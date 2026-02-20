@@ -96,11 +96,14 @@ class TestDESDataFetch:
     TEST_DATE = "2022-06-15"
 
     def test_fetch_rgb(self):
-        """Fetch RGB bands (b04, b03, b02) for a small area.
+        """Fetch RGB bands (b04, b03, b02) and verify DN→reflectance conversion.
 
         Note: DES uses lowercase band names (b02, b03, b04, ...).
+        Sentinel-2 L2A via DES applies BOA_ADD_OFFSET = 1000:
+            reflectance = (DN - 1000) / 10000
         """
         from datetime import datetime, timedelta
+        from imint.utils import dn_to_reflectance
 
         conn = _connect()
         date = datetime.strptime(self.TEST_DATE, "%Y-%m-%d")
@@ -119,13 +122,20 @@ class TestDESDataFetch:
 
         import rasterio
         with rasterio.open(io.BytesIO(data)) as src:
-            print(f"\n  Shape: {src.shape}")
-            print(f"  Bands: {src.count}")
-            print(f"  CRS: {src.crs}")
-
             assert src.count >= 3, f"Expected at least 3 bands, got {src.count}"
-            arr = src.read()
-            print(f"  Value range: [{arr.min()}, {arr.max()}]")
+            dn = src.read()
+            refl = dn_to_reflectance(dn)
+
+            print(f"\n  Shape: {src.shape}")
+            print(f"  CRS: {src.crs}")
+            print(f"  DN range:         [{dn.min()}, {dn.max()}]")
+            print(f"  Reflectance range: [{refl.min():.4f}, {refl.max():.4f}]")
+
+            # Reflectance should be in [0, 1] for valid surface pixels
+            assert refl.max() <= 1.0, f"Reflectance > 1.0: {refl.max()}"
+            assert refl.min() >= 0.0, f"Reflectance < 0.0: {refl.min()}"
+            # Typical land reflectance in visible bands: 0.01–0.30
+            assert refl.mean() < 0.5, f"Mean reflectance suspiciously high: {refl.mean():.4f}"
 
     def test_fetch_all_imint_bands(self):
         """Fetch all bands needed by IMINT Engine, handling resolution differences.

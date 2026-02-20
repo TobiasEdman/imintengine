@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from executors.base import BaseExecutor
 from imint.job import IMINTJob, IMINTResult
+from imint.utils import dn_to_reflectance, bands_to_rgb
 
 
 class LocalExecutor(BaseExecutor):
@@ -101,15 +102,11 @@ class LocalExecutor(BaseExecutor):
             return self._synthetic_image()
 
     def _bands_to_rgb(self, bands: dict) -> np.ndarray:
-        """Convert band dict to normalized RGB (B04=R, B03=G, B02=B)."""
-        r = bands.get("B04", np.zeros((256, 256)))
-        g = bands.get("B03", np.zeros((256, 256)))
-        b = bands.get("B02", np.zeros((256, 256)))
-        rgb = np.stack([r, g, b], axis=-1).astype(np.float32)
-        # Normalize to [0, 1] using the 2nd/98th percentile
-        p2, p98 = np.percentile(rgb, [2, 98])
-        rgb = np.clip((rgb - p2) / (p98 - p2 + 1e-6), 0, 1)
-        return rgb
+        """Convert band dict to normalized RGB (B04=R, B03=G, B02=B).
+
+        Delegates to imint.utils.bands_to_rgb which handles percentile stretching.
+        """
+        return bands_to_rgb(bands)
 
     def _synthetic_image(self):
         """Synthetic image for local dev — no DES needed."""
