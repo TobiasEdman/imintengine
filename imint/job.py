@@ -5,6 +5,7 @@ An IMINTJob is the unit of work passed between the executor and the engine.
 It is executor-agnostic: ColonyOS, local runner, Airflow, cron — all produce
 the same IMINTJob and hand it to run_job().
 """
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any

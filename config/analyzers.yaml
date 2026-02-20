@@ -1,0 +1,23 @@
+# IMINT Engine — Analyzer Configuration
+#
+# Enable/disable analyzers and adjust parameters.
+# The engine loads this file at the start of each run_job() call.
+
+change_detection:
+  enabled: true
+  threshold: 0.15           # Per-pixel L2 norm difference threshold
+  min_region_pixels: 50     # Ignore connected components smaller than this
+
+spectral:
+  enabled: true
+  ndvi_threshold: 0.3       # NDVI above this = vegetation
+  ndwi_threshold: 0.3       # NDWI above this = water
+  ndbi_threshold: 0.0       # NDBI above this = built-up
+
+object_detection:
+  enabled: true
+  mode: heatmap             # "heatmap" (no model) or "model" (requires ultralytics)
+  patch_size: 32            # Patch size for variance heatmap
+  std_threshold: 2.0        # Standard deviations above mean to flag anomaly
+  # model_path: yolov8n.pt  # Uncomment for model mode
+  # confidence: 0.25        # Minimum confidence for model detections

@@ -12,10 +12,15 @@ Or from Python / a notebook:
     executor = LocalExecutor()
     result = executor.execute(date="2022-06-15", coords={...})
 """
+from __future__ import annotations
 
 import os
+import sys
 import argparse
 import numpy as np
+
+# Ensure project root is on sys.path when running as a script
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from executors.base import BaseExecutor
 from imint.job import IMINTJob, IMINTResult

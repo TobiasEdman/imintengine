@@ -4,6 +4,7 @@ executors/base.py — Executor interface
 Any job runner (ColonyOS, local, Airflow, cron, CLI) implements this.
 The engine never imports from here — only executors do.
 """
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from imint.job import IMINTJob, IMINTResult

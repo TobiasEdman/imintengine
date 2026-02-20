@@ -10,9 +10,14 @@ The ColonyOS job spec (get_cloud_free.json) calls:
 Environment variables are set by ColonyOS from the job spec:
     DATE, WEST, SOUTH, EAST, NORTH, OUTPUTS_DIR
 """
+from __future__ import annotations
 
 import os
+import sys
 import numpy as np
+
+# Ensure project root is on sys.path when running as a script
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from executors.base import BaseExecutor
 from imint.job import IMINTJob, IMINTResult

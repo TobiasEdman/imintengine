@@ -4,6 +4,7 @@ imint/engine.py — Analysis engine
 run_job() is the single entry point for all executors.
 It is completely independent of how the job was scheduled or submitted.
 """
+from __future__ import annotations
 
 import os
 import yaml
