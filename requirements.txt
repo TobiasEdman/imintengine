@@ -1,0 +1,19 @@
+# Core
+numpy>=1.24
+scipy>=1.10
+Pillow>=10.0
+matplotlib>=3.7
+pyyaml>=6.0
+
+# Geospatial output (optional but recommended)
+rasterio>=1.3
+
+# Notebook development
+jupyter>=1.0
+ipykernel>=6.0
+
+# Satellite data (needed for real runs via DES)
+# openeo>=0.20
+
+# Object detection (optional — needed for mode: model)
+# ultralytics>=8.0     # YOLO
