@@ -29,10 +29,12 @@ env/
 # Credentials — never commit
 .cdsapirc
 utils/config.py
+config.py
 *credentials*
 *secret*
 *.env
 .env
+.des_token
 
 # IDE
 .vscode/
