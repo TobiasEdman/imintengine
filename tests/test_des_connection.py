@@ -160,7 +160,7 @@ class TestDESDataFetch:
             temporal_extent=temporal,
             bands=bands_20m,
         )
-        cube_20m = cube_20m.resample_cube_spatial(target=cube_10m)
+        cube_20m = cube_20m.resample_cube_spatial(target=cube_10m, method="bilinear")
 
         # Merge the two cubes
         cube = cube_10m.merge_cubes(cube_20m)
