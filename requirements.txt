@@ -13,7 +13,7 @@ jupyter>=1.0
 ipykernel>=6.0
 
 # Satellite data (needed for real runs via DES)
-# openeo>=0.20
+openeo>=0.20
 
 # Object detection (optional — needed for mode: model)
 # ultralytics>=8.0     # YOLO

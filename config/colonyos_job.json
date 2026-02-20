@@ -1,0 +1,31 @@
+{
+    "conditions": {
+        "colonyname": "imint",
+        "executortype": "container-executor"
+    },
+    "env": {
+        "DATE": "2022-06-15",
+        "WEST": "14.5",
+        "SOUTH": "56.0",
+        "EAST": "15.5",
+        "NORTH": "57.0",
+        "DES_TOKEN": "",
+        "CLOUD_THRESHOLD": "0.3",
+        "OUTPUTS_DIR": "/cfs/outputs",
+        "CONFIG_PATH": "config/analyzers.yaml"
+    },
+    "funcname": "get-cloud-free",
+    "kwargs": {
+        "docker-image": "imint-engine:latest",
+        "rebuild-image": false
+    },
+    "maxexectime": 600,
+    "maxretries": 3,
+    "fs": [
+        {
+            "mount": "/cfs/outputs",
+            "dir": "imint-outputs",
+            "keepfiles": true
+        }
+    ]
+}

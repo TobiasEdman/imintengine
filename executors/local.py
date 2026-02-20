@@ -24,7 +24,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from executors.base import BaseExecutor
 from imint.job import IMINTJob, IMINTResult
-from imint.utils import dn_to_reflectance, bands_to_rgb
 
 
 class LocalExecutor(BaseExecutor):
@@ -40,9 +39,11 @@ class LocalExecutor(BaseExecutor):
         self,
         output_dir: str = "outputs",
         config_path: str = "config/analyzers.yaml",
+        cloud_threshold: float = 0.3,
     ):
         self.output_dir = output_dir
         self.config_path = config_path
+        self.cloud_threshold = cloud_threshold
 
     def build_job(
         self,
@@ -56,8 +57,8 @@ class LocalExecutor(BaseExecutor):
         Build an IMINTJob.
 
         If rgb is not provided, tries to fetch from DES via openEO + run
-        cloud detection. Falls back to a synthetic image with a warning
-        (useful for analyzer development without DES access).
+        cloud detection using SCL. Falls back to a synthetic image with a
+        warning (useful for analyzer development without DES access).
         """
         if rgb is not None:
             print(f"[LocalExecutor] Using provided RGB array {rgb.shape}")
@@ -76,37 +77,42 @@ class LocalExecutor(BaseExecutor):
 
     def _fetch_and_check(self, date: str, coords: dict):
         """
-        Attempt to fetch real Sentinel-2 data from DES and run cloud detection.
-        Falls back to synthetic data if DES is not configured.
+        Attempt to fetch real Sentinel-2 data from DES and run SCL cloud detection.
+        Falls back to synthetic data if openeo is not installed or DES is not configured.
         """
         try:
-            # Import the original ai-pipelines-poc modules if available
-            # These live in my_cloud_filtering/ in the original repo
-            from my_cloud_filtering.get_data import get_data
-            from my_cloud_filtering.main import pred_cloudy
+            from imint.fetch import fetch_des_data, FetchError
 
             print(f"[LocalExecutor] Fetching Sentinel-2 data for {date}...")
-            bands_raw = get_data(date, coords)
-            rgb = self._bands_to_rgb(bands_raw)
+            result = fetch_des_data(
+                date=date,
+                coords=coords,
+                cloud_threshold=self.cloud_threshold,
+            )
 
-            if pred_cloudy(rgb):
-                print(f"[LocalExecutor] Image is cloudy — skipping {date}")
+            if result.cloud_fraction > self.cloud_threshold:
+                print(
+                    f"[LocalExecutor] Cloud fraction {result.cloud_fraction:.1%} "
+                    f"> threshold {self.cloud_threshold:.0%} — skipping {date}"
+                )
                 return None, None
 
-            return rgb, bands_raw
+            print(
+                f"[LocalExecutor] Fetched {len(result.bands)} bands, "
+                f"cloud fraction {result.cloud_fraction:.1%}"
+            )
+            return result.rgb, result.bands
 
         except ImportError:
-            print("[LocalExecutor] WARNING: my_cloud_filtering not found.")
+            print("[LocalExecutor] WARNING: openeo not installed.")
             print("  Generating synthetic image for analyzer development.")
-            print("  To use real data, add my_cloud_filtering/ to this repo or PYTHONPATH.")
+            print("  To use real data: pip install openeo")
             return self._synthetic_image()
 
-    def _bands_to_rgb(self, bands: dict) -> np.ndarray:
-        """Convert band dict to normalized RGB (B04=R, B03=G, B02=B).
-
-        Delegates to imint.utils.bands_to_rgb which handles percentile stretching.
-        """
-        return bands_to_rgb(bands)
+        except Exception as e:
+            print(f"[LocalExecutor] WARNING: DES fetch failed: {e}")
+            print("  Generating synthetic image for analyzer development.")
+            return self._synthetic_image()
 
     def _synthetic_image(self):
         """Synthetic image for local dev — no DES needed."""
@@ -140,12 +146,18 @@ def main():
     parser.add_argument("--rgb",   help="Path to .npy RGB array (skip data fetch)")
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument("--config", default="config/analyzers.yaml")
+    parser.add_argument("--cloud-threshold", type=float, default=0.3,
+                        help="Max cloud fraction (0.0-1.0, default: 0.3)")
     args = parser.parse_args()
 
     coords = {"west": args.west, "south": args.south, "east": args.east, "north": args.north}
     rgb = np.load(args.rgb) if args.rgb else None
 
-    executor = LocalExecutor(output_dir=args.output_dir, config_path=args.config)
+    executor = LocalExecutor(
+        output_dir=args.output_dir,
+        config_path=args.config,
+        cloud_threshold=args.cloud_threshold,
+    )
     executor.execute(date=args.date, coords=coords, rgb=rgb)
 
 
