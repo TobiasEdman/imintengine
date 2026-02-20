@@ -7,24 +7,40 @@ from __future__ import annotations
 
 import numpy as np
 
-# Sentinel-2 L2A Processing Baseline >= 04.00 applies a radiometric offset.
-# The RADIO_ADD_OFFSET = -1000 was added during encoding:
-#   DN = reflectance * QUANTIFICATION_VALUE + RADIO_ADD_OFFSET
-#   DN = reflectance * 10000 + (-1000)
-# To decode:
-#   reflectance = (DN - RADIO_ADD_OFFSET) / QUANTIFICATION_VALUE
-#   reflectance = (DN - (-1000)) / 10000 = (DN + 1000) / 10000
-#
-# HOWEVER: DES stores COGs with the offset already baked into the DN values,
-# meaning the raw values from DES are standard pre-PB04.00 encoding:
-#   reflectance = (DN - 1000) / 10000
-#
-# Verified empirically: vegetation B04 DN ~1960 → (1960-1000)/10000 = 0.096
-# which matches expected red reflectance for vegetation (~0.03-0.10).
+# ── Data source profiles ─────────────────────────────────────────────────────
+# Each source has its own offset and scale for DN → reflectance conversion:
+#   reflectance = (DN - offset) / scale
 #
 # See: https://sentinels.copernicus.eu/web/sentinel/-/copernicus-sentinel-2-major-products-upgrade-702
-BOA_ADD_OFFSET = 1000              # Subtract from DN to get scaled reflectance
-QUANTIFICATION_VALUE = 10000       # Scale factor to get [0, 1] reflectance
+
+DATA_SOURCES = {
+    "des": {
+        "offset": 1000,
+        "scale": 10000,
+        "description": (
+            "Digital Earth Sweden. COGs with PB>=04.00 offset baked in. "
+            "Verified: vegetation B04 DN ~1960 → (1960-1000)/10000 = 0.096"
+        ),
+    },
+    "copernicus": {
+        "offset": -1000,
+        "scale": 10000,
+        "description": (
+            "Copernicus Data Space (CDSE). Raw L2A with RADIO_ADD_OFFSET=-1000. "
+            "reflectance = (DN - (-1000)) / 10000 = (DN + 1000) / 10000"
+        ),
+    },
+    "legacy": {
+        "offset": 0,
+        "scale": 10000,
+        "description": (
+            "Pre-PB04.00 data or sources without offset. "
+            "reflectance = DN / 10000"
+        ),
+    },
+}
+
+DEFAULT_SOURCE = "des"
 
 # Band name mapping: DES uses lowercase, IMINT Engine uses uppercase internally
 DES_TO_IMINT = {
@@ -36,24 +52,30 @@ DES_TO_IMINT = {
 IMINT_TO_DES = {v: k for k, v in DES_TO_IMINT.items()}
 
 
-def dn_to_reflectance(dn: np.ndarray, clip: bool = True) -> np.ndarray:
-    """Convert Sentinel-2 L2A DN values (from DES) to BOA reflectance.
+def dn_to_reflectance(
+    dn: np.ndarray,
+    clip: bool = True,
+    source: str = DEFAULT_SOURCE,
+) -> np.ndarray:
+    """Convert Sentinel-2 L2A DN values to BOA reflectance.
 
-    Formula: reflectance = (DN - BOA_ADD_OFFSET) / QUANTIFICATION_VALUE
-             reflectance = (DN - 1000) / 10000
+    Formula: reflectance = (DN - offset) / scale
 
-    Verified against DES data:
-        Vegetation B04 DN ~1960 → (1960 - 1000) / 10000 = 0.096 ✓
-        Expected vegetation red reflectance: ~0.03-0.10
+    The offset and scale depend on the data source:
+        - "des":        (DN - 1000) / 10000   (DES bakes PB04.00 offset into COGs)
+        - "copernicus": (DN + 1000) / 10000   (raw RADIO_ADD_OFFSET = -1000)
+        - "legacy":     DN / 10000            (pre-PB04.00, no offset)
 
     Args:
-        dn: Raw DN array (int or float) from Sentinel-2 L2A via DES.
+        dn: Raw DN array (int or float).
         clip: If True, clip result to [0, 1].
+        source: Data source profile name (see DATA_SOURCES).
 
     Returns:
         Reflectance array as float32 in [0, 1] (if clipped).
     """
-    reflectance = (dn.astype(np.float32) - BOA_ADD_OFFSET) / QUANTIFICATION_VALUE
+    profile = DATA_SOURCES[source]
+    reflectance = (dn.astype(np.float32) - profile["offset"]) / profile["scale"]
     if clip:
         reflectance = np.clip(reflectance, 0.0, 1.0)
     return reflectance

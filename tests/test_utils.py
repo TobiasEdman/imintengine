@@ -52,6 +52,35 @@ class TestDNToReflectance:
         assert refl.dtype == np.float32
 
 
+class TestDNSourceProfiles:
+    """Verify different data source offset/scale profiles."""
+
+    def test_des_source(self):
+        """DES: (DN - 1000) / 10000."""
+        dn = np.array([1960], dtype=np.float32)
+        refl = dn_to_reflectance(dn, source="des")
+        assert abs(refl[0] - 0.096) < 1e-4
+
+    def test_copernicus_source(self):
+        """Copernicus/CDSE: (DN + 1000) / 10000."""
+        dn = np.array([960], dtype=np.float32)
+        refl = dn_to_reflectance(dn, source="copernicus")
+        assert abs(refl[0] - 0.196) < 1e-4
+
+    def test_legacy_source(self):
+        """Legacy pre-PB04.00: DN / 10000."""
+        dn = np.array([960], dtype=np.float32)
+        refl = dn_to_reflectance(dn, source="legacy")
+        assert abs(refl[0] - 0.096) < 1e-4
+
+    def test_default_is_des(self):
+        """Default source should be DES."""
+        dn = np.array([2000], dtype=np.float32)
+        refl_default = dn_to_reflectance(dn)
+        refl_des = dn_to_reflectance(dn, source="des")
+        np.testing.assert_array_equal(refl_default, refl_des)
+
+
 class TestDesToImintBands:
     """Verify DES lowercase → IMINT uppercase band mapping."""
 
