@@ -140,8 +140,10 @@ class TestConnect:
     @patch.dict("os.environ", {}, clear=False)
     @patch("imint.fetch.openeo", create=True)
     def test_file_token_fallback(self, mock_openeo_module, tmp_path):
-        """Token file should be used if no explicit token or env var."""
+        """Token file should be used if no explicit token, env var, or refresh token."""
         mock_conn = MagicMock()
+        # Make refresh token fail so it falls through to file token
+        mock_conn.authenticate_oidc_refresh_token.side_effect = Exception("no refresh token")
         with patch.dict("sys.modules", {"openeo": mock_openeo_module}):
             mock_openeo_module.connect.return_value = mock_conn
 

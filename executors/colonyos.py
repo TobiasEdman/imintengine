@@ -42,10 +42,13 @@ class ColonyOSExecutor(BaseExecutor):
         output_dir = os.environ.get("OUTPUTS_DIR", "/cfs/outputs")
         job_id = os.environ.get("COLONY_PROCESS_ID", None)
         cloud_threshold = float(os.environ.get("CLOUD_THRESHOLD", "0.3"))
+        date_window = int(os.environ.get("DATE_WINDOW", "5"))
 
         coords = {"west": west, "south": south, "east": east, "north": north}
 
-        rgb, bands, is_cloudy = self._fetch_and_check(date, coords, cloud_threshold)
+        rgb, bands, is_cloudy = self._fetch_and_check(
+            date, coords, cloud_threshold, date_window
+        )
 
         if is_cloudy or rgb is None:
             print(f"[ColonyOSExecutor] Cloudy or no data for {date} — skipping.")
@@ -61,15 +64,19 @@ class ColonyOSExecutor(BaseExecutor):
             job_id=job_id,
         )
 
-    def _fetch_and_check(self, date: str, coords: dict, cloud_threshold: float = 0.3):
+    def _fetch_and_check(
+        self, date: str, coords: dict,
+        cloud_threshold: float = 0.3, date_window: int = 5,
+    ):
         """Fetch Sentinel-2 data from DES and check for clouds using SCL band."""
-        print(f"[ColonyOSExecutor] Fetching data for {date}...")
+        print(f"[ColonyOSExecutor] Fetching data for {date} (±{date_window} days)...")
 
         try:
             result = fetch_des_data(
                 date=date,
                 coords=coords,
                 cloud_threshold=cloud_threshold,
+                date_window=date_window,
             )
         except FetchError as e:
             print(f"[ColonyOSExecutor] Fetch failed: {e}")

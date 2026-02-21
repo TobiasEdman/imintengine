@@ -102,8 +102,8 @@ def _connect(token: str | None = None, token_path: str | None = None):
     Authentication priority:
         1. Explicit token argument
         2. DES_TOKEN environment variable
-        3. Token file at token_path (default: .des_token in project root)
-        4. Cached OIDC session (interactive device flow)
+        3. Stored refresh token (from ``des_login.py --device``, auto-renews)
+        4. Token file at token_path (default: .des_token in project root)
 
     Returns:
         Authenticated openeo.Connection.
@@ -135,7 +135,18 @@ def _connect(token: str | None = None, token_path: str | None = None):
         conn.authenticate_oidc_access_token(access_token=env_token, provider_id="egi")
         return conn
 
-    # 3. Token file
+    # 3. Stored refresh token (from des_login.py --device)
+    #    This auto-renews expired access tokens — best for local dev.
+    try:
+        conn.authenticate_oidc_refresh_token(
+            provider_id="egi",
+            store_refresh_token=True,
+        )
+        return conn
+    except Exception:
+        pass  # No stored refresh token, try next method
+
+    # 4. Token file (short-lived access token from Web Editor)
     resolved_path = token_path or TOKEN_PATH_DEFAULT
     if os.path.exists(resolved_path):
         with open(resolved_path) as f:
@@ -146,16 +157,11 @@ def _connect(token: str | None = None, token_path: str | None = None):
             )
             return conn
 
-    # 4. Cached OIDC (interactive)
-    try:
-        conn.authenticate_oidc(provider_id="egi")
-        return conn
-    except Exception as e:
-        raise FetchError(
-            f"No valid DES authentication found. "
-            f"Set DES_TOKEN env var or run: python scripts/des_login.py --token YOUR_TOKEN. "
-            f"Error: {e}"
-        )
+    raise FetchError(
+        "No valid DES authentication found. Run:\n"
+        "  python scripts/des_login.py --device   (recommended, persistent)\n"
+        "  python scripts/des_login.py --token YOUR_TOKEN  (short-lived)"
+    )
 
 
 # ── Main fetch function ─────────────────────────────────────────────────────
@@ -166,6 +172,7 @@ def fetch_des_data(
     cloud_threshold: float = 0.3,
     token: str | None = None,
     include_scl: bool = True,
+    date_window: int = 0,
 ) -> FetchResult:
     """Fetch Sentinel-2 L2A data from DES via openEO.
 
@@ -180,6 +187,9 @@ def fetch_des_data(
                          just returned in the result for the caller to decide).
         token: Optional DES access token. Falls back to env/file/OIDC.
         include_scl: If True, also fetch the SCL band for cloud detection.
+        date_window: Days before/after date to search for imagery.
+                     0 = single day, 5 = ±5 days window. DES will pick
+                     the most recent available acquisition.
 
     Returns:
         FetchResult with bands, rgb, cloud_fraction, etc.
@@ -193,9 +203,11 @@ def fetch_des_data(
 
     conn = _connect(token=token)
 
-    # Temporal extent: single day
+    # Temporal extent: date ± window
     dt = datetime.strptime(date, "%Y-%m-%d")
-    temporal = [date, (dt + timedelta(days=1)).strftime("%Y-%m-%d")]
+    start = (dt - timedelta(days=date_window)).strftime("%Y-%m-%d")
+    end = (dt + timedelta(days=max(date_window, 1))).strftime("%Y-%m-%d")
+    temporal = [start, end]
 
     try:
         # Load 10m bands
@@ -233,6 +245,13 @@ def fetch_des_data(
                 target=cube_10m, method="near"
             )
             cube = cube.merge_cubes(cube_scl)
+
+        # If searching a date window, reduce temporal axis to get
+        # the most recent pixel values (last available observation)
+        if date_window > 0:
+            cube = cube.reduce_dimension(
+                dimension="t", reducer="last"
+            )
 
         # Download as GeoTIFF
         data = cube.download(format="gtiff")
