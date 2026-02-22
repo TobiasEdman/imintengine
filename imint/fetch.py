@@ -414,8 +414,8 @@ def fetch_des_data(
     # Map lowercase → uppercase band names
     imint_bands = des_to_imint_bands(des_bands)
 
-    # Create RGB composite
-    rgb = bands_to_rgb(imint_bands)
+    # Create RGB composite (mask clouds from stretch if SCL available)
+    rgb = bands_to_rgb(imint_bands, scl=scl)
 
     # Build GeoContext — links this raster to the NMD 10m grid
     geo = GeoContext(

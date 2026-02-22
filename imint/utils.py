@@ -97,15 +97,24 @@ def des_to_imint_bands(des_bands: dict) -> dict:
     return result
 
 
-def bands_to_rgb(bands: dict, percentile_stretch: bool = True) -> np.ndarray:
+def bands_to_rgb(
+    bands: dict,
+    percentile_stretch: bool = True,
+    scl: np.ndarray | None = None,
+) -> np.ndarray:
     """Convert a band dictionary to an RGB image array.
 
     Uses B04 (Red), B03 (Green), B02 (Blue). Assumes values are already
     in reflectance [0, 1]. Applies percentile stretch for visualization.
 
+    When *scl* is provided, cloud pixels (SCL classes 8, 9, 10) are masked
+    out before computing the stretch percentiles so that bright clouds do
+    not compress the dynamic range of the underlying surface.
+
     Args:
         bands: Dict with at least "B02", "B03", "B04" keys.
         percentile_stretch: If True, stretch to 2nd/98th percentile.
+        scl: Optional SCL array (H, W) uint8 with values 0-11.
 
     Returns:
         RGB array (H, W, 3) float32 in [0, 1].
@@ -117,7 +126,15 @@ def bands_to_rgb(bands: dict, percentile_stretch: bool = True) -> np.ndarray:
     rgb = np.stack([r, g, b], axis=-1).astype(np.float32)
 
     if percentile_stretch:
-        p2, p98 = np.percentile(rgb, [2, 98])
+        if scl is not None:
+            cloud_mask = np.isin(scl, [8, 9, 10])
+            clear_pixels = rgb[~cloud_mask]
+            if clear_pixels.size > 0:
+                p2, p98 = np.percentile(clear_pixels, [2, 98])
+            else:
+                p2, p98 = np.percentile(rgb, [2, 98])
+        else:
+            p2, p98 = np.percentile(rgb, [2, 98])
         rgb = np.clip((rgb - p2) / (p98 - p2 + 1e-6), 0, 1)
 
     return rgb

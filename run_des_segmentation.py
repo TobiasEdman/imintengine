@@ -172,6 +172,14 @@ def main():
         help="Force fresh DES fetch even if cache exists",
     )
     parser.add_argument(
+        "--no-cloud-check", action="store_true",
+        help="Allow cloudy scenes (sets threshold to 100%%, still fetches SCL for visualization)",
+    )
+    parser.add_argument(
+        "--cloud-threshold", type=float, default=None,
+        help="Cloud fraction threshold 0.0-1.0 (default: 0.3). Overrides --no-cloud-check.",
+    )
+    parser.add_argument(
         "--output-dir", default=None,
         help="Override output directory (default: auto-generated from coords)",
     )
@@ -195,6 +203,15 @@ def main():
     print(f"  Date:       {args.date} (±{args.date_window} days)")
     print(f"  Task head:  {args.task_head}")
     print(f"  Device:     {args.device}")
+    # Resolve cloud threshold
+    if args.cloud_threshold is not None:
+        cloud_threshold = args.cloud_threshold
+    elif args.no_cloud_check:
+        cloud_threshold = 1.0  # accept everything, but still fetch SCL
+    else:
+        cloud_threshold = DEFAULT_CLOUD_THRESHOLD
+
+    print(f"  Cloud thr:  {cloud_threshold:.0%}")
     print(f"  Output dir: {output_dir}")
     print("=" * 70)
 
@@ -204,7 +221,7 @@ def main():
         coords=coords,
         date=args.date,
         date_window=args.date_window,
-        cloud_threshold=DEFAULT_CLOUD_THRESHOLD,
+        cloud_threshold=cloud_threshold,
         output_dir=output_dir,
         force_fetch=args.fetch,
     )
