@@ -65,8 +65,12 @@ def _make_job(tmp_path, date="2022-06-15"):
             "B02": rng.rand(h, w).astype(np.float32),
             "B03": rng.rand(h, w).astype(np.float32),
             "B04": rng.rand(h, w).astype(np.float32),
+            "B05": rng.rand(h, w).astype(np.float32),
+            "B06": rng.rand(h, w).astype(np.float32),
+            "B07": rng.rand(h, w).astype(np.float32),
             "B08": (rng.rand(h, w) + 0.3).astype(np.float32),
             "B8A": (rng.rand(h, w) + 0.25).astype(np.float32),
+            "B09": rng.rand(h, w).astype(np.float32),
             "B11": rng.rand(h, w).astype(np.float32),
             "B12": rng.rand(h, w).astype(np.float32),
         },
@@ -88,7 +92,7 @@ class TestRunJobEndToEnd:
         assert result.success, f"run_job failed: {result.error}"
         assert result.job_id == "test_integration"
         assert result.date == "2022-06-15"
-        assert len(result.analyzer_results) == 4
+        assert len(result.analyzer_results) == 5
 
     def test_rgb_png_created(self, tmp_path):
         """RGB composite PNG should be a valid image."""
@@ -151,7 +155,7 @@ class TestRunJobEndToEnd:
             summary = json.load(f)
 
         assert summary["date"] == "2022-06-15"
-        assert len(summary["analyzers"]) == 4
+        assert len(summary["analyzers"]) == 5
         names = [a["name"] for a in summary["analyzers"]]
         assert "change_detection" in names
         assert "spectral" in names

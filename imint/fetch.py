@@ -53,7 +53,8 @@ TARGET_CRS = "EPSG:3006"
 
 # DES band groupings by native resolution
 BANDS_10M = ["b02", "b03", "b04", "b08"]
-BANDS_20M_SPECTRAL = ["b8a", "b11", "b12"]
+BANDS_20M_SPECTRAL = ["b05", "b06", "b07", "b8a", "b11", "b12"]
+BANDS_60M = ["b09"]
 BANDS_20M_CATEGORICAL = ["scl"]
 
 # SCL cloud classes (Sentinel-2 L2A Scene Classification)
@@ -371,8 +372,19 @@ def fetch_des_data(
             target=cube_10m, method="bilinear"
         )
 
+        # Load 60m bands (B09), resample to 10m
+        cube_60m = conn.load_collection(
+            collection_id=COLLECTION,
+            spatial_extent=projected_coords,
+            temporal_extent=temporal,
+            bands=BANDS_60M,
+        )
+        cube_60m = cube_60m.resample_cube_spatial(
+            target=cube_10m, method="bilinear"
+        )
+
         # Merge spectral bands
-        cube = cube_10m.merge_cubes(cube_20m)
+        cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_60m)
 
         # If searching a date window, reduce temporal axis to get
         # the most recent pixel values (last available observation)
@@ -403,8 +415,9 @@ def fetch_des_data(
 
     # Split into individual bands (order follows merge order)
     # 10m: b02=0, b03=1, b04=2, b08=3
-    # 20m spectral: b8a=4, b11=5, b12=6
-    spectral_names = BANDS_10M + BANDS_20M_SPECTRAL
+    # 20m spectral: b05=4, b06=5, b07=6, b8a=7, b11=8, b12=9
+    # 60m: b09=10
+    spectral_names = BANDS_10M + BANDS_20M_SPECTRAL + BANDS_60M
 
     # Convert spectral bands: DN → reflectance
     des_bands = {}

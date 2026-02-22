@@ -19,6 +19,7 @@ from .analyzers.spectral import SpectralAnalyzer
 from .analyzers.object_detection import ObjectDetectionAnalyzer
 from .analyzers.prithvi import PrithviAnalyzer
 from .analyzers.nmd import NMDAnalyzer
+from .analyzers.cot import COTAnalyzer
 from .exporters.export import (
     save_rgb_png, save_change_overlay, save_ndvi_colormap,
     save_regions_geojson, save_geotiff, save_summary_report,
@@ -33,6 +34,7 @@ ANALYZER_REGISTRY = {
     "object_detection": ObjectDetectionAnalyzer,
     "prithvi": PrithviAnalyzer,
     "nmd": NMDAnalyzer,
+    "cot": COTAnalyzer,
 }
 
 
@@ -235,6 +237,15 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
                     os.path.join(out, f"{prefix}prithvi_embedding.png"),
                 )
 
+    elif result.analyzer == "cot":
+        cot_map = result.outputs.get("cot_map")
+        cloud_class = result.outputs.get("cloud_class")
+        if cot_map is not None:
+            save_geotiff(cot_map, os.path.join(out, f"{prefix}cot.tif"),
+                         geo=job.geo, coords=job.coords)
+            _save_cot_visualization(cot_map, cloud_class, job.rgb,
+                                    os.path.join(out, f"{prefix}cot.png"))
+
     elif result.analyzer == "nmd":
         if result.outputs.get("nmd_available"):
             l1_raster = result.outputs.get("l1_raster")
@@ -244,3 +255,42 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
             cross_ref = result.outputs.get("cross_reference")
             if class_stats:
                 save_nmd_stats(class_stats, cross_ref, os.path.join(out, f"{prefix}nmd_stats.json"))
+
+
+def _save_cot_visualization(cot_map, cloud_class, rgb, path):
+    """Save COT visualization: RGB, COT heatmap, and cloud classification."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+    # Panel 1: RGB
+    axes[0].imshow(rgb)
+    axes[0].set_title("RGB")
+    axes[0].axis("off")
+
+    # Panel 2: COT heatmap
+    im = axes[1].imshow(cot_map, cmap="hot_r", vmin=0, vmax=0.3)
+    axes[1].set_title("Cloud Optical Thickness")
+    axes[1].axis("off")
+    plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04, label="COT")
+
+    # Panel 3: Cloud classification (clear / thin / thick)
+    cmap = ListedColormap(["#2196F3", "#FFC107", "#F44336"])
+    axes[2].imshow(cloud_class, cmap=cmap, vmin=0, vmax=2)
+    axes[2].set_title("Cloud Classification")
+    axes[2].axis("off")
+    from matplotlib.patches import Patch
+    legend = [
+        Patch(facecolor="#2196F3", label="Clear"),
+        Patch(facecolor="#FFC107", label="Thin cloud"),
+        Patch(facecolor="#F44336", label="Thick cloud"),
+    ]
+    axes[2].legend(handles=legend, loc="lower right", fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    saved: {path}")

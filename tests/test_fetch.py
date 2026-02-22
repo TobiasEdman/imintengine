@@ -211,16 +211,21 @@ class TestFetchDesData:
         mock_cube.reduce_dimension.return_value = mock_cube
         mock_cube.download.return_value = b"geotiff-data"
 
-        # SCL GeoTIFF (1 band) and spectral GeoTIFF (7 bands)
+        # SCL GeoTIFF (1 band) and spectral GeoTIFF (11 bands)
+        # Band order: b02, b03, b04, b08, b05, b06, b07, b8a, b11, b12, b09
         scl_raw = np.full((1, h, w), scl_value, dtype=np.uint16)
-        spectral_raw = np.zeros((7, h, w), dtype=np.uint16)
-        spectral_raw[0] = 1500  # b02
-        spectral_raw[1] = 1600  # b03
-        spectral_raw[2] = 1960  # b04
-        spectral_raw[3] = 3000  # b08
-        spectral_raw[4] = 2800  # b8a
-        spectral_raw[5] = 2000  # b11
-        spectral_raw[6] = 1800  # b12
+        spectral_raw = np.zeros((11, h, w), dtype=np.uint16)
+        spectral_raw[0] = 1500   # b02
+        spectral_raw[1] = 1600   # b03
+        spectral_raw[2] = 1960   # b04
+        spectral_raw[3] = 3000   # b08
+        spectral_raw[4] = 2200   # b05
+        spectral_raw[5] = 2400   # b06
+        spectral_raw[6] = 2600   # b07
+        spectral_raw[7] = 2800   # b8a
+        spectral_raw[8] = 2000   # b11
+        spectral_raw[9] = 1800   # b12
+        spectral_raw[10] = 1000  # b09
 
         call_count = {"n": 0}
         def make_mock_src(data):
@@ -297,7 +302,7 @@ class TestFetchDesData:
         mock_cube.merge_cubes.return_value = mock_cube
         mock_cube.download.return_value = b"geotiff-data"
 
-        spectral_raw = np.zeros((7, h, w), dtype=np.uint16)
+        spectral_raw = np.zeros((11, h, w), dtype=np.uint16)
         spectral_raw[0] = 1500
         mock_src = MagicMock()
         mock_src.read.return_value = spectral_raw
@@ -357,14 +362,19 @@ class TestBandConstants:
         assert BANDS_10M == ["b02", "b03", "b04", "b08"]
 
     def test_20m_spectral_bands(self):
-        assert BANDS_20M_SPECTRAL == ["b8a", "b11", "b12"]
+        assert BANDS_20M_SPECTRAL == ["b05", "b06", "b07", "b8a", "b11", "b12"]
+
+    def test_60m_bands(self):
+        from imint.fetch import BANDS_60M
+        assert BANDS_60M == ["b09"]
 
     def test_20m_categorical_bands(self):
         assert BANDS_20M_CATEGORICAL == ["scl"]
 
     def test_all_lowercase(self):
         """DES uses lowercase band names."""
-        for band in BANDS_10M + BANDS_20M_SPECTRAL + BANDS_20M_CATEGORICAL:
+        from imint.fetch import BANDS_60M
+        for band in BANDS_10M + BANDS_20M_SPECTRAL + BANDS_60M + BANDS_20M_CATEGORICAL:
             assert band == band.lower()
 
 
@@ -458,7 +468,7 @@ class TestToNMDGrid:
             return src
 
         scl_raw = np.full((1, 64, 64), 4, dtype=np.uint16)  # vegetation
-        spectral_raw = np.zeros((7, 64, 64), dtype=np.uint16)
+        spectral_raw = np.zeros((11, 64, 64), dtype=np.uint16)
 
         coords = {"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0}
 
