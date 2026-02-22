@@ -46,7 +46,7 @@ class ColonyOSExecutor(BaseExecutor):
 
         coords = {"west": west, "south": south, "east": east, "north": north}
 
-        rgb, bands, is_cloudy = self._fetch_and_check(
+        rgb, bands, geo, is_cloudy = self._fetch_and_check(
             date, coords, cloud_threshold, date_window
         )
 
@@ -59,6 +59,7 @@ class ColonyOSExecutor(BaseExecutor):
 
         return IMINTJob(
             date=date, coords=coords, rgb=rgb, bands=bands,
+            geo=geo,
             output_dir=os.path.join(output_dir, date),
             config_path=os.environ.get("CONFIG_PATH", "config/analyzers.yaml"),
             job_id=job_id,
@@ -80,7 +81,7 @@ class ColonyOSExecutor(BaseExecutor):
             )
         except FetchError as e:
             print(f"[ColonyOSExecutor] Fetch failed: {e}")
-            return None, None, False
+            return None, None, None, False
 
         is_cloudy = result.cloud_fraction > cloud_threshold
         if is_cloudy:
@@ -89,7 +90,7 @@ class ColonyOSExecutor(BaseExecutor):
                 f"> threshold {cloud_threshold:.0%} — marking as cloudy"
             )
 
-        return result.rgb, result.bands, is_cloudy
+        return result.rgb, result.bands, result.geo, is_cloudy
 
     def handle_result(self, result: IMINTResult) -> None:
         if result.success:
