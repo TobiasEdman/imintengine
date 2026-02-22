@@ -4,9 +4,18 @@ imint/analyzers/base.py — Abstract base analyzer and result dataclass
 All analyzers subclass BaseAnalyzer and implement analyze().
 BaseAnalyzer.run() wraps analyze() with error handling so analyzers
 never raise exceptions to the engine.
+
+The ``previous_results`` parameter (Alt A) enables cross-analyzer
+dependencies — analyzers that need results from earlier stages can
+declare it in their analyze() signature. Analyzers that don't need it
+simply omit the parameter; run() detects this via inspect and skips it.
+
+Migration to Alt B (shared JobContext) is a mechanical change: replace
+``previous_results: list[AnalysisResult]`` with ``context: JobContext``.
 """
 from __future__ import annotations
 
+import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -51,6 +60,7 @@ class BaseAnalyzer(ABC):
         date: str | None = None,
         coords: dict | None = None,
         output_dir: str = "outputs",
+        previous_results: list[AnalysisResult] | None = None,
     ) -> AnalysisResult:
         ...
 
@@ -61,9 +71,22 @@ class BaseAnalyzer(ABC):
         date: str | None = None,
         coords: dict | None = None,
         output_dir: str = "outputs",
+        previous_results: list[AnalysisResult] | None = None,
     ) -> AnalysisResult:
-        """Run analyze() with error handling."""
+        """Run analyze() with error handling.
+
+        Passes ``previous_results`` only if the concrete analyze()
+        declares it in its signature — existing analyzers that omit
+        it are called without it, requiring zero changes.
+        """
         try:
+            sig = inspect.signature(self.analyze)
+            if "previous_results" in sig.parameters:
+                return self.analyze(
+                    rgb, bands=bands, date=date,
+                    coords=coords, output_dir=output_dir,
+                    previous_results=previous_results,
+                )
             return self.analyze(
                 rgb, bands=bands, date=date,
                 coords=coords, output_dir=output_dir,

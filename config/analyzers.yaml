@@ -21,3 +21,15 @@ object_detection:
   std_threshold: 2.0        # Standard deviations above mean to flag anomaly
   # model_path: yolov8n.pt  # Uncomment for model mode
   # confidence: 0.25        # Minimum confidence for model detections
+
+prithvi:
+  enabled: false            # Requires: pip install terratorch (or just torch for Prithvi-only)
+  mode: embeddings          # "embeddings" or "segmentation"
+  backbone: prithvi_eo_v2_300m_tl
+  # --- Segmentation mode options ---
+  # task_head: sen1floods11  # Pre-trained task heads: sen1floods11, burn_scars
+  # model_path: path/to/finetuned.pt  # Alternative: direct checkpoint path
+  # device: cpu                       # Auto-detected if omitted (cuda > mps > cpu)
+
+nmd:
+  enabled: true             # NMD LULC analysis (requires DES connection + coords)

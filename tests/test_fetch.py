@@ -1,6 +1,7 @@
 """Tests for imint/fetch.py — cloud detection and DES data fetching."""
 from __future__ import annotations
 
+import os
 from unittest.mock import patch, MagicMock
 import numpy as np
 import pytest
@@ -13,7 +14,10 @@ from imint.fetch import (
     BANDS_10M,
     BANDS_20M_SPECTRAL,
     BANDS_20M_CATEGORICAL,
+    NMD_GRID_SIZE,
+    TARGET_CRS,
     _connect,
+    _to_nmd_grid,
     fetch_des_data,
 )
 
@@ -100,6 +104,23 @@ class TestFetchResult:
         assert result.crs == "EPSG:3006"
         assert result.transform == "mock"
 
+    def test_geo_field(self):
+        """FetchResult should accept a geo field."""
+        from imint.job import GeoContext
+        geo = GeoContext(
+            crs="EPSG:3006",
+            transform="mock-transform",
+            bounds_projected={"west": 370000, "south": 6150000, "east": 380000, "north": 6160000},
+            bounds_wgs84={"west": 13.0, "south": 55.5, "east": 13.1, "north": 55.6},
+            shape=(100, 100),
+        )
+        result = FetchResult(
+            bands={}, scl=None, cloud_fraction=0.0,
+            rgb=np.zeros((1, 1, 3)), geo=geo,
+        )
+        assert result.geo is not None
+        assert result.geo.crs == "EPSG:3006"
+
 
 # ── _connect authentication priority ─────────────────────────────────────────
 
@@ -177,7 +198,7 @@ class TestFetchDesData:
     def test_returns_fetch_result(self, mock_connect, mock_rasterio_open):
         """fetch_des_data should return a FetchResult with correct fields."""
         h, w = 64, 64
-        n_bands = 6  # 4 x 10m + 1 x 20m + 1 x SCL
+        n_bands = 8  # 4 x 10m + 3 x 20m spectral + 1 x SCL
 
         # Mock openEO connection and cube operations
         mock_conn = MagicMock()
@@ -198,14 +219,16 @@ class TestFetchDesData:
         mock_merged.download.return_value = b"geotiff-data"
 
         # Mock rasterio to return fake band data
-        # Band order: b02, b03, b04, b08, b11, scl
+        # Band order: b02, b03, b04, b08, b8a, b11, b12, scl
         raw = np.zeros((n_bands, h, w), dtype=np.uint16)
         raw[0] = 1500  # b02
         raw[1] = 1600  # b03
         raw[2] = 1960  # b04
         raw[3] = 3000  # b08
-        raw[4] = 2000  # b11
-        raw[5] = 4     # scl = vegetation (no clouds)
+        raw[4] = 2800  # b8a (narrow NIR)
+        raw[5] = 2000  # b11
+        raw[6] = 1800  # b12 (SWIR2)
+        raw[7] = 4     # scl = vegetation (no clouds)
 
         mock_src = MagicMock()
         mock_src.read.return_value = raw
@@ -223,7 +246,9 @@ class TestFetchDesData:
         assert isinstance(result, FetchResult)
         assert "B02" in result.bands
         assert "B04" in result.bands
+        assert "B8A" in result.bands
         assert "B11" in result.bands
+        assert "B12" in result.bands
         assert result.scl is not None
         assert result.cloud_fraction == 0.0  # all vegetation
         assert result.rgb.shape == (h, w, 3)
@@ -271,7 +296,7 @@ class TestBandConstants:
         assert BANDS_10M == ["b02", "b03", "b04", "b08"]
 
     def test_20m_spectral_bands(self):
-        assert BANDS_20M_SPECTRAL == ["b11"]
+        assert BANDS_20M_SPECTRAL == ["b8a", "b11", "b12"]
 
     def test_20m_categorical_bands(self):
         assert BANDS_20M_CATEGORICAL == ["scl"]
@@ -282,4 +307,104 @@ class TestBandConstants:
             assert band == band.lower()
 
 
-import os
+# ── Grid snapping constants ──────────────────────────────────────────────────
+
+class TestGridConstants:
+    """Verify NMD grid constants."""
+
+    def test_grid_size(self):
+        assert NMD_GRID_SIZE == 10
+
+    def test_target_crs(self):
+        assert TARGET_CRS == "EPSG:3006"
+
+
+# ── _to_nmd_grid ────────────────────────────────────────────────────────────
+
+class TestToNMDGrid:
+    """Verify WGS84 → EPSG:3006 + 10m grid snapping."""
+
+    def test_output_keys(self):
+        """Should return west, south, east, north, crs."""
+        coords = {"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0}
+        result = _to_nmd_grid(coords)
+        assert set(result.keys()) == {"west", "south", "east", "north", "crs"}
+
+    def test_crs_is_epsg3006(self):
+        coords = {"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0}
+        result = _to_nmd_grid(coords)
+        assert result["crs"] == "EPSG:3006"
+
+    def test_all_bounds_divisible_by_grid(self):
+        """All bounds must be exact multiples of NMD_GRID_SIZE (10m)."""
+        coords = {"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0}
+        result = _to_nmd_grid(coords)
+        for key in ["west", "south", "east", "north"]:
+            assert result[key] % NMD_GRID_SIZE == 0, f"{key}={result[key]} not divisible by {NMD_GRID_SIZE}"
+
+    def test_bbox_only_expands(self):
+        """Snapping must never shrink the bbox."""
+        import math
+        from rasterio.crs import CRS
+        from rasterio.warp import transform_bounds
+
+        coords = {"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0}
+        w, s, e, n = transform_bounds(
+            CRS.from_epsg(4326), CRS.from_epsg(3006),
+            coords["west"], coords["south"], coords["east"], coords["north"],
+        )
+        result = _to_nmd_grid(coords)
+        assert result["west"] <= w
+        assert result["south"] <= s
+        assert result["east"] >= e
+        assert result["north"] >= n
+
+    def test_deterministic(self):
+        """Same input must always produce the same output."""
+        coords = {"west": 13.5, "south": 55.5, "east": 14.0, "north": 56.0}
+        assert _to_nmd_grid(coords) == _to_nmd_grid(coords)
+
+    def test_projected_coords_in_reasonable_range(self):
+        """SWEREF99 TM coords for Sweden should be in expected ranges."""
+        coords = {"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0}
+        result = _to_nmd_grid(coords)
+        # EPSG:3006 easting ~300_000 to ~900_000 for Sweden
+        assert 300_000 < result["west"] < 900_000
+        assert 300_000 < result["east"] < 900_000
+        # EPSG:3006 northing ~6_100_000 to ~7_700_000 for Sweden
+        assert 6_100_000 < result["south"] < 7_700_000
+        assert 6_100_000 < result["north"] < 7_700_000
+
+    def test_fetch_des_data_sends_projected_coords(self):
+        """fetch_des_data should pass projected coords to load_collection."""
+        from unittest.mock import MagicMock, patch
+
+        mock_conn = MagicMock()
+        mock_cube = MagicMock()
+        mock_conn.load_collection.return_value = mock_cube
+        mock_cube.resample_cube_spatial.return_value = mock_cube
+        mock_cube.merge_cubes.return_value = mock_cube
+        mock_cube.download.return_value = b"geotiff-data"
+
+        # Mock rasterio to return fake data
+        mock_src = MagicMock()
+        raw = np.zeros((8, 64, 64), dtype=np.uint16)
+        raw[7] = 4  # SCL vegetation
+        mock_src.read.return_value = raw
+        mock_src.crs = "EPSG:3006"
+        mock_src.transform = "mock-transform"
+        mock_src.__enter__ = MagicMock(return_value=mock_src)
+        mock_src.__exit__ = MagicMock(return_value=False)
+
+        coords = {"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0}
+
+        with patch("imint.fetch._connect", return_value=mock_conn), \
+             patch("rasterio.open", return_value=mock_src):
+            fetch_des_data(date="2022-06-15", coords=coords)
+
+        # Verify all load_collection calls used projected coords with crs key
+        for call_args in mock_conn.load_collection.call_args_list:
+            spatial_extent = call_args[1].get("spatial_extent") or call_args[0][1] if len(call_args[0]) > 1 else call_args[1].get("spatial_extent")
+            if spatial_extent:
+                assert "crs" in spatial_extent, "spatial_extent should include crs"
+                assert spatial_extent["crs"] == "EPSG:3006"

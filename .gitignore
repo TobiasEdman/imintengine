@@ -4,6 +4,8 @@ data/
 *.npy
 *.tif
 *.geotiff
+*.pt
+*.pth
 
 # Baselines (large numpy files)
 **/baselines/

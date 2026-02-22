@@ -46,7 +46,9 @@ def bands_known():
         "B03": np.full((h, w), 0.3, dtype=np.float32),
         "B04": b04,
         "B08": b08,
+        "B8A": np.full((h, w), 0.75, dtype=np.float32),  # narrow NIR, similar to B08
         "B11": np.full((h, w), 0.15, dtype=np.float32),
+        "B12": np.full((h, w), 0.12, dtype=np.float32),  # SWIR2
     }
 
 
