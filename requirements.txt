@@ -17,3 +17,6 @@ openeo>=0.20
 
 # Object detection (optional — needed for mode: model)
 # ultralytics>=8.0     # YOLO
+
+# Foundation models (optional — needed for Prithvi/THOR analyzers)
+# terratorch>=1.0
