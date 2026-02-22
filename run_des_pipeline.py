@@ -1,16 +1,22 @@
 """
-run_des_pipeline.py -- Run the IMINT Engine pipeline with real Sentinel-2
-data from DES (Digital Earth Sweden) over Malmö.
+run_des_pipeline.py -- Run the full IMINT Engine pipeline with real Sentinel-2
+data from DES (Digital Earth Sweden).
 
 Fetches actual satellite imagery and NMD land cover data via openEO,
-runs all analyzers, and saves results to outputs/des_malmo/.
+runs all analyzers, and saves results.
 
 Requires:
     - Valid DES authentication (see scripts/des_login.py)
     - .des_token file or stored OIDC refresh token
 
 Usage:
+    # Malmö (default)
     .venv/bin/python run_des_pipeline.py
+
+    # Custom area
+    .venv/bin/python run_des_pipeline.py \\
+        --west 17.95 --south 63.51 --east 18.05 --north 63.56 \\
+        --date 2025-09-08 --date-window 5
 """
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+import argparse
 import numpy as np
 
 # ---- Project setup --------------------------------------------------------
@@ -31,33 +38,57 @@ from imint.job import IMINTJob
 from imint.fetch import fetch_des_data
 from imint.engine import run_job
 
-# ---- Configuration --------------------------------------------------------
+# ---- Defaults (Malmö centrum) --------------------------------------------
 
-# Malmö centrum — ~2x2 km area covering urban, parks, and water
-COORDS = {
+DEFAULT_COORDS = {
     "west": 13.00,
     "south": 55.58,
     "east": 13.02,
     "north": 55.60,
 }
-
-DATE = "2023-07-15"        # Summer date — good vegetation contrast
-DATE_WINDOW = 15           # ±15 days to find cloud-free imagery
-CLOUD_THRESHOLD = 0.3      # Max 30% cloud cover
-
-OUTPUT_DIR = str(PROJECT_ROOT / "outputs" / "des_malmo")
+DEFAULT_DATE = "2023-07-15"
+DEFAULT_DATE_WINDOW = 15
+DEFAULT_CLOUD_THRESHOLD = 0.3
 CONFIG_PATH = str(PROJECT_ROOT / "config" / "analyzers.yaml")
 
 
 # ---- Main -----------------------------------------------------------------
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Run the full IMINT Engine pipeline on DES Sentinel-2 data",
+    )
+    parser.add_argument("--west", type=float, default=DEFAULT_COORDS["west"])
+    parser.add_argument("--south", type=float, default=DEFAULT_COORDS["south"])
+    parser.add_argument("--east", type=float, default=DEFAULT_COORDS["east"])
+    parser.add_argument("--north", type=float, default=DEFAULT_COORDS["north"])
+    parser.add_argument("--date", default=DEFAULT_DATE,
+                        help="Target date ISO format (default: 2023-07-15)")
+    parser.add_argument("--date-window", type=int, default=DEFAULT_DATE_WINDOW,
+                        help="Days ± to search (default: 15)")
+    parser.add_argument("--output-dir", default=None,
+                        help="Override output directory")
+    args = parser.parse_args()
+
+    coords = {
+        "west": args.west, "south": args.south,
+        "east": args.east, "north": args.north,
+    }
+    date = args.date
+    date_window = args.date_window
+
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        area_tag = f"{args.west:.2f}_{args.south:.2f}_{args.east:.2f}_{args.north:.2f}"
+        output_dir = str(PROJECT_ROOT / "outputs" / f"pipeline_{area_tag}_{date}")
+
     print("=" * 70)
     print("  IMINT Engine -- DES Pipeline Run (Real Data)")
-    print(f"  Date: {DATE} (±{DATE_WINDOW} days)")
-    print(f"  Coords: {COORDS}")
-    print(f"  Cloud threshold: {CLOUD_THRESHOLD}")
-    print(f"  Output dir: {OUTPUT_DIR}")
+    print(f"  Area:   {args.west:.4f}-{args.east:.4f}E, {args.south:.4f}-{args.north:.4f}N")
+    print(f"  Date:   {date} (+/-{date_window} days)")
+    print(f"  Cloud:  {DEFAULT_CLOUD_THRESHOLD:.0%} threshold")
+    print(f"  Output: {output_dir}")
     print("=" * 70)
 
     # Step 1: Fetch real Sentinel-2 data from DES
@@ -66,19 +97,19 @@ def main():
 
     try:
         fetch_result = fetch_des_data(
-            date=DATE,
-            coords=COORDS,
-            cloud_threshold=CLOUD_THRESHOLD,
+            date=date,
+            coords=coords,
+            cloud_threshold=DEFAULT_CLOUD_THRESHOLD,
             include_scl=True,
-            date_window=DATE_WINDOW,
+            date_window=date_window,
         )
     except Exception as e:
-        print(f"\n  ❌ DES fetch failed: {e}")
-        print("  Make sure you have valid authentication:")
-        print("    python scripts/des_login.py --device")
+        print(f"\n    DES fetch failed: {e}")
+        print("    Make sure you have valid authentication:")
+        print("      python scripts/des_login.py --device")
         return
 
-    print(f"    ✅ Data fetched successfully!")
+    print(f"    Data fetched successfully!")
     print(f"    RGB shape: {fetch_result.rgb.shape}")
     print(f"    Bands: {list(fetch_result.bands.keys())}")
     print(f"    Cloud fraction: {fetch_result.cloud_fraction:.2%}")
@@ -93,24 +124,24 @@ def main():
         print(f"    {name}: min={arr.min():.4f}, max={arr.max():.4f}, mean={arr.mean():.4f}")
 
     # Check cloud cover
-    if fetch_result.cloud_fraction > CLOUD_THRESHOLD:
-        print(f"\n  ⚠️  Cloud fraction ({fetch_result.cloud_fraction:.1%}) exceeds "
-              f"threshold ({CLOUD_THRESHOLD:.0%}).")
-        print("  Continuing anyway for testing purposes...")
+    if fetch_result.cloud_fraction > DEFAULT_CLOUD_THRESHOLD:
+        print(f"\n    Cloud fraction ({fetch_result.cloud_fraction:.1%}) exceeds "
+              f"threshold ({DEFAULT_CLOUD_THRESHOLD:.0%}).")
+        print("    Continuing anyway...")
 
     # Step 2: Build IMINTJob
     print(f"\n[2] Building IMINTJob...")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
     job = IMINTJob(
-        date=DATE,
-        coords=COORDS,
+        date=date,
+        coords=coords,
         rgb=fetch_result.rgb,
         bands=fetch_result.bands,
         geo=fetch_result.geo,
-        output_dir=OUTPUT_DIR,
+        output_dir=output_dir,
         config_path=CONFIG_PATH,
-        job_id="des-malmo-001",
+        job_id=f"des-pipeline-{date}",
     )
     print(f"    job_id: {job.job_id}")
     print(f"    geo: {job.geo.crs if job.geo else 'None'}")
@@ -164,13 +195,13 @@ def main():
 
     total_size = 0
     file_count = 0
-    for root, dirs, files in os.walk(OUTPUT_DIR):
+    for root, dirs, files in os.walk(output_dir):
         for fname in sorted(files):
             fpath = os.path.join(root, fname)
             size = os.path.getsize(fpath)
             total_size += size
             file_count += 1
-            rel = os.path.relpath(fpath, OUTPUT_DIR)
+            rel = os.path.relpath(fpath, output_dir)
 
             ext = Path(fname).suffix.lower()
             desc = {

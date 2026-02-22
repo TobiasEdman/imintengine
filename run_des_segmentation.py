@@ -1,12 +1,19 @@
 """
 run_des_segmentation.py -- Run Prithvi segmentation on real Sentinel-2 data
-from DES (Digital Earth Sweden) over Malmö.
+from DES (Digital Earth Sweden).
 
 Uses cached bands from a previous pipeline run if available, or fetches
 fresh data from DES. Only runs the Prithvi analyzer in segmentation mode.
 
 Usage:
+    # Malmö (default)
     .venv/bin/python run_des_segmentation.py
+
+    # Custom area — Kubbe flood analysis
+    .venv/bin/python run_des_segmentation.py \\
+        --west 17.95 --south 63.51 --east 18.05 --north 63.56 \\
+        --date 2025-09-08 --date-window 5
+
     .venv/bin/python run_des_segmentation.py --task_head burn_scars
     .venv/bin/python run_des_segmentation.py --fetch   # Force fresh DES fetch
 """
@@ -30,33 +37,36 @@ from imint.job import IMINTJob, GeoContext
 from imint.engine import run_job, load_bands_cache
 from imint.utils import bands_to_rgb
 
-# ---- Configuration --------------------------------------------------------
+# ---- Defaults (Malmö centrum) --------------------------------------------
 
-# Same area as run_des_pipeline.py — Malmö centrum
-COORDS = {
+DEFAULT_COORDS = {
     "west": 13.00,
     "south": 55.58,
     "east": 13.02,
     "north": 55.60,
 }
-DATE = "2023-07-15"
-DATE_WINDOW = 15
-CLOUD_THRESHOLD = 0.3
-
-# Where previous DES runs saved data
-DES_OUTPUT_DIR = str(PROJECT_ROOT / "outputs" / "des_malmo")
+DEFAULT_DATE = "2023-07-15"
+DEFAULT_DATE_WINDOW = 15
+DEFAULT_CLOUD_THRESHOLD = 0.3
 
 
 # ---- Band loading ---------------------------------------------------------
 
-def load_cached_or_fetch(force_fetch: bool = False) -> dict:
+def load_cached_or_fetch(
+    coords: dict,
+    date: str,
+    date_window: int,
+    cloud_threshold: float,
+    output_dir: str,
+    force_fetch: bool = False,
+) -> dict:
     """Load cached bands from previous DES run, or fetch fresh from DES.
 
     Returns:
         Dict with keys: bands, rgb, geo, date, coords, source
     """
-    bands_dir = os.path.join(DES_OUTPUT_DIR, "bands")
-    prefix = f"{DATE}_"
+    bands_dir = os.path.join(output_dir, "bands")
+    prefix = f"{date}_"
 
     # Try loading from cache
     if not force_fetch and os.path.isdir(bands_dir):
@@ -85,8 +95,8 @@ def load_cached_or_fetch(force_fetch: bool = False) -> dict:
                 "bands": cached["bands"],
                 "rgb": rgb,
                 "geo": geo,
-                "date": cached.get("date", DATE),
-                "coords": cached.get("coords", COORDS),
+                "date": cached.get("date", date),
+                "coords": cached.get("coords", coords),
                 "source": "cache",
             }
         except (FileNotFoundError, KeyError) as e:
@@ -94,18 +104,18 @@ def load_cached_or_fetch(force_fetch: bool = False) -> dict:
 
     # Fetch from DES
     print(f"    Fetching Sentinel-2 data from DES...")
-    print(f"    Date: {DATE} (±{DATE_WINDOW} days)")
-    print(f"    Coords: {COORDS}")
+    print(f"    Date: {date} (±{date_window} days)")
+    print(f"    Coords: {coords}")
 
     from imint.fetch import fetch_des_data
 
     try:
         result = fetch_des_data(
-            date=DATE,
-            coords=COORDS,
-            cloud_threshold=CLOUD_THRESHOLD,
+            date=date,
+            coords=coords,
+            cloud_threshold=cloud_threshold,
             include_scl=True,
-            date_window=DATE_WINDOW,
+            date_window=date_window,
         )
     except Exception as e:
         print(f"\n    DES fetch failed: {e}")
@@ -119,8 +129,8 @@ def load_cached_or_fetch(force_fetch: bool = False) -> dict:
         "bands": result.bands,
         "rgb": result.rgb,
         "geo": result.geo,
-        "date": DATE,
-        "coords": COORDS,
+        "date": date,
+        "coords": coords,
         "source": "des",
     }
 
@@ -129,8 +139,23 @@ def load_cached_or_fetch(force_fetch: bool = False) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run Prithvi segmentation on real Malmö Sentinel-2 data",
+        description="Run Prithvi segmentation on Sentinel-2 data from DES",
     )
+    # Area
+    parser.add_argument("--west", type=float, default=DEFAULT_COORDS["west"],
+                        help="West longitude (WGS84)")
+    parser.add_argument("--south", type=float, default=DEFAULT_COORDS["south"],
+                        help="South latitude (WGS84)")
+    parser.add_argument("--east", type=float, default=DEFAULT_COORDS["east"],
+                        help="East longitude (WGS84)")
+    parser.add_argument("--north", type=float, default=DEFAULT_COORDS["north"],
+                        help="North latitude (WGS84)")
+    # Temporal
+    parser.add_argument("--date", default=DEFAULT_DATE,
+                        help="Target date ISO format (default: 2023-07-15)")
+    parser.add_argument("--date-window", type=int, default=DEFAULT_DATE_WINDOW,
+                        help="Days ± to search for cloud-free imagery (default: 15)")
+    # Model
     parser.add_argument(
         "--task_head", default="sen1floods11",
         choices=["sen1floods11", "burn_scars"],
@@ -141,31 +166,33 @@ def main():
         choices=["cpu", "cuda", "mps"],
         help="PyTorch device (default: cpu)",
     )
+    # Data source
     parser.add_argument(
         "--fetch", action="store_true",
         help="Force fresh DES fetch even if cache exists",
     )
     parser.add_argument(
-        "--data-dir", default=None,
-        help="Override source directory for band cache (default: outputs/des_malmo)",
-    )
-    parser.add_argument(
-        "--date", default=None,
-        help="Override date for band cache prefix (default: 2023-07-15)",
+        "--output-dir", default=None,
+        help="Override output directory (default: auto-generated from coords)",
     )
     args = parser.parse_args()
 
-    if args.data_dir:
-        global DES_OUTPUT_DIR
-        DES_OUTPUT_DIR = args.data_dir
-    if args.date:
-        global DATE
-        DATE = args.date
+    coords = {
+        "west": args.west, "south": args.south,
+        "east": args.east, "north": args.north,
+    }
 
-    output_dir = str(PROJECT_ROOT / "outputs" / f"des_segmentation_{args.task_head}")
+    # Auto-generate output dir from coordinates if not specified
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        area_tag = f"{args.west:.2f}_{args.south:.2f}_{args.east:.2f}_{args.north:.2f}"
+        output_dir = str(PROJECT_ROOT / "outputs" / f"seg_{area_tag}_{args.date}_{args.task_head}")
 
     print("=" * 70)
-    print(f"  Prithvi Segmentation on Real DES Data — Malmö")
+    print(f"  Prithvi Segmentation on DES Sentinel-2 Data")
+    print(f"  Area:       {args.west:.4f}–{args.east:.4f}°E, {args.south:.4f}–{args.north:.4f}°N")
+    print(f"  Date:       {args.date} (±{args.date_window} days)")
     print(f"  Task head:  {args.task_head}")
     print(f"  Device:     {args.device}")
     print(f"  Output dir: {output_dir}")
@@ -173,7 +200,14 @@ def main():
 
     # Load data (cache or DES)
     print("\n[1] Loading Sentinel-2 bands...")
-    data = load_cached_or_fetch(force_fetch=args.fetch)
+    data = load_cached_or_fetch(
+        coords=coords,
+        date=args.date,
+        date_window=args.date_window,
+        cloud_threshold=DEFAULT_CLOUD_THRESHOLD,
+        output_dir=output_dir,
+        force_fetch=args.fetch,
+    )
     print(f"    Source: {data['source']}")
     print(f"    RGB shape: {data['rgb'].shape}")
     print(f"    Bands: {list(data['bands'].keys())}")
