@@ -78,6 +78,66 @@ MAP_VIEWERS = [
         ],
     },
     {
+        "id": "map-dnbr",
+        "title": "dNBR (Brandsvårighetsgrad)",
+        "key": "dnbr",
+        "legend": [
+            {"color": "#1a9850", "label": "Hög återväxt (< -0.25)"},
+            {"color": "#91cf60", "label": "Låg återväxt (-0.25 – -0.1)"},
+            {"color": "#d9ef8b", "label": "Obränt (-0.1 – 0.1)"},
+            {"color": "#fee08b", "label": "Låg svårighetsgrad (0.1 – 0.27)"},
+            {"color": "#fdae61", "label": "Måttligt låg (0.27 – 0.44)"},
+            {"color": "#f46d43", "label": "Måttligt hög (0.44 – 0.66)"},
+            {"color": "#d73027", "label": "Hög svårighetsgrad (> 0.66)"},
+        ],
+    },
+    {
+        "id": "map-change-gradient",
+        "title": "Förändring (gradient)",
+        "key": "change_gradient",
+        "legend": [
+            {"color": "#FFFFB2", "label": "Liten förändring"},
+            {"color": "#FD8D3C", "label": "Måttlig förändring"},
+            {"color": "#BD0026", "label": "Stor förändring"},
+        ],
+    },
+    {
+        "id": "map-ndwi",
+        "title": "NDWI (Vattenindex)",
+        "key": "ndwi",
+        "legend": [
+            {"color": "#67001f", "label": "-1.0"},
+            {"color": "#d6604d", "label": "-0.5"},
+            {"color": "#f7f7f7", "label": "0.0"},
+            {"color": "#4393c3", "label": "0.5"},
+            {"color": "#053061", "label": "1.0 Vatten"},
+        ],
+    },
+    {
+        "id": "map-ndbi",
+        "title": "NDBI (Bebyggelseindex)",
+        "key": "ndbi",
+        "legend": [
+            {"color": "#313695", "label": "-1.0"},
+            {"color": "#abd9e9", "label": "-0.5"},
+            {"color": "#ffffbf", "label": "0.0"},
+            {"color": "#fdae61", "label": "0.5"},
+            {"color": "#a50026", "label": "1.0 Bebyggt"},
+        ],
+    },
+    {
+        "id": "map-evi",
+        "title": "EVI (Enhanced Vegetation Index)",
+        "key": "evi",
+        "legend": [
+            {"color": "#a50026", "label": "-1.0"},
+            {"color": "#f46d43", "label": "-0.5"},
+            {"color": "#fee08b", "label": "0.0"},
+            {"color": "#a6d96a", "label": "0.5"},
+            {"color": "#006837", "label": "1.0"},
+        ],
+    },
+    {
         "id": "map-prithvi",
         "title": "Prithvi Segmentering",
         "key": "prithvi_seg",
@@ -91,9 +151,9 @@ MAP_VIEWERS = [
         "title": "Molnoptisk tjocklek (COT)",
         "key": "cot",
         "legend": [
-            {"color": "#FFFFB2", "label": "Låg COT"},
-            {"color": "#FD8D3C", "label": "Medel COT"},
-            {"color": "#BD0026", "label": "Hög COT"},
+            {"color": "#FFFFB2", "label": "0.0 (Klart)"},
+            {"color": "#FD8D3C", "label": "0.5"},
+            {"color": "#BD0026", "label": "1.0 (Tjockt moln)"},
         ],
     },
 ]
@@ -266,7 +326,7 @@ def _build_html(
     if chart_data.get("spectral"):
         chart_sections_html += """
         <div class="chart-card">
-            <h3>Spektralindex per markklass (NDVI / NDWI)</h3>
+            <h3>Spektralindex per markklass (NDVI / NDWI / NBR / NDBI / EVI)</h3>
             <canvas id="chart-spectral"></canvas>
         </div>"""
     if chart_data.get("change"):
@@ -274,6 +334,10 @@ def _build_html(
         <div class="chart-card">
             <h3>Förändringsdetektering per markklass</h3>
             <canvas id="chart-change"></canvas>
+        </div>
+        <div class="chart-card">
+            <h3>dNBR brandsvårighetsgrad per markklass</h3>
+            <canvas id="chart-dnbr"></canvas>
         </div>"""
     if chart_data.get("prithvi"):
         chart_sections_html += """
@@ -614,7 +678,12 @@ def _build_html(
                 zoomSnap: 0.25,
             }});
 
-            const overlay = L.imageOverlay(IMAGES[v.key], bounds).addTo(map);
+            // Add RGB as background layer (except for the RGB panel itself)
+            if (v.key !== 'rgb' && IMAGES['rgb']) {{
+                L.imageOverlay(IMAGES['rgb'], bounds, {{zIndex: 0}}).addTo(map);
+            }}
+
+            const overlay = L.imageOverlay(IMAGES[v.key], bounds, {{zIndex: 1}}).addTo(map);
             map.fitBounds(bounds);
             maps.push(map);
             overlays[v.id] = overlay;
@@ -654,7 +723,7 @@ def _build_html(
                     labels: CHART_DATA.spectral.labels,
                     datasets: [
                         {{
-                            label: 'Medel-NDVI',
+                            label: 'NDVI',
                             data: CHART_DATA.spectral.ndvi,
                             backgroundColor: 'rgba(34,197,94,0.8)',
                             borderColor: '#22c55e',
@@ -662,10 +731,34 @@ def _build_html(
                             borderRadius: 3,
                         }},
                         {{
-                            label: 'Medel-NDWI',
+                            label: 'NDWI',
                             data: CHART_DATA.spectral.ndwi,
                             backgroundColor: 'rgba(59,130,246,0.8)',
                             borderColor: '#3b82f6',
+                            borderWidth: 1,
+                            borderRadius: 3,
+                        }},
+                        {{
+                            label: 'NBR',
+                            data: CHART_DATA.spectral.nbr,
+                            backgroundColor: 'rgba(249,115,22,0.8)',
+                            borderColor: '#f97316',
+                            borderWidth: 1,
+                            borderRadius: 3,
+                        }},
+                        {{
+                            label: 'NDBI',
+                            data: CHART_DATA.spectral.ndbi,
+                            backgroundColor: 'rgba(168,85,247,0.8)',
+                            borderColor: '#a855f7',
+                            borderWidth: 1,
+                            borderRadius: 3,
+                        }},
+                        {{
+                            label: 'EVI',
+                            data: CHART_DATA.spectral.evi,
+                            backgroundColor: 'rgba(234,179,8,0.8)',
+                            borderColor: '#eab308',
                             borderWidth: 1,
                             borderRadius: 3,
                         }},
@@ -715,6 +808,49 @@ def _build_html(
                             beginAtZero: true,
                             max: 100,
                             title: {{ display: true, text: 'Andel förändrad (%)' }},
+                            grid: {{ color: 'rgba(255,255,255,0.04)' }},
+                        }},
+                        x: {{
+                            grid: {{ display: false }},
+                        }},
+                    }},
+                }},
+            }});
+        }}
+
+        // ── Chart 2b: dNBR severity per NMD class ──────────────────────
+        if (CHART_DATA.change && CHART_DATA.change.dnbr && CHART_DATA.change.labels.length > 0) {{
+            // Color bars by USGS severity class
+            const dnbrColors = CHART_DATA.change.dnbr.map(function(v) {{
+                if (v < -0.25) return 'rgba(26,152,80,0.85)';
+                if (v < -0.1)  return 'rgba(145,207,96,0.85)';
+                if (v < 0.1)   return 'rgba(217,239,139,0.85)';
+                if (v < 0.27)  return 'rgba(254,224,139,0.85)';
+                if (v < 0.44)  return 'rgba(253,174,97,0.85)';
+                if (v < 0.66)  return 'rgba(244,109,67,0.85)';
+                return 'rgba(215,48,39,0.85)';
+            }});
+            new Chart(document.getElementById('chart-dnbr'), {{
+                type: 'bar',
+                data: {{
+                    labels: CHART_DATA.change.labels,
+                    datasets: [{{
+                        label: 'Medel-dNBR',
+                        data: CHART_DATA.change.dnbr,
+                        backgroundColor: dnbrColors,
+                        borderColor: dnbrColors.map(c => c.replace('0.85', '1')),
+                        borderWidth: 1,
+                        borderRadius: 3,
+                    }}],
+                }},
+                options: {{
+                    responsive: true,
+                    plugins: {{
+                        legend: {{ display: false }},
+                    }},
+                    scales: {{
+                        y: {{
+                            title: {{ display: true, text: 'dNBR' }},
                             grid: {{ color: 'rgba(255,255,255,0.04)' }},
                         }},
                         x: {{
@@ -901,16 +1037,25 @@ def _build_chart_data(nmd_stats: dict) -> dict:
         labels = []
         ndvi_vals = []
         ndwi_vals = []
+        nbr_vals = []
+        ndbi_vals = []
+        evi_vals = []
         for key in L2_ORDER:
             if key in spectral:
                 info = NMD_L2_CHART.get(key, {"label": key})
                 labels.append(info["label"])
                 ndvi_vals.append(round(spectral[key].get("mean_ndvi", 0), 4))
                 ndwi_vals.append(round(spectral[key].get("mean_ndwi", 0), 4))
+                nbr_vals.append(round(spectral[key].get("mean_nbr", 0), 4))
+                ndbi_vals.append(round(spectral[key].get("mean_ndbi", 0), 4))
+                evi_vals.append(round(spectral[key].get("mean_evi", 0), 4))
         chart_data["spectral"] = {
             "labels": labels,
             "ndvi": ndvi_vals,
             "ndwi": ndwi_vals,
+            "nbr": nbr_vals,
+            "ndbi": ndbi_vals,
+            "evi": evi_vals,
         }
 
     # ── Change detection chart (Level 2) ──────────────────────────────────
@@ -918,6 +1063,7 @@ def _build_chart_data(nmd_stats: dict) -> dict:
     if change:
         labels = []
         fractions = []
+        dnbr_vals = []
         colors = []
         borders = []
         for key in L2_ORDER:
@@ -925,11 +1071,13 @@ def _build_chart_data(nmd_stats: dict) -> dict:
                 info = NMD_L2_CHART.get(key, {"label": key, "color": "gray", "border": "gray"})
                 labels.append(info["label"])
                 fractions.append(round(change[key].get("change_fraction", 0) * 100, 1))
+                dnbr_vals.append(round(change[key].get("mean_dnbr", 0), 4))
                 colors.append(info["color"])
                 borders.append(info["border"])
         chart_data["change"] = {
             "labels": labels,
             "fractions": fractions,
+            "dnbr": dnbr_vals,
             "colors": colors,
             "borders": borders,
         }

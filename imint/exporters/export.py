@@ -774,6 +774,37 @@ def save_ndvi_clean_png(ndvi: np.ndarray, path: str) -> str:
     return path
 
 
+def save_spectral_index_clean_png(
+    index_arr: np.ndarray,
+    path: str,
+    cmap_name: str = "RdYlGn",
+    vmin: float = -1.0,
+    vmax: float = 1.0,
+) -> str:
+    """Save a spectral index as a clean color-mapped PNG for Leaflet overlay.
+
+    Args:
+        index_arr: (H, W) float32 array.
+        path: Output PNG path.
+        cmap_name: Matplotlib colormap name.
+        vmin: Minimum value for normalization.
+        vmax: Maximum value for normalization.
+
+    Returns:
+        The output file path.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+
+    norm = ((index_arr - vmin) / (vmax - vmin + 1e-10)).clip(0, 1)
+    cmap = cm.get_cmap(cmap_name)
+    rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
+    Image.fromarray(rgba).save(path)
+    print(f"    saved: {path}")
+    return path
+
+
 def save_prithvi_seg_clean_png(
     seg_mask: np.ndarray,
     path: str,
@@ -809,8 +840,7 @@ def save_prithvi_seg_clean_png(
 def save_cot_clean_png(cot_map: np.ndarray, path: str) -> str:
     """Save COT heatmap as a clean PNG for Leaflet overlay.
 
-    Uses the hot_r colormap with histogram stretching (2nd-98th
-    percentile) for maximum contrast across the actual data range.
+    Uses the hot_r colormap with fixed 0–1 range.
 
     Args:
         cot_map: (H, W) float32 COT values.
@@ -823,11 +853,7 @@ def save_cot_clean_png(cot_map: np.ndarray, path: str) -> str:
     matplotlib.use("Agg")
     import matplotlib.cm as cm
 
-    vmin, vmax = _cot_stretch_range(cot_map)
-    if vmax - vmin < 1e-10:
-        norm = np.zeros_like(cot_map)
-    else:
-        norm = ((cot_map - vmin) / (vmax - vmin)).clip(0, 1)
+    norm = cot_map.clip(0, 1)
     cmap = cm.get_cmap("hot_r")
     rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
     Image.fromarray(rgba).save(path)
@@ -881,6 +907,72 @@ def save_cloud_class_clean_png(cloud_class: np.ndarray, path: str) -> str:
     ], dtype=np.uint8)
     clamped = np.clip(cloud_class, 0, 2)
     rgb = palette[clamped]
+    Image.fromarray(rgb).save(path)
+    print(f"    saved: {path}")
+    return path
+
+
+def save_change_gradient_png(diff: np.ndarray, path: str) -> str:
+    """Save change magnitude as a gradient heatmap PNG for Leaflet overlay.
+
+    Low change → transparent/blue, high change → red.
+    Uses the 'hot' colormap normalized to the data range.
+
+    Args:
+        diff: (H, W) float32 L2-norm difference between current and baseline.
+        path: Output PNG path.
+
+    Returns:
+        The output file path.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+
+    vmax = float(np.percentile(diff[diff > 0], 98)) if (diff > 0).any() else 1.0
+    vmax = max(vmax, 1e-6)
+    norm = (diff / vmax).clip(0, 1)
+    cmap = cm.get_cmap("hot_r")
+    rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
+    Image.fromarray(rgba).save(path)
+    print(f"    saved: {path}")
+    return path
+
+
+def save_dnbr_clean_png(dnbr: np.ndarray, path: str) -> str:
+    """Save dNBR as a clean PNG with discrete USGS burn severity classes.
+
+    USGS dNBR classification:
+        < -0.25  : High regrowth  (#1a9850)
+        -0.25–-0.1: Low regrowth  (#91cf60)
+        -0.1–0.1 : Unburned       (#d9ef8b)
+        0.1–0.27 : Low severity   (#fee08b)
+        0.27–0.44: Moderate-low   (#fdae61)
+        0.44–0.66: Moderate-high  (#f46d43)
+        > 0.66   : High severity  (#d73027)
+
+    Args:
+        dnbr: (H, W) float32 dNBR values (NBR_pre - NBR_post).
+        path: Output PNG path.
+
+    Returns:
+        The output file path.
+    """
+    # USGS thresholds and colors (RGB)
+    thresholds = [-0.25, -0.1, 0.1, 0.27, 0.44, 0.66]
+    colors = np.array([
+        [26, 152, 80],    # High regrowth (dark green)
+        [145, 207, 96],   # Low regrowth (light green)
+        [217, 239, 139],  # Unburned (yellow-green)
+        [254, 224, 139],  # Low severity (yellow)
+        [253, 174, 97],   # Moderate-low (orange)
+        [244, 109, 67],   # Moderate-high (red-orange)
+        [215, 48, 39],    # High severity (red)
+    ], dtype=np.uint8)
+
+    # Classify each pixel
+    class_idx = np.digitize(dnbr, thresholds)  # 0..6
+    rgb = colors[class_idx]
     Image.fromarray(rgb).save(path)
     print(f"    saved: {path}")
     return path

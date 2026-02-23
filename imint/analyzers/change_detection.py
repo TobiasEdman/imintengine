@@ -60,6 +60,11 @@ def _ndwi(b03, b08):
     return (b03 - b08) / (b03 + b08 + 1e-10)
 
 
+def _nbr(b08, b12):
+    """Compute NBR from NIR (B08) and SWIR2 (B12)."""
+    return (b08 - b12) / (b08 + b12 + 1e-10)
+
+
 class ChangeDetectionAnalyzer(BaseAnalyzer):
     name = "change_detection"
 
@@ -232,6 +237,7 @@ class ChangeDetectionAnalyzer(BaseAnalyzer):
         }
 
         # Index-based change metadata (only when multispectral)
+        dnbr = None
         if baseline_is_multispectral and is_multispectral:
             valid = ~cloud_mask
             # Current and baseline band arrays (from stacks)
@@ -241,21 +247,33 @@ class ChangeDetectionAnalyzer(BaseAnalyzer):
             cur_ndwi = _ndwi(current_stack[..., 1], current_stack[..., 3])
             bas_ndwi = _ndwi(baseline_stack[..., 1], baseline_stack[..., 3])
 
+            # dNBR = NBR_pre - NBR_post (positive = burn severity)
+            nbr_pre = _nbr(baseline_stack[..., 3], baseline_stack[..., 5])
+            nbr_post = _nbr(current_stack[..., 3], current_stack[..., 5])
+            dnbr = nbr_pre - nbr_post
+
             if valid.any():
                 metadata["ndvi_diff_mean"] = round(float((cur_ndvi - bas_ndvi)[valid].mean()), 4)
                 metadata["ndwi_diff_mean"] = round(float((cur_ndwi - bas_ndwi)[valid].mean()), 4)
+                metadata["dnbr_mean"] = round(float(dnbr[valid].mean()), 4)
             else:
                 metadata["ndvi_diff_mean"] = 0.0
                 metadata["ndwi_diff_mean"] = 0.0
+                metadata["dnbr_mean"] = 0.0
+
+        outputs = {
+            "change_fraction": change_fraction,
+            "n_regions": len(regions),
+            "regions": regions,
+            "change_mask": change_mask,
+            "change_diff": diff,
+        }
+        if dnbr is not None:
+            outputs["dnbr"] = dnbr
 
         return AnalysisResult(
             analyzer=self.name,
             success=True,
-            outputs={
-                "change_fraction": change_fraction,
-                "n_regions": len(regions),
-                "regions": regions,
-                "change_mask": change_mask,
-            },
+            outputs=outputs,
             metadata=metadata,
         )

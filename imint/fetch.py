@@ -1050,6 +1050,17 @@ def ensure_baseline(
         if result.scl is not None:
             scl_path = baseline_path.replace(".npy", "_scl.npy")
             np.save(scl_path, result.scl)
+
+        # Save multispectral bands stack for dNBR / change detection
+        _CHANGE_BANDS = ["B02", "B03", "B04", "B08", "B11", "B12"]
+        if result.bands and all(b in result.bands for b in _CHANGE_BANDS):
+            bands_stack = np.stack(
+                [result.bands[b] for b in _CHANGE_BANDS], axis=-1
+            ).astype(np.float32)
+            bands_path = baseline_path.replace(".npy", "_bands.npy")
+            np.save(bands_path, bands_stack)
+            print(f"  [baseline] Saved multispectral bands: {bands_path}")
+
         print(f"  [baseline] Saved cloud-free baseline: {baseline_path}")
         return baseline_path
 

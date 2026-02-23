@@ -25,8 +25,10 @@ from .exporters.export import (
     save_regions_geojson, save_geotiff, save_summary_report,
     save_nmd_overlay, save_nmd_stats, save_nmd_visualization,
     save_prithvi_overlay, save_prithvi_embedding_viz,
-    save_ndvi_clean_png, save_prithvi_seg_clean_png,
+    save_ndvi_clean_png, save_spectral_index_clean_png,
+    save_prithvi_seg_clean_png,
     save_cot_clean_png, save_cloud_class_clean_png,
+    save_dnbr_clean_png, save_change_gradient_png,
 )
 from .exporters.html_report import save_html_report
 
@@ -200,11 +202,38 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
                 save_regions_geojson(regions, os.path.join(out, f"{prefix}change_regions.geojson"),
                                      geo=job.geo, coords=job.coords, image_shape=job.rgb.shape)
 
+        # Gradient change magnitude
+        change_diff = result.outputs.get("change_diff")
+        if change_diff is not None:
+            save_change_gradient_png(change_diff, os.path.join(out, f"{prefix}change_gradient.png"))
+
+        # dNBR (burn severity)
+        dnbr = result.outputs.get("dnbr")
+        if dnbr is not None:
+            save_dnbr_clean_png(dnbr, os.path.join(out, f"{prefix}dnbr_clean.png"))
+
     elif result.analyzer == "spectral":
-        ndvi = result.outputs.get("indices", {}).get("NDVI")
+        indices = result.outputs.get("indices", {})
+        ndvi = indices.get("NDVI")
         if ndvi is not None:
             save_ndvi_colormap(ndvi, os.path.join(out, f"{prefix}ndvi.png"))
             save_ndvi_clean_png(ndvi, os.path.join(out, f"{prefix}ndvi_clean.png"))
+
+        # Save clean PNGs for all spectral indices (for HTML report)
+        index_cmaps = {
+            "NDWI": ("RdBu", -1, 1),
+            "NDBI": ("RdYlBu_r", -1, 1),
+            "EVI": ("RdYlGn", -1, 1),
+            "NBR": ("RdYlGn", -1, 1),
+        }
+        for idx_name, (cmap, vmin, vmax) in index_cmaps.items():
+            idx_arr = indices.get(idx_name)
+            if idx_arr is not None:
+                save_spectral_index_clean_png(
+                    idx_arr,
+                    os.path.join(out, f"{prefix}{idx_name.lower()}_clean.png"),
+                    cmap_name=cmap, vmin=vmin, vmax=vmax,
+                )
 
     elif result.analyzer == "object_detection":
         regions = result.outputs.get("regions", [])
@@ -287,6 +316,12 @@ def _generate_html_report(job: IMINTJob, prefix: str) -> None:
         "nmd": f"{prefix}nmd_overlay.png",
         "change": f"{prefix}change_overlay.png",
         "ndvi": f"{prefix}ndvi_clean.png",
+        "ndwi": f"{prefix}ndwi_clean.png",
+        "ndbi": f"{prefix}ndbi_clean.png",
+        "evi": f"{prefix}evi_clean.png",
+        "nbr": f"{prefix}nbr_clean.png",
+        "dnbr": f"{prefix}dnbr_clean.png",
+        "change_gradient": f"{prefix}change_gradient.png",
         "prithvi_seg": f"{prefix}prithvi_seg_clean.png",
         "cot": f"{prefix}cot_clean.png",
     }

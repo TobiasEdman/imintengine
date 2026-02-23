@@ -330,8 +330,15 @@ def _spectral_cross_ref(nmd_raster: np.ndarray, spectral: AnalysisResult) -> dic
         Dict mapping L2 class name to spectral statistics.
     """
     indices = spectral.outputs.get("indices", {})
-    ndvi = indices.get("NDVI")
-    ndwi = indices.get("NDWI")
+
+    # All spectral indices to cross-reference
+    index_keys = [
+        ("NDVI", "mean_ndvi"),
+        ("NDWI", "mean_ndwi"),
+        ("NBR", "mean_nbr"),
+        ("NDBI", "mean_ndbi"),
+        ("EVI", "mean_evi"),
+    ]
 
     result = {}
     for name, codes in NMD_LEVEL2.items():
@@ -341,10 +348,10 @@ def _spectral_cross_ref(nmd_raster: np.ndarray, spectral: AnalysisResult) -> dic
             continue
 
         entry = {}
-        if ndvi is not None and ndvi.shape == nmd_raster.shape:
-            entry["mean_ndvi"] = round(float(np.mean(ndvi[mask])), 4)
-        if ndwi is not None and ndwi.shape == nmd_raster.shape:
-            entry["mean_ndwi"] = round(float(np.mean(ndwi[mask])), 4)
+        for idx_name, out_key in index_keys:
+            arr = indices.get(idx_name)
+            if arr is not None and arr.shape == nmd_raster.shape:
+                entry[out_key] = round(float(np.mean(arr[mask])), 4)
 
         if entry:
             result[name] = entry
@@ -372,6 +379,8 @@ def _change_cross_ref(nmd_raster: np.ndarray, change: AnalysisResult) -> dict:
     if change_mask.shape != nmd_raster.shape:
         return {}
 
+    dnbr = change.outputs.get("dnbr")
+
     result = {}
     for name, codes in NMD_LEVEL2.items():
         lulc_mask = np.isin(nmd_raster, list(codes))
@@ -380,11 +389,17 @@ def _change_cross_ref(nmd_raster: np.ndarray, change: AnalysisResult) -> dict:
             continue
 
         changed_in_class = int((change_mask & lulc_mask).sum())
-        result[name] = {
+        entry = {
             "change_fraction": round(changed_in_class / n_pixels, 4),
             "changed_pixels": changed_in_class,
             "total_pixels": n_pixels,
         }
+
+        # dNBR severity per NMD class
+        if dnbr is not None and dnbr.shape == nmd_raster.shape:
+            entry["mean_dnbr"] = round(float(np.mean(dnbr[lulc_mask])), 4)
+
+        result[name] = entry
 
     return result
 
