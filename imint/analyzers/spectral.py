@@ -1,8 +1,8 @@
 """
 imint/analyzers/spectral.py — Spectral index analyzer
 
-Computes NDVI, NDWI, NDBI, and EVI from Sentinel-2 bands.
-Classifies each pixel as water, vegetation, built-up, or bare soil.
+Computes NDVI, NDWI, NDBI, EVI, and NBR from Sentinel-2 bands.
+NBR (Normalized Burn Ratio) = (B08 - B12) / (B08 + B12) measures burn severity.
 Falls back to RGB approximations if spectral bands are missing.
 """
 from __future__ import annotations
@@ -26,6 +26,7 @@ class SpectralAnalyzer(BaseAnalyzer):
             b04 = bands.get("B04", rgb[:, :, 0] if rgb is not None else np.zeros((256, 256)))
             b08 = bands["B08"]
             b11 = bands.get("B11", np.full_like(b08, 0.1))
+            b12 = bands.get("B12", np.full_like(b08, 0.1))
             fallback = False
         else:
             b04 = rgb[:, :, 0].astype(np.float32)  # Red
@@ -33,6 +34,7 @@ class SpectralAnalyzer(BaseAnalyzer):
             b02 = rgb[:, :, 2].astype(np.float32)  # Blue
             b08 = np.mean(rgb, axis=-1).astype(np.float32)  # Rough NIR proxy
             b11 = np.full_like(b08, 0.1)
+            b12 = np.full_like(b08, 0.1)
             fallback = True
 
         # Compute indices
@@ -40,12 +42,13 @@ class SpectralAnalyzer(BaseAnalyzer):
         ndwi = _safe_ratio(b03, b08)
         ndbi = _safe_ratio(b11, b08)
         evi = 2.5 * (b08 - b04) / (b08 + 6.0 * b04 - 7.5 * b02 + 1.0 + 1e-10)
+        nbr = _safe_ratio(b08, b12)
 
         return AnalysisResult(
             analyzer=self.name,
             success=True,
             outputs={
-                "indices": {"NDVI": ndvi, "NDWI": ndwi, "NDBI": ndbi, "EVI": evi},
+                "indices": {"NDVI": ndvi, "NDWI": ndwi, "NDBI": ndbi, "EVI": evi, "NBR": nbr},
             },
             metadata={"fallback_rgb": fallback, "date": date},
         )
