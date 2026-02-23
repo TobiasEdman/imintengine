@@ -284,25 +284,21 @@ def fetch_des_data(
 ) -> FetchResult:
     """Fetch Sentinel-2 L2A data from DES via openEO.
 
-    Uses a two-stage fetch strategy:
-        1. Fetch SCL (Scene Classification Layer) first — lightweight
-        2. Check cloud fraction against threshold
-        3. Only fetch full spectral bands if cloud cover is acceptable
-
-    This avoids downloading large spectral cubes for cloudy scenes.
+    Fetches all spectral bands + SCL in a single request. Cloud fraction
+    is computed *after* download from the SCL band and compared against
+    the threshold.  If the scene exceeds the threshold a ``FetchError``
+    is raised.
 
     Args:
         date: ISO date string, e.g. "2022-06-15".
         coords: Bounding box dict with keys: west, south, east, north.
-        cloud_threshold: Maximum cloud fraction (0.0–1.0). If SCL shows
-                         more cloud than this, spectral bands are NOT fetched
-                         and a FetchError is raised. Default: 0.1 (10%).
+        cloud_threshold: Maximum cloud fraction (0.0–1.0). Set to 1.0
+                         to accept any cloud cover. Default: 0.1 (10%).
         token: Optional DES access token. Falls back to env/file/OIDC.
-        include_scl: If True, pre-screen with SCL before fetching spectral
-                     bands. If False, skip cloud check and fetch everything.
+        include_scl: If True, fetch SCL band for cloud stats and
+                     visualization. If False, skip SCL entirely.
         date_window: Days before/after date to search for imagery.
-                     0 = single day, 5 = ±5 days window. DES will pick
-                     the most recent available acquisition.
+                     0 = single day, 5 = ±5 days window.
 
     Returns:
         FetchResult with bands, rgb, cloud_fraction, etc.
@@ -325,33 +321,9 @@ def fetch_des_data(
     end = (dt + timedelta(days=max(date_window, 1))).strftime("%Y-%m-%d")
     temporal = [start, end]
 
-    # ── Stage 1: Fetch SCL and check cloud cover ─────────────────────────
-    scl = None
-    cloud_fraction = 0.0
-
-    if include_scl:
-        try:
-            print(f"    [SCL] Fetching cloud mask...")
-            scl, cloud_fraction, scl_crs, scl_transform = _fetch_scl(
-                conn, projected_coords, temporal, date_window
-            )
-            print(f"    [SCL] Cloud fraction: {cloud_fraction:.1%}")
-
-            if cloud_fraction > cloud_threshold:
-                raise FetchError(
-                    f"Scene too cloudy: {cloud_fraction:.1%} cloud "
-                    f"(threshold: {cloud_threshold:.0%}). "
-                    f"Spectral bands not downloaded. "
-                    f"Try a different date or wider date_window."
-                )
-        except FetchError:
-            raise
-        except Exception as e:
-            raise FetchError(f"SCL fetch failed for {date}: {e}")
-
-    # ── Stage 2: Fetch spectral bands (scene is clear enough) ────────────
+    # ── Fetch all bands in a single request ──────────────────────────────
     try:
-        print(f"    [Spectral] Fetching bands (scene passed cloud check)...")
+        print(f"    Fetching spectral bands{' + SCL' if include_scl else ''}...")
 
         # Load 10m bands (EPSG:3006, snapped to NMD grid)
         cube_10m = conn.load_collection(
@@ -386,6 +358,19 @@ def fetch_des_data(
         # Merge spectral bands
         cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_60m)
 
+        # Optionally include SCL (resampled to 10m with nearest-neighbor)
+        if include_scl:
+            cube_scl = conn.load_collection(
+                collection_id=COLLECTION,
+                spatial_extent=projected_coords,
+                temporal_extent=temporal,
+                bands=BANDS_20M_CATEGORICAL,
+            )
+            cube_scl = cube_scl.resample_cube_spatial(
+                target=cube_10m, method="near"
+            )
+            cube = cube.merge_cubes(cube_scl)
+
         # If searching a date window, reduce temporal axis to get
         # the most recent pixel values (last available observation)
         if date_window > 0:
@@ -417,12 +402,29 @@ def fetch_des_data(
     # 10m: b02=0, b03=1, b04=2, b08=3
     # 20m spectral: b05=4, b06=5, b07=6, b8a=7, b11=8, b12=9
     # 60m: b09=10
+    # SCL: 11 (if included)
     spectral_names = BANDS_10M + BANDS_20M_SPECTRAL + BANDS_60M
+    n_spectral = len(spectral_names)
 
     # Convert spectral bands: DN → reflectance
     des_bands = {}
     for i, band_name in enumerate(spectral_names):
         des_bands[band_name] = dn_to_reflectance(raw[i], source="des")
+
+    # Extract SCL if present (last band)
+    scl = None
+    cloud_fraction = 0.0
+    if include_scl and raw.shape[0] > n_spectral:
+        scl = raw[n_spectral].astype(np.uint8)
+        cloud_fraction = check_cloud_fraction(scl)
+        print(f"    Cloud fraction: {cloud_fraction:.1%}")
+
+        if cloud_fraction > cloud_threshold:
+            raise FetchError(
+                f"Scene too cloudy: {cloud_fraction:.1%} cloud "
+                f"(threshold: {cloud_threshold:.0%}). "
+                f"Try a different date or wider date_window."
+            )
 
     # Map lowercase → uppercase band names
     imint_bands = des_to_imint_bands(des_bands)

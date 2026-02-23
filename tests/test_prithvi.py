@@ -356,11 +356,14 @@ class TestTaskHeadRegistry:
         from imint.fm.terratorch_loader import TASK_HEAD_REGISTRY
         required_fields = [
             "repo_id", "filename", "num_classes", "feature_indices",
-            "decoder_channels", "dropout", "class_names", "description",
+            "dropout", "class_names", "description",
         ]
         for name, entry in TASK_HEAD_REGISTRY.items():
             for field in required_fields:
                 assert field in entry, f"Task head '{name}' missing field '{field}'"
+            # Must have either decoder_channels (UPerNet) or decoder_type (UNet)
+            has_decoder_config = "decoder_channels" in entry or "decoder_type" in entry
+            assert has_decoder_config, f"Task head '{name}' needs decoder_channels or decoder_type"
 
     def test_unknown_task_head_raises(self):
         """load_segmentation_model should raise ValueError for unknown heads."""

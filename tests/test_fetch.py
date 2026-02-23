@@ -193,12 +193,15 @@ class TestFetchDesData:
         # We'll mock rasterio.open instead of creating real GeoTIFF bytes
         return b"fake-geotiff-bytes"
 
-    def _mock_two_stage_fetch(self, mock_connect, mock_rasterio_open,
-                               h=64, w=64, scl_value=4):
-        """Set up mocks for the two-stage SCL-first fetch strategy.
+    def _mock_single_stage_fetch(self, mock_connect, mock_rasterio_open,
+                                  h=64, w=64, scl_value=4, include_scl=True):
+        """Set up mocks for the single-stage fetch (all bands in one request).
 
-        Stage 1: SCL fetch (load_collection x2: b02 ref + scl)
-        Stage 2: Spectral fetch (load_collection x2: 10m + 20m)
+        Band order in the merged GeoTIFF:
+          10m: b02=0, b03=1, b04=2, b08=3
+          20m spectral: b05=4, b06=5, b07=6, b8a=7, b11=8, b12=9
+          60m: b09=10
+          SCL: 11 (if included)
         """
         mock_conn = MagicMock()
         mock_connect.return_value = mock_conn
@@ -211,23 +214,23 @@ class TestFetchDesData:
         mock_cube.reduce_dimension.return_value = mock_cube
         mock_cube.download.return_value = b"geotiff-data"
 
-        # SCL GeoTIFF (1 band) and spectral GeoTIFF (11 bands)
-        # Band order: b02, b03, b04, b08, b05, b06, b07, b8a, b11, b12, b09
-        scl_raw = np.full((1, h, w), scl_value, dtype=np.uint16)
-        spectral_raw = np.zeros((11, h, w), dtype=np.uint16)
-        spectral_raw[0] = 1500   # b02
-        spectral_raw[1] = 1600   # b03
-        spectral_raw[2] = 1960   # b04
-        spectral_raw[3] = 3000   # b08
-        spectral_raw[4] = 2200   # b05
-        spectral_raw[5] = 2400   # b06
-        spectral_raw[6] = 2600   # b07
-        spectral_raw[7] = 2800   # b8a
-        spectral_raw[8] = 2000   # b11
-        spectral_raw[9] = 1800   # b12
-        spectral_raw[10] = 1000  # b09
+        # Build single merged GeoTIFF: 11 spectral + 1 SCL (or 11 without SCL)
+        n_bands = 12 if include_scl else 11
+        raw = np.zeros((n_bands, h, w), dtype=np.uint16)
+        raw[0] = 1500   # b02
+        raw[1] = 1600   # b03
+        raw[2] = 1960   # b04
+        raw[3] = 3000   # b08
+        raw[4] = 2200   # b05
+        raw[5] = 2400   # b06
+        raw[6] = 2600   # b07
+        raw[7] = 2800   # b8a
+        raw[8] = 2000   # b11
+        raw[9] = 1800   # b12
+        raw[10] = 1000  # b09
+        if include_scl:
+            raw[11] = scl_value  # SCL
 
-        call_count = {"n": 0}
         def make_mock_src(data):
             """Create a rasterio mock src for given raw data."""
             src = MagicMock()
@@ -238,11 +241,8 @@ class TestFetchDesData:
             src.__exit__ = MagicMock(return_value=False)
             return src
 
-        # rasterio.open is called twice: first for SCL, then for spectral
-        mock_rasterio_open.side_effect = [
-            make_mock_src(scl_raw),
-            make_mock_src(spectral_raw),
-        ]
+        # Single rasterio.open call for the merged GeoTIFF
+        mock_rasterio_open.return_value = make_mock_src(raw)
 
         return mock_conn
 
@@ -251,8 +251,8 @@ class TestFetchDesData:
     def test_returns_fetch_result(self, mock_connect, mock_rasterio_open):
         """fetch_des_data should return a FetchResult with correct fields."""
         h, w = 64, 64
-        self._mock_two_stage_fetch(mock_connect, mock_rasterio_open, h, w,
-                                    scl_value=4)  # vegetation, no clouds
+        self._mock_single_stage_fetch(mock_connect, mock_rasterio_open, h, w,
+                                       scl_value=4)  # vegetation, no clouds
 
         result = fetch_des_data(
             date="2022-06-15",
@@ -278,8 +278,8 @@ class TestFetchDesData:
     def test_rejects_cloudy_scene(self, mock_connect, mock_rasterio_open):
         """Should raise FetchError when cloud fraction exceeds threshold."""
         h, w = 64, 64
-        self._mock_two_stage_fetch(mock_connect, mock_rasterio_open, h, w,
-                                    scl_value=9)  # cloud_high_probability
+        self._mock_single_stage_fetch(mock_connect, mock_rasterio_open, h, w,
+                                       scl_value=9)  # cloud_high_probability
 
         with pytest.raises(FetchError, match="too cloudy"):
             fetch_des_data(
@@ -457,7 +457,7 @@ class TestToNMDGrid:
         mock_cube.merge_cubes.return_value = mock_cube
         mock_cube.download.return_value = b"geotiff-data"
 
-        # Mock rasterio — called twice (SCL stage + spectral stage)
+        # Mock rasterio — single call for merged GeoTIFF (11 spectral + 1 SCL)
         def make_src(raw):
             src = MagicMock()
             src.read.return_value = raw
@@ -467,13 +467,13 @@ class TestToNMDGrid:
             src.__exit__ = MagicMock(return_value=False)
             return src
 
-        scl_raw = np.full((1, 64, 64), 4, dtype=np.uint16)  # vegetation
-        spectral_raw = np.zeros((11, 64, 64), dtype=np.uint16)
+        merged_raw = np.zeros((12, 64, 64), dtype=np.uint16)
+        merged_raw[11] = 4  # SCL = vegetation
 
         coords = {"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0}
 
         with patch("imint.fetch._connect", return_value=mock_conn), \
-             patch("rasterio.open", side_effect=[make_src(scl_raw), make_src(spectral_raw)]):
+             patch("rasterio.open", return_value=make_src(merged_raw)):
             fetch_des_data(date="2022-06-15", coords=coords)
 
         # Verify all load_collection calls used projected coords with crs key

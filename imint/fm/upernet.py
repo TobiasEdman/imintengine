@@ -1,14 +1,19 @@
 """
-imint/fm/upernet.py — UperNet decoder matching TerraTorch checkpoint layout
+imint/fm/upernet.py — Segmentation decoders matching TerraTorch checkpoints
 
-Implements the exact UperNet architecture used by TerraTorch fine-tuned
-Prithvi models (Sen1Floods11, BurnScars, etc.) so that checkpoints can
-be loaded directly without key mapping.
+Implements two decoder architectures used by TerraTorch fine-tuned
+Prithvi models so that checkpoints can be loaded directly:
 
-The module structure mirrors TerraTorch's smp-based UperNet:
-    model.encoder  → PrithviViT backbone
-    model.decoder  → UperNet (psp_modules, bottleneck, lateral/fpn_convs, fpn1/fpn2 scale modules)
-    model.head     → Segmentation head (dropout + Conv2d classifier)
+1. UPerNet (Sen1Floods11): PSP + FPN decoder
+   model.encoder  → PrithviViT backbone
+   model.decoder  → UperNet (psp_modules, bottleneck, lateral/fpn_convs, fpn1/fpn2)
+   model.head     → Segmentation head
+
+2. UNet (BurnScars): Progressive upsampling decoder
+   model.encoder  → PrithviViT backbone
+   model.neck     → Scale modules (fpn1/fpn2)
+   model.decoder  → UNet blocks (conv1+conv2 per level)
+   model.head     → Segmentation head
 
 References:
     - Xiao et al., "Unified Perceptual Parsing for Scene Understanding" (2018)
@@ -371,4 +376,215 @@ class PrithviSegmentationModel(nn.Module):
                 mode="bilinear", align_corners=True,
             )
 
+        return logits
+
+
+# ── UNet decoder (BurnScars checkpoint) ──────────────────────────────────────
+
+
+class UNetDecoderBlock(nn.Module):
+    """Single UNet decoder block matching smp's DecoderBlock layout.
+
+    Checkpoint layout per block:
+        blocks.{i}.conv1.0.weight  (Conv2d)
+        blocks.{i}.conv1.1.*       (BatchNorm2d)
+        blocks.{i}.conv2.0.weight  (Conv2d)
+        blocks.{i}.conv2.1.*       (BatchNorm2d)
+
+    When skip is provided, input is concat(upsampled, skip).
+    When skip is None, input is just upsampled (no skip connection).
+    """
+
+    def __init__(self, in_ch: int, skip_ch: int, out_ch: int):
+        super().__init__()
+        self.skip_ch = skip_ch
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_ch + skip_ch, out_ch, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor,
+                skip: torch.Tensor | None = None) -> torch.Tensor:
+        if skip is not None:
+            x = F.interpolate(x, size=skip.shape[2:],
+                              mode="bilinear", align_corners=True)
+            x = torch.cat([x, skip], dim=1)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        return x
+
+
+class TerraTorchUNetDecoder(nn.Module):
+    """UNet decoder matching BurnScars TerraTorch/smp checkpoint layout.
+
+    The checkpoint path is ``decoder.decoder.blocks.{i}`` — note the
+    double ``decoder.`` prefix from TerraTorch wrapping.
+
+    Architecture for 4 encoder levels [256, 512, 1024, 1024] (shallow→deep):
+        blocks.0: up(1024) + skip[-2]=1024 → concat(1024+1024)=2048 → 512
+        blocks.1: up(512) + skip[-3]=512  → concat(512+512)=1024 → 256
+        blocks.2: up(256) + skip[-4]=256  → concat(256+256)=512 → 128
+        blocks.3: up(128), no skip        → 128 → 64
+
+    N encoder levels produce N-1 skip connections. The last block has
+    no skip connection.
+    """
+
+    def __init__(self, encoder_channels: list[int] = None,
+                 decoder_channels: list[int] = None):
+        super().__init__()
+        if encoder_channels is None:
+            encoder_channels = [256, 512, 1024, 1024]
+        if decoder_channels is None:
+            decoder_channels = [512, 256, 128, 64]
+
+        n_blocks = len(decoder_channels)
+        # Skips: from second-deepest to shallowest
+        skip_channels = list(reversed(encoder_channels[:-1]))
+        # Pad with 0 for blocks without skip connections
+        while len(skip_channels) < n_blocks:
+            skip_channels.append(0)
+
+        self.blocks = nn.ModuleList()
+        in_ch = encoder_channels[-1]  # deepest = 1024
+        for i in range(n_blocks):
+            self.blocks.append(UNetDecoderBlock(
+                in_ch=in_ch,
+                skip_ch=skip_channels[i],
+                out_ch=decoder_channels[i],
+            ))
+            in_ch = decoder_channels[i]
+
+        self.out_channels = decoder_channels[-1]
+
+    def forward(self, features: list[torch.Tensor]) -> torch.Tensor:
+        """Forward pass.
+
+        Args:
+            features: [level_0 (highest res), ..., level_N (deepest)].
+
+        Returns:
+            (B, out_channels, H, W) decoded feature map.
+        """
+        n = len(features)
+        x = features[-1]  # deepest
+
+        for i, block in enumerate(self.blocks):
+            skip_idx = n - 2 - i
+            skip = features[skip_idx] if skip_idx >= 0 else None
+            x = block(x, skip)
+
+        return x
+
+
+class PrithviUNetSegmentationModel(nn.Module):
+    """Prithvi segmentation model with UNet decoder (BurnScars architecture).
+
+    State dict layout (matching BurnScars checkpoint):
+        encoder.*           → PrithviViT backbone
+        neck.2.fpn1/fpn2    → Scale modules
+        decoder.decoder.*   → UNet decoder blocks
+        head.*              → Segmentation head
+
+    The key difference from UPerNet variant:
+        - Scale modules live under ``neck.2`` instead of ``decoder``
+        - Decoder is UNet (progressive upsampling) not UPerNet (PSP+FPN)
+        - Output channels = 64 (not 256)
+    """
+
+    def __init__(
+        self,
+        encoder,
+        feature_indices: list[int] = (5, 11, 17, 23),
+        num_classes: int = 2,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.feature_indices = list(feature_indices)
+
+        if hasattr(encoder, "encoder"):
+            self.encoder = encoder.encoder
+        else:
+            self.encoder = encoder
+
+        self.embed_dim = self.encoder.embed_dim  # 1024 for 300M
+
+        # Scale modules under neck.2 (matching checkpoint path)
+        self.neck = nn.ModuleList([
+            nn.Identity(),  # neck.0 placeholder
+            nn.Identity(),  # neck.1 placeholder
+            nn.Module(),    # neck.2 holds fpn1/fpn2
+        ])
+
+        # fpn1: ConvTranspose2d(1024→512) + BN + GELU + ConvTranspose2d(512→256)
+        self.neck[2].fpn1 = nn.Sequential(
+            nn.ConvTranspose2d(self.embed_dim, self.embed_dim // 2,
+                               kernel_size=2, stride=2),
+            nn.BatchNorm2d(self.embed_dim // 2),
+            nn.GELU(),
+            nn.ConvTranspose2d(self.embed_dim // 2, self.embed_dim // 4,
+                               kernel_size=2, stride=2),
+        )
+
+        # fpn2: ConvTranspose2d(1024→512)
+        self.neck[2].fpn2 = nn.Sequential(
+            nn.ConvTranspose2d(self.embed_dim, self.embed_dim // 2,
+                               kernel_size=2, stride=2),
+        )
+
+        # Multi-scale channels after scaling
+        scale_channels = [
+            self.embed_dim // 4,  # 256 (after fpn1)
+            self.embed_dim // 2,  # 512 (after fpn2)
+            self.embed_dim,       # 1024
+            self.embed_dim,       # 1024
+        ]
+
+        # UNet decoder
+        self.decoder = nn.Module()
+        self.decoder.decoder = TerraTorchUNetDecoder(
+            encoder_channels=scale_channels,
+            decoder_channels=[512, 256, 128, 64],
+        )
+
+        # Segmentation head (64 channels from UNet output)
+        head_channels = self.decoder.decoder.out_channels
+        self.head = SegmentationHead(head_channels, num_classes, dropout)
+
+    def _extract_multi_scale_features(self, x: torch.Tensor) -> list[torch.Tensor]:
+        """Extract and rescale features from selected transformer blocks."""
+        all_features = self.encoder.forward_features(x)
+        selected = [all_features[i] for i in self.feature_indices]
+        spatial = self.encoder.prepare_features_for_image_model(selected)
+
+        scaled = [
+            self.neck[2].fpn1(spatial[0]),   # (B, 256, 4*gh, 4*gw)
+            self.neck[2].fpn2(spatial[1]),   # (B, 512, 2*gh, 2*gw)
+            spatial[2],                      # (B, 1024, gh, gw)
+            spatial[3],                      # (B, 1024, gh, gw)
+        ]
+        return scaled
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Full forward: encoder → neck → UNet decoder → head."""
+        if x.dim() == 4:
+            input_h, input_w = x.shape[2:]
+        else:
+            input_h, input_w = x.shape[3:]
+
+        features = self._extract_multi_scale_features(x)
+        decoded = self.decoder.decoder(features)
+        logits = self.head(decoded)
+
+        if logits.shape[2:] != (input_h, input_w):
+            logits = F.interpolate(
+                logits, size=(input_h, input_w),
+                mode="bilinear", align_corners=True,
+            )
         return logits

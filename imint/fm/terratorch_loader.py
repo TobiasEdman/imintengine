@@ -256,7 +256,7 @@ TASK_HEAD_REGISTRY = {
         "filename": "Prithvi_EO_V2_300M_BurnScars.pt",
         "num_classes": 2,
         "feature_indices": [5, 11, 17, 23],
-        "decoder_channels": 256,
+        "decoder_type": "unet",
         "dropout": 0.1,
         "class_names": {0: "no_burn", 1: "burned"},
         "description": "Burn scar segmentation (HLS Burn Scars dataset)",
@@ -277,24 +277,29 @@ def load_segmentation_model(
     task_head: str,
     device: str = "cpu",
 ):
-    """Load a complete Prithvi segmentation model (backbone + UperNet decoder).
+    """Load a complete Prithvi segmentation model.
 
-    Downloads the fine-tuned checkpoint from HuggingFace and maps its weights
-    into our PrithviSegmentationModel architecture.
+    Selects the correct decoder architecture based on ``decoder_type``
+    in the task head config:
+        - ``"upernet"`` (default): UPerNet decoder (Sen1Floods11)
+        - ``"unet"``: UNet decoder (BurnScars)
+
+    Downloads the fine-tuned checkpoint from HuggingFace and maps its
+    weights into the model.
 
     Args:
         task_head: Name from TASK_HEAD_REGISTRY (e.g. "sen1floods11").
         device: Target device ("cpu", "cuda", "mps").
 
     Returns:
-        Tuple of (PrithviSegmentationModel, task_config_dict).
+        Tuple of (segmentation_model, task_config_dict).
 
     Raises:
         ValueError: If task_head is not in the registry.
         ImportError: If torch is not installed.
     """
     import torch
-    from .upernet import PrithviSegmentationModel
+    from .upernet import PrithviSegmentationModel, PrithviUNetSegmentationModel
 
     if task_head not in TASK_HEAD_REGISTRY:
         available = ", ".join(sorted(TASK_HEAD_REGISTRY.keys()))
@@ -304,18 +309,27 @@ def load_segmentation_model(
         )
 
     config = TASK_HEAD_REGISTRY[task_head]
+    decoder_type = config.get("decoder_type", "upernet")
 
     # 1. Load backbone (pretrained from HF)
     backbone = _load_prithvi_from_hf(pretrained=True)
 
-    # 2. Build segmentation model (our architecture matches checkpoint layout)
-    seg_model = PrithviSegmentationModel(
-        encoder=backbone,
-        feature_indices=config["feature_indices"],
-        decoder_channels=config["decoder_channels"],
-        num_classes=config["num_classes"],
-        dropout=config["dropout"],
-    )
+    # 2. Build segmentation model based on decoder type
+    if decoder_type == "unet":
+        seg_model = PrithviUNetSegmentationModel(
+            encoder=backbone,
+            feature_indices=config["feature_indices"],
+            num_classes=config["num_classes"],
+            dropout=config["dropout"],
+        )
+    else:
+        seg_model = PrithviSegmentationModel(
+            encoder=backbone,
+            feature_indices=config["feature_indices"],
+            decoder_channels=config.get("decoder_channels", 256),
+            num_classes=config["num_classes"],
+            dropout=config["dropout"],
+        )
 
     # 3. Download and load fine-tuned checkpoint
     from huggingface_hub import hf_hub_download
@@ -364,11 +378,11 @@ def _map_checkpoint_keys(state_dict: dict, target_model) -> dict:
     The checkpoint uses ``model.`` prefix (Lightning wrapping):
         model.encoder.* → our encoder.*
         model.decoder.* → our decoder.*
+        model.neck.*    → our neck.*     (UNet variant)
         model.head.*    → our head.*
 
-    Our PrithviSegmentationModel matches this layout exactly
-    (encoder, decoder, head) so the mapping is just stripping
-    the ``model.`` prefix.
+    Our segmentation models match this layout exactly, so the mapping
+    is just stripping the ``model.`` prefix.
 
     Returns:
         Mapped state dict ready for load_state_dict().
@@ -384,7 +398,8 @@ def _map_checkpoint_keys(state_dict: dict, target_model) -> dict:
             new_key = key
 
         # Skip non-model keys (optimizer, scheduler, etc.)
-        if not any(new_key.startswith(p) for p in ("encoder.", "decoder.", "head.")):
+        if not any(new_key.startswith(p) for p in
+                   ("encoder.", "decoder.", "neck.", "head.")):
             continue
 
         if new_key in target_keys:
