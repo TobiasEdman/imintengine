@@ -180,7 +180,7 @@ class TestEnsureBaseline:
         baseline_dir = os.path.join(output_dir, "..", "baselines")
         os.makedirs(baseline_dir, exist_ok=True)
 
-        baseline_path = os.path.join(baseline_dir, "summer_14.5_56.0_15.5_57.0.npy")
+        baseline_path = os.path.join(baseline_dir, "14.5_56.0_15.5_57.0.npy")
         np.save(baseline_path, np.zeros((64, 64, 3)))
 
         result = ensure_baseline(
@@ -229,31 +229,6 @@ class TestEnsureBaseline:
         )
 
         assert result is None
-
-    def test_season_mapping(self, tmp_path):
-        """Verify correct season is used in baseline filename."""
-        for date, expected_season in [
-            ("2024-03-15", "spring"),
-            ("2024-06-15", "summer"),
-            ("2024-09-15", "autumn"),
-            ("2024-12-15", "winter"),
-        ]:
-            output_dir = str(tmp_path / "outputs" / date)
-            os.makedirs(output_dir, exist_ok=True)
-
-            baseline_dir = os.path.join(output_dir, "..", "baselines")
-            os.makedirs(baseline_dir, exist_ok=True)
-
-            path = os.path.join(baseline_dir, f"{expected_season}_14.5_56.0_15.5_57.0.npy")
-            np.save(path, np.zeros((64, 64, 3)))
-
-            result = ensure_baseline(
-                date=date,
-                coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
-                output_dir=output_dir,
-            )
-
-            assert result == path, f"Date {date} should map to season {expected_season}"
 
     @patch("imint.fetch.fetch_cloud_free_baseline")
     def test_does_not_refetch_after_save(self, mock_fetch, tmp_path):

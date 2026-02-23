@@ -93,9 +93,8 @@ class TestPreCreatedBaseline:
         # Simulate a pre-fetched cloud-free baseline
         baseline_dir = os.path.join(tmp_output_dir, "..", "baselines")
         os.makedirs(baseline_dir, exist_ok=True)
-        season = "summer"  # 2022-06-15 is summer
         area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
-        baseline_path = os.path.join(baseline_dir, f"{season}_{area}.npy")
+        baseline_path = os.path.join(baseline_dir, f"{area}.npy")
 
         baseline = np.zeros((64, 64, 3), dtype=np.float32)
         np.save(baseline_path, baseline)
@@ -114,9 +113,8 @@ class TestPreCreatedBaseline:
 
         baseline_dir = os.path.join(tmp_output_dir, "..", "baselines")
         os.makedirs(baseline_dir, exist_ok=True)
-        season = "summer"
         area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
-        baseline_path = os.path.join(baseline_dir, f"{season}_{area}.npy")
+        baseline_path = os.path.join(baseline_dir, f"{area}.npy")
 
         img = np.full((64, 64, 3), 0.5, dtype=np.float32)
         np.save(baseline_path, img)
@@ -185,8 +183,8 @@ class TestCloudMasking:
         baseline_dir = os.path.join(tmp_output_dir, "..", "baselines")
         os.makedirs(baseline_dir, exist_ok=True)
         area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
-        baseline_path = os.path.join(baseline_dir, f"summer_{area}.npy")
-        scl_path = os.path.join(baseline_dir, f"summer_{area}_scl.npy")
+        baseline_path = os.path.join(baseline_dir, f"{area}.npy")
+        scl_path = os.path.join(baseline_dir, f"{area}_scl.npy")
 
         baseline = np.zeros((64, 64, 3), dtype=np.float32)
         np.save(baseline_path, baseline)
@@ -303,7 +301,7 @@ class TestMultispectralChangeDetection:
         baseline_dir = os.path.join(tmp_output_dir, "..", "baselines")
         os.makedirs(baseline_dir, exist_ok=True)
         area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
-        baseline_path = os.path.join(baseline_dir, f"summer_{area}.npy")
+        baseline_path = os.path.join(baseline_dir, f"{area}.npy")
         np.save(baseline_path, np.full((64, 64, 3), 0.3, dtype=np.float32))
 
         # Run with bands but only RGB baseline exists
@@ -335,7 +333,7 @@ class TestMultispectralChangeDetection:
         # Verify _bands.npy was saved
         baseline_dir = os.path.join(tmp_output_dir, "..", "baselines")
         area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
-        bands_path = os.path.join(baseline_dir, f"summer_{area}_bands.npy")
+        bands_path = os.path.join(baseline_dir, f"{area}_bands.npy")
         assert os.path.exists(bands_path)
         saved = np.load(bands_path)
         assert saved.shape == (64, 64, 6)

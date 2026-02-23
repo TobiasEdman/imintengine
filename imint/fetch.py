@@ -992,18 +992,6 @@ def run_cot_on_candidates(
     return top
 
 
-def _baseline_season(date: str) -> str:
-    """Map ISO date to season name (matches change_detection._season)."""
-    month = int(date.split("-")[1])
-    if month in (3, 4, 5):
-        return "spring"
-    elif month in (6, 7, 8):
-        return "summer"
-    elif month in (9, 10, 11):
-        return "autumn"
-    return "winter"
-
-
 def _baseline_area_key(coords: dict) -> str:
     """Stable string key from bbox (matches change_detection._area_key)."""
     return f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
@@ -1018,10 +1006,10 @@ def ensure_baseline(
     cloud_threshold: float = 0.1,
     token: str | None = None,
 ) -> str | None:
-    """Ensure a cloud-free baseline exists for this season/area.
+    """Ensure a cloud-free baseline exists for this area.
 
     Checks if a baseline .npy file already exists at the expected path
-    (matching the season/area naming used by ChangeDetectionAnalyzer).
+    (matching the area naming used by ChangeDetectionAnalyzer).
     If not, fetches a cloud-free image from DES and saves it.
 
     Args:
@@ -1037,17 +1025,16 @@ def ensure_baseline(
         Path to the baseline .npy file (existing or newly created),
         or None if fetching failed (logged as warning, not raised).
     """
-    season = _baseline_season(date)
     area = _baseline_area_key(coords)
     baseline_dir = os.path.join(output_dir, "..", "baselines")
-    baseline_path = os.path.join(baseline_dir, f"{season}_{area}.npy")
+    baseline_path = os.path.join(baseline_dir, f"{area}.npy")
 
     if os.path.exists(baseline_path):
         print(f"  [baseline] Using existing baseline: {baseline_path}")
         return baseline_path
 
     try:
-        print(f"  [baseline] No baseline found for {season}/{area}")
+        print(f"  [baseline] No baseline found for area {area}")
         print(f"  [baseline] Scanning {search_start_days}-{search_end_days} days back...")
         result = fetch_cloud_free_baseline(
             date=date,

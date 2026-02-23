@@ -1,7 +1,7 @@
 """
 imint/analyzers/change_detection.py — Change detection analyzer
 
-Compares the current image against a stored baseline per season/area.
+Compares the current image against a stored baseline per area.
 First run saves the image as baseline and reports zero changes.
 Subsequent runs flag changed pixels above a configurable threshold.
 
@@ -27,18 +27,6 @@ _SCL_CLOUD = frozenset({8, 9, 10})
 # Bands used for multispectral change detection
 # B02 (Blue), B03 (Green), B04 (Red), B08 (NIR), B11 (SWIR1), B12 (SWIR2)
 CHANGE_BANDS = ["B02", "B03", "B04", "B08", "B11", "B12"]
-
-
-def _season(date: str) -> str:
-    """Map ISO date to season name."""
-    month = int(date.split("-")[1])
-    if month in (3, 4, 5):
-        return "spring"
-    elif month in (6, 7, 8):
-        return "summer"
-    elif month in (9, 10, 11):
-        return "autumn"
-    return "winter"
 
 
 def _area_key(coords: dict) -> str:
@@ -80,14 +68,13 @@ class ChangeDetectionAnalyzer(BaseAnalyzer):
         threshold = self.config.get("threshold", 0.15)
         min_region_pixels = self.config.get("min_region_pixels", 50)
 
-        # Determine baseline paths
-        season = _season(date) if date else "unknown"
+        # Determine baseline paths (keyed by area only, not season)
         area = _area_key(coords) if coords else "default"
         baseline_dir = os.path.join(output_dir, "..", "baselines")
         os.makedirs(baseline_dir, exist_ok=True)
-        baseline_rgb_path = os.path.join(baseline_dir, f"{season}_{area}.npy")
-        baseline_bands_path = os.path.join(baseline_dir, f"{season}_{area}_bands.npy")
-        scl_path = os.path.join(baseline_dir, f"{season}_{area}_scl.npy")
+        baseline_rgb_path = os.path.join(baseline_dir, f"{area}.npy")
+        baseline_bands_path = os.path.join(baseline_dir, f"{area}_bands.npy")
+        scl_path = os.path.join(baseline_dir, f"{area}_scl.npy")
 
         # Build current multispectral stack
         current_stack, is_multispectral = _build_stack(rgb, bands)
