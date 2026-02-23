@@ -177,13 +177,17 @@ class TestRunJobEdgeCases:
         job1 = _make_job(tmp_path, date="2022-06-15")
         run_job(job1)
 
-        # Second run with different data
+        # Second run with different data (both RGB and spectral bands)
         rng = np.random.RandomState(99)
+        h, w = 64, 64
         job2 = IMINTJob(
             date="2022-06-15",
             coords=job1.coords,
-            rgb=rng.rand(64, 64, 3).astype(np.float32),
-            bands=job1.bands,
+            rgb=rng.rand(h, w, 3).astype(np.float32),
+            bands={
+                name: rng.rand(h, w).astype(np.float32)
+                for name in job1.bands
+            },
             output_dir=job1.output_dir,
             config_path=job1.config_path,
             job_id="test_run2",

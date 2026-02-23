@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import os
 import numpy as np
-from imint.analyzers.change_detection import ChangeDetectionAnalyzer
+from imint.analyzers.change_detection import ChangeDetectionAnalyzer, CHANGE_BANDS
+
+
+def _make_bands(h=64, w=64, value=0.3):
+    """Create a uniform bands dict with all CHANGE_BANDS."""
+    return {b: np.full((h, w), value, dtype=np.float32) for b in CHANGE_BANDS}
 
 
 class TestBaselineBehavior:
@@ -181,7 +186,7 @@ class TestCloudMasking:
         os.makedirs(baseline_dir, exist_ok=True)
         area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
         baseline_path = os.path.join(baseline_dir, f"summer_{area}.npy")
-        scl_path = baseline_path.replace(".npy", "_scl.npy")
+        scl_path = os.path.join(baseline_dir, f"summer_{area}_scl.npy")
 
         baseline = np.zeros((64, 64, 3), dtype=np.float32)
         np.save(baseline_path, baseline)
@@ -218,3 +223,176 @@ class TestCloudMasking:
         assert result.metadata["cloud_masked_pixels"] == 0
         assert result.metadata["valid_pixels"] == 64 * 64
         assert result.outputs["change_fraction"] > 0.9
+
+
+class TestMultispectralChangeDetection:
+    """Verify multispectral (NIR+SWIR) change detection."""
+
+    def test_nir_change_detected_with_bands(self, tmp_output_dir, coords):
+        """NIR change (invisible in RGB) should be detected when bands are provided."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.1, "min_region_pixels": 5})
+
+        # Identical RGB for both runs
+        rgb = np.full((64, 64, 3), 0.3, dtype=np.float32)
+
+        # Baseline: uniform bands
+        bands1 = _make_bands(value=0.3)
+        analyzer.run(rgb, bands=bands1, date="2022-06-15", coords=coords,
+                     output_dir=tmp_output_dir)
+
+        # Current: same RGB, but NIR (B08) drastically changed (vegetation loss)
+        bands2 = _make_bands(value=0.3)
+        bands2["B08"] = np.full((64, 64), 0.8, dtype=np.float32)  # NIR jump
+
+        result = analyzer.run(rgb, bands=bands2, date="2022-06-15", coords=coords,
+                              output_dir=tmp_output_dir)
+
+        assert result.success
+        assert result.outputs["change_fraction"] > 0.5, \
+            "NIR change should be detected even though RGB is identical"
+        assert result.metadata["multispectral"] is True
+        assert result.metadata["n_bands"] == 6
+
+    def test_swir_change_detected_with_bands(self, tmp_output_dir, coords):
+        """SWIR change (moisture) should be detected when bands are provided."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.1, "min_region_pixels": 5})
+
+        rgb = np.full((64, 64, 3), 0.3, dtype=np.float32)
+
+        # Baseline
+        bands1 = _make_bands(value=0.2)
+        analyzer.run(rgb, bands=bands1, date="2022-06-15", coords=coords,
+                     output_dir=tmp_output_dir)
+
+        # Current: SWIR1 (B11) changed significantly
+        bands2 = _make_bands(value=0.2)
+        bands2["B11"] = np.full((64, 64), 0.7, dtype=np.float32)
+
+        result = analyzer.run(rgb, bands=bands2, date="2022-06-15", coords=coords,
+                              output_dir=tmp_output_dir)
+
+        assert result.success
+        assert result.outputs["change_fraction"] > 0.5, \
+            "SWIR change should be detected"
+        assert result.metadata["multispectral"] is True
+
+    def test_fallback_to_rgb_without_bands(self, tmp_output_dir, coords):
+        """Without bands, should fall back to RGB-only detection."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.1, "min_region_pixels": 5})
+
+        img1 = np.full((64, 64, 3), 0.3, dtype=np.float32)
+        r1 = analyzer.run(img1, bands=None, date="2022-06-15", coords=coords,
+                          output_dir=tmp_output_dir)
+        assert r1.metadata.get("multispectral") is False
+
+        img2 = np.full((64, 64, 3), 0.9, dtype=np.float32)
+        r2 = analyzer.run(img2, bands=None, date="2022-06-15", coords=coords,
+                          output_dir=tmp_output_dir)
+
+        assert r2.success
+        assert r2.outputs["change_fraction"] > 0.5
+        assert r2.metadata["multispectral"] is False
+        assert r2.metadata["n_bands"] == 3
+        assert r2.metadata["bands_used"] == ["R", "G", "B"]
+
+    def test_backward_compat_rgb_baseline(self, tmp_output_dir, coords):
+        """When only RGB baseline exists, should compare using RGB even if bands provided."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.1, "min_region_pixels": 5})
+
+        # Pre-create RGB-only baseline (legacy format)
+        baseline_dir = os.path.join(tmp_output_dir, "..", "baselines")
+        os.makedirs(baseline_dir, exist_ok=True)
+        area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
+        baseline_path = os.path.join(baseline_dir, f"summer_{area}.npy")
+        np.save(baseline_path, np.full((64, 64, 3), 0.3, dtype=np.float32))
+
+        # Run with bands but only RGB baseline exists
+        rgb = np.full((64, 64, 3), 0.9, dtype=np.float32)
+        bands = _make_bands(value=0.9)
+
+        result = analyzer.run(rgb, bands=bands, date="2022-06-15", coords=coords,
+                              output_dir=tmp_output_dir)
+
+        assert result.success
+        assert result.outputs["change_fraction"] > 0.5
+        # Should fall back to RGB comparison
+        assert result.metadata["multispectral"] is False
+
+    def test_multispectral_saves_bands_baseline(self, tmp_output_dir, coords):
+        """First multispectral run should save _bands.npy baseline."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.15})
+
+        rgb = np.full((64, 64, 3), 0.5, dtype=np.float32)
+        bands = _make_bands(value=0.5)
+
+        result = analyzer.run(rgb, bands=bands, date="2022-06-15", coords=coords,
+                              output_dir=tmp_output_dir)
+
+        assert result.success
+        assert result.metadata["multispectral"] is True
+        assert result.metadata["n_bands"] == 6
+
+        # Verify _bands.npy was saved
+        baseline_dir = os.path.join(tmp_output_dir, "..", "baselines")
+        area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
+        bands_path = os.path.join(baseline_dir, f"summer_{area}_bands.npy")
+        assert os.path.exists(bands_path)
+        saved = np.load(bands_path)
+        assert saved.shape == (64, 64, 6)
+
+    def test_identical_multispectral_no_change(self, tmp_output_dir, coords):
+        """Two identical multispectral images should produce zero change."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.15})
+
+        rgb = np.full((64, 64, 3), 0.5, dtype=np.float32)
+        bands = _make_bands(value=0.5)
+
+        analyzer.run(rgb, bands=bands, date="2022-06-15", coords=coords,
+                     output_dir=tmp_output_dir)
+        result = analyzer.run(rgb, bands=bands, date="2022-06-15", coords=coords,
+                              output_dir=tmp_output_dir)
+
+        assert result.success
+        assert result.outputs["change_fraction"] == 0.0
+        assert result.metadata["multispectral"] is True
+
+    def test_ndvi_diff_metadata(self, tmp_output_dir, coords):
+        """Multispectral comparison should report NDVI and NDWI diff in metadata."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.01, "min_region_pixels": 1})
+
+        rgb = np.full((64, 64, 3), 0.3, dtype=np.float32)
+
+        # Baseline: high vegetation (high NIR, low red)
+        bands1 = _make_bands(value=0.3)
+        bands1["B04"] = np.full((64, 64), 0.1, dtype=np.float32)  # red
+        bands1["B08"] = np.full((64, 64), 0.8, dtype=np.float32)  # NIR
+        analyzer.run(rgb, bands=bands1, date="2022-06-15", coords=coords,
+                     output_dir=tmp_output_dir)
+
+        # Current: low vegetation (low NIR, high red) — vegetation loss
+        bands2 = _make_bands(value=0.3)
+        bands2["B04"] = np.full((64, 64), 0.6, dtype=np.float32)  # red up
+        bands2["B08"] = np.full((64, 64), 0.2, dtype=np.float32)  # NIR down
+        result = analyzer.run(rgb, bands=bands2, date="2022-06-15", coords=coords,
+                              output_dir=tmp_output_dir)
+
+        assert result.success
+        assert "ndvi_diff_mean" in result.metadata
+        assert "ndwi_diff_mean" in result.metadata
+        # NDVI should decrease significantly (vegetation loss)
+        assert result.metadata["ndvi_diff_mean"] < -0.3, \
+            f"Expected negative NDVI diff, got {result.metadata['ndvi_diff_mean']}"
+
+    def test_bands_used_metadata(self, tmp_output_dir, coords):
+        """Metadata should report which bands are used."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.15})
+
+        rgb = np.full((64, 64, 3), 0.5, dtype=np.float32)
+        bands = _make_bands(value=0.5)
+
+        analyzer.run(rgb, bands=bands, date="2022-06-15", coords=coords,
+                     output_dir=tmp_output_dir)
+        result = analyzer.run(rgb, bands=bands, date="2022-06-15", coords=coords,
+                              output_dir=tmp_output_dir)
+
+        assert result.metadata["bands_used"] == CHANGE_BANDS
