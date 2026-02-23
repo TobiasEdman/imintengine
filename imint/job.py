@@ -51,6 +51,7 @@ class IMINTJob:
     # Image data — set by the data fetcher after cloud verification
     rgb: np.ndarray | None = None      # (H, W, 3) float32 [0, 1]
     bands: dict[str, np.ndarray] = field(default_factory=dict)  # {"B04": arr, ...}
+    scl: np.ndarray | None = None      # Scene Classification Layer, uint8 (0-11)
 
     # Spatial reference — set by the data fetcher
     geo: GeoContext | None = None      # CRS + transform + projected bounds

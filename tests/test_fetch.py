@@ -158,6 +158,28 @@ class TestConnect:
                 access_token="env-token", provider_id="egi"
             )
 
+    @patch.dict("os.environ", {"DES_USER": "testuser", "DES_PASSWORD": "testpass"}, clear=False)
+    @patch("imint.fetch.openeo", create=True)
+    def test_basic_auth_fallback(self, mock_openeo_module):
+        """DES_USER + DES_PASSWORD env vars should trigger Basic Auth."""
+        mock_conn = MagicMock()
+        with patch.dict("sys.modules", {"openeo": mock_openeo_module}):
+            mock_openeo_module.connect.return_value = mock_conn
+
+            # Remove DES_TOKEN so it falls through to Basic Auth
+            with patch.dict("os.environ", {k: v for k, v in os.environ.items()
+                                           if k != "DES_TOKEN"}, clear=True):
+                # Re-set the basic auth env vars since clear=True removed them
+                os.environ["DES_USER"] = "testuser"
+                os.environ["DES_PASSWORD"] = "testpass"
+
+                result = _connect(token=None)
+
+                mock_conn.authenticate_basic.assert_called_once_with(
+                    username="testuser", password="testpass"
+                )
+                assert result is mock_conn
+
     @patch.dict("os.environ", {}, clear=False)
     @patch("imint.fetch.openeo", create=True)
     def test_file_token_fallback(self, mock_openeo_module, tmp_path):
@@ -169,7 +191,8 @@ class TestConnect:
             mock_openeo_module.connect.return_value = mock_conn
 
             # Remove DES_TOKEN from env if present
-            with patch.dict("os.environ", {k: v for k, v in os.environ.items() if k != "DES_TOKEN"}):
+            with patch.dict("os.environ", {k: v for k, v in os.environ.items()
+                                           if k not in ("DES_TOKEN", "DES_USER", "DES_PASSWORD")}):
                 token_file = tmp_path / ".des_token"
                 token_file.write_text("file-token\n")
 
@@ -482,3 +505,77 @@ class TestToNMDGrid:
             if spatial_extent:
                 assert "crs" in spatial_extent, "spatial_extent should include crs"
                 assert spatial_extent["crs"] == "EPSG:3006"
+
+
+# ── STAC-guided fetch_des_data ──────────────────────────────────────────────
+
+class TestFetchDesDataSTAC:
+    """Verify that fetch_des_data uses STAC when date_window > 0."""
+
+    @patch("imint.fetch._stac_best_date")
+    @patch("rasterio.open")
+    @patch("imint.fetch._connect")
+    def test_stac_called_with_date_window(self, mock_connect, mock_rasterio_open, mock_stac):
+        """fetch_des_data should call _stac_best_date when date_window > 0."""
+        mock_stac.return_value = "2022-06-14"  # STAC selects a nearby date
+
+        mock_conn = MagicMock()
+        mock_connect.return_value = mock_conn
+        mock_cube = MagicMock()
+        mock_conn.load_collection.return_value = mock_cube
+        mock_cube.resample_cube_spatial.return_value = mock_cube
+        mock_cube.merge_cubes.return_value = mock_cube
+        mock_cube.download.return_value = b"geotiff-data"
+
+        raw = np.zeros((12, 64, 64), dtype=np.uint16)
+        raw[11] = 4  # SCL = vegetation
+        src = MagicMock()
+        src.read.return_value = raw
+        src.crs = "EPSG:3006"
+        src.transform = "mock-transform"
+        src.__enter__ = MagicMock(return_value=src)
+        src.__exit__ = MagicMock(return_value=False)
+        mock_rasterio_open.return_value = src
+
+        result = fetch_des_data(
+            date="2022-06-15",
+            coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+            date_window=5,
+        )
+
+        assert isinstance(result, FetchResult)
+        mock_stac.assert_called_once()
+        # Should have been called with the original date and window
+        args = mock_stac.call_args[0]
+        assert args[1] == "2022-06-15"
+        assert args[2] == 5
+
+    @patch("rasterio.open")
+    @patch("imint.fetch._connect")
+    def test_stac_not_called_without_date_window(self, mock_connect, mock_rasterio_open):
+        """fetch_des_data should NOT call STAC when date_window == 0."""
+        mock_conn = MagicMock()
+        mock_connect.return_value = mock_conn
+        mock_cube = MagicMock()
+        mock_conn.load_collection.return_value = mock_cube
+        mock_cube.resample_cube_spatial.return_value = mock_cube
+        mock_cube.merge_cubes.return_value = mock_cube
+        mock_cube.download.return_value = b"geotiff-data"
+
+        raw = np.zeros((12, 64, 64), dtype=np.uint16)
+        raw[11] = 4
+        src = MagicMock()
+        src.read.return_value = raw
+        src.crs = "EPSG:3006"
+        src.transform = "mock-transform"
+        src.__enter__ = MagicMock(return_value=src)
+        src.__exit__ = MagicMock(return_value=False)
+        mock_rasterio_open.return_value = src
+
+        with patch("imint.fetch._stac_best_date") as mock_stac:
+            fetch_des_data(
+                date="2022-06-15",
+                coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+                date_window=0,
+            )
+            mock_stac.assert_not_called()

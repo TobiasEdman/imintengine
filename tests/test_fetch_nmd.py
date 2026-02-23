@@ -255,16 +255,16 @@ class TestNMDExports:
     """Test NMD export functions."""
 
     def test_save_nmd_overlay(self, tmp_path):
-        """NMD overlay should create a valid RGB PNG."""
+        """NMD overlay should create a valid RGB PNG with L2 palette."""
         from imint.exporters.export import save_nmd_overlay
         from PIL import Image
 
-        l1_raster = np.zeros((20, 20), dtype=np.uint8)
-        l1_raster[:10, :] = 1   # forest (green)
-        l1_raster[10:, :] = 6   # water (blue)
+        l2_raster = np.zeros((20, 20), dtype=np.uint8)
+        l2_raster[:10, :] = 1    # forest_pine (dark green)
+        l2_raster[10:, :] = 18   # water_lakes (blue)
 
         path = str(tmp_path / "nmd_overlay.png")
-        save_nmd_overlay(l1_raster, path)
+        save_nmd_overlay(l2_raster, path)
 
         assert os.path.exists(path)
         img = Image.open(path)
@@ -273,9 +273,9 @@ class TestNMDExports:
 
         # Check colors
         arr = np.array(img)
-        # Forest pixels should be green (34, 139, 34)
-        np.testing.assert_array_equal(arr[0, 0], [34, 139, 34])
-        # Water pixels should be blue (0, 0, 255)
+        # forest_pine pixels should be dark green (0, 100, 0)
+        np.testing.assert_array_equal(arr[0, 0], [0, 100, 0])
+        # water_lakes pixels should be blue (0, 0, 255)
         np.testing.assert_array_equal(arr[15, 0], [0, 0, 255])
 
     def test_save_nmd_stats(self, tmp_path):

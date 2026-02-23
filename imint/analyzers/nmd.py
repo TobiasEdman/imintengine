@@ -127,6 +127,29 @@ def nmd_raster_to_l1(nmd_raster: np.ndarray) -> np.ndarray:
     return l1
 
 
+# Level 2 class order (matches NMD_LEVEL2 dict order)
+L2_CLASSES = list(NMD_LEVEL2.keys())
+
+
+def nmd_raster_to_l2(nmd_raster: np.ndarray) -> np.ndarray:
+    """Convert NMD class codes to Level 2 integer codes.
+
+    Mapping:
+        0 = unclassified, 1 = forest_pine, 2 = forest_spruce, ..., 19 = water_sea
+
+    Args:
+        nmd_raster: 2D uint8 array with NMD class codes.
+
+    Returns:
+        2D uint8 array with Level 2 codes (0-19).
+    """
+    l2 = np.zeros_like(nmd_raster, dtype=np.uint8)
+    for idx, name in enumerate(L2_CLASSES):
+        for code in NMD_LEVEL2[name]:
+            l2[nmd_raster == code] = idx + 1  # 0 reserved for unclassified
+    return l2
+
+
 # ── Analyzer ─────────────────────────────────────────────────────────────────
 
 class NMDAnalyzer(BaseAnalyzer):
@@ -175,8 +198,9 @@ class NMDAnalyzer(BaseAnalyzer):
         # Compute class statistics
         class_stats = _compute_class_stats(nmd_raster)
 
-        # Build Level 1 raster for exports
+        # Build Level 1 and Level 2 rasters for exports
         l1_raster = nmd_raster_to_l1(nmd_raster)
+        l2_raster = nmd_raster_to_l2(nmd_raster)
 
         # Cross-reference with previous results
         cross_ref = {}
@@ -190,6 +214,7 @@ class NMDAnalyzer(BaseAnalyzer):
                 "nmd_available": True,
                 "nmd_raster": nmd_raster,
                 "l1_raster": l1_raster,
+                "l2_raster": l2_raster,
                 "class_stats": class_stats,
                 "cross_reference": cross_ref,
             },
@@ -283,30 +308,33 @@ def _cross_reference(
     if objdet:
         cross_ref["object_detection"] = _anomaly_cross_ref(nmd_raster, objdet)
 
+    # Prithvi segmentation cross-reference (burn scars / flood)
+    prithvi = results_by_name.get("prithvi")
+    if prithvi and prithvi.outputs.get("seg_mask") is not None:
+        cross_ref["prithvi"] = _prithvi_cross_ref(nmd_raster, prithvi)
+
     return cross_ref
 
 
 def _spectral_cross_ref(nmd_raster: np.ndarray, spectral: AnalysisResult) -> dict:
-    """Compute mean spectral indices and land cover fractions per NMD class.
+    """Compute mean spectral indices per NMD Level 2 class.
 
-    For each Level 1 LULC class, reports:
+    For each Level 2 LULC class, reports:
         - mean_ndvi, mean_ndwi: mean spectral index values
-        - vegetation_fraction, water_fraction, built_up_fraction: from spectral land cover
 
     Args:
         nmd_raster: NMD class code raster.
         spectral: AnalysisResult from SpectralAnalyzer.
 
     Returns:
-        Dict mapping L1 class name to spectral statistics.
+        Dict mapping L2 class name to spectral statistics.
     """
     indices = spectral.outputs.get("indices", {})
     ndvi = indices.get("NDVI")
     ndwi = indices.get("NDWI")
-    land_cover = spectral.outputs.get("land_cover")
 
     result = {}
-    for name, codes in NMD_LEVEL1.items():
+    for name, codes in NMD_LEVEL2.items():
         mask = np.isin(nmd_raster, list(codes))
         n_pixels = int(mask.sum())
         if n_pixels == 0:
@@ -318,12 +346,6 @@ def _spectral_cross_ref(nmd_raster: np.ndarray, spectral: AnalysisResult) -> dic
         if ndwi is not None and ndwi.shape == nmd_raster.shape:
             entry["mean_ndwi"] = round(float(np.mean(ndwi[mask])), 4)
 
-        if land_cover is not None and land_cover.shape == nmd_raster.shape:
-            lc_in_class = land_cover[mask]
-            entry["vegetation_fraction"] = round(float((lc_in_class == 2).sum()) / n_pixels, 4)
-            entry["water_fraction"] = round(float((lc_in_class == 1).sum()) / n_pixels, 4)
-            entry["built_up_fraction"] = round(float((lc_in_class == 3).sum()) / n_pixels, 4)
-
         if entry:
             result[name] = entry
 
@@ -331,9 +353,9 @@ def _spectral_cross_ref(nmd_raster: np.ndarray, spectral: AnalysisResult) -> dic
 
 
 def _change_cross_ref(nmd_raster: np.ndarray, change: AnalysisResult) -> dict:
-    """Compute change fraction per NMD class.
+    """Compute change fraction per NMD Level 2 class.
 
-    For each Level 1 LULC class, reports the fraction of pixels
+    For each Level 2 LULC class, reports the fraction of pixels
     that were flagged as changed.
 
     Args:
@@ -341,7 +363,7 @@ def _change_cross_ref(nmd_raster: np.ndarray, change: AnalysisResult) -> dict:
         change: AnalysisResult from ChangeDetectionAnalyzer.
 
     Returns:
-        Dict mapping L1 class name to {"change_fraction": float, "changed_pixels": int}.
+        Dict mapping L2 class name to {"change_fraction": float, "changed_pixels": int}.
     """
     change_mask = change.outputs.get("change_mask")
     if change_mask is None:
@@ -351,7 +373,7 @@ def _change_cross_ref(nmd_raster: np.ndarray, change: AnalysisResult) -> dict:
         return {}
 
     result = {}
-    for name, codes in NMD_LEVEL1.items():
+    for name, codes in NMD_LEVEL2.items():
         lulc_mask = np.isin(nmd_raster, list(codes))
         n_pixels = int(lulc_mask.sum())
         if n_pixels == 0:
@@ -368,7 +390,7 @@ def _change_cross_ref(nmd_raster: np.ndarray, change: AnalysisResult) -> dict:
 
 
 def _anomaly_cross_ref(nmd_raster: np.ndarray, objdet: AnalysisResult) -> dict:
-    """Count detected anomalies/objects per NMD class.
+    """Count detected anomalies/objects per NMD Level 2 class.
 
     Uses the center point of each detection's bounding box to determine
     which LULC class it falls in.
@@ -378,7 +400,7 @@ def _anomaly_cross_ref(nmd_raster: np.ndarray, objdet: AnalysisResult) -> dict:
         objdet: AnalysisResult from ObjectDetectionAnalyzer.
 
     Returns:
-        Dict mapping L1 class name to {"count": int, "detections": list}.
+        Dict mapping L2 class name to {"count": int, "detections": list}.
     """
     regions = objdet.outputs.get("regions", [])
     if not regions:
@@ -397,16 +419,64 @@ def _anomaly_cross_ref(nmd_raster: np.ndarray, objdet: AnalysisResult) -> dict:
         cx = min(max(cx, 0), w - 1)
 
         code = int(nmd_raster[cy, cx])
-        l1_name = nmd_code_to_l1(code)
+        l2_name = nmd_code_to_l2(code)
 
-        if l1_name not in result:
-            result[l1_name] = {"count": 0, "detections": []}
+        if l2_name not in result:
+            result[l2_name] = {"count": 0, "detections": []}
 
-        result[l1_name]["count"] += 1
-        result[l1_name]["detections"].append({
+        result[l2_name]["count"] += 1
+        result[l2_name]["detections"].append({
             "center": (cy, cx),
             "score": region.get("score", 0),
             "label": region.get("label", "unknown"),
         })
+
+    return result
+
+
+def _prithvi_cross_ref(nmd_raster: np.ndarray, prithvi: AnalysisResult) -> dict:
+    """Compute Prithvi segmentation fraction per NMD Level 2 class.
+
+    For each Level 2 LULC class, reports the fraction of pixels
+    classified as each Prithvi class (e.g., burned vs. no_burn).
+
+    Args:
+        nmd_raster: NMD class code raster.
+        prithvi: AnalysisResult from PrithviAnalyzer (segmentation mode).
+
+    Returns:
+        Dict mapping L2 class name to per-class fractions and pixel counts.
+    """
+    seg_mask = prithvi.outputs.get("seg_mask")
+    if seg_mask is None:
+        return {}
+    if seg_mask.shape != nmd_raster.shape:
+        return {}
+
+    class_stats = prithvi.outputs.get("class_stats", {})
+    # Build name lookup: {0: "no_burn", 1: "burned"}
+    class_names = {
+        int(k): v.get("name", f"class_{k}")
+        for k, v in class_stats.items()
+    }
+
+    task_head = prithvi.metadata.get("task_head", "unknown")
+
+    result = {}
+    for name, codes in NMD_LEVEL2.items():
+        lulc_mask = np.isin(nmd_raster, list(codes))
+        n_pixels = int(lulc_mask.sum())
+        if n_pixels == 0:
+            continue
+
+        seg_in_class = seg_mask[lulc_mask]
+        entry = {"total_pixels": n_pixels, "task_head": task_head}
+        unique, counts = np.unique(seg_in_class, return_counts=True)
+        for cls_id, cnt in zip(unique, counts):
+            cls_int = int(cls_id)
+            cls_name = class_names.get(cls_int, f"class_{cls_int}")
+            entry[f"{cls_name}_fraction"] = round(int(cnt) / n_pixels, 4)
+            entry[f"{cls_name}_pixels"] = int(cnt)
+        result[name] = entry
 
     return result

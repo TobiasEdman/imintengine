@@ -1,0 +1,31 @@
+# IMINT Engine — Full Analyzer Configuration (all analyzers enabled)
+
+change_detection:
+  enabled: true
+  threshold: 0.15
+  min_region_pixels: 50
+
+spectral:
+  enabled: true
+  ndvi_threshold: 0.3
+  ndwi_threshold: 0.3
+  ndbi_threshold: 0.0
+
+object_detection:
+  enabled: true
+  mode: heatmap
+  patch_size: 32
+  std_threshold: 2.0
+
+prithvi:
+  enabled: true
+  mode: segmentation
+  task_head: burn_scars
+  device: cpu
+
+nmd:
+  enabled: true
+
+cot:
+  enabled: true
+  device: cpu

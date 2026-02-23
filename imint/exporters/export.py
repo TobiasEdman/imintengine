@@ -264,37 +264,282 @@ def save_summary_report(
     return path
 
 
-def save_nmd_overlay(l1_raster: np.ndarray, path: str) -> str:
-    """Render NMD Level 1 land cover classes as a color-coded PNG overlay.
+def save_nmd_overlay(l2_raster: np.ndarray, path: str) -> str:
+    """Render NMD Level 2 land cover classes as a color-coded PNG overlay.
 
     Color palette:
-        0=unclassified (gray), 1=forest (green), 2=wetland (brown),
-        3=cropland (gold), 4=open_land (beige), 5=developed (red),
-        6=water (blue)
+        0=unclassified (gray), 1-19 = L2 classes
 
     Args:
-        l1_raster: 2D uint8 array with Level 1 class codes (0-6).
+        l2_raster: 2D uint8 array with Level 2 class codes (0-19).
         path: Output PNG path.
 
     Returns:
         The output file path.
     """
-    # Level 1 color palette (index = class code)
+    # Level 2 color palette (index = class code)
+    # Order matches L2_CLASSES from nmd.py
     palette = np.array([
         [128, 128, 128],  # 0: unclassified
-        [34, 139, 34],    # 1: forest
-        [139, 90, 43],    # 2: wetland
-        [255, 215, 0],    # 3: cropland
-        [210, 180, 140],  # 4: open_land
-        [255, 0, 0],      # 5: developed
-        [0, 0, 255],      # 6: water
+        [0, 100, 0],      # 1: forest_pine
+        [34, 139, 34],    # 2: forest_spruce
+        [50, 205, 50],    # 3: forest_deciduous
+        [60, 179, 113],   # 4: forest_mixed
+        [144, 238, 144],  # 5: forest_temp_non_forest
+        [46, 79, 46],     # 6: forest_wetland_pine
+        [58, 95, 58],     # 7: forest_wetland_spruce
+        [74, 127, 74],    # 8: forest_wetland_deciduous
+        [90, 143, 90],    # 9: forest_wetland_mixed
+        [122, 175, 122],  # 10: forest_wetland_temp
+        [139, 90, 43],    # 11: open_wetland
+        [255, 215, 0],    # 12: cropland
+        [200, 173, 127],  # 13: open_land_bare
+        [210, 180, 140],  # 14: open_land_vegetated
+        [255, 0, 0],      # 15: developed_buildings
+        [255, 69, 0],     # 16: developed_infrastructure
+        [255, 99, 71],    # 17: developed_roads
+        [0, 0, 255],      # 18: water_lakes
+        [30, 144, 255],   # 19: water_sea
     ], dtype=np.uint8)
 
     # Clamp to valid range
-    clamped = np.clip(l1_raster, 0, len(palette) - 1)
+    clamped = np.clip(l2_raster, 0, len(palette) - 1)
     rgb = palette[clamped]
 
     Image.fromarray(rgb).save(path)
+    print(f"    saved: {path}")
+    return path
+
+
+# ── NMD Level 1 & 2 palettes and Swedish labels ────────────────────────────
+
+_NMD_L1_PALETTE = {
+    0: {"color": "#808080", "rgb": (128, 128, 128), "name": "Oklassificerat"},
+    1: {"color": "#228B22", "rgb": (34, 139, 34),   "name": "Skog"},
+    2: {"color": "#8B5A2B", "rgb": (139, 90, 43),   "name": "Våtmark"},
+    3: {"color": "#FFD700", "rgb": (255, 215, 0),    "name": "Åkermark"},
+    4: {"color": "#D2B48C", "rgb": (210, 180, 140),  "name": "Öppen mark"},
+    5: {"color": "#FF0000", "rgb": (255, 0, 0),      "name": "Bebyggelse"},
+    6: {"color": "#0000FF", "rgb": (0, 0, 255),      "name": "Vatten"},
+}
+
+_NMD_L2_PALETTE = {
+    "forest_pine":              {"color": "#006400", "name": "Tallskog"},
+    "forest_spruce":            {"color": "#228B22", "name": "Granskog"},
+    "forest_deciduous":         {"color": "#32CD32", "name": "Lövskog"},
+    "forest_mixed":             {"color": "#3CB371", "name": "Blandskog"},
+    "forest_temp_non_forest":   {"color": "#90EE90", "name": "Temporärt ej skog"},
+    "forest_wetland_pine":      {"color": "#2E4F2E", "name": "Sumpskog tall"},
+    "forest_wetland_spruce":    {"color": "#3A5F3A", "name": "Sumpskog gran"},
+    "forest_wetland_deciduous": {"color": "#4A7F4A", "name": "Sumpskog löv"},
+    "forest_wetland_mixed":     {"color": "#5A8F5A", "name": "Sumpskog bland"},
+    "forest_wetland_temp":      {"color": "#7AAF7A", "name": "Sumpskog temp"},
+    "open_wetland":             {"color": "#8B5A2B", "name": "Öppen våtmark"},
+    "cropland":                 {"color": "#FFD700", "name": "Åkermark"},
+    "open_land_bare":           {"color": "#C8AD7F", "name": "Öppen mark, bar"},
+    "open_land_vegetated":      {"color": "#D2B48C", "name": "Öppen mark, veg."},
+    "developed_buildings":      {"color": "#FF0000", "name": "Byggnader"},
+    "developed_infrastructure": {"color": "#FF4500", "name": "Infrastruktur"},
+    "developed_roads":          {"color": "#FF6347", "name": "Vägar"},
+    "water_lakes":              {"color": "#0000FF", "name": "Sjöar"},
+    "water_sea":                {"color": "#1E90FF", "name": "Hav"},
+}
+
+
+def save_nmd_visualization(
+    l2_raster: np.ndarray,
+    rgb: np.ndarray,
+    class_stats: dict,
+    cross_ref: dict | None,
+    path: str,
+) -> str:
+    """Create a comprehensive NMD land cover visualization.
+
+    Generates a multi-panel figure:
+        Panel 1: RGB satellite image
+        Panel 2: NMD Level 2 land cover map with legend
+        Panel 3: Land cover distribution (horizontal bar chart, Level 2)
+        Panel 4: Cross-reference — mean NDVI/NDWI per LULC class (Level 2)
+
+    Args:
+        l2_raster: 2D uint8 array with Level 2 class codes (0-19).
+        rgb: (H, W, 3) float32 [0,1] RGB reference image.
+        class_stats: Dict with "level1" and "level2" sub-dicts from NMDAnalyzer.
+        cross_ref: Cross-reference dict (spectral, change, object per class).
+        path: Output PNG path.
+
+    Returns:
+        The output file path.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from matplotlib.gridspec import GridSpec
+
+    has_spectral = cross_ref and "spectral" in cross_ref
+
+    # Layout: 2 rows x 2 columns
+    fig = plt.figure(figsize=(16, 14))
+    gs = GridSpec(2, 2, figure=fig, hspace=0.25, wspace=0.25)
+
+    # ── Panel 1: RGB ─────────────────────────────────────────────────────
+    ax_rgb = fig.add_subplot(gs[0, 0])
+    ax_rgb.imshow(rgb.clip(0, 1))
+    ax_rgb.set_title("Sentinel-2 RGB", fontsize=13, fontweight="bold")
+    ax_rgb.axis("off")
+
+    # ── Panel 2: NMD Level 2 map with legend ─────────────────────────────
+    ax_nmd = fig.add_subplot(gs[0, 1])
+
+    # Build L2 palette array: index 0 = unclassified, 1-19 = L2 classes
+    l2_palette_list = [(128, 128, 128)]  # 0: unclassified
+    l2_keys = list(_NMD_L2_PALETTE.keys())
+    for key in l2_keys:
+        hex_c = _NMD_L2_PALETTE[key]["color"]
+        r, g, b = int(hex_c[1:3], 16), int(hex_c[3:5], 16), int(hex_c[5:7], 16)
+        l2_palette_list.append((r, g, b))
+    palette_arr = np.array(l2_palette_list, dtype=np.uint8)
+
+    clamped = np.clip(l2_raster, 0, len(palette_arr) - 1)
+    nmd_rgb = palette_arr[clamped]
+
+    ax_nmd.imshow(nmd_rgb)
+    ax_nmd.set_title("NMD Markt\u00e4cke (Niv\u00e5 2)", fontsize=13, fontweight="bold")
+    ax_nmd.axis("off")
+
+    # Legend with L2 class names and fractions
+    l2_stats = class_stats.get("level2", {})
+    legend_patches = []
+    for key in l2_keys:
+        info = _NMD_L2_PALETTE[key]
+        stats = l2_stats.get(key)
+        if stats and stats["fraction"] > 0.001:
+            pct = stats["fraction"] * 100
+            label = f"{info['name']} ({pct:.1f}%)"
+        elif stats:
+            label = f"{info['name']} (<0.1%)"
+        else:
+            continue
+        legend_patches.append(mpatches.Patch(color=info["color"], label=label))
+
+    if legend_patches:
+        ax_nmd.legend(
+            handles=legend_patches, loc="lower left", fontsize=6,
+            framealpha=0.9, edgecolor="gray", ncol=2,
+        )
+
+    # ── Panel 3: Level 2 bar chart ───────────────────────────────────────
+    ax_bars = fig.add_subplot(gs[1, 0])
+
+    # Sort by fraction descending, skip tiny classes
+    l2_sorted = sorted(
+        [(k, v) for k, v in l2_stats.items() if v["fraction"] > 0.001],
+        key=lambda x: x[1]["fraction"],
+        reverse=True,
+    )
+
+    if l2_sorted:
+        names_l2 = []
+        fracs_l2 = []
+        colors_l2 = []
+        for key, stats in l2_sorted:
+            info = _NMD_L2_PALETTE.get(key, {"color": "#808080", "name": key})
+            names_l2.append(info["name"])
+            fracs_l2.append(stats["fraction"] * 100)
+            colors_l2.append(info["color"])
+
+        y_pos = range(len(names_l2))
+        bars = ax_bars.barh(y_pos, fracs_l2, color=colors_l2,
+                            edgecolor="white", linewidth=0.5)
+        ax_bars.set_yticks(y_pos)
+        ax_bars.set_yticklabels(names_l2, fontsize=9)
+        ax_bars.invert_yaxis()
+        ax_bars.set_xlabel("Andel (%)", fontsize=10)
+        ax_bars.set_title("Markt\u00e4cke \u2014 detaljerade klasser (Niv\u00e5 2)",
+                          fontsize=13, fontweight="bold")
+
+        # Value labels on bars
+        for bar, frac in zip(bars, fracs_l2):
+            if frac > 2:
+                ax_bars.text(
+                    bar.get_width() - 0.3,
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{frac:.1f}%", ha="right", va="center", fontsize=8,
+                    fontweight="bold", color="white",
+                )
+            else:
+                ax_bars.text(
+                    bar.get_width() + 0.3,
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{frac:.1f}%", ha="left", va="center", fontsize=8,
+                    color="black",
+                )
+        ax_bars.set_xlim(0, max(fracs_l2) * 1.15)
+    else:
+        ax_bars.text(0.5, 0.5, "Ingen data", ha="center", va="center",
+                     fontsize=14)
+        ax_bars.axis("off")
+
+    # ── Panel 4: Cross-reference — NDVI/NDWI per LULC class (L2) ────────
+    ax_xref = fig.add_subplot(gs[1, 1])
+
+    if has_spectral:
+        spectral_xref = cross_ref["spectral"]
+        xref_classes = []
+        ndvi_vals = []
+        ndwi_vals = []
+
+        for key in l2_keys:
+            if key in spectral_xref:
+                info = _NMD_L2_PALETTE[key]
+                xref_classes.append(info["name"])
+                ndvi_vals.append(spectral_xref[key].get("mean_ndvi", 0))
+                ndwi_vals.append(spectral_xref[key].get("mean_ndwi", 0))
+
+        if xref_classes:
+            x = np.arange(len(xref_classes))
+            width = 0.35
+            ax_xref.bar(x - width / 2, ndvi_vals, width,
+                        label="Medel-NDVI", color="#4CAF50", alpha=0.85)
+            ax_xref.bar(x + width / 2, ndwi_vals, width,
+                        label="Medel-NDWI", color="#2196F3", alpha=0.85)
+
+            ax_xref.set_xticks(x)
+            ax_xref.set_xticklabels(xref_classes, fontsize=7,
+                                     rotation=45, ha="right")
+            ax_xref.set_ylabel("Indexv\u00e4rde", fontsize=10)
+            ax_xref.set_title("Spektral korsreferens per markt\u00e4cke (Niv\u00e5 2)",
+                              fontsize=13, fontweight="bold")
+            ax_xref.legend(fontsize=9, loc="upper right")
+            ax_xref.axhline(y=0, color="gray", linewidth=0.5, linestyle="--")
+            ax_xref.set_ylim(
+                min(min(ndwi_vals), -0.6) - 0.1,
+                max(max(ndvi_vals), 0.7) + 0.1,
+            )
+
+            # Value labels
+            for i, (ndvi, ndwi) in enumerate(zip(ndvi_vals, ndwi_vals)):
+                ax_xref.text(i - width / 2, ndvi + 0.02, f"{ndvi:.2f}",
+                             ha="center", va="bottom", fontsize=6)
+                y_ndwi = ndwi - 0.02 if ndwi < 0 else ndwi + 0.02
+                va_ndwi = "top" if ndwi < 0 else "bottom"
+                ax_xref.text(i + width / 2, y_ndwi, f"{ndwi:.2f}",
+                             ha="center", va=va_ndwi, fontsize=6)
+        else:
+            ax_xref.text(0.5, 0.5, "Ingen spektraldata",
+                         ha="center", va="center", fontsize=14)
+            ax_xref.axis("off")
+    else:
+        ax_xref.text(0.5, 0.5, "Ingen korsreferensdata",
+                     ha="center", va="center", fontsize=14)
+        ax_xref.axis("off")
+
+    fig.suptitle("NMD Markt\u00e4ckeanalys \u2014 Nationellt Markt\u00e4ckedata",
+                 fontsize=15, fontweight="bold", y=0.98)
+
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
     print(f"    saved: {path}")
     return path
 
@@ -501,6 +746,142 @@ def save_prithvi_embedding_viz(
     fig.suptitle("Prithvi-EO-2.0 Embedding", fontsize=14)
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+    print(f"    saved: {path}")
+    return path
+
+
+def save_ndvi_clean_png(ndvi: np.ndarray, path: str) -> str:
+    """Save NDVI as a clean color-mapped PNG (no axes/borders) for Leaflet overlay.
+
+    Uses the RdYlGn colormap, mapping [-1, 1] → [0, 1].
+
+    Args:
+        ndvi: (H, W) float32 NDVI array in [-1, 1].
+        path: Output PNG path.
+
+    Returns:
+        The output file path.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+
+    norm = ((ndvi + 1.0) / 2.0).clip(0, 1)
+    cmap = cm.get_cmap("RdYlGn")
+    rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
+    Image.fromarray(rgba).save(path)
+    print(f"    saved: {path}")
+    return path
+
+
+def save_prithvi_seg_clean_png(
+    seg_mask: np.ndarray,
+    path: str,
+    class_colors: dict[int, tuple] | None = None,
+) -> str:
+    """Save Prithvi segmentation as a clean color-coded PNG for Leaflet overlay.
+
+    Args:
+        seg_mask: (H, W) uint8 segmentation mask.
+        path: Output PNG path.
+        class_colors: Optional mapping of class index → (R, G, B) tuple.
+            Defaults to burn_scars palette: 0=green, 1=red-orange.
+
+    Returns:
+        The output file path.
+    """
+    if class_colors is None:
+        class_colors = {
+            0: (34, 139, 34),    # no_burn: green
+            1: (255, 69, 0),     # burned: red-orange
+        }
+    max_class = max(class_colors.keys())
+    palette = np.zeros((max_class + 1, 3), dtype=np.uint8)
+    for cls_id, color in class_colors.items():
+        palette[cls_id] = color
+    clamped = np.clip(seg_mask, 0, max_class)
+    rgb = palette[clamped]
+    Image.fromarray(rgb).save(path)
+    print(f"    saved: {path}")
+    return path
+
+
+def save_cot_clean_png(cot_map: np.ndarray, path: str) -> str:
+    """Save COT heatmap as a clean PNG for Leaflet overlay.
+
+    Uses the hot_r colormap with histogram stretching (2nd-98th
+    percentile) for maximum contrast across the actual data range.
+
+    Args:
+        cot_map: (H, W) float32 COT values.
+        path: Output PNG path.
+
+    Returns:
+        The output file path.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+
+    vmin, vmax = _cot_stretch_range(cot_map)
+    if vmax - vmin < 1e-10:
+        norm = np.zeros_like(cot_map)
+    else:
+        norm = ((cot_map - vmin) / (vmax - vmin)).clip(0, 1)
+    cmap = cm.get_cmap("hot_r")
+    rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
+    Image.fromarray(rgba).save(path)
+    print(f"    saved: {path}")
+    return path
+
+
+def _cot_stretch_range(
+    cot_map: np.ndarray,
+    p_low: float = 2,
+    p_high: float = 98,
+) -> tuple[float, float]:
+    """Compute histogram stretch range for COT values.
+
+    Args:
+        cot_map: (H, W) float32 COT array.
+        p_low: Low percentile (default 2).
+        p_high: High percentile (default 98).
+
+    Returns:
+        (vmin, vmax) for stretching.
+    """
+    valid = cot_map[np.isfinite(cot_map)]
+    if valid.size == 0:
+        return 0.0, 1.0
+    vmin = float(np.percentile(valid, p_low))
+    vmax = float(np.percentile(valid, p_high))
+    # Ensure vmin is never negative for COT
+    vmin = max(vmin, 0.0)
+    if vmax <= vmin:
+        vmax = vmin + 1e-6
+    return vmin, vmax
+
+
+def save_cloud_class_clean_png(cloud_class: np.ndarray, path: str) -> str:
+    """Save cloud classification as a clean color-coded PNG for Leaflet overlay.
+
+    Palette: 0=clear (blue), 1=thin cloud (amber), 2=thick cloud (red).
+
+    Args:
+        cloud_class: (H, W) uint8 cloud classification (0-2).
+        path: Output PNG path.
+
+    Returns:
+        The output file path.
+    """
+    palette = np.array([
+        [33, 150, 243],   # 0: clear (blue)
+        [255, 193, 7],    # 1: thin cloud (amber)
+        [244, 67, 54],    # 2: thick cloud (red)
+    ], dtype=np.uint8)
+    clamped = np.clip(cloud_class, 0, 2)
+    rgb = palette[clamped]
+    Image.fromarray(rgb).save(path)
     print(f"    saved: {path}")
     return path
 

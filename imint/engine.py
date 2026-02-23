@@ -23,9 +23,12 @@ from .analyzers.cot import COTAnalyzer
 from .exporters.export import (
     save_rgb_png, save_change_overlay, save_ndvi_colormap,
     save_regions_geojson, save_geotiff, save_summary_report,
-    save_nmd_overlay, save_nmd_stats, save_prithvi_overlay,
-    save_prithvi_embedding_viz,
+    save_nmd_overlay, save_nmd_stats, save_nmd_visualization,
+    save_prithvi_overlay, save_prithvi_embedding_viz,
+    save_ndvi_clean_png, save_prithvi_seg_clean_png,
+    save_cot_clean_png, save_cloud_class_clean_png,
 )
+from .exporters.html_report import save_html_report
 
 
 ANALYZER_REGISTRY = {
@@ -93,6 +96,7 @@ def run_job(job: IMINTJob) -> IMINTResult:
             date=job.date, coords=job.coords,
             output_dir=job.output_dir,
             previous_results=results,
+            scl=job.scl,
         )
         results.append(result)
         print(f"  {result.summary()}")
@@ -100,6 +104,9 @@ def run_job(job: IMINTJob) -> IMINTResult:
 
     summary_path = save_summary_report(results, job.date, job.output_dir)
     print(f"\n  Summary → {summary_path}")
+
+    # Generate interactive HTML report
+    _generate_html_report(job, prefix)
     print(f"{'='*60}\n")
 
     return IMINTResult(
@@ -197,9 +204,7 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
         ndvi = result.outputs.get("indices", {}).get("NDVI")
         if ndvi is not None:
             save_ndvi_colormap(ndvi, os.path.join(out, f"{prefix}ndvi.png"))
-        lc = result.outputs.get("land_cover")
-        if lc is not None:
-            save_geotiff(lc, os.path.join(out, f"{prefix}land_cover.tif"), geo=job.geo, coords=job.coords)
+            save_ndvi_clean_png(ndvi, os.path.join(out, f"{prefix}ndvi_clean.png"))
 
     elif result.analyzer == "object_detection":
         regions = result.outputs.get("regions", [])
@@ -225,6 +230,10 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
                     rgb=job.rgb,
                     class_names=class_names,
                 )
+                save_prithvi_seg_clean_png(
+                    seg_mask,
+                    os.path.join(out, f"{prefix}prithvi_seg_clean.png"),
+                )
                 save_geotiff(seg_mask, os.path.join(out, f"{prefix}prithvi_seg.tif"),
                              geo=job.geo, coords=job.coords)
         elif mode == "embeddings":
@@ -243,52 +252,101 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
         if cot_map is not None:
             save_geotiff(cot_map, os.path.join(out, f"{prefix}cot.tif"),
                          geo=job.geo, coords=job.coords)
+            save_cot_clean_png(cot_map, os.path.join(out, f"{prefix}cot_clean.png"))
+            if cloud_class is not None:
+                save_cloud_class_clean_png(cloud_class, os.path.join(out, f"{prefix}cloud_class_clean.png"))
             _save_cot_visualization(cot_map, cloud_class, job.rgb,
                                     os.path.join(out, f"{prefix}cot.png"))
 
     elif result.analyzer == "nmd":
         if result.outputs.get("nmd_available"):
-            l1_raster = result.outputs.get("l1_raster")
-            if l1_raster is not None:
-                save_nmd_overlay(l1_raster, os.path.join(out, f"{prefix}nmd_overlay.png"))
+            l2_raster = result.outputs.get("l2_raster")
             class_stats = result.outputs.get("class_stats")
             cross_ref = result.outputs.get("cross_reference")
+            if l2_raster is not None:
+                # Simple color-coded overlay (kept for quick reference)
+                save_nmd_overlay(l2_raster, os.path.join(out, f"{prefix}nmd_overlay.png"))
+                # Rich multi-panel visualization with charts and cross-reference
+                if class_stats:
+                    save_nmd_visualization(
+                        l2_raster, job.rgb, class_stats, cross_ref,
+                        os.path.join(out, f"{prefix}nmd_analysis.png"),
+                    )
             if class_stats:
                 save_nmd_stats(class_stats, cross_ref, os.path.join(out, f"{prefix}nmd_stats.json"))
 
 
+def _generate_html_report(job: IMINTJob, prefix: str) -> None:
+    """Generate interactive HTML report after all analyzers complete."""
+    out = job.output_dir
+    h, w = job.rgb.shape[:2]
+
+    # Collect image paths (only include those that exist)
+    path_candidates = {
+        "rgb": f"{prefix}rgb.png",
+        "nmd": f"{prefix}nmd_overlay.png",
+        "change": f"{prefix}change_overlay.png",
+        "ndvi": f"{prefix}ndvi_clean.png",
+        "prithvi_seg": f"{prefix}prithvi_seg_clean.png",
+        "cot": f"{prefix}cot_clean.png",
+    }
+    image_paths = {}
+    for key, filename in path_candidates.items():
+        full_path = os.path.join(out, filename)
+        if os.path.exists(full_path):
+            image_paths[key] = full_path
+
+    if not image_paths:
+        print("  [html_report] skipped — no images available")
+        return
+
+    # Load nmd_stats if available
+    nmd_stats_path = os.path.join(out, f"{prefix}nmd_stats.json")
+    nmd_stats = {}
+    if os.path.exists(nmd_stats_path):
+        with open(nmd_stats_path) as f:
+            nmd_stats = json.load(f)
+
+    # Load imint_summary
+    summary_path = os.path.join(out, f"{prefix}imint_summary.json")
+    imint_summary = {}
+    if os.path.exists(summary_path):
+        with open(summary_path) as f:
+            imint_summary = json.load(f)
+
+    html_path = os.path.join(out, f"{prefix}imint_report.html")
+    save_html_report(
+        image_paths=image_paths,
+        nmd_stats=nmd_stats,
+        imint_summary=imint_summary,
+        image_shape=(h, w),
+        date=job.date or "unknown",
+        output_path=html_path,
+    )
+    print(f"  HTML Report → {html_path}")
+
+
 def _save_cot_visualization(cot_map, cloud_class, rgb, path):
-    """Save COT visualization: RGB, COT heatmap, and cloud classification."""
+    """Save COT visualization: RGB and histogram-stretched COT heatmap."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.colors import ListedColormap
+    from .exporters.export import _cot_stretch_range
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    vmin, vmax = _cot_stretch_range(cot_map)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
     # Panel 1: RGB
     axes[0].imshow(rgb)
-    axes[0].set_title("RGB")
+    axes[0].set_title("Sentinel-2 RGB")
     axes[0].axis("off")
 
-    # Panel 2: COT heatmap
-    im = axes[1].imshow(cot_map, cmap="hot_r", vmin=0, vmax=0.3)
-    axes[1].set_title("Cloud Optical Thickness")
+    # Panel 2: Continuous COT heatmap (histogram stretched)
+    im = axes[1].imshow(cot_map, cmap="hot_r", vmin=vmin, vmax=vmax)
+    axes[1].set_title(f"Cloud Optical Thickness (stretch {vmin:.4f}\u2013{vmax:.4f})")
     axes[1].axis("off")
     plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04, label="COT")
-
-    # Panel 3: Cloud classification (clear / thin / thick)
-    cmap = ListedColormap(["#2196F3", "#FFC107", "#F44336"])
-    axes[2].imshow(cloud_class, cmap=cmap, vmin=0, vmax=2)
-    axes[2].set_title("Cloud Classification")
-    axes[2].axis("off")
-    from matplotlib.patches import Patch
-    legend = [
-        Patch(facecolor="#2196F3", label="Clear"),
-        Patch(facecolor="#FFC107", label="Thin cloud"),
-        Patch(facecolor="#F44336", label="Thick cloud"),
-    ]
-    axes[2].legend(handles=legend, loc="lower right", fontsize=8)
 
     plt.tight_layout()
     plt.savefig(path, dpi=150, bbox_inches="tight")

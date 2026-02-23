@@ -4,6 +4,10 @@ imint/analyzers/change_detection.py — Change detection analyzer
 Compares the current image against a stored baseline per season/area.
 First run saves the image as baseline and reports zero changes.
 Subsequent runs flag changed pixels above a configurable threshold.
+
+Cloud masking: When an SCL (Scene Classification Layer) array is provided,
+pixels classified as cloud (SCL 8/9/10) in either the current image or
+the baseline are excluded from comparison.
 """
 
 import os
@@ -12,6 +16,9 @@ from scipy import ndimage
 from pathlib import Path
 
 from .base import BaseAnalyzer, AnalysisResult
+
+# SCL classes treated as cloud (matches fetch.py SCL_CLOUD_CLASSES)
+_SCL_CLOUD = frozenset({8, 9, 10})
 
 
 def _season(date: str) -> str:
@@ -34,7 +41,8 @@ def _area_key(coords: dict) -> str:
 class ChangeDetectionAnalyzer(BaseAnalyzer):
     name = "change_detection"
 
-    def analyze(self, rgb, bands=None, date=None, coords=None, output_dir="outputs"):
+    def analyze(self, rgb, bands=None, date=None, coords=None,
+                output_dir="outputs", scl=None):
         threshold = self.config.get("threshold", 0.15)
         min_region_pixels = self.config.get("min_region_pixels", 50)
 
@@ -48,6 +56,8 @@ class ChangeDetectionAnalyzer(BaseAnalyzer):
         # First run: save baseline, return zero changes
         if not os.path.exists(baseline_path):
             np.save(baseline_path, rgb)
+            if scl is not None:
+                np.save(baseline_path.replace(".npy", "_scl.npy"), scl)
             return AnalysisResult(
                 analyzer=self.name,
                 success=True,
@@ -64,6 +74,8 @@ class ChangeDetectionAnalyzer(BaseAnalyzer):
         baseline = np.load(baseline_path)
         if baseline.shape != rgb.shape:
             np.save(baseline_path, rgb)
+            if scl is not None:
+                np.save(baseline_path.replace(".npy", "_scl.npy"), scl)
             return AnalysisResult(
                 analyzer=self.name,
                 success=True,
@@ -76,8 +88,27 @@ class ChangeDetectionAnalyzer(BaseAnalyzer):
                 metadata={"baseline_resaved": True, "reason": "shape_mismatch"},
             )
 
+        # Build combined cloud mask from current + baseline SCL
+        cloud_mask = np.zeros(rgb.shape[:2], dtype=bool)
+        current_cloud_frac = 0.0
+        baseline_cloud_frac = 0.0
+
+        if scl is not None and scl.shape == rgb.shape[:2]:
+            current_cloud = np.isin(scl, list(_SCL_CLOUD))
+            cloud_mask |= current_cloud
+            current_cloud_frac = float(current_cloud.sum()) / max(scl.size, 1)
+
+        scl_path = baseline_path.replace(".npy", "_scl.npy")
+        if os.path.exists(scl_path):
+            baseline_scl = np.load(scl_path)
+            if baseline_scl.shape == rgb.shape[:2]:
+                baseline_cloud = np.isin(baseline_scl, list(_SCL_CLOUD))
+                cloud_mask |= baseline_cloud
+                baseline_cloud_frac = float(baseline_cloud.sum()) / max(baseline_scl.size, 1)
+
+        # Compute pixel-wise difference, mask out clouds
         diff = np.linalg.norm(rgb.astype(np.float32) - baseline.astype(np.float32), axis=-1)
-        change_mask = diff > threshold
+        change_mask = (diff > threshold) & ~cloud_mask
 
         # Morphological cleaning
         struct = ndimage.generate_binary_structure(2, 1)
@@ -101,7 +132,10 @@ class ChangeDetectionAnalyzer(BaseAnalyzer):
             }
             regions.append({"bbox": bbox, "pixel_count": pixel_count})
 
-        change_fraction = float(change_mask.sum()) / change_mask.size
+        # Change fraction relative to valid (non-cloud) pixels
+        cloud_masked_pixels = int(cloud_mask.sum())
+        valid_pixels = rgb.shape[0] * rgb.shape[1] - cloud_masked_pixels
+        change_fraction = float(change_mask.sum()) / max(valid_pixels, 1)
 
         return AnalysisResult(
             analyzer=self.name,
@@ -112,5 +146,12 @@ class ChangeDetectionAnalyzer(BaseAnalyzer):
                 "regions": regions,
                 "change_mask": change_mask,
             },
-            metadata={"threshold": threshold, "baseline": baseline_path},
+            metadata={
+                "threshold": threshold,
+                "baseline": baseline_path,
+                "cloud_masked_pixels": cloud_masked_pixels,
+                "valid_pixels": valid_pixels,
+                "cloud_fraction_current": round(current_cloud_frac, 4),
+                "cloud_fraction_baseline": round(baseline_cloud_frac, 4),
+            },
         )

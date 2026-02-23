@@ -464,12 +464,14 @@ class TestPrithviEngineRegistration:
         keys = list(ANALYZER_REGISTRY.keys())
         assert keys.index("prithvi") < keys.index("nmd")
 
-    def test_disabled_by_default(self):
-        """Prithvi should be disabled in default config."""
+    def test_enabled_in_config(self):
+        """Prithvi should be enabled in config with burn_scars task head."""
         import yaml
         with open("config/analyzers.yaml") as f:
             config = yaml.safe_load(f)
-        assert config["prithvi"]["enabled"] is False
+        assert config["prithvi"]["enabled"] is True
+        assert config["prithvi"]["mode"] == "segmentation"
+        assert config["prithvi"]["task_head"] == "burn_scars"
 
 
 # ── Embedding visualization ──────────────────────────────────────────────────

@@ -61,6 +61,7 @@ class BaseAnalyzer(ABC):
         coords: dict | None = None,
         output_dir: str = "outputs",
         previous_results: list[AnalysisResult] | None = None,
+        scl: np.ndarray | None = None,
     ) -> AnalysisResult:
         ...
 
@@ -72,25 +73,22 @@ class BaseAnalyzer(ABC):
         coords: dict | None = None,
         output_dir: str = "outputs",
         previous_results: list[AnalysisResult] | None = None,
+        scl: np.ndarray | None = None,
     ) -> AnalysisResult:
         """Run analyze() with error handling.
 
-        Passes ``previous_results`` only if the concrete analyze()
-        declares it in its signature — existing analyzers that omit
-        it are called without it, requiring zero changes.
+        Passes ``previous_results`` and ``scl`` only if the concrete
+        analyze() declares them in its signature — existing analyzers
+        that omit them are called without, requiring zero changes.
         """
         try:
             sig = inspect.signature(self.analyze)
+            kwargs = dict(bands=bands, date=date, coords=coords, output_dir=output_dir)
             if "previous_results" in sig.parameters:
-                return self.analyze(
-                    rgb, bands=bands, date=date,
-                    coords=coords, output_dir=output_dir,
-                    previous_results=previous_results,
-                )
-            return self.analyze(
-                rgb, bands=bands, date=date,
-                coords=coords, output_dir=output_dir,
-            )
+                kwargs["previous_results"] = previous_results
+            if "scl" in sig.parameters:
+                kwargs["scl"] = scl
+            return self.analyze(rgb, **kwargs)
         except Exception as e:
             return AnalysisResult(
                 analyzer=self.name,

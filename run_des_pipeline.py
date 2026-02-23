@@ -35,7 +35,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from imint.job import IMINTJob
-from imint.fetch import fetch_des_data
+from imint.fetch import fetch_des_data, ensure_baseline
 from imint.engine import run_job
 
 # ---- Defaults (Malmö centrum) --------------------------------------------
@@ -129,19 +129,30 @@ def main():
               f"threshold ({DEFAULT_CLOUD_THRESHOLD:.0%}).")
         print("    Continuing anyway...")
 
+    # Step 1.5: Ensure cloud-free baseline for change detection
+    print("\n[1.5] Ensuring cloud-free baseline for change detection...")
+    os.makedirs(output_dir, exist_ok=True)
+    ensure_baseline(
+        date=date,
+        coords=coords,
+        output_dir=output_dir,
+        cloud_threshold=0.1,
+    )
+
     # Step 2: Build IMINTJob
     print(f"\n[2] Building IMINTJob...")
-    os.makedirs(output_dir, exist_ok=True)
 
     job = IMINTJob(
         date=date,
         coords=coords,
         rgb=fetch_result.rgb,
         bands=fetch_result.bands,
+        scl=fetch_result.scl,
         geo=fetch_result.geo,
         output_dir=output_dir,
         config_path=CONFIG_PATH,
         job_id=f"des-pipeline-{date}",
+        extra={"scl_cloud_fraction": fetch_result.cloud_fraction},
     )
     print(f"    job_id: {job.job_id}")
     print(f"    geo: {job.geo.crs if job.geo else 'None'}")

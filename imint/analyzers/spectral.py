@@ -10,13 +10,6 @@ from __future__ import annotations
 import numpy as np
 from .base import BaseAnalyzer, AnalysisResult
 
-# Land cover class encoding
-LC_WATER = 1
-LC_VEGETATION = 2
-LC_BUILT_UP = 3
-LC_BARE_SOIL = 4
-
-
 def _safe_ratio(a, b):
     """Normalized difference ratio with epsilon to avoid division by zero."""
     return (a - b) / (a + b + 1e-10)
@@ -48,33 +41,11 @@ class SpectralAnalyzer(BaseAnalyzer):
         ndbi = _safe_ratio(b11, b08)
         evi = 2.5 * (b08 - b04) / (b08 + 6.0 * b04 - 7.5 * b02 + 1.0 + 1e-10)
 
-        # Land cover classification
-        h, w = ndvi.shape
-        land_cover = np.full((h, w), LC_BARE_SOIL, dtype=np.uint8)
-
-        ndwi_thresh = self.config.get("ndwi_threshold", 0.3)
-        ndvi_thresh = self.config.get("ndvi_threshold", 0.3)
-        ndbi_thresh = self.config.get("ndbi_threshold", 0.0)
-
-        land_cover[ndwi > ndwi_thresh] = LC_WATER
-        land_cover[(ndvi > ndvi_thresh) & (land_cover == LC_BARE_SOIL)] = LC_VEGETATION
-        land_cover[(ndbi > ndbi_thresh) & (land_cover == LC_BARE_SOIL)] = LC_BUILT_UP
-
-        total = h * w
-        stats = {
-            "water_fraction": float((land_cover == LC_WATER).sum()) / total,
-            "vegetation_fraction": float((land_cover == LC_VEGETATION).sum()) / total,
-            "built_up_fraction": float((land_cover == LC_BUILT_UP).sum()) / total,
-            "bare_soil_fraction": float((land_cover == LC_BARE_SOIL).sum()) / total,
-        }
-
         return AnalysisResult(
             analyzer=self.name,
             success=True,
             outputs={
                 "indices": {"NDVI": ndvi, "NDWI": ndwi, "NDBI": ndbi, "EVI": evi},
-                "land_cover": land_cover,
-                "stats": stats,
             },
             metadata={"fallback_rgb": fallback, "date": date},
         )

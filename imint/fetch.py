@@ -167,8 +167,9 @@ def _connect(token: str | None = None, token_path: str | None = None):
     Authentication priority:
         1. Explicit token argument
         2. DES_TOKEN environment variable
-        3. Stored refresh token (from ``des_login.py --device``, auto-renews)
-        4. Token file at token_path (default: .des_token in project root)
+        3. DES_USER + DES_PASSWORD environment variables (Basic Auth)
+        4. Stored refresh token (from ``des_login.py --device``, auto-renews)
+        5. Token file at token_path (default: .des_token in project root)
 
     Returns:
         Authenticated openeo.Connection.
@@ -200,7 +201,15 @@ def _connect(token: str | None = None, token_path: str | None = None):
         conn.authenticate_oidc_access_token(access_token=env_token, provider_id="egi")
         return conn
 
-    # 3. Stored refresh token (from des_login.py --device)
+    # 3. Basic Auth (DES_USER + DES_PASSWORD env vars)
+    #    Compatible with DES community tutorial pattern.
+    des_user = os.environ.get("DES_USER")
+    des_password = os.environ.get("DES_PASSWORD")
+    if des_user and des_password:
+        conn.authenticate_basic(username=des_user, password=des_password)
+        return conn
+
+    # 4. Stored refresh token (from des_login.py --device)
     #    This auto-renews expired access tokens — best for local dev.
     try:
         conn.authenticate_oidc_refresh_token(
@@ -211,7 +220,7 @@ def _connect(token: str | None = None, token_path: str | None = None):
     except Exception:
         pass  # No stored refresh token, try next method
 
-    # 4. Token file (short-lived access token from Web Editor)
+    # 5. Token file (short-lived access token from Web Editor)
     resolved_path = token_path or TOKEN_PATH_DEFAULT
     if os.path.exists(resolved_path):
         with open(resolved_path) as f:
@@ -225,6 +234,7 @@ def _connect(token: str | None = None, token_path: str | None = None):
     raise FetchError(
         "No valid DES authentication found. Run:\n"
         "  python scripts/des_login.py --device   (recommended, persistent)\n"
+        "  python scripts/des_login.py --basic     (tutorial-style basic auth)\n"
         "  python scripts/des_login.py --token YOUR_TOKEN  (short-lived)"
     )
 
@@ -310,15 +320,20 @@ def fetch_des_data(
     import rasterio
     from datetime import datetime, timedelta
 
+    # STAC-guided date selection when using a date window
+    if date_window > 0:
+        date = _stac_best_date(coords, date, date_window)
+        date_window = 0  # fetch exact date
+
     conn = _connect(token=token)
 
     # Project WGS84 coords to EPSG:3006 snapped to NMD 10m grid
     projected_coords = _to_nmd_grid(coords)
 
-    # Temporal extent: date ± window
+    # Temporal extent: single date (STAC already selected the best)
     dt = datetime.strptime(date, "%Y-%m-%d")
-    start = (dt - timedelta(days=date_window)).strftime("%Y-%m-%d")
-    end = (dt + timedelta(days=max(date_window, 1))).strftime("%Y-%m-%d")
+    start = dt.strftime("%Y-%m-%d")
+    end = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
     temporal = [start, end]
 
     # ── Fetch all bands in a single request ──────────────────────────────
@@ -450,6 +465,611 @@ def fetch_des_data(
         crs=crs,
         transform=transform,
     )
+
+
+# ── Cloud-free baseline fetching ─────────────────────────────────────────────
+
+def fetch_cloud_free_baseline(
+    date: str,
+    coords: dict,
+    search_start_days: int = 30,
+    search_end_days: int = 90,
+    scan_interval_days: int = 7,
+    cloud_threshold: float = 0.1,
+    token: str | None = None,
+) -> FetchResult:
+    """Fetch a cloud-free Sentinel-2 image for use as a change detection baseline.
+
+    Three-phase STAC-guided approach:
+    1. STAC discovery — find all available dates in the search window
+    2. SCL screening — compute AOI-specific cloud fraction per date
+    3. COT ranking — run COT on top 5 to pick best visibility
+
+    Args:
+        date: ISO date string of the analysis (e.g. "2024-07-15").
+        coords: WGS84 bounding box dict.
+        search_start_days: Start of search window (days before date). Default: 30.
+        search_end_days: End of search window (days before date). Default: 90.
+        scan_interval_days: Ignored (kept for API compatibility).
+        cloud_threshold: Maximum acceptable cloud fraction. Default: 0.1.
+        token: Optional DES access token.
+
+    Returns:
+        FetchResult for the image with best visibility.
+
+    Raises:
+        FetchError: If no candidate below cloud_threshold is found.
+    """
+    from datetime import datetime, timedelta
+
+    dt = datetime.strptime(date, "%Y-%m-%d")
+    start = (dt - timedelta(days=search_end_days)).strftime("%Y-%m-%d")
+    end = (dt - timedelta(days=search_start_days)).strftime("%Y-%m-%d")
+
+    # Phase 1: STAC discovery
+    print(f"    [STAC] Querying available dates {start} to {end}...")
+    stac_dates = _stac_available_dates(coords, start, end, scene_cloud_max=80.0)
+    print(f"    [STAC] {len(stac_dates)} dates with scene cloud <= 80%")
+
+    if not stac_dates:
+        raise FetchError(
+            f"No Sentinel-2 data available in baseline window "
+            f"({search_start_days}-{search_end_days} days back). "
+            f"STAC returned no results."
+        )
+
+    # Phase 2: SCL screening per STAC date
+    conn = _connect(token=token)
+    projected_coords = _to_nmd_grid(coords)
+
+    scl_results: list[tuple[str, float, float]] = []  # (date, aoi_cloud, scene_cloud)
+
+    for i, (candidate_date, scene_cloud) in enumerate(stac_dates, 1):
+        candidate_dt = datetime.strptime(candidate_date, "%Y-%m-%d")
+        temporal = [
+            candidate_date,
+            (candidate_dt + timedelta(days=1)).strftime("%Y-%m-%d"),
+        ]
+        try:
+            _scl, aoi_cloud, _crs, _transform = _fetch_scl(
+                conn, projected_coords, temporal, date_window=0
+            )
+            print(f"    [{i}/{len(stac_dates)}] {candidate_date}  "
+                  f"scene={scene_cloud:.1f}%  AOI(SCL)={aoi_cloud:.1%}")
+            scl_results.append((candidate_date, aoi_cloud, scene_cloud))
+        except Exception:
+            print(f"    [{i}/{len(stac_dates)}] {candidate_date}  -> no data")
+            continue
+
+    if not scl_results:
+        raise FetchError("All SCL fetches failed — no baseline candidates")
+
+    # Sort by AOI cloud fraction
+    scl_results.sort(key=lambda x: x[1])
+
+    # Phase 3: COT on top 5 for visibility ranking
+    top_n = min(5, len(scl_results))
+    top_dates = scl_results[:top_n]
+
+    # Only run COT if we have multiple good candidates to choose from
+    best_date = top_dates[0][0]
+    best_cloud = top_dates[0][1]
+
+    if top_n >= 2 and top_dates[0][1] < cloud_threshold:
+        try:
+            from imint.analyzers.cot import COTAnalyzer
+            import rasterio
+
+            analyzer = COTAnalyzer(config={"device": "cpu"})
+            print(f"    [COT] Ranking top {top_n} by visibility...")
+
+            cot_scores: list[tuple[str, float, float]] = []  # (date, clear_frac, cot_mean)
+
+            for candidate_date, aoi_cloud, _scene_cloud in top_dates:
+                candidate_dt = datetime.strptime(candidate_date, "%Y-%m-%d")
+                temporal = [
+                    candidate_date,
+                    (candidate_dt + timedelta(days=1)).strftime("%Y-%m-%d"),
+                ]
+                try:
+                    # Full spectral fetch for COT
+                    cube_10m = conn.load_collection(
+                        collection_id=COLLECTION,
+                        spatial_extent=projected_coords,
+                        temporal_extent=temporal,
+                        bands=BANDS_10M,
+                    )
+                    cube_20m = conn.load_collection(
+                        collection_id=COLLECTION,
+                        spatial_extent=projected_coords,
+                        temporal_extent=temporal,
+                        bands=BANDS_20M_SPECTRAL,
+                    )
+                    cube_20m = cube_20m.resample_cube_spatial(
+                        target=cube_10m, method="bilinear"
+                    )
+                    cube_60m = conn.load_collection(
+                        collection_id=COLLECTION,
+                        spatial_extent=projected_coords,
+                        temporal_extent=temporal,
+                        bands=BANDS_60M,
+                    )
+                    cube_60m = cube_60m.resample_cube_spatial(
+                        target=cube_10m, method="bilinear"
+                    )
+                    cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_60m)
+                    data = cube.download(format="gtiff")
+
+                    with rasterio.open(io.BytesIO(data)) as src:
+                        raw = src.read()
+
+                    spectral_names = BANDS_10M + BANDS_20M_SPECTRAL + BANDS_60M
+                    bands = des_to_imint_bands(
+                        {n.lower(): dn_to_reflectance(raw[j], source="des")
+                         for j, n in enumerate(spectral_names)}
+                    )
+
+                    rgb_dummy = np.zeros((*raw.shape[1:], 3), dtype=np.float32)
+                    result = analyzer.analyze(
+                        rgb=rgb_dummy, bands=bands, date=candidate_date,
+                        output_dir="/tmp",
+                    )
+                    if result.success:
+                        cf = result.outputs["stats"]["clear_fraction"]
+                        cm = result.outputs["stats"]["cot_mean"]
+                        print(f"      {candidate_date}  clear={cf:.1%}  COT={cm:.6f}")
+                        cot_scores.append((candidate_date, cf, cm))
+                except Exception as e:
+                    print(f"      {candidate_date}  COT failed: {e}")
+
+            if cot_scores:
+                # Best visibility: highest clear_fraction, then lowest cot_mean
+                cot_scores.sort(key=lambda x: (-x[1], x[2]))
+                best_date = cot_scores[0][0]
+                print(f"    [COT] Best visibility: {best_date} "
+                      f"(clear={cot_scores[0][1]:.1%}, COT={cot_scores[0][2]:.6f})")
+
+        except ImportError:
+            print("    [COT] COT analyzer not available, using SCL ranking")
+
+    # Check threshold
+    if best_cloud > cloud_threshold and best_date == top_dates[0][0]:
+        raise FetchError(
+            f"No cloud-free baseline found. "
+            f"Best AOI cloud: {best_cloud:.1%} (threshold: {cloud_threshold:.0%})"
+        )
+
+    # Phase 4: Full fetch for the best date
+    print(f"    Selected baseline: {best_date}")
+    return fetch_des_data(
+        date=best_date,
+        coords=coords,
+        cloud_threshold=1.0,  # already verified
+        token=token,
+        include_scl=True,
+        date_window=0,
+    )
+
+
+STAC_SEARCH_URL = "https://explorer.digitalearth.se/stac/search"
+
+
+def _stac_best_date(coords: dict, date: str, window: int) -> str:
+    """Find best available date via STAC within date ± window.
+
+    Queries STAC for all Sentinel-2 L2A dates in the window and returns
+    the one with lowest scene-level cloud cover.
+
+    Args:
+        coords: WGS84 bounding box dict.
+        date: Target ISO date string.
+        window: Days before/after date to search.
+
+    Returns:
+        ISO date string of the best available date.
+
+    Raises:
+        FetchError: If no data available in the window.
+    """
+    from datetime import datetime, timedelta
+
+    dt = datetime.strptime(date, "%Y-%m-%d")
+    start = (dt - timedelta(days=window)).strftime("%Y-%m-%d")
+    end = (dt + timedelta(days=window)).strftime("%Y-%m-%d")
+
+    stac_dates = _stac_available_dates(coords, start, end, scene_cloud_max=100.0)
+    if not stac_dates:
+        raise FetchError(
+            f"No Sentinel-2 data available for {date} ±{window} days "
+            f"(STAC query returned no results)"
+        )
+
+    best_date, best_cloud = stac_dates[0]  # already sorted by cloud asc
+    print(f"    [STAC] {len(stac_dates)} dates in {start}/{end}, "
+          f"best: {best_date} (scene cloud {best_cloud:.1f}%)")
+    return best_date
+
+
+@dataclass
+class BaselineCandidate:
+    """A candidate baseline image with cloud statistics and RGB thumbnail."""
+    date: str
+    cloud_fraction: float        # SCL-based, within AOI
+    scene_cloud_fraction: float  # Scene-level from STAC metadata
+    rgb_thumbnail: np.ndarray    # (H, W, 3) float32 [0, 1]
+    shape: tuple                 # (H, W)
+    cot_stats: dict | None = None  # COT analysis: clear_fraction, cot_mean, etc.
+
+
+def _stac_available_dates(
+    coords: dict,
+    date_start: str,
+    date_end: str,
+    scene_cloud_max: float = 80.0,
+) -> list[tuple[str, float]]:
+    """Query STAC API for available Sentinel-2 L2A dates within bbox and time range.
+
+    Returns deduplicated dates sorted by scene cloud cover ascending.
+    Multiple tiles/orbits on the same date are merged (lowest cloud kept).
+
+    Args:
+        coords: WGS84 bounding box dict.
+        date_start: ISO start date (inclusive).
+        date_end: ISO end date (inclusive).
+        scene_cloud_max: Discard dates with scene cloud > this %.
+
+    Returns:
+        List of (date_str, scene_cloud_pct) sorted by cloud ascending.
+    """
+    import urllib.request
+    import urllib.parse
+    import json
+
+    params = urllib.parse.urlencode({
+        "collections": "s2_msi_l2a",
+        "bbox": f"{coords['west']},{coords['south']},{coords['east']},{coords['north']}",
+        "datetime": f"{date_start}/{date_end}",
+        "limit": 200,
+    })
+    url = f"{STAC_SEARCH_URL}?{params}"
+
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read())
+
+    # Deduplicate: keep lowest cloud per date
+    date_cloud: dict[str, float] = {}
+    for feat in data.get("features", []):
+        props = feat.get("properties", {})
+        dt_str = (props.get("datetime") or props.get("start_datetime") or "")[:10]
+        if not dt_str:
+            continue
+        cc = props.get("eo:cloud_cover", props.get("cloud_cover"))
+        if cc is None:
+            cc = 100.0
+        if dt_str not in date_cloud or cc < date_cloud[dt_str]:
+            date_cloud[dt_str] = cc
+
+    # Filter and sort by cloud ascending
+    result = [
+        (d, c) for d, c in date_cloud.items()
+        if c <= scene_cloud_max
+    ]
+    result.sort(key=lambda x: x[1])
+    return result
+
+
+def scan_baseline_candidates(
+    date: str,
+    coords: dict,
+    search_start_days: int = 30,
+    search_end_days: int = 90,
+    scene_cloud_max: float = 80.0,
+    token: str | None = None,
+) -> list[BaselineCandidate]:
+    """Scan all available dates via STAC API, then fetch RGB+SCL for AOI cloud %.
+
+    Two-phase approach:
+    1. Query STAC for all dates with data (fast HTTP call)
+    2. Fetch RGB+SCL only for dates with scene cloud < threshold
+
+    Args:
+        date: ISO date string of the analysis (e.g. "2018-07-24").
+        coords: WGS84 bounding box dict.
+        search_start_days: Start of search window (days before date).
+        search_end_days: End of search window (days before date).
+        scene_cloud_max: Skip dates with scene cloud above this %.
+        token: Optional DES access token.
+
+    Returns:
+        List of BaselineCandidate sorted by cloud_fraction ascending.
+    """
+    from datetime import datetime, timedelta
+
+    dt = datetime.strptime(date, "%Y-%m-%d")
+    start = (dt - timedelta(days=search_end_days)).strftime("%Y-%m-%d")
+    end = (dt - timedelta(days=search_start_days)).strftime("%Y-%m-%d")
+
+    # Phase 1: STAC discovery
+    print(f"  [STAC] Querying available dates {start} to {end}...")
+    stac_dates = _stac_available_dates(coords, start, end, scene_cloud_max)
+    print(f"  [STAC] {len(stac_dates)} dates with scene cloud <= {scene_cloud_max:.0f}%")
+
+    if not stac_dates:
+        return []
+
+    # Phase 2: Fetch RGB+SCL per date
+    conn = _connect(token=token)
+    projected_coords = _to_nmd_grid(coords)
+
+    results = []
+    for i, (candidate_date, scene_cloud) in enumerate(stac_dates, 1):
+        candidate_dt = datetime.strptime(candidate_date, "%Y-%m-%d")
+        temporal = [
+            candidate_date,
+            (candidate_dt + timedelta(days=1)).strftime("%Y-%m-%d"),
+        ]
+
+        try:
+            rgb, aoi_cloud, shape = _fetch_rgb_and_scl(
+                conn, projected_coords, temporal
+            )
+            print(f"    [{i}/{len(stac_dates)}] {candidate_date}  "
+                  f"scene={scene_cloud:.1f}%  AOI(SCL)={aoi_cloud:.1%}  "
+                  f"[{shape[1]}x{shape[0]}]")
+
+            results.append(BaselineCandidate(
+                date=candidate_date,
+                cloud_fraction=aoi_cloud,
+                scene_cloud_fraction=scene_cloud,
+                rgb_thumbnail=rgb,
+                shape=shape,
+            ))
+
+        except Exception as e:
+            print(f"    [{i}/{len(stac_dates)}] {candidate_date}  "
+                  f"scene={scene_cloud:.1f}%  -> failed ({e})")
+            continue
+
+    results.sort(key=lambda c: c.cloud_fraction)
+    return results
+
+
+def _fetch_rgb_and_scl(conn, projected_coords: dict, temporal: list):
+    """Fetch B02/B03/B04 + SCL for a single date. Lightweight RGB thumbnail.
+
+    Returns:
+        Tuple of (rgb_array, cloud_fraction, shape).
+    """
+    import rasterio
+
+    cube_rgb = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=["b02", "b03", "b04"],
+    )
+
+    cube_scl = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=BANDS_20M_CATEGORICAL,
+    )
+    cube_scl = cube_scl.resample_cube_spatial(target=cube_rgb, method="near")
+
+    cube = cube_rgb.merge_cubes(cube_scl)
+    data = cube.download(format="gtiff")
+
+    if not data:
+        raise FetchError("DES returned empty data")
+
+    with rasterio.open(io.BytesIO(data)) as src:
+        raw = src.read()  # (4, H, W): b02, b03, b04, scl
+
+    b02 = dn_to_reflectance(raw[0], source="des")
+    b03 = dn_to_reflectance(raw[1], source="des")
+    b04 = dn_to_reflectance(raw[2], source="des")
+    scl = raw[3].astype(np.uint8)
+
+    cloud_frac = check_cloud_fraction(scl)
+
+    band_dict = {"B02": b02, "B03": b03, "B04": b04}
+    rgb = bands_to_rgb(band_dict, scl=scl)
+    shape = rgb.shape[:2]
+
+    return rgb, cloud_frac, shape
+
+
+def run_cot_on_candidates(
+    candidates: list[BaselineCandidate],
+    coords: dict,
+    top_n: int = 5,
+    token: str | None = None,
+) -> list[BaselineCandidate]:
+    """Fetch full bands for top N candidates and run COT analysis.
+
+    Fetches all 11 spectral bands needed by COT, runs the analyzer,
+    and populates the ``cot_stats`` field. Returns candidates re-sorted
+    by best visibility (highest clear_fraction, then lowest cot_mean).
+
+    Args:
+        candidates: Pre-sorted by cloud_fraction (from scan_baseline_candidates).
+        coords: WGS84 bounding box dict.
+        top_n: How many top candidates to run COT on.
+        token: Optional DES access token.
+
+    Returns:
+        The top_n candidates with cot_stats populated, sorted by visibility.
+    """
+    from datetime import datetime, timedelta
+    from imint.analyzers.cot import COTAnalyzer
+    import rasterio
+
+    top = candidates[:top_n]
+    if not top:
+        return []
+
+    conn = _connect(token=token)
+    projected_coords = _to_nmd_grid(coords)
+
+    analyzer = COTAnalyzer(config={"device": "cpu"})
+    print(f"\n  [COT] Running visibility analysis on top {len(top)} candidates...")
+
+    for i, c in enumerate(top, 1):
+        dt = datetime.strptime(c.date, "%Y-%m-%d")
+        temporal = [c.date, (dt + timedelta(days=1)).strftime("%Y-%m-%d")]
+
+        try:
+            # Full spectral fetch (all 11 bands)
+            cube_10m = conn.load_collection(
+                collection_id=COLLECTION,
+                spatial_extent=projected_coords,
+                temporal_extent=temporal,
+                bands=BANDS_10M,
+            )
+            cube_20m = conn.load_collection(
+                collection_id=COLLECTION,
+                spatial_extent=projected_coords,
+                temporal_extent=temporal,
+                bands=BANDS_20M_SPECTRAL,
+            )
+            cube_20m = cube_20m.resample_cube_spatial(
+                target=cube_10m, method="bilinear"
+            )
+            cube_60m = conn.load_collection(
+                collection_id=COLLECTION,
+                spatial_extent=projected_coords,
+                temporal_extent=temporal,
+                bands=BANDS_60M,
+            )
+            cube_60m = cube_60m.resample_cube_spatial(
+                target=cube_10m, method="bilinear"
+            )
+            cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_60m)
+            data = cube.download(format="gtiff")
+
+            with rasterio.open(io.BytesIO(data)) as src:
+                raw = src.read()
+
+            spectral_names = BANDS_10M + BANDS_20M_SPECTRAL + BANDS_60M
+            bands = {}
+            for j, name in enumerate(spectral_names):
+                bands[name.upper()] = dn_to_reflectance(raw[j], source="des")
+            # B8A uppercase fix
+            if "B8A" not in bands and "b8a".upper() in bands:
+                pass  # already uppercase
+            bands = des_to_imint_bands(
+                {n.lower(): dn_to_reflectance(raw[j], source="des")
+                 for j, n in enumerate(spectral_names)}
+            )
+
+            # Run COT
+            rgb_dummy = c.rgb_thumbnail
+            result = analyzer.analyze(
+                rgb=rgb_dummy, bands=bands, date=c.date, output_dir="/tmp",
+            )
+
+            if result.success:
+                c.cot_stats = result.outputs["stats"]
+                cf = c.cot_stats["clear_fraction"]
+                cm = c.cot_stats["cot_mean"]
+                print(f"    [{i}/{len(top)}] {c.date}  "
+                      f"clear={cf:.1%}  COT_mean={cm:.6f}")
+            else:
+                print(f"    [{i}/{len(top)}] {c.date}  COT failed: {result.error}")
+
+        except Exception as e:
+            print(f"    [{i}/{len(top)}] {c.date}  COT fetch failed: {e}")
+
+    # Sort by visibility: highest clear_fraction, then lowest cot_mean
+    def _visibility_key(c):
+        if c.cot_stats is None:
+            return (0.0, 1.0)
+        return (c.cot_stats["clear_fraction"], -c.cot_stats["cot_mean"])
+
+    top.sort(key=_visibility_key, reverse=True)
+    return top
+
+
+def _baseline_season(date: str) -> str:
+    """Map ISO date to season name (matches change_detection._season)."""
+    month = int(date.split("-")[1])
+    if month in (3, 4, 5):
+        return "spring"
+    elif month in (6, 7, 8):
+        return "summer"
+    elif month in (9, 10, 11):
+        return "autumn"
+    return "winter"
+
+
+def _baseline_area_key(coords: dict) -> str:
+    """Stable string key from bbox (matches change_detection._area_key)."""
+    return f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
+
+
+def ensure_baseline(
+    date: str,
+    coords: dict,
+    output_dir: str,
+    search_start_days: int = 30,
+    search_end_days: int = 90,
+    cloud_threshold: float = 0.1,
+    token: str | None = None,
+) -> str | None:
+    """Ensure a cloud-free baseline exists for this season/area.
+
+    Checks if a baseline .npy file already exists at the expected path
+    (matching the season/area naming used by ChangeDetectionAnalyzer).
+    If not, fetches a cloud-free image from DES and saves it.
+
+    Args:
+        date: ISO date string of the analysis.
+        coords: WGS84 bounding box dict.
+        output_dir: The job's output directory (baselines stored at ../baselines/).
+        search_start_days: Start of search window in days before date.
+        search_end_days: End of search window in days before date.
+        cloud_threshold: Maximum acceptable cloud fraction for baseline.
+        token: Optional DES access token.
+
+    Returns:
+        Path to the baseline .npy file (existing or newly created),
+        or None if fetching failed (logged as warning, not raised).
+    """
+    season = _baseline_season(date)
+    area = _baseline_area_key(coords)
+    baseline_dir = os.path.join(output_dir, "..", "baselines")
+    baseline_path = os.path.join(baseline_dir, f"{season}_{area}.npy")
+
+    if os.path.exists(baseline_path):
+        print(f"  [baseline] Using existing baseline: {baseline_path}")
+        return baseline_path
+
+    try:
+        print(f"  [baseline] No baseline found for {season}/{area}")
+        print(f"  [baseline] Scanning {search_start_days}-{search_end_days} days back...")
+        result = fetch_cloud_free_baseline(
+            date=date,
+            coords=coords,
+            search_start_days=search_start_days,
+            search_end_days=search_end_days,
+            cloud_threshold=cloud_threshold,
+            token=token,
+        )
+
+        os.makedirs(baseline_dir, exist_ok=True)
+        np.save(baseline_path, result.rgb)
+        if result.scl is not None:
+            scl_path = baseline_path.replace(".npy", "_scl.npy")
+            np.save(scl_path, result.scl)
+        print(f"  [baseline] Saved cloud-free baseline: {baseline_path}")
+        return baseline_path
+
+    except FetchError as e:
+        print(f"  [baseline] WARNING: Could not fetch baseline: {e}")
+        print(f"  [baseline] Change detection will create baseline from current image.")
+        return None
 
 
 # ── NMD (Nationellt Marktäckedata) ────────────────────────────────────────────

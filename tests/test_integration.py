@@ -92,7 +92,7 @@ class TestRunJobEndToEnd:
         assert result.success, f"run_job failed: {result.error}"
         assert result.job_id == "test_integration"
         assert result.date == "2022-06-15"
-        assert len(result.analyzer_results) == 5
+        assert len(result.analyzer_results) == 6
 
     def test_rgb_png_created(self, tmp_path):
         """RGB composite PNG should be a valid image."""
@@ -115,27 +115,6 @@ class TestRunJobEndToEnd:
         img = Image.open(path)
         assert img.size[0] > 0 and img.size[1] > 0
 
-    def test_land_cover_tif_created(self, tmp_path):
-        """Land cover GeoTIFF should exist and be non-empty."""
-        job = _make_job(tmp_path)
-        run_job(job)
-
-        path = os.path.join(job.output_dir, "2022-06-15_land_cover.tif")
-        assert os.path.exists(path)
-        assert os.path.getsize(path) > 0
-
-    def test_land_cover_tif_has_epsg3006(self, tmp_path):
-        """Land cover GeoTIFF should have EPSG:3006 CRS when geo is set."""
-        import rasterio
-
-        job = _make_job(tmp_path)
-        run_job(job)
-
-        path = os.path.join(job.output_dir, "2022-06-15_land_cover.tif")
-        assert os.path.exists(path)
-        with rasterio.open(path) as src:
-            assert str(src.crs) == "EPSG:3006"
-
     def test_geo_propagated_to_job(self, tmp_path):
         """GeoContext should be present in the job."""
         job = _make_job(tmp_path)
@@ -155,11 +134,12 @@ class TestRunJobEndToEnd:
             summary = json.load(f)
 
         assert summary["date"] == "2022-06-15"
-        assert len(summary["analyzers"]) == 5
+        assert len(summary["analyzers"]) == 6
         names = [a["name"] for a in summary["analyzers"]]
         assert "change_detection" in names
         assert "spectral" in names
         assert "object_detection" in names
+        assert "prithvi" in names
         assert "nmd" in names
 
     def test_detections_geojson_valid(self, tmp_path):

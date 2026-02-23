@@ -78,6 +78,50 @@ class TestChangeRegions:
         assert region["pixel_count"] > 0
 
 
+class TestPreCreatedBaseline:
+    """Verify change detection works with pre-created cloud-free baselines."""
+
+    def test_detects_changes_against_prefetched_baseline(self, tmp_output_dir, coords):
+        """When a baseline already exists (from ensure_baseline), compare against it."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.1, "min_region_pixels": 5})
+
+        # Simulate a pre-fetched cloud-free baseline
+        baseline_dir = os.path.join(tmp_output_dir, "..", "baselines")
+        os.makedirs(baseline_dir, exist_ok=True)
+        season = "summer"  # 2022-06-15 is summer
+        area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
+        baseline_path = os.path.join(baseline_dir, f"{season}_{area}.npy")
+
+        baseline = np.zeros((64, 64, 3), dtype=np.float32)
+        np.save(baseline_path, baseline)
+
+        # Run analyzer with bright image — should detect changes
+        bright = np.full((64, 64, 3), 0.9, dtype=np.float32)
+        result = analyzer.run(bright, date="2022-06-15", coords=coords, output_dir=tmp_output_dir)
+
+        assert result.success
+        assert result.outputs["change_fraction"] > 0.5
+        assert "baseline_saved" not in result.metadata
+
+    def test_no_change_against_identical_prefetched_baseline(self, tmp_output_dir, coords):
+        """Pre-created baseline identical to current image -> zero change."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.15})
+
+        baseline_dir = os.path.join(tmp_output_dir, "..", "baselines")
+        os.makedirs(baseline_dir, exist_ok=True)
+        season = "summer"
+        area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
+        baseline_path = os.path.join(baseline_dir, f"{season}_{area}.npy")
+
+        img = np.full((64, 64, 3), 0.5, dtype=np.float32)
+        np.save(baseline_path, img)
+
+        result = analyzer.run(img, date="2022-06-15", coords=coords, output_dir=tmp_output_dir)
+
+        assert result.success
+        assert result.outputs["change_fraction"] == 0.0
+
+
 class TestChangeThreshold:
     """Verify threshold parameter controls sensitivity."""
 
@@ -99,3 +143,78 @@ class TestChangeThreshold:
         r_high = a_high.run(img2, date="2022-06-15", coords=coords, output_dir=out2)
 
         assert r_low.outputs["change_fraction"] >= r_high.outputs["change_fraction"]
+
+
+class TestCloudMasking:
+    """Verify SCL-based cloud masking in change detection."""
+
+    def test_cloudy_pixels_excluded_from_change(self, tmp_output_dir, coords):
+        """Pixels cloudy in current SCL should not count as changed."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.1, "min_region_pixels": 1})
+
+        # Baseline: dark image
+        img1 = np.zeros((64, 64, 3), dtype=np.float32)
+        analyzer.run(img1, date="2022-06-15", coords=coords, output_dir=tmp_output_dir)
+
+        # Current: bright everywhere, but top half is cloud (SCL=9)
+        img2 = np.ones((64, 64, 3), dtype=np.float32)
+        scl = np.zeros((64, 64), dtype=np.uint8)
+        scl[:32, :] = 9  # top half = cloud_high_probability
+
+        result = analyzer.run(img2, date="2022-06-15", coords=coords,
+                              output_dir=tmp_output_dir, scl=scl)
+
+        assert result.success
+        # Only bottom half (non-cloud) should be detected as changed
+        mask = result.outputs["change_mask"]
+        assert mask[:32, :].sum() == 0, "Cloudy pixels should not be flagged"
+        assert mask[32:, :].sum() > 0, "Non-cloudy changed pixels should be flagged"
+        assert result.metadata["cloud_masked_pixels"] == 32 * 64
+        assert result.metadata["valid_pixels"] == 32 * 64
+
+    def test_baseline_scl_also_masks(self, tmp_output_dir, coords):
+        """Pixels cloudy in baseline SCL should also be excluded."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.1, "min_region_pixels": 1})
+
+        # Create baseline + baseline SCL with clouds in bottom half
+        baseline_dir = os.path.join(tmp_output_dir, "..", "baselines")
+        os.makedirs(baseline_dir, exist_ok=True)
+        area = f"{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
+        baseline_path = os.path.join(baseline_dir, f"summer_{area}.npy")
+        scl_path = baseline_path.replace(".npy", "_scl.npy")
+
+        baseline = np.zeros((64, 64, 3), dtype=np.float32)
+        np.save(baseline_path, baseline)
+        baseline_scl = np.zeros((64, 64), dtype=np.uint8)
+        baseline_scl[32:, :] = 8  # bottom half = cloud_medium_probability
+        np.save(scl_path, baseline_scl)
+
+        # Current: bright, cloud in top half
+        img2 = np.ones((64, 64, 3), dtype=np.float32)
+        current_scl = np.zeros((64, 64), dtype=np.uint8)
+        current_scl[:32, :] = 10  # top half = thin_cirrus
+
+        result = analyzer.run(img2, date="2022-06-15", coords=coords,
+                              output_dir=tmp_output_dir, scl=current_scl)
+
+        assert result.success
+        # Both halves are cloudy (one in current, one in baseline) -> no valid changes
+        mask = result.outputs["change_mask"]
+        assert mask.sum() == 0, "All pixels should be masked by combined cloud mask"
+        assert result.metadata["cloud_masked_pixels"] == 64 * 64
+
+    def test_no_scl_means_no_masking(self, tmp_output_dir, coords):
+        """Without SCL, all pixels are compared (backward compatible)."""
+        analyzer = ChangeDetectionAnalyzer(config={"threshold": 0.1, "min_region_pixels": 1})
+
+        img1 = np.zeros((64, 64, 3), dtype=np.float32)
+        analyzer.run(img1, date="2022-06-15", coords=coords, output_dir=tmp_output_dir)
+
+        img2 = np.ones((64, 64, 3), dtype=np.float32)
+        result = analyzer.run(img2, date="2022-06-15", coords=coords,
+                              output_dir=tmp_output_dir, scl=None)
+
+        assert result.success
+        assert result.metadata["cloud_masked_pixels"] == 0
+        assert result.metadata["valid_pixels"] == 64 * 64
+        assert result.outputs["change_fraction"] > 0.9

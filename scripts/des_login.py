@@ -6,10 +6,13 @@ Supports multiple authentication methods:
 1. OIDC device flow (recommended — stores refresh token for auto-renewal):
     python scripts/des_login.py --device
 
-2. Access token (from Web Editor — expires in ~60 min, no auto-renewal):
+2. Basic Auth (tutorial-style — shared credentials):
+    python scripts/des_login.py --basic --user testuser --password secretpassword
+
+3. Access token (from Web Editor — expires in ~60 min, no auto-renewal):
     python scripts/des_login.py --token "your_access_token"
 
-3. Test current authentication:
+4. Test current authentication:
     python scripts/des_login.py --test
 """
 from __future__ import annotations
@@ -58,6 +61,37 @@ def login_device():
     return conn
 
 
+def login_basic(user: str, password: str):
+    """Authenticate with HTTP Basic Auth (username + password).
+
+    This is the method used in the DES community tutorials.
+    Credentials can optionally be saved as environment variables
+    DES_USER and DES_PASSWORD for use by imint.fetch.
+
+    NOTE: Basic Auth uses shared credentials and is primarily intended
+    for tutorials and development. Use --device for production.
+    """
+    import openeo
+
+    print(f"Connecting to {OPENEO_URL}...")
+    conn = openeo.connect(OPENEO_URL)
+    conn.authenticate_basic(username=user, password=password)
+
+    # Verify
+    collections = conn.list_collections()
+    print(f"Authenticated via Basic Auth! Found {len(collections)} collections.")
+    for c in collections:
+        print(f"  - {c['id']}: {c.get('title', '')}")
+
+    print()
+    print("To use with imint.fetch, set environment variables:")
+    print(f"  export DES_USER=\"{user}\"")
+    print(f"  export DES_PASSWORD=\"{password}\"")
+    print()
+    print("TIP: Use --device instead for production (per-user OIDC, auto-renewing).")
+    return conn
+
+
 def login_token(token: str):
     """Authenticate with an EGI OIDC access token (e.g. from Web Editor).
 
@@ -103,7 +137,22 @@ def test_connection():
     except Exception:
         pass
 
-    # 2. Try saved access token
+    # 2. Try Basic Auth from environment variables
+    des_user = os.environ.get("DES_USER")
+    des_password = os.environ.get("DES_PASSWORD")
+    if des_user and des_password:
+        try:
+            conn.authenticate_basic(username=des_user, password=des_password)
+            collections = conn.list_collections()
+            print(f"Authenticated via Basic Auth (DES_USER env var).")
+            print(f"  {len(collections)} collections available.")
+            for c in collections:
+                print(f"  - {c['id']}: {c.get('title', '')}")
+            return conn
+        except Exception as e:
+            print(f"  Basic Auth failed: {e}")
+
+    # 3. Try saved access token
     token_path = os.path.join(os.path.dirname(__file__), "..", ".des_token")
     if os.path.exists(token_path):
         with open(token_path) as f:
@@ -122,6 +171,7 @@ def test_connection():
 
     print("Not authenticated. Run one of:")
     print("  python scripts/des_login.py --device    (recommended)")
+    print("  python scripts/des_login.py --basic --user USER --password PASS")
     print("  python scripts/des_login.py --token YOUR_TOKEN")
     return None
 
@@ -134,6 +184,10 @@ def main():
         help="OIDC device flow (recommended — stores refresh token)"
     )
     group.add_argument(
+        "--basic", action="store_true",
+        help="Basic Auth (tutorial-style, shared credentials)"
+    )
+    group.add_argument(
         "--token",
         help="Access token from Web Editor (short-lived, ~60 min)"
     )
@@ -141,10 +195,18 @@ def main():
         "--test", action="store_true",
         help="Test current authentication"
     )
+
+    parser.add_argument("--user", help="Username for --basic auth")
+    parser.add_argument("--password", help="Password for --basic auth")
+
     args = parser.parse_args()
 
     if args.device:
         login_device()
+    elif args.basic:
+        if not args.user or not args.password:
+            parser.error("--basic requires --user and --password")
+        login_basic(args.user, args.password)
     elif args.token:
         login_token(args.token)
     elif args.test:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
-from imint.analyzers.spectral import SpectralAnalyzer, LC_WATER, LC_VEGETATION, LC_BARE_SOIL
+from imint.analyzers.spectral import SpectralAnalyzer
 
 
 class TestSpectralNDVI:
@@ -30,40 +30,6 @@ class TestSpectralNDVI:
         ndvi = result.outputs["indices"]["NDVI"]
         bottom_mean = float(ndvi[32:, :].mean())
         assert bottom_mean < -0.5, f"Expected low NDVI in bottom half, got {bottom_mean}"
-
-
-class TestSpectralLandCover:
-    """Verify pixel classification."""
-
-    def test_vegetation_classified(self, bands_known):
-        """Top half (high NDVI) should be classified as vegetation."""
-        analyzer = SpectralAnalyzer(config={"ndvi_threshold": 0.3})
-        rgb = np.full((64, 64, 3), 0.5, dtype=np.float32)
-        result = analyzer.run(rgb, bands=bands_known, date="2022-06-15")
-
-        lc = result.outputs["land_cover"]
-        top_veg = (lc[:32, :] == LC_VEGETATION).mean()
-        assert top_veg > 0.9, f"Expected top half mostly vegetation, got {top_veg:.0%}"
-
-    def test_not_vegetation_in_bottom(self, bands_known):
-        """Bottom half (negative NDVI) should NOT be classified as vegetation."""
-        analyzer = SpectralAnalyzer(config={"ndvi_threshold": 0.3})
-        rgb = np.full((64, 64, 3), 0.5, dtype=np.float32)
-        result = analyzer.run(rgb, bands=bands_known, date="2022-06-15")
-
-        lc = result.outputs["land_cover"]
-        bottom_veg = (lc[32:, :] == LC_VEGETATION).mean()
-        assert bottom_veg == 0.0, f"Expected no vegetation in bottom half, got {bottom_veg:.0%}"
-
-    def test_stats_sum_to_one(self, bands_known):
-        """Land cover fractions should sum to 1.0."""
-        analyzer = SpectralAnalyzer(config={})
-        rgb = np.full((64, 64, 3), 0.5, dtype=np.float32)
-        result = analyzer.run(rgb, bands=bands_known, date="2022-06-15")
-
-        stats = result.outputs["stats"]
-        total = sum(stats.values())
-        assert abs(total - 1.0) < 1e-6, f"Stats sum to {total}, expected 1.0"
 
 
 class TestSpectralFallback:

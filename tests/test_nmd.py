@@ -14,9 +14,11 @@ from imint.analyzers.nmd import (
     NMDAnalyzer,
     NMD_LEVEL1,
     NMD_LEVEL2,
+    L2_CLASSES,
     nmd_code_to_l1,
     nmd_code_to_l2,
     nmd_raster_to_l1,
+    nmd_raster_to_l2,
     _compute_class_stats,
     _cross_reference,
     _spectral_cross_ref,
@@ -104,6 +106,44 @@ class TestNMDRasterToL1:
         assert l1.dtype == np.uint8
 
 
+class TestNMDRasterToL2:
+    """Test raster-level Level 2 conversion."""
+
+    def test_basic_conversion(self):
+        """Known codes should map to correct L2 integers."""
+        raster = np.array([[111, 112], [53, 62]], dtype=np.uint8)
+        l2 = nmd_raster_to_l2(raster)
+        # forest_pine=1, forest_spruce=2, developed_roads=17, water_sea=19
+        assert l2[0, 0] == L2_CLASSES.index("forest_pine") + 1
+        assert l2[0, 1] == L2_CLASSES.index("forest_spruce") + 1
+        assert l2[1, 0] == L2_CLASSES.index("developed_roads") + 1
+        assert l2[1, 1] == L2_CLASSES.index("water_sea") + 1
+
+    def test_unknown_stays_zero(self):
+        """Unknown codes should be 0 (unclassified)."""
+        raster = np.array([[0, 255]], dtype=np.uint8)
+        l2 = nmd_raster_to_l2(raster)
+        assert l2[0, 0] == 0
+        assert l2[0, 1] == 0
+
+    def test_all_l2_classes_mapped(self):
+        """Every L2 class should produce a unique non-zero code."""
+        codes_seen = set()
+        for name, nmd_codes in NMD_LEVEL2.items():
+            code = list(nmd_codes)[0]
+            raster = np.array([[code]], dtype=np.uint8)
+            l2 = nmd_raster_to_l2(raster)
+            val = int(l2[0, 0])
+            assert val > 0, f"{name} should map to non-zero"
+            codes_seen.add(val)
+        assert len(codes_seen) == len(NMD_LEVEL2), "All L2 classes should have unique codes"
+
+    def test_dtype_preserved(self):
+        raster = np.array([[111]], dtype=np.uint8)
+        l2 = nmd_raster_to_l2(raster)
+        assert l2.dtype == np.uint8
+
+
 # ── Class statistics tests ───────────────────────────────────────────────────
 
 class TestNMDClassStats:
@@ -161,41 +201,26 @@ class TestNMDCrossReference:
         return raster
 
     def test_spectral_cross_ref_ndvi(self):
-        """Mean NDVI should be computed per LULC class."""
+        """Mean NDVI should be computed per L2 LULC class."""
         nmd = self._make_nmd_raster()
         ndvi = np.zeros((10, 10), dtype=np.float32)
-        ndvi[:5, :] = 0.8   # High NDVI in forest
-        ndvi[5:, :] = -0.2  # Low NDVI in water
+        ndvi[:5, :] = 0.8   # High NDVI in forest_pine (111)
+        ndvi[5:, :] = -0.2  # Low NDVI in water_lakes (61)
 
         spectral = AnalysisResult(
             analyzer="spectral", success=True,
-            outputs={"indices": {"NDVI": ndvi, "NDWI": ndvi * -1}, "land_cover": None},
+            outputs={"indices": {"NDVI": ndvi, "NDWI": ndvi * -1}},
         )
 
         result = _spectral_cross_ref(nmd, spectral)
-        assert abs(result["forest"]["mean_ndvi"] - 0.8) < 0.01
-        assert abs(result["water"]["mean_ndvi"] - (-0.2)) < 0.01
-
-    def test_spectral_cross_ref_land_cover(self):
-        """Vegetation/water/built-up fractions per LULC class."""
-        nmd = self._make_nmd_raster()
-        lc = np.full((10, 10), 2, dtype=np.uint8)  # All vegetation
-        lc[5:, :] = 1  # Water in bottom half
-
-        spectral = AnalysisResult(
-            analyzer="spectral", success=True,
-            outputs={"indices": {}, "land_cover": lc},
-        )
-
-        result = _spectral_cross_ref(nmd, spectral)
-        assert result["forest"]["vegetation_fraction"] == 1.0
-        assert result["water"]["water_fraction"] == 1.0
+        assert abs(result["forest_pine"]["mean_ndvi"] - 0.8) < 0.01
+        assert abs(result["water_lakes"]["mean_ndvi"] - (-0.2)) < 0.01
 
     def test_change_cross_ref(self):
-        """Change fraction should be broken down per LULC class."""
+        """Change fraction should be broken down per L2 LULC class."""
         nmd = self._make_nmd_raster()
         change_mask = np.zeros((10, 10), dtype=bool)
-        change_mask[:5, :5] = True  # 25 changed pixels in forest
+        change_mask[:5, :5] = True  # 25 changed pixels in forest_pine (111)
 
         change = AnalysisResult(
             analyzer="change_detection", success=True,
@@ -203,9 +228,9 @@ class TestNMDCrossReference:
         )
 
         result = _change_cross_ref(nmd, change)
-        assert result["forest"]["change_fraction"] == 0.5  # 25/50
-        assert result["forest"]["changed_pixels"] == 25
-        assert result["water"]["change_fraction"] == 0.0
+        assert result["forest_pine"]["change_fraction"] == 0.5  # 25/50
+        assert result["forest_pine"]["changed_pixels"] == 25
+        assert result["water_lakes"]["change_fraction"] == 0.0
 
     def test_change_cross_ref_shape_mismatch(self):
         """Shape mismatch should return empty dict."""
@@ -221,7 +246,7 @@ class TestNMDCrossReference:
         assert result == {}
 
     def test_anomaly_cross_ref(self):
-        """Anomaly detections should be counted per LULC class."""
+        """Anomaly detections should be counted per L2 LULC class."""
         nmd = self._make_nmd_raster()
 
         regions = [
@@ -234,8 +259,8 @@ class TestNMDCrossReference:
         )
 
         result = _anomaly_cross_ref(nmd, objdet)
-        assert result["forest"]["count"] == 1
-        assert result["water"]["count"] == 1
+        assert result["forest_pine"]["count"] == 1
+        assert result["water_lakes"]["count"] == 1
 
     def test_anomaly_cross_ref_empty_regions(self):
         """Empty regions list should return empty dict."""
@@ -258,7 +283,7 @@ class TestNMDCrossReference:
             ),
             AnalysisResult(
                 analyzer="spectral", success=True,
-                outputs={"indices": {"NDVI": np.zeros((10, 10))}, "land_cover": None},
+                outputs={"indices": {"NDVI": np.zeros((10, 10))}},
             ),
             AnalysisResult(
                 analyzer="object_detection", success=True,
@@ -359,7 +384,6 @@ class TestNMDGracefulDegradation:
                 analyzer="spectral", success=True,
                 outputs={
                     "indices": {"NDVI": np.full((10, 10), 0.7, dtype=np.float32)},
-                    "land_cover": np.full((10, 10), 2, dtype=np.uint8),
                 },
             ),
             AnalysisResult(
@@ -374,11 +398,10 @@ class TestNMDGracefulDegradation:
         assert "spectral" in result.outputs["cross_reference"]
         assert "change_detection" in result.outputs["cross_reference"]
 
-        # Check spectral cross-ref values
+        # Check spectral cross-ref values (now L2 keys)
         sr = result.outputs["cross_reference"]["spectral"]
-        assert abs(sr["forest"]["mean_ndvi"] - 0.7) < 0.01
-        assert sr["forest"]["vegetation_fraction"] == 1.0
+        assert abs(sr["forest_pine"]["mean_ndvi"] - 0.7) < 0.01
 
-        # Check change cross-ref values
+        # Check change cross-ref values (now L2 keys)
         cr = result.outputs["cross_reference"]["change_detection"]
-        assert cr["forest"]["change_fraction"] == 1.0
+        assert cr["forest_pine"]["change_fraction"] == 1.0

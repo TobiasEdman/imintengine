@@ -23,13 +23,11 @@ object_detection:
   # confidence: 0.25        # Minimum confidence for model detections
 
 prithvi:
-  enabled: false            # Requires: pip install terratorch (or just torch for Prithvi-only)
-  mode: embeddings          # "embeddings" or "segmentation"
+  enabled: true
+  mode: segmentation
   backbone: prithvi_eo_v2_300m_tl
-  # --- Segmentation mode options ---
-  # task_head: sen1floods11  # Pre-trained task heads: sen1floods11, burn_scars
-  # model_path: path/to/finetuned.pt  # Alternative: direct checkpoint path
-  # device: cpu                       # Auto-detected if omitted (cuda > mps > cpu)
+  task_head: burn_scars
+  device: cpu
 
 nmd:
   enabled: true             # NMD LULC analysis (requires DES connection + coords)
