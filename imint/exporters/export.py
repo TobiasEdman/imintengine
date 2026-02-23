@@ -840,7 +840,7 @@ def save_prithvi_seg_clean_png(
 def save_cot_clean_png(cot_map: np.ndarray, path: str) -> str:
     """Save COT heatmap as a clean PNG for Leaflet overlay.
 
-    Uses the hot_r colormap with fixed 0–1 range.
+    Uses the hot_r colormap with fixed 0–100 range.
 
     Args:
         cot_map: (H, W) float32 COT values.
@@ -853,7 +853,7 @@ def save_cot_clean_png(cot_map: np.ndarray, path: str) -> str:
     matplotlib.use("Agg")
     import matplotlib.cm as cm
 
-    norm = cot_map.clip(0, 1)
+    norm = (cot_map / 100.0).clip(0, 1)
     cmap = cm.get_cmap("hot_r")
     rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
     Image.fromarray(rgba).save(path)

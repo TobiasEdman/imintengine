@@ -10,6 +10,9 @@ data/
 # Baselines (large numpy files)
 **/baselines/
 
+# Cached CDN libraries for offline HTML reports
+.lib_cache/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -1,11 +1,12 @@
 """
 imint/exporters/html_report.py — Interactive HTML analysis report
 
-Generates a self-contained HTML file with:
+Generates a fully self-contained HTML file with:
 - Synchronized zoomable Leaflet.js map viewers (CRS.Simple + leaflet-sync)
 - Opacity sliders per layer
 - Chart.js charts for NMD cross-reference data
 - All images base64-encoded inline for portability
+- All JS/CSS libraries inlined (no external CDN dependencies)
 """
 from __future__ import annotations
 
@@ -13,6 +14,52 @@ import os
 import json
 import base64
 from pathlib import Path
+from urllib.request import urlopen
+from urllib.error import URLError
+
+# Project root for library cache
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_LIB_CACHE_DIR = _PROJECT_ROOT / ".lib_cache"
+
+# CDN URLs for external libraries
+_CDN_LIBS = {
+    "leaflet_css": "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
+    "leaflet_js": "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
+    "leaflet_sync_js": "https://cdn.jsdelivr.net/npm/leaflet.sync@0.2.4/L.Map.Sync.js",
+    "chart_js": "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js",
+}
+
+
+def _fetch_lib(url: str, cache_dir: Path | None = None) -> str:
+    """Download a library file and cache it locally.
+
+    Args:
+        url: CDN URL to fetch.
+        cache_dir: Local cache directory (default: .lib_cache/).
+
+    Returns:
+        File content as string.
+    """
+    if cache_dir is None:
+        cache_dir = _LIB_CACHE_DIR
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    filename = url.rsplit("/", 1)[-1]
+    cached = cache_dir / filename
+
+    if cached.exists():
+        return cached.read_text(encoding="utf-8")
+
+    try:
+        print(f"    [html_report] Downloading {filename} ...")
+        with urlopen(url, timeout=30) as resp:
+            content = resp.read().decode("utf-8")
+        cached.write_text(content, encoding="utf-8")
+        print(f"    [html_report] Cached: {cached}")
+        return content
+    except (URLError, OSError) as e:
+        print(f"    [html_report] WARNING: Could not download {url}: {e}")
+        return f"/* Failed to fetch {url} */"
 
 
 def _img_to_base64(path: str) -> str:
@@ -55,14 +102,6 @@ MAP_VIEWERS = [
             {"color": "#FF6347", "label": "Vägar"},
             {"color": "#0000FF", "label": "Sjöar"},
             {"color": "#1E90FF", "label": "Hav"},
-        ],
-    },
-    {
-        "id": "map-change",
-        "title": "Förändringsdetektering",
-        "key": "change",
-        "legend": [
-            {"color": "#FF0000", "label": "Förändring"},
         ],
     },
     {
@@ -151,9 +190,9 @@ MAP_VIEWERS = [
         "title": "Molnoptisk tjocklek (COT)",
         "key": "cot",
         "legend": [
-            {"color": "#FFFFB2", "label": "0.0 (Klart)"},
-            {"color": "#FD8D3C", "label": "0.5"},
-            {"color": "#BD0026", "label": "1.0 (Tjockt moln)"},
+            {"color": "#FFFFB2", "label": "0 (Klart)"},
+            {"color": "#FD8D3C", "label": "50"},
+            {"color": "#BD0026", "label": "100 (Tjockt moln)"},
         ],
     },
 ]
@@ -274,6 +313,12 @@ def _build_html(
 ) -> str:
     """Build the complete HTML string."""
 
+    # ── Fetch and cache external libraries for inline embedding ───────────
+    leaflet_css = _fetch_lib(_CDN_LIBS["leaflet_css"])
+    leaflet_js = _fetch_lib(_CDN_LIBS["leaflet_js"])
+    leaflet_sync_js = _fetch_lib(_CDN_LIBS["leaflet_sync_js"])
+    chart_js = _fetch_lib(_CDN_LIBS["chart_js"])
+
     # ── Map cells HTML ────────────────────────────────────────────────────
     map_cells_html = ""
     for v in viewers:
@@ -368,7 +413,7 @@ def _build_html(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IMINT Analysrapport \u2014 {date}</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>{leaflet_css}</style>
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{
@@ -648,9 +693,9 @@ def _build_html(
         IMINT Engine &middot; Genererad {date}
     </div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/leaflet.sync@0.2.4/L.Map.Sync.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+    <script>{leaflet_js}</script>
+    <script>{leaflet_sync_js}</script>
+    <script>{chart_js}</script>
     <script>
     (function() {{
         'use strict';
