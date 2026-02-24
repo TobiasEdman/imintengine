@@ -136,7 +136,15 @@ body {{
   0%, 100% {{ opacity: 1; }}
   50% {{ opacity: 0.3; }}
 }}
-.container {{ padding: 24px 32px; max-width: 1400px; margin: 0 auto; }}
+.container {{ padding: 24px 32px; max-width: 1500px; margin: 0 auto; display: flex; gap: 24px; }}
+.main-content {{ flex: 1; min-width: 0; }}
+.sidebar {{ width: 160px; flex-shrink: 0; position: sticky; top: 24px; align-self: flex-start; }}
+.sidebar .section-title {{ font-size: 11px; margin-bottom: 10px; }}
+.sidebar .gauge-card {{ margin-bottom: 10px; padding: 8px 10px; min-width: unset; }}
+.sidebar .gauge-svg {{ width: 80px; height: 52px; }}
+.sidebar .gauge-value {{ font-size: 16px; margin-top: -6px; }}
+.sidebar .gauge-label {{ font-size: 9px; }}
+.sidebar .net-card {{ padding: 10px 8px; }}
 .section {{
   margin-bottom: 28px;
 }}
@@ -283,6 +291,9 @@ body {{
   margin-top: 2px;
 }}
 @media (max-width: 900px) {{
+  .container {{ flex-direction: column; }}
+  .sidebar {{ width: 100%; position: static; display: flex; flex-wrap: wrap; gap: 10px; }}
+  .sidebar .gauge-card {{ margin-bottom: 0; }}
   .chart-grid {{ grid-template-columns: 1fr; }}
   .cards {{ grid-template-columns: repeat(2, 1fr); }}
 }}
@@ -302,46 +313,8 @@ body {{
 
 <div class="container">
 
-  <!-- System Metrics -->
-  <div class="section" id="section-system">
-    <div class="section-header">
-      <div class="section-title">System</div>
-    </div>
-    <div style="display:flex; gap:24px; flex-wrap:wrap; margin-bottom:18px;">
-      <div class="gauge-card">
-        <svg viewBox="0 0 120 80" class="gauge-svg">
-          <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#1e293b" stroke-width="10" stroke-linecap="round"/>
-          <path id="gauge-cpu-arc" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#3b82f6" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 157"/>
-        </svg>
-        <div class="gauge-value" id="gauge-cpu-val">-</div>
-        <div class="gauge-label">CPU</div>
-      </div>
-      <div class="gauge-card">
-        <svg viewBox="0 0 120 80" class="gauge-svg">
-          <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#1e293b" stroke-width="10" stroke-linecap="round"/>
-          <path id="gauge-mem-arc" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#8b5cf6" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 157"/>
-        </svg>
-        <div class="gauge-value" id="gauge-mem-val">-</div>
-        <div class="gauge-label">RAM</div>
-      </div>
-      <div class="gauge-card">
-        <svg viewBox="0 0 120 80" class="gauge-svg">
-          <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#1e293b" stroke-width="10" stroke-linecap="round"/>
-          <path id="gauge-gpu-arc" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#22c55e" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 157"/>
-        </svg>
-        <div class="gauge-value" id="gauge-gpu-val">-</div>
-        <div class="gauge-label">GPU</div>
-      </div>
-      <div class="gauge-card" style="min-width:140px;">
-        <div style="text-align:center; padding:12px 0;">
-          <div style="font-size:11px; color:#6b7280; margin-bottom:6px;">NETWORK</div>
-          <div style="font-size:14px; color:#60a5fa;">↓ <span id="net-recv">-</span> MB</div>
-          <div style="font-size:14px; color:#f59e0b; margin-top:4px;">↑ <span id="net-sent">-</span> MB</div>
-          <div style="font-size:10px; color:#4b5563; margin-top:6px;" id="net-device">-</div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!-- Main content -->
+  <div class="main-content">
 
   <!-- NMD Pre-filter Section -->
   <div class="section" id="section-nmd">
@@ -483,7 +456,49 @@ body {{
       </div>
     </div>
   </div>
-</div>
+
+  </div><!-- /main-content -->
+
+  <!-- Sidebar: System Metrics -->
+  <div class="sidebar" id="section-system">
+    <div class="section-title">System</div>
+
+    <div class="gauge-card">
+      <svg viewBox="0 0 120 80" class="gauge-svg">
+        <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#1e293b" stroke-width="10" stroke-linecap="round"/>
+        <path id="gauge-cpu-arc" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#3b82f6" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 157"/>
+      </svg>
+      <div class="gauge-value" id="gauge-cpu-val">-</div>
+      <div class="gauge-label">CPU</div>
+    </div>
+
+    <div class="gauge-card">
+      <svg viewBox="0 0 120 80" class="gauge-svg">
+        <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#1e293b" stroke-width="10" stroke-linecap="round"/>
+        <path id="gauge-mem-arc" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#8b5cf6" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 157"/>
+      </svg>
+      <div class="gauge-value" id="gauge-mem-val">-</div>
+      <div class="gauge-label">RAM</div>
+    </div>
+
+    <div class="gauge-card">
+      <svg viewBox="0 0 120 80" class="gauge-svg">
+        <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#1e293b" stroke-width="10" stroke-linecap="round"/>
+        <path id="gauge-gpu-arc" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#22c55e" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 157"/>
+      </svg>
+      <div class="gauge-value" id="gauge-gpu-val">-</div>
+      <div class="gauge-label">GPU</div>
+    </div>
+
+    <div class="gauge-card net-card">
+      <div style="font-size:10px; color:#6b7280; margin-bottom:4px;">NETWORK</div>
+      <div style="font-size:12px; color:#60a5fa;">↓ <span id="net-recv">-</span> MB</div>
+      <div style="font-size:12px; color:#f59e0b; margin-top:3px;">↑ <span id="net-sent">-</span> MB</div>
+      <div style="font-size:9px; color:#4b5563; margin-top:4px;" id="net-device">-</div>
+    </div>
+  </div><!-- /sidebar -->
+
+</div><!-- /container -->
 
 <script>
 {chart_js_src}
