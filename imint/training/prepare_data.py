@@ -3,13 +3,20 @@ imint/training/prepare_data.py — Fetch and cache LULC training data
 
 Orchestrates bulk fetching of Sentinel-2 + NMD tile pairs from DES,
 with progress tracking for resumability.
+
+NMD pre-filter and STAC/spectral fetch run in parallel: a background
+thread filters cells via NMD while worker threads fetch spectral data
+for cells that have already been approved.
 """
 from __future__ import annotations
 
 import json
 import os
+import queue
+import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,16 +29,19 @@ from .sampler import (
     densify_grid, generate_densification_regions,
 )
 
+# Sentinel value to signal that the NMD producer is done
+_NMD_DONE = None
+
+# Number of parallel STAC/spectral fetch workers
+_FETCH_WORKERS = 4
+
 
 def prepare_training_data(config: TrainingConfig) -> None:
     """Main entry point for training data preparation.
 
-    Steps:
-        1. Generate uniform grid across Sweden
-        2. Convert to WGS84 and split by latitude
-        3. For each grid cell, fetch Sentinel-2 + NMD
-        4. Convert NMD to LULC labels and save as .npz
-        5. Write split files and class statistics
+    NMD pre-filter and spectral data fetch run concurrently:
+    a producer thread filters cells via NMD and pushes approved cells
+    into a queue; consumer threads pick them up for STAC + DES fetch.
     """
     from ..fetch import (
         fetch_des_data, fetch_nmd_data,
@@ -90,33 +100,35 @@ def prepare_training_data(config: TrainingConfig) -> None:
     print(f"  Progress: {len(completed)} completed, {len(failed)} failed")
 
     # ── Step 4: Verify DES connection ─────────────────────────────────
-    #   Preferred authentication: basic auth via environment variables
-    #     export DES_USER=testuser DES_PASSWORD=secretpassword
-    #   Alternative: DES_TOKEN (OIDC access token)
     print("\n  Verifying DES connection...")
     conn = _connect()
     print("  DES connection OK")
 
-    # ── Step 4b: NMD pre-filter — cache NMD + remove lake cells ────
-    #   The land mask (generate_grid) already removed ocean/sea cells.
-    #   This step pre-fetches NMD for remaining cells to:
-    #     a) Cache NMD on disk so the main loop fetch is instant
-    #     b) Filter cells that are >95% inland water/background
-    #   NMD is cached on disk (.nmd_cache/) so the second fetch in the
-    #   main loop (with target_shape) hits cache and is free.
-    print("\n  Pre-filtering cells via NMD (caching + lake filter)...")
-    water_skipped = 0
-    nmd_failed = 0
-    nmd_land_cells = set()  # cell_keys that passed the land-fraction check
+    # ── Build cell list with split labels ─────────────────────────────
+    all_cells_with_split = []
+    for split_name, split_cells in [("train", train_cells),
+                                     ("val", val_cells),
+                                     ("test", test_cells)]:
+        for cell in split_cells:
+            all_cells_with_split.append((split_name, cell))
 
-    all_cells_flat = train_cells + val_cells + test_cells
-    total_to_filter = len(all_cells_flat)
+    total_cells = len(all_cells_with_split)
 
-    # NMD pre-filter log for dashboard
+    # ── Thread-safe shared state ──────────────────────────────────────
+    lock = threading.Lock()
+    class_counts = {}
+    tile_histograms = {}
+    tile_names_by_split = {"train": [], "val": [], "test": []}
+    tile_idx_box = [len(completed)]  # mutable counter in a list
+
+    # Queue for NMD-approved cells → spectral fetch workers
+    approved_q = queue.Queue(maxsize=200)
+
+    # ── NMD pre-filter log ────────────────────────────────────────────
     nmd_log_path = data_dir / "nmd_prefilter_log.json"
     nmd_log = {
         "status": "running",
-        "total_cells": total_to_filter,
+        "total_cells": total_cells,
         "processed": 0,
         "land_kept": 0,
         "water_skipped": 0,
@@ -127,71 +139,8 @@ def prepare_training_data(config: TrainingConfig) -> None:
     }
     _write_prepare_log(nmd_log_path, nmd_log)
 
-    for ci, cell in enumerate(all_cells_flat):
-        cell_key = f"{cell.easting}_{cell.northing}"
-        if cell_key in completed or cell_key in failed:
-            nmd_log["already_done"] = nmd_log.get("already_done", 0) + 1
-            nmd_log["processed"] = ci + 1
-            if (ci + 1) % 10 == 0:
-                nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
-                _write_prepare_log(nmd_log_path, nmd_log)
-            continue
-        coords_nmd = {
-            "west": cell.west_wgs84, "east": cell.east_wgs84,
-            "south": cell.south_wgs84, "north": cell.north_wgs84,
-        }
-        try:
-            nmd_result = fetch_nmd_data(coords=coords_nmd)
-            labels = nmd_raster_to_lulc(
-                nmd_result.nmd_raster, num_classes=config.num_classes,
-            )
-            land_frac = float(np.mean(
-                (labels > 0) & (labels != 18) & (labels != 19)))
-            if land_frac < 0.05:
-                water_skipped += 1
-                failed.add(cell_key)
-                print(f"    {cell_key}: SKIP water — "
-                      f"land_frac={land_frac:.1%}")
-            else:
-                nmd_land_cells.add(cell_key)
-                print(f"    {cell_key}: land_frac={land_frac:.1%} ✓ "
-                      f"(classes={np.unique(labels).tolist()})")
-        except Exception as e:
-            nmd_failed += 1
-            print(f"    NMD fail {cell_key}: {type(e).__name__}: {e}")
-            failed.add(cell_key)
-
-        # Update NMD pre-filter log for dashboard
-        nmd_log["processed"] = ci + 1
-        nmd_log["land_kept"] = len(nmd_land_cells)
-        nmd_log["water_skipped"] = water_skipped
-        nmd_log["failed"] = nmd_failed
-        nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
-        if (ci + 1) % 5 == 0 or ci + 1 == total_to_filter:
-            _write_prepare_log(nmd_log_path, nmd_log)
-
-        if (ci + 1) % 20 == 0:
-            print(f"    NMD pre-filter: {ci+1}/{total_to_filter} "
-                  f"(kept {len(nmd_land_cells)}, water={water_skipped}, "
-                  f"fail={nmd_failed})")
-
-    print(f"  NMD pre-filter done: {len(nmd_land_cells)} land cells, "
-          f"{water_skipped} water, {nmd_failed} failed")
-
-    # Final NMD log update
-    nmd_log["status"] = "completed"
-    nmd_log["processed"] = total_to_filter
-    nmd_log["land_kept"] = len(nmd_land_cells)
-    nmd_log["water_skipped"] = water_skipped
-    nmd_log["failed"] = nmd_failed
-    nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
-    _write_prepare_log(nmd_log_path, nmd_log)
-
-    # Save progress after pre-filter (water cells are now in failed set)
-    _save_progress(progress_path, completed, failed)
-
-    # ── Prepare log for dashboard ───────────────────────────────────
-    total_cells = len(train_cells) + len(val_cells) + len(test_cells)
+    # ── Prepare log for dashboard ─────────────────────────────────────
+    prep_log_path = data_dir / "prepare_log.json"
     prep_log = {
         "status": "running",
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -200,74 +149,121 @@ def prepare_training_data(config: TrainingConfig) -> None:
         "completed": len(completed),
         "failed": len(failed),
         "current_split": "",
-        "tiles_saved": len(completed),
+        "tiles_saved": tile_idx_box[0],
         "latest_tile": "",
         "latest_date": "",
         "latest_cloud": 0.0,
         "class_counts": {},
         "elapsed_s": 0.0,
     }
-    prep_log_path = data_dir / "prepare_log.json"
     t_start = time.time()
     _write_prepare_log(prep_log_path, prep_log)
 
-    # ── Step 5: Process all cells ─────────────────────────────────────
-    all_splits = [
-        ("train", train_cells),
-        ("val", val_cells),
-        ("test", test_cells),
-    ]
+    # ── NMD producer thread ───────────────────────────────────────────
+    def _nmd_producer():
+        water_skipped = 0
+        nmd_failed = 0
+        land_kept = 0
 
-    class_counts = {}
-    tile_histograms = {}  # per-tile class pixel counts for rarity scoring
-    tile_names_by_split = {"train": [], "val": [], "test": []}
-    tile_idx = len(completed)
-
-    total_cells = sum(len(sc) for _, sc in all_splits)
-    processed_count = 0
-
-    for split_name, split_cells in all_splits:
-        print(f"\n  Processing {split_name} split ({len(split_cells)} cells)...")
-        prep_log["current_split"] = split_name
-
-        for i, cell in enumerate(split_cells):
+        for ci, (split_name, cell) in enumerate(all_cells_with_split):
             cell_key = f"{cell.easting}_{cell.northing}"
-            processed_count += 1
 
-            # Progress counter every 5 cells
-            if processed_count % 5 == 0 or processed_count == total_cells:
-                print(f"    Progress: {processed_count}/{total_cells} cells | "
-                      f"{len(completed)} OK, {len(failed)} failed, "
-                      f"{tile_idx} tiles saved")
+            # Already processed in a previous run
+            with lock:
+                already = cell_key in completed or cell_key in failed
+            if already:
+                nmd_log["already_done"] = nmd_log.get("already_done", 0) + 1
+                nmd_log["processed"] = ci + 1
+                if (ci + 1) % 50 == 0:
+                    nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    _write_prepare_log(nmd_log_path, nmd_log)
 
-            if cell_key in completed:
-                # Find existing tile name
-                tile_name = f"tile_{cell_key}.npz"
-                if (tiles_dir / tile_name).exists():
-                    tile_names_by_split[split_name].append(tile_name)
+                # For already-completed cells, still push them so the
+                # fetch worker can register existing tiles in split lists
+                with lock:
+                    if cell_key in completed:
+                        tile_name = f"tile_{cell_key}.npz"
+                        if (tiles_dir / tile_name).exists():
+                            tile_names_by_split[split_name].append(tile_name)
                 continue
 
-            if cell_key in failed:
-                continue
-
-            # Skip cells not in nmd_land_cells (filtered by pre-filter)
-            if cell_key not in nmd_land_cells and cell_key not in completed:
-                continue
-
-            coords = {
-                "west": cell.west_wgs84,
-                "east": cell.east_wgs84,
-                "south": cell.south_wgs84,
-                "north": cell.north_wgs84,
+            coords_nmd = {
+                "west": cell.west_wgs84, "east": cell.east_wgs84,
+                "south": cell.south_wgs84, "north": cell.north_wgs84,
             }
+            try:
+                nmd_result = fetch_nmd_data(coords=coords_nmd)
+                labels = nmd_raster_to_lulc(
+                    nmd_result.nmd_raster, num_classes=config.num_classes,
+                )
+                land_frac = float(np.mean(
+                    (labels > 0) & (labels != 18) & (labels != 19)))
+                if land_frac < 0.05:
+                    water_skipped += 1
+                    with lock:
+                        failed.add(cell_key)
+                    print(f"    NMD {cell_key}: SKIP water — "
+                          f"land_frac={land_frac:.1%}")
+                else:
+                    land_kept += 1
+                    # Push approved cell to fetch queue
+                    approved_q.put((split_name, cell, cell_key))
+            except Exception as e:
+                nmd_failed += 1
+                with lock:
+                    failed.add(cell_key)
+                print(f"    NMD fail {cell_key}: {type(e).__name__}: {e}")
 
+            # Update NMD log
+            nmd_log["processed"] = ci + 1
+            nmd_log["land_kept"] = land_kept
+            nmd_log["water_skipped"] = water_skipped
+            nmd_log["failed"] = nmd_failed
+            nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+            if (ci + 1) % 5 == 0 or ci + 1 == total_cells:
+                _write_prepare_log(nmd_log_path, nmd_log)
+
+            if (ci + 1) % 50 == 0:
+                print(f"    NMD pre-filter: {ci+1}/{total_cells} "
+                      f"(kept {land_kept}, water={water_skipped}, "
+                      f"fail={nmd_failed})")
+
+        # Signal done
+        nmd_log["status"] = "completed"
+        nmd_log["processed"] = total_cells
+        nmd_log["land_kept"] = land_kept
+        nmd_log["water_skipped"] = water_skipped
+        nmd_log["failed"] = nmd_failed
+        nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _write_prepare_log(nmd_log_path, nmd_log)
+
+        with lock:
+            _save_progress(progress_path, completed, failed)
+
+        print(f"  NMD pre-filter done: {land_kept} land, "
+              f"{water_skipped} water, {nmd_failed} failed")
+
+        # Signal all fetch workers to stop
+        for _ in range(_FETCH_WORKERS):
+            approved_q.put(_NMD_DONE)
+
+    # ── Spectral fetch worker ─────────────────────────────────────────
+    def _fetch_worker():
+        while True:
+            item = approved_q.get()
+            if item is _NMD_DONE:
+                break
+
+            split_name, cell, cell_key = item
+            coords = {
+                "west": cell.west_wgs84, "east": cell.east_wgs84,
+                "south": cell.south_wgs84, "north": cell.north_wgs84,
+            }
             tile_name = f"tile_{cell_key}.npz"
             success = False
 
-            # Try each year
             for year in config.years:
                 try:
-                    # Find best cloud-free date in growing season
                     date_start = f"{year}-{config.growing_season[0]:02d}-01"
                     date_end = f"{year}-{config.growing_season[1]:02d}-30"
 
@@ -276,11 +272,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         scene_cloud_max=80,
                     )
                     if not dates:
-                        print(f"    {cell_key} {year}: STAC 0 scenes")
                         continue
-                    print(f"    {cell_key} {year}: {len(dates)} scenes, "
-                          f"cloud [{dates[0][1]:.0f}%-{dates[-1][1]:.0f}%], "
-                          f"best={dates[0][0]} ({dates[0][1]:.1f}%)")
 
                     best_date = dates[0][0]
 
@@ -299,35 +291,27 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     except Exception:
                         pass
 
-                    # Check we have all Prithvi bands
+                    # Check Prithvi bands
                     missing = [b for b in config.prithvi_bands
                                if b not in result.bands]
                     if missing:
-                        print(f"    {cell_key}: SKIP bands — missing {missing} "
-                              f"(have: {sorted(result.bands.keys())})")
                         continue
 
-                    # Stack Prithvi bands
+                    # Stack bands
                     image = np.stack(
                         [result.bands[b] for b in config.prithvi_bands],
                         axis=0,
-                    ).astype(np.float32)  # (6, H, W) reflectance [0,1]
+                    ).astype(np.float32)
 
-                    # Fetch NMD — hits disk cache from pre-filter,
-                    # but now with target_shape to match spectral image
+                    # Fetch NMD (cached) with target_shape
                     nmd_result = fetch_nmd_data(
                         coords=coords,
                         target_shape=image.shape[1:],
                     )
-
-                    # Convert to LULC labels
                     labels = nmd_raster_to_lulc(
                         nmd_result.nmd_raster,
                         num_classes=config.num_classes,
                     )
-                    print(f"    NMD (cached): {nmd_result.nmd_raster.shape} → "
-                          f"labels {labels.shape}, "
-                          f"classes={np.unique(labels).tolist()}")
 
                     # Save tile
                     np.savez_compressed(
@@ -341,51 +325,114 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         lon=cell.center_lon,
                     )
 
-                    # Update class counts and per-tile histogram
+                    # Compute class histogram
                     tile_hist = {}
                     for cls_idx in range(config.num_classes + 1):
                         count = int((labels == cls_idx).sum())
-                        class_counts[cls_idx] = class_counts.get(cls_idx, 0) + count
                         if count > 0:
                             tile_hist[cls_idx] = count
-                    tile_histograms[tile_name] = tile_hist
 
-                    tile_names_by_split[split_name].append(tile_name)
-                    success = True
-                    tile_idx += 1
+                    # Update shared state
+                    with lock:
+                        for cls_idx, count in tile_hist.items():
+                            class_counts[cls_idx] = class_counts.get(cls_idx, 0) + count
+                        tile_histograms[tile_name] = tile_hist
+                        tile_names_by_split[split_name].append(tile_name)
+                        completed.add(cell_key)
+                        tile_idx_box[0] += 1
+                        cur_idx = tile_idx_box[0]
 
-                    # Update prepare log with latest tile info
-                    prep_log["latest_tile"] = tile_name
-                    prep_log["latest_date"] = best_date
-                    prep_log["latest_cloud"] = round(result.cloud_fraction, 4)
+                        prep_log["completed"] = len(completed)
+                        prep_log["failed"] = len(failed)
+                        prep_log["tiles_saved"] = cur_idx
+                        prep_log["latest_tile"] = tile_name
+                        prep_log["latest_date"] = best_date
+                        prep_log["latest_cloud"] = round(result.cloud_fraction, 4)
+                        prep_log["class_counts"] = {
+                            str(k): v for k, v in class_counts.items()
+                        }
+                        prep_log["elapsed_s"] = round(time.time() - t_start, 1)
+                        prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+                        _write_prepare_log(prep_log_path, prep_log)
 
-                    print(f"    ✓ [{tile_idx}] {tile_name} ({best_date}, "
+                        if cur_idx % 50 == 0:
+                            _save_progress(progress_path, completed, failed)
+
+                    print(f"    \u2713 [{cur_idx}] {tile_name} ({best_date}, "
                           f"cloud={result.cloud_fraction:.1%})")
+                    success = True
+                    break  # No need to try other years
 
-                    break  # Success, no need to try other years
-
-                except (FetchError, Exception) as e:
+                except Exception as e:
                     print(f"    {cell_key} {year}: {type(e).__name__}: {e}")
                     continue
 
-            # Track progress
-            if success:
-                completed.add(cell_key)
-            else:
-                failed.add(cell_key)
+            if not success:
+                with lock:
+                    failed.add(cell_key)
+                    prep_log["failed"] = len(failed)
+                    prep_log["elapsed_s"] = round(time.time() - t_start, 1)
+                    prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    _write_prepare_log(prep_log_path, prep_log)
 
-            # Update prepare log for dashboard
-            prep_log["completed"] = len(completed)
-            prep_log["failed"] = len(failed)
-            prep_log["tiles_saved"] = tile_idx
-            prep_log["class_counts"] = {str(k): v for k, v in class_counts.items()}
-            prep_log["elapsed_s"] = round(time.time() - t_start, 1)
-            prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
-            _write_prepare_log(prep_log_path, prep_log)
+    # ── System metrics background thread ─────────────────────────────
+    _metrics_stop = threading.Event()
 
-            # Save progress periodically
-            if (len(completed) + len(failed)) % 50 == 0:
-                _save_progress(progress_path, completed, failed)
+    def _system_metrics_writer():
+        try:
+            import psutil
+        except ImportError:
+            return
+        metrics_path = data_dir / "system_metrics.json"
+        while not _metrics_stop.is_set():
+            try:
+                net = psutil.net_io_counters()
+                metrics = {
+                    "cpu_percent": psutil.cpu_percent(interval=0.5),
+                    "memory_percent": psutil.virtual_memory().percent,
+                    "memory_used_gb": round(
+                        psutil.virtual_memory().used / (1024**3), 1),
+                    "memory_total_gb": round(
+                        psutil.virtual_memory().total / (1024**3), 1),
+                    "device": "cpu",
+                    "gpu_percent": None,
+                    "gpu_memory_used_gb": None,
+                    "gpu_memory_total_gb": None,
+                    "net_sent_mb": round(net.bytes_sent / (1024**2), 1),
+                    "net_recv_mb": round(net.bytes_recv / (1024**2), 1),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                tmp = metrics_path.with_suffix(".json.tmp")
+                with open(tmp, "w") as f:
+                    json.dump(metrics, f, indent=2)
+                tmp.rename(metrics_path)
+            except Exception:
+                pass
+            _metrics_stop.wait(5)
+
+    metrics_thread = threading.Thread(target=_system_metrics_writer, daemon=True)
+    metrics_thread.start()
+
+    # ── Launch parallel pipeline ──────────────────────────────────────
+    print(f"\n  Starting parallel pipeline: NMD filter + "
+          f"{_FETCH_WORKERS} fetch workers...")
+
+    nmd_thread = threading.Thread(target=_nmd_producer, daemon=True)
+    nmd_thread.start()
+
+    fetch_threads = []
+    for _ in range(_FETCH_WORKERS):
+        t = threading.Thread(target=_fetch_worker, daemon=True)
+        t.start()
+        fetch_threads.append(t)
+
+    # Wait for NMD producer to finish
+    nmd_thread.join()
+    # Wait for all fetch workers to drain the queue and finish
+    for t in fetch_threads:
+        t.join()
+
+    print(f"\n  All workers done.")
 
     # ── Step 6: Save progress, splits, and stats ──────────────────────
     _save_progress(progress_path, completed, failed)
@@ -394,7 +441,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
         split_path = data_dir / f"split_{split_name}.txt"
         with open(split_path, "w") as f:
             f.write("\n".join(sorted(names)) + "\n")
-        print(f"  {split_name}: {len(names)} tiles → {split_path}")
+        print(f"  {split_name}: {len(names)} tiles \u2192 {split_path}")
 
     # Compute tile weights for rare-class oversampling
     tile_weights = _compute_tile_weights(
@@ -413,13 +460,13 @@ def prepare_training_data(config: TrainingConfig) -> None:
             class_counts, config.num_classes,
             config.rare_class_threshold, config.ignore_index,
         ),
-        "total_tiles": tile_idx,
+        "total_tiles": tile_idx_box[0],
         "num_classes": config.num_classes,
     }
     stats_path = data_dir / "class_stats.json"
     with open(stats_path, "w") as f:
         json.dump(stats, f, indent=2)
-    print(f"  Class stats → {stats_path}")
+    print(f"  Class stats \u2192 {stats_path}")
 
     # Report rare classes
     if stats["rare_classes"]:
@@ -435,13 +482,16 @@ def prepare_training_data(config: TrainingConfig) -> None:
     prep_log["status"] = "completed"
     prep_log["completed"] = len(completed)
     prep_log["failed"] = len(failed)
-    prep_log["tiles_saved"] = tile_idx
+    prep_log["tiles_saved"] = tile_idx_box[0]
     prep_log["class_counts"] = {str(k): v for k, v in class_counts.items()}
     prep_log["elapsed_s"] = round(time.time() - t_start, 1)
     prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
     _write_prepare_log(prep_log_path, prep_log)
 
-    print(f"\n  Done! {tile_idx} tiles saved to {tiles_dir}")
+    # Stop system metrics writer
+    _metrics_stop.set()
+
+    print(f"\n  Done! {tile_idx_box[0]} tiles saved to {tiles_dir}")
 
 
 def _write_prepare_log(path: Path, log: dict) -> None:
