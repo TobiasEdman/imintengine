@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import socket
 import threading
 import time
 import traceback
@@ -21,6 +22,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+
+# ── Global socket timeout — prevents openEO from hanging indefinitely ──────
+_SOCKET_TIMEOUT = 90  # seconds; applies to all socket operations
+socket.setdefaulttimeout(_SOCKET_TIMEOUT)
+
+_MAX_RETRIES = 2      # retries per cell on transient/timeout errors
+_SCL_CANDIDATES = 3   # max STAC dates to pre-screen with SCL before giving up
 
 from .config import TrainingConfig
 from .class_schema import nmd_raster_to_lulc
@@ -32,8 +40,9 @@ from .sampler import (
 # Sentinel value to signal that the NMD producer is done
 _NMD_DONE = None
 
-# Number of parallel STAC/spectral fetch workers
-_FETCH_WORKERS = 4
+# Number of parallel STAC/spectral fetch workers (keep low to avoid
+# DES rate-limiting — 1 fetch + 1 NMD = 2 concurrent openEO requests)
+_FETCH_WORKERS = 1
 
 
 def prepare_training_data(config: TrainingConfig) -> None:
@@ -45,7 +54,8 @@ def prepare_training_data(config: TrainingConfig) -> None:
     """
     from ..fetch import (
         fetch_des_data, fetch_nmd_data,
-        _connect, _stac_available_dates, FetchError,
+        _connect, _stac_available_dates, _fetch_scl, _to_nmd_grid,
+        FetchError,
     )
 
     data_dir = Path(config.data_dir)
@@ -155,6 +165,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
         "latest_cloud": 0.0,
         "class_counts": {},
         "elapsed_s": 0.0,
+        "recent_previews": [],
     }
     t_start = time.time()
     _write_prepare_log(prep_log_path, prep_log)
@@ -191,28 +202,42 @@ def prepare_training_data(config: TrainingConfig) -> None:
                 "west": cell.west_wgs84, "east": cell.east_wgs84,
                 "south": cell.south_wgs84, "north": cell.north_wgs84,
             }
-            try:
-                nmd_result = fetch_nmd_data(coords=coords_nmd)
-                labels = nmd_raster_to_lulc(
-                    nmd_result.nmd_raster, num_classes=config.num_classes,
-                )
-                land_frac = float(np.mean(
-                    (labels > 0) & (labels != 18) & (labels != 19)))
-                if land_frac < 0.05:
-                    water_skipped += 1
-                    with lock:
-                        failed.add(cell_key)
-                    print(f"    NMD {cell_key}: SKIP water — "
-                          f"land_frac={land_frac:.1%}")
-                else:
-                    land_kept += 1
-                    # Push approved cell to fetch queue
-                    approved_q.put((split_name, cell, cell_key))
-            except Exception as e:
-                nmd_failed += 1
-                with lock:
-                    failed.add(cell_key)
-                print(f"    NMD fail {cell_key}: {type(e).__name__}: {e}")
+            nmd_ok = False
+            for attempt in range(_MAX_RETRIES + 1):
+                try:
+                    nmd_result = fetch_nmd_data(coords=coords_nmd)
+                    # Polite pause if we had to hit DES (not cache)
+                    if not nmd_result.from_cache:
+                        time.sleep(1)
+                    labels = nmd_raster_to_lulc(
+                        nmd_result.nmd_raster, num_classes=config.num_classes,
+                    )
+                    land_frac = float(np.mean(
+                        (labels > 0) & (labels != 18) & (labels != 19)))
+                    if land_frac < 0.05:
+                        water_skipped += 1
+                        with lock:
+                            failed.add(cell_key)
+                        print(f"    NMD {cell_key}: SKIP water — "
+                              f"land_frac={land_frac:.1%}")
+                    else:
+                        land_kept += 1
+                        # Push approved cell to fetch queue
+                        approved_q.put((split_name, cell, cell_key))
+                    nmd_ok = True
+                    break
+                except Exception as e:
+                    if attempt < _MAX_RETRIES:
+                        wait = 5 * (attempt + 1)
+                        print(f"    NMD {cell_key}: retry {attempt+1} "
+                              f"after {type(e).__name__}, wait {wait}s")
+                        time.sleep(wait)
+                    else:
+                        nmd_failed += 1
+                        with lock:
+                            failed.add(cell_key)
+                        print(f"    NMD fail {cell_key}: "
+                              f"{type(e).__name__}: {e}")
 
             # Update NMD log
             nmd_log["processed"] = ci + 1
@@ -274,20 +299,58 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     if not dates:
                         continue
 
-                    best_date = dates[0][0]
+                    # ── SCL pre-screening: lightweight cloud check ─────
+                    projected = _to_nmd_grid(coords)
+                    good_date = None
+                    good_cloud = None
 
+                    for cand_date, scene_cloud in dates[:_SCL_CANDIDATES]:
+                        try:
+                            from datetime import timedelta as _td
+                            cand_dt = datetime.strptime(cand_date, "%Y-%m-%d")
+                            temporal = [
+                                cand_date,
+                                (cand_dt + _td(days=1)).strftime("%Y-%m-%d"),
+                            ]
+                            _scl, aoi_cloud, _crs, _tr = _fetch_scl(
+                                conn, projected, temporal, date_window=0,
+                            )
+                            time.sleep(1)
+
+                            if aoi_cloud <= config.cloud_threshold:
+                                good_date = cand_date
+                                good_cloud = aoi_cloud
+                                break
+                            else:
+                                print(f"    SCL {cell_key} {cand_date}: "
+                                      f"cloud={aoi_cloud:.1%} > "
+                                      f"{config.cloud_threshold:.0%}, skip")
+                        except Exception as e:
+                            print(f"    SCL {cell_key} {cand_date}: "
+                                  f"{type(e).__name__}: {e}")
+                            time.sleep(1)
+
+                    if good_date is None:
+                        print(f"    {cell_key} {year}: no cloud-free date "
+                              f"in top {min(len(dates), _SCL_CANDIDATES)} "
+                              f"STAC candidates")
+                        continue
+
+                    # ── Full spectral fetch (SCL already verified) ─────
                     result = fetch_des_data(
-                        date=best_date,
+                        date=good_date,
                         coords=coords,
-                        cloud_threshold=config.cloud_threshold,
+                        cloud_threshold=1.0,    # already screened
+                        include_scl=False,      # skip redundant SCL
                     )
 
                     # Save RGB preview
+                    preview_fname = f"preview_{cell_key}_{good_date}.png"
                     try:
                         from PIL import Image as _PILImage
                         rgb_u8 = (result.rgb * 255).clip(0, 255).astype(np.uint8)
                         _PILImage.fromarray(rgb_u8).save(
-                            tiles_dir / f"preview_{cell_key}_{best_date}.png")
+                            tiles_dir / preview_fname)
                     except Exception:
                         pass
 
@@ -320,7 +383,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         label=labels,
                         easting=cell.easting,
                         northing=cell.northing,
-                        date=best_date,
+                        date=good_date,
                         lat=cell.center_lat,
                         lon=cell.center_lon,
                     )
@@ -346,25 +409,33 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         prep_log["failed"] = len(failed)
                         prep_log["tiles_saved"] = cur_idx
                         prep_log["latest_tile"] = tile_name
-                        prep_log["latest_date"] = best_date
-                        prep_log["latest_cloud"] = round(result.cloud_fraction, 4)
+                        prep_log["latest_date"] = good_date
+                        prep_log["latest_cloud"] = round(good_cloud, 4)
                         prep_log["class_counts"] = {
                             str(k): v for k, v in class_counts.items()
                         }
                         prep_log["elapsed_s"] = round(time.time() - t_start, 1)
                         prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+                        # Track recent preview for dashboard
+                        recent = prep_log.get("recent_previews", [])
+                        recent.append(preview_fname)
+                        prep_log["recent_previews"] = recent[-3:]
+
                         _write_prepare_log(prep_log_path, prep_log)
 
                         if cur_idx % 50 == 0:
                             _save_progress(progress_path, completed, failed)
 
-                    print(f"    \u2713 [{cur_idx}] {tile_name} ({best_date}, "
-                          f"cloud={result.cloud_fraction:.1%})")
+                    print(f"    \u2713 [{cur_idx}] {tile_name} ({good_date}, "
+                          f"cloud={good_cloud:.1%})")
                     success = True
+                    time.sleep(1)  # polite pause between DES requests
                     break  # No need to try other years
 
                 except Exception as e:
                     print(f"    {cell_key} {year}: {type(e).__name__}: {e}")
+                    time.sleep(3)  # back off after errors
                     continue
 
             if not success:
@@ -379,26 +450,23 @@ def prepare_training_data(config: TrainingConfig) -> None:
     _metrics_stop = threading.Event()
 
     def _system_metrics_writer():
+        """Write system-wide metrics (CPU, RAM, network delta since start)."""
         try:
             import psutil
         except ImportError:
             return
-        proc = psutil.Process(os.getpid())
-        proc.cpu_percent()  # prime the first call (always returns 0)
+        psutil.cpu_percent()  # prime (always returns 0 on first call)
         net_baseline = psutil.net_io_counters()
-        sys_mem_total = psutil.virtual_memory().total
         metrics_path = data_dir / "system_metrics.json"
         while not _metrics_stop.is_set():
             try:
-                mem = proc.memory_info()
+                vm = psutil.virtual_memory()
                 net = psutil.net_io_counters()
-                mem_rss_gb = mem.rss / (1024**3)
-                mem_pct = (mem.rss / sys_mem_total) * 100
                 metrics = {
-                    "cpu_percent": proc.cpu_percent(),
-                    "memory_percent": round(mem_pct, 1),
-                    "memory_used_gb": round(mem_rss_gb, 2),
-                    "memory_total_gb": round(sys_mem_total / (1024**3), 1),
+                    "cpu_percent": psutil.cpu_percent(),
+                    "memory_percent": round(vm.percent, 1),
+                    "memory_used_gb": round(vm.used / (1024**3), 2),
+                    "memory_total_gb": round(vm.total / (1024**3), 1),
                     "device": "cpu",
                     "gpu_percent": None,
                     "gpu_memory_used_gb": None,

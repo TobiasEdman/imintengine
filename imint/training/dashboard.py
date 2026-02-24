@@ -138,13 +138,15 @@ body {{
 }}
 .container {{ padding: 24px 32px; max-width: 1500px; margin: 0 auto; display: flex; gap: 24px; }}
 .main-content {{ flex: 1; min-width: 0; }}
-.sidebar {{ width: 160px; flex-shrink: 0; position: sticky; top: 24px; align-self: flex-start; }}
+.sidebar {{ width: 200px; flex-shrink: 0; position: sticky; top: 24px; align-self: flex-start; }}
 .sidebar .section-title {{ font-size: 11px; margin-bottom: 10px; }}
 .sidebar .gauge-card {{ margin-bottom: 10px; padding: 8px 10px; min-width: unset; }}
 .sidebar .gauge-svg {{ width: 80px; height: 52px; }}
 .sidebar .gauge-value {{ font-size: 16px; margin-top: -6px; }}
 .sidebar .gauge-label {{ font-size: 9px; }}
 .sidebar .net-card {{ padding: 10px 8px; }}
+.preview-thumb {{ width: 100%; border-radius: 6px; border: 1px solid #1e293b; margin-bottom: 4px; }}
+.preview-label {{ font-size: 9px; color: #6b7280; margin-bottom: 10px; line-height: 1.3; }}
 .section {{
   margin-bottom: 28px;
 }}
@@ -495,6 +497,11 @@ body {{
       <div style="font-size:12px; color:#60a5fa;">↓ <span id="net-recv">-</span> MB</div>
       <div style="font-size:12px; color:#f59e0b; margin-top:3px;">↑ <span id="net-sent">-</span> MB</div>
       <div style="font-size:9px; color:#4b5563; margin-top:4px;" id="net-device">-</div>
+    </div>
+
+    <div class="section-title" style="margin-top:14px;">Recent Tiles</div>
+    <div id="recent-previews">
+      <div style="font-size:10px; color:#4b5563;">No tiles yet</div>
     </div>
   </div><!-- /sidebar -->
 
@@ -1065,6 +1072,23 @@ async function refresh() {{
   if (p || s) updateDataPrep(p, s);
   if (t) updateTraining(t);
   if (sysMetrics) updateSystemMetrics(sysMetrics);
+
+  // Update preview thumbnails
+  if (p && p.recent_previews && p.recent_previews.length > 0) {{
+    const container = document.getElementById('recent-previews');
+    const previews = p.recent_previews;
+    let html = '';
+    for (let i = previews.length - 1; i >= 0; i--) {{
+      const fname = previews[i];
+      const base = fname.replace('preview_', '').replace('.png', '');
+      const dateStr = base.slice(-10);
+      const cellKey = base.slice(0, base.length - 11);
+      html += '<img class="preview-thumb" src="tiles/' + fname + '?t=' + Date.now() + '" '
+           + 'onerror="this.hidden=true">';
+      html += '<div class="preview-label">' + cellKey + '<br>' + dateStr + '</div>';
+    }}
+    container.innerHTML = html;
+  }}
 
   // Show disconnect warning after 3 consecutive failures
   if (_fetchFails >= 3) {{

@@ -366,22 +366,18 @@ class LULCTrainer:
             print(f"    WARNING: Failed to write training log: {e}")
 
     def _write_system_metrics(self) -> None:
-        """Write system_metrics.json with per-process CPU, memory, and GPU usage."""
+        """Write system_metrics.json with system-wide CPU/RAM and GPU usage."""
         try:
             import psutil
         except ImportError:
             return
 
-        proc = psutil.Process(os.getpid())
-        mem = proc.memory_info()
-        sys_mem_total = psutil.virtual_memory().total
-        mem_pct = (mem.rss / sys_mem_total) * 100
-
+        vm = psutil.virtual_memory()
         metrics = {
-            "cpu_percent": proc.cpu_percent(),
-            "memory_percent": round(mem_pct, 1),
-            "memory_used_gb": round(mem.rss / (1024**3), 2),
-            "memory_total_gb": round(sys_mem_total / (1024**3), 1),
+            "cpu_percent": psutil.cpu_percent(),
+            "memory_percent": round(vm.percent, 1),
+            "memory_used_gb": round(vm.used / (1024**3), 2),
+            "memory_total_gb": round(vm.total / (1024**3), 1),
             "device": str(self.device),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -405,7 +401,7 @@ class LULCTrainer:
             metrics["gpu_memory_used_gb"] = None
             metrics["gpu_memory_total_gb"] = None
 
-        # Network delta since process start
+        # Network delta since pipeline start
         if not hasattr(self, '_net_baseline'):
             self._net_baseline = psutil.net_io_counters()
         net = psutil.net_io_counters()
