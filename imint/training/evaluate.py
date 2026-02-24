@@ -114,7 +114,7 @@ def evaluate_model(
 
         # Add temporal dimension: (1, 6, H, W) → (1, 6, 1, H, W)
         image_5d = image.unsqueeze(2)
-        logits = model(image_5d)  # (1, C, H, W)
+        logits = model(image_5d).contiguous()  # (1, C, H, W)
         pred = logits.argmax(dim=1).squeeze(0).cpu().numpy()  # (H, W)
 
         all_preds.append(pred)

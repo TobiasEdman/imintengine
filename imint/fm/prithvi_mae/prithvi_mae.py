@@ -369,13 +369,16 @@ class PrithviViT(nn.Module):
 
         # keep the first subset
         ids_keep = ids_shuffle[:, :len_keep]
-        sequence_unmasked = torch.gather(sequence, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, dim))
+        sequence_unmasked = torch.gather(
+            sequence, dim=1,
+            index=ids_keep.unsqueeze(-1).repeat(1, 1, dim).contiguous(),
+        )
 
         # generate the binary mask: 0 is keep, 1 is remove
         mask = torch.ones([batch_size, seq_length], device=sequence.device)
         mask[:, :len_keep] = 0
         # unshuffle to get the binary mask
-        mask = torch.gather(mask, dim=1, index=ids_restore)
+        mask = torch.gather(mask, dim=1, index=ids_restore.contiguous())
 
         return sequence_unmasked, mask, ids_restore
 
@@ -580,7 +583,10 @@ class MAEDecoder(nn.Module):
         mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
         x = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
         # unshuffle
-        x = torch.gather(x, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]).to(x.device))
+        x = torch.gather(
+            x, dim=1,
+            index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]).contiguous().to(x.device),
+        )
 
         # add pos embed
         decoder_pos_embed = self.interpolate_pos_encoding(input_size[-3:])

@@ -260,6 +260,28 @@ body {{
   border-color: #eab308;
 }}
 .full-width {{ grid-column: 1 / -1; }}
+.gauge-card {{
+  background: #111827;
+  border-radius: 10px;
+  padding: 10px 16px;
+  border: 1px solid #1e293b;
+  min-width: 120px;
+  text-align: center;
+}}
+.gauge-svg {{ width: 100px; height: 65px; display: block; margin: 0 auto; }}
+.gauge-value {{
+  font-size: 20px;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin-top: -8px;
+}}
+.gauge-label {{
+  font-size: 10px;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-top: 2px;
+}}
 @media (max-width: 900px) {{
   .chart-grid {{ grid-template-columns: 1fr; }}
   .cards {{ grid-template-columns: repeat(2, 1fr); }}
@@ -279,6 +301,47 @@ body {{
 </div>
 
 <div class="container">
+
+  <!-- System Metrics -->
+  <div class="section" id="section-system">
+    <div class="section-header">
+      <div class="section-title">System</div>
+    </div>
+    <div style="display:flex; gap:24px; flex-wrap:wrap; margin-bottom:18px;">
+      <div class="gauge-card">
+        <svg viewBox="0 0 120 80" class="gauge-svg">
+          <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#1e293b" stroke-width="10" stroke-linecap="round"/>
+          <path id="gauge-cpu-arc" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#3b82f6" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 157"/>
+        </svg>
+        <div class="gauge-value" id="gauge-cpu-val">-</div>
+        <div class="gauge-label">CPU</div>
+      </div>
+      <div class="gauge-card">
+        <svg viewBox="0 0 120 80" class="gauge-svg">
+          <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#1e293b" stroke-width="10" stroke-linecap="round"/>
+          <path id="gauge-mem-arc" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#8b5cf6" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 157"/>
+        </svg>
+        <div class="gauge-value" id="gauge-mem-val">-</div>
+        <div class="gauge-label">RAM</div>
+      </div>
+      <div class="gauge-card">
+        <svg viewBox="0 0 120 80" class="gauge-svg">
+          <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#1e293b" stroke-width="10" stroke-linecap="round"/>
+          <path id="gauge-gpu-arc" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#22c55e" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 157"/>
+        </svg>
+        <div class="gauge-value" id="gauge-gpu-val">-</div>
+        <div class="gauge-label">GPU</div>
+      </div>
+      <div class="gauge-card" style="min-width:140px;">
+        <div style="text-align:center; padding:12px 0;">
+          <div style="font-size:11px; color:#6b7280; margin-bottom:6px;">NETWORK</div>
+          <div style="font-size:14px; color:#60a5fa;">↓ <span id="net-recv">-</span> MB</div>
+          <div style="font-size:14px; color:#f59e0b; margin-top:4px;">↑ <span id="net-sent">-</span> MB</div>
+          <div style="font-size:10px; color:#4b5563; margin-top:6px;" id="net-device">-</div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- NMD Pre-filter Section -->
   <div class="section" id="section-nmd">
@@ -932,12 +995,43 @@ async function fetchJSON(url) {{
   }}
 }}
 
+function updateGauge(arcId, valId, pct, suffix) {{
+  const arc = document.getElementById(arcId);
+  const val = document.getElementById(valId);
+  if (!arc || !val) return;
+  const p = Math.max(0, Math.min(100, pct || 0));
+  // Arc length: 157 is the full semicircle path length
+  arc.setAttribute('stroke-dasharray', (p / 100 * 157) + ' 157');
+  // Color: blue→yellow→red
+  if (p > 80) arc.setAttribute('stroke', '#ef4444');
+  else if (p > 60) arc.setAttribute('stroke', '#eab308');
+  val.textContent = Math.round(p) + (suffix || '%');
+}}
+
+function updateSystemMetrics(m) {{
+  if (!m) return;
+  updateGauge('gauge-cpu-arc', 'gauge-cpu-val', m.cpu_percent, '%');
+  updateGauge('gauge-mem-arc', 'gauge-mem-val', m.memory_percent, '%');
+  if (m.gpu_percent != null) {{
+    updateGauge('gauge-gpu-arc', 'gauge-gpu-val', m.gpu_percent, '%');
+  }} else if (m.gpu_memory_used_gb != null) {{
+    document.getElementById('gauge-gpu-val').textContent = m.gpu_memory_used_gb + ' GB';
+    document.getElementById('gauge-gpu-arc').setAttribute('stroke-dasharray', '0 157');
+  }} else {{
+    document.getElementById('gauge-gpu-val').textContent = 'N/A';
+  }}
+  if (m.net_recv_mb != null) document.getElementById('net-recv').textContent = m.net_recv_mb;
+  if (m.net_sent_mb != null) document.getElementById('net-sent').textContent = m.net_sent_mb;
+  document.getElementById('net-device').textContent = (m.device || '').toUpperCase();
+}}
+
 async function refresh() {{
-  const [nmdLog, prepLog, trainLog, stats] = await Promise.all([
+  const [nmdLog, prepLog, trainLog, stats, sysMetrics] = await Promise.all([
     fetchJSON('nmd_prefilter_log.json'),
     fetchJSON('prepare_log.json'),
     fetchJSON('training_log.json'),
     fetchJSON('class_stats.json'),
+    fetchJSON('system_metrics.json'),
   ]);
 
   // Keep last good data so UI stays populated after disconnect
@@ -955,6 +1049,7 @@ async function refresh() {{
   if (n) updateNmdPrefilter(n);
   if (p || s) updateDataPrep(p, s);
   if (t) updateTraining(t);
+  if (sysMetrics) updateSystemMetrics(sysMetrics);
 
   // Show disconnect warning after 3 consecutive failures
   if (_fetchFails >= 3) {{

@@ -221,7 +221,7 @@ class LULCTrainer:
                         pg["lr"] = cfg.lr * lr_scale
 
                 optimizer.zero_grad()
-                logits = self.model(images_5d)  # (B, C, H, W)
+                logits = self.model(images_5d).contiguous()  # (B, C, H, W)
                 loss = criterion(logits, labels)
                 loss.backward()
                 optimizer.step()
@@ -267,6 +267,9 @@ class LULCTrainer:
                 metric_value = (1 - w) * val_miou + w * worst_iou
             else:
                 metric_value = val_miou
+
+            # ── System metrics ────────────────────────────────────────
+            self._write_system_metrics()
 
             # ── Log epoch to JSON ─────────────────────────────────────
             is_new_best = metric_value > best_metric
@@ -361,6 +364,57 @@ class LULCTrainer:
             tmp_path.rename(log_path)
         except Exception as e:
             print(f"    WARNING: Failed to write training log: {e}")
+
+    def _write_system_metrics(self) -> None:
+        """Write system_metrics.json with CPU, memory, and GPU usage."""
+        try:
+            import psutil
+        except ImportError:
+            return
+
+        metrics = {
+            "cpu_percent": psutil.cpu_percent(interval=0.1),
+            "memory_percent": psutil.virtual_memory().percent,
+            "memory_used_gb": round(
+                psutil.virtual_memory().used / (1024**3), 1),
+            "memory_total_gb": round(
+                psutil.virtual_memory().total / (1024**3), 1),
+            "device": str(self.device),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        # GPU usage (MPS doesn't expose util, but we can get memory)
+        if self.device.type == "cuda":
+            import torch
+            metrics["gpu_percent"] = torch.cuda.utilization(self.device)
+            metrics["gpu_memory_used_gb"] = round(
+                torch.cuda.memory_allocated(self.device) / (1024**3), 1)
+            metrics["gpu_memory_total_gb"] = round(
+                torch.cuda.get_device_properties(self.device).total_mem / (1024**3), 1)
+        elif self.device.type == "mps":
+            import torch
+            metrics["gpu_percent"] = None  # Not exposed by MPS
+            metrics["gpu_memory_used_gb"] = round(
+                torch.mps.current_allocated_memory() / (1024**3), 2)
+            metrics["gpu_memory_total_gb"] = None
+        else:
+            metrics["gpu_percent"] = None
+            metrics["gpu_memory_used_gb"] = None
+            metrics["gpu_memory_total_gb"] = None
+
+        # Network (bytes sent/received since boot)
+        net = psutil.net_io_counters()
+        metrics["net_sent_mb"] = round(net.bytes_sent / (1024**2), 1)
+        metrics["net_recv_mb"] = round(net.bytes_recv / (1024**2), 1)
+
+        try:
+            path = Path(self.config.data_dir) / "system_metrics.json"
+            tmp = path.with_suffix(".json.tmp")
+            with open(tmp, "w") as f:
+                json.dump(metrics, f, indent=2)
+            tmp.rename(path)
+        except Exception:
+            pass
 
     # ── Checkpoint ────────────────────────────────────────────────────
 

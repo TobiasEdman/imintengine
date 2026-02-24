@@ -38,10 +38,10 @@ class ConvBnRelu(nn.Module):
         super().__init__()
         self.conv = nn.Conv2d(in_ch, out_ch, kernel, padding=padding, bias=bias)
         self.norm = nn.BatchNorm2d(out_ch)
-        self.relu = nn.ReLU(inplace=True)
+        self.relu = nn.ReLU(inplace=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.relu(self.norm(self.conv(x)))
+        return self.relu(self.norm(self.conv(x.contiguous())))
 
 
 class TerraTorchUperNetDecoder(nn.Module):
@@ -69,7 +69,7 @@ class TerraTorchUperNetDecoder(nn.Module):
         self,
         in_channels: list[int] = None,
         decoder_channels: int = 256,
-        pool_sizes: tuple[int, ...] = (1, 2, 3, 6),
+        pool_sizes: tuple[int, ...] = (1, 2, 7, 14),
     ):
         super().__init__()
         if in_channels is None:
@@ -124,7 +124,9 @@ class TerraTorchUperNetDecoder(nn.Module):
         psp_outs = [deepest]
         for psp_module in self.psp_modules:
             pooled = psp_module(deepest)
-            pooled = F.interpolate(pooled, size=(h, w), mode="bilinear", align_corners=True)
+            pooled = F.interpolate(
+                pooled, size=(h, w), mode="bilinear", align_corners=True,
+            ).contiguous()
             psp_outs.append(pooled)
         psp_out = self.bottleneck(torch.cat(psp_outs, dim=1))
 
@@ -136,7 +138,7 @@ class TerraTorchUperNetDecoder(nn.Module):
             upsampled = F.interpolate(
                 fpn_outs[0], size=(target_h, target_w),
                 mode="bilinear", align_corners=True,
-            )
+            ).contiguous()
             fpn_out = self.fpn_convs[i](lateral + upsampled)
             fpn_outs.insert(0, fpn_out)
 
@@ -148,7 +150,7 @@ class TerraTorchUperNetDecoder(nn.Module):
                 out = F.interpolate(
                     out, size=(target_h, target_w),
                     mode="bilinear", align_corners=True,
-                )
+                ).contiguous()
             resized.append(out)
 
         return self.fpn_bottleneck(torch.cat(resized, dim=1))
@@ -247,7 +249,9 @@ class PrithviSegmentationModel(nn.Module):
         ]
 
         # PSP modules
-        pool_sizes = (1, 2, 3, 6)
+        # Pool sizes must divide the feature map (14×14 for 224px input).
+        # Standard (1,2,3,6) causes MPS failures; (1,2,7,14) divides 14.
+        pool_sizes = (1, 2, 7, 14)
         self.decoder.psp_modules = nn.ModuleList()
         for pool_size in pool_sizes:
             self.decoder.psp_modules.append(nn.Sequential(
@@ -321,7 +325,9 @@ class PrithviSegmentationModel(nn.Module):
         psp_outs = [deepest]
         for psp_module in self.decoder.psp_modules:
             pooled = psp_module(deepest)
-            pooled = F.interpolate(pooled, size=(h, w), mode="bilinear", align_corners=True)
+            pooled = F.interpolate(
+                pooled, size=(h, w), mode="bilinear", align_corners=True,
+            ).contiguous()
             psp_outs.append(pooled)
         psp_out = self.decoder.bottleneck(torch.cat(psp_outs, dim=1))
 
@@ -334,7 +340,7 @@ class PrithviSegmentationModel(nn.Module):
             upsampled = F.interpolate(
                 fpn_outs[0], size=(target_h, target_w),
                 mode="bilinear", align_corners=True,
-            )
+            ).contiguous()
             fpn_out = self.decoder.fpn_convs[i](lateral + upsampled)
             fpn_outs.insert(0, fpn_out)
 
@@ -346,7 +352,7 @@ class PrithviSegmentationModel(nn.Module):
                 out = F.interpolate(
                     out, size=(target_h, target_w),
                     mode="bilinear", align_corners=True,
-                )
+                ).contiguous()
             resized.append(out)
 
         return self.decoder.fpn_bottleneck(torch.cat(resized, dim=1))
@@ -401,21 +407,21 @@ class UNetDecoderBlock(nn.Module):
         self.conv1 = nn.Sequential(
             nn.Conv2d(in_ch + skip_ch, out_ch, 3, padding=1, bias=False),
             nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
         )
         self.conv2 = nn.Sequential(
             nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=False),
             nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
         )
 
     def forward(self, x: torch.Tensor,
                 skip: torch.Tensor | None = None) -> torch.Tensor:
         if skip is not None:
             x = F.interpolate(x, size=skip.shape[2:],
-                              mode="bilinear", align_corners=True)
+                              mode="bilinear", align_corners=True).contiguous()
             x = torch.cat([x, skip], dim=1)
-        x = self.conv1(x)
+        x = self.conv1(x.contiguous())
         x = self.conv2(x)
         return x
 
