@@ -383,23 +383,30 @@ def prepare_training_data(config: TrainingConfig) -> None:
             import psutil
         except ImportError:
             return
+        proc = psutil.Process(os.getpid())
+        proc.cpu_percent()  # prime the first call (always returns 0)
+        net_baseline = psutil.net_io_counters()
+        sys_mem_total = psutil.virtual_memory().total
         metrics_path = data_dir / "system_metrics.json"
         while not _metrics_stop.is_set():
             try:
+                mem = proc.memory_info()
                 net = psutil.net_io_counters()
+                mem_rss_gb = mem.rss / (1024**3)
+                mem_pct = (mem.rss / sys_mem_total) * 100
                 metrics = {
-                    "cpu_percent": psutil.cpu_percent(interval=0.5),
-                    "memory_percent": psutil.virtual_memory().percent,
-                    "memory_used_gb": round(
-                        psutil.virtual_memory().used / (1024**3), 1),
-                    "memory_total_gb": round(
-                        psutil.virtual_memory().total / (1024**3), 1),
+                    "cpu_percent": proc.cpu_percent(),
+                    "memory_percent": round(mem_pct, 1),
+                    "memory_used_gb": round(mem_rss_gb, 2),
+                    "memory_total_gb": round(sys_mem_total / (1024**3), 1),
                     "device": "cpu",
                     "gpu_percent": None,
                     "gpu_memory_used_gb": None,
                     "gpu_memory_total_gb": None,
-                    "net_sent_mb": round(net.bytes_sent / (1024**2), 1),
-                    "net_recv_mb": round(net.bytes_recv / (1024**2), 1),
+                    "net_sent_mb": round(
+                        (net.bytes_sent - net_baseline.bytes_sent) / (1024**2), 1),
+                    "net_recv_mb": round(
+                        (net.bytes_recv - net_baseline.bytes_recv) / (1024**2), 1),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
                 tmp = metrics_path.with_suffix(".json.tmp")
@@ -506,20 +513,45 @@ def _write_prepare_log(path: Path, log: dict) -> None:
 
 
 def _load_progress(path: Path) -> dict:
-    """Load progress checkpoint."""
+    """Load progress checkpoint, rebuilding from tile files if corrupt/missing."""
     if path.exists():
-        with open(path) as f:
-            return json.load(f)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            if data.get("completed"):
+                return data
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Auto-recover: rebuild from existing tile files
+    tiles_dir = path.parent / "tiles"
+    if tiles_dir.exists():
+        completed = []
+        for npz in tiles_dir.glob("tile_*.npz"):
+            key = npz.stem.replace("tile_", "")  # e.g. "361280_6231280"
+            completed.append(key)
+        if completed:
+            print(f"  Recovered progress from {len(completed)} existing tiles")
+            progress = {"completed": sorted(completed), "failed": []}
+            with open(path, "w") as f:
+                json.dump(progress, f)
+            return progress
+
     return {"completed": [], "failed": []}
 
 
 def _save_progress(path: Path, completed: set, failed: set) -> None:
-    """Save progress checkpoint."""
-    with open(path, "w") as f:
-        json.dump({
-            "completed": sorted(completed),
-            "failed": sorted(failed),
-        }, f)
+    """Save progress checkpoint (atomic write to prevent corruption)."""
+    try:
+        tmp = path.with_suffix(".json.tmp")
+        with open(tmp, "w") as f:
+            json.dump({
+                "completed": sorted(completed),
+                "failed": sorted(failed),
+            }, f)
+        tmp.rename(path)
+    except Exception:
+        pass
 
 
 def _find_rare_classes(

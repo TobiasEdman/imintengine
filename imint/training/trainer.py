@@ -366,19 +366,22 @@ class LULCTrainer:
             print(f"    WARNING: Failed to write training log: {e}")
 
     def _write_system_metrics(self) -> None:
-        """Write system_metrics.json with CPU, memory, and GPU usage."""
+        """Write system_metrics.json with per-process CPU, memory, and GPU usage."""
         try:
             import psutil
         except ImportError:
             return
 
+        proc = psutil.Process(os.getpid())
+        mem = proc.memory_info()
+        sys_mem_total = psutil.virtual_memory().total
+        mem_pct = (mem.rss / sys_mem_total) * 100
+
         metrics = {
-            "cpu_percent": psutil.cpu_percent(interval=0.1),
-            "memory_percent": psutil.virtual_memory().percent,
-            "memory_used_gb": round(
-                psutil.virtual_memory().used / (1024**3), 1),
-            "memory_total_gb": round(
-                psutil.virtual_memory().total / (1024**3), 1),
+            "cpu_percent": proc.cpu_percent(),
+            "memory_percent": round(mem_pct, 1),
+            "memory_used_gb": round(mem.rss / (1024**3), 2),
+            "memory_total_gb": round(sys_mem_total / (1024**3), 1),
             "device": str(self.device),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -402,10 +405,14 @@ class LULCTrainer:
             metrics["gpu_memory_used_gb"] = None
             metrics["gpu_memory_total_gb"] = None
 
-        # Network (bytes sent/received since boot)
+        # Network delta since process start
+        if not hasattr(self, '_net_baseline'):
+            self._net_baseline = psutil.net_io_counters()
         net = psutil.net_io_counters()
-        metrics["net_sent_mb"] = round(net.bytes_sent / (1024**2), 1)
-        metrics["net_recv_mb"] = round(net.bytes_recv / (1024**2), 1)
+        metrics["net_sent_mb"] = round(
+            (net.bytes_sent - self._net_baseline.bytes_sent) / (1024**2), 1)
+        metrics["net_recv_mb"] = round(
+            (net.bytes_recv - self._net_baseline.bytes_recv) / (1024**2), 1)
 
         try:
             path = Path(self.config.data_dir) / "system_metrics.json"
