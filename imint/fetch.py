@@ -57,9 +57,10 @@ BANDS_20M_SPECTRAL = ["b05", "b06", "b07", "b8a", "b11", "b12"]
 BANDS_60M = ["b09"]
 BANDS_20M_CATEGORICAL = ["scl"]
 
-# SCL cloud classes (Sentinel-2 L2A Scene Classification)
-# 8 = cloud_medium_probability, 9 = cloud_high_probability, 10 = thin_cirrus
-SCL_CLOUD_CLASSES = frozenset({8, 9, 10})
+# SCL cloud + shadow classes (Sentinel-2 L2A Scene Classification)
+# 3 = cloud_shadow, 8 = cloud_medium_probability,
+# 9 = cloud_high_probability, 10 = thin_cirrus
+SCL_CLOUD_CLASSES = frozenset({3, 8, 9, 10})
 
 # Default token file location (project root)
 TOKEN_PATH_DEFAULT = os.path.join(
@@ -142,9 +143,10 @@ class FetchResult:
 # ── Cloud detection ──────────────────────────────────────────────────────────
 
 def check_cloud_fraction(scl: np.ndarray) -> float:
-    """Compute cloud fraction from a Scene Classification Layer array.
+    """Compute cloud + shadow fraction from a Scene Classification Layer array.
 
-    SCL classes counted as cloud:
+    SCL classes counted as cloud/shadow:
+        3 = cloud_shadow
         8 = cloud_medium_probability
         9 = cloud_high_probability
         10 = thin_cirrus
@@ -153,7 +155,7 @@ def check_cloud_fraction(scl: np.ndarray) -> float:
         scl: 2D array (H, W) with SCL class values (0-11).
 
     Returns:
-        Fraction of pixels that are cloud (0.0 to 1.0).
+        Fraction of pixels that are cloud or shadow (0.0 to 1.0).
     """
     cloud_mask = np.isin(scl, list(SCL_CLOUD_CLASSES))
     return float(cloud_mask.sum()) / max(scl.size, 1)
