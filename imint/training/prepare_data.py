@@ -30,6 +30,15 @@ socket.setdefaulttimeout(_SOCKET_TIMEOUT)
 _MAX_RETRIES = 2      # retries per cell on transient/timeout errors
 _SCL_CANDIDATES = 3   # max STAC dates to pre-screen with SCL before giving up
 
+# ── Adaptive concurrency defaults ────────────────────────────────────────
+_INITIAL_WORKERS = 3
+_MIN_WORKERS = 1
+_MAX_WORKERS = 4
+_ADAPT_WINDOW = 10          # requests to consider for adaptation
+_LATENCY_HIGH_S = 60.0      # p90 above this → scale down
+_LATENCY_LOW_S = 30.0       # p90 below this → scale up
+_ERROR_RATE_HIGH = 0.30     # >30 % errors → scale down
+
 from .config import TrainingConfig
 from .class_schema import nmd_raster_to_lulc
 from .sampler import (
@@ -40,9 +49,97 @@ from .sampler import (
 # Sentinel value to signal that the NMD producer is done
 _NMD_DONE = None
 
-# Number of parallel STAC/spectral fetch workers (keep low to avoid
-# DES rate-limiting — 1 fetch + 1 NMD = 2 concurrent openEO requests)
-_FETCH_WORKERS = 1
+# Adaptive concurrency controller — adjusts fetch parallelism to DES health
+class _AdaptiveWorkerPool:
+    """Tracks DES response latency/errors and adjusts active worker count.
+
+    Workers check ``may_proceed()`` before starting a DES request.
+    If the pool wants fewer active workers it blocks extras on a semaphore
+    until conditions improve.
+    """
+
+    def __init__(
+        self,
+        initial: int = _INITIAL_WORKERS,
+        lo: int = _MIN_WORKERS,
+        hi: int = _MAX_WORKERS,
+    ):
+        self._lock = threading.Lock()
+        self._active = initial
+        self._lo = lo
+        self._hi = hi
+        self._sem = threading.Semaphore(initial)
+        self._latencies: list[float] = []   # last N request durations (seconds)
+        self._errors: list[bool] = []        # last N: True = error
+        self._last_adjust = time.monotonic()
+
+    @property
+    def active(self) -> int:
+        with self._lock:
+            return self._active
+
+    def acquire(self) -> None:
+        """Block until a worker slot is available."""
+        self._sem.acquire()
+
+    def release(self) -> None:
+        self._sem.release()
+
+    def record(self, latency_s: float, error: bool) -> None:
+        """Record a DES request outcome and maybe adjust concurrency."""
+        with self._lock:
+            self._latencies.append(latency_s)
+            self._errors.append(error)
+            # Keep only the window
+            if len(self._latencies) > _ADAPT_WINDOW:
+                self._latencies = self._latencies[-_ADAPT_WINDOW:]
+                self._errors = self._errors[-_ADAPT_WINDOW:]
+            # Only adapt after a full window and at most every 30 s
+            if (len(self._latencies) < _ADAPT_WINDOW
+                    or time.monotonic() - self._last_adjust < 30):
+                return
+            self._maybe_adapt()
+
+    def _maybe_adapt(self) -> None:
+        """Adjust concurrency based on recent DES behaviour (called with lock)."""
+        lats = sorted(self._latencies)
+        p90 = lats[int(len(lats) * 0.9)]
+        err_rate = sum(self._errors) / len(self._errors)
+
+        old = self._active
+
+        if err_rate > _ERROR_RATE_HIGH or p90 > _LATENCY_HIGH_S:
+            # Scale down
+            new = max(self._lo, self._active - 1)
+        elif err_rate == 0 and p90 < _LATENCY_LOW_S:
+            # Scale up
+            new = min(self._hi, self._active + 1)
+        else:
+            new = self._active
+
+        if new != old:
+            diff = new - old
+            self._active = new
+            self._last_adjust = time.monotonic()
+            # Reset window after adjustment so we evaluate fresh data
+            self._latencies.clear()
+            self._errors.clear()
+            if diff > 0:
+                for _ in range(diff):
+                    self._sem.release()
+                print(f"    ⚡ DES adaptive: {old} → {new} workers "
+                      f"(p90={p90:.0f}s, err={err_rate:.0%})")
+            else:
+                # Draining: next -diff acquire() calls will block
+                for _ in range(-diff):
+                    # Non-blocking drain; if can't drain now the
+                    # natural acquire/release flow will catch up.
+                    self._sem.acquire(blocking=False)
+                print(f"    ⚠ DES adaptive: {old} → {new} workers "
+                      f"(p90={p90:.0f}s, err={err_rate:.0%})")
+
+# Static count used for NMD_DONE sentinels — start with max possible
+_FETCH_WORKERS = _MAX_WORKERS
 
 
 def prepare_training_data(config: TrainingConfig) -> None:
@@ -133,6 +230,11 @@ def prepare_training_data(config: TrainingConfig) -> None:
 
     # Queue for NMD-approved cells → spectral fetch workers
     approved_q = queue.Queue(maxsize=200)
+
+    # Adaptive concurrency pool
+    pool = _AdaptiveWorkerPool(
+        initial=_INITIAL_WORKERS, lo=_MIN_WORKERS, hi=_MAX_WORKERS,
+    )
 
     # ── NMD pre-filter log ────────────────────────────────────────────
     nmd_log_path = data_dir / "nmd_prefilter_log.json"
@@ -289,46 +391,71 @@ def prepare_training_data(config: TrainingConfig) -> None:
 
             for year in config.years:
                 try:
-                    date_start = f"{year}-{config.growing_season[0]:02d}-01"
-                    date_end = f"{year}-{config.growing_season[1]:02d}-30"
+                    from datetime import timedelta as _td
 
-                    dates = _stac_available_dates(
-                        coords, date_start, date_end,
-                        scene_cloud_max=80,
-                    )
-                    if not dates:
-                        continue
+                    # Search month by month: August first, then July,
+                    # then June — peak summer first, lowest cloud within
+                    # each month (STAC returns sorted by cloud asc).
+                    m_start = config.growing_season[0]
+                    m_end = config.growing_season[1]
+                    months = list(range(m_end, m_start - 1, -1))
 
-                    # ── SCL pre-screening: lightweight cloud check ─────
                     projected = _to_nmd_grid(coords)
                     good_date = None
                     good_cloud = None
 
-                    for cand_date, scene_cloud in dates[:_SCL_CANDIDATES]:
-                        try:
-                            from datetime import timedelta as _td
-                            cand_dt = datetime.strptime(cand_date, "%Y-%m-%d")
-                            temporal = [
-                                cand_date,
-                                (cand_dt + _td(days=1)).strftime("%Y-%m-%d"),
-                            ]
-                            _scl, aoi_cloud, _crs, _tr = _fetch_scl(
-                                conn, projected, temporal, date_window=0,
-                            )
-                            time.sleep(1)
+                    for month in months:
+                        if good_date:
+                            break
+                        date_start = f"{year}-{month:02d}-01"
+                        date_end = f"{year}-{month:02d}-28"
+                        if month in (1,3,5,7,8,10,12):
+                            date_end = f"{year}-{month:02d}-31"
+                        elif month in (4,6,9,11):
+                            date_end = f"{year}-{month:02d}-30"
 
-                            if aoi_cloud <= config.cloud_threshold:
-                                good_date = cand_date
-                                good_cloud = aoi_cloud
-                                break
-                            else:
+                        dates = _stac_available_dates(
+                            coords, date_start, date_end,
+                            scene_cloud_max=50,
+                        )
+                        if not dates:
+                            continue
+
+                        # SCL pre-screen top candidates in this month
+                        for cand_date, scene_cloud in dates[:_SCL_CANDIDATES]:
+                            try:
+                                cand_dt = datetime.strptime(cand_date, "%Y-%m-%d")
+                                temporal = [
+                                    cand_date,
+                                    (cand_dt + _td(days=1)).strftime("%Y-%m-%d"),
+                                ]
+                                pool.acquire()
+                                t0 = time.monotonic()
+                                scl_err = False
+                                try:
+                                    _scl, aoi_cloud, _crs, _tr = _fetch_scl(
+                                        conn, projected, temporal, date_window=0,
+                                    )
+                                except Exception:
+                                    scl_err = True
+                                    raise
+                                finally:
+                                    pool.record(time.monotonic() - t0, scl_err)
+                                    pool.release()
+                                time.sleep(1)
+
+                                if aoi_cloud <= config.cloud_threshold:
+                                    good_date = cand_date
+                                    good_cloud = aoi_cloud
+                                    break
+                                else:
+                                    print(f"    SCL {cell_key} {cand_date}: "
+                                          f"cloud={aoi_cloud:.1%} > "
+                                          f"{config.cloud_threshold:.0%}, skip")
+                            except Exception as e:
                                 print(f"    SCL {cell_key} {cand_date}: "
-                                      f"cloud={aoi_cloud:.1%} > "
-                                      f"{config.cloud_threshold:.0%}, skip")
-                        except Exception as e:
-                            print(f"    SCL {cell_key} {cand_date}: "
-                                  f"{type(e).__name__}: {e}")
-                            time.sleep(1)
+                                      f"{type(e).__name__}: {e}")
+                                time.sleep(1)
 
                     if good_date is None:
                         print(f"    {cell_key} {year}: no cloud-free date "
@@ -337,12 +464,22 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         continue
 
                     # ── Full spectral fetch (SCL already verified) ─────
-                    result = fetch_des_data(
-                        date=good_date,
-                        coords=coords,
-                        cloud_threshold=1.0,    # already screened
-                        include_scl=False,      # skip redundant SCL
-                    )
+                    pool.acquire()
+                    t0_spec = time.monotonic()
+                    spec_err = False
+                    try:
+                        result = fetch_des_data(
+                            date=good_date,
+                            coords=coords,
+                            cloud_threshold=1.0,    # already screened
+                            include_scl=False,      # skip redundant SCL
+                        )
+                    except Exception:
+                        spec_err = True
+                        raise
+                    finally:
+                        pool.record(time.monotonic() - t0_spec, spec_err)
+                        pool.release()
 
                     # Save RGB preview
                     preview_fname = f"preview_{cell_key}_{good_date}.png"
@@ -415,6 +552,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                             str(k): v for k, v in class_counts.items()
                         }
                         prep_log["elapsed_s"] = round(time.time() - t_start, 1)
+                        prep_log["active_workers"] = pool.active
                         prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
 
                         # Track recent preview for dashboard
@@ -490,13 +628,15 @@ def prepare_training_data(config: TrainingConfig) -> None:
 
     # ── Launch parallel pipeline ──────────────────────────────────────
     print(f"\n  Starting parallel pipeline: NMD filter + "
-          f"{_FETCH_WORKERS} fetch workers...")
+          f"{_INITIAL_WORKERS} fetch workers (adaptive {_MIN_WORKERS}-{_MAX_WORKERS})...")
 
     nmd_thread = threading.Thread(target=_nmd_producer, daemon=True)
     nmd_thread.start()
 
+    # Spawn MAX threads — the adaptive semaphore controls how many
+    # are actually active at any time.
     fetch_threads = []
-    for _ in range(_FETCH_WORKERS):
+    for _ in range(_MAX_WORKERS):
         t = threading.Thread(target=_fetch_worker, daemon=True)
         t.start()
         fetch_threads.append(t)

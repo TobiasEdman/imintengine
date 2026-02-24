@@ -16,11 +16,11 @@ class TrainingConfig:
     # ── Data ──────────────────────────────────────────────────────────────
     data_dir: str = "data/lulc_training"
     years: list[str] = field(default_factory=lambda: ["2019", "2020"])
-    growing_season: tuple[int, int] = (5, 9)          # May – September
+    growing_season: tuple[int, int] = (6, 8)          # June – August
     grid_spacing_m: int = 10_000                       # 10 km grid
     patch_pixels: int = 224                            # Training patch size
     fetch_pixels: int = 256                            # Fetch larger for crop
-    cloud_threshold: float = 0.10
+    cloud_threshold: float = 0.05
 
     # ── Class schema ─────────────────────────────────────────────────────
     num_classes: int = 19                              # Full NMD L2
