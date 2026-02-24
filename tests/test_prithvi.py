@@ -354,13 +354,16 @@ class TestTaskHeadRegistry:
     def test_all_entries_have_required_fields(self):
         """Every registry entry must have all required fields."""
         from imint.fm.terratorch_loader import TASK_HEAD_REGISTRY
-        required_fields = [
-            "repo_id", "filename", "num_classes", "feature_indices",
+        common_fields = [
+            "num_classes", "feature_indices",
             "dropout", "class_names", "description",
         ]
         for name, entry in TASK_HEAD_REGISTRY.items():
-            for field in required_fields:
+            for field in common_fields:
                 assert field in entry, f"Task head '{name}' missing field '{field}'"
+            # Must have either HuggingFace source (repo_id + filename) or local_path
+            has_source = ("repo_id" in entry and "filename" in entry) or "local_path" in entry
+            assert has_source, f"Task head '{name}' needs repo_id+filename or local_path"
             # Must have either decoder_channels (UPerNet) or decoder_type (UNet)
             has_decoder_config = "decoder_channels" in entry or "decoder_type" in entry
             assert has_decoder_config, f"Task head '{name}' needs decoder_channels or decoder_type"

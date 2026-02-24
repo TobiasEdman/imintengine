@@ -34,7 +34,7 @@ env/
 # Credentials — never commit
 .cdsapirc
 utils/config.py
-config.py
+/config.py
 *credentials*
 *secret*
 *.env

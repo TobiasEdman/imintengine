@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""
+scripts/train_lulc.py — Train LULC classifier on Prithvi + UPerNet
+
+Trains a UPerNet decoder on frozen Prithvi-EO-2.0 backbone using
+NMD-derived LULC labels. Produces checkpoints compatible with the
+TASK_HEAD_REGISTRY / load_segmentation_model() pipeline.
+
+Usage:
+    python scripts/train_lulc.py --data-dir data/lulc_training
+    python scripts/train_lulc.py --epochs 2 --batch-size 4 --device mps
+    python scripts/train_lulc.py --evaluate-only --checkpoint checkpoints/lulc/best_model.pt
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from imint.training.config import TrainingConfig
+from imint.training.dataset import LULCDataset
+from imint.training.trainer import LULCTrainer
+from imint.training.evaluate import evaluate_model
+from imint.training.class_schema import get_class_names
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Train Prithvi LULC segmentation model",
+    )
+
+    # Data
+    parser.add_argument(
+        "--data-dir", type=str, default="data/lulc_training",
+        help="Directory with training tiles (default: data/lulc_training)",
+    )
+    parser.add_argument(
+        "--num-classes", type=int, default=19,
+        help="Number of classes: 19 (full NMD L2) or 10 (grouped)",
+    )
+
+    # Training
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--weight-decay", type=float, default=0.01)
+    parser.add_argument("--patience", type=int, default=5,
+                        help="Early stopping patience (default: 5)")
+    parser.add_argument("--num-workers", type=int, default=4)
+
+    # Model
+    parser.add_argument("--decoder-channels", type=int, default=256)
+    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--device", type=str, default=None,
+                        help="Device: cuda, mps, cpu (default: auto)")
+
+    # Checkpoint
+    parser.add_argument("--checkpoint-dir", type=str,
+                        default="checkpoints/lulc")
+    parser.add_argument("--save-every", type=int, default=5,
+                        help="Save checkpoint every N epochs")
+
+    # Loss
+    parser.add_argument("--loss-type", type=str, default="cross_entropy",
+                        choices=["cross_entropy", "focal"],
+                        help="Loss function (default: cross_entropy)")
+    parser.add_argument("--focal-gamma", type=float, default=2.0,
+                        help="Focal loss gamma (default: 2.0)")
+
+    # Early stopping metric
+    parser.add_argument("--early-stop-metric", type=str, default="miou",
+                        choices=["miou", "worst_class_iou", "combined"],
+                        help="Metric for early stopping (default: miou)")
+
+    # Evaluate-only mode
+    parser.add_argument("--evaluate-only", action="store_true",
+                        help="Only evaluate an existing checkpoint")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Path to checkpoint for evaluation")
+
+    args = parser.parse_args()
+
+    config = TrainingConfig(
+        data_dir=args.data_dir,
+        num_classes=args.num_classes,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        early_stopping_patience=args.patience,
+        num_workers=args.num_workers,
+        decoder_channels=args.decoder_channels,
+        dropout=args.dropout,
+        device=args.device,
+        checkpoint_dir=args.checkpoint_dir,
+        save_every_n_epochs=args.save_every,
+        loss_type=args.loss_type,
+        focal_gamma=args.focal_gamma,
+        early_stop_metric=args.early_stop_metric,
+    )
+
+    # Load datasets
+    print(f"\n  Loading datasets from {config.data_dir}...")
+    train_dataset = LULCDataset(config.data_dir, split="train", config=config)
+    val_dataset = LULCDataset(config.data_dir, split="val", config=config)
+    print(f"  Train: {len(train_dataset)} tiles, Val: {len(val_dataset)} tiles")
+
+    if args.evaluate_only:
+        # Evaluate-only mode
+        checkpoint_path = args.checkpoint or str(
+            Path(config.checkpoint_dir) / "best_model.pt"
+        )
+        print(f"\n  Evaluating checkpoint: {checkpoint_path}")
+
+        import torch
+        from imint.fm.terratorch_loader import _load_prithvi_from_hf
+        from imint.fm.upernet import PrithviSegmentationModel
+
+        # Load model
+        backbone = _load_prithvi_from_hf(pretrained=True)
+        model = PrithviSegmentationModel(
+            encoder=backbone,
+            feature_indices=config.feature_indices,
+            decoder_channels=config.decoder_channels,
+            num_classes=config.num_classes + 1,
+            dropout=config.dropout,
+        )
+
+        # Load checkpoint
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        state_dict = ckpt.get("state_dict", ckpt)
+        # Strip "model." prefix
+        clean_sd = {}
+        for k, v in state_dict.items():
+            key = k[len("model."):] if k.startswith("model.") else k
+            clean_sd[key] = v
+        model.load_state_dict(clean_sd, strict=False)
+
+        device = torch.device(config.device or "cpu")
+        model.to(device)
+
+        # Evaluate on test set if available
+        for split_name in ["test", "val"]:
+            try:
+                ds = LULCDataset(config.data_dir, split=split_name, config=config)
+                print(f"\n  Evaluating on {split_name} ({len(ds)} tiles)...")
+                metrics = evaluate_model(model, ds, config, device)
+                print(f"  mIoU: {metrics['miou']:.4f}")
+                print(f"  Overall Accuracy: {metrics['overall_accuracy']:.4f}")
+                print(f"  Per-class IoU:")
+                for name, iou in metrics["per_class_iou"].items():
+                    print(f"    {name:30s} {iou:.4f}")
+            except FileNotFoundError:
+                print(f"  Split '{split_name}' not found, skipping.")
+
+    else:
+        # Training mode
+        trainer = LULCTrainer(config)
+        result = trainer.train(train_dataset, val_dataset)
+
+        print(f"\n{'='*60}")
+        print(f"  Result:")
+        print(f"    Best mIoU:     {result['best_miou']:.4f}")
+        print(f"    Best epoch:    {result['best_epoch']}")
+        print(f"    Checkpoint:    {result['checkpoint']}")
+        print(f"{'='*60}")
+
+
+if __name__ == "__main__":
+    main()

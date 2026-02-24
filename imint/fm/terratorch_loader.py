@@ -261,6 +261,26 @@ TASK_HEAD_REGISTRY = {
         "class_names": {0: "no_burn", 1: "burned"},
         "description": "Burn scar segmentation (HLS Burn Scars dataset)",
     },
+    "nmd_lulc": {
+        "local_path": "checkpoints/lulc/best_model.pt",
+        "num_classes": 20,  # 19 NMD L2 classes + background at index 0
+        "feature_indices": [5, 11, 17, 23],
+        "decoder_channels": 256,
+        "decoder_type": "upernet",
+        "dropout": 0.1,
+        "class_names": {
+            0: "background", 1: "forest_pine", 2: "forest_spruce",
+            3: "forest_deciduous", 4: "forest_mixed",
+            5: "forest_temp_non_forest", 6: "forest_wetland_pine",
+            7: "forest_wetland_spruce", 8: "forest_wetland_deciduous",
+            9: "forest_wetland_mixed", 10: "forest_wetland_temp",
+            11: "open_wetland", 12: "cropland",
+            13: "open_land_bare", 14: "open_land_vegetated",
+            15: "developed_buildings", 16: "developed_infrastructure",
+            17: "developed_roads", 18: "water_lakes", 19: "water_sea",
+        },
+        "description": "LULC classification (NMD Level 2, Sweden)",
+    },
 }
 
 
@@ -331,14 +351,22 @@ def load_segmentation_model(
             dropout=config["dropout"],
         )
 
-    # 3. Download and load fine-tuned checkpoint
-    from huggingface_hub import hf_hub_download
-
-    checkpoint_path = hf_hub_download(
-        config["repo_id"],
-        config["filename"],
-    )
-    print(f"    Loading checkpoint: {config['filename']}")
+    # 3. Load fine-tuned checkpoint (local_path or HuggingFace)
+    if "local_path" in config:
+        checkpoint_path = config["local_path"]
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(
+                f"Local checkpoint not found: {checkpoint_path}. "
+                f"Train the model first with scripts/train_lulc.py"
+            )
+        print(f"    Loading local checkpoint: {checkpoint_path}")
+    else:
+        from huggingface_hub import hf_hub_download
+        checkpoint_path = hf_hub_download(
+            config["repo_id"],
+            config["filename"],
+        )
+        print(f"    Loading checkpoint: {config['filename']}")
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
