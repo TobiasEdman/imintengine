@@ -76,6 +76,16 @@ def main():
                         choices=["miou", "worst_class_iou", "combined"],
                         help="Metric for early stopping (default: miou)")
 
+    # Dashboard
+    parser.add_argument("--dashboard", action="store_true",
+                        help="Launch live training dashboard in browser")
+    parser.add_argument("--dashboard-port", type=int, default=8000,
+                        help="Port for dashboard HTTP server (default: 8000)")
+
+    # Background mode
+    parser.add_argument("--background", action="store_true",
+                        help="Run training as a detached background process")
+
     # Evaluate-only mode
     parser.add_argument("--evaluate-only", action="store_true",
                         help="Only evaluate an existing checkpoint")
@@ -83,6 +93,35 @@ def main():
                         help="Path to checkpoint for evaluation")
 
     args = parser.parse_args()
+
+    # ── Background mode: re-exec as detached process ──────────────
+    if args.background:
+        import subprocess
+        cmd = [sys.executable, __file__]
+        # Forward all args except --background
+        for arg in sys.argv[1:]:
+            if arg != "--background":
+                cmd.append(arg)
+        # Always enable dashboard in background mode
+        if "--dashboard" not in cmd:
+            cmd.append("--dashboard")
+
+        log_dir = Path(args.data_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "train.log"
+
+        with open(log_file, "w") as lf:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=lf,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        print(f"\n  Training started in background (PID {proc.pid})")
+        print(f"  Log: {log_file}")
+        print(f"  Dashboard: http://localhost:{args.dashboard_port}/training_dashboard.html")
+        print(f"\n  To stop: kill {proc.pid}")
+        return
 
     config = TrainingConfig(
         data_dir=args.data_dir,
@@ -159,6 +198,14 @@ def main():
 
     else:
         # Training mode
+        if args.dashboard:
+            from imint.training.dashboard import start_dashboard_server
+            start_dashboard_server(
+                config.data_dir,
+                port=args.dashboard_port,
+                open_browser=True,
+            )
+
         trainer = LULCTrainer(config)
         result = trainer.train(train_dataset, val_dataset)
 

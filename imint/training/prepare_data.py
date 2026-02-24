@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -87,9 +89,127 @@ def prepare_training_data(config: TrainingConfig) -> None:
     failed = set(progress.get("failed", []))
     print(f"  Progress: {len(completed)} completed, {len(failed)} failed")
 
-    # ── Step 4: Connect to DES ────────────────────────────────────────
-    print("\n  Connecting to DES...")
+    # ── Step 4: Verify DES connection ─────────────────────────────────
+    #   Preferred authentication: basic auth via environment variables
+    #     export DES_USER=testuser DES_PASSWORD=secretpassword
+    #   Alternative: DES_TOKEN (OIDC access token)
+    print("\n  Verifying DES connection...")
     conn = _connect()
+    print("  DES connection OK")
+
+    # ── Step 4b: NMD pre-filter — cache NMD + remove lake cells ────
+    #   The land mask (generate_grid) already removed ocean/sea cells.
+    #   This step pre-fetches NMD for remaining cells to:
+    #     a) Cache NMD on disk so the main loop fetch is instant
+    #     b) Filter cells that are >95% inland water/background
+    #   NMD is cached on disk (.nmd_cache/) so the second fetch in the
+    #   main loop (with target_shape) hits cache and is free.
+    print("\n  Pre-filtering cells via NMD (caching + lake filter)...")
+    water_skipped = 0
+    nmd_failed = 0
+    nmd_land_cells = set()  # cell_keys that passed the land-fraction check
+
+    all_cells_flat = train_cells + val_cells + test_cells
+    total_to_filter = len(all_cells_flat)
+
+    # NMD pre-filter log for dashboard
+    nmd_log_path = data_dir / "nmd_prefilter_log.json"
+    nmd_log = {
+        "status": "running",
+        "total_cells": total_to_filter,
+        "processed": 0,
+        "land_kept": 0,
+        "water_skipped": 0,
+        "failed": 0,
+        "already_done": 0,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": None,
+    }
+    _write_prepare_log(nmd_log_path, nmd_log)
+
+    for ci, cell in enumerate(all_cells_flat):
+        cell_key = f"{cell.easting}_{cell.northing}"
+        if cell_key in completed or cell_key in failed:
+            nmd_log["already_done"] = nmd_log.get("already_done", 0) + 1
+            nmd_log["processed"] = ci + 1
+            if (ci + 1) % 10 == 0:
+                nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+                _write_prepare_log(nmd_log_path, nmd_log)
+            continue
+        coords_nmd = {
+            "west": cell.west_wgs84, "east": cell.east_wgs84,
+            "south": cell.south_wgs84, "north": cell.north_wgs84,
+        }
+        try:
+            nmd_result = fetch_nmd_data(coords=coords_nmd)
+            labels = nmd_raster_to_lulc(
+                nmd_result.nmd_raster, num_classes=config.num_classes,
+            )
+            land_frac = float(np.mean(
+                (labels > 0) & (labels != 18) & (labels != 19)))
+            if land_frac < 0.05:
+                water_skipped += 1
+                failed.add(cell_key)
+                print(f"    {cell_key}: SKIP water — "
+                      f"land_frac={land_frac:.1%}")
+            else:
+                nmd_land_cells.add(cell_key)
+                print(f"    {cell_key}: land_frac={land_frac:.1%} ✓ "
+                      f"(classes={np.unique(labels).tolist()})")
+        except Exception as e:
+            nmd_failed += 1
+            print(f"    NMD fail {cell_key}: {type(e).__name__}: {e}")
+            failed.add(cell_key)
+
+        # Update NMD pre-filter log for dashboard
+        nmd_log["processed"] = ci + 1
+        nmd_log["land_kept"] = len(nmd_land_cells)
+        nmd_log["water_skipped"] = water_skipped
+        nmd_log["failed"] = nmd_failed
+        nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if (ci + 1) % 5 == 0 or ci + 1 == total_to_filter:
+            _write_prepare_log(nmd_log_path, nmd_log)
+
+        if (ci + 1) % 20 == 0:
+            print(f"    NMD pre-filter: {ci+1}/{total_to_filter} "
+                  f"(kept {len(nmd_land_cells)}, water={water_skipped}, "
+                  f"fail={nmd_failed})")
+
+    print(f"  NMD pre-filter done: {len(nmd_land_cells)} land cells, "
+          f"{water_skipped} water, {nmd_failed} failed")
+
+    # Final NMD log update
+    nmd_log["status"] = "completed"
+    nmd_log["processed"] = total_to_filter
+    nmd_log["land_kept"] = len(nmd_land_cells)
+    nmd_log["water_skipped"] = water_skipped
+    nmd_log["failed"] = nmd_failed
+    nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write_prepare_log(nmd_log_path, nmd_log)
+
+    # Save progress after pre-filter (water cells are now in failed set)
+    _save_progress(progress_path, completed, failed)
+
+    # ── Prepare log for dashboard ───────────────────────────────────
+    total_cells = len(train_cells) + len(val_cells) + len(test_cells)
+    prep_log = {
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": None,
+        "grid_cells": total_cells,
+        "completed": len(completed),
+        "failed": len(failed),
+        "current_split": "",
+        "tiles_saved": len(completed),
+        "latest_tile": "",
+        "latest_date": "",
+        "latest_cloud": 0.0,
+        "class_counts": {},
+        "elapsed_s": 0.0,
+    }
+    prep_log_path = data_dir / "prepare_log.json"
+    t_start = time.time()
+    _write_prepare_log(prep_log_path, prep_log)
 
     # ── Step 5: Process all cells ─────────────────────────────────────
     all_splits = [
@@ -103,11 +223,22 @@ def prepare_training_data(config: TrainingConfig) -> None:
     tile_names_by_split = {"train": [], "val": [], "test": []}
     tile_idx = len(completed)
 
+    total_cells = sum(len(sc) for _, sc in all_splits)
+    processed_count = 0
+
     for split_name, split_cells in all_splits:
         print(f"\n  Processing {split_name} split ({len(split_cells)} cells)...")
+        prep_log["current_split"] = split_name
 
         for i, cell in enumerate(split_cells):
             cell_key = f"{cell.easting}_{cell.northing}"
+            processed_count += 1
+
+            # Progress counter every 5 cells
+            if processed_count % 5 == 0 or processed_count == total_cells:
+                print(f"    Progress: {processed_count}/{total_cells} cells | "
+                      f"{len(completed)} OK, {len(failed)} failed, "
+                      f"{tile_idx} tiles saved")
 
             if cell_key in completed:
                 # Find existing tile name
@@ -117,6 +248,10 @@ def prepare_training_data(config: TrainingConfig) -> None:
                 continue
 
             if cell_key in failed:
+                continue
+
+            # Skip cells not in nmd_land_cells (filtered by pre-filter)
+            if cell_key not in nmd_land_cells and cell_key not in completed:
                 continue
 
             coords = {
@@ -138,24 +273,38 @@ def prepare_training_data(config: TrainingConfig) -> None:
 
                     dates = _stac_available_dates(
                         coords, date_start, date_end,
-                        max_cloud_pct=30,
+                        scene_cloud_max=80,
                     )
                     if not dates:
+                        print(f"    {cell_key} {year}: STAC 0 scenes")
                         continue
+                    print(f"    {cell_key} {year}: {len(dates)} scenes, "
+                          f"cloud [{dates[0][1]:.0f}%-{dates[-1][1]:.0f}%], "
+                          f"best={dates[0][0]} ({dates[0][1]:.1f}%)")
 
-                    # Try best (lowest cloud) date
                     best_date = dates[0][0]
 
                     result = fetch_des_data(
                         date=best_date,
                         coords=coords,
                         cloud_threshold=config.cloud_threshold,
-                        token=conn.authenticate_oidc_device
-                        if hasattr(conn, "authenticate_oidc_device") else None,
                     )
 
+                    # Save RGB preview
+                    try:
+                        from PIL import Image as _PILImage
+                        rgb_u8 = (result.rgb * 255).clip(0, 255).astype(np.uint8)
+                        _PILImage.fromarray(rgb_u8).save(
+                            tiles_dir / f"preview_{cell_key}_{best_date}.png")
+                    except Exception:
+                        pass
+
                     # Check we have all Prithvi bands
-                    if not all(b in result.bands for b in config.prithvi_bands):
+                    missing = [b for b in config.prithvi_bands
+                               if b not in result.bands]
+                    if missing:
+                        print(f"    {cell_key}: SKIP bands — missing {missing} "
+                              f"(have: {sorted(result.bands.keys())})")
                         continue
 
                     # Stack Prithvi bands
@@ -164,7 +313,8 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         axis=0,
                     ).astype(np.float32)  # (6, H, W) reflectance [0,1]
 
-                    # Fetch NMD
+                    # Fetch NMD — hits disk cache from pre-filter,
+                    # but now with target_shape to match spectral image
                     nmd_result = fetch_nmd_data(
                         coords=coords,
                         target_shape=image.shape[1:],
@@ -175,11 +325,9 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         nmd_result.nmd_raster,
                         num_classes=config.num_classes,
                     )
-
-                    # Skip if >95% water/background
-                    land_frac = np.mean((labels > 0) & (labels != 18) & (labels != 19))
-                    if land_frac < 0.05:
-                        continue
+                    print(f"    NMD (cached): {nmd_result.nmd_raster.shape} → "
+                          f"labels {labels.shape}, "
+                          f"classes={np.unique(labels).tolist()}")
 
                     # Save tile
                     np.savez_compressed(
@@ -206,15 +354,18 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     success = True
                     tile_idx += 1
 
-                    if tile_idx % 10 == 0:
-                        print(f"    [{tile_idx}] {tile_name} ({best_date}, "
-                              f"cloud={result.cloud_fraction:.1%})")
+                    # Update prepare log with latest tile info
+                    prep_log["latest_tile"] = tile_name
+                    prep_log["latest_date"] = best_date
+                    prep_log["latest_cloud"] = round(result.cloud_fraction, 4)
+
+                    print(f"    ✓ [{tile_idx}] {tile_name} ({best_date}, "
+                          f"cloud={result.cloud_fraction:.1%})")
 
                     break  # Success, no need to try other years
 
                 except (FetchError, Exception) as e:
-                    if "cloud" not in str(e).lower():
-                        print(f"    WARNING: {cell_key} {year}: {e}")
+                    print(f"    {cell_key} {year}: {type(e).__name__}: {e}")
                     continue
 
             # Track progress
@@ -222,6 +373,15 @@ def prepare_training_data(config: TrainingConfig) -> None:
                 completed.add(cell_key)
             else:
                 failed.add(cell_key)
+
+            # Update prepare log for dashboard
+            prep_log["completed"] = len(completed)
+            prep_log["failed"] = len(failed)
+            prep_log["tiles_saved"] = tile_idx
+            prep_log["class_counts"] = {str(k): v for k, v in class_counts.items()}
+            prep_log["elapsed_s"] = round(time.time() - t_start, 1)
+            prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _write_prepare_log(prep_log_path, prep_log)
 
             # Save progress periodically
             if (len(completed) + len(failed)) % 50 == 0:
@@ -271,7 +431,28 @@ def prepare_training_data(config: TrainingConfig) -> None:
         n_boosted = sum(1 for w in tile_weights.values() if w > 1.01)
         print(f"  Tiles with boosted weight: {n_boosted}/{len(tile_weights)}")
 
+    # Final prepare log update
+    prep_log["status"] = "completed"
+    prep_log["completed"] = len(completed)
+    prep_log["failed"] = len(failed)
+    prep_log["tiles_saved"] = tile_idx
+    prep_log["class_counts"] = {str(k): v for k, v in class_counts.items()}
+    prep_log["elapsed_s"] = round(time.time() - t_start, 1)
+    prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write_prepare_log(prep_log_path, prep_log)
+
     print(f"\n  Done! {tile_idx} tiles saved to {tiles_dir}")
+
+
+def _write_prepare_log(path: Path, log: dict) -> None:
+    """Atomic write of prepare_log.json for dashboard polling."""
+    try:
+        tmp = path.with_suffix(".json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(log, f, indent=2)
+        tmp.rename(path)
+    except Exception:
+        pass
 
 
 def _load_progress(path: Path) -> dict:

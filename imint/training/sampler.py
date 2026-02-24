@@ -3,11 +3,18 @@ imint/training/sampler.py — Geographic sampling grid across Sweden
 
 Generates a uniform grid of training patch locations in EPSG:3006
 (SWEREF99 TM) and provides train/val/test splitting by latitude.
+
+The optional Sweden land mask (``sweden_land_epsg3006.json``) is derived
+from Lantmäteriet's "Sverige 5 miljoner" vector dataset (SWEREF99 TM).
+When available, grid cells whose centres fall in the sea are discarded
+immediately — avoiding expensive NMD/spectral fetches for ocean points.
 """
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 # Sweden approximate bounding box in EPSG:3006 (SWEREF99 TM)
 SWEDEN_WEST = 260_000
@@ -36,15 +43,106 @@ class GridCell:
     center_lon: float = 0.0
 
 
+def _load_sweden_land_mask(
+    geojson_path: str | Path | None = None,
+) -> object | None:
+    """Load Sweden land polygon from GeoJSON for fast point-in-polygon.
+
+    The GeoJSON must be in EPSG:3006 (SWEREF99 TM).  The file is expected
+    at ``data/sweden_land_epsg3006.json`` relative to the project root,
+    unless an explicit path is provided.
+
+    Returns:
+        A shapely Geometry (union of all land polygons) or None if the
+        file is not found or shapely is unavailable.
+    """
+    try:
+        from shapely.geometry import shape
+        from shapely.ops import unary_union
+    except ImportError:
+        return None
+
+    if geojson_path is None:
+        project_root = Path(__file__).resolve().parent.parent.parent
+        geojson_path = project_root / "data" / "sweden_land_epsg3006.json"
+
+    geojson_path = Path(geojson_path)
+    if not geojson_path.exists():
+        return None
+
+    with open(geojson_path) as f:
+        data = json.load(f)
+
+    polys = []
+    for feature in data["features"]:
+        polys.append(shape(feature["geometry"]))
+
+    land = unary_union(polys)
+    return land
+
+
+# Module-level cache for the land mask
+_SWEDEN_LAND_MASK = None
+
+
+def _get_land_mask() -> object | None:
+    """Get the cached Sweden land mask (loads once on first call)."""
+    global _SWEDEN_LAND_MASK
+    if _SWEDEN_LAND_MASK is None:
+        _SWEDEN_LAND_MASK = _load_sweden_land_mask()
+    return _SWEDEN_LAND_MASK
+
+
+def filter_land_cells(cells: list[GridCell]) -> list[GridCell]:
+    """Remove grid cells whose centres fall outside Sweden's land area.
+
+    Uses the "Sverige 5 miljoner" vector dataset as a fast land mask.
+    Grid cell centres are tested against the EPSG:3006 polygon — no
+    coordinate conversion needed.
+
+    If the land mask is unavailable (file missing or no shapely),
+    returns the input unchanged.
+
+    Args:
+        cells: Grid cells with EPSG:3006 coordinates.
+
+    Returns:
+        Filtered list of GridCell (only land cells).
+    """
+    land = _get_land_mask()
+    if land is None:
+        print("  WARNING: Sweden land mask not found — skipping land filter")
+        return cells
+
+    from shapely.geometry import Point
+    from shapely import prepared
+
+    # Use prepared geometry for fast repeated contains() checks
+    prep_land = prepared.prep(land)
+
+    land_cells = []
+    for cell in cells:
+        pt = Point(cell.easting, cell.northing)
+        if prep_land.contains(pt):
+            land_cells.append(cell)
+
+    print(f"  Land filter: {len(land_cells)}/{len(cells)} cells on land "
+          f"({len(cells) - len(land_cells)} in sea)")
+    return land_cells
+
+
 def generate_grid(
     spacing_m: int = 10_000,
     patch_size_m: int = 2_240,
+    land_filter: bool = True,
 ) -> list[GridCell]:
     """Generate a regular grid of patch locations across Sweden.
 
     Args:
         spacing_m: Distance between grid centers in meters.
         patch_size_m: Side length of each patch in meters (224px * 10m).
+        land_filter: If True, remove cells in the sea using Sweden's
+            land polygon. Default True.
 
     Returns:
         List of GridCell instances covering Sweden.
@@ -66,6 +164,9 @@ def generate_grid(
             ))
             n += spacing_m
         e += spacing_m
+
+    if land_filter:
+        cells = filter_land_cells(cells)
 
     return cells
 

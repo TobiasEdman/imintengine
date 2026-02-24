@@ -12,6 +12,7 @@ import math
 import os
 import time
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +45,15 @@ class LULCTrainer:
         self.model = self._build_model()
         self._freeze_backbone()
         self.model.to(self.device)
+        self._training_log = {
+            "config": {},
+            "epochs": [],
+            "best_epoch": 0,
+            "best_metric": 0.0,
+            "status": "initialized",
+            "started_at": None,
+            "updated_at": None,
+        }
 
     # ── Model setup ───────────────────────────────────────────────────
 
@@ -185,6 +195,8 @@ class LULCTrainer:
               f"lr={cfg.lr}, device={self.device}")
         print(f"{'='*60}\n")
 
+        self._init_training_log()
+
         for epoch in range(1, cfg.epochs + 1):
             # ── Train epoch ───────────────────────────────────────────
             self.model.train()
@@ -256,8 +268,23 @@ class LULCTrainer:
             else:
                 metric_value = val_miou
 
-            # ── Checkpointing ─────────────────────────────────────────
+            # ── Log epoch to JSON ─────────────────────────────────────
             is_new_best = metric_value > best_metric
+            self._update_training_log({
+                "epoch": epoch,
+                "train_loss": round(avg_loss, 6),
+                "val_miou": round(val_miou, 6),
+                "per_class_iou": {k: round(v, 6) for k, v in per_class.items()
+                                  if not math.isnan(v)},
+                "worst_class": worst_class,
+                "worst_class_iou": round(worst_iou, 6),
+                "lr": lr_now,
+                "elapsed_s": round(elapsed, 1),
+                "metric_value": round(metric_value, 6),
+                "is_best": is_new_best,
+            })
+
+            # ── Checkpointing ─────────────────────────────────────────
             if is_new_best:
                 best_metric = metric_value
                 best_miou = val_miou
@@ -287,7 +314,12 @@ class LULCTrainer:
             if patience_counter >= cfg.early_stopping_patience:
                 print(f"\n  Early stopping at epoch {epoch} "
                       f"(best={best_epoch}, mIoU={best_miou:.4f})")
+                self._training_log["status"] = "stopped"
+                self._write_log_file()
                 break
+        else:
+            self._training_log["status"] = "completed"
+            self._write_log_file()
 
         print(f"\n  Training complete. Best mIoU={best_miou:.4f} at epoch {best_epoch}")
         return {
@@ -295,6 +327,40 @@ class LULCTrainer:
             "best_epoch": best_epoch,
             "checkpoint": str(ckpt_dir / "best_model.pt"),
         }
+
+    # ── Training log (JSON for dashboard) ─────────────────────────────
+
+    def _init_training_log(self) -> None:
+        """Write initial training_log.json before the training loop."""
+        cfg = self.config
+        self._training_log["config"] = {
+            k: v for k, v in asdict(cfg).items()
+            if not isinstance(v, (bytes,))
+        }
+        self._training_log["status"] = "running"
+        self._training_log["started_at"] = datetime.now(timezone.utc).isoformat()
+        self._write_log_file()
+
+    def _update_training_log(self, epoch_data: dict) -> None:
+        """Append epoch metrics and write training_log.json."""
+        self._training_log["epochs"].append(epoch_data)
+        if epoch_data.get("is_best"):
+            self._training_log["best_epoch"] = epoch_data["epoch"]
+            self._training_log["best_metric"] = epoch_data["metric_value"]
+        self._training_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._write_log_file()
+
+    def _write_log_file(self) -> None:
+        """Atomic write of training_log.json (tmp + rename)."""
+        try:
+            log_path = Path(self.config.data_dir) / "training_log.json"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = log_path.with_suffix(".json.tmp")
+            with open(tmp_path, "w") as f:
+                json.dump(self._training_log, f, indent=2, default=str)
+            tmp_path.rename(log_path)
+        except Exception as e:
+            print(f"    WARNING: Failed to write training log: {e}")
 
     # ── Checkpoint ────────────────────────────────────────────────────
 
