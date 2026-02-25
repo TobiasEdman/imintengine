@@ -290,33 +290,38 @@ def _fetch_scl_batch(
     conn,
     projected_coords: dict,
     candidate_dates: list[str],
-    all_stac_dates: list[str] | None = None,
 ) -> list[tuple[str, float]]:
     """Fetch SCL for multiple dates in one DES call, return per-date cloud fractions.
 
-    Uses the full temporal range spanning all candidate dates.  Downloads
-    as NetCDF (which supports the temporal dimension natively), then
-    extracts per-date SCL arrays and computes cloud fractions.
+    DES returns multi-date downloads as a ``.tar.gz`` archive containing
+    one GeoTIFF per date (filename pattern ``out_YYYY_MM_DDT...tif``).
+    This function extracts each TIF, parses the date from the filename,
+    and computes ``check_cloud_fraction`` locally.
+
+    One batch call replaces N separate openEO calls, saving connection,
+    auth, and graph-compilation overhead.
+
+    The temporal extent spans from the earliest to the latest candidate
+    date. DES may return extra dates within that range; only dates that
+    appear in *candidate_dates* are returned.
 
     Args:
         conn: openEO connection.
         projected_coords: EPSG:3006 bbox dict with ``"crs"`` key.
-        candidate_dates: Date strings to evaluate, e.g.
-            ``["2018-08-09", "2018-08-14", "2018-08-19"]``.
-        all_stac_dates: *All* dates returned by STAC for the same temporal
-            range (chronologically sorted).  Used to validate the number of
-            time steps.  If ``None``, candidate_dates is used directly.
+        candidate_dates: Date strings ordered by STAC cloud score
+            (best first), e.g. ``["2018-08-11", "2018-08-13"]``.
 
     Returns:
-        List of ``(date_str, aoi_cloud_fraction)`` for each candidate date
-        that could be matched.  Order follows *candidate_dates*.
+        List of ``(date_str, cloud_fraction)`` in *candidate_dates*
+        order (only dates found in the archive).
 
     Raises:
-        FetchError: If DES returns empty data.
-        ValueError: If date mapping fails (caller should fall back to
-            per-date fetching).
+        FetchError: If DES returns empty/unparseable data.
     """
-    import xarray as xr
+    import re
+    import gzip
+    import tarfile
+    import rasterio
     from datetime import datetime as _dt, timedelta as _td
 
     if not candidate_dates:
@@ -327,7 +332,7 @@ def _fetch_scl_batch(
     dt_end = _dt.strptime(sorted_cands[-1], "%Y-%m-%d") + _td(days=1)
     temporal = [sorted_cands[0], dt_end.strftime("%Y-%m-%d")]
 
-    # Fetch SCL cube — NO temporal reduction so we get one layer per date
+    # Load SCL, resample to 10m grid
     cube_ref = conn.load_collection(
         collection_id=COLLECTION,
         spatial_extent=projected_coords,
@@ -342,73 +347,44 @@ def _fetch_scl_batch(
     )
     cube_scl = cube_scl.resample_cube_spatial(target=cube_ref, method="near")
 
-    data = cube_scl.download(format="netcdf")
+    data = cube_scl.download(format="gtiff")
     if not data:
         raise FetchError("DES returned empty SCL batch data")
 
-    # Parse NetCDF4 — openEO returns NetCDF4 which requires the netcdf4 engine
-    import tempfile
-    tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
-    try:
-        tmp.write(data)
-        tmp.close()
-        ds = xr.open_dataset(tmp.name, engine="netcdf4")
-    finally:
-        os.unlink(tmp.name)
-
-    # The NetCDF has a 't' (time) dimension with actual date labels
-    # Find the SCL variable — usually named 'scl' or 'SCL'
-    scl_var = None
-    for var_name in ds.data_vars:
-        if var_name.lower() == "scl":
-            scl_var = var_name
-            break
-    if scl_var is None:
-        # Use the first data variable
-        scl_var = list(ds.data_vars)[0]
-
-    da = ds[scl_var]
-
-    # Extract time coordinate — dates from the NetCDF itself
-    if "t" in da.dims:
-        time_dim = "t"
-    elif "time" in da.dims:
-        time_dim = "time"
-    else:
-        raise ValueError(
-            f"SCL batch: no time dimension found in NetCDF dims={list(da.dims)}"
-        )
-
-    nc_times = da[time_dim].values
-    nc_dates = []
-    for t in nc_times:
-        # Convert numpy datetime64 to date string
-        ts = np.datetime_as_string(t, unit="D")  # e.g. "2018-08-14"
-        nc_dates.append(ts)
-
-    # Compute cloud fraction for each time step
-    band_cloud: dict[str, float] = {}
-    for i, date_str in enumerate(nc_dates):
-        scl = da.isel({time_dim: i}).values.astype(np.uint8)
-        band_cloud[date_str] = check_cloud_fraction(scl)
-
-    ds.close()
-
-    # Return results in candidate_dates order (only dates we care about)
+    # DES returns tar.gz for multi-date results
     cand_set = set(candidate_dates)
-    results = [
-        (d, band_cloud[d])
-        for d in candidate_dates
-        if d in band_cloud
-    ]
+    cloud_by_date: dict[str, float] = {}
+    _DATE_RE = re.compile(r"out_(\d{4})_(\d{2})_(\d{2})T")
 
-    if not results:
-        raise ValueError(
-            f"SCL batch: none of candidate dates {candidate_dates} found in "
-            f"NetCDF dates {nc_dates}"
+    if isinstance(data, bytes) and data[:2] == b"\x1f\x8b":
+        # tar.gz archive — extract TIFs, parse dates from filenames
+        tf = tarfile.open(fileobj=io.BytesIO(data), mode="r:gz")
+        for member in tf.getmembers():
+            if not member.name.lower().endswith((".tif", ".tiff")):
+                continue
+            m = _DATE_RE.search(member.name)
+            if not m:
+                continue
+            date_str = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+            if date_str not in cand_set:
+                continue  # extra date in range, skip
+            f = tf.extractfile(member)
+            if f is None:
+                continue
+            with rasterio.open(io.BytesIO(f.read())) as src:
+                scl = src.read()[0].astype(np.uint8)
+            cloud_by_date[date_str] = check_cloud_fraction(scl)
+        tf.close()
+    else:
+        raise FetchError(
+            f"SCL batch: unexpected format (magic={data[:4].hex()})"
         )
 
-    return results
+    if not cloud_by_date:
+        raise FetchError("SCL batch: no matching dates in archive")
+
+    # Return in candidate_dates order (preserves STAC ranking)
+    return [(d, cloud_by_date[d]) for d in candidate_dates if d in cloud_by_date]
 
 
 def fetch_des_data(

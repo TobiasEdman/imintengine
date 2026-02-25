@@ -270,6 +270,9 @@ def prepare_training_data(config: TrainingConfig) -> None:
     tile_histograms = {}
     tile_names_by_split = {"train": [], "val": [], "test": []}
     tile_idx_box = [len(completed)]  # mutable counter in a list
+    tiles_at_session_start = len(completed)
+    from collections import deque
+    _tile_timestamps = deque()  # timestamps of recent tile completions
 
     # ── Restore class distribution from existing tiles on disk ───────
     if completed and tiles_dir.exists():
@@ -303,6 +306,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
         "buffer": [],
         "summary": {
             "stac_search":   {"count": 0, "latency_sum": 0.0, "bytes_sum": 0, "errors": 0},
+            "scl_batch":     {"count": 0, "latency_sum": 0.0, "bytes_sum": 0, "errors": 0},
             "scl_prescreen": {"count": 0, "latency_sum": 0.0, "bytes_sum": 0, "errors": 0},
             "full_spectral": {"count": 0, "latency_sum": 0.0, "bytes_sum": 0, "errors": 0},
             "nmd_fetch":     {"count": 0, "latency_sum": 0.0, "bytes_sum": 0, "errors": 0},
@@ -334,6 +338,15 @@ def prepare_training_data(config: TrainingConfig) -> None:
 
     # ── Prepare log for dashboard ─────────────────────────────────────
     prep_log_path = data_dir / "prepare_log.json"
+    # Restore cumulative elapsed time from previous runs
+    prev_elapsed = 0.0
+    if prep_log_path.exists():
+        try:
+            with open(prep_log_path) as f:
+                prev_log = json.load(f)
+            prev_elapsed = prev_log.get("elapsed_s", 0.0)
+        except Exception:
+            pass
     prep_log = {
         "status": "running",
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -347,7 +360,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
         "latest_date": "",
         "latest_cloud": 0.0,
         "class_counts": {str(k): v for k, v in class_counts.items()},
-        "elapsed_s": 0.0,
+        "elapsed_s": prev_elapsed,
         "recent_previews": [],
     }
     t_start = time.time()
@@ -545,47 +558,53 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         if not dates:
                             continue
 
-                        # SCL pre-screen: batch all candidates in one DES call
-                        cand_dates = [d for d, _ in dates[:_SCL_CANDIDATES]]
-                        all_stac = [d for d, _ in dates]  # all dates from STAC for this month
-                        scl_results = []
-                        try:
+                        # SCL pre-screen — try batch (1 call), fall back to per-date
+                        top_dates = dates[:_SCL_CANDIDATES]
+                        cand_strs = [d for d, _ in top_dates]
+                        batch_ok = False
+
+                        if len(cand_strs) > 1:
                             pool.acquire()
-                            t0 = time.monotonic()
-                            scl_err = False
+                            t0_batch = time.monotonic()
+                            batch_err = False
                             try:
-                                scl_results = _fetch_scl_batch(
-                                    conn, projected, cand_dates,
-                                    all_stac_dates=all_stac,
+                                batch_results = _fetch_scl_batch(
+                                    conn, projected, cand_strs,
                                 )
-                            except Exception:
-                                scl_err = True
-                                raise
+                                batch_ok = True
+                                for cand_date, aoi_cloud in batch_results:
+                                    if aoi_cloud <= config.cloud_threshold:
+                                        good_date = cand_date
+                                        good_cloud = aoi_cloud
+                                        break
+                                    else:
+                                        print(f"    SCL {cell_key} {cand_date}: "
+                                              f"cloud={aoi_cloud:.1%} > "
+                                              f"{config.cloud_threshold:.0%}, skip")
+                            except Exception as e:
+                                batch_err = True
+                                err_msg = str(e)
+                                if len(err_msg) > 80:
+                                    err_msg = err_msg[:77] + "..."
+                                print(f"    SCL batch {cell_key}: "
+                                      f"{type(e).__name__}: {err_msg}")
                             finally:
-                                scl_lat = time.monotonic() - t0
-                                pool.record(scl_lat, scl_err)
+                                batch_lat = time.monotonic() - t0_batch
+                                pool.record(batch_lat, batch_err)
                                 pool.release()
                                 _record_des_call(
-                                    des_stats, "scl_prescreen",
+                                    des_stats, "scl_batch",
                                     cell_key=cell_key,
-                                    date=f"{cand_dates[0]}..{cand_dates[-1]}",
-                                    latency_s=scl_lat,
-                                    band_count=len(all_stac),
-                                    success=not scl_err,
+                                    date="/".join(cand_strs),
+                                    latency_s=batch_lat,
+                                    band_count=len(cand_strs),
+                                    success=batch_ok,
                                 )
                             time.sleep(1)
-                        except (ValueError, Exception) as e:
-                            # Batch failed (band mismatch or DES error) — fall back
-                            # to per-date fetching
-                            err_msg = str(e)
-                            if len(err_msg) > 80:
-                                err_msg = err_msg[:77] + "..."
-                            print(f"    SCL batch {cell_key}: "
-                                  f"{type(e).__name__}: {err_msg}, "
-                                  f"falling back to per-date")
-                            time.sleep(1)
-                            scl_results = []
-                            for cand_date, scene_cloud in dates[:_SCL_CANDIDATES]:
+
+                        # Fall back to per-date if batch failed or only 1 candidate
+                        if not batch_ok and good_date is None:
+                            for cand_date, scene_cloud in top_dates:
                                 try:
                                     cand_dt = datetime.strptime(cand_date, "%Y-%m-%d")
                                     temporal = [
@@ -594,44 +613,41 @@ def prepare_training_data(config: TrainingConfig) -> None:
                                     ]
                                     pool.acquire()
                                     t0 = time.monotonic()
-                                    scl_err2 = False
+                                    scl_err = False
                                     try:
                                         _scl, aoi_cloud, _crs, _tr = _fetch_scl(
                                             conn, projected, temporal, date_window=0,
                                         )
                                     except Exception:
-                                        scl_err2 = True
+                                        scl_err = True
                                         raise
                                     finally:
-                                        scl_lat2 = time.monotonic() - t0
-                                        pool.record(scl_lat2, scl_err2)
+                                        scl_lat = time.monotonic() - t0
+                                        pool.record(scl_lat, scl_err)
                                         pool.release()
                                         _record_des_call(
                                             des_stats, "scl_prescreen",
                                             cell_key=cell_key, date=cand_date,
-                                            latency_s=scl_lat2, band_count=1,
-                                            success=not scl_err2,
+                                            latency_s=scl_lat, band_count=1,
+                                            success=not scl_err,
                                         )
                                     time.sleep(1)
-                                    scl_results.append((cand_date, aoi_cloud))
-                                except Exception as e2:
-                                    err_msg2 = str(e2)
-                                    if len(err_msg2) > 80:
-                                        err_msg2 = err_msg2[:77] + "..."
-                                    print(f"    SCL {cell_key} {cand_date}: "
-                                          f"{type(e2).__name__}: {err_msg2}")
-                                    time.sleep(1)
 
-                        # Find first date below cloud threshold
-                        for cand_date_str, aoi_cloud in scl_results:
-                            if aoi_cloud <= config.cloud_threshold:
-                                good_date = cand_date_str
-                                good_cloud = aoi_cloud
-                                break
-                            else:
-                                print(f"    SCL {cell_key} {cand_date_str}: "
-                                      f"cloud={aoi_cloud:.1%} > "
-                                      f"{config.cloud_threshold:.0%}, skip")
+                                    if aoi_cloud <= config.cloud_threshold:
+                                        good_date = cand_date
+                                        good_cloud = aoi_cloud
+                                        break
+                                    else:
+                                        print(f"    SCL {cell_key} {cand_date}: "
+                                              f"cloud={aoi_cloud:.1%} > "
+                                              f"{config.cloud_threshold:.0%}, skip")
+                                except Exception as e:
+                                    err_msg = str(e)
+                                    if len(err_msg) > 80:
+                                        err_msg = err_msg[:77] + "..."
+                                    print(f"    SCL {cell_key} {cand_date}: "
+                                          f"{type(e).__name__}: {err_msg}")
+                                    time.sleep(1)
 
                     if good_date is None:
                         with lock:
@@ -758,7 +774,17 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         prep_log["class_counts"] = {
                             str(k): v for k, v in class_counts.items()
                         }
-                        prep_log["elapsed_s"] = round(time.time() - t_start, 1)
+                        prep_log["elapsed_s"] = round(prev_elapsed + time.time() - t_start, 1)
+                        # Rolling 5-minute rate for ETA
+                        now = time.time()
+                        _tile_timestamps.append(now)
+                        # Trim to last 5 minutes
+                        cutoff = now - 300
+                        while _tile_timestamps and _tile_timestamps[0] < cutoff:
+                            _tile_timestamps.popleft()
+                        window = now - _tile_timestamps[0] if len(_tile_timestamps) > 1 else (now - t_start)
+                        n_in_window = len(_tile_timestamps)
+                        prep_log["session_rate"] = round(n_in_window / max(window, 1) * 3600, 1)
                         prep_log["active_workers"] = pool.active
                         prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -784,8 +810,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         if cur_idx % 50 == 0:
                             _save_progress(progress_path, completed, failed)
 
-                    elapsed = time.time() - t_start
-                    rate = cur_idx / max(elapsed, 1) * 3600
+                    rate = prep_log.get("session_rate", 0)
                     print(f"    \u2713 [{cur_idx}/{total_cells}] {tile_name} "
                           f"({good_date}, cloud={good_cloud:.1%}) "
                           f"[{rate:.0f}/h, {pool.active}w]")
@@ -805,7 +830,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                 with lock:
                     failed.add(cell_key)
                     prep_log["failed"] = len(failed)
-                    prep_log["elapsed_s"] = round(time.time() - t_start, 1)
+                    prep_log["elapsed_s"] = round(prev_elapsed + time.time() - t_start, 1)
                     prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
                     _write_prepare_log(prep_log_path, prep_log)
 
@@ -925,7 +950,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
     prep_log["failed"] = len(failed)
     prep_log["tiles_saved"] = tile_idx_box[0]
     prep_log["class_counts"] = {str(k): v for k, v in class_counts.items()}
-    prep_log["elapsed_s"] = round(time.time() - t_start, 1)
+    prep_log["elapsed_s"] = round(prev_elapsed + time.time() - t_start, 1)
     prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
     _write_prepare_log(prep_log_path, prep_log)
 
