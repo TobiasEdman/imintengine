@@ -286,6 +286,131 @@ def _fetch_scl(conn, projected_coords: dict, temporal: list, date_window: int):
     return scl, cloud_fraction, crs, transform
 
 
+def _fetch_scl_batch(
+    conn,
+    projected_coords: dict,
+    candidate_dates: list[str],
+    all_stac_dates: list[str] | None = None,
+) -> list[tuple[str, float]]:
+    """Fetch SCL for multiple dates in one DES call, return per-date cloud fractions.
+
+    Uses the full temporal range spanning all candidate dates.  Downloads
+    as NetCDF (which supports the temporal dimension natively), then
+    extracts per-date SCL arrays and computes cloud fractions.
+
+    Args:
+        conn: openEO connection.
+        projected_coords: EPSG:3006 bbox dict with ``"crs"`` key.
+        candidate_dates: Date strings to evaluate, e.g.
+            ``["2018-08-09", "2018-08-14", "2018-08-19"]``.
+        all_stac_dates: *All* dates returned by STAC for the same temporal
+            range (chronologically sorted).  Used to validate the number of
+            time steps.  If ``None``, candidate_dates is used directly.
+
+    Returns:
+        List of ``(date_str, aoi_cloud_fraction)`` for each candidate date
+        that could be matched.  Order follows *candidate_dates*.
+
+    Raises:
+        FetchError: If DES returns empty data.
+        ValueError: If date mapping fails (caller should fall back to
+            per-date fetching).
+    """
+    import xarray as xr
+    from datetime import datetime as _dt, timedelta as _td
+
+    if not candidate_dates:
+        return []
+
+    # Build temporal extent spanning all candidates
+    sorted_cands = sorted(candidate_dates)
+    dt_end = _dt.strptime(sorted_cands[-1], "%Y-%m-%d") + _td(days=1)
+    temporal = [sorted_cands[0], dt_end.strftime("%Y-%m-%d")]
+
+    # Fetch SCL cube — NO temporal reduction so we get one layer per date
+    cube_ref = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=["b02"],
+    )
+    cube_scl = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=BANDS_20M_CATEGORICAL,
+    )
+    cube_scl = cube_scl.resample_cube_spatial(target=cube_ref, method="near")
+
+    data = cube_scl.download(format="netcdf")
+    if not data:
+        raise FetchError("DES returned empty SCL batch data")
+
+    # Parse NetCDF4 — openEO returns NetCDF4 which requires the netcdf4 engine
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
+    try:
+        tmp.write(data)
+        tmp.close()
+        ds = xr.open_dataset(tmp.name, engine="netcdf4")
+    finally:
+        os.unlink(tmp.name)
+
+    # The NetCDF has a 't' (time) dimension with actual date labels
+    # Find the SCL variable — usually named 'scl' or 'SCL'
+    scl_var = None
+    for var_name in ds.data_vars:
+        if var_name.lower() == "scl":
+            scl_var = var_name
+            break
+    if scl_var is None:
+        # Use the first data variable
+        scl_var = list(ds.data_vars)[0]
+
+    da = ds[scl_var]
+
+    # Extract time coordinate — dates from the NetCDF itself
+    if "t" in da.dims:
+        time_dim = "t"
+    elif "time" in da.dims:
+        time_dim = "time"
+    else:
+        raise ValueError(
+            f"SCL batch: no time dimension found in NetCDF dims={list(da.dims)}"
+        )
+
+    nc_times = da[time_dim].values
+    nc_dates = []
+    for t in nc_times:
+        # Convert numpy datetime64 to date string
+        ts = np.datetime_as_string(t, unit="D")  # e.g. "2018-08-14"
+        nc_dates.append(ts)
+
+    # Compute cloud fraction for each time step
+    band_cloud: dict[str, float] = {}
+    for i, date_str in enumerate(nc_dates):
+        scl = da.isel({time_dim: i}).values.astype(np.uint8)
+        band_cloud[date_str] = check_cloud_fraction(scl)
+
+    ds.close()
+
+    # Return results in candidate_dates order (only dates we care about)
+    cand_set = set(candidate_dates)
+    results = [
+        (d, band_cloud[d])
+        for d in candidate_dates
+        if d in band_cloud
+    ]
+
+    if not results:
+        raise ValueError(
+            f"SCL batch: none of candidate dates {candidate_dates} found in "
+            f"NetCDF dates {nc_dates}"
+        )
+
+    return results
+
+
 def fetch_des_data(
     date: str,
     coords: dict,

@@ -194,8 +194,8 @@ def prepare_training_data(config: TrainingConfig) -> None:
     """
     from ..fetch import (
         fetch_des_data, fetch_nmd_data,
-        _connect, _stac_available_dates, _fetch_scl, _to_nmd_grid,
-        FetchError,
+        _connect, _stac_available_dates, _fetch_scl, _fetch_scl_batch,
+        _to_nmd_grid, FetchError,
     )
 
     data_dir = Path(config.data_dir)
@@ -368,17 +368,20 @@ def prepare_training_data(config: TrainingConfig) -> None:
             if already:
                 nmd_log["already_done"] = nmd_log.get("already_done", 0) + 1
                 nmd_log["processed"] = ci + 1
-                if (ci + 1) % 50 == 0:
-                    nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    _write_prepare_log(nmd_log_path, nmd_log)
-
-                # For already-completed cells, still push them so the
-                # fetch worker can register existing tiles in split lists
+                # Restore counters for previously-processed cells
                 with lock:
                     if cell_key in completed:
+                        land_kept += 1
                         tile_name = f"tile_{cell_key}.npz"
                         if (tiles_dir / tile_name).exists():
                             tile_names_by_split[split_name].append(tile_name)
+                    elif cell_key in failed:
+                        water_skipped += 1  # most failed cells are water/empty
+                nmd_log["land_kept"] = land_kept
+                nmd_log["water_skipped"] = water_skipped
+                if (ci + 1) % 50 == 0:
+                    nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    _write_prepare_log(nmd_log_path, nmd_log)
                 continue
 
             coords_nmd = {
@@ -542,52 +545,93 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         if not dates:
                             continue
 
-                        # SCL pre-screen top candidates in this month
-                        for cand_date, scene_cloud in dates[:_SCL_CANDIDATES]:
+                        # SCL pre-screen: batch all candidates in one DES call
+                        cand_dates = [d for d, _ in dates[:_SCL_CANDIDATES]]
+                        all_stac = [d for d, _ in dates]  # all dates from STAC for this month
+                        scl_results = []
+                        try:
+                            pool.acquire()
+                            t0 = time.monotonic()
+                            scl_err = False
                             try:
-                                cand_dt = datetime.strptime(cand_date, "%Y-%m-%d")
-                                temporal = [
-                                    cand_date,
-                                    (cand_dt + _td(days=1)).strftime("%Y-%m-%d"),
-                                ]
-                                pool.acquire()
-                                t0 = time.monotonic()
-                                scl_err = False
+                                scl_results = _fetch_scl_batch(
+                                    conn, projected, cand_dates,
+                                    all_stac_dates=all_stac,
+                                )
+                            except Exception:
+                                scl_err = True
+                                raise
+                            finally:
+                                scl_lat = time.monotonic() - t0
+                                pool.record(scl_lat, scl_err)
+                                pool.release()
+                                _record_des_call(
+                                    des_stats, "scl_prescreen",
+                                    cell_key=cell_key,
+                                    date=f"{cand_dates[0]}..{cand_dates[-1]}",
+                                    latency_s=scl_lat,
+                                    band_count=len(all_stac),
+                                    success=not scl_err,
+                                )
+                            time.sleep(1)
+                        except (ValueError, Exception) as e:
+                            # Batch failed (band mismatch or DES error) — fall back
+                            # to per-date fetching
+                            err_msg = str(e)
+                            if len(err_msg) > 80:
+                                err_msg = err_msg[:77] + "..."
+                            print(f"    SCL batch {cell_key}: "
+                                  f"{type(e).__name__}: {err_msg}, "
+                                  f"falling back to per-date")
+                            time.sleep(1)
+                            scl_results = []
+                            for cand_date, scene_cloud in dates[:_SCL_CANDIDATES]:
                                 try:
-                                    _scl, aoi_cloud, _crs, _tr = _fetch_scl(
-                                        conn, projected, temporal, date_window=0,
-                                    )
-                                except Exception:
-                                    scl_err = True
-                                    raise
-                                finally:
-                                    scl_lat = time.monotonic() - t0
-                                    pool.record(scl_lat, scl_err)
-                                    pool.release()
-                                    _record_des_call(
-                                        des_stats, "scl_prescreen",
-                                        cell_key=cell_key, date=cand_date,
-                                        latency_s=scl_lat, band_count=1,
-                                        success=not scl_err,
-                                    )
-                                time.sleep(1)
-
-                                if aoi_cloud <= config.cloud_threshold:
-                                    good_date = cand_date
-                                    good_cloud = aoi_cloud
-                                    break
-                                else:
+                                    cand_dt = datetime.strptime(cand_date, "%Y-%m-%d")
+                                    temporal = [
+                                        cand_date,
+                                        (cand_dt + _td(days=1)).strftime("%Y-%m-%d"),
+                                    ]
+                                    pool.acquire()
+                                    t0 = time.monotonic()
+                                    scl_err2 = False
+                                    try:
+                                        _scl, aoi_cloud, _crs, _tr = _fetch_scl(
+                                            conn, projected, temporal, date_window=0,
+                                        )
+                                    except Exception:
+                                        scl_err2 = True
+                                        raise
+                                    finally:
+                                        scl_lat2 = time.monotonic() - t0
+                                        pool.record(scl_lat2, scl_err2)
+                                        pool.release()
+                                        _record_des_call(
+                                            des_stats, "scl_prescreen",
+                                            cell_key=cell_key, date=cand_date,
+                                            latency_s=scl_lat2, band_count=1,
+                                            success=not scl_err2,
+                                        )
+                                    time.sleep(1)
+                                    scl_results.append((cand_date, aoi_cloud))
+                                except Exception as e2:
+                                    err_msg2 = str(e2)
+                                    if len(err_msg2) > 80:
+                                        err_msg2 = err_msg2[:77] + "..."
                                     print(f"    SCL {cell_key} {cand_date}: "
-                                          f"cloud={aoi_cloud:.1%} > "
-                                          f"{config.cloud_threshold:.0%}, skip")
-                            except Exception as e:
-                                # One-line summary instead of full traceback
-                                err_msg = str(e)
-                                if len(err_msg) > 80:
-                                    err_msg = err_msg[:77] + "..."
-                                print(f"    SCL {cell_key} {cand_date}: "
-                                      f"{type(e).__name__}: {err_msg}")
-                                time.sleep(1)
+                                          f"{type(e2).__name__}: {err_msg2}")
+                                    time.sleep(1)
+
+                        # Find first date below cloud threshold
+                        for cand_date_str, aoi_cloud in scl_results:
+                            if aoi_cloud <= config.cloud_threshold:
+                                good_date = cand_date_str
+                                good_cloud = aoi_cloud
+                                break
+                            else:
+                                print(f"    SCL {cell_key} {cand_date_str}: "
+                                      f"cloud={aoi_cloud:.1%} > "
+                                      f"{config.cloud_threshold:.0%}, skip")
 
                     if good_date is None:
                         with lock:
