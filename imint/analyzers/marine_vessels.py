@@ -97,9 +97,13 @@ class MarineVesselAnalyzer(BaseAnalyzer):
                 error=f"Failed to load model: {e}",
             )
 
-        # ── Prepare image ─────────────────────────────────────────────
+        # ── Prepare image (TCI formula) ────────────────────────────────
+        # The YOLO model was trained on L1C-TCI imagery which uses the ESA
+        # TCI formula: pixel = clip(reflectance × 2.5 × 255, 0, 255).
+        # Using simple reflectance × 255 produces images that are too dark,
+        # causing near-zero detections.  The × 2.5 factor is critical.
         if rgb.dtype != np.uint8:
-            img = (rgb * 255).clip(0, 255).astype(np.uint8)
+            img = (rgb * 2.5 * 255).clip(0, 255).astype(np.uint8)
         else:
             img = rgb
 
