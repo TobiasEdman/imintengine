@@ -840,7 +840,10 @@ def save_prithvi_seg_clean_png(
 def save_cot_clean_png(cot_map: np.ndarray, path: str) -> str:
     """Save COT heatmap as a clean PNG for Leaflet overlay.
 
-    Uses the hot_r colormap with fixed 0–100 range.
+    Uses the hot_r colormap with a fixed 0–0.05 range matching the DES
+    MLP5 model output.  The model's thresholds are 0.015 (thin cloud) and
+    0.025 (thick cloud), so 0–0.05 (= 2× thick threshold) gives good
+    contrast across the clear → thin → thick transition.
 
     Args:
         cot_map: (H, W) float32 COT values.
@@ -853,7 +856,8 @@ def save_cot_clean_png(cot_map: np.ndarray, path: str) -> str:
     matplotlib.use("Agg")
     import matplotlib.cm as cm
 
-    norm = (cot_map / 100.0).clip(0, 1)
+    COT_VIZ_MAX = 0.05  # 2× thick cloud threshold (0.025)
+    norm = (cot_map / COT_VIZ_MAX).clip(0, 1)
     cmap = cm.get_cmap("hot_r")
     rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
     Image.fromarray(rgba).save(path)
@@ -863,29 +867,19 @@ def save_cot_clean_png(cot_map: np.ndarray, path: str) -> str:
 
 def _cot_stretch_range(
     cot_map: np.ndarray,
-    p_low: float = 2,
-    p_high: float = 98,
 ) -> tuple[float, float]:
-    """Compute histogram stretch range for COT values.
+    """Compute display range for COT visualization.
 
-    Args:
-        cot_map: (H, W) float32 COT array.
-        p_low: Low percentile (default 2).
-        p_high: High percentile (default 98).
+    Uses a fixed 0–0.05 range matching the DES MLP5 model output.  The
+    model's classification thresholds are 0.015 (thin) and 0.025 (thick),
+    so 0–0.05 provides good contrast for cloud-screened scenes where most
+    values cluster between 0.003 and 0.025.  P2/P98 percentile stretching
+    amplified noise on clean scenes and produced unstable results.
 
     Returns:
-        (vmin, vmax) for stretching.
+        (vmin, vmax) for color mapping.
     """
-    valid = cot_map[np.isfinite(cot_map)]
-    if valid.size == 0:
-        return 0.0, 1.0
-    vmin = float(np.percentile(valid, p_low))
-    vmax = float(np.percentile(valid, p_high))
-    # Ensure vmin is never negative for COT
-    vmin = max(vmin, 0.0)
-    if vmax <= vmin:
-        vmax = vmin + 1e-6
-    return vmin, vmax
+    return 0.0, 0.05
 
 
 def save_cloud_class_clean_png(cloud_class: np.ndarray, path: str) -> str:

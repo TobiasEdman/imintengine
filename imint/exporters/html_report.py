@@ -191,8 +191,8 @@ MAP_VIEWERS = [
         "key": "cot",
         "legend": [
             {"color": "#FFFFB2", "label": "0 (Klart)"},
-            {"color": "#FD8D3C", "label": "50"},
-            {"color": "#BD0026", "label": "100 (Tjockt moln)"},
+            {"color": "#FD8D3C", "label": "0.015 (Tunt moln)"},
+            {"color": "#BD0026", "label": "0.05 (Tjockt moln)"},
         ],
     },
 ]
