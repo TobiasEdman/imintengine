@@ -228,6 +228,31 @@ def prepare_training_data(config: TrainingConfig) -> None:
     tile_names_by_split = {"train": [], "val": [], "test": []}
     tile_idx_box = [len(completed)]  # mutable counter in a list
 
+    # ── Restore class distribution from existing tiles on disk ───────
+    if completed and tiles_dir.exists():
+        print(f"\n  Restoring class distribution from {len(completed)} existing tiles...")
+        restored = 0
+        for npz_path in tiles_dir.glob("tile_*.npz"):
+            tile_name = npz_path.name
+            cell_key = tile_name.replace("tile_", "").replace(".npz", "")
+            if cell_key not in completed:
+                continue
+            try:
+                with np.load(npz_path) as td:
+                    labels = td["label"]
+                tile_hist = {}
+                for cls_idx in range(config.num_classes + 1):
+                    count = int((labels == cls_idx).sum())
+                    if count > 0:
+                        tile_hist[cls_idx] = count
+                for cls_idx, count in tile_hist.items():
+                    class_counts[cls_idx] = class_counts.get(cls_idx, 0) + count
+                tile_histograms[tile_name] = tile_hist
+                restored += 1
+            except Exception:
+                pass  # skip corrupt tiles
+        print(f"  Restored class counts from {restored} tiles")
+
     # Queue for NMD-approved cells → spectral fetch workers
     approved_q = queue.Queue(maxsize=200)
 
@@ -265,7 +290,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
         "latest_tile": "",
         "latest_date": "",
         "latest_cloud": 0.0,
-        "class_counts": {},
+        "class_counts": {str(k): v for k, v in class_counts.items()},
         "elapsed_s": 0.0,
         "recent_previews": [],
     }
@@ -510,6 +535,15 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         [result.bands[b] for b in config.prithvi_bands],
                         axis=0,
                     ).astype(np.float32)
+
+                    # ── Nodata quality gate (band misalignment) ────────
+                    # Sentinel-2 orbit edges can have 10m bands (B02-B04)
+                    # with much less coverage than 20m bands (B8A, B11).
+                    nodata_frac = float((image[0] == 0).mean())
+                    if nodata_frac > 0.10:
+                        print(f"    nodata {cell_key} {good_date}: "
+                              f"B02 zeros={nodata_frac:.0%}, reject")
+                        continue
 
                     # ── B02 haze quality gate (thin cloud detection) ───
                     # B02 (blue) is first Prithvi band; high mean on
