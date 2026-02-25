@@ -143,6 +143,48 @@ class _AdaptiveWorkerPool:
 _FETCH_WORKERS = _MAX_WORKERS
 
 
+def _record_des_call(
+    stats: dict, call_type: str, *, cell_key=None, date=None,
+    latency_s=0.0, band_count=0, pixel_dims=None,
+    response_bytes=0, success=True, error=None,
+    retry=0, from_cache=False,
+):
+    """Record a single DES API call to the stats buffer (thread-safe)."""
+    record = {
+        "call_type": call_type, "cell_key": cell_key, "date": date,
+        "band_count": band_count, "latency_s": round(latency_s, 2),
+        "response_bytes": response_bytes,
+        "pixel_dims": list(pixel_dims) if pixel_dims else None,
+        "success": success,
+        "error": type(error).__name__ if error else None,
+        "retry": retry, "from_cache": from_cache,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    with stats["lock"]:
+        s = stats["summary"][call_type]
+        s["count"] += 1
+        s["latency_sum"] += latency_s
+        s["bytes_sum"] += response_bytes
+        if not success:
+            s["errors"] += 1
+        stats["buffer"].append(record)
+        if len(stats["buffer"]) >= 20:
+            with open(stats["log_path"], "a") as f:
+                for r in stats["buffer"]:
+                    f.write(json.dumps(r) + "\n")
+            stats["buffer"].clear()
+
+
+def _flush_des_stats(stats: dict):
+    """Flush remaining buffered stats to disk."""
+    with stats["lock"]:
+        if stats["buffer"]:
+            with open(stats["log_path"], "a") as f:
+                for r in stats["buffer"]:
+                    f.write(json.dumps(r) + "\n")
+            stats["buffer"].clear()
+
+
 def prepare_training_data(config: TrainingConfig) -> None:
     """Main entry point for training data preparation.
 
@@ -254,6 +296,19 @@ def prepare_training_data(config: TrainingConfig) -> None:
                 pass  # skip corrupt tiles
         print(f"  Restored class counts from {restored} tiles")
 
+    # ── DES API call statistics ────────────────────────────────────────
+    des_stats = {
+        "lock": threading.Lock(),
+        "log_path": data_dir / "des_api_stats.jsonl",
+        "buffer": [],
+        "summary": {
+            "stac_search":   {"count": 0, "latency_sum": 0.0, "bytes_sum": 0, "errors": 0},
+            "scl_prescreen": {"count": 0, "latency_sum": 0.0, "bytes_sum": 0, "errors": 0},
+            "full_spectral": {"count": 0, "latency_sum": 0.0, "bytes_sum": 0, "errors": 0},
+            "nmd_fetch":     {"count": 0, "latency_sum": 0.0, "bytes_sum": 0, "errors": 0},
+        },
+    }
+
     # Queue for NMD-approved cells → spectral fetch workers
     approved_q = queue.Queue(maxsize=200)
 
@@ -333,7 +388,14 @@ def prepare_training_data(config: TrainingConfig) -> None:
             nmd_ok = False
             for attempt in range(_MAX_RETRIES + 1):
                 try:
+                    t0_nmd = time.monotonic()
                     nmd_result = fetch_nmd_data(coords=coords_nmd)
+                    _record_des_call(
+                        des_stats, "nmd_fetch", cell_key=cell_key,
+                        latency_s=time.monotonic() - t0_nmd,
+                        band_count=1, success=True, retry=attempt,
+                        from_cache=nmd_result.from_cache,
+                    )
                     # Polite pause if we had to hit DES (not cache)
                     if not nmd_result.from_cache:
                         time.sleep(1)
@@ -355,6 +417,11 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     nmd_ok = True
                     break
                 except Exception as e:
+                    _record_des_call(
+                        des_stats, "nmd_fetch", cell_key=cell_key,
+                        latency_s=time.monotonic() - t0_nmd,
+                        band_count=1, success=False, error=e, retry=attempt,
+                    )
                     if attempt < _MAX_RETRIES:
                         wait = 5 * (attempt + 1)
                         print(f"    NMD {cell_key}: retry {attempt+1} "
@@ -450,9 +517,27 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         elif month in (4,6,9,11):
                             date_end = f"{year}-{month:02d}-30"
 
-                        dates = _stac_available_dates(
-                            coords, date_start, date_end,
-                            scene_cloud_max=50,
+                        t0_stac = time.monotonic()
+                        stac_ok = True
+                        try:
+                            dates = _stac_available_dates(
+                                coords, date_start, date_end,
+                                scene_cloud_max=50,
+                            )
+                        except Exception as e:
+                            stac_ok = False
+                            _record_des_call(
+                                des_stats, "stac_search", cell_key=cell_key,
+                                date=f"{date_start}/{date_end}",
+                                latency_s=time.monotonic() - t0_stac,
+                                success=False, error=e,
+                            )
+                            raise
+                        _record_des_call(
+                            des_stats, "stac_search", cell_key=cell_key,
+                            date=f"{date_start}/{date_end}",
+                            latency_s=time.monotonic() - t0_stac,
+                            success=True,
                         )
                         if not dates:
                             continue
@@ -476,8 +561,15 @@ def prepare_training_data(config: TrainingConfig) -> None:
                                     scl_err = True
                                     raise
                                 finally:
-                                    pool.record(time.monotonic() - t0, scl_err)
+                                    scl_lat = time.monotonic() - t0
+                                    pool.record(scl_lat, scl_err)
                                     pool.release()
+                                    _record_des_call(
+                                        des_stats, "scl_prescreen",
+                                        cell_key=cell_key, date=cand_date,
+                                        latency_s=scl_lat, band_count=1,
+                                        success=not scl_err,
+                                    )
                                 time.sleep(1)
 
                                 if aoi_cloud <= config.cloud_threshold:
@@ -519,8 +611,17 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         spec_err = True
                         raise
                     finally:
-                        pool.record(time.monotonic() - t0_spec, spec_err)
+                        spec_lat = time.monotonic() - t0_spec
+                        pool.record(spec_lat, spec_err)
                         pool.release()
+                        _record_des_call(
+                            des_stats, "full_spectral",
+                            cell_key=cell_key, date=good_date,
+                            latency_s=spec_lat, band_count=11,
+                            pixel_dims=(result.bands["B02"].shape
+                                        if not spec_err else None),
+                            success=not spec_err,
+                        )
 
                     # Save RGB preview
                     preview_fname = f"preview_{cell_key}_{good_date}.png"
@@ -622,6 +723,18 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         recent.append(preview_fname)
                         prep_log["recent_previews"] = recent[-3:]
 
+                        # DES API call summary for dashboard
+                        with des_stats["lock"]:
+                            prep_log["des_api_summary"] = {
+                                k: {
+                                    **v,
+                                    "avg_latency_s": round(
+                                        v["latency_sum"] / max(v["count"], 1), 1
+                                    ),
+                                }
+                                for k, v in des_stats["summary"].items()
+                            }
+
                         _write_prepare_log(prep_log_path, prep_log)
 
                         if cur_idx % 50 == 0:
@@ -718,6 +831,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
     print(f"\n  All workers done.")
 
     # ── Step 6: Save progress, splits, and stats ──────────────────────
+    _flush_des_stats(des_stats)
     _save_progress(progress_path, completed, failed)
 
     for split_name, names in tile_names_by_split.items():
