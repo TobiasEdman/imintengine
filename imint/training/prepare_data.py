@@ -338,8 +338,11 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         nmd_failed += 1
                         with lock:
                             failed.add(cell_key)
+                        err_msg = str(e)
+                        if len(err_msg) > 80:
+                            err_msg = err_msg[:77] + "..."
                         print(f"    NMD fail {cell_key}: "
-                              f"{type(e).__name__}: {e}")
+                              f"{type(e).__name__}: {err_msg}")
 
             # Update NMD log
             nmd_log["processed"] = ci + 1
@@ -453,14 +456,19 @@ def prepare_training_data(config: TrainingConfig) -> None:
                                           f"cloud={aoi_cloud:.1%} > "
                                           f"{config.cloud_threshold:.0%}, skip")
                             except Exception as e:
+                                # One-line summary instead of full traceback
+                                err_msg = str(e)
+                                if len(err_msg) > 80:
+                                    err_msg = err_msg[:77] + "..."
                                 print(f"    SCL {cell_key} {cand_date}: "
-                                      f"{type(e).__name__}: {e}")
+                                      f"{type(e).__name__}: {err_msg}")
                                 time.sleep(1)
 
                     if good_date is None:
-                        print(f"    {cell_key} {year}: no cloud-free date "
-                              f"in top {min(len(dates), _SCL_CANDIDATES)} "
-                              f"STAC candidates")
+                        with lock:
+                            n_done = len(completed) + len(failed)
+                        print(f"    \u2717 [{n_done}/{total_cells}] {cell_key} "
+                              f"{year}: no clear date found")
                         continue
 
                     # ── Full spectral fetch (SCL already verified) ─────
@@ -502,6 +510,18 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         [result.bands[b] for b in config.prithvi_bands],
                         axis=0,
                     ).astype(np.float32)
+
+                    # ── B02 haze quality gate (thin cloud detection) ───
+                    # B02 (blue) is first Prithvi band; high mean on
+                    # SCL-clear pixels indicates residual haze/thin cloud
+                    b02_idx = config.prithvi_bands.index("B02") \
+                        if "B02" in config.prithvi_bands else 0
+                    b02_mean = float(image[b02_idx].mean())
+                    if b02_mean > config.b02_haze_threshold:
+                        print(f"    haze {cell_key} {good_date}: "
+                              f"B02={b02_mean:.4f} > "
+                              f"{config.b02_haze_threshold}, reject")
+                        continue
 
                     # Fetch NMD (cached) with target_shape
                     nmd_result = fetch_nmd_data(
@@ -565,14 +585,20 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         if cur_idx % 50 == 0:
                             _save_progress(progress_path, completed, failed)
 
-                    print(f"    \u2713 [{cur_idx}] {tile_name} ({good_date}, "
-                          f"cloud={good_cloud:.1%})")
+                    elapsed = time.time() - t_start
+                    rate = cur_idx / max(elapsed, 1) * 3600
+                    print(f"    \u2713 [{cur_idx}/{total_cells}] {tile_name} "
+                          f"({good_date}, cloud={good_cloud:.1%}) "
+                          f"[{rate:.0f}/h, {pool.active}w]")
                     success = True
                     time.sleep(1)  # polite pause between DES requests
                     break  # No need to try other years
 
                 except Exception as e:
-                    print(f"    {cell_key} {year}: {type(e).__name__}: {e}")
+                    err_msg = str(e)
+                    if len(err_msg) > 80:
+                        err_msg = err_msg[:77] + "..."
+                    print(f"    {cell_key} {year}: {type(e).__name__}: {err_msg}")
                     time.sleep(3)  # back off after errors
                     continue
 
@@ -721,29 +747,53 @@ def _write_prepare_log(path: Path, log: dict) -> None:
 
 
 def _load_progress(path: Path) -> dict:
-    """Load progress checkpoint, rebuilding from tile files if corrupt/missing."""
+    """Load progress checkpoint, merging with actual tile files on disk.
+
+    Always cross-checks progress.json against tiles/ directory so that
+    tiles saved after the last checkpoint are not re-fetched.
+    """
+    saved_completed: set[str] = set()
+    saved_failed: set[str] = set()
+
     if path.exists():
         try:
             with open(path) as f:
                 data = json.load(f)
-            if data.get("completed"):
-                return data
+            saved_completed = set(data.get("completed", []))
+            saved_failed = set(data.get("failed", []))
         except (json.JSONDecodeError, KeyError):
             pass
 
-    # Auto-recover: rebuild from existing tile files
+    # Cross-check against actual tile files on disk
     tiles_dir = path.parent / "tiles"
+    disk_keys: set[str] = set()
     if tiles_dir.exists():
-        completed = []
         for npz in tiles_dir.glob("tile_*.npz"):
-            key = npz.stem.replace("tile_", "")  # e.g. "361280_6231280"
-            completed.append(key)
-        if completed:
-            print(f"  Recovered progress from {len(completed)} existing tiles")
-            progress = {"completed": sorted(completed), "failed": []}
-            with open(path, "w") as f:
+            key = npz.stem.replace("tile_", "")
+            disk_keys.add(key)
+
+    # Merge: tiles on disk are definitely completed
+    merged = saved_completed | disk_keys
+    if len(merged) > len(saved_completed):
+        added = len(merged) - len(saved_completed)
+        print(f"  Recovered {added} tiles from disk "
+              f"({len(saved_completed)} in checkpoint, "
+              f"{len(disk_keys)} on disk)")
+
+    if merged:
+        progress = {
+            "completed": sorted(merged),
+            "failed": sorted(saved_failed - disk_keys),
+        }
+        # Persist the merged state
+        try:
+            tmp = path.with_suffix(".json.tmp")
+            with open(tmp, "w") as f:
                 json.dump(progress, f)
-            return progress
+            tmp.rename(path)
+        except Exception:
+            pass
+        return progress
 
     return {"completed": [], "failed": []}
 

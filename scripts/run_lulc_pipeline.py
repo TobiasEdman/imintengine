@@ -66,8 +66,8 @@ def main():
         help="Number of classes: 19 (full NMD L2) or 10 (grouped)",
     )
     parser.add_argument(
-        "--cloud-threshold", type=float, default=0.10,
-        help="Max cloud fraction per tile (default: 0.10)",
+        "--cloud-threshold", type=float, default=0.05,
+        help="Max cloud+shadow fraction per tile (default: 0.05)",
     )
 
     # ── Training ──────────────────────────────────────────────────

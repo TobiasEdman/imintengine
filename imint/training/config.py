@@ -21,6 +21,8 @@ class TrainingConfig:
     patch_pixels: int = 224                            # Training patch size
     fetch_pixels: int = 256                            # Fetch larger for crop
     cloud_threshold: float = 0.05
+    b02_haze_threshold: float = 0.06                  # Max mean B02 reflectance
+                                                       # for clear-sky quality gate
 
     # ── Class schema ─────────────────────────────────────────────────────
     num_classes: int = 19                              # Full NMD L2
