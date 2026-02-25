@@ -10,6 +10,7 @@ for cells that have already been approved.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -417,16 +418,23 @@ def prepare_training_data(config: TrainingConfig) -> None:
             tile_name = f"tile_{cell_key}.npz"
             success = False
 
-            for year in config.years:
+            # Alternate starting year & month per cell for temporal
+            # variation.  hash(cell_key) is deterministic so restarts
+            # give the same assignment regardless of processing order.
+            cell_hash = int(hashlib.md5(cell_key.encode()).hexdigest(), 16)
+            years_offset = cell_hash % len(config.years)
+            years_order = config.years[years_offset:] + config.years[:years_offset]
+
+            for year in years_order:
                 try:
                     from datetime import timedelta as _td
 
-                    # Search month by month: August first, then July,
-                    # then June — peak summer first, lowest cloud within
-                    # each month (STAC returns sorted by cloud asc).
                     m_start = config.growing_season[0]
                     m_end = config.growing_season[1]
                     months = list(range(m_end, m_start - 1, -1))
+                    # Rotate month order per cell for within-season variation
+                    month_offset = (cell_hash // len(config.years)) % len(months)
+                    months = months[month_offset:] + months[:month_offset]
 
                     projected = _to_nmd_grid(coords)
                     good_date = None
