@@ -20,6 +20,7 @@ from .analyzers.object_detection import ObjectDetectionAnalyzer
 from .analyzers.prithvi import PrithviAnalyzer
 from .analyzers.nmd import NMDAnalyzer
 from .analyzers.cot import COTAnalyzer
+from .analyzers.marine_vessels import MarineVesselAnalyzer
 from .exporters.export import (
     save_rgb_png, save_change_overlay, save_ndvi_colormap,
     save_regions_geojson, save_geotiff, save_summary_report,
@@ -29,6 +30,7 @@ from .exporters.export import (
     save_prithvi_seg_clean_png,
     save_cot_clean_png, save_cloud_class_clean_png,
     save_dnbr_clean_png, save_change_gradient_png,
+    save_vessel_overlay,
 )
 from .exporters.html_report import save_html_report
 
@@ -40,6 +42,7 @@ ANALYZER_REGISTRY = {
     "prithvi": PrithviAnalyzer,
     "nmd": NMDAnalyzer,
     "cot": COTAnalyzer,
+    "marine_vessels": MarineVesselAnalyzer,
 }
 
 
@@ -241,6 +244,16 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
             save_regions_geojson(regions, os.path.join(out, f"{prefix}detections.geojson"),
                                  geo=job.geo, coords=job.coords, image_shape=job.rgb.shape)
 
+    elif result.analyzer == "marine_vessels":
+        regions = result.outputs.get("regions", [])
+        if regions:
+            save_regions_geojson(regions, os.path.join(out, f"{prefix}vessels.geojson"),
+                                 geo=job.geo, coords=job.coords, image_shape=job.rgb.shape)
+        save_vessel_overlay(
+            job.rgb, regions,
+            os.path.join(out, f"{prefix}vessels_clean.png"),
+        )
+
     elif result.analyzer == "prithvi":
         mode = result.metadata.get("mode", "embeddings")
         if mode == "segmentation":
@@ -324,6 +337,7 @@ def _generate_html_report(job: IMINTJob, prefix: str) -> None:
         "change_gradient": f"{prefix}change_gradient.png",
         "prithvi_seg": f"{prefix}prithvi_seg_clean.png",
         "cot": f"{prefix}cot_clean.png",
+        "vessels": f"{prefix}vessels_clean.png",
     }
     image_paths = {}
     for key, filename in path_candidates.items():

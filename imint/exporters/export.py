@@ -987,3 +987,51 @@ def _json_default(obj):
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+
+def save_vessel_overlay(
+    rgb: np.ndarray, regions: list[dict], path: str,
+) -> str:
+    """Save RGB with vessel bounding boxes and count annotation.
+
+    Draws cyan bounding boxes around detected vessels and adds a count
+    label in the top-left corner.  Produces a clean PNG suitable for
+    the HTML report Leaflet overlay.
+
+    Args:
+        rgb: (H, W, 3) float32 [0,1] or uint8 RGB image.
+        regions: List of detection dicts with ``bbox`` keys.
+        path: Output PNG path.
+
+    Returns:
+        The output file path.
+    """
+    if rgb.dtype != np.uint8:
+        img = (rgb * 255).clip(0, 255).astype(np.uint8)
+    else:
+        img = rgb.copy()
+
+    from PIL import ImageDraw, ImageFont
+
+    pil_img = Image.fromarray(img)
+    draw = ImageDraw.Draw(pil_img)
+
+    for r in regions:
+        bb = r["bbox"]
+        x0, y0, x1, y1 = bb["x_min"], bb["y_min"], bb["x_max"], bb["y_max"]
+        draw.rectangle([x0, y0, x1, y1], outline=(0, 255, 255), width=2)
+
+    # Count label
+    label = f"{len(regions)} vessels"
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 14)
+    except Exception:
+        font = ImageFont.load_default()
+    bbox = draw.textbbox((0, 0), label, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.rectangle([4, 4, 8 + tw, 8 + th], fill=(0, 0, 0, 180))
+    draw.text((6, 6), label, fill=(0, 255, 255), font=font)
+
+    pil_img.save(path)
+    print(f"    saved: {path}")
+    return path
