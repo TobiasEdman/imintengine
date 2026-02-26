@@ -34,7 +34,7 @@ _SCL_CANDIDATES = 3   # max STAC dates to pre-screen with SCL before giving up
 # ── Adaptive concurrency defaults ────────────────────────────────────────
 _INITIAL_WORKERS = 3
 _MIN_WORKERS = 1
-_MAX_WORKERS = 4
+_MAX_WORKERS = 3
 _ADAPT_WINDOW = 10          # requests to consider for adaptation
 _LATENCY_HIGH_S = 60.0      # p90 above this → scale down
 _LATENCY_LOW_S = 30.0       # p90 below this → scale up
@@ -229,6 +229,8 @@ def prepare_training_data(config: TrainingConfig) -> None:
             max_distance_m=config.max_sea_distance_m,
             cache_dir=cache_dir,
         )
+        for cell in coastal_cells:
+            cell.skip_land_filter = True
         cells = cells + coastal_cells
         print(f"  Sea densification: +{len(coastal_cells)} coastal water cells")
     else:
@@ -483,14 +485,14 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     labels = nmd_raster_to_lulc(
                         nmd_result.nmd_raster, num_classes=config.num_classes,
                     )
-                    land_frac = float(np.mean(
-                        (labels > 0) & (labels != 18) & (labels != 19)))
-                    if land_frac < 0.05:
+                    # Skip tiles that are entirely nodata (background)
+                    valid_frac = float(np.mean(labels > 0))
+                    if valid_frac < 0.01:
                         water_skipped += 1
                         with lock:
                             failed.add(cell_key)
-                        print(f"    NMD {cell_key}: SKIP water — "
-                              f"land_frac={land_frac:.1%}")
+                        print(f"    NMD {cell_key}: SKIP nodata — "
+                              f"valid={valid_frac:.1%}")
                     else:
                         land_kept += 1
                         # Push approved cell to fetch queue

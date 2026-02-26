@@ -42,6 +42,9 @@ class GridCell:
     center_lat: float = 0.0
     center_lon: float = 0.0
 
+    # If True, skip the NMD land-fraction filter (for intentional sea cells)
+    skip_land_filter: bool = False
+
 
 def _load_sweden_land_mask(
     geojson_path: str | Path | None = None,
