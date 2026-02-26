@@ -192,53 +192,11 @@ def _connect(token: str | None = None, token_path: str | None = None):
     except Exception as e:
         raise FetchError(f"Failed to connect to {OPENEO_URL}: {e}")
 
-    # 1. Explicit token
-    if token:
-        conn.authenticate_oidc_access_token(access_token=token, provider_id="egi")
-        return conn
-
-    # 2. Environment variable (used in Docker/ColonyOS)
-    env_token = os.environ.get("DES_TOKEN")
-    if env_token:
-        conn.authenticate_oidc_access_token(access_token=env_token, provider_id="egi")
-        return conn
-
-    # 3. Basic Auth (DES_USER + DES_PASSWORD env vars)
-    #    Compatible with DES community tutorial pattern.
-    des_user = os.environ.get("DES_USER")
-    des_password = os.environ.get("DES_PASSWORD")
-    if des_user and des_password:
-        conn.authenticate_basic(username=des_user, password=des_password)
-        return conn
-
-    # 4. Stored refresh token (from des_login.py --device)
-    #    This auto-renews expired access tokens — best for local dev.
-    try:
-        conn.authenticate_oidc_refresh_token(
-            provider_id="egi",
-            store_refresh_token=True,
-        )
-        return conn
-    except Exception:
-        pass  # No stored refresh token, try next method
-
-    # 5. Token file (short-lived access token from Web Editor)
-    resolved_path = token_path or TOKEN_PATH_DEFAULT
-    if os.path.exists(resolved_path):
-        with open(resolved_path) as f:
-            file_token = f.read().strip()
-        if file_token:
-            conn.authenticate_oidc_access_token(
-                access_token=file_token, provider_id="egi"
-            )
-            return conn
-
-    raise FetchError(
-        "No valid DES authentication found. Run:\n"
-        "  python scripts/des_login.py --device   (recommended, persistent)\n"
-        "  python scripts/des_login.py --basic     (tutorial-style basic auth)\n"
-        "  python scripts/des_login.py --token YOUR_TOKEN  (short-lived)"
-    )
+    # Basic Auth — DES community tutorial credentials
+    des_user = os.environ.get("DES_USER", "testuser")
+    des_password = os.environ.get("DES_PASSWORD", "secretpassword")
+    conn.authenticate_basic(username=des_user, password=des_password)
+    return conn
 
 
 # ── Main fetch function ─────────────────────────────────────────────────────

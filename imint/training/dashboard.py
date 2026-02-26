@@ -692,11 +692,12 @@ function initCharts() {{
   }});
 
   classDistDetailChart = new Chart(document.getElementById('chart-classdist-detail'), {{
-    type: 'pie',
+    type: 'doughnut',
     data: {{ labels: [], datasets: [{{ data: [], backgroundColor: [], borderColor: '#0f172a', borderWidth: 1 }}] }},
     options: {{
       responsive: true,
       maintainAspectRatio: false,
+      cutout: '55%',
       plugins: {{
         legend: {{
           display: true,

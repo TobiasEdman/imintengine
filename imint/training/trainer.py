@@ -189,15 +189,36 @@ class LULCTrainer:
         best_epoch = 0
         patience_counter = 0
         step = 0
+        start_epoch = 1
 
         print(f"\n{'='*60}")
         print(f"  Training: {cfg.epochs} epochs, batch_size={cfg.batch_size}, "
               f"lr={cfg.lr}, device={self.device}")
         print(f"{'='*60}\n")
 
-        self._init_training_log()
+        # ── Resume from checkpoint ────────────────────────────────
+        resume_path = None
+        if cfg.resume_from_checkpoint:
+            resume_path = Path(cfg.resume_from_checkpoint)
+        else:
+            auto_path = ckpt_dir / "last_checkpoint.pt"
+            if auto_path.exists():
+                resume_path = auto_path
 
-        for epoch in range(1, cfg.epochs + 1):
+        if resume_path and resume_path.exists():
+            state = self._load_resume_checkpoint(
+                resume_path, optimizer, scheduler,
+            )
+            start_epoch = state["epoch"] + 1
+            step = state["step"]
+            best_metric = state["best_metric"]
+            best_miou = state["best_miou"]
+            best_epoch = state["best_epoch"]
+            patience_counter = state["patience_counter"]
+        else:
+            self._init_training_log()
+
+        for epoch in range(start_epoch, cfg.epochs + 1):
             # ── Train epoch ───────────────────────────────────────────
             self.model.train()
             # Keep encoder in eval mode (batchnorm/dropout frozen)
@@ -313,6 +334,19 @@ class LULCTrainer:
                     ckpt_dir / f"epoch_{epoch:03d}.pt", epoch, val_metrics,
                 )
 
+            # ── Save resume checkpoint (every epoch) ──────────────
+            self._save_resume_checkpoint(
+                ckpt_dir / "last_checkpoint.pt",
+                epoch=epoch,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                step=step,
+                best_metric=best_metric,
+                best_miou=best_miou,
+                best_epoch=best_epoch,
+                patience_counter=patience_counter,
+            )
+
             # Early stopping
             if patience_counter >= cfg.early_stopping_patience:
                 print(f"\n  Early stopping at epoch {epoch} "
@@ -420,6 +454,65 @@ class LULCTrainer:
             pass
 
     # ── Checkpoint ────────────────────────────────────────────────────
+
+    def _save_resume_checkpoint(
+        self,
+        path: Path,
+        epoch: int,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler._LRScheduler,
+        step: int,
+        best_metric: float,
+        best_miou: float,
+        best_epoch: int,
+        patience_counter: int,
+    ) -> None:
+        """Save full training state for resumption after interruption."""
+        checkpoint = {
+            "epoch": epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "step": step,
+            "best_metric": best_metric,
+            "best_miou": best_miou,
+            "best_epoch": best_epoch,
+            "patience_counter": patience_counter,
+            "training_log": self._training_log,
+        }
+        tmp = path.with_suffix(".pt.tmp")
+        torch.save(checkpoint, tmp)
+        tmp.rename(path)
+
+    def _load_resume_checkpoint(
+        self,
+        path: Path,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler._LRScheduler,
+    ) -> dict:
+        """Load full training state from a resume checkpoint.
+
+        Returns:
+            Dict with keys: epoch, step, best_metric, best_miou,
+            best_epoch, patience_counter.
+        """
+        print(f"  Resuming from checkpoint: {path}")
+        ckpt = torch.load(path, map_location=self.device)
+        self.model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        if "training_log" in ckpt:
+            self._training_log = ckpt["training_log"]
+        print(f"  Resumed at epoch {ckpt['epoch']} "
+              f"(step={ckpt['step']}, best_mIoU={ckpt['best_miou']:.4f})")
+        return {
+            "epoch": ckpt["epoch"],
+            "step": ckpt["step"],
+            "best_metric": ckpt["best_metric"],
+            "best_miou": ckpt["best_miou"],
+            "best_epoch": ckpt["best_epoch"],
+            "patience_counter": ckpt["patience_counter"],
+        }
 
     def _save_checkpoint(
         self,

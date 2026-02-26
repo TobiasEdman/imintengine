@@ -45,7 +45,10 @@ from .class_schema import nmd_raster_to_lulc
 from .sampler import (
     generate_grid, grid_to_wgs84, split_by_latitude,
     densify_grid, generate_densification_regions,
+    filter_land_cells, filter_sea_cells_swedish_waters,
 )
+from .scb_tatort import generate_scb_densification_regions
+from .skg_sumpskog import generate_sumpskog_densification_regions
 
 # Sentinel value to signal that the NMD producer is done
 _NMD_DONE = None
@@ -211,13 +214,31 @@ def prepare_training_data(config: TrainingConfig) -> None:
     print(f"{'='*60}")
 
     patch_size_m = config.fetch_pixels * 10  # 10m resolution
-    cells = generate_grid(
-        spacing_m=config.grid_spacing_m,
-        patch_size_m=patch_size_m,
-    )
+    cache_dir = data_dir / "cache"
+
+    # Generate base grid (disable built-in land filter if we need sea cells)
+    if config.enable_sea_densification:
+        cells = generate_grid(
+            spacing_m=config.grid_spacing_m,
+            patch_size_m=patch_size_m,
+            land_filter=False,
+        )
+        cells, sea_cells = filter_land_cells(cells, return_sea_cells=True)
+        coastal_cells = filter_sea_cells_swedish_waters(
+            sea_cells,
+            max_distance_m=config.max_sea_distance_m,
+            cache_dir=cache_dir,
+        )
+        cells = cells + coastal_cells
+        print(f"  Sea densification: +{len(coastal_cells)} coastal water cells")
+    else:
+        cells = generate_grid(
+            spacing_m=config.grid_spacing_m,
+            patch_size_m=patch_size_m,
+        )
     base_count = len(cells)
 
-    # Optional: densify grid in rare-class areas
+    # Optional: densify grid in predefined rare-class areas
     if config.enable_grid_densification:
         regions = generate_densification_regions()
         cells = densify_grid(
@@ -230,6 +251,39 @@ def prepare_training_data(config: TrainingConfig) -> None:
               f"{len(cells) - base_count} densified = {len(cells)} locations")
     else:
         print(f"\n  Grid: {len(cells)} candidate locations")
+
+    # Optional: SCB tätort urban densification
+    if config.enable_scb_densification:
+        scb_regions = generate_scb_densification_regions(
+            cache_dir=cache_dir,
+            min_population=config.scb_min_population,
+            patch_size_m=patch_size_m,
+        )
+        pre_scb = len(cells)
+        cells = densify_grid(
+            cells,
+            densification_regions=scb_regions,
+            densify_spacing_m=config.scb_densify_spacing_m,
+            patch_size_m=patch_size_m,
+        )
+        print(f"  SCB urban: +{len(cells) - pre_scb} cells "
+              f"({len(scb_regions)} tätort regions)")
+
+    # Optional: Skogsstyrelsen sumpskog densification
+    if config.enable_sumpskog_densification:
+        skg_regions = generate_sumpskog_densification_regions(
+            cache_dir=cache_dir,
+            min_density_pct=config.sumpskog_min_density_pct,
+        )
+        pre_skg = len(cells)
+        cells = densify_grid(
+            cells,
+            densification_regions=skg_regions,
+            densify_spacing_m=config.sumpskog_densify_spacing_m,
+            patch_size_m=patch_size_m,
+        )
+        print(f"  Sumpskog: +{len(cells) - pre_skg} cells "
+              f"({len(skg_regions)} wetland regions)")
 
     cells = grid_to_wgs84(cells)
 
@@ -363,6 +417,17 @@ def prepare_training_data(config: TrainingConfig) -> None:
         "elapsed_s": prev_elapsed,
         "recent_previews": [],
     }
+
+    # Restore recent previews from existing tiles on disk
+    if completed and tiles_dir.exists():
+        existing_previews = sorted(
+            tiles_dir.glob("preview_*.png"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        if existing_previews:
+            prep_log["recent_previews"] = [
+                p.name for p in existing_previews[-3:]
+            ]
     t_start = time.time()
     _write_prepare_log(prep_log_path, prep_log)
 

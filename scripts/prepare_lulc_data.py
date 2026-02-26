@@ -36,8 +36,8 @@ def main():
         help="Grid spacing in meters (default: 10000, use 50000 for test)",
     )
     parser.add_argument(
-        "--years", nargs="+", default=["2017", "2018"],
-        help="Years to fetch data from (default: 2017 2018)",
+        "--years", nargs="+", default=["2019", "2018"],
+        help="Years to fetch data from (default: 2019 2018)",
     )
     parser.add_argument(
         "--num-classes", type=int, default=19,
@@ -48,6 +48,44 @@ def main():
         help="Max cloud fraction per tile (default: 0.10)",
     )
 
+    # ── Grid densification flags ──────────────────────────────────────
+    parser.add_argument(
+        "--enable-densification", action="store_true",
+        help="Enable grid densification in predefined rare-class areas",
+    )
+    parser.add_argument(
+        "--enable-scb-densification", action="store_true",
+        help="Enable SCB tätort urban densification (downloads ~60 MB)",
+    )
+    parser.add_argument(
+        "--scb-min-population", type=int, default=2_000,
+        help="Min tätort population for SCB densification (default: 2000)",
+    )
+    parser.add_argument(
+        "--scb-densify-spacing", type=int, default=2_500,
+        help="Grid spacing in SCB tätort regions in meters (default: 2500)",
+    )
+    parser.add_argument(
+        "--enable-sea-densification", action="store_true",
+        help="Enable coastal water densification (uses HaV EEZ data)",
+    )
+    parser.add_argument(
+        "--max-sea-distance", type=int, default=5_000,
+        help="Max distance from land for sea cells in meters (default: 5000)",
+    )
+    parser.add_argument(
+        "--enable-sumpskog-densification", action="store_true",
+        help="Enable Skogsstyrelsen sumpskog (swamp forest) densification",
+    )
+    parser.add_argument(
+        "--sumpskog-min-density", type=float, default=5.0,
+        help="Min sumpskog density %% per 25km cell for inclusion (default: 5.0)",
+    )
+    parser.add_argument(
+        "--sumpskog-densify-spacing", type=int, default=10_000,
+        help="Grid spacing in sumpskog regions in meters (default: 10000)",
+    )
+
     args = parser.parse_args()
 
     config = TrainingConfig(
@@ -56,6 +94,15 @@ def main():
         years=args.years,
         num_classes=args.num_classes,
         cloud_threshold=args.cloud_threshold,
+        enable_grid_densification=args.enable_densification,
+        enable_scb_densification=args.enable_scb_densification,
+        scb_min_population=args.scb_min_population,
+        scb_densify_spacing_m=args.scb_densify_spacing,
+        enable_sea_densification=args.enable_sea_densification,
+        max_sea_distance_m=args.max_sea_distance,
+        enable_sumpskog_densification=args.enable_sumpskog_densification,
+        sumpskog_min_density_pct=args.sumpskog_min_density,
+        sumpskog_densify_spacing_m=args.sumpskog_densify_spacing,
     )
 
     prepare_training_data(config)

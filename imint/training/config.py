@@ -15,7 +15,7 @@ class TrainingConfig:
 
     # ── Data ──────────────────────────────────────────────────────────────
     data_dir: str = "data/lulc_training"
-    years: list[str] = field(default_factory=lambda: ["2019", "2020"])
+    years: list[str] = field(default_factory=lambda: ["2019", "2018"])
     growing_season: tuple[int, int] = (6, 8)          # June – August
     grid_spacing_m: int = 10_000                       # 10 km grid
     patch_pixels: int = 224                            # Training patch size
@@ -62,6 +62,14 @@ class TrainingConfig:
     # ── Grid densification ─────────────────────────────────────────────
     enable_grid_densification: bool = False             # Opt-in for rare-class areas
     densify_spacing_m: int = 5_000                     # 5 km sub-grid in dense areas
+    enable_scb_densification: bool = False              # SCB tätort urban oversampling
+    scb_min_population: int = 2_000                    # Min population for inclusion
+    scb_densify_spacing_m: int = 2_500                 # Tighter spacing in urban areas
+    enable_sea_densification: bool = False              # Coastal water oversampling
+    max_sea_distance_m: int = 5_000                    # Max distance from land (meters)
+    enable_sumpskog_densification: bool = False         # Skogsstyrelsen sumpskog
+    sumpskog_min_density_pct: float = 5.0              # Min sumpskog % per scan cell
+    sumpskog_densify_spacing_m: int = 10_000           # Sub-grid spacing in wetland areas
 
     # ── Validation split (latitude-based) ─────────────────────────────────
     val_latitude_min: float = 64.0
@@ -76,6 +84,7 @@ class TrainingConfig:
     # ── Checkpoint ────────────────────────────────────────────────────────
     checkpoint_dir: str = "checkpoints/lulc"
     save_every_n_epochs: int = 5
+    resume_from_checkpoint: str | None = None     # Path to last_checkpoint.pt
 
     # ── Prithvi normalization (from config.json, DN-scale) ────────────────
     prithvi_mean: list[float] = field(

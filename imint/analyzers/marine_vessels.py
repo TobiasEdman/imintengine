@@ -100,9 +100,14 @@ class MarineVesselAnalyzer(BaseAnalyzer):
         # ── Prepare image (TCI formula) ────────────────────────────────
         # The YOLO model was trained on L1C-TCI imagery which uses the ESA
         # TCI formula: pixel = clip(reflectance × 2.5 × 255, 0, 255).
-        # Using simple reflectance × 255 produces images that are too dark,
-        # causing near-zero detections.  The × 2.5 factor is critical.
-        if rgb.dtype != np.uint8:
+        # IMPORTANT: Must use RAW reflectance bands, NOT the percentile-
+        # stretched rgb (which is [0,1] after stretch and would produce
+        # overexposed images when multiplied by 2.5 × 255).
+        if bands and all(b in bands for b in ("B04", "B03", "B02")):
+            raw_rgb = np.stack([bands["B04"], bands["B03"], bands["B02"]], axis=-1)
+            img = (raw_rgb * 2.5 * 255).clip(0, 255).astype(np.uint8)
+        elif rgb.dtype != np.uint8:
+            # Fallback: if no bands available, try TCI on rgb anyway
             img = (rgb * 2.5 * 255).clip(0, 255).astype(np.uint8)
         else:
             img = rgb

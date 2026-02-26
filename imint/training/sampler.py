@@ -93,7 +93,10 @@ def _get_land_mask() -> object | None:
     return _SWEDEN_LAND_MASK
 
 
-def filter_land_cells(cells: list[GridCell]) -> list[GridCell]:
+def filter_land_cells(
+    cells: list[GridCell],
+    return_sea_cells: bool = False,
+) -> list[GridCell] | tuple[list[GridCell], list[GridCell]]:
     """Remove grid cells whose centres fall outside Sweden's land area.
 
     Uses the "Sverige 5 miljoner" vector dataset as a fast land mask.
@@ -105,13 +108,18 @@ def filter_land_cells(cells: list[GridCell]) -> list[GridCell]:
 
     Args:
         cells: Grid cells with EPSG:3006 coordinates.
+        return_sea_cells: If True, also return cells that were filtered
+            out (centres in the sea).
 
     Returns:
-        Filtered list of GridCell (only land cells).
+        If *return_sea_cells* is False (default): list of land cells.
+        If True: ``(land_cells, sea_cells)`` tuple.
     """
     land = _get_land_mask()
     if land is None:
         print("  WARNING: Sweden land mask not found — skipping land filter")
+        if return_sea_cells:
+            return cells, []
         return cells
 
     from shapely.geometry import Point
@@ -121,13 +129,19 @@ def filter_land_cells(cells: list[GridCell]) -> list[GridCell]:
     prep_land = prepared.prep(land)
 
     land_cells = []
+    sea_cells = []
     for cell in cells:
         pt = Point(cell.easting, cell.northing)
         if prep_land.contains(pt):
             land_cells.append(cell)
+        elif return_sea_cells:
+            sea_cells.append(cell)
 
     print(f"  Land filter: {len(land_cells)}/{len(cells)} cells on land "
           f"({len(cells) - len(land_cells)} in sea)")
+
+    if return_sea_cells:
+        return land_cells, sea_cells
     return land_cells
 
 
@@ -403,3 +417,258 @@ def _sweref99_to_wgs84(easting: float, northing: float) -> tuple[float, float]:
     lon = lon0 + math.atan2(math.sinh(eta_prime), math.cos(xi_prime))
 
     return math.degrees(lat), math.degrees(lon)
+
+
+# ── Sea cell filtering (Swedish waters) ──────────────────────────────────
+
+_SFV_TERRITORIAL_URL = (
+    "https://www.sjofartsverket.se/globalassets/tjanster/sjokort/"
+    "sjoterritoriets_gransterritorialgrans.zip"
+)
+
+_SWEDISH_TERRITORIAL_WATERS = None
+
+
+def _wgs84_to_sweref99(lat_deg: float, lon_deg: float) -> tuple[float, float]:
+    """Convert WGS84 (lat, lon) to SWEREF99 TM (easting, northing).
+
+    Simplified forward Transverse Mercator, accurate to ~10 m.
+    """
+    a = 6_378_137.0
+    f = 1 / 298.257222101
+    lon0 = math.radians(15.0)
+    k0 = 0.9996
+    fe = 500_000.0
+
+    e2 = 2 * f - f * f
+    n = f / (2 - f)
+    n2, n3, n4 = n * n, n ** 3, n ** 4
+    A = (a / (1 + n)) * (1 + n2 / 4 + n4 / 64)
+
+    lat = math.radians(lat_deg)
+    lon = math.radians(lon_deg)
+
+    t = math.sinh(
+        math.atanh(math.sin(lat))
+        - 2 * math.sqrt(e2) / (1 + e2)
+        * math.atanh(2 * math.sqrt(e2) / (1 + e2) * math.sin(lat))
+    )
+    xi_p = math.atan2(t, math.cos(lon - lon0))
+    eta_p = math.atanh(math.sin(lon - lon0) / math.sqrt(1 + t * t))
+
+    a1 = n / 2 - 2 * n2 / 3 + 5 * n3 / 16
+    a2 = 13 * n2 / 48 - 3 * n3 / 5
+    a3 = 61 * n3 / 240
+
+    northing = k0 * A * (
+        xi_p
+        + a1 * math.sin(2 * xi_p) * math.cosh(2 * eta_p)
+        + a2 * math.sin(4 * xi_p) * math.cosh(4 * eta_p)
+        + a3 * math.sin(6 * xi_p) * math.cosh(6 * eta_p)
+    )
+    easting = fe + k0 * A * (
+        eta_p
+        + a1 * math.cos(2 * xi_p) * math.sinh(2 * eta_p)
+        + a2 * math.cos(4 * xi_p) * math.sinh(4 * eta_p)
+        + a3 * math.cos(6 * xi_p) * math.sinh(6 * eta_p)
+    )
+    return easting, northing
+
+
+def _build_territorial_waters(cache_dir: Path) -> object | None:
+    """Build Swedish territorial waters polygon from Sjöfartsverket data.
+
+    Downloads the official territorial boundary point shapefile, converts
+    the turning-point sequences to polygons in EPSG:3006, and subtracts
+    the land mask to produce a territorial-waters-only geometry.
+
+    The result is cached as GeoJSON for fast reloads.
+    """
+    try:
+        import shapefile as pyshp
+        from shapely.geometry import Polygon
+        from shapely.ops import unary_union
+    except ImportError as exc:
+        print(f"  WARNING: missing dependency for territorial waters: {exc}")
+        return None
+
+    cache_dir = Path(cache_dir)
+    geojson_cache = cache_dir / "swedish_territorial_waters.json"
+
+    # Fast path: load from cache
+    if geojson_cache.exists():
+        from shapely.geometry import shape
+        with open(geojson_cache) as f:
+            data = json.load(f)
+        polys = [shape(feat["geometry"]) for feat in data["features"]]
+        return unary_union(polys)
+
+    # ── Download shapefile ────────────────────────────────────────────
+    zip_path = cache_dir / "territorialgrans.zip"
+    if not zip_path.exists():
+        import urllib.request
+        print("  Downloading Sjöfartsverket territorial boundary …")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp = zip_path.with_suffix(".zip.tmp")
+        urllib.request.urlretrieve(_SFV_TERRITORIAL_URL, tmp)
+        tmp.rename(zip_path)
+        print(f"  Saved to {zip_path}")
+
+    # ── Extract ───────────────────────────────────────────────────────
+    import zipfile
+    extract_dir = cache_dir / "territorialgrans"
+    if not extract_dir.exists():
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(extract_dir)
+
+    # ── Find the polygon shapefile (not _linje) ──────────────────────
+    import glob as _glob
+
+    shp_files = _glob.glob(
+        str(extract_dir / "**" / "*.shp"), recursive=True,
+    )
+    shp_path = next(
+        (f for f in shp_files if "_linje" not in f), None,
+    )
+    if shp_path is None:
+        print("  WARNING: territorial boundary .shp not found")
+        return None
+
+    # ── Read boundary points ──────────────────────────────────────────
+    from collections import defaultdict
+
+    sf = pyshp.Reader(shp_path, encoding="latin-1")
+    segments: dict[str, list] = defaultdict(list)
+    for rec, _shape in zip(sf.iterRecords(), sf.iterShapes()):
+        seg = rec["Delsträcka"]
+        nr = rec["Löpnr_dels"]
+        lon = rec["Longitud_d"]
+        lat = rec["Latitud_de"]
+        segments[seg].append((nr, lon, lat))
+
+    for seg in segments:
+        segments[seg].sort(key=lambda x: x[0])
+
+    # ── Build polygons in EPSG:3006 ───────────────────────────────────
+    polys = []
+    for _seg_name, pts in segments.items():
+        coords = [_wgs84_to_sweref99(lat, lon) for _, lon, lat in pts]
+        coords.append(coords[0])  # close ring
+        poly = Polygon(coords)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        polys.append(poly)
+
+    territorial_zone = unary_union(polys)
+
+    # ── Subtract land → territorial waters ────────────────────────────
+    land = _get_land_mask()
+    if land is not None:
+        territorial_waters = territorial_zone.difference(land)
+    else:
+        territorial_waters = territorial_zone
+
+    print(f"  Territorial waters: {territorial_waters.area / 1e6:.0f} km²")
+
+    # ── Cache as GeoJSON ──────────────────────────────────────────────
+    from shapely.geometry import mapping
+
+    features = []
+    if territorial_waters.geom_type == "MultiPolygon":
+        for geom in territorial_waters.geoms:
+            features.append({
+                "type": "Feature",
+                "geometry": mapping(geom),
+                "properties": {},
+            })
+    else:
+        features.append({
+            "type": "Feature",
+            "geometry": mapping(territorial_waters),
+            "properties": {},
+        })
+
+    geojson = {"type": "FeatureCollection", "features": features}
+    tmp = geojson_cache.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(geojson, f)
+    tmp.rename(geojson_cache)
+    print(f"  Cached territorial waters → {geojson_cache}")
+
+    return territorial_waters
+
+
+def _get_territorial_waters(cache_dir: Path | None = None) -> object | None:
+    """Get the cached territorial waters mask (loads once)."""
+    global _SWEDISH_TERRITORIAL_WATERS
+    if _SWEDISH_TERRITORIAL_WATERS is None:
+        if cache_dir is None:
+            project_root = Path(__file__).resolve().parent.parent.parent
+            cache_dir = project_root / "data" / "cache"
+        _SWEDISH_TERRITORIAL_WATERS = _build_territorial_waters(cache_dir)
+    return _SWEDISH_TERRITORIAL_WATERS
+
+
+def filter_sea_cells_swedish_waters(
+    sea_cells: list[GridCell],
+    max_distance_m: int = 5_000,
+    cache_dir: Path | None = None,
+) -> list[GridCell]:
+    """Keep only sea cells that are in Swedish waters near the coast.
+
+    Two-step filter:
+
+    1. **Distance** — cell centre must be within *max_distance_m* of
+       Swedish land (EPSG:3006 distance in meters).
+    2. **Territorial** — cell centre must fall inside the Swedish
+       territorial waters polygon derived from Sjöfartsverket's
+       official boundary data.
+
+    This prevents cells in Norwegian, Danish, or Finnish waters.
+
+    Args:
+        sea_cells: Cells whose centres are NOT on Swedish land.
+        max_distance_m: Maximum distance from land in meters.
+        cache_dir: Cache directory for downloaded/cached data.
+
+    Returns:
+        Filtered list of sea cells in Swedish coastal waters.
+    """
+    if not sea_cells:
+        return []
+
+    land = _get_land_mask()
+    if land is None:
+        print("  WARNING: land mask unavailable — returning all sea cells")
+        return sea_cells
+
+    from shapely.geometry import Point
+
+    # Step 1: distance from Swedish land
+    near_coast = []
+    for cell in sea_cells:
+        pt = Point(cell.easting, cell.northing)
+        if land.distance(pt) <= max_distance_m:
+            near_coast.append(cell)
+
+    print(f"  Sea distance filter: {len(near_coast)}/{len(sea_cells)} "
+          f"within {max_distance_m / 1000:.0f} km of land")
+
+    # Step 2: Swedish territorial waters (Sjöfartsverket boundary)
+    tw = _get_territorial_waters(cache_dir)
+    if tw is None:
+        print("  WARNING: territorial waters unavailable — skipping filter")
+        return near_coast
+
+    from shapely import prepared
+
+    prep_tw = prepared.prep(tw)
+    swedish = []
+    for cell in near_coast:
+        pt = Point(cell.easting, cell.northing)
+        if prep_tw.contains(pt):
+            swedish.append(cell)
+
+    print(f"  Territorial filter: {len(swedish)}/{len(near_coast)} "
+          f"in Swedish waters")
+    return swedish
