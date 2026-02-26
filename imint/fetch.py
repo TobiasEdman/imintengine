@@ -8,8 +8,13 @@ cloud cover using the SCL (Scene Classification Layer) band.
 Also provides NMD (Nationellt Marktäckedata) fetching for LULC analysis.
 NMD is a static 10m land cover dataset from Naturvårdsverket.
 
+Sjökort (nautical chart) data can be fetched from Sjöfartsverket via
+SLU GET (Geodata Extraction Tool). This provides S-57 vector data for
+Swedish coastal and inland waters.
+
 Usage:
     from imint.fetch import fetch_des_data, fetch_nmd_data, FetchError
+    from imint.fetch import fetch_sjokort_data
 
     result = fetch_des_data(date="2022-06-15", coords={...})
     if result.cloud_fraction < 0.3:
@@ -18,6 +23,15 @@ Usage:
 
     nmd = fetch_nmd_data(coords={...}, target_shape=(H, W))
     # nmd.nmd_raster is uint8 with NMD class codes
+
+    sjokort = fetch_sjokort_data(coords={...}, email="user@org.se", session=shibboleth_session)
+    # sjokort.s57_paths contains downloaded S-57 (.000) files
+
+    # Or with pre-downloaded S-57 data and rendering:
+    sjokort = fetch_sjokort_data(
+        coords={...}, s57_dir="path/to/s57/",
+        render=True, output_path="sjokort.png",
+    )
 """
 from __future__ import annotations
 
@@ -1294,3 +1308,706 @@ def fetch_nmd_data(
         transform=transform,
         from_cache=False,
     )
+
+
+# ── Sjökort (Nautical chart from SLU GET) ─────────────────────────────────────
+
+# SLU GET API for ordering S-57 nautical chart data from Sjöfartsverket.
+# Requires a Shibboleth-authenticated session (browser cookies).
+# Chart data is in S-57 (.000) vector format, delivered in EPSG:4326.
+# Max area per order: ~2.5 km² (workload 2 = "orange" in SLU GET UI).
+# For larger areas the bbox must be tiled into ≤2.5 km² pieces.
+
+SLU_GET_BASE_URL = "https://maps.slu.se/get"
+SLU_GET_DOWNLOAD_URL = "https://maps.slu.se/get/done"
+SLU_GET_JOB_ID = "sjokort_vektor"
+SLU_GET_MAX_AREA_M2 = 2_500_000  # ~2.5 km²
+SLU_GET_DEFAULT_MARGIN_M = 1000  # 1 km margin around bbox
+
+# Default cache directory (project root/.sjokort_cache)
+SJOKORT_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".sjokort_cache"
+)
+
+# S-57 layer rendering config — IHO S-52 inspired colour scheme
+# Depth ranges (DRVAL1/DRVAL2 midpoint) → hex colour
+_S57_DEPTH_COLOURS = [
+    (0,   3,   "#9BCFEA"),   # Very shallow
+    (3,   6,   "#B5D9EE"),   # Shallow
+    (6,   10,  "#C0DFF2"),   # Moderate shallow
+    (10,  20,  "#CCE7F5"),   # Moderate
+    (20,  30,  "#DAF0FA"),   # Deeper
+    (30,  50,  "#E4F4FB"),   # Deep
+    (50,  999, "#EEF8FC"),   # Very deep
+]
+_S57_LAND_COLOUR = "#F5E6C8"
+_S57_COASTLINE_COLOUR = "#333333"
+_S57_DEPCNT_COLOUR = "#8BB8D9"
+_S57_FAIRWAY_COLOUR = "#D4B8E8"
+_S57_BG_COLOUR = "#EEF8FC"
+
+
+@dataclass
+class SjokortTile:
+    """A single sjökort order tile with SWEREF99 TM bounds.
+
+    Attributes:
+        north: Max Y in EPSG:3006.
+        south: Min Y in EPSG:3006.
+        east:  Max X in EPSG:3006.
+        west:  Min X in EPSG:3006.
+        uuid:  Server-assigned UUID after successful order (None before).
+        area_m2: Tile area in square meters.
+    """
+    north: int
+    south: int
+    east: int
+    west: int
+    uuid: str | None = None
+    area_m2: int = 0
+
+    def __post_init__(self):
+        self.area_m2 = (self.east - self.west) * (self.north - self.south)
+
+
+@dataclass
+class SjokortFetchResult:
+    """Result of a sjökort fetch operation.
+
+    Attributes:
+        s57_paths: Deduplicated list of unique S-57 file paths (one per ENC cell).
+        tiles:     List of SjokortTile objects with order metadata.
+        bbox_wgs84: Original WGS84 bounding box (without margin).
+        bbox_sweref: NMD-aligned SWEREF99 TM bounding box (without margin).
+        bbox_sweref_padded: SWEREF99 TM bbox including margin (used for ordering).
+        rendered_png: Path to rendered PNG if ``render=True`` was used, else None.
+        from_cache: True if loaded from local cache.
+    """
+    s57_paths: list[Path]
+    tiles: list[SjokortTile]
+    bbox_wgs84: dict
+    bbox_sweref: dict
+    bbox_sweref_padded: dict | None = None
+    rendered_png: Path | None = None
+    from_cache: bool = False
+
+
+def _sjokort_cache_key(coords: dict) -> str:
+    """Generate a deterministic cache key from SWEREF99 TM coordinates."""
+    key_str = f"sjokort_{coords['west']}_{coords['south']}_{coords['east']}_{coords['north']}"
+    return hashlib.sha256(key_str.encode()).hexdigest()[:16]
+
+
+def _tile_sjokort_bbox(projected_coords: dict, max_area: int = SLU_GET_MAX_AREA_M2) -> list[SjokortTile]:
+    """Split a SWEREF99 TM bbox into tiles that fit under the SLU GET area limit.
+
+    Tiles are aligned to the NMD 10m grid. The number of columns and rows is
+    chosen to keep each tile under ``max_area`` while using the fewest splits.
+
+    Args:
+        projected_coords: SWEREF99 TM bbox with keys west, south, east, north.
+        max_area: Maximum tile area in m² (default ~2.5 km²).
+
+    Returns:
+        List of SjokortTile objects covering the full bbox.
+    """
+    W = projected_coords["west"]
+    S = projected_coords["south"]
+    E = projected_coords["east"]
+    N = projected_coords["north"]
+    total_w = E - W
+    total_h = N - S
+    total_area = total_w * total_h
+
+    if total_area <= max_area:
+        return [SjokortTile(north=N, south=S, east=E, west=W)]
+
+    # Find minimum number of columns and rows
+    grid = NMD_GRID_SIZE
+    n_cols = 1
+    n_rows = 1
+    while True:
+        tile_w = total_w / n_cols
+        tile_h = total_h / n_rows
+        if tile_w * tile_h <= max_area:
+            break
+        # Split along the longer dimension
+        if tile_w >= tile_h:
+            n_cols += 1
+        else:
+            n_rows += 1
+
+    # Calculate tile dimensions snapped to NMD grid
+    col_width = math.floor(total_w / n_cols / grid) * grid
+    row_height = math.floor(total_h / n_rows / grid) * grid
+
+    tiles = []
+    for r in range(n_rows):
+        for c in range(n_cols):
+            tile_w = W + c * col_width
+            tile_e = W + (c + 1) * col_width if c < n_cols - 1 else E
+            tile_s = S + r * row_height
+            tile_n = S + (r + 1) * row_height if r < n_rows - 1 else N
+            tiles.append(SjokortTile(north=tile_n, south=tile_s, east=tile_e, west=tile_w))
+
+    return tiles
+
+
+def _order_sjokort_tile(
+    tile: SjokortTile,
+    email: str,
+    session: Any,
+) -> SjokortTile:
+    """Submit a single sjökort order via the SLU GET API.
+
+    Args:
+        tile: SjokortTile with SWEREF99 TM bounds.
+        email: E-mail address for the download link.
+        session: ``requests.Session`` with Shibboleth cookies.
+
+    Returns:
+        The same tile with ``uuid`` populated on success.
+
+    Raises:
+        FetchError: If the order submission fails.
+    """
+    url = (
+        f"{SLU_GET_BASE_URL}/api/job/{SLU_GET_JOB_ID}"
+        f"/{tile.north}/{tile.south}/{tile.east}/{tile.west}/{email}"
+    )
+    try:
+        resp = session.post(url, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        uuid = data.get("Uuid")
+        if not uuid:
+            raise FetchError(f"SLU GET order failed — no Uuid in response: {data}")
+        tile.uuid = uuid
+        return tile
+    except FetchError:
+        raise
+    except Exception as e:
+        raise FetchError(f"SLU GET order request failed: {e}")
+
+
+def _download_sjokort_zip(
+    uuid: str,
+    dest_dir: Path,
+    session: Any | None = None,
+    max_retries: int = 20,
+    retry_delay: float = 30.0,
+) -> Path:
+    """Download a processed sjökort ZIP from SLU GET.
+
+    Polls the download URL until the ZIP is ready (server returns HTML
+    while processing, ZIP when done).  Uses the same Shibboleth session
+    as the ordering step (maps.slu.se requires it).
+
+    Args:
+        uuid: Order UUID from the API response.
+        dest_dir: Directory to save the ZIP file.
+        session: ``requests.Session`` with Shibboleth cookies (recommended).
+                 Falls back to a plain ``requests.get`` if None.
+        max_retries: Maximum number of download attempts.
+        retry_delay: Seconds between retries.
+
+    Returns:
+        Path to the downloaded ZIP file.
+
+    Raises:
+        FetchError: If download fails after all retries.
+    """
+    import time
+    import requests
+
+    url = f"{SLU_GET_DOWNLOAD_URL}/{uuid}.zip"
+    zip_path = dest_dir / f"{uuid}.zip"
+    getter = session if session is not None else requests
+
+    for attempt in range(max_retries):
+        try:
+            resp = getter.get(url, timeout=60)
+            resp.raise_for_status()
+            # SLU returns HTML while processing, ZIP when ready
+            content_type = resp.headers.get("Content-Type", "")
+            if "html" in content_type or resp.content[:4] != b"PK\x03\x04":
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                raise FetchError(
+                    f"Sjökort ZIP not ready after {max_retries * retry_delay:.0f}s "
+                    f"for UUID {uuid}"
+                )
+            zip_path.write_bytes(resp.content)
+            return zip_path
+        except FetchError:
+            raise
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                continue
+            raise FetchError(f"Failed to download sjökort ZIP {uuid}: {e}")
+
+    raise FetchError(f"Sjökort download exhausted retries for {uuid}")
+
+
+def _extract_s57_from_zip(zip_path: Path, dest_dir: Path) -> list[Path]:
+    """Extract S-57 (.000) files from a sjökort ZIP archive.
+
+    Args:
+        zip_path: Path to the ZIP file.
+        dest_dir: Directory to extract S-57 files into.
+
+    Returns:
+        List of extracted S-57 file paths.
+    """
+    import zipfile
+
+    s57_paths = []
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for name in zf.namelist():
+            if name.endswith(".000"):
+                extracted = dest_dir / Path(name).name
+                extracted.write_bytes(zf.read(name))
+                s57_paths.append(extracted)
+
+    return s57_paths
+
+
+def _pad_sweref_bbox(coords: dict, margin_m: int) -> dict:
+    """Expand a SWEREF99 TM bbox by ``margin_m`` metres on each side, snapped to NMD grid.
+
+    Args:
+        coords: SWEREF99 TM bbox with keys west, south, east, north.
+        margin_m: Margin in metres to add on each side.
+
+    Returns:
+        Expanded bbox dict (same format, re-snapped to NMD 10m grid).
+    """
+    grid = NMD_GRID_SIZE
+    return {
+        "west": math.floor((coords["west"] - margin_m) / grid) * grid,
+        "south": math.floor((coords["south"] - margin_m) / grid) * grid,
+        "east": math.ceil((coords["east"] + margin_m) / grid) * grid,
+        "north": math.ceil((coords["north"] + margin_m) / grid) * grid,
+        "crs": coords.get("crs", TARGET_CRS),
+    }
+
+
+def _deduplicate_s57(s57_paths: list[Path]) -> list[Path]:
+    """Remove duplicate S-57 files across tiles (same ENC cell name).
+
+    SLU GET delivers full ENC cells for every overlapping tile order. This
+    function keeps only one copy per unique filename (stem), preferring the
+    first occurrence.
+
+    Args:
+        s57_paths: All extracted S-57 file paths (may contain duplicates).
+
+    Returns:
+        Deduplicated list of paths (one per unique ENC cell).
+    """
+    seen: dict[str, Path] = {}
+    for p in s57_paths:
+        if p.stem not in seen:
+            seen[p.stem] = p
+    return sorted(seen.values())
+
+
+def _depth_colour(drval1: float | None, drval2: float | None) -> str:
+    """Map S-57 DEPARE depth range to an IHO-inspired colour hex string."""
+    mid = ((drval1 or 0) + (drval2 or 0)) / 2.0
+    for lo, hi, col in _S57_DEPTH_COLOURS:
+        if lo <= mid < hi:
+            return col
+    return _S57_BG_COLOUR
+
+
+def render_sjokort_png(
+    s57_paths: list[Path],
+    bbox_wgs84: dict,
+    output_path: Path,
+    img_w: int,
+    img_h: int,
+) -> Path:
+    """Render S-57 nautical chart data to a PNG image.
+
+    Reads key layers (DEPARE, LNDARE, COALNE, DEPCNT, FAIRWY) from the
+    provided ENC cell files and renders them with IHO S-52 inspired colours,
+    clipped to the given WGS84 bounding box.
+
+    Only the highest-scale ENC cells that actually contain data within the
+    bbox are used. Layers are rendered bottom-to-top: depth areas → fairways
+    → land → depth contours → coastline.
+
+    Args:
+        s57_paths: Deduplicated list of S-57 (.000) file paths.
+        bbox_wgs84: WGS84 bounding box with keys west, south, east, north.
+        output_path: Where to save the output PNG.
+        img_w: Target image width in pixels.
+        img_h: Target image height in pixels.
+
+    Returns:
+        Path to the rendered PNG file.
+
+    Raises:
+        FetchError: If rendering fails (e.g. no data within bbox).
+    """
+    import warnings
+
+    try:
+        import geopandas as gpd
+        import pandas as pd
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from shapely.geometry import box
+        from PIL import Image
+    except ImportError as e:
+        raise FetchError(
+            f"Sjökort rendering requires geopandas, matplotlib and Pillow: {e}"
+        )
+
+    warnings.filterwarnings("ignore", message=".*Skipping field.*")
+    warnings.filterwarnings("ignore", category=UserWarning)
+
+    W = bbox_wgs84["west"]
+    S = bbox_wgs84["south"]
+    E = bbox_wgs84["east"]
+    N = bbox_wgs84["north"]
+    clip_box = box(W, S, E, N)
+
+    def _read_layer(path: Path, layer: str, geom_types: list[str] | None = None):
+        """Read and clip a single S-57 layer."""
+        import fiona
+        try:
+            if layer not in fiona.listlayers(str(path)):
+                return gpd.GeoDataFrame()
+            gdf = gpd.read_file(str(path), layer=layer, bbox=(W, S, E, N))
+            if gdf.empty:
+                return gdf
+            gdf = gdf[gdf.geometry.notna()]
+            if geom_types and not gdf.empty:
+                gdf = gdf[gdf.geometry.geom_type.isin(geom_types)]
+            if not gdf.empty:
+                gdf = gpd.clip(gdf, clip_box)
+            return gdf
+        except Exception:
+            return gpd.GeoDataFrame()
+
+    # Accumulate layers from all ENC cells
+    all_dep, all_lnd, all_coa, all_dpc, all_fwy = [], [], [], [], []
+    for f in s57_paths:
+        dep = _read_layer(f, "DEPARE", ["Polygon", "MultiPolygon"])
+        if not dep.empty:
+            all_dep.append(dep)
+        lnd = _read_layer(f, "LNDARE", ["Polygon", "MultiPolygon"])
+        if not lnd.empty:
+            all_lnd.append(lnd)
+        coa = _read_layer(f, "COALNE", ["LineString", "MultiLineString"])
+        if not coa.empty:
+            all_coa.append(coa)
+        dpc = _read_layer(f, "DEPCNT", ["LineString", "MultiLineString"])
+        if not dpc.empty:
+            all_dpc.append(dpc)
+        fwy = _read_layer(f, "FAIRWY", ["Polygon", "MultiPolygon"])
+        if not fwy.empty:
+            all_fwy.append(fwy)
+
+    dep_gdf = pd.concat(all_dep, ignore_index=True) if all_dep else gpd.GeoDataFrame()
+    lnd_gdf = pd.concat(all_lnd, ignore_index=True) if all_lnd else gpd.GeoDataFrame()
+    coa_gdf = pd.concat(all_coa, ignore_index=True) if all_coa else gpd.GeoDataFrame()
+    dpc_gdf = pd.concat(all_dpc, ignore_index=True) if all_dpc else gpd.GeoDataFrame()
+    fwy_gdf = pd.concat(all_fwy, ignore_index=True) if all_fwy else gpd.GeoDataFrame()
+
+    # Render
+    dpi = 150
+    fig_w = img_w / 100
+    fig_h = img_h / 100
+    fig, ax = plt.subplots(1, 1, figsize=(fig_w, fig_h), dpi=dpi)
+    ax.set_xlim(W, E)
+    ax.set_ylim(S, N)
+    ax.set_aspect("auto")
+    ax.axis("off")
+    fig.patch.set_facecolor(_S57_BG_COLOUR)
+    ax.set_facecolor(_S57_BG_COLOUR)
+
+    # 1. Depth areas
+    if not dep_gdf.empty:
+        dep_gdf = gpd.GeoDataFrame(dep_gdf, geometry="geometry")
+        dep_gdf["_colour"] = dep_gdf.apply(
+            lambda r: _depth_colour(r.get("DRVAL1"), r.get("DRVAL2")), axis=1
+        )
+        for colour in dep_gdf["_colour"].unique():
+            subset = dep_gdf[dep_gdf["_colour"] == colour]
+            subset.plot(ax=ax, color=colour, edgecolor="none")
+
+    # 2. Fairways
+    if not fwy_gdf.empty:
+        gpd.GeoDataFrame(fwy_gdf, geometry="geometry").plot(
+            ax=ax, color=_S57_FAIRWAY_COLOUR, alpha=0.4,
+            edgecolor=_S57_FAIRWAY_COLOUR, linewidth=0.3,
+        )
+
+    # 3. Land
+    if not lnd_gdf.empty:
+        gpd.GeoDataFrame(lnd_gdf, geometry="geometry").plot(
+            ax=ax, color=_S57_LAND_COLOUR, edgecolor="none",
+        )
+
+    # 4. Depth contours
+    if not dpc_gdf.empty:
+        gpd.GeoDataFrame(dpc_gdf, geometry="geometry").plot(
+            ax=ax, color=_S57_DEPCNT_COLOUR, linewidth=0.3, alpha=0.5,
+        )
+
+    # 5. Coastline
+    if not coa_gdf.empty:
+        gpd.GeoDataFrame(coa_gdf, geometry="geometry").plot(
+            ax=ax, color=_S57_COASTLINE_COLOUR, linewidth=0.5,
+        )
+
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(
+        output_path, dpi=dpi, bbox_inches="tight", pad_inches=0,
+        facecolor=_S57_BG_COLOUR,
+    )
+    plt.close(fig)
+
+    # Resize to exact target dimensions
+    img = Image.open(output_path)
+    img = img.resize((img_w, img_h), Image.LANCZOS)
+    img.save(output_path)
+
+    return output_path
+
+
+def fetch_sjokort_data(
+    coords: dict,
+    email: str | None = None,
+    session: Any | None = None,
+    cookies: dict | None = None,
+    cache_dir: str | None = None,
+    max_retries: int = 20,
+    retry_delay: float = 30.0,
+    margin_m: int = SLU_GET_DEFAULT_MARGIN_M,
+    render: bool = False,
+    output_path: str | Path | None = None,
+    img_w: int = 324,
+    img_h: int = 573,
+    s57_dir: str | Path | None = None,
+) -> SjokortFetchResult:
+    """Fetch sjökort (nautical chart) data from SLU GET for a given bounding box.
+
+    The area is projected to SWEREF99 TM and snapped to the NMD 10m grid,
+    expanded by ``margin_m`` metres on each side (for cropping flexibility),
+    then split into tiles ≤ 2.5 km² for ordering. Each tile is submitted via
+    the SLU GET API, downloaded, and extracted. Duplicate ENC cells across
+    tiles are deduplicated automatically.
+
+    Optionally renders the S-57 data to a PNG image via ``render=True``.
+
+    **Authentication note:**
+    SLU GET (maps.slu.se) uses Shibboleth SSO with httpOnly cookies that
+    cannot be extracted from a browser via JavaScript. There are three
+    ways to supply authentication:
+
+    1. *Pre-extracted S-57 directory* — set ``s57_dir`` to a directory
+       containing .000 files. The order/download steps are skipped entirely.
+       This is the recommended approach when data has been downloaded via
+       a browser session manually or through automation.
+
+    2. *requests.Session with Shibboleth cookies* — pass a ``session``
+       obtained via Selenium/Playwright that has navigated through the
+       Shibboleth login flow, or manually copy cookies into a session.
+
+    3. *Cookie dict* — pass ``cookies`` as a dict; a new session is created.
+
+    S-57 files are cached locally by NMD-aligned (padded) bounding box.
+
+    Args:
+        coords: WGS84 bounding box dict with keys: west, south, east, north.
+        email: E-mail address registered with SLU GET. Required unless
+               ``s57_dir`` is provided or cache exists.
+        session: Optional ``requests.Session`` with Shibboleth cookies.
+                 If not provided, one is created from ``cookies``.
+        cookies: Optional dict of Shibboleth cookies (used if session is None).
+        cache_dir: Directory for the sjökort cache. Defaults to .sjokort_cache/.
+        max_retries: Max download poll attempts per tile (default 20).
+        retry_delay: Seconds between download retries (default 30).
+        margin_m: Margin in metres to expand the bbox before ordering
+                  (default 1000). Set to 0 to order exactly the input bbox.
+        render: If True, render the S-57 data to a PNG at ``output_path``.
+        output_path: Destination for the rendered PNG. Required when
+                     ``render=True``. Accepts str or Path.
+        img_w: Rendered image width in pixels (default 324).
+        img_h: Rendered image height in pixels (default 573).
+        s57_dir: Path to a directory of pre-extracted S-57 (.000) files.
+                 When set, the order and download steps are skipped — the
+                 function only deduplicates and optionally renders.
+
+    Returns:
+        SjokortFetchResult with S-57 file paths, tile metadata, and
+        optionally the path to the rendered PNG.
+
+    Raises:
+        FetchError: If ordering, downloading, or rendering fails.
+        ValueError: If ``render=True`` but ``output_path`` is not set,
+                    or if no ``email`` / ``s57_dir`` / cache is available.
+    """
+    import logging
+    import requests as req_lib
+
+    log = logging.getLogger(__name__)
+
+    if render and output_path is None:
+        raise ValueError("output_path is required when render=True")
+    if output_path is not None:
+        output_path = Path(output_path)
+
+    # Project and snap to NMD grid
+    projected_coords = _to_nmd_grid(coords)
+    log.info(
+        "Sjökort bbox SWEREF99 TM: W=%d S=%d E=%d N=%d",
+        projected_coords["west"],
+        projected_coords["south"],
+        projected_coords["east"],
+        projected_coords["north"],
+    )
+
+    # Expand by margin for ordering (padded bbox)
+    if margin_m > 0:
+        padded_coords = _pad_sweref_bbox(projected_coords, margin_m)
+        log.info(
+            "Sjökort padded bbox (+%dm): W=%d S=%d E=%d N=%d",
+            margin_m,
+            padded_coords["west"],
+            padded_coords["south"],
+            padded_coords["east"],
+            padded_coords["north"],
+        )
+    else:
+        padded_coords = projected_coords
+
+    resolved_cache = Path(cache_dir or SJOKORT_CACHE_DIR)
+
+    # ── Mode 1: Pre-extracted S-57 directory ──────────────────────────
+    if s57_dir is not None:
+        s57_dir = Path(s57_dir)
+        raw_files = sorted(s57_dir.glob("**/*.000"))
+        if not raw_files:
+            raise FetchError(f"No S-57 (.000) files found in {s57_dir}")
+        unique_files = _deduplicate_s57(raw_files)
+        log.info(
+            "Sjökort from s57_dir: %d raw → %d unique S-57 files",
+            len(raw_files), len(unique_files),
+        )
+        result = SjokortFetchResult(
+            s57_paths=unique_files,
+            tiles=[],
+            bbox_wgs84=coords,
+            bbox_sweref=projected_coords,
+            bbox_sweref_padded=padded_coords if margin_m > 0 else None,
+            from_cache=False,
+        )
+        if render:
+            result.rendered_png = render_sjokort_png(
+                unique_files, coords, output_path, img_w, img_h,
+            )
+            log.info("Sjökort rendered to %s", result.rendered_png)
+        return result
+
+    # ── Mode 2: Cache lookup (keyed on padded bbox) ───────────────────
+    cache_key = _sjokort_cache_key(padded_coords)
+    cache_s57_dir = resolved_cache / cache_key
+
+    if cache_s57_dir.exists():
+        cached_files = sorted(cache_s57_dir.glob("*.000"))
+        if cached_files:
+            unique_files = _deduplicate_s57(cached_files)
+            log.info("Sjökort loaded from cache: %d S-57 files", len(unique_files))
+            result = SjokortFetchResult(
+                s57_paths=unique_files,
+                tiles=[],
+                bbox_wgs84=coords,
+                bbox_sweref=projected_coords,
+                bbox_sweref_padded=padded_coords if margin_m > 0 else None,
+                from_cache=True,
+            )
+            if render:
+                result.rendered_png = render_sjokort_png(
+                    unique_files, coords, output_path, img_w, img_h,
+                )
+                log.info("Sjökort rendered to %s", result.rendered_png)
+            return result
+
+    # ── Mode 3: Full order + download via SLU GET ─────────────────────
+    if email is None:
+        raise ValueError(
+            "email is required for SLU GET ordering. Provide email, "
+            "or use s57_dir= for pre-downloaded data, "
+            "or ensure data is cached."
+        )
+
+    # Create session if needed
+    if session is None:
+        session = req_lib.Session()
+        if cookies:
+            session.cookies.update(cookies)
+
+    # Tile the padded area
+    tiles = _tile_sjokort_bbox(padded_coords)
+    log.info(
+        "Sjökort area %.2f km² → %d tile(s)",
+        sum(t.area_m2 for t in tiles) / 1e6,
+        len(tiles),
+    )
+
+    # Submit orders
+    for i, tile in enumerate(tiles):
+        _order_sjokort_tile(tile, email, session)
+        log.info(
+            "  Tile %d/%d ordered: UUID=%s (%.2f km²)",
+            i + 1, len(tiles), tile.uuid, tile.area_m2 / 1e6,
+        )
+
+    # Download and extract
+    cache_s57_dir.mkdir(parents=True, exist_ok=True)
+    zip_dir = resolved_cache / "zips"
+    zip_dir.mkdir(parents=True, exist_ok=True)
+
+    all_s57: list[Path] = []
+    for i, tile in enumerate(tiles):
+        log.info("  Downloading tile %d/%d (UUID=%s)...", i + 1, len(tiles), tile.uuid)
+        zip_path = _download_sjokort_zip(
+            tile.uuid, zip_dir, session=session,
+            max_retries=max_retries, retry_delay=retry_delay,
+        )
+        s57_files = _extract_s57_from_zip(zip_path, cache_s57_dir)
+        all_s57.extend(s57_files)
+        log.info("  Extracted %d S-57 files from tile %d", len(s57_files), i + 1)
+
+    # Deduplicate across tiles
+    unique_files = _deduplicate_s57(all_s57)
+    log.info(
+        "Sjökort fetch complete: %d raw → %d unique S-57 files",
+        len(all_s57), len(unique_files),
+    )
+
+    result = SjokortFetchResult(
+        s57_paths=unique_files,
+        tiles=tiles,
+        bbox_wgs84=coords,
+        bbox_sweref=projected_coords,
+        bbox_sweref_padded=padded_coords if margin_m > 0 else None,
+        from_cache=False,
+    )
+
+    if render:
+        result.rendered_png = render_sjokort_png(
+            unique_files, coords, output_path, img_w, img_h,
+        )
+        log.info("Sjökort rendered to %s", result.rendered_png)
+
+    return result
