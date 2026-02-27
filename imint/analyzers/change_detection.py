@@ -81,10 +81,21 @@ class ChangeDetectionAnalyzer(BaseAnalyzer):
         baseline_bands_path = os.path.join(baseline_dir, f"{area}_bands.npy")
         scl_path = os.path.join(baseline_dir, f"{area}_scl.npy")
 
+        # Allow explicit baseline override via config
+        cfg_baseline = self.config.get("baseline_path")
+        if cfg_baseline:
+            if cfg_baseline.endswith("_bands.npy"):
+                baseline_bands_path = cfg_baseline
+                baseline_rgb_path = cfg_baseline.replace("_bands.npy", ".npy")
+            else:
+                baseline_rgb_path = cfg_baseline
+                baseline_bands_path = cfg_baseline.replace(".npy", "_bands.npy")
+            scl_path = baseline_bands_path.replace("_bands.npy", "_scl.npy")
+
         # Build current multispectral stack
         current_stack, is_multispectral = _build_stack(rgb, bands)
 
-        # First run: save baseline, return zero changes
+        # First run (no baseline exists and none specified): save and return zero
         if not os.path.exists(baseline_rgb_path) and not os.path.exists(baseline_bands_path):
             np.save(baseline_rgb_path, rgb)
             if is_multispectral:

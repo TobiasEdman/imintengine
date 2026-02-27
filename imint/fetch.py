@@ -261,7 +261,9 @@ def _fetch_scl(conn, projected_coords: dict, temporal: list, date_window: int):
 def _fetch_scl_batch(
     conn,
     projected_coords: dict,
-    candidate_dates: list[str],
+    candidate_dates: list[str] | None = None,
+    *,
+    temporal: list[str] | None = None,
 ) -> list[tuple[str, float]]:
     """Fetch SCL for multiple dates in one DES call, return per-date cloud fractions.
 
@@ -270,22 +272,24 @@ def _fetch_scl_batch(
     This function extracts each TIF, parses the date from the filename,
     and computes ``check_cloud_fraction`` locally.
 
-    One batch call replaces N separate openEO calls, saving connection,
-    auth, and graph-compilation overhead.
+    Supports two modes:
 
-    The temporal extent spans from the earliest to the latest candidate
-    date. DES may return extra dates within that range; only dates that
-    appear in *candidate_dates* are returned.
+    * **candidate_dates** — temporal extent is derived from the list;
+      only these dates are returned.
+    * **temporal** — explicit ``[start, end)`` range; ALL dates found
+      in the archive are returned (sorted by date).  This is the
+      "skip STAC" mode where DES discovers available dates directly.
 
     Args:
         conn: openEO connection.
         projected_coords: EPSG:3006 bbox dict with ``"crs"`` key.
-        candidate_dates: Date strings ordered by STAC cloud score
-            (best first), e.g. ``["2018-08-11", "2018-08-13"]``.
+        candidate_dates: Optional list of date strings to filter to.
+        temporal: Optional ``[start, end)`` ISO date pair.  If given,
+            *candidate_dates* is ignored and all dates are returned.
 
     Returns:
-        List of ``(date_str, cloud_fraction)`` in *candidate_dates*
-        order (only dates found in the archive).
+        List of ``(date_str, cloud_fraction)`` sorted by date or in
+        *candidate_dates* order.
 
     Raises:
         FetchError: If DES returns empty/unparseable data.
@@ -296,25 +300,29 @@ def _fetch_scl_batch(
     import rasterio
     from datetime import datetime as _dt, timedelta as _td
 
-    if not candidate_dates:
+    # Determine temporal extent
+    if temporal is not None:
+        _temporal = temporal
+        cand_set = None  # accept all dates
+    elif candidate_dates:
+        sorted_cands = sorted(candidate_dates)
+        dt_end = _dt.strptime(sorted_cands[-1], "%Y-%m-%d") + _td(days=1)
+        _temporal = [sorted_cands[0], dt_end.strftime("%Y-%m-%d")]
+        cand_set = set(candidate_dates)
+    else:
         return []
-
-    # Build temporal extent spanning all candidates
-    sorted_cands = sorted(candidate_dates)
-    dt_end = _dt.strptime(sorted_cands[-1], "%Y-%m-%d") + _td(days=1)
-    temporal = [sorted_cands[0], dt_end.strftime("%Y-%m-%d")]
 
     # Load SCL, resample to 10m grid
     cube_ref = conn.load_collection(
         collection_id=COLLECTION,
         spatial_extent=projected_coords,
-        temporal_extent=temporal,
+        temporal_extent=_temporal,
         bands=["b02"],
     )
     cube_scl = conn.load_collection(
         collection_id=COLLECTION,
         spatial_extent=projected_coords,
-        temporal_extent=temporal,
+        temporal_extent=_temporal,
         bands=BANDS_20M_CATEGORICAL,
     )
     cube_scl = cube_scl.resample_cube_spatial(target=cube_ref, method="near")
@@ -324,7 +332,6 @@ def _fetch_scl_batch(
         raise FetchError("DES returned empty SCL batch data")
 
     # DES returns tar.gz for multi-date results
-    cand_set = set(candidate_dates)
     cloud_by_date: dict[str, float] = {}
     _DATE_RE = re.compile(r"out_(\d{4})_(\d{2})_(\d{2})T")
 
@@ -338,7 +345,7 @@ def _fetch_scl_batch(
             if not m:
                 continue
             date_str = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-            if date_str not in cand_set:
+            if cand_set is not None and date_str not in cand_set:
                 continue  # extra date in range, skip
             f = tf.extractfile(member)
             if f is None:
@@ -355,8 +362,10 @@ def _fetch_scl_batch(
     if not cloud_by_date:
         raise FetchError("SCL batch: no matching dates in archive")
 
-    # Return in candidate_dates order (preserves STAC ranking)
-    return [(d, cloud_by_date[d]) for d in candidate_dates if d in cloud_by_date]
+    # Return in candidate_dates order, or sorted by date
+    if candidate_dates is not None and cand_set is not None:
+        return [(d, cloud_by_date[d]) for d in candidate_dates if d in cloud_by_date]
+    return sorted(cloud_by_date.items())
 
 
 def fetch_des_data(
@@ -540,6 +549,346 @@ def fetch_des_data(
         crs=crs,
         transform=transform,
     )
+
+
+# ── Multi-temporal vessel heatmap ────────────────────────────────────────────
+
+
+def _fetch_tci_bands(
+    conn,
+    projected_coords: dict,
+    temporal: list,
+) -> tuple[dict, np.ndarray, "GeoContext"]:
+    """Fetch B02+B03+B04+SCL for vessel detection (lightweight, single date).
+
+    Downloads only the three 10 m TCI bands and the SCL layer — roughly
+    3× smaller than a full spectral fetch.  The TCI bands are needed by
+    ``MarineVesselAnalyzer`` (L1C-TCI formula) and the SCL is used for
+    water-mask filtering of false positives.
+
+    Args:
+        conn: Authenticated openEO connection.
+        projected_coords: EPSG:3006 bbox dict with ``"crs"`` key.
+        temporal: Two-element list ``[start_date, end_date]``.
+
+    Returns:
+        Tuple of ``(bands_dict, scl_array, geo)`` where *bands_dict*
+        has uppercase keys ``{"B02", "B03", "B04"}`` as float32
+        reflectance, *scl_array* is uint8, and *geo* is a GeoContext.
+    """
+    import rasterio
+    from .utils import dn_to_reflectance, des_to_imint_bands
+
+    tci_bands = ["b02", "b03", "b04"]
+
+    cube_tci = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=tci_bands,
+    )
+    cube_scl = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=BANDS_20M_CATEGORICAL,
+    )
+    cube_scl = cube_scl.resample_cube_spatial(target=cube_tci, method="near")
+    cube = cube_tci.merge_cubes(cube_scl)
+
+    data = cube.download(format="gtiff")
+    if not data:
+        raise FetchError("DES returned empty TCI data")
+
+    with rasterio.open(io.BytesIO(data)) as src:
+        raw = src.read()  # (4, H, W): b02, b03, b04, scl
+        crs = src.crs
+        transform = src.transform
+
+    # TCI bands → reflectance
+    bands = {}
+    for i, name in enumerate(tci_bands):
+        bands[name] = dn_to_reflectance(raw[i], source="des")
+    imint_bands = des_to_imint_bands(bands)
+
+    # SCL (last band)
+    scl = raw[len(tci_bands)].astype(np.uint8)
+
+    # Strip "crs" key for bounds_projected
+    proj_bounds = {k: v for k, v in projected_coords.items() if k != "crs"}
+
+    geo = GeoContext(
+        crs=str(crs),
+        transform=transform,
+        bounds_projected=proj_bounds,
+        bounds_wgs84=None,  # not needed for vessel detection
+        shape=(raw.shape[1], raw.shape[2]),
+    )
+
+    return imint_bands, scl, geo
+
+
+def _fetch_tci_scl_batch(
+    conn,
+    projected_coords: dict,
+    temporal: list[str],
+) -> list[tuple[str, dict, np.ndarray, "GeoContext"]]:
+    """Fetch B02+B03+B04+SCL for ALL dates in a temporal range in one call.
+
+    Returns per-date tuples so the caller can screen cloud and run
+    vessel detection without additional DES calls.
+
+    Args:
+        conn: Authenticated openEO connection.
+        projected_coords: EPSG:3006 bbox dict with ``"crs"`` key.
+        temporal: ``[start, end)`` ISO date pair for the range.
+
+    Returns:
+        List of ``(date_str, bands_dict, scl, geo)`` sorted by date.
+        *bands_dict* has uppercase keys ``{"B02", "B03", "B04"}`` as
+        float32 reflectance.
+    """
+    import re
+    import tarfile
+    import rasterio
+    from .utils import dn_to_reflectance, des_to_imint_bands
+
+    tci_band_names = ["b02", "b03", "b04"]
+
+    cube_tci = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=tci_band_names,
+    )
+    cube_scl = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=BANDS_20M_CATEGORICAL,
+    )
+    cube_scl = cube_scl.resample_cube_spatial(target=cube_tci, method="near")
+    cube = cube_tci.merge_cubes(cube_scl)
+
+    data = cube.download(format="gtiff")
+    if not data:
+        raise FetchError("DES returned empty TCI+SCL batch data")
+
+    _DATE_RE = re.compile(r"out_(\d{4})_(\d{2})_(\d{2})T")
+    results: dict[str, tuple[dict, np.ndarray, "GeoContext"]] = {}
+
+    if isinstance(data, bytes) and data[:2] == b"\x1f\x8b":
+        tf = tarfile.open(fileobj=io.BytesIO(data), mode="r:gz")
+        for member in tf.getmembers():
+            if not member.name.lower().endswith((".tif", ".tiff")):
+                continue
+            m = _DATE_RE.search(member.name)
+            if not m:
+                continue
+            date_str = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+            f = tf.extractfile(member)
+            if f is None:
+                continue
+            try:
+                with rasterio.open(io.BytesIO(f.read())) as src:
+                    raw = src.read()  # (4, H, W): b02, b03, b04, scl
+                    crs = src.crs
+                    transform = src.transform
+            except Exception:
+                continue
+
+            bands = {}
+            for i, name in enumerate(tci_band_names):
+                bands[name] = dn_to_reflectance(raw[i], source="des")
+            imint_bands = des_to_imint_bands(bands)
+            scl = raw[len(tci_band_names)].astype(np.uint8)
+
+            proj_bounds = {k: v for k, v in projected_coords.items() if k != "crs"}
+            geo = GeoContext(
+                crs=str(crs),
+                transform=transform,
+                bounds_projected=proj_bounds,
+                bounds_wgs84=None,
+                shape=(raw.shape[1], raw.shape[2]),
+            )
+            results[date_str] = (imint_bands, scl, geo)
+        tf.close()
+    elif isinstance(data, bytes):
+        # Single-date result (plain GeoTIFF, not tar.gz)
+        with rasterio.open(io.BytesIO(data)) as src:
+            raw = src.read()
+            crs = src.crs
+            transform = src.transform
+        bands = {}
+        for i, name in enumerate(tci_band_names):
+            bands[name] = dn_to_reflectance(raw[i], source="des")
+        imint_bands = des_to_imint_bands(bands)
+        scl = raw[len(tci_band_names)].astype(np.uint8)
+        proj_bounds = {k: v for k, v in projected_coords.items() if k != "crs"}
+        geo = GeoContext(
+            crs=str(crs), transform=transform,
+            bounds_projected=proj_bounds, bounds_wgs84=None,
+            shape=(raw.shape[1], raw.shape[2]),
+        )
+        # Use start date as fallback
+        results[temporal[0]] = (imint_bands, scl, geo)
+
+    return [(d, *results[d]) for d in sorted(results)]
+
+
+def fetch_vessel_heatmap(
+    coords: dict,
+    date_start: str,
+    date_end: str,
+    output_dir: str | Path,
+    *,
+    cloud_threshold: float = 0.3,
+    scene_cloud_max: float = 50.0,
+    gaussian_sigma: float = 5.0,
+    prefix: str = "",
+) -> dict:
+    """Fetch all cloud-free Sentinel-2 images in a date range, run vessel
+    detection on each, and aggregate into a heatmap.
+
+    Pipeline (single DES call per month — no STAC):
+
+    1. For each calendar month, batch-fetch B02+B03+B04+SCL for ALL
+       available dates in one openEO call.
+    2. Screen per-date AOI cloud fraction from the downloaded SCL.
+    3. Run ``MarineVesselAnalyzer`` on each cloud-free date (already
+       in memory — no extra fetch needed).
+    4. Accumulate detection centroids into a (H, W) grid and smooth
+       with a Gaussian kernel.
+    5. Save the heatmap as a colormapped RGBA PNG.
+
+    Args:
+        coords: WGS84 bounding box ``{west, south, east, north}``.
+        date_start: Start of search period (ISO date, e.g. ``"2025-07-01"``).
+        date_end: End of search period (ISO date, e.g. ``"2025-07-31"``).
+        output_dir: Directory for output files.
+        cloud_threshold: Maximum AOI cloud fraction (0.0–1.0). Dates with
+            higher cloud coverage are skipped. Default: 0.3 (30%).
+        scene_cloud_max: Unused (kept for CLI compatibility).
+        gaussian_sigma: Standard deviation (in pixels, 1 px = 10 m) for
+            Gaussian smoothing of the raw detection grid. Default: 5.0.
+        prefix: Date prefix for output filenames (e.g. ``"2025-07-10_"``).
+
+    Returns:
+        Dict with keys ``heatmap``, ``dates_used``, ``dates_skipped``,
+        ``total_detections``, ``per_date``, ``heatmap_path``.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    from scipy.ndimage import gaussian_filter
+    from .analyzers.marine_vessels import MarineVesselAnalyzer
+    from .exporters.export import save_vessel_heatmap_png
+    from .utils import bands_to_rgb
+    import json as _json
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    projected_coords = _to_nmd_grid(coords)
+    conn = _connect()
+
+    # Generate 2-week windows.  DES limits synchronous jobs to ~20
+    # time steps; with 4 bands (B02+B03+B04+SCL) per date and ~3
+    # Sentinel-2 passes per 2-week window, each call stays well
+    # within the limit.
+    _CHUNK_DAYS = 14
+    _d_start = _dt.strptime(date_start, "%Y-%m-%d")
+    _d_end = _dt.strptime(date_end, "%Y-%m-%d")
+
+    _chunk_ranges: list[tuple[str, str]] = []
+    _cur = _d_start
+    while _cur <= _d_end:
+        _c_end = min(_cur + _td(days=_CHUNK_DAYS), _d_end + _td(days=1))
+        _chunk_ranges.append((_cur.strftime("%Y-%m-%d"), _c_end.strftime("%Y-%m-%d")))
+        _cur = _c_end
+
+    # ── Fetch + detect per chunk (one DES call each) ─────────────────
+    analyzer = MarineVesselAnalyzer(config={
+        "confidence": 0.286,
+        "water_filter": True,
+    })
+    heatmap = None
+    per_date = []
+    dates_used = []
+    dates_skipped = []
+    total_detections = 0
+
+    print(f"\n[vessel-heatmap] Fetching TCI+SCL from DES ({len(_chunk_ranges)} chunks) ...")
+    for _c_start, _c_end in _chunk_ranges:
+        print(f"\n  ── {_c_start} – {_c_end} ──")
+        try:
+            batch = _fetch_tci_scl_batch(conn, projected_coords, [_c_start, _c_end])
+        except FetchError:
+            print(f"    (no data)")
+            continue
+
+        print(f"    {len(batch)} dates returned")
+
+        for date, bands, scl, geo in batch:
+            cloud = check_cloud_fraction(scl)
+            if cloud > cloud_threshold:
+                dates_skipped.append(date)
+                print(f"    {date}  cloud={cloud:.1%}  ✗")
+                continue
+
+            dates_used.append(date)
+            rgb = bands_to_rgb(bands, scl=scl)
+
+            result = analyzer.run(rgb, bands=bands, scl=scl)
+            regions = result.outputs.get("regions", []) if result.success else []
+            n = len(regions)
+            total_detections += n
+            per_date.append({"date": date, "cloud": cloud, "vessels": n})
+            print(f"    {date}  cloud={cloud:.1%}  ✓  vessels={n}")
+
+            if heatmap is None:
+                heatmap = np.zeros(rgb.shape[:2], dtype=np.float32)
+
+            for r in regions:
+                bb = r["bbox"]
+                cy = (bb["y_min"] + bb["y_max"]) // 2
+                cx = (bb["x_min"] + bb["x_max"]) // 2
+                if 0 <= cy < heatmap.shape[0] and 0 <= cx < heatmap.shape[1]:
+                    heatmap[cy, cx] += 1.0
+
+    print(f"\n    {len(dates_used)} dates used, {len(dates_skipped)} skipped")
+
+    # ── Step 5: Smooth and save ──────────────────────────────────────
+    heatmap_path = None
+    if heatmap is not None and heatmap.max() > 0:
+        heatmap = gaussian_filter(heatmap, sigma=gaussian_sigma)
+        # Cache the raw smoothed array for quick re-export
+        np.save(str(output_dir / f"{prefix}vessel_heatmap.npy"), heatmap)
+        heatmap_path = output_dir / f"{prefix}vessel_heatmap_clean.png"
+        save_vessel_heatmap_png(heatmap, str(heatmap_path))
+
+    # Save summary JSON
+    summary = {
+        "date_start": date_start,
+        "date_end": date_end,
+        "dates_used": dates_used,
+        "dates_skipped": dates_skipped,
+        "total_detections": total_detections,
+        "per_date": per_date,
+        "cloud_threshold": cloud_threshold,
+        "gaussian_sigma": gaussian_sigma,
+    }
+    summary_path = output_dir / f"{prefix}vessel_heatmap_summary.json"
+    with open(summary_path, "w") as f:
+        _json.dump(summary, f, indent=2)
+    print(f"\n[vessel-heatmap] Summary → {summary_path}")
+
+    return {
+        "heatmap": heatmap,
+        "dates_used": dates_used,
+        "dates_skipped": dates_skipped,
+        "total_detections": total_detections,
+        "per_date": per_date,
+        "heatmap_path": heatmap_path,
+    }
 
 
 # ── Cloud-free baseline fetching ─────────────────────────────────────────────
@@ -1332,19 +1681,217 @@ SJOKORT_CACHE_DIR = os.path.join(
 # S-57 layer rendering config — IHO S-52 inspired colour scheme
 # Depth ranges (DRVAL1/DRVAL2 midpoint) → hex colour
 _S57_DEPTH_COLOURS = [
-    (0,   3,   "#9BCFEA"),   # Very shallow
-    (3,   6,   "#B5D9EE"),   # Shallow
-    (6,   10,  "#C0DFF2"),   # Moderate shallow
-    (10,  20,  "#CCE7F5"),   # Moderate
-    (20,  30,  "#DAF0FA"),   # Deeper
-    (30,  50,  "#E4F4FB"),   # Deep
-    (50,  999, "#EEF8FC"),   # Very deep
+    (0,   3,   "#B0DEF5"),   # Very shallow — bright cyan-blue
+    (3,   6,   "#C2E6F8"),   # Shallow
+    (6,   10,  "#D0ECF9"),   # Moderate shallow
+    (10,  20,  "#DDF2FB"),   # Moderate
+    (20,  30,  "#E6F5FC"),   # Deeper
+    (30,  50,  "#EDF8FD"),   # Deep
+    (50,  999, "#EDF8FD"),   # Very deep — same as BG (no visible border)
 ]
-_S57_LAND_COLOUR = "#F5E6C8"
-_S57_COASTLINE_COLOUR = "#333333"
-_S57_DEPCNT_COLOUR = "#8BB8D9"
-_S57_FAIRWAY_COLOUR = "#D4B8E8"
-_S57_BG_COLOUR = "#EEF8FC"
+_S57_LAND_COLOUR = "#F5E6C8"       # Warm tan/sand
+_S57_COASTLINE_COLOUR = "#2C2C2C"  # Near-black
+_S57_DEPCNT_COLOUR = "#7CADC8"     # Blue-grey contour lines
+_S57_FAIRWAY_COLOUR = "#C9ABE0"    # Light purple
+_S57_BG_COLOUR = "#EDF8FD"         # Default sea — matches DEPARE 30-50 m
+_S57_BUILDING_COLOUR = "#C8AD8A"   # Darker tan for buildings
+_S57_ROAD_COLOUR = "#999999"       # Grey for roads
+_S57_SLCONS_COLOUR = "#555555"     # Dark grey for shoreline constructions
+_S57_BRIDGE_COLOUR = "#444444"     # Dark for bridges
+_S57_NAVLNE_COLOUR = "#AA5599"     # Magenta for navigation lines
+_S57_SOUNDG_COLOUR = "#3366AA"     # Blue for sounding labels
+_S57_OBSTRN_COLOUR = "#CC3333"     # Red for obstructions
+_S57_WRECKS_COLOUR = "#333333"     # Dark for wrecks
+
+# S-57 COLOUR attribute mapping (IHO S-57 Appendix A, Chapter 2)
+_S57_COLOUR_MAP = {
+    "1": "#FFFFFF",   # white
+    "2": "#000000",   # black
+    "3": "#FF0000",   # red
+    "4": "#00AA00",   # green
+    "5": "#0000FF",   # blue
+    "6": "#FFCC00",   # yellow
+    "7": "#888888",   # grey
+    "8": "#8B4513",   # brown
+    "9": "#FFBF00",   # amber
+    "10": "#8B008B",  # violet
+    "11": "#FF8800",  # orange
+    "12": "#FF00FF",  # magenta
+    "13": "#FFB6C1",  # pink
+}
+
+# Rendering colours for light sectors (semi-transparent fills)
+_SECTOR_FILL = {
+    "3": (1.0, 0.0, 0.0, 0.18),   # red
+    "4": (0.0, 0.7, 0.0, 0.18),   # green
+    "1": (1.0, 1.0, 0.6, 0.12),   # white (pale yellow tint)
+    "6": (1.0, 0.8, 0.0, 0.15),   # yellow
+}
+_SECTOR_EDGE = {
+    "3": "#CC0000",
+    "4": "#006600",
+    "1": "#AA8800",
+    "6": "#CC8800",
+}
+
+
+def _load_svg_symbol(svg_path: str, flip_y: bool = True):
+    """Parse an OpenSeaMap SVG file into a normalised matplotlib Path.
+
+    Extracts all ``<path d="...">`` elements, combines them, centres on
+    the origin, and scales to the range *-1 … 1*.  Y is flipped by
+    default because SVG has *y-down* while matplotlib markers use *y-up*.
+
+    Returns ``None`` if the file cannot be read or contains no paths.
+    """
+    import re
+    import numpy as np
+    from svgpath2mpl import parse_path
+    from matplotlib.path import Path as MPath
+
+    try:
+        with open(svg_path) as fh:
+            svg = fh.read()
+    except OSError:
+        return None
+
+    paths_data = re.findall(r'<path[^>]*\bd="([^"]+)"', svg)
+    if not paths_data:
+        return None
+
+    all_verts: list[np.ndarray] = []
+    all_codes: list[int] = []
+    for d in paths_data:
+        try:
+            p = parse_path(d)
+            all_verts.append(p.vertices.copy())
+            all_codes.extend(list(p.codes))
+        except Exception:
+            continue
+
+    if not all_verts:
+        return None
+
+    verts = np.vstack(all_verts)
+    xmin, ymin = verts.min(axis=0)
+    xmax, ymax = verts.max(axis=0)
+    cx, cy = (xmin + xmax) / 2, (ymin + ymax) / 2
+    scale = max(xmax - xmin, ymax - ymin) / 2
+    if scale < 1e-6:
+        scale = 1.0
+    verts = (verts - [cx, cy]) / scale
+    if flip_y:
+        verts[:, 1] *= -1
+
+    return MPath(verts, all_codes)
+
+
+def _int1_symbols() -> dict:
+    """Load INT1/S-52 nautical chart symbols from OpenSeaMap SVGs.
+
+    Returns a dict mapping symbol name → ``matplotlib.path.Path`` usable
+    as a ``marker`` in ``ax.scatter()`` / ``ax.plot()``.
+
+    Symbols are loaded from ``data/symbols/*.svg`` (OpenSeaMap renderer
+    project, archived 2021).  Each SVG is parsed with *svgpath2mpl* and
+    normalised to the coordinate range -1 … 1.
+
+    If an SVG file is missing a simple hand-coded fallback is used so
+    the renderer never crashes.
+    """
+    import os
+    import math
+    from matplotlib.path import Path as MPath
+
+    MOVETO = MPath.MOVETO
+    LINETO = MPath.LINETO
+    CLOSEPOLY = MPath.CLOSEPOLY
+
+    symbols: dict[str, MPath] = {}
+
+    # ── Locate SVG directory ────────────────────────────────────────
+    svg_dir = os.path.join(os.path.dirname(__file__), "..", "data", "symbols")
+    svg_dir = os.path.normpath(svg_dir)
+
+    def _svg(name: str):
+        return _load_svg_symbol(os.path.join(svg_dir, f"{name}.svg"))
+
+    # ── Buoys (pillar / spar pole symbols) ─────────────────────────
+    symbols["buoy_can"]      = _svg("Pillar")     # port / lateral
+    symbols["buoy_cone"]     = _svg("Spar")       # starboard / lateral
+    symbols["buoy_cardinal"] = _svg("Pillar")     # cardinal
+    symbols["buoy_special"]  = _svg("Float")      # special purpose
+
+    # ── Beacon ──────────────────────────────────────────────────────
+    symbols["beacon"] = _svg("Beacon")
+
+    # ── Light ───────────────────────────────────────────────────────
+    symbols["light"] = _svg("Light")
+
+    # ── Wreck ───────────────────────────────────────────────────────
+    symbols["wreck"] = _svg("WreckD")
+
+    # ── Rock ────────────────────────────────────────────────────────
+    symbols["rock"] = _svg("Rock")
+
+    # ── Obstruction ─────────────────────────────────────────────────
+    # Reuse rock cross — good + symbol
+    symbols["obstruction"] = _svg("Rock")
+
+    # ── Landmark ────────────────────────────────────────────────────
+    symbols["landmark"] = _svg("Tower") or _svg("Church")
+
+    # ── Mooring / bollard ───────────────────────────────────────────
+    symbols["mooring"] = _svg("Bollard")
+
+    # ── Harbour ─────────────────────────────────────────────────────
+    symbols["harbour"] = _svg("Harbour")
+
+    # ── Topmarks ────────────────────────────────────────────────────
+    symbols["topmark"]       = _svg("Top_Can")
+    symbols["topmark_can"]   = _svg("Top_Can")
+    symbols["topmark_cone"]  = _svg("Top_Cone")
+    symbols["topmark_x"]     = _svg("Top_X")
+    symbols["topmark_north"] = _svg("Top_North")
+    symbols["topmark_south"] = _svg("Top_South")
+
+    # ── Fallbacks for any missing SVGs ──────────────────────────────
+    # Simple cross for rock / obstruction
+    _cross = MPath(
+        [(0, -0.8), (0, 0.8), (0, 0),
+         (-0.8, 0), (0.8, 0), (0, 0)],
+        [MOVETO, LINETO, MOVETO,
+         MOVETO, LINETO, MOVETO],
+    )
+    # Simple triangle for beacon / generic
+    _tri = MPath(
+        [(0, -1), (0, 0.1), (-0.5, 0.1), (0, 0.9),
+         (0.5, 0.1), (-0.5, 0.1)],
+        [MOVETO, LINETO, MOVETO, LINETO, LINETO, CLOSEPOLY],
+    )
+    # Simple filled circle for buoys
+    import numpy as _np
+    _circ_pts = [(0.8 * math.cos(t), 0.8 * math.sin(t))
+                 for t in _np.linspace(0, 2 * math.pi, 20)]
+    _circ_codes = [MOVETO] + [LINETO] * 18 + [CLOSEPOLY]
+    _circ = MPath(_circ_pts, _circ_codes)
+
+    _fallbacks = {
+        "buoy_can": _circ, "buoy_cone": _circ,
+        "buoy_cardinal": _circ, "buoy_special": _circ,
+        "beacon": _tri, "light": _tri,
+        "wreck": _cross, "rock": _cross,
+        "obstruction": _cross, "landmark": _tri,
+        "mooring": _circ, "harbour": _cross,
+        "topmark": _tri, "topmark_can": _tri,
+        "topmark_cone": _tri, "topmark_x": _cross,
+        "topmark_north": _tri, "topmark_south": _tri,
+    }
+    for key, fallback in _fallbacks.items():
+        if symbols.get(key) is None:
+            symbols[key] = fallback
+
+    return symbols
 
 
 @dataclass
@@ -1623,29 +2170,157 @@ def _depth_colour(drval1: float | None, drval2: float | None) -> str:
     return _S57_BG_COLOUR
 
 
+def _best_scale_prefix(s57_paths: list, bbox_wgs84: dict) -> str | None:
+    """Auto-select the most detailed ENC scale whose data covers the AOI.
+
+    Swedish ENC cells use prefixes that encode the navigational purpose:
+
+        SE2 — Overview        (1:1 000 000)
+        SE3 — General         (1:350 000)
+        SE4 — Harbour/Approach (1:90 000)
+        SE5 — Berthing        (1:22 000)
+
+    The function groups the supplied S-57 files by prefix, then tests
+    each group starting from the most detailed (highest number).  For
+    each scale the DEPARE (depth area) and LNDARE (land area) polygons
+    are unioned and intersected with the AOI.  If the coverage ratio
+    is ≥ 95 % the scale is selected.
+
+    Actual geometry coverage is checked — not the cell metadata extent
+    (M_COVR) — so scales with gaps in depth data (e.g. open water
+    outside a harbour cell) are correctly rejected.
+
+    Returns:
+        The chosen prefix string (e.g. ``"SE4"``) or ``None`` if no
+        single scale covers the AOI sufficiently.
+    """
+    import fiona
+    import geopandas as gpd
+    from collections import defaultdict
+    from shapely.geometry import box as _box
+    from shapely.ops import unary_union
+
+    W = bbox_wgs84["west"]
+    S = bbox_wgs84["south"]
+    E = bbox_wgs84["east"]
+    N = bbox_wgs84["north"]
+    aoi = _box(W, S, E, N)
+    aoi_area = aoi.area
+
+    # Gruppera filer per prefix (SE2, SE3, SE4, SE5, …)
+    groups: dict[str, list] = defaultdict(list)
+    for p in s57_paths:
+        stem = Path(p).stem.upper()
+        prefix = stem[:3]           # "SE4", "SE3", etc.
+        groups[prefix].append(p)
+
+    # Testa varje grupp — högsta nummer (mest detaljerad) först
+    for prefix in sorted(groups.keys(), reverse=True):
+        paths = groups[prefix]
+        dep_polys = []
+        lnd_polys = []
+        for p in paths:
+            try:
+                lyrs = fiona.listlayers(str(p))
+                if "DEPARE" in lyrs:
+                    gdf = gpd.read_file(str(p), layer="DEPARE",
+                                        bbox=(W, S, E, N))
+                    if not gdf.empty:
+                        dep_polys.extend(
+                            g for g in gdf.geometry if g and g.is_valid
+                        )
+                if "LNDARE" in lyrs:
+                    gdf = gpd.read_file(str(p), layer="LNDARE",
+                                        bbox=(W, S, E, N))
+                    if not gdf.empty:
+                        lnd_polys.extend(
+                            g for g in gdf.geometry if g and g.is_valid
+                        )
+            except Exception:
+                continue
+
+        if not dep_polys and not lnd_polys:
+            continue
+
+        # Union av DEPARE + LNDARE klippt mot AOI
+        all_polys = dep_polys + lnd_polys
+        coverage = unary_union(all_polys).intersection(aoi)
+        ratio = coverage.area / aoi_area if aoi_area > 0 else 0
+
+        if ratio >= 0.95:
+            return prefix
+
+    return None          # Ingen skala täcker ≥95 %
+
+
 def render_sjokort_png(
     s57_paths: list[Path],
-    bbox_wgs84: dict,
+    bbox_wgs84: dict | None,
     output_path: Path,
-    img_w: int,
-    img_h: int,
+    img_w: int = 0,
+    img_h: int = 0,
+    *,
+    scale_prefix: str | None = None,
 ) -> Path:
     """Render S-57 nautical chart data to a PNG image.
 
-    Reads key layers (DEPARE, LNDARE, COALNE, DEPCNT, FAIRWY) from the
-    provided ENC cell files and renders them with IHO S-52 inspired colours,
-    clipped to the given WGS84 bounding box.
+    Reads key layers from ENC cell files and renders them with IHO S-52
+    inspired colours, clipped to the given WGS84 bounding box.
 
-    Only the highest-scale ENC cells that actually contain data within the
-    bbox are used. Layers are rendered bottom-to-top: depth areas → fairways
-    → land → depth contours → coastline.
+    **CRS handling — critical for pixel alignment:**
+
+    S-57 ENC data is natively in WGS84 (EPSG:4326), but the Sentinel-2
+    RGB image is in SWEREF99 TM (EPSG:3006).  If the sjökort were rendered
+    directly in WGS84, its pixel grid would not align with the RGB because
+    the two coordinate systems distort space differently (geographic degrees
+    vs projected metres).
+
+    To guarantee exact pixel alignment the function:
+
+    1. Reads S-57 features using the WGS84 bbox (native CRS of the ENC
+       files) and clips them to the AOI.
+    2. Reprojects every GeoDataFrame to the target CRS read from
+       ``bands_meta.json`` (normally ``EPSG:3006``).  Fiona-based point
+       features (lights, buoys, labels) are transformed via ``pyproj``.
+    3. Sets the matplotlib axes to the **projected bounds** from the
+       metadata (``bounds_projected``) so that the rendered image covers
+       exactly the same metric rectangle as the RGB.
+
+    If ``bands_meta.json`` is unavailable, projected bounds are computed
+    on-the-fly from the WGS84 bbox using ``pyproj``.
+
+    If *bbox_wgs84* is ``None``, or *img_w*/*img_h* are 0, the
+    function reads ``bands_meta.json`` from the same output directory
+    (using the date prefix from *output_path*) and uses its
+    ``bounds_wgs84`` and ``shape`` so that the chart matches the
+    Sentinel-2 RGB pixel grid exactly.
+
+    Rendering order (bottom to top):
+        1. Sea background
+        2. DEPARE — depth areas (polygon fills, colour by depth)
+        3. FAIRWY — fairway areas (semi-transparent)
+        4. DRGARE — dredged areas
+        5. LNDARE — land areas (warm tan fill)
+        6. BUISGL — buildings on land
+        7. DEPCNT — depth contour lines
+        8. SLCONS — shoreline constructions (piers, breakwaters)
+        9. COALNE — coastline
+        10. ROADWY — roads
+        11. BRIDGE — bridges
+        12. NAVLNE — navigation lines
+        13. SOUNDG — depth soundings (point text labels)
+        14. OBSTRN — obstructions (markers)
+        15. WRECKS — wrecks (markers)
 
     Args:
         s57_paths: Deduplicated list of S-57 (.000) file paths.
-        bbox_wgs84: WGS84 bounding box with keys west, south, east, north.
+        bbox_wgs84: WGS84 bounding box ``{west, south, east, north}``,
+            or ``None`` to read from bands_meta.json.
         output_path: Where to save the output PNG.
-        img_w: Target image width in pixels.
-        img_h: Target image height in pixels.
+        img_w: Target image width in pixels (0 = read from meta).
+        img_h: Target image height in pixels (0 = read from meta).
+        scale_prefix: Optional ENC scale prefix filter (e.g. "SE5") —
+            only files whose stem starts with this prefix are rendered.
 
     Returns:
         Path to the rendered PNG file.
@@ -1661,8 +2336,10 @@ def render_sjokort_png(
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from shapely.geometry import box
+        from matplotlib.patches import FancyArrowPatch, Wedge
+        from shapely.geometry import box, MultiPoint
         from PIL import Image
+        import math
     except ImportError as e:
         raise FetchError(
             f"Sjökort rendering requires geopandas, matplotlib and Pillow: {e}"
@@ -1671,114 +2348,653 @@ def render_sjokort_png(
     warnings.filterwarnings("ignore", message=".*Skipping field.*")
     warnings.filterwarnings("ignore", category=UserWarning)
 
+    # ── Read bands_meta.json for rendering parameters ────────────
+    # Always read meta for projected bounds (CRS alignment).  Also use
+    # it as fallback for bbox / image dimensions when not supplied.
+    import json as _json
+    _out_dir = Path(output_path).parent
+    _meta_candidates = sorted(_out_dir.glob("bands/*bands_meta.json"))
+    _bm: dict = {}
+    _geo: dict = {}
+    if _meta_candidates:
+        with open(_meta_candidates[0]) as _mf:
+            _bm = _json.load(_mf)
+        _geo = _bm.get("geo", {})
+    elif bbox_wgs84 is None or img_w == 0 or img_h == 0:
+        raise FetchError(
+            "bbox_wgs84 is None and no bands_meta.json found in "
+            f"{_out_dir}/bands/"
+        )
+
+    if bbox_wgs84 is None:
+        bbox_wgs84 = (
+            _bm.get("bounds_wgs84")
+            or _geo.get("bounds_wgs84")
+            or _bm.get("coords")
+        )
+    if img_w == 0 or img_h == 0:
+        _shape = _bm.get("shape") or _geo.get("shape") or [573, 324]
+        img_h, img_w = _shape[0], _shape[1]
+
+    # Projected CRS + bounds — the RGB image is in EPSG:3006 (SWEREF99 TM).
+    # The sjökort MUST render in the same CRS so pixels align perfectly.
+    target_crs = _geo.get("crs", "EPSG:3006")
+    _proj_bounds = _geo.get("bounds_projected")
+
+    # ── Filter paths by scale prefix ──────────────────────────────
+    all_s57_paths = list(s57_paths)
+    if scale_prefix:
+        s57_paths = [
+            p for p in s57_paths
+            if Path(p).stem.upper().startswith(scale_prefix.upper())
+        ]
+        # Fallback cells: coarser scales for gap-fill (e.g. SE3 behind SE4)
+        _fallback_paths = [p for p in all_s57_paths if p not in s57_paths]
+    else:
+        _fallback_paths = []
+    if not s57_paths:
+        raise FetchError(
+            f"No S-57 files match scale_prefix={scale_prefix!r}"
+        )
+
+    # WGS84 bbox — used ONLY as a spatial filter when reading S-57 data
+    # (the native CRS of ENC files).  NOT used for clipping — see below.
     W = bbox_wgs84["west"]
-    S = bbox_wgs84["south"]
+    S_ = bbox_wgs84["south"]
     E = bbox_wgs84["east"]
     N = bbox_wgs84["north"]
-    clip_box = box(W, S, E, N)
 
-    def _read_layer(path: Path, layer: str, geom_types: list[str] | None = None):
-        """Read and clip a single S-57 layer."""
+    # Projected rendering bounds (e.g. EPSG:3006 / SWEREF99 TM).
+    # These define the matplotlib axes so the output pixel grid matches
+    # the Sentinel-2 RGB exactly.  Prefer the snapped bounds stored in
+    # bands_meta.json; fall back to a pyproj transform if unavailable.
+    if _proj_bounds:
+        pW = _proj_bounds["west"]
+        pS = _proj_bounds["south"]
+        pE = _proj_bounds["east"]
+        pN = _proj_bounds["north"]
+    else:
+        from pyproj import Transformer as _Tr
+        _t = _Tr.from_crs("EPSG:4326", target_crs, always_xy=True)
+        pW, pS = _t.transform(W, S_)
+        pE, pN = _t.transform(E, N)
+
+    # Clip box in the PROJECTED CRS.  Clipping must happen after
+    # reprojection — clipping in WGS84 then reprojecting creates curved
+    # edges that leave thin gaps at the image border.
+    clip_box = box(pW, pS, pE, pN)
+
+    # ── Helper: read & clip one layer ─────────────────────────────
+    def _read_layer(
+        path: Path,
+        layer: str,
+        geom_types: list[str] | None = None,
+    ) -> gpd.GeoDataFrame:
         import fiona
         try:
             if layer not in fiona.listlayers(str(path)):
                 return gpd.GeoDataFrame()
-            gdf = gpd.read_file(str(path), layer=layer, bbox=(W, S, E, N))
+            # Read with WGS84 bbox as spatial filter (S-57 native CRS).
+            gdf = gpd.read_file(str(path), layer=layer,
+                                bbox=(W, S_, E, N))
             if gdf.empty:
                 return gdf
             gdf = gdf[gdf.geometry.notna()]
             if geom_types and not gdf.empty:
                 gdf = gdf[gdf.geometry.geom_type.isin(geom_types)]
+            # Reproject WGS84 → target CRS (e.g. EPSG:3006 SWEREF99 TM)
+            # BEFORE clipping.  Clipping in WGS84 then reprojecting
+            # produces curved edges that don't align with the projected
+            # axis limits, leaving thin gaps at the image border.
+            if not gdf.empty:
+                if gdf.crs is None:
+                    gdf = gdf.set_crs("EPSG:4326")
+                gdf = gdf.to_crs(target_crs)
+            # Clip in the projected CRS — straight edges match the axes.
             if not gdf.empty:
                 gdf = gpd.clip(gdf, clip_box)
             return gdf
         except Exception:
             return gpd.GeoDataFrame()
 
-    # Accumulate layers from all ENC cells
-    all_dep, all_lnd, all_coa, all_dpc, all_fwy = [], [], [], [], []
-    for f in s57_paths:
-        dep = _read_layer(f, "DEPARE", ["Polygon", "MultiPolygon"])
-        if not dep.empty:
-            all_dep.append(dep)
-        lnd = _read_layer(f, "LNDARE", ["Polygon", "MultiPolygon"])
-        if not lnd.empty:
-            all_lnd.append(lnd)
-        coa = _read_layer(f, "COALNE", ["LineString", "MultiLineString"])
-        if not coa.empty:
-            all_coa.append(coa)
-        dpc = _read_layer(f, "DEPCNT", ["LineString", "MultiLineString"])
-        if not dpc.empty:
-            all_dpc.append(dpc)
-        fwy = _read_layer(f, "FAIRWY", ["Polygon", "MultiPolygon"])
-        if not fwy.empty:
-            all_fwy.append(fwy)
+    # ── Helper: accumulate a layer from all files ─────────────────
+    def _collect(layer: str, geom_types: list[str] | None = None):
+        parts = []
+        for f in s57_paths:
+            gdf = _read_layer(f, layer, geom_types)
+            if not gdf.empty:
+                parts.append(gdf)
+        if parts:
+            return pd.concat(parts, ignore_index=True)
+        return gpd.GeoDataFrame()
 
-    dep_gdf = pd.concat(all_dep, ignore_index=True) if all_dep else gpd.GeoDataFrame()
-    lnd_gdf = pd.concat(all_lnd, ignore_index=True) if all_lnd else gpd.GeoDataFrame()
-    coa_gdf = pd.concat(all_coa, ignore_index=True) if all_coa else gpd.GeoDataFrame()
-    dpc_gdf = pd.concat(all_dpc, ignore_index=True) if all_dpc else gpd.GeoDataFrame()
-    fwy_gdf = pd.concat(all_fwy, ignore_index=True) if all_fwy else gpd.GeoDataFrame()
+    # ── Collect all layers ────────────────────────────────────────
+    poly_t = ["Polygon", "MultiPolygon"]
+    line_t = ["LineString", "MultiLineString"]
+    point_t = ["Point", "MultiPoint"]
 
-    # Render
-    dpi = 150
-    fig_w = img_w / 100
-    fig_h = img_h / 100
-    fig, ax = plt.subplots(1, 1, figsize=(fig_w, fig_h), dpi=dpi)
-    ax.set_xlim(W, E)
-    ax.set_ylim(S, N)
+    # ── Polygon layers (bottom) ───────────────────────────────────
+    dep_gdf = _collect("DEPARE", poly_t)     # Depth areas
+    fwy_gdf = _collect("FAIRWY", poly_t)     # Fairways
+    drg_gdf = _collect("DRGARE", poly_t)     # Dredged areas
+    swp_gdf = _collect("SWPARE", poly_t)     # Swept areas
+    res_gdf = _collect("RESARE", poly_t)     # Restricted areas
+    ctn_gdf = _collect("CTNARE", poly_t)     # Caution areas
+    ach_gdf = _collect("ACHARE", poly_t)     # Anchorage areas
+    mar_gdf = _collect("MARCUL", poly_t)     # Marine cultivation
+    tes_gdf = _collect("TESARE", poly_t)     # Territorial sea
+    lnd_gdf = _collect("LNDARE", poly_t)     # Land areas
+    bua_gdf = _collect("BUAARE", poly_t)     # Built-up areas
+    bui_gdf = _collect("BUISGL", poly_t)     # Buildings
+
+    # ── Line layers (middle) ──────────────────────────────────────
+    dpc_gdf = _collect("DEPCNT", line_t)     # Depth contours
+    slc_gdf = _collect("SLCONS", line_t)     # Shoreline constructions
+    coa_gdf = _collect("COALNE", line_t)     # Coastline
+    rwy_gdf = _collect("ROADWY", line_t)     # Roads
+    brg_gdf = _collect("BRIDGE", line_t)     # Bridges
+    nav_gdf = _collect("NAVLNE", line_t)     # Navigation lines
+    rec_gdf = _collect("RECTRC", line_t)     # Recommended tracks
+    fer_gdf = _collect("FERYRT", line_t)     # Ferry routes
+    cbs_gdf = _collect("CBLSUB", line_t)     # Submarine cables
+    cbo_gdf = _collect("CBLOHD", line_t)     # Overhead cables
+    pip_gdf = _collect("PIPSOL", line_t)     # Pipelines
+    elv_gdf = _collect("LNDELV", line_t)     # Land elevation contours
+    rdl_gdf = _collect("RDOCAL", line_t)     # Radio calling lines
+
+    # ── Point layers (top) ────────────────────────────────────────
+    snd_gdf = _collect("SOUNDG", point_t)    # Soundings (depth values)
+    uwr_gdf = _collect("UWTROC", point_t)    # Underwater rocks
+    obs_gdf = _collect("OBSTRN", point_t)    # Obstructions
+    wrk_gdf = _collect("WRECKS", point_t)    # Wrecks
+    # ── Fiona-based readers for layers with List-type attributes ──
+    import fiona as _fiona
+    _LITCHR_MAP = {1: "F", 2: "Fl", 3: "LFl", 4: "Q", 5: "VQ",
+                   6: "UQ", 7: "Oc", 8: "Iso", 9: "Mo"}
+    _COL_LETTER = {"1": "W", "3": "R", "4": "G", "6": "Y"}
+
+    def _fiona_points(layer):
+        """Read point features via fiona (handles List[str] COLOUR)."""
+        results = []
+        for fp in s57_paths:
+            try:
+                if layer not in _fiona.listlayers(str(fp)):
+                    continue
+                with _fiona.open(str(fp), layer=layer) as src:
+                    for feat in src:
+                        geom = feat.get("geometry")
+                        if not geom or geom["type"] != "Point":
+                            continue
+                        x, y = geom["coordinates"][:2]
+                        if not (W <= x <= E and S_ <= y <= N):
+                            continue
+                        p = feat["properties"]
+                        col_list = p.get("COLOUR") or []
+                        results.append({"x": x, "y": y, "props": p,
+                                        "colour": col_list})
+            except Exception:
+                pass
+        return results
+
+    # Lights (with sectors/characteristics)
+    lit_features = []
+    for item in _fiona_points("LIGHTS"):
+        p = item["props"]
+        col_code = item["colour"][0] if item["colour"] else "1"
+        lit_features.append({
+            "x": item["x"], "y": item["y"],
+            "sectr1": p.get("SECTR1"), "sectr2": p.get("SECTR2"),
+            "colour": col_code,
+            "valnmr": p.get("VALNMR"), "litchr": p.get("LITCHR"),
+            "sigper": p.get("SIGPER"), "siggrp": p.get("SIGGRP"),
+            "objnam": p.get("OBJNAM"),
+        })
+
+    # Buoys with colour (BOYLAT, BOYSPP, BOYCAR)
+    buoy_features = []
+    for layer in ("BOYLAT", "BOYSPP", "BOYCAR"):
+        for item in _fiona_points(layer):
+            col_code = item["colour"][0] if item["colour"] else "0"
+            buoy_features.append({
+                "x": item["x"], "y": item["y"],
+                "colour": col_code, "layer": layer,
+            })
+
+    # Place names (LNDRGN, SEAARE)
+    place_labels = []
+    for layer in ("LNDRGN", "SEAARE"):
+        for item in _fiona_points(layer):
+            nm = item["props"].get("OBJNAM", "")
+            if nm:
+                place_labels.append({
+                    "x": item["x"], "y": item["y"],
+                    "name": nm, "type": layer,
+                })
+    bcn_gdf = _collect("BCNSPP", point_t)    # Beacons
+    blt_gdf = _collect("BOYLAT", point_t)    # Lateral buoys
+    bsp_gdf = _collect("BOYSPP", point_t)    # Special purpose buoys
+    bca_gdf = _collect("BOYCAR", point_t)    # Cardinal buoys
+    top_gdf = _collect("TOPMAR", point_t)    # Topmarks
+    lmk_gdf = _collect("LNDMRK", point_t)   # Landmarks
+    lrg_gdf = _collect("LNDRGN", point_t)    # Land region
+    sea_gdf = _collect("SEAARE", point_t)    # Sea area names
+    sba_gdf = _collect("SBDARE", point_t)    # Seabed area
+    mor_gdf = _collect("MORFAC", point_t)    # Mooring facility
+    ber_gdf = _collect("BERTHS", point_t)    # Berths
+    hbr_gdf = _collect("HRBFAC", point_t)    # Harbour facility
+    sil_gdf = _collect("SILTNK", point_t)    # Silo/tank
+    pil_gdf = _collect("PILPNT", point_t)    # Pile/post
+    abr_gdf = _collect("ACHBRT", point_t)    # Anchor berth
+
+    # ── Reproject fiona-based point data (WGS84 → target CRS) ──
+    # Lights, buoys and place labels are read via fiona (not geopandas)
+    # to handle List-type attributes.  Their (x, y) coordinates are
+    # still in WGS84 and must be transformed to the projected CRS so
+    # they land on the correct pixel when plotted on the projected axes.
+    from pyproj import Transformer as _Transformer
+    _wgs_to_proj = _Transformer.from_crs("EPSG:4326", target_crs, always_xy=True)
+    for lf in lit_features:
+        lf["x"], lf["y"] = _wgs_to_proj.transform(lf["x"], lf["y"])
+    for bf in buoy_features:
+        bf["x"], bf["y"] = _wgs_to_proj.transform(bf["x"], bf["y"])
+    for pl in place_labels:
+        pl["x"], pl["y"] = _wgs_to_proj.transform(pl["x"], pl["y"])
+
+    # ── Figure setup ──────────────────────────────────────────────
+    # Axes use projected bounds (pW, pS, pE, pN) so the pixel grid
+    # matches the Sentinel-2 RGB image exactly.  aspect="auto" lets
+    # matplotlib stretch the projected rectangle to fill img_w × img_h.
+    dpi = 200
+    fig_w = img_w / dpi
+    fig_h = img_h / dpi
+    fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi)
+    ax = fig.add_axes([0, 0, 1, 1])  # axes fills entire figure — no margins
+    ax.set_xlim(pW, pE)
+    ax.set_ylim(pS, pN)
     ax.set_aspect("auto")
     ax.axis("off")
     fig.patch.set_facecolor(_S57_BG_COLOUR)
     ax.set_facecolor(_S57_BG_COLOUR)
 
-    # 1. Depth areas
+    # ── Plot helpers ──────────────────────────────────────────────
+    def _plot_poly(gdf, colour, edgecolour="none", alpha=1.0, lw=0):
+        if gdf.empty:
+            return
+        gpd.GeoDataFrame(gdf, geometry="geometry").plot(
+            ax=ax, color=colour, edgecolor=edgecolour,
+            alpha=alpha, linewidth=lw,
+        )
+
+    def _plot_line(gdf, colour, lw=0.4, alpha=1.0, ls="-"):
+        if gdf.empty:
+            return
+        gpd.GeoDataFrame(gdf, geometry="geometry").plot(
+            ax=ax, color=colour, linewidth=lw, alpha=alpha, linestyle=ls,
+        )
+
+    def _plot_points(gdf, colour, marker="o", size=4, lw=0.4,
+                     alpha=0.9, zorder=10, edgecolor=None):
+        if gdf.empty:
+            return
+        xs = [g.x for g in gdf.geometry
+              if g and g.geom_type == "Point"]
+        ys = [g.y for g in gdf.geometry
+              if g and g.geom_type == "Point"]
+        if xs:
+            kw = dict(c=colour, s=size, marker=marker,
+                      linewidths=lw, zorder=zorder, alpha=alpha)
+            if edgecolor:
+                kw["edgecolors"] = edgecolor
+            ax.scatter(xs, ys, **kw)
+
+    # Load INT1 symbol markers
+    int1 = _int1_symbols()
+    ms = max(4, img_w / 100)  # base marker size (compact for clean chart look)
+
+    # ══════════════════════════════════════════════════════════════
+    # RENDER ORDER — bottom to top
+    # ══════════════════════════════════════════════════════════════
+
+    # ── 0. Fallback base layer (coarser ENC cells) ──────────────
+    # Render DEPARE + LNDARE + COALNE from fallback cells first so
+    # that gaps in the primary (harbour-scale) data are filled with
+    # coarser but complete coverage.
+    if _fallback_paths:
+        for fp in _fallback_paths:
+            _fb_dep = _read_layer(fp, "DEPARE", poly_t)
+            if not _fb_dep.empty:
+                _fb_dep = gpd.GeoDataFrame(_fb_dep, geometry="geometry")
+                _fb_dep["_colour"] = _fb_dep.apply(
+                    lambda r: _depth_colour(r.get("DRVAL1"), r.get("DRVAL2")),
+                    axis=1,
+                )
+                for colour in _fb_dep["_colour"].unique():
+                    subset = _fb_dep[_fb_dep["_colour"] == colour]
+                    subset.plot(ax=ax, color=colour, edgecolor="none")
+            _fb_lnd = _read_layer(fp, "LNDARE", poly_t)
+            if not _fb_lnd.empty:
+                _plot_poly(_fb_lnd, _S57_LAND_COLOUR)
+            _fb_coa = _read_layer(fp, "COALNE", line_t)
+            if not _fb_coa.empty:
+                gpd.GeoDataFrame(_fb_coa, geometry="geometry").plot(
+                    ax=ax, color="#000000", linewidth=0.15, alpha=0.5,
+                )
+
+    # ── 1. Depth areas (DEPARE) ───────────────────────────────────
     if not dep_gdf.empty:
         dep_gdf = gpd.GeoDataFrame(dep_gdf, geometry="geometry")
         dep_gdf["_colour"] = dep_gdf.apply(
-            lambda r: _depth_colour(r.get("DRVAL1"), r.get("DRVAL2")), axis=1
+            lambda r: _depth_colour(r.get("DRVAL1"), r.get("DRVAL2")),
+            axis=1,
         )
         for colour in dep_gdf["_colour"].unique():
             subset = dep_gdf[dep_gdf["_colour"] == colour]
             subset.plot(ax=ax, color=colour, edgecolor="none")
 
-    # 2. Fairways
-    if not fwy_gdf.empty:
-        gpd.GeoDataFrame(fwy_gdf, geometry="geometry").plot(
-            ax=ax, color=_S57_FAIRWAY_COLOUR, alpha=0.4,
-            edgecolor=_S57_FAIRWAY_COLOUR, linewidth=0.3,
-        )
+    # ── 2. Swept areas (SWPARE) ───────────────────────────────────
+    _plot_poly(swp_gdf, "#D0E8F0", edgecolour="#90B8D0", alpha=0.4, lw=0.3)
 
-    # 3. Land
-    if not lnd_gdf.empty:
-        gpd.GeoDataFrame(lnd_gdf, geometry="geometry").plot(
-            ax=ax, color=_S57_LAND_COLOUR, edgecolor="none",
-        )
+    # ── 3. Fairways (FAIRWY) ─────────────────────────────────────
+    _plot_poly(fwy_gdf, _S57_FAIRWAY_COLOUR, alpha=0.35,
+               edgecolour=_S57_FAIRWAY_COLOUR, lw=0.3)
 
-    # 4. Depth contours
-    if not dpc_gdf.empty:
-        gpd.GeoDataFrame(dpc_gdf, geometry="geometry").plot(
-            ax=ax, color=_S57_DEPCNT_COLOUR, linewidth=0.3, alpha=0.5,
-        )
+    # ── 4. Dredged areas (DRGARE) ────────────────────────────────
+    _plot_poly(drg_gdf, "#C5E0F0", edgecolour="#8BB8D9", alpha=0.5, lw=0.3)
 
-    # 5. Coastline
-    if not coa_gdf.empty:
-        gpd.GeoDataFrame(coa_gdf, geometry="geometry").plot(
-            ax=ax, color=_S57_COASTLINE_COLOUR, linewidth=0.5,
-        )
+    # ── 5. Restricted areas (RESARE) ─────────────────────────────
+    _plot_poly(res_gdf, "none", edgecolour="#CC4444", alpha=0.5, lw=0.6)
 
+    # ── 6. Caution areas (CTNARE) ────────────────────────────────
+    _plot_poly(ctn_gdf, "#FFEE88", edgecolour="#CCAA00", alpha=0.15, lw=0.4)
+
+    # ── 7. Anchorage areas (ACHARE) ──────────────────────────────
+    _plot_poly(ach_gdf, "#E0D0F0", edgecolour="#9977BB", alpha=0.2, lw=0.4)
+
+    # ── 8. Marine cultivation (MARCUL) ───────────────────────────
+    _plot_poly(mar_gdf, "#A8D8A8", edgecolour="#66AA66", alpha=0.3, lw=0.4)
+
+    # ── 9. Territorial sea (TESARE) ──────────────────────────────
+    _plot_poly(tes_gdf, "none", edgecolour="#666699", alpha=0.3, lw=0.3)
+
+    # ── 10. Land (LNDARE) ────────────────────────────────────────
+    _plot_poly(lnd_gdf, _S57_LAND_COLOUR)
+
+    # ── 11. Built-up areas (BUAARE) ──────────────────────────────
+    _plot_poly(bua_gdf, "#E8D8B0", edgecolour="#B8A880", alpha=0.7, lw=0.2)
+
+    # ── 12. Buildings (BUISGL) ───────────────────────────────────
+    _plot_poly(bui_gdf, _S57_BUILDING_COLOUR, edgecolour="#8A7A5A", lw=0.2)
+
+    # ── 13. Land elevation contours (LNDELV) ─────────────────────
+    _plot_line(elv_gdf, "#C0A880", lw=0.2, alpha=0.4)
+
+    # ── 14. Depth contours (DEPCNT) ──────────────────────────────
+    _plot_line(dpc_gdf, _S57_DEPCNT_COLOUR, lw=0.25, alpha=0.6)
+
+    # ── 15. Submarine cables (CBLSUB) ────────────────────────────
+    _plot_line(cbs_gdf, "#CC44CC", lw=0.3, alpha=0.5, ls="--")
+
+    # ── 16. Overhead cables (CBLOHD) ─────────────────────────────
+    _plot_line(cbo_gdf, "#CC2222", lw=0.3, alpha=0.5, ls="--")
+
+    # ── 17. Pipelines (PIPSOL) ───────────────────────────────────
+    _plot_line(pip_gdf, "#44AA44", lw=0.3, alpha=0.5, ls="--")
+
+    # ── 18. Shoreline constructions (SLCONS) ─────────────────────
+    _plot_line(slc_gdf, _S57_SLCONS_COLOUR, lw=0.3)
+
+    # ── 19. Coastline (COALNE) ───────────────────────────────────
+    _plot_line(coa_gdf, _S57_COASTLINE_COLOUR, lw=0.25)
+
+    # ── 20. Roads (ROADWY) ───────────────────────────────────────
+    _plot_line(rwy_gdf, _S57_ROAD_COLOUR, lw=0.3, alpha=0.7)
+
+    # ── 21. Bridges (BRIDGE) ─────────────────────────────────────
+    _plot_line(brg_gdf, _S57_BRIDGE_COLOUR, lw=0.8)
+
+    # ── 22. Navigation lines (NAVLNE) ────────────────────────────
+    _plot_line(nav_gdf, _S57_NAVLNE_COLOUR, lw=0.4, alpha=0.6, ls="--")
+
+    # ── 23. Recommended tracks (RECTRC) ──────────────────────────
+    _plot_line(rec_gdf, "#228833", lw=0.5, alpha=0.6)
+
+    # ── 24. Ferry routes (FERYRT) ────────────────────────────────
+    _plot_line(fer_gdf, "#8844AA", lw=0.5, alpha=0.6, ls="-.")
+
+    # ── 25. Radio calling lines (RDOCAL) ─────────────────────────
+    _plot_line(rdl_gdf, "#996633", lw=0.3, alpha=0.4, ls=":")
+
+    # ── 26. Soundings — depth labels (SOUNDG) ────────────────────
+    if not snd_gdf.empty:
+        pts = []
+        for _, row in snd_gdf.iterrows():
+            geom = row.geometry
+            if geom is None:
+                continue
+            if geom.geom_type == "MultiPoint":
+                for pt in geom.geoms:
+                    pts.append(pt)
+            else:
+                pts.append(geom)
+        snd_fs = max(2.0, min(3.5, img_w / 200))
+        for pt in pts:
+            if pt.has_z:
+                depth = abs(pt.z)
+            else:
+                continue
+            depth_str = f"{depth:.1f}" if depth % 1 else f"{int(depth)}"
+            ax.text(pt.x, pt.y, depth_str,
+                    fontsize=snd_fs, color=_S57_SOUNDG_COLOUR,
+                    ha="center", va="center", zorder=16)
+
+    # ── 27. Underwater rocks (UWTROC) — INT1 K.14 cross ──────────
+    _plot_points(uwr_gdf, "#333333", marker="+", size=ms * 0.6,
+                 lw=0.4, alpha=0.7)
+
+    # ── 28. Seabed area type (SBDARE) ────────────────────────────
+    _plot_points(sba_gdf, "#8899AA", marker=".", size=ms * 0.3,
+                 alpha=0.3, zorder=5)
+
+    # ── 29. Obstructions (OBSTRN) — INT1 K.40 cross-in-circle ───
+    _plot_points(obs_gdf, _S57_OBSTRN_COLOUR, marker=int1["obstruction"],
+                 size=ms * 0.9, lw=0.3, alpha=0.8)
+
+    # ── 30. Wrecks (WRECKS) — INT1 K.20 hull outline ────────────
+    _plot_points(wrk_gdf, _S57_WRECKS_COLOUR, marker=int1["wreck"],
+                 size=ms * 1.0, lw=0.3, alpha=0.85)
+
+    # ── 31. Lights (LIGHTS) — sector arc outlines + symbol + labels ─
+    if lit_features:
+        from collections import defaultdict
+        light_groups = defaultdict(list)
+        for lf in lit_features:
+            key = (round(lf["x"], 1), round(lf["y"], 1))
+            light_groups[key].append(lf)
+
+        # Arc radius in projected metres.  Because we render in a
+        # metric CRS (SWEREF99 TM) the radius is simply a fraction of
+        # the north–south extent — no cos(lat) correction is needed
+        # (unlike WGS84 where longitude degrees are shorter than latitude).
+        sector_r = (pN - pS) * 0.035
+        sector_r_lg = (pN - pS) * 0.055
+
+        _SECTOR_LINE = {"3": "#CC0000", "4": "#006600", "1": "#888888", "6": "#CC8800"}
+
+        def _arc_points(cx, cy, r, brg1, brg2, n_pts=40):
+            """Return (xs, ys) for a circular arc in projected (metric) coords."""
+            if brg2 <= brg1:
+                brg2 += 360.0
+            xs, ys = [], []
+            for i in range(n_pts + 1):
+                brg = math.radians(brg1 + (brg2 - brg1) * i / n_pts)
+                xs.append(cx + r * math.sin(brg))
+                ys.append(cy + r * math.cos(brg))
+            return xs, ys
+
+        label_fs = max(3.0, min(5.0, img_w / 130))
+
+        for (lx, ly), feats in light_groups.items():
+            has_sectors = any(
+                f["sectr1"] is not None and f["sectr2"] is not None
+                for f in feats
+            )
+            if has_sectors:
+                # Draw arc outline per sector
+                for f in feats:
+                    if f["sectr1"] is None or f["sectr2"] is None:
+                        continue
+                    col_code = f["colour"]
+                    r = sector_r if not (f.get("valnmr") and f["valnmr"] >= 6) else sector_r_lg
+                    colour = _SECTOR_LINE.get(col_code, "#888888")
+                    xs, ys = _arc_points(lx, ly, r, f["sectr1"], f["sectr2"])
+                    ax.plot(xs, ys, color=colour, linewidth=0.8,
+                            alpha=0.85, zorder=14, solid_capstyle="round")
+                    # Tick lines at sector boundaries
+                    for bx, by in [(xs[0], ys[0]), (xs[-1], ys[-1])]:
+                        ax.plot([lx, bx], [ly, by], color=colour,
+                                linewidth=0.3, alpha=0.5, zorder=13)
+
+                # Light symbol at center
+                ax.scatter([lx], [ly], c="#000000", s=ms * 2.0,
+                           marker=int1["light"], zorder=16,
+                           edgecolors="none", linewidths=0)
+
+                # Light characteristic label
+                # Collect unique colours across all sectors
+                all_cols = sorted(set(
+                    _COL_LETTER.get(f["colour"], "") for f in feats
+                    if f["sectr1"] is not None
+                ))
+                col_str = "".join(all_cols)
+                f0 = feats[0]
+                chr_str = _LITCHR_MAP.get(f0.get("litchr"), "")
+                per_str = f"{f0['sigper']:.0f}s" if f0.get("sigper") else ""
+                rng_str = f"{f0['valnmr']:.0f}M" if f0.get("valnmr") else ""
+                nm = f0.get("objnam") or ""
+                parts = [p for p in [chr_str, col_str, per_str, rng_str] if p]
+                label = " ".join(parts)
+                if nm:
+                    # Name on one line, characteristic below
+                    ax.text(lx, ly - (pN - pS) * 0.018, nm,
+                            fontsize=label_fs, fontweight="bold",
+                            color="#000000", ha="center", va="top", zorder=17)
+                    ax.text(lx, ly - (pN - pS) * 0.035, label,
+                            fontsize=label_fs * 0.85,
+                            color="#000000", ha="center", va="top", zorder=17)
+                elif label:
+                    ax.text(lx, ly - (pN - pS) * 0.018, label,
+                            fontsize=label_fs * 0.85,
+                            color="#000000", ha="center", va="top", zorder=17)
+            else:
+                # All-round light — star symbol + label
+                f0 = feats[0]
+                col_code = f0.get("colour", "1")
+                ax.scatter([lx], [ly], c="#000000", s=ms * 1.5,
+                           marker=int1["light"], zorder=15,
+                           edgecolors="none", linewidths=0)
+                # Label: "name\nchr col rngM"
+                nm = f0.get("objnam") or ""
+                chr_str = _LITCHR_MAP.get(f0.get("litchr"), "")
+                col_l = _COL_LETTER.get(col_code, "")
+                rng = f"{f0['valnmr']:.0f}M" if f0.get("valnmr") else ""
+                parts = [p for p in [chr_str, col_l, rng] if p]
+                label = " ".join(parts)
+                if nm or label:
+                    txt = f"{nm}\n{label}" if nm and label else (nm or label)
+                    ax.text(lx, ly - (pN - pS) * 0.015, txt,
+                            fontsize=label_fs * 0.85,
+                            color="#000000", ha="center", va="top", zorder=17)
+
+    # ── 32. Beacons (BCNSPP) — INT1 Q.100 filled black ───────────
+    _plot_points(bcn_gdf, "#000000", marker=int1["beacon"],
+                 size=ms * 1.5, lw=0.3, alpha=0.9, zorder=14,
+                 edgecolor="#000000")
+
+    # ── 33–35. Buoys — colour-correct via fiona data ─────────────
+    _BUOY_COLOURS = {"3": "#CC0000", "4": "#00AA00", "6": "#DDAA00",
+                     "2": "#000000", "1": "#FFFFFF"}
+    _BUOY_MARKERS = {
+        "BOYLAT": {
+            "1": int1["buoy_can"],    # cat 1 = port = can
+            "2": int1["buoy_cone"],   # cat 2 = starboard = cone
+        },
+        "BOYSPP": int1["buoy_special"],
+        "BOYCAR": int1["buoy_cardinal"],
+    }
+    buoy_label_fs = max(2.5, min(4.0, img_w / 150))
+    for bf in buoy_features:
+        col_hex = _BUOY_COLOURS.get(bf["colour"], "#888888")
+        col_letter = _COL_LETTER.get(bf["colour"], "")
+        layer = bf["layer"]
+        if layer == "BOYLAT":
+            # Determine can vs cone based on colour (port=red=can, stbd=green=cone)
+            mkr = int1["buoy_can"] if bf["colour"] == "3" else int1["buoy_cone"]
+        elif layer == "BOYSPP":
+            mkr = int1["buoy_special"]
+        else:
+            mkr = int1["buoy_cardinal"]
+
+        edge = "#880000" if bf["colour"] == "3" else (
+               "#006600" if bf["colour"] == "4" else "#666600")
+        ax.scatter([bf["x"]], [bf["y"]], c=col_hex, s=ms * 1.0,
+                   marker=mkr, zorder=13, edgecolors=edge,
+                   linewidths=0.3, alpha=0.9)
+        # Colour letter label
+        if col_letter:
+            ax.text(bf["x"], bf["y"] - (pN - pS) * 0.008, col_letter,
+                    fontsize=buoy_label_fs, fontweight="bold",
+                    color=col_hex, ha="center", va="top", zorder=14)
+
+    # ── 36. Topmarks (TOPMAR) — INT1 Q.9 day mark ───────────────
+    _plot_points(top_gdf, "#DD4444", marker=int1["topmark"],
+                 size=ms * 0.7, lw=0.3, alpha=0.75, zorder=12)
+
+    # ── 37. Landmarks (LNDMRK) — INT1 E.10 tower/spire ──────────
+    _plot_points(lmk_gdf, "#885522", marker=int1["landmark"],
+                 size=ms * 0.8, lw=0.3, alpha=0.75, zorder=11)
+
+    # ── 38. Mooring facilities (MORFAC) — bollard symbol ─────────
+    _plot_points(mor_gdf, "#4466AA", marker=int1["mooring"],
+                 size=ms * 0.7, lw=0.3, alpha=0.75, zorder=11)
+
+    # ── 39. Harbour facilities (HRBFAC) — INT1 F.10 anchor ──────
+    _plot_points(hbr_gdf, "#664499", marker=int1["harbour"],
+                 size=ms * 1.0, lw=0.3, alpha=0.75, zorder=11)
+
+    # ── 40. Berths (BERTHS) ──────────────────────────────────────
+    _plot_points(ber_gdf, "#4488AA", marker="s", size=ms * 0.5,
+                 lw=0.2, alpha=0.6, zorder=11)
+
+    # ── 41. Silo/tank (SILTNK) ───────────────────────────────────
+    _plot_points(sil_gdf, "#998877", marker="o", size=ms * 0.4,
+                 lw=0.2, alpha=0.5, zorder=8)
+
+    # ── 42. Pile/post (PILPNT) ───────────────────────────────────
+    _plot_points(pil_gdf, "#666666", marker="|", size=ms * 0.5,
+                 lw=0.2, alpha=0.6, zorder=9)
+
+    # ── 43. Anchor berth (ACHBRT) ────────────────────────────────
+    _plot_points(abr_gdf, "#7755AA", marker="P", size=ms * 0.7,
+                 lw=0.2, alpha=0.6, zorder=10)
+
+    # ── 44. Place name labels (LNDRGN + SEAARE) — disabled ────────
+    # Names omitted to keep the chart clean at small sizes.
+
+    # ── Save ──────────────────────────────────────────────────────
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(
-        output_path, dpi=dpi, bbox_inches="tight", pad_inches=0,
+        output_path, dpi=dpi, pad_inches=0,
         facecolor=_S57_BG_COLOUR,
     )
     plt.close(fig)
 
-    # Resize to exact target dimensions
+    # Resize to exact target pixel dimensions
     img = Image.open(output_path)
-    img = img.resize((img_w, img_h), Image.LANCZOS)
-    img.save(output_path)
+    if (img.width, img.height) != (img_w, img_h):
+        img = img.resize((img_w, img_h), Image.LANCZOS)
+        img.save(output_path)
 
     return output_path
 
@@ -1797,6 +3013,7 @@ def fetch_sjokort_data(
     img_w: int = 324,
     img_h: int = 573,
     s57_dir: str | Path | None = None,
+    scale_prefix: str | None = None,
 ) -> SjokortFetchResult:
     """Fetch sjökort (nautical chart) data from SLU GET for a given bounding box.
 
@@ -1846,6 +3063,9 @@ def fetch_sjokort_data(
         s57_dir: Path to a directory of pre-extracted S-57 (.000) files.
                  When set, the order and download steps are skipped — the
                  function only deduplicates and optionally renders.
+        scale_prefix: Optional ENC scale prefix filter (e.g. "SE5") —
+                      only ENC cells whose filename starts with this prefix
+                      are used for rendering. Useful to avoid mixing scales.
 
     Returns:
         SjokortFetchResult with S-57 file paths, tile metadata, and
@@ -1912,8 +3132,12 @@ def fetch_sjokort_data(
             from_cache=False,
         )
         if render:
+            # Auto-select the most detailed ENC scale that covers the AOI
+            if scale_prefix is None:
+                scale_prefix = _best_scale_prefix(unique_files, coords)
             result.rendered_png = render_sjokort_png(
                 unique_files, coords, output_path, img_w, img_h,
+                scale_prefix=scale_prefix,
             )
             log.info("Sjökort rendered to %s", result.rendered_png)
         return result
@@ -1936,8 +3160,12 @@ def fetch_sjokort_data(
                 from_cache=True,
             )
             if render:
+                # Auto-select the most detailed ENC scale that covers the AOI
+                if scale_prefix is None:
+                    scale_prefix = _best_scale_prefix(unique_files, coords)
                 result.rendered_png = render_sjokort_png(
                     unique_files, coords, output_path, img_w, img_h,
+                    scale_prefix=scale_prefix,
                 )
                 log.info("Sjökort rendered to %s", result.rendered_png)
             return result
@@ -2005,8 +3233,12 @@ def fetch_sjokort_data(
     )
 
     if render:
+        # Auto-select the most detailed ENC scale that covers the AOI
+        if scale_prefix is None:
+            scale_prefix = _best_scale_prefix(unique_files, coords)
         result.rendered_png = render_sjokort_png(
             unique_files, coords, output_path, img_w, img_h,
+            scale_prefix=scale_prefix,
         )
         log.info("Sjökort rendered to %s", result.rendered_png)
 

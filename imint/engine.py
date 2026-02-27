@@ -182,10 +182,17 @@ def load_bands_cache(bands_dir: str, prefix: str = "") -> dict:
         path = os.path.join(bands_dir, f"{prefix}{band_name}.npy")
         bands[band_name] = np.load(path)
 
+    # Convert transform list back to rasterio Affine (JSON serializes it as list)
+    geo = meta.get("geo")
+    if geo and "transform" in geo:
+        from rasterio.transform import Affine
+        t = geo["transform"]
+        geo["transform"] = Affine(t[0], t[1], t[2], t[3], t[4], t[5])
+
     return {
         "bands": bands,
         "coords": meta["coords"],
-        "geo_meta": meta.get("geo"),
+        "geo_meta": geo,
         "date": meta.get("date"),
     }
 
@@ -338,6 +345,8 @@ def _generate_html_report(job: IMINTJob, prefix: str) -> None:
         "prithvi_seg": f"{prefix}prithvi_seg_clean.png",
         "cot": f"{prefix}cot_clean.png",
         "vessels": f"{prefix}vessels_clean.png",
+        "vessel_heatmap": f"{prefix}vessel_heatmap_clean.png",
+        "sjokort": f"{prefix}sjokort.png",
     }
     image_paths = {}
     for key, filename in path_candidates.items():

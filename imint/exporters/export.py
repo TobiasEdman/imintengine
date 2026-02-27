@@ -1029,3 +1029,45 @@ def save_vessel_overlay(
     pil_img.save(path)
     print(f"    saved: {path}")
     return path
+
+
+def save_vessel_heatmap_png(
+    heatmap: np.ndarray,
+    path: str,
+    cmap_name: str = "YlOrRd",
+) -> str:
+    """Save vessel density heatmap as a clean RGBA PNG for Leaflet overlay.
+
+    Normalises the heatmap to [0, 1] and applies a matplotlib colourmap.
+    Zero-density pixels are fully transparent so the background layer
+    (RGB or sjökort) shows through.
+
+    Args:
+        heatmap: (H, W) float32 vessel density array (e.g. Gaussian-smoothed
+            detection counts).
+        path: Output PNG path.
+        cmap_name: Matplotlib colourmap name (default ``"YlOrRd"``).
+
+    Returns:
+        The output file path.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+
+    vmax = heatmap.max()
+    if vmax > 0:
+        norm = (heatmap / vmax).clip(0, 1)
+    else:
+        norm = heatmap
+
+    cmap = cm.get_cmap(cmap_name)
+    rgba = (cmap(norm) * 255).astype(np.uint8)  # (H, W, 4) RGBA
+
+    # Scale alpha by normalised density so low-value areas fade out
+    # smoothly instead of showing a constant yellow wash.
+    rgba[:, :, 3] = (norm * 255).astype(np.uint8)
+
+    Image.fromarray(rgba, "RGBA").save(path)
+    print(f"    saved: {path}")
+    return path
