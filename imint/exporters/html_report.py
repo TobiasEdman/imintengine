@@ -1283,6 +1283,283 @@ _MARINE_VIEWERS = [
     ]},
 ]
 
+# ── Analysis descriptions — single source of truth ───────────────────────────
+# Each entry has a shared technical description ("body") + per-context notes.
+# The helper _render_descriptions() builds HTML for a given tab.
+
+_ANALYSIS_DESCRIPTIONS = {
+    "sentinel2_rgb": {
+        "title": "Sentinel-2 RGB — Satellitbilden",
+        "body": (
+            "Sentinel-2 är en konstellation av två satelliter (2A och 2B) som drivs av "
+            "Europeiska rymdorganisationen (ESA) inom Copernicus-programmet. Satelliterna "
+            "kretsar i en solsynkron bana på 786 km höjd och avbildar hela jorden "
+            "var femte dag med en upplösning på 10 meter per pixel för de synliga "
+            "banden. RGB-bilden visar området som det ser ut för ögat, med band 4 (rött), "
+            "band 3 (grönt) och band 2 (blått)."
+        ),
+        "fire_note": (
+            "De bruna och grå områdena är brandskadat landskap där vegetationen har förstörts."
+        ),
+        "marine_note": (
+            "I kustmiljön syns land, öar, holmar och öppet vatten — och vid god sikt "
+            "kan enskilda fartyg och deras kölvatten urskiljas i bilden."
+        ),
+        "ref": (
+            '<em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" '
+            'target="_blank">ESA Sentinel-2</a></em>'
+        ),
+    },
+    "ndvi": {
+        "title": "NDVI — Vegetationsindex",
+        "body": (
+            "NDVI (Normalized Difference Vegetation Index) är det mest använda vegetationsindexet "
+            "inom fjärranalys. Det beräknas som (NIR − Röd) / (NIR + Röd) där NIR "
+            "är det nära infraröda bandet (B08) och Röd är det synliga röda bandet (B04). "
+            "Frisk vegetation reflekterar starkt i NIR och absorberar rött ljus, vilket ger "
+            "höga NDVI-värden (0.3–0.9)."
+        ),
+        "fire_note": (
+            "Brandskadat eller vegetationslöst område ger låga värden nära noll. "
+            "På kartan visas högt NDVI i grönt (frisk skog) och lågt i rött/gult (skadad mark)."
+        ),
+        "marine_note": (
+            "Vatten och bar mark ger värden nära eller under noll. I kustanalysen "
+            "används NDVI för att skilja vegetationsklädda öar och strandremsor från "
+            "kala klippor, vatten och bebyggelse — och för att bedöma "
+            "kustvegetationens hälsotillstånd."
+        ),
+        "ref": (
+            '<em>Källa: Rouse et al., 1974. &quot;Monitoring vegetation systems in the '
+            'Great Plains with ERTS.&quot; Third Earth Resources Technology Satellite-1 '
+            'Symposium, NASA SP-351.</em>'
+        ),
+    },
+    "ndwi": {
+        "title": "NDWI — Vattenindex",
+        "body": (
+            "NDWI (Normalized Difference Water Index) mäter förekomsten av vatten och "
+            "fuktighet i landskapet. Det beräknas som (Grön − NIR) / (Grön + NIR) "
+            "med band B03 och B08. Positiva värden (blått på kartan) indikerar "
+            "öppet vatten, medan negativa värden visar torr mark."
+        ),
+        "fire_note": (
+            "Sjöar och vattendrag syns tydligt som blå områden. "
+            "Indexet är användbart för att identifiera hur en brand påverkat "
+            "markfuktigheten och vattenbalansen i området."
+        ),
+        "marine_note": (
+            "I den marina analysen ger NDWI en tydlig bild av gränsen mellan "
+            "land och vatten samt hjälper till att identifiera grunda vattenområden, "
+            "inlopp och vikar. Indexet kompletterar NMD-landmasken genom att visa "
+            "vattenytor med högre detaljeringsgrad."
+        ),
+        "ref": (
+            '<em>Källa: McFeeters, S.K., 1996. &quot;The use of the Normalized '
+            'Difference Water Index (NDWI) in the delineation of open water '
+            'features.&quot; Int. J. Remote Sensing, 17(7).</em>'
+        ),
+    },
+    "evi": {
+        "title": "EVI — Förbättrat vegetationsindex",
+        "body": (
+            "EVI (Enhanced Vegetation Index) är ett vidareutvecklat vegetationsindex som "
+            "korrigerar för atmosfäriska störningar och markens bakgrundsreflektion. "
+            "Till skillnad från NDVI mättas inte EVI lika lätt i områden med tät vegetation, "
+            "vilket ger mer nyanserad information i frodiga skogsområden. EVI "
+            "använder tre band — blått (B02), rött (B04) och NIR (B08) — för att "
+            "skatta vegetationens tillstånd mer robust än NDVI ensamt."
+        ),
+        "ref": (
+            '<em>Källa: Huete et al., 2002. &quot;Overview of the radiometric and biophysical '
+            'performance of the MODIS vegetation indices.&quot; Remote Sensing of '
+            'Environment, 83(1-2).</em>'
+        ),
+    },
+    "cot": {
+        "title": "COT — Molnoptisk tjocklek",
+        "body": (
+            "COT (Cloud Optical Thickness) anger hur optiskt tjockt molntäcket är "
+            "över analysområdet. Värden nära noll (ljusgult) innebär klar himmel "
+            "och tillförlitliga satellitdata, medan högre värden (orange till rött) "
+            "visar molniga områden där underliggande mark eller hav inte kan ses. "
+            "Modellen är en ensemble av fem MLP5-nätverk (fem lager djupa neurala nät) "
+            "som tränats på syntetiska molndata från SMHI. Varje nätverk tar emot "
+            "11 Sentinel-2-band (B02–B12, exklusive B01 och B10) och predikterar ett "
+            "kontinuerligt COT-värde per pixel. Genom att använda medelvärdet av alla "
+            "fem modellers prediktioner fås ett robust och brusreducerat resultat."
+        ),
+        "fire_note": (
+            "Molnanalysen används här för att säkerställa att det valda datumet har "
+            "tillräckligt molnfria förhållanden för en pålitlig analys."
+        ),
+        "marine_note": (
+            "Molnanalysen är särskilt viktig i den marina kedjan: om ett datum "
+            "har för hög molntäckning exkluderas det automatiskt från "
+            "heatmap-ackumuleringen för att undvika att moln feldetekteras som fartyg."
+        ),
+        "ref": (
+            '<em>Källa: Pirinen, A. et al., 2024. &quot;Creating and Leveraging a Synthetic '
+            'Dataset of Cloud Optical Thickness Measures for Cloud Detection in MSI.&quot; '
+            'Remote Sensing. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" '
+            'target="_blank">GitHub</a></em>'
+        ),
+    },
+    "dnbr": {
+        "title": "dNBR — Brandsvårighetsgrad",
+        "body": (
+            "dNBR (differentierat Normalized Burn Ratio) är standardmetoden för att "
+            "kvantifiera hur allvarligt en brand har skadat vegetationen. Först beräknas "
+            "NBR-indexet som (NIR − SWIR) / (NIR + SWIR) med band B08 och B12 både "
+            "för ett datum före branden (baslinje) och för branddatumet. Sedan tas "
+            "differensen: dNBR = NBR<sub>före</sub> − NBR<sub>efter</sub>. Höga positiva "
+            "värden (röda på kartan) innebär hög brandsvårighetsgrad där träd och "
+            "markvegetation har förstörts, medan värden nära noll (gult/grönt) visar "
+            "obrända eller lätt påverkade områden. Klassificeringen följer USGS standard "
+            "med sju klasser från hög återväxt till hög svårighetsgrad."
+        ),
+        "ref": (
+            '<em>Källa: Key, C.H. &amp; Benson, N.C., 2006. &quot;Landscape Assessment: '
+            'Ground measure of severity.&quot; USGS FIREMON, LA1-LA51.</em>'
+        ),
+    },
+    "change_gradient": {
+        "title": "Förändring (gradient) — Multispektral förändringsdetektering",
+        "body": (
+            "Förändringsgradientkartan visar hur mycket varje pixel har förändrats "
+            "jämfört med en molnfri baslinjebild från före branden. Analysen använder "
+            "sex Sentinel-2-band (B02, B03, B04, B08, B11, B12) — alltså synligt ljus, "
+            "nära infrarött och kortvågigt infrarött — och beräknar den euklidiska "
+            "normen av skillnaden mellan de två datumen. Baslinjejustering sker med "
+            "IMINT Engines koregistreringsmodul som korrigerar både heltals- och "
+            "subpixelförskjutningar mellan olika satellitöverfarter. Resultatet visas "
+            "som en värmekarta där mörka områden är oförändrade och ljusa/heta "
+            "områden visar störst förändring."
+        ),
+    },
+    "prithvi": {
+        "title": "Prithvi — AI-segmentering av brandområdet",
+        "body": (
+            "Prithvi är en geospatial foundation model utvecklad av NASA och IBM inom "
+            "projektet NASA Earth Science. Modellen är förtränad på stora mängder "
+            "HLS-satellitdata (Harmonized Landsat Sentinel-2) med en Masked Autoencoder-arkitektur "
+            "(ViT-MAE) som lär sig representera markanvändning och landskap genom att "
+            "rekonstruera maskerade delar av satellitbilder. För brandanalys har modellen "
+            'finjusterats med uppgiftsspecifika segmenteringshuvuden (UPerNet) på datamängden '
+            '"burn scars" som klassificerar varje pixel som antingen bränt (orange) eller '
+            "obränt (grönt). Resultatet är en pixelnivåklassificering som "
+            "kompletterar de spektrala indexen med en inlärd förståelse för hur "
+            "brandskadat landskap ser ut."
+        ),
+        "ref": (
+            '<em>Källa: Jakubik et al., 2023. &quot;Prithvi-100M: Foundation Model for '
+            'Geospatial Applications.&quot; arXiv:2310.18660. '
+            '<a href="https://huggingface.co/ibm-nasa-geospatial/Prithvi-100M" '
+            'target="_blank">HuggingFace</a></em>'
+        ),
+    },
+    "nmd": {
+        "title": "NMD — Nationellt Marktäckedata",
+        "body": (
+            "NMD (Nationellt Marktäckedata) är Sveriges rikstäckande kartläggning "
+            "av marktäcke och markanvändning, producerad av Naturvårdsverket. Datat "
+            "har 10 meters upplösning och klassificerar marken i över 25 kategorier "
+            "— från tallskog och granskog till åkermark, bebyggelse och vatten."
+        ),
+        "fire_note": (
+            "I brandanalysen används NMD för att korsreferera vilka naturtyper som "
+            "drabbats hårdast: diagrammet visar hur stor andel av varje markklass som "
+            "ligger inom det brandpåverkade området. Detta ger viktig kontext för "
+            "ekologisk bedömning och återställningsplanering."
+        ),
+        "marine_note": (
+            "I den marina analysen fyller NMD en dubbel funktion: dels som "
+            "bakgrundsinformation som visar vilka landtyper som finns längs kusten, "
+            "dels som landmask för fartygsdetekteringen. Genom att identifiera vilka "
+            "pixlar som är land respektive vatten kan analyskedjan filtrera bort "
+            "falsklarm på land och begränsa detektionerna till sjö- och havsområden."
+        ),
+        "ref": (
+            '<em>Källa: Naturvårdsverket, &quot;Nationellt Marktäckedata (NMD).&quot; '
+            '<a href="https://www.naturvardsverket.se/verktyg-och-tjanster/kartor-och-karttjanster/'
+            'nationella-marktackedata/" target="_blank">naturvardsverket.se</a></em>'
+        ),
+    },
+    "yolo_vessels": {
+        "title": "Fartygsdetektering (YOLO) — AI-objektdetektering",
+        "body": (
+            "Fartygsdetekteringen använder YOLO11s (You Only Look Once, version 11 small), "
+            "en modern AI-modell för objektdetektering i realtid. YOLO-arkitekturen bygger på "
+            "ett djupt konvolutionellt neuralt nätverk (CNN) som analyserar hela bilden i ett "
+            "enda steg — till skillnad från äldre metoder som först föreslår kandidatområden "
+            "och sedan klassificerar dem separat. Modellen har tränats på satellitbilder "
+            "av fartyg och delar in bilden i ett rutnät där varje cell förutsäger "
+            "bounding boxes (rektanglar) och sannolikheter för att ett fartyg finns. "
+            "Överlappande detektioner filtreras med Non-Maximum Suppression (NMS). "
+            "En NMD-baserad landmask säkerställer att enbart detektioner på vatten "
+            "behålls, vilket eliminerar falsklarm på land. Varje detekterat fartyg "
+            "markeras med en cyan-färgad ruta i bilden."
+        ),
+        "ref": (
+            '<em>Källa: Jocher, G. et al., 2024. &quot;Ultralytics YOLO11.&quot; '
+            '<a href="https://docs.ultralytics.com/" target="_blank">docs.ultralytics.com</a>; '
+            'Redmon, J. et al., 2016. &quot;You Only Look Once: Unified, Real-Time Object '
+            'Detection.&quot; CVPR 2016.</em>'
+        ),
+    },
+    "vessel_heatmap": {
+        "title": "Fartygsaktivitet (heatmap) — Multitemporal analys",
+        "body": (
+            "Heatmap-analysen aggregerar fartygsdetektioner från flera satellitöverfarter "
+            "under en tidsperiod till en enda värmekarta som visar var fartyg förekommer "
+            "oftast. För varje molnfritt tillfälle körs YOLO-detektorn och resultaten "
+            "ackumuleras i ett rutnät där varje cells intensitet ökar för varje "
+            "detekterat fartyg. Områden med återkommande trafik — som farleder, "
+            "hamninlopp och ankringsplatser — får höga värden (röda), medan enstaka "
+            "passeringar ger lägre intensitet (gult). Bilder med för hög molntäckning "
+            "filtreras automatiskt bort genom COT-analys för att undvika falsklarm. "
+            "Resultatet ger en överblick av det maritima rörelsemönstret som enstaka "
+            "ögonblicksbilder inte kan visa."
+        ),
+    },
+}
+
+# Which descriptions to show in each tab (in order) and which context to use
+_FIRE_DESCRIPTION_IDS = [
+    "sentinel2_rgb", "ndvi", "ndwi", "evi", "cot", "dnbr",
+    "change_gradient", "prithvi", "nmd",
+]
+_MARINE_DESCRIPTION_IDS = [
+    "sentinel2_rgb", "yolo_vessels", "vessel_heatmap",
+    "nmd", "ndvi", "ndwi", "cot",
+]
+
+
+def _render_descriptions(desc_ids: list[str], context: str) -> str:
+    """Render analysis description HTML from _ANALYSIS_DESCRIPTIONS.
+
+    Args:
+        desc_ids: List of keys into _ANALYSIS_DESCRIPTIONS.
+        context: 'fire' or 'marine' — selects the context-specific note.
+    """
+    parts = []
+    note_key = f"{context}_note"
+    for did in desc_ids:
+        d = _ANALYSIS_DESCRIPTIONS[did]
+        body = d["body"]
+        note = d.get(note_key, "")
+        if note:
+            body = f"{body} {note}"
+        ref = d.get("ref", "")
+        ref_html = f"\n                <br>{ref}" if ref else ""
+        parts.append(
+            f'            <h3>{d["title"]}</h3>\n'
+            f'            <p>\n'
+            f'                {body}{ref_html}\n'
+            f'            </p>'
+        )
+    return "\n\n".join(parts)
+
 
 def save_tabbed_report(
     fire_dir: str,
@@ -1550,6 +1827,10 @@ def save_tabbed_report(
 
     fire_imgs_js = _imgs_js(fire_imgs)
     marine_imgs_js = _imgs_js(marine_imgs)
+
+    # ── Render descriptions from shared objects ────────────────────────────
+    fire_descriptions = _render_descriptions(_FIRE_DESCRIPTION_IDS, "fire")
+    marine_descriptions = _render_descriptions(_MARINE_DESCRIPTION_IDS, "marine")
 
     # ── Assemble HTML ─────────────────────────────────────────────────────
     html = f"""<!DOCTYPE html>
@@ -2027,21 +2308,16 @@ def save_tabbed_report(
         {fire_charts_html}
         <div class="tab-description">
             <p>
-                Analysomr\u00e5det \u00e4r beläget i Ljusdals kommun, Gävleborgs län, och
-                visar K\u00e5rbölebranden — en av de st\u00f6rsta skogsbränderna i Sveriges moderna historia
-                sommaren 2018. Sentinel-2-data fr\u00e5n {fire_date} har analyserats med flera
-                kompletterande metoder: multispektral f\u00f6r\u00e4ndringsdetektering mot en f\u00f6rbrandsbaseline
-                identifierar förändrade pixlar, dNBR (differentierat Normalized Burn Ratio) kvantifierar
-                brandens svårighetsgrad fr\u00e5n l\u00e5g till h\u00f6g intensitet, och Prithvi — en
-                NASA/IBM foundation model tr\u00e4nad p\u00e5 HLS-data — segmenterar brandomr\u00e5det
-                med djupinl\u00e4rning.
+                Analysområdet är beläget i Ljusdals kommun, Gävleborgs län, och
+                visar Kårbölebranden — en av de största skogsbränderna i Sveriges moderna historia
+                sommaren 2018. Den 14 juli 2018 startade en skogsbrand som till slut
+                bredde ut sig över cirka 9\u202f500 hektar skog, vilket gjorde den till
+                den största skogsbranden i Sverige på över 50 år. Här har
+                Sentinel-2-data från {fire_date} analyserats med flera kompletterande metoder
+                för att kartlägga brandens utbredning och intensitet.
             </p>
-            <p>
-                Resultaten korsrefereras mot Naturv\u00e5rdsverkets Nationella Markt\u00e4ckedata (NMD)
-                f\u00f6r att visa hur branden p\u00e5verkat olika markklasser — fr\u00e5n tallskog
-                och v\u00e5tmark till \u00f6ppen mark. Molnanalys via COT-modellen s\u00e4kerst\u00e4ller
-                datakvaliteten f\u00f6r det valda datumet.
-            </p>
+
+{fire_descriptions}
         </div>
     </div>
 
@@ -2050,9 +2326,10 @@ def save_tabbed_report(
         {marine_summary_html}
         <div class="tab-intro">
             <p>
-                Automatisk fartygsdetektering och havsövervakning l\u00e4ngs Bohusläns kust
-                med Sentinel-2-satellitdata. Analysen kombinerar YOLO-objektdetektering
-                och multitemporala heatmaps f\u00f6r att kartl\u00e4gga maritim aktivitet.
+                Automatisk fartygsdetektering och havsövervakning i skärgården utanför
+                Hunnebostrand med Sentinel-2-satellitdata. Analysen kombinerar YOLO-objektdetektering,
+                multitemporala heatmaps och spektralindex för att kartlägga maritim aktivitet
+                och kustmiljöns tillstånd.
             </p>
         </div>
         <div class="section-header">
@@ -2064,24 +2341,21 @@ def save_tabbed_report(
         </div>
         <div class="tab-description">
             <p>
-                Analysomr\u00e5det t\u00e4cker Bohusläns sk\u00e4rg\u00e5rd — ett av Sveriges mest trafikerade
-                kustomr\u00e5den med b\u00e5de kommersiell sjöfart, fiske och fritidsb\u00e5tar.
-                YOLO11s-modellen detekterar fartyg i optiska Sentinel-2-bilder
-                genom att skanna bilden i överlappande rutor och filtrera mot NMD-landmask.
+                Analysområdet visar skärgården utanför Hunnebostrand — ett område
+                längs den norra bohuslänska kusten med intensiv maritim aktivitet
+                från både kommersiell sjöfart, fiske och fritidsbåtar. Sentinel-2-data
+                från {marine_date} har analyserats med flera kompletterande metoder
+                för att kartlägga fartygsförekomst, vattenförhållanden och marktäcke
+                i kust- och havsområdet.
             </p>
-            <p>
-                Multitemporala heatmaps aggregerar detektioner \u00f6ver flera
-                satellit\u00f6verfarter f\u00f6r att visa återkommande trafikm\u00f6nster och
-                ankringsplatser. Bilder med h\u00f6g molnt\u00e4ckning filtreras automatiskt
-                via COT-analys. NMD-data anv\u00e4nds f\u00f6r landmaskering s\u00e5 att
-                detektioner begr\u00e4nsas till vattenomr\u00e5den. Sjökort fr\u00e5n Sjöfartsverket
-                (via SLU GET) kan visas som bakgrundslager f\u00f6r geografisk kontext.
-            </p>
+
+{marine_descriptions}
         </div>
     </div>
 
     <div class="footer">
-        IMINT Engine &middot; Genererad {fire_date} / {marine_date}
+        IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB
+        &middot; CC0 1.0 Universal &middot; Genererad {fire_date} / {marine_date}
         <br>
         <button class="license-toggle" onclick="document.getElementById('license-info').classList.toggle('open'); this.textContent = this.textContent === 'Visa licenser och upphovsr\u00e4tt' ? 'D\u00f6lj licenser' : 'Visa licenser och upphovsr\u00e4tt';">Visa licenser och upphovsr\u00e4tt</button>
         <div id="license-info" class="license-section">
@@ -2111,6 +2385,12 @@ def save_tabbed_report(
                     <td><span class="license-badge badge-open">Apache 2.0</span></td>
                     <td>&copy; IBM, NASA, J\u00fclich Supercomputing Centre</td>
                     <td>Geospatial foundation model (600M parametrar)</td>
+                </tr>
+                <tr>
+                    <td>COT MLP5 ensemble (molndetektering)</td>
+                    <td><span class="license-badge badge-restricted">Ej klargjord</span></td>
+                    <td>Aleksis Pirinen / RISE</td>
+                    <td>Pirinen et al., 2024. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" style="color:#cff8e4;" target="_blank">GitHub</a> &mdash; kommersiell licens ej bekr\u00e4ftad</td>
                 </tr>
                 <tr>
                     <td>PyTorch / Torchvision</td>

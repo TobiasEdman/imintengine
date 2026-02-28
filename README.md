@@ -125,4 +125,18 @@ The engine code is untouched.
 
 ## License
 
-MIT
+Copyright (c) 2024-2025 RISE Research Institutes of Sweden AB
+
+The original source code and documentation in this repository are dedicated
+to the public domain under **CC0 1.0 Universal**. See [LICENSE](LICENSE)
+for the full text.
+
+Third-party components (models, data, libraries) retain their original
+licenses. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for
+details. Notable obligations:
+
+- **YOLO11s** (Ultralytics): AGPL-3.0 — commercial closed-source use
+  requires an Enterprise license
+- **Prithvi-EO** (IBM/NASA): Apache 2.0
+- **COT MLP5** (Pirinen et al. / RISE): license TBD
+- **Sjokort S-57** (Sjofartsverket): academic use only via SLU GET
