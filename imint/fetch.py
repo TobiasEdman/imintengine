@@ -84,6 +84,128 @@ TOKEN_PATH_DEFAULT = os.path.join(
 
 # ── Grid alignment ───────────────────────────────────────────────────────────
 
+def _snap_to_target_grid(
+    raw: np.ndarray,
+    src_transform,
+    src_crs,
+    target_bounds: dict,
+    pixel_size: int = 10,
+) -> tuple[np.ndarray, "Affine"]:
+    """Reproject/snap a raster to the exact target pixel grid.
+
+    The DES/openEO server may return Sentinel-2 data on a pixel grid that
+    is offset from the requested bounds due to the native tile alignment
+    and reprojection pipeline. This function ensures the output is
+    pixel-aligned to our canonical NMD 10m grid.
+
+    Uses a Fourier phase-shift for sub-pixel corrections (sinc
+    interpolation) when the offset is fractional, and simple array
+    slicing for integer-pixel offsets. Falls back to rasterio warp
+    for CRS mismatches.
+
+    Args:
+        raw:            (n_bands, H, W) array from rasterio.
+        src_transform:  Affine transform of the downloaded GeoTIFF.
+        src_crs:        CRS of the downloaded GeoTIFF.
+        target_bounds:  Dict with west/south/east/north in EPSG:3006.
+        pixel_size:     Grid cell size (default 10m).
+
+    Returns:
+        (aligned_raw, target_transform) — the raster snapped to the
+        target grid, and the corresponding Affine transform.
+    """
+    from rasterio.transform import from_origin
+    from rasterio.crs import CRS
+
+    target_w = target_bounds["west"]
+    target_n = target_bounds["north"]
+    target_width = int((target_bounds["east"] - target_bounds["west"]) / pixel_size)
+    target_height = int((target_bounds["north"] - target_bounds["south"]) / pixel_size)
+    target_transform = from_origin(target_w, target_n, pixel_size, pixel_size)
+
+    # Check if the source transform already matches the target
+    src_x0 = src_transform.c
+    src_y0 = src_transform.f
+    dx_m = src_x0 - target_w
+    dy_m = target_n - src_y0
+
+    # Convert offset to pixels
+    dx_px = dx_m / pixel_size
+    dy_px = dy_m / pixel_size
+
+    # If essentially zero offset and same dimensions, no correction needed
+    if (abs(dx_px) < 0.01 and abs(dy_px) < 0.01
+            and raw.shape[1] == target_height and raw.shape[2] == target_width):
+        return raw, target_transform
+
+    # Check CRS match
+    if isinstance(src_crs, CRS):
+        src_crs_obj = src_crs
+    elif isinstance(src_crs, str):
+        src_crs_obj = CRS.from_user_input(src_crs)
+    else:
+        src_crs_obj = CRS(src_crs)
+    target_crs = CRS.from_epsg(3006)
+    if src_crs_obj != target_crs:
+        # Full reprojection needed (different CRS)
+        from rasterio.warp import reproject, Resampling
+        n_bands = raw.shape[0]
+        aligned = np.zeros((n_bands, target_height, target_width), dtype=raw.dtype)
+        for b in range(n_bands):
+            reproject(
+                source=raw[b],
+                destination=aligned[b],
+                src_transform=src_transform,
+                src_crs=src_crs_obj,
+                dst_transform=target_transform,
+                dst_crs=target_crs,
+                resampling=Resampling.bilinear,
+            )
+        print(f"    [grid] Reprojected from {src_crs_obj} to target grid "
+              f"(offset was {dx_px:.2f}, {dy_px:.2f} px)")
+        return aligned, target_transform
+
+    # Same CRS — handle pixel offset (integer + sub-pixel)
+    int_dx = int(round(dx_px))
+    int_dy = int(round(dy_px))
+    frac_dx = dx_px - int_dx
+    frac_dy = dy_px - int_dy
+
+    n_bands, src_h, src_w = raw.shape
+    aligned = np.zeros((n_bands, target_height, target_width), dtype=raw.dtype)
+
+    # Compute overlap region
+    # Source pixel (sr, sc) maps to target pixel (sr + int_dy, sc + int_dx)
+    tgt_r0 = max(0, int_dy)
+    tgt_c0 = max(0, int_dx)
+    src_r0 = max(0, -int_dy)
+    src_c0 = max(0, -int_dx)
+    copy_h = min(target_height - tgt_r0, src_h - src_r0)
+    copy_w = min(target_width - tgt_c0, src_w - src_c0)
+
+    if copy_h > 0 and copy_w > 0:
+        aligned[:, tgt_r0:tgt_r0 + copy_h, tgt_c0:tgt_c0 + copy_w] = \
+            raw[:, src_r0:src_r0 + copy_h, src_c0:src_c0 + copy_w]
+
+    # Apply sub-pixel correction if needed (uses shared coregistration module)
+    if abs(frac_dx) > 0.01 or abs(frac_dy) > 0.01:
+        from .coregistration import subpixel_shift
+        for b in range(n_bands):
+            aligned[b] = subpixel_shift(
+                aligned[b].astype(np.float64), frac_dy, frac_dx
+            ).astype(aligned.dtype)
+        print(f"    [grid] Applied sub-pixel correction: "
+              f"dy={frac_dy:+.3f} dx={frac_dx:+.3f} px "
+              f"({frac_dy*pixel_size:+.1f}m / {frac_dx*pixel_size:+.1f}m)")
+
+    if int_dx != 0 or int_dy != 0:
+        print(f"    [grid] Snapped to target grid: "
+              f"integer offset {int_dy},{int_dx} px "
+              f"({int_dy*pixel_size}m, {int_dx*pixel_size}m)")
+
+    return aligned, target_transform
+
+
 def _to_nmd_grid(coords: dict) -> dict:
     """Convert WGS84 bounding box to EPSG:3006 snapped to the NMD 10m grid.
 
@@ -497,6 +619,15 @@ def fetch_des_data(
     except Exception as e:
         raise FetchError(f"Failed to parse GeoTIFF for {date}: {e}")
 
+    # Snap to target NMD grid — corrects pixel-level and sub-pixel offsets
+    # that arise from Sentinel-2 tile alignment during server-side
+    # reprojection.  Ensures all dates produce identical pixel grids.
+    target_bounds = {k: v for k, v in projected_coords.items() if k != "crs"}
+    raw, transform = _snap_to_target_grid(
+        raw, transform, crs, target_bounds, pixel_size=NMD_GRID_SIZE,
+    )
+    crs = rasterio.crs.CRS.from_epsg(3006)
+
     # Split into individual bands (order follows merge order)
     # 10m: b02=0, b03=1, b04=2, b08=3
     # 20m spectral: b05=4, b06=5, b07=6, b8a=7, b11=8, b12=9
@@ -628,6 +759,93 @@ def _fetch_tci_bands(
     return imint_bands, scl, geo
 
 
+def _fetch_ai2_bands(
+    conn,
+    projected_coords: dict,
+    temporal: list,
+) -> tuple[dict, np.ndarray, "GeoContext"]:
+    """Fetch all 9 bands needed by the AI2 vessel detector, plus SCL.
+
+    Downloads B02, B03, B04, B08 (10 m) and B05, B06, B07, B11, B12 (20 m)
+    plus SCL.  The 20 m bands and SCL are resampled to 10 m to match the
+    high-resolution bands.
+
+    The returned bands dict contains **raw DN values** (not reflectance),
+    as the AI2 model handles its own normalization (divide by 3000/8160).
+
+    Args:
+        conn: Authenticated openEO connection.
+        projected_coords: EPSG:3006 bbox dict with ``"crs"`` key.
+        temporal: Two-element list ``[start_date, end_date]``.
+
+    Returns:
+        Tuple of ``(bands_dict, scl_array, geo)`` where *bands_dict*
+        has uppercase keys (B02, B03, B04, B05, B06, B07, B08, B11, B12)
+        as float32 DN values, *scl_array* is uint8, and *geo* is a GeoContext.
+    """
+    import rasterio
+
+    bands_10m = ["b02", "b03", "b04", "b08"]
+    bands_20m = ["b05", "b06", "b07", "b11", "b12"]
+
+    # Load 10 m bands (reference grid)
+    cube_10m = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=bands_10m,
+    )
+
+    # Load 20 m spectral bands and resample to 10 m grid
+    cube_20m = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=bands_20m,
+    )
+    cube_20m = cube_20m.resample_cube_spatial(target=cube_10m, method="bilinear")
+
+    # Load SCL (20 m categorical) and resample with nearest-neighbour
+    cube_scl = conn.load_collection(
+        collection_id=COLLECTION,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=BANDS_20M_CATEGORICAL,
+    )
+    cube_scl = cube_scl.resample_cube_spatial(target=cube_10m, method="near")
+
+    # Merge all cubes and download
+    cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_scl)
+    data = cube.download(format="gtiff")
+    if not data:
+        raise FetchError("DES returned empty AI2 band data")
+
+    with rasterio.open(io.BytesIO(data)) as src:
+        raw = src.read()  # (10, H, W): b02,b03,b04,b08, b05,b06,b07,b11,b12, scl
+        crs = src.crs
+        transform = src.transform
+
+    all_band_names = bands_10m + bands_20m  # 9 bands
+    bands = {}
+    for i, name in enumerate(all_band_names):
+        uname = name.upper()
+        bands[uname] = raw[i].astype(np.float32)
+
+    # SCL is the last band
+    scl = raw[len(all_band_names)].astype(np.uint8)
+
+    proj_bounds = {k: v for k, v in projected_coords.items() if k != "crs"}
+    geo = GeoContext(
+        crs=str(crs),
+        transform=transform,
+        bounds_projected=proj_bounds,
+        bounds_wgs84=None,
+        shape=(raw.shape[1], raw.shape[2]),
+    )
+
+    return bands, scl, geo
+
+
 def _fetch_tci_scl_batch(
     conn,
     projected_coords: dict,
@@ -746,16 +964,18 @@ def fetch_vessel_heatmap(
     scene_cloud_max: float = 50.0,
     gaussian_sigma: float = 5.0,
     prefix: str = "",
+    analyzer_type: str = "yolo",
+    predict_attributes: bool = False,
 ) -> dict:
     """Fetch all cloud-free Sentinel-2 images in a date range, run vessel
     detection on each, and aggregate into a heatmap.
 
     Pipeline (single DES call per month — no STAC):
 
-    1. For each calendar month, batch-fetch B02+B03+B04+SCL for ALL
+    1. For each calendar month, batch-fetch spectral bands + SCL for ALL
        available dates in one openEO call.
     2. Screen per-date AOI cloud fraction from the downloaded SCL.
-    3. Run ``MarineVesselAnalyzer`` on each cloud-free date (already
+    3. Run the selected vessel detector on each cloud-free date (already
        in memory — no extra fetch needed).
     4. Accumulate detection centroids into a (H, W) grid and smooth
        with a Gaussian kernel.
@@ -772,6 +992,12 @@ def fetch_vessel_heatmap(
         gaussian_sigma: Standard deviation (in pixels, 1 px = 10 m) for
             Gaussian smoothing of the raw detection grid. Default: 5.0.
         prefix: Date prefix for output filenames (e.g. ``"2025-07-10_"``).
+        analyzer_type: ``"yolo"`` for YOLO11s or ``"ai2"`` for the Allen AI
+            rslearn Swin V2 + Faster R-CNN model. Default: ``"yolo"``.
+        predict_attributes: If ``True``, run the AI2 attribute model on
+            each detection to predict speed, heading, length, width, and
+            vessel type. Requires fetching all 9 bands (forces per-date
+            mode). Default: ``False``.
 
     Returns:
         Dict with keys ``heatmap``, ``dates_used``, ``dates_skipped``,
@@ -779,8 +1005,11 @@ def fetch_vessel_heatmap(
     """
     from datetime import datetime as _dt, timedelta as _td
     from scipy.ndimage import gaussian_filter
-    from .analyzers.marine_vessels import MarineVesselAnalyzer
-    from .exporters.export import save_vessel_heatmap_png
+    from .exporters.export import save_vessel_heatmap_png, save_ai2_vessel_overlay
+    from .analyzers.ai2_vessels import (
+        _load_attribute_model, _predict_attributes,
+        _bands_dict_to_9ch, _DEFAULT_ATTR_CKPT, BAND_ORDER,
+    )
     from .utils import bands_to_rgb
     import json as _json
 
@@ -789,6 +1018,35 @@ def fetch_vessel_heatmap(
 
     projected_coords = _to_nmd_grid(coords)
     conn = _connect()
+
+    # Select analyzer
+    _use_ai2 = analyzer_type.lower() == "ai2"
+    _want_attrs = predict_attributes or _use_ai2  # AI2 always predicts attributes
+    if _use_ai2:
+        from .analyzers.ai2_vessels import AI2VesselAnalyzer
+        analyzer = AI2VesselAnalyzer(config={"water_filter": True})
+        print("[vessel-heatmap] Using AI2 rslearn detector (Swin V2 B + Faster R-CNN)")
+    else:
+        from .analyzers.marine_vessels import MarineVesselAnalyzer
+        analyzer = MarineVesselAnalyzer(config={
+            "confidence": 0.286,
+            "water_filter": True,
+        })
+        print("[vessel-heatmap] Using YOLO11s detector")
+        if _want_attrs:
+            print("[vessel-heatmap] + AI2 attribute prediction (speed/heading/type)")
+
+    # Lazy-loaded attribute model (shared across all dates)
+    _attr_model = [None]  # mutable container for closure access
+
+    def _ensure_attr_model():
+        if _attr_model[0] is None:
+            attr_ckpt = str(_DEFAULT_ATTR_CKPT)
+            if not Path(attr_ckpt).exists():
+                print(f"    [attr] Checkpoint not found: {attr_ckpt}")
+                return None
+            _attr_model[0] = _load_attribute_model(attr_ckpt)
+        return _attr_model[0]
 
     # Generate 2-week windows.  DES limits synchronous jobs to ~20
     # time steps; with 4 bands (B02+B03+B04+SCL) per date and ~3
@@ -805,54 +1063,124 @@ def fetch_vessel_heatmap(
         _chunk_ranges.append((_cur.strftime("%Y-%m-%d"), _c_end.strftime("%Y-%m-%d")))
         _cur = _c_end
 
-    # ── Fetch + detect per chunk (one DES call each) ─────────────────
-    analyzer = MarineVesselAnalyzer(config={
-        "confidence": 0.286,
-        "water_filter": True,
-    })
+    # ── Fetch + detect ──────────────────────────────────────────────
+    # For large areas (> ~2000 px on any side), batch mode times out
+    # on DES synchronous — go straight to per-date fetching.
+    _px_w = (projected_coords["east"] - projected_coords["west"]) / 10
+    _px_h = (projected_coords["north"] - projected_coords["south"]) / 10
+    _use_single_date = max(_px_w, _px_h) > 2000
+    if _use_single_date:
+        print(f"    Large area ({_px_w:.0f}×{_px_h:.0f} px) — using per-date mode")
     heatmap = None
     per_date = []
     dates_used = []
     dates_skipped = []
     total_detections = 0
+    # Track best (lowest cloud) date for overlay snapshot
+    _best_snapshot = {"cloud": 1.0, "rgb": None, "regions": None, "date": None}
 
-    print(f"\n[vessel-heatmap] Fetching TCI+SCL from DES ({len(_chunk_ranges)} chunks) ...")
+    def _detect_and_accumulate(date, bands, scl):
+        """Run vessel detection on one date and accumulate into heatmap."""
+        nonlocal heatmap, total_detections
+        cloud = check_cloud_fraction(scl)
+        if cloud > cloud_threshold:
+            dates_skipped.append(date)
+            print(f"    {date}  cloud={cloud:.1%}  ✗")
+            return
+        dates_used.append(date)
+        rgb = bands_to_rgb(bands, scl=scl)
+        result = analyzer.run(rgb, bands=bands, scl=scl)
+        regions = result.outputs.get("regions", []) if result.success else []
+
+        # ── Attribute prediction (hybrid YOLO + AI2 attributes) ──
+        if _want_attrs and regions and not _use_ai2:
+            # AI2 analyzer already predicts attributes internally;
+            # this branch adds attributes to YOLO detections.
+            attr_model = _ensure_attr_model()
+            if attr_model is not None:
+                try:
+                    image_9ch = _bands_dict_to_9ch(bands)
+                    # Convert regions to the format _predict_attributes expects
+                    det_for_attr = []
+                    for r in regions:
+                        bb = r["bbox"]
+                        det_for_attr.append({
+                            "x_min": bb["x_min"], "y_min": bb["y_min"],
+                            "x_max": bb["x_max"], "y_max": bb["y_max"],
+                        })
+                    attrs = _predict_attributes(attr_model, image_9ch, det_for_attr)
+                    for r, attr in zip(regions, attrs):
+                        r["attributes"] = attr
+                    n_attr = sum(1 for a in attrs if a.get("vessel_type"))
+                    print(f"      + attributes predicted for {n_attr}/{len(regions)} detections")
+                except Exception as e:
+                    print(f"      ⚠ attribute prediction failed: {e}")
+
+        n = len(regions)
+        total_detections += n
+        per_date.append({"date": date, "cloud": cloud, "vessels": n})
+        print(f"    {date}  cloud={cloud:.1%}  ✓  vessels={n}")
+        if heatmap is None:
+            heatmap = np.zeros(rgb.shape[:2], dtype=np.float32)
+        for r in regions:
+            bb = r["bbox"]
+            cy = (bb["y_min"] + bb["y_max"]) // 2
+            cx = (bb["x_min"] + bb["x_max"]) // 2
+            if 0 <= cy < heatmap.shape[0] and 0 <= cx < heatmap.shape[1]:
+                heatmap[cy, cx] += 1.0
+        # Keep the clearest date with detections for overlay snapshot
+        if n > 0 and cloud < _best_snapshot["cloud"]:
+            _best_snapshot["cloud"] = cloud
+            _best_snapshot["rgb"] = rgb
+            _best_snapshot["regions"] = regions
+            _best_snapshot["date"] = date
+
+    _band_label = "9 bands" if _want_attrs else "TCI+SCL"
+    print(f"\n[vessel-heatmap] Fetching {_band_label} from DES ({len(_chunk_ranges)} chunks) ...")
+    # Attribute prediction needs 9 bands — the batch TCI+SCL fetcher only
+    # provides 4, so we always use per-date mode when attributes are wanted.
+    if not _use_single_date and _want_attrs:
+        _use_single_date = True
+        print("    Attribute prediction needs 9 bands — using per-date mode")
+    if not _use_single_date:
+        _use_single_date = False  # set True on first batch timeout
     for _c_start, _c_end in _chunk_ranges:
         print(f"\n  ── {_c_start} – {_c_end} ──")
-        try:
-            batch = _fetch_tci_scl_batch(conn, projected_coords, [_c_start, _c_end])
-        except FetchError:
-            print(f"    (no data)")
-            continue
 
-        print(f"    {len(batch)} dates returned")
-
-        for date, bands, scl, geo in batch:
-            cloud = check_cloud_fraction(scl)
-            if cloud > cloud_threshold:
-                dates_skipped.append(date)
-                print(f"    {date}  cloud={cloud:.1%}  ✗")
+        if not _use_single_date:
+            try:
+                batch = _fetch_tci_scl_batch(conn, projected_coords, [_c_start, _c_end])
+                print(f"    {len(batch)} dates returned")
+                for date, bands, scl, geo in batch:
+                    _detect_and_accumulate(date, bands, scl)
                 continue
+            except (FetchError, Exception) as _batch_err:
+                if "504" in str(_batch_err) or "Gateway" in str(_batch_err):
+                    print(f"    Batch too large — switching to per-date mode")
+                    _use_single_date = True
+                elif "no matching dates" in str(_batch_err):
+                    print(f"    (no data)")
+                    continue
+                else:
+                    print(f"    Batch failed: {_batch_err} — switching to per-date mode")
+                    _use_single_date = True
 
-            dates_used.append(date)
-            rgb = bands_to_rgb(bands, scl=scl)
-
-            result = analyzer.run(rgb, bands=bands, scl=scl)
-            regions = result.outputs.get("regions", []) if result.success else []
-            n = len(regions)
-            total_detections += n
-            per_date.append({"date": date, "cloud": cloud, "vessels": n})
-            print(f"    {date}  cloud={cloud:.1%}  ✓  vessels={n}")
-
-            if heatmap is None:
-                heatmap = np.zeros(rgb.shape[:2], dtype=np.float32)
-
-            for r in regions:
-                bb = r["bbox"]
-                cy = (bb["y_min"] + bb["y_max"]) // 2
-                cx = (bb["x_min"] + bb["x_max"]) // 2
-                if 0 <= cy < heatmap.shape[0] and 0 <= cx < heatmap.shape[1]:
-                    heatmap[cy, cx] += 1.0
+        # Per-date fallback for large areas
+        _c_dt = _dt.strptime(_c_start, "%Y-%m-%d")
+        _e_dt = _dt.strptime(_c_end, "%Y-%m-%d")
+        while _c_dt < _e_dt:
+            date = _c_dt.strftime("%Y-%m-%d")
+            temporal = [date, (_c_dt + _td(days=1)).strftime("%Y-%m-%d")]
+            try:
+                if _want_attrs:
+                    bands, scl, geo = _fetch_ai2_bands(conn, projected_coords, temporal)
+                else:
+                    bands, scl, geo = _fetch_tci_bands(conn, projected_coords, temporal)
+                _detect_and_accumulate(date, bands, scl)
+            except Exception as e:
+                if "empty" not in str(e).lower():
+                    print(f"    {date}  ✗ {e}")
+            _c_dt += _td(days=1)
 
     print(f"\n    {len(dates_used)} dates used, {len(dates_skipped)} skipped")
 
@@ -865,6 +1193,21 @@ def fetch_vessel_heatmap(
         heatmap_path = output_dir / f"{prefix}vessel_heatmap_clean.png"
         save_vessel_heatmap_png(heatmap, str(heatmap_path))
 
+    # ── Save vessel overlay with attributes (AI2 or YOLO+attributes) ──
+    ai2_overlay_path = None
+    if _want_attrs and _best_snapshot["regions"]:
+        # Check that at least some detections have attributes
+        has_attrs = any(r.get("attributes") for r in _best_snapshot["regions"])
+        if has_attrs:
+            ai2_overlay_path = output_dir / f"{prefix}ai2_vessels_clean.png"
+            save_ai2_vessel_overlay(
+                _best_snapshot["rgb"],
+                _best_snapshot["regions"],
+                str(ai2_overlay_path),
+            )
+            _src = "AI2" if _use_ai2 else "YOLO+attributes"
+            print(f"[vessel-heatmap] {_src} overlay ({_best_snapshot['date']}) → {ai2_overlay_path}")
+
     # Save summary JSON
     summary = {
         "date_start": date_start,
@@ -875,6 +1218,7 @@ def fetch_vessel_heatmap(
         "per_date": per_date,
         "cloud_threshold": cloud_threshold,
         "gaussian_sigma": gaussian_sigma,
+        "analyzer": analyzer_type,
     }
     summary_path = output_dir / f"{prefix}vessel_heatmap_summary.json"
     with open(summary_path, "w") as f:
@@ -1484,6 +1828,18 @@ def ensure_baseline(
             bands_path = baseline_path.replace(".npy", "_bands.npy")
             np.save(bands_path, bands_stack)
             print(f"  [baseline] Saved multispectral bands: {bands_path}")
+
+        # Save geospatial transform so change detection can align grids
+        if result.geo and result.geo.transform:
+            import json as _json
+            geo_path = baseline_path.replace(".npy", "_geo.json")
+            with open(geo_path, "w") as _f:
+                _json.dump({
+                    "transform": list(result.geo.transform)[:6],
+                    "crs": str(result.geo.crs),
+                    "shape": list(result.rgb.shape[:2]),
+                }, _f, indent=2)
+            print(f"  [baseline] Saved geo transform: {geo_path}")
 
         print(f"  [baseline] Saved cloud-free baseline: {baseline_path}")
         return baseline_path

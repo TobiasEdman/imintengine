@@ -6,6 +6,7 @@ data/
 *.geotiff
 *.pt
 *.pth
+*.ckpt
 
 # Baselines (large numpy files)
 **/baselines/

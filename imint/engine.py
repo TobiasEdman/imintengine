@@ -102,6 +102,7 @@ def run_job(job: IMINTJob) -> IMINTResult:
             output_dir=job.output_dir,
             previous_results=results,
             scl=job.scl,
+            geo=job.geo,
         )
         results.append(result)
         print(f"  {result.summary()}")

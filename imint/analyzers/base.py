@@ -62,6 +62,7 @@ class BaseAnalyzer(ABC):
         output_dir: str = "outputs",
         previous_results: list[AnalysisResult] | None = None,
         scl: np.ndarray | None = None,
+        geo: Any | None = None,
     ) -> AnalysisResult:
         ...
 
@@ -74,12 +75,13 @@ class BaseAnalyzer(ABC):
         output_dir: str = "outputs",
         previous_results: list[AnalysisResult] | None = None,
         scl: np.ndarray | None = None,
+        geo: Any | None = None,
     ) -> AnalysisResult:
         """Run analyze() with error handling.
 
-        Passes ``previous_results`` and ``scl`` only if the concrete
-        analyze() declares them in its signature — existing analyzers
-        that omit them are called without, requiring zero changes.
+        Passes ``previous_results``, ``scl``, and ``geo`` only if the
+        concrete analyze() declares them in its signature — existing
+        analyzers that omit them are called without, requiring zero changes.
         """
         try:
             sig = inspect.signature(self.analyze)
@@ -88,6 +90,8 @@ class BaseAnalyzer(ABC):
                 kwargs["previous_results"] = previous_results
             if "scl" in sig.parameters:
                 kwargs["scl"] = scl
+            if "geo" in sig.parameters:
+                kwargs["geo"] = geo
             return self.analyze(rgb, **kwargs)
         except Exception as e:
             return AnalysisResult(

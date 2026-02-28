@@ -46,6 +46,10 @@ def main():
                         help="Date prefix for output files (e.g. '2025-07-10_')")
     parser.add_argument("--showcase", action="store_true",
                         help="Regenerate IMINT showcase HTML after heatmap")
+    parser.add_argument("--analyzer", choices=["yolo", "ai2"], default="yolo",
+                        help="Vessel detector: 'yolo' (YOLO11s) or 'ai2' (rslearn Swin V2 B)")
+    parser.add_argument("--predict-attributes", action="store_true",
+                        help="Run AI2 attribute model on each detection (speed/heading/type/length/width)")
     parser.add_argument("--fire-dir", default=None,
                         help="Fire analysis dir (for showcase, if --showcase)")
     parser.add_argument("--fire-date", default="", help="Fire date prefix")
@@ -65,6 +69,9 @@ def main():
     print(f"  Cloud:     ≤{args.cloud_threshold:.0%} AOI, "
           f"≤{args.scene_cloud_max:.0f}% scene")
     print(f"  Sigma:     {args.sigma} px ({args.sigma * 10:.0f} m)")
+    print(f"  Analyzer:  {args.analyzer}")
+    if args.predict_attributes:
+        print(f"  Attributes: AI2 (speed/heading/type/length/width)")
     print(f"  Output:    {args.output_dir}")
     print("=" * 70)
 
@@ -79,6 +86,8 @@ def main():
         scene_cloud_max=args.scene_cloud_max,
         gaussian_sigma=args.sigma,
         prefix=args.prefix,
+        analyzer_type=args.analyzer,
+        predict_attributes=args.predict_attributes,
     )
 
     # Print summary

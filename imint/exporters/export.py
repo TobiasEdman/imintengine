@@ -1031,6 +1031,146 @@ def save_vessel_overlay(
     return path
 
 
+def save_ai2_vessel_overlay(
+    rgb: np.ndarray, regions: list[dict], path: str,
+) -> str:
+    """Save RGB with AI2 vessel detections, heading arrows, speed colours.
+
+    Each vessel is drawn with:
+      • Bounding box coloured by speed (blue → yellow → red)
+      • Heading arrow from the centre of the box
+      • Label showing vessel type + length
+
+    Produces a clean PNG suitable for the HTML report Leaflet overlay.
+
+    Args:
+        rgb: (H, W, 3) float32 [0,1] or uint8 RGB image.
+        regions: List of detection dicts, each with ``bbox`` and
+            optional ``attributes`` dict (length_m, width_m,
+            speed_knots, heading_deg, vessel_type, type_confidence).
+        path: Output PNG path.
+
+    Returns:
+        The output file path.
+    """
+    import math
+    from PIL import ImageDraw, ImageFont
+
+    if rgb.dtype != np.uint8:
+        img = (rgb * 255).clip(0, 255).astype(np.uint8)
+    else:
+        img = rgb.copy()
+
+    pil_img = Image.fromarray(img).convert("RGBA")
+    overlay = Image.new("RGBA", pil_img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 11)
+        font_big = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 14)
+    except Exception:
+        font = ImageFont.load_default()
+        font_big = font
+
+    def _speed_colour(speed_kn: float) -> tuple:
+        """Map speed to colour: blue (0 kn) → yellow (5 kn) → red (15+ kn)."""
+        if speed_kn <= 0:
+            return (80, 160, 255)       # light blue - stationary
+        if speed_kn < 5:
+            t = speed_kn / 5.0
+            r = int(80 + t * (255 - 80))
+            g = int(160 + t * (230 - 160))
+            b = int(255 - t * 255)
+            return (r, g, b)
+        if speed_kn < 15:
+            t = (speed_kn - 5) / 10.0
+            r = 255
+            g = int(230 - t * 230)
+            b = 0
+            return (r, g, b)
+        return (255, 0, 0)             # red - fast
+
+    for r in regions:
+        bb = r["bbox"]
+        x0, y0, x1, y1 = bb["x_min"], bb["y_min"], bb["x_max"], bb["y_max"]
+        cx = (x0 + x1) / 2
+        cy = (y0 + y1) / 2
+        attrs = r.get("attributes", {})
+
+        speed = attrs.get("speed_knots", 0)
+        colour = _speed_colour(speed)
+        colour_a = colour + (220,)  # with alpha
+
+        # Bounding box
+        draw.rectangle([x0, y0, x1, y1], outline=colour_a, width=2)
+
+        # Heading arrow
+        heading_deg = attrs.get("heading_deg")
+        if heading_deg is not None:
+            arrow_len = 18
+            rad = math.radians(heading_deg)
+            # Heading: 0° = East, 90° = North in math coords
+            # Convert to image coords (y increases downward)
+            dx = arrow_len * math.cos(rad)
+            dy = -arrow_len * math.sin(rad)
+            ex, ey = cx + dx, cy + dy
+            draw.line([(cx, cy), (ex, ey)], fill=colour_a, width=2)
+            # Arrow head
+            head_len = 5
+            head_angle = 0.4  # radians (~23°)
+            for sign in (-1, 1):
+                hx = ex - head_len * math.cos(rad + sign * head_angle)
+                hy = ey + head_len * math.sin(rad + sign * head_angle)
+                draw.line([(ex, ey), (hx, hy)], fill=colour_a, width=2)
+
+        # Label: type + length
+        vtype = attrs.get("vessel_type", "")
+        length = attrs.get("length_m")
+        parts = []
+        if vtype:
+            parts.append(vtype.capitalize())
+        if length:
+            parts.append(f"{length:.0f}m")
+        label = " ".join(parts) if parts else f"{r.get('score', 0):.0%}"
+
+        bbox_t = draw.textbbox((0, 0), label, font=font)
+        tw = bbox_t[2] - bbox_t[0]
+        th = bbox_t[3] - bbox_t[1]
+        # Position label above bbox
+        lx = max(0, int(cx - tw / 2))
+        ly = max(0, y0 - th - 4)
+        draw.rectangle([lx - 1, ly - 1, lx + tw + 1, ly + th + 1],
+                        fill=(0, 0, 0, 160))
+        draw.text((lx, ly), label, fill=colour_a, font=font)
+
+    # Composite
+    pil_img = Image.alpha_composite(pil_img, overlay)
+
+    # Summary label (top-left)
+    final = pil_img.convert("RGB")
+    draw2 = ImageDraw.Draw(final)
+    n = len(regions)
+    n_with_attrs = sum(1 for r in regions if r.get("attributes"))
+    summary = f"{n} vessels (AI2)"
+    if n_with_attrs > 0:
+        types = {}
+        for r in regions:
+            t = r.get("attributes", {}).get("vessel_type", "unknown")
+            types[t] = types.get(t, 0) + 1
+        top_types = sorted(types.items(), key=lambda x: -x[1])[:3]
+        summary += " — " + ", ".join(f"{v}× {k}" for k, v in top_types)
+
+    bbox_s = draw2.textbbox((0, 0), summary, font=font_big)
+    sw = bbox_s[2] - bbox_s[0]
+    sh = bbox_s[3] - bbox_s[1]
+    draw2.rectangle([4, 4, 8 + sw, 8 + sh], fill=(0, 0, 0, 200))
+    draw2.text((6, 6), summary, fill=(0, 255, 180), font=font_big)
+
+    final.save(path)
+    print(f"    saved: {path}")
+    return path
+
+
 def save_vessel_heatmap_png(
     heatmap: np.ndarray,
     path: str,
