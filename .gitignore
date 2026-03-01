@@ -1,5 +1,9 @@
 # Outputs and data — never commit these
-outputs/
+outputs/*
+# But keep the showcase (small, deliverable)
+!outputs/imint_showcase.html
+!outputs/showcase/
+!outputs/showcase/**
 data/
 *.npy
 *.tif
