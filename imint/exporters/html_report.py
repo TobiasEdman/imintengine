@@ -18,6 +18,7 @@ Common features:
 from __future__ import annotations
 
 import os
+import re
 import json
 import base64
 import shutil
@@ -1022,8 +1023,8 @@ def _build_marine_summary_cards(marine_dir: str, prefix: str,
         dates_skip = len(hs.get("dates_skipped", []))
         cards.append(
             '<div class="summary-card">'
-            '<h4>Fartygsdetektering</h4>'
-            f'<div class="value">{total} fartyg</div>'
+            '<h4>Båtdetektering</h4>'
+            f'<div class="value">{total} båtar</div>'
             f'<div class="detail">{dates_used} datum ({dates_skip} skippade)</div>'
             '</div>'
         )
@@ -1034,7 +1035,7 @@ def _build_marine_summary_cards(marine_dir: str, prefix: str,
             cards.append(
                 '<div class="summary-card">'
                 '<h4>Bästa datum</h4>'
-                f'<div class="value">{best["vessels"]} fartyg</div>'
+                f'<div class="value">{best["vessels"]} båtar</div>'
                 f'<div class="detail">{best["date"]}</div>'
                 '</div>'
             )
@@ -1246,10 +1247,10 @@ _FIRE_VIEWERS = [
 
 _MARINE_VIEWERS = [
     {"id": "m-rgb",  "title": "Sentinel-2 RGB", "key": "rgb", "legend": []},
-    {"id": "m-vessels", "title": "Fartygsdetektering (YOLO)", "key": "vessels", "legend": [
-        {"color": "#00E5FF", "label": "Detekterat fartyg"},
+    {"id": "m-vessels", "title": "Båtdetektering (YOLO)", "key": "vessels", "legend": [
+        {"color": "#00E5FF", "label": "Detekterad båt"},
     ]},
-    {"id": "m-vessel-heatmap", "title": "Fartygsaktivitet (heatmap)", "key": "vessel_heatmap", "legend": [
+    {"id": "m-vessel-heatmap", "title": "Båtaktivitet (heatmap)", "key": "vessel_heatmap", "legend": [
         {"color": "#FFFFB2", "label": "Låg"},
         {"color": "#FD8D3C", "label": "Medel"},
         {"color": "#BD0026", "label": "Hög"},
@@ -1303,7 +1304,7 @@ _ANALYSIS_DESCRIPTIONS = {
         ),
         "marine_note": (
             "I kustmiljön syns land, öar, holmar och öppet vatten — och vid god sikt "
-            "kan enskilda fartyg och deras kölvatten urskiljas i bilden."
+            "kan enskilda båtar och deras kölvatten urskiljas i bilden."
         ),
         "ref": (
             '<em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" '
@@ -1396,7 +1397,7 @@ _ANALYSIS_DESCRIPTIONS = {
         "marine_note": (
             "Molnanalysen är särskilt viktig i den marina kedjan: om ett datum "
             "har för hög molntäckning exkluderas det automatiskt från "
-            "heatmap-ackumuleringen för att undvika att moln feldetekteras som fartyg."
+            "heatmap-ackumuleringen för att undvika att moln feldetekteras som båtar."
         ),
         "ref": (
             '<em>Källa: Pirinen, A. et al., 2024. &quot;Creating and Leveraging a Synthetic '
@@ -1475,7 +1476,7 @@ _ANALYSIS_DESCRIPTIONS = {
         "marine_note": (
             "I den marina analysen fyller NMD en dubbel funktion: dels som "
             "bakgrundsinformation som visar vilka landtyper som finns längs kusten, "
-            "dels som landmask för fartygsdetekteringen. Genom att identifiera vilka "
+            "dels som landmask för båtdetekteringen. Genom att identifiera vilka "
             "pixlar som är land respektive vatten kan analyskedjan filtrera bort "
             "falsklarm på land och begränsa detektionerna till sjö- och havsområden."
         ),
@@ -1486,18 +1487,18 @@ _ANALYSIS_DESCRIPTIONS = {
         ),
     },
     "yolo_vessels": {
-        "title": "Fartygsdetektering (YOLO) — AI-objektdetektering",
+        "title": "Båtdetektering (YOLO) — AI-objektdetektering",
         "body": (
-            "Fartygsdetekteringen använder YOLO11s (You Only Look Once, version 11 small), "
+            "Båtdetekteringen använder YOLO11s (You Only Look Once, version 11 small), "
             "en modern AI-modell för objektdetektering i realtid. YOLO-arkitekturen bygger på "
             "ett djupt konvolutionellt neuralt nätverk (CNN) som analyserar hela bilden i ett "
             "enda steg — till skillnad från äldre metoder som först föreslår kandidatområden "
             "och sedan klassificerar dem separat. Modellen har tränats på satellitbilder "
-            "av fartyg och delar in bilden i ett rutnät där varje cell förutsäger "
-            "bounding boxes (rektanglar) och sannolikheter för att ett fartyg finns. "
+            "av båtar och delar in bilden i ett rutnät där varje cell förutsäger "
+            "bounding boxes (rektanglar) och sannolikheter för att en båt finns. "
             "Överlappande detektioner filtreras med Non-Maximum Suppression (NMS). "
             "En NMD-baserad landmask säkerställer att enbart detektioner på vatten "
-            "behålls, vilket eliminerar falsklarm på land. Varje detekterat fartyg "
+            "behålls, vilket eliminerar falsklarm på land. Varje detekterad båt "
             "markeras med en cyan-färgad ruta i bilden."
         ),
         "ref": (
@@ -1508,13 +1509,13 @@ _ANALYSIS_DESCRIPTIONS = {
         ),
     },
     "vessel_heatmap": {
-        "title": "Fartygsaktivitet (heatmap) — Multitemporal analys",
+        "title": "Båtaktivitet (heatmap) — Multitemporal analys",
         "body": (
-            "Heatmap-analysen aggregerar fartygsdetektioner från flera satellitöverfarter "
-            "under en tidsperiod till en enda värmekarta som visar var fartyg förekommer "
+            "Heatmap-analysen aggregerar båtdetektioner från flera satellitöverfarter "
+            "under en tidsperiod till en enda värmekarta som visar var båtar förekommer "
             "oftast. För varje molnfritt tillfälle körs YOLO-detektorn och resultaten "
             "ackumuleras i ett rutnät där varje cells intensitet ökar för varje "
-            "detekterat fartyg. Områden med återkommande trafik — som farleder, "
+            "detekterad båt. Områden med återkommande trafik — som farleder, "
             "hamninlopp och ankringsplatser — får höga värden (röda), medan enstaka "
             "passeringar ger lägre intensitet (gult). Bilder med för hög molntäckning "
             "filtreras automatiskt bort genom COT-analys för att undvika falsklarm. "
@@ -1658,6 +1659,56 @@ def save_tabbed_report(
             shutil.copy2(sjokort_src, sjokort_dest)
         marine_imgs["m-sjokort"] = f"showcase/marine/{file_map['sjokort']}"
 
+    # Generate baseline RGB PNG for fire tab (pre-fire reference image)
+    # Match baseline by comparing coordinates from fire_dir name
+    _baseline_dir = os.path.join(fire_dir, "..", "baselines")
+    _area_candidates = [
+        f.replace(".npy", "") for f in os.listdir(_baseline_dir)
+        if f.endswith(".npy") and "_bands" not in f and "_scl" not in f and "_geo" not in f
+    ] if os.path.isdir(_baseline_dir) else []
+    _baseline_npy = None
+    # Extract approximate lon/lat from fire_dir to match correct baseline
+    _fire_bbox_m = re.search(r'([\d.]+)_([\d.]+)_([\d.]+)_([\d.]+)',
+                             os.path.basename(fire_dir))
+    _fire_lon = float(_fire_bbox_m.group(1)) if _fire_bbox_m else None
+    # Collect area-matching candidates, prefer ones with _geo.json (= geo-aligned)
+    _geo_candidates = []
+    _plain_candidates = []
+    for cand in _area_candidates:
+        npy_path = os.path.join(_baseline_dir, cand + ".npy")
+        if not os.path.isfile(npy_path):
+            continue
+        if _fire_lon is not None:
+            _cand_m = re.match(r'([\d.]+)_', cand)
+            if _cand_m and abs(float(_cand_m.group(1)) - _fire_lon) > 1.0:
+                continue  # wrong area (e.g. marine baseline)
+        if os.path.isfile(os.path.join(_baseline_dir, cand + "_geo.json")):
+            _geo_candidates.append(npy_path)
+        else:
+            _plain_candidates.append(npy_path)
+    # Prefer geo-aligned baselines over legacy ones
+    if _geo_candidates:
+        _baseline_npy = _geo_candidates[0]
+    elif _plain_candidates:
+        _baseline_npy = _plain_candidates[0]
+    if _baseline_npy is not None:
+        try:
+            import numpy as np
+            from PIL import Image as PILImage
+            bl_arr = np.load(_baseline_npy)
+            if bl_arr.dtype != np.uint8:
+                if bl_arr.max() <= 1.0:
+                    bl_arr = (bl_arr * 255).clip(0, 255).astype(np.uint8)
+                else:
+                    bl_arr = bl_arr.clip(0, 255).astype(np.uint8)
+            bl_img = PILImage.fromarray(bl_arr)
+            bl_dest = os.path.join(showcase_dir, "fire", "baseline_rgb.png")
+            os.makedirs(os.path.join(showcase_dir, "fire"), exist_ok=True)
+            bl_img.save(bl_dest)
+            fire_imgs["f-baseline"] = "showcase/fire/baseline_rgb.png"
+        except Exception:
+            pass  # baseline not available, skip toggle
+
     fire_viewers = [v for v in _FIRE_VIEWERS if v["id"] in fire_imgs]
     marine_viewers = [v for v in _MARINE_VIEWERS if v["id"] in marine_imgs]
 
@@ -1708,7 +1759,9 @@ def save_tabbed_report(
     chart_js = _fetch_lib(_CDN_LIBS["chart_js"])
 
     # ── Build map cells HTML per tab ──────────────────────────────────────
-    def _map_cells(viewers, tab_prefix, has_bg_toggle=False, hideable=False):
+    def _map_cells(viewers, tab_prefix, has_bg_toggle=False, hideable=False,
+                   per_panel_toggle=None):
+        """per_panel_toggle: dict mapping viewer key to list of (data-bg, label) tuples."""
         html = ""
         for v in viewers:
             legend_html = ""
@@ -1722,7 +1775,18 @@ def save_tabbed_report(
                 legend_html = f'<div class="legend-strip">{items}</div>'
 
             bg_toggle_html = ""
-            if has_bg_toggle:
+            panel_toggle = (per_panel_toggle or {}).get(v["key"])
+            if panel_toggle:
+                btns = ""
+                for i, (bg_key, label) in enumerate(panel_toggle):
+                    active = " active" if i == 0 else ""
+                    btns += f'<button class="bg-btn{active}" data-bg="{bg_key}">{label}</button>'
+                bg_toggle_html = f"""
+                    <div class="bg-toggle" data-map-id="{v["id"]}">
+                        <span class="bg-label">Visa:</span>
+                        {btns}
+                    </div>"""
+            elif has_bg_toggle:
                 bg_toggle_html = f"""
                     <div class="bg-toggle" data-map-id="{v["id"]}">
                         <span class="bg-label">Visa:</span>
@@ -1758,7 +1822,14 @@ def save_tabbed_report(
         return html
 
     has_marine_bg = "m-sjokort" in marine_imgs and "m-rgb" in marine_imgs
-    fire_cells = _map_cells(fire_viewers, "f", hideable=True)
+    fire_bg_toggle = {}
+    if "f-baseline" in fire_imgs:
+        fire_bg_toggle = {
+            "dnbr": [("rgb", "Efter"), ("baseline", "Före")],
+            "change_gradient": [("rgb", "Efter"), ("baseline", "Före")],
+        }
+    fire_cells = _map_cells(fire_viewers, "f", hideable=True,
+                            per_panel_toggle=fire_bg_toggle)
     marine_cells = _map_cells(marine_viewers, "m", has_bg_toggle=has_marine_bg, hideable=True)
 
     # ── Fire chart sections ───────────────────────────────────────────────
@@ -1845,16 +1916,17 @@ def save_tabbed_report(
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{
             font-family: 'Space Grotesk', sans-serif;
-            background: #1a4338;
-            color: #cff8e4;
+            background: #ffffff;
+            color: #171717;
+            font-size: 18px;
             line-height: 1.56;
         }}
 
-        /* ── Header ──────────────────────────────────────────────────── */
+        /* ── Header (white background, black text) ─────────────────── */
         .header {{
-            background: linear-gradient(135deg, #132e25 0%, #1a4338 100%);
+            background: #ffffff;
             padding: 20px 32px;
-            border-bottom: 1px solid #2d6354;
+            border-bottom: 1px solid #e5e7eb;
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -1866,29 +1938,18 @@ def save_tabbed_report(
             align-items: center;
             gap: 20px;
         }}
-        .des-logo {{
-            height: 42px;
-            filter: invert(0.94) sepia(0.07) saturate(5.62) hue-rotate(97deg) brightness(0.98) contrast(1.01);
-            flex-shrink: 0;
-        }}
-        .header-divider {{
-            width: 1px;
-            height: 36px;
-            background: rgba(207,248,228,0.2);
-            flex-shrink: 0;
-        }}
         .header-left h1 {{
             font-size: 22px;
             font-weight: 700;
-            color: #ffffff;
+            color: #171717;
             letter-spacing: -0.3px;
         }}
         .header-left h1 span {{
-            color: #ffffff;
+            color: #171717;
         }}
         .header-left p {{
             font-size: 13px;
-            color: rgba(207,248,228,0.6);
+            color: #6b7280;
             margin-top: 2px;
         }}
         .header-nav {{
@@ -1901,21 +1962,21 @@ def save_tabbed_report(
             border-radius: 9999px;
             font-size: 13px;
             font-weight: 600;
-            color: rgba(207,248,228,0.6);
-            background: #245045;
-            border: 1px solid #2d6354;
+            color: #6b7280;
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
             cursor: pointer;
             transition: all 0.15s;
         }}
         .theme-tab:hover {{
-            color: #cff8e4;
-            border-color: #cff8e4;
-            background: rgba(207,248,228,0.1);
+            color: #171717;
+            border-color: #9ca3af;
+            background: #e5e7eb;
         }}
         .theme-tab.active {{
-            color: #1a4338;
-            background: #cff8e4;
-            border-color: #cff8e4;
+            color: #ffffff;
+            background: #1a4338;
+            border-color: #1a4338;
         }}
 
         /* ── Summary cards ───────────────────────────────────────────── */
@@ -1926,7 +1987,7 @@ def save_tabbed_report(
             padding: 16px 20px 8px;
         }}
         .summary-card {{
-            background: #163930;
+            background: #1a4338;
             border-radius: 10px;
             padding: 14px 18px;
             min-width: 170px;
@@ -1946,14 +2007,14 @@ def save_tabbed_report(
             font-size: 10px;
             text-transform: uppercase;
             letter-spacing: 1.2px;
-            color: rgba(207,248,228,0.4);
+            color: rgba(207,248,228,0.5);
             margin-bottom: 6px;
             font-weight: 600;
         }}
         .summary-card .value {{
             font-size: 22px;
             font-weight: 700;
-            color: #ffffff;
+            color: #cff8e4;
         }}
         .summary-card .detail {{
             font-size: 11px;
@@ -1967,9 +2028,9 @@ def save_tabbed_report(
             padding: 28px 20px 10px;
         }}
         .section-header h2 {{
-            font-size: 16px;
+            font-size: 20px;
             font-weight: 700;
-            color: #cff8e4;
+            color: #171717;
         }}
 
         /* ── Tab intro / description ────────────────────────────────── */
@@ -1980,23 +2041,34 @@ def save_tabbed_report(
             text-align: center;
         }}
         .tab-intro p {{
-            font-size: 17px;
-            line-height: 1.7;
-            color: rgba(207,248,228,0.8);
+            font-size: 18px;
+            line-height: 1.56;
+            color: #171717;
             margin: 0;
         }}
         .tab-description {{
             max-width: 820px;
             margin: 0 auto;
             padding: 10px 28px 20px;
-            border-bottom: 1px solid rgba(207,248,228,0.08);
+            border-bottom: 1px solid #e5e7eb;
             margin-bottom: 10px;
         }}
         .tab-description p {{
-            font-size: 15px;
-            line-height: 1.75;
-            color: rgba(207,248,228,0.55);
+            font-size: 18px;
+            line-height: 1.56;
+            color: #171717;
             margin: 8px 0 0;
+        }}
+        .tab-description h3 {{
+            color: #171717;
+            margin-top: 28px;
+        }}
+        .tab-description a {{
+            color: #171717;
+            text-decoration: underline;
+        }}
+        .tab-description em {{
+            color: #555555;
         }}
 
         /* ── Tab content ─────────────────────────────────────────────── */
@@ -2015,7 +2087,7 @@ def save_tabbed_report(
             padding: 10px 20px;
         }}
         .map-cell {{
-            background: #163930;
+            background: #1a4338;
             border-radius: 10px;
             overflow: hidden;
             border: 1px solid #245045;
@@ -2026,6 +2098,7 @@ def save_tabbed_report(
             align-items: center;
             padding: 10px 14px;
             border-bottom: 1px solid #245045;
+            background: #163930;
         }}
         .map-cell-header h3 {{
             font-size: 13px;
@@ -2042,7 +2115,7 @@ def save_tabbed_report(
             align-items: center;
             gap: 6px;
             font-size: 11px;
-            color: rgba(207,248,228,0.4);
+            color: rgba(207,248,228,0.5);
         }}
         .opacity-control input[type="range"] {{
             width: 70px;
@@ -2068,8 +2141,8 @@ def save_tabbed_report(
             flex-wrap: wrap;
         }}
         .panel-toolbar-label {{
-            font-size: 11px;
-            color: rgba(207,248,228,0.4);
+            font-size: 12px;
+            color: #171717;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             margin-right: 4px;
@@ -2078,27 +2151,29 @@ def save_tabbed_report(
             font-size: 11px;
             padding: 4px 12px;
             border-radius: 9999px;
-            border: 1px solid #2d6354;
-            background: #245045;
-            color: rgba(207,248,228,0.6);
+            border: 1px solid #245045;
+            background: #1a4338;
+            color: rgba(207,248,228,0.7);
             cursor: pointer;
             transition: all 0.15s;
             user-select: none;
         }}
         .panel-chip.active {{
-            background: rgba(207,248,228,0.12);
+            background: #245045;
             border-color: #cff8e4;
             color: #cff8e4;
+            font-weight: 600;
         }}
         .panel-chip:hover {{
-            border-color: #2d6354;
+            border-color: #cff8e4;
+            color: #cff8e4;
         }}
 
         /* ── Hide button in map-cell header ──────────────────────────── */
         .hide-panel-btn {{
             background: none;
             border: none;
-            color: rgba(207,248,228,0.3);
+            color: rgba(207,248,228,0.4);
             cursor: pointer;
             font-size: 16px;
             padding: 2px 6px;
@@ -2108,7 +2183,7 @@ def save_tabbed_report(
         }}
         .hide-panel-btn:hover {{
             color: #ef4444;
-            background: rgba(239, 68, 68, 0.1);
+            background: rgba(239, 68, 68, 0.15);
         }}
 
         .map-cell.hidden-panel {{
@@ -2123,7 +2198,7 @@ def save_tabbed_report(
         }}
         .bg-label {{
             font-size: 10px;
-            color: rgba(207,248,228,0.4);
+            color: rgba(207,248,228,0.5);
             text-transform: uppercase;
             letter-spacing: 0.5px;
             margin-right: 2px;
@@ -2131,16 +2206,16 @@ def save_tabbed_report(
         .bg-btn {{
             font-size: 10px;
             padding: 2px 8px;
-            border: 1px solid #2d6354;
+            border: 1px solid #245045;
             border-radius: 3px;
             background: transparent;
-            color: rgba(207,248,228,0.4);
+            color: rgba(207,248,228,0.6);
             cursor: pointer;
             transition: all 0.15s;
         }}
         .bg-btn:hover {{
-            border-color: #2d6354;
-            color: rgba(207,248,228,0.6);
+            border-color: #cff8e4;
+            color: #cff8e4;
         }}
         .bg-btn.active {{
             background: #cff8e4;
@@ -2178,7 +2253,7 @@ def save_tabbed_report(
             padding: 10px 20px 32px;
         }}
         .chart-card {{
-            background: #163930;
+            background: #1a4338;
             border-radius: 10px;
             padding: 18px 20px;
             border: 1px solid #245045;
@@ -2199,13 +2274,13 @@ def save_tabbed_report(
             text-align: center;
             padding: 20px;
             font-size: 11px;
-            color: rgba(207,248,228,0.3);
-            border-top: 1px solid #245045;
+            color: #9ca3af;
+            border-top: 1px solid #e5e7eb;
         }}
         .license-toggle {{
             background: none;
-            border: 1px solid #2d6354;
-            color: rgba(207,248,228,0.6);
+            border: 1px solid #d1d5db;
+            color: #6b7280;
             padding: 6px 16px;
             border-radius: 9999px;
             cursor: pointer;
@@ -2215,8 +2290,8 @@ def save_tabbed_report(
             transition: all 0.15s;
         }}
         .license-toggle:hover {{
-            border-color: #cff8e4;
-            color: #cff8e4;
+            border-color: #171717;
+            color: #171717;
         }}
         .license-section {{
             display: none;
@@ -2224,16 +2299,16 @@ def save_tabbed_report(
             max-width: 900px;
             margin: 16px auto 0;
             padding: 20px 24px;
-            background: #163930;
-            border: 1px solid #245045;
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
             border-radius: 10px;
             font-size: 11px;
-            color: rgba(207,248,228,0.6);
+            color: #4b5563;
             line-height: 1.6;
         }}
         .license-section.open {{ display: block; }}
         .license-section h4 {{
-            font-size: 12px; color: #cff8e4;
+            font-size: 12px; color: #171717;
             margin: 14px 0 6px; font-weight: 600;
         }}
         .license-section h4:first-child {{ margin-top: 0; }}
@@ -2243,22 +2318,23 @@ def save_tabbed_report(
         .license-table th {{
             text-align: left; font-size: 10px;
             text-transform: uppercase; letter-spacing: 0.5px;
-            color: rgba(207,248,228,0.4); padding: 6px 10px;
-            border-bottom: 1px solid #245045;
+            color: #6b7280; padding: 6px 10px;
+            border-bottom: 1px solid #e5e7eb;
         }}
         .license-table td {{
             padding: 6px 10px;
-            border-bottom: 1px solid rgba(36,80,69,0.5);
+            border-bottom: 1px solid #f3f4f6;
             vertical-align: top;
         }}
         .license-table tr:last-child td {{ border-bottom: none; }}
+        .license-table a {{ color: #171717; text-decoration: underline; }}
         .license-badge {{
             display: inline-block; padding: 1px 7px;
             border-radius: 4px; font-size: 10px; font-weight: 600;
         }}
-        .badge-open {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
-        .badge-restricted {{ background: rgba(234,179,8,0.15); color: #eab308; }}
-        .badge-copyleft {{ background: rgba(239,68,68,0.15); color: #ef4444; }}
+        .badge-open {{ background: #dcfce7; color: #166534; }}
+        .badge-restricted {{ background: #fef9c3; color: #854d0e; }}
+        .badge-copyleft {{ background: #fee2e2; color: #991b1b; }}
 
         /* ── Leaflet overrides ───────────────────────────────────────── */
         .leaflet-container {{
@@ -2275,8 +2351,6 @@ def save_tabbed_report(
 <body>
     <div class="header">
         <div class="header-left">
-            <img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+IDxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayIgeG1sbnM6c2VyaWY9Imh0dHA6Ly93d3cuc2VyaWYuY29tLyIgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgdmlld0JveD0iMCAwIDIzMCAxMTQiIHZlcnNpb249IjEuMSIgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgc3R5bGU9ImZpbGwtcnVsZTpldmVub2RkO2NsaXAtcnVsZTpldmVub2RkO3N0cm9rZS1saW5lam9pbjpyb3VuZDtzdHJva2UtbWl0ZXJsaW1pdDoyOyI+IDxnIGlkPSJBcnRib2FyZDEiIHRyYW5zZm9ybT0ibWF0cml4KDAuOTQyOTIzLDAsMCwxLDAsMCkiPiA8Zz4gPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC40NTc0MTksLTAuNDMxMzEsMC40NTc0MTksMC40MzEzMSwtMTA5LjUwNSw0Ni4yMzY1KSI+IDxyZWN0IHg9IjE3MyIgeT0iMTEzLjEiIHdpZHRoPSI0Ny4zIiBoZWlnaHQ9IjQ3LjMiPjwvcmVjdD4gPC9nPiA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjQ1NzQxOSwtMC40MzEzMSwwLjQ1NzQxOSwwLjQzMTMxLC0xMzMuNTY5LDQ1Ljg3MDUpIj4gPHJlY3QgeD0iMTU5LjUiIHk9IjE2My40IiB3aWR0aD0iMzUuOCIgaGVpZ2h0PSIzNS44Ij48L3JlY3Q+IDwvZz4gPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC40NTc0MTksLTAuNDMxMzEsMC40NTc0MTksMC40MzEzMSwtMTU5LjEyMiw1NS44NzM5KSI+IDxyZWN0IHg9IjE1OS40IiB5PSIyMTkuMyIgd2lkdGg9IjM1LjgiIGhlaWdodD0iMzUuOCI+PC9yZWN0PiA8L2c+IDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNDU3NDE5LC0wLjQzMTMxLDAuNDU3NDE5LDAuNDMxMzEsLTE3NC45Nyw1My42NzgxKSI+IDxyZWN0IHg9IjE1MC45IiB5PSIyNTUuMiIgd2lkdGg9IjE5LjciIGhlaWdodD0iMTkuNyI+PC9yZWN0PiA8L2c+IDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNDU3NDE5LC0wLjQzMTMxLDAuNDU3NDE5LDAuNDMxMzEsLTE3MC41NzEsNDMuNjEzNikiPiA8cmVjdCB4PSIxMzQuMyIgeT0iMjM4LjYiIHdpZHRoPSIxOS43IiBoZWlnaHQ9IjE5LjciPjwvcmVjdD4gPC9nPiA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjQ1NzQxOSwtMC40MzEzMSwwLjQ1NzQxOSwwLjQzMTMxLC0xNDkuNDgzLDQzLjczNTYpIj4gPHJlY3QgeD0iMTUwLjkiIHk9IjE5OS40IiB3aWR0aD0iMTkuNyIgaGVpZ2h0PSIxOS43Ij48L3JlY3Q+IDwvZz4gPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC40NTc0MTksLTAuNDMxMzEsMC40NTc0MTksMC40MzEzMSwtMTg0LjY3NCw1MS44NDgyKSI+IDxyZWN0IHg9IjE0My42IiB5PSIyNzUuNiIgd2lkdGg9IjEyLjEiIGhlaWdodD0iMTIuMSI+PC9yZWN0PiA8L2c+IDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNDU3NDE5LC0wLjQzMTMxLDAuNDU3NDE5LDAuNDMxMzEsLTE3NS4yOTQsNjIuMTU2NikiPiA8cmVjdCB4PSIxNzMuOSIgeT0iMjY5LjEiIHdpZHRoPSI2LjkiIGhlaWdodD0iNi45Ij48L3JlY3Q+IDwvZz4gPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC40NTc0MTksLTAuNDMxMzEsMC40NTc0MTksMC40MzEzMSwtMTY5Ljc5NSw2NS41NzI0KSI+IDxyZWN0IHg9IjE4Mi40IiB5PSIyNTkuMiIgd2lkdGg9IjExLjciIGhlaWdodD0iMTEuNyI+PC9yZWN0PiA8L2c+IDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNjQ2ODg4LDAsMCwwLjYwOTk2NSwtODQuNjMxOCwtNjMuMDA4MykiPiA8cGF0aCBkPSJNMjI5LjgsMTk5LjVMMjI5LjgsMTYxLjdMMjQxLjUsMTYxLjdDMjQ2LjUsMTYxLjcgMjUwLjQsMTYzIDI1My4xLDE2NS41QzI1NS44LDE2OCAyNTcuMiwxNzEuOSAyNTcuMiwxNzcuMUwyNTcuMiwxODQuMUMyNTcuMiwxODkuNCAyNTUuOCwxOTMuMiAyNTMuMSwxOTUuN0MyNTAuNCwxOTguMiAyNDYuNSwxOTkuNSAyNDEuNSwxOTkuNUwyMjkuOCwxOTkuNVpNMjM0LjMsMTk1LjRMMjQxLjUsMTk1LjRDMjQ1LjEsMTk1LjQgMjQ3LjksMTk0LjUgMjQ5LjgsMTkyLjdDMjUxLjcsMTkwLjkgMjUyLjYsMTg4LjEgMjUyLjYsMTg0LjNMMjUyLjYsMTc2LjlDMjUyLjYsMTczIDI1MS43LDE3MC4yIDI0OS44LDE2OC41QzI0Ny45LDE2Ni43IDI0NS4yLDE2NS45IDI0MS41LDE2NS45TDIzNC4zLDE2NS45TDIzNC4zLDE5NS41TDIzNC4zLDE5NS40WiIgc3R5bGU9ImZpbGwtcnVsZTpub256ZXJvOyI+PC9wYXRoPiA8L2c+IDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNjQ2ODg4LDAsMCwwLjYwOTk2NSwtODQuNjMxOCwtNjMuMDA4MykiPiA8cGF0aCBkPSJNMjY0LjksMTY5QzI2NCwxNjkgMjYzLjIsMTY4LjcgMjYyLjUsMTY4LjFDMjYxLjgsMTY3LjUgMjYxLjUsMTY2LjcgMjYxLjUsMTY1LjhDMjYxLjUsMTY0LjkgMjYxLjgsMTY0IDI2Mi41LDE2My40QzI2My4xLDE2Mi44IDI2My45LDE2Mi41IDI2NC45LDE2Mi41QzI2NS45LDE2Mi41IDI2Ni42LDE2Mi44IDI2Ny4yLDE2My40QzI2Ny44LDE2NCAyNjguMSwxNjQuOCAyNjguMSwxNjUuOEMyNjguMSwxNjYuOCAyNjcuOCwxNjcuNSAyNjcuMiwxNjguMUMyNjYuNiwxNjguNyAyNjUuOCwxNjkgMjY0LjksMTY5Wk0yNjIuOCwxOTkuNUwyNjIuOCwxNzMuMUwyNjcuMSwxNzMuMUwyNjcuMSwxOTkuNUwyNjIuOCwxOTkuNVoiIHN0eWxlPSJmaWxsLXJ1bGU6bm9uemVybzsiPjwvcGF0aD4gPC9nPiA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjY0Njg4OCwwLDAsMC42MDk5NjUsLTg0LjYzMTgsLTYzLjAwODMpIj4gPHBhdGggZD0iTTI4MCwyMTAuNUMyNzguMiwyMTAuNSAyNzYuNywyMTAuMiAyNzUuNSwyMDkuN0MyNzQuMywyMDkuMSAyNzMuNCwyMDguNCAyNzIuOCwyMDcuNEMyNzIuMiwyMDYuNCAyNzEuOSwyMDUuMyAyNzEuOSwyMDQuMUMyNzEuOSwyMDIuOSAyNzIuMiwyMDEuNSAyNzIuOSwyMDAuN0MyNzMuNiwxOTkuOSAyNzQuMywxOTkuMyAyNzQuOSwxOTlMMjc0LjksMTk4LjRDMjc0LjMsMTk4IDI3My43LDE5Ny41IDI3My4yLDE5Ni44QzI3Mi43LDE5Ni4xIDI3Mi40LDE5NS4yIDI3Mi40LDE5NEMyNzIuNCwxOTIuOCAyNzIuNywxOTEuNyAyNzMuNCwxOTFDMjc0LjEsMTkwLjMgMjc0LjgsMTg5LjcgMjc1LjUsMTg5LjRMMjc1LjUsMTg4LjRMMjc4LjksMTkwLjdDMjc4LjIsMTkwLjggMjc3LjYsMTkxLjEgMjc3LDE5MS41QzI3Ni40LDE5MS45IDI3Ni4xLDE5Mi42IDI3Ni4xLDE5My41QzI3Ni4xLDE5NC40IDI3Ni40LDE5NS4xIDI3Ny4xLDE5NS41QzI3Ny43LDE5NS45IDI3OC42LDE5Ni4xIDI3OS42LDE5Ni4xTDI4OC43LDE5Ni4xQzI5MS40LDE5Ni4xIDI5My41LDE5Ni43IDI5NSwxOTcuOUMyOTYuNSwxOTkuMSAyOTcuMiwyMDAuOCAyOTcuMiwyMDMuMUwyOTcuMiwyMDMuNUMyOTcuMiwyMDUuNyAyOTYuNSwyMDcuNCAyOTUsMjA4LjdDMjkzLjUsMjEwIDI5MS40LDIxMC42IDI4OC43LDIxMC42TDI4MCwyMTAuNkwyODAsMjEwLjVaTTI4My40LDE5MS42QzI4MS40LDE5MS42IDI3OS42LDE5MS4yIDI3OCwxOTAuNUMyNzYuNCwxODkuOCAyNzUuMiwxODguNyAyNzQuMywxODcuM0MyNzMuNCwxODUuOSAyNzIuOSwxODQuMSAyNzIuOSwxODIuMUwyNzIuOSwxODEuOUMyNzIuOSwxNzkuOCAyNzMuNCwxNzguMSAyNzQuMywxNzYuN0MyNzUuMiwxNzUuMyAyNzYuNCwxNzQuMiAyNzgsMTczLjVDMjc5LjYsMTcyLjggMjgxLjMsMTcyLjQgMjgzLjMsMTcyLjRDMjg1LjMsMTcyLjQgMjg0LjksMTcyLjQgMjg1LjcsMTcyLjZDMjg2LjQsMTcyLjggMjg3LjEsMTcyLjkgMjg3LjcsMTczLjFMMjk2LjksMTczLjFMMjk2LjksMTc2LjZMMjkxLjksMTc2LjZMMjkxLjksMTc3LjJDMjkyLjQsMTc3LjggMjkyLjgsMTc4LjYgMjkzLjEsMTc5LjRDMjkzLjQsMTgwLjIgMjkzLjYsMTgxLjEgMjkzLjYsMTgyLjJDMjkzLjYsMTg1LjIgMjkyLjcsMTg3LjUgMjkwLjgsMTg5LjFDMjg4LjksMTkwLjcgMjg2LjUsMTkxLjUgMjgzLjUsMTkxLjVMMjgzLjQsMTkxLjZaTTI4MCwyMDdMMjg4LjksMjA3QzI5MC4zLDIwNyAyOTEuMywyMDYuNyAyOTIuMSwyMDYuMUMyOTIuOSwyMDUuNSAyOTMuMywyMDQuNiAyOTMuMywyMDMuNEMyOTMuMywyMDIuMiAyOTIuOSwyMDEuMyAyOTIuMSwyMDAuN0MyOTEuMywyMDAuMSAyOTAuMiwxOTkuOCAyODguOSwxOTkuOEwyODAsMTk5LjhDMjc4LjYsMTk5LjggMjc3LjYsMjAwLjEgMjc2LjgsMjAwLjdDMjc2LDIwMS4zIDI3NS42LDIwMi4yIDI3NS42LDIwMy40QzI3NS42LDIwNC42IDI3NiwyMDUuNSAyNzYuOCwyMDYuMUMyNzcuNiwyMDYuNyAyNzguNywyMDcgMjgwLDIwN1pNMjgzLjQsMTg4LjFDMjg1LjIsMTg4LjEgMjg2LjgsMTg3LjUgMjg4LDE4Ni40QzI4OS4yLDE4NS4zIDI4OS44LDE4My44IDI4OS44LDE4MS45QzI4OS44LDE4MCAyODkuMiwxNzguNSAyODgsMTc3LjRDMjg2LjgsMTc2LjMgMjg1LjMsMTc1LjcgMjgzLjQsMTc1LjdDMjgxLjUsMTc1LjcgMjgwLDE3Ni4zIDI3OC44LDE3Ny40QzI3Ny42LDE3OC41IDI3NywxODAgMjc3LDE4MS45QzI3NywxODMuOCAyNzcuNiwxODUuMyAyNzguOCwxODYuNEMyODAsMTg3LjUgMjgxLjYsMTg4LjEgMjgzLjQsMTg4LjFaIiBzdHlsZT0iZmlsbC1ydWxlOm5vbnplcm87Ij48L3BhdGg+IDwvZz4gPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC42NDY4ODgsMCwwLDAuNjA5OTY1LC04NC42MzE4LC02My4wMDgzKSI+IDxwYXRoIGQ9Ik0zMDMuMSwxNjlDMzAyLjIsMTY5IDMwMS40LDE2OC43IDMwMC43LDE2OC4xQzMwMCwxNjcuNSAyOTkuNywxNjYuNyAyOTkuNywxNjUuOEMyOTkuNywxNjQuOSAzMDAsMTY0IDMwMC43LDE2My40QzMwMS4zLDE2Mi44IDMwMi4xLDE2Mi41IDMwMy4xLDE2Mi41QzMwNC4xLDE2Mi41IDMwNC44LDE2Mi44IDMwNS40LDE2My40QzMwNiwxNjQgMzA2LjMsMTY0LjggMzA2LjMsMTY1LjhDMzA2LjMsMTY2LjggMzA2LDE2Ny41IDMwNS40LDE2OC4xQzMwNC44LDE2OC43IDMwNCwxNjkgMzAzLjEsMTY5Wk0zMDAuOSwxOTkuNUwzMDAuOSwxNzMuMUwzMDUuMiwxNzMuMUwzMDUuMiwxOTkuNUwzMDAuOSwxOTkuNVoiIHN0eWxlPSJmaWxsLXJ1bGU6bm9uemVybzsiPjwvcGF0aD4gPC9nPiA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjY0Njg4OCwwLDAsMC42MDk5NjUsLTg0LjYzMTgsLTYzLjAwODMpIj4gPHBhdGggZD0iTTMyMS43LDE5OS41QzMyMC4yLDE5OS41IDMxOSwxOTkuMSAzMTguMiwxOTguM0MzMTcuNCwxOTcuNSAzMTcsMTk2LjMgMzE3LDE5NC45TDMxNywxNzYuOEwzMDksMTc2LjhMMzA5LDE3My4xTDMxNywxNzMuMUwzMTcsMTYzLjdMMzIxLjMsMTYzLjdMMzIxLjMsMTczLjFMMzI5LjksMTczLjFMMzI5LjksMTc2LjhMMzIxLjMsMTc2LjhMMzIxLjMsMTk0LjJDMzIxLjMsMTk1LjMgMzIxLjgsMTk1LjggMzIyLjksMTk1LjhMMzI4LjgsMTk1LjhMMzI4LjgsMTk5LjVMMzIxLjcsMTk5LjVaIiBzdHlsZT0iZmlsbC1ydWxlOm5vbnplcm87Ij48L3BhdGg+IDwvZz4gPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC42NDY4ODgsMCwwLDAuNjA5OTY1LC04NC42MzE4LC02My4wMDgzKSI+IDxwYXRoIGQ9Ik0zNDIuNywyMDAuM0MzNDAuOSwyMDAuMyAzMzkuMiwyMDAgMzM3LjcsMTk5LjNDMzM2LjIsMTk4LjcgMzM1LDE5Ny43IDMzNC4xLDE5Ni41QzMzMy4yLDE5NS4zIDMzMi44LDE5My44IDMzMi44LDE5MkMzMzIuOCwxOTAuMiAzMzMuMiwxODguNyAzMzQuMSwxODcuNUMzMzUsMTg2LjMgMzM2LjEsMTg1LjQgMzM3LjcsMTg0LjlDMzM5LjIsMTg0LjMgMzQwLjksMTg0IDM0Mi44LDE4NEwzNTEuNywxODRMMzUxLjcsMTgyLjFDMzUxLjcsMTgwLjIgMzUxLjIsMTc4LjcgMzUwLjEsMTc3LjdDMzQ5LDE3Ni42IDM0Ny40LDE3Ni4xIDM0NS4yLDE3Ni4xQzM0MywxNzYuMSAzNDEuNCwxNzYuNiAzNDAuMiwxNzcuNkMzMzksMTc4LjYgMzM4LjIsMTgwIDMzNy44LDE4MS43TDMzMy44LDE4MC40QzMzNC4yLDE3OC45IDMzNC45LDE3Ny42IDMzNS44LDE3Ni40QzMzNi43LDE3NS4yIDMzOCwxNzQuMiAzMzkuNiwxNzMuNUMzNDEuMiwxNzIuOCAzNDMuMSwxNzIuNCAzNDUuMiwxNzIuNEMzNDguNiwxNzIuNCAzNTEuMiwxNzMuMyAzNTMuMSwxNzVDMzU1LDE3Ni44IDM1NS45LDE3OS4yIDM1NS45LDE4Mi40TDM1NS45LDE5NC4zQzM1NS45LDE5NS40IDM1Ni40LDE5NS45IDM1Ny40LDE5NS45TDM1OS44LDE5NS45TDM1OS44LDE5OS41TDM1Ni4xLDE5OS41QzM1NC45LDE5OS41IDM1NCwxOTkuMiAzNTMuMiwxOTguNUMzNTIuNSwxOTcuOCAzNTIuMSwxOTYuOSAzNTIuMSwxOTUuOEwzNTIuMSwxOTUuNUwzNTEuNSwxOTUuNUMzNTEuMSwxOTYuMiAzNTAuNiwxOTYuOSAzNDkuOSwxOTcuNkMzNDkuMiwxOTguMyAzNDguMywxOTkgMzQ3LjIsMTk5LjRDMzQ2LjEsMTk5LjkgMzQ0LjYsMjAwLjEgMzQyLjcsMjAwLjFMMzQyLjcsMjAwLjNaTTM0My4xLDE5Ni42QzM0NS42LDE5Ni42IDM0Ny43LDE5NS44IDM0OS4yLDE5NC40QzM1MC43LDE5MyAzNTEuNiwxOTAuOCAzNTEuNiwxODguMUwzNTEuNiwxODcuNUwzNDIuOCwxODcuNUMzNDEuMSwxODcuNSAzMzkuNywxODcuOSAzMzguNiwxODguNkMzMzcuNSwxODkuMyAzMzcsMTkwLjUgMzM3LDE5MS45QzMzNywxOTMuMyAzMzcuNiwxOTQuNSAzMzguNywxOTUuNEMzMzkuOCwxOTYuMiAzNDEuMywxOTYuNiAzNDMuMSwxOTYuNloiIHN0eWxlPSJmaWxsLXJ1bGU6bm9uemVybzsiPjwvcGF0aD4gPC9nPiA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjY0Njg4OCwwLDAsMC42MDk5NjUsLTg0LjYzMTgsLTYzLjAwODMpIj4gPHJlY3QgeD0iMzYzLjUiIHk9IjE2MS43IiB3aWR0aD0iNC4zIiBoZWlnaHQ9IjM3LjgiPjwvcmVjdD4gPC9nPiA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjY0Njg4OCwwLDAsMC42MDk5NjUsLTg0LjYzMTgsLTYzLjAwODMpIj4gPHBhdGggZD0iTTM4NCwxOTkuNUwzODQsMTYxLjdMNDA3LjMsMTYxLjdMNDA3LjMsMTY1LjhMMzg4LjUsMTY1LjhMMzg4LjUsMTc4LjRMNDA1LjcsMTc4LjRMNDA1LjcsMTgyLjVMMzg4LjUsMTgyLjVMMzg4LjUsMTk1LjRMNDA3LjUsMTk1LjRMNDA3LjUsMTk5LjVMMzgzLjksMTk5LjVMMzg0LDE5OS41WiIgc3R5bGU9ImZpbGwtcnVsZTpub256ZXJvOyI+PC9wYXRoPiA8L2c+IDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNjQ2ODg4LDAsMCwwLjYwOTk2NSwtODQuNjMxOCwtNjMuMDA4MykiPiA8cGF0aCBkPSJNNDIwLjUsMjAwLjNDNDE4LjcsMjAwLjMgNDE3LDIwMCA0MTUuNSwxOTkuM0M0MTQsMTk4LjcgNDEyLjgsMTk3LjcgNDExLjksMTk2LjVDNDExLDE5NS4zIDQxMC42LDE5My44IDQxMC42LDE5MkM0MTAuNiwxOTAuMiA0MTEsMTg4LjcgNDExLjksMTg3LjVDNDEyLjgsMTg2LjMgNDEzLjksMTg1LjQgNDE1LjUsMTg0LjlDNDE3LDE4NC4zIDQxOC43LDE4NCA0MjAuNiwxODRMNDI5LjUsMTg0TDQyOS41LDE4Mi4xQzQyOS41LDE4MC4yIDQyOSwxNzguNyA0MjcuOSwxNzcuN0M0MjYuOCwxNzYuNiA0MjUuMiwxNzYuMSA0MjMsMTc2LjFDNDIwLjgsMTc2LjEgNDE5LjIsMTc2LjYgNDE4LDE3Ny42QzQxNi44LDE3OC42IDQxNiwxODAgNDE1LjYsMTgxLjdMNDExLjYsMTgwLjRDNDEyLDE3OC45IDQxMi43LDE3Ny42IDQxMy42LDE3Ni40QzQxNC41LDE3NS4yIDQxNS44LDE3NC4yIDQxNy40LDE3My41QzQxOSwxNzIuOCA0MjAuOSwxNzIuNCA0MjMsMTcyLjRDNDI2LjQsMTcyLjQgNDI5LDE3My4zIDQzMC45LDE3NUM0MzIuOCwxNzYuOCA0MzMuNywxNzkuMiA0MzMuNywxODIuNEw0MzMuNywxOTQuM0M0MzMuNywxOTUuNCA0MzQuMiwxOTUuOSA0MzUuMiwxOTUuOUw0MzcuNiwxOTUuOUw0MzcuNiwxOTkuNUw0MzMuOSwxOTkuNUM0MzIuNywxOTkuNSA0MzEuOCwxOTkuMiA0MzEsMTk4LjVDNDMwLjMsMTk3LjggNDI5LjksMTk2LjkgNDI5LjksMTk1LjhMNDI5LjksMTk1LjVMNDI5LjMsMTk1LjVDNDI4LjksMTk2LjIgNDI4LjQsMTk2LjkgNDI3LjcsMTk3LjZDNDI3LDE5OC4zIDQyNi4xLDE5OSA0MjUsMTk5LjRDNDIzLjksMTk5LjkgNDIyLjQsMjAwLjEgNDIwLjUsMjAwLjFMNDIwLjUsMjAwLjNaTTQyMSwxOTYuNkM0MjMuNSwxOTYuNiA0MjUuNiwxOTUuOCA0MjcuMSwxOTQuNEM0MjguNiwxOTMgNDI5LjUsMTkwLjggNDI5LjUsMTg4LjFMNDI5LjUsMTg3LjVMNDIwLjcsMTg3LjVDNDE5LDE4Ny41IDQxNy42LDE4Ny45IDQxNi41LDE4OC42QzQxNS40LDE4OS4zIDQxNC45LDE5MC41IDQxNC45LDE5MS45QzQxNC45LDE5My4zIDQxNS41LDE5NC41IDQxNi42LDE5NS40QzQxNy43LDE5Ni4yIDQxOS4yLDE5Ni42IDQyMSwxOTYuNloiIHN0eWxlPSJmaWxsLXJ1bGU6bm9uemVybzsiPjwvcGF0aD4gPC9nPiA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjY0Njg4OCwwLDAsMC42MDk5NjUsLTg0LjYzMTgsLTYzLjAwODMpIj4gPHBhdGggZD0iTTQ0MS4zLDE5OS41TDQ0MS4zLDE3My4xTDQ0NS41LDE3My4xTDQ0NS41LDE3Ni4zTDQ0Ni4zLDE3Ni4zQzQ0Ni44LDE3NS4yIDQ0Ny41LDE3NC4zIDQ0OC41LDE3My44QzQ0OS41LDE3My4zIDQ1MC43LDE3MyA0NTIuMywxNzNMNDU1LjQsMTczTDQ1NS40LDE3Ni45TDQ1MiwxNzYuOUM0NTAuMSwxNzYuOSA0NDguNSwxNzcuNCA0NDcuNCwxNzguNUM0NDYuMiwxNzkuNiA0NDUuNiwxODEuMiA0NDUuNiwxODMuNEw0NDUuNiwxOTkuNUw0NDEuMywxOTkuNVoiIHN0eWxlPSJmaWxsLXJ1bGU6bm9uemVybzsiPjwvcGF0aD4gPC9nPiA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjY0Njg4OCwwLDAsMC42MDk5NjUsLTg0LjYzMTgsLTYzLjAwODMpIj4gPHBhdGggZD0iTTQ3MS40LDE5OS41QzQ2OS45LDE5OS41IDQ2OC43LDE5OS4xIDQ2Ny45LDE5OC4zQzQ2Ny4xLDE5Ny41IDQ2Ni43LDE5Ni4zIDQ2Ni43LDE5NC45TDQ2Ni43LDE3Ni44TDQ1OC43LDE3Ni44TDQ1OC43LDE3My4xTDQ2Ni43LDE3My4xTDQ2Ni43LDE2My43TDQ3MSwxNjMuN0w0NzEsMTczLjFMNDc5LjYsMTczLjFMNDc5LjYsMTc2LjhMNDcxLDE3Ni44TDQ3MSwxOTQuMkM0NzEsMTk1LjMgNDcxLjUsMTk1LjggNDcyLjYsMTk1LjhMNDc4LjUsMTk1LjhMNDc4LjUsMTk5LjVMNDcxLjQsMTk5LjVaIiBzdHlsZT0iZmlsbC1ydWxlOm5vbnplcm87Ij48L3BhdGg+IDwvZz4gPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC42NDY4ODgsMCwwLDAuNjA5OTY1LC04NC42MzE4LC02My4wMDgzKSI+IDxwYXRoIGQ9Ik00ODMuMywxOTkuNUw0ODMuMywxNjEuN0w0ODcuNiwxNjEuN0w0ODcuNiwxNzcuM0w0ODguNCwxNzcuM0M0ODguOCwxNzYuNSA0ODkuMywxNzUuOCA0OTAsMTc1LjFDNDkwLjcsMTc0LjQgNDkxLjcsMTczLjggNDkyLjksMTczLjNDNDk0LjEsMTcyLjggNDk1LjYsMTcyLjYgNDk3LjQsMTcyLjZDNDk5LjIsMTcyLjYgNTAxLjIsMTczIDUwMi43LDE3My45QzUwNC4zLDE3NC44IDUwNS41LDE3NiA1MDYuNSwxNzcuNkM1MDcuNCwxNzkuMiA1MDcuOSwxODEuMiA1MDcuOSwxODMuNkw1MDcuOSwxOTkuNkw1MDMuNiwxOTkuNkw1MDMuNiwxODMuOUM1MDMuNiwxODEuMyA1MDIuOSwxNzkuNCA1MDEuNiwxNzguMkM1MDAuMywxNzcgNDk4LjUsMTc2LjQgNDk2LjMsMTc2LjRDNDk0LjEsMTc2LjQgNDkxLjcsMTc3LjIgNDkwLjEsMTc4LjlDNDg4LjUsMTgwLjYgNDg3LjcsMTgzIDQ4Ny43LDE4Ni4zTDQ4Ny43LDE5OS42TDQ4My40LDE5OS42TDQ4My4zLDE5OS41WiIgc3R5bGU9ImZpbGwtcnVsZTpub256ZXJvOyI+PC9wYXRoPiA8L2c+IDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNjQ2ODg4LDAsMCwwLjYwOTk2NSwtODQuNjMxOCwtNjMuMDA4MykiPiA8cGF0aCBkPSJNMjQyLjQsMjU1LjVDMjM5LjcsMjU1LjUgMjM3LjIsMjU1IDIzNSwyNTRDMjMyLjgsMjUzIDIzMS4xLDI1MS42IDIyOS45LDI0OS42QzIyOC43LDI0Ny42IDIyOCwyNDUuMiAyMjgsMjQyLjJMMjI4LDI0MS4xTDIzMi41LDI0MS4xTDIzMi41LDI0Mi4yQzIzMi41LDI0NS4zIDIzMy40LDI0Ny43IDIzNS4zLDI0OS4yQzIzNy4yLDI1MC43IDIzOS41LDI1MS41IDI0Mi40LDI1MS41QzI0NS4zLDI1MS41IDI0Ny42LDI1MC44IDI0OS4yLDI0OS41QzI1MC44LDI0OC4yIDI1MS41LDI0Ni41IDI1MS41LDI0NC41QzI1MS41LDI0Mi41IDI1MS4xLDI0MiAyNTAuNCwyNDEuMUMyNDkuNywyNDAuMiAyNDguNywyMzkuNiAyNDcuNSwyMzkuMUMyNDYuMiwyMzguNiAyNDQuOCwyMzguMSAyNDMuMSwyMzcuN0wyNDAuMywyMzdDMjM4LjEsMjM2LjQgMjM2LjIsMjM1LjcgMjM0LjUsMjM0LjlDMjMyLjgsMjM0LjEgMjMxLjUsMjMzIDIzMC41LDIzMS42QzIyOS41LDIzMC4yIDIyOS4xLDIyOC41IDIyOS4xLDIyNi40QzIyOS4xLDIyNC4zIDIyOS42LDIyMi40IDIzMC43LDIyMC45QzIzMS44LDIxOS4zIDIzMy4zLDIxOC4yIDIzNS4yLDIxNy4zQzIzNy4xLDIxNi41IDIzOS4zLDIxNi4xIDI0MS45LDIxNi4xQzI0NC41LDIxNi4xIDI0Ni44LDIxNi41IDI0OC44LDIxNy40QzI1MC44LDIxOC4zIDI1Mi40LDIxOS42IDI1My42LDIyMS4zQzI1NC44LDIyMyAyNTUuNCwyMjUuMiAyNTUuNCwyMjcuOEwyNTUuNCwyMzAuMUwyNTAuOSwyMzAuMUwyNTAuOSwyMjcuOEMyNTAuOSwyMjYgMjUwLjUsMjI0LjUgMjQ5LjcsMjIzLjRDMjQ4LjksMjIyLjMgMjQ3LjksMjIxLjUgMjQ2LjUsMjIwLjlDMjQ1LjEsMjIwLjQgMjQzLjYsMjIwLjEgMjQxLjksMjIwLjFDMjM5LjQsMjIwLjEgMjM3LjQsMjIwLjcgMjM1LjksMjIxLjdDMjM0LjQsMjIyLjggMjMzLjYsMjI0LjQgMjMzLjYsMjI2LjRDMjMzLjYsMjI4LjQgMjMzLjksMjI4LjggMjM0LjYsMjI5LjZDMjM1LjMsMjMwLjQgMjM2LjIsMjMxLjEgMjM3LjQsMjMxLjZDMjM4LjYsMjMyLjEgMjQwLDIzMi42IDI0MS43LDIzM0wyNDQuNSwyMzMuN0MyNDYuNywyMzQuMiAyNDguNywyMzQuOCAyNTAuNCwyMzUuNkMyNTIuMSwyMzYuNCAyNTMuNSwyMzcuNSAyNTQuNiwyMzguOUMyNTUuNiwyNDAuMyAyNTYuMiwyNDIuMSAyNTYuMiwyNDQuM0MyNTYuMiwyNDYuNSAyNTUuNiwyNDguNSAyNTQuNSwyNTAuMUMyNTMuNCwyNTEuNyAyNTEuOCwyNTMgMjQ5LjgsMjU0QzI0Ny44LDI1NC45IDI0NS40LDI1NS40IDI0Mi42LDI1NS40TDI0Mi40LDI1NS41WiIgc3R5bGU9ImZpbGwtcnVsZTpub256ZXJvOyI+PC9wYXRoPiA8L2c+IDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNjQ2ODg4LDAsMCwwLjYwOTk2NSwtODQuNjMxOCwtNjMuMDA4MykiPiA8cGF0aCBkPSJNMjY0LjYsMjU0LjdMMjU5LjMsMjI4LjNMMjYzLjYsMjI4LjNMMjY4LDI1MS45TDI2OC44LDI1MS45TDI3NC42LDIyOC4zTDI4MS43LDIyOC4zTDI4Ny41LDI1MS45TDI4OC4zLDI1MS45TDI5Mi43LDIyOC4zTDI5NywyMjguM0wyOTEuNywyNTQuN0wyODQuNCwyNTQuN0wyNzguNiwyMzEuMUwyNzcuOSwyMzEuMUwyNzIuMSwyNTQuN0wyNjQuNiwyNTQuN1oiIHN0eWxlPSJmaWxsLXJ1bGU6bm9uemVybzsiPjwvcGF0aD4gPC9nPiA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjY0Njg4OCwwLDAsMC42MDk5NjUsLTg0LjYzMTgsLTYzLjAwODMpIj4gPHBhdGggZD0iTTMxMi42LDI1NS41QzMwOS45LDI1NS41IDMwNy42LDI1NC45IDMwNS42LDI1My44QzMwMy42LDI1Mi43IDMwMiwyNTEuMSAzMDAuOSwyNDlDMjk5LjgsMjQ2LjkgMjk5LjIsMjQ0LjYgMjk5LjIsMjQxLjlMMjk5LjIsMjQxLjNDMjk5LjIsMjM4LjYgMjk5LjgsMjM2LjIgMzAwLjksMjM0LjFDMzAyLDIzMiAzMDMuNiwyMzAuNSAzMDUuNSwyMjkuM0MzMDcuNSwyMjguMiAzMDkuNywyMjcuNiAzMTIuMywyMjcuNkMzMTQuOSwyMjcuNiAzMTcsMjI4LjEgMzE4LjksMjI5LjJDMzIwLjgsMjMwLjMgMzIyLjMsMjMxLjggMzIzLjQsMjMzLjhDMzI0LjUsMjM1LjggMzI1LDIzOC4xIDMyNSwyNDAuOEwzMjUsMjQyLjdMMzAzLjQsMjQyLjdDMzAzLjUsMjQ1LjYgMzA0LjQsMjQ3LjggMzA2LjIsMjQ5LjRDMzA4LDI1MSAzMTAuMSwyNTEuOCAzMTIuNywyNTEuOEMzMTUuMywyNTEuOCAzMTYuNywyNTEuMyAzMTcuOSwyNTAuMkMzMTkuMSwyNDkuMSAzMjAuMSwyNDcuOSAzMjAuNywyNDYuNUwzMjQuNCwyNDguM0MzMjMuOSwyNDkuNCAzMjMuMSwyNTAuNSAzMjIuMiwyNTEuN0MzMjEuMiwyNTIuOCAzMjAsMjUzLjggMzE4LjUsMjU0LjVDMzE3LDI1NS4yIDMxNSwyNTUuNiAzMTIuNiwyNTUuNkwzMTIuNiwyNTUuNVpNMzAzLjQsMjM5LjFMMzIwLjcsMjM5LjFDMzIwLjYsMjM2LjcgMzE5LjcsMjM0LjcgMzE4LjIsMjMzLjRDMzE2LjcsMjMyLjEgMzE0LjcsMjMxLjMgMzEyLjMsMjMxLjNDMzA5LjksMjMxLjMgMzA3LjksMjMyIDMwNi4zLDIzMy40QzMwNC44LDIzNC44IDMwMy44LDIzNi43IDMwMy40LDIzOS4xWiIgc3R5bGU9ImZpbGwtcnVsZTpub256ZXJvOyI+PC9wYXRoPiA8L2c+IDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNjQ2ODg4LDAsMCwwLjYwOTk2NSwtODQuNjMxOCwtNjMuMDA4MykiPiA8cGF0aCBkPSJNMzQxLjUsMjU1LjVDMzM5LjIsMjU1LjUgMzM3LjEsMjU1IDMzNS4yLDI1My45QzMzMy4zLDI1Mi44IDMzMS44LDI1MS4zIDMzMC43LDI0OS4yQzMyOS42LDI0Ny4xIDMyOSwyNDQuNyAzMjksMjQxLjlMMzI5LDI0MS4yQzMyOSwyMzguNCAzMjkuNiwyMzYgMzMwLjcsMjMzLjlDMzMxLjgsMjMxLjkgMzMzLjMsMjMwLjMgMzM1LjIsMjI5LjJDMzM3LjEsMjI4LjEgMzM5LjIsMjI3LjYgMzQxLjUsMjI3LjZDMzQzLjgsMjI3LjYgMzQ0LjksMjI3LjggMzQ2LjIsMjI4LjNDMzQ3LjUsMjI4LjggMzQ4LjUsMjI5LjQgMzQ5LjMsMjMwLjFDMzUwLjEsMjMwLjggMzUwLjcsMjMxLjYgMzUxLjEsMjMyLjVMMzUxLjksMjMyLjVMMzUxLjksMjE2LjlMMzU2LjIsMjE2LjlMMzU2LjIsMjU0LjdMMzUyLDI1NC43TDM1MiwyNTAuM0wzNTEuMiwyNTAuM0MzNTAuNSwyNTEuNiAzNDkuNCwyNTIuOCAzNDcuOCwyNTMuOUMzNDYuMywyNTQuOSAzNDQuMiwyNTUuNSAzNDEuNCwyNTUuNUwzNDEuNSwyNTUuNVpNMzQyLjYsMjUxLjdDMzQ1LjMsMjUxLjcgMzQ3LjYsMjUwLjggMzQ5LjMsMjQ5LjFDMzUxLDI0Ny4zIDM1MS45LDI0NC45IDM1MS45LDI0MS44TDM1MS45LDI0MS4zQzM1MS45LDIzOC4yIDM1MSwyMzUuNyAzNDkuMywyMzRDMzQ3LjYsMjMyLjIgMzQ1LjQsMjMxLjQgMzQyLjYsMjMxLjRDMzM5LjgsMjMxLjQgMzM3LjcsMjMyLjMgMzM1LjksMjM0QzMzNC4xLDIzNS43IDMzMy4zLDIzOC4yIDMzMy4zLDI0MS4zTDMzMy4zLDI0MS44QzMzMy4zLDI0NC45IDMzNC4yLDI0Ny40IDMzNS45LDI0OS4xQzMzNy43LDI1MC45IDMzOS45LDI1MS43IDM0Mi42LDI1MS43WiIgc3R5bGU9ImZpbGwtcnVsZTpub256ZXJvOyI+PC9wYXRoPiA8L2c+IDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNjQ2ODg4LDAsMCwwLjYwOTk2NSwtODQuNjMxOCwtNjMuMDA4MykiPiA8cGF0aCBkPSJNMzc1LDI1NS41QzM3Mi4zLDI1NS41IDM3MCwyNTQuOSAzNjgsMjUzLjhDMzY2LDI1Mi43IDM2NC40LDI1MS4xIDM2My4zLDI0OUMzNjIuMiwyNDYuOSAzNjEuNiwyNDQuNiAzNjEuNiwyNDEuOUwzNjEuNiwyNDEuM0MzNjEuNiwyMzguNiAzNjIuMiwyMzYuMiAzNjMuMywyMzQuMUMzNjQuNCwyMzIgMzY2LDIzMC41IDM2Ny45LDIyOS4zQzM2OS45LDIyOC4yIDM3Mi4xLDIyNy42IDM3NC43LDIyNy42QzM3Ny4zLDIyNy42IDM3OS40LDIyOC4xIDM4MS4zLDIyOS4yQzM4My4yLDIzMC4zIDM4NC43LDIzMS44IDM4NS44LDIzMy44QzM4Ni45LDIzNS44IDM4Ny40LDIzOC4xIDM4Ny40LDI0MC44TDM4Ny40LDI0Mi43TDM2NS44LDI0Mi43QzM2NS45LDI0NS42IDM2Ni44LDI0Ny44IDM2OC42LDI0OS40QzM3MC40LDI1MSAzNzIuNSwyNTEuOCAzNzUuMSwyNTEuOEMzNzcuNywyNTEuOCAzNzkuMSwyNTEuMyAzODAuMywyNTAuMkMzODEuNSwyNDkuMSAzODIuNSwyNDcuOSAzODMuMSwyNDYuNUwzODYuOCwyNDguM0MzODYuMywyNDkuNCAzODUuNSwyNTAuNSAzODQuNiwyNTEuN0MzODMuNiwyNTIuOCAzODIuNCwyNTMuOCAzODAuOSwyNTQuNUMzNzkuNCwyNTUuMiAzNzcuNCwyNTUuNiAzNzUsMjU1LjZMMzc1LDI1NS41Wk0zNjUuOSwyMzkuMUwzODMuMiwyMzkuMUMzODMuMSwyMzYuNyAzODIuMiwyMzQuNyAzODAuNywyMzMuNEMzNzkuMiwyMzIuMSAzNzcuMiwyMzEuMyAzNzQuOCwyMzEuM0MzNzIuNCwyMzEuMyAzNzAuNCwyMzIgMzY4LjgsMjMzLjRDMzY3LjMsMjM0LjggMzY2LjMsMjM2LjcgMzY1LjksMjM5LjFaIiBzdHlsZT0iZmlsbC1ydWxlOm5vbnplcm87Ij48L3BhdGg+IDwvZz4gPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC42NDY4ODgsMCwwLDAuNjA5OTY1LC04NC42MzE4LC02My4wMDgzKSI+IDxwYXRoIGQ9Ik0zOTEuNywyNTQuN0wzOTEuNywyMjguM0wzOTUuOSwyMjguM0wzOTUuOSwyMzIuOEwzOTYuNywyMzIuOEMzOTcuMywyMzEuNSAzOTguMywyMzAuNCAzOTkuNywyMjkuNEM0MDEuMSwyMjguNCA0MDMuMSwyMjcuOSA0MDUuOCwyMjcuOUM0MDguNSwyMjcuOSA0MDkuNiwyMjguMyA0MTEuMSwyMjkuMUM0MTIuNywyMjkuOSA0MTMuOSwyMzEuMiA0MTQuOSwyMzIuOEM0MTUuOCwyMzQuNCA0MTYuMywyMzYuNCA0MTYuMywyMzguOEw0MTYuMywyNTQuOEw0MTIsMjU0LjhMNDEyLDIzOS4xQzQxMiwyMzYuNSA0MTEuMywyMzQuNiA0MTAsMjMzLjRDNDA4LjcsMjMyLjIgNDA2LjksMjMxLjYgNDA0LjcsMjMxLjZDNDAyLjUsMjMxLjYgNDAwLjEsMjMyLjQgMzk4LjUsMjM0LjFDMzk2LjksMjM1LjggMzk2LjEsMjM4LjIgMzk2LjEsMjQxLjVMMzk2LjEsMjU0LjhMMzkxLjgsMjU0LjhMMzkxLjcsMjU0LjdaIiBzdHlsZT0iZmlsbC1ydWxlOm5vbnplcm87Ij48L3BhdGg+IDwvZz4gPC9nPiA8L2c+IDwvc3ZnPiA=" class="des-logo" alt="Digital Earth Sweden">
-            <div class="header-divider"></div>
             <div>
                 <h1><span>IMINT</span> Analysrapport</h1>
                 <p>Showcase — Brand ({fire_date}) &middot; Marin ({marine_date})</p>
@@ -2290,23 +2364,11 @@ def save_tabbed_report(
 
     <!-- ── Fire tab ──────────────────────────────────────────────── -->
     <div class="tab-content active" id="tab-fire">
-        {fire_summary_html}
-        <div class="tab-intro">
-            <p>
-                Multisensoranalys av skogsbrand med Sentinel-2 multispektraldata.
-                Analysen kombinerar f\u00f6r\u00e4ndringsdetektering, brandsvårighetsindex (dNBR),
-                AI-segmentering och markt\u00e4ckedata f\u00f6r att kartl\u00e4gga brandens utbredning och intensitet.
-            </p>
-        </div>
         <div class="section-header">
             <h2>Brandanalys — {fire_date}</h2>
         </div>
-        {fire_toolbar}
-        <div class="map-grid">
-            {fire_cells}
-        </div>
-        {fire_charts_html}
-        <div class="tab-description">
+        {fire_summary_html}
+        <div class="tab-intro">
             <p>
                 Analysområdet är beläget i Ljusdals kommun, Gävleborgs län, och
                 visar Kårbölebranden — en av de största skogsbränderna i Sveriges moderna historia
@@ -2316,38 +2378,38 @@ def save_tabbed_report(
                 Sentinel-2-data från {fire_date} analyserats med flera kompletterande metoder
                 för att kartlägga brandens utbredning och intensitet.
             </p>
-
+        </div>
+        {fire_toolbar}
+        <div class="map-grid">
+            {fire_cells}
+        </div>
+        {fire_charts_html}
+        <div class="tab-description">
 {fire_descriptions}
         </div>
     </div>
 
     <!-- ── Marine tab ────────────────────────────────────────────── -->
     <div class="tab-content" id="tab-marine">
+        <div class="section-header">
+            <h2>Marin analys — {marine_date}</h2>
+        </div>
         {marine_summary_html}
         <div class="tab-intro">
             <p>
-                Automatisk fartygsdetektering och havsövervakning i skärgården utanför
-                Hunnebostrand med Sentinel-2-satellitdata. Analysen kombinerar YOLO-objektdetektering,
-                multitemporala heatmaps och spektralindex för att kartlägga maritim aktivitet
-                och kustmiljöns tillstånd.
+                Analysområdet visar skärgården utanför Hunnebostrand — ett område
+                längs den norra bohuslänska kusten med intensiv maritim aktivitet
+                från både kommersiell sjöfart, fiske och fritidsbåtar. Sentinel-2-data
+                från {marine_date} har analyserats med flera kompletterande metoder
+                för att kartlägga båtförekomst, vattenförhållanden och marktäcke
+                i kust- och havsområdet.
             </p>
-        </div>
-        <div class="section-header">
-            <h2>Marin analys — {marine_date}</h2>
         </div>
         {marine_toolbar}
         <div class="map-grid">
             {marine_cells}
         </div>
         <div class="tab-description">
-            <p>
-                Analysområdet visar skärgården utanför Hunnebostrand — ett område
-                längs den norra bohuslänska kusten med intensiv maritim aktivitet
-                från både kommersiell sjöfart, fiske och fritidsbåtar. Sentinel-2-data
-                från {marine_date} har analyserats med flera kompletterande metoder
-                för att kartlägga fartygsförekomst, vattenförhållanden och marktäcke
-                i kust- och havsområdet.
-            </p>
 
 {marine_descriptions}
         </div>
@@ -2363,7 +2425,7 @@ def save_tabbed_report(
             <table class="license-table">
                 <tr><th>Komponent</th><th>Licens</th><th>Upphovsr\u00e4tt</th><th>Anm\u00e4rkning</th></tr>
                 <tr>
-                    <td>YOLO11s (fartygsdetektering)</td>
+                    <td>YOLO11s (båtdetektering)</td>
                     <td><span class="license-badge badge-copyleft">AGPL-3.0</span></td>
                     <td>Ultralytics</td>
                     <td>Copyleft &mdash; kommersiellt bruk kr\u00e4ver Enterprise-licens</td>
@@ -2390,7 +2452,7 @@ def save_tabbed_report(
                     <td>COT MLP5 ensemble (molndetektering)</td>
                     <td><span class="license-badge badge-restricted">Ej klargjord</span></td>
                     <td>Aleksis Pirinen / RISE</td>
-                    <td>Pirinen et al., 2024. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" style="color:#cff8e4;" target="_blank">GitHub</a> &mdash; kommersiell licens ej bekr\u00e4ftad</td>
+                    <td>Pirinen et al., 2024. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" style="color:#171717;" target="_blank">GitHub</a> &mdash; kommersiell licens ej bekr\u00e4ftad</td>
                 </tr>
                 <tr>
                     <td>PyTorch / Torchvision</td>
@@ -2425,7 +2487,7 @@ def save_tabbed_report(
                     <td>Sj\u00f6kort (S-57) via SLU GET</td>
                     <td><span class="license-badge badge-restricted">Akademisk</span></td>
                     <td>&copy; Sj\u00f6fartsverket</td>
-                    <td>Tillg\u00e4nglig via <a href="https://maps.slu.se/get/" style="color:#cff8e4;" target="_blank">SLU GET</a>
+                    <td>Tillg\u00e4nglig via <a href="https://maps.slu.se/get/" style="color:#171717;" target="_blank">SLU GET</a>
                         f\u00f6r SLU-anst\u00e4llda/studenter. Publicering i vetenskapliga arbeten till\u00e5ten
                         med attribution: &ldquo;Sj\u00f6kortsdata &copy; Sj\u00f6fartsverket&rdquo;</td>
                 </tr>
@@ -2445,8 +2507,8 @@ def save_tabbed_report(
                     <td>&copy; 2014&ndash;2024 Chart.js Contributors</td>
                 </tr>
             </table>
-            <p style="margin-top:14px; color:rgba(207,248,228,0.4);">
-                <strong style="color:rgba(207,248,228,0.6);">OBS:</strong>
+            <p style="margin-top:14px; color:#6b7280;">
+                <strong style="color:#374151;">OBS:</strong>
                 YOLO11s distribueras under AGPL-3.0 vilket inneb\u00e4r att kommersiell anv\u00e4ndning
                 utan \u00f6ppen k\u00e4llkod kr\u00e4ver en Enterprise-licens fr\u00e5n Ultralytics.
                 Sj\u00f6kortsdata fr\u00e5n Sj\u00f6fartsverket tillhandah\u00e5lls via SLU GET f\u00f6r akademiskt bruk
@@ -2517,32 +2579,52 @@ def save_tabbed_report(
                     zoomSnap: 0.25,
                 }});
 
+                // Check if this specific panel has a bg-toggle element
+                const cell = container.closest('.map-cell');
+                const panelToggle = cell ? cell.querySelector('.bg-toggle') : null;
+                const panelHasBg = hasBgToggle || !!panelToggle;
+
                 // Background / overlay layer logic
-                if (hasBgToggle) {{
+                if (panelHasBg) {{
                     bgLayers[v.id] = {{}};
                     const prefix = v.id.split('-')[0];
                     const rgbId = prefix + '-rgb';
-                    const sjokortId = prefix + '-sjokort';
 
-                    // RGB background layer
+                    // Discover all bg keys from the toggle buttons
+                    const bgKeys = [];
+                    if (panelToggle) {{
+                        panelToggle.querySelectorAll('.bg-btn').forEach(function(b) {{
+                            bgKeys.push(b.dataset.bg);
+                        }});
+                    }}
+
+                    // RGB / "efter" background layer
                     const rgbUrl = (v.key === 'rgb') ? images[v.id] : images[rgbId];
                     if (rgbUrl) {{
                         bgLayers[v.id].rgb = L.imageOverlay(
                             rgbUrl, bounds, {{zIndex: 0, opacity: 1}}
                         ).addTo(map);
                     }}
-                    // Sjökort background layer
+
+                    // Sjökort background layer (marine)
+                    const sjokortId = prefix + '-sjokort';
                     if (images[sjokortId]) {{
                         bgLayers[v.id].sjokort = L.imageOverlay(
                             images[sjokortId], bounds, {{zIndex: 0, opacity: 0}}
                         ).addTo(map);
                     }}
 
+                    // Baseline / "före" background layer (fire)
+                    const baselineId = prefix + '-baseline';
+                    if (images[baselineId]) {{
+                        bgLayers[v.id].baseline = L.imageOverlay(
+                            images[baselineId], bounds, {{zIndex: 0, opacity: 0}}
+                        ).addTo(map);
+                    }}
+
                     if (v.key === 'rgb') {{
-                        // RGB panel: background IS content, opacity slider controls active bg
                         overlays[v.id] = bgLayers[v.id].rgb;
                     }} else {{
-                        // Analysis panels: overlay on top, opacity slider controls it
                         const overlay = L.imageOverlay(images[v.id], bounds, {{zIndex: 1}}).addTo(map);
                         overlays[v.id] = overlay;
                     }}
@@ -2582,23 +2664,22 @@ def save_tabbed_report(
                 }});
             }});
 
-            // Background toggle (RGB ↔ Sjökort)
+            // Background toggle (generic: RGB ↔ Sjökort, Efter ↔ Före, etc.)
             document.querySelectorAll('.bg-toggle').forEach(function(toggle) {{
                 toggle.querySelectorAll('.bg-btn').forEach(function(btn) {{
                     btn.addEventListener('click', function() {{
                         const mapId = toggle.dataset.mapId;
-                        const bg = this.dataset.bg;
+                        const activeBg = this.dataset.bg;
                         const layers = bgLayers[mapId];
                         if (!layers) return;
                         toggle.querySelectorAll('.bg-btn').forEach(b => b.classList.remove('active'));
                         this.classList.add('active');
-                        if (bg === 'rgb') {{
-                            if (layers.rgb) layers.rgb.setOpacity(1);
-                            if (layers.sjokort) layers.sjokort.setOpacity(0);
-                        }} else {{
-                            if (layers.rgb) layers.rgb.setOpacity(0);
-                            if (layers.sjokort) layers.sjokort.setOpacity(1);
-                        }}
+                        // Hide all bg layers, then show the selected one
+                        Object.keys(layers).forEach(function(key) {{
+                            if (layers[key] && layers[key].setOpacity) {{
+                                layers[key].setOpacity(key === activeBg ? 1 : 0);
+                            }}
+                        }});
                         // For RGB panel: update overlay ref (bg IS content)
                         // For analysis panels: keep analysis overlay as controlled layer
                         const prefix = mapId.split('-')[0];
@@ -2631,7 +2712,7 @@ def save_tabbed_report(
         const CHART_DATA = {fire_chart_json};
 
         Chart.defaults.color = 'rgba(207,248,228,0.6)';
-        Chart.defaults.borderColor = 'rgba(207,248,228,0.06)';
+        Chart.defaults.borderColor = 'rgba(207,248,228,0.1)';
         Chart.defaults.font.family = "'Space Grotesk', sans-serif";
 
         if (CHART_DATA.change && CHART_DATA.change.labels.length > 0) {{
@@ -2753,7 +2834,13 @@ def save_tabbed_report(
             chip.addEventListener('click', function() {{
                 const pid = this.dataset.panelId;
                 const isActive = this.classList.contains('active');
-                togglePanel(pid, !isActive);
+                if (!isActive) {{
+                    togglePanel(pid, true);
+                }}
+                const cell = document.querySelector('.map-cell[data-panel-id="' + pid + '"]');
+                if (cell) {{
+                    cell.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                }}
             }});
         }});
 

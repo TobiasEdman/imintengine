@@ -31,15 +31,23 @@ fi
 # Activate venv
 source "$VENV_DIR/bin/activate"
 
+# Ensure python3 is available as python inside venv
+if [ ! -e "$VENV_DIR/bin/python" ] && [ -e "$VENV_DIR/bin/python3" ]; then
+    ln -s python3 "$VENV_DIR/bin/python"
+fi
+
 # ── Step 2: Install dependencies ─────────────────────────────
 echo ""
 echo "  Checking dependencies..."
 
+# Ensure pip is available in the venv
+python3 -m ensurepip --upgrade -q 2>/dev/null || true
+
 # Check if torch is installed (key dependency)
-if ! python -c "import torch" 2>/dev/null; then
+if ! python3 -c "import torch" 2>/dev/null; then
     echo "  Installing dependencies (first run)..."
-    pip install --upgrade pip -q
-    pip install -r requirements.txt -q
+    python3 -m pip install --upgrade pip -q
+    python3 -m pip install -r requirements.txt -q
     echo "  Dependencies installed."
 else
     echo "  Dependencies OK."
@@ -74,7 +82,7 @@ if [ ! -f "$DATA_DIR/class_stats.json" ]; then
 fi
 
 # ── Step 4: Detect device ────────────────────────────────────
-DEVICE=$(python -c "
+DEVICE=$(python3 -c "
 import torch
 if torch.cuda.is_available():
     print('cuda')
@@ -92,7 +100,7 @@ DASHBOARD_PORT=8050
 lsof -ti :$DASHBOARD_PORT 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
-python -m http.server $DASHBOARD_PORT --directory "$DATA_DIR" &
+python3 -m http.server $DASHBOARD_PORT --directory "$DATA_DIR" &
 HTTP_PID=$!
 echo ""
 echo "  Dashboard: http://localhost:$DASHBOARD_PORT/training_dashboard.html"
@@ -111,7 +119,7 @@ echo "  Starting training..."
 echo "============================================"
 echo ""
 
-python scripts/train_lulc.py \
+python3 scripts/train_lulc.py \
     --data-dir "$DATA_DIR" \
     --device "$DEVICE" \
     --dashboard \
