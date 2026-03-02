@@ -46,6 +46,7 @@ utils/config.py
 .env
 .des_token
 .des_token.bak
+ssh-copy-id*
 
 # IDE
 .vscode/
