@@ -15,6 +15,7 @@ Swedish coastal and inland waters.
 Usage:
     from imint.fetch import fetch_des_data, fetch_nmd_data, FetchError
     from imint.fetch import fetch_sjokort_data
+    from imint.fetch import fetch_grazing_timeseries
 
     result = fetch_des_data(date="2022-06-15", coords={...})
     if result.cloud_fraction < 0.3:
@@ -69,7 +70,18 @@ TARGET_CRS = "EPSG:3006"
 BANDS_10M = ["b02", "b03", "b04", "b08"]
 BANDS_20M_SPECTRAL = ["b05", "b06", "b07", "b8a", "b11", "b12"]
 BANDS_60M = ["b09"]
+BANDS_60M_ALL = ["b01", "b09"]  # Includes B01 (coastal aerosol) for grazing model
 BANDS_20M_CATEGORICAL = ["scl"]
+
+# 12-band order expected by pib-ml-grazing CNN-LSTM model (all S2 except B10)
+GRAZING_BAND_ORDER = [
+    "b01", "b02", "b03", "b04", "b05", "b06",
+    "b07", "b08", "b8a", "b09", "b11", "b12",
+]
+# Reorder indices: download order (10m+20m+60m_all) → GRAZING_BAND_ORDER
+# Download: b02(0) b03(1) b04(2) b08(3) b05(4) b06(5) b07(6) b8a(7) b11(8) b12(9) b01(10) b09(11)
+# Target:   b01(0) b02(1) b03(2) b04(3) b05(4) b06(5) b07(6) b08(7) b8a(8) b09(9) b11(10) b12(11)
+_GRAZING_REORDER = [10, 0, 1, 2, 4, 5, 6, 3, 7, 11, 8, 9]
 
 # SCL cloud + shadow classes (Sentinel-2 L2A Scene Classification)
 # 3 = cloud_shadow, 8 = cloud_medium_probability,
@@ -276,6 +288,28 @@ class FetchResult:
     transform: Any | None = None
 
 
+@dataclass
+class GrazingTimeseriesResult:
+    """Result of a grazing timeseries fetch for one polygon.
+
+    Attributes:
+        data: (T, 12, H, W) float32 reflectance array.
+              Band order: B01, B02, B03, B04, B05, B06, B07, B08,
+                          B8A, B09, B11, B12.
+        dates: List of ISO date strings for the T cloud-free timesteps.
+        cloud_fractions: Per-date cloud fraction within the polygon.
+        polygon_id: Identifier for this polygon (index or name).
+        geo: GeoContext with CRS, transform, and projected bounds.
+        shape_hw: Spatial dimensions (H, W) of each timestep.
+    """
+    data: np.ndarray             # (T, 12, H, W) float32
+    dates: list[str]
+    cloud_fractions: list[float]
+    polygon_id: str | int
+    geo: GeoContext
+    shape_hw: tuple[int, int]
+
+
 # ── Cloud detection ──────────────────────────────────────────────────────────
 
 def check_cloud_fraction(scl: np.ndarray) -> float:
@@ -295,6 +329,114 @@ def check_cloud_fraction(scl: np.ndarray) -> float:
     """
     cloud_mask = np.isin(scl, list(SCL_CLOUD_CLASSES))
     return float(cloud_mask.sum()) / max(scl.size, 1)
+
+
+def _polygon_cloud_fraction(
+    scl: np.ndarray,
+    polygon_mask: np.ndarray,
+) -> float:
+    """Compute cloud fraction ONLY within a polygon mask.
+
+    Unlike :func:`check_cloud_fraction` which checks the full bounding
+    box, this function restricts the count to pixels inside *polygon_mask*.
+
+    Args:
+        scl: 2D array (H, W) with SCL class values (0-11).
+        polygon_mask: 2D boolean array (H, W), True inside polygon.
+
+    Returns:
+        Fraction of polygon pixels that are cloud/shadow (0.0 to 1.0).
+        Returns 1.0 if polygon_mask has zero True pixels.
+    """
+    n_polygon = int(polygon_mask.sum())
+    if n_polygon == 0:
+        return 1.0
+    cloud_mask = np.isin(scl, list(SCL_CLOUD_CLASSES))
+    cloud_in_polygon = int((cloud_mask & polygon_mask).sum())
+    return cloud_in_polygon / n_polygon
+
+
+def _rasterize_polygon(
+    polygon_geom,
+    projected_bounds: dict,
+    pixel_size: int = 10,
+) -> np.ndarray:
+    """Rasterize a shapely polygon to a boolean mask on the NMD 10m grid.
+
+    Args:
+        polygon_geom: Shapely geometry in EPSG:3006.
+        projected_bounds: Dict with west/south/east/north in EPSG:3006.
+        pixel_size: Grid cell size (default 10m).
+
+    Returns:
+        Boolean array (H, W) where True = inside polygon.
+    """
+    from rasterio.transform import from_origin
+    from rasterio.features import rasterize as rio_rasterize
+
+    width = int((projected_bounds["east"] - projected_bounds["west"]) / pixel_size)
+    height = int((projected_bounds["north"] - projected_bounds["south"]) / pixel_size)
+    transform = from_origin(
+        projected_bounds["west"], projected_bounds["north"],
+        pixel_size, pixel_size,
+    )
+    mask = rio_rasterize(
+        [(polygon_geom, 1)],
+        out_shape=(height, width),
+        transform=transform,
+        fill=0,
+        dtype=np.uint8,
+    )
+    return mask.astype(bool)
+
+
+def _polygon_to_projected_bbox(
+    polygon_geom,
+    src_crs: str = "EPSG:4326",
+    buffer_m: float = 50.0,
+) -> dict:
+    """Convert a polygon geometry to a projected EPSG:3006 bbox on the NMD grid.
+
+    Computes the bounding box of the polygon, adds a buffer, and snaps
+    to the 10m NMD grid.
+
+    Args:
+        polygon_geom: Shapely geometry (in *src_crs*).
+        src_crs: CRS of the input geometry.  Default: EPSG:4326.
+        buffer_m: Buffer in metres around the polygon bbox (default 50m =
+                  5 pixels at 10m, giving the model context around edges).
+
+    Returns:
+        EPSG:3006 bbox dict snapped to NMD grid, with ``"crs"`` key.
+    """
+    from rasterio.crs import CRS
+    from rasterio.warp import transform_bounds
+
+    minx, miny, maxx, maxy = polygon_geom.bounds
+
+    if src_crs != TARGET_CRS:
+        w, s, e, n = transform_bounds(
+            CRS.from_user_input(src_crs), CRS.from_epsg(3006),
+            minx, miny, maxx, maxy,
+        )
+    else:
+        w, s, e, n = minx, miny, maxx, maxy
+
+    # Add buffer
+    w -= buffer_m
+    s -= buffer_m
+    e += buffer_m
+    n += buffer_m
+
+    # Snap to NMD grid
+    grid = NMD_GRID_SIZE
+    return {
+        "west": math.floor(w / grid) * grid,
+        "south": math.floor(s / grid) * grid,
+        "east": math.ceil(e / grid) * grid,
+        "north": math.ceil(n / grid) * grid,
+        "crs": TARGET_CRS,
+    }
 
 
 # ── DES connection ───────────────────────────────────────────────────────────
@@ -680,6 +822,108 @@ def fetch_des_data(
         crs=crs,
         transform=transform,
     )
+
+
+# ── Seasonal / multitemporal fetching ────────────────────────────────────────
+
+
+def fetch_seasonal_dates(
+    coords: dict,
+    seasonal_windows: list[tuple[int, int]],
+    years: list[str],
+    scene_cloud_max: float = 50.0,
+) -> list[list[tuple[str, float]]]:
+    """Find best available Sentinel-2 dates for each seasonal window.
+
+    Queries STAC for each window across the given years and returns
+    candidate dates sorted by cloud cover (ascending).
+
+    Args:
+        coords: WGS84 bounding box dict.
+        seasonal_windows: List of (start_month, end_month) tuples defining
+            each seasonal window, e.g. [(4,5), (6,7), (8,9), (1,2)].
+        years: Years to search, e.g. ["2019", "2018"].
+        scene_cloud_max: Max scene cloud % for STAC pre-filter.
+
+    Returns:
+        List of lists (one per window), each containing
+        ``[(date_str, scene_cloud_pct), ...]`` sorted by cloud ascending.
+        Empty list if no data found for that window.
+    """
+    results = []
+    for m_start, m_end in seasonal_windows:
+        window_candidates = []
+        for year in years:
+            date_start = f"{year}-{m_start:02d}-01"
+            # End of the last month in the window
+            if m_end in (1, 3, 5, 7, 8, 10, 12):
+                date_end = f"{year}-{m_end:02d}-31"
+            elif m_end in (4, 6, 9, 11):
+                date_end = f"{year}-{m_end:02d}-30"
+            else:  # February
+                date_end = f"{year}-{m_end:02d}-28"
+
+            try:
+                dates = _stac_available_dates(
+                    coords, date_start, date_end,
+                    scene_cloud_max=scene_cloud_max,
+                )
+                window_candidates.extend(dates)
+            except Exception:
+                pass  # STAC timeout — skip this year/window
+
+        # Sort all candidates across years by cloud ascending
+        window_candidates.sort(key=lambda x: x[1])
+        results.append(window_candidates)
+
+    return results
+
+
+def fetch_seasonal_image(
+    date: str,
+    coords: dict,
+    prithvi_bands: list[str] | None = None,
+) -> tuple[np.ndarray, str] | None:
+    """Fetch a single Sentinel-2 scene for seasonal tile assembly.
+
+    Uses the standard ``fetch_des_data`` pipeline (including NMD grid
+    snapping and sub-pixel correction) but skips SCL and cloud threshold
+    since STAC + SCL pre-screening has already been done.
+
+    Args:
+        date: ISO date string (already cloud-screened).
+        coords: WGS84 bounding box dict.
+        prithvi_bands: Band names for stacking, e.g. ["B02", ..., "B12"].
+                       Defaults to the Prithvi 6-band set.
+
+    Returns:
+        Tuple of ``(image_array, date_str)`` where image_array is
+        ``(6, H, W)`` float32 reflectance [0,1], or ``None`` if fetch
+        fails (caller handles missing seasons).
+    """
+    if prithvi_bands is None:
+        prithvi_bands = ["B02", "B03", "B04", "B8A", "B11", "B12"]
+
+    try:
+        result = fetch_des_data(
+            date=date,
+            coords=coords,
+            cloud_threshold=1.0,    # already screened
+            include_scl=False,      # skip redundant SCL
+        )
+    except FetchError:
+        return None
+
+    # Check all Prithvi bands present
+    missing = [b for b in prithvi_bands if b not in result.bands]
+    if missing:
+        return None
+
+    image = np.stack(
+        [result.bands[b] for b in prithvi_bands], axis=0,
+    ).astype(np.float32)
+
+    return image, date
 
 
 # ── Multi-temporal vessel heatmap ────────────────────────────────────────────
@@ -1233,6 +1477,446 @@ def fetch_vessel_heatmap(
         "per_date": per_date,
         "heatmap_path": heatmap_path,
     }
+
+
+# ── Grazing timeseries fetching ──────────────────────────────────────────────
+
+def _process_grazing_tif(
+    tif_bytes: bytes,
+    date_str: str,
+    projected_bbox: dict,
+    polygon_mask: np.ndarray,
+    cloud_threshold: float,
+    clean_dates: list,
+    clean_cloud_fracs: list,
+    clean_bands_stack: list,
+    clean_transforms: list,
+) -> None:
+    """Parse one GeoTIFF from a grazing timeseries fetch.
+
+    Performs grid-snapping, polygon-level cloud check, band reordering,
+    and DN→reflectance conversion. Appends to the clean_* lists if the
+    timestep passes cloud filtering.
+
+    Band order in the downloaded GeoTIFF (from merge order):
+        10m:  b02(0) b03(1) b04(2) b08(3)
+        20m:  b05(4) b06(5) b07(6) b8a(7) b11(8) b12(9)
+        60m:  b01(10) b09(11)
+        cat:  scl(12)
+    """
+    import rasterio
+
+    with rasterio.open(io.BytesIO(tif_bytes)) as src:
+        raw = src.read()  # (13, H, W)
+        crs = src.crs
+        transform = src.transform
+
+    if raw.shape[0] < 13:
+        print(f"    {date_str}  only {raw.shape[0]} bands (expected 13), skip")
+        return
+
+    # Grid-align to NMD grid
+    target_bounds = {k: v for k, v in projected_bbox.items() if k != "crs"}
+    raw, transform = _snap_to_target_grid(
+        raw, transform, crs, target_bounds, pixel_size=NMD_GRID_SIZE,
+    )
+
+    # Extract SCL (band index 12) and check polygon-level cloud
+    scl = raw[12].astype(np.uint8)
+
+    # Ensure mask matches raster dimensions
+    if polygon_mask.shape != scl.shape:
+        # Re-rasterize if grid snapping changed dimensions
+        from rasterio.transform import from_origin
+        from rasterio.features import rasterize as rio_rasterize
+        _mask = np.zeros(scl.shape, dtype=bool)
+        print(f"    {date_str}  mask shape mismatch {polygon_mask.shape} vs "
+              f"{scl.shape}, using full-bbox cloud check")
+        cloud_frac = check_cloud_fraction(scl)
+    else:
+        cloud_frac = _polygon_cloud_fraction(scl, polygon_mask)
+
+    if cloud_frac > cloud_threshold:
+        print(f"    {date_str}  cloud={cloud_frac:.1%}  (skip)")
+        return
+
+    # Reorder spectral bands: download order → GRAZING_BAND_ORDER
+    spectral = raw[_GRAZING_REORDER]  # (12, H, W)
+
+    # Convert DN to reflectance
+    spectral_ref = np.stack([
+        dn_to_reflectance(spectral[i], source="des")
+        for i in range(12)
+    ])  # (12, H, W) float32
+
+    clean_dates.append(date_str)
+    clean_cloud_fracs.append(cloud_frac)
+    clean_bands_stack.append(spectral_ref)
+    clean_transforms.append(transform)
+    print(f"    {date_str}  cloud={cloud_frac:.1%}  OK")
+
+
+def fetch_grazing_timeseries(
+    polygons,
+    year: int,
+    *,
+    date_start: str | None = None,
+    date_end: str | None = None,
+    cloud_threshold: float = 0.01,
+    scene_cloud_max: float = 50.0,
+    buffer_m: float = 50.0,
+    chunk_days: int = 14,
+    token: str | None = None,
+    polygon_id_col: str | None = None,
+    polygon_crs: str = "EPSG:4326",
+) -> list[GrazingTimeseriesResult]:
+    """Fetch multi-date 12-band Sentinel-2 timeseries for grazing polygons.
+
+    Designed for the pib-ml-grazing CNN-LSTM model. For each polygon:
+
+    1. Compute projected bbox from polygon geometry (+buffer)
+    2. Discover available dates via STAC (April 1 – October 21)
+    3. Fetch all 12 bands + SCL in 14-day chunks via openEO
+    4. Filter by polygon-level cloud fraction (default 1%)
+    5. Co-register all timesteps (integer + sub-pixel alignment)
+    6. Stack cloud-free dates into (T, 12, H, W) array
+
+    Band order in output: B01, B02, B03, B04, B05, B06, B07, B08,
+                          B8A, B09, B11, B12
+
+    Values are BOA reflectance: (DN − 1000) / 10000, clipped to [0, 1].
+
+    Args:
+        polygons: One of:
+            - shapely Polygon/MultiPolygon geometry (single polygon)
+            - list of shapely geometries
+            - GeoDataFrame with polygon geometries
+        year: Year to fetch (e.g. 2023). Growing season Apr 1 – Oct 21.
+        date_start: Override start date (ISO). Default: ``"{year}-04-01"``.
+        date_end: Override end date (ISO). Default: ``"{year}-10-21"``.
+        cloud_threshold: Max cloud fraction within polygon to keep a
+            timestep. Default: 0.01 (1%).
+        scene_cloud_max: STAC pre-filter for scene-level cloud %.
+            Default: 50%.
+        buffer_m: Buffer in metres around polygon bbox. Default: 50m.
+        chunk_days: Days per temporal chunk for DES calls. Default: 14.
+        token: Optional DES access token.
+        polygon_id_col: Column name in GeoDataFrame to use as polygon ID.
+            If None, uses integer index.
+        polygon_crs: CRS of input polygon geometries. Default: EPSG:4326.
+            Ignored if *polygons* is a GeoDataFrame (uses ``.crs``).
+
+    Returns:
+        List of :class:`GrazingTimeseriesResult`, one per polygon.
+
+    Raises:
+        FetchError: If DES calls fail.
+        ValueError: If no valid polygons provided.
+    """
+    import re
+    import tarfile
+    from datetime import datetime as _dt, timedelta as _td
+    from rasterio.transform import from_origin
+    from rasterio.crs import CRS
+    from rasterio.warp import transform_bounds as _tb
+
+    from .coregistration import coregister_to_reference
+
+    # ── Normalise polygon input ──────────────────────────────────────
+    if hasattr(polygons, "geometry") and hasattr(polygons, "crs"):
+        # GeoDataFrame
+        _crs = str(polygons.crs) if polygons.crs else polygon_crs
+        geom_list = []
+        for idx, row in polygons.iterrows():
+            pid = (
+                row[polygon_id_col]
+                if polygon_id_col and polygon_id_col in row.index
+                else idx
+            )
+            geom_list.append((pid, row.geometry))
+    elif hasattr(polygons, "geom_type"):
+        # Single shapely geometry
+        _crs = polygon_crs
+        geom_list = [(0, polygons)]
+    elif isinstance(polygons, list):
+        _crs = polygon_crs
+        geom_list = [(i, g) for i, g in enumerate(polygons)]
+    else:
+        raise ValueError(
+            "polygons must be a shapely geometry, list of geometries, "
+            "or GeoDataFrame"
+        )
+    if not geom_list:
+        raise ValueError("No valid polygons provided")
+
+    # ── Temporal range ───────────────────────────────────────────────
+    _start = date_start or f"{year}-04-01"
+    _end = date_end or f"{year}-10-21"
+
+    # ── Connect to DES ───────────────────────────────────────────────
+    conn = _connect(token=token)
+    results: list[GrazingTimeseriesResult] = []
+
+    _DATE_RE = re.compile(r"out_(\d{4})_(\d{2})_(\d{2})T")
+
+    for poly_idx, (pid, geom) in enumerate(geom_list):
+        print(f"\n[grazing] Polygon {poly_idx + 1}/{len(geom_list)} "
+              f"(id={pid})")
+
+        # ── Project polygon bbox to EPSG:3006 ────────────────────────
+        projected_bbox = _polygon_to_projected_bbox(
+            geom, src_crs=_crs, buffer_m=buffer_m,
+        )
+        proj_bounds = {k: v for k, v in projected_bbox.items()
+                       if k != "crs"}
+
+        # ── Project polygon geometry for rasterization ───────────────
+        if _crs != TARGET_CRS:
+            import pyproj
+            from shapely.ops import transform as shapely_transform
+            _proj = pyproj.Transformer.from_crs(
+                _crs, TARGET_CRS, always_xy=True,
+            ).transform
+            geom_3006 = shapely_transform(_proj, geom)
+        else:
+            geom_3006 = geom
+
+        polygon_mask = _rasterize_polygon(
+            geom_3006, proj_bounds, pixel_size=NMD_GRID_SIZE,
+        )
+
+        # ── STAC date discovery ──────────────────────────────────────
+        # Need WGS84 bbox for STAC
+        w84 = _tb(
+            CRS.from_epsg(3006), CRS.from_epsg(4326),
+            proj_bounds["west"], proj_bounds["south"],
+            proj_bounds["east"], proj_bounds["north"],
+        )
+        wgs84_coords = {
+            "west": w84[0], "south": w84[1],
+            "east": w84[2], "north": w84[3],
+        }
+        stac_dates = _stac_available_dates(
+            wgs84_coords, _start, _end, scene_cloud_max,
+        )
+        print(f"  [STAC] {len(stac_dates)} dates with scene cloud "
+              f"<= {scene_cloud_max:.0f}%")
+
+        if not stac_dates:
+            H, W = polygon_mask.shape
+            results.append(GrazingTimeseriesResult(
+                data=np.empty((0, 12, H, W), dtype=np.float32),
+                dates=[], cloud_fractions=[], polygon_id=pid,
+                geo=GeoContext(
+                    crs=TARGET_CRS,
+                    transform=from_origin(
+                        proj_bounds["west"], proj_bounds["north"],
+                        NMD_GRID_SIZE, NMD_GRID_SIZE),
+                    bounds_projected=proj_bounds,
+                    bounds_wgs84=wgs84_coords,
+                    shape=(H, W),
+                ),
+                shape_hw=(H, W),
+            ))
+            continue
+
+        # ── Generate 14-day chunk windows ────────────────────────────
+        _d_start = _dt.strptime(_start, "%Y-%m-%d")
+        _d_end = _dt.strptime(_end, "%Y-%m-%d")
+        _chunk_ranges: list[tuple[str, str]] = []
+        _cur = _d_start
+        while _cur <= _d_end:
+            _c_end = min(_cur + _td(days=chunk_days),
+                         _d_end + _td(days=1))
+            _chunk_ranges.append((
+                _cur.strftime("%Y-%m-%d"),
+                _c_end.strftime("%Y-%m-%d"),
+            ))
+            _cur = _c_end
+
+        # ── Fetch per chunk ──────────────────────────────────────────
+        clean_dates: list[str] = []
+        clean_cloud_fracs: list[float] = []
+        clean_bands_stack: list[np.ndarray] = []
+        clean_transforms: list = []
+
+        for c_start, c_end in _chunk_ranges:
+            print(f"  -- {c_start} to {c_end} --")
+            try:
+                # 10m bands
+                cube_10m = conn.load_collection(
+                    collection_id=COLLECTION,
+                    spatial_extent=projected_bbox,
+                    temporal_extent=[c_start, c_end],
+                    bands=BANDS_10M,
+                )
+                # 20m spectral → bilinear resample to 10m
+                cube_20m = conn.load_collection(
+                    collection_id=COLLECTION,
+                    spatial_extent=projected_bbox,
+                    temporal_extent=[c_start, c_end],
+                    bands=BANDS_20M_SPECTRAL,
+                )
+                cube_20m = cube_20m.resample_cube_spatial(
+                    target=cube_10m, method="bilinear",
+                )
+                # 60m bands (B01 + B09) → bilinear resample to 10m
+                cube_60m = conn.load_collection(
+                    collection_id=COLLECTION,
+                    spatial_extent=projected_bbox,
+                    temporal_extent=[c_start, c_end],
+                    bands=BANDS_60M_ALL,
+                )
+                cube_60m = cube_60m.resample_cube_spatial(
+                    target=cube_10m, method="bilinear",
+                )
+                # SCL → nearest resample to 10m
+                cube_scl = conn.load_collection(
+                    collection_id=COLLECTION,
+                    spatial_extent=projected_bbox,
+                    temporal_extent=[c_start, c_end],
+                    bands=BANDS_20M_CATEGORICAL,
+                )
+                cube_scl = cube_scl.resample_cube_spatial(
+                    target=cube_10m, method="near",
+                )
+                # Merge all and download
+                cube = (cube_10m.merge_cubes(cube_20m)
+                        .merge_cubes(cube_60m)
+                        .merge_cubes(cube_scl))
+                data = cube.download(format="gtiff")
+
+                if not data:
+                    print("    (no data)")
+                    continue
+
+                # Parse response — multi-date returns tar.gz
+                if isinstance(data, bytes) and data[:2] == b"\x1f\x8b":
+                    tf = tarfile.open(
+                        fileobj=io.BytesIO(data), mode="r:gz",
+                    )
+                    for member in tf.getmembers():
+                        if not member.name.lower().endswith(
+                            (".tif", ".tiff")
+                        ):
+                            continue
+                        m = _DATE_RE.search(member.name)
+                        if not m:
+                            continue
+                        d_str = (f"{m.group(1)}-{m.group(2)}-"
+                                 f"{m.group(3)}")
+                        f = tf.extractfile(member)
+                        if f is None:
+                            continue
+                        _process_grazing_tif(
+                            f.read(), d_str, projected_bbox,
+                            polygon_mask, cloud_threshold,
+                            clean_dates, clean_cloud_fracs,
+                            clean_bands_stack, clean_transforms,
+                        )
+                    tf.close()
+                elif isinstance(data, bytes):
+                    _process_grazing_tif(
+                        data, c_start, projected_bbox,
+                        polygon_mask, cloud_threshold,
+                        clean_dates, clean_cloud_fracs,
+                        clean_bands_stack, clean_transforms,
+                    )
+            except Exception as e:
+                print(f"    Chunk {c_start}–{c_end} failed: {e}")
+                continue
+
+        # ── Co-registration ──────────────────────────────────────────
+        # First cloud-free timestep is the reference; align all others.
+        if len(clean_bands_stack) >= 2:
+            ref_bands = clean_bands_stack[0]   # (12, H, W)
+            ref_tf = clean_transforms[0]
+            ref_tf_list = list(ref_tf)[:6] if hasattr(ref_tf, '__iter__') else None
+
+            aligned_stack = [ref_bands]
+            for i in range(1, len(clean_bands_stack)):
+                cur_bands = clean_bands_stack[i]
+                cur_tf = clean_transforms[i]
+                cur_tf_list = list(cur_tf)[:6] if hasattr(cur_tf, '__iter__') else None
+
+                # Transpose (12, H, W) → (H, W, 12) for coregister
+                cur_hwc = np.transpose(cur_bands, (1, 2, 0))
+                ref_hwc = np.transpose(ref_bands, (1, 2, 0))
+
+                try:
+                    aligned_cur, _aligned_ref, meta = coregister_to_reference(
+                        target=cur_hwc,
+                        reference=ref_hwc,
+                        target_transform=cur_tf_list,
+                        reference_transform=ref_tf_list,
+                        subpixel=True,
+                        reference_band=3,  # B04 (red) in GRAZING order
+                    )
+                    # Transpose back (H, W, 12) → (12, H, W)
+                    aligned_stack.append(
+                        np.transpose(aligned_cur, (2, 0, 1))
+                    )
+                    sub = meta.get("subpixel_offset", (0, 0))
+                    intg = meta.get("integer_offset", (0, 0))
+                    if abs(intg[0]) + abs(intg[1]) > 0 or abs(sub[0]) + abs(sub[1]) > 0.05:
+                        print(f"    [coreg] {clean_dates[i]}: "
+                              f"int=({intg[0]},{intg[1]}) "
+                              f"sub=({sub[0]:.3f},{sub[1]:.3f})")
+                except Exception as e:
+                    print(f"    [coreg] {clean_dates[i]} failed: {e}, "
+                          f"using grid-snapped version")
+                    aligned_stack.append(cur_bands)
+
+            # After co-registration, all arrays must have the same shape.
+            # Crop to the minimum common shape.
+            min_h = min(a.shape[1] for a in aligned_stack)
+            min_w = min(a.shape[2] for a in aligned_stack)
+            clean_bands_stack = [
+                a[:, :min_h, :min_w] for a in aligned_stack
+            ]
+
+        # ── Stack result ─────────────────────────────────────────────
+        if clean_bands_stack:
+            # Sort by date
+            order = sorted(range(len(clean_dates)),
+                           key=lambda i: clean_dates[i])
+            data_array = np.stack(
+                [clean_bands_stack[i] for i in order], axis=0,
+            )  # (T, 12, H, W)
+            sorted_dates = [clean_dates[i] for i in order]
+            sorted_fracs = [clean_cloud_fracs[i] for i in order]
+        else:
+            H, W = polygon_mask.shape
+            data_array = np.empty((0, 12, H, W), dtype=np.float32)
+            sorted_dates = []
+            sorted_fracs = []
+
+        H_out, W_out = data_array.shape[2], data_array.shape[3] if data_array.size else polygon_mask.shape
+        geo = GeoContext(
+            crs=TARGET_CRS,
+            transform=from_origin(
+                proj_bounds["west"], proj_bounds["north"],
+                NMD_GRID_SIZE, NMD_GRID_SIZE,
+            ),
+            bounds_projected=proj_bounds,
+            bounds_wgs84=wgs84_coords,
+            shape=(H_out, W_out),
+        )
+
+        result = GrazingTimeseriesResult(
+            data=data_array,
+            dates=sorted_dates,
+            cloud_fractions=sorted_fracs,
+            polygon_id=pid,
+            geo=geo,
+            shape_hw=(H_out, W_out),
+        )
+        results.append(result)
+        print(f"  [grazing] Polygon {pid}: {len(sorted_dates)} clean "
+              f"dates out of {len(stac_dates)} available, "
+              f"shape={data_array.shape}")
+
+    return results
 
 
 # ── Cloud-free baseline fetching ─────────────────────────────────────────────

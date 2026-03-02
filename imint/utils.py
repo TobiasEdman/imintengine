@@ -44,6 +44,7 @@ DEFAULT_SOURCE = "des"
 
 # Band name mapping: DES uses lowercase, IMINT Engine uses uppercase internally
 DES_TO_IMINT = {
+    "b01": "B01",
     "b02": "B02", "b03": "B03", "b04": "B04",
     "b05": "B05", "b06": "B06", "b07": "B07",
     "b08": "B08", "b8a": "B8A", "b09": "B09",
