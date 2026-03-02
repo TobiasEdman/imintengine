@@ -12,11 +12,18 @@ from imint.fetch import (
     _polygon_cloud_fraction,
     _rasterize_polygon,
     _polygon_to_projected_bbox,
+    _lpis_bbox_string,
+    fetch_lpis_polygons,
+    fetch_grazing_lpis,
     _GRAZING_REORDER,
     GRAZING_BAND_ORDER,
     GrazingTimeseriesResult,
+    FetchError,
     SCL_CLOUD_CLASSES,
     NMD_GRID_SIZE,
+    LPIS_WFS_URL,
+    LPIS_LAYER,
+    LPIS_PASTURE_AGOSLAG,
 )
 from imint.job import GeoContext
 
@@ -259,3 +266,271 @@ class TestGrazingTimeseriesResult:
         assert result.data.shape[0] == 0
         assert result.data.shape[1] == 12
         assert len(result.dates) == 0
+
+
+# ── LPIS bbox helpers ────────────────────────────────────────────────────
+
+class TestLpisBboxString:
+
+    def test_dict_wgs84_autodetect(self):
+        """Dict with small coords → WGS84."""
+        bbox_str, crs = _lpis_bbox_string(
+            {"west": 13.4, "south": 55.9, "east": 13.5, "north": 56.0}
+        )
+        assert crs == "EPSG:4326"
+        assert "13.4,55.9,13.5,56.0" in bbox_str
+        assert bbox_str.endswith(",EPSG:4326")
+
+    def test_dict_epsg3006_autodetect(self):
+        """Dict with large coords → EPSG:3006."""
+        bbox_str, crs = _lpis_bbox_string(
+            {"west": 400000, "south": 6200000, "east": 410000, "north": 6210000}
+        )
+        assert crs == "EPSG:3006"
+        assert bbox_str.endswith(",EPSG:3006")
+
+    def test_tuple_input(self):
+        """Tuple (w, s, e, n) works."""
+        bbox_str, crs = _lpis_bbox_string((13.4, 55.9, 13.5, 56.0))
+        assert crs == "EPSG:4326"
+        assert "13.4,55.9" in bbox_str
+
+    def test_explicit_crs_overrides(self):
+        """Explicit bbox_crs takes precedence."""
+        bbox_str, crs = _lpis_bbox_string(
+            {"west": 13.4, "south": 55.9, "east": 13.5, "north": 56.0},
+            bbox_crs="EPSG:3006",
+        )
+        assert crs == "EPSG:3006"
+
+    def test_invalid_bbox_raises(self):
+        """Non-dict, non-tuple raises ValueError."""
+        with pytest.raises(ValueError):
+            _lpis_bbox_string("invalid")
+
+
+# ── LPIS constants ───────────────────────────────────────────────────────
+
+class TestLpisConstants:
+
+    def test_wfs_url(self):
+        assert "epub.sjv.se" in LPIS_WFS_URL
+        assert "wfs" in LPIS_WFS_URL
+
+    def test_layer_name(self):
+        assert LPIS_LAYER == "inspire:senaste_arslager_block"
+
+    def test_pasture_agoslag(self):
+        assert LPIS_PASTURE_AGOSLAG == "Bete"
+
+
+# ── fetch_lpis_polygons (mocked) ─────────────────────────────────────────
+
+# Minimal GeoJSON fixture simulating Jordbruksverket WFS response
+_LPIS_GEOJSON_FIXTURE = {
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[400010, 6200010], [400110, 6200010],
+                                 [400110, 6200110], [400010, 6200110],
+                                 [400010, 6200010]]],
+            },
+            "properties": {
+                "blockid": "12345678901",
+                "agoslag": "Bete",
+                "kategori": "Gård/Miljö",
+                "areal": 1.0,
+                "region_kod": "1234",
+                "arslager": 2024,
+            },
+        },
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[400200, 6200200], [400300, 6200200],
+                                 [400300, 6200300], [400200, 6200300],
+                                 [400200, 6200200]]],
+            },
+            "properties": {
+                "blockid": "12345678902",
+                "agoslag": "Åker",
+                "kategori": "Gård/Miljö",
+                "areal": 2.5,
+                "region_kod": "1234",
+                "arslager": 2024,
+            },
+        },
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[400400, 6200400], [400500, 6200400],
+                                 [400500, 6200500], [400400, 6200500],
+                                 [400400, 6200400]]],
+            },
+            "properties": {
+                "blockid": "12345678903",
+                "agoslag": "Bete",
+                "kategori": "Ej stödberättigande",
+                "areal": 0.8,
+                "region_kod": "1234",
+                "arslager": 2024,
+            },
+        },
+    ],
+}
+
+
+class TestFetchLpisPolygons:
+
+    def _mock_urlopen(self, monkeypatch):
+        """Patch urllib to return the GeoJSON fixture."""
+        import io
+        import json
+
+        class FakeResponse:
+            def __init__(self):
+                self._data = json.dumps(_LPIS_GEOJSON_FIXTURE).encode()
+            def read(self):
+                return self._data
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                pass
+
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            lambda req, timeout=None: FakeResponse(),
+        )
+
+    def test_returns_geodataframe(self, monkeypatch):
+        """Should return a GeoDataFrame with expected columns."""
+        self._mock_urlopen(monkeypatch)
+        gdf = fetch_lpis_polygons(
+            {"west": 400000, "south": 6200000, "east": 401000, "north": 6201000},
+            agoslag=None,
+        )
+        assert hasattr(gdf, "geometry")
+        assert hasattr(gdf, "crs")
+        assert len(gdf) == 3
+        assert "blockid" in gdf.columns
+        assert "agoslag" in gdf.columns
+
+    def test_filter_bete(self, monkeypatch):
+        """Default filter should keep only 'Bete' rows."""
+        self._mock_urlopen(monkeypatch)
+        gdf = fetch_lpis_polygons(
+            (400000, 6200000, 401000, 6201000),
+            agoslag="Bete",
+        )
+        assert len(gdf) == 2
+        assert set(gdf["agoslag"]) == {"Bete"}
+
+    def test_filter_none_returns_all(self, monkeypatch):
+        """agoslag=None should return all land-use types."""
+        self._mock_urlopen(monkeypatch)
+        gdf = fetch_lpis_polygons(
+            (400000, 6200000, 401000, 6201000),
+            agoslag=None,
+        )
+        assert len(gdf) == 3
+
+    def test_filter_multiple(self, monkeypatch):
+        """List of ägoslag should filter correctly."""
+        self._mock_urlopen(monkeypatch)
+        gdf = fetch_lpis_polygons(
+            (400000, 6200000, 401000, 6201000),
+            agoslag=["Bete", "Åker"],
+        )
+        assert len(gdf) == 3
+
+    def test_crs_is_epsg3006(self, monkeypatch):
+        """Result CRS should be EPSG:3006."""
+        self._mock_urlopen(monkeypatch)
+        gdf = fetch_lpis_polygons(
+            (400000, 6200000, 401000, 6201000),
+            agoslag=None,
+        )
+        assert "3006" in str(gdf.crs)
+
+    def test_empty_response(self, monkeypatch):
+        """Empty WFS response → empty GeoDataFrame."""
+        import json
+
+        class FakeEmpty:
+            def read(self):
+                return json.dumps({"type": "FeatureCollection", "features": []}).encode()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                pass
+
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            lambda req, timeout=None: FakeEmpty(),
+        )
+        gdf = fetch_lpis_polygons(
+            (13.4, 55.9, 13.5, 56.0),
+            agoslag="Bete",
+        )
+        assert len(gdf) == 0
+        assert "blockid" in gdf.columns
+
+    def test_cache_roundtrip(self, monkeypatch, tmp_path):
+        """Cached file should be used on second call."""
+        self._mock_urlopen(monkeypatch)
+
+        # First call — fetches from WFS
+        gdf1 = fetch_lpis_polygons(
+            (400000, 6200000, 401000, 6201000),
+            agoslag="Bete",
+            cache_dir=str(tmp_path),
+        )
+        assert len(gdf1) == 2
+
+        # Replace urlopen with one that raises (should not be called)
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            lambda req, timeout=None: (_ for _ in ()).throw(
+                RuntimeError("should not be called")
+            ),
+        )
+
+        # Second call — should use cache
+        gdf2 = fetch_lpis_polygons(
+            (400000, 6200000, 401000, 6201000),
+            agoslag="Bete",
+            cache_dir=str(tmp_path),
+        )
+        assert len(gdf2) == 2
+
+
+# ── fetch_grazing_lpis ───────────────────────────────────────────────────
+
+class TestFetchGrazingLpis:
+
+    def test_no_polygons_raises(self, monkeypatch):
+        """FetchError if LPIS returns no polygons."""
+        import json
+
+        class FakeEmpty:
+            def read(self):
+                return json.dumps({"type": "FeatureCollection", "features": []}).encode()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                pass
+
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            lambda req, timeout=None: FakeEmpty(),
+        )
+        with pytest.raises(FetchError):
+            fetch_grazing_lpis(
+                bbox=(13.4, 55.9, 13.5, 56.0),
+                year=2024,
+            )

@@ -88,6 +88,11 @@ _GRAZING_REORDER = [10, 0, 1, 2, 4, 5, 6, 3, 7, 11, 8, 9]
 # 9 = cloud_high_probability, 10 = thin_cirrus
 SCL_CLOUD_CLASSES = frozenset({3, 8, 9, 10})
 
+# ── LPIS (Jordbruksverket) ────────────────────────────────────────────────
+LPIS_WFS_URL = "http://epub.sjv.se/inspire/inspire/wfs"
+LPIS_LAYER = "inspire:senaste_arslager_block"
+LPIS_PASTURE_AGOSLAG = "Bete"
+
 # Default token file location (project root)
 TOKEN_PATH_DEFAULT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".des_token"
@@ -1556,6 +1561,219 @@ def _process_grazing_tif(
     print(f"    {date_str}  cloud={cloud_frac:.1%}  OK")
 
 
+# ── LPIS (Jordbruksverket) polygon fetching ──────────────────────────────
+
+def _lpis_bbox_string(bbox, bbox_crs: str | None = None) -> tuple[str, str]:
+    """Convert bbox to WFS bbox parameter string + CRS.
+
+    Auto-detects CRS from coordinate magnitude if *bbox_crs* is None:
+    values with ``|west| < 180`` are treated as WGS84, otherwise EPSG:3006.
+
+    Args:
+        bbox: dict ``{"west","south","east","north"}`` **or** tuple
+            ``(west, south, east, north)``.
+        bbox_crs: Explicit CRS (e.g. ``"EPSG:4326"``).  Auto-detected if
+            *None*.
+
+    Returns:
+        ``(bbox_str, crs_str)`` — e.g. ``("13.4,55.9,13.5,56.0", "EPSG:4326")``.
+    """
+    if isinstance(bbox, dict):
+        w, s, e, n = bbox["west"], bbox["south"], bbox["east"], bbox["north"]
+    elif isinstance(bbox, (tuple, list)) and len(bbox) == 4:
+        w, s, e, n = bbox
+    else:
+        raise ValueError(
+            "bbox must be dict with west/south/east/north or 4-element tuple"
+        )
+
+    if bbox_crs is None:
+        bbox_crs = "EPSG:4326" if abs(w) < 180 and abs(e) < 180 else "EPSG:3006"
+
+    return f"{w},{s},{e},{n},{bbox_crs}", bbox_crs
+
+
+def fetch_lpis_polygons(
+    bbox,
+    *,
+    agoslag: str | list[str] | None = "Bete",
+    bbox_crs: str | None = None,
+    max_features: int = 5000,
+    timeout: int = 60,
+    cache_dir: str | None = None,
+):
+    """Fetch LPIS field boundary polygons from Jordbruksverket WFS.
+
+    Downloads agricultural block polygons (jordbruksblock) for a given
+    bounding box.  By default only pasture blocks (ägoslag = "Bete") are
+    returned — set *agoslag=None* for all land-use types.
+
+    The data is open (CC BY 4.0) and requires no authentication.
+
+    Args:
+        bbox: Bounding box — dict ``{"west","south","east","north"}`` or
+            tuple ``(west, south, east, north)``.  Accepts both WGS84 and
+            EPSG:3006 coordinates (auto-detected from magnitude).
+        agoslag: Land-use filter.  ``"Bete"`` for pasture only, ``None``
+            for all types, or a list like ``["Bete", "Åker"]``.
+        bbox_crs: Explicit CRS for *bbox*.  Auto-detected if *None*.
+        max_features: Maximum number of features to request.  Default 5000.
+        timeout: HTTP timeout in seconds.
+        cache_dir: Directory for caching WFS responses.  If provided,
+            subsequent calls with the same bbox + filter skip the HTTP
+            request.
+
+    Returns:
+        ``geopandas.GeoDataFrame`` with columns ``geometry``, ``blockid``,
+        ``agoslag``, ``kategori``, ``areal``, ``region_kod``, ``arslager``.
+        CRS is EPSG:3006.
+
+    Raises:
+        FetchError: If the WFS request fails.
+    """
+    import geopandas as gpd
+    import hashlib
+    import json
+    import urllib.request
+    import urllib.parse
+
+    bbox_str, _crs = _lpis_bbox_string(bbox, bbox_crs)
+
+    # ── Check cache ───────────────────────────────────────────────
+    cache_path = None
+    if cache_dir:
+        _cache = Path(cache_dir)
+        _cache.mkdir(parents=True, exist_ok=True)
+        _key = f"{bbox_str}|{agoslag}|{max_features}"
+        _hash = hashlib.md5(_key.encode()).hexdigest()[:12]
+        cache_path = _cache / f"lpis_{_hash}.json"
+        if cache_path.exists():
+            print(f"  LPIS cache hit: {cache_path}")
+            gdf = gpd.read_file(str(cache_path))
+            if gdf.crs is None:
+                gdf = gdf.set_crs("EPSG:3006")
+            return gdf
+
+    # ── Build WFS URL ─────────────────────────────────────────────
+    params = {
+        "service": "WFS",
+        "version": "2.0.0",
+        "request": "GetFeature",
+        "typeName": LPIS_LAYER,
+        "outputFormat": "application/json",
+        "srsName": "EPSG:3006",
+        "bbox": bbox_str,
+        "count": str(max_features),
+    }
+    url = f"{LPIS_WFS_URL}?{urllib.parse.urlencode(params)}"
+
+    print(f"  Fetching LPIS polygons from Jordbruksverket WFS …")
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            data = json.loads(raw)
+    except Exception as e:
+        raise FetchError(f"LPIS WFS request failed: {e}") from e
+
+    features = data.get("features", [])
+    if not features:
+        print("  LPIS: no features found in bbox")
+        # Return empty GeoDataFrame with correct schema
+        gdf = gpd.GeoDataFrame(
+            columns=["geometry", "blockid", "agoslag", "kategori",
+                      "areal", "region_kod", "arslager"],
+            geometry="geometry",
+            crs="EPSG:3006",
+        )
+        return gdf
+
+    # ── Parse to GeoDataFrame ─────────────────────────────────────
+    gdf = gpd.GeoDataFrame.from_features(features, crs="EPSG:3006")
+    print(f"  LPIS: {len(gdf)} block fetched")
+
+    # ── Filter by ägoslag ─────────────────────────────────────────
+    if agoslag is not None and "agoslag" in gdf.columns:
+        if isinstance(agoslag, str):
+            agoslag = [agoslag]
+        gdf = gdf[gdf["agoslag"].isin(agoslag)].copy()
+        print(f"  LPIS: {len(gdf)} block after ägoslag filter ({agoslag})")
+
+    # ── Cache ─────────────────────────────────────────────────────
+    if cache_path is not None and len(gdf) > 0:
+        tmp = cache_path.with_suffix(".json.tmp")
+        gdf.to_file(str(tmp), driver="GeoJSON")
+        tmp.rename(cache_path)
+        print(f"  LPIS: cached to {cache_path}")
+
+    return gdf
+
+
+def fetch_grazing_lpis(
+    bbox,
+    year: int,
+    *,
+    agoslag: str | list[str] | None = "Bete",
+    bbox_crs: str | None = None,
+    cloud_threshold: float = 0.01,
+    scene_cloud_max: float = 50.0,
+    buffer_m: float = 50.0,
+    chunk_days: int = 5,
+    token: str | None = None,
+    max_features: int = 5000,
+    lpis_cache_dir: str | None = None,
+) -> list:
+    """Fetch LPIS pasture polygons and their Sentinel-2 timeseries.
+
+    Convenience wrapper that combines :func:`fetch_lpis_polygons` with
+    :func:`fetch_grazing_timeseries` in a single call.
+
+    Args:
+        bbox: Bounding box for LPIS polygon search (WGS84 or EPSG:3006).
+        year: Year to fetch Sentinel-2 data (growing season Apr–Oct).
+        agoslag: Land-use filter for LPIS (default ``"Bete"``).
+        bbox_crs: CRS of *bbox* (auto-detected if *None*).
+        cloud_threshold: Max polygon-level cloud fraction.
+        scene_cloud_max: STAC pre-filter for scene cloud %.
+        buffer_m: Buffer around polygon bbox in metres.
+        chunk_days: Temporal chunk size for DES calls.
+        token: DES access token.
+        max_features: Max LPIS polygons to fetch.
+        lpis_cache_dir: Cache directory for WFS responses.
+
+    Returns:
+        List of :class:`GrazingTimeseriesResult`, one per LPIS polygon.
+
+    Raises:
+        FetchError: If LPIS returns no polygons or DES calls fail.
+    """
+    lpis_gdf = fetch_lpis_polygons(
+        bbox,
+        agoslag=agoslag,
+        bbox_crs=bbox_crs,
+        max_features=max_features,
+        cache_dir=lpis_cache_dir,
+    )
+
+    if len(lpis_gdf) == 0:
+        raise FetchError(
+            f"No LPIS polygons found for bbox={bbox} with ägoslag={agoslag}"
+        )
+
+    print(f"  Fetching grazing timeseries for {len(lpis_gdf)} LPIS polygons …")
+    return fetch_grazing_timeseries(
+        lpis_gdf,
+        year,
+        cloud_threshold=cloud_threshold,
+        scene_cloud_max=scene_cloud_max,
+        buffer_m=buffer_m,
+        chunk_days=chunk_days,
+        token=token,
+        polygon_id_col="blockid",
+        polygon_crs="EPSG:3006",
+    )
+
+
 def fetch_grazing_timeseries(
     polygons,
     year: int,
@@ -1565,7 +1783,7 @@ def fetch_grazing_timeseries(
     cloud_threshold: float = 0.01,
     scene_cloud_max: float = 50.0,
     buffer_m: float = 50.0,
-    chunk_days: int = 14,
+    chunk_days: int = 5,
     token: str | None = None,
     polygon_id_col: str | None = None,
     polygon_crs: str = "EPSG:4326",
