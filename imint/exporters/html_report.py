@@ -1088,6 +1088,75 @@ def _build_marine_summary_cards(marine_dir: str, prefix: str,
     return '<div class="summary-section">' + "".join(cards) + "</div>"
 
 
+def _build_grazing_summary_cards(grazing_dir: str) -> str:
+    """Build HTML summary cards for the grazing/pasture tab.
+
+    Reads ``grazing_meta.json`` from *grazing_dir* which should contain
+    NMD statistics within LPIS polygons, NDVI means, area, etc.
+    """
+    meta_path = os.path.join(grazing_dir, "grazing_meta.json")
+    if not os.path.isfile(meta_path):
+        return ""
+
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    cards = []
+
+    # Card 1: Number of betesblock
+    lpis_count = meta.get("lpis_count", 0)
+    area_ha = meta.get("lpis_total_area_ha", 0)
+    if lpis_count:
+        cards.append(
+            '<div class="summary-card">'
+            '<h4>LPIS Betesblock</h4>'
+            f'<div class="value">{lpis_count} block</div>'
+            f'<div class="detail">{area_ha:.0f} ha total areal</div>'
+            '</div>'
+        )
+
+    # Card 2: Dominant NMD class inside blocks
+    nmd_within = meta.get("nmd_within_lpis", {})
+    if nmd_within:
+        top_name = next(iter(nmd_within.keys()))
+        top = nmd_within[top_name]
+        top_frac = top.get("fraction", 0)
+        cards.append(
+            '<div class="summary-card">'
+            '<h4>NMD inom betesblock</h4>'
+            f'<div class="value">{top_frac*100:.0f}% {top_name}</div>'
+            f'<div class="detail">{len(nmd_within)} markklasser</div>'
+            '</div>'
+        )
+
+    # Card 3: NDVI mean inside blocks
+    ndvi_mean = meta.get("ndvi_mean_inside", 0)
+    ndvi_std = meta.get("ndvi_std_inside", 0)
+    if ndvi_mean > 0:
+        cards.append(
+            '<div class="summary-card">'
+            '<h4>NDVI i betesmark</h4>'
+            f'<div class="value">{ndvi_mean:.2f}</div>'
+            f'<div class="detail">\u00b1 {ndvi_std:.2f} standardavvikelse</div>'
+            '</div>'
+        )
+
+    # Card 4: Cloud fraction
+    cloud_frac = meta.get("cloud_fraction", 0)
+    cards.append(
+        '<div class="summary-card">'
+        '<h4>Molnt\u00e4cke</h4>'
+        f'<div class="value">{(1 - cloud_frac)*100:.1f}% klart</div>'
+        f'<div class="detail">{meta.get("date", "")}</div>'
+        '</div>'
+    )
+
+    if not cards:
+        return ""
+
+    return '<div class="summary-section">' + "".join(cards) + "</div>"
+
+
 def _build_chart_data(nmd_stats: dict) -> dict:
     """Extract chart data from nmd_stats JSON structure."""
     cross_ref = nmd_stats.get("cross_reference", {})
@@ -1247,8 +1316,8 @@ _FIRE_VIEWERS = [
 
 _MARINE_VIEWERS = [
     {"id": "m-rgb",  "title": "Sentinel-2 RGB", "key": "rgb", "legend": []},
-    {"id": "m-vessels", "title": "Båtdetektering (YOLO)", "key": "vessels", "legend": [
-        {"color": "#00E5FF", "label": "Detekterad båt"},
+    {"id": "m-vessels", "title": "Båtdetektering (YOLO)", "key": "vessels", "vector": True, "legend": [
+        {"color": "#00E5FF", "label": "Detekterad båt / anomali"},
     ]},
     {"id": "m-vessel-heatmap", "title": "Båtaktivitet (heatmap)", "key": "vessel_heatmap", "legend": [
         {"color": "#FFFFB2", "label": "Låg"},
@@ -1284,6 +1353,43 @@ _MARINE_VIEWERS = [
     ]},
 ]
 
+_GRAZING_VIEWERS = [
+    {"id": "g-rgb",  "title": "Sentinel-2 RGB", "key": "rgb", "legend": []},
+    {"id": "g-nmd",  "title": "NMD Marktäcke",  "key": "nmd", "legend": [
+        {"color": "#FFD700", "label": "Åkermark"},
+        {"color": "#D2B48C", "label": "Öpp. mark veg."},
+        {"color": "#50B43C", "label": "Ädellövskog"},  {"color": "#32CD32", "label": "Triviallöv"},
+        {"color": "#228B22", "label": "Granskog"},      {"color": "#46A064", "label": "Blandskog"},
+        {"color": "#006400", "label": "Tallskog"},
+        {"color": "#4A7F4A", "label": "Skog våtmark"},
+        {"color": "#8B5A2B", "label": "Öpp. våtmark"},
+        {"color": "#FF0000", "label": "Bebyggelse"},
+        {"color": "#0000FF", "label": "Vatten"},
+    ]},
+    {"id": "g-lpis", "title": "LPIS Betesblock", "key": "lpis", "vector": True, "legend": [
+        {"color": "#E6119D", "label": "Betesblock (Jordbruksverket)"},
+    ]},
+    {"id": "g-ndvi", "title": "NDVI (Vegetationsindex)", "key": "ndvi", "legend": [
+        {"color": "#a50026", "label": "-1.0"}, {"color": "#f46d43", "label": "-0.5"},
+        {"color": "#fee08b", "label": "0.0"},  {"color": "#a6d96a", "label": "0.5"},
+        {"color": "#006837", "label": "1.0"},
+    ]},
+    {"id": "g-evi",  "title": "EVI (Förstärkt vegetationsindex)", "key": "evi", "legend": [
+        {"color": "#a50026", "label": "-0.5"}, {"color": "#fee08b", "label": "0.0"},
+        {"color": "#a6d96a", "label": "0.5"},   {"color": "#006837", "label": "1.0"},
+    ]},
+    {"id": "g-ndwi", "title": "NDWI (Vattenindex)", "key": "ndwi", "legend": [
+        {"color": "#67001f", "label": "-1.0"}, {"color": "#d6604d", "label": "-0.5"},
+        {"color": "#f7f7f7", "label": "0.0"},  {"color": "#4393c3", "label": "0.5"},
+        {"color": "#053061", "label": "1.0 Vatten"},
+    ]},
+    {"id": "g-cot",  "title": "Molnoptisk tjocklek (COT)", "key": "cot", "legend": [
+        {"color": "#FFFFB2", "label": "0 (Klart)"},
+        {"color": "#FD8D3C", "label": "0.015 (Tunt moln)"},
+        {"color": "#BD0026", "label": "0.05 (Tjockt moln)"},
+    ]},
+]
+
 # ── Analysis descriptions — single source of truth ───────────────────────────
 # Each entry has a shared technical description ("body") + per-context notes.
 # The helper _render_descriptions() builds HTML for a given tab.
@@ -1305,6 +1411,11 @@ _ANALYSIS_DESCRIPTIONS = {
         "marine_note": (
             "I kustmiljön syns land, öar, holmar och öppet vatten — och vid god sikt "
             "kan enskilda båtar och deras kölvatten urskiljas i bilden."
+        ),
+        "grazing_note": (
+            "I betesmarksanalysen visar RGB-bilden jordbrukslandskapet i Skåne "
+            "med blandning av åkermark, beteshagar och skogspartier. De gröna "
+            "fälten i maj indikerar aktiv betessäsong."
         ),
         "ref": (
             '<em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" '
@@ -1329,6 +1440,12 @@ _ANALYSIS_DESCRIPTIONS = {
             "används NDVI för att skilja vegetationsklädda öar och strandremsor från "
             "kala klippor, vatten och bebyggelse — och för att bedöma "
             "kustvegetationens hälsotillstånd."
+        ),
+        "grazing_note": (
+            "I betesmarksanalysen är NDVI centralt för att bedöma betesmarkens "
+            "vitalitet. Aktivt betade marker visar typiskt NDVI 0.4–0.7, medan "
+            "obetade gräsmarker ofta når 0.7–0.9. Genom att jämföra NDVI-värden "
+            "inuti och utanför LPIS-polygonerna kan betestrycket uppskattas."
         ),
         "ref": (
             '<em>Källa: Rouse et al., 1974. &quot;Monitoring vegetation systems in the '
@@ -1355,6 +1472,11 @@ _ANALYSIS_DESCRIPTIONS = {
             "inlopp och vikar. Indexet kompletterar NMD-landmasken genom att visa "
             "vattenytor med högre detaljeringsgrad."
         ),
+        "grazing_note": (
+            "I beteslandskapet ger NDWI information om markfuktigheten, "
+            "vilket är avgörande för beteskvalitet. Våta betesmarker kan indikera "
+            "dränerings\u00adproblem eller naturliga våtmarker inom blockgränserna."
+        ),
         "ref": (
             '<em>Källa: McFeeters, S.K., 1996. &quot;The use of the Normalized '
             'Difference Water Index (NDWI) in the delineation of open water '
@@ -1370,6 +1492,11 @@ _ANALYSIS_DESCRIPTIONS = {
             "vilket ger mer nyanserad information i frodiga skogsområden. EVI "
             "använder tre band — blått (B02), rött (B04) och NIR (B08) — för att "
             "skatta vegetationens tillstånd mer robust än NDVI ensamt."
+        ),
+        "grazing_note": (
+            "EVI ger en bättre bild av betesmarkens biomassa än NDVI i frodiga "
+            "områden. Eftersom EVI inte mättas vid hög vegetationstäthet kan det "
+            "skilja på nyligen betade hagar (lägre EVI) och obetade fält (högre EVI)."
         ),
         "ref": (
             '<em>Källa: Huete et al., 2002. &quot;Overview of the radiometric and biophysical '
@@ -1398,6 +1525,11 @@ _ANALYSIS_DESCRIPTIONS = {
             "Molnanalysen är särskilt viktig i den marina kedjan: om ett datum "
             "har för hög molntäckning exkluderas det automatiskt från "
             "heatmap-ackumuleringen för att undvika att moln feldetekteras som båtar."
+        ),
+        "grazing_note": (
+            "I betesmarksanalysen används COT för att verifiera att de analyserade "
+            "Sentinel-2-scenerna är molnfria. Pixlar med COT > 0.015 maskeras "
+            "automatiskt före beräkning av vegetationsindex."
         ),
         "ref": (
             '<em>Källa: Pirinen, A. et al., 2024. &quot;Creating and Leveraging a Synthetic '
@@ -1480,6 +1612,12 @@ _ANALYSIS_DESCRIPTIONS = {
             "pixlar som är land respektive vatten kan analyskedjan filtrera bort "
             "falsklarm på land och begränsa detektionerna till sjö- och havsområden."
         ),
+        "grazing_note": (
+            "I betesmarksanalysen korsrefereras NMD med LPIS-polygonerna för att "
+            "verifiera vilka markklasser som faktiskt ligger inom de registrerade "
+            "betesblockens gränser. Detta avslöjar t.ex. om ett betesblock innehåller "
+            "skog, våtmark eller åkermark utöver den förväntade gräsmarken."
+        ),
         "ref": (
             '<em>Källa: Naturvårdsverket, &quot;Nationellt Marktäckedata (NMD).&quot; '
             '<a href="https://www.naturvardsverket.se/verktyg-och-tjanster/kartor-och-karttjanster/'
@@ -1523,6 +1661,47 @@ _ANALYSIS_DESCRIPTIONS = {
             "ögonblicksbilder inte kan visa."
         ),
     },
+    "lpis_betesmark": {
+        "title": "LPIS Betesblock \u2014 Jordbruksverkets blockdatabas",
+        "body": (
+            "LPIS (Land Parcel Identification System) \u00e4r Jordbruksverkets "
+            "databas \u00f6ver alla jordbruksblock i Sverige. Polygonerna h\u00e4mtas "
+            "i realtid via Jordbruksverkets \u00f6ppna WFS-tj\u00e4nst och filtreras "
+            "p\u00e5 \u00e4goslag = \u201cBete\u201d f\u00f6r att visa enbart betesmark. "
+            "Datan uppdateras \u00e5rligen och inneh\u00e5ller ~252\u202f000 betesblock "
+            "\u00f6ver hela Sverige. Varje block har ett unikt block-ID, areal, "
+            "region och st\u00f6dkategori. Koordinatsystemet \u00e4r EPSG:3006 "
+            "(SWEREF99 TM) \u2014 samma som v\u00e5r NMD-grid, vilket ger exakt "
+            "pixeljustering utan omprojicering."
+        ),
+        "ref": (
+            '<em>K\u00e4lla: Jordbruksverket, \u00d6ppna data, CC BY 4.0. '
+            '<a href="https://jordbruksverket.se/e-tjanster-databaser-och-appar/'
+            'ovriga-e-tjanster-och-databaser/oppna-data" target="_blank">'
+            'jordbruksverket.se/oppna-data</a></em>'
+        ),
+    },
+    "grazing_pipeline": {
+        "title": "Betesmarkspipeline \u2014 Multitemporal analys",
+        "body": (
+            "IMINT Engines betesmarkspipeline h\u00e4mtar automatiskt alla "
+            "molnfria Sentinel-2-scener under betess\u00e4songen (april\u2013oktober) "
+            "f\u00f6r varje LPIS-polygon. F\u00f6r varje tidssnitt h\u00e4mtas "
+            "alla 12 spektralband (B01\u2013B12 exkl. B10) och en SCL-baserad "
+            "molnmask. Tidssnitt med \u22651% moln inom polygonen filtreras bort. "
+            "Alla kvarst\u00e5ende datum co-registreras geometriskt mot ett "
+            "referensdatum med sub-pixel Fourier-faskorrelation f\u00f6r att "
+            "s\u00e4kerst\u00e4lla perfekt pixeljustering mellan tidssnitt. "
+            "Resultatet \u00e4r en (T, 12, H, W)-tensor redo f\u00f6r "
+            "CNN-LSTM-klassificering av betesaktivitet."
+        ),
+        "ref": (
+            '<em>Pirinen, A. et al., 2024. \u201cDetecting Grazing Activity '
+            'from Satellite Time Series Data.\u201d '
+            '<a href="https://arxiv.org/abs/2510.14493" target="_blank">'
+            'arXiv:2510.14493</a></em>'
+        ),
+    },
 }
 
 # Which descriptions to show in each tab (in order) and which context to use
@@ -1533,6 +1712,10 @@ _FIRE_DESCRIPTION_IDS = [
 _MARINE_DESCRIPTION_IDS = [
     "sentinel2_rgb", "yolo_vessels", "vessel_heatmap",
     "nmd", "ndvi", "ndwi", "cot",
+]
+_GRAZING_DESCRIPTION_IDS = [
+    "sentinel2_rgb", "lpis_betesmark", "ndvi", "ndwi",
+    "evi", "cot", "nmd", "grazing_pipeline",
 ]
 
 
@@ -1568,30 +1751,14 @@ def save_tabbed_report(
     output_path: str,
     fire_date: str = "",
     marine_date: str = "",
+    grazing_dir: str | None = None,
+    grazing_date: str = "",
 ) -> str:
-    """Generate a tabbed HTML showcase with Fire and Marine analysis tabs.
+    """Generate a tabbed HTML showcase with Fire, Marine, and Grazing tabs.
 
     Uses EXTERNAL image files (no base64 embedding).  Images are copied
-    to ``showcase/fire/`` and ``showcase/marine/`` subdirectories next
-    to the output HTML.  The HTML references them via relative paths.
-
-    Each tab contains its own set of Leaflet map viewers with opacity
-    sliders, synced within the tab.  The Fire tab includes NMD charts.
-    The Marine vessels panel has an RGB/Sjökort background toggle.
-
-    Output structure::
-
-        <output_dir>/
-        ├── imint_showcase.html
-        └── showcase/
-            ├── fire/
-            │   ├── rgb.png
-            │   ├── nmd_overlay.png
-            │   └── ...
-            └── marine/
-                ├── vessels_clean.png
-                ├── sjokort.png
-                └── ...
+    to ``showcase/fire/``, ``showcase/marine/``, and ``showcase/grazing/``
+    subdirectories next to the output HTML.
 
     Args:
         fire_dir: Path to fire analysis output directory.
@@ -1599,6 +1766,8 @@ def save_tabbed_report(
         output_path: Where to write the HTML file.
         fire_date: Date string for fire analysis (e.g. "2018-07-24").
         marine_date: Date string for marine analysis (e.g. "2025-07-10").
+        grazing_dir: Path to grazing analysis output directory (optional).
+        grazing_date: Date string for grazing analysis.
 
     Returns:
         The output file path.
@@ -1621,6 +1790,7 @@ def save_tabbed_report(
         "ai2_vessels": "ai2_vessels_clean.png",
         "vessel_heatmap": "vessel_heatmap_clean.png",
         "sjokort": "sjokort.png",
+        "lpis": "lpis_overlay.png",
     }
 
     # ── Copy images to showcase subdirectories ──────────────────────────
@@ -1648,6 +1818,25 @@ def save_tabbed_report(
     fire_imgs = _copy_images(fire_dir, fire_prefix, _FIRE_VIEWERS, "fire")
     marine_imgs = _copy_images(marine_dir, marine_prefix, _MARINE_VIEWERS, "marine")
 
+    # Grazing tab (optional) — grazing images have no date prefix
+    grazing_imgs = {}
+    _lpis_geojson_raw = ""
+    if grazing_dir and os.path.isdir(grazing_dir):
+        grazing_imgs = _copy_images(grazing_dir, "", _GRAZING_VIEWERS, "grazing")
+        # Load LPIS vector GeoJSON (pixel coordinates) if available
+        _lpis_geojson_path = os.path.join(grazing_dir, "lpis_polygons.json")
+        if os.path.isfile(_lpis_geojson_path):
+            with open(_lpis_geojson_path, encoding="utf-8") as _lf:
+                _lpis_geojson_raw = _lf.read()
+        else:
+            _lpis_geojson_raw = ""
+        # Read date from meta if not provided
+        if not grazing_date:
+            _gm_path = os.path.join(grazing_dir, "grazing_meta.json")
+            if os.path.isfile(_gm_path):
+                with open(_gm_path) as _gf:
+                    grazing_date = json.load(_gf).get("date", "")
+
     # Also copy sjökort for the RGB panel toggle (not a separate viewer)
     sjokort_src = os.path.join(
         marine_dir, marine_prefix + file_map.get("sjokort", "sjokort.png")
@@ -1658,6 +1847,16 @@ def save_tabbed_report(
         if os.path.abspath(sjokort_src) != os.path.abspath(sjokort_dest):
             shutil.copy2(sjokort_src, sjokort_dest)
         marine_imgs["m-sjokort"] = f"showcase/marine/{file_map['sjokort']}"
+
+    # Load marine vessel/detection GeoJSON (pixel coordinates) if available
+    _vessel_geojson_raw = ""
+    _vessel_geojson_path = os.path.join(marine_dir, "vessel_detections.json")
+    # Also check in showcase/marine/ (may have been pre-generated)
+    if not os.path.isfile(_vessel_geojson_path):
+        _vessel_geojson_path = os.path.join(showcase_dir, "marine", "vessel_detections.json")
+    if os.path.isfile(_vessel_geojson_path):
+        with open(_vessel_geojson_path, encoding="utf-8") as _vf:
+            _vessel_geojson_raw = _vf.read()
 
     # Generate baseline RGB PNG for fire tab (pre-fire reference image)
     # Match baseline by comparing coordinates from fire_dir name
@@ -1710,7 +1909,14 @@ def save_tabbed_report(
             pass  # baseline not available, skip toggle
 
     fire_viewers = [v for v in _FIRE_VIEWERS if v["id"] in fire_imgs]
-    marine_viewers = [v for v in _MARINE_VIEWERS if v["id"] in marine_imgs]
+    marine_viewers = [
+        v for v in _MARINE_VIEWERS
+        if v["id"] in marine_imgs or (v.get("vector") and _vessel_geojson_raw)
+    ]
+    grazing_viewers = [
+        v for v in _GRAZING_VIEWERS
+        if v["id"] in grazing_imgs or (v.get("vector") and _lpis_geojson_raw)
+    ]
 
     # Image dimensions (read from bands_meta or first image)
     def _read_shape(out_dir, prefix):
@@ -1724,6 +1930,18 @@ def save_tabbed_report(
 
     fire_h, fire_w = _read_shape(fire_dir, fire_prefix)
     marine_h, marine_w = _read_shape(marine_dir, marine_prefix)
+
+    # Grazing shape — read from meta or first image
+    grazing_h, grazing_w = 344, 383  # default
+    if grazing_dir:
+        grazing_meta_path = os.path.join(grazing_dir, "grazing_meta.json")
+        if os.path.isfile(grazing_meta_path):
+            with open(grazing_meta_path) as f:
+                _gm = json.load(f)
+            _gs = _gm.get("shape", [344, 383])
+            grazing_h, grazing_w = _gs[0], _gs[1]
+        else:
+            grazing_h, grazing_w = _read_shape(grazing_dir, grazing_prefix)
 
     # NMD stats for fire charts
     nmd_path = os.path.join(fire_dir, f"{fire_prefix}nmd_stats.json")
@@ -1751,6 +1969,11 @@ def save_tabbed_report(
     marine_summary_html = _build_marine_summary_cards(
         marine_dir, marine_prefix, marine_imint_summary
     )
+
+    # Summary cards for grazing
+    grazing_summary_html = ""
+    if grazing_dir and os.path.isdir(grazing_dir):
+        grazing_summary_html = _build_grazing_summary_cards(grazing_dir)
 
     # ── Fetch libraries ───────────────────────────────────────────────────
     leaflet_css = _fetch_lib(_CDN_LIBS["leaflet_css"])
@@ -1831,6 +2054,11 @@ def save_tabbed_report(
     fire_cells = _map_cells(fire_viewers, "f", hideable=True,
                             per_panel_toggle=fire_bg_toggle)
     marine_cells = _map_cells(marine_viewers, "m", has_bg_toggle=has_marine_bg, hideable=True)
+    grazing_bg_toggle = {}
+    if "g-lpis" in grazing_imgs and "g-nmd" in grazing_imgs:
+        grazing_bg_toggle["lpis"] = [("rgb", "RGB"), ("nmd", "NMD")]
+    grazing_cells = _map_cells(grazing_viewers, "g", hideable=True,
+                               per_panel_toggle=grazing_bg_toggle)
 
     # ── Fire chart sections ───────────────────────────────────────────────
     fire_charts_html = ""
@@ -1872,7 +2100,15 @@ def save_tabbed_report(
         ensure_ascii=False,
     )
     marine_viewer_js = json.dumps(
-        [{"id": v["id"], "key": v["key"]} for v in marine_viewers],
+        [{"id": v["id"], "key": v["key"], "vector": v.get("vector", False),
+          "legend": v.get("legend", [])}
+         for v in marine_viewers],
+        ensure_ascii=False,
+    )
+    grazing_viewer_js = json.dumps(
+        [{"id": v["id"], "key": v["key"], "vector": v.get("vector", False),
+          "legend": v.get("legend", [])}
+         for v in grazing_viewers],
         ensure_ascii=False,
     )
 
@@ -1890,6 +2126,7 @@ def save_tabbed_report(
 
     fire_toolbar = _panel_toolbar(fire_viewers)
     marine_toolbar = _panel_toolbar(marine_viewers)
+    grazing_toolbar = _panel_toolbar(grazing_viewers)
 
     # ── Images as JS objects ──────────────────────────────────────────────
     def _imgs_js(imgs_dict):
@@ -1898,10 +2135,64 @@ def save_tabbed_report(
 
     fire_imgs_js = _imgs_js(fire_imgs)
     marine_imgs_js = _imgs_js(marine_imgs)
+    grazing_imgs_js = _imgs_js(grazing_imgs)
 
     # ── Render descriptions from shared objects ────────────────────────────
     fire_descriptions = _render_descriptions(_FIRE_DESCRIPTION_IDS, "fire")
     marine_descriptions = _render_descriptions(_MARINE_DESCRIPTION_IDS, "marine")
+    grazing_descriptions = _render_descriptions(_GRAZING_DESCRIPTION_IDS, "grazing")
+
+    # ── Pre-compute grazing HTML (avoids backslash in f-string on Py 3.9) ──
+    grazing_tab_btn = (
+        '<a href="#" class="theme-tab" data-tab="grazing">\U0001f404 Betesmark</a>'
+        if grazing_viewers else ""
+    )
+    grazing_subtitle = (
+        f" &middot; Betesmark ({grazing_date})" if grazing_viewers else ""
+    )
+    if grazing_viewers:
+        grazing_tab_html = f"""<div class="tab-content" id="tab-grazing">
+        <div class="section-header">
+            <h2>Betesmarksanalys \u2014 {grazing_date}</h2>
+        </div>
+        {grazing_summary_html}
+        <div class="tab-intro">
+            <p>
+                Analysomr\u00e5det \u00e4r bel\u00e4get nordost om Lund i Sk\u00e5ne \u2014 ett av
+                Sveriges mest intensivt brukade jordbrukslandskap med en blandning
+                av \u00e5kermark, beteshagar och sm\u00e5skaliga skogspartier. LPIS-polygoner
+                fr\u00e5n Jordbruksverkets blockdatabas visar registrerade betesblock
+                i omr\u00e5det. Sentinel-2-data fr\u00e5n {grazing_date} har analyserats
+                med spektrala index (NDVI, NDWI, EVI), molnanalys (COT) och
+                korsrefererats mot NMD markt\u00e4ckedata f\u00f6r att kartera
+                vegetationens tillst\u00e5nd inom betesmarkerna.
+            </p>
+        </div>
+        {grazing_toolbar}
+        <div class="map-grid">
+            {grazing_cells}
+        </div>
+        <div class="tab-description">
+
+{grazing_descriptions}
+        </div>
+    </div>"""
+        _geojson_js = f"const LPIS_GEOJSON = {_lpis_geojson_raw};" if _lpis_geojson_raw else "const LPIS_GEOJSON = null;"
+        grazing_js_block = (
+            f"const GRAZING_VIEWERS = {grazing_viewer_js};\n"
+            f"        const GRAZING_IMAGES = {grazing_imgs_js};\n"
+            f"        {_geojson_js}\n"
+            f"        initMaps(GRAZING_VIEWERS, GRAZING_IMAGES, {grazing_h}, {grazing_w}, false, LPIS_GEOJSON);"
+        )
+    else:
+        grazing_tab_html = ""
+        grazing_js_block = ""
+
+    # Marine vessel detection GeoJSON for Leaflet vector rendering
+    if _vessel_geojson_raw:
+        _marine_geojson_js = f"const VESSEL_GEOJSON = {_vessel_geojson_raw};"
+    else:
+        _marine_geojson_js = "const VESSEL_GEOJSON = null;"
 
     # ── Assemble HTML ─────────────────────────────────────────────────────
     html = f"""<!DOCTYPE html>
@@ -2353,12 +2644,13 @@ def save_tabbed_report(
         <div class="header-left">
             <div>
                 <h1><span>IMINT</span> Analysrapport</h1>
-                <p>Showcase — Brand ({fire_date}) &middot; Marin ({marine_date})</p>
+                <p>Showcase — Brand ({fire_date}) &middot; Marin ({marine_date}){grazing_subtitle}</p>
             </div>
         </div>
         <div class="header-nav">
             <a href="#" class="theme-tab active" data-tab="fire">\U0001f525 Brand</a>
             <a href="#" class="theme-tab" data-tab="marine">\u2693 Marin</a>
+            {grazing_tab_btn}
         </div>
     </div>
 
@@ -2415,6 +2707,8 @@ def save_tabbed_report(
         </div>
     </div>
 
+    <!-- ── Grazing tab ──────────────────────────────────────────── -->
+    {grazing_tab_html}
     <div class="footer">
         IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB
         &middot; CC0 1.0 Universal &middot; Genererad {fire_date} / {marine_date}
@@ -2482,6 +2776,12 @@ def save_tabbed_report(
                     <td><span class="license-badge badge-open">CC0</span></td>
                     <td>Naturv\u00e5rdsverket</td>
                     <td>Public domain, attribution rekommenderas</td>
+                </tr>
+                <tr>
+                    <td>LPIS Blockdatabas (Jordbruksverket)</td>
+                    <td><span class="license-badge badge-open">CC BY 4.0</span></td>
+                    <td>&copy; Jordbruksverket</td>
+                    <td>Betesblock (ägoslag) via WFS. <a href="https://jordbruksverket.se/e-tjanster-databaser-och-appar/ovriga-e-tjanster-och-databaser/oppna-data" style="color:#171717;" target="_blank">Öppna data</a></td>
                 </tr>
                 <tr>
                     <td>Sj\u00f6kort (S-57) via SLU GET</td>
@@ -2561,7 +2861,7 @@ def save_tabbed_report(
         }});
 
         // ── Create maps for a tab ────────────────────────────────────────
-        function initMaps(viewers, images, imgH, imgW, hasBgToggle) {{
+        function initMaps(viewers, images, imgH, imgW, hasBgToggle, geojsonData) {{
             const bounds = [[0, 0], [imgH, imgW]];
             const maps = [];
             const overlays = {{}};
@@ -2569,7 +2869,8 @@ def save_tabbed_report(
 
             viewers.forEach(function(v) {{
                 const container = document.getElementById(v.id);
-                if (!container || !images[v.id]) return;
+                // Vector layers don't need an image, but raster layers do
+                if (!container || (!images[v.id] && !v.vector)) return;
 
                 const map = L.map(v.id, {{
                     crs: L.CRS.Simple,
@@ -2622,22 +2923,57 @@ def save_tabbed_report(
                         ).addTo(map);
                     }}
 
+                    // NMD background layer (grazing LPIS toggle)
+                    const nmdId = prefix + '-nmd';
+                    if (images[nmdId] && v.key !== 'nmd') {{
+                        bgLayers[v.id].nmd = L.imageOverlay(
+                            images[nmdId], bounds, {{zIndex: 0, opacity: 0}}
+                        ).addTo(map);
+                    }}
+
                     if (v.key === 'rgb') {{
                         overlays[v.id] = bgLayers[v.id].rgb;
+                    }} else if (v.vector && geojsonData) {{
+                        // Vector overlay (GeoJSON polygons)
+                        const vColor = (v.legend && v.legend[0]) ? v.legend[0].color : '#E6119D';
+                        const gjLayer = L.geoJSON(geojsonData, {{
+                            style: {{ color: vColor, weight: 2, fillOpacity: 0, opacity: 1 }},
+                            coordsToLatLng: function(coords) {{
+                                return L.latLng(coords[1], coords[0]);
+                            }},
+                        }}).addTo(map);
+                        overlays[v.id] = gjLayer;
                     }} else {{
                         const overlay = L.imageOverlay(images[v.id], bounds, {{zIndex: 1}}).addTo(map);
                         overlays[v.id] = overlay;
                     }}
                 }} else {{
                     // No toggle available: static RGB background + overlay
-                    if (v.key !== 'rgb') {{
-                        const rgbId = v.id.split('-')[0] + '-rgb';
-                        if (images[rgbId]) {{
-                            L.imageOverlay(images[rgbId], bounds, {{zIndex: 0}}).addTo(map);
+                    if (v.vector && geojsonData) {{
+                        // Vector overlay with RGB background
+                        const prefix2 = v.id.split('-')[0];
+                        const rgbId2 = prefix2 + '-rgb';
+                        if (images[rgbId2]) {{
+                            L.imageOverlay(images[rgbId2], bounds, {{zIndex: 0}}).addTo(map);
                         }}
+                        const vColor2 = (v.legend && v.legend[0]) ? v.legend[0].color : '#E6119D';
+                        const gjLayer = L.geoJSON(geojsonData, {{
+                            style: {{ color: vColor2, weight: 2, fillOpacity: 0, opacity: 1 }},
+                            coordsToLatLng: function(coords) {{
+                                return L.latLng(coords[1], coords[0]);
+                            }},
+                        }}).addTo(map);
+                        overlays[v.id] = gjLayer;
+                    }} else {{
+                        if (v.key !== 'rgb') {{
+                            const rgbId = v.id.split('-')[0] + '-rgb';
+                            if (images[rgbId]) {{
+                                L.imageOverlay(images[rgbId], bounds, {{zIndex: 0}}).addTo(map);
+                            }}
+                        }}
+                        const overlay = L.imageOverlay(images[v.id], bounds, {{zIndex: 1}}).addTo(map);
+                        overlays[v.id] = overlay;
                     }}
-                    const overlay = L.imageOverlay(images[v.id], bounds, {{zIndex: 1}}).addTo(map);
-                    overlays[v.id] = overlay;
                 }}
 
                 map.fitBounds(bounds);
@@ -2660,7 +2996,11 @@ def save_tabbed_report(
                     const val = parseInt(this.value);
                     const valEl = document.getElementById('opacity-val-' + mapId);
                     if (valEl) valEl.textContent = val + '%';
-                    if (overlays[mapId]) overlays[mapId].setOpacity(val / 100);
+                    const ov = overlays[mapId];
+                    if (ov) {{
+                        if (ov.setOpacity) ov.setOpacity(val / 100);
+                        else if (ov.setStyle) ov.setStyle({{ opacity: val / 100 }});
+                    }}
                 }});
             }});
 
@@ -2706,7 +3046,10 @@ def save_tabbed_report(
         const MARINE_IMAGES = {marine_imgs_js};
 
         initMaps(FIRE_VIEWERS, FIRE_IMAGES, {fire_h}, {fire_w}, false);
-        initMaps(MARINE_VIEWERS, MARINE_IMAGES, {marine_h}, {marine_w}, {str(has_marine_bg).lower()});
+        {_marine_geojson_js}
+        initMaps(MARINE_VIEWERS, MARINE_IMAGES, {marine_h}, {marine_w}, {str(has_marine_bg).lower()}, VESSEL_GEOJSON);
+
+        {grazing_js_block}
 
         // ── Chart.js (Fire tab) ──────────────────────────────────────────
         const CHART_DATA = {fire_chart_json};

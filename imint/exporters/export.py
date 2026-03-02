@@ -265,21 +265,55 @@ def save_summary_report(
 
 
 def save_nmd_overlay(l2_raster: np.ndarray, path: str) -> str:
-    """Render NMD Level 2 land cover classes as a color-coded PNG overlay.
+    """Render NMD land cover classes as a color-coded PNG overlay.
 
-    Color palette:
-        0=unclassified (gray), 1-19 = L2 classes
+    Handles both raw NMD codes (e.g. 111, 112, 3, 42, 61, …) and
+    pre-remapped sequential codes (0-19).  If max value > 19 the raw
+    NMD coding system is assumed and mapped to display colours.
 
     Args:
-        l2_raster: 2D uint8 array with Level 2 class codes (0-19).
+        l2_raster: 2D uint8/uint16 array with NMD class codes.
         path: Output PNG path.
 
     Returns:
         The output file path.
     """
-    # Level 2 color palette (index = class code)
-    # Order matches L2_CLASSES from nmd.py
-    palette = np.array([
+    # Raw NMD Generell (10 m) code → display colour (R, G, B)
+    _RAW_NMD_COLORS = {
+        # Skog utanför våtmark
+        111: (0, 100, 0),       # Tallskog
+        112: (34, 139, 34),     # Granskog
+        113: (20, 120, 20),     # Tall/gran-blandskog
+        114: (60, 179, 113),    # Barrblandskog
+        115: (50, 205, 50),     # Triviallövskog
+        116: (80, 180, 60),     # Ädellövskog
+        117: (100, 200, 80),    # Trivial/ädellövblandskog
+        118: (70, 160, 100),    # Barr/lövblandskog
+        # Skog på våtmark
+        121: (46, 79, 46),      # Tallskog våtmark
+        122: (58, 95, 58),      # Granskog våtmark
+        123: (50, 85, 50),      # Tall/gran våtmark
+        124: (90, 143, 90),     # Barrblandskog våtmark
+        125: (74, 127, 74),     # Triviallövskog våtmark
+        126: (85, 140, 80),     # Ädellövskog våtmark
+        127: (95, 155, 90),     # Lövblandskog våtmark
+        128: (80, 130, 80),     # Barr/löv våtmark
+        # Öppen mark
+        2:   (139, 90, 43),     # Öppen våtmark
+        3:   (255, 215, 0),     # Åkermark
+        41:  (200, 173, 127),   # Övrig öppen mark utan vegetation
+        42:  (210, 180, 140),   # Övrig öppen mark med vegetation
+        # Bebyggelse
+        51:  (255, 0, 0),       # Exploaterad mark, byggnad
+        52:  (255, 69, 0),      # Exploaterad mark, ej byggnad/väg
+        53:  (255, 99, 71),     # Exploaterad mark, övrig hårdgjord
+        # Vatten
+        61:  (0, 0, 255),       # Sjö och vattendrag
+        62:  (30, 144, 255),    # Hav
+    }
+
+    # Sequential L2 palette (for pre-remapped rasters, indices 0-19)
+    _SEQ_PALETTE = np.array([
         [128, 128, 128],  # 0: unclassified
         [0, 100, 0],      # 1: forest_pine
         [34, 139, 34],    # 2: forest_spruce
@@ -302,9 +336,19 @@ def save_nmd_overlay(l2_raster: np.ndarray, path: str) -> str:
         [30, 144, 255],   # 19: water_sea
     ], dtype=np.uint8)
 
-    # Clamp to valid range
-    clamped = np.clip(l2_raster, 0, len(palette) - 1)
-    rgb = palette[clamped]
+    max_val = int(l2_raster.max())
+    if max_val > 19:
+        # Raw NMD codes — map via lookup
+        h, w = l2_raster.shape[:2]
+        rgb = np.full((h, w, 3), 128, dtype=np.uint8)  # default gray
+        for code, color in _RAW_NMD_COLORS.items():
+            mask = l2_raster == code
+            if mask.any():
+                rgb[mask] = color
+    else:
+        # Pre-remapped sequential codes
+        clamped = np.clip(l2_raster, 0, len(_SEQ_PALETTE) - 1)
+        rgb = _SEQ_PALETTE[clamped]
 
     Image.fromarray(rgb).save(path)
     print(f"    saved: {path}")
@@ -1210,4 +1254,251 @@ def save_vessel_heatmap_png(
 
     Image.fromarray(rgba, "RGBA").save(path)
     print(f"    saved: {path}")
+    return path
+
+
+def save_lpis_overlay(
+    rgb: np.ndarray,
+    lpis_gdf,
+    geo,
+    path: str,
+    fill_color: tuple = (0.0, 0.0, 0.0, 0.0),
+    edge_color: tuple = (0.90, 0.07, 0.61),
+    edge_width: int = 2,
+) -> str:
+    """Render LPIS pasture polygons on top of an RGB image.
+
+    Burns polygon perimeters (and optional fills) onto the satellite image
+    using rasterio rasterization.
+
+    Default style: magenta perimeter only (#E6119D) — colorblind-friendly
+    and high contrast against NMD greens.
+
+    Args:
+        rgb: (H, W, 3) float32 [0, 1] satellite image.
+        lpis_gdf: GeoDataFrame with polygon geometries in EPSG:3006.
+        geo: GeoContext with ``transform`` and ``shape``.
+        path: Output PNG path.
+        fill_color: RGBA fill colour for polygon interiors (default: no fill).
+        edge_color: RGB edge colour for polygon boundaries.
+        edge_width: Boundary line width in pixels.
+
+    Returns:
+        The output file path.
+    """
+    from rasterio.features import rasterize
+    from shapely.geometry import mapping
+
+    h, w = rgb.shape[:2]
+    transform = geo.transform
+
+    geoms = list(lpis_gdf.geometry)
+    if not geoms:
+        img = (rgb * 255).clip(0, 255).astype(np.uint8)
+        Image.fromarray(img).save(path)
+        print(f"    saved: {path} (no LPIS polygons)")
+        return path
+
+    # Rasterize polygon fills
+    fill_mask = rasterize(
+        [(mapping(g), 1) for g in geoms],
+        out_shape=(h, w),
+        transform=transform,
+        fill=0,
+        dtype=np.uint8,
+    )
+
+    # Rasterize polygon boundaries (dilated - filled = edge ring)
+    if edge_width > 0:
+        buffered = [g.buffer(edge_width * 10) for g in geoms]  # ~10m per pixel
+        edge_outer = rasterize(
+            [(mapping(g), 1) for g in buffered],
+            out_shape=(h, w),
+            transform=transform,
+            fill=0,
+            dtype=np.uint8,
+        )
+        # Also erode to get inner ring
+        eroded = [g.buffer(-edge_width * 10) for g in geoms]
+        eroded = [g for g in eroded if not g.is_empty]
+        if eroded:
+            inner = rasterize(
+                [(mapping(g), 1) for g in eroded],
+                out_shape=(h, w),
+                transform=transform,
+                fill=0,
+                dtype=np.uint8,
+            )
+        else:
+            inner = np.zeros((h, w), dtype=np.uint8)
+        # Edge = (buffered OR original) minus eroded interior
+        edge_mask = ((edge_outer > 0) | (fill_mask > 0)) & (inner == 0)
+    else:
+        edge_mask = np.zeros((h, w), dtype=bool)
+
+    # Composite: RGB + fill + edge
+    out = rgb.copy()
+
+    # Apply fill (alpha blend) — skip if fully transparent
+    alpha = fill_color[3] if len(fill_color) > 3 else 0.0
+    if alpha > 0:
+        for c in range(3):
+            out[:, :, c] = np.where(
+                fill_mask > 0,
+                out[:, :, c] * (1 - alpha) + fill_color[c] * alpha,
+                out[:, :, c],
+            )
+
+    # Apply edge (solid)
+    for c in range(3):
+        out[:, :, c] = np.where(edge_mask, edge_color[c], out[:, :, c])
+
+    img = (out * 255).clip(0, 255).astype(np.uint8)
+    Image.fromarray(img).save(path)
+    print(f"    saved: {path} ({len(geoms)} LPIS polygons)")
+    return path
+
+
+def save_lpis_geojson(lpis_gdf, geo, path: str, img_shape=None) -> str:
+    """Convert LPIS polygons to pixel-coordinate GeoJSON for Leaflet CRS.Simple.
+
+    Transforms polygon coordinates from their source CRS to pixel space
+    suitable for Leaflet CRS.Simple where bounds = ``[[0, 0], [H, W]]``.
+
+    In CRS.Simple the Y-axis points **up** (lat increases upward) but in
+    raster pixel space row 0 is the top.  We therefore output GeoJSON
+    coordinates as ``[col, H - row]`` so that ``coordsToLatLng(c)`` →
+    ``L.latLng(c[1], c[0])`` = ``L.latLng(H - row, col)`` places
+    features correctly on top of the image overlay.
+
+    Args:
+        lpis_gdf: GeoDataFrame with polygon geometries (any CRS — will
+            be reprojected to match *geo.crs* if needed).
+        geo: GeoContext with ``crs``, ``transform`` and ``shape``.
+        path: Output GeoJSON file path.
+        img_shape: ``(H, W)`` tuple.  Falls back to ``geo.shape`` if
+            *None*.
+
+    Returns:
+        The output file path.
+    """
+    import json
+    from shapely.geometry import mapping
+    from shapely.ops import transform as shp_transform
+    from rasterio.transform import AffineTransformer
+
+    # ── Determine image height ──────────────────────────────────────
+    if img_shape is not None:
+        img_h = int(img_shape[0])
+    elif hasattr(geo, "shape") and geo.shape is not None:
+        img_h = int(geo.shape[0])
+    else:
+        raise ValueError("img_shape or geo.shape required for Y-flip")
+
+    # ── Ensure CRS matches the raster transform ─────────────────────
+    gdf = lpis_gdf
+    target_crs = getattr(geo, "crs", "EPSG:3006")
+    if gdf.crs is not None and not gdf.crs.equals(target_crs):
+        print(f"    Reprojecting LPIS from {gdf.crs} → {target_crs}")
+        gdf = gdf.to_crs(target_crs)
+
+    transformer = AffineTransformer(geo.transform)
+
+    def _to_pixel(x, y, z=None):
+        """Convert projected (x, y) → GeoJSON (col, H-row) for Leaflet."""
+        row, col = transformer.rowcol(x, y)   # (row, col) from CRS coords
+        return (float(col), float(img_h - row))  # GeoJSON [x=col, y=H-row]
+
+    features = []
+    for _, feat in gdf.iterrows():
+        geom = feat.geometry
+        if geom is None or geom.is_empty:
+            continue
+
+        # Transform coordinates: projected CRS → pixel space (Y-flipped)
+        pixel_geom = shp_transform(_to_pixel, geom)
+
+        props = {}
+        for col_name in ["blockid", "agoslag", "areal"]:
+            if col_name in gdf.columns:
+                val = feat.get(col_name)
+                if val is not None:
+                    props[col_name] = val if not hasattr(val, 'item') else val.item()
+
+        features.append({
+            "type": "Feature",
+            "geometry": mapping(pixel_geom),
+            "properties": props,
+        })
+
+    geojson = {
+        "type": "FeatureCollection",
+        "features": features,
+    }
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(geojson, f, ensure_ascii=False)
+
+    print(f"    saved: {path} ({len(features)} features)")
+    return path
+
+
+def save_regions_leaflet_geojson(
+    regions: list[dict],
+    img_shape: tuple,
+    path: str,
+) -> str:
+    """Convert pixel-space bounding-box regions to Leaflet CRS.Simple GeoJSON.
+
+    Each region dict must contain a ``"bbox"`` key with
+    ``{x_min, y_min, x_max, y_max}`` in pixel coordinates.  The output
+    GeoJSON uses ``[col, H - row]`` coordinates so that Leaflet
+    ``coordsToLatLng(c)`` → ``L.latLng(c[1], c[0])`` places rectangles
+    correctly with image bounds ``[[0, 0], [H, W]]``.
+
+    Args:
+        regions: List of dicts with ``"bbox"`` plus optional properties
+            (``score``, ``label``, ``attributes``, etc.).
+        img_shape: ``(H, W)`` image dimensions.
+        path: Output GeoJSON file path.
+
+    Returns:
+        The output file path.
+    """
+    import json
+
+    img_h = int(img_shape[0])
+
+    features = []
+    for region in regions:
+        bbox = region["bbox"]
+        x_min, y_min = bbox["x_min"], bbox["y_min"]
+        x_max, y_max = bbox["x_max"], bbox["y_max"]
+
+        # Flip Y for Leaflet CRS.Simple (lat=0 at bottom, lat=H at top)
+        polygon = [
+            [float(x_min), float(img_h - y_max)],
+            [float(x_max), float(img_h - y_max)],
+            [float(x_max), float(img_h - y_min)],
+            [float(x_min), float(img_h - y_min)],
+            [float(x_min), float(img_h - y_max)],
+        ]
+
+        properties = {k: v for k, v in region.items() if k != "bbox"}
+        # Ensure JSON-serialisable (numpy scalars → Python)
+        for k, v in properties.items():
+            if hasattr(v, "item"):
+                properties[k] = v.item()
+
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": [polygon]},
+            "properties": properties,
+        })
+
+    geojson = {"type": "FeatureCollection", "features": features}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(geojson, f, ensure_ascii=False)
+
+    print(f"    saved: {path} ({len(features)} features)")
     return path
