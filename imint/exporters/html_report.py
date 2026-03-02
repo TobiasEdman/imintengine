@@ -1092,7 +1092,8 @@ def _build_grazing_summary_cards(grazing_dir: str) -> str:
     """Build HTML summary cards for the grazing/pasture tab.
 
     Reads ``grazing_meta.json`` from *grazing_dir* which should contain
-    NMD statistics within LPIS polygons, NDVI means, area, etc.
+    NMD statistics within LPIS polygons, NDVI means, area, grazing
+    model predictions, etc.
     """
     meta_path = os.path.join(grazing_dir, "grazing_meta.json")
     if not os.path.isfile(meta_path):
@@ -1103,7 +1104,30 @@ def _build_grazing_summary_cards(grazing_dir: str) -> str:
 
     cards = []
 
-    # Card 1: Number of betesblock
+    # Card 1: Grazing model results (most important — show first)
+    gp = meta.get("grazing_predictions", {})
+    if gp:
+        n_active = gp.get("active_grazing", 0)
+        total = gp.get("total_polygons", 0)
+        conf = gp.get("mean_confidence", 0)
+        cards.append(
+            '<div class="summary-card">'
+            '<h4>Betesanalys (AI)</h4>'
+            f'<div class="value">{n_active}/{total} aktiv</div>'
+            f'<div class="detail">Konfidens: {conf*100:.0f}%</div>'
+            '</div>'
+        )
+        n_inactive = gp.get("no_activity", 0)
+        if n_inactive:
+            cards.append(
+                '<div class="summary-card">'
+                '<h4>Ingen aktivitet</h4>'
+                f'<div class="value">{n_inactive} block</div>'
+                f'<div class="detail">{gp.get("num_dates", 0)} molnfria datum</div>'
+                '</div>'
+            )
+
+    # Card 2: Number of betesblock + area
     lpis_count = meta.get("lpis_count", 0)
     area_ha = meta.get("lpis_total_area_ha", 0)
     if lpis_count:
@@ -1112,20 +1136,6 @@ def _build_grazing_summary_cards(grazing_dir: str) -> str:
             '<h4>LPIS Betesblock</h4>'
             f'<div class="value">{lpis_count} block</div>'
             f'<div class="detail">{area_ha:.0f} ha total areal</div>'
-            '</div>'
-        )
-
-    # Card 2: Dominant NMD class inside blocks
-    nmd_within = meta.get("nmd_within_lpis", {})
-    if nmd_within:
-        top_name = next(iter(nmd_within.keys()))
-        top = nmd_within[top_name]
-        top_frac = top.get("fraction", 0)
-        cards.append(
-            '<div class="summary-card">'
-            '<h4>NMD inom betesblock</h4>'
-            f'<div class="value">{top_frac*100:.0f}% {top_name}</div>'
-            f'<div class="detail">{len(nmd_within)} markklasser</div>'
             '</div>'
         )
 
@@ -1141,15 +1151,19 @@ def _build_grazing_summary_cards(grazing_dir: str) -> str:
             '</div>'
         )
 
-    # Card 4: Cloud fraction
-    cloud_frac = meta.get("cloud_fraction", 0)
-    cards.append(
-        '<div class="summary-card">'
-        '<h4>Molnt\u00e4cke</h4>'
-        f'<div class="value">{(1 - cloud_frac)*100:.1f}% klart</div>'
-        f'<div class="detail">{meta.get("date", "")}</div>'
-        '</div>'
-    )
+    # Card 4: Dominant NMD class inside blocks
+    nmd_within = meta.get("nmd_within_lpis", {})
+    if nmd_within:
+        top_name = next(iter(nmd_within.keys()))
+        top = nmd_within[top_name]
+        top_frac = top.get("fraction", 0)
+        cards.append(
+            '<div class="summary-card">'
+            '<h4>NMD inom betesblock</h4>'
+            f'<div class="value">{top_frac*100:.0f}% {top_name}</div>'
+            f'<div class="detail">{len(nmd_within)} markklasser</div>'
+            '</div>'
+        )
 
     if not cards:
         return ""
@@ -1354,8 +1368,8 @@ _MARINE_VIEWERS = [
 ]
 
 _GRAZING_VIEWERS = [
-    {"id": "g-rgb",  "title": "Sentinel-2 RGB", "key": "rgb", "legend": []},
-    {"id": "g-nmd",  "title": "NMD Marktäcke",  "key": "nmd", "legend": [
+    {"id": "g-rgb",  "title": "Sentinel-2<br>RGB", "key": "rgb", "legend": []},
+    {"id": "g-nmd",  "title": "NMD<br>Marktäcke",  "key": "nmd", "legend": [
         {"color": "#FFD700", "label": "Åkermark"},
         {"color": "#D2B48C", "label": "Öpp. mark veg."},
         {"color": "#50B43C", "label": "Ädellövskog"},  {"color": "#32CD32", "label": "Triviallöv"},
@@ -1366,24 +1380,26 @@ _GRAZING_VIEWERS = [
         {"color": "#FF0000", "label": "Bebyggelse"},
         {"color": "#0000FF", "label": "Vatten"},
     ]},
-    {"id": "g-lpis", "title": "LPIS Betesblock", "key": "lpis", "vector": True, "legend": [
-        {"color": "#E6119D", "label": "Betesblock (Jordbruksverket)"},
+    {"id": "g-lpis", "title": "LPIS<br>Betesblock", "key": "lpis", "vector": True, "legend": [
+        {"color": "#00BFFF", "label": "Aktiv betesmark"},
+        {"color": "#E6119D", "label": "Ingen aktivitet"},
+        {"color": "#aaaaaa", "label": "Ej analyserad"},
     ]},
-    {"id": "g-ndvi", "title": "NDVI (Vegetationsindex)", "key": "ndvi", "legend": [
+    {"id": "g-ndvi", "title": "NDVI<br>Vegetationsindex", "key": "ndvi", "legend": [
         {"color": "#a50026", "label": "-1.0"}, {"color": "#f46d43", "label": "-0.5"},
         {"color": "#fee08b", "label": "0.0"},  {"color": "#a6d96a", "label": "0.5"},
         {"color": "#006837", "label": "1.0"},
     ]},
-    {"id": "g-evi",  "title": "EVI (Förstärkt vegetationsindex)", "key": "evi", "legend": [
+    {"id": "g-evi",  "title": "EVI<br>Vegetationsindex", "key": "evi", "legend": [
         {"color": "#a50026", "label": "-0.5"}, {"color": "#fee08b", "label": "0.0"},
         {"color": "#a6d96a", "label": "0.5"},   {"color": "#006837", "label": "1.0"},
     ]},
-    {"id": "g-ndwi", "title": "NDWI (Vattenindex)", "key": "ndwi", "legend": [
+    {"id": "g-ndwi", "title": "NDWI<br>Vattenindex", "key": "ndwi", "legend": [
         {"color": "#67001f", "label": "-1.0"}, {"color": "#d6604d", "label": "-0.5"},
         {"color": "#f7f7f7", "label": "0.0"},  {"color": "#4393c3", "label": "0.5"},
         {"color": "#053061", "label": "1.0 Vatten"},
     ]},
-    {"id": "g-cot",  "title": "Molnoptisk tjocklek (COT)", "key": "cot", "legend": [
+    {"id": "g-cot",  "title": "COT<br>Molnoptisk tjocklek", "key": "cot", "legend": [
         {"color": "#FFFFB2", "label": "0 (Klart)"},
         {"color": "#FD8D3C", "label": "0.015 (Tunt moln)"},
         {"color": "#BD0026", "label": "0.05 (Tjockt moln)"},
@@ -1702,6 +1718,28 @@ _ANALYSIS_DESCRIPTIONS = {
             'arXiv:2510.14493</a></em>'
         ),
     },
+    "grazing_model": {
+        "title": "CNN-biLSTM betesklassificerare (pib-ml-grazing)",
+        "body": (
+            "F\u00f6r varje LPIS-betespolygon klassificeras den multitemporala "
+            "Sentinel-2-tidsserien som <em>aktiv betesmark</em> eller "
+            "<em>ingen aktivitet</em>. Modellen \u00e4r en CNN-biLSTM fr\u00e5n "
+            "RISE Research Institutes of Sweden: ett CNN-block (Conv2d \u2192 ReLU "
+            "\u2192 MaxPool2d) extraherar rumsliga features per tidssnitt, sedan "
+            "bearbetas tidsserien av en bidirektionell LSTM (hidden_dim=8). "
+            "F\u00f6r slutprediktionen tas medianen av de sista 4 tidsstegen, "
+            "vilket ger robust klassificering. Indata: 12 band \u00d7 46\u00d746 px "
+            "(center crop) \u00d7 T tidssteg. Modellen \u00e4r f\u00f6rtr\u00e4nad p\u00e5 "
+            "LPIS-polygoner i Sverige med data fr\u00e5n Jordbruksverket. "
+            "MIT-licens."
+        ),
+        "ref": (
+            '<em>Pirinen, A. et al., 2024. \u201cDetecting Grazing Activity '
+            'from Satellite Time Series Data.\u201d '
+            '<a href="https://github.com/aleksispi/pib-ml-grazing" target="_blank">'
+            'github.com/aleksispi/pib-ml-grazing</a> (MIT)</em>'
+        ),
+    },
 }
 
 # Which descriptions to show in each tab (in order) and which context to use
@@ -1715,7 +1753,7 @@ _MARINE_DESCRIPTION_IDS = [
 ]
 _GRAZING_DESCRIPTION_IDS = [
     "sentinel2_rgb", "lpis_betesmark", "ndvi", "ndwi",
-    "evi", "cot", "nmd", "grazing_pipeline",
+    "evi", "cot", "nmd", "grazing_pipeline", "grazing_model",
 ]
 
 
@@ -2934,10 +2972,24 @@ def save_tabbed_report(
                     if (v.key === 'rgb') {{
                         overlays[v.id] = bgLayers[v.id].rgb;
                     }} else if (v.vector && geojsonData) {{
-                        // Vector overlay (GeoJSON polygons)
-                        const vColor = (v.legend && v.legend[0]) ? v.legend[0].color : '#E6119D';
+                        // Vector overlay (GeoJSON polygons) — per-feature styling
                         const gjLayer = L.geoJSON(geojsonData, {{
-                            style: {{ color: vColor, weight: 2, fillOpacity: 0, opacity: 1 }},
+                            style: function(feature) {{
+                                const cls = feature.properties && feature.properties.predicted_class;
+                                let color = '#aaaaaa';
+                                if (cls === 1) color = '#00BFFF';
+                                else if (cls === 0) color = '#E6119D';
+                                return {{ color: color, weight: 2, fillOpacity: 0.15, opacity: 1 }};
+                            }},
+                            onEachFeature: function(feature, layer) {{
+                                const p = feature.properties || {{}};
+                                if (p.class_label) {{
+                                    layer.bindPopup(
+                                        '<b>Block ' + (p.blockid || '') + '</b><br>' +
+                                        p.class_label + ' (' + Math.round((p.confidence||0)*100) + '%)'
+                                    );
+                                }}
+                            }},
                             coordsToLatLng: function(coords) {{
                                 return L.latLng(coords[1], coords[0]);
                             }},
@@ -2956,9 +3008,23 @@ def save_tabbed_report(
                         if (images[rgbId2]) {{
                             L.imageOverlay(images[rgbId2], bounds, {{zIndex: 0}}).addTo(map);
                         }}
-                        const vColor2 = (v.legend && v.legend[0]) ? v.legend[0].color : '#E6119D';
                         const gjLayer = L.geoJSON(geojsonData, {{
-                            style: {{ color: vColor2, weight: 2, fillOpacity: 0, opacity: 1 }},
+                            style: function(feature) {{
+                                const cls = feature.properties && feature.properties.predicted_class;
+                                let color = '#aaaaaa';
+                                if (cls === 1) color = '#00BFFF';
+                                else if (cls === 0) color = '#E6119D';
+                                return {{ color: color, weight: 2, fillOpacity: 0.15, opacity: 1 }};
+                            }},
+                            onEachFeature: function(feature, layer) {{
+                                const p = feature.properties || {{}};
+                                if (p.class_label) {{
+                                    layer.bindPopup(
+                                        '<b>Block ' + (p.blockid || '') + '</b><br>' +
+                                        p.class_label + ' (' + Math.round((p.confidence||0)*100) + '%)'
+                                    );
+                                }}
+                            }},
                             coordsToLatLng: function(coords) {{
                                 return L.latLng(coords[1], coords[0]);
                             }},

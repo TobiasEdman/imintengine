@@ -1,5 +1,5 @@
 {
-  "date": "2024-05-13",
+  "date": "2025-06-14",
   "coords": {
     "west": 13.42,
     "south": 55.935,
@@ -10,104 +10,29 @@
     344,
     383
   ],
-  "cloud_fraction": 0.004462930353998421,
+  "cloud_fraction": 0.0,
   "lpis_count": 80,
-  "lpis_total_area_ha": 128.5,
-  "lpis_total_pixels": 12848,
-  "ndvi_mean_inside": 0.786,
-  "ndvi_std_inside": 0.076,
+  "lpis_total_area_ha": 123.7,
+  "ndvi_mean_inside": 0.8129,
+  "ndvi_std_inside": 0.0591,
   "nmd_within_lpis": {
-    "Öppen mark, vegetation": {
-      "code": 42,
-      "count": 9508,
-      "fraction": 0.74
-    },
-    "Ädellövskog": {
-      "code": 116,
-      "count": 1440,
-      "fraction": 0.1121
-    },
-    "Öppen våtmark": {
-      "code": 2,
-      "count": 824,
-      "fraction": 0.0641
-    },
-    "Triviallövskog": {
-      "code": 115,
-      "count": 561,
-      "fraction": 0.0437
-    },
-    "Hårdgjord yta": {
-      "code": 53,
-      "count": 165,
-      "fraction": 0.0128
+    "Våtmark": {
+      "fraction": 0.0659,
+      "pixel_count": 815
     },
     "Åkermark": {
-      "code": 3,
-      "count": 121,
-      "fraction": 0.0094
-    },
-    "Triviallöv (våtmark)": {
-      "code": 125,
-      "count": 109,
-      "fraction": 0.0085
-    },
-    "Barrblandskog": {
-      "code": 114,
-      "count": 53,
-      "fraction": 0.0041
-    },
-    "Tallskog": {
-      "code": 111,
-      "count": 36,
-      "fraction": 0.0028
-    },
-    "Barr/lövblandskog": {
-      "code": 118,
-      "count": 12,
-      "fraction": 0.0009
-    },
-    "Barrbland (våtmark)": {
-      "code": 124,
-      "count": 8,
-      "fraction": 0.0006
-    },
-    "Löv/ädellöv": {
-      "code": 117,
-      "count": 7,
-      "fraction": 0.0005
-    },
-    "Tallskog (våtmark)": {
-      "code": 121,
-      "count": 3,
-      "fraction": 0.0002
-    },
-    "Öppen mark, bar": {
-      "code": 41,
-      "count": 1,
-      "fraction": 0.0001
+      "fraction": 0.0098,
+      "pixel_count": 121
     }
   },
-  "nmd_l1_within_lpis": {
-    "Skog": {
-      "count": 2229,
-      "fraction": 0.1735
-    },
-    "Åkermark": {
-      "count": 121,
-      "fraction": 0.0094
-    },
-    "Öppen mark": {
-      "count": 9509,
-      "fraction": 0.7401
-    },
-    "Våtmark": {
-      "count": 944,
-      "fraction": 0.0735
-    },
-    "Bebyggelse": {
-      "count": 165,
-      "fraction": 0.0128
-    }
+  "grazing_predictions": {
+    "total_polygons": 80,
+    "active_grazing": 68,
+    "no_activity": 8,
+    "errors": 4,
+    "mean_confidence": 0.73,
+    "model": "pib-ml-grazing CNN-biLSTM (RISE, 2025)",
+    "year": 2025,
+    "num_dates": 19
   }
 }
