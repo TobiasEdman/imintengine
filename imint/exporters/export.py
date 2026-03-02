@@ -1265,14 +1265,16 @@ def save_lpis_overlay(
     fill_color: tuple = (0.0, 0.0, 0.0, 0.0),
     edge_color: tuple = (0.90, 0.07, 0.61),
     edge_width: int = 2,
+    predictions: dict | None = None,
 ) -> str:
     """Render LPIS pasture polygons on top of an RGB image.
 
     Burns polygon perimeters (and optional fills) onto the satellite image
     using rasterio rasterization.
 
-    Default style: magenta perimeter only (#E6119D) — colorblind-friendly
-    and high contrast against NMD greens.
+    When *predictions* is provided, each polygon is coloured by its
+    predicted class: green for active grazing, grey for no activity,
+    and magenta for polygons without a prediction.
 
     Args:
         rgb: (H, W, 3) float32 [0, 1] satellite image.
@@ -1280,14 +1282,23 @@ def save_lpis_overlay(
         geo: GeoContext with ``transform`` and ``shape``.
         path: Output PNG path.
         fill_color: RGBA fill colour for polygon interiors (default: no fill).
-        edge_color: RGB edge colour for polygon boundaries.
+        edge_color: RGB edge colour for polygon boundaries (used when
+            *predictions* is ``None``).
         edge_width: Boundary line width in pixels.
+        predictions: Optional dict mapping polygon_id (str) to a prediction
+            object with ``predicted_class`` attribute (1=active, 0=no activity).
 
     Returns:
         The output file path.
     """
     from rasterio.features import rasterize
     from shapely.geometry import mapping
+
+    _PRED_COLORS = {
+        1: (0.0, 0.75, 1.0),  # active grazing → cyan
+        0: (0.90, 0.07, 0.61),  # no activity → magenta
+    }
+    _DEFAULT_COLOR = (0.67, 0.67, 0.67)  # grey (not analyzed)
 
     h, w = rgb.shape[:2]
     transform = geo.transform
@@ -1299,49 +1310,18 @@ def save_lpis_overlay(
         print(f"    saved: {path} (no LPIS polygons)")
         return path
 
-    # Rasterize polygon fills
-    fill_mask = rasterize(
-        [(mapping(g), 1) for g in geoms],
-        out_shape=(h, w),
-        transform=transform,
-        fill=0,
-        dtype=np.uint8,
-    )
-
-    # Rasterize polygon boundaries (dilated - filled = edge ring)
-    if edge_width > 0:
-        buffered = [g.buffer(edge_width * 10) for g in geoms]  # ~10m per pixel
-        edge_outer = rasterize(
-            [(mapping(g), 1) for g in buffered],
-            out_shape=(h, w),
-            transform=transform,
-            fill=0,
-            dtype=np.uint8,
-        )
-        # Also erode to get inner ring
-        eroded = [g.buffer(-edge_width * 10) for g in geoms]
-        eroded = [g for g in eroded if not g.is_empty]
-        if eroded:
-            inner = rasterize(
-                [(mapping(g), 1) for g in eroded],
-                out_shape=(h, w),
-                transform=transform,
-                fill=0,
-                dtype=np.uint8,
-            )
-        else:
-            inner = np.zeros((h, w), dtype=np.uint8)
-        # Edge = (buffered OR original) minus eroded interior
-        edge_mask = ((edge_outer > 0) | (fill_mask > 0)) & (inner == 0)
-    else:
-        edge_mask = np.zeros((h, w), dtype=bool)
-
-    # Composite: RGB + fill + edge
     out = rgb.copy()
 
     # Apply fill (alpha blend) — skip if fully transparent
     alpha = fill_color[3] if len(fill_color) > 3 else 0.0
     if alpha > 0:
+        fill_mask = rasterize(
+            [(mapping(g), 1) for g in geoms],
+            out_shape=(h, w),
+            transform=transform,
+            fill=0,
+            dtype=np.uint8,
+        )
         for c in range(3):
             out[:, :, c] = np.where(
                 fill_mask > 0,
@@ -1349,9 +1329,54 @@ def save_lpis_overlay(
                 out[:, :, c],
             )
 
-    # Apply edge (solid)
-    for c in range(3):
-        out[:, :, c] = np.where(edge_mask, edge_color[c], out[:, :, c])
+    # Rasterize edges per polygon (or all at once if no predictions)
+    if edge_width > 0:
+        # Group polygons by edge colour
+        color_groups: dict[tuple, list] = {}
+        for i, (_, feat) in enumerate(lpis_gdf.iterrows()):
+            geom = feat.geometry
+            if geom is None or geom.is_empty:
+                continue
+            if predictions:
+                bid = str(feat.get("blockid", ""))
+                pred = predictions.get(bid)
+                cls = pred.predicted_class if pred else -1
+                colour = _PRED_COLORS.get(cls, _DEFAULT_COLOR)
+            else:
+                colour = edge_color
+            color_groups.setdefault(colour, []).append(geom)
+
+        for colour, group_geoms in color_groups.items():
+            buffered = [g.buffer(edge_width * 10) for g in group_geoms]
+            edge_outer = rasterize(
+                [(mapping(g), 1) for g in buffered],
+                out_shape=(h, w),
+                transform=transform,
+                fill=0,
+                dtype=np.uint8,
+            )
+            eroded = [g.buffer(-edge_width * 10) for g in group_geoms]
+            eroded = [g for g in eroded if not g.is_empty]
+            if eroded:
+                inner = rasterize(
+                    [(mapping(g), 1) for g in eroded],
+                    out_shape=(h, w),
+                    transform=transform,
+                    fill=0,
+                    dtype=np.uint8,
+                )
+            else:
+                inner = np.zeros((h, w), dtype=np.uint8)
+            fill_rast = rasterize(
+                [(mapping(g), 1) for g in group_geoms],
+                out_shape=(h, w),
+                transform=transform,
+                fill=0,
+                dtype=np.uint8,
+            )
+            edge_mask = ((edge_outer > 0) | (fill_rast > 0)) & (inner == 0)
+            for c in range(3):
+                out[:, :, c] = np.where(edge_mask, colour[c], out[:, :, c])
 
     img = (out * 255).clip(0, 255).astype(np.uint8)
     Image.fromarray(img).save(path)
@@ -1359,7 +1384,8 @@ def save_lpis_overlay(
     return path
 
 
-def save_lpis_geojson(lpis_gdf, geo, path: str, img_shape=None) -> str:
+def save_lpis_geojson(lpis_gdf, geo, path: str, img_shape=None,
+                      predictions: dict | None = None) -> str:
     """Convert LPIS polygons to pixel-coordinate GeoJSON for Leaflet CRS.Simple.
 
     Transforms polygon coordinates from their source CRS to pixel space
@@ -1378,6 +1404,9 @@ def save_lpis_geojson(lpis_gdf, geo, path: str, img_shape=None) -> str:
         path: Output GeoJSON file path.
         img_shape: ``(H, W)`` tuple.  Falls back to ``geo.shape`` if
             *None*.
+        predictions: Optional dict mapping polygon_id (str) to a
+            prediction object with ``predicted_class``, ``class_label``,
+            and ``confidence`` attributes.
 
     Returns:
         The output file path.
@@ -1424,6 +1453,15 @@ def save_lpis_geojson(lpis_gdf, geo, path: str, img_shape=None) -> str:
                 val = feat.get(col_name)
                 if val is not None:
                     props[col_name] = val if not hasattr(val, 'item') else val.item()
+
+        # Add grazing model predictions if available
+        if predictions:
+            bid = str(props.get("blockid", ""))
+            pred = predictions.get(bid)
+            if pred is not None:
+                props["predicted_class"] = pred.predicted_class
+                props["class_label"] = pred.class_label
+                props["confidence"] = round(pred.confidence, 3)
 
         features.append({
             "type": "Feature",

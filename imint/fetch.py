@@ -1952,14 +1952,24 @@ def fetch_grazing_timeseries(
             ))
             _cur = _c_end
 
-        # ── Fetch per chunk ──────────────────────────────────────────
+        # ── Fetch per chunk (parallel with 3 workers) ─────────────
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        _GRAZING_WORKERS = 3
+        _chunk_lock = threading.Lock()
         clean_dates: list[str] = []
         clean_cloud_fracs: list[float] = []
         clean_bands_stack: list[np.ndarray] = []
         clean_transforms: list = []
 
-        for c_start, c_end in _chunk_ranges:
-            print(f"  -- {c_start} to {c_end} --")
+        def _fetch_chunk(c_start_end):
+            c_start, c_end = c_start_end
+            chunk_dates = []
+            chunk_fracs = []
+            chunk_bands = []
+            chunk_tfs = []
+            print(f"  -- {c_start} to {c_end} --", flush=True)
             try:
                 # 10m bands
                 cube_10m = conn.load_collection(
@@ -2005,8 +2015,8 @@ def fetch_grazing_timeseries(
                 data = cube.download(format="gtiff")
 
                 if not data:
-                    print("    (no data)")
-                    continue
+                    print("    (no data)", flush=True)
+                    return
 
                 # Parse response — multi-date returns tar.gz
                 if isinstance(data, bytes) and data[:2] == b"\x1f\x8b":
@@ -2029,20 +2039,38 @@ def fetch_grazing_timeseries(
                         _process_grazing_tif(
                             f.read(), d_str, projected_bbox,
                             polygon_mask, cloud_threshold,
-                            clean_dates, clean_cloud_fracs,
-                            clean_bands_stack, clean_transforms,
+                            chunk_dates, chunk_fracs,
+                            chunk_bands, chunk_tfs,
                         )
                     tf.close()
                 elif isinstance(data, bytes):
                     _process_grazing_tif(
                         data, c_start, projected_bbox,
                         polygon_mask, cloud_threshold,
-                        clean_dates, clean_cloud_fracs,
-                        clean_bands_stack, clean_transforms,
+                        chunk_dates, chunk_fracs,
+                        chunk_bands, chunk_tfs,
                     )
             except Exception as e:
-                print(f"    Chunk {c_start}–{c_end} failed: {e}")
-                continue
+                print(f"    Chunk {c_start}–{c_end} failed: {e}",
+                      flush=True)
+                return
+
+            # Merge results into shared lists under lock
+            with _chunk_lock:
+                clean_dates.extend(chunk_dates)
+                clean_cloud_fracs.extend(chunk_fracs)
+                clean_bands_stack.extend(chunk_bands)
+                clean_transforms.extend(chunk_tfs)
+
+        print(f"  Fetching {len(_chunk_ranges)} chunks with "
+              f"{_GRAZING_WORKERS} workers ...", flush=True)
+        with ThreadPoolExecutor(max_workers=_GRAZING_WORKERS) as pool:
+            futures = {
+                pool.submit(_fetch_chunk, cr): cr
+                for cr in _chunk_ranges
+            }
+            for future in as_completed(futures):
+                future.result()  # Propagate exceptions
 
         # ── Co-registration ──────────────────────────────────────────
         # First cloud-free timestep is the reference; align all others.
