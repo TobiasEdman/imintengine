@@ -11,6 +11,8 @@ data/
 *.pt
 *.pth
 *.ckpt
+*.tar.gz
+*.npz
 
 # Baselines (large numpy files)
 **/baselines/
