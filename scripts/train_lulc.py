@@ -33,48 +33,58 @@ def main():
         description="Train Prithvi LULC segmentation model",
     )
 
+    # Use TrainingConfig defaults for all values
+    _defaults = TrainingConfig()
+
     # Data
     parser.add_argument(
-        "--data-dir", type=str, default="data/lulc_training",
-        help="Directory with training tiles (default: data/lulc_training)",
+        "--data-dir", type=str, default=_defaults.data_dir,
+        help="Directory with training tiles",
     )
     parser.add_argument(
-        "--num-classes", type=int, default=19,
+        "--num-classes", type=int, default=_defaults.num_classes,
         help="Number of classes: 19 (full NMD L2) or 10 (grouped)",
     )
 
     # Training
-    parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--weight-decay", type=float, default=0.01)
-    parser.add_argument("--patience", type=int, default=5,
-                        help="Early stopping patience (default: 5)")
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--epochs", type=int, default=_defaults.epochs)
+    parser.add_argument("--batch-size", type=int, default=_defaults.batch_size)
+    parser.add_argument("--lr", type=float, default=_defaults.lr)
+    parser.add_argument("--weight-decay", type=float, default=_defaults.weight_decay)
+    parser.add_argument("--patience", type=int, default=_defaults.early_stopping_patience,
+                        help="Early stopping patience")
+    parser.add_argument("--num-workers", type=int, default=_defaults.num_workers)
 
     # Model
-    parser.add_argument("--decoder-channels", type=int, default=256)
-    parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--device", type=str, default=None,
+    parser.add_argument("--decoder-channels", type=int, default=_defaults.decoder_channels)
+    parser.add_argument("--dropout", type=float, default=_defaults.dropout)
+    parser.add_argument("--device", type=str, default=_defaults.device,
                         help="Device: cuda, mps, cpu (default: auto)")
+    parser.add_argument("--unfreeze-layers", type=int,
+                        default=_defaults.unfreeze_backbone_layers,
+                        help="Unfreeze last N backbone transformer blocks")
+    parser.add_argument("--backbone-lr-factor", type=float,
+                        default=_defaults.backbone_lr_factor,
+                        help="Backbone LR = lr * this factor")
 
     # Checkpoint
     parser.add_argument("--checkpoint-dir", type=str,
-                        default="checkpoints/lulc")
-    parser.add_argument("--save-every", type=int, default=5,
+                        default=_defaults.checkpoint_dir)
+    parser.add_argument("--save-every", type=int, default=_defaults.save_every_n_epochs,
                         help="Save checkpoint every N epochs")
 
     # Loss
-    parser.add_argument("--loss-type", type=str, default="cross_entropy",
+    parser.add_argument("--loss-type", type=str, default=_defaults.loss_type,
                         choices=["cross_entropy", "focal"],
-                        help="Loss function (default: cross_entropy)")
-    parser.add_argument("--focal-gamma", type=float, default=2.0,
-                        help="Focal loss gamma (default: 2.0)")
+                        help="Loss function")
+    parser.add_argument("--focal-gamma", type=float, default=_defaults.focal_gamma,
+                        help="Focal loss gamma")
 
     # Early stopping metric
-    parser.add_argument("--early-stop-metric", type=str, default="miou",
+    parser.add_argument("--early-stop-metric", type=str,
+                        default=_defaults.early_stop_metric,
                         choices=["miou", "worst_class_iou", "combined"],
-                        help="Metric for early stopping (default: miou)")
+                        help="Metric for early stopping")
 
     # Dashboard
     parser.add_argument("--dashboard", action="store_true",
@@ -126,6 +136,7 @@ def main():
     config = TrainingConfig(
         data_dir=args.data_dir,
         num_classes=args.num_classes,
+        use_grouped_classes=(args.num_classes < 19),
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
@@ -140,6 +151,8 @@ def main():
         loss_type=args.loss_type,
         focal_gamma=args.focal_gamma,
         early_stop_metric=args.early_stop_metric,
+        unfreeze_backbone_layers=args.unfreeze_layers,
+        backbone_lr_factor=args.backbone_lr_factor,
     )
 
     # Load datasets

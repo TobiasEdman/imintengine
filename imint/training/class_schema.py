@@ -56,43 +56,44 @@ for code, idx in _NMD_CODE_TO_19.items():
     _LUT_19[code] = idx
 
 
-# ── 10-class schema (grouped) ────────────────────────────────────────────
+# ── 10-class schema (grouped — pine/spruce kept separate) ────────────────
 
 LULC_CLASS_NAMES_10 = {
     0: "background",
-    1: "forest_conifer",
-    2: "forest_deciduous",
-    3: "forest_mixed",
-    4: "forest_wetland",
-    5: "open_wetland",
-    6: "cropland",
-    7: "open_land",
-    8: "developed",
-    9: "water",
+    1: "forest_pine",
+    2: "forest_spruce",
+    3: "forest_deciduous",
+    4: "forest_mixed",
+    5: "forest_wetland",
+    6: "open_wetland",
+    7: "cropland",
+    8: "open_land",
+    9: "developed",
+    10: "water",
 }
 
 # Map 19-class indices to 10-class indices
 _MAP_19_TO_10 = {
-    0: 0,   # background
-    1: 1,   # forest_pine → forest_conifer
-    2: 1,   # forest_spruce → forest_conifer
-    3: 2,   # forest_deciduous
-    4: 3,   # forest_mixed
-    5: 3,   # forest_temp_non_forest → forest_mixed
-    6: 4,   # forest_wetland_pine → forest_wetland
-    7: 4,   # forest_wetland_spruce → forest_wetland
-    8: 4,   # forest_wetland_deciduous → forest_wetland
-    9: 4,   # forest_wetland_mixed → forest_wetland
-    10: 4,  # forest_wetland_temp → forest_wetland
-    11: 5,  # open_wetland
-    12: 6,  # cropland
-    13: 7,  # open_land_bare → open_land
-    14: 7,  # open_land_vegetated → open_land
-    15: 8,  # developed_buildings → developed
-    16: 8,  # developed_infrastructure → developed
-    17: 8,  # developed_roads → developed
-    18: 9,  # water_lakes → water
-    19: 9,  # water_sea → water
+    0: 0,    # background
+    1: 1,    # forest_pine
+    2: 2,    # forest_spruce
+    3: 3,    # forest_deciduous
+    4: 4,    # forest_mixed
+    5: 4,    # forest_temp_non_forest → forest_mixed
+    6: 5,    # forest_wetland_pine → forest_wetland
+    7: 5,    # forest_wetland_spruce → forest_wetland
+    8: 5,    # forest_wetland_deciduous → forest_wetland
+    9: 5,    # forest_wetland_mixed → forest_wetland
+    10: 5,   # forest_wetland_temp → forest_wetland
+    11: 6,   # open_wetland
+    12: 7,   # cropland
+    13: 8,   # open_land_bare → open_land
+    14: 8,   # open_land_vegetated → open_land
+    15: 9,   # developed_buildings → developed
+    16: 9,   # developed_infrastructure → developed
+    17: 9,   # developed_roads → developed
+    18: 10,  # water_lakes → water
+    19: 10,  # water_sea → water
 }
 
 _LUT_19_TO_10 = np.zeros(20, dtype=np.uint8)
@@ -125,7 +126,9 @@ def get_class_names(num_classes: int = 19) -> dict[int, str]:
     """Return class name mapping for the given schema."""
     if num_classes == 19:
         return LULC_CLASS_NAMES_19
-    return LULC_CLASS_NAMES_10
+    if num_classes == 10:
+        return LULC_CLASS_NAMES_10
+    return LULC_CLASS_NAMES_19
 
 
 def compute_class_weights(

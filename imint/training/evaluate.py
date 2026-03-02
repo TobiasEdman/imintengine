@@ -107,6 +107,9 @@ def evaluate_model(
 
     n_samples = len(dataset) if max_samples is None else min(max_samples, len(dataset))
 
+    # Ordered aux channel names (must match trainer._collect_aux order)
+    _AUX_NAMES = ("height", "volume", "basal_area", "diameter", "dem")
+
     for i in range(n_samples):
         sample = dataset[i]
         image = sample["image"].unsqueeze(0).to(device)  # (1, 6, H, W)
@@ -114,7 +117,15 @@ def evaluate_model(
 
         # Add temporal dimension: (1, 6, H, W) → (1, 6, 1, H, W)
         image_5d = image.unsqueeze(2)
-        logits = model(image_5d).contiguous()  # (1, C, H, W)
+
+        # Collect auxiliary channels if present
+        aux_parts = []
+        for name in _AUX_NAMES:
+            if name in sample:
+                aux_parts.append(sample[name].unsqueeze(0).to(device))
+        aux = torch.cat(aux_parts, dim=1) if aux_parts else None
+
+        logits = model(image_5d, aux=aux).contiguous()  # (1, C, H, W)
         pred = logits.argmax(dim=1).squeeze(0).cpu().numpy()  # (H, W)
 
         all_preds.append(pred)

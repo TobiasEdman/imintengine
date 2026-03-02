@@ -66,6 +66,35 @@ class LULCTrainer:
             return torch.device("mps")
         return torch.device("cpu")
 
+    def _count_aux_channels(self) -> int:
+        """Count how many auxiliary raster channels are enabled."""
+        return sum([
+            self.config.enable_height_channel,
+            self.config.enable_volume_channel,
+            self.config.enable_basal_area_channel,
+            self.config.enable_diameter_channel,
+            self.config.enable_dem_channel,
+        ])
+
+    @staticmethod
+    def _collect_aux(
+        batch: dict,
+        device: "torch.device",
+    ) -> "torch.Tensor | None":
+        """Stack enabled aux channels from a batch dict → (B, N, H, W).
+
+        Channels are always collected in a fixed order
+        (height, volume, basal_area, diameter) regardless of which
+        subset is enabled, ensuring consistent channel indexing.
+        """
+        parts: list["torch.Tensor"] = []
+        for name in ("height", "volume", "basal_area", "diameter", "dem"):
+            if name in batch:
+                parts.append(batch[name].to(device))  # (B, 1, H, W)
+        if not parts:
+            return None
+        return torch.cat(parts, dim=1)  # (B, N, H, W)
+
     def _build_model(self):
         """Build PrithviSegmentationModel using existing infrastructure."""
         from ..fm.terratorch_loader import _load_prithvi_from_hf
@@ -74,26 +103,50 @@ class LULCTrainer:
         print(f"  Loading Prithvi backbone ({self.config.backbone})...")
         backbone = _load_prithvi_from_hf(pretrained=True)
 
+        n_aux = self._count_aux_channels()
+
         model = PrithviSegmentationModel(
             encoder=backbone,
             feature_indices=self.config.feature_indices,
             decoder_channels=self.config.decoder_channels,
             num_classes=self.config.num_classes + 1,  # +1 for background at 0
             dropout=self.config.dropout,
+            n_aux_channels=n_aux,
         )
+        aux_str = f", aux={n_aux} channels" if n_aux else ""
         print(f"  Model built: {self.config.num_classes + 1} classes, "
-              f"decoder={self.config.decoder_type}")
+              f"decoder={self.config.decoder_type}{aux_str}")
         return model
 
     def _freeze_backbone(self) -> None:
-        """Freeze all encoder parameters."""
-        frozen = 0
+        """Freeze encoder, then selectively unfreeze last N transformer blocks."""
+        # First freeze everything in encoder
         for param in self.model.encoder.parameters():
             param.requires_grad = False
-            frozen += param.numel()
 
-        trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        print(f"  Frozen: {frozen:,} params | Trainable: {trainable:,} params")
+        # Unfreeze last N blocks + final norm
+        n_unfreeze = self.config.unfreeze_backbone_layers
+        if n_unfreeze > 0 and hasattr(self.model.encoder, "blocks"):
+            total_blocks = len(self.model.encoder.blocks)
+            start_idx = total_blocks - n_unfreeze
+            for i in range(start_idx, total_blocks):
+                for param in self.model.encoder.blocks[i].parameters():
+                    param.requires_grad = True
+            # Also unfreeze final layernorm
+            if hasattr(self.model.encoder, "norm"):
+                for param in self.model.encoder.norm.parameters():
+                    param.requires_grad = True
+            print(f"  Unfreezing encoder blocks {start_idx}-{total_blocks-1} "
+                  f"+ norm (lr_factor={self.config.backbone_lr_factor})")
+
+        frozen = sum(p.numel() for p in self.model.encoder.parameters()
+                     if not p.requires_grad)
+        trainable_enc = sum(p.numel() for p in self.model.encoder.parameters()
+                           if p.requires_grad)
+        trainable_dec = sum(p.numel() for p in self.model.parameters()
+                           if p.requires_grad) - trainable_enc
+        print(f"  Frozen: {frozen:,} | Trainable encoder: {trainable_enc:,} "
+              f"| Trainable decoder: {trainable_dec:,}")
 
     # ── Training ──────────────────────────────────────────────────────
 
@@ -120,7 +173,18 @@ class LULCTrainer:
         if stats_path.exists():
             with open(stats_path) as f:
                 stats = json.load(f)
-            class_counts = {int(k): v for k, v in stats.get("class_counts", {}).items()}
+            class_counts_19 = {int(k): v for k, v in stats.get("class_counts", {}).items()}
+
+            # If using grouped classes, aggregate 19-class counts to grouped schema
+            if cfg.use_grouped_classes:
+                from .class_schema import _MAP_19_TO_10
+                class_counts = {}
+                for idx_19, count in class_counts_19.items():
+                    idx_grouped = _MAP_19_TO_10.get(idx_19, 0)
+                    class_counts[idx_grouped] = class_counts.get(idx_grouped, 0) + count
+            else:
+                class_counts = class_counts_19
+
             weights = compute_class_weights(
                 class_counts,
                 num_classes=cfg.num_classes,
@@ -149,10 +213,32 @@ class LULCTrainer:
             )
             print(f"  Loss: CrossEntropy")
 
-        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        # Differential learning rate: backbone gets lower LR
+        backbone_params = []
+        decoder_params = []
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if name.startswith("encoder."):
+                backbone_params.append(param)
+            else:
+                decoder_params.append(param)
+
+        param_groups = [
+            {"params": decoder_params, "lr": cfg.lr},
+        ]
+        if backbone_params:
+            param_groups.append({
+                "params": backbone_params,
+                "lr": cfg.lr * cfg.backbone_lr_factor,
+            })
+            print(f"  Optimizer: decoder_lr={cfg.lr}, "
+                  f"backbone_lr={cfg.lr * cfg.backbone_lr_factor}")
+        else:
+            print(f"  Optimizer: lr={cfg.lr}")
+
         optimizer = torch.optim.AdamW(
-            trainable_params,
-            lr=cfg.lr,
+            param_groups,
             weight_decay=cfg.weight_decay,
         )
 
@@ -188,6 +274,7 @@ class LULCTrainer:
         best_miou = 0.0
         best_epoch = 0
         patience_counter = 0
+        train_loss_history = []       # Track recent train losses for convergence
         step = 0
         start_epoch = 1
 
@@ -215,6 +302,7 @@ class LULCTrainer:
             best_miou = state["best_miou"]
             best_epoch = state["best_epoch"]
             patience_counter = state["patience_counter"]
+            train_loss_history = state.get("train_loss_history", [])
         else:
             self._init_training_log()
 
@@ -235,6 +323,9 @@ class LULCTrainer:
                 # Add temporal dim: (B, 6, H, W) → (B, 6, 1, H, W)
                 images_5d = images.unsqueeze(2)
 
+                # Collect auxiliary channels (height/volume/etc.)
+                aux = self._collect_aux(batch, self.device)
+
                 # Warmup: linear LR ramp
                 if step < warmup_steps:
                     lr_scale = (step + 1) / warmup_steps
@@ -242,7 +333,7 @@ class LULCTrainer:
                         pg["lr"] = cfg.lr * lr_scale
 
                 optimizer.zero_grad()
-                logits = self.model(images_5d).contiguous()  # (B, C, H, W)
+                logits = self.model(images_5d, aux=aux).contiguous()
                 loss = criterion(logits, labels)
                 loss.backward()
                 optimizer.step()
@@ -345,11 +436,25 @@ class LULCTrainer:
                 best_miou=best_miou,
                 best_epoch=best_epoch,
                 patience_counter=patience_counter,
+                train_loss_history=train_loss_history,
             )
 
-            # Early stopping
-            if patience_counter >= cfg.early_stopping_patience:
-                print(f"\n  Early stopping at epoch {epoch} "
+            # Track train loss convergence
+            train_loss_history.append(avg_loss)
+
+            # Early stopping: val metric patience OR train loss converged
+            val_stop = patience_counter >= cfg.early_stopping_patience
+            train_stop = False
+            if len(train_loss_history) >= cfg.train_loss_patience:
+                recent = train_loss_history[-cfg.train_loss_patience:]
+                loss_delta = max(recent) - min(recent)
+                if loss_delta < cfg.train_loss_min_delta:
+                    train_stop = True
+
+            if val_stop or train_stop:
+                reason = ("train loss converged" if train_stop
+                          else "val metric plateau")
+                print(f"\n  Early stopping at epoch {epoch}: {reason} "
                       f"(best={best_epoch}, mIoU={best_miou:.4f})")
                 self._training_log["status"] = "stopped"
                 self._write_log_file()
@@ -466,6 +571,7 @@ class LULCTrainer:
         best_miou: float,
         best_epoch: int,
         patience_counter: int,
+        train_loss_history: list[float] | None = None,
     ) -> None:
         """Save full training state for resumption after interruption."""
         checkpoint = {
@@ -479,6 +585,7 @@ class LULCTrainer:
             "best_epoch": best_epoch,
             "patience_counter": patience_counter,
             "training_log": self._training_log,
+            "train_loss_history": train_loss_history or [],
         }
         tmp = path.with_suffix(".pt.tmp")
         torch.save(checkpoint, tmp)
@@ -512,6 +619,7 @@ class LULCTrainer:
             "best_miou": ckpt["best_miou"],
             "best_epoch": ckpt["best_epoch"],
             "patience_counter": ckpt["patience_counter"],
+            "train_loss_history": ckpt.get("train_loss_history", []),
         }
 
     def _save_checkpoint(
@@ -540,6 +648,7 @@ class LULCTrainer:
                 "decoder_channels": self.config.decoder_channels,
                 "feature_indices": self.config.feature_indices,
                 "dropout": self.config.dropout,
+                "n_aux_channels": self._count_aux_channels(),
             },
         }
         torch.save(checkpoint, path)

@@ -5,10 +5,25 @@ scripts/prepare_lulc_data.py — Fetch and cache LULC training data
 Generates a geographic grid across Sweden, fetches Sentinel-2 + NMD
 tile pairs from DES, and saves them as .npz files ready for training.
 
+Supports two modes:
+  * Single-date (default): One best cloud-free growing season image per tile.
+  * Multitemporal (--multitemporal): T seasonal frames per tile for
+    phenological time-series classification with Prithvi-EO-2.0.
+
 Usage:
     python scripts/prepare_lulc_data.py
     python scripts/prepare_lulc_data.py --grid-spacing 50000   # Small test (~50 tiles)
     python scripts/prepare_lulc_data.py --data-dir /path/to/data --years 2017 2018
+
+    # Multitemporal: 4 seasonal frames (spring/summer/autumn/winter)
+    python scripts/prepare_lulc_data.py --multitemporal --data-dir data/lulc_mt
+
+    # Custom seasonal windows (3 frames, growing season only)
+    python scripts/prepare_lulc_data.py --multitemporal --num-frames 3 \\
+        --seasonal-windows 5-5 7-7 9-9
+
+    # With Skogsstyrelsen tree height as extra channel
+    python scripts/prepare_lulc_data.py --enable-height
 """
 from __future__ import annotations
 
@@ -86,9 +101,66 @@ def main():
         help="Grid spacing in sumpskog regions in meters (default: 10000)",
     )
 
+    # ── Multitemporal / seasonal flags ─────────────────────────────────
+    parser.add_argument(
+        "--multitemporal", action="store_true",
+        help="Enable multitemporal fetching (4 seasonal frames per tile)",
+    )
+    parser.add_argument(
+        "--num-frames", type=int, default=4,
+        help="Number of temporal frames (default: 4, max for Prithvi)",
+    )
+    parser.add_argument(
+        "--seasonal-windows", nargs="+", default=None,
+        help="Seasonal windows as M1-M2 pairs, e.g. '4-5 6-7 8-9 1-2' "
+             "(default: spring/summer/autumn/winter)",
+    )
+    parser.add_argument(
+        "--seasonal-cloud-threshold", type=float, default=0.10,
+        help="Cloud threshold for seasonal images (default: 0.10)",
+    )
+    parser.add_argument(
+        "--require-all-seasons", action="store_true",
+        help="Require all seasonal frames (skip tiles with missing seasons)",
+    )
+
+    # ── Auxiliary raster channels ─────────────────────────────────────
+    parser.add_argument(
+        "--enable-height", action="store_true",
+        help="Fetch Skogsstyrelsen tree height as extra channel per tile",
+    )
+    parser.add_argument(
+        "--enable-volume", action="store_true",
+        help="Fetch Skogliga grunddata timber volume (m³sk/ha) per tile",
+    )
+    parser.add_argument(
+        "--enable-basal-area", action="store_true",
+        help="Fetch Skogliga grunddata basal area / grundyta (m²/ha) per tile",
+    )
+    parser.add_argument(
+        "--enable-diameter", action="store_true",
+        help="Fetch Skogliga grunddata mean diameter / medeldiameter (cm) per tile",
+    )
+    parser.add_argument(
+        "--enable-dem", action="store_true",
+        help="Fetch Copernicus DEM GLO-30 terrain elevation (meters) per tile",
+    )
+
     args = parser.parse_args()
 
-    config = TrainingConfig(
+    # Parse seasonal windows from CLI (e.g. "4-5 6-7 8-9 1-2")
+    seasonal_windows = None
+    if args.seasonal_windows:
+        seasonal_windows = []
+        for w in args.seasonal_windows:
+            parts = w.split("-")
+            if len(parts) == 2:
+                seasonal_windows.append((int(parts[0]), int(parts[1])))
+            else:
+                parser.error(f"Invalid seasonal window '{w}', use M1-M2 format")
+
+    # Build config kwargs
+    config_kwargs = dict(
         data_dir=args.data_dir,
         grid_spacing_m=args.grid_spacing,
         years=args.years,
@@ -103,7 +175,22 @@ def main():
         enable_sumpskog_densification=args.enable_sumpskog_densification,
         sumpskog_min_density_pct=args.sumpskog_min_density,
         sumpskog_densify_spacing_m=args.sumpskog_densify_spacing,
+        # Multitemporal
+        enable_multitemporal=args.multitemporal,
+        num_temporal_frames=args.num_frames,
+        seasonal_cloud_threshold=args.seasonal_cloud_threshold,
+        seasonal_require_all=args.require_all_seasons,
+        # Auxiliary channels
+        enable_height_channel=args.enable_height,
+        enable_volume_channel=args.enable_volume,
+        enable_basal_area_channel=args.enable_basal_area,
+        enable_diameter_channel=args.enable_diameter,
+        enable_dem_channel=args.enable_dem,
     )
+    if seasonal_windows is not None:
+        config_kwargs["seasonal_windows"] = seasonal_windows
+
+    config = TrainingConfig(**config_kwargs)
 
     prepare_training_data(config)
 

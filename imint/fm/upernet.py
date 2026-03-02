@@ -156,6 +156,29 @@ class TerraTorchUperNetDecoder(nn.Module):
         return self.fpn_bottleneck(torch.cat(resized, dim=1))
 
 
+class AuxEncoder(nn.Module):
+    """Lightweight CNN encoder for auxiliary raster channels.
+
+    Processes (B, N, H, W) auxiliary channels (e.g. tree height, timber
+    volume, basal area, DEM) into (B, out_ch, H, W) feature maps at full
+    input resolution.  Used for late fusion with the decoder output.
+
+    Two 3×3 conv layers with BatchNorm and ReLU provide enough capacity
+    to transform heterogeneous forestry variables into a shared feature
+    space, without over-parameterising for only 1–5 input channels.
+    """
+
+    def __init__(self, in_channels: int, out_channels: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(
+            ConvBnRelu(in_channels, out_channels, kernel=3, padding=1),
+            ConvBnRelu(out_channels, out_channels, kernel=3, padding=1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
 class SegmentationHead(nn.Module):
     """Segmentation classification head matching TerraTorch layout.
 
@@ -206,9 +229,11 @@ class PrithviSegmentationModel(nn.Module):
         decoder_channels: int = 256,
         num_classes: int = 2,
         dropout: float = 0.1,
+        n_aux_channels: int = 0,
     ):
         super().__init__()
         self.feature_indices = list(feature_indices)
+        self.n_aux_channels = n_aux_channels
 
         # Get the ViT encoder from PrithviMAE if needed
         if hasattr(encoder, "encoder"):
@@ -285,6 +310,17 @@ class PrithviSegmentationModel(nn.Module):
         # Segmentation head
         self.head = SegmentationHead(decoder_channels, num_classes, dropout)
 
+        # Late fusion: auxiliary raster channels (height, volume, etc.)
+        if n_aux_channels > 0:
+            self.aux_encoder = AuxEncoder(n_aux_channels, out_channels=64)
+            self.aux_fusion = ConvBnRelu(
+                decoder_channels + 64, decoder_channels,
+                kernel=1, padding=0,
+            )
+        else:
+            self.aux_encoder = None
+            self.aux_fusion = None
+
     def _extract_multi_scale_features(self, x: torch.Tensor) -> list[torch.Tensor]:
         """Extract and rescale features from selected transformer blocks.
 
@@ -357,11 +393,19 @@ class PrithviSegmentationModel(nn.Module):
 
         return self.decoder.fpn_bottleneck(torch.cat(resized, dim=1))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        aux: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Full forward pass: encoder → scale → UperNet → head.
 
         Args:
             x: (B, C, H, W) or (B, C, T, H, W) input tensor.
+            aux: Optional (B, N, H, W) auxiliary raster channels
+                (e.g. height, volume, basal area).  If provided and
+                ``n_aux_channels > 0``, features are fused with the
+                decoder output at full resolution before the head.
 
         Returns:
             (B, num_classes, H, W) logits at input resolution.
@@ -373,15 +417,27 @@ class PrithviSegmentationModel(nn.Module):
 
         features = self._extract_multi_scale_features(x)
         decoded = self._decode(features)
-        logits = self.head(decoded)
 
-        # Upsample to input resolution
+        # Late fusion: aux channels processed at full resolution
+        if self.aux_encoder is not None and aux is not None:
+            # Upsample decoder output to input resolution for fusion
+            decoded = F.interpolate(
+                decoded, size=(input_h, input_w),
+                mode="bilinear", align_corners=True,
+            ).contiguous()
+            aux_feat = self.aux_encoder(aux)   # (B, 64, H, W)
+            decoded = self.aux_fusion(
+                torch.cat([decoded, aux_feat], dim=1))  # (B, 256, H, W)
+            logits = self.head(decoded)
+            return logits
+
+        # Standard path (no aux or aux not provided)
+        logits = self.head(decoded)
         if logits.shape[2:] != (input_h, input_w):
             logits = F.interpolate(
                 logits, size=(input_h, input_w),
                 mode="bilinear", align_corners=True,
             )
-
         return logits
 
 

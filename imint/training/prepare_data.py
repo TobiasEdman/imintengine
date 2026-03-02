@@ -49,6 +49,9 @@ from .sampler import (
 )
 from .scb_tatort import generate_scb_densification_regions
 from .skg_sumpskog import generate_sumpskog_densification_regions
+from .skg_height import fetch_height_tile
+from .skg_grunddata import fetch_volume_tile, fetch_basal_area_tile, fetch_diameter_tile
+from .copernicus_dem import fetch_dem_tile
 
 # Sentinel value to signal that the NMD producer is done
 _NMD_DONE = None
@@ -199,6 +202,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
         fetch_des_data, fetch_nmd_data,
         _connect, _stac_available_dates, _fetch_scl, _fetch_scl_batch,
         _to_nmd_grid, FetchError,
+        fetch_seasonal_dates, fetch_seasonal_image,
     )
 
     data_dir = Path(config.data_dir)
@@ -210,7 +214,26 @@ def prepare_training_data(config: TrainingConfig) -> None:
     print(f"  LULC Training Data Preparation")
     print(f"  Grid spacing: {config.grid_spacing_m}m")
     print(f"  Years: {config.years}")
-    print(f"  Growing season: months {config.growing_season[0]}-{config.growing_season[1]}")
+    if config.enable_multitemporal:
+        print(f"  Mode: MULTITEMPORAL ({config.num_temporal_frames} frames)")
+        for i, (ms, me) in enumerate(config.seasonal_windows[:config.num_temporal_frames]):
+            print(f"    Frame {i}: months {ms}-{me}")
+    else:
+        print(f"  Mode: Single-date (growing season months "
+              f"{config.growing_season[0]}-{config.growing_season[1]})")
+    _aux = []
+    if config.enable_height_channel:
+        _aux.append("height")
+    if config.enable_volume_channel:
+        _aux.append("volume")
+    if config.enable_basal_area_channel:
+        _aux.append("basal_area")
+    if config.enable_diameter_channel:
+        _aux.append("diameter")
+    if config.enable_dem_channel:
+        _aux.append("dem")
+    if _aux:
+        print(f"  Aux channels: {', '.join(_aux)}")
     print(f"{'='*60}")
 
     patch_size_m = config.fetch_pixels * 10  # 10m resolution
@@ -803,9 +826,8 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         num_classes=config.num_classes,
                     )
 
-                    # Save tile
-                    np.savez_compressed(
-                        tiles_dir / tile_name,
+                    # ── Optional: height channel ──────────────────────
+                    save_kwargs = dict(
                         image=image,
                         label=labels,
                         easting=cell.easting,
@@ -813,6 +835,75 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         date=good_date,
                         lat=cell.center_lat,
                         lon=cell.center_lon,
+                    )
+                    _spatial = (image.shape[-2], image.shape[-1])
+                    _aux_cache = (lambda sub: cache_dir / sub
+                                  if config.aux_cache_enabled
+                                  else None)
+                    if config.enable_height_channel:
+                        try:
+                            height = fetch_height_tile(
+                                cell.west_3006, cell.south_3006,
+                                cell.east_3006, cell.north_3006,
+                                size_px=_spatial,
+                                cache_dir=_aux_cache("height"),
+                            )
+                            save_kwargs["height"] = height
+                        except Exception as e:
+                            print(f"    height {cell_key}: "
+                                  f"{type(e).__name__}: {e}")
+                    if config.enable_volume_channel:
+                        try:
+                            volume = fetch_volume_tile(
+                                cell.west_3006, cell.south_3006,
+                                cell.east_3006, cell.north_3006,
+                                size_px=_spatial,
+                                cache_dir=_aux_cache("volume"),
+                            )
+                            save_kwargs["volume"] = volume
+                        except Exception as e:
+                            print(f"    volume {cell_key}: "
+                                  f"{type(e).__name__}: {e}")
+                    if config.enable_basal_area_channel:
+                        try:
+                            basal_area = fetch_basal_area_tile(
+                                cell.west_3006, cell.south_3006,
+                                cell.east_3006, cell.north_3006,
+                                size_px=_spatial,
+                                cache_dir=_aux_cache("basal_area"),
+                            )
+                            save_kwargs["basal_area"] = basal_area
+                        except Exception as e:
+                            print(f"    basal_area {cell_key}: "
+                                  f"{type(e).__name__}: {e}")
+                    if config.enable_diameter_channel:
+                        try:
+                            diameter = fetch_diameter_tile(
+                                cell.west_3006, cell.south_3006,
+                                cell.east_3006, cell.north_3006,
+                                size_px=_spatial,
+                                cache_dir=_aux_cache("diameter"),
+                            )
+                            save_kwargs["diameter"] = diameter
+                        except Exception as e:
+                            print(f"    diameter {cell_key}: "
+                                  f"{type(e).__name__}: {e}")
+                    if config.enable_dem_channel:
+                        try:
+                            dem = fetch_dem_tile(
+                                cell.west_3006, cell.south_3006,
+                                cell.east_3006, cell.north_3006,
+                                size_px=_spatial,
+                                cache_dir=_aux_cache("dem"),
+                            )
+                            save_kwargs["dem"] = dem
+                        except Exception as e:
+                            print(f"    dem {cell_key}: "
+                                  f"{type(e).__name__}: {e}")
+
+                    # Save tile
+                    np.savez_compressed(
+                        tiles_dir / tile_name, **save_kwargs,
                     )
 
                     # Compute class histogram
@@ -901,6 +992,415 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     prep_log["updated_at"] = datetime.now(timezone.utc).isoformat()
                     _write_prepare_log(prep_log_path, prep_log)
 
+    # ── Multitemporal spectral fetch worker ─────────────────────────
+    def _fetch_worker_multitemporal():
+        """Fetch T seasonal frames per cell and save as multitemporal tile.
+
+        For each cell:
+        1. Query STAC for each seasonal window across all years
+        2. SCL pre-screen the best candidate per window
+        3. Full spectral fetch for each passing date
+        4. Stack into (T*6, H, W) and save .npz with dates array
+
+        Falls back gracefully: if a season has no clear image,
+        that frame is filled with zeros and flagged in the mask.
+        """
+        n_frames = config.num_temporal_frames
+        windows = config.seasonal_windows[:n_frames]
+        prithvi_bands = config.prithvi_bands
+        n_bands = len(prithvi_bands)
+
+        while True:
+            item = approved_q.get()
+            if item is _NMD_DONE:
+                break
+
+            split_name, cell, cell_key = item
+            coords = {
+                "west": cell.west_wgs84, "east": cell.east_wgs84,
+                "south": cell.south_wgs84, "north": cell.north_wgs84,
+            }
+            tile_name = f"tile_{cell_key}.npz"
+            success = False
+
+            # Deterministic year rotation per cell
+            cell_hash = int(hashlib.md5(cell_key.encode()).hexdigest(), 16)
+            years_offset = cell_hash % len(config.years)
+            years_order = config.years[years_offset:] + config.years[:years_offset]
+
+            try:
+                projected = _to_nmd_grid(coords)
+
+                # ── Phase 1: STAC discovery per season ──────────────────
+                season_candidates = fetch_seasonal_dates(
+                    coords, windows, years_order,
+                    scene_cloud_max=50.0,
+                )
+
+                # ── Phase 2: SCL pre-screen + spectral fetch per season ─
+                frames = []       # list of (6, H, W) arrays
+                frame_dates = []  # list of date strings
+                frame_mask = []   # 1 = valid, 0 = padded
+
+                for win_idx, (m_start, m_end) in enumerate(windows):
+                    candidates = season_candidates[win_idx]
+                    win_label = f"m{m_start}-{m_end}"
+
+                    if not candidates:
+                        print(f"    {cell_key} {win_label}: no STAC candidates")
+                        frames.append(None)
+                        frame_dates.append("")
+                        frame_mask.append(0)
+                        continue
+
+                    # Try top candidates with SCL pre-screening
+                    frame_image = None
+                    frame_date = None
+                    top_cands = candidates[:_SCL_CANDIDATES]
+                    cand_strs = [d for d, _ in top_cands]
+
+                    # Batch SCL pre-screen
+                    good_date = None
+                    if len(cand_strs) > 1:
+                        pool.acquire()
+                        t0 = time.monotonic()
+                        batch_err = False
+                        try:
+                            batch_results = _fetch_scl_batch(
+                                conn, projected, cand_strs,
+                            )
+                            for cand_date, aoi_cloud in batch_results:
+                                if aoi_cloud <= config.seasonal_cloud_threshold:
+                                    good_date = cand_date
+                                    break
+                        except Exception:
+                            batch_err = True
+                        finally:
+                            pool.record(time.monotonic() - t0, batch_err)
+                            pool.release()
+                        time.sleep(0.5)
+
+                    # Per-date fallback
+                    if good_date is None:
+                        from datetime import timedelta as _td
+                        for cand_date, _ in top_cands:
+                            try:
+                                cand_dt = datetime.strptime(cand_date, "%Y-%m-%d")
+                                temporal = [
+                                    cand_date,
+                                    (cand_dt + _td(days=1)).strftime("%Y-%m-%d"),
+                                ]
+                                pool.acquire()
+                                t0 = time.monotonic()
+                                scl_err = False
+                                try:
+                                    _scl, aoi_cloud, _crs, _tr = _fetch_scl(
+                                        conn, projected, temporal, date_window=0,
+                                    )
+                                except Exception:
+                                    scl_err = True
+                                    raise
+                                finally:
+                                    pool.record(time.monotonic() - t0, scl_err)
+                                    pool.release()
+                                time.sleep(0.5)
+
+                                if aoi_cloud <= config.seasonal_cloud_threshold:
+                                    good_date = cand_date
+                                    break
+                            except Exception:
+                                time.sleep(1)
+
+                    if good_date is None:
+                        print(f"    {cell_key} {win_label}: "
+                              f"no clear date (tried {len(cand_strs)})")
+                        frames.append(None)
+                        frame_dates.append("")
+                        frame_mask.append(0)
+                        continue
+
+                    # Full spectral fetch using existing pipeline
+                    # (includes grid snapping + sub-pixel correction)
+                    pool.acquire()
+                    t0_spec = time.monotonic()
+                    spec_err = False
+                    try:
+                        img_result = fetch_seasonal_image(
+                            good_date, coords, prithvi_bands,
+                        )
+                    except Exception:
+                        spec_err = True
+                        img_result = None
+                    finally:
+                        spec_lat = time.monotonic() - t0_spec
+                        pool.record(spec_lat, spec_err)
+                        pool.release()
+                        _record_des_call(
+                            des_stats, "full_spectral",
+                            cell_key=cell_key, date=good_date,
+                            latency_s=spec_lat, band_count=n_bands,
+                            success=img_result is not None,
+                        )
+                    time.sleep(1)
+
+                    if img_result is not None:
+                        frame_img, frame_dt = img_result
+
+                        # Quality gates
+                        nodata_frac = float((frame_img[0] == 0).mean())
+                        if nodata_frac > 0.10:
+                            print(f"    {cell_key} {win_label} {good_date}: "
+                                  f"nodata={nodata_frac:.0%}, skip")
+                            frames.append(None)
+                            frame_dates.append("")
+                            frame_mask.append(0)
+                            continue
+
+                        b02_idx = prithvi_bands.index("B02") \
+                            if "B02" in prithvi_bands else 0
+                        b02_mean = float(frame_img[b02_idx].mean())
+                        if b02_mean > config.b02_haze_threshold:
+                            print(f"    {cell_key} {win_label} {good_date}: "
+                                  f"haze B02={b02_mean:.4f}, skip")
+                            frames.append(None)
+                            frame_dates.append("")
+                            frame_mask.append(0)
+                            continue
+
+                        frames.append(frame_img)
+                        frame_dates.append(frame_dt)
+                        frame_mask.append(1)
+                        print(f"    {cell_key} {win_label}: {frame_dt} ✓")
+                    else:
+                        frames.append(None)
+                        frame_dates.append("")
+                        frame_mask.append(0)
+
+                # ── Check minimum frames ────────────────────────────────
+                n_valid = sum(frame_mask)
+                if config.seasonal_require_all and n_valid < n_frames:
+                    with lock:
+                        n_done = len(completed) + len(failed)
+                    print(f"    ✗ [{n_done}/{total_cells}] {cell_key}: "
+                          f"only {n_valid}/{n_frames} seasonal frames")
+                    continue
+                if n_valid == 0:
+                    with lock:
+                        n_done = len(completed) + len(failed)
+                    print(f"    ✗ [{n_done}/{total_cells}] {cell_key}: "
+                          f"no valid frames")
+                    continue
+
+                # ── Stack frames into (T*6, H, W) ──────────────────────
+                # Use the shape from the first valid frame
+                ref_shape = None
+                for f in frames:
+                    if f is not None:
+                        ref_shape = f.shape[1:]  # (H, W)
+                        break
+
+                stacked_frames = []
+                for f in frames:
+                    if f is not None:
+                        # Ensure consistent shape (may differ by ±1 pixel)
+                        if f.shape[1:] != ref_shape:
+                            padded = np.zeros(
+                                (n_bands, ref_shape[0], ref_shape[1]),
+                                dtype=np.float32,
+                            )
+                            h = min(f.shape[1], ref_shape[0])
+                            w = min(f.shape[2], ref_shape[1])
+                            padded[:, :h, :w] = f[:, :h, :w]
+                            stacked_frames.append(padded)
+                        else:
+                            stacked_frames.append(f)
+                    else:
+                        # Zero-padded frame for missing season
+                        stacked_frames.append(
+                            np.zeros((n_bands,) + ref_shape, dtype=np.float32)
+                        )
+
+                # (T*6, H, W) — interleaved: [t0_b02, t0_b03, ..., t1_b02, ...]
+                image = np.concatenate(stacked_frames, axis=0)
+
+                # ── Fetch NMD labels (same as single-date) ──────────────
+                nmd_result = fetch_nmd_data(
+                    coords=coords,
+                    target_shape=ref_shape,
+                )
+                labels = nmd_raster_to_lulc(
+                    nmd_result.nmd_raster,
+                    num_classes=config.num_classes,
+                )
+
+                # ── Compute day-of-year for temporal position encoding ──
+                doy_values = []
+                for d_str in frame_dates:
+                    if d_str:
+                        dt = datetime.strptime(d_str, "%Y-%m-%d")
+                        doy_values.append(dt.timetuple().tm_yday)
+                    else:
+                        doy_values.append(0)
+
+                # ── Save tile ───────────────────────────────────────────
+                save_kwargs = dict(
+                    image=image,                         # (T*6, H, W)
+                    label=labels,                        # (H, W)
+                    easting=cell.easting,
+                    northing=cell.northing,
+                    dates=np.array(frame_dates),          # (T,) strings
+                    doy=np.array(doy_values, dtype=np.int32),  # (T,)
+                    temporal_mask=np.array(frame_mask, dtype=np.uint8),
+                    num_frames=n_frames,
+                    num_bands=n_bands,
+                    lat=cell.center_lat,
+                    lon=cell.center_lon,
+                    multitemporal=True,
+                )
+                _spatial = (ref_shape[0], ref_shape[1])
+                _aux_cache = (lambda sub: cache_dir / sub
+                              if config.aux_cache_enabled
+                              else None)
+                if config.enable_height_channel:
+                    try:
+                        height = fetch_height_tile(
+                            cell.west_3006, cell.south_3006,
+                            cell.east_3006, cell.north_3006,
+                            size_px=_spatial,
+                            cache_dir=_aux_cache("height"),
+                        )
+                        save_kwargs["height"] = height
+                    except Exception as e:
+                        print(f"    height {cell_key}: "
+                              f"{type(e).__name__}: {e}")
+                if config.enable_volume_channel:
+                    try:
+                        volume = fetch_volume_tile(
+                            cell.west_3006, cell.south_3006,
+                            cell.east_3006, cell.north_3006,
+                            size_px=_spatial,
+                            cache_dir=_aux_cache("volume"),
+                        )
+                        save_kwargs["volume"] = volume
+                    except Exception as e:
+                        print(f"    volume {cell_key}: "
+                              f"{type(e).__name__}: {e}")
+                if config.enable_basal_area_channel:
+                    try:
+                        basal_area = fetch_basal_area_tile(
+                            cell.west_3006, cell.south_3006,
+                            cell.east_3006, cell.north_3006,
+                            size_px=_spatial,
+                            cache_dir=_aux_cache("basal_area"),
+                        )
+                        save_kwargs["basal_area"] = basal_area
+                    except Exception as e:
+                        print(f"    basal_area {cell_key}: "
+                              f"{type(e).__name__}: {e}")
+                if config.enable_diameter_channel:
+                    try:
+                        diameter = fetch_diameter_tile(
+                            cell.west_3006, cell.south_3006,
+                            cell.east_3006, cell.north_3006,
+                            size_px=_spatial,
+                            cache_dir=_aux_cache("diameter"),
+                        )
+                        save_kwargs["diameter"] = diameter
+                    except Exception as e:
+                        print(f"    diameter {cell_key}: "
+                              f"{type(e).__name__}: {e}")
+                if config.enable_dem_channel:
+                    try:
+                        dem = fetch_dem_tile(
+                            cell.west_3006, cell.south_3006,
+                            cell.east_3006, cell.north_3006,
+                            size_px=_spatial,
+                            cache_dir=_aux_cache("dem"),
+                        )
+                        save_kwargs["dem"] = dem
+                    except Exception as e:
+                        print(f"    dem {cell_key}: "
+                              f"{type(e).__name__}: {e}")
+
+                np.savez_compressed(
+                    tiles_dir / tile_name, **save_kwargs,
+                )
+
+                # Compute class histogram
+                tile_hist = {}
+                for cls_idx in range(config.num_classes + 1):
+                    count = int((labels == cls_idx).sum())
+                    if count > 0:
+                        tile_hist[cls_idx] = count
+
+                # Update shared state
+                primary_date = next(
+                    (d for d in frame_dates if d), "unknown"
+                )
+                with lock:
+                    for cls_idx, count in tile_hist.items():
+                        class_counts[cls_idx] = class_counts.get(cls_idx, 0) + count
+                    tile_histograms[tile_name] = tile_hist
+                    tile_names_by_split[split_name].append(tile_name)
+                    completed.add(cell_key)
+                    tile_idx_box[0] += 1
+                    cur_idx = tile_idx_box[0]
+
+                    prep_log["completed"] = len(completed)
+                    prep_log["failed"] = len(failed)
+                    prep_log["tiles_saved"] = cur_idx
+                    prep_log["latest_tile"] = tile_name
+                    prep_log["latest_date"] = primary_date
+                    prep_log["class_counts"] = {
+                        str(k): v for k, v in class_counts.items()
+                    }
+                    prep_log["elapsed_s"] = round(
+                        prev_elapsed + time.time() - t_start, 1)
+                    now = time.time()
+                    _tile_timestamps.append(now)
+                    cutoff = now - 300
+                    while _tile_timestamps and _tile_timestamps[0] < cutoff:
+                        _tile_timestamps.popleft()
+                    window = (now - _tile_timestamps[0]
+                              if len(_tile_timestamps) > 1
+                              else (now - t_start))
+                    n_in_window = len(_tile_timestamps)
+                    prep_log["session_rate"] = round(
+                        n_in_window / max(window, 1) * 3600, 1)
+                    prep_log["active_workers"] = pool.active
+                    prep_log["updated_at"] = datetime.now(
+                        timezone.utc).isoformat()
+                    _write_prepare_log(prep_log_path, prep_log)
+
+                    if cur_idx % 50 == 0:
+                        _save_progress(progress_path, completed, failed)
+
+                rate = prep_log.get("session_rate", 0)
+                frames_str = "/".join(
+                    f"{'✓' if m else '✗'}" for m in frame_mask
+                )
+                print(f"    ✓ [{cur_idx}/{total_cells}] {tile_name} "
+                      f"[{frames_str}] {n_valid}/{n_frames} frames "
+                      f"[{rate:.0f}/h, {pool.active}w]")
+                success = True
+
+            except Exception as e:
+                err_msg = str(e)
+                if len(err_msg) > 80:
+                    err_msg = err_msg[:77] + "..."
+                print(f"    {cell_key}: {type(e).__name__}: {err_msg}")
+                time.sleep(3)
+
+            if not success:
+                with lock:
+                    failed.add(cell_key)
+                    prep_log["failed"] = len(failed)
+                    prep_log["elapsed_s"] = round(
+                        prev_elapsed + time.time() - t_start, 1)
+                    prep_log["updated_at"] = datetime.now(
+                        timezone.utc).isoformat()
+                    _write_prepare_log(prep_log_path, prep_log)
+
     # ── System metrics background thread ─────────────────────────────
     _metrics_stop = threading.Event()
 
@@ -952,9 +1452,12 @@ def prepare_training_data(config: TrainingConfig) -> None:
 
     # Spawn MAX threads — the adaptive semaphore controls how many
     # are actually active at any time.
+    worker_fn = (_fetch_worker_multitemporal
+                 if config.enable_multitemporal
+                 else _fetch_worker)
     fetch_threads = []
     for _ in range(_MAX_WORKERS):
-        t = threading.Thread(target=_fetch_worker, daemon=True)
+        t = threading.Thread(target=worker_fn, daemon=True)
         t.start()
         fetch_threads.append(t)
 
