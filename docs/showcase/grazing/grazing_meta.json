@@ -1,0 +1,38 @@
+{
+  "date": "2025-06-14",
+  "coords": {
+    "west": 13.42,
+    "south": 55.935,
+    "east": 13.48,
+    "north": 55.965
+  },
+  "shape": [
+    344,
+    383
+  ],
+  "cloud_fraction": 0.0,
+  "lpis_count": 80,
+  "lpis_total_area_ha": 123.7,
+  "ndvi_mean_inside": 0.8129,
+  "ndvi_std_inside": 0.0591,
+  "nmd_within_lpis": {
+    "Våtmark": {
+      "fraction": 0.0659,
+      "pixel_count": 815
+    },
+    "Åkermark": {
+      "fraction": 0.0098,
+      "pixel_count": 121
+    }
+  },
+  "grazing_predictions": {
+    "total_polygons": 80,
+    "active_grazing": 68,
+    "no_activity": 8,
+    "errors": 4,
+    "mean_confidence": 0.73,
+    "model": "pib-ml-grazing CNN-biLSTM (RISE, 2025)",
+    "year": 2025,
+    "num_dates": 19
+  }
+}
