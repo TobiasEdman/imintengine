@@ -1857,7 +1857,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
                     </div>
                 </div>
                 <div id="k-shore" class="map-container"></div>
-                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#fde724"></span>Strandlinje (2025)</span></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#ffffff"></span>Strandlinje (2025)</span></div>
             </div>
             <div class="map-cell" data-panel-id="k-change">
                 <div class="map-cell-header">
@@ -1874,7 +1874,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
                     </div>
                 </div>
                 <div id="k-change" class="map-container"></div>
-                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#440154"></span>2018</span><span class="legend-item"><span class="legend-swatch" style="background:#46317e"></span>2019</span><span class="legend-item"><span class="legend-swatch" style="background:#365b8c"></span>2020</span><span class="legend-item"><span class="legend-swatch" style="background:#277e8e"></span>2021</span><span class="legend-item"><span class="legend-swatch" style="background:#1fa187"></span>2022</span><span class="legend-item"><span class="legend-swatch" style="background:#49c16d"></span>2023</span><span class="legend-item"><span class="legend-swatch" style="background:#9fd938"></span>2024</span><span class="legend-item"><span class="legend-swatch" style="background:#fde724"></span>2025</span></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#e6194b"></span>2018</span><span class="legend-item"><span class="legend-swatch" style="background:#f58231"></span>2019</span><span class="legend-item"><span class="legend-swatch" style="background:#ffe119"></span>2020</span><span class="legend-item"><span class="legend-swatch" style="background:#3cb44b"></span>2021</span><span class="legend-item"><span class="legend-swatch" style="background:#42d4f4"></span>2022</span><span class="legend-item"><span class="legend-swatch" style="background:#4363d8"></span>2023</span><span class="legend-item"><span class="legend-swatch" style="background:#f032e6"></span>2024</span><span class="legend-item"><span class="legend-swatch" style="background:#ffffff"></span>2025</span></div>
             </div>
             <div class="map-cell" data-panel-id="k-cot">
                 <div class="map-cell-header">
@@ -2471,10 +2471,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
                                 // Coastline: year-based viridis color (colorblind-safe)
                                 if (p.year !== undefined) {
                                     if (isOverlay) {
-                                        return { color: '#fde724', weight: 2.5, opacity: 0.9, fill: false };
+                                        return { color: '#ffffff', weight: 2.5, opacity: 0.9, fill: false };
                                     }
-                                    var viridis = {'2018':'#440154','2019':'#46317e','2020':'#365b8c','2021':'#277e8e','2022':'#1fa187','2023':'#49c16d','2024':'#9fd938','2025':'#fde724'};
-                                    var c = viridis[p.year] || '#fde724';
+                                    var viridis = {'2018':'#e6194b','2019':'#f58231','2020':'#ffe119','2021':'#3cb44b','2022':'#42d4f4','2023':'#4363d8','2024':'#f032e6','2025':'#ffffff'};
+                                    var c = viridis[p.year] || '#ffffff';
                                     return { color: c, weight: 2.5, opacity: 0.85, fill: false };
                                 }
                                 // LPIS: predicted_class based
@@ -2527,10 +2527,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
                                 // Coastline: year-based viridis color (colorblind-safe)
                                 if (p.year !== undefined) {
                                     if (isOverlay) {
-                                        return { color: '#fde724', weight: 2.5, opacity: 0.9, fill: false };
+                                        return { color: '#ffffff', weight: 2.5, opacity: 0.9, fill: false };
                                     }
-                                    var viridis = {'2018':'#440154','2019':'#46317e','2020':'#365b8c','2021':'#277e8e','2022':'#1fa187','2023':'#49c16d','2024':'#9fd938','2025':'#fde724'};
-                                    var c = viridis[p.year] || '#fde724';
+                                    var viridis = {'2018':'#e6194b','2019':'#f58231','2020':'#ffe119','2021':'#3cb44b','2022':'#42d4f4','2023':'#4363d8','2024':'#f032e6','2025':'#ffffff'};
+                                    var c = viridis[p.year] || '#ffffff';
                                     return { color: c, weight: 2.5, opacity: 0.85, fill: false };
                                 }
                                 // LPIS: predicted_class based
@@ -2683,7 +2683,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
             {"id": "k-ndwi", "key": "ndwi", "vector": false, "legend": [{"color": "#67001f", "label": "-1.0"}, {"color": "#d6604d", "label": "-0.5"}, {"color": "#f7f7f7", "label": "0.0"}, {"color": "#4393c3", "label": "0.5"}, {"color": "#053061", "label": "1.0 Vatten"}]},
             {"id": "k-seg", "key": "coastline", "vector": false, "legend": [{"color": "#1565C0", "label": "Vatten"}, {"color": "#64B5F6", "label": "Grunt vatten"}, {"color": "#D4A76A", "label": "Sediment"}, {"color": "#4CAF50", "label": "Land"}]},
             {"id": "k-shore", "key": "shoreline_overlay", "vector": true, "legend": [{"color": "#FF5722", "label": "Strandlinje"}]},
-            {"id": "k-change", "key": "shoreline_change", "vector": true, "legend": [{"color": "#440154", "label": "2018"}, {"color": "#46317e", "label": "2019"}, {"color": "#365b8c", "label": "2020"}, {"color": "#277e8e", "label": "2021"}, {"color": "#1fa187", "label": "2022"}, {"color": "#49c16d", "label": "2023"}, {"color": "#9fd938", "label": "2024"}, {"color": "#fde724", "label": "2025"}]},
+            {"id": "k-change", "key": "shoreline_change", "vector": true, "legend": [{"color": "#e6194b", "label": "2018"}, {"color": "#f58231", "label": "2019"}, {"color": "#ffe119", "label": "2020"}, {"color": "#3cb44b", "label": "2021"}, {"color": "#42d4f4", "label": "2022"}, {"color": "#4363d8", "label": "2023"}, {"color": "#f032e6", "label": "2024"}, {"color": "#ffffff", "label": "2025"}]},
             {"id": "k-cot", "key": "cot", "vector": false, "legend": [{"color": "#FFFFB2", "label": "0 (Klart)"}, {"color": "#FD8D3C", "label": "0.015 (Tunt moln)"}, {"color": "#BD0026", "label": "0.05 (Tjockt moln)"}]}
         ];
         const KUSTLINJE_IMAGES = {
