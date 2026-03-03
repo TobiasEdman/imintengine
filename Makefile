@@ -14,10 +14,11 @@
         bench-batch bench-batch-cdse bench-batch-quick \
         docker-seasonal docker-seasonal-des docker-analysis \
         colony-up colony-down colony-logs colony-status colony-submit \
-        submit-dry submit-live status clean help
+        colony-monitor submit-dry submit-live status clean help
 
-PYTHON := .venv/bin/python
-IMAGE  := imint-engine:latest
+PYTHON   := .venv/bin/python
+IMAGE    := imint-engine:latest
+DATA_DIR ?= ~/training_data
 
 # ── Docker ────────────────────────────────────────────────────────────────
 
@@ -103,6 +104,9 @@ colony-status:  ## Check ColonyOS is running (colony + executor)
 
 colony-submit:  ## Submit a single test job to ColonyOS
 	colonies function submit --spec config/seasonal_fetch_job.json
+
+colony-monitor:  ## Monitor seasonal fetch progress (writes dashboard JSON)
+	$(PYTHON) scripts/monitor_seasonal_jobs.py --data-dir $(DATA_DIR) --interval 15
 
 # ── ColonyOS job submission ───────────────────────────────────────────────
 

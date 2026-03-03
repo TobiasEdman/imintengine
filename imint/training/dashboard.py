@@ -299,6 +299,39 @@ body {{
   .chart-grid {{ grid-template-columns: 1fr; }}
   .cards {{ grid-template-columns: repeat(2, 1fr); }}
 }}
+.sf-source-grid {{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 8px;
+}}
+.sf-source-box {{
+  background: #0d1117;
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid #1e293b;
+}}
+.sf-source-title {{
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}}
+.sf-source-stat {{
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 3px 0;
+  border-bottom: 1px solid #1e293b20;
+}}
+.sf-stat-label {{
+  color: #6b7280;
+}}
+.sf-source-stat span:last-child {{
+  color: #e2e8f0;
+  font-weight: 600;
+}}
 </style>
 </head>
 <body>
@@ -346,6 +379,73 @@ body {{
         <div class="card-label">Failed</div>
         <div class="card-value" id="nmd-failed" style="color: #ef4444">-</div>
         <div class="card-sub">NMD fetch error</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Seasonal Fetch (ColonyOS) Section -->
+  <div class="section" id="section-seasonal">
+    <div class="section-header">
+      <div class="section-title">Seasonal Fetch (ColonyOS)</div>
+      <span class="section-badge pending" id="sf-badge">pending</span>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Progress</div>
+        <div class="card-value" id="sf-progress-text">-</div>
+        <div class="progress-bar-outer">
+          <div class="progress-bar-inner" id="sf-progress" style="width: 0%"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-label">Completed</div>
+        <div class="card-value" id="sf-completed" style="color: #22c55e">-</div>
+        <div class="card-sub">tiles saved</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Running</div>
+        <div class="card-value" id="sf-running" style="color: #60a5fa">-</div>
+        <div class="card-sub">active jobs</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Failed</div>
+        <div class="card-value" id="sf-failed" style="color: #ef4444">-</div>
+        <div class="card-sub" id="sf-failed-sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Rate</div>
+        <div class="card-value" id="sf-rate">-</div>
+        <div class="card-sub">tiles / hour</div>
+      </div>
+      <div class="card">
+        <div class="card-label">ETA</div>
+        <div class="card-value" id="sf-eta">-</div>
+        <div class="card-sub" id="sf-elapsed"></div>
+      </div>
+    </div>
+    <div class="chart-grid">
+      <div class="chart-box">
+        <h3>CDSE vs DES &mdash; Completed &amp; Failed</h3>
+        <canvas id="chart-sf-comparison"></canvas>
+      </div>
+      <div class="chart-box">
+        <h3>Source Performance</h3>
+        <div class="sf-source-grid">
+          <div class="sf-source-box">
+            <div class="sf-source-title" style="color:#3b82f6">CDSE (Copernicus)</div>
+            <div class="sf-source-stat"><span class="sf-stat-label">Completed</span> <span id="sf-cdse-done">-</span></div>
+            <div class="sf-source-stat"><span class="sf-stat-label">Failed</span> <span id="sf-cdse-fail">-</span></div>
+            <div class="sf-source-stat"><span class="sf-stat-label">Avg time</span> <span id="sf-cdse-avg">-</span></div>
+            <div class="sf-source-stat"><span class="sf-stat-label">Success rate</span> <span id="sf-cdse-rate">-</span></div>
+          </div>
+          <div class="sf-source-box">
+            <div class="sf-source-title" style="color:#f59e0b">DES</div>
+            <div class="sf-source-stat"><span class="sf-stat-label">Completed</span> <span id="sf-des-done">-</span></div>
+            <div class="sf-source-stat"><span class="sf-stat-label">Failed</span> <span id="sf-des-fail">-</span></div>
+            <div class="sf-source-stat"><span class="sf-stat-label">Avg time</span> <span id="sf-des-avg">-</span></div>
+            <div class="sf-source-stat"><span class="sf-stat-label">Success rate</span> <span id="sf-des-rate">-</span></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -576,7 +676,7 @@ Chart.defaults.borderColor = '#1e293b';
 Chart.defaults.font.family = "'SF Mono', 'Cascadia Code', monospace";
 Chart.defaults.font.size = 11;
 
-let lossChart, miouChart, perClassChart, worstChart, classDistChart, classDistDetailChart, evalPerClassChart;
+let lossChart, miouChart, perClassChart, worstChart, classDistChart, classDistDetailChart, evalPerClassChart, sfCompChart;
 let _classViewDetailed = false;
 
 function toggleClassView() {{
@@ -764,6 +864,27 @@ function initCharts() {{
       }}
     }}
   }});
+
+  sfCompChart = new Chart(document.getElementById('chart-sf-comparison'), {{
+    type: 'bar',
+    data: {{
+      labels: ['Completed', 'Failed', 'Running'],
+      datasets: [
+        {{ label: 'CDSE', data: [0, 0, 0], backgroundColor: '#3b82f6', borderRadius: 4 }},
+        {{ label: 'DES', data: [0, 0, 0], backgroundColor: '#f59e0b', borderRadius: 4 }},
+      ]
+    }},
+    options: {{
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {{
+        legend: {{ display: true, position: 'top', labels: {{ color: '#e2e8f0', padding: 12 }} }}
+      }},
+      scales: {{
+        y: {{ beginAtZero: true, ticks: {{ precision: 0 }} }}
+      }}
+    }}
+  }});
 }}
 
 // ── NMD Pre-filter ──────────────────────────────────────────────
@@ -794,6 +915,80 @@ function updateNmdPrefilter(nmdLog) {{
   }} else if (nmdLog.status === 'running') {{
     nmdBadge.className = 'section-badge active';
     nmdBadge.textContent = 'running';
+  }}
+}}
+
+// ── Seasonal Fetch (ColonyOS) ────────────────────────────────────
+function updateSeasonalFetch(sf) {{
+  const badge = document.getElementById('sf-badge');
+  if (!sf) return;
+
+  // Badge
+  if (sf.status === 'completed') {{
+    badge.className = 'section-badge done';
+    badge.textContent = 'done';
+  }} else if (sf.status === 'running') {{
+    badge.className = 'section-badge active';
+    badge.textContent = 'running';
+  }} else {{
+    badge.className = 'section-badge pending';
+    badge.textContent = sf.status || 'waiting';
+  }}
+
+  // Cards
+  const total = sf.total_tiles || 0;
+  const done = sf.completed || 0;
+  const fail = sf.failed || 0;
+  const run = sf.running || 0;
+  const processed = done + fail + run;
+
+  document.getElementById('sf-progress-text').textContent =
+    total > 0 ? done + '/' + total : '-';
+  document.getElementById('sf-completed').textContent = done;
+  document.getElementById('sf-running').textContent = run;
+  document.getElementById('sf-failed').textContent = fail;
+  document.getElementById('sf-rate').textContent =
+    sf.rate_tiles_per_hour ? sf.rate_tiles_per_hour.toFixed(0) : '-';
+  document.getElementById('sf-eta').textContent = fmtTime(sf.eta_s);
+  document.getElementById('sf-elapsed').textContent =
+    sf.elapsed_s ? fmtTime(sf.elapsed_s) + ' elapsed' : '';
+
+  if (total > 0) {{
+    const pct = Math.round(done / total * 100);
+    document.getElementById('sf-progress').style.width = pct + '%';
+  }}
+
+  if (fail > 0) {{
+    document.getElementById('sf-failed-sub').textContent = 'fetch errors';
+  }}
+
+  // Per-source stats
+  const cdse = (sf.sources || {{}}).copernicus || {{}};
+  const des = (sf.sources || {{}}).des || {{}};
+
+  document.getElementById('sf-cdse-done').textContent = cdse.completed || 0;
+  document.getElementById('sf-cdse-fail').textContent = cdse.failed || 0;
+  document.getElementById('sf-cdse-avg').textContent =
+    cdse.avg_time_s ? cdse.avg_time_s.toFixed(0) + 's' : '-';
+  document.getElementById('sf-cdse-rate').textContent =
+    cdse.success_rate != null ? (cdse.success_rate * 100).toFixed(1) + '%' : '-';
+
+  document.getElementById('sf-des-done').textContent = des.completed || 0;
+  document.getElementById('sf-des-fail').textContent = des.failed || 0;
+  document.getElementById('sf-des-avg').textContent =
+    des.avg_time_s ? des.avg_time_s.toFixed(0) + 's' : '-';
+  document.getElementById('sf-des-rate').textContent =
+    des.success_rate != null ? (des.success_rate * 100).toFixed(1) + '%' : '-';
+
+  // Comparison bar chart
+  if (sfCompChart) {{
+    sfCompChart.data.datasets[0].data = [
+      cdse.completed || 0, cdse.failed || 0, cdse.running || 0
+    ];
+    sfCompChart.data.datasets[1].data = [
+      des.completed || 0, des.failed || 0, des.running || 0
+    ];
+    sfCompChart.update('none');
   }}
 }}
 
@@ -1136,13 +1331,14 @@ function updateSystemMetrics(m) {{
 }}
 
 async function refresh() {{
-  const [nmdLog, prepLog, trainLog, stats, sysMetrics, evalTest] = await Promise.all([
+  const [nmdLog, prepLog, trainLog, stats, sysMetrics, evalTest, sfLog] = await Promise.all([
     fetchJSON('nmd_prefilter_log.json'),
     fetchJSON('prepare_log.json'),
     fetchJSON('training_log.json'),
     fetchJSON('class_stats.json'),
     fetchJSON('system_metrics.json'),
     fetchJSON('eval_test.json'),
+    fetchJSON('seasonal_fetch_log.json'),
   ]);
 
   // Keep last good data so UI stays populated after disconnect
@@ -1151,15 +1347,18 @@ async function refresh() {{
   if (trainLog) _lastGoodData.trainLog = trainLog;
   if (stats) _lastGoodData.stats = stats;
   if (evalTest) _lastGoodData.evalTest = evalTest;
+  if (sfLog) _lastGoodData.sfLog = sfLog;
 
   const n = nmdLog || _lastGoodData.nmdLog;
   const p = prepLog || _lastGoodData.prepLog;
   const t = trainLog || _lastGoodData.trainLog;
   const s = stats || _lastGoodData.stats;
   const ev = evalTest || _lastGoodData.evalTest;
+  const sf = sfLog || _lastGoodData.sfLog;
 
   updateGlobalStatus(n, p, t);
   if (n) updateNmdPrefilter(n);
+  if (sf) updateSeasonalFetch(sf);
   if (p || s) updateDataPrep(p, s);
   if (ev) updateEvaluation(ev);
   if (t) updateTraining(t);

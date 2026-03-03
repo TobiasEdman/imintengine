@@ -44,7 +44,7 @@ def _list_existing_tiles(cfs_dir: str) -> set[str]:
     """List tiles already present in CFS, return set of cell keys."""
     try:
         result = subprocess.run(
-            ["colonies", "fs", "list", "-d", cfs_dir],
+            ["colonies", "fs", "ls", "--label", cfs_dir, "--insecure"],
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode != 0:
