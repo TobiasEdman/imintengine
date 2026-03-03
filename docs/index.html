@@ -2458,11 +2458,21 @@ svg.leaflet-image-layer.leaflet-interactive path {
                         overlays[v.id] = bgLayers[v.id].rgb;
                     } else if (v.vector && geojsonData) {
                         // Vector overlay (GeoJSON) — auto-detect styling from properties
+                        const isOverlay = v.key === 'shoreline_overlay';
                         const gjLayer = L.geoJSON(geojsonData, {
+                            filter: function(feature) {
+                                if (isOverlay && feature.properties && feature.properties.year !== undefined) {
+                                    return feature.properties.year === 2025;
+                                }
+                                return true;
+                            },
                             style: function(feature) {
                                 const p = feature.properties || {};
                                 // Coastline: year-based color gradient
                                 if (p.year !== undefined) {
+                                    if (isOverlay) {
+                                        return { color: '#FF5722', weight: 2.5, opacity: 0.9, fill: false };
+                                    }
                                     const t = (p.year - 2018) / (2025 - 2018);
                                     const r = Math.round(255 * Math.max(0.6, t));
                                     const g = Math.round(193 * (1 - t));
@@ -2506,11 +2516,21 @@ svg.leaflet-image-layer.leaflet-interactive path {
                         if (images[rgbId2]) {
                             L.imageOverlay(images[rgbId2], bounds, {zIndex: 0}).addTo(map);
                         }
+                        const isOverlay = v.key === 'shoreline_overlay';
                         const gjLayer = L.geoJSON(geojsonData, {
+                            filter: function(feature) {
+                                if (isOverlay && feature.properties && feature.properties.year !== undefined) {
+                                    return feature.properties.year === 2025;
+                                }
+                                return true;
+                            },
                             style: function(feature) {
                                 const p = feature.properties || {};
                                 // Coastline: year-based color gradient
                                 if (p.year !== undefined) {
+                                    if (isOverlay) {
+                                        return { color: '#FF5722', weight: 2.5, opacity: 0.9, fill: false };
+                                    }
                                     const t = (p.year - 2018) / (2025 - 2018);
                                     const r = Math.round(255 * Math.max(0.6, t));
                                     const g = Math.round(193 * (1 - t));
@@ -2666,7 +2686,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
             {"id": "k-ndvi", "key": "ndvi", "vector": false, "legend": [{"color": "#a50026", "label": "-1.0"}, {"color": "#f46d43", "label": "-0.5"}, {"color": "#fee08b", "label": "0.0"}, {"color": "#a6d96a", "label": "0.5"}, {"color": "#006837", "label": "1.0"}]},
             {"id": "k-ndwi", "key": "ndwi", "vector": false, "legend": [{"color": "#67001f", "label": "-1.0"}, {"color": "#d6604d", "label": "-0.5"}, {"color": "#f7f7f7", "label": "0.0"}, {"color": "#4393c3", "label": "0.5"}, {"color": "#053061", "label": "1.0 Vatten"}]},
             {"id": "k-seg", "key": "coastline", "vector": false, "legend": [{"color": "#1565C0", "label": "Vatten"}, {"color": "#64B5F6", "label": "Grunt vatten"}, {"color": "#D4A76A", "label": "Sediment"}, {"color": "#4CAF50", "label": "Land"}]},
-            {"id": "k-shore", "key": "shoreline_overlay", "vector": false, "legend": [{"color": "#FF5722", "label": "Strandlinje"}]},
+            {"id": "k-shore", "key": "shoreline_overlay", "vector": true, "legend": [{"color": "#FF5722", "label": "Strandlinje"}]},
             {"id": "k-change", "key": "shoreline_change", "vector": true, "legend": [{"color": "#FFC107", "label": "2018"}, {"color": "#FF9800", "label": "2020"}, {"color": "#FF5722", "label": "2025"}]},
             {"id": "k-cot", "key": "cot", "vector": false, "legend": [{"color": "#FFFFB2", "label": "0 (Klart)"}, {"color": "#FD8D3C", "label": "0.015 (Tunt moln)"}, {"color": "#BD0026", "label": "0.05 (Tjockt moln)"}]}
         ];
