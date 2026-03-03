@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import json
+import cv2
 import numpy as np
 from PIL import Image
 from datetime import datetime
@@ -1295,10 +1296,10 @@ def save_lpis_overlay(
     from shapely.geometry import mapping
 
     _PRED_COLORS = {
-        1: (0.0, 0.75, 1.0),  # active grazing → cyan
-        0: (0.90, 0.07, 0.61),  # no activity → magenta
+        1: (0.2, 0.8, 0.33),   # active grazing → green
+        0: (0.53, 0.53, 0.53),  # no activity → grey
     }
-    _DEFAULT_COLOR = (0.67, 0.67, 0.67)  # grey (not analyzed)
+    _DEFAULT_COLOR = (0.90, 0.07, 0.61)  # magenta (not analyzed)
 
     h, w = rgb.shape[:2]
     transform = geo.transform
@@ -1539,4 +1540,194 @@ def save_regions_leaflet_geojson(
         json.dump(geojson, f, ensure_ascii=False)
 
     print(f"    saved: {path} ({len(features)} features)")
+    return path
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  Coastline / Shoreline exports
+# ──────────────────────────────────────────────────────────────────────
+
+_COAST_CLASS_COLORS = {
+    0: (0.08, 0.40, 0.75),   # water — dark blue
+    1: (0.39, 0.71, 0.96),   # whitewater — light blue
+    2: (0.83, 0.65, 0.42),   # sediment — beige/sand
+    3: (0.30, 0.69, 0.31),   # other (land) — green
+}
+
+
+def save_segmentation_clean_png(
+    seg_map: np.ndarray, path: str
+) -> str:
+    """Save a 4-class coastal segmentation map as a coloured PNG.
+
+    Classes: 0=water (blue), 1=whitewater (light blue),
+             2=sediment (beige), 3=other/land (green).
+    """
+    from PIL import Image
+
+    h, w = seg_map.shape
+    out = np.zeros((h, w, 3), dtype=np.float32)
+    for cls, color in _COAST_CLASS_COLORS.items():
+        mask = seg_map == cls
+        for c in range(3):
+            out[:, :, c][mask] = color[c]
+
+    img = (out * 255).astype(np.uint8)
+    Image.fromarray(img).save(path)
+    print(f"    saved: {path}")
+    return path
+
+
+def save_shoreline_overlay(
+    rgb: np.ndarray,
+    shoreline_mask: np.ndarray,
+    path: str,
+    color: tuple[float, float, float] = (1.0, 0.34, 0.13),
+    line_width: int = 2,
+) -> str:
+    """Save RGB with shoreline edges overlaid as coloured lines.
+
+    Args:
+        rgb: (H, W, 3) float32 [0, 1].
+        shoreline_mask: (H, W) uint8 binary (255 = shoreline).
+        color: overlay colour (default: orange-red).
+        line_width: dilation of the shoreline line.
+    """
+    from PIL import Image
+
+    overlay = rgb.copy()
+
+    # Dilate shoreline for visibility
+    if line_width > 1:
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (line_width, line_width)
+        )
+        mask = cv2.dilate(shoreline_mask, kernel)
+    else:
+        mask = shoreline_mask
+
+    edge = mask > 127
+    for c in range(3):
+        overlay[:, :, c][edge] = color[c]
+
+    img = (np.clip(overlay, 0, 1) * 255).astype(np.uint8)
+    Image.fromarray(img).save(path)
+    print(f"    saved: {path}")
+    return path
+
+
+def save_shoreline_change_png(
+    shorelines_per_year: dict[int, np.ndarray],
+    rgb_ref: np.ndarray,
+    path: str,
+) -> str:
+    """Save multi-year shoreline change overlay on reference RGB.
+
+    Each year's shoreline is drawn with a colour gradient from yellow
+    (oldest) to red (newest).
+
+    Args:
+        shorelines_per_year: {year: (H, W) uint8 shoreline mask}.
+        rgb_ref: (H, W, 3) float32 [0, 1] reference image.
+    """
+    from PIL import Image
+
+    overlay = (rgb_ref * 0.6).copy()  # darken background
+    years = sorted(shorelines_per_year.keys())
+    n = max(len(years) - 1, 1)
+
+    for i, year in enumerate(years):
+        t = i / n  # 0 → oldest, 1 → newest
+        # Yellow → Red gradient
+        r, g, b = 1.0, 1.0 - 0.8 * t, 0.1 * (1.0 - t)
+        mask = shorelines_per_year[year]
+
+        # Dilate for visibility
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        mask = cv2.dilate(mask, kernel)
+        edge = mask > 127
+
+        for c_idx, c_val in enumerate([r, g, b]):
+            overlay[:, :, c_idx][edge] = c_val
+
+    img = (np.clip(overlay, 0, 1) * 255).astype(np.uint8)
+    Image.fromarray(img).save(path)
+    print(f"    saved: {path} ({len(years)} years)")
+    return path
+
+
+def save_coastline_geojson(
+    shorelines_per_year: dict[int, list[np.ndarray]],
+    geo,
+    path: str,
+    img_shape: tuple[int, int] | None = None,
+) -> str:
+    """Save shoreline contours as GeoJSON with per-year properties.
+
+    Each contour becomes a LineString feature with year and length_m.
+
+    Args:
+        shorelines_per_year: {year: [array (N,2) pixel coords, ...]}.
+        geo: GeoContext with transform and CRS.
+        path: output JSON path.
+        img_shape: (H, W) — used for y-flip if needed.
+    """
+    from rasterio.transform import Affine
+
+    features = []
+    tf = geo.transform
+    if not isinstance(tf, Affine):
+        tf = Affine(*tf[:6]) if len(tf) >= 6 else Affine(10, 0, 0, 0, -10, 0)
+
+    for year in sorted(shorelines_per_year.keys()):
+        for contour in shorelines_per_year[year]:
+            if len(contour) < 3:
+                continue
+
+            # Convert pixel coords to projected CRS coords
+            coords_proj = []
+            for px, py in contour:
+                x, y = tf * (float(px), float(py))
+                coords_proj.append((x, y))
+
+            # Approximate length in meters
+            length_m = 0.0
+            for j in range(1, len(coords_proj)):
+                dx = coords_proj[j][0] - coords_proj[j - 1][0]
+                dy = coords_proj[j][1] - coords_proj[j - 1][1]
+                length_m += (dx**2 + dy**2) ** 0.5
+
+            # Convert to WGS84 for GeoJSON
+            try:
+                from pyproj import Transformer
+                transformer = Transformer.from_crs(
+                    geo.crs, "EPSG:4326", always_xy=True
+                )
+                coords_wgs84 = [
+                    list(transformer.transform(x, y))
+                    for x, y in coords_proj
+                ]
+            except Exception:
+                # Fallback: assume already in WGS84-compatible coords
+                coords_wgs84 = [[x, y] for x, y in coords_proj]
+
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": coords_wgs84,
+                },
+                "properties": {
+                    "year": year,
+                    "length_m": round(length_m, 1),
+                },
+            })
+
+    geojson = {"type": "FeatureCollection", "features": features}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(geojson, f, ensure_ascii=False)
+
+    n_lines = len(features)
+    years = sorted(shorelines_per_year.keys())
+    print(f"    saved: {path} ({n_lines} lines, years {years[0]}–{years[-1]})")
     return path

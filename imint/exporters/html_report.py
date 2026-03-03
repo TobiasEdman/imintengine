@@ -1171,6 +1171,88 @@ def _build_grazing_summary_cards(grazing_dir: str) -> str:
     return '<div class="summary-section">' + "".join(cards) + "</div>"
 
 
+def _build_kustlinje_summary_cards(kustlinje_dir: str) -> str:
+    """Build HTML summary cards for the Kustlinje (Shoreline) tab.
+
+    Reads ``kustlinje_meta.json`` from *kustlinje_dir* which should contain
+    per-year water fractions, NDWI thresholds, contour counts, etc.
+    """
+    meta_path = os.path.join(kustlinje_dir, "kustlinje_meta.json")
+    if not os.path.isfile(meta_path):
+        return ""
+
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    cards = []
+    per_year = meta.get("per_year", {})
+
+    # Card 1: Number of years analysed
+    num_years = meta.get("num_years", len(per_year))
+    years_list = meta.get("years_analyzed", sorted(per_year.keys()))
+    if years_list:
+        first_year = min(int(y) for y in years_list)
+        last_year = max(int(y) for y in years_list)
+        cards.append(
+            '<div class="summary-card">'
+            '<h4>Analysperiod</h4>'
+            f'<div class="value">{first_year}\u2013{last_year}</div>'
+            f'<div class="detail">{num_years} \u00e5r analyserade</div>'
+            '</div>'
+        )
+
+    # Card 2: Water fraction (reference year)
+    ref_year = str(meta.get("reference_year", ""))
+    ref_data = per_year.get(ref_year, {})
+    water_frac = ref_data.get("water_fraction", 0)
+    if water_frac > 0:
+        cards.append(
+            '<div class="summary-card">'
+            '<h4>Vattenbeläggning</h4>'
+            f'<div class="value">{water_frac*100:.1f}%</div>'
+            f'<div class="detail">Referens\u00e5r {ref_year}</div>'
+            '</div>'
+        )
+
+    # Card 3: Total contours (reference year)
+    n_contours = ref_data.get("n_contours", 0)
+    if n_contours > 0:
+        cards.append(
+            '<div class="summary-card">'
+            '<h4>Strandlinjesegment</h4>'
+            f'<div class="value">{n_contours}</div>'
+            f'<div class="detail">Vektoriserade konturer</div>'
+            '</div>'
+        )
+
+    # Card 4: Method
+    method = meta.get("method", "")
+    if method:
+        cards.append(
+            '<div class="summary-card">'
+            '<h4>Metod</h4>'
+            f'<div class="value" style="font-size:16px;">{method}</div>'
+            f'<div class="detail">Vos et al. (2019)</div>'
+            '</div>'
+        )
+
+    # Card 5: NDWI mean
+    ndwi_mean = meta.get("ndwi_mean", 0)
+    if ndwi_mean != 0:
+        cards.append(
+            '<div class="summary-card">'
+            '<h4>NDWI medel</h4>'
+            f'<div class="value">{ndwi_mean:.3f}</div>'
+            f'<div class="detail">Referens\u00e5r {ref_year}</div>'
+            '</div>'
+        )
+
+    if not cards:
+        return ""
+
+    return '<div class="summary-section">' + "".join(cards) + "</div>"
+
+
 def _build_chart_data(nmd_stats: dict) -> dict:
     """Extract chart data from nmd_stats JSON structure."""
     cross_ref = nmd_stats.get("cross_reference", {})
@@ -1381,9 +1463,9 @@ _GRAZING_VIEWERS = [
         {"color": "#0000FF", "label": "Vatten"},
     ]},
     {"id": "g-lpis", "title": "LPIS<br>Betesblock", "key": "lpis", "vector": True, "legend": [
-        {"color": "#00BFFF", "label": "Aktiv betesmark"},
-        {"color": "#E6119D", "label": "Ingen aktivitet"},
-        {"color": "#aaaaaa", "label": "Ej analyserad"},
+        {"color": "#33cc55", "label": "Aktiv betesmark"},
+        {"color": "#888888", "label": "Ingen aktivitet"},
+        {"color": "#E6119D", "label": "Ej analyserad"},
     ]},
     {"id": "g-ndvi", "title": "NDVI<br>Vegetationsindex", "key": "ndvi", "legend": [
         {"color": "#a50026", "label": "-1.0"}, {"color": "#f46d43", "label": "-0.5"},
@@ -1406,6 +1488,40 @@ _GRAZING_VIEWERS = [
     ]},
 ]
 
+_KUSTLINJE_VIEWERS = [
+    {"id": "k-rgb",  "title": "Sentinel-2<br>RGB", "key": "rgb", "legend": []},
+    {"id": "k-ndvi", "title": "NDVI<br>Vegetationsindex", "key": "ndvi", "legend": [
+        {"color": "#a50026", "label": "-1.0"}, {"color": "#f46d43", "label": "-0.5"},
+        {"color": "#fee08b", "label": "0.0"},  {"color": "#a6d96a", "label": "0.5"},
+        {"color": "#006837", "label": "1.0"},
+    ]},
+    {"id": "k-ndwi", "title": "NDWI<br>Vattenindex", "key": "ndwi", "legend": [
+        {"color": "#67001f", "label": "-1.0"}, {"color": "#d6604d", "label": "-0.5"},
+        {"color": "#f7f7f7", "label": "0.0"},  {"color": "#4393c3", "label": "0.5"},
+        {"color": "#053061", "label": "1.0 Vatten"},
+    ]},
+    {"id": "k-seg",  "title": "Segmentering<br>Kustlinje", "key": "coastline", "legend": [
+        {"color": "#1565C0", "label": "Vatten"},
+        {"color": "#64B5F6", "label": "Grunt vatten"},
+        {"color": "#D4A76A", "label": "Sediment"},
+        {"color": "#4CAF50", "label": "Land"},
+    ]},
+    {"id": "k-shore", "title": "Strandlinje<br>Overlay", "key": "shoreline_overlay", "legend": [
+        {"color": "#FF5722", "label": "Strandlinje"},
+    ]},
+    {"id": "k-change", "title": "Förändring<br>2018\u20132025", "key": "shoreline_change",
+     "vector": True, "legend": [
+        {"color": "#FFC107", "label": "2018"},
+        {"color": "#FF9800", "label": "2020"},
+        {"color": "#FF5722", "label": "2025"},
+    ]},
+    {"id": "k-cot",  "title": "COT<br>Molnoptisk tjocklek", "key": "cot", "legend": [
+        {"color": "#FFFFB2", "label": "0 (Klart)"},
+        {"color": "#FD8D3C", "label": "0.015 (Tunt moln)"},
+        {"color": "#BD0026", "label": "0.05 (Tjockt moln)"},
+    ]},
+]
+
 # ── Analysis descriptions — single source of truth ───────────────────────────
 # Each entry has a shared technical description ("body") + per-context notes.
 # The helper _render_descriptions() builds HTML for a given tab.
@@ -1416,7 +1532,7 @@ _ANALYSIS_DESCRIPTIONS = {
         "body": (
             "Sentinel-2 är en konstellation av två satelliter (2A och 2B) som drivs av "
             "Europeiska rymdorganisationen (ESA) inom Copernicus-programmet. Satelliterna "
-            "kretsar i en solsynkron bana på 786 km höjd och avbildar hela jorden "
+            "kretsar i en solsynkron bana på 786 km höjd och avbildar hela jorden"
             "var femte dag med en upplösning på 10 meter per pixel för de synliga "
             "banden. RGB-bilden visar området som det ser ut för ögat, med band 4 (rött), "
             "band 3 (grönt) och band 2 (blått)."
@@ -1740,6 +1856,42 @@ _ANALYSIS_DESCRIPTIONS = {
             'github.com/aleksispi/pib-ml-grazing</a> (MIT)</em>'
         ),
     },
+    "shoreline_segmentation": {
+        "title": "Kustlinjesegmentering — NDWI/MNDWI + Otsu",
+        "body": (
+            "Kustlinjesegmenteringen bygger på CoastSat-metoden av Vos et al. (2019) "
+            "som använder spektrala vattenindex för att identifiera gränsen mellan "
+            "land och vatten. NDWI (Normalized Difference Water Index) beräknas från "
+            "grönt ljus (B03) och nära infrarött (B08), medan MNDWI (Modified NDWI) "
+            "använder grönt ljus och SWIR (B11) för bättre separation mot bebyggelse. "
+            "Otsu-tröskling tillämpas automatiskt för att hitta den optimala gränsen "
+            "mellan vatten och land. Genom att kombinera NDWI och MNDWI skapas en "
+            "4-klassig segmentering: djupt vatten, grunt vatten, sediment och land. "
+            "Strandlinjen extraheras som morfologisk gradient vid vattengränsen."
+        ),
+        "ref": (
+            '<em>Vos, K. et al., 2019. "CoastSat: A Google Earth Engine-enabled '
+            'Python toolkit to extract shorelines from publicly available satellite '
+            'imagery." Environmental Modelling &amp; Software, 122, 104528.</em>'
+        ),
+        "kustlinje_note": (
+            "Här har metoden tillämpats på Sentinel-2 L2A-data för Skånes sydkust "
+            "vid Kåseberga, med analyser för varje sommar 2018\u20132025. "
+            "Strandlinjeförändringar visualiseras med en färggradient från gult "
+            "(2018) till rött (2025)."
+        ),
+    },
+    "shoreline_change": {
+        "title": "Strandlinjeförändring — Multitemporalt",
+        "body": (
+            "Genom att jämföra den extraherade strandlinjen för varje sommar under "
+            "perioden 2018\u20132025 kan erosion och ackumulering av sediment identifieras. "
+            "Varje års strandlinje extraheras från den bästa molnfria Sentinel-2-bilden "
+            "(juni\u2013augusti) och vektoriseras till polylinjer. Strandlinjerna visualiseras "
+            "med en färggradient: gult för äldsta året, orange för mellanliggande, och "
+            "rött för senaste året. Popups visar år och strandlinjelängd i meter."
+        ),
+    },
 }
 
 # Which descriptions to show in each tab (in order) and which context to use
@@ -1754,6 +1906,10 @@ _MARINE_DESCRIPTION_IDS = [
 _GRAZING_DESCRIPTION_IDS = [
     "sentinel2_rgb", "lpis_betesmark", "ndvi", "ndwi",
     "evi", "cot", "nmd", "grazing_pipeline", "grazing_model",
+]
+_KUSTLINJE_DESCRIPTION_IDS = [
+    "sentinel2_rgb", "ndvi", "ndwi", "cot",
+    "shoreline_segmentation", "shoreline_change",
 ]
 
 
@@ -1791,12 +1947,14 @@ def save_tabbed_report(
     marine_date: str = "",
     grazing_dir: str | None = None,
     grazing_date: str = "",
+    kustlinje_dir: str | None = None,
+    kustlinje_date: str = "",
 ) -> str:
-    """Generate a tabbed HTML showcase with Fire, Marine, and Grazing tabs.
+    """Generate a tabbed HTML showcase with Fire, Marine, Grazing, and Kustlinje tabs.
 
     Uses EXTERNAL image files (no base64 embedding).  Images are copied
-    to ``showcase/fire/``, ``showcase/marine/``, and ``showcase/grazing/``
-    subdirectories next to the output HTML.
+    to ``showcase/fire/``, ``showcase/marine/``, ``showcase/grazing/``,
+    and ``showcase/kustlinje/`` subdirectories next to the output HTML.
 
     Args:
         fire_dir: Path to fire analysis output directory.
@@ -1806,6 +1964,8 @@ def save_tabbed_report(
         marine_date: Date string for marine analysis (e.g. "2025-07-10").
         grazing_dir: Path to grazing analysis output directory (optional).
         grazing_date: Date string for grazing analysis.
+        kustlinje_dir: Path to kustlinje analysis output directory (optional).
+        kustlinje_date: Date string for kustlinje analysis.
 
     Returns:
         The output file path.
@@ -1829,6 +1989,9 @@ def save_tabbed_report(
         "vessel_heatmap": "vessel_heatmap_clean.png",
         "sjokort": "sjokort.png",
         "lpis": "lpis_overlay.png",
+        "coastline": "coastline_clean.png",
+        "shoreline_overlay": "shoreline_overlay.png",
+        "shoreline_change": "shoreline_change.png",
     }
 
     # ── Copy images to showcase subdirectories ──────────────────────────
@@ -1877,6 +2040,32 @@ def save_tabbed_report(
             if os.path.isfile(_gm_path):
                 with open(_gm_path) as _gf:
                     grazing_date = json.load(_gf).get("date", "")
+
+    # Kustlinje tab (optional) — kustlinje images have no date prefix
+    kustlinje_imgs = {}
+    _coastline_geojson_raw = ""
+    if kustlinje_dir and os.path.isdir(kustlinje_dir):
+        kustlinje_imgs = _copy_images(kustlinje_dir, "", _KUSTLINJE_VIEWERS, "kustlinje")
+        # Load coastline vector GeoJSON (pixel coordinates) if available
+        _coastline_geojson_path = os.path.join(kustlinje_dir, "coastline_vectors.json")
+        if not os.path.isfile(_coastline_geojson_path):
+            _coastline_geojson_path = os.path.join(showcase_dir, "kustlinje", "coastline_vectors.json")
+        if os.path.isfile(_coastline_geojson_path):
+            with open(_coastline_geojson_path, encoding="utf-8") as _kf:
+                _coastline_geojson_raw = _kf.read()
+            # Also copy the GeoJSON to showcase dir
+            _coast_dest = os.path.join(showcase_dir, "kustlinje", "coastline_vectors.json")
+            if os.path.isfile(os.path.join(kustlinje_dir, "coastline_vectors.json")):
+                os.makedirs(os.path.join(showcase_dir, "kustlinje"), exist_ok=True)
+                src = os.path.join(kustlinje_dir, "coastline_vectors.json")
+                if os.path.abspath(src) != os.path.abspath(_coast_dest):
+                    shutil.copy2(src, _coast_dest)
+        # Read date from meta if not provided
+        if not kustlinje_date:
+            _km_path = os.path.join(kustlinje_dir, "kustlinje_meta.json")
+            if os.path.isfile(_km_path):
+                with open(_km_path) as _kf2:
+                    kustlinje_date = json.load(_kf2).get("date", "")
 
     # Also copy sjökort for the RGB panel toggle (not a separate viewer)
     sjokort_src = os.path.join(
@@ -1958,6 +2147,10 @@ def save_tabbed_report(
         v for v in _GRAZING_VIEWERS
         if v["id"] in grazing_imgs or (v.get("vector") and _lpis_geojson_raw)
     ]
+    kustlinje_viewers = [
+        v for v in _KUSTLINJE_VIEWERS
+        if v["id"] in kustlinje_imgs or (v.get("vector") and _coastline_geojson_raw)
+    ]
 
     # Image dimensions (read from bands_meta or first image)
     def _read_shape(out_dir, prefix):
@@ -1983,6 +2176,16 @@ def save_tabbed_report(
             grazing_h, grazing_w = _gs[0], _gs[1]
         else:
             grazing_h, grazing_w = _read_shape(grazing_dir, grazing_prefix)
+
+    # Kustlinje shape — read from meta
+    kustlinje_h, kustlinje_w = 450, 900  # default
+    if kustlinje_dir:
+        kustlinje_meta_path = os.path.join(kustlinje_dir, "kustlinje_meta.json")
+        if os.path.isfile(kustlinje_meta_path):
+            with open(kustlinje_meta_path) as f:
+                _km = json.load(f)
+            _ks = _km.get("shape", [450, 900])
+            kustlinje_h, kustlinje_w = _ks[0], _ks[1]
 
     # NMD stats for fire charts
     nmd_path = os.path.join(fire_dir, f"{fire_prefix}nmd_stats.json")
@@ -2015,6 +2218,11 @@ def save_tabbed_report(
     grazing_summary_html = ""
     if grazing_dir and os.path.isdir(grazing_dir):
         grazing_summary_html = _build_grazing_summary_cards(grazing_dir)
+
+    # Summary cards for kustlinje
+    kustlinje_summary_html = ""
+    if kustlinje_dir and os.path.isdir(kustlinje_dir):
+        kustlinje_summary_html = _build_kustlinje_summary_cards(kustlinje_dir)
 
     # ── Fetch libraries ───────────────────────────────────────────────────
     leaflet_css = _fetch_lib(_CDN_LIBS["leaflet_css"])
@@ -2100,6 +2308,7 @@ def save_tabbed_report(
         grazing_bg_toggle["lpis"] = [("rgb", "RGB"), ("nmd", "NMD")]
     grazing_cells = _map_cells(grazing_viewers, "g", hideable=True,
                                per_panel_toggle=grazing_bg_toggle)
+    kustlinje_cells = _map_cells(kustlinje_viewers, "k", hideable=True)
 
     # ── Fire chart sections ───────────────────────────────────────────────
     fire_charts_html = ""
@@ -2154,6 +2363,12 @@ def save_tabbed_report(
          for v in grazing_viewers],
         ensure_ascii=False,
     )
+    kustlinje_viewer_js = json.dumps(
+        [{"id": v["id"], "key": v["key"], "vector": v.get("vector", False),
+          "legend": v.get("legend", [])}
+         for v in kustlinje_viewers],
+        ensure_ascii=False,
+    )
 
     # ── Panel visibility toolbar ──────────────────────────────────────────
     def _panel_toolbar(viewers):
@@ -2170,6 +2385,7 @@ def save_tabbed_report(
     fire_toolbar = _panel_toolbar(fire_viewers)
     marine_toolbar = _panel_toolbar(marine_viewers)
     grazing_toolbar = _panel_toolbar(grazing_viewers)
+    kustlinje_toolbar = _panel_toolbar(kustlinje_viewers)
 
     # ── Images as JS objects ──────────────────────────────────────────────
     def _imgs_js(imgs_dict):
@@ -2179,11 +2395,13 @@ def save_tabbed_report(
     fire_imgs_js = _imgs_js(fire_imgs)
     marine_imgs_js = _imgs_js(marine_imgs)
     grazing_imgs_js = _imgs_js(grazing_imgs)
+    kustlinje_imgs_js = _imgs_js(kustlinje_imgs)
 
     # ── Render descriptions from shared objects ────────────────────────────
     fire_descriptions = _render_descriptions(_FIRE_DESCRIPTION_IDS, "fire")
     marine_descriptions = _render_descriptions(_MARINE_DESCRIPTION_IDS, "marine")
     grazing_descriptions = _render_descriptions(_GRAZING_DESCRIPTION_IDS, "grazing")
+    kustlinje_descriptions = _render_descriptions(_KUSTLINJE_DESCRIPTION_IDS, "kustlinje")
 
     # ── Pre-compute grazing HTML (avoids backslash in f-string on Py 3.9) ──
     grazing_tab_btn = (
@@ -2230,6 +2448,50 @@ def save_tabbed_report(
     else:
         grazing_tab_html = ""
         grazing_js_block = ""
+
+    # ── Pre-compute kustlinje HTML ──
+    kustlinje_tab_btn = (
+        '<a href="#" class="theme-tab" data-tab="kustlinje">\U0001f3d6 Kustlinje</a>'
+        if kustlinje_viewers else ""
+    )
+    kustlinje_subtitle = (
+        f" &middot; Kustlinje ({kustlinje_date})" if kustlinje_viewers else ""
+    )
+    if kustlinje_viewers:
+        kustlinje_tab_html = f"""<div class="tab-content" id="tab-kustlinje">
+        <div class="section-header">
+            <h2>Kustlinjeanalys \u2014 2018\u20132025</h2>
+        </div>
+        {kustlinje_summary_html}
+        <div class="tab-intro">
+            <p>
+                Analysomr\u00e5det \u00e4r bel\u00e4get vid K\u00e5seberga p\u00e5 Sk\u00e5nes sydkust \u2014 en
+                dynamisk kuststr\u00e4cka med sandstrand, klippor och sedimentprocesser.
+                Sentinel-2 L2A-data fr\u00e5n sommarm\u00e5naderna (juni\u2013augusti) f\u00f6r varje
+                \u00e5r 2018\u20132025 har analyserats med NDWI/MNDWI + Otsu-tr\u00f6skling
+                (CoastSat-metoden) f\u00f6r att extrahera strandlinjen och
+                identifiera f\u00f6r\u00e4ndringar \u00f6ver tid.
+            </p>
+        </div>
+        {kustlinje_toolbar}
+        <div class="map-grid">
+            {kustlinje_cells}
+        </div>
+        <div class="tab-description">
+
+{kustlinje_descriptions}
+        </div>
+    </div>"""
+        _coast_geojson_js = f"const COASTLINE_GEOJSON = {_coastline_geojson_raw};" if _coastline_geojson_raw else "const COASTLINE_GEOJSON = null;"
+        kustlinje_js_block = (
+            f"const KUSTLINJE_VIEWERS = {kustlinje_viewer_js};\n"
+            f"        const KUSTLINJE_IMAGES = {kustlinje_imgs_js};\n"
+            f"        {_coast_geojson_js}\n"
+            f"        initMaps(KUSTLINJE_VIEWERS, KUSTLINJE_IMAGES, {kustlinje_h}, {kustlinje_w}, false, COASTLINE_GEOJSON);"
+        )
+    else:
+        kustlinje_tab_html = ""
+        kustlinje_js_block = ""
 
     # Marine vessel detection GeoJSON for Leaflet vector rendering
     if _vessel_geojson_raw:
@@ -2687,13 +2949,14 @@ def save_tabbed_report(
         <div class="header-left">
             <div>
                 <h1><span>IMINT</span> Analysrapport</h1>
-                <p>Showcase — Brand ({fire_date}) &middot; Marin ({marine_date}){grazing_subtitle}</p>
+                <p>Showcase — Brand ({fire_date}) &middot; Marin ({marine_date}){grazing_subtitle}{kustlinje_subtitle}</p>
             </div>
         </div>
         <div class="header-nav">
             <a href="#" class="theme-tab active" data-tab="fire">\U0001f525 Brand</a>
             <a href="#" class="theme-tab" data-tab="marine">\u2693 Marin</a>
             {grazing_tab_btn}
+            {kustlinje_tab_btn}
         </div>
     </div>
 
@@ -2752,9 +3015,12 @@ def save_tabbed_report(
 
     <!-- ── Grazing tab ──────────────────────────────────────────── -->
     {grazing_tab_html}
+
+    <!-- ── Kustlinje tab ─────────────────────────────────────────── -->
+    {kustlinje_tab_html}
     <div class="footer">
         IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB
-        &middot; CC0 1.0 Universal &middot; Genererad {fire_date} / {marine_date} / {grazing_date}
+        &middot; CC0 1.0 Universal &middot; Genererad {fire_date} / {marine_date} / {grazing_date} / {kustlinje_date}
         <br>
         <button class="license-toggle" onclick="document.getElementById('license-info').classList.toggle('open'); this.textContent = this.textContent === 'Visa licenser och upphovsr\u00e4tt' ? 'D\u00f6lj licenser' : 'Visa licenser och upphovsr\u00e4tt';">Visa licenser och upphovsr\u00e4tt</button>
         <div id="license-info" class="license-section">
@@ -2796,6 +3062,12 @@ def save_tabbed_report(
                     <td><span class="license-badge badge-open">MIT</span></td>
                     <td>&copy; RISE / Jordbruksverket</td>
                     <td>Tidsserie\u00f6vervakad betesmarksklassificering. <a href="https://github.com/DigitalEarthSweden/pib-ml-grazing" style="color:#171717;" target="_blank">GitHub</a></td>
+                </tr>
+                <tr>
+                    <td>CoastSat-metod (kustlinjeanalys)</td>
+                    <td><span class="license-badge badge-open">GPL-3.0</span></td>
+                    <td>&copy; Vos et al., 2019</td>
+                    <td>NDWI/MNDWI + Otsu. <a href="https://github.com/kvos/CoastSat" style="color:#171717;" target="_blank">GitHub</a></td>
                 </tr>
                 <tr>
                     <td>PyTorch / Torchvision</td>
@@ -2983,18 +3255,31 @@ def save_tabbed_report(
                     if (v.key === 'rgb') {{
                         overlays[v.id] = bgLayers[v.id].rgb;
                     }} else if (v.vector && geojsonData) {{
-                        // Vector overlay (GeoJSON polygons) — per-feature styling
+                        // Vector overlay (GeoJSON) — auto-detect styling from properties
                         const gjLayer = L.geoJSON(geojsonData, {{
                             style: function(feature) {{
-                                const cls = feature.properties && feature.properties.predicted_class;
-                                let color = '#aaaaaa';
-                                if (cls === 1) color = '#00BFFF';
-                                else if (cls === 0) color = '#E6119D';
+                                const p = feature.properties || {{}};
+                                // Coastline: year-based color gradient
+                                if (p.year !== undefined) {{
+                                    const t = (p.year - 2018) / (2025 - 2018);
+                                    const r = Math.round(255 * Math.max(0.6, t));
+                                    const g = Math.round(193 * (1 - t));
+                                    const b = Math.round(7 + 50 * (1 - t));
+                                    return {{ color: 'rgb('+r+','+g+','+b+')', weight: 2.5, opacity: 0.85, fill: false }};
+                                }}
+                                // LPIS: predicted_class based
+                                const cls = p.predicted_class;
+                                let color = '#E6119D';
+                                if (cls === 1) color = '#33cc55';
+                                else if (cls === 0) color = '#888888';
                                 return {{ color: color, weight: 2, fillOpacity: 0.15, opacity: 1 }};
                             }},
                             onEachFeature: function(feature, layer) {{
                                 const p = feature.properties || {{}};
-                                if (p.class_label) {{
+                                if (p.year !== undefined) {{
+                                    const len = p.length_m ? Math.round(p.length_m) : '?';
+                                    layer.bindPopup('<b>' + p.year + '</b><br>L\u00e4ngd: ' + len + ' m');
+                                }} else if (p.class_label) {{
                                     layer.bindPopup(
                                         '<b>Block ' + (p.blockid || '') + '</b><br>' +
                                         p.class_label + ' (' + Math.round((p.confidence||0)*100) + '%)'
@@ -3021,15 +3306,28 @@ def save_tabbed_report(
                         }}
                         const gjLayer = L.geoJSON(geojsonData, {{
                             style: function(feature) {{
-                                const cls = feature.properties && feature.properties.predicted_class;
-                                let color = '#aaaaaa';
-                                if (cls === 1) color = '#00BFFF';
-                                else if (cls === 0) color = '#E6119D';
+                                const p = feature.properties || {{}};
+                                // Coastline: year-based color gradient
+                                if (p.year !== undefined) {{
+                                    const t = (p.year - 2018) / (2025 - 2018);
+                                    const r = Math.round(255 * Math.max(0.6, t));
+                                    const g = Math.round(193 * (1 - t));
+                                    const b = Math.round(7 + 50 * (1 - t));
+                                    return {{ color: 'rgb('+r+','+g+','+b+')', weight: 2.5, opacity: 0.85, fill: false }};
+                                }}
+                                // LPIS: predicted_class based
+                                const cls = p.predicted_class;
+                                let color = '#E6119D';
+                                if (cls === 1) color = '#33cc55';
+                                else if (cls === 0) color = '#888888';
                                 return {{ color: color, weight: 2, fillOpacity: 0.15, opacity: 1 }};
                             }},
                             onEachFeature: function(feature, layer) {{
                                 const p = feature.properties || {{}};
-                                if (p.class_label) {{
+                                if (p.year !== undefined) {{
+                                    const len = p.length_m ? Math.round(p.length_m) : '?';
+                                    layer.bindPopup('<b>' + p.year + '</b><br>L\u00e4ngd: ' + len + ' m');
+                                }} else if (p.class_label) {{
                                     layer.bindPopup(
                                         '<b>Block ' + (p.blockid || '') + '</b><br>' +
                                         p.class_label + ' (' + Math.round((p.confidence||0)*100) + '%)'
@@ -3127,6 +3425,8 @@ def save_tabbed_report(
         initMaps(MARINE_VIEWERS, MARINE_IMAGES, {marine_h}, {marine_w}, {str(has_marine_bg).lower()}, VESSEL_GEOJSON);
 
         {grazing_js_block}
+
+        {kustlinje_js_block}
 
         // ── Chart.js (Fire tab) ──────────────────────────────────────────
         const CHART_DATA = {fire_chart_json};
