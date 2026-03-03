@@ -1,9 +1,14 @@
 """
-imint/fetch.py — DES/openEO data fetching and cloud detection
+imint/fetch.py — Sentinel-2 data fetching (DES + CDSE) and cloud detection
 
-Fetches Sentinel-2 L2A data from Digital Earth Sweden (DES) via openEO,
-handles multi-resolution bands, converts DN to reflectance, and checks
-cloud cover using the SCL (Scene Classification Layer) band.
+Fetches Sentinel-2 L2A data via openEO from two backends:
+  - DES (Digital Earth Sweden): ``fetch_des_data()``
+  - CDSE (Copernicus Data Space Ecosystem): ``fetch_copernicus_data()``
+  - Dispatcher: ``fetch_sentinel2_data(source="des"|"copernicus")``
+
+Both backends produce identical ``FetchResult`` objects with reflectance
+bands, SCL cloud mask, and RGB composites. Date discovery uses DES STAC
+for both backends.
 
 Also provides NMD (Nationellt Marktäckedata) fetching for LULC analysis.
 NMD is a static 10m land cover dataset from Naturvårdsverket.
@@ -13,11 +18,19 @@ SLU GET (Geodata Extraction Tool). This provides S-57 vector data for
 Swedish coastal and inland waters.
 
 Usage:
-    from imint.fetch import fetch_des_data, fetch_nmd_data, FetchError
-    from imint.fetch import fetch_sjokort_data
-    from imint.fetch import fetch_grazing_timeseries
+    from imint.fetch import fetch_des_data, fetch_copernicus_data, FetchError
+    from imint.fetch import fetch_sentinel2_data
+    from imint.fetch import fetch_nmd_data, fetch_sjokort_data
 
+    # DES backend (default)
     result = fetch_des_data(date="2022-06-15", coords={...})
+
+    # CDSE backend
+    result = fetch_copernicus_data(date="2022-06-15", coords={...})
+
+    # Or use the dispatcher
+    result = fetch_sentinel2_data(source="copernicus", date="2022-06-15", coords={...})
+
     if result.cloud_fraction < 0.3:
         # Use result.rgb and result.bands for analysis
         ...
@@ -82,6 +95,14 @@ GRAZING_BAND_ORDER = [
 # Download: b02(0) b03(1) b04(2) b08(3) b05(4) b06(5) b07(6) b8a(7) b11(8) b12(9) b01(10) b09(11)
 # Target:   b01(0) b02(1) b03(2) b04(3) b05(4) b06(5) b07(6) b08(7) b8a(8) b09(9) b11(10) b12(11)
 _GRAZING_REORDER = [10, 0, 1, 2, 4, 5, 6, 3, 7, 11, 8, 9]
+
+# ── CDSE (Copernicus Data Space Ecosystem) constants ─────────────────────────
+CDSE_OPENEO_URL = "https://openeo.dataspace.copernicus.eu/"
+CDSE_COLLECTION = "SENTINEL2_L2A"
+CDSE_BANDS_10M = ["B02", "B03", "B04", "B08"]
+CDSE_BANDS_20M_SPECTRAL = ["B05", "B06", "B07", "B8A", "B11", "B12"]
+CDSE_BANDS_60M = ["B09"]
+CDSE_BANDS_20M_CATEGORICAL = ["SCL"]
 
 # SCL cloud + shadow classes (Sentinel-2 L2A Scene Classification)
 # 3 = cloud_shadow, 8 = cloud_medium_probability,
@@ -475,38 +496,164 @@ def _connect(token: str | None = None, token_path: str | None = None):
     except Exception as e:
         raise FetchError(f"Failed to connect to {OPENEO_URL}: {e}")
 
-    # Basic Auth — DES community tutorial credentials
-    des_user = os.environ.get("DES_USER", "testuser")
-    des_password = os.environ.get("DES_PASSWORD", "secretpassword")
+    # Basic Auth — requires DES_USER + DES_PASSWORD env vars (or .env file)
+    des_user = os.environ.get("DES_USER")
+    des_password = os.environ.get("DES_PASSWORD")
+    if not des_user or not des_password:
+        raise FetchError(
+            "DES credentials not configured. "
+            "Set DES_USER and DES_PASSWORD env vars or add them to .env"
+        )
     conn.authenticate_basic(username=des_user, password=des_password)
     return conn
 
 
+# ── CDSE connection ──────────────────────────────────────────────────────────
+
+def _connect_cdse():
+    """Connect and authenticate to CDSE (Copernicus Data Space Ecosystem).
+
+    Authentication priority:
+        1. CDSE_CLIENT_ID + CDSE_CLIENT_SECRET env vars → client_credentials
+        2. .cdse_credentials file (email + password, one per line)
+        3. Fallback: authenticate_oidc() (interactive browser login)
+
+    Returns:
+        Authenticated openeo.Connection.
+
+    Raises:
+        FetchError: If authentication fails.
+    """
+    try:
+        import openeo
+    except ImportError:
+        raise ImportError(
+            "openeo is required for CDSE data fetching. "
+            "Install with: pip install openeo"
+        )
+
+    try:
+        conn = openeo.connect(CDSE_OPENEO_URL)
+    except Exception as e:
+        raise FetchError(f"Failed to connect to {CDSE_OPENEO_URL}: {e}")
+
+    # 1. Client credentials (service account)
+    client_id = os.environ.get("CDSE_CLIENT_ID")
+    client_secret = os.environ.get("CDSE_CLIENT_SECRET")
+
+    if client_id and client_secret:
+        try:
+            conn.authenticate_oidc_client_credentials(
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            return conn
+        except Exception as e:
+            raise FetchError(
+                f"CDSE client_credentials auth failed: {e}\n"
+                "Check CDSE_CLIENT_ID and CDSE_CLIENT_SECRET env vars."
+            )
+
+    # 2. Credentials file (.cdse_credentials):
+    #    Line 1: email, Line 2: password, Line 3: client_id, Line 4: client_secret
+    #    If client_id + client_secret present → client_credentials flow.
+    #    If only email + password → resource owner password flow.
+    cred_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ".cdse_credentials",
+    )
+    if os.path.isfile(cred_path):
+        try:
+            with open(cred_path) as f:
+                lines = [l.strip() for l in f.readlines()]
+        except Exception as e:
+            raise FetchError(f"Failed to read {cred_path}: {e}")
+
+        # 2a. Client credentials (lines 3+4: client_id, client_secret)
+        if len(lines) >= 4 and lines[2] and lines[3]:
+            try:
+                conn.authenticate_oidc_client_credentials(
+                    client_id=lines[2],
+                    client_secret=lines[3],
+                )
+                return conn
+            except Exception as e:
+                raise FetchError(
+                    f"CDSE client_credentials auth failed: {e}\n"
+                    f"Check client_id/secret in {cred_path}"
+                )
+
+        # 2b. Resource owner password (lines 1+2: email, password)
+        if len(lines) >= 2 and lines[0] and lines[1]:
+            file_client_id = lines[2] if len(lines) >= 3 and lines[2] else "cdse-public"
+            try:
+                conn.authenticate_oidc_resource_owner_password_credentials(
+                    username=lines[0],
+                    password=lines[1],
+                    client_id=file_client_id,
+                )
+                return conn
+            except Exception as e:
+                raise FetchError(
+                    f"CDSE password auth failed: {e}\n"
+                    f"Check credentials in {cred_path}"
+                )
+
+    # 3. Fallback: interactive OIDC (opens browser)
+    try:
+        conn.authenticate_oidc()
+        return conn
+    except Exception as e:
+        raise FetchError(
+            f"CDSE OIDC auth failed: {e}\n"
+            "Set CDSE_CLIENT_ID + CDSE_CLIENT_SECRET env vars, or create "
+            f"{cred_path} with email on line 1 and password on line 2."
+        )
+
+
 # ── Main fetch function ─────────────────────────────────────────────────────
 
-def _fetch_scl(conn, projected_coords: dict, temporal: list, date_window: int):
-    """Fetch only the SCL band from DES and compute cloud fraction.
+def _fetch_scl(conn, projected_coords: dict, temporal: list, date_window: int,
+               source: str = "des"):
+    """Fetch only the SCL band and compute cloud fraction.
 
     This is a lightweight request (~20x smaller than full spectral fetch)
     used to pre-screen scenes before downloading expensive spectral bands.
+
+    Args:
+        conn: openEO connection (DES or CDSE).
+        projected_coords: EPSG:3006 bbox dict with ``"crs"`` key.
+        temporal: Two-element list ``[start_date, end_date]``.
+        date_window: Days before/after to search.
+        source: ``"des"`` or ``"copernicus"`` — selects collection/band names.
 
     Returns:
         Tuple of (scl_array, cloud_fraction, crs, transform).
     """
     import rasterio
 
+    # Select collection + band names based on source
+    if source == "copernicus":
+        _collection = CDSE_COLLECTION
+        _ref_band = "B02"
+        _scl_bands = CDSE_BANDS_20M_CATEGORICAL
+    else:
+        _collection = COLLECTION
+        _ref_band = "b02"
+        _scl_bands = BANDS_20M_CATEGORICAL
+
     # Load SCL at native 20m, resample to 10m grid
     cube_ref = conn.load_collection(
-        collection_id=COLLECTION,
+        collection_id=_collection,
         spatial_extent=projected_coords,
         temporal_extent=temporal,
-        bands=["b02"],  # lightweight reference for grid alignment
+        bands=[_ref_band],  # lightweight reference for grid alignment
     )
     cube_scl = conn.load_collection(
-        collection_id=COLLECTION,
+        collection_id=_collection,
         spatial_extent=projected_coords,
         temporal_extent=temporal,
-        bands=BANDS_20M_CATEGORICAL,
+        bands=_scl_bands,
     )
     cube_scl = cube_scl.resample_cube_spatial(target=cube_ref, method="near")
 
@@ -515,7 +662,7 @@ def _fetch_scl(conn, projected_coords: dict, temporal: list, date_window: int):
 
     data = cube_scl.download(format="gtiff")
     if not data:
-        raise FetchError("DES returned empty SCL data")
+        raise FetchError(f"{source.upper()} returned empty SCL data")
 
     with rasterio.open(io.BytesIO(data)) as src:
         raw = src.read()
@@ -533,10 +680,11 @@ def _fetch_scl_batch(
     candidate_dates: list[str] | None = None,
     *,
     temporal: list[str] | None = None,
+    source: str = "des",
 ) -> list[tuple[str, float]]:
-    """Fetch SCL for multiple dates in one DES call, return per-date cloud fractions.
+    """Fetch SCL for multiple dates in one call, return per-date cloud fractions.
 
-    DES returns multi-date downloads as a ``.tar.gz`` archive containing
+    Multi-date downloads are returned as a ``.tar.gz`` archive containing
     one GeoTIFF per date (filename pattern ``out_YYYY_MM_DDT...tif``).
     This function extracts each TIF, parses the date from the filename,
     and computes ``check_cloud_fraction`` locally.
@@ -550,24 +698,35 @@ def _fetch_scl_batch(
       "skip STAC" mode where DES discovers available dates directly.
 
     Args:
-        conn: openEO connection.
+        conn: openEO connection (DES or CDSE).
         projected_coords: EPSG:3006 bbox dict with ``"crs"`` key.
         candidate_dates: Optional list of date strings to filter to.
         temporal: Optional ``[start, end)`` ISO date pair.  If given,
             *candidate_dates* is ignored and all dates are returned.
+        source: ``"des"`` or ``"copernicus"`` — selects collection/band names.
 
     Returns:
         List of ``(date_str, cloud_fraction)`` sorted by date or in
         *candidate_dates* order.
 
     Raises:
-        FetchError: If DES returns empty/unparseable data.
+        FetchError: If backend returns empty/unparseable data.
     """
     import re
     import gzip
     import tarfile
     import rasterio
     from datetime import datetime as _dt, timedelta as _td
+
+    # Select collection + band names based on source
+    if source == "copernicus":
+        _collection = CDSE_COLLECTION
+        _ref_band = "B02"
+        _scl_bands = CDSE_BANDS_20M_CATEGORICAL
+    else:
+        _collection = COLLECTION
+        _ref_band = "b02"
+        _scl_bands = BANDS_20M_CATEGORICAL
 
     # Determine temporal extent
     if temporal is not None:
@@ -583,22 +742,22 @@ def _fetch_scl_batch(
 
     # Load SCL, resample to 10m grid
     cube_ref = conn.load_collection(
-        collection_id=COLLECTION,
+        collection_id=_collection,
         spatial_extent=projected_coords,
         temporal_extent=_temporal,
-        bands=["b02"],
+        bands=[_ref_band],
     )
     cube_scl = conn.load_collection(
-        collection_id=COLLECTION,
+        collection_id=_collection,
         spatial_extent=projected_coords,
         temporal_extent=_temporal,
-        bands=BANDS_20M_CATEGORICAL,
+        bands=_scl_bands,
     )
     cube_scl = cube_scl.resample_cube_spatial(target=cube_ref, method="near")
 
     data = cube_scl.download(format="gtiff")
     if not data:
-        raise FetchError("DES returned empty SCL batch data")
+        raise FetchError(f"{source.upper()} returned empty SCL batch data")
 
     # DES returns tar.gz for multi-date results
     cloud_by_date: dict[str, float] = {}
@@ -829,6 +988,216 @@ def fetch_des_data(
     )
 
 
+# ── CDSE / Copernicus data fetching ──────────────────────────────────────────
+
+def fetch_copernicus_data(
+    date: str,
+    coords: dict,
+    cloud_threshold: float = 0.1,
+    include_scl: bool = True,
+    date_window: int = 0,
+) -> FetchResult:
+    """Fetch Sentinel-2 L2A data from CDSE via openEO.
+
+    Mirrors ``fetch_des_data`` but uses the Copernicus Data Space Ecosystem
+    (CDSE) openEO backend. Date discovery still uses DES STAC (via
+    ``_stac_best_date``); only the data fetch goes through CDSE.
+
+    Band names on CDSE are uppercase (B02, SCL) and DN→reflectance uses
+    ``source="copernicus"`` (offset = -1000).
+
+    Args:
+        date: ISO date string, e.g. "2022-06-15".
+        coords: Bounding box dict with keys: west, south, east, north.
+        cloud_threshold: Maximum cloud fraction (0.0–1.0). Default: 0.1.
+        include_scl: If True, fetch SCL band for cloud stats.
+        date_window: Days before/after date to search for imagery.
+                     0 = single day, 5 = ±5 days window.
+
+    Returns:
+        FetchResult with bands, rgb, cloud_fraction, etc.
+
+    Raises:
+        FetchError: If data fetching fails or cloud cover exceeds threshold.
+    """
+    import rasterio
+    from datetime import datetime, timedelta
+
+    # STAC-guided date selection (uses DES STAC, same as fetch_des_data)
+    if date_window > 0:
+        date = _stac_best_date(coords, date, date_window)
+        date_window = 0
+
+    conn = _connect_cdse()
+
+    # Project WGS84 coords to EPSG:3006 snapped to NMD 10m grid
+    projected_coords = _to_nmd_grid(coords)
+
+    # Temporal extent: single date
+    dt = datetime.strptime(date, "%Y-%m-%d")
+    start = dt.strftime("%Y-%m-%d")
+    end = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    temporal = [start, end]
+
+    # ── Fetch all bands in a single request ──────────────────────────────
+    try:
+        print(f"    [CDSE] Fetching spectral bands{' + SCL' if include_scl else ''}...")
+
+        # Load 10m bands (EPSG:3006, snapped to NMD grid)
+        cube_10m = conn.load_collection(
+            collection_id=CDSE_COLLECTION,
+            spatial_extent=projected_coords,
+            temporal_extent=temporal,
+            bands=CDSE_BANDS_10M,
+        )
+
+        # Load 20m spectral bands, resample to 10m with bilinear
+        cube_20m = conn.load_collection(
+            collection_id=CDSE_COLLECTION,
+            spatial_extent=projected_coords,
+            temporal_extent=temporal,
+            bands=CDSE_BANDS_20M_SPECTRAL,
+        )
+        cube_20m = cube_20m.resample_cube_spatial(
+            target=cube_10m, method="bilinear"
+        )
+
+        # Load 60m bands (B09), resample to 10m
+        cube_60m = conn.load_collection(
+            collection_id=CDSE_COLLECTION,
+            spatial_extent=projected_coords,
+            temporal_extent=temporal,
+            bands=CDSE_BANDS_60M,
+        )
+        cube_60m = cube_60m.resample_cube_spatial(
+            target=cube_10m, method="bilinear"
+        )
+
+        # Merge spectral bands
+        cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_60m)
+
+        # Optionally include SCL (resampled to 10m with nearest-neighbor)
+        if include_scl:
+            cube_scl = conn.load_collection(
+                collection_id=CDSE_COLLECTION,
+                spatial_extent=projected_coords,
+                temporal_extent=temporal,
+                bands=CDSE_BANDS_20M_CATEGORICAL,
+            )
+            cube_scl = cube_scl.resample_cube_spatial(
+                target=cube_10m, method="near"
+            )
+            cube = cube.merge_cubes(cube_scl)
+
+        if date_window > 0:
+            cube = cube.reduce_dimension(
+                dimension="t", reducer="last"
+            )
+
+        # Download as GeoTIFF
+        data = cube.download(format="gtiff")
+
+        if not data:
+            raise FetchError(f"CDSE returned empty data for {date}")
+
+    except FetchError:
+        raise
+    except Exception as e:
+        raise FetchError(f"CDSE fetch failed for {date}: {e}")
+
+    # Parse GeoTIFF
+    try:
+        with rasterio.open(io.BytesIO(data)) as src:
+            raw = src.read()  # (n_bands, H, W)
+            crs = src.crs
+            transform = src.transform
+    except Exception as e:
+        raise FetchError(f"Failed to parse CDSE GeoTIFF for {date}: {e}")
+
+    # Snap to target NMD grid
+    target_bounds = {k: v for k, v in projected_coords.items() if k != "crs"}
+    raw, transform = _snap_to_target_grid(
+        raw, transform, crs, target_bounds, pixel_size=NMD_GRID_SIZE,
+    )
+    crs = rasterio.crs.CRS.from_epsg(3006)
+
+    # Split into individual bands (order follows merge order)
+    # 10m: B02=0, B03=1, B04=2, B08=3
+    # 20m spectral: B05=4, B06=5, B07=6, B8A=7, B11=8, B12=9
+    # 60m: B09=10
+    # SCL: 11 (if included)
+    spectral_names = CDSE_BANDS_10M + CDSE_BANDS_20M_SPECTRAL + CDSE_BANDS_60M
+    n_spectral = len(spectral_names)
+
+    # Convert spectral bands: DN → reflectance (CDSE offset)
+    # CDSE bands are already uppercase — map to IMINT names directly
+    imint_bands = {}
+    for i, band_name in enumerate(spectral_names):
+        imint_bands[band_name] = dn_to_reflectance(raw[i], source="copernicus")
+
+    # Extract SCL if present (last band)
+    scl = None
+    cloud_fraction = 0.0
+    if include_scl and raw.shape[0] > n_spectral:
+        scl = raw[n_spectral].astype(np.uint8)
+        cloud_fraction = check_cloud_fraction(scl)
+        print(f"    [CDSE] Cloud fraction: {cloud_fraction:.1%}")
+
+        if cloud_fraction > cloud_threshold:
+            raise FetchError(
+                f"Scene too cloudy: {cloud_fraction:.1%} cloud "
+                f"(threshold: {cloud_threshold:.0%}). "
+                f"Try a different date or wider date_window."
+            )
+
+    # Create RGB composite
+    rgb = bands_to_rgb(imint_bands, scl=scl)
+
+    # Build GeoContext
+    geo = GeoContext(
+        crs=str(crs),
+        transform=transform,
+        bounds_projected={k: v for k, v in projected_coords.items() if k != "crs"},
+        bounds_wgs84=coords,
+        shape=rgb.shape[:2],
+    )
+
+    return FetchResult(
+        bands=imint_bands,
+        scl=scl,
+        cloud_fraction=cloud_fraction,
+        rgb=rgb,
+        geo=geo,
+        crs=crs,
+        transform=transform,
+    )
+
+
+def fetch_sentinel2_data(
+    source: str = "des",
+    **kwargs,
+) -> FetchResult:
+    """Fetch Sentinel-2 L2A data from either DES or CDSE.
+
+    Dispatcher that routes to ``fetch_des_data`` or ``fetch_copernicus_data``
+    based on the ``source`` argument.
+
+    Args:
+        source: "des" for Digital Earth Sweden (default),
+                "copernicus" for CDSE.
+        **kwargs: Passed through to the underlying fetch function.
+
+    Returns:
+        FetchResult (identical format from both backends).
+    """
+    if source == "copernicus":
+        return fetch_copernicus_data(**kwargs)
+    elif source == "des":
+        return fetch_des_data(**kwargs)
+    else:
+        raise ValueError(f"Unknown source '{source}'. Use 'des' or 'copernicus'.")
+
+
 # ── Seasonal / multitemporal fetching ────────────────────────────────────────
 
 
@@ -888,18 +1257,21 @@ def fetch_seasonal_image(
     date: str,
     coords: dict,
     prithvi_bands: list[str] | None = None,
+    source: str = "des",
 ) -> tuple[np.ndarray, str] | None:
     """Fetch a single Sentinel-2 scene for seasonal tile assembly.
 
-    Uses the standard ``fetch_des_data`` pipeline (including NMD grid
-    snapping and sub-pixel correction) but skips SCL and cloud threshold
-    since STAC + SCL pre-screening has already been done.
+    Uses ``fetch_sentinel2_data`` (routing to DES or CDSE based on
+    *source*) with grid snapping and sub-pixel correction, but skips
+    SCL and cloud threshold since STAC + SCL pre-screening has already
+    been done.
 
     Args:
         date: ISO date string (already cloud-screened).
         coords: WGS84 bounding box dict.
         prithvi_bands: Band names for stacking, e.g. ["B02", ..., "B12"].
                        Defaults to the Prithvi 6-band set.
+        source: ``"des"`` or ``"copernicus"`` — backend to fetch from.
 
     Returns:
         Tuple of ``(image_array, date_str)`` where image_array is
@@ -910,7 +1282,8 @@ def fetch_seasonal_image(
         prithvi_bands = ["B02", "B03", "B04", "B8A", "B11", "B12"]
 
     try:
-        result = fetch_des_data(
+        result = fetch_sentinel2_data(
+            source=source,
             date=date,
             coords=coords,
             cloud_threshold=1.0,    # already screened

@@ -23,6 +23,9 @@ class TrainingConfig:
     cloud_threshold: float = 0.05
     b02_haze_threshold: float = 0.06                  # Max mean B02 reflectance
                                                        # for clear-sky quality gate
+    fetch_sources: list[str] = field(                  # Backends for data fetching
+        default_factory=lambda: ["copernicus", "des"]  # "copernicus" (CDSE), "des"
+    )                                                  # Multiple = parallel load balance
 
     # ── Multitemporal / seasonal ─────────────────────────────────────────
     # When enabled, each tile stores T temporal frames as (T*6, H, W).
@@ -101,14 +104,13 @@ class TrainingConfig:
     aux_cache_enabled: bool = True                       # Cache aux tiles as .npy
 
     # Z-score normalization for aux channels: {name: (mean, std)}
-    # Computed from non-zero pixels across all training tiles.
-    # Placeholder values — recalculate with scripts/compute_aux_stats.py
+    # Computed from non-zero pixels across 5801 tiles (lulc_full).
     aux_norm: dict = field(default_factory=lambda: {
-        "height":     (5.0, 6.0),      # meters (Skogsstyrelsen trädhöjd)
-        "volume":     (50.0, 70.0),    # m³sk/ha (Skogliga grunddata)
-        "basal_area": (7.0, 8.0),     # m²/ha (grundyta)
-        "diameter":   (6.0, 7.0),     # cm (medeldiameter)
-        "dem":        (200.0, 200.0), # meters a.s.l. (Copernicus DEM)
+        "height":     (7.31, 6.49),      # meters (Skogsstyrelsen trädhöjd)
+        "volume":     (109.69, 106.77),  # m³sk/ha (Skogliga grunddata)
+        "basal_area": (15.07, 9.95),     # m²/ha (grundyta)
+        "diameter":   (15.28, 7.88),     # cm (medeldiameter)
+        "dem":        (261.56, 214.59),  # meters a.s.l. (Copernicus DEM)
     })
 
     # ── Validation split (latitude-based) ─────────────────────────────────

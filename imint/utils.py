@@ -22,12 +22,23 @@ DATA_SOURCES = {
             "Verified: vegetation B04 DN ~1960 → (1960-1000)/10000 = 0.096"
         ),
     },
-    "copernicus": {
+    "copernicus_raw": {
         "offset": -1000,
         "scale": 10000,
         "description": (
-            "Copernicus Data Space (CDSE). Raw L2A with RADIO_ADD_OFFSET=-1000. "
+            "Copernicus Data Space (CDSE) raw L2A files (S3/OData download). "
+            "RADIO_ADD_OFFSET=-1000 NOT applied by the file format. "
             "reflectance = (DN - (-1000)) / 10000 = (DN + 1000) / 10000"
+        ),
+    },
+    "copernicus": {
+        "offset": 0,
+        "scale": 10000,
+        "description": (
+            "Copernicus Data Space (CDSE) via openEO. The openEO backend "
+            "applies RADIO_ADD_OFFSET internally, so output DN is already "
+            "corrected: reflectance = DN / 10000. "
+            "Verified: cross-validated against DES for identical scenes."
         ),
     },
     "legacy": {

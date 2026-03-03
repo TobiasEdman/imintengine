@@ -14,11 +14,19 @@ from imint.fetch import (
     BANDS_10M,
     BANDS_20M_SPECTRAL,
     BANDS_20M_CATEGORICAL,
+    CDSE_BANDS_10M,
+    CDSE_BANDS_20M_SPECTRAL,
+    CDSE_BANDS_20M_CATEGORICAL,
+    CDSE_COLLECTION,
+    CDSE_OPENEO_URL,
     NMD_GRID_SIZE,
     TARGET_CRS,
     _connect,
+    _connect_cdse,
     _to_nmd_grid,
     fetch_des_data,
+    fetch_copernicus_data,
+    fetch_sentinel2_data,
 )
 
 
@@ -579,3 +587,315 @@ class TestFetchDesDataSTAC:
                 date_window=0,
             )
             mock_stac.assert_not_called()
+
+
+# ── CDSE band constants ──────────────────────────────────────────────────────
+
+class TestCDSEBandConstants:
+    """Verify CDSE band grouping constants."""
+
+    def test_cdse_10m_bands(self):
+        assert CDSE_BANDS_10M == ["B02", "B03", "B04", "B08"]
+
+    def test_cdse_20m_spectral_bands(self):
+        assert CDSE_BANDS_20M_SPECTRAL == ["B05", "B06", "B07", "B8A", "B11", "B12"]
+
+    def test_cdse_20m_categorical_bands(self):
+        assert CDSE_BANDS_20M_CATEGORICAL == ["SCL"]
+
+    def test_cdse_all_uppercase(self):
+        """CDSE uses uppercase band names."""
+        from imint.fetch import CDSE_BANDS_60M
+        for band in CDSE_BANDS_10M + CDSE_BANDS_20M_SPECTRAL + CDSE_BANDS_60M + CDSE_BANDS_20M_CATEGORICAL:
+            assert band == band.upper()
+
+    def test_cdse_collection_name(self):
+        assert CDSE_COLLECTION == "SENTINEL2_L2A"
+
+    def test_cdse_openeo_url(self):
+        assert "dataspace.copernicus.eu" in CDSE_OPENEO_URL
+
+
+# ── _connect_cdse ────────────────────────────────────────────────────────────
+
+class TestConnectCDSE:
+    """Verify CDSE authentication priority."""
+
+    @patch.dict("os.environ", {"CDSE_CLIENT_ID": "test-id", "CDSE_CLIENT_SECRET": "test-secret"}, clear=False)
+    @patch("imint.fetch.openeo", create=True)
+    def test_client_credentials_auth(self, mock_openeo_module):
+        """Should use client_credentials when env vars are set."""
+        mock_conn = MagicMock()
+        with patch.dict("sys.modules", {"openeo": mock_openeo_module}):
+            mock_openeo_module.connect.return_value = mock_conn
+
+            result = _connect_cdse()
+
+            mock_openeo_module.connect.assert_called_once_with(CDSE_OPENEO_URL)
+            mock_conn.authenticate_oidc_client_credentials.assert_called_once_with(
+                client_id="test-id",
+                client_secret="test-secret",
+            )
+            assert result is mock_conn
+
+    @patch.dict("os.environ", {}, clear=False)
+    @patch("imint.fetch.openeo", create=True)
+    def test_oidc_fallback(self, mock_openeo_module):
+        """Should fall back to interactive OIDC when no client credentials or cred file."""
+        mock_conn = MagicMock()
+        with patch.dict("sys.modules", {"openeo": mock_openeo_module}):
+            mock_openeo_module.connect.return_value = mock_conn
+
+            # Remove CDSE env vars and mock away credentials file
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("CDSE_CLIENT_ID", "CDSE_CLIENT_SECRET")}
+            with patch.dict("os.environ", env, clear=True), \
+                 patch("os.path.isfile", return_value=False):
+                result = _connect_cdse()
+
+                mock_conn.authenticate_oidc.assert_called_once()
+                assert result is mock_conn
+
+    @patch.dict("os.environ", {"CDSE_CLIENT_ID": "bad-id", "CDSE_CLIENT_SECRET": "bad-secret"}, clear=False)
+    @patch("imint.fetch.openeo", create=True)
+    def test_client_credentials_failure(self, mock_openeo_module):
+        """Should raise FetchError on auth failure."""
+        mock_conn = MagicMock()
+        mock_conn.authenticate_oidc_client_credentials.side_effect = Exception("auth failed")
+        with patch.dict("sys.modules", {"openeo": mock_openeo_module}):
+            mock_openeo_module.connect.return_value = mock_conn
+
+            with pytest.raises(FetchError, match="client_credentials auth failed"):
+                _connect_cdse()
+
+
+# ── fetch_copernicus_data (mocked) ───────────────────────────────────────────
+
+class TestFetchCopernicusData:
+    """Verify fetch_copernicus_data with mocked CDSE backend."""
+
+    def _mock_cdse_fetch(self, mock_connect, mock_rasterio_open,
+                          h=64, w=64, scl_value=4, include_scl=True):
+        """Set up mocks for CDSE fetch (all bands in one request).
+
+        Band order in the merged GeoTIFF (UPPERCASE):
+          10m: B02=0, B03=1, B04=2, B08=3
+          20m spectral: B05=4, B06=5, B07=6, B8A=7, B11=8, B12=9
+          60m: B09=10
+          SCL: 11 (if included)
+        """
+        mock_conn = MagicMock()
+        mock_connect.return_value = mock_conn
+
+        mock_cube = MagicMock()
+        mock_conn.load_collection.return_value = mock_cube
+        mock_cube.resample_cube_spatial.return_value = mock_cube
+        mock_cube.merge_cubes.return_value = mock_cube
+        mock_cube.reduce_dimension.return_value = mock_cube
+        mock_cube.download.return_value = b"geotiff-data"
+
+        # Build single merged GeoTIFF: 11 spectral + 1 SCL
+        n_bands = 12 if include_scl else 11
+        # CDSE openEO DN values: backend applies RADIO_ADD_OFFSET,
+        # so DN = reflectance * 10000 (offset=0)
+        raw = np.zeros((n_bands, h, w), dtype=np.int16)
+        raw[0] = 500    # B02 → refl = 500/10000 = 0.05
+        raw[1] = 1000   # B03 → refl = 1000/10000 = 0.10
+        raw[2] = 960    # B04 → refl = 960/10000 = 0.096
+        raw[3] = 3000   # B08 → refl = 3000/10000 = 0.30
+        raw[4] = 1500   # B05
+        raw[5] = 1700   # B06
+        raw[6] = 1900   # B07
+        raw[7] = 2500   # B8A
+        raw[8] = 1300   # B11
+        raw[9] = 1100   # B12
+        raw[10] = 800   # B09
+        if include_scl:
+            raw[11] = scl_value
+
+        def make_mock_src(data):
+            src = MagicMock()
+            src.read.return_value = data
+            src.crs = "EPSG:3006"
+            src.transform = "mock-transform"
+            src.__enter__ = MagicMock(return_value=src)
+            src.__exit__ = MagicMock(return_value=False)
+            return src
+
+        mock_rasterio_open.return_value = make_mock_src(raw)
+        return mock_conn
+
+    @patch("imint.fetch._snap_to_target_grid")
+    @patch("rasterio.open")
+    @patch("imint.fetch._connect_cdse")
+    def test_returns_fetch_result(self, mock_connect, mock_rasterio_open, mock_snap):
+        """fetch_copernicus_data should return FetchResult with correct fields."""
+        h, w = 64, 64
+        self._mock_cdse_fetch(mock_connect, mock_rasterio_open, h, w, scl_value=4)
+        # _snap_to_target_grid passes through raw unchanged
+        mock_snap.side_effect = lambda raw, *a, **kw: (raw, "mock-transform")
+
+        result = fetch_copernicus_data(
+            date="2022-06-15",
+            coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+        )
+
+        assert isinstance(result, FetchResult)
+        assert "B02" in result.bands
+        assert "B04" in result.bands
+        assert "B8A" in result.bands
+        assert "B11" in result.bands
+        assert "B12" in result.bands
+        assert result.scl is not None
+        assert result.cloud_fraction == 0.0  # all vegetation
+        assert result.rgb.shape == (h, w, 3)
+
+    @patch("imint.fetch._snap_to_target_grid")
+    @patch("rasterio.open")
+    @patch("imint.fetch._connect_cdse")
+    def test_copernicus_reflectance_conversion(self, mock_connect, mock_rasterio_open, mock_snap):
+        """Verify CDSE DN→reflectance uses copernicus offset.
+
+        B04 DN=-40 → refl = (-40+1000)/10000 = 0.096
+        """
+        h, w = 64, 64
+        self._mock_cdse_fetch(mock_connect, mock_rasterio_open, h, w, scl_value=4)
+        mock_snap.side_effect = lambda raw, *a, **kw: (raw, "mock-transform")
+
+        result = fetch_copernicus_data(
+            date="2022-06-15",
+            coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+        )
+
+        # B04 DN=960 → 960/10000 = 0.096 (openEO applies offset)
+        assert abs(result.bands["B04"].mean() - 0.096) < 1e-4
+
+    @patch("imint.fetch._snap_to_target_grid")
+    @patch("rasterio.open")
+    @patch("imint.fetch._connect_cdse")
+    def test_uses_cdse_collection(self, mock_connect, mock_rasterio_open, mock_snap):
+        """Should use SENTINEL2_L2A collection on CDSE."""
+        h, w = 64, 64
+        mock_conn = self._mock_cdse_fetch(mock_connect, mock_rasterio_open, h, w)
+        mock_snap.side_effect = lambda raw, *a, **kw: (raw, "mock-transform")
+
+        fetch_copernicus_data(
+            date="2022-06-15",
+            coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+        )
+
+        # Verify all load_collection calls used CDSE collection
+        for call_args in mock_conn.load_collection.call_args_list:
+            collection = call_args[1].get("collection_id") or call_args[0][0]
+            assert collection == "SENTINEL2_L2A"
+
+    @patch("imint.fetch._snap_to_target_grid")
+    @patch("rasterio.open")
+    @patch("imint.fetch._connect_cdse")
+    def test_rejects_cloudy_scene(self, mock_connect, mock_rasterio_open, mock_snap):
+        """Should raise FetchError when cloud fraction exceeds threshold."""
+        h, w = 64, 64
+        self._mock_cdse_fetch(mock_connect, mock_rasterio_open, h, w, scl_value=9)
+        mock_snap.side_effect = lambda raw, *a, **kw: (raw, "mock-transform")
+
+        with pytest.raises(FetchError, match="too cloudy"):
+            fetch_copernicus_data(
+                date="2022-06-15",
+                coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+                cloud_threshold=0.1,
+            )
+
+    @patch("imint.fetch._connect_cdse")
+    def test_fetch_error_on_empty_data(self, mock_connect):
+        """Should raise FetchError when CDSE returns empty data."""
+        mock_conn = MagicMock()
+        mock_connect.return_value = mock_conn
+
+        mock_cube = MagicMock()
+        mock_conn.load_collection.return_value = mock_cube
+        mock_cube.resample_cube_spatial.return_value = mock_cube
+        mock_cube.merge_cubes.return_value = mock_cube
+        mock_cube.download.return_value = b""
+
+        with pytest.raises(FetchError, match="empty"):
+            fetch_copernicus_data(
+                date="2022-06-15",
+                coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+                include_scl=False,
+            )
+
+    @patch("imint.fetch._snap_to_target_grid")
+    @patch("imint.fetch._stac_best_date")
+    @patch("rasterio.open")
+    @patch("imint.fetch._connect_cdse")
+    def test_uses_des_stac_for_date_selection(self, mock_connect, mock_rasterio_open, mock_stac, mock_snap):
+        """fetch_copernicus_data should use DES STAC for date discovery."""
+        mock_stac.return_value = "2022-06-14"
+        mock_snap.side_effect = lambda raw, *a, **kw: (raw, "mock-transform")
+        h, w = 64, 64
+        self._mock_cdse_fetch(mock_connect, mock_rasterio_open, h, w, scl_value=4)
+
+        result = fetch_copernicus_data(
+            date="2022-06-15",
+            coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+            date_window=5,
+        )
+
+        assert isinstance(result, FetchResult)
+        mock_stac.assert_called_once()
+
+
+# ── fetch_sentinel2_data dispatcher ──────────────────────────────────────────
+
+class TestFetchSentinel2Data:
+    """Verify fetch_sentinel2_data dispatcher."""
+
+    @patch("imint.fetch.fetch_des_data")
+    def test_default_routes_to_des(self, mock_des):
+        """Default source should route to fetch_des_data."""
+        mock_des.return_value = MagicMock(spec=FetchResult)
+
+        fetch_sentinel2_data(
+            date="2022-06-15",
+            coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+        )
+
+        mock_des.assert_called_once()
+
+    @patch("imint.fetch.fetch_copernicus_data")
+    def test_copernicus_routes_to_cdse(self, mock_cdse):
+        """source='copernicus' should route to fetch_copernicus_data."""
+        mock_cdse.return_value = MagicMock(spec=FetchResult)
+
+        fetch_sentinel2_data(
+            source="copernicus",
+            date="2022-06-15",
+            coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+        )
+
+        mock_cdse.assert_called_once()
+
+    def test_invalid_source_raises(self):
+        """Unknown source should raise ValueError."""
+        with pytest.raises(ValueError, match="Unknown source"):
+            fetch_sentinel2_data(source="invalid")
+
+    @patch("imint.fetch.fetch_des_data")
+    def test_passes_kwargs_through(self, mock_des):
+        """All kwargs should be forwarded to the underlying function."""
+        mock_des.return_value = MagicMock(spec=FetchResult)
+
+        fetch_sentinel2_data(
+            source="des",
+            date="2022-06-15",
+            coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+            cloud_threshold=0.5,
+            date_window=3,
+        )
+
+        mock_des.assert_called_once_with(
+            date="2022-06-15",
+            coords={"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0},
+            cloud_threshold=0.5,
+            date_window=3,
+        )

@@ -62,9 +62,15 @@ class TestDNSourceProfiles:
         assert abs(refl[0] - 0.096) < 1e-4
 
     def test_copernicus_source(self):
-        """Copernicus/CDSE: (DN + 1000) / 10000."""
+        """Copernicus/CDSE via openEO: DN / 10000 (offset already applied by backend)."""
         dn = np.array([960], dtype=np.float32)
         refl = dn_to_reflectance(dn, source="copernicus")
+        assert abs(refl[0] - 0.096) < 1e-4
+
+    def test_copernicus_raw_source(self):
+        """Copernicus/CDSE raw files: (DN + 1000) / 10000."""
+        dn = np.array([960], dtype=np.float32)
+        refl = dn_to_reflectance(dn, source="copernicus_raw")
         assert abs(refl[0] - 0.196) < 1e-4
 
     def test_legacy_source(self):
@@ -79,6 +85,65 @@ class TestDNSourceProfiles:
         refl_default = dn_to_reflectance(dn)
         refl_des = dn_to_reflectance(dn, source="des")
         np.testing.assert_array_equal(refl_default, refl_des)
+
+
+class TestCopernicusReflectanceOffset:
+    """Validate CDSE DN→reflectance offset for openEO and raw data.
+
+    CDSE via openEO: the backend applies RADIO_ADD_OFFSET internally,
+    so output DN is already corrected. reflectance = DN / 10000.
+
+    CDSE raw files (S3/OData): RADIO_ADD_OFFSET=-1000 is NOT applied.
+    reflectance = (DN + 1000) / 10000.
+    """
+
+    def test_copernicus_openeo_offset_range(self):
+        """Verify CDSE openEO DN (offset=0) produces correct reflectance.
+
+        openEO applies RADIO_ADD_OFFSET, so DN=960 → refl = 960/10000 = 0.096.
+        """
+        dn = np.array([0, 500, 960, 5000], dtype=np.float32)
+        refl = dn_to_reflectance(dn, source="copernicus")
+        expected = np.array([0.00, 0.05, 0.096, 0.50])
+        np.testing.assert_allclose(refl, expected, atol=1e-6)
+
+    def test_des_vs_copernicus_same_reflectance(self):
+        """DES DN=1960 and CDSE openEO DN=960 should both give reflectance≈0.096.
+
+        DES:   (1960 - 1000) / 10000 = 0.096
+        CDSE:  960 / 10000 = 0.096  (openEO already applied offset)
+        """
+        des_refl = dn_to_reflectance(np.array([1960.0]), source="des")
+        cdse_refl = dn_to_reflectance(np.array([960.0]), source="copernicus")
+        np.testing.assert_allclose(des_refl, cdse_refl, atol=1e-6)
+
+    def test_copernicus_nodata_clips_to_zero(self):
+        """CDSE openEO DN=0 → refl = 0/10000 = 0.0."""
+        dn = np.array([0], dtype=np.float32)
+        refl = dn_to_reflectance(dn, source="copernicus", clip=True)
+        assert refl[0] == 0.0
+
+    def test_copernicus_high_reflectance(self):
+        """CDSE openEO DN=10000 → refl = 10000/10000 = 1.0."""
+        dn = np.array([10000], dtype=np.float32)
+        refl = dn_to_reflectance(dn, source="copernicus")
+        assert abs(refl[0] - 1.0) < 1e-6
+
+    def test_copernicus_raw_offset(self):
+        """CDSE raw files: DN=-500 → refl = (-500+1000)/10000 = 0.05."""
+        dn = np.array([-500], dtype=np.float32)
+        refl = dn_to_reflectance(dn, source="copernicus_raw", clip=False)
+        np.testing.assert_allclose(refl, [0.05], atol=1e-6)
+
+    def test_copernicus_raw_vs_openeo_equivalence(self):
+        """Same reflectance from raw and openEO should agree.
+
+        Raw DN=-40 → (−40+1000)/10000 = 0.096
+        openEO DN=960 → 960/10000 = 0.096
+        """
+        raw_refl = dn_to_reflectance(np.array([-40.0]), source="copernicus_raw")
+        openeo_refl = dn_to_reflectance(np.array([960.0]), source="copernicus")
+        np.testing.assert_allclose(raw_refl, openeo_refl, atol=1e-6)
 
 
 class TestDesToImintBands:

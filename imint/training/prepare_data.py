@@ -199,10 +199,12 @@ def prepare_training_data(config: TrainingConfig) -> None:
     into a queue; consumer threads pick them up for STAC + DES fetch.
     """
     from ..fetch import (
-        fetch_des_data, fetch_nmd_data,
-        _connect, _stac_available_dates, _fetch_scl, _fetch_scl_batch,
+        fetch_des_data, fetch_copernicus_data, fetch_nmd_data,
+        _connect, _connect_cdse,
+        _stac_available_dates, _fetch_scl, _fetch_scl_batch,
         _to_nmd_grid, FetchError,
         fetch_seasonal_dates, fetch_seasonal_image,
+        fetch_sentinel2_data,
     )
 
     data_dir = Path(config.data_dir)
@@ -234,6 +236,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
         _aux.append("dem")
     if _aux:
         print(f"  Aux channels: {', '.join(_aux)}")
+    print(f"  Fetch sources: {', '.join(s.upper() for s in config.fetch_sources)}")
     print(f"{'='*60}")
 
     patch_size_m = config.fetch_pixels * 10  # 10m resolution
@@ -328,10 +331,38 @@ def prepare_training_data(config: TrainingConfig) -> None:
     failed = set(progress.get("failed", []))
     print(f"  Progress: {len(completed)} completed, {len(failed)} failed")
 
-    # ── Step 4: Verify DES connection ─────────────────────────────────
-    print("\n  Verifying DES connection...")
-    conn = _connect()
-    print("  DES connection OK")
+    # ── Step 4: Verify data source connections ───────────────────────
+    sources = config.fetch_sources
+    connections = {}
+    for src in sources:
+        if src == "copernicus":
+            print("\n  Verifying CDSE connection...")
+            connections["copernicus"] = _connect_cdse()
+            print("  CDSE connection OK")
+        else:
+            print(f"\n  Verifying DES connection...")
+            connections["des"] = _connect()
+            print("  DES connection OK")
+
+    # Worker distribution: more workers to faster source (CDSE)
+    workers_per_source = {}
+    n_sources = len(sources)
+    if n_sources == 1:
+        workers_per_source[sources[0]] = _MAX_WORKERS
+    elif n_sources >= 2:
+        if "copernicus" in sources:
+            workers_per_source["copernicus"] = max(2, _MAX_WORKERS // 2 + 1)
+            for s in sources:
+                if s != "copernicus":
+                    workers_per_source[s] = max(
+                        1, _MAX_WORKERS - workers_per_source["copernicus"],
+                    )
+        else:
+            for s in sources:
+                workers_per_source[s] = max(1, _MAX_WORKERS // n_sources)
+
+    # Backward compat: single conn for code that still uses it directly
+    conn = connections.get("des") or connections.get("copernicus")
 
     # ── Build cell list with split labels ─────────────────────────────
     all_cells_with_split = []
@@ -395,10 +426,15 @@ def prepare_training_data(config: TrainingConfig) -> None:
     # Queue for NMD-approved cells → spectral fetch workers
     approved_q = queue.Queue(maxsize=200)
 
-    # Adaptive concurrency pool
-    pool = _AdaptiveWorkerPool(
-        initial=_INITIAL_WORKERS, lo=_MIN_WORKERS, hi=_MAX_WORKERS,
-    )
+    # Adaptive concurrency pools — one per source for independent tracking
+    pools = {}
+    for src in sources:
+        n = workers_per_source[src]
+        pools[src] = _AdaptiveWorkerPool(
+            initial=n, lo=_MIN_WORKERS, hi=n,
+        )
+    # Backward compat: single pool reference for code that uses it
+    pool = pools.get("des") or pools.get("copernicus")
 
     # ── NMD pre-filter log ────────────────────────────────────────────
     nmd_log_path = data_dir / "nmd_prefilter_log.json"
@@ -573,7 +609,8 @@ def prepare_training_data(config: TrainingConfig) -> None:
               f"{water_skipped} water, {nmd_failed} failed")
 
         # Signal all fetch workers to stop
-        for _ in range(_FETCH_WORKERS):
+        n_fetch_workers = sum(workers_per_source.values())
+        for _ in range(n_fetch_workers):
             approved_q.put(_NMD_DONE)
 
     # ── Spectral fetch worker ─────────────────────────────────────────
@@ -993,7 +1030,8 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     _write_prepare_log(prep_log_path, prep_log)
 
     # ── Multitemporal spectral fetch worker ─────────────────────────
-    def _fetch_worker_multitemporal():
+    def _fetch_worker_multitemporal(worker_conn=None, worker_pool=None,
+                                     worker_source="des"):
         """Fetch T seasonal frames per cell and save as multitemporal tile.
 
         For each cell:
@@ -1005,6 +1043,11 @@ def prepare_training_data(config: TrainingConfig) -> None:
         Falls back gracefully: if a season has no clear image,
         that frame is filled with zeros and flagged in the mask.
         """
+        # Use provided conn/pool/source or fall back to shared defaults
+        _conn = worker_conn if worker_conn is not None else conn
+        _pool = worker_pool if worker_pool is not None else pool
+        _source = worker_source
+
         n_frames = config.num_temporal_frames
         windows = config.seasonal_windows[:n_frames]
         prithvi_bands = config.prithvi_bands
@@ -1062,12 +1105,13 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     # Batch SCL pre-screen
                     good_date = None
                     if len(cand_strs) > 1:
-                        pool.acquire()
+                        _pool.acquire()
                         t0 = time.monotonic()
                         batch_err = False
                         try:
                             batch_results = _fetch_scl_batch(
-                                conn, projected, cand_strs,
+                                _conn, projected, cand_strs,
+                                source=_source,
                             )
                             for cand_date, aoi_cloud in batch_results:
                                 if aoi_cloud <= config.seasonal_cloud_threshold:
@@ -1076,8 +1120,8 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         except Exception:
                             batch_err = True
                         finally:
-                            pool.record(time.monotonic() - t0, batch_err)
-                            pool.release()
+                            _pool.record(time.monotonic() - t0, batch_err)
+                            _pool.release()
                         time.sleep(0.5)
 
                     # Per-date fallback
@@ -1090,19 +1134,20 @@ def prepare_training_data(config: TrainingConfig) -> None:
                                     cand_date,
                                     (cand_dt + _td(days=1)).strftime("%Y-%m-%d"),
                                 ]
-                                pool.acquire()
+                                _pool.acquire()
                                 t0 = time.monotonic()
                                 scl_err = False
                                 try:
                                     _scl, aoi_cloud, _crs, _tr = _fetch_scl(
-                                        conn, projected, temporal, date_window=0,
+                                        _conn, projected, temporal,
+                                        date_window=0, source=_source,
                                     )
                                 except Exception:
                                     scl_err = True
                                     raise
                                 finally:
-                                    pool.record(time.monotonic() - t0, scl_err)
-                                    pool.release()
+                                    _pool.record(time.monotonic() - t0, scl_err)
+                                    _pool.release()
                                 time.sleep(0.5)
 
                                 if aoi_cloud <= config.seasonal_cloud_threshold:
@@ -1121,20 +1166,21 @@ def prepare_training_data(config: TrainingConfig) -> None:
 
                     # Full spectral fetch using existing pipeline
                     # (includes grid snapping + sub-pixel correction)
-                    pool.acquire()
+                    _pool.acquire()
                     t0_spec = time.monotonic()
                     spec_err = False
                     try:
                         img_result = fetch_seasonal_image(
                             good_date, coords, prithvi_bands,
+                            source=_source,
                         )
                     except Exception:
                         spec_err = True
                         img_result = None
                     finally:
                         spec_lat = time.monotonic() - t0_spec
-                        pool.record(spec_lat, spec_err)
-                        pool.release()
+                        _pool.record(spec_lat, spec_err)
+                        _pool.release()
                         _record_des_call(
                             des_stats, "full_spectral",
                             cell_key=cell_key, date=good_date,
@@ -1444,22 +1490,37 @@ def prepare_training_data(config: TrainingConfig) -> None:
     metrics_thread.start()
 
     # ── Launch parallel pipeline ──────────────────────────────────────
+    total_workers = sum(workers_per_source.values())
+    source_desc = ", ".join(
+        f"{n}×{s.upper()}" for s, n in workers_per_source.items()
+    )
     print(f"\n  Starting parallel pipeline: NMD filter + "
-          f"{_INITIAL_WORKERS} fetch workers (adaptive {_MIN_WORKERS}-{_MAX_WORKERS})...")
+          f"{total_workers} fetch workers ({source_desc})...")
 
     nmd_thread = threading.Thread(target=_nmd_producer, daemon=True)
     nmd_thread.start()
 
-    # Spawn MAX threads — the adaptive semaphore controls how many
-    # are actually active at any time.
-    worker_fn = (_fetch_worker_multitemporal
-                 if config.enable_multitemporal
-                 else _fetch_worker)
+    # Spawn workers per source — each gets its own connection + pool
     fetch_threads = []
-    for _ in range(_MAX_WORKERS):
-        t = threading.Thread(target=worker_fn, daemon=True)
-        t.start()
-        fetch_threads.append(t)
+    for src in sources:
+        n_workers = workers_per_source[src]
+        src_conn = connections[src]
+        src_pool = pools[src]
+        for _ in range(n_workers):
+            if config.enable_multitemporal:
+                t = threading.Thread(
+                    target=_fetch_worker_multitemporal,
+                    kwargs=dict(
+                        worker_conn=src_conn,
+                        worker_pool=src_pool,
+                        worker_source=src,
+                    ),
+                    daemon=True,
+                )
+            else:
+                t = threading.Thread(target=_fetch_worker, daemon=True)
+            t.start()
+            fetch_threads.append(t)
 
     # Wait for NMD producer to finish
     nmd_thread.join()
