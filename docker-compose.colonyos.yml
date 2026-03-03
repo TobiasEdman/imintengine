@@ -1,0 +1,180 @@
+# ── ColonyOS local development stack ─────────────────────────────────────────
+#
+# Spins up the full ColonyOS platform on M1 Max:
+#   - TimescaleDB (database)
+#   - MinIO (S3-compatible CFS storage)
+#   - Colonies server (scheduler)
+#   - Docker executor (runs our container jobs)
+#
+# Usage:
+#   docker compose -f docker-compose.colonyos.yml --env-file .env.colonyos up -d
+#   make colony-up      (shortcut)
+#
+# After startup:
+#   colonies colony ls                         # verify colony exists
+#   colonies executor ls                       # verify docker-executor registered
+#   colonies function submit --spec config/seasonal_fetch_job.json   # submit a job
+#
+# MinIO console: http://localhost:9001 (admin / admin12345)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Database ──────────────────────────────────────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    platform: linux/arm64
+    environment:
+      POSTGRES_PASSWORD: ${COLONIES_DB_PASSWORD}
+      POSTGRES_DB: colonies
+      TZ: ${TZ}
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    command: ["postgres", "-c", "max_connections=1000"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Object storage (CFS) ─────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    platform: linux/arm64
+    ports:
+      - "9000:9000"    # S3 API
+      - "9001:9001"    # Web console
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+    volumes:
+      - minio_data:/var/lib/minio/data
+    command: server /var/lib/minio/data --console-address ":9001"
+
+  minio-setup:
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+        sleep 3;
+        mc alias set myminio http://minio:9000 $${MINIO_USER} $${MINIO_PASSWORD};
+        mc admin user add myminio $${AWS_S3_ACCESSKEY} $${AWS_S3_SECRETKEY};
+        mc admin policy attach myminio readwrite --user $${AWS_S3_ACCESSKEY};
+        mc mb --ignore-existing myminio/$${AWS_S3_BUCKET};
+        echo 'MinIO setup complete';
+      "
+
+  # ── Colonies server (scheduler) ──────────────────────────────────────────
+  colonies-server:
+    image: colonyos/colonies:v1.9.12
+    platform: linux/arm64
+    ports:
+      - "${COLONIES_SERVER_PORT}:${COLONIES_SERVER_PORT}"
+    environment:
+      COLONIES_SERVER_HOST: "0.0.0.0"
+      COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT}
+      COLONIES_TLS: ${COLONIES_TLS}
+      COLONIES_DB_HOST: timescaledb
+      COLONIES_DB_USER: postgres
+      COLONIES_DB_PORT: 5432
+      COLONIES_DB_PASSWORD: ${COLONIES_DB_PASSWORD}
+      COLONIES_SERVER_ID: ${COLONIES_SERVER_ID}
+      COLONIES_SERVER_PRVKEY: ${COLONIES_SERVER_PRVKEY}
+      COLONIES_MONITOR_PORT: ${COLONIES_MONITOR_PORT}
+      COLONIES_MONITOR_INTERVAL: ${COLONIES_MONITOR_INTERVAL}
+      COLONIES_CRON_CHECKER_PERIOD: ${COLONIES_CRON_CHECKER_PERIOD}
+      COLONIES_GENERATOR_CHECKER_PERIOD: ${COLONIES_GENERATOR_CHECKER_PERIOD}
+      COLONIES_EXCLUSIVE_ASSIGN: ${COLONIES_EXCLUSIVE_ASSIGN}
+      COLONIES_ALLOW_EXECUTOR_REREGISTER: ${COLONIES_ALLOW_EXECUTOR_REREGISTER}
+      COLONIES_RETENTION: "false"
+      COLONIES_SERVER_PROFILER: "false"
+      COLONIES_VERBOSE: "false"
+      TZ: ${TZ}
+    volumes:
+      - colonies_etcd:/var/colonies/etcd
+    command: ["colonies", "server", "start", "--initdb"]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      minio-setup:
+        condition: service_completed_successfully
+
+  # ── Colony + user setup (runs once) ──────────────────────────────────────
+  colonies-setup:
+    image: colonyos/colonies:v1.9.12
+    platform: linux/arm64
+    environment:
+      COLONIES_SERVER_HOST: colonies-server
+      COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT}
+      COLONIES_SERVER_TLS: ${COLONIES_TLS}
+      COLONIES_SERVER_PRVKEY: ${COLONIES_SERVER_PRVKEY}
+      COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME}
+      COLONIES_COLONY_ID: ${COLONIES_COLONY_ID}
+      COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY}
+      COLONIES_ID: ${COLONIES_ID}
+      COLONIES_PRVKEY: ${COLONIES_PRVKEY}
+    depends_on:
+      - colonies-server
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sleep 5
+        colonies colony add --name $${COLONIES_COLONY_NAME} --colonyid $${COLONIES_COLONY_ID} --serverprvkey $${COLONIES_SERVER_PRVKEY} --host colonies-server --port $${COLONIES_SERVER_PORT} --insecure 2>/dev/null || echo 'Colony already exists'
+        colonies user add --name imint-user --email dev@imint.local --phone '' --userid $${COLONIES_ID} --colonyprvkey $${COLONIES_COLONY_PRVKEY} --host colonies-server --port $${COLONIES_SERVER_PORT} --insecure 2>/dev/null || echo 'User already exists'
+        echo 'Colony setup complete'
+
+  # ── Docker executor (runs our container jobs) ────────────────────────────
+  docker-executor:
+    image: colonyos/dockerexecutor:v1.0.9
+    platform: linux/arm64
+    environment:
+      COLONIES_TLS: ${COLONIES_TLS}
+      COLONIES_SERVER_HOST: colonies-server
+      COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT}
+      COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME}
+      COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY}
+      COLONIES_PRVKEY: ${COLONIES_EXECUTOR_PRVKEY}
+      COLONIES_EXECUTOR_NAME: dev-docker
+      # ── Executor identity ──
+      EXECUTOR_TYPE: "container-executor"
+      EXECUTOR_GPU: "false"
+      EXECUTOR_SW_NAME: "imint-engine:latest"
+      EXECUTOR_SW_TYPE: "docker"
+      EXECUTOR_SW_VERSION: "latest"
+      EXECUTOR_HW_CPU: "10"
+      EXECUTOR_HW_MODEL: "Apple M1 Max"
+      EXECUTOR_HW_NODES: "1"
+      EXECUTOR_HW_MEM: "32000"
+      EXECUTOR_HW_STORAGE: "500000"
+      EXECUTOR_HW_GPU_COUNT: "0"
+      EXECUTOR_HW_GPU_MEM: "0"
+      EXECUTOR_HW_GPU_NODES_COUNT: "0"
+      EXECUTOR_HW_GPU_NAME: "n/a"
+      EXECUTOR_LOCATION_LONG: "0"
+      EXECUTOR_LOCATION_LAT: "0"
+      EXECUTOR_LOCATION_DESC: "dev-local"
+      EXECUTOR_FS_DIR: /tmp/cfs
+      EXECUTOR_ADD_DEBUG_LOGS: "true"
+      # ── S3 / CFS ──
+      AWS_S3_ENDPOINT: minio:9000
+      AWS_S3_ACCESSKEY: ${AWS_S3_ACCESSKEY}
+      AWS_S3_SECRETKEY: ${AWS_S3_SECRETKEY}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_S3_REGION_KEY: ""
+      AWS_S3_TLS: "false"
+      AWS_S3_SKIPVERIFY: "false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - cfs_data:/tmp/cfs
+    command: ["docker_executor", "start", "-v"]
+    depends_on:
+      colonies-setup:
+        condition: service_completed_successfully
+
+volumes:
+  timescaledb_data:
+  minio_data:
+  colonies_etcd:
+  cfs_data:

@@ -16,7 +16,7 @@ FROM python:3.11-slim
 
 # Runtime GDAL libs only (no compiler)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgdal32 \
+    libgdal36 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -34,7 +34,9 @@ COPY executors/ executors/
 COPY config/ config/
 
 # CDSE credentials (if available — gitignored, optional)
-COPY .cdse_credentials* /app/
+# Use a shell trick: copy if exists, skip if not
+RUN true
+COPY .cdse_credential[s] /app/
 
 # Flexible entry point — CMD selects executor:
 #   Default:   python executors/colonyos.py  (analysis jobs)

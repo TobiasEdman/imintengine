@@ -13,6 +13,7 @@
 .PHONY: build test test-seasonal test-seasonal-des test-compare \
         bench-batch bench-batch-cdse bench-batch-quick \
         docker-seasonal docker-seasonal-des docker-analysis \
+        colony-up colony-down colony-logs colony-status colony-submit \
         submit-dry submit-live status clean help
 
 PYTHON := .venv/bin/python
@@ -70,6 +71,38 @@ docker-seasonal-des:  ## Run seasonal fetch in Docker (DES)
 
 docker-analysis:  ## Run IMINT analysis in Docker
 	docker compose run --rm analysis
+
+# ── ColonyOS local platform ──────────────────────────────────────────────
+
+COLONY_COMPOSE := docker compose -f docker-compose.colonyos.yml --env-file .env.colonyos
+
+colony-up:  ## Start ColonyOS platform (TimescaleDB + MinIO + server + executor)
+	$(COLONY_COMPOSE) up -d
+	@echo ""
+	@echo "  ColonyOS starting up..."
+	@echo "  Server:       http://localhost:50080"
+	@echo "  MinIO console: http://localhost:9001 (admin / admin12345)"
+	@echo ""
+	@echo "  Wait ~10s, then: make colony-status"
+
+colony-down:  ## Stop ColonyOS platform
+	$(COLONY_COMPOSE) down
+
+colony-reset:  ## Stop and destroy all ColonyOS data (volumes)
+	$(COLONY_COMPOSE) down -v
+
+colony-logs:  ## Follow ColonyOS logs
+	$(COLONY_COMPOSE) logs -f colonies-server docker-executor
+
+colony-status:  ## Check ColonyOS is running (colony + executor)
+	@echo "=== Colonies server ==="
+	@docker compose -f docker-compose.colonyos.yml ps colonies-server 2>/dev/null || echo "not running"
+	@echo ""
+	@echo "=== Docker executor ==="
+	@docker compose -f docker-compose.colonyos.yml ps docker-executor 2>/dev/null || echo "not running"
+
+colony-submit:  ## Submit a single test job to ColonyOS
+	colonies function submit --spec config/seasonal_fetch_job.json
 
 # ── ColonyOS job submission ───────────────────────────────────────────────
 
