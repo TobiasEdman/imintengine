@@ -1842,14 +1842,17 @@ def save_tabbed_report(
         imgs = {}
         for v in viewers:
             key = v["key"]
-            fname = prefix + file_map.get(key, f"{key}.png")
+            dst_name = file_map.get(key, f"{key}.png")
+            dst = os.path.join(dest_dir, dst_name)
+            # Try source with prefix first (original output dir)
+            fname = prefix + dst_name
             src = os.path.join(out_dir, fname)
             if os.path.isfile(src):
-                dst_name = file_map.get(key, f"{key}.png")
-                dst = os.path.join(dest_dir, dst_name)
                 if os.path.abspath(src) != os.path.abspath(dst):
                     shutil.copy2(src, dst)
-                # Relative path from HTML file to the image
+                imgs[v["id"]] = f"showcase/{tab_name}/{dst_name}"
+            elif os.path.isfile(dst):
+                # File already exists in showcase dir (pre-generated)
                 imgs[v["id"]] = f"showcase/{tab_name}/{dst_name}"
         return imgs
 
@@ -2134,7 +2137,9 @@ def save_tabbed_report(
 
     # ── Viewer configs as JS ──────────────────────────────────────────────
     fire_viewer_js = json.dumps(
-        [{"id": v["id"], "key": v["key"]} for v in fire_viewers],
+        [{"id": v["id"], "key": v["key"], "vector": v.get("vector", False),
+          "legend": v.get("legend", [])}
+         for v in fire_viewers],
         ensure_ascii=False,
     )
     marine_viewer_js = json.dumps(
@@ -2749,7 +2754,7 @@ def save_tabbed_report(
     {grazing_tab_html}
     <div class="footer">
         IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB
-        &middot; CC0 1.0 Universal &middot; Genererad {fire_date} / {marine_date}
+        &middot; CC0 1.0 Universal &middot; Genererad {fire_date} / {marine_date} / {grazing_date}
         <br>
         <button class="license-toggle" onclick="document.getElementById('license-info').classList.toggle('open'); this.textContent = this.textContent === 'Visa licenser och upphovsr\u00e4tt' ? 'D\u00f6lj licenser' : 'Visa licenser och upphovsr\u00e4tt';">Visa licenser och upphovsr\u00e4tt</button>
         <div id="license-info" class="license-section">
@@ -2785,6 +2790,12 @@ def save_tabbed_report(
                     <td><span class="license-badge badge-restricted">Ej klargjord</span></td>
                     <td>Aleksis Pirinen / RISE</td>
                     <td>Pirinen et al., 2024. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" style="color:#171717;" target="_blank">GitHub</a> &mdash; kommersiell licens ej bekr\u00e4ftad</td>
+                </tr>
+                <tr>
+                    <td>pib-ml-grazing CNN-biLSTM (betesanalys)</td>
+                    <td><span class="license-badge badge-open">MIT</span></td>
+                    <td>&copy; RISE / Jordbruksverket</td>
+                    <td>Tidsserie\u00f6vervakad betesmarksklassificering. <a href="https://github.com/DigitalEarthSweden/pib-ml-grazing" style="color:#171717;" target="_blank">GitHub</a></td>
                 </tr>
                 <tr>
                     <td>PyTorch / Torchvision</td>

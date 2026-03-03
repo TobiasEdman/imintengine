@@ -113,9 +113,10 @@ def main():
 
     # Build RGB: B04(3)=Red, B03(2)=Green, B02(1)=Blue
     rgb = np.stack([snapshot[3], snapshot[2], snapshot[1]], axis=-1)  # (H, W, 3)
-    # Clip and scale for display (reflectance 0–0.3 → 0–1)
-    rgb = np.clip(rgb / 0.3, 0.0, 1.0).astype(np.float32)
-    print(f"    RGB shape: {rgb.shape}")
+    # Percentile contrast stretch for better visualisation
+    p2, p98 = np.percentile(rgb, [2, 98])
+    rgb = np.clip((rgb - p2) / (p98 - p2 + 1e-8), 0.0, 1.0).astype(np.float32)
+    print(f"    RGB shape: {rgb.shape}, stretch: [{p2:.4f}, {p98:.4f}]")
 
     # Build bands dict for analyzers
     bands = {name: snapshot[i] for i, name in enumerate(_BAND_NAMES)}

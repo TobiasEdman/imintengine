@@ -1135,9 +1135,162 @@ svg.leaflet-image-layer.leaflet-interactive path {
                 för att kartlägga brandens utbredning och intensitet.
             </p>
         </div>
-        
+        <div class="panel-toolbar"><span class="panel-toolbar-label">Paneler:</span><button class="panel-chip active" data-panel-id="f-rgb">Sentinel-2 RGB</button><button class="panel-chip active" data-panel-id="f-nmd">NMD Marktäcke</button><button class="panel-chip active" data-panel-id="f-ndvi">NDVI (Vegetationsindex)</button><button class="panel-chip active" data-panel-id="f-ndwi">NDWI (Vattenindex)</button><button class="panel-chip active" data-panel-id="f-evi">EVI (Enhanced Vegetation Index)</button><button class="panel-chip active" data-panel-id="f-cot">Molnoptisk tjocklek (COT)</button><button class="panel-chip active" data-panel-id="f-dnbr">dNBR (Brandsvårighetsgrad)</button><button class="panel-chip active" data-panel-id="f-gradient">Förändring (gradient)</button><button class="panel-chip active" data-panel-id="f-prithvi">Prithvi Segmentering</button></div>
         <div class="map-grid">
             
+            <div class="map-cell" data-panel-id="f-rgb">
+                <div class="map-cell-header">
+                    <h3>Sentinel-2 RGB</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-f-rgb">Opacitet</label>
+                            <input type="range" id="opacity-f-rgb" min="0" max="100"
+                                   value="100" data-map-id="f-rgb">
+                            <span class="opacity-value" id="opacity-val-f-rgb">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="f-rgb" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="f-rgb" class="map-container"></div>
+                
+            </div>
+            <div class="map-cell" data-panel-id="f-nmd">
+                <div class="map-cell-header">
+                    <h3>NMD Marktäcke</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-f-nmd">Opacitet</label>
+                            <input type="range" id="opacity-f-nmd" min="0" max="100"
+                                   value="100" data-map-id="f-nmd">
+                            <span class="opacity-value" id="opacity-val-f-nmd">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="f-nmd" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="f-nmd" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#006400"></span>Tallskog</span><span class="legend-item"><span class="legend-swatch" style="background:#228B22"></span>Granskog</span><span class="legend-item"><span class="legend-swatch" style="background:#32CD32"></span>Lövskog</span><span class="legend-item"><span class="legend-swatch" style="background:#3CB371"></span>Blandskog</span><span class="legend-item"><span class="legend-swatch" style="background:#90EE90"></span>Temp. ej skog</span><span class="legend-item"><span class="legend-swatch" style="background:#2E4F2E"></span>Sumpsk. tall</span><span class="legend-item"><span class="legend-swatch" style="background:#3A5F3A"></span>Sumpsk. gran</span><span class="legend-item"><span class="legend-swatch" style="background:#4A7F4A"></span>Sumpsk. löv</span><span class="legend-item"><span class="legend-swatch" style="background:#5A8F5A"></span>Sumpsk. bland</span><span class="legend-item"><span class="legend-swatch" style="background:#7AAF7A"></span>Sumpsk. temp</span><span class="legend-item"><span class="legend-swatch" style="background:#8B5A2B"></span>Öpp. våtmark</span><span class="legend-item"><span class="legend-swatch" style="background:#FFD700"></span>Åkermark</span><span class="legend-item"><span class="legend-swatch" style="background:#C8AD7F"></span>Öpp. mark bar</span><span class="legend-item"><span class="legend-swatch" style="background:#D2B48C"></span>Öpp. mark veg.</span><span class="legend-item"><span class="legend-swatch" style="background:#FF0000"></span>Byggnader</span><span class="legend-item"><span class="legend-swatch" style="background:#FF4500"></span>Infrastruktur</span><span class="legend-item"><span class="legend-swatch" style="background:#FF6347"></span>Vägar</span><span class="legend-item"><span class="legend-swatch" style="background:#0000FF"></span>Sjöar</span><span class="legend-item"><span class="legend-swatch" style="background:#1E90FF"></span>Hav</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="f-ndvi">
+                <div class="map-cell-header">
+                    <h3>NDVI (Vegetationsindex)</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-f-ndvi">Opacitet</label>
+                            <input type="range" id="opacity-f-ndvi" min="0" max="100"
+                                   value="100" data-map-id="f-ndvi">
+                            <span class="opacity-value" id="opacity-val-f-ndvi">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="f-ndvi" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="f-ndvi" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#a50026"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#f46d43"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#fee08b"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#a6d96a"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#006837"></span>1.0</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="f-ndwi">
+                <div class="map-cell-header">
+                    <h3>NDWI (Vattenindex)</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-f-ndwi">Opacitet</label>
+                            <input type="range" id="opacity-f-ndwi" min="0" max="100"
+                                   value="100" data-map-id="f-ndwi">
+                            <span class="opacity-value" id="opacity-val-f-ndwi">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="f-ndwi" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="f-ndwi" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#67001f"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#d6604d"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#f7f7f7"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#4393c3"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#053061"></span>1.0 Vatten</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="f-evi">
+                <div class="map-cell-header">
+                    <h3>EVI (Enhanced Vegetation Index)</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-f-evi">Opacitet</label>
+                            <input type="range" id="opacity-f-evi" min="0" max="100"
+                                   value="100" data-map-id="f-evi">
+                            <span class="opacity-value" id="opacity-val-f-evi">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="f-evi" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="f-evi" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#a50026"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#f46d43"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#fee08b"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#a6d96a"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#006837"></span>1.0</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="f-cot">
+                <div class="map-cell-header">
+                    <h3>Molnoptisk tjocklek (COT)</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-f-cot">Opacitet</label>
+                            <input type="range" id="opacity-f-cot" min="0" max="100"
+                                   value="100" data-map-id="f-cot">
+                            <span class="opacity-value" id="opacity-val-f-cot">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="f-cot" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="f-cot" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#FFFFB2"></span>0 (Klart)</span><span class="legend-item"><span class="legend-swatch" style="background:#FD8D3C"></span>0.015 (Tunt moln)</span><span class="legend-item"><span class="legend-swatch" style="background:#BD0026"></span>0.05 (Tjockt moln)</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="f-dnbr">
+                <div class="map-cell-header">
+                    <h3>dNBR (Brandsvårighetsgrad)</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-f-dnbr">Opacitet</label>
+                            <input type="range" id="opacity-f-dnbr" min="0" max="100"
+                                   value="100" data-map-id="f-dnbr">
+                            <span class="opacity-value" id="opacity-val-f-dnbr">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="f-dnbr" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="f-dnbr" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#1a9850"></span>Hög återväxt (< -0.25)</span><span class="legend-item"><span class="legend-swatch" style="background:#91cf60"></span>Låg återväxt (-0.25 – -0.1)</span><span class="legend-item"><span class="legend-swatch" style="background:#d9ef8b"></span>Obränt (-0.1 – 0.1)</span><span class="legend-item"><span class="legend-swatch" style="background:#fee08b"></span>Låg svårighetsgrad (0.1 – 0.27)</span><span class="legend-item"><span class="legend-swatch" style="background:#fdae61"></span>Måttligt låg (0.27 – 0.44)</span><span class="legend-item"><span class="legend-swatch" style="background:#f46d43"></span>Måttligt hög (0.44 – 0.66)</span><span class="legend-item"><span class="legend-swatch" style="background:#d73027"></span>Hög svårighetsgrad (> 0.66)</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="f-gradient">
+                <div class="map-cell-header">
+                    <h3>Förändring (gradient)</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-f-gradient">Opacitet</label>
+                            <input type="range" id="opacity-f-gradient" min="0" max="100"
+                                   value="100" data-map-id="f-gradient">
+                            <span class="opacity-value" id="opacity-val-f-gradient">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="f-gradient" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="f-gradient" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#FFFFB2"></span>Liten förändring</span><span class="legend-item"><span class="legend-swatch" style="background:#FD8D3C"></span>Måttlig förändring</span><span class="legend-item"><span class="legend-swatch" style="background:#BD0026"></span>Stor förändring</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="f-prithvi">
+                <div class="map-cell-header">
+                    <h3>Prithvi Segmentering</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-f-prithvi">Opacitet</label>
+                            <input type="range" id="opacity-f-prithvi" min="0" max="100"
+                                   value="100" data-map-id="f-prithvi">
+                            <span class="opacity-value" id="opacity-val-f-prithvi">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="f-prithvi" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="f-prithvi" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#228B22"></span>Ej bränt</span><span class="legend-item"><span class="legend-swatch" style="background:#FF4500"></span>Bränt</span></div>
+            </div>
         </div>
         
         <div class="tab-description">
@@ -1212,9 +1365,26 @@ svg.leaflet-image-layer.leaflet-interactive path {
                 i kust- och havsområdet.
             </p>
         </div>
-        
+        <div class="panel-toolbar"><span class="panel-toolbar-label">Paneler:</span><button class="panel-chip active" data-panel-id="m-rgb">Sentinel-2 RGB</button><button class="panel-chip active" data-panel-id="m-vessels">Båtdetektering (YOLO)</button><button class="panel-chip active" data-panel-id="m-vessel-heatmap">Båtaktivitet (heatmap)</button><button class="panel-chip active" data-panel-id="m-nmd">NMD Marktäcke</button><button class="panel-chip active" data-panel-id="m-ndvi">NDVI (Vegetationsindex)</button><button class="panel-chip active" data-panel-id="m-ndwi">NDWI (Vattenindex)</button><button class="panel-chip active" data-panel-id="m-cot">Molnoptisk tjocklek (COT)</button></div>
         <div class="map-grid">
             
+            <div class="map-cell" data-panel-id="m-rgb">
+                <div class="map-cell-header">
+                    <h3>Sentinel-2 RGB</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-m-rgb">Opacitet</label>
+                            <input type="range" id="opacity-m-rgb" min="0" max="100"
+                                   value="100" data-map-id="m-rgb">
+                            <span class="opacity-value" id="opacity-val-m-rgb">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="m-rgb" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="m-rgb" class="map-container"></div>
+                
+            </div>
             <div class="map-cell" data-panel-id="m-vessels">
                 <div class="map-cell-header">
                     <h3>Båtdetektering (YOLO)</h3>
@@ -1231,6 +1401,91 @@ svg.leaflet-image-layer.leaflet-interactive path {
                 </div>
                 <div id="m-vessels" class="map-container"></div>
                 <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#00E5FF"></span>Detekterad båt / anomali</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="m-vessel-heatmap">
+                <div class="map-cell-header">
+                    <h3>Båtaktivitet (heatmap)</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-m-vessel-heatmap">Opacitet</label>
+                            <input type="range" id="opacity-m-vessel-heatmap" min="0" max="100"
+                                   value="100" data-map-id="m-vessel-heatmap">
+                            <span class="opacity-value" id="opacity-val-m-vessel-heatmap">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="m-vessel-heatmap" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="m-vessel-heatmap" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#FFFFB2"></span>Låg</span><span class="legend-item"><span class="legend-swatch" style="background:#FD8D3C"></span>Medel</span><span class="legend-item"><span class="legend-swatch" style="background:#BD0026"></span>Hög</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="m-nmd">
+                <div class="map-cell-header">
+                    <h3>NMD Marktäcke</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-m-nmd">Opacitet</label>
+                            <input type="range" id="opacity-m-nmd" min="0" max="100"
+                                   value="100" data-map-id="m-nmd">
+                            <span class="opacity-value" id="opacity-val-m-nmd">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="m-nmd" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="m-nmd" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#006400"></span>Tallskog</span><span class="legend-item"><span class="legend-swatch" style="background:#228B22"></span>Granskog</span><span class="legend-item"><span class="legend-swatch" style="background:#32CD32"></span>Lövskog</span><span class="legend-item"><span class="legend-swatch" style="background:#3CB371"></span>Blandskog</span><span class="legend-item"><span class="legend-swatch" style="background:#90EE90"></span>Temp. ej skog</span><span class="legend-item"><span class="legend-swatch" style="background:#2E4F2E"></span>Sumpsk. tall</span><span class="legend-item"><span class="legend-swatch" style="background:#3A5F3A"></span>Sumpsk. gran</span><span class="legend-item"><span class="legend-swatch" style="background:#4A7F4A"></span>Sumpsk. löv</span><span class="legend-item"><span class="legend-swatch" style="background:#5A8F5A"></span>Sumpsk. bland</span><span class="legend-item"><span class="legend-swatch" style="background:#7AAF7A"></span>Sumpsk. temp</span><span class="legend-item"><span class="legend-swatch" style="background:#8B5A2B"></span>Öpp. våtmark</span><span class="legend-item"><span class="legend-swatch" style="background:#FFD700"></span>Åkermark</span><span class="legend-item"><span class="legend-swatch" style="background:#C8AD7F"></span>Öpp. mark bar</span><span class="legend-item"><span class="legend-swatch" style="background:#D2B48C"></span>Öpp. mark veg.</span><span class="legend-item"><span class="legend-swatch" style="background:#FF0000"></span>Byggnader</span><span class="legend-item"><span class="legend-swatch" style="background:#FF4500"></span>Infrastruktur</span><span class="legend-item"><span class="legend-swatch" style="background:#FF6347"></span>Vägar</span><span class="legend-item"><span class="legend-swatch" style="background:#0000FF"></span>Sjöar</span><span class="legend-item"><span class="legend-swatch" style="background:#1E90FF"></span>Hav</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="m-ndvi">
+                <div class="map-cell-header">
+                    <h3>NDVI (Vegetationsindex)</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-m-ndvi">Opacitet</label>
+                            <input type="range" id="opacity-m-ndvi" min="0" max="100"
+                                   value="100" data-map-id="m-ndvi">
+                            <span class="opacity-value" id="opacity-val-m-ndvi">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="m-ndvi" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="m-ndvi" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#a50026"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#f46d43"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#fee08b"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#a6d96a"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#006837"></span>1.0</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="m-ndwi">
+                <div class="map-cell-header">
+                    <h3>NDWI (Vattenindex)</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-m-ndwi">Opacitet</label>
+                            <input type="range" id="opacity-m-ndwi" min="0" max="100"
+                                   value="100" data-map-id="m-ndwi">
+                            <span class="opacity-value" id="opacity-val-m-ndwi">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="m-ndwi" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="m-ndwi" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#67001f"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#d6604d"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#f7f7f7"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#4393c3"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#053061"></span>1.0 Vatten</span></div>
+            </div>
+            <div class="map-cell" data-panel-id="m-cot">
+                <div class="map-cell-header">
+                    <h3>Molnoptisk tjocklek (COT)</h3>
+                    <div class="header-controls">
+                        
+                        <div class="opacity-control">
+                            <label for="opacity-m-cot">Opacitet</label>
+                            <input type="range" id="opacity-m-cot" min="0" max="100"
+                                   value="100" data-map-id="m-cot">
+                            <span class="opacity-value" id="opacity-val-m-cot">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="m-cot" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="m-cot" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#FFFFB2"></span>0 (Klart)</span><span class="legend-item"><span class="legend-swatch" style="background:#FD8D3C"></span>0.015 (Tunt moln)</span><span class="legend-item"><span class="legend-swatch" style="background:#BD0026"></span>0.05 (Tjockt moln)</span></div>
             </div>
         </div>
         <div class="tab-description">
@@ -1482,7 +1737,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
     </div>
     <div class="footer">
         IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB
-        &middot; CC0 1.0 Universal &middot; Genererad 2018-07-24 / 2025-07-10
+        &middot; CC0 1.0 Universal &middot; Genererad 2018-07-24 / 2025-07-10 / 2025-06-14
         <br>
         <button class="license-toggle" onclick="document.getElementById('license-info').classList.toggle('open'); this.textContent = this.textContent === 'Visa licenser och upphovsrätt' ? 'Dölj licenser' : 'Visa licenser och upphovsrätt';">Visa licenser och upphovsrätt</button>
         <div id="license-info" class="license-section">
@@ -1518,6 +1773,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
                     <td><span class="license-badge badge-restricted">Ej klargjord</span></td>
                     <td>Aleksis Pirinen / RISE</td>
                     <td>Pirinen et al., 2024. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" style="color:#171717;" target="_blank">GitHub</a> &mdash; kommersiell licens ej bekräftad</td>
+                </tr>
+                <tr>
+                    <td>pib-ml-grazing CNN-biLSTM (betesanalys)</td>
+                    <td><span class="license-badge badge-open">MIT</span></td>
+                    <td>&copy; RISE / Jordbruksverket</td>
+                    <td>Tidsserieövervakad betesmarksklassificering. <a href="https://github.com/DigitalEarthSweden/pib-ml-grazing" style="color:#171717;" target="_blank">GitHub</a></td>
                 </tr>
                 <tr>
                     <td>PyTorch / Torchvision</td>
@@ -2127,13 +2388,27 @@ svg.leaflet-image-layer.leaflet-interactive path {
         }
 
         // ── Initialize both tabs ─────────────────────────────────────────
-        const FIRE_VIEWERS = [];
+        const FIRE_VIEWERS = [{"id": "f-rgb", "key": "rgb", "vector": false, "legend": []}, {"id": "f-nmd", "key": "nmd", "vector": false, "legend": [{"color": "#006400", "label": "Tallskog"}, {"color": "#228B22", "label": "Granskog"}, {"color": "#32CD32", "label": "Lövskog"}, {"color": "#3CB371", "label": "Blandskog"}, {"color": "#90EE90", "label": "Temp. ej skog"}, {"color": "#2E4F2E", "label": "Sumpsk. tall"}, {"color": "#3A5F3A", "label": "Sumpsk. gran"}, {"color": "#4A7F4A", "label": "Sumpsk. löv"}, {"color": "#5A8F5A", "label": "Sumpsk. bland"}, {"color": "#7AAF7A", "label": "Sumpsk. temp"}, {"color": "#8B5A2B", "label": "Öpp. våtmark"}, {"color": "#FFD700", "label": "Åkermark"}, {"color": "#C8AD7F", "label": "Öpp. mark bar"}, {"color": "#D2B48C", "label": "Öpp. mark veg."}, {"color": "#FF0000", "label": "Byggnader"}, {"color": "#FF4500", "label": "Infrastruktur"}, {"color": "#FF6347", "label": "Vägar"}, {"color": "#0000FF", "label": "Sjöar"}, {"color": "#1E90FF", "label": "Hav"}]}, {"id": "f-ndvi", "key": "ndvi", "vector": false, "legend": [{"color": "#a50026", "label": "-1.0"}, {"color": "#f46d43", "label": "-0.5"}, {"color": "#fee08b", "label": "0.0"}, {"color": "#a6d96a", "label": "0.5"}, {"color": "#006837", "label": "1.0"}]}, {"id": "f-ndwi", "key": "ndwi", "vector": false, "legend": [{"color": "#67001f", "label": "-1.0"}, {"color": "#d6604d", "label": "-0.5"}, {"color": "#f7f7f7", "label": "0.0"}, {"color": "#4393c3", "label": "0.5"}, {"color": "#053061", "label": "1.0 Vatten"}]}, {"id": "f-evi", "key": "evi", "vector": false, "legend": [{"color": "#a50026", "label": "-1.0"}, {"color": "#f46d43", "label": "-0.5"}, {"color": "#fee08b", "label": "0.0"}, {"color": "#a6d96a", "label": "0.5"}, {"color": "#006837", "label": "1.0"}]}, {"id": "f-cot", "key": "cot", "vector": false, "legend": [{"color": "#FFFFB2", "label": "0 (Klart)"}, {"color": "#FD8D3C", "label": "0.015 (Tunt moln)"}, {"color": "#BD0026", "label": "0.05 (Tjockt moln)"}]}, {"id": "f-dnbr", "key": "dnbr", "vector": false, "legend": [{"color": "#1a9850", "label": "Hög återväxt (< -0.25)"}, {"color": "#91cf60", "label": "Låg återväxt (-0.25 – -0.1)"}, {"color": "#d9ef8b", "label": "Obränt (-0.1 – 0.1)"}, {"color": "#fee08b", "label": "Låg svårighetsgrad (0.1 – 0.27)"}, {"color": "#fdae61", "label": "Måttligt låg (0.27 – 0.44)"}, {"color": "#f46d43", "label": "Måttligt hög (0.44 – 0.66)"}, {"color": "#d73027", "label": "Hög svårighetsgrad (> 0.66)"}]}, {"id": "f-gradient", "key": "change_gradient", "vector": false, "legend": [{"color": "#FFFFB2", "label": "Liten förändring"}, {"color": "#FD8D3C", "label": "Måttlig förändring"}, {"color": "#BD0026", "label": "Stor förändring"}]}, {"id": "f-prithvi", "key": "prithvi_seg", "vector": false, "legend": [{"color": "#228B22", "label": "Ej bränt"}, {"color": "#FF4500", "label": "Bränt"}]}];
         const FIRE_IMAGES = {
-
+    "f-rgb": "showcase/fire/rgb.png",
+    "f-nmd": "showcase/fire/nmd_overlay.png",
+    "f-ndvi": "showcase/fire/ndvi_clean.png",
+    "f-ndwi": "showcase/fire/ndwi_clean.png",
+    "f-evi": "showcase/fire/evi_clean.png",
+    "f-cot": "showcase/fire/cot_clean.png",
+    "f-dnbr": "showcase/fire/dnbr_clean.png",
+    "f-gradient": "showcase/fire/change_gradient.png",
+    "f-prithvi": "showcase/fire/prithvi_seg_clean.png"
 };
-        const MARINE_VIEWERS = [{"id": "m-vessels", "key": "vessels", "vector": true, "legend": [{"color": "#00E5FF", "label": "Detekterad båt / anomali"}]}];
+        const MARINE_VIEWERS = [{"id": "m-rgb", "key": "rgb", "vector": false, "legend": []}, {"id": "m-vessels", "key": "vessels", "vector": true, "legend": [{"color": "#00E5FF", "label": "Detekterad båt / anomali"}]}, {"id": "m-vessel-heatmap", "key": "vessel_heatmap", "vector": false, "legend": [{"color": "#FFFFB2", "label": "Låg"}, {"color": "#FD8D3C", "label": "Medel"}, {"color": "#BD0026", "label": "Hög"}]}, {"id": "m-nmd", "key": "nmd", "vector": false, "legend": [{"color": "#006400", "label": "Tallskog"}, {"color": "#228B22", "label": "Granskog"}, {"color": "#32CD32", "label": "Lövskog"}, {"color": "#3CB371", "label": "Blandskog"}, {"color": "#90EE90", "label": "Temp. ej skog"}, {"color": "#2E4F2E", "label": "Sumpsk. tall"}, {"color": "#3A5F3A", "label": "Sumpsk. gran"}, {"color": "#4A7F4A", "label": "Sumpsk. löv"}, {"color": "#5A8F5A", "label": "Sumpsk. bland"}, {"color": "#7AAF7A", "label": "Sumpsk. temp"}, {"color": "#8B5A2B", "label": "Öpp. våtmark"}, {"color": "#FFD700", "label": "Åkermark"}, {"color": "#C8AD7F", "label": "Öpp. mark bar"}, {"color": "#D2B48C", "label": "Öpp. mark veg."}, {"color": "#FF0000", "label": "Byggnader"}, {"color": "#FF4500", "label": "Infrastruktur"}, {"color": "#FF6347", "label": "Vägar"}, {"color": "#0000FF", "label": "Sjöar"}, {"color": "#1E90FF", "label": "Hav"}]}, {"id": "m-ndvi", "key": "ndvi", "vector": false, "legend": [{"color": "#a50026", "label": "-1.0"}, {"color": "#f46d43", "label": "-0.5"}, {"color": "#fee08b", "label": "0.0"}, {"color": "#a6d96a", "label": "0.5"}, {"color": "#006837", "label": "1.0"}]}, {"id": "m-ndwi", "key": "ndwi", "vector": false, "legend": [{"color": "#67001f", "label": "-1.0"}, {"color": "#d6604d", "label": "-0.5"}, {"color": "#f7f7f7", "label": "0.0"}, {"color": "#4393c3", "label": "0.5"}, {"color": "#053061", "label": "1.0 Vatten"}]}, {"id": "m-cot", "key": "cot", "vector": false, "legend": [{"color": "#FFFFB2", "label": "0 (Klart)"}, {"color": "#FD8D3C", "label": "0.015 (Tunt moln)"}, {"color": "#BD0026", "label": "0.05 (Tjockt moln)"}]}];
         const MARINE_IMAGES = {
-
+    "m-rgb": "showcase/marine/rgb.png",
+    "m-vessels": "showcase/marine/vessels_clean.png",
+    "m-vessel-heatmap": "showcase/marine/vessel_heatmap_clean.png",
+    "m-nmd": "showcase/marine/nmd_overlay.png",
+    "m-ndvi": "showcase/marine/ndvi_clean.png",
+    "m-ndwi": "showcase/marine/ndwi_clean.png",
+    "m-cot": "showcase/marine/cot_clean.png"
 };
 
         initMaps(FIRE_VIEWERS, FIRE_IMAGES, 573, 324, false);
