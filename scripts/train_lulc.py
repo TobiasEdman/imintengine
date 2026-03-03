@@ -86,6 +86,20 @@ def main():
                         choices=["miou", "worst_class_iou", "combined"],
                         help="Metric for early stopping")
 
+    # Auxiliary channels
+    parser.add_argument("--enable-height", action="store_true",
+                        help="Enable tree height aux channel")
+    parser.add_argument("--enable-volume", action="store_true",
+                        help="Enable timber volume aux channel")
+    parser.add_argument("--enable-basal-area", action="store_true",
+                        help="Enable basal area aux channel")
+    parser.add_argument("--enable-diameter", action="store_true",
+                        help="Enable stem diameter aux channel")
+    parser.add_argument("--enable-dem", action="store_true",
+                        help="Enable DEM terrain elevation aux channel")
+    parser.add_argument("--enable-all-aux", action="store_true",
+                        help="Enable all 5 auxiliary channels")
+
     # Dashboard
     parser.add_argument("--dashboard", action="store_true",
                         help="Launch live training dashboard in browser")
@@ -133,6 +147,8 @@ def main():
         print(f"\n  To stop: kill {proc.pid}")
         return
 
+    # Resolve aux flags
+    all_aux = args.enable_all_aux
     config = TrainingConfig(
         data_dir=args.data_dir,
         num_classes=args.num_classes,
@@ -153,6 +169,11 @@ def main():
         early_stop_metric=args.early_stop_metric,
         unfreeze_backbone_layers=args.unfreeze_layers,
         backbone_lr_factor=args.backbone_lr_factor,
+        enable_height_channel=all_aux or args.enable_height,
+        enable_volume_channel=all_aux or args.enable_volume,
+        enable_basal_area_channel=all_aux or args.enable_basal_area,
+        enable_diameter_channel=all_aux or args.enable_diameter,
+        enable_dem_channel=all_aux or args.enable_dem,
     )
 
     # Load datasets

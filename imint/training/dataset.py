@@ -112,12 +112,16 @@ class LULCDataset(Dataset):
         label = data["label"].astype(np.int64)
 
         # Load and stack auxiliary channels → (N, H, W) or None
+        # Missing channels are zero-filled to ensure consistent batch keys
         aux_names: list[str] = []
         aux_arrays: list[np.ndarray] = []
+        h, w = label.shape
         for ch_name in self.aux_channels:
+            aux_names.append(ch_name)
             if ch_name in data:
-                aux_names.append(ch_name)
                 aux_arrays.append(data[ch_name].astype(np.float32))
+            else:
+                aux_arrays.append(np.zeros((h, w), dtype=np.float32))
         aux_stack = np.stack(aux_arrays) if aux_arrays else None  # (N,H,W)
 
         # Normalize aux channels (z-score using empirical mean/std)

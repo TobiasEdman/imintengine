@@ -404,6 +404,40 @@ body {{
     </div>
   </div>
 
+  <!-- Evaluation Section -->
+  <div class="section" id="section-eval">
+    <div class="section-header">
+      <div class="section-title">Evaluation</div>
+      <span class="section-badge pending" id="eval-badge">pending</span>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">mIoU</div>
+        <div class="card-value" id="eval-miou">-</div>
+        <div class="card-sub" id="eval-checkpoint"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Overall Accuracy</div>
+        <div class="card-value" id="eval-oa">-</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Test Tiles</div>
+        <div class="card-value" id="eval-tiles">-</div>
+        <div class="card-sub" id="eval-time"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Aux Channels</div>
+        <div class="card-value sm" id="eval-aux">-</div>
+      </div>
+    </div>
+    <div class="chart-grid">
+      <div class="chart-box full-width">
+        <h3>Per-Class IoU (test)</h3>
+        <canvas id="chart-eval-perclass"></canvas>
+      </div>
+    </div>
+  </div>
+
   <!-- Training Section -->
   <div class="section" id="section-training">
     <div class="section-header">
@@ -542,7 +576,7 @@ Chart.defaults.borderColor = '#1e293b';
 Chart.defaults.font.family = "'SF Mono', 'Cascadia Code', monospace";
 Chart.defaults.font.size = 11;
 
-let lossChart, miouChart, perClassChart, worstChart, classDistChart, classDistDetailChart;
+let lossChart, miouChart, perClassChart, worstChart, classDistChart, classDistDetailChart, evalPerClassChart;
 let _classViewDetailed = false;
 
 function toggleClassView() {{
@@ -713,6 +747,20 @@ function initCharts() {{
             }}
           }}
         }}
+      }}
+    }}
+  }});
+
+  evalPerClassChart = new Chart(document.getElementById('chart-eval-perclass'), {{
+    type: 'bar',
+    data: {{ labels: [], datasets: [{{ data: [], backgroundColor: [], borderWidth: 0 }}] }},
+    options: {{
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: {{ legend: {{ display: false }} }},
+      scales: {{
+        x: {{ beginAtZero: true, max: 1.0, title: {{ display: true, text: 'IoU' }} }}
       }}
     }}
   }});
@@ -935,6 +983,45 @@ function updateClassDistChart(counts, rareClasses) {{
   classDistDetailChart.update('none');
 }}
 
+// ── Evaluation ──────────────────────────────────────────────────
+function updateEvaluation(evalData) {{
+  const badge = document.getElementById('eval-badge');
+  if (!evalData) return;
+
+  badge.className = 'section-badge done';
+  badge.textContent = 'done';
+
+  document.getElementById('eval-miou').textContent = fmtNum(evalData.miou);
+  document.getElementById('eval-oa').textContent =
+    evalData.overall_accuracy != null ? (evalData.overall_accuracy * 100).toFixed(1) + '%' : '-';
+  document.getElementById('eval-tiles').textContent = evalData.n_tiles || '-';
+  document.getElementById('eval-time').textContent =
+    evalData.elapsed_s ? fmtTime(evalData.elapsed_s) : '';
+  document.getElementById('eval-checkpoint').textContent =
+    evalData.checkpoint ? evalData.checkpoint.split('/').pop() : '';
+
+  const aux = evalData.aux_channels || [];
+  document.getElementById('eval-aux').textContent =
+    aux.length > 0 ? aux.join(', ') : 'none (baseline)';
+
+  // Per-class IoU bar chart
+  if (evalData.per_class_iou) {{
+    const items = Object.entries(evalData.per_class_iou)
+      .sort((a,b) => a[1] - b[1]);
+    evalPerClassChart.data.labels = items.map(e => e[0]);
+    const ds = evalPerClassChart.data.datasets[0];
+    ds.data = items.map(e => e[1]);
+    ds.backgroundColor = items.map(e => {{
+      const v = e[1];
+      if (v >= 0.6) return '#22c55e';
+      if (v >= 0.4) return '#eab308';
+      if (v >= 0.2) return '#f97316';
+      return '#ef4444';
+    }});
+    evalPerClassChart.update('none');
+  }}
+}}
+
 // ── Training ────────────────────────────────────────────────────
 function updateTraining(log) {{
   const epochs = log.epochs || [];
@@ -1049,12 +1136,13 @@ function updateSystemMetrics(m) {{
 }}
 
 async function refresh() {{
-  const [nmdLog, prepLog, trainLog, stats, sysMetrics] = await Promise.all([
+  const [nmdLog, prepLog, trainLog, stats, sysMetrics, evalTest] = await Promise.all([
     fetchJSON('nmd_prefilter_log.json'),
     fetchJSON('prepare_log.json'),
     fetchJSON('training_log.json'),
     fetchJSON('class_stats.json'),
     fetchJSON('system_metrics.json'),
+    fetchJSON('eval_test.json'),
   ]);
 
   // Keep last good data so UI stays populated after disconnect
@@ -1062,15 +1150,18 @@ async function refresh() {{
   if (prepLog) _lastGoodData.prepLog = prepLog;
   if (trainLog) _lastGoodData.trainLog = trainLog;
   if (stats) _lastGoodData.stats = stats;
+  if (evalTest) _lastGoodData.evalTest = evalTest;
 
   const n = nmdLog || _lastGoodData.nmdLog;
   const p = prepLog || _lastGoodData.prepLog;
   const t = trainLog || _lastGoodData.trainLog;
   const s = stats || _lastGoodData.stats;
+  const ev = evalTest || _lastGoodData.evalTest;
 
   updateGlobalStatus(n, p, t);
   if (n) updateNmdPrefilter(n);
   if (p || s) updateDataPrep(p, s);
+  if (ev) updateEvaluation(ev);
   if (t) updateTraining(t);
   if (sysMetrics) updateSystemMetrics(sysMetrics);
 
