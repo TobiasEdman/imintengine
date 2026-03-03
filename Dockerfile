@@ -1,21 +1,43 @@
-FROM python:3.11-slim
+# ── Multi-stage build optimised for ARM64 (M1/M2 Mac) ────────────────────
+# Stage 1: Build native wheels for rasterio/GDAL/shapely
+FROM python:3.11-slim AS builder
 
-# System deps for rasterio/GDAL
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgdal-dev \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /wheels
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt
+
+# Stage 2: Runtime — slim image with pre-built wheels
+FROM python:3.11-slim
+
+# Runtime GDAL libs only (no compiler)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgdal32 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Install Python dependencies
+# Install from pre-built wheels (fast, no compilation)
+COPY --from=builder /wheels /wheels
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --no-index --find-links=/wheels \
+    -r requirements.txt \
+    && rm -rf /wheels
 
 # Copy application code
 COPY imint/ imint/
 COPY executors/ executors/
 COPY config/ config/
 
-# ColonyOS entry point
-ENTRYPOINT ["python", "executors/colonyos.py"]
+# CDSE credentials (if available — gitignored, optional)
+COPY .cdse_credentials* /app/
+
+# Flexible entry point — CMD selects executor:
+#   Default:   python executors/colonyos.py  (analysis jobs)
+#   Seasonal:  python executors/seasonal_fetch.py
+ENTRYPOINT ["python"]
+CMD ["executors/colonyos.py"]

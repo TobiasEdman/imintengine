@@ -1,0 +1,73 @@
+# ── Local ColonyOS development on M1 Max ─────────────────────────────────
+#
+# Usage:
+#   make build                    # Build image
+#   make test-seasonal            # Test one tile locally
+#   make test-seasonal-cdse       # Test with CDSE backend
+#
+# Or directly:
+#   docker compose run --rm seasonal-fetch-cdse
+#   docker compose run --rm seasonal-fetch-des
+
+services:
+  # ── Seasonal tile fetch via CDSE (default, faster) ───────────────────
+  seasonal-fetch-cdse:
+    build: .
+    platform: linux/arm64
+    command: ["executors/seasonal_fetch.py"]
+    env_file: .env
+    environment:
+      - FETCH_SOURCE=copernicus
+      # Override these per tile:
+      - EASTING=361280
+      - NORTHING=6231280
+      - WEST_WGS84=16.0
+      - SOUTH_WGS84=58.4
+      - EAST_WGS84=16.05
+      - NORTH_WGS84=58.45
+      - YEARS=2019,2018
+      - SEASONAL_WINDOWS=4-5,6-7,8-9,1-2
+      - SEASONAL_CLOUD_THRESHOLD=0.10
+      - TILES_DIR=/data/tiles
+      - NUM_CLASSES=10
+      - B02_HAZE_THRESHOLD=0.06
+    volumes:
+      - ./data/tiles:/data/tiles
+
+  # ── Seasonal tile fetch via DES ──────────────────────────────────────
+  seasonal-fetch-des:
+    build: .
+    platform: linux/arm64
+    command: ["executors/seasonal_fetch.py"]
+    env_file: .env
+    environment:
+      - FETCH_SOURCE=des
+      - EASTING=361280
+      - NORTHING=6231280
+      - WEST_WGS84=16.0
+      - SOUTH_WGS84=58.4
+      - EAST_WGS84=16.05
+      - NORTH_WGS84=58.45
+      - YEARS=2019,2018
+      - SEASONAL_WINDOWS=4-5,6-7,8-9,1-2
+      - SEASONAL_CLOUD_THRESHOLD=0.10
+      - TILES_DIR=/data/tiles
+      - NUM_CLASSES=10
+    volumes:
+      - ./data/tiles:/data/tiles
+
+  # ── Standard IMINT analysis job ──────────────────────────────────────
+  analysis:
+    build: .
+    platform: linux/arm64
+    env_file: .env
+    environment:
+      - DATE=2022-06-15
+      - WEST=16.0
+      - SOUTH=58.4
+      - EAST=16.05
+      - NORTH=58.45
+      - CLOUD_THRESHOLD=0.3
+      - OUTPUTS_DIR=/data/outputs
+    volumes:
+      - ./outputs:/data/outputs
