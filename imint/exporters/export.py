@@ -1661,6 +1661,9 @@ def save_coastline_geojson(
     geo,
     path: str,
     img_shape: tuple[int, int] | None = None,
+    pixel_coords: bool = False,
+    smooth_sigma: float = 3.0,
+    subsample_step: int = 3,
 ) -> str:
     """Save shoreline contours as GeoJSON with per-year properties.
 
@@ -1670,52 +1673,86 @@ def save_coastline_geojson(
         shorelines_per_year: {year: [array (N,2) pixel coords, ...]}.
         geo: GeoContext with transform and CRS.
         path: output JSON path.
-        img_shape: (H, W) — used for y-flip if needed.
+        img_shape: (H, W) — required for pixel_coords mode (Y-flip).
+        pixel_coords: If True, output pixel coordinates (for Leaflet
+            Simple CRS) with Y-flipped for bottom-origin.  If False,
+            output WGS84 geographic coordinates.
+        smooth_sigma: Gaussian smoothing sigma (0 to disable).
+        subsample_step: Keep every Nth point after smoothing (1 = all).
     """
-    from rasterio.transform import Affine
+    from scipy.ndimage import gaussian_filter1d
 
     features = []
-    tf = geo.transform
-    if not isinstance(tf, Affine):
-        tf = Affine(*tf[:6]) if len(tf) >= 6 else Affine(10, 0, 0, 0, -10, 0)
+
+    if not pixel_coords:
+        from rasterio.transform import Affine
+        tf = geo.transform
+        if not isinstance(tf, Affine):
+            tf = Affine(*tf[:6]) if len(tf) >= 6 else Affine(10, 0, 0, 0, -10, 0)
+
+    img_h = img_shape[0] if img_shape else 0
 
     for year in sorted(shorelines_per_year.keys()):
         for contour in shorelines_per_year[year]:
             if len(contour) < 3:
                 continue
 
-            # Convert pixel coords to projected CRS coords
-            coords_proj = []
-            for px, py in contour:
-                x, y = tf * (float(px), float(py))
-                coords_proj.append((x, y))
+            xs = contour[:, 0].astype(float)
+            ys = contour[:, 1].astype(float)
 
-            # Approximate length in meters
-            length_m = 0.0
-            for j in range(1, len(coords_proj)):
-                dx = coords_proj[j][0] - coords_proj[j - 1][0]
-                dy = coords_proj[j][1] - coords_proj[j - 1][1]
-                length_m += (dx**2 + dy**2) ** 0.5
+            # Gaussian smoothing
+            if smooth_sigma > 0 and len(xs) > 5:
+                xs = gaussian_filter1d(xs, sigma=smooth_sigma)
+                ys = gaussian_filter1d(ys, sigma=smooth_sigma)
 
-            # Convert to WGS84 for GeoJSON
-            try:
-                from pyproj import Transformer
-                transformer = Transformer.from_crs(
-                    geo.crs, "EPSG:4326", always_xy=True
-                )
-                coords_wgs84 = [
-                    list(transformer.transform(x, y))
-                    for x, y in coords_proj
+            # Subsample
+            if subsample_step > 1:
+                xs_s = xs[::subsample_step]
+                ys_s = ys[::subsample_step]
+                if len(xs) % subsample_step != 1:
+                    xs_s = np.append(xs_s, xs[-1])
+                    ys_s = np.append(ys_s, ys[-1])
+                xs, ys = xs_s, ys_s
+
+            if pixel_coords:
+                # Y-flip for Leaflet Simple CRS (origin at bottom-left)
+                coords = [
+                    [round(float(x), 2), round(float(img_h - y), 2)]
+                    for x, y in zip(xs, ys)
                 ]
-            except Exception:
-                # Fallback: assume already in WGS84-compatible coords
-                coords_wgs84 = [[x, y] for x, y in coords_proj]
+                # Length in meters (10 m/pixel)
+                length_m = sum(
+                    ((coords[j][0] - coords[j-1][0])**2 +
+                     (coords[j][1] - coords[j-1][1])**2) ** 0.5 * 10
+                    for j in range(1, len(coords))
+                )
+            else:
+                # Convert pixel coords to projected CRS, then to WGS84
+                coords_proj = [
+                    tf * (float(x), float(y)) for x, y in zip(xs, ys)
+                ]
+                length_m = sum(
+                    ((coords_proj[j][0] - coords_proj[j-1][0])**2 +
+                     (coords_proj[j][1] - coords_proj[j-1][1])**2) ** 0.5
+                    for j in range(1, len(coords_proj))
+                )
+                try:
+                    from pyproj import Transformer
+                    transformer = Transformer.from_crs(
+                        geo.crs, "EPSG:4326", always_xy=True
+                    )
+                    coords = [
+                        list(transformer.transform(x, y))
+                        for x, y in coords_proj
+                    ]
+                except Exception:
+                    coords = [[x, y] for x, y in coords_proj]
 
             features.append({
                 "type": "Feature",
                 "geometry": {
                     "type": "LineString",
-                    "coordinates": coords_wgs84,
+                    "coordinates": coords,
                 },
                 "properties": {
                     "year": year,

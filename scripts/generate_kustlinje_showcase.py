@@ -304,12 +304,15 @@ def main():
         os.path.join(out_dir, "shoreline_change.png"),
     )
 
-    # Save GeoJSON with all years' contours
+    # Save GeoJSON with all years' contours (pixel coords for Leaflet)
     save_coastline_geojson(
         yearly_contours,
         geo,
         os.path.join(out_dir, "coastline_vectors.json"),
         img_shape=(H, W),
+        pixel_coords=True,
+        smooth_sigma=3.0,
+        subsample_step=3,
     )
 
     # ── Step 7: Compute statistics and save metadata ─────────────────

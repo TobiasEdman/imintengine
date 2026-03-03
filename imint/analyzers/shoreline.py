@@ -170,7 +170,10 @@ class ShorelineAnalyzer(BaseAnalyzer):
 
     @staticmethod
     def extract_shoreline(seg_map: np.ndarray) -> np.ndarray:
-        """Extract shoreline as binary edge mask (water <-> non-water).
+        """Extract shoreline as 1-pixel-wide centerline (water <-> non-water).
+
+        Uses morphological gradient to find the edge band, then
+        skeletonizes to a single-pixel centerline.
 
         Args:
             seg_map: (H, W) uint8 — class indices (0, 1 = water classes).
@@ -178,6 +181,8 @@ class ShorelineAnalyzer(BaseAnalyzer):
         Returns:
             (H, W) uint8 — binary shoreline mask (255 = shoreline pixel).
         """
+        from skimage.morphology import skeletonize
+
         water = (seg_map <= 1).astype(np.uint8)
 
         # Morphological cleanup
@@ -185,11 +190,21 @@ class ShorelineAnalyzer(BaseAnalyzer):
         water = cv2.morphologyEx(water, cv2.MORPH_CLOSE, kernel_clean)
         water = cv2.morphologyEx(water, cv2.MORPH_OPEN, kernel_clean)
 
-        # Edge via morphological gradient
+        # Edge via morphological gradient (produces ~3px wide band)
         kernel_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         edges = cv2.morphologyEx(water, cv2.MORPH_GRADIENT, kernel_edge)
 
-        return (edges * 255).astype(np.uint8)
+        # Skeletonize to 1-pixel-wide centerline
+        skeleton = skeletonize(edges > 0).astype(np.uint8)
+
+        # Remove border pixels to avoid edge artifacts
+        margin = 3
+        skeleton[:margin, :] = 0
+        skeleton[-margin:, :] = 0
+        skeleton[:, :margin] = 0
+        skeleton[:, -margin:] = 0
+
+        return (skeleton * 255).astype(np.uint8)
 
     @staticmethod
     def extract_contours(
@@ -200,7 +215,7 @@ class ShorelineAnalyzer(BaseAnalyzer):
         Returns list of (N, 2) arrays in pixel coordinates [x, y].
         """
         contours, _ = cv2.findContours(
-            shoreline_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            shoreline_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
         )
         results = []
         for c in contours:
