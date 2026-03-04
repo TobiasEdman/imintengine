@@ -12,8 +12,8 @@ Environment variables are set by ColonyOS from the job spec:
     WEST_WGS84, SOUTH_WGS84,
     EAST_WGS84, NORTH_WGS84     — bounding box in WGS84
     FETCH_SOURCE                 — "auto" (default), "des", or "copernicus"
-                                   auto = deterministic 2:1 CDSE weighting
-                                   with fallback to the other on failure
+                                   auto = adaptive, picks the currently
+                                   faster backend based on shared stats
     YEARS                        — comma-separated, e.g. "2019,2018"
     SEASONAL_WINDOWS             — e.g. "4-5,6-7,8-9,1-2"
     SEASONAL_CLOUD_THRESHOLD     — max cloud fraction, e.g. "0.10"
@@ -30,6 +30,8 @@ from __future__ import annotations
 import os
 import sys
 import time
+import json
+import fcntl
 import hashlib
 import numpy as np
 from pathlib import Path
@@ -60,23 +62,115 @@ def _parse_windows(s: str) -> list[tuple[int, int]]:
     return windows
 
 
-def _pick_source(cell_key: str, preferred: str) -> tuple[str, str]:
-    """Return (primary, secondary) source based on preference or cell hash.
+_STATS_FILE = "source_stats.json"
 
-    When *preferred* is ``"auto"``, uses deterministic 2:1 CDSE weighting
-    based on *cell_key* hash so the same cell always tries the same
-    primary source first.  Explicit ``"copernicus"`` or ``"des"`` still
-    works (backward compatible) — the other source becomes the fallback.
+
+def _read_stats(tiles_dir: Path) -> dict:
+    """Read shared source performance stats (file-locked)."""
+    path = tiles_dir / _STATS_FILE
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r") as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            data = json.load(f)
+            fcntl.flock(f, fcntl.LOCK_UN)
+        return data
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _update_stats(tiles_dir: Path, source: str, elapsed: float) -> None:
+    """Record a fetch timing to the shared stats file (file-locked)."""
+    path = tiles_dir / _STATS_FILE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Open for read+write, create if missing
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT)
+        with os.fdopen(fd, "r+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            content = f.read()
+            try:
+                data = json.loads(content) if content else {}
+            except json.JSONDecodeError:
+                data = {}
+
+            entry = data.get(source, {"total": 0.0, "count": 0, "fails": 0})
+            entry["total"] = entry.get("total", 0.0) + elapsed
+            entry["count"] = entry.get("count", 0) + 1
+            entry["avg"] = entry["total"] / entry["count"]
+            data[source] = entry
+
+            f.seek(0)
+            f.truncate()
+            json.dump(data, f, indent=2)
+            fcntl.flock(f, fcntl.LOCK_UN)
+    except OSError as e:
+        print(f"  Warning: could not update stats: {e}")
+
+
+def _record_failure(tiles_dir: Path, source: str) -> None:
+    """Record a source failure to the shared stats file."""
+    path = tiles_dir / _STATS_FILE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT)
+        with os.fdopen(fd, "r+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            content = f.read()
+            try:
+                data = json.loads(content) if content else {}
+            except json.JSONDecodeError:
+                data = {}
+
+            entry = data.get(source, {"total": 0.0, "count": 0, "fails": 0})
+            entry["fails"] = entry.get("fails", 0) + 1
+            data[source] = entry
+
+            f.seek(0)
+            f.truncate()
+            json.dump(data, f, indent=2)
+            fcntl.flock(f, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+def _pick_source(tiles_dir: Path, preferred: str) -> tuple[str, str]:
+    """Return (primary, secondary) source based on observed performance.
+
+    When *preferred* is ``"auto"``, reads the shared stats file to pick
+    the backend with the lower average response time.  Defaults to DES
+    when no stats exist yet.  Explicit ``"copernicus"`` or ``"des"``
+    still works (backward compatible).
     """
     if preferred in ("copernicus", "des"):
         other = "des" if preferred == "copernicus" else "copernicus"
         return preferred, other
 
-    # auto: deterministic 2:1 weighting via cell hash
-    h = int(hashlib.md5(cell_key.encode()).hexdigest(), 16)
-    if h % 3 != 2:
+    # auto: pick faster backend from shared stats
+    stats = _read_stats(tiles_dir)
+    des_stats = stats.get("des", {})
+    cdse_stats = stats.get("copernicus", {})
+
+    des_avg = des_stats.get("avg", 0)
+    cdse_avg = cdse_stats.get("avg", 0)
+    des_count = des_stats.get("count", 0)
+    cdse_count = cdse_stats.get("count", 0)
+
+    # Default to DES if no stats yet (it's typically faster)
+    if des_count == 0 and cdse_count == 0:
+        return "des", "copernicus"
+
+    # If only one source has stats, prefer it (known quantity)
+    if des_count > 0 and cdse_count == 0:
+        return "des", "copernicus"
+    if cdse_count > 0 and des_count == 0:
         return "copernicus", "des"
-    return "des", "copernicus"
+
+    # Both have stats — pick faster
+    if des_avg <= cdse_avg:
+        return "des", "copernicus"
+    return "copernicus", "des"
 
 
 class SeasonalFetchExecutor:
@@ -113,10 +207,23 @@ class SeasonalFetchExecutor:
         n_bands = len(_PRITHVI_BANDS)
         tile_path = tiles_dir / f"tile_{cell_key}.npz"
 
-        primary, secondary = _pick_source(cell_key, preferred)
+        primary, secondary = _pick_source(tiles_dir, preferred)
+
+        # Show stats context
+        stats = _read_stats(tiles_dir)
+        stats_info = []
+        for src in ("des", "copernicus"):
+            s = stats.get(src, {})
+            if s.get("count", 0) > 0:
+                stats_info.append(
+                    f"{src.upper()}: {s['avg']:.0f}s avg "
+                    f"({s['count']} tiles, {s.get('fails', 0)} fails)"
+                )
+        stats_str = ", ".join(stats_info) if stats_info else "no history"
+
         print(f"[SeasonalFetch] Tile {cell_key} "
-              f"(preferred={preferred}, primary={primary.upper()}, "
-              f"fallback={secondary.upper()})")
+              f"(primary={primary.upper()}, fallback={secondary.upper()})")
+        print(f"  Stats: {stats_str}")
         print(f"  Windows: {windows}, Years: {years}")
         print(f"  Cloud threshold: {cloud_threshold:.0%}")
         t_start = time.monotonic()
@@ -132,6 +239,7 @@ class SeasonalFetchExecutor:
             if attempt_idx > 0:
                 print(f"  >> Falling back to {source.upper()}")
 
+            t_fetch = time.monotonic()
             try:
                 self._fetch_tile(
                     source=source,
@@ -149,15 +257,19 @@ class SeasonalFetchExecutor:
                     easting=easting,
                     northing=northing,
                 )
-                elapsed = time.monotonic() - t_start
+                fetch_elapsed = time.monotonic() - t_fetch
+                _update_stats(tiles_dir, source, fetch_elapsed)
+
+                total_elapsed = time.monotonic() - t_start
                 label = source.upper()
                 if attempt_idx > 0:
                     label += " (fallback)"
                 print(f"[SeasonalFetch] Tile {cell_key} saved via {label} "
-                      f"({elapsed:.1f}s)")
+                      f"({total_elapsed:.1f}s)")
                 return  # success
             except Exception as e:
                 last_error = e
+                _record_failure(tiles_dir, source)
                 print(f"  ✗ {source.upper()} failed: {e}")
 
         # Both sources failed

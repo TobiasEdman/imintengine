@@ -782,6 +782,43 @@ def _fetch_scl_batch(
                 scl = src.read()[0].astype(np.uint8)
             cloud_by_date[date_str] = check_cloud_fraction(scl)
         tf.close()
+    elif isinstance(data, bytes):
+        # Plain GeoTIFF — CDSE returns multi-date results as stacked
+        # bands (one band per date) instead of a tar.gz archive.
+        with rasterio.open(io.BytesIO(data)) as src:
+            raw = src.read()  # (N_dates, H, W)
+
+        # Build date list to match bands
+        if candidate_dates:
+            dates_list = sorted(candidate_dates)
+        elif temporal is not None:
+            dates_list = []
+            dt_cur = _dt.strptime(temporal[0], "%Y-%m-%d")
+            dt_end = _dt.strptime(temporal[1], "%Y-%m-%d")
+            while dt_cur < dt_end:
+                dates_list.append(dt_cur.strftime("%Y-%m-%d"))
+                dt_cur += _td(days=1)
+        else:
+            dates_list = []
+
+        n_bands = raw.shape[0]
+        if n_bands == 1 and dates_list:
+            # Single date — use first candidate
+            scl = raw[0].astype(np.uint8)
+            cloud_by_date[dates_list[0]] = check_cloud_fraction(scl)
+        elif n_bands == len(dates_list):
+            # One band per candidate date
+            for i, date_str in enumerate(dates_list):
+                if cand_set is not None and date_str not in cand_set:
+                    continue
+                scl = raw[i].astype(np.uint8)
+                cloud_by_date[date_str] = check_cloud_fraction(scl)
+        else:
+            # Band count doesn't match dates — use what we have
+            for i in range(min(n_bands, len(dates_list) if dates_list else n_bands)):
+                date_str = dates_list[i] if i < len(dates_list) else f"band_{i}"
+                scl = raw[i].astype(np.uint8)
+                cloud_by_date[date_str] = check_cloud_fraction(scl)
     else:
         raise FetchError(
             f"SCL batch: unexpected format (magic={data[:4].hex()})"
