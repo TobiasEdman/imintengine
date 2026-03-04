@@ -11,15 +11,18 @@ Environment variables are set by ColonyOS from the job spec:
     EASTING, NORTHING            — tile center in EPSG:3006
     WEST_WGS84, SOUTH_WGS84,
     EAST_WGS84, NORTH_WGS84     — bounding box in WGS84
-    FETCH_SOURCE                 — "des" or "copernicus" (default: "copernicus")
+    FETCH_SOURCE                 — "auto" (default), "des", or "copernicus"
+                                   auto = deterministic 2:1 CDSE weighting
+                                   with fallback to the other on failure
     YEARS                        — comma-separated, e.g. "2019,2018"
     SEASONAL_WINDOWS             — e.g. "4-5,6-7,8-9,1-2"
     SEASONAL_CLOUD_THRESHOLD     — max cloud fraction, e.g. "0.10"
     TILES_DIR                    — output directory (default: /cfs/tiles)
     NUM_CLASSES                  — NMD class count (default: 10)
     B02_HAZE_THRESHOLD           — max mean B02 reflectance (default: 0.06)
-    DES_TOKEN                    — DES auth token (for source=des)
-    CDSE_CLIENT_ID               — CDSE OAuth client ID (for source=copernicus)
+    DES_TOKEN                    — DES auth token
+    DES_USER, DES_PASSWORD       — DES basic auth
+    CDSE_CLIENT_ID               — CDSE OAuth client ID
     CDSE_CLIENT_SECRET           — CDSE OAuth client secret
 """
 from __future__ import annotations
@@ -57,6 +60,25 @@ def _parse_windows(s: str) -> list[tuple[int, int]]:
     return windows
 
 
+def _pick_source(cell_key: str, preferred: str) -> tuple[str, str]:
+    """Return (primary, secondary) source based on preference or cell hash.
+
+    When *preferred* is ``"auto"``, uses deterministic 2:1 CDSE weighting
+    based on *cell_key* hash so the same cell always tries the same
+    primary source first.  Explicit ``"copernicus"`` or ``"des"`` still
+    works (backward compatible) — the other source becomes the fallback.
+    """
+    if preferred in ("copernicus", "des"):
+        other = "des" if preferred == "copernicus" else "copernicus"
+        return preferred, other
+
+    # auto: deterministic 2:1 weighting via cell hash
+    h = int(hashlib.md5(cell_key.encode()).hexdigest(), 16)
+    if h % 3 != 2:
+        return "copernicus", "des"
+    return "des", "copernicus"
+
+
 class SeasonalFetchExecutor:
     """ColonyOS executor that fetches seasonal Sentinel-2 data for one tile."""
 
@@ -73,7 +95,7 @@ class SeasonalFetchExecutor:
             "north": float(os.environ["NORTH_WGS84"]),
         }
 
-        source = os.environ.get("FETCH_SOURCE", "copernicus")
+        preferred = os.environ.get("FETCH_SOURCE", "auto")
         years = os.environ.get("YEARS", "2019,2018").split(",")
         windows = _parse_windows(
             os.environ.get("SEASONAL_WINDOWS", "4-5,6-7,8-9,1-2")
@@ -91,7 +113,10 @@ class SeasonalFetchExecutor:
         n_bands = len(_PRITHVI_BANDS)
         tile_path = tiles_dir / f"tile_{cell_key}.npz"
 
-        print(f"[SeasonalFetch] Tile {cell_key} via {source.upper()}")
+        primary, secondary = _pick_source(cell_key, preferred)
+        print(f"[SeasonalFetch] Tile {cell_key} "
+              f"(preferred={preferred}, primary={primary.upper()}, "
+              f"fallback={secondary.upper()})")
         print(f"  Windows: {windows}, Years: {years}")
         print(f"  Cloud threshold: {cloud_threshold:.0%}")
         t_start = time.monotonic()
@@ -101,15 +126,77 @@ class SeasonalFetchExecutor:
             print(f"[SeasonalFetch] Tile already exists: {tile_path}")
             return
 
-        # ── 3. Connect to backend ────────────────────────────────────────
+        # ── 3. Try primary, then fallback ────────────────────────────────
+        last_error = None
+        for attempt_idx, source in enumerate([primary, secondary]):
+            if attempt_idx > 0:
+                print(f"  >> Falling back to {source.upper()}")
+
+            try:
+                self._fetch_tile(
+                    source=source,
+                    cell_key=cell_key,
+                    coords=coords,
+                    years=years,
+                    windows=windows,
+                    cloud_threshold=cloud_threshold,
+                    b02_haze_threshold=b02_haze_threshold,
+                    n_frames=n_frames,
+                    n_bands=n_bands,
+                    tile_path=tile_path,
+                    tiles_dir=tiles_dir,
+                    num_classes=num_classes,
+                    easting=easting,
+                    northing=northing,
+                )
+                elapsed = time.monotonic() - t_start
+                label = source.upper()
+                if attempt_idx > 0:
+                    label += " (fallback)"
+                print(f"[SeasonalFetch] Tile {cell_key} saved via {label} "
+                      f"({elapsed:.1f}s)")
+                return  # success
+            except Exception as e:
+                last_error = e
+                print(f"  ✗ {source.upper()} failed: {e}")
+
+        # Both sources failed
+        raise RuntimeError(
+            f"Tile {cell_key}: all sources failed. "
+            f"Last error: {last_error}"
+        )
+
+    # ── Core fetch logic ──────────────────────────────────────────────
+    def _fetch_tile(
+        self,
+        *,
+        source: str,
+        cell_key: str,
+        coords: dict,
+        years: list[str],
+        windows: list[tuple[int, int]],
+        cloud_threshold: float,
+        b02_haze_threshold: float,
+        n_frames: int,
+        n_bands: int,
+        tile_path: Path,
+        tiles_dir: Path,
+        num_classes: int,
+        easting: int,
+        northing: int,
+    ) -> None:
+        """Fetch all seasonal frames from *source* and save tile.
+
+        Raises on failure so the caller can fall back to another source.
+        """
+        # Connect to backend
         if source == "copernicus":
             conn = _connect_cdse()
         else:
             conn = _connect()
         print(f"  {source.upper()} connection OK")
 
-        # ── 4. STAC discovery per season ─────────────────────────────────
-        # Deterministic year rotation per cell
+        # STAC discovery per season (deterministic year rotation)
         cell_hash = int(hashlib.md5(cell_key.encode()).hexdigest(), 16)
         years_offset = cell_hash % len(years)
         years_order = years[years_offset:] + years[:years_offset]
@@ -119,7 +206,7 @@ class SeasonalFetchExecutor:
             scene_cloud_max=50.0,
         )
 
-        # ── 5. SCL pre-screen + spectral fetch per season ────────────────
+        # SCL pre-screen + spectral fetch per season
         projected = _to_nmd_grid(coords)
         frames = []       # list of (6, H, W) arrays or None
         frame_dates = []   # list of date strings
@@ -223,12 +310,12 @@ class SeasonalFetchExecutor:
                 frame_dates.append("")
                 frame_mask.append(0)
 
-        # ── 6. Check minimum frames ──────────────────────────────────────
+        # Check minimum frames
         n_valid = sum(frame_mask)
         if n_valid == 0:
-            raise RuntimeError(f"Tile {cell_key}: no valid frames")
+            raise RuntimeError(f"No valid frames from {source.upper()}")
 
-        # ── 7. Stack frames into (T*6, H, W) ────────────────────────────
+        # Stack frames into (T*6, H, W)
         ref_shape = None
         for f in frames:
             if f is not None:
@@ -256,7 +343,7 @@ class SeasonalFetchExecutor:
 
         image = np.concatenate(stacked_frames, axis=0)  # (T*6, H, W)
 
-        # ── 8. Fetch NMD labels ──────────────────────────────────────────
+        # Fetch NMD labels
         nmd_result = fetch_nmd_data(
             coords=coords,
             target_shape=ref_shape,
@@ -276,7 +363,7 @@ class SeasonalFetchExecutor:
             else:
                 doy_values.append(0)
 
-        # ── 9. Save tile ─────────────────────────────────────────────────
+        # Save tile (atomic write)
         tiles_dir.mkdir(parents=True, exist_ok=True)
         tmp_path = tile_path.with_suffix(".tmp.npz")
         np.savez_compressed(
@@ -293,12 +380,8 @@ class SeasonalFetchExecutor:
             multitemporal=True,
             source=source,
         )
-        # Atomic rename
         tmp_path.rename(tile_path)
-
-        elapsed = time.monotonic() - t_start
-        print(f"[SeasonalFetch] Tile {cell_key} saved "
-              f"({n_valid}/{n_frames} frames, {elapsed:.1f}s)")
+        print(f"  {source.upper()}: {n_valid}/{n_frames} frames OK")
 
 
 if __name__ == "__main__":

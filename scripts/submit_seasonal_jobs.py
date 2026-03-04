@@ -69,7 +69,6 @@ def _list_existing_tiles(cfs_dir: str) -> set[str]:
 
 def _build_job_spec(
     cell,
-    source: str,
     years: list[str],
     windows: str,
     cloud_threshold: float,
@@ -77,15 +76,28 @@ def _build_job_spec(
     num_classes: int,
     b02_haze_threshold: float,
     des_token: str = "",
+    des_user: str = "",
+    des_password: str = "",
     cdse_client_id: str = "",
     cdse_client_secret: str = "",
 ) -> dict:
-    """Build a ColonyOS job spec dict for one tile."""
+    """Build a ColonyOS job spec dict for one tile.
+
+    FETCH_SOURCE is set to "auto" — the executor picks the source
+    dynamically (2:1 CDSE:DES weighting) with fallback on failure.
+    Both CDSE and DES credentials are included so fallback works.
+    """
     cell_key = f"{cell.easting}_{cell.northing}"
     return {
         "conditions": {
             "colonyname": "imint",
             "executortype": "container-executor",
+            "nodes": 1,
+            "processes": 1,
+            "processespernode": 1,
+            "walltime": 900,
+            "cpu": "1000m",
+            "mem": "2Gi",
         },
         "env": {
             "EASTING": str(cell.easting),
@@ -94,7 +106,7 @@ def _build_job_spec(
             "SOUTH_WGS84": str(cell.south_wgs84),
             "EAST_WGS84": str(cell.east_wgs84),
             "NORTH_WGS84": str(cell.north_wgs84),
-            "FETCH_SOURCE": source,
+            "FETCH_SOURCE": "auto",
             "YEARS": ",".join(years),
             "SEASONAL_WINDOWS": windows,
             "SEASONAL_CLOUD_THRESHOLD": str(cloud_threshold),
@@ -102,24 +114,34 @@ def _build_job_spec(
             "NUM_CLASSES": str(num_classes),
             "B02_HAZE_THRESHOLD": str(b02_haze_threshold),
             "DES_TOKEN": des_token,
+            "DES_USER": des_user,
+            "DES_PASSWORD": des_password,
             "CDSE_CLIENT_ID": cdse_client_id,
             "CDSE_CLIENT_SECRET": cdse_client_secret,
         },
-        "funcname": "seasonal-tile-fetch",
+        "funcname": "execute",
         "kwargs": {
-            "docker-image": "imint-engine:latest",
+            "docker-image": "localhost:5000/imint-engine:latest",
             "rebuild-image": False,
-            "cmd": "executors/seasonal_fetch.py",
+            "cmd": "python executors/seasonal_fetch.py",
         },
         "maxexectime": 900,
         "maxretries": 3,
-        "fs": [
-            {
-                "mount": "/cfs/tiles",
-                "dir": cfs_dir,
-                "keepfiles": True,
-            }
-        ],
+        "maxwaittime": -1,
+        "fs": {
+            "mount": "/cfs/tiles",
+            "dirs": [
+                {
+                    "label": cfs_dir,
+                    "dir": "/cfs/tiles",
+                    "keepfiles": False,
+                    "onconflicts": {
+                        "onstart": {"keeplocal": False},
+                        "onclose": {"keeplocal": False},
+                    },
+                }
+            ],
+        },
     }
 
 
@@ -127,8 +149,8 @@ def _submit_job(spec: dict, dry_run: bool = False) -> bool:
     """Submit a single ColonyOS job. Returns True on success."""
     if dry_run:
         cell_key = f"{spec['env']['EASTING']}_{spec['env']['NORTHING']}"
-        src = spec["env"]["FETCH_SOURCE"]
-        print(f"  [DRY-RUN] Would submit: {cell_key} via {src.upper()}")
+        mode = spec["env"]["FETCH_SOURCE"]
+        print(f"  [DRY-RUN] Would submit: {cell_key} (source={mode})")
         return True
 
     # Write spec to temp file
@@ -234,6 +256,9 @@ def main():
     land_cells = filter_land_cells(cells)
     print(f"  Land cells: {len(land_cells)}")
 
+    # ── Compute WGS84 coordinates from SWEREF99 ─────────────────────
+    land_cells = grid_to_wgs84(land_cells)
+
     # ── Check CFS for existing tiles ─────────────────────────────────
     print("  Checking CFS for existing tiles...")
     existing = _list_existing_tiles(args.tiles_dir)
@@ -255,8 +280,10 @@ def main():
         todo = todo[:args.max_jobs]
         print(f"  Limiting to {args.max_jobs} jobs")
 
-    # ── Load credentials ─────────────────────────────────────────────
+    # ── Load credentials (both CDSE and DES for dynamic fallback) ────
     des_token = os.environ.get("DES_TOKEN", "")
+    des_user = os.environ.get("DES_USER", "")
+    des_password = os.environ.get("DES_PASSWORD", "")
     cdse_client_id = os.environ.get("CDSE_CLIENT_ID", "")
     cdse_client_secret = os.environ.get("CDSE_CLIENT_SECRET", "")
 
@@ -268,24 +295,22 @@ def main():
             cdse_client_id = lines[2].strip()
             cdse_client_secret = lines[3].strip()
 
-    # ── Submit jobs with 2:1 CDSE:DES load balancing ─────────────────
+    has_cdse = bool(cdse_client_id and cdse_client_secret)
+    has_des = bool(des_token or (des_user and des_password))
+    print(f"\n  Credentials: CDSE={'OK' if has_cdse else 'MISSING'}, "
+          f"DES={'OK' if has_des else 'MISSING'}")
+    print(f"  Source mode: auto (executor picks 2:1 CDSE:DES with fallback)")
+
+    # ── Submit jobs ───────────────────────────────────────────────────
     print(f"\n  Submitting {len(todo)} jobs "
           f"({'DRY RUN' if args.dry_run else 'LIVE'})...")
 
     submitted = 0
     failed = 0
-    source_counts = {s: 0 for s in sources}
 
     for i, cell in enumerate(todo):
-        # 2:1 CDSE:DES distribution
-        if len(sources) >= 2 and "copernicus" in sources:
-            source = "copernicus" if (i % 3) != 2 else "des"
-        else:
-            source = sources[i % len(sources)]
-
         spec = _build_job_spec(
             cell=cell,
-            source=source,
             years=years,
             windows=args.windows,
             cloud_threshold=args.cloud_threshold,
@@ -293,13 +318,14 @@ def main():
             num_classes=args.num_classes,
             b02_haze_threshold=config.b02_haze_threshold,
             des_token=des_token,
+            des_user=des_user,
+            des_password=des_password,
             cdse_client_id=cdse_client_id,
             cdse_client_secret=cdse_client_secret,
         )
 
         if _submit_job(spec, dry_run=args.dry_run):
             submitted += 1
-            source_counts[source] = source_counts.get(source, 0) + 1
         else:
             failed += 1
 
@@ -311,8 +337,7 @@ def main():
     print(f"\n  {'=' * 50}")
     print(f"  Submitted: {submitted}")
     print(f"  Failed:    {failed}")
-    for s, n in source_counts.items():
-        print(f"    {s.upper()}: {n} jobs")
+    print(f"  Source: auto (dynamic 2:1 CDSE:DES with fallback)")
     print(f"  {'=' * 50}")
 
     if not args.dry_run and submitted > 0:

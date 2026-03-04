@@ -37,6 +37,15 @@ services:
       timeout: 3s
       retries: 10
 
+  # ── Local Docker registry (for local images) ────────────────────────────
+  registry:
+    image: registry:2
+    platform: linux/arm64
+    ports:
+      - "5000:5000"
+    volumes:
+      - registry_data:/var/lib/registry
+
   # ── Object storage (CFS) ─────────────────────────────────────────────────
   minio:
     image: minio/minio:latest
@@ -55,6 +64,12 @@ services:
     image: minio/mc
     depends_on:
       - minio
+    environment:
+      MINIO_USER: ${MINIO_USER}
+      MINIO_PASSWORD: ${MINIO_PASSWORD}
+      AWS_S3_ACCESSKEY: ${AWS_S3_ACCESSKEY}
+      AWS_S3_SECRETKEY: ${AWS_S3_SECRETKEY}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
     entrypoint: >
       /bin/sh -c "
         sleep 3;
@@ -155,7 +170,8 @@ services:
       EXECUTOR_LOCATION_LONG: "0"
       EXECUTOR_LOCATION_LAT: "0"
       EXECUTOR_LOCATION_DESC: "dev-local"
-      EXECUTOR_FS_DIR: /tmp/cfs
+      EXECUTOR_FS_DIR: /Users/tobiasedm/cfs
+      EXECUTOR_PARALLEL_CONTAINERS: "true"
       EXECUTOR_ADD_DEBUG_LOGS: "true"
       # ── S3 / CFS ──
       AWS_S3_ENDPOINT: minio:9000
@@ -167,7 +183,7 @@ services:
       AWS_S3_SKIPVERIFY: "false"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - cfs_data:/tmp/cfs
+      - /Users/tobiasedm/cfs:/Users/tobiasedm/cfs
     command: ["docker_executor", "start", "-v"]
     depends_on:
       colonies-setup:
@@ -177,4 +193,4 @@ volumes:
   timescaledb_data:
   minio_data:
   colonies_etcd:
-  cfs_data:
+  registry_data:

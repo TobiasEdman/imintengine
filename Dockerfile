@@ -38,8 +38,6 @@ COPY config/ config/
 RUN true
 COPY .cdse_credential[s] /app/
 
-# Flexible entry point — CMD selects executor:
-#   Default:   python executors/colonyos.py  (analysis jobs)
-#   Seasonal:  python executors/seasonal_fetch.py
-ENTRYPOINT ["python"]
-CMD ["executors/colonyos.py"]
+# No ENTRYPOINT — ColonyOS Docker executor wraps cmd in sh -c
+# and sets it as the container command
+CMD ["python", "executors/colonyos.py"]

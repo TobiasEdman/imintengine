@@ -80,10 +80,19 @@ def _query_all_processes() -> dict[str, list[dict]]:
 
 
 def _is_seasonal(proc: dict) -> bool:
-    """Check if a process is a seasonal-tile-fetch job."""
+    """Check if a process is a seasonal tile fetch job.
+
+    Matches by the ``cmd`` kwarg (executor script path) since the
+    ColonyOS docker-executor uses the generic ``execute`` funcname.
+    """
     spec = proc.get("spec", proc)
-    funcname = spec.get("funcname", "")
-    return funcname == "seasonal-tile-fetch"
+    kwargs = spec.get("kwargs", {})
+    cmd = kwargs.get("cmd", "")
+    if "seasonal_fetch" in cmd:
+        return True
+    # Also check env for FETCH_SOURCE (belt-and-suspenders)
+    env = spec.get("env", {})
+    return "EASTING" in env and "NORTHING" in env
 
 
 def _get_env(proc: dict) -> dict:
