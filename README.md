@@ -1,6 +1,6 @@
 # IMINT Engine
 
-Modular satellite image intelligence engine built on as part of the Swedish Space Data Lab and Digital Earth Sweden.
+Modular satellite image intelligence engine built as part of the Swedish Space Data Lab and Digital Earth Sweden.
 
 Analyzes cloud-free Sentinel-2 imagery for change detection, spectral classification, and object detection.
 
