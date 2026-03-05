@@ -8,12 +8,9 @@
 
 ### Skogsstyrelsen Tree Height
 
-**Endpoint:** Public kartportal proxy (no auth required):
-```
-URL_REMOVED_SEE_SKG_ENDPOINTS
-```
+**Endpoint:** Public kartportal proxy (no auth required). URL configured via `.skg_endpoints` file (gitignored).
 
-Discovery: Opened kartportal in Chrome DevTools, found OpenLayers map layers, traced proxy URL that forwards to authenticated `geodata.[REDACTED]` ImageServer without requiring authentication.
+Discovery: Opened kartportal in Chrome DevTools, found OpenLayers map layers, traced proxy URL that forwards to authenticated ImageServer without requiring authentication.
 
 **File:** `imint/training/skg_height.py`
 - `fetch_height_tile(west, south, east, north, *, size_px, cache_dir)` -> (H, W) float32 meters
@@ -25,7 +22,7 @@ Test: Ljungby forest 256x256, 0-30.3m, 89.9% forest, 0.7s. Cache: 70x faster (0.
 
 ### Skogliga Grunddata (Volume, Basal Area, Diameter)
 
-**Endpoint:** `URL_REMOVED_SEE_SKG_ENDPOINTS`
+**Endpoint:** Skogsstyrelsen kartportal proxy (URL in `.skg_endpoints`)
 
 10-band TIFF via `renderingRule: {"rasterFunction":"none"}`:
 

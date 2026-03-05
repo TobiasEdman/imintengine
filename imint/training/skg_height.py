@@ -13,9 +13,8 @@ Access goes through Skogsstyrelsen's public kartportal proxy which
 exposes the ImageServer ``exportImage`` endpoint without requiring a
 Geodatasamverkan user account.
 
-Data source:
-    URL_REMOVED_SEE_SKG_ENDPOINTS
-    (proxies geodata.[REDACTED] Trädhöjd 3.1 ImageServer)
+Endpoint URL is loaded from ``.skg_endpoints`` config file or the
+``SKG_HEIGHT_URL`` environment variable.
 
 License: CC0 (public domain)
 
@@ -28,7 +27,9 @@ Typical usage in the training pipeline::
 
 from __future__ import annotations
 
+import configparser
 import io
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -36,12 +37,40 @@ from pathlib import Path
 
 import numpy as np
 
-# ── ArcGIS ImageServer endpoint (via kartportal proxy) ─────────────────
-# The kartportal at kartor.skogsstyrelsen.se proxies the authenticated
-# ImageServer exportImage endpoint, making it publicly accessible.
-_IMAGESERVER_URL = (
-    "URL_REMOVED_SEE_SKG_ENDPOINTS"
-)
+# ── ArcGIS ImageServer endpoint ────────────────────────────────────────
+# Loaded from .skg_endpoints config file or SKG_HEIGHT_URL env var.
+_IMAGESERVER_URL: str | None = None
+
+
+def _get_height_url() -> str:
+    """Resolve the Skogsstyrelsen height endpoint URL."""
+    global _IMAGESERVER_URL
+    if _IMAGESERVER_URL is not None:
+        return _IMAGESERVER_URL
+
+    # 1. Environment variable
+    url = os.environ.get("SKG_HEIGHT_URL")
+    if url:
+        _IMAGESERVER_URL = url
+        return url
+
+    # 2. Config file (.skg_endpoints in project root)
+    for candidate in [
+        Path(__file__).resolve().parents[2] / ".skg_endpoints",
+        Path.home() / ".skg_endpoints",
+    ]:
+        if candidate.exists():
+            cfg = configparser.ConfigParser()
+            cfg.read(candidate)
+            url = cfg.get("height", "url", fallback=None)
+            if url:
+                _IMAGESERVER_URL = url
+                return url
+
+    raise RuntimeError(
+        "Skogsstyrelsen height URL not configured. "
+        "Set SKG_HEIGHT_URL env var or create .skg_endpoints file."
+    )
 
 # MosaicRule selects the "THF" product (Trädhöjd Flygbild — aerial image
 # matching + laser ground hits).  Without this the server may return
@@ -198,7 +227,7 @@ def _download_tile(
         "f": "image",
     }
 
-    url = _IMAGESERVER_URL + "?" + urllib.parse.urlencode(params)
+    url = _get_height_url() + "?" + urllib.parse.urlencode(params)
 
     for attempt in range(_MAX_RETRIES + 1):
         try:
