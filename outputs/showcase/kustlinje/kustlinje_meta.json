@@ -1,0 +1,118 @@
+{
+  "date": "2025-06-14",
+  "reference_year": 2025,
+  "coords": {
+    "west": 14.13,
+    "south": 55.355,
+    "east": 14.22,
+    "north": 55.4
+  },
+  "shape": [
+    508,
+    577
+  ],
+  "years_analyzed": [
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025
+  ],
+  "num_years": 8,
+  "method": "NDWI/MNDWI + Otsu (CoastSat approach)",
+  "reference": "Vos et al. (2019) CoastSat",
+  "per_year": {
+    "2018": {
+      "date": "2018-06-03",
+      "water_fraction": 0.6062,
+      "deep_water_fraction": 0.6018,
+      "shallow_water_fraction": 0.0044,
+      "sediment_fraction": 0.0137,
+      "land_fraction": 0.3801,
+      "ndwi_threshold": -0.0652,
+      "mndwi_threshold": 0.1096,
+      "n_contours": 1
+    },
+    "2019": {
+      "date": "2019-08-27",
+      "water_fraction": 0.6049,
+      "deep_water_fraction": 0.6001,
+      "shallow_water_fraction": 0.0048,
+      "sediment_fraction": 0.0109,
+      "land_fraction": 0.3843,
+      "ndwi_threshold": -0.0281,
+      "mndwi_threshold": 0.1233,
+      "n_contours": 1
+    },
+    "2020": {
+      "date": "2020-08-14",
+      "water_fraction": 0.6076,
+      "deep_water_fraction": 0.6021,
+      "shallow_water_fraction": 0.0055,
+      "sediment_fraction": 0.0098,
+      "land_fraction": 0.3827,
+      "ndwi_threshold": -0.0796,
+      "mndwi_threshold": 0.0424,
+      "n_contours": 1
+    },
+    "2021": {
+      "date": "2021-06-17",
+      "water_fraction": 0.6093,
+      "deep_water_fraction": 0.6048,
+      "shallow_water_fraction": 0.0046,
+      "sediment_fraction": 0.0091,
+      "land_fraction": 0.3815,
+      "ndwi_threshold": -0.0935,
+      "mndwi_threshold": 0.1295,
+      "n_contours": 1
+    },
+    "2022": {
+      "date": "2022-06-25",
+      "water_fraction": 0.616,
+      "deep_water_fraction": 0.607,
+      "shallow_water_fraction": 0.0089,
+      "sediment_fraction": 0.0028,
+      "land_fraction": 0.3812,
+      "ndwi_threshold": -0.1755,
+      "mndwi_threshold": -0.0204,
+      "n_contours": 1
+    },
+    "2023": {
+      "date": "2023-06-07",
+      "water_fraction": 0.6067,
+      "deep_water_fraction": 0.6036,
+      "shallow_water_fraction": 0.0031,
+      "sediment_fraction": 0.0096,
+      "land_fraction": 0.3837,
+      "ndwi_threshold": -0.0504,
+      "mndwi_threshold": 0.1717,
+      "n_contours": 1
+    },
+    "2024": {
+      "date": "2024-08-10",
+      "water_fraction": 0.6077,
+      "deep_water_fraction": 0.6055,
+      "shallow_water_fraction": 0.0022,
+      "sediment_fraction": 0.0082,
+      "land_fraction": 0.3841,
+      "ndwi_threshold": 0.0169,
+      "mndwi_threshold": 0.1033,
+      "n_contours": 1
+    },
+    "2025": {
+      "date": "2025-06-14",
+      "water_fraction": 0.6187,
+      "deep_water_fraction": 0.6087,
+      "shallow_water_fraction": 0.01,
+      "sediment_fraction": 0.0009,
+      "land_fraction": 0.3804,
+      "ndwi_threshold": -0.2209,
+      "mndwi_threshold": -0.0681,
+      "n_contours": 1
+    }
+  },
+  "ndwi_mean": -0.1123
+}
