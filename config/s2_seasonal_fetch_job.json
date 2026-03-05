@@ -1,0 +1,38 @@
+{
+  "conditions": {
+    "colonyname": "imint",
+    "executortype": "container-executor"
+  },
+  "env": {
+    "EASTING": "",
+    "NORTHING": "",
+    "WEST_WGS84": "",
+    "SOUTH_WGS84": "",
+    "EAST_WGS84": "",
+    "NORTH_WGS84": "",
+    "YEARS": "2019,2018",
+    "SEASONAL_WINDOWS": "4-5,6-7,8-9,1-2",
+    "SEASONAL_CLOUD_THRESHOLD": "0.10",
+    "B02_HAZE_THRESHOLD": "0.06",
+    "TILES_DIR": "/cfs/tiles",
+    "NUM_CLASSES": "10",
+    "TILE_SIZE_PX": "256",
+    "CDSE_CLIENT_ID": "",
+    "CDSE_CLIENT_SECRET": ""
+  },
+  "funcname": "s2-seasonal-fetch",
+  "kwargs": {
+    "docker-image": "imint-engine:latest",
+    "rebuild-image": false,
+    "cmd": "executors/s2_seasonal_fetch.py"
+  },
+  "maxexectime": 600,
+  "maxretries": 3,
+  "fs": [
+    {
+      "mount": "/cfs/tiles",
+      "dir": "seasonal-tiles",
+      "keepfiles": true
+    }
+  ]
+}

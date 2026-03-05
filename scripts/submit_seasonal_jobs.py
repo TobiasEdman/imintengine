@@ -100,6 +100,7 @@ def _build_job_spec(
             "mem": "2Gi",
         },
         "env": {
+            "PYTHONUNBUFFERED": "1",
             "EASTING": str(cell.easting),
             "NORTHING": str(cell.northing),
             "WEST_WGS84": str(cell.west_wgs84),
@@ -162,7 +163,7 @@ def _submit_job(spec: dict, dry_run: bool = False) -> bool:
 
     try:
         result = subprocess.run(
-            ["colonies", "function", "submit", "--spec", spec_path],
+            ["colonies", "function", "submit", "--spec", spec_path, "--insecure"],
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode != 0:
