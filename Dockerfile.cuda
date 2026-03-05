@@ -1,0 +1,65 @@
+# ── Multi-stage build for x86_64 with NVIDIA CUDA (H100) ──────────────────
+# For training on ICE Connect (RISE Luleå) GPU VMs.
+#
+# Build:
+#   docker build --platform linux/amd64 -f Dockerfile.cuda -t imint-engine:cuda .
+#
+# Run:
+#   docker run --gpus all --rm -it \
+#     -v /path/to/data:/data/lulc_full \
+#     -v /path/to/checkpoints:/app/checkpoints \
+#     imint-engine:cuda \
+#     python3 scripts/train_lulc.py --data-dir /data/lulc_full --device cuda
+#
+# Stage 1: Build native wheels for rasterio/GDAL/shapely
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-dev python3.11-venv python3-pip \
+    libgdal-dev g++ gdal-bin \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+WORKDIR /wheels
+COPY requirements.txt .
+RUN python3 -m pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt
+
+# Stage 2: Runtime — CUDA runtime with pre-built wheels
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3-pip \
+    libgdal30 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+WORKDIR /app
+
+# Install CUDA-enabled PyTorch from official index
+RUN python3 -m pip install --no-cache-dir \
+    torch --index-url https://download.pytorch.org/whl/cu124
+
+# Install remaining deps from pre-built wheels
+COPY --from=builder /wheels /wheels
+COPY requirements.txt .
+RUN python3 -m pip install --no-cache-dir --no-index --find-links=/wheels \
+    -r requirements.txt 2>/dev/null || \
+    python3 -m pip install --no-cache-dir -r requirements.txt \
+    && rm -rf /wheels
+
+# Copy application code
+COPY imint/ imint/
+COPY executors/ executors/
+COPY config/ config/
+COPY scripts/ scripts/
+
+# CDSE credentials (if available — gitignored, optional)
+RUN true
+COPY .cdse_credential[s] /app/
+
+# Default: training entry point (can be overridden)
+CMD ["python3", "scripts/train_lulc.py", "--data-dir", "/data/lulc_full"]
