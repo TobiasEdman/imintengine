@@ -210,18 +210,67 @@ class ShorelineAnalyzer(BaseAnalyzer):
     def extract_contours(
         shoreline_mask: np.ndarray, min_length: int = 15
     ) -> list[np.ndarray]:
-        """Vectorize shoreline mask into contour polylines.
+        """Trace skeleton into ordered polylines (single clean line per component).
+
+        Walks the 1-pixel skeleton directly instead of using cv2.findContours,
+        which would trace both edges of even a thin skeleton and produce
+        doubled parallel lines.
 
         Returns list of (N, 2) arrays in pixel coordinates [x, y].
         """
-        contours, _ = cv2.findContours(
-            shoreline_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
-        )
+        from scipy import ndimage
+
+        binary = (shoreline_mask > 0).astype(np.uint8)
+        labeled, num_components = ndimage.label(binary, structure=np.ones((3, 3)))
+
         results = []
-        for c in contours:
-            if len(c) >= min_length:
-                coords = c.reshape(-1, 2)
-                results.append(coords)
+        for comp_id in range(1, num_components + 1):
+            ys, xs = np.where(labeled == comp_id)
+            if len(xs) < min_length:
+                continue
+
+            # Build adjacency map (8-connected)
+            coords_set = set(zip(xs.tolist(), ys.tolist()))
+            adjacency: dict[tuple[int, int], list[tuple[int, int]]] = {}
+            for x, y in coords_set:
+                nbrs = []
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        n = (x + dx, y + dy)
+                        if n in coords_set:
+                            nbrs.append(n)
+                adjacency[(x, y)] = nbrs
+
+            # Start from an endpoint (degree ≤ 1) for a clean walk
+            start = None
+            for pt, nbrs in adjacency.items():
+                if len(nbrs) <= 1:
+                    start = pt
+                    break
+            if start is None:
+                start = next(iter(adjacency))
+
+            # Greedy DFS walk
+            path = [start]
+            visited = {start}
+            current = start
+            while True:
+                moved = False
+                for nbr in adjacency[current]:
+                    if nbr not in visited:
+                        path.append(nbr)
+                        visited.add(nbr)
+                        current = nbr
+                        moved = True
+                        break
+                if not moved:
+                    break
+
+            if len(path) >= min_length:
+                results.append(np.array(path))
+
         return results
 
     # ------------------------------------------------------------------ #
