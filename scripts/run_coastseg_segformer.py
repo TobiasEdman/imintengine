@@ -1,14 +1,18 @@
 """Run CoastSeg SegFormer inference on cached Sentinel-2 kustlinje data.
 
 Loads the SegFormer-B0 model (4-class coastal segmentation) and runs it
-on the reference year RGB, producing a segmentation map that can be
-compared with the index-based (NDWI/MNDWI + Otsu) approach.
+on Sentinel-2 RGB for all years (2018–2025), producing segmentation maps,
+shoreline vectors, and change analysis — comparable to the index-based
+(NDWI/MNDWI + Otsu) pipeline.
 
 Usage:
-    .venv/bin/python scripts/run_coastseg_segformer.py [--year 2025]
+    .venv/bin/python scripts/run_coastseg_segformer.py
+    .venv/bin/python scripts/run_coastseg_segformer.py --year 2025   # single year only
 
 Output:
-    outputs/showcase/kustlinje/coastseg_segformer.png
+    outputs/showcase/kustlinje/coastseg_segformer.png         (reference year)
+    outputs/showcase/kustlinje/segformer_shoreline_change.png  (multi-year overlay)
+    outputs/showcase/kustlinje/segformer_vectors.json          (GeoJSON contours)
 """
 from __future__ import annotations
 
@@ -26,6 +30,8 @@ import numpy as np
 # Band order in cached timeseries
 _BAND_NAMES = ["B01", "B02", "B03", "B04", "B05", "B06", "B07",
                "B08", "B8A", "B09", "B11", "B12"]
+
+YEARS = list(range(2018, 2026))
 
 # CoastSeg 4-class colours (same as index-based for fair comparison)
 CLASS_COLORS = {
@@ -202,63 +208,178 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Run CoastSeg SegFormer inference")
-    parser.add_argument("--year", type=int, default=2025, help="Year to process")
+    parser.add_argument("--year", type=int, default=None,
+                        help="Single year to process (default: all 2018-2025)")
     args = parser.parse_args()
 
     cache_dir = str(PROJECT_ROOT / "outputs" / "kustlinje_model")
     out_dir = str(PROJECT_ROOT / "outputs" / "showcase" / "kustlinje")
     weights_path = str(PROJECT_ROOT / "imint" / "fm" / "coastseg" / "model_weights.h5")
 
+    years = [args.year] if args.year else YEARS
+
     print("=" * 60)
-    print("  CoastSeg SegFormer Inference")
-    print(f"  Year: {args.year}")
+    print("  CoastSeg SegFormer — Multi-year Shoreline Analysis")
+    print(f"  Years: {years[0]}–{years[-1]}" if len(years) > 1 else f"  Year: {years[0]}")
+    print(f"  Output: {out_dir}")
     print("=" * 60)
 
-    # ── Load cached Sentinel-2 data ──────────────────────────────────
-    cache_npz = os.path.join(cache_dir, f"bbox_timeseries_{args.year}.npz")
-    cache_json = os.path.join(cache_dir, f"bbox_timeseries_{args.year}_meta.json")
-
-    if not os.path.isfile(cache_npz):
-        print(f"ERROR: No cached data for {args.year}: {cache_npz}")
-        return
-
-    print(f"\n[1] Loading cached data for {args.year}...")
-    data = np.load(cache_npz)["data"]
-    with open(cache_json) as f:
-        meta = json.load(f)
-
-    best_idx = _pick_best_date(meta["dates"], meta["cloud_fractions"])
-    date = meta["dates"][best_idx]
-    snapshot = data[best_idx]  # (12, H, W)
-    print(f"    Best date: {date} (cloud: {meta['cloud_fractions'][best_idx]:.1%})")
-    print(f"    Shape: {snapshot.shape}")
-
-    # Build RGB
-    rgb = _build_rgb(snapshot)
-    H, W = rgb.shape[:2]
-    print(f"    RGB: {H}×{W}")
-
-    # ── Load model ───────────────────────────────────────────────────
-    print(f"\n[2] Loading CoastSeg SegFormer model...")
+    # ── Step 1: Load model ───────────────────────────────────────────
+    print(f"\n[1] Loading CoastSeg SegFormer model...")
     model = load_model(weights_path)
 
-    # ── Run inference ────────────────────────────────────────────────
-    print(f"\n[3] Running inference...")
-    seg_map = predict_full_image(model, rgb, tile_size=512, overlap=64)
+    # ── Step 2: Load data & run inference per year ───────────────────
+    print(f"\n[2] Running inference per year...")
+    yearly_rgbs = {}       # year → (H, W, 3) float32
+    yearly_seg = {}        # year → (H, W) uint8
+    yearly_dates = {}      # year → str
 
-    # Print class distribution
-    total = H * W
-    class_names = ["Deep water", "Shallow water", "Sediment", "Land"]
-    for i, name in enumerate(class_names):
-        frac = (seg_map == i).sum() / total
-        print(f"    {name}: {frac:.1%}")
+    for year in years:
+        cache_npz = os.path.join(cache_dir, f"bbox_timeseries_{year}.npz")
+        cache_json = os.path.join(cache_dir, f"bbox_timeseries_{year}_meta.json")
 
-    # ── Save output ──────────────────────────────────────────────────
-    print(f"\n[4] Saving output...")
-    save_segmentation_png(seg_map, os.path.join(out_dir, "coastseg_segformer.png"))
+        if not os.path.isfile(cache_npz):
+            print(f"    {year}: No cached data, skipping")
+            continue
+
+        data = np.load(cache_npz)["data"]
+        with open(cache_json) as f:
+            meta = json.load(f)
+
+        best_idx = _pick_best_date(meta["dates"], meta["cloud_fractions"])
+        date = meta["dates"][best_idx]
+        snapshot = data[best_idx]  # (12, H, W)
+        rgb = _build_rgb(snapshot)
+        yearly_rgbs[year] = rgb
+        yearly_dates[year] = date
+
+        print(f"    {year} ({date})...", end=" ", flush=True)
+        seg_map = predict_full_image(model, rgb, tile_size=512, overlap=64)
+        yearly_seg[year] = seg_map
+
+        total = seg_map.shape[0] * seg_map.shape[1]
+        water_frac = (seg_map <= 1).sum() / total
+        land_frac = (seg_map == 3).sum() / total
+        sed_frac = (seg_map == 2).sum() / total
+        print(f"water={water_frac:.1%}, sediment={sed_frac:.1%}, land={land_frac:.1%}")
+
+    if not yearly_seg:
+        print("ERROR: No data for any year. Aborting.")
+        return
+
+    # ── Step 3: Extract shorelines from SegFormer segmentation ───────
+    print(f"\n[3] Extracting shorelines from SegFormer segmentation...")
+    from imint.analyzers.shoreline import ShorelineAnalyzer
+
+    analyzer = ShorelineAnalyzer()
+    yearly_shorelines = {}   # year → (H, W) uint8 mask
+    yearly_contours = {}     # year → [array (N,2)]
+
+    for year in sorted(yearly_seg.keys()):
+        print(f"    {year}...", end=" ", flush=True)
+        seg_map = yearly_seg[year]
+        shoreline = analyzer.extract_shoreline(seg_map)
+        contours = analyzer.extract_contours(shoreline, min_length=10)
+        yearly_shorelines[year] = shoreline
+        yearly_contours[year] = contours
+        print(f"{len(contours)} contours")
+
+    # ── Step 4: Save reference year segmentation ─────────────────────
+    ref_year = max(yearly_seg.keys())
+    print(f"\n[4] Saving outputs...")
+
+    # Reference segmentation PNG
+    save_segmentation_png(
+        yearly_seg[ref_year],
+        os.path.join(out_dir, "coastseg_segformer.png"),
+    )
+
+    # ── Step 5: Save multi-year shoreline change overlay ─────────────
+    from imint.exporters.export import (
+        save_shoreline_change_png,
+        save_coastline_geojson,
+    )
+
+    if len(yearly_shorelines) > 1:
+        ref_rgb = yearly_rgbs[ref_year]
+        save_shoreline_change_png(
+            yearly_shorelines,
+            ref_rgb,
+            os.path.join(out_dir, "segformer_shoreline_change.png"),
+        )
+
+    # ── Step 6: Save GeoJSON vectors ─────────────────────────────────
+    H, W = yearly_seg[ref_year].shape
+
+    # Build a minimal GeoContext for pixel-coords export
+    from rasterio.transform import from_origin
+    from imint.fetch import GeoContext
+
+    first_meta_file = os.path.join(cache_dir, f"bbox_timeseries_{ref_year}_meta.json")
+    with open(first_meta_file) as f:
+        first_meta = json.load(f)
+
+    geo = GeoContext(
+        crs="EPSG:3006",
+        transform=from_origin(
+            first_meta["west"], first_meta["north"],
+            first_meta.get("pixel_size", 10), first_meta.get("pixel_size", 10),
+        ),
+        bounds_projected={
+            "west": first_meta["west"],
+            "south": first_meta["south"],
+            "east": first_meta["east"],
+            "north": first_meta["north"],
+        },
+        bounds_wgs84=None,
+        shape=(H, W),
+    )
+
+    save_coastline_geojson(
+        yearly_contours,
+        geo,
+        os.path.join(out_dir, "segformer_vectors.json"),
+        img_shape=(H, W),
+        pixel_coords=True,
+        smooth_sigma=3.0,
+        subsample_step=3,
+    )
+
+    # ── Step 7: Per-year statistics ──────────────────────────────────
+    print(f"\n[5] Statistics...")
+    per_year = {}
+    for year in sorted(yearly_seg.keys()):
+        seg = yearly_seg[year]
+        total = seg.shape[0] * seg.shape[1]
+        per_year[year] = {
+            "date": yearly_dates[year],
+            "water_fraction": round(float((seg <= 1).sum()) / total, 4),
+            "deep_water_fraction": round(float((seg == 0).sum()) / total, 4),
+            "shallow_water_fraction": round(float((seg == 1).sum()) / total, 4),
+            "sediment_fraction": round(float((seg == 2).sum()) / total, 4),
+            "land_fraction": round(float((seg == 3).sum()) / total, 4),
+            "n_contours": len(yearly_contours[year]),
+        }
+        print(f"    {year}: water={per_year[year]['water_fraction']:.1%}, "
+              f"sediment={per_year[year]['sediment_fraction']:.1%}, "
+              f"{per_year[year]['n_contours']} contours")
+
+    meta_out = {
+        "method": "CoastSeg SegFormer-B0 (4-class)",
+        "model": "imint/fm/coastseg/model_weights.h5",
+        "reference_year": ref_year,
+        "years_analyzed": sorted(yearly_seg.keys()),
+        "per_year": per_year,
+    }
+    meta_path = os.path.join(out_dir, "segformer_meta.json")
+    with open(meta_path, "w") as f:
+        json.dump(meta_out, f, indent=2)
+    print(f"    Saved: {meta_path}")
 
     print(f"\n{'=' * 60}")
-    print(f"  Done!")
+    print(f"  Done! {len(yearly_seg)} years processed")
+    files = [f for f in os.listdir(out_dir) if 'segformer' in f]
+    print(f"  SegFormer files: {', '.join(sorted(files))}")
     print(f"{'=' * 60}")
 
 

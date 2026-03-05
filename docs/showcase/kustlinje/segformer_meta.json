@@ -1,0 +1,89 @@
+{
+  "method": "CoastSeg SegFormer-B0 (4-class)",
+  "model": "imint/fm/coastseg/model_weights.h5",
+  "reference_year": 2025,
+  "years_analyzed": [
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025
+  ],
+  "per_year": {
+    "2018": {
+      "date": "2018-06-03",
+      "water_fraction": 0.6057,
+      "deep_water_fraction": 0.6057,
+      "shallow_water_fraction": 0.0,
+      "sediment_fraction": 0.0043,
+      "land_fraction": 0.39,
+      "n_contours": 2
+    },
+    "2019": {
+      "date": "2019-08-27",
+      "water_fraction": 0.599,
+      "deep_water_fraction": 0.599,
+      "shallow_water_fraction": 0.0,
+      "sediment_fraction": 0.0042,
+      "land_fraction": 0.3968,
+      "n_contours": 2
+    },
+    "2020": {
+      "date": "2020-08-14",
+      "water_fraction": 0.6012,
+      "deep_water_fraction": 0.6011,
+      "shallow_water_fraction": 0.0001,
+      "sediment_fraction": 0.0059,
+      "land_fraction": 0.3929,
+      "n_contours": 1
+    },
+    "2021": {
+      "date": "2021-06-17",
+      "water_fraction": 0.6125,
+      "deep_water_fraction": 0.6125,
+      "shallow_water_fraction": 0.0,
+      "sediment_fraction": 0.001,
+      "land_fraction": 0.3864,
+      "n_contours": 6
+    },
+    "2022": {
+      "date": "2022-06-25",
+      "water_fraction": 0.6079,
+      "deep_water_fraction": 0.606,
+      "shallow_water_fraction": 0.0019,
+      "sediment_fraction": 0.0071,
+      "land_fraction": 0.385,
+      "n_contours": 3
+    },
+    "2023": {
+      "date": "2023-06-07",
+      "water_fraction": 0.6027,
+      "deep_water_fraction": 0.6027,
+      "shallow_water_fraction": 0.0,
+      "sediment_fraction": 0.0034,
+      "land_fraction": 0.3939,
+      "n_contours": 2
+    },
+    "2024": {
+      "date": "2024-08-10",
+      "water_fraction": 0.5926,
+      "deep_water_fraction": 0.589,
+      "shallow_water_fraction": 0.0036,
+      "sediment_fraction": 0.0077,
+      "land_fraction": 0.3998,
+      "n_contours": 1
+    },
+    "2025": {
+      "date": "2025-06-14",
+      "water_fraction": 0.6042,
+      "deep_water_fraction": 0.6042,
+      "shallow_water_fraction": 0.0,
+      "sediment_fraction": 0.0081,
+      "land_fraction": 0.3876,
+      "n_contours": 4
+    }
+  }
+}
