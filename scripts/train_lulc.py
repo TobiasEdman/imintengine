@@ -21,6 +21,9 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from imint.config.env import load_env
+load_env()  # Load config/environments/{IMINT_ENV}.env (default: dev)
+
 from imint.training.config import TrainingConfig
 from imint.training.dataset import LULCDataset
 from imint.training.trainer import LULCTrainer

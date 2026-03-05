@@ -39,7 +39,7 @@ env/
 # macOS
 .DS_Store
 
-# Credentials — never commit
+# Credentials & endpoints — never commit
 .cdsapirc
 utils/config.py
 /config.py
@@ -50,6 +50,13 @@ utils/config.py
 .des_token
 .des_token.bak
 ssh-copy-id*
+.skg_endpoints
+
+# Environment configs (secrets) — keep template.env only
+!config/environments/template.env
+config/environments/dev.env
+config/environments/test.env
+config/environments/prod.env
 
 # IDE
 .vscode/

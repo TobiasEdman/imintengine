@@ -14,11 +14,14 @@
         bench-batch bench-batch-cdse bench-batch-quick \
         docker-seasonal docker-seasonal-des docker-analysis \
         colony-up colony-down colony-logs colony-status colony-submit \
-        colony-monitor submit-dry submit-live status clean help
+        colony-monitor submit-dry submit-live status clean help \
+        train-dev train-test train-prod
 
 PYTHON   := .venv/bin/python
 IMAGE    := imint-engine:latest
 DATA_DIR ?= ~/training_data
+ENV      ?= dev
+ARGS     ?=
 
 # ── Docker ────────────────────────────────────────────────────────────────
 
@@ -123,6 +126,17 @@ submit-all:  ## Submit ALL seasonal fetch jobs to ColonyOS
 
 status:  ## Check ColonyOS progress
 	$(PYTHON) scripts/submit_seasonal_jobs.py --status
+
+# ── Environment-aware training ─────────────────────────────────────────────
+
+train-dev:  ## Train with dev environment (M1 Max / MPS)
+	IMINT_ENV=dev $(PYTHON) scripts/train_lulc.py $(ARGS)
+
+train-test:  ## Quick test run (2 epochs, CPU, small batch)
+	IMINT_ENV=test $(PYTHON) scripts/train_lulc.py --epochs 2 --batch-size 2 $(ARGS)
+
+train-prod:  ## Train with production settings (H100 / CUDA)
+	IMINT_ENV=prod $(PYTHON) scripts/train_lulc.py $(ARGS)
 
 # ── Cleanup ───────────────────────────────────────────────────────────────
 

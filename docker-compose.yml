@@ -15,7 +15,7 @@ services:
     build: .
     platform: linux/arm64
     command: ["executors/seasonal_fetch.py"]
-    env_file: .env
+    env_file: ${IMINT_ENV_FILE:-config/environments/dev.env}
     environment:
       - FETCH_SOURCE=copernicus
       # Override these per tile:
@@ -39,7 +39,7 @@ services:
     build: .
     platform: linux/arm64
     command: ["executors/seasonal_fetch.py"]
-    env_file: .env
+    env_file: ${IMINT_ENV_FILE:-config/environments/dev.env}
     environment:
       - FETCH_SOURCE=des
       - EASTING=361280
@@ -60,7 +60,7 @@ services:
   analysis:
     build: .
     platform: linux/arm64
-    env_file: .env
+    env_file: ${IMINT_ENV_FILE:-config/environments/dev.env}
     environment:
       - DATE=2022-06-15
       - WEST=16.0

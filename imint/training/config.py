@@ -3,9 +3,14 @@ imint/training/config.py — Training configuration
 
 Centralised dataclass for all hyperparameters, paths, and options
 used by the LULC training pipeline.
+
+Environment-aware: if ``IMINT_*`` environment variables are set
+(e.g. via ``config/environments/dev.env``), they override the
+dataclass defaults.  CLI arguments still take highest priority.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 
@@ -138,3 +143,24 @@ class TrainingConfig:
     prithvi_bands: list[str] = field(
         default_factory=lambda: ["B02", "B03", "B04", "B8A", "B11", "B12"]
     )
+
+    def __post_init__(self) -> None:
+        """Override defaults from ``IMINT_*`` environment variables.
+
+        Only applies when the env var is set *and* the field still has
+        its default value (so CLI argparse overrides still win).
+        """
+        _env_overrides: dict[str, tuple[str, type]] = {
+            "IMINT_BATCH_SIZE":   ("batch_size",   int),
+            "IMINT_NUM_WORKERS":  ("num_workers",  int),
+            "IMINT_EPOCHS":       ("epochs",       int),
+            "IMINT_DEVICE":       ("device",       str),
+            "IMINT_DATA_DIR":     ("data_dir",     str),
+        }
+        for env_key, (attr, typ) in _env_overrides.items():
+            val = os.environ.get(env_key)
+            if val is not None and val != "":
+                try:
+                    setattr(self, attr, typ(val))
+                except (ValueError, TypeError):
+                    pass  # ignore malformed env values
