@@ -17,7 +17,10 @@ from pathlib import Path
 
 import numpy as np
 
-AUX_CHANNELS = ["height", "volume", "basal_area", "diameter", "dem"]
+AUX_CHANNELS = [
+    "height", "volume", "basal_area", "diameter", "dem",
+    "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
+]
 
 
 def main():

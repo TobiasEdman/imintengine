@@ -1,0 +1,30 @@
+{
+  "conditions": {
+    "colonyname": "imint",
+    "executortype": "container-executor"
+  },
+  "env": {
+    "EASTING": "",
+    "NORTHING": "",
+    "TILES_DIR": "/cfs/tiles",
+    "VPP_YEAR": "2021",
+    "PATCH_SIZE_M": "2560",
+    "CDSE_CLIENT_ID": "",
+    "CDSE_CLIENT_SECRET": ""
+  },
+  "funcname": "vpp-tile-fetch",
+  "kwargs": {
+    "docker-image": "imint-engine:latest",
+    "rebuild-image": false,
+    "cmd": "executors/vpp_fetch.py"
+  },
+  "maxexectime": 300,
+  "maxretries": 3,
+  "fs": [
+    {
+      "mount": "/cfs/tiles",
+      "dir": "seasonal-tiles",
+      "keepfiles": true
+    }
+  ]
+}

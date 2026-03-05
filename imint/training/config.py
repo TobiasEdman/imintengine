@@ -101,16 +101,24 @@ class TrainingConfig:
     enable_basal_area_channel: bool = False              # Grundyta (Gy), m²/ha
     enable_diameter_channel: bool = False                # Medeldiameter (Dgv), cm
     enable_dem_channel: bool = False                     # Copernicus DEM (terrain elev.)
+    enable_vpp_channels: bool = False                    # HR-VPP phenology (5 bands)
     aux_cache_enabled: bool = True                       # Cache aux tiles as .npy
 
     # Z-score normalization for aux channels: {name: (mean, std)}
     # Computed from non-zero pixels across 5801 tiles (lulc_full).
+    # VPP stats are initial estimates — recompute with compute_aux_stats.py
+    # after prefetching VPP data.
     aux_norm: dict = field(default_factory=lambda: {
         "height":     (7.31, 6.49),      # meters (Skogsstyrelsen trädhöjd)
         "volume":     (109.69, 106.77),  # m³sk/ha (Skogliga grunddata)
         "basal_area": (15.07, 9.95),     # m²/ha (grundyta)
         "diameter":   (15.28, 7.88),     # cm (medeldiameter)
         "dem":        (261.56, 214.59),  # meters a.s.l. (Copernicus DEM)
+        "vpp_sosd":   (120.0, 30.0),     # day-of-year, start of season
+        "vpp_eosd":   (280.0, 30.0),     # day-of-year, end of season
+        "vpp_length": (160.0, 40.0),     # days, season length
+        "vpp_maxv":   (0.50, 0.25),      # PPI unitless, max vegetation index
+        "vpp_minv":   (0.05, 0.05),      # PPI unitless, min vegetation index
     })
 
     # ── Validation split (latitude-based) ─────────────────────────────────

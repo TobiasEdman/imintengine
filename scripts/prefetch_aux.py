@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prefetch Skogsstyrelsen auxiliary raster channels for training tiles.
+"""Prefetch auxiliary raster channels for training tiles.
 
 Scans an existing tile directory (data/lulc_full/tiles/) and adds
 auxiliary channels to every .npz tile that doesn't already have them.
@@ -10,16 +10,21 @@ Supported channels:
   basal_area  — basal area / grundyta in m²/ha (Skogliga grunddata)
   diameter    — mean stem diameter / medeldiameter in cm (Skogliga grunddata)
   dem         — terrain elevation in meters (Copernicus DEM GLO-30)
+  vpp         — HR-VPP vegetation phenology (5 bands: sosd, eosd, length,
+                maxv, minv) via CDSE Sentinel Hub Process API
 
 Runs independently of the main training pipeline so data can be
 downloaded in the background while training continues.
 
 Usage:
-    # Fetch all four channels at once
-    python scripts/prefetch_aux.py --channels height volume basal_area diameter
+    # Fetch all standard channels
+    python scripts/prefetch_aux.py --channels height volume basal_area diameter dem
 
-    # Fetch just volume and basal_area
-    python scripts/prefetch_aux.py --channels volume basal_area
+    # Fetch VPP phenology channels
+    python scripts/prefetch_aux.py --channels vpp
+
+    # Fetch everything including VPP
+    python scripts/prefetch_aux.py --channels height volume basal_area diameter dem vpp
 
     # Backward compatible: height only (same as prefetch_height.py)
     python scripts/prefetch_aux.py --channels height
@@ -50,8 +55,10 @@ from imint.training.skg_grunddata import (
     fetch_diameter_tile,
 )
 from imint.training.copernicus_dem import fetch_dem_tile
+from imint.training.cdse_vpp import fetch_vpp_tiles
 
 # ── Channel registry ──────────────────────────────────────────────────────
+# Standard channels: each fetcher returns a single (H, W) float32 array.
 
 _CHANNEL_FETCHERS = {
     "height": fetch_height_tile,
@@ -61,7 +68,11 @@ _CHANNEL_FETCHERS = {
     "dem": fetch_dem_tile,
 }
 
-ALL_CHANNELS = list(_CHANNEL_FETCHERS.keys())
+# VPP is a multi-band channel: one fetch returns 5 bands stored as
+# vpp_sosd, vpp_eosd, vpp_length, vpp_maxv, vpp_minv in the .npz.
+_VPP_BAND_NAMES = ["vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv"]
+
+ALL_CHANNELS = list(_CHANNEL_FETCHERS.keys()) + ["vpp"]
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -93,10 +104,21 @@ def _bbox_from_tile(tile_path: Path, half_m: int) -> tuple[int, int, int, int]:
 def _tile_missing_channels(
     tile_path: Path, channels: list[str],
 ) -> list[str]:
-    """Return list of requested channels missing from the tile."""
+    """Return list of requested channels missing from the tile.
+
+    For "vpp", checks whether all 5 VPP sub-bands are present.
+    """
     try:
         with np.load(tile_path, allow_pickle=True) as d:
-            return [ch for ch in channels if ch not in d]
+            missing = []
+            for ch in channels:
+                if ch == "vpp":
+                    # VPP is present only if all 5 sub-bands exist
+                    if not all(b in d for b in _VPP_BAND_NAMES):
+                        missing.append("vpp")
+                elif ch not in d:
+                    missing.append(ch)
+            return missing
     except Exception:
         return channels
 
@@ -131,18 +153,35 @@ def _add_channels_to_tile(
     # Fetch each missing channel
     fetched = {}
     for ch_name in missing:
-        fetcher = _CHANNEL_FETCHERS[ch_name]
-        data = fetcher(
-            west, south, east, north,
-            size_px=(h_px, w_px),
-            cache_dir=cache_dirs.get(ch_name),
-        )
-        existing[ch_name] = data
-        fetched[ch_name] = {
-            "mean": float(data.mean()),
-            "max": float(data.max()),
-            "nonzero_pct": float((data > 0).mean() * 100),
-        }
+        if ch_name == "vpp":
+            # VPP: multi-band fetch → 5 sub-bands
+            vpp_data = fetch_vpp_tiles(
+                west, south, east, north,
+                size_px=(h_px, w_px),
+                cache_dir=cache_dirs.get("vpp"),
+            )
+            for raw_name, arr in vpp_data.items():
+                key = f"vpp_{raw_name}"
+                existing[key] = arr
+                fetched[key] = {
+                    "mean": float(arr.mean()),
+                    "max": float(arr.max()),
+                    "nonzero_pct": float((arr > 0).mean() * 100),
+                }
+        else:
+            # Standard single-band channel
+            fetcher = _CHANNEL_FETCHERS[ch_name]
+            data = fetcher(
+                west, south, east, north,
+                size_px=(h_px, w_px),
+                cache_dir=cache_dirs.get(ch_name),
+            )
+            existing[ch_name] = data
+            fetched[ch_name] = {
+                "mean": float(data.mean()),
+                "max": float(data.max()),
+                "nonzero_pct": float((data > 0).mean() * 100),
+            }
 
     # Atomic rewrite
     tmp = tile_path.parent / (tile_path.stem + "_tmp.npz")
@@ -160,7 +199,7 @@ def _add_channels_to_tile(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Prefetch Skogsstyrelsen aux channels for training tiles",
+        description="Prefetch auxiliary channels for training tiles",
     )
     parser.add_argument(
         "--data-dir", type=str, default="data/lulc_full",
