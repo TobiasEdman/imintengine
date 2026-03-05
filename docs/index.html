@@ -1817,10 +1817,9 @@ svg.leaflet-image-layer.leaflet-interactive path {
                 Analysområdet visar kuststräckan utanför Ystad i södra Skåne — ett av Sveriges mest erosionskänsliga kustområden. Med hjälp av Sentinel-2-data från 2018 till 2025 har strandlinjens förändring kartlagts med CoastSat-metoden (NDWI/MNDWI + Otsu-tröskling). Analysen visar hur strandlinjen förflyttats över 8 år, med möjlighet att identifiera områden med erosion och ackumulation.
             </p>
         </div>
-        <div class="panel-toolbar"><span class="panel-toolbar-label">Paneler:</span><button class="panel-chip active" data-panel-id="c-rgb">Sentinel-2 RGB</button><button class="panel-chip active" data-panel-id="c-shoreline">Strandlinjeförändring (2018–2025)</button><button class="panel-chip active" data-panel-id="c-shoreline-change">Kusterosion & ackumulation</button><button class="panel-chip active" data-panel-id="c-ndvi">NDVI (Vegetationsindex)</button><button class="panel-chip active" data-panel-id="c-ndwi">NDWI (Vattenindex)</button><button class="panel-chip active" data-panel-id="c-evi">EVI (Enhanced Vegetation Index)</button><button class="panel-chip active" data-panel-id="c-cot">Molnoptisk tjocklek (COT)</button><button class="panel-chip active" data-panel-id="c-coastseg">Indexbaserad Segmentering</button><button class="panel-chip active" data-panel-id="c-segformer">CoastSeg SegFormer</button><button class="panel-chip active" data-panel-id="c-sf-shoreline">SegFormer Strandlinje</button><button class="panel-chip active" data-panel-id="c-sf-change">SegFormer Kustförändring</button></div>
+        <div class="panel-toolbar"><span class="panel-toolbar-label">Paneler:</span><button class="panel-chip active" data-panel-id="c-rgb">Sentinel-2 RGB</button><button class="panel-chip active" data-panel-id="c-coastseg">Indexbaserad Segmentering</button><button class="panel-chip active" data-panel-id="c-segformer">CoastSeg SegFormer</button><button class="panel-chip active" data-panel-id="c-shoreline">Strandlinje (Index)</button><button class="panel-chip active" data-panel-id="c-sf-shoreline">Strandlinje (SegFormer)</button><button class="panel-chip active" data-panel-id="c-shoreline-change">Kusterosion (Index)</button><button class="panel-chip active" data-panel-id="c-sf-change">Kustförändring (SegFormer)</button><button class="panel-chip active" data-panel-id="c-ndvi">NDVI</button><button class="panel-chip active" data-panel-id="c-ndwi">NDWI</button><button class="panel-chip active" data-panel-id="c-evi">EVI</button><button class="panel-chip active" data-panel-id="c-cot">COT</button></div>
         <div class="map-grid">
-
-            <div class="map-cell" data-panel-id="c-rgb">
+<div class="map-cell" data-panel-id="c-rgb">
                 <div class="map-cell-header">
                     <h3>Sentinel-2 RGB</h3>
                     <div class="header-controls">
@@ -1837,7 +1836,40 @@ svg.leaflet-image-layer.leaflet-interactive path {
                 <div id="c-rgb" class="map-container"></div>
 
             </div>
-            <div class="map-cell" data-panel-id="c-shoreline">
+<div class="map-cell" data-panel-id="c-coastseg">
+                <div class="map-cell-header">
+                    <h3>Indexbaserad Segmentering (NDWI/MNDWI + Otsu)</h3>
+                    <div class="header-controls">
+
+                        <div class="opacity-control">
+                            <label for="opacity-c-coastseg">Opacitet</label>
+                            <input type="range" id="opacity-c-coastseg" min="0" max="100"
+                                   value="100" data-map-id="c-coastseg">
+                            <span class="opacity-value" id="opacity-val-c-coastseg">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="c-coastseg" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="c-coastseg" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:rgb(20,102,191)"></span>Djupt vatten</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(99,181,244)"></span>Grunt vatten</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(211,165,107)"></span>Sediment</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(76,175,79)"></span>Land</span></div>
+            </div>
+<div class="map-cell" data-panel-id="c-segformer">
+                <div class="map-cell-header">
+                    <h3>CoastSeg SegFormer (Neuralt nätverk)</h3>
+                    <div class="map-cell-controls">
+                        <div class="opacity-control">
+                            <label for="opacity-c-segformer">Opacitet</label>
+                            <input type="range" id="opacity-c-segformer" min="0" max="100"
+                                   value="100" data-map-id="c-segformer">
+                            <span class="opacity-value" id="opacity-val-c-segformer">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="c-segformer" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="c-segformer" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:rgb(20,102,191)"></span>Djupt vatten</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(99,181,244)"></span>Grunt vatten</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(211,165,107)"></span>Sediment</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(76,175,79)"></span>Land</span></div>
+            </div>
+<div class="map-cell" data-panel-id="c-shoreline">
                 <div class="map-cell-header">
                     <h3>Strandlinjeförändring (2018–2025)</h3>
                     <div class="header-controls">
@@ -1858,7 +1890,27 @@ svg.leaflet-image-layer.leaflet-interactive path {
                 <div id="c-shoreline" class="map-container"></div>
                 <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#FF0000"></span>2018</span><span class="legend-item"><span class="legend-swatch" style="background:#FF8C00"></span>2019</span><span class="legend-item"><span class="legend-swatch" style="background:#FFD700"></span>2020</span><span class="legend-item"><span class="legend-swatch" style="background:#00FF00"></span>2021</span><span class="legend-item"><span class="legend-swatch" style="background:#00CED1"></span>2022</span><span class="legend-item"><span class="legend-swatch" style="background:#1E90FF"></span>2023</span><span class="legend-item"><span class="legend-swatch" style="background:#8A2BE2"></span>2024</span><span class="legend-item"><span class="legend-swatch" style="background:#FF1493"></span>2025</span></div>
             </div>
-            <div class="map-cell" data-panel-id="c-shoreline-change">
+<div class="map-cell" data-panel-id="c-sf-shoreline">
+                <div class="map-cell-header">
+                    <h3>SegFormer Strandlinje (2018–2025)</h3>
+                    <div class="map-cell-controls">
+                        <div class="bg-toggle" data-map-id="c-sf-shoreline">
+                            <span class="bg-label">Visa:</span>
+                            <button class="bg-btn active" data-bg="rgb">2025</button><button class="bg-btn" data-bg="baseline">2018</button>
+                        </div>
+                        <div class="opacity-control">
+                            <label for="opacity-c-sf-shoreline">Opacitet</label>
+                            <input type="range" id="opacity-c-sf-shoreline" min="0" max="100"
+                                   value="100" data-map-id="c-sf-shoreline">
+                            <span class="opacity-value" id="opacity-val-c-sf-shoreline">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="c-sf-shoreline" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="c-sf-shoreline" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#e41a1c"></span>2018</span><span class="legend-item"><span class="legend-swatch" style="background:#ff7f00"></span>2019</span><span class="legend-item"><span class="legend-swatch" style="background:#ffd700"></span>2020</span><span class="legend-item"><span class="legend-swatch" style="background:#4daf4a"></span>2021</span><span class="legend-item"><span class="legend-swatch" style="background:#00ced1"></span>2022</span><span class="legend-item"><span class="legend-swatch" style="background:#377eb8"></span>2023</span><span class="legend-item"><span class="legend-swatch" style="background:#984ea3"></span>2024</span><span class="legend-item"><span class="legend-swatch" style="background:#e41a9d"></span>2025</span></div>
+            </div>
+<div class="map-cell" data-panel-id="c-shoreline-change">
                 <div class="map-cell-header">
                     <h3>Kusterosion & ackumulation</h3>
                     <div class="header-controls">
@@ -1879,127 +1931,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
                 <div id="c-shoreline-change" class="map-container"></div>
                 <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#d73027"></span>Erosion</span><span class="legend-item"><span class="legend-swatch" style="background:#ffffbf"></span>Stabil</span><span class="legend-item"><span class="legend-swatch" style="background:#1a9850"></span>Ackumulation</span></div>
             </div>
-            <div class="map-cell" data-panel-id="c-ndvi">
-                <div class="map-cell-header">
-                    <h3>NDVI (Vegetationsindex)</h3>
-                    <div class="header-controls">
-
-                        <div class="opacity-control">
-                            <label for="opacity-c-ndvi">Opacitet</label>
-                            <input type="range" id="opacity-c-ndvi" min="0" max="100"
-                                   value="100" data-map-id="c-ndvi">
-                            <span class="opacity-value" id="opacity-val-c-ndvi">100%</span>
-                        </div>
-                        <button class="hide-panel-btn" data-panel-id="c-ndvi" title="Dölj panel">✕</button>
-                    </div>
-                </div>
-                <div id="c-ndvi" class="map-container"></div>
-                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#a50026"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#f46d43"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#fee08b"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#a6d96a"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#006837"></span>1.0</span></div>
-            </div>
-            <div class="map-cell" data-panel-id="c-ndwi">
-                <div class="map-cell-header">
-                    <h3>NDWI (Vattenindex)</h3>
-                    <div class="header-controls">
-
-                        <div class="opacity-control">
-                            <label for="opacity-c-ndwi">Opacitet</label>
-                            <input type="range" id="opacity-c-ndwi" min="0" max="100"
-                                   value="100" data-map-id="c-ndwi">
-                            <span class="opacity-value" id="opacity-val-c-ndwi">100%</span>
-                        </div>
-                        <button class="hide-panel-btn" data-panel-id="c-ndwi" title="Dölj panel">✕</button>
-                    </div>
-                </div>
-                <div id="c-ndwi" class="map-container"></div>
-                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#67001f"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#d6604d"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#f7f7f7"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#4393c3"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#053061"></span>1.0 Vatten</span></div>
-            </div>
-            <div class="map-cell" data-panel-id="c-evi">
-                <div class="map-cell-header">
-                    <h3>EVI (Enhanced Vegetation Index)</h3>
-                    <div class="header-controls">
-
-                        <div class="opacity-control">
-                            <label for="opacity-c-evi">Opacitet</label>
-                            <input type="range" id="opacity-c-evi" min="0" max="100"
-                                   value="100" data-map-id="c-evi">
-                            <span class="opacity-value" id="opacity-val-c-evi">100%</span>
-                        </div>
-                        <button class="hide-panel-btn" data-panel-id="c-evi" title="Dölj panel">✕</button>
-                    </div>
-                </div>
-                <div id="c-evi" class="map-container"></div>
-                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#a50026"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#f46d43"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#fee08b"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#a6d96a"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#006837"></span>1.0</span></div>
-            </div>
-            <div class="map-cell" data-panel-id="c-cot">
-                <div class="map-cell-header">
-                    <h3>Molnoptisk tjocklek (COT)</h3>
-                    <div class="header-controls">
-
-                        <div class="opacity-control">
-                            <label for="opacity-c-cot">Opacitet</label>
-                            <input type="range" id="opacity-c-cot" min="0" max="100"
-                                   value="100" data-map-id="c-cot">
-                            <span class="opacity-value" id="opacity-val-c-cot">100%</span>
-                        </div>
-                        <button class="hide-panel-btn" data-panel-id="c-cot" title="Dölj panel">✕</button>
-                    </div>
-                </div>
-                <div id="c-cot" class="map-container"></div>
-                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#FFFFB2"></span>0 (Klart)</span><span class="legend-item"><span class="legend-swatch" style="background:#FD8D3C"></span>0.015 (Tunt moln)</span><span class="legend-item"><span class="legend-swatch" style="background:#BD0026"></span>0.05 (Tjockt moln)</span></div>
-            </div>
-            <div class="map-cell" data-panel-id="c-coastseg">
-                <div class="map-cell-header">
-                    <h3>Indexbaserad Segmentering (NDWI/MNDWI + Otsu)</h3>
-                    <div class="header-controls">
-
-                        <div class="opacity-control">
-                            <label for="opacity-c-coastseg">Opacitet</label>
-                            <input type="range" id="opacity-c-coastseg" min="0" max="100"
-                                   value="100" data-map-id="c-coastseg">
-                            <span class="opacity-value" id="opacity-val-c-coastseg">100%</span>
-                        </div>
-                        <button class="hide-panel-btn" data-panel-id="c-coastseg" title="Dölj panel">✕</button>
-                    </div>
-                </div>
-                <div id="c-coastseg" class="map-container"></div>
-                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:rgb(20,102,191)"></span>Djupt vatten</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(99,181,244)"></span>Grunt vatten</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(211,165,107)"></span>Sediment</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(76,175,79)"></span>Land</span></div>
-            </div>
-            <div class="map-cell" data-panel-id="c-segformer">
-                <div class="map-cell-header">
-                    <h3>CoastSeg SegFormer (Neuralt nätverk)</h3>
-                    <div class="map-cell-controls">
-                        <div class="opacity-control">
-                            <label for="opacity-c-segformer">Opacitet</label>
-                            <input type="range" id="opacity-c-segformer" min="0" max="100"
-                                   value="100" data-map-id="c-segformer">
-                            <span class="opacity-value" id="opacity-val-c-segformer">100%</span>
-                        </div>
-                        <button class="hide-panel-btn" data-panel-id="c-segformer" title="Dölj panel">✕</button>
-                    </div>
-                </div>
-                <div id="c-segformer" class="map-container"></div>
-                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:rgb(20,102,191)"></span>Djupt vatten</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(99,181,244)"></span>Grunt vatten</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(211,165,107)"></span>Sediment</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(76,175,79)"></span>Land</span></div>
-            </div>
-            <div class="map-cell" data-panel-id="c-sf-shoreline">
-                <div class="map-cell-header">
-                    <h3>SegFormer Strandlinje (2018–2025)</h3>
-                    <div class="map-cell-controls">
-                        <div class="bg-toggle" data-map-id="c-sf-shoreline">
-                            <span class="bg-label">Visa:</span>
-                            <button class="bg-btn active" data-bg="rgb">2025</button><button class="bg-btn" data-bg="baseline">2018</button>
-                        </div>
-                        <div class="opacity-control">
-                            <label for="opacity-c-sf-shoreline">Opacitet</label>
-                            <input type="range" id="opacity-c-sf-shoreline" min="0" max="100"
-                                   value="100" data-map-id="c-sf-shoreline">
-                            <span class="opacity-value" id="opacity-val-c-sf-shoreline">100%</span>
-                        </div>
-                        <button class="hide-panel-btn" data-panel-id="c-sf-shoreline" title="Dölj panel">✕</button>
-                    </div>
-                </div>
-                <div id="c-sf-shoreline" class="map-container"></div>
-            </div>
-            <div class="map-cell" data-panel-id="c-sf-change">
+<div class="map-cell" data-panel-id="c-sf-change">
                 <div class="map-cell-header">
                     <h3>SegFormer Kustförändring</h3>
                     <div class="map-cell-controls">
@@ -2017,6 +1949,75 @@ svg.leaflet-image-layer.leaflet-interactive path {
                     </div>
                 </div>
                 <div id="c-sf-change" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#e41a1c"></span>2018</span><span class="legend-item"><span class="legend-swatch" style="background:#ff7f00"></span>2019</span><span class="legend-item"><span class="legend-swatch" style="background:#ffd700"></span>2020</span><span class="legend-item"><span class="legend-swatch" style="background:#4daf4a"></span>2021</span><span class="legend-item"><span class="legend-swatch" style="background:#00ced1"></span>2022</span><span class="legend-item"><span class="legend-swatch" style="background:#377eb8"></span>2023</span><span class="legend-item"><span class="legend-swatch" style="background:#984ea3"></span>2024</span><span class="legend-item"><span class="legend-swatch" style="background:#e41a9d"></span>2025</span></div>
+            </div>
+<div class="map-cell" data-panel-id="c-ndvi">
+                <div class="map-cell-header">
+                    <h3>NDVI (Vegetationsindex)</h3>
+                    <div class="header-controls">
+
+                        <div class="opacity-control">
+                            <label for="opacity-c-ndvi">Opacitet</label>
+                            <input type="range" id="opacity-c-ndvi" min="0" max="100"
+                                   value="100" data-map-id="c-ndvi">
+                            <span class="opacity-value" id="opacity-val-c-ndvi">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="c-ndvi" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="c-ndvi" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#a50026"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#f46d43"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#fee08b"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#a6d96a"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#006837"></span>1.0</span></div>
+            </div>
+<div class="map-cell" data-panel-id="c-ndwi">
+                <div class="map-cell-header">
+                    <h3>NDWI (Vattenindex)</h3>
+                    <div class="header-controls">
+
+                        <div class="opacity-control">
+                            <label for="opacity-c-ndwi">Opacitet</label>
+                            <input type="range" id="opacity-c-ndwi" min="0" max="100"
+                                   value="100" data-map-id="c-ndwi">
+                            <span class="opacity-value" id="opacity-val-c-ndwi">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="c-ndwi" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="c-ndwi" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#67001f"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#d6604d"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#f7f7f7"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#4393c3"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#053061"></span>1.0 Vatten</span></div>
+            </div>
+<div class="map-cell" data-panel-id="c-evi">
+                <div class="map-cell-header">
+                    <h3>EVI (Enhanced Vegetation Index)</h3>
+                    <div class="header-controls">
+
+                        <div class="opacity-control">
+                            <label for="opacity-c-evi">Opacitet</label>
+                            <input type="range" id="opacity-c-evi" min="0" max="100"
+                                   value="100" data-map-id="c-evi">
+                            <span class="opacity-value" id="opacity-val-c-evi">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="c-evi" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="c-evi" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#a50026"></span>-1.0</span><span class="legend-item"><span class="legend-swatch" style="background:#f46d43"></span>-0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#fee08b"></span>0.0</span><span class="legend-item"><span class="legend-swatch" style="background:#a6d96a"></span>0.5</span><span class="legend-item"><span class="legend-swatch" style="background:#006837"></span>1.0</span></div>
+            </div>
+<div class="map-cell" data-panel-id="c-cot">
+                <div class="map-cell-header">
+                    <h3>Molnoptisk tjocklek (COT)</h3>
+                    <div class="header-controls">
+
+                        <div class="opacity-control">
+                            <label for="opacity-c-cot">Opacitet</label>
+                            <input type="range" id="opacity-c-cot" min="0" max="100"
+                                   value="100" data-map-id="c-cot">
+                            <span class="opacity-value" id="opacity-val-c-cot">100%</span>
+                        </div>
+                        <button class="hide-panel-btn" data-panel-id="c-cot" title="Dölj panel">✕</button>
+                    </div>
+                </div>
+                <div id="c-cot" class="map-container"></div>
+                <div class="legend-strip"><span class="legend-item"><span class="legend-swatch" style="background:#FFFFB2"></span>0 (Klart)</span><span class="legend-item"><span class="legend-swatch" style="background:#FD8D3C"></span>0.015 (Tunt moln)</span><span class="legend-item"><span class="legend-swatch" style="background:#BD0026"></span>0.05 (Tjockt moln)</span></div>
             </div>
         </div>
         <div class="tab-description">
@@ -2735,7 +2736,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
           {"id": "c-coastseg", "key": "coastseg", "vector": false, "legend": [{"color": "rgb(20,102,191)", "label": "Djupt vatten"}, {"color": "rgb(99,181,244)", "label": "Grunt vatten"}, {"color": "rgb(211,165,107)", "label": "Sediment"}, {"color": "rgb(76,175,79)", "label": "Land"}]},
           {"id": "c-segformer", "key": "segformer", "vector": false, "legend": [{"color": "rgb(20,102,191)", "label": "Djupt vatten"}, {"color": "rgb(99,181,244)", "label": "Grunt vatten"}, {"color": "rgb(211,165,107)", "label": "Sediment"}, {"color": "rgb(76,175,79)", "label": "Land"}]},
           {"id": "c-sf-shoreline", "key": "sf_shoreline", "vector": true, "geojson": SEGFORMER_GEOJSON, "legend": [{"color": "#e41a1c", "label": "2018"}, {"color": "#ff7f00", "label": "2019"}, {"color": "#ffd700", "label": "2020"}, {"color": "#4daf4a", "label": "2021"}, {"color": "#00ced1", "label": "2022"}, {"color": "#377eb8", "label": "2023"}, {"color": "#984ea3", "label": "2024"}, {"color": "#e41a9d", "label": "2025"}]},
-          {"id": "c-sf-change", "key": "sf_change", "vector": false, "legend": [{"color": "#e41a1c", "label": "2018"}, {"color": "#ff7f00", "label": "2019"}, {"color": "#ffd700", "label": "2020"}, {"color": "#4daf4a", "label": "2021"}, {"color": "#00ced1", "label": "2022"}, {"color": "#377eb8", "label": "2023"}, {"color": "#984ea3", "label": "2024"}, {"color": "#e41a9d", "label": "2025"}]}
+          {"id": "c-sf-change", "key": "sf_change", "vector": true, "geojson": SEGFORMER_GEOJSON, "legend": [{"color": "#e41a1c", "label": "2018"}, {"color": "#ff7f00", "label": "2019"}, {"color": "#ffd700", "label": "2020"}, {"color": "#4daf4a", "label": "2021"}, {"color": "#00ced1", "label": "2022"}, {"color": "#377eb8", "label": "2023"}, {"color": "#984ea3", "label": "2024"}, {"color": "#e41a9d", "label": "2025"}]}
         ];
         const COASTLINE_IMAGES = {
           "c-rgb": "showcase/kustlinje/rgb.png",
