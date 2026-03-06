@@ -158,7 +158,7 @@ services:
       EXECUTOR_SW_NAME: "imint-engine:latest"
       EXECUTOR_SW_TYPE: "docker"
       EXECUTOR_SW_VERSION: "latest"
-      EXECUTOR_HW_CPU: "10"
+      EXECUTOR_HW_CPU: "8"
       EXECUTOR_HW_MODEL: "Apple M1 Max"
       EXECUTOR_HW_NODES: "1"
       EXECUTOR_HW_MEM: "32000"
@@ -171,7 +171,7 @@ services:
       EXECUTOR_LOCATION_LAT: "0"
       EXECUTOR_LOCATION_DESC: "dev-local"
       EXECUTOR_FS_DIR: /Users/tobiasedm/cfs
-      EXECUTOR_PARALLEL_CONTAINERS: "8"
+      EXECUTOR_PARALLEL_CONTAINERS: "true"
       EXECUTOR_ADD_DEBUG_LOGS: "true"
       # ── S3 / CFS ──
       # Use host.docker.internal so spawned child containers can reach MinIO
