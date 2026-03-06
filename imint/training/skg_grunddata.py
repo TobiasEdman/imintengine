@@ -23,9 +23,8 @@ Access goes through Skogsstyrelsen's public kartportal proxy which
 exposes the ImageServer ``exportImage`` endpoint without requiring a
 Geodatasamverkan user account.
 
-Data source:
-    URL_REMOVED_SEE_SKG_ENDPOINTS
-    (proxies geodata.[REDACTED] Skogliga grunddata 3.1 ImageServer)
+Endpoint URL is loaded from ``.skg_endpoints`` config file or the
+``SKG_GRUNDDATA_URL`` environment variable.
 
 License: CC0 (public domain)
 
@@ -38,6 +37,8 @@ Typical usage::
 
 from __future__ import annotations
 
+import configparser
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -56,10 +57,38 @@ BAND_SCAN_DATE = 7       # Scanningsdatum (kodad)
 BAND_NMD_PROD = 8        # NMD produktivitet: 0=annan, 1=produktiv, 2=improduktiv
 BAND_OMDREV = 9          # Omdrev (version)
 
-# ── ArcGIS ImageServer endpoint (via kartportal proxy) ─────────────────
-_IMAGESERVER_URL = (
-    "URL_REMOVED_SEE_SKG_ENDPOINTS"
-)
+# ── ArcGIS ImageServer endpoint ────────────────────────────────────────
+# Loaded from .skg_endpoints config file or SKG_GRUNDDATA_URL env var.
+_IMAGESERVER_URL: str | None = None
+
+
+def _get_grunddata_url() -> str:
+    """Resolve the Skogliga grunddata endpoint URL."""
+    global _IMAGESERVER_URL
+    if _IMAGESERVER_URL is not None:
+        return _IMAGESERVER_URL
+
+    url = os.environ.get("SKG_GRUNDDATA_URL")
+    if url:
+        _IMAGESERVER_URL = url
+        return url
+
+    for candidate in [
+        Path(__file__).resolve().parents[2] / ".skg_endpoints",
+        Path.home() / ".skg_endpoints",
+    ]:
+        if candidate.exists():
+            cfg = configparser.ConfigParser()
+            cfg.read(candidate)
+            url = cfg.get("grunddata", "url", fallback=None)
+            if url:
+                _IMAGESERVER_URL = url
+                return url
+
+    raise RuntimeError(
+        "Skogliga grunddata URL not configured. "
+        "Set SKG_GRUNDDATA_URL env var or create .skg_endpoints file."
+    )
 
 _REQUEST_TIMEOUT_S = 60
 _MAX_RETRIES = 2
@@ -239,7 +268,7 @@ def _download_tile(
         "f": "image",
     }
 
-    url = _IMAGESERVER_URL + "?" + urllib.parse.urlencode(params)
+    url = _get_grunddata_url() + "?" + urllib.parse.urlencode(params)
 
     for attempt in range(_MAX_RETRIES + 1):
         try:

@@ -27,6 +27,31 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def get_default_pool_sizes(
+    device: str | torch.device | None = None,
+) -> tuple[int, ...]:
+    """Return PSP pool sizes appropriate for the compute device.
+
+    Standard UPerNet uses (1, 2, 3, 6).  Apple MPS has a bug with
+    AdaptiveAvgPool2d for pool sizes that don't evenly divide the
+    feature map (14x14 for 224 px input), so we use (1, 2, 7, 14)
+    on MPS.
+
+    Args:
+        device: Target device string or torch.device.  If *None*,
+            returns MPS-safe sizes as a conservative default.
+
+    Returns:
+        Tuple of pool sizes for PSP modules.
+    """
+    if device is not None:
+        device_str = str(device)
+        if "cuda" in device_str or "cpu" in device_str:
+            return (1, 2, 3, 6)
+    # MPS or unknown — use MPS-safe sizes
+    return (1, 2, 7, 14)
+
+
 class ConvBnRelu(nn.Module):
     """Conv2d + BatchNorm2d + ReLU block matching TerraTorch naming.
 
@@ -230,6 +255,7 @@ class PrithviSegmentationModel(nn.Module):
         num_classes: int = 2,
         dropout: float = 0.1,
         n_aux_channels: int = 0,
+        pool_sizes: tuple[int, ...] | None = None,
     ):
         super().__init__()
         self.feature_indices = list(feature_indices)
@@ -273,10 +299,12 @@ class PrithviSegmentationModel(nn.Module):
             self.embed_dim,       # 1024 (deepest, goes to PSP)
         ]
 
-        # PSP modules
-        # Pool sizes must divide the feature map (14×14 for 224px input).
-        # Standard (1,2,3,6) causes MPS failures; (1,2,7,14) divides 14.
-        pool_sizes = (1, 2, 7, 14)
+        # PSP modules — pool sizes depend on compute device.
+        # Standard (1,2,3,6) is optimal but crashes on Apple MPS;
+        # (1,2,7,14) divides the 14×14 feature map and works everywhere.
+        # Use get_default_pool_sizes(device) to select automatically.
+        if pool_sizes is None:
+            pool_sizes = get_default_pool_sizes()  # MPS-safe default
         self.decoder.psp_modules = nn.ModuleList()
         for pool_size in pool_sizes:
             self.decoder.psp_modules.append(nn.Sequential(

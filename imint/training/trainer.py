@@ -98,7 +98,7 @@ class LULCTrainer:
     def _build_model(self):
         """Build PrithviSegmentationModel using existing infrastructure."""
         from ..fm.terratorch_loader import _load_prithvi_from_hf
-        from ..fm.upernet import PrithviSegmentationModel
+        from ..fm.upernet import PrithviSegmentationModel, get_default_pool_sizes
 
         print(f"  Loading Prithvi backbone ({self.config.backbone})...")
         backbone = _load_prithvi_from_hf(pretrained=True)
@@ -112,6 +112,7 @@ class LULCTrainer:
             num_classes=self.config.num_classes + 1,  # +1 for background at 0
             dropout=self.config.dropout,
             n_aux_channels=n_aux,
+            pool_sizes=get_default_pool_sizes(self.device),
         )
         aux_str = f", aux={n_aux} channels" if n_aux else ""
         print(f"  Model built: {self.config.num_classes + 1} classes, "

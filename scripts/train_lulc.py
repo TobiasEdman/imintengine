@@ -100,8 +100,10 @@ def main():
                         help="Enable stem diameter aux channel")
     parser.add_argument("--enable-dem", action="store_true",
                         help="Enable DEM terrain elevation aux channel")
+    parser.add_argument("--enable-vpp", action="store_true",
+                        help="Enable HR-VPP phenology aux channels (5 bands)")
     parser.add_argument("--enable-all-aux", action="store_true",
-                        help="Enable all 5 auxiliary channels")
+                        help="Enable all auxiliary channels (incl. VPP)")
 
     # Dashboard
     parser.add_argument("--dashboard", action="store_true",
@@ -177,6 +179,7 @@ def main():
         enable_basal_area_channel=all_aux or args.enable_basal_area,
         enable_diameter_channel=all_aux or args.enable_diameter,
         enable_dem_channel=all_aux or args.enable_dem,
+        enable_vpp_channels=all_aux or args.enable_vpp,
     )
 
     # Load datasets

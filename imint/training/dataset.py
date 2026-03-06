@@ -13,6 +13,11 @@ Optional auxiliary channels (each stored as (H, W) float32 in .npz):
   - basal_area: basal area in m²/ha (Skogliga grunddata grundyta)
   - diameter:   mean stem diameter in cm (Skogliga grunddata Dgv)
   - dem:        terrain elevation in meters (Copernicus DEM GLO-30)
+  - vpp_sosd:   start of season day (HR-VPP phenology)
+  - vpp_eosd:   end of season day (HR-VPP phenology)
+  - vpp_length: season length in days (HR-VPP phenology)
+  - vpp_maxv:   max Plant Phenology Index (HR-VPP)
+  - vpp_minv:   min Plant Phenology Index (HR-VPP)
 """
 from __future__ import annotations
 
@@ -85,7 +90,7 @@ class LULCDataset(Dataset):
             self.mean_mt = np.tile(self.mean, (self.n_frames, 1, 1))
             self.std_mt = np.tile(self.std, (self.n_frames, 1, 1))
 
-        # Auxiliary channels: list of (npz_key, config_flag) pairs
+        # Auxiliary channels: list of npz key names
         self.aux_channels: list[str] = []
         if self.config.enable_height_channel:
             self.aux_channels.append("height")
@@ -97,6 +102,12 @@ class LULCDataset(Dataset):
             self.aux_channels.append("diameter")
         if self.config.enable_dem_channel:
             self.aux_channels.append("dem")
+        if self.config.enable_vpp_channels:
+            # VPP adds 5 channels stored as separate keys in .npz
+            self.aux_channels.extend([
+                "vpp_sosd", "vpp_eosd", "vpp_length",
+                "vpp_maxv", "vpp_minv",
+            ])
 
         # Augmentation only for training
         self.augment = split == "train"
