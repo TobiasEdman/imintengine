@@ -171,7 +171,7 @@ services:
       EXECUTOR_LOCATION_LAT: "0"
       EXECUTOR_LOCATION_DESC: "dev-local"
       EXECUTOR_FS_DIR: /Users/tobiasedm/cfs
-      EXECUTOR_PARALLEL_CONTAINERS: "true"
+      EXECUTOR_PARALLEL_CONTAINERS: "8"
       EXECUTOR_ADD_DEBUG_LOGS: "true"
       # ── S3 / CFS ──
       # Use host.docker.internal so spawned child containers can reach MinIO
