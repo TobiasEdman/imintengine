@@ -126,11 +126,23 @@ colony-up:  ## Start ColonyOS platform (TimescaleDB + MinIO + server + executor)
 	@echo ""
 	@echo "  Wait ~10s, then: make colony-status"
 
-colony-down:  ## Stop ColonyOS platform
-	$(COLONY_COMPOSE) down
+colony-down:  ## Stop ColonyOS platform (data preserved)
+	./scripts/colony_safe_down.sh
 
-colony-reset:  ## Stop and destroy all ColonyOS data (volumes)
-	$(COLONY_COMPOSE) down -v
+colony-reset:  ## Stop and DESTROY all ColonyOS data (interactive confirmation)
+	./scripts/colony_safe_down.sh --reset
+
+colony-watchdog:  ## Run watchdog: health check + cleanup + resubmit failed
+	./scripts/colony_watchdog.sh
+
+colony-watchdog-loop:  ## Run watchdog in loop mode (every 5 min)
+	./scripts/colony_watchdog.sh --loop 300
+
+colony-backup:  ## Backup ColonyOS state (config + CFS + DB) to ~/imint_backups/
+	./scripts/colony_backup.sh
+
+colony-backup-config:  ## Backup config/credentials only
+	./scripts/colony_backup.sh --config-only
 
 colony-logs:  ## Follow ColonyOS logs
 	$(COLONY_COMPOSE) logs -f colonies-server docker-executor

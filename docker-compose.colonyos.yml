@@ -22,6 +22,7 @@ services:
 
   # ── Database ──────────────────────────────────────────────────────────────
   timescaledb:
+    restart: unless-stopped
     image: timescale/timescaledb:latest-pg17
     platform: linux/arm64
     environment:
@@ -39,6 +40,7 @@ services:
 
   # ── Local Docker registry (for local images) ────────────────────────────
   registry:
+    restart: unless-stopped
     image: registry:2
     platform: linux/arm64
     ports:
@@ -48,6 +50,7 @@ services:
 
   # ── Object storage (CFS) ─────────────────────────────────────────────────
   minio:
+    restart: unless-stopped
     image: minio/minio:latest
     platform: linux/arm64
     ports:
@@ -59,6 +62,12 @@ services:
     volumes:
       - minio_data:/var/lib/minio/data
     command: server /var/lib/minio/data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   minio-setup:
     image: minio/mc
@@ -82,6 +91,7 @@ services:
 
   # ── Colonies server (scheduler) ──────────────────────────────────────────
   colonies-server:
+    restart: unless-stopped
     image: colonyos/colonies:v1.9.12
     platform: linux/arm64
     ports:
@@ -142,6 +152,7 @@ services:
 
   # ── Docker executor (runs our container jobs) ────────────────────────────
   docker-executor:
+    restart: unless-stopped
     image: colonyos/dockerexecutor:v1.0.9
     platform: linux/arm64
     environment:
@@ -187,6 +198,12 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /Users/tobiasedm/cfs:/Users/tobiasedm/cfs
     command: ["docker_executor", "start", "-v"]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x docker_executor || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     depends_on:
       colonies-setup:
         condition: service_completed_successfully
