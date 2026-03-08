@@ -21,10 +21,14 @@ This directory contains Claude Code conversation logs split into topic-based mar
 | 13 | [13_auxiliary_channels_fusion.md](13_auxiliary_channels_fusion.md) | Auxiliary Channels — Height, volume, basal area, diameter, DEM, AuxEncoder late fusion |
 | 14 | [14_cdse_dual_source_fetch.md](14_cdse_dual_source_fetch.md) | CDSE & Dual-Source — Copernicus backend, DN offset, batch benchmarks, seasonal fetch |
 | 15 | [15_colonyos_deployment.md](15_colonyos_deployment.md) | ColonyOS Deployment — Docker, M1 Max setup, job spec debugging, parallel execution |
+| 16 | [16_s2_process_api_fetch.md](16_s2_process_api_fetch.md) | S2 Process API — Migration from openEO to HTTP POST, 1-stage cloud filter, ColonyOS fixes, 4,381 jobs |
+| 17 | [17_training_runs_comparison.md](17_training_runs_comparison.md) | Training Runs — Base vs AuxEncoder comparison, 43.27% mIoU best result, checkpoint inventory |
+| 18 | [18_vpp_phenology_pipeline.md](18_vpp_phenology_pipeline.md) | HR-VPP Phenology — PPI, SOSD/EOSD/LENGTH, Sentinel Hub BYOC collection, integration with AuxEncoder |
 
 ## Sources
 
 Files 01-10: Original conversation log (`Data preperation and training pipeline.txt`, ~1 MB)
 Files 02, 11-15: Second pipeline conversation (`Data preperation and training pipeline_2.txt`, ~585 KB)
+Files 16-18: Third pipeline conversation (S2 Process API, training results, VPP phenology)
 
 The conversations cover satellite imagery analysis with ImintEngine, including Sentinel-2 data processing, LULC classification with Prithvi-EO-2.0, auxiliary data fusion, distributed computing with ColonyOS, vessel detection, nautical chart integration, change detection, grazing analysis, shoreline mapping, and web deployment.
