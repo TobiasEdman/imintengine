@@ -5,6 +5,7 @@ outputs/*
 !outputs/showcase/
 !outputs/showcase/**
 data/
+!docs/data/
 *.npy
 *.tif
 *.geotiff
@@ -51,6 +52,9 @@ utils/config.py
 .des_token.bak
 ssh-copy-id*
 .skg_endpoints
+
+# M1 Max (ColonyOS worker)
+# SSH: tobiasedm@192.168.50.100
 
 # Environment configs (secrets) — keep template.env only
 !config/environments/template.env

@@ -100,12 +100,26 @@ data/                       Training data & caches
   symbols/                  Map symbol library
 
 docs/                       GitHub Pages showcase
-  index.html                Interactive dashboard (4 tabs)
+  index.html                Dashboard shell (tabs, descriptions, chart canvases)
+  css/
+    leaflet.css             Leaflet 1.9.4 styles
+    styles.css              Custom dashboard styles
+  js/
+    vendor/                 Third-party libraries (Leaflet, Chart.js)
+    tab-data.js             Shared legends, GeoJSON paths, tab configs
+    app.js                  Reusable components, map init, event handlers
+  data/
+    vessels.geojson         YOLO vessel detections
+    lpis.geojson            LPIS grazing block polygons
+    erosion.geojson         Coastline erosion vectors
+    segformer-shorelines.geojson  SegFormer shoreline vectors
+    coastline-shorelines.geojson  Index-based shoreline vectors
+    chart-data.json         NMD cross-reference chart data
   showcase/
-    fire/                   Wildfire analysis (Ljusdal)
-    marine/                 Marine vessel detection (Lysekil)
-    grazing/                Grazing land monitoring (Vastervik)
-    kustlinje/              Coastline erosion analysis (Ystad)
+    fire/                   Wildfire analysis images (Ljusdal)
+    marine/                 Marine vessel detection images (Hunnebostrand)
+    grazing/                Grazing land monitoring images (Lund)
+    kustlinje/              Coastline erosion images (Ystad)
 
 outputs/                    Generated files (gitignored except showcase)
 checkpoints/                Model training checkpoints

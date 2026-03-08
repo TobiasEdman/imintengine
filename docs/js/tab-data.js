@@ -1,0 +1,264 @@
+'use strict';
+
+// ── Shared legend definitions (reused across tabs) ──────────────────
+var LEGENDS = {
+    nmd: [
+        {color:'#006400',label:'Tallskog'},{color:'#228B22',label:'Granskog'},
+        {color:'#32CD32',label:'Lövskog'},{color:'#3CB371',label:'Blandskog'},
+        {color:'#90EE90',label:'Temp. ej skog'},{color:'#2E4F2E',label:'Sumpsk. tall'},
+        {color:'#3A5F3A',label:'Sumpsk. gran'},{color:'#4A7F4A',label:'Sumpsk. löv'},
+        {color:'#5A8F5A',label:'Sumpsk. bland'},{color:'#7AAF7A',label:'Sumpsk. temp'},
+        {color:'#8B5A2B',label:'Öpp. våtmark'},{color:'#FFD700',label:'Åkermark'},
+        {color:'#C8AD7F',label:'Öpp. mark bar'},{color:'#D2B48C',label:'Öpp. mark veg.'},
+        {color:'#FF0000',label:'Byggnader'},{color:'#FF4500',label:'Infrastruktur'},
+        {color:'#FF6347',label:'Vägar'},{color:'#0000FF',label:'Sjöar'},
+        {color:'#1E90FF',label:'Hav'}
+    ],
+    nmd_grazing: [
+        {color:'#FFD700',label:'Åkermark'},{color:'#D2B48C',label:'Öpp. mark veg.'},
+        {color:'#50B43C',label:'Ädellövskog'},{color:'#32CD32',label:'Triviallöv'},
+        {color:'#228B22',label:'Granskog'},{color:'#46A064',label:'Blandskog'},
+        {color:'#006400',label:'Tallskog'},{color:'#4A7F4A',label:'Skog våtmark'},
+        {color:'#8B5A2B',label:'Öpp. våtmark'},{color:'#FF0000',label:'Bebyggelse'},
+        {color:'#0000FF',label:'Vatten'}
+    ],
+    ndvi: [
+        {color:'#a50026',label:'-1.0'},{color:'#f46d43',label:'-0.5'},
+        {color:'#fee08b',label:'0.0'},{color:'#a6d96a',label:'0.5'},
+        {color:'#006837',label:'1.0'}
+    ],
+    ndwi: [
+        {color:'#67001f',label:'-1.0'},{color:'#d6604d',label:'-0.5'},
+        {color:'#f7f7f7',label:'0.0'},{color:'#4393c3',label:'0.5'},
+        {color:'#053061',label:'1.0 Vatten'}
+    ],
+    evi: [
+        {color:'#a50026',label:'-1.0'},{color:'#f46d43',label:'-0.5'},
+        {color:'#fee08b',label:'0.0'},{color:'#a6d96a',label:'0.5'},
+        {color:'#006837',label:'1.0'}
+    ],
+    evi_grazing: [
+        {color:'#a50026',label:'-0.5'},{color:'#fee08b',label:'0.0'},
+        {color:'#a6d96a',label:'0.5'},{color:'#006837',label:'1.0'}
+    ],
+    cot: [
+        {color:'#FFFFB2',label:'0 (Klart)'},{color:'#FD8D3C',label:'0.015 (Tunt moln)'},
+        {color:'#BD0026',label:'0.05 (Tjockt moln)'}
+    ],
+    dnbr: [
+        {color:'#1a9850',label:'Hög återväxt (< -0.25)'},
+        {color:'#91cf60',label:'Låg återväxt (-0.25 – -0.1)'},
+        {color:'#d9ef8b',label:'Obränt (-0.1 – 0.1)'},
+        {color:'#fee08b',label:'Låg svårighetsgrad (0.1 – 0.27)'},
+        {color:'#fdae61',label:'Måttligt låg (0.27 – 0.44)'},
+        {color:'#f46d43',label:'Måttligt hög (0.44 – 0.66)'},
+        {color:'#d73027',label:'Hög svårighetsgrad (> 0.66)'}
+    ],
+    change_gradient: [
+        {color:'#FFFFB2',label:'Liten förändring'},
+        {color:'#FD8D3C',label:'Måttlig förändring'},
+        {color:'#BD0026',label:'Stor förändring'}
+    ],
+    prithvi_fire: [
+        {color:'#228B22',label:'Ej bränt'},{color:'#FF4500',label:'Bränt'}
+    ],
+    vessel: [
+        {color:'#00E5FF',label:'Detekterad båt / anomali'}
+    ],
+    heatmap: [
+        {color:'#FFFFB2',label:'Låg'},{color:'#FD8D3C',label:'Medel'},
+        {color:'#BD0026',label:'Hög'}
+    ],
+    lpis: [
+        {color:'#E6119D',label:'Aktiv betesmark'},
+        {color:'#111111',label:'Ingen aktivitet'},
+        {color:'#888888',label:'Ej analyserad'}
+    ],
+    coastseg: [
+        {color:'rgb(20,102,191)',label:'Djupt vatten'},
+        {color:'rgb(99,181,244)',label:'Grunt vatten'},
+        {color:'rgb(211,173,113)',label:'Sediment'},
+        {color:'rgb(17,122,62)',label:'Land'}
+    ],
+    shoreline_years: [
+        {color:'#e41a1c',label:'2018'},{color:'#ff7f00',label:'2019'},
+        {color:'#ffd700',label:'2020'},{color:'#4daf4a',label:'2021'},
+        {color:'#00ced1',label:'2022'},{color:'#377eb8',label:'2023'},
+        {color:'#984ea3',label:'2024'},{color:'#e41a9d',label:'2025'}
+    ],
+    erosion: [
+        {color:'#d73027',label:'Erosion'},{color:'#ffffbf',label:'Stabil'},
+        {color:'#1a9850',label:'Ackumulation'}
+    ]
+};
+
+// ── GeoJSON file paths (loaded async) ────────────────────────────────
+var GEOJSON_FILES = {
+    vessels:              'data/vessels.geojson',
+    lpis:                 'data/lpis.geojson',
+    erosion:              'data/erosion.geojson',
+    segformer_shorelines: 'data/segformer-shorelines.geojson',
+    coastline_shorelines: 'data/coastline-shorelines.geojson'
+};
+
+// ── Tab configurations ───────────────────────────────────────────────
+var TAB_CONFIG = {
+
+    fire: {
+        title: 'Brandanalys — 2018-07-24',
+        summary: [
+            {title:'Förändringsdetektering',value:'22.8%',detail:'49 regioner'},
+            {title:'dNBR Hög svårighetsgrad',value:'1.2 km²',detail:'8.9% av området'},
+            {title:'Prithvi (burn_scars)',value:'64.8% burned',detail:'96677 px'},
+            {title:'NMD Marktäcke',value:'82.4% Skog',detail:'6 klasser'},
+            {title:'Molnanalys (COT)',value:'99.9% klart',detail:'COT medel: 0.0017'}
+        ],
+        intro: 'Analysområdet är beläget i Ljusdals kommun, Gävleborgs län, och visar Kårbölebranden — en av de största skogsbränderna i Sveriges moderna historia sommaren 2018. Den 14 juli 2018 startade en skogsbrand som till slut bredde ut sig över cirka 9 500 hektar skog, vilket gjorde den till den största skogsbranden i Sverige på över 50 år. Här har Sentinel-2-data från 2018-07-24 analyserats med flera kompletterande metoder för att kartlägga brandens utbredning och intensitet.',
+        panels: [
+            {id:'f-rgb',    key:'rgb',     title:'Sentinel-2 RGB',                    legend:null},
+            {id:'f-nmd',    key:'nmd',     title:'NMD Marktäcke',                     legend:'nmd'},
+            {id:'f-ndvi',   key:'ndvi',    title:'NDVI (Vegetationsindex)',            legend:'ndvi'},
+            {id:'f-ndwi',   key:'ndwi',    title:'NDWI (Vattenindex)',                 legend:'ndwi'},
+            {id:'f-evi',    key:'evi',     title:'EVI (Enhanced Vegetation Index)',    legend:'evi'},
+            {id:'f-cot',    key:'cot',     title:'Molnoptisk tjocklek (COT)',          legend:'cot'},
+            {id:'f-dnbr',   key:'dnbr',    title:'dNBR (Brandsvårighetsgrad)',         legend:'dnbr',
+                bgToggle:[{label:'Efter',key:'rgb',active:true},{label:'Före',key:'baseline'}]},
+            {id:'f-gradient',key:'gradient',title:'Förändring (gradient)',             legend:'change_gradient',
+                bgToggle:[{label:'Efter',key:'rgb',active:true},{label:'Före',key:'baseline'}]},
+            {id:'f-prithvi',key:'prithvi', title:'Prithvi Segmentering',              legend:'prithvi_fire'}
+        ],
+        images: {
+            'f-rgb':       'showcase/fire/rgb.png',
+            'f-nmd':       'showcase/fire/nmd_overlay.png',
+            'f-ndvi':      'showcase/fire/ndvi_clean.png',
+            'f-ndwi':      'showcase/fire/ndwi_clean.png',
+            'f-evi':       'showcase/fire/evi_clean.png',
+            'f-cot':       'showcase/fire/cot_clean.png',
+            'f-dnbr':      'showcase/fire/dnbr_clean.png',
+            'f-gradient':  'showcase/fire/change_gradient.png',
+            'f-prithvi':   'showcase/fire/prithvi_seg_clean.png',
+            'f-baseline':  'showcase/fire/baseline_rgb.png'
+        },
+        imgH: 559, imgW: 267,
+        hasBgToggle: false,
+        hasCharts: true,
+        chartSectionTitle: 'Korsreferens mot NMD (Nationellt Marktackedata)'
+    },
+
+    marine: {
+        title: 'Marin analys — 2025-07-10',
+        summary: [
+            {title:'Båtdetektering',value:'130 båtar',detail:'5 datum (4 skippade)'},
+            {title:'Bästa datum',value:'50 båtar',detail:'2025-07-17'},
+            {title:'NMD Marktäcke',value:'64.2% Vatten',detail:'6 klasser'},
+            {title:'Molnanalys (COT)',value:'99.7% klart',detail:'COT medel: 0.0019'},
+            {title:'Analysområde',value:'18.6 km²',detail:'Bohuslän kustzon'}
+        ],
+        intro: 'Analysområdet visar skärgården utanför Hunnebostrand — ett område längs den norra bohuslänska kusten med intensiv maritim aktivitet från både kommersiell sjöfart, fiske och fritidsbåtar. Sentinel-2-data från 2025-07-10 har analyserats med flera kompletterande metoder för att kartlägga båtförekomst, vattenförhållanden och marktäcke i kust- och havsområdet.',
+        panels: [
+            {id:'m-rgb',           key:'rgb',           title:'Sentinel-2 RGB',           legend:null,
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'m-vessels',       key:'vessels',       title:'Båtdetektering (YOLO)',    legend:'vessel',      vector:true, geojsonFile:'vessels',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'m-vessel-heatmap',key:'vessel-heatmap',title:'Båtaktivitet (heatmap)',   legend:'heatmap',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'m-nmd',           key:'nmd',           title:'NMD Marktäcke',            legend:'nmd',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'m-ndvi',          key:'ndvi',          title:'NDVI (Vegetationsindex)',   legend:'ndvi',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'m-ndwi',          key:'ndwi',          title:'NDWI (Vattenindex)',        legend:'ndwi',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'m-cot',           key:'cot',           title:'Molnoptisk tjocklek (COT)', legend:'cot',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]}
+        ],
+        images: {
+            'm-rgb':            'showcase/marine/rgb.png',
+            'm-vessels':        'showcase/marine/vessels_clean.png',
+            'm-vessel-heatmap': 'showcase/marine/vessel_heatmap_clean.png',
+            'm-nmd':            'showcase/marine/nmd_overlay.png',
+            'm-ndvi':           'showcase/marine/ndvi_clean.png',
+            'm-ndwi':           'showcase/marine/ndwi_clean.png',
+            'm-cot':            'showcase/marine/cot_clean.png',
+            'm-sjokort':        'showcase/marine/sjokort.png'
+        },
+        imgH: 573, imgW: 324,
+        hasBgToggle: true
+    },
+
+    grazing: {
+        title: 'Betesmarksanalys — 2025-06-14',
+        summary: [
+            {title:'Betesanalys (AI)',value:'68/80 aktiv',detail:'Konfidens: 73%'},
+            {title:'Ingen aktivitet',value:'8 block',detail:'19 molnfria datum'},
+            {title:'LPIS Betesblock',value:'80 block',detail:'124 ha total areal'},
+            {title:'NDVI i betesmark',value:'0.81',detail:'± 0.06 standardavvikelse'},
+            {title:'NMD inom betesblock',value:'7% Våtmark',detail:'2 markklasser'}
+        ],
+        intro: 'Analysområdet är beläget nordost om Lund i Skåne — ett av Sveriges mest intensivt brukade jordbrukslandskap med en blandning av åkermark, beteshagar och småskaliga skogspartier. LPIS-polygoner från Jordbruksverkets blockdatabas visar registrerade betesblock i området. Sentinel-2-data från 2025-06-14 har analyserats med spektrala index (NDVI, NDWI, EVI), molnanalys (COT) och korsrefererats mot NMD marktäckedata för att kartera vegetationens tillstånd inom betesmarkerna.',
+        panels: [
+            {id:'g-rgb',  key:'rgb',  title:'Sentinel-2<br>RGB',           legend:null},
+            {id:'g-nmd',  key:'nmd',  title:'NMD<br>Marktäcke',            legend:'nmd_grazing'},
+            {id:'g-lpis', key:'lpis', title:'LPIS<br>Betesblock',          legend:'lpis', vector:true, geojsonFile:'lpis',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'NMD',key:'nmd'}]},
+            {id:'g-ndvi', key:'ndvi', title:'NDVI<br>Vegetationsindex',     legend:'ndvi'},
+            {id:'g-evi',  key:'evi',  title:'EVI<br>Vegetationsindex',      legend:'evi_grazing'},
+            {id:'g-ndwi', key:'ndwi', title:'NDWI<br>Vattenindex',          legend:'ndwi'},
+            {id:'g-cot',  key:'cot',  title:'COT<br>Molnoptisk tjocklek',   legend:'cot'}
+        ],
+        images: {
+            'g-rgb':  'showcase/grazing/rgb.png',
+            'g-nmd':  'showcase/grazing/nmd_overlay.png',
+            'g-lpis': 'showcase/grazing/lpis_overlay.png',
+            'g-ndvi': 'showcase/grazing/ndvi_clean.png',
+            'g-evi':  'showcase/grazing/evi_clean.png',
+            'g-ndwi': 'showcase/grazing/ndwi_clean.png',
+            'g-cot':  'showcase/grazing/cot_clean.png'
+        },
+        imgH: 344, imgW: 383,
+        hasBgToggle: false
+    },
+
+    coastline: {
+        title: 'Kustlinjeanalys — 2025-06-14',
+        summary: [
+            {title:'Analysperiod',value:'8 år',detail:'2018–2025'},
+            {title:'Strandlinjeanalys',value:'CoastSat',detail:'NDWI + Otsu'},
+            {title:'Vattenandel',value:'61.9%',detail:'Land: 38.0%'},
+            {title:'Molnanalys (COT)',value:'Klart',detail:'Alla datum användbara'},
+            {title:'Analysområde',value:'Ystad',detail:'Sydskånska kusten'}
+        ],
+        intro: 'Analysområdet är beläget vid Ystads kust i sydöstra Skåne — en utsatt kuststräcka längs Östersjön med dokumenterad stranderosion. Här har Sentinel-2-data från åtta år (2018–2025) analyserats med CoastSat-metoden (NDWI/MNDWI + Otsu-tröskelvärde) och CoastSeg SegFormer (neuralt nät) för att extrahera strandlinjer och kvantifiera erosion och ackumulation.',
+        panels: [
+            {id:'c-rgb',             key:'rgb',             title:'Sentinel-2 RGB',                                     legend:null},
+            {id:'c-coastseg',        key:'coastseg',        title:'Indexbaserad Segmentering (NDWI/MNDWI + Otsu)',      legend:'coastseg'},
+            {id:'c-segformer',       key:'segformer',       title:'CoastSeg SegFormer (4-klass neuralt nät)',            legend:'coastseg'},
+            {id:'c-shoreline',       key:'shoreline',       title:'Strandlinjeförändring 2018–2025 (Indexbaserad)',      legend:'shoreline_years',
+                vector:true, geojsonFile:'coastline_shorelines'},
+            {id:'c-sf-shoreline',    key:'sf_shoreline',    title:'SegFormer Strandlinje 2018–2025',                    legend:'shoreline_years',
+                vector:true, geojsonFile:'segformer_shorelines'},
+            {id:'c-shoreline-change',key:'shoreline_change',title:'Kusterosion & ackumulation (Indexbaserad)',           legend:'erosion',
+                vector:true, geojsonFile:'erosion'},
+            {id:'c-sf-change',       key:'sf_change',       title:'SegFormer Kustförändring 2018–2025',                 legend:'shoreline_years',
+                vector:true, geojsonFile:'segformer_shorelines'},
+            {id:'c-ndvi',            key:'ndvi',            title:'NDVI (Vegetationsindex)',                             legend:'ndvi'},
+            {id:'c-ndwi',            key:'ndwi',            title:'NDWI (Vattenindex)',                                  legend:'ndwi'},
+            {id:'c-evi',             key:'evi',             title:'EVI (Enhanced Vegetation Index)',                     legend:'evi'},
+            {id:'c-cot',             key:'cot',             title:'Molnoptisk tjocklek (COT)',                           legend:'cot'}
+        ],
+        images: {
+            'c-rgb':            'showcase/kustlinje/rgb.png',
+            'c-shoreline':      'showcase/kustlinje/shoreline_overlay.png',
+            'c-shoreline-change':'showcase/kustlinje/shoreline_change.png',
+            'c-ndvi':           'showcase/kustlinje/ndvi_clean.png',
+            'c-ndwi':           'showcase/kustlinje/ndwi_clean.png',
+            'c-evi':            'showcase/kustlinje/evi_clean.png',
+            'c-cot':            'showcase/kustlinje/cot_clean.png',
+            'c-baseline':       'showcase/kustlinje/baseline_rgb.png',
+            'c-coastseg':       'showcase/kustlinje/coastline_clean.png',
+            'c-segformer':      'showcase/kustlinje/coastseg_segformer.png',
+            'c-sf-change':      'showcase/kustlinje/segformer_shoreline_change.png'
+        },
+        imgH: 508, imgW: 577,
+        hasBgToggle: false
+    }
+};

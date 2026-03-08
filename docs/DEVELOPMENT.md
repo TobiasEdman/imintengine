@@ -86,15 +86,38 @@ It's embedded as an iframe on **digitalearth.se**.
 
 ### Showcase Files
 
+The showcase is modular — a thin HTML shell with external CSS, JS, and data files:
+
 ```
-outputs/
-  imint_showcase.html          ← Main dashboard (committed, served by Pages)
+docs/
+  index.html                   ← Dashboard shell (tabs, descriptions, chart canvases)
+  css/
+    leaflet.css                ← Leaflet 1.9.4 styles
+    styles.css                 ← Custom dashboard styles
+  js/
+    vendor/
+      leaflet.min.js           ← Leaflet 1.9.4
+      leaflet-sync.js          ← L.Map.Sync for synchronized panning
+      chart.min.js             ← Chart.js 4.4.1
+    tab-data.js                ← Shared legends, GeoJSON paths, tab panel configs
+    app.js                     ← Reusable components, map init, event handlers
+  data/
+    vessels.geojson            ← YOLO vessel detection polygons
+    lpis.geojson               ← LPIS grazing block polygons
+    erosion.geojson            ← Coastline erosion vectors
+    segformer-shorelines.geojson ← SegFormer shoreline vectors
+    coastline-shorelines.geojson ← Index-based shoreline vectors
+    chart-data.json            ← NMD cross-reference chart data
   showcase/
-    fire/                      ← 9 PNGs + metadata
-    marine/                    ← 7 PNGs + vessel GeoJSON + sjokort
-    grazing/                   ← 7 PNGs + LPIS GeoJSON
-    kustlinje/                 ← 7 PNGs + coastline vectors GeoJSON
+    fire/                      ← 9 PNGs (Ljusdal wildfire)
+    marine/                    ← 7 PNGs + sjokort (Hunnebostrand)
+    grazing/                   ← 7 PNGs (Lund area)
+    kustlinje/                 ← 7 PNGs (Ystad coast)
 ```
+
+Key files:
+- **`tab-data.js`** — `LEGENDS` (shared legend definitions reused across tabs), `GEOJSON_FILES` (path map), `TAB_CONFIG` (structured config for all 4 tabs with panels, summary cards, images)
+- **`app.js`** — `renderTabDynamic()` builds each tab's DOM from config; `initMaps()` creates Leaflet maps with overlays and sync; `initCharts()` loads chart data via fetch
 
 ### Generating Showcase Images
 
@@ -112,30 +135,38 @@ Fire and marine showcases were generated via the standard analysis pipeline (`ex
 
 ### Adding a New Showcase Tab
 
-1. **Generate images** — Create a script `scripts/generate_<name>_showcase.py` following the pattern in `generate_kustlinje_showcase.py`. Save PNGs to `outputs/showcase/<name>/`.
+1. **Generate images** — Create a script `scripts/generate_<name>_showcase.py` following the pattern in `generate_kustlinje_showcase.py`. Save PNGs to `docs/showcase/<name>/`.
 
-2. **Add HTML tab** — In `outputs/imint_showcase.html`:
-   - Add tab button in `<div class="header-nav">` with `data-tab="<name>"`
-   - Add `<div class="tab-content" id="tab-<name>">` section with summary cards, intro text, panels
-   - Use prefix `<x>-` for panel IDs (e.g., `k-rgb`, `k-ndvi`)
+2. **Add tab config** — In `docs/js/tab-data.js`:
+   - Add panel definitions to `TAB_CONFIG.<name>` with `id`, `key`, `title`, `legend`, `bgToggle`, `vector`, `geojsonFile`
+   - Add image paths to `TAB_CONFIG.<name>.images`
+   - Add summary cards to `TAB_CONFIG.<name>.summary`
+   - Reuse existing legends from the `LEGENDS` object or define new ones
 
-3. **Add JavaScript** — At the end of the `<script>` block:
-   - Define `<NAME>_VIEWERS` array (set `"vector": true` for GeoJSON overlays)
-   - Define `<NAME>_IMAGES` dict mapping panel IDs to image paths
-   - Optionally define `<NAME>_GEOJSON` for vector overlays
-   - Call `initMaps(<NAME>_VIEWERS, <NAME>_IMAGES, imgH, imgW, hasBgToggle, geojsonData)`
+3. **Add HTML shell** — In `docs/index.html`:
+   - Add tab button in the header nav
+   - Add `<div class="tab-content" id="tab-<name>">` with `<div class="tab-dynamic"></div>` (filled by JS), static description prose, and any chart canvases
 
-4. **Commit and push** — Images and HTML go to `main` branch. GitHub Pages auto-deploys.
+4. **Add GeoJSON** (optional) — Save vector data to `docs/data/<name>.geojson` and register the path in `GEOJSON_FILES`
+
+5. **Commit and push** — All files go to `main` branch. GitHub Pages auto-deploys.
 
 ### Vector Overlays
 
-The showcase supports interactive GeoJSON overlays on Leaflet maps. Set `"vector": true` in the viewer config and pass GeoJSON as the 6th argument to `initMaps()`.
+GeoJSON files in `docs/data/` are loaded via `fetch()` at runtime. Set `"vector": true` and `"geojsonFile"` in the panel config (`tab-data.js`).
 
 Supported geometry types:
 - **Polygon** — vessel detections, LPIS parcels (colored by `predicted_class`)
 - **LineString** — coastline shorelines (colored by `year`)
 
-The `initMaps()` style function auto-detects the feature type based on properties.
+The `makeGeoJSON()` function in `app.js` auto-detects the feature type and applies appropriate styling.
+
+### Local Preview
+
+```bash
+cd docs && python3 -m http.server 8091
+# Open http://localhost:8091/
+```
 
 ---
 
