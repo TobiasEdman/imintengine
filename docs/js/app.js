@@ -739,10 +739,10 @@
             initCharts();
         }
 
-        // Initialize LULC charts
-        if (TAB_CONFIG.lulc && TAB_CONFIG.lulc.hasCharts) {
-            initLulcCharts();
-        }
+        // LULC charts disabled — tab moved to fetch/training dashboard
+        // if (TAB_CONFIG.lulc && TAB_CONFIG.lulc.hasCharts) {
+        //     initLulcCharts();
+        // }
 
         // License toggle
         var licBtn = document.querySelector('.license-toggle');
