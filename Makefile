@@ -19,7 +19,7 @@
         colony-up colony-down colony-logs colony-status colony-submit \
         colony-monitor submit-dry submit-live status \
         train-dev train-test train-prod predict-aux predict-summary \
-        lulc-showcase lulc-showcase-placeholder \
+        lulc-gallery lulc-showcase lulc-showcase-placeholder \
         vpp-prefetch vpp-submit-dry vpp-submit \
         s2-submit-dry s2-submit s2-submit-all s2-status s2-local \
         vm-setup vm-transfer vm-train vm-status vm-attach vm-logs \
@@ -202,17 +202,18 @@ predict-summary:  ## Quick summary only (no saved predictions)
 		--enable-height --enable-volume --enable-basal-area \
 		--enable-diameter --enable-dem --summary-only $(ARGS)
 
-lulc-showcase:  ## Generate LULC showcase images + chart data from predictions
+lulc-gallery:  ## Generate LULC gallery images + JSON for training dashboard
+	$(PYTHON) scripts/generate_lulc_showcase.py \
+		--predictions-dir $(DATA_DIR)/predictions/val $(ARGS)
+
+lulc-showcase:  ## Generate LULC showcase (gallery + docs chart data)
 	$(PYTHON) scripts/generate_lulc_showcase.py \
 		--predictions-dir $(DATA_DIR)/predictions/val \
-		--output-dir docs/showcase/lulc \
 		--chart-output docs/data/lulc-data.json $(ARGS)
 
 lulc-showcase-placeholder:  ## Generate placeholder LULC chart data only
 	$(PYTHON) scripts/generate_lulc_showcase.py \
 		--predictions-dir $(DATA_DIR)/predictions/val \
-		--output-dir docs/showcase/lulc \
-		--chart-output docs/data/lulc-data.json \
 		--placeholder-only
 
 # ── VPP phenology enrichment ─────────────────────────────────────────────

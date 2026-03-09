@@ -69,18 +69,12 @@ _CLASS_COLORS = {
 }
 
 
-def _build_html(chart_js_src: str) -> str:
-    """Build the complete dashboard HTML string."""
-    import json
-    colors_json = json.dumps(_CLASS_COLORS)
+# ── Section builders ─────────────────────────────────────────────────────
 
-    return f"""<!DOCTYPE html>
-<html lang="sv">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IMINT Training Dashboard</title>
-<style>
+
+def _css_styles() -> str:
+    """Return the full <style>...</style> block."""
+    return f"""<style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{
   font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
@@ -292,11 +286,85 @@ body {{
   letter-spacing: 1px;
   margin-top: 2px;
 }}
+/* ── LULC inference tile gallery ─────────────────────────── */
+.lulc-gallery-header {{
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 4px;
+  padding: 6px 0;
+  margin-bottom: 4px;
+}}
+.lulc-gallery-header span {{
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #6b7280;
+  text-align: center;
+}}
+.lulc-gallery-row {{
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 0;
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 4px;
+  transition: border-color 0.15s;
+}}
+.lulc-gallery-row:hover {{
+  border-color: #60a5fa;
+}}
+.lulc-gallery-cell {{
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+}}
+.lulc-gallery-cell img {{
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  image-rendering: pixelated;
+}}
+.lulc-gallery-cell .cell-label {{
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  font-size: 9px;
+  font-weight: 600;
+  color: #e2e8f0;
+  background: rgba(17,24,39,0.85);
+  padding: 2px 6px;
+  text-align: center;
+}}
+.lulc-legend {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 8px 0;
+}}
+.lulc-legend-item {{
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: #94a3b8;
+}}
+.lulc-legend-swatch {{
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}}
 @media (max-width: 900px) {{
   .container {{ flex-direction: column; }}
   .sidebar {{ width: 100%; position: static; display: flex; flex-wrap: wrap; gap: 10px; }}
   .sidebar .gauge-card {{ margin-bottom: 0; }}
   .chart-grid {{ grid-template-columns: 1fr; }}
+  .lulc-gallery-header, .lulc-gallery-row {{ grid-template-columns: 1fr 1fr; }}
   .cards {{ grid-template-columns: repeat(2, 1fr); }}
 }}
 .sf-source-grid {{
@@ -332,11 +400,12 @@ body {{
   color: #e2e8f0;
   font-weight: 600;
 }}
-</style>
-</head>
-<body>
+</style>"""
 
-<div class="header">
+
+def _html_header() -> str:
+    """Return the page header with status badge."""
+    return f"""<div class="header">
   <h1>IMINT Training Dashboard</h1>
   <div class="header-right">
     <div class="status-badge status-waiting" id="status-badge">
@@ -344,14 +413,12 @@ body {{
       <span id="status-text">Waiting...</span>
     </div>
   </div>
-</div>
+</div>"""
 
-<div class="container">
 
-  <!-- Main content -->
-  <div class="main-content">
-
-  <!-- NMD Pre-filter Section -->
+def _html_nmd_section() -> str:
+    """Return the NMD pre-filter section."""
+    return f"""  <!-- NMD Pre-filter Section -->
   <div class="section" id="section-nmd">
     <div class="section-header">
       <div class="section-title">NMD Pre-filter</div>
@@ -381,9 +448,12 @@ body {{
         <div class="card-sub">NMD fetch error</div>
       </div>
     </div>
-  </div>
+  </div>"""
 
-  <!-- Seasonal Fetch (ColonyOS) Section -->
+
+def _html_seasonal_fetch_section() -> str:
+    """Return the seasonal fetch (ColonyOS) section."""
+    return f"""  <!-- Seasonal Fetch (ColonyOS) Section -->
   <div class="section" id="section-seasonal">
     <div class="section-header">
       <div class="section-title">Seasonal Fetch (ColonyOS)</div>
@@ -448,9 +518,12 @@ body {{
         </div>
       </div>
     </div>
-  </div>
+  </div>"""
 
-  <!-- Data Preparation Section -->
+
+def _html_dataprep_section() -> str:
+    """Return the data preparation section."""
+    return f"""  <!-- Data Preparation Section -->
   <div class="section" id="section-dataprep">
     <div class="section-header">
       <div class="section-title">Spectral Data Fetch</div>
@@ -502,9 +575,12 @@ body {{
         <canvas id="chart-classdist-detail" style="display:none"></canvas>
       </div>
     </div>
-  </div>
+  </div>"""
 
-  <!-- Evaluation Section -->
+
+def _html_eval_section() -> str:
+    """Return the evaluation section."""
+    return f"""  <!-- Evaluation Section -->
   <div class="section" id="section-eval">
     <div class="section-header">
       <div class="section-title">Evaluation</div>
@@ -536,9 +612,12 @@ body {{
         <canvas id="chart-eval-perclass"></canvas>
       </div>
     </div>
-  </div>
+  </div>"""
 
-  <!-- Training Section -->
+
+def _html_training_section() -> str:
+    """Return the training section."""
+    return f"""  <!-- Training Section -->
   <div class="section" id="section-training">
     <div class="section-header">
       <div class="section-title">Training</div>
@@ -591,11 +670,68 @@ body {{
         <canvas id="chart-worst"></canvas>
       </div>
     </div>
-  </div>
+  </div>"""
 
-  </div><!-- /main-content -->
 
-  <!-- Sidebar: System Metrics -->
+def _html_lulc_section() -> str:
+    """Return the LULC inference section."""
+    return f"""  <!-- LULC Inference Section -->
+  <div class="section" id="section-lulc">
+    <div class="section-header">
+      <div class="section-title">LULC Inference</div>
+      <span class="section-badge pending" id="lulc-badge">pending</span>
+    </div>
+    <div class="cards" id="lulc-cards">
+      <div class="card">
+        <div class="card-label">Overall Accuracy</div>
+        <div class="card-value" id="lulc-accuracy">-</div>
+        <div class="card-sub" id="lulc-pixels-sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">High-Conf Wrong</div>
+        <div class="card-value" id="lulc-hcw" style="color: #f472b6">-</div>
+        <div class="card-sub">model &gt;80% sure, NMD disagrees</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Tiles</div>
+        <div class="card-value" id="lulc-tiles">-</div>
+        <div class="card-sub">val split</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Disagree</div>
+        <div class="card-value" id="lulc-disagree" style="color: #ef4444">-</div>
+        <div class="card-sub" id="lulc-disagree-sub"></div>
+      </div>
+    </div>
+    <div class="lulc-legend" id="lulc-class-legend"></div>
+    <div class="lulc-legend">
+      <span class="lulc-legend-item"><span class="lulc-legend-swatch" style="background:#2ecc40"></span>Korrekt</span>
+      <span class="lulc-legend-item"><span class="lulc-legend-swatch" style="background:#ff4136"></span>Fel</span>
+      <span class="lulc-legend-item"><span class="lulc-legend-swatch" style="background:#ff00ff"></span>Hög konf. fel</span>
+    </div>
+    <div class="lulc-gallery-header">
+      <span>S2 pseudofärg (B8/B3/B4)</span>
+      <span>NMD grundsanning</span>
+      <span>Modellprediktion</span>
+      <span>Kvalitet</span>
+    </div>
+    <div id="lulc-gallery">
+      <div style="font-size:11px; color:#4b5563; padding:12px 0;">
+        Kör <code style="background:#1e293b; padding:2px 6px; border-radius:4px;">make predict-aux &amp;&amp; make lulc-showcase</code> för att generera
+      </div>
+    </div>
+    <div class="chart-grid">
+      <div class="chart-box full-width">
+        <h3>Per-Class Accuracy (val)</h3>
+        <canvas id="chart-lulc-perclass"></canvas>
+      </div>
+    </div>
+  </div>"""
+
+
+def _html_sidebar() -> str:
+    """Return the system metrics sidebar."""
+    return f"""  <!-- Sidebar: System Metrics -->
   <div class="sidebar" id="section-system">
     <div class="section-title">System</div>
 
@@ -637,15 +773,12 @@ body {{
     <div id="recent-previews">
       <div style="font-size:10px; color:#4b5563;">No tiles yet</div>
     </div>
-  </div><!-- /sidebar -->
+  </div><!-- /sidebar -->"""
 
-</div><!-- /container -->
 
-<script>
-{chart_js_src}
-</script>
-<script>
-"use strict";
+def _js_constants(colors_json: str) -> str:
+    """Return JS constant declarations (CLASS_COLORS, CLASS_NAMES, CLASS_GROUPS, chart variables)."""
+    return f""""use strict";
 
 const REFRESH_MS = 5000;
 const CLASS_COLORS = {colors_json};
@@ -677,9 +810,12 @@ Chart.defaults.font.family = "'SF Mono', 'Cascadia Code', monospace";
 Chart.defaults.font.size = 11;
 
 let lossChart, miouChart, perClassChart, worstChart, classDistChart, classDistDetailChart, evalPerClassChart, sfCompChart;
-let _classViewDetailed = false;
+let _classViewDetailed = false;"""
 
-function toggleClassView() {{
+
+def _js_utils() -> str:
+    """Return utility functions (toggleClassView, fmtNum, fmtTime, computeETA, computePatience, makeLineChart)."""
+    return f"""function toggleClassView() {{
   _classViewDetailed = !_classViewDetailed;
   const btn = document.getElementById('toggle-classdist');
   const grouped = document.getElementById('chart-classdist');
@@ -750,9 +886,12 @@ function makeLineChart(ctx, label, color) {{
       }}
     }}
   }});
-}}
+}}"""
 
-function initCharts() {{
+
+def _js_init_charts() -> str:
+    """Return the initCharts function."""
+    return f"""function initCharts() {{
   lossChart = makeLineChart(
     document.getElementById('chart-loss'), 'Loss', '#ef4444');
   miouChart = new Chart(document.getElementById('chart-miou'), {{
@@ -885,9 +1024,12 @@ function initCharts() {{
       }}
     }}
   }});
-}}
+}}"""
 
-// ── NMD Pre-filter ──────────────────────────────────────────────
+
+def _js_update_sections() -> str:
+    """Return all update functions (updateNmdPrefilter, updateSeasonalFetch, updateGlobalStatus, updateDataPrep, updateClassDistChart, updateEvaluation, updateTraining)."""
+    return f"""// ── NMD Pre-filter ──────────────────────────────────────────────
 function updateNmdPrefilter(nmdLog) {{
   const nmdBadge = document.getElementById('nmd-badge');
   if (!nmdLog) return;
@@ -1282,9 +1424,12 @@ function updateTraining(log) {{
     pds.backgroundColor = items.map(e => CLASS_COLORS[e[0]] || '#6b7280');
     perClassChart.update('none');
   }}
-}}
+}}"""
 
-// ── Refresh loop ────────────────────────────────────────────────
+
+def _js_refresh_loop() -> str:
+    """Return fetchJSON, updateGauge, updateSystemMetrics, LULC code, refresh function, and boot code."""
+    return f"""// ── Refresh loop ────────────────────────────────────────────────
 let _fetchFails = 0;
 let _lastGoodData = {{}};
 
@@ -1330,8 +1475,103 @@ function updateSystemMetrics(m) {{
   document.getElementById('net-device').textContent = (m.device || '').toUpperCase();
 }}
 
+// ── LULC Inference ────────────────────────────────────────────
+const LULC_CLASS_LEGEND = [
+  {{color:'#006400',label:'Tallskog'}},{{color:'#228B22',label:'Granskog'}},
+  {{color:'#32CD32',label:'Lövskog'}},{{color:'#3CB371',label:'Blandskog'}},
+  {{color:'#2E4F2E',label:'Sumpskog'}},{{color:'#8B5A2B',label:'Öpp. våtmark'}},
+  {{color:'#FFD700',label:'Åkermark'}},{{color:'#D2B48C',label:'Öpp. mark'}},
+  {{color:'#FF0000',label:'Bebyggelse'}},{{color:'#0000FF',label:'Vatten'}}
+];
+let _lulcChartCreated = false;
+let _lulcGalleryRendered = false;
+
+// Init class legend
+(function() {{
+  const el = document.getElementById('lulc-class-legend');
+  if (!el) return;
+  LULC_CLASS_LEGEND.forEach(function(item) {{
+    el.innerHTML += '<span class="lulc-legend-item">' +
+      '<span class="lulc-legend-swatch" style="background:' + item.color + '"></span>' +
+      item.label + '</span>';
+  }});
+}})();
+
+function updateLulcInference(summary, gallery) {{
+  if (!summary) return;
+  const badge = document.getElementById('lulc-badge');
+  if (summary.tiles > 0) {{
+    badge.textContent = 'done';
+    badge.className = 'section-badge done';
+  }}
+  const acc = summary.overall_agreement_pct || summary.overall_accuracy || 0;
+  document.getElementById('lulc-accuracy').textContent = acc.toFixed(1) + '%';
+  document.getElementById('lulc-pixels-sub').textContent =
+    (summary.total_pixels || 0).toLocaleString() + ' pixlar';
+  document.getElementById('lulc-hcw').textContent =
+    (summary.high_confidence_wrong || 0).toLocaleString();
+  document.getElementById('lulc-tiles').textContent =
+    String(summary.tiles || 0);
+  const disagree_pct = summary.total_pixels > 0
+    ? (100 * summary.disagree_pixels / summary.total_pixels).toFixed(1) + '%'
+    : '-';
+  document.getElementById('lulc-disagree').textContent = disagree_pct;
+  document.getElementById('lulc-disagree-sub').textContent =
+    (summary.disagree_pixels || 0).toLocaleString() + ' pixlar';
+
+  // Per-class chart
+  if (summary.per_class && !_lulcChartCreated) {{
+    _lulcChartCreated = true;
+    const pc = summary.per_class;
+    const labels = Object.keys(pc);
+    const values = labels.map(k => pc[k].accuracy_pct || 0);
+    const colors = LULC_CLASS_LEGEND.map(l => l.color);
+    const ctx = document.getElementById('chart-lulc-perclass');
+    if (ctx) {{
+      new Chart(ctx, {{
+        type: 'bar',
+        data: {{
+          labels: labels,
+          datasets: [{{ label: 'Accuracy (%)', data: values,
+            backgroundColor: colors.slice(0, labels.length),
+            borderWidth: 1 }}]
+        }},
+        options: {{
+          indexAxis: 'y', responsive: true,
+          plugins: {{ legend: {{ display: false }} }},
+          scales: {{
+            x: {{ beginAtZero: true, max: 100, title: {{ display: true, text: '%' }} }},
+            y: {{ grid: {{ display: false }} }}
+          }}
+        }}
+      }});
+    }}
+  }}
+
+  // Render gallery
+  if (gallery && gallery.length > 0 && !_lulcGalleryRendered) {{
+    _lulcGalleryRendered = true;
+    const container = document.getElementById('lulc-gallery');
+    container.innerHTML = '';
+    gallery.forEach(function(tile) {{
+      const accColor = tile.accuracy_pct >= 70 ? '#2ecc40' :
+                       tile.accuracy_pct >= 50 ? '#eab308' : '#ef4444';
+      container.innerHTML +=
+        '<div class="lulc-gallery-row">' +
+        '<div class="lulc-gallery-cell"><img src="' + tile.s2 + '" loading="lazy">' +
+        '<span class="cell-label">' + (tile.dominant_class || '') + '</span></div>' +
+        '<div class="lulc-gallery-cell"><img src="' + tile.nmd + '" loading="lazy"></div>' +
+        '<div class="lulc-gallery-cell"><img src="' + tile.pred + '" loading="lazy"></div>' +
+        '<div class="lulc-gallery-cell"><img src="' + tile.quality + '" loading="lazy">' +
+        '<span class="cell-label" style="color:' + accColor + '">' +
+        tile.accuracy_pct + '% · ' + tile.unique_classes + ' klasser</span></div>' +
+        '</div>';
+    }});
+  }}
+}}
+
 async function refresh() {{
-  const [nmdLog, prepLog, trainLog, stats, sysMetrics, evalTest, sfLog] = await Promise.all([
+  const [nmdLog, prepLog, trainLog, stats, sysMetrics, evalTest, sfLog, lulcSummary, lulcGallery] = await Promise.all([
     fetchJSON('nmd_prefilter_log.json'),
     fetchJSON('prepare_log.json'),
     fetchJSON('training_log.json'),
@@ -1339,6 +1579,8 @@ async function refresh() {{
     fetchJSON('system_metrics.json'),
     fetchJSON('eval_test.json'),
     fetchJSON('seasonal_fetch_log.json'),
+    fetchJSON('predictions/val/prediction_summary.json'),
+    fetchJSON('predictions/val/gallery.json'),
   ]);
 
   // Keep last good data so UI stays populated after disconnect
@@ -1348,6 +1590,8 @@ async function refresh() {{
   if (stats) _lastGoodData.stats = stats;
   if (evalTest) _lastGoodData.evalTest = evalTest;
   if (sfLog) _lastGoodData.sfLog = sfLog;
+  if (lulcSummary) _lastGoodData.lulcSummary = lulcSummary;
+  if (lulcGallery) _lastGoodData.lulcGallery = lulcGallery;
 
   const n = nmdLog || _lastGoodData.nmdLog;
   const p = prepLog || _lastGoodData.prepLog;
@@ -1355,6 +1599,8 @@ async function refresh() {{
   const s = stats || _lastGoodData.stats;
   const ev = evalTest || _lastGoodData.evalTest;
   const sf = sfLog || _lastGoodData.sfLog;
+  const ls = lulcSummary || _lastGoodData.lulcSummary;
+  const lg = lulcGallery || _lastGoodData.lulcGallery;
 
   updateGlobalStatus(n, p, t);
   if (n) updateNmdPrefilter(n);
@@ -1363,6 +1609,7 @@ async function refresh() {{
   if (ev) updateEvaluation(ev);
   if (t) updateTraining(t);
   if (sysMetrics) updateSystemMetrics(sysMetrics);
+  if (ls) updateLulcInference(ls, lg);
 
   // Update preview thumbnails
   if (p && p.recent_previews && p.recent_previews.length > 0) {{
@@ -1394,7 +1641,62 @@ async function refresh() {{
 
 initCharts();
 refresh();
-setInterval(refresh, REFRESH_MS);
+setInterval(refresh, REFRESH_MS);"""
+
+
+def _build_html(chart_js_src: str) -> str:
+    """Build the complete dashboard HTML string."""
+    import json
+    colors_json = json.dumps(_CLASS_COLORS)
+
+    return f"""<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IMINT Training Dashboard</title>
+{_css_styles()}
+</head>
+<body>
+
+{_html_header()}
+
+<div class="container">
+
+  <!-- Main content -->
+  <div class="main-content">
+
+{_html_nmd_section()}
+
+{_html_seasonal_fetch_section()}
+
+{_html_dataprep_section()}
+
+{_html_eval_section()}
+
+{_html_training_section()}
+
+{_html_lulc_section()}
+
+  </div><!-- /main-content -->
+
+{_html_sidebar()}
+
+</div><!-- /container -->
+
+<script>
+{chart_js_src}
+</script>
+<script>
+{_js_constants(colors_json)}
+
+{_js_utils()}
+
+{_js_init_charts()}
+
+{_js_update_sections()}
+
+{_js_refresh_loop()}
 </script>
 </body>
 </html>"""

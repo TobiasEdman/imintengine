@@ -4,24 +4,31 @@ scripts/generate_lulc_showcase.py — Generate LULC showcase images + chart data
 
 Reads prediction .npz files (from predict_lulc.py) and generates:
   - Per-tile gallery images: S2 RGB, NMD label, prediction, quality overlay
-  - Chart data JSON for the dashboard (per-class IoU and accuracy)
-  - Tile gallery JSON listing all tiles with paths and metrics
+  - Gallery JSON listing all tiles with image paths and per-tile metrics
+  - (Optional) Chart data JSON for the docs showcase dashboard
 
 Gallery mode (default): picks N diverse tiles and generates 4 images each
 for the per-row dashboard layout: S2 pseudocolor | NMD | LULC | Quality.
 
+The training dashboard (imint/training/dashboard.py) serves from the data
+directory, so images go to predictions/val/showcase/ and gallery metadata
+to predictions/val/gallery.json.
+
 Usage:
-    # Generate gallery from val split predictions
+    # Generate gallery from val split predictions (for training dashboard)
     python scripts/generate_lulc_showcase.py \\
         --predictions-dir data/predictions/val \\
-        --output-dir docs/showcase/lulc \\
+        --num-tiles 12
+
+    # Also generate chart data for docs showcase
+    python scripts/generate_lulc_showcase.py \\
+        --predictions-dir data/predictions/val \\
         --chart-output docs/data/lulc-data.json \\
         --num-tiles 12
 
     # Placeholder only (no predictions needed)
     python scripts/generate_lulc_showcase.py \\
         --predictions-dir data/predictions/val \\
-        --chart-output docs/data/lulc-data.json \\
         --placeholder-only
 """
 from __future__ import annotations
@@ -249,6 +256,7 @@ def select_diverse_tiles(scored: list[dict], n: int = 12) -> list[dict]:
 def generate_tile_gallery(
     tiles: list[dict],
     output_dir: Path,
+    img_prefix: str = "predictions/val/showcase",
 ) -> list[dict]:
     """Generate gallery images for selected tiles.
 
@@ -257,6 +265,12 @@ def generate_tile_gallery(
       - tile_N_nmd.png    — NMD ground truth (colored)
       - tile_N_pred.png   — Model prediction (colored)
       - tile_N_quality.png — Disagreement overlay (green/red/magenta)
+
+    Args:
+        tiles: Scored tile dicts from select_diverse_tiles().
+        output_dir: Directory to write PNG images to.
+        img_prefix: Path prefix for gallery JSON entries (relative to
+            the HTTP server root, i.e. the data directory).
 
     Returns list of tile metadata dicts for the gallery JSON.
     """
@@ -302,10 +316,10 @@ def generate_tile_gallery(
         gallery.append({
             "index": i,
             "name": tile_info["name"],
-            "s2": f"showcase/lulc/{prefix}_s2.png",
-            "nmd": f"showcase/lulc/{prefix}_nmd.png",
-            "pred": f"showcase/lulc/{prefix}_pred.png",
-            "quality": f"showcase/lulc/{prefix}_quality.png",
+            "s2": f"{img_prefix}/{prefix}_s2.png",
+            "nmd": f"{img_prefix}/{prefix}_nmd.png",
+            "pred": f"{img_prefix}/{prefix}_pred.png",
+            "quality": f"{img_prefix}/{prefix}_quality.png",
             "accuracy_pct": tile_info["accuracy_pct"],
             "disagree_pct": tile_info["disagree_pct"],
             "unique_classes": tile_info["unique_classes"],
@@ -469,10 +483,12 @@ def main():
     )
     parser.add_argument("--predictions-dir", type=str, required=True,
                         help="Directory with *_pred.npz files and prediction_summary.json")
-    parser.add_argument("--output-dir", type=str, default="docs/showcase/lulc",
-                        help="Output directory for showcase images")
-    parser.add_argument("--chart-output", type=str, default="docs/data/lulc-data.json",
-                        help="Output path for chart data JSON")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Output directory for gallery images (default: <predictions-dir>/showcase)")
+    parser.add_argument("--gallery-output", type=str, default=None,
+                        help="Output path for gallery JSON (default: <predictions-dir>/gallery.json)")
+    parser.add_argument("--chart-output", type=str, default=None,
+                        help="Optional: also write docs chart data JSON (for showcase dashboard)")
     parser.add_argument("--num-tiles", type=int, default=12,
                         help="Number of tiles for gallery (default: 12)")
     parser.add_argument("--tile", type=str, default=None,
@@ -482,19 +498,37 @@ def main():
 
     args = parser.parse_args()
     predictions_dir = Path(args.predictions_dir)
-    output_dir = Path(args.output_dir)
-    chart_output = Path(args.chart_output)
+
+    # Default: images go into predictions_dir/showcase/,
+    # gallery JSON goes to predictions_dir/gallery.json
+    output_dir = Path(args.output_dir) if args.output_dir else predictions_dir / "showcase"
+    gallery_output = Path(args.gallery_output) if args.gallery_output else predictions_dir / "gallery.json"
+    chart_output = Path(args.chart_output) if args.chart_output else None
+
+    # Image prefix for gallery JSON — relative to the data dir root.
+    # The training dashboard HTTP server serves from DATA_DIR, so if
+    # predictions_dir = DATA_DIR/predictions/val and output_dir =
+    # DATA_DIR/predictions/val/showcase, the prefix is predictions/val/showcase.
+    img_prefix = "predictions/val/showcase"
 
     print(f"\n{'='*60}")
     print(f"  LULC Showcase Generator")
     print(f"  Predictions: {predictions_dir}")
     print(f"  Output:      {output_dir}")
-    print(f"  Chart data:  {chart_output}")
+    print(f"  Gallery JSON: {gallery_output}")
+    if chart_output:
+        print(f"  Chart data:   {chart_output}")
     print(f"{'='*60}")
 
     if args.placeholder_only:
-        _placeholder_chart_data(chart_output)
-        print("\n  Done (placeholder only).\n")
+        if chart_output:
+            _placeholder_chart_data(chart_output)
+        # Also write empty gallery.json
+        gallery_output.parent.mkdir(parents=True, exist_ok=True)
+        with open(gallery_output, "w") as f:
+            json.dump([], f)
+        print(f"\n  Placeholder gallery.json saved: {gallery_output}")
+        print("  Done (placeholder only).\n")
         return
 
     # Score all tiles
@@ -503,7 +537,8 @@ def main():
     if not scored:
         print(f"  WARNING: No prediction tiles found in {predictions_dir}")
         print(f"           Run `make predict-aux` first.")
-        _placeholder_chart_data(chart_output)
+        if chart_output:
+            _placeholder_chart_data(chart_output)
         return
 
     print(f"  Found {len(scored)} valid tiles")
@@ -513,18 +548,24 @@ def main():
     print(f"  Selected {len(selected)} tiles for gallery\n")
 
     # Generate gallery images
-    gallery = generate_tile_gallery(selected, output_dir)
+    gallery = generate_tile_gallery(selected, output_dir, img_prefix=img_prefix)
 
     # Also generate single-tile showcase (best tile) for Leaflet panels
     best_tile = scored[0]["path"]
     print(f"\n  Generating single-tile showcase from: {best_tile.name}")
     generate_showcase_images(best_tile, output_dir)
 
-    # Generate chart data + gallery JSON
-    generate_chart_data(predictions_dir, chart_output, gallery=gallery)
+    # Write gallery JSON (for training dashboard)
+    gallery_output.parent.mkdir(parents=True, exist_ok=True)
+    with open(gallery_output, "w") as f:
+        json.dump(gallery, f, indent=2)
+    print(f"\n  Gallery JSON saved: {gallery_output}  ({len(gallery)} tiles)")
 
-    print(f"\n  Gallery: {len(gallery)} tiles")
-    print(f"  Done.\n")
+    # Optionally generate chart data + gallery for docs showcase
+    if chart_output:
+        generate_chart_data(predictions_dir, chart_output, gallery=gallery)
+
+    print(f"\n  Done.\n")
 
 
 if __name__ == "__main__":
