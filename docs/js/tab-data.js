@@ -89,6 +89,25 @@ var LEGENDS = {
     erosion: [
         {color:'#d73027',label:'Erosion'},{color:'#ffffbf',label:'Stabil'},
         {color:'#1a9850',label:'Ackumulation'}
+    ],
+    lulc_grouped: [
+        {color:'#006400',label:'Tallskog'},{color:'#228B22',label:'Granskog'},
+        {color:'#32CD32',label:'Lövskog'},{color:'#3CB371',label:'Blandskog'},
+        {color:'#2E4F2E',label:'Sumpskog'},{color:'#8B5A2B',label:'Öpp. våtmark'},
+        {color:'#FFD700',label:'Åkermark'},{color:'#D2B48C',label:'Öpp. mark'},
+        {color:'#FF0000',label:'Bebyggelse'},{color:'#0000FF',label:'Vatten'}
+    ],
+    disagree: [
+        {color:'#2ecc40',label:'Korrekt'},{color:'#ff4136',label:'Fel'},
+        {color:'#ff00ff',label:'Hög konfidens fel'}
+    ],
+    confidence: [
+        {color:'#d73027',label:'Låg (0.0)'},{color:'#fee08b',label:'Medel (0.5)'},
+        {color:'#1a9850',label:'Hög (1.0)'}
+    ],
+    entropy: [
+        {color:'#FFFFB2',label:'Låg (säker)'},{color:'#FD8D3C',label:'Medel'},
+        {color:'#BD0026',label:'Hög (osäker)'}
     ]
 };
 
@@ -260,5 +279,35 @@ var TAB_CONFIG = {
         },
         imgH: 508, imgW: 577,
         hasBgToggle: false
+    },
+
+    lulc: {
+        title: 'LULC-klassificering — Labelkvalitet',
+        summary: [
+            {title:'mIoU (val)',value:'43.3%',detail:'10-klass modell + 5 aux'},
+            {title:'Hög konfidens fel',value:'—',detail:'Modell >80% säker, NMD avviker'},
+            {title:'Låg konfidens rätt',value:'—',detail:'Modell <50% säker, NMD stämmer'},
+            {title:'Analyserade tiles',value:'—',detail:'Val-split'},
+            {title:'Modell',value:'Prithvi-EO 2.0',detail:'UPerNet + AuxEncoder'}
+        ],
+        intro: 'Prithvi-EO 2.0 foundation model med UPerNet-dekoder och 5 auxiliära kanaler (medelhöjd, volym, grundyta, diameter, DEM) har tränats för pixelvis LULC-klassificering med NMD som grundsanning. Denna analys visar var modellen avviker från NMD — särskilt pixlar där modellen är >80% säker men NMD anger en annan klass. Dessa "high-confidence wrong"-pixlar indikerar sannolika NMD-labeleringsfel och är kandidater för labelrensning. NMD har känt lägst noggrannhet för lövskog och blandskog, vilket direkt förklarar modellens låga IoU för dessa klasser.',
+        panels: [
+            {id:'l-nmd',        key:'nmd_label',   title:'NMD Grundsanning',           legend:'lulc_grouped'},
+            {id:'l-pred',       key:'prediction',  title:'Modellprediktion',            legend:'lulc_grouped'},
+            {id:'l-disagree',   key:'disagree',    title:'Avvikelser (NMD vs modell)',  legend:'disagree'},
+            {id:'l-confidence', key:'confidence',  title:'Konfidens (softmax)',         legend:'confidence'},
+            {id:'l-entropy',    key:'entropy',     title:'Entropi (osäkerhet)',         legend:'entropy'}
+        ],
+        images: {
+            'l-nmd':        'showcase/lulc/nmd_label.png',
+            'l-pred':       'showcase/lulc/prediction.png',
+            'l-disagree':   'showcase/lulc/disagree.png',
+            'l-confidence': 'showcase/lulc/confidence.png',
+            'l-entropy':    'showcase/lulc/entropy.png'
+        },
+        imgH: 224, imgW: 224,
+        hasBgToggle: false,
+        hasCharts: true,
+        chartSectionTitle: 'Labelkvalitet per klass'
     }
 };

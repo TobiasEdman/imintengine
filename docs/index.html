@@ -13,7 +13,7 @@
         <div class="header-left">
             <div>
                 <h1><span>IMINT</span> Analysrapport</h1>
-                <p>Showcase — Brand (2018-07-24) &middot; Marin (2025-07-10) &middot; Betesmark (2025-06-14) &middot; Kustlinje (2025-06-14)</p>
+                <p>Showcase — Brand (2018-07-24) &middot; Marin (2025-07-10) &middot; Betesmark (2025-06-14) &middot; Kustlinje (2025-06-14) &middot; LULC</p>
             </div>
         </div>
         <div class="header-nav">
@@ -21,6 +21,7 @@
             <a href="#" class="theme-tab" data-tab="marine">⚓ Marin</a>
             <a href="#" class="theme-tab" data-tab="grazing">🐄 Betesmark</a>
             <a href="#" class="theme-tab" data-tab="coastline">🌊 Kustlinje</a>
+            <a href="#" class="theme-tab" data-tab="lulc">🌲 LULC</a>
         </div>
     </div>
 
@@ -268,6 +269,45 @@
             <p>
                 <strong>CoastSeg SegFormer (neuralt nätverk):</strong> En SegFormer-B0 transformer-modell (3,7 M parametrar) tränad på märkt satellitdata för kustsegmentering. Modellen lär sig komplexa spatiala mönster direkt från RGB-bilddata och producerar samma fyra klasser. Jämför de två metodernas resultat för att se var de överensstämmer och var de skiljer sig — särskilt vid komplexa kustlinjer med sediment och grunt vatten.
                 <br><em>Källa: Vos, K. et al., CoastSeg — <a href="https://github.com/SatelliteShorelines/CoastSeg" target="_blank">GitHub</a></em>
+            </p>
+        </div>
+    </div>
+
+    <!-- ── LULC tab ──────────────────────────────────────────────── -->
+    <div class="tab-content" id="tab-lulc">
+        <div class="tab-dynamic"></div>
+        <div class="section-header">
+            <h2>Labelkvalitet per klass</h2>
+        </div>
+        <div class="charts-grid">
+            <div class="chart-card">
+                <h3>IoU per markklass</h3>
+                <canvas id="chart-lulc-iou"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Pixelträffsäkerhet per markklass</h3>
+                <canvas id="chart-lulc-accuracy"></canvas>
+            </div>
+        </div>
+        <div class="tab-description">
+            <h3>Prithvi-EO 2.0 + UPerNet — LULC-klassificering</h3>
+            <p>
+                Modellen bygger på Prithvi-EO 2.0, en geospatial foundation model (600M parametrar) utvecklad av IBM, NASA och Jülich Supercomputing Centre. Prithvi är förtränad med Masked Autoencoder (ViT-MAE) på stora mängder HLS-satellitdata (Harmonized Landsat Sentinel-2) och lär sig robusta representationer av jordytan. Ovanpå backbone-modellen sitter en UPerNet-dekoder (Unified Perceptual Parsing Network) med PPM (Pyramid Pooling Module) och FPN (Feature Pyramid Network) som aggregerar features på flera skalor för pixelvis klassificering.
+            </p>
+
+            <h3>Auxiliära kanaler — Skogliga attribut + DEM</h3>
+            <p>
+                Utöver de 6 Sentinel-2-banden matas modellen med 5 auxiliära kanaler: medelhöjd, medelvolym, grundyta (basal area), medeldiameter och DEM (Digital Elevation Model) från Lantmäteriet. Dessa kanaler fusioneras via en AuxEncoder (2-lagers CNN) med UPerNet-dekodern genom late fusion (1x1 konvolution). De skogliga attributen ger direkt strukturell information som hjälper modellen skilja t.ex. tallskog från granskog baserat på trädstorlek och beståndstäthet.
+            </p>
+
+            <h3>NMD-labelkvalitet — Kända begränsningar</h3>
+            <p>
+                NMD (Nationellt Marktäckedata) används som grundsanning vid träning. NMD har en övergripande noggrannhet på 70–80% på detaljerad klassnivå, men med stora variationer: tallskog och granskog har god träffsäkerhet, medan lövskog och blandskog har de största avvikelserna. Noggrannheten minskar norrut (träningsområdet lat 64–66°N ligger i det sämsta intervallet). Höga "high-confidence wrong"-värden (modellen >80% säker men avviker från NMD) kan indikera att NMD-labeln är felaktig snarare än modellen — dessa pixlar är kandidater för labelrensning.
+            </p>
+
+            <h3>Labelrensning via konfidensanalys</h3>
+            <p>
+                Genom att analysera var modellen är säker men avviker från NMD-grundsanningen identifieras pixlar där NMD sannolikt har fel. Dessa "high-confidence wrong"-pixlar kan användas för att rensa träningsdata: antingen genom att vikta ner osäkra etiketter i förlustfunktionen (confidence weighting) eller genom att manuellt granska och korrigera de mest avvikande områdena. Omvänt visar "low-confidence correct"-pixlar gränsfall där modellen råkar gissa rätt trots osäkerhet.
             </p>
         </div>
     </div>

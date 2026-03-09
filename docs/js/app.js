@@ -326,6 +326,92 @@
         }
     }
 
+    // ── LULC Chart initialization ────────────────────────────────────
+
+    function initLulcCharts() {
+        fetch('data/lulc-data.json')
+            .then(function(r) { return r.json(); })
+            .then(function(LULC_DATA) {
+                var chartOpts = {
+                    indexAxis: 'y',
+                    responsive: true,
+                    plugins: {legend: {display: false}},
+                    scales: {
+                        x: {beginAtZero:true, title:{display:true, text:'%'},
+                            grid:{color:'rgba(255,255,255,0.04)'}},
+                        y: {grid:{display:false}}
+                    }
+                };
+
+                // Per-class IoU chart
+                if (LULC_DATA.per_class_iou && LULC_DATA.per_class_iou.labels.length > 0) {
+                    var iouCanvas = document.getElementById('chart-lulc-iou');
+                    if (iouCanvas) {
+                        new Chart(iouCanvas, {
+                            type: 'bar',
+                            data: {
+                                labels: LULC_DATA.per_class_iou.labels,
+                                datasets: [{
+                                    label: 'IoU (%)',
+                                    data: LULC_DATA.per_class_iou.values,
+                                    backgroundColor: LULC_DATA.per_class_iou.colors,
+                                    borderColor: LULC_DATA.per_class_iou.colors.map(function(c) {
+                                        return c.replace('0.85','1');
+                                    }),
+                                    borderWidth: 1
+                                }]
+                            },
+                            options: chartOpts
+                        });
+                    }
+                }
+
+                // Per-class accuracy chart
+                if (LULC_DATA.per_class_accuracy && LULC_DATA.per_class_accuracy.labels.length > 0) {
+                    var accCanvas = document.getElementById('chart-lulc-accuracy');
+                    if (accCanvas) {
+                        new Chart(accCanvas, {
+                            type: 'bar',
+                            data: {
+                                labels: LULC_DATA.per_class_accuracy.labels,
+                                datasets: [{
+                                    label: 'Träffsäkerhet (%)',
+                                    data: LULC_DATA.per_class_accuracy.values,
+                                    backgroundColor: LULC_DATA.per_class_accuracy.colors,
+                                    borderColor: LULC_DATA.per_class_accuracy.colors.map(function(c) {
+                                        return c.replace('0.85','1');
+                                    }),
+                                    borderWidth: 1
+                                }]
+                            },
+                            options: chartOpts
+                        });
+                    }
+                }
+
+                // Update summary cards with real data if available
+                if (LULC_DATA.summary && LULC_DATA.summary.tiles > 0) {
+                    var lulcTab = document.getElementById('tab-lulc');
+                    if (lulcTab) {
+                        var cards = lulcTab.querySelectorAll('.summary-card');
+                        var s = LULC_DATA.summary;
+                        if (cards.length >= 4) {
+                            // Update high-conf wrong card
+                            cards[1].querySelector('.value').textContent =
+                                s.high_confidence_wrong.toLocaleString() + ' px';
+                            // Update low-conf correct card
+                            cards[2].querySelector('.value').textContent =
+                                s.low_confidence_correct.toLocaleString() + ' px';
+                            // Update tiles card
+                            cards[3].querySelector('.value').textContent =
+                                s.tiles.toString();
+                        }
+                    }
+                }
+            })
+            .catch(function(e) { console.warn('Could not load LULC chart data:', e); });
+    }
+
     // ── Chart initialization ─────────────────────────────────────────
 
     function initCharts() {
@@ -499,6 +585,11 @@
         // Initialize charts (fire tab)
         if (TAB_CONFIG.fire && TAB_CONFIG.fire.hasCharts) {
             initCharts();
+        }
+
+        // Initialize LULC charts
+        if (TAB_CONFIG.lulc && TAB_CONFIG.lulc.hasCharts) {
+            initLulcCharts();
         }
 
         // License toggle

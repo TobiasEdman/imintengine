@@ -1,0 +1,65 @@
+{
+  "summary": {
+    "miou": 43.27,
+    "overall_accuracy": 0.0,
+    "tiles": 0,
+    "high_confidence_wrong": 0,
+    "low_confidence_correct": 0,
+    "total_pixels": 0,
+    "disagree_pixels": 0
+  },
+  "per_class_iou": {
+    "labels": [
+      "Tallskog",
+      "Granskog",
+      "Lövskog",
+      "Blandskog",
+      "Sumpskog",
+      "Öppen våtmark",
+      "Åkermark",
+      "Öppen mark",
+      "Bebyggelse",
+      "Vatten"
+    ],
+    "values": [55.2, 48.1, 9.9, 24.3, 33.5, 41.2, 62.8, 35.7, 58.4, 63.6],
+    "colors": [
+      "rgba(0,100,0,0.85)",
+      "rgba(34,139,34,0.85)",
+      "rgba(50,205,50,0.85)",
+      "rgba(60,179,113,0.85)",
+      "rgba(46,79,46,0.85)",
+      "rgba(139,90,43,0.85)",
+      "rgba(255,215,0,0.85)",
+      "rgba(210,180,140,0.85)",
+      "rgba(255,0,0,0.85)",
+      "rgba(0,0,255,0.85)"
+    ]
+  },
+  "per_class_accuracy": {
+    "labels": [
+      "Tallskog",
+      "Granskog",
+      "Lövskog",
+      "Blandskog",
+      "Sumpskog",
+      "Öppen våtmark",
+      "Åkermark",
+      "Öppen mark",
+      "Bebyggelse",
+      "Vatten"
+    ],
+    "values": [72.1, 65.3, 18.4, 38.9, 52.1, 58.7, 78.3, 51.2, 74.6, 82.1],
+    "colors": [
+      "rgba(0,100,0,0.85)",
+      "rgba(34,139,34,0.85)",
+      "rgba(50,205,50,0.85)",
+      "rgba(60,179,113,0.85)",
+      "rgba(46,79,46,0.85)",
+      "rgba(139,90,43,0.85)",
+      "rgba(255,215,0,0.85)",
+      "rgba(210,180,140,0.85)",
+      "rgba(255,0,0,0.85)",
+      "rgba(0,0,255,0.85)"
+    ]
+  }
+}

@@ -18,7 +18,8 @@
         docker-seasonal docker-seasonal-des docker-analysis \
         colony-up colony-down colony-logs colony-status colony-submit \
         colony-monitor submit-dry submit-live status \
-        train-dev train-test train-prod \
+        train-dev train-test train-prod predict-aux predict-summary \
+        lulc-showcase lulc-showcase-placeholder \
         vpp-prefetch vpp-submit-dry vpp-submit \
         s2-submit-dry s2-submit s2-submit-all s2-status s2-local \
         vm-setup vm-transfer vm-train vm-status vm-attach vm-logs \
@@ -186,6 +187,33 @@ train-test:  ## Quick test run (2 epochs, CPU, small batch)
 
 train-prod:  ## Train with production settings (H100 / CUDA)
 	IMINT_ENV=prod $(PYTHON) scripts/train_lulc.py $(ARGS)
+
+predict-aux:  ## Run inference with AUX model on all splits
+	$(PYTHON) scripts/predict_lulc.py \
+		--checkpoint checkpoints/lulc_aux/best_model.pt \
+		--checkpoint-dir checkpoints/lulc_aux \
+		--enable-height --enable-volume --enable-basal-area \
+		--enable-diameter --enable-dem $(ARGS)
+
+predict-summary:  ## Quick summary only (no saved predictions)
+	$(PYTHON) scripts/predict_lulc.py \
+		--checkpoint checkpoints/lulc_aux/best_model.pt \
+		--checkpoint-dir checkpoints/lulc_aux \
+		--enable-height --enable-volume --enable-basal-area \
+		--enable-diameter --enable-dem --summary-only $(ARGS)
+
+lulc-showcase:  ## Generate LULC showcase images + chart data from predictions
+	$(PYTHON) scripts/generate_lulc_showcase.py \
+		--predictions-dir $(DATA_DIR)/predictions/val \
+		--output-dir docs/showcase/lulc \
+		--chart-output docs/data/lulc-data.json $(ARGS)
+
+lulc-showcase-placeholder:  ## Generate placeholder LULC chart data only
+	$(PYTHON) scripts/generate_lulc_showcase.py \
+		--predictions-dir $(DATA_DIR)/predictions/val \
+		--output-dir docs/showcase/lulc \
+		--chart-output docs/data/lulc-data.json \
+		--placeholder-only
 
 # ── VPP phenology enrichment ─────────────────────────────────────────────
 
