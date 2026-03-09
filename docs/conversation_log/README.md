@@ -25,6 +25,7 @@ This directory contains Claude Code conversation logs split into topic-based mar
 | 17 | [17_training_runs_comparison.md](17_training_runs_comparison.md) | Training Runs — Base vs AuxEncoder comparison, 43.27% mIoU best result, checkpoint inventory |
 | 18 | [18_vpp_phenology_pipeline.md](18_vpp_phenology_pipeline.md) | HR-VPP Phenology — PPI, SOSD/EOSD/LENGTH, Sentinel Hub BYOC collection, integration with AuxEncoder |
 | 19 | [19_marine_commercial_showcase.md](19_marine_commercial_showcase.md) | Marine Commercial Showcase — Kalmarsund shipping tab, AI2 vessel detection, coordinate convention fix, grazing statistics |
+| 20 | [20_lulc_inference_dashboard.md](20_lulc_inference_dashboard.md) | LULC Inference Dashboard — Per-tile prediction pipeline, NIR false-color, tile gallery, modular dashboard refactoring |
 
 ## Sources
 

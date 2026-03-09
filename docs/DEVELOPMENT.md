@@ -335,6 +335,73 @@ executors/
 
 ---
 
+## LULC Inference & Training Dashboard
+
+### Inference Pipeline
+
+After training, run inference on the validation split to generate per-tile predictions:
+
+```bash
+# Run inference (saves .npz per tile with prediction, confidence, label, disagree, entropy, s2_rgb)
+make predict-aux ARGS="--splits val"
+
+# Generate tile gallery for dashboard (16 diverse tiles)
+make lulc-gallery
+
+# Also generate chart data for docs showcase
+make lulc-showcase
+```
+
+The `predict_lulc.py` script:
+1. Loads the best checkpoint from `checkpoints/lulc_aux/`
+2. Runs inference on each tile with the full AuxEncoder model
+3. Saves per-tile `.npz` files in `DATA_DIR/predictions/val/` with: `prediction`, `confidence`, `label`, `disagree`, `entropy`, `s2_rgb`
+4. Writes `prediction_summary.json` with aggregate metrics
+
+The `generate_lulc_showcase.py` script:
+1. Scores all predicted tiles by class diversity and disagreement
+2. Selects 12-16 diverse tiles (prioritizing unique dominant classes)
+3. Renders 4 images per tile: S2 pseudocolor (NIR B8/B3/B4), NMD label, model prediction, quality overlay
+4. Writes `gallery.json` with tile metadata and image paths
+
+### Training Dashboard
+
+The training dashboard (`imint/training/dashboard.py`) is a self-contained HTML page with embedded Chart.js that polls JSON metrics from the data directory via `fetch()`. It monitors the full pipeline:
+
+| Section | Data Source | Shows |
+|---------|-------------|-------|
+| NMD Pre-filter | `nmd_prefilter_log.json` | Grid filtering progress, land/water counts |
+| Seasonal Fetch | `seasonal_fetch_log.json` | ColonyOS job progress, CDSE vs DES stats |
+| Spectral Data Fetch | `prepare_log.json` | Tile preparation, class distribution |
+| Training | `training_log.json` | Loss/mIoU curves, patience, per-class IoU |
+| Evaluation | `eval_test.json` | Test split mIoU, per-class IoU |
+| LULC Inference | `predictions/val/prediction_summary.json` + `gallery.json` | Per-tile gallery, accuracy, per-class chart |
+
+Start the dashboard:
+
+```bash
+# From the training script (auto-starts)
+make train-dev
+
+# Standalone (serve existing data)
+python -c "
+from imint.training.dashboard import start_dashboard_server
+import time
+server, thread = start_dashboard_server('data/lulc_full', port=8000)
+while True: time.sleep(60)
+"
+```
+
+The dashboard is split into modular section-builder functions for maintainability:
+- `_css_styles()`, `_html_header()`, `_html_nmd_section()`, etc.
+- `_js_constants()`, `_js_utils()`, `_js_init_charts()`, `_js_update_sections()`, `_js_refresh_loop()`
+
+### S2 Pseudocolor (NIR False-Color)
+
+The training dashboard uses NIR false-color for the S2 column: R=B8A(NIR), G=B03, B=B04 with DN stretch `min=400, max=[4000, 1500, 1500]`. This highlights vegetation structure better than true-color RGB for forest class differentiation.
+
+---
+
 ## Tests
 
 ```bash

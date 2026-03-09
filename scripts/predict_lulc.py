@@ -128,10 +128,17 @@ def predict_split(
     total_pixels = 0
     disagree_pixels = 0
     per_class_disagree = np.zeros(num_classes, dtype=np.int64)
-    per_class_total = np.zeros(num_classes, dtype=np.int64)
+    per_class_total = np.zeros(num_classes, dtype=np.int64)       # pixels with label == c (for producer acc)
     per_class_correct = np.zeros(num_classes, dtype=np.int64)
+    per_class_predicted = np.zeros(num_classes, dtype=np.int64)   # pixels with pred == c (for user acc)
+    per_class_pred_correct = np.zeros(num_classes, dtype=np.int64)  # pred == c AND label == c
     high_conf_wrong = 0  # confident prediction != label (label cleaning candidates)
     low_conf_correct = 0  # uncertain prediction == label
+
+    # AUC-ROC histograms: bin softmax probabilities for each class
+    N_AUC_BINS = 1000
+    auc_hist_pos = np.zeros((num_classes, N_AUC_BINS), dtype=np.int64)  # p(c) where label==c
+    auc_hist_neg = np.zeros((num_classes, N_AUC_BINS), dtype=np.int64)  # p(c) where label!=c
 
     t0 = time.time()
 
@@ -194,13 +201,27 @@ def predict_split(
         disagree_pixels += n_disagree
 
         for c in range(num_classes):
-            mask_c = label == c
             if c == 0:
                 continue
-            n_c = mask_c.sum()
-            per_class_total[c] += n_c
-            per_class_correct[c] += (pred[mask_c] == c).sum()
-            per_class_disagree[c] += (pred[mask_c] != c).sum()
+            # Producer accuracy (recall): of pixels labeled c, how many predicted c?
+            mask_label_c = label == c
+            n_label = mask_label_c.sum()
+            per_class_total[c] += n_label
+            per_class_correct[c] += (pred[mask_label_c] == c).sum()
+            per_class_disagree[c] += (pred[mask_label_c] != c).sum()
+            # User accuracy (precision): of pixels predicted c, how many labeled c?
+            mask_pred_c = (pred == c) & valid
+            per_class_predicted[c] += mask_pred_c.sum()
+            per_class_pred_correct[c] += (label[mask_pred_c] == c).sum()
+
+        # AUC-ROC: bin per-class softmax probabilities
+        for c in range(1, num_classes):
+            p_c = probs[c].astype(np.float32)  # (H, W) probability of class c
+            bins_c = np.clip((p_c * N_AUC_BINS).astype(np.int32), 0, N_AUC_BINS - 1)
+            mask_is_c = (label == c) & valid
+            mask_not_c = (label != c) & valid
+            np.add.at(auc_hist_pos[c], bins_c[mask_is_c], 1)
+            np.add.at(auc_hist_neg[c], bins_c[mask_not_c], 1)
 
         # High-confidence wrong: model confident (>0.8) but disagrees with label
         high_conf_mask = confidence.astype(np.float32) > 0.8
@@ -252,16 +273,55 @@ def predict_split(
     print()
 
     # Per-class breakdown
-    print(f"  {'Class':<25s} {'Pixels':>10s} {'Correct':>10s} {'Wrong':>10s} {'Acc':>7s} {'Label %':>8s}")
+    print(f"  {'Class':<20s} {'Labeled':>9s} {'Pred':>9s} {'Prod.Acc':>9s} {'User.Acc':>9s} {'Label%':>7s}")
     print(f"  {'-'*70}")
     for c in range(1, num_classes):
         name = class_names.get(c, f"class_{c}")
         total_c = per_class_total[c]
-        correct_c = per_class_correct[c]
-        wrong_c = per_class_disagree[c]
-        acc = 100 * correct_c / max(total_c, 1)
+        pred_c = per_class_predicted[c]
+        producer_acc = 100 * per_class_correct[c] / max(total_c, 1)
+        user_acc = 100 * per_class_pred_correct[c] / max(pred_c, 1)
         label_pct = 100 * total_c / max(total_pixels, 1)
-        print(f"  {name:<25s} {total_c:>10,d} {correct_c:>10,d} {wrong_c:>10,d} {acc:>6.1f}% {label_pct:>7.1f}%")
+        print(f"  {name:<20s} {total_c:>9,d} {pred_c:>9,d} {producer_acc:>8.1f}% {user_acc:>8.1f}% {label_pct:>6.1f}%")
+
+    # AUC-ROC per class (from binned probability histograms)
+    def _auc_from_hist(hist_pos, hist_neg, n_points=100):
+        """Compute AUC-ROC and downsampled ROC curve from histograms."""
+        total_pos = hist_pos.sum()
+        total_neg = hist_neg.sum()
+        if total_pos == 0 or total_neg == 0:
+            return 0.0, [], []
+        # Sweep from high to low threshold → accumulate TP, FP
+        cum_tp, cum_fp = 0, 0
+        fpr_list, tpr_list = [0.0], [0.0]
+        for b in range(len(hist_pos) - 1, -1, -1):
+            cum_tp += hist_pos[b]
+            cum_fp += hist_neg[b]
+            fpr_list.append(cum_fp / total_neg)
+            tpr_list.append(cum_tp / total_pos)
+        # Trapezoidal AUC
+        fpr_arr = np.array(fpr_list)
+        tpr_arr = np.array(tpr_list)
+        auc = float(np.trapz(tpr_arr, fpr_arr))
+        # Downsample to n_points for JSON/chart
+        indices = np.linspace(0, len(fpr_arr) - 1, n_points, dtype=int)
+        fpr_ds = [round(float(fpr_arr[i]), 4) for i in indices]
+        tpr_ds = [round(float(tpr_arr[i]), 4) for i in indices]
+        return round(auc, 4), fpr_ds, tpr_ds
+
+    print()
+    print(f"  {'Class':<20s} {'AUC-ROC':>9s}")
+    print(f"  {'-'*30}")
+    auc_results = {}
+    for c in range(1, num_classes):
+        name = class_names.get(c, f"class_{c}")
+        auc_val, fpr_ds, tpr_ds = _auc_from_hist(auc_hist_pos[c], auc_hist_neg[c])
+        auc_results[name] = {"auc": auc_val, "fpr": fpr_ds, "tpr": tpr_ds}
+        print(f"  {name:<20s} {auc_val:>8.4f}")
+
+    # Mean AUC (macro)
+    mean_auc = np.mean([v["auc"] for v in auc_results.values()])
+    print(f"  {'Mean AUC':<20s} {mean_auc:>8.4f}")
 
     print(f"  {'='*60}")
 
@@ -273,16 +333,26 @@ def predict_split(
         "overall_agreement_pct": round(agree_pct, 2),
         "high_confidence_wrong": int(high_conf_wrong),
         "low_confidence_correct": int(low_conf_correct),
+        "mean_auc": round(float(mean_auc), 4),
         "per_class": {},
+        "auc_roc": auc_results,
     }
     for c in range(1, num_classes):
         name = class_names.get(c, f"class_{c}")
         total_c = int(per_class_total[c])
+        pred_c = int(per_class_predicted[c])
+        correct_c = int(per_class_correct[c])
+        pred_correct_c = int(per_class_pred_correct[c])
         summary["per_class"][name] = {
             "total_pixels": total_c,
-            "correct": int(per_class_correct[c]),
+            "predicted_pixels": pred_c,
+            "correct": correct_c,
             "wrong": int(per_class_disagree[c]),
-            "accuracy_pct": round(100 * int(per_class_correct[c]) / max(total_c, 1), 2),
+            "producer_accuracy_pct": round(100 * correct_c / max(total_c, 1), 2),
+            "user_accuracy_pct": round(100 * pred_correct_c / max(pred_c, 1), 2),
+            "auc": auc_results.get(name, {}).get("auc", 0),
+            # Keep legacy field for backward compat
+            "accuracy_pct": round(100 * correct_c / max(total_c, 1), 2),
         }
 
     summary_path = output_dir / "prediction_summary.json"

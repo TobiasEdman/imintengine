@@ -76,7 +76,9 @@ config/
 scripts/                    Standalone utility scripts
   generate_kustlinje_showcase.py   Generate coastline showcase images
   generate_grazing_showcase.py     Generate grazing showcase images
+  generate_lulc_showcase.py        Generate LULC tile gallery + chart data
   train_lulc.py                    Train LULC segmentation model
+  predict_lulc.py                  Run LULC inference, save per-tile predictions
   run_lulc_pipeline.py             Run LULC classification pipeline
   run_grazing_model.py             Run grazing model inference
   run_evaluation.py                Run model evaluation suite
@@ -142,6 +144,8 @@ Four analysis tabs with interactive Leaflet maps, vector overlays, and backgroun
 | **Bete** | Vastervik, Kalmar | LPIS grazing classification, NMD overlay |
 | **Kustlinje** | Ystad, Skane | 8-year shoreline vectors, erosion analysis, 2018/2025 toggle |
 
+A separate **training dashboard** (`imint/training/dashboard.py`) monitors the full pipeline in real-time: NMD pre-filter, seasonal fetch, data preparation, training, evaluation, and LULC inference with a per-tile gallery showing S2 pseudocolor, NMD labels, model predictions, and quality overlays.
+
 ---
 
 ## Quickstart (local, no DES account needed)
@@ -197,14 +201,19 @@ The ColonyOS executor reads `DATE`, `WEST`, `SOUTH`, `EAST`, `NORTH` from enviro
 # Prepare training data from NMD + Sentinel-2
 python scripts/prepare_lulc_data.py
 
-# Train
-python scripts/train_lulc.py --config config/environments/dev.env
+# Train (dev = M1 Max / MPS)
+make train-dev
 
-# Evaluate
-python scripts/run_evaluation.py
+# Run inference on val split (saves per-tile .npz with predictions)
+make predict-aux ARGS="--splits val"
+
+# Generate tile gallery for the training dashboard
+make lulc-gallery
 ```
 
-Training uses Prithvi-EO as backbone with UPerNet segmentation head. Class schema maps NMD land-cover codes to a hierarchical LULC taxonomy.
+Training uses Prithvi-EO-2.0 as backbone with UPerNet segmentation head and 5 auxiliary channels (tree height, volume, basal area, diameter, DEM) fused via late fusion. Best result: **44.14% mIoU** at epoch 42 (10-class schema).
+
+The training dashboard shows live progress and, after inference, a per-tile gallery comparing S2 pseudocolor (B8/B3/B4), NMD ground truth, model predictions, and a quality overlay highlighting correct/wrong/high-confidence-wrong pixels.
 
 ---
 
@@ -241,7 +250,7 @@ The engine code is untouched.
 
 | Model | Source | License | Use |
 |---|---|---|---|
-| **Prithvi-EO** | IBM/NASA | Apache 2.0 | LULC segmentation backbone |
+| **Prithvi-EO-2.0** | IBM/NASA | Apache 2.0 | LULC segmentation backbone (300M params) |
 | **CoastSeg SegFormer** | Vos et al. | GPL-3.0 | Shoreline classification (weights only) |
 | **YOLO11s** | Ultralytics | AGPL-3.0 | Object & vessel detection |
 | **COT MLP5** | Pirinen / RISE | TBD | Cloud optical thickness |

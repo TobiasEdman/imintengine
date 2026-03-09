@@ -720,10 +720,23 @@ def _html_lulc_section() -> str:
         Kör <code style="background:#1e293b; padding:2px 6px; border-radius:4px;">make predict-aux &amp;&amp; make lulc-showcase</code> för att generera
       </div>
     </div>
+    <div class="cards" id="lulc-auc-cards" style="margin-top: 12px; display: none;">
+      <div class="card">
+        <div class="card-label">Mean AUC-ROC</div>
+        <div class="card-value" id="lulc-mean-auc" style="color: #60a5fa">-</div>
+        <div class="card-sub">macro average</div>
+      </div>
+    </div>
     <div class="chart-grid">
       <div class="chart-box full-width">
-        <h3>Per-Class Accuracy (val)</h3>
+        <h3>Accuracy per klass — Producer (recall) vs User (precision)</h3>
         <canvas id="chart-lulc-perclass"></canvas>
+      </div>
+    </div>
+    <div class="chart-grid" style="margin-top: 16px;">
+      <div class="chart-box full-width">
+        <h3>ROC-kurvor per klass</h3>
+        <canvas id="chart-lulc-roc"></canvas>
       </div>
     </div>
   </div>"""
@@ -1484,6 +1497,7 @@ const LULC_CLASS_LEGEND = [
   {{color:'#FF0000',label:'Bebyggelse'}},{{color:'#0000FF',label:'Vatten'}}
 ];
 let _lulcChartCreated = false;
+let _lulcRocCreated = false;
 let _lulcGalleryRendered = false;
 
 // Init class legend
@@ -1519,12 +1533,13 @@ function updateLulcInference(summary, gallery) {{
   document.getElementById('lulc-disagree-sub').textContent =
     (summary.disagree_pixels || 0).toLocaleString() + ' pixlar';
 
-  // Per-class chart
+  // Per-class chart — grouped bars: producer accuracy (recall) + user accuracy (precision)
   if (summary.per_class && !_lulcChartCreated) {{
     _lulcChartCreated = true;
     const pc = summary.per_class;
     const labels = Object.keys(pc);
-    const values = labels.map(k => pc[k].accuracy_pct || 0);
+    const producerValues = labels.map(k => pc[k].producer_accuracy_pct || pc[k].accuracy_pct || 0);
+    const userValues = labels.map(k => pc[k].user_accuracy_pct || 0);
     const colors = LULC_CLASS_LEGEND.map(l => l.color);
     const ctx = document.getElementById('chart-lulc-perclass');
     if (ctx) {{
@@ -1532,16 +1547,112 @@ function updateLulcInference(summary, gallery) {{
         type: 'bar',
         data: {{
           labels: labels,
-          datasets: [{{ label: 'Accuracy (%)', data: values,
-            backgroundColor: colors.slice(0, labels.length),
-            borderWidth: 1 }}]
+          datasets: [
+            {{
+              label: 'Producer acc. (recall)',
+              data: producerValues,
+              backgroundColor: colors.slice(0, labels.length).map(c => c + 'CC'),
+              borderColor: colors.slice(0, labels.length),
+              borderWidth: 1,
+            }},
+            {{
+              label: 'User acc. (precision)',
+              data: userValues,
+              backgroundColor: colors.slice(0, labels.length).map(c => c + '66'),
+              borderColor: colors.slice(0, labels.length),
+              borderWidth: 1,
+              borderDash: [3, 3],
+            }}
+          ]
         }},
         options: {{
           indexAxis: 'y', responsive: true,
-          plugins: {{ legend: {{ display: false }} }},
+          plugins: {{
+            legend: {{ display: true, position: 'top', labels: {{ color: '#94a3b8', font: {{ size: 11 }} }} }},
+            tooltip: {{
+              callbacks: {{
+                label: function(ctx) {{
+                  const cls = labels[ctx.dataIndex];
+                  const info = pc[cls];
+                  if (ctx.datasetIndex === 0) {{
+                    return 'Producer: ' + ctx.raw.toFixed(1) + '% (' + (info.correct||0).toLocaleString() + '/' + (info.total_pixels||0).toLocaleString() + ' labeled px)';
+                  }} else {{
+                    return 'User: ' + ctx.raw.toFixed(1) + '% (' + (info.correct||0).toLocaleString() + '/' + (info.predicted_pixels||0).toLocaleString() + ' predicted px)';
+                  }}
+                }}
+              }}
+            }}
+          }},
           scales: {{
-            x: {{ beginAtZero: true, max: 100, title: {{ display: true, text: '%' }} }},
-            y: {{ grid: {{ display: false }} }}
+            x: {{ beginAtZero: true, max: 100, title: {{ display: true, text: '%', color: '#94a3b8' }}, ticks: {{ color: '#94a3b8' }}, grid: {{ color: '#1e293b' }} }},
+            y: {{ grid: {{ display: false }}, ticks: {{ color: '#94a3b8' }} }}
+          }}
+        }}
+      }});
+    }}
+  }}
+
+  // AUC-ROC curves
+  if (summary.auc_roc && !_lulcRocCreated) {{
+    _lulcRocCreated = true;
+    // Show AUC card
+    const aucCards = document.getElementById('lulc-auc-cards');
+    if (aucCards) aucCards.style.display = '';
+    document.getElementById('lulc-mean-auc').textContent =
+      (summary.mean_auc || 0).toFixed(4);
+
+    const roc = summary.auc_roc;
+    const classKeys = Object.keys(roc);
+    const rocColors = LULC_CLASS_LEGEND.map(l => l.color);
+    const datasets = classKeys.map(function(cls, idx) {{
+      const curve = roc[cls];
+      const data = curve.fpr.map(function(f, j) {{ return {{x: f, y: curve.tpr[j]}}; }});
+      return {{
+        label: cls + ' (AUC ' + curve.auc.toFixed(3) + ')',
+        data: data,
+        borderColor: rocColors[idx] || '#94a3b8',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.1,
+      }};
+    }});
+    // Add diagonal reference line
+    datasets.push({{
+      label: 'Slump (AUC 0.5)',
+      data: [{{x:0,y:0}}, {{x:1,y:1}}],
+      borderColor: '#4b5563',
+      borderDash: [5, 5],
+      borderWidth: 1,
+      pointRadius: 0,
+    }});
+
+    const rocCtx = document.getElementById('chart-lulc-roc');
+    if (rocCtx) {{
+      new Chart(rocCtx, {{
+        type: 'scatter',
+        data: {{ datasets: datasets }},
+        options: {{
+          showLine: true,
+          responsive: true,
+          aspectRatio: 1.2,
+          plugins: {{
+            legend: {{
+              display: true, position: 'right',
+              labels: {{ color: '#94a3b8', font: {{ size: 10 }}, boxWidth: 12, padding: 6 }}
+            }},
+          }},
+          scales: {{
+            x: {{
+              type: 'linear', min: 0, max: 1,
+              title: {{ display: true, text: 'False Positive Rate', color: '#94a3b8' }},
+              ticks: {{ color: '#94a3b8' }}, grid: {{ color: '#1e293b' }}
+            }},
+            y: {{
+              type: 'linear', min: 0, max: 1,
+              title: {{ display: true, text: 'True Positive Rate', color: '#94a3b8' }},
+              ticks: {{ color: '#94a3b8' }}, grid: {{ color: '#1e293b' }}
+            }}
           }}
         }}
       }});
