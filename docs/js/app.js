@@ -146,7 +146,7 @@
             return;
         }
         if (p.label === 'vessel') {
-            var html = '<b>Fartyg</b><br>Konfidens: ' + Math.round((p.confidence||0)*100) + '%';
+            var html = '<b>Fartyg</b><br>Konfidens: ' + Math.round((p.confidence||p.score||0)*100) + '%';
             if (p.vessel_type) html += '<br>Typ: ' + p.vessel_type;
             if (typeof p.speed_knots === 'number') html += '<br>Fart: ' + p.speed_knots.toFixed(1) + ' kn';
             if (typeof p.heading_deg === 'number') html += '<br>Kurs: ' + Math.round(p.heading_deg) + '°';
@@ -640,28 +640,25 @@
                         }
                     });
 
-                    // Size distribution stacked
-                    new Chart(document.getElementById('chart-grazing-size'), {
+                    // NMD within LPIS
+                    new Chart(document.getElementById('chart-grazing-nmd'), {
                         type: 'bar',
                         data: {
-                            labels: g.size_distribution.labels,
-                            datasets: g.size_distribution.classes.map(function(cls) {
-                                return {
-                                    label: cls.label, data: cls.data,
-                                    backgroundColor: cls.color, borderColor: cls.border, borderWidth: 1
-                                };
-                            })
+                            labels: g.nmd_within_lpis.labels,
+                            datasets: [{
+                                label: 'Andel (%)',
+                                data: g.nmd_within_lpis.fractions,
+                                backgroundColor: g.nmd_within_lpis.colors,
+                                borderColor: g.nmd_within_lpis.borders,
+                                borderWidth: 1
+                            }]
                         },
-                        options: {
-                            responsive: true,
-                            plugins: {legend:{position:'top'}},
-                            scales: {
-                                x: {stacked:true, title:{display:true, text:'Blockstorlek'},
-                                    grid:{color:'rgba(255,255,255,0.04)'}},
-                                y: {stacked:true, beginAtZero:true, title:{display:true, text:'Antal block'},
+                        options: Object.assign({}, gBarOpts, {
+                            scales: Object.assign({}, gBarOpts.scales, {
+                                x: {beginAtZero:true, max:100, title:{display:true, text:'Andel (%)'},
                                     grid:{color:'rgba(255,255,255,0.04)'}}
-                            }
-                        }
+                            })
+                        })
                     });
                 }
 

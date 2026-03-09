@@ -80,8 +80,9 @@ It's embedded as an iframe on **digitalearth.se**.
 | Tab | Date | Area | Key analysis |
 |-----|------|------|--------------|
 | Brand | 2018-07-24 | Ljusdal, Gavleborg | Wildfire detection (dNBR, Prithvi segmentation) |
-| Marin | 2025-07-10 | Hunnebostrand, Bohuslan | Vessel detection (YOLO, heatmap) |
-| Betesmark | 2025-06-14 | Oland | Grazing classification (CNN-biLSTM, LPIS) |
+| Marin — Fritid | 2025-07-10 | Hunnebostrand, Bohuslan | Recreational vessel detection (YOLO, heatmap) |
+| Marin — Kommersiell | 2025-07-15 | Kalmarsund, Oland | Commercial shipping (YOLO + AI2, dual heatmaps, vessel attributes) |
+| Betesmark | 2025-06-14 | Oland | Grazing classification (CNN-biLSTM, LPIS), NMD cross-reference |
 | Kustlinje | 2025-06-14 | Ystad, Skane | Shoreline change 2018-2025 (CoastSat, NDWI) |
 
 ### Showcase Files
@@ -102,21 +103,24 @@ docs/
     tab-data.js                ← Shared legends, GeoJSON paths, tab panel configs
     app.js                     ← Reusable components, map init, event handlers
   data/
-    vessels.geojson            ← YOLO vessel detection polygons
+    vessels.geojson            ← YOLO vessel detection polygons (leisure)
+    mc_vessels.geojson         ← YOLO vessel detection polygons (commercial)
+    mc_ai2_vessels.geojson     ← AI2 vessel detections with attributes
     lpis.geojson               ← LPIS grazing block polygons
     erosion.geojson            ← Coastline erosion vectors
     segformer-shorelines.geojson ← SegFormer shoreline vectors
     coastline-shorelines.geojson ← Index-based shoreline vectors
-    chart-data.json            ← NMD cross-reference chart data
+    chart-data.json            ← Chart data (wildfire, grazing NMD/confidence)
   showcase/
     fire/                      ← 9 PNGs (Ljusdal wildfire)
-    marine/                    ← 7 PNGs + sjokort (Hunnebostrand)
-    grazing/                   ← 7 PNGs (Lund area)
+    marine/                    ← 7 PNGs + sjokort (Hunnebostrand, leisure)
+    marine_commercial/         ← 10 PNGs + sjokort (Kalmarsund, commercial)
+    grazing/                   ← 7 PNGs (Oland)
     kustlinje/                 ← 7 PNGs (Ystad coast)
 ```
 
 Key files:
-- **`tab-data.js`** — `LEGENDS` (shared legend definitions reused across tabs), `GEOJSON_FILES` (path map), `TAB_CONFIG` (structured config for all 4 tabs with panels, summary cards, images)
+- **`tab-data.js`** — `LEGENDS` (shared legend definitions reused across tabs), `GEOJSON_FILES` (path map), `TAB_CONFIG` (structured config for all 5 tabs with panels, summary cards, images)
 - **`app.js`** — `renderTabDynamic()` builds each tab's DOM from config; `initMaps()` creates Leaflet maps with overlays and sync; `initCharts()` loads chart data via fetch
 
 ### Generating Showcase Images
@@ -129,9 +133,12 @@ Each tab has a generation script that fetches Sentinel-2 data, runs analyzers, a
 
 # Kustlinje showcase (Ystad coast, 2018-2025)
 .venv/bin/python scripts/generate_kustlinje_showcase.py
+
+# Marine commercial showcase (Kalmarsund, YOLO + AI2)
+.venv/bin/python scripts/generate_marine_commercial_showcase.py
 ```
 
-Fire and marine showcases were generated via the standard analysis pipeline (`executors/local.py`).
+Fire and marine leisure showcases were generated via the standard analysis pipeline (`executors/local.py`).
 
 ### Adding a New Showcase Tab
 
@@ -159,7 +166,7 @@ Supported geometry types:
 - **Polygon** — vessel detections, LPIS parcels (colored by `predicted_class`)
 - **LineString** — coastline shorelines (colored by `year`)
 
-The `makeGeoJSON()` function in `app.js` auto-detects the feature type and applies appropriate styling.
+The `makeGeoJSON()` function in `app.js` auto-detects the feature type and applies appropriate styling. All GeoJSON files use pixel y-down coordinates (row 0 = top); the universal `coordsToLatLng` function in `makeGeoJSON()` flips y for Leaflet CRS.Simple (y-up).
 
 ### Local Preview
 

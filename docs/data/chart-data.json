@@ -195,6 +195,16 @@
         "rgba(34,139,34,0.85)"
       ]
     },
+    "nmd_within_lpis": {
+      "labels": ["Gräsmark / Öppen mark", "Våtmark", "Åkermark"],
+      "fractions": [92.4, 6.6, 1.0],
+      "colors": [
+        "rgba(34,139,34,0.85)",
+        "rgba(139,90,43,0.85)",
+        "rgba(255,215,0,0.85)"
+      ],
+      "borders": ["#228B22", "#8B5A2B", "#FFD700"]
+    },
     "size_distribution": {
       "labels": ["< 0.5 ha", "0.5–1 ha", "1–3 ha", "3–5 ha", "5–10 ha"],
       "classes": [
