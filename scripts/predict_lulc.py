@@ -154,6 +154,22 @@ def predict_split(
                 aux_parts.append(sample[name].unsqueeze(0).to(device))
         aux = torch.cat(aux_parts, dim=1) if aux_parts else None
 
+        # Extract S2 NIR false-color for showcase: B8(NIR), B3(Green), B4(Red)
+        # Band order in dataset: B02(0), B03(1), B04(2), B8A(3), B11(4), B12(5)
+        # Visualization: R=B8A(idx3), G=B03(idx1), B=B04(idx2)
+        # Stretch: min=400 DN, max=[4000, 1500, 1500] DN
+        s2_raw = image.squeeze(0).cpu().numpy()  # (6, H, W)
+        # Denormalize all 6 bands back to DN scale: dn = norm * std + mean
+        _MEAN = np.array([1087.0, 1342.0, 1433.0, 2734.0, 1958.0, 1363.0])
+        _STD = np.array([2248.0, 2179.0, 2178.0, 1850.0, 1242.0, 1049.0])
+        for b in range(s2_raw.shape[0]):
+            s2_raw[b] = s2_raw[b] * _STD[b] + _MEAN[b]
+        # NIR false-color: R=B8A, G=B03, B=B04
+        _MIN = 400.0
+        _MAX = np.array([4000.0, 1500.0, 1500.0])
+        nir_fc = np.stack([s2_raw[3], s2_raw[1], s2_raw[2]], axis=-1)  # (H,W,3)
+        s2_rgb = np.clip((nir_fc - _MIN) / (_MAX - _MIN) * 255, 0, 255).astype(np.uint8)
+
         with torch.no_grad():
             logits = model(image_5d, aux=aux).contiguous()
 
@@ -204,6 +220,7 @@ def predict_split(
                 label=label.astype(np.uint8),
                 disagree=disagree,
                 entropy=entropy,
+                s2_rgb=s2_rgb,
                 easting=easting,
                 northing=northing,
             )

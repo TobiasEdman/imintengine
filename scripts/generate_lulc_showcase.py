@@ -3,24 +3,26 @@
 scripts/generate_lulc_showcase.py — Generate LULC showcase images + chart data
 
 Reads prediction .npz files (from predict_lulc.py) and generates:
-  - Per-tile showcase images (NMD label, prediction, confidence, entropy, disagree)
+  - Per-tile gallery images: S2 RGB, NMD label, prediction, quality overlay
   - Chart data JSON for the dashboard (per-class IoU and accuracy)
+  - Tile gallery JSON listing all tiles with paths and metrics
 
-Picks a representative tile (highest disagreement + most diverse classes)
-and renders it as showcase images for the dashboard Leaflet panels.
+Gallery mode (default): picks N diverse tiles and generates 4 images each
+for the per-row dashboard layout: S2 pseudocolor | NMD | LULC | Quality.
 
 Usage:
-    # Generate from val split predictions
+    # Generate gallery from val split predictions
     python scripts/generate_lulc_showcase.py \\
         --predictions-dir data/predictions/val \\
         --output-dir docs/showcase/lulc \\
-        --chart-output docs/data/lulc-data.json
+        --chart-output docs/data/lulc-data.json \\
+        --num-tiles 12
 
-    # Use a specific tile
+    # Placeholder only (no predictions needed)
     python scripts/generate_lulc_showcase.py \\
         --predictions-dir data/predictions/val \\
-        --tile tile_0042_pred.npz \\
-        --output-dir docs/showcase/lulc
+        --chart-output docs/data/lulc-data.json \\
+        --placeholder-only
 """
 from __future__ import annotations
 
@@ -81,15 +83,7 @@ def _hex_to_rgba(hex_color: str, alpha: float = 0.85) -> str:
 
 
 def render_class_map(class_map: np.ndarray, output_path: str) -> str:
-    """Render a class index map as a color-coded PNG.
-
-    Args:
-        class_map: (H, W) uint8 with class indices 0-10.
-        output_path: Output PNG path.
-
-    Returns:
-        Output file path.
-    """
+    """Render a class index map as a color-coded PNG."""
     from PIL import Image
 
     max_class = max(LULC_10_COLORS.keys())
@@ -100,7 +94,6 @@ def render_class_map(class_map: np.ndarray, output_path: str) -> str:
     clamped = np.clip(class_map, 0, max_class)
     rgb = palette[clamped]
     Image.fromarray(rgb).save(output_path)
-    print(f"    saved: {output_path}")
     return output_path
 
 
@@ -111,18 +104,7 @@ def render_heatmap(
     vmin: float = 0.0,
     vmax: float = 1.0,
 ) -> str:
-    """Render a float array as a color-mapped heatmap PNG.
-
-    Args:
-        arr: (H, W) float array.
-        output_path: Output PNG path.
-        cmap_name: Matplotlib colormap name.
-        vmin: Minimum value for normalization.
-        vmax: Maximum value for normalization.
-
-    Returns:
-        Output file path.
-    """
+    """Render a float array as a color-mapped heatmap PNG."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.cm as cm
@@ -132,7 +114,6 @@ def render_heatmap(
     cmap = cm.get_cmap(cmap_name)
     rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
     Image.fromarray(rgba).save(output_path)
-    print(f"    saved: {output_path}")
     return output_path
 
 
@@ -143,18 +124,7 @@ def render_disagree_overlay(
     output_path: str,
     conf_threshold: float = 0.8,
 ) -> str:
-    """Render disagreement overlay: green=correct, red=wrong, magenta=high-conf wrong.
-
-    Args:
-        prediction: (H, W) uint8 predicted class indices.
-        label: (H, W) uint8 ground truth class indices.
-        confidence: (H, W) float confidence scores.
-        output_path: Output PNG path.
-        conf_threshold: Threshold for high-confidence wrong (default 0.8).
-
-    Returns:
-        Output file path.
-    """
+    """Render disagreement overlay: green=correct, red=wrong, magenta=high-conf wrong."""
     from PIL import Image
 
     h, w = prediction.shape
@@ -167,134 +137,222 @@ def render_disagree_overlay(
     regular_wrong = wrong & ~high_conf_wrong
     background = ~valid
 
-    # Background: dark gray
     rgb[background] = [40, 40, 40]
-    # Correct: green
     rgb[correct] = [46, 204, 64]
-    # Wrong: red
     rgb[regular_wrong] = [255, 65, 54]
-    # High-confidence wrong: bright magenta (label cleaning candidates)
     rgb[high_conf_wrong] = [255, 0, 255]
 
     Image.fromarray(rgb).save(output_path)
-    print(f"    saved: {output_path}")
     return output_path
 
 
-def pick_representative_tile(predictions_dir: Path) -> Path | None:
-    """Pick the most interesting tile for showcase — highest disagree ratio
-    with at least 4 distinct classes present.
+def render_s2_rgb(s2_rgb: np.ndarray, output_path: str) -> str:
+    """Save pre-rendered S2 RGB uint8 array as PNG."""
+    from PIL import Image
+    Image.fromarray(s2_rgb).save(output_path)
+    return output_path
 
-    Args:
-        predictions_dir: Directory containing *_pred.npz files.
 
-    Returns:
-        Path to the selected npz file, or None if no files found.
-    """
+# ── Multi-tile selection ──────────────────────────────────────────────────
+
+
+def score_tiles(predictions_dir: Path) -> list[dict]:
+    """Score all tiles by diversity and disagreement, return sorted list."""
     npz_files = sorted(predictions_dir.glob("*_pred.npz"))
     if not npz_files:
-        return None
+        return []
 
-    best_file = None
-    best_score = -1.0
-
+    scored = []
     for f in npz_files:
         try:
             data = np.load(f)
             label = data["label"]
             disagree = data["disagree"]
+            prediction = data["prediction"]
+            confidence = data["confidence"].astype(np.float32)
 
             valid = label > 0
-            n_valid = valid.sum()
+            n_valid = int(valid.sum())
             if n_valid < 100:
                 continue
 
-            # Disagreement ratio
-            disagree_ratio = disagree.sum() / max(n_valid, 1)
-
-            # Class diversity (number of unique classes present)
+            n_disagree = int(disagree.sum())
+            disagree_ratio = n_disagree / max(n_valid, 1)
             unique_classes = len(np.unique(label[valid]))
 
-            # Score: balance disagreement with diversity
-            # We want tiles that show interesting disagreement across multiple classes
-            score = disagree_ratio * 0.6 + (unique_classes / 10.0) * 0.4
+            # High-confidence wrong count
+            high_conf_wrong = int(((confidence > 0.8) & disagree).sum())
 
-            if score > best_score:
-                best_score = score
-                best_file = f
-        except Exception:
+            # Accuracy
+            accuracy = 1.0 - disagree_ratio
+
+            # Dominant class
+            unique, counts = np.unique(label[valid], return_counts=True)
+            dominant_class = int(unique[counts.argmax()])
+            dominant_name = LULC_10_NAMES_SV.get(dominant_class, f"Klass {dominant_class}")
+
+            # Score: balance class diversity with interesting disagreement
+            score = (unique_classes / 10.0) * 0.5 + disagree_ratio * 0.3 + (n_valid / 50176) * 0.2
+
+            scored.append({
+                "path": f,
+                "name": f.stem.replace("_pred", ""),
+                "score": score,
+                "n_valid": n_valid,
+                "n_disagree": n_disagree,
+                "disagree_pct": round(disagree_ratio * 100, 1),
+                "accuracy_pct": round(accuracy * 100, 1),
+                "unique_classes": unique_classes,
+                "high_conf_wrong": high_conf_wrong,
+                "dominant_class": dominant_name,
+                "has_s2_rgb": "s2_rgb" in data.files,
+            })
+        except Exception as e:
+            print(f"    WARNING: Could not score {f.name}: {e}")
             continue
 
-    return best_file
+    # Sort by score descending, then pick diverse tiles
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored
+
+
+def select_diverse_tiles(scored: list[dict], n: int = 12) -> list[dict]:
+    """Select N tiles that are diverse in dominant class and disagreement."""
+    if len(scored) <= n:
+        return scored
+
+    selected = []
+    seen_dominant = set()
+
+    # First pass: pick tiles with unique dominant classes
+    for tile in scored:
+        if len(selected) >= n:
+            break
+        dom = tile["dominant_class"]
+        if dom not in seen_dominant:
+            selected.append(tile)
+            seen_dominant.add(dom)
+
+    # Second pass: fill remaining from top-scored tiles
+    for tile in scored:
+        if len(selected) >= n:
+            break
+        if tile not in selected:
+            selected.append(tile)
+
+    return selected[:n]
+
+
+# ── Gallery generation ────────────────────────────────────────────────────
+
+
+def generate_tile_gallery(
+    tiles: list[dict],
+    output_dir: Path,
+) -> list[dict]:
+    """Generate gallery images for selected tiles.
+
+    For each tile generates:
+      - tile_N_s2.png     — Sentinel-2 pseudocolor RGB
+      - tile_N_nmd.png    — NMD ground truth (colored)
+      - tile_N_pred.png   — Model prediction (colored)
+      - tile_N_quality.png — Disagreement overlay (green/red/magenta)
+
+    Returns list of tile metadata dicts for the gallery JSON.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    gallery = []
+    for i, tile_info in enumerate(tiles):
+        tile_path = tile_info["path"]
+        data = np.load(tile_path)
+
+        prefix = f"tile_{i:02d}"
+        print(f"  [{i+1}/{len(tiles)}] {tile_info['name']}  "
+              f"acc={tile_info['accuracy_pct']}%  "
+              f"classes={tile_info['unique_classes']}  "
+              f"dom={tile_info['dominant_class']}")
+
+        prediction = data["prediction"]
+        confidence = data["confidence"].astype(np.float32)
+        label = data["label"]
+
+        # 1. S2 RGB (from predict_lulc.py or fallback to confidence heatmap)
+        if "s2_rgb" in data.files:
+            s2_path = render_s2_rgb(data["s2_rgb"], str(output_dir / f"{prefix}_s2.png"))
+        else:
+            # Fallback: render confidence heatmap if no S2 RGB available
+            s2_path = render_heatmap(
+                confidence, str(output_dir / f"{prefix}_s2.png"),
+                cmap_name="viridis", vmin=0.0, vmax=1.0,
+            )
+
+        # 2. NMD ground truth
+        nmd_path = render_class_map(label, str(output_dir / f"{prefix}_nmd.png"))
+
+        # 3. Model prediction
+        pred_path = render_class_map(prediction, str(output_dir / f"{prefix}_pred.png"))
+
+        # 4. Quality overlay (disagree map)
+        quality_path = render_disagree_overlay(
+            prediction, label, confidence,
+            str(output_dir / f"{prefix}_quality.png"),
+        )
+
+        gallery.append({
+            "index": i,
+            "name": tile_info["name"],
+            "s2": f"showcase/lulc/{prefix}_s2.png",
+            "nmd": f"showcase/lulc/{prefix}_nmd.png",
+            "pred": f"showcase/lulc/{prefix}_pred.png",
+            "quality": f"showcase/lulc/{prefix}_quality.png",
+            "accuracy_pct": tile_info["accuracy_pct"],
+            "disagree_pct": tile_info["disagree_pct"],
+            "unique_classes": tile_info["unique_classes"],
+            "high_conf_wrong": tile_info["high_conf_wrong"],
+            "dominant_class": tile_info["dominant_class"],
+        })
+
+    return gallery
+
+
+# ── Also keep single-tile showcase for Leaflet panels ────────────────────
 
 
 def generate_showcase_images(tile_path: Path, output_dir: Path) -> dict:
-    """Generate all showcase images from a prediction tile.
-
-    Args:
-        tile_path: Path to *_pred.npz file.
-        output_dir: Output directory for images.
-
-    Returns:
-        Dict with image dimensions (imgH, imgW).
-    """
+    """Generate single-tile showcase images (backward compat)."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     data = np.load(tile_path)
     prediction = data["prediction"]
     confidence = data["confidence"].astype(np.float32)
     label = data["label"]
-    disagree = data["disagree"]
     entropy = data["entropy"].astype(np.float32)
 
     h, w = prediction.shape
-    print(f"\n  Generating showcase images from: {tile_path.name}")
-    print(f"  Tile size: {w}x{h}")
 
-    # 1. NMD ground truth (label)
     render_class_map(label, str(output_dir / "nmd_label.png"))
-
-    # 2. Model prediction
     render_class_map(prediction, str(output_dir / "prediction.png"))
-
-    # 3. Confidence heatmap (RdYlGn: red=low, green=high)
     render_heatmap(confidence, str(output_dir / "confidence.png"),
                    cmap_name="RdYlGn", vmin=0.0, vmax=1.0)
-
-    # 4. Entropy heatmap (YlOrRd: yellow=certain, red=uncertain)
     max_entropy = float(entropy.max()) if entropy.max() > 0 else 1.0
     render_heatmap(entropy, str(output_dir / "entropy.png"),
                    cmap_name="YlOrRd", vmin=0.0, vmax=max_entropy)
-
-    # 5. Disagreement overlay
     render_disagree_overlay(prediction, label, confidence,
                             str(output_dir / "disagree.png"))
 
-    # Print tile stats
-    valid = label > 0
-    n_valid = valid.sum()
-    n_disagree = disagree.sum()
-    n_high_conf_wrong = ((confidence > 0.8) & disagree).sum()
-    print(f"\n  Tile stats:")
-    print(f"    Valid pixels:       {n_valid:,}")
-    print(f"    Disagree:           {n_disagree:,} ({100*n_disagree/max(n_valid,1):.1f}%)")
-    print(f"    High-conf wrong:    {n_high_conf_wrong:,}")
-    print(f"    Mean confidence:    {confidence[valid].mean():.3f}")
-    print(f"    Mean entropy:       {entropy[valid].mean():.3f}")
+    if "s2_rgb" in data.files:
+        render_s2_rgb(data["s2_rgb"], str(output_dir / "s2_rgb.png"))
 
     return {"imgH": h, "imgW": w}
 
 
-def generate_chart_data(predictions_dir: Path, chart_output: Path) -> dict:
-    """Generate chart data JSON from prediction_summary.json.
+# ── Chart data generation ────────────────────────────────────────────────
 
-    Args:
-        predictions_dir: Directory containing prediction_summary.json.
-        chart_output: Output path for lulc-data.json.
 
-    Returns:
-        The chart data dict.
-    """
+def generate_chart_data(predictions_dir: Path, chart_output: Path,
+                        gallery: list[dict] | None = None) -> dict:
+    """Generate chart data JSON from prediction_summary.json."""
     summary_path = predictions_dir / "prediction_summary.json"
     if not summary_path.exists():
         print(f"  WARNING: {summary_path} not found, generating placeholder data")
@@ -303,14 +361,12 @@ def generate_chart_data(predictions_dir: Path, chart_output: Path) -> dict:
     with open(summary_path) as f:
         summary = json.load(f)
 
-    # Build per-class arrays
     labels = []
     iou_values = []
     acc_values = []
     colors = []
 
     per_class = summary.get("per_class", {})
-    # Map English class names to Swedish + colors
     _EN_TO_SV = {
         "forest_pine": ("Tallskog", "#006400"),
         "forest_spruce": ("Granskog", "#228B22"),
@@ -329,9 +385,6 @@ def generate_chart_data(predictions_dir: Path, chart_output: Path) -> dict:
         labels.append(sv_name)
         acc_values.append(cls_data.get("accuracy_pct", 0))
         colors.append(_hex_to_rgba(hex_color))
-
-        # IoU is not in prediction_summary.json, use accuracy as proxy
-        # (real IoU comes from evaluate.py — we include it if available)
         iou_values.append(cls_data.get("iou_pct", cls_data.get("accuracy_pct", 0)))
 
     chart_data = {
@@ -356,6 +409,10 @@ def generate_chart_data(predictions_dir: Path, chart_output: Path) -> dict:
         },
     }
 
+    # Include gallery tile list
+    if gallery:
+        chart_data["gallery"] = gallery
+
     chart_output.parent.mkdir(parents=True, exist_ok=True)
     with open(chart_output, "w") as f:
         json.dump(chart_data, f, indent=2)
@@ -372,7 +429,6 @@ def _placeholder_chart_data(chart_output: Path) -> dict:
                   "#8B5A2B", "#FFD700", "#D2B48C", "#FF0000", "#0000FF"]
     colors = [_hex_to_rgba(h) for h in hex_colors]
 
-    # Placeholder values from training val metrics (43.27% mIoU)
     iou_placeholder = [55.2, 48.1, 9.9, 24.3, 33.5, 41.2, 62.8, 35.7, 58.4, 63.6]
     acc_placeholder = [72.1, 65.3, 18.4, 38.9, 52.1, 58.7, 78.3, 51.2, 74.6, 82.1]
 
@@ -396,6 +452,7 @@ def _placeholder_chart_data(chart_output: Path) -> dict:
             "values": acc_placeholder,
             "colors": colors,
         },
+        "gallery": [],
     }
 
     chart_output.parent.mkdir(parents=True, exist_ok=True)
@@ -416,8 +473,10 @@ def main():
                         help="Output directory for showcase images")
     parser.add_argument("--chart-output", type=str, default="docs/data/lulc-data.json",
                         help="Output path for chart data JSON")
+    parser.add_argument("--num-tiles", type=int, default=12,
+                        help="Number of tiles for gallery (default: 12)")
     parser.add_argument("--tile", type=str, default=None,
-                        help="Specific tile .npz file to use (default: auto-pick)")
+                        help="Specific tile .npz file for single-tile mode")
     parser.add_argument("--placeholder-only", action="store_true",
                         help="Only generate placeholder chart data, no images")
 
@@ -438,29 +497,34 @@ def main():
         print("\n  Done (placeholder only).\n")
         return
 
-    # Generate chart data from prediction summary
-    generate_chart_data(predictions_dir, chart_output)
+    # Score all tiles
+    print(f"\n  Scoring tiles...")
+    scored = score_tiles(predictions_dir)
+    if not scored:
+        print(f"  WARNING: No prediction tiles found in {predictions_dir}")
+        print(f"           Run `make predict-aux` first.")
+        _placeholder_chart_data(chart_output)
+        return
 
-    # Pick or use specified tile
-    if args.tile:
-        tile_path = predictions_dir / args.tile
-        if not tile_path.exists():
-            print(f"  ERROR: Tile not found: {tile_path}")
-            sys.exit(1)
-    else:
-        tile_path = pick_representative_tile(predictions_dir)
-        if tile_path is None:
-            print(f"  WARNING: No prediction tiles found in {predictions_dir}")
-            print(f"           Run `make predict-aux` first to generate predictions.")
-            print(f"           Generated placeholder chart data only.\n")
-            return
+    print(f"  Found {len(scored)} valid tiles")
 
-    print(f"\n  Selected tile: {tile_path.name}")
+    # Select diverse tiles for gallery
+    selected = select_diverse_tiles(scored, n=args.num_tiles)
+    print(f"  Selected {len(selected)} tiles for gallery\n")
 
-    # Generate showcase images
-    dims = generate_showcase_images(tile_path, output_dir)
-    print(f"\n  Image dimensions: {dims['imgW']}x{dims['imgH']}")
-    print(f"\n  Done.\n")
+    # Generate gallery images
+    gallery = generate_tile_gallery(selected, output_dir)
+
+    # Also generate single-tile showcase (best tile) for Leaflet panels
+    best_tile = scored[0]["path"]
+    print(f"\n  Generating single-tile showcase from: {best_tile.name}")
+    generate_showcase_images(best_tile, output_dir)
+
+    # Generate chart data + gallery JSON
+    generate_chart_data(predictions_dir, chart_output, gallery=gallery)
+
+    print(f"\n  Gallery: {len(gallery)} tiles")
+    print(f"  Done.\n")
 
 
 if __name__ == "__main__":
