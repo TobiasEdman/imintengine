@@ -175,6 +175,44 @@
       }
     ]
   },
+  "grazing": {
+    "classification": {
+      "labels": ["Aktiv betesmark", "Ingen aktivitet", "Analysfel"],
+      "counts": [68, 8, 4],
+      "areas": [98.8, 17.1, 46.4],
+      "colors": ["rgba(34,139,34,0.85)", "rgba(255,165,0,0.85)", "rgba(128,128,128,0.85)"],
+      "borders": ["#228B22", "#FFA500", "#808080"]
+    },
+    "confidence": {
+      "labels": ["0.50–0.60", "0.60–0.70", "0.70–0.80", "0.80–0.90", "0.90–1.00"],
+      "counts": [14, 21, 16, 12, 13],
+      "areas": [11.0, 22.0, 33.0, 14.7, 35.1],
+      "colors": [
+        "rgba(255,99,71,0.85)",
+        "rgba(255,165,0,0.85)",
+        "rgba(255,215,0,0.85)",
+        "rgba(144,238,144,0.85)",
+        "rgba(34,139,34,0.85)"
+      ]
+    },
+    "size_distribution": {
+      "labels": ["< 0.5 ha", "0.5–1 ha", "1–3 ha", "3–5 ha", "5–10 ha"],
+      "classes": [
+        {
+          "label": "Aktiv betesmark",
+          "data": [23, 17, 18, 7, 3],
+          "color": "rgba(34,139,34,0.85)",
+          "border": "#228B22"
+        },
+        {
+          "label": "Ingen aktivitet",
+          "data": [2, 2, 2, 1, 1],
+          "color": "rgba(255,165,0,0.85)",
+          "border": "#FFA500"
+        }
+      ]
+    }
+  },
   "l2": {
     "labels": [
       "Tallskog",

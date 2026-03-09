@@ -117,6 +117,16 @@
             var cc = {'erosion':'#d73027','stable':'#ffffbf','accumulation':'#1a9850'};
             return {color: cc[p.change_type] || '#fff', weight: 3.5, opacity: 0.95, fill: false};
         }
+        // AI2 vessel with speed attribute — color by speed
+        if (p.label === 'vessel' && typeof p.speed_knots === 'number') {
+            var spd = p.speed_knots;
+            var vc = spd <= 0.5 ? '#50A0FF' : spd < 5 ? '#FFE600' : spd < 15 ? '#FF6600' : '#FF0000';
+            return {color: vc, weight: 2.5, fillColor: vc, fillOpacity: 0.25, opacity: 1};
+        }
+        // YOLO vessel (no speed attribute)
+        if (p.label === 'vessel') {
+            return {color: '#E6119D', weight: 2, fillOpacity: 0.15, opacity: 1};
+        }
         var cls = p.predicted_class;
         var color = '#888888';
         if (cls === 1) color = '#E6119D';
@@ -135,6 +145,15 @@
             layer.bindPopup('<b>' + (labels[p.change_type]||p.change_type) + '</b><br>Förändring: ' + p.change_m + ' m');
             return;
         }
+        if (p.label === 'vessel') {
+            var html = '<b>Fartyg</b><br>Konfidens: ' + Math.round((p.confidence||0)*100) + '%';
+            if (p.vessel_type) html += '<br>Typ: ' + p.vessel_type;
+            if (typeof p.speed_knots === 'number') html += '<br>Fart: ' + p.speed_knots.toFixed(1) + ' kn';
+            if (typeof p.heading_deg === 'number') html += '<br>Kurs: ' + Math.round(p.heading_deg) + '°';
+            if (typeof p.length_m === 'number') html += '<br>Längd: ' + Math.round(p.length_m) + ' m';
+            layer.bindPopup(html);
+            return;
+        }
         if (p.class_label) {
             layer.bindPopup(
                 '<b>Block ' + (p.blockid || '') + '</b><br>' +
@@ -143,12 +162,22 @@
         }
     }
 
-    function makeGeoJSON(gjData, map) {
-        return L.geoJSON(gjData, {
+    /**
+     * Convert pixel-space GeoJSON (y-down) to Leaflet CRS.Simple (y-up).
+     * All showcase GeoJSON uses image pixel coordinates where row 0 is
+     * the top of the image, but Leaflet CRS.Simple has lat 0 at the
+     * bottom. The coordsToLatLng callback flips y: lat = imgH - row.
+     */
+    function makeGeoJSON(gjData, map, imgH) {
+        var gjLayer = L.geoJSON(gjData, {
             style: gjStyle,
             onEachFeature: gjPopup,
-            coordsToLatLng: function(coords) { return L.latLng(coords[1], coords[0]); }
+            coordsToLatLng: function(coords) {
+                return L.latLng(imgH - coords[1], coords[0]);
+            }
         }).addTo(map);
+
+        return gjLayer;
     }
 
     // ── Map initialization ───────────────────────────────────────────
@@ -200,7 +229,7 @@
             } else if (isVector) {
                 var gjData = geojsonMap ? geojsonMap[panel.geojsonFile || '_default'] : null;
                 if (gjData) {
-                    allOverlays[panel.id] = makeGeoJSON(gjData, map);
+                    allOverlays[panel.id] = makeGeoJSON(gjData, map, imgH);
                 }
             } else {
                 allOverlays[panel.id] = L.imageOverlay(images[panel.id], bounds, {zIndex:1}).addTo(map);
@@ -300,6 +329,28 @@
                 var target = this.dataset.tab;
                 document.querySelectorAll('.tab-content').forEach(function(tc) {
                     tc.classList.toggle('active', tc.id === 'tab-' + target);
+                });
+                setTimeout(function() {
+                    Object.values(allMaps).forEach(function(m) {
+                        m.invalidateSize();
+                        if (m._imgBounds) m.fitBounds(m._imgBounds);
+                    });
+                }, 50);
+            });
+        });
+    }
+
+    function bindSubTabSwitching() {
+        document.querySelectorAll('.sub-tab').forEach(function(tab) {
+            tab.addEventListener('click', function(e) {
+                e.preventDefault();
+                var nav = this.closest('.sub-tab-nav');
+                nav.querySelectorAll('.sub-tab').forEach(function(t) { t.classList.remove('active'); });
+                this.classList.add('active');
+                var target = this.dataset.subtab;
+                var parent = nav.parentElement;
+                parent.querySelectorAll('.sub-tab-content').forEach(function(sc) {
+                    sc.classList.toggle('active', sc.id === 'tab-' + target);
                 });
                 setTimeout(function() {
                     Object.values(allMaps).forEach(function(m) {
@@ -511,6 +562,109 @@
                     });
                 }
 
+                // Grazing charts
+                if (CHART_DATA.grazing) {
+                    var g = CHART_DATA.grazing;
+                    var gBarOpts = {
+                        indexAxis: 'y', responsive: true,
+                        plugins: {legend:{display:false}},
+                        scales: {
+                            x: {beginAtZero:true, grid:{color:'rgba(255,255,255,0.04)'}},
+                            y: {grid:{display:false}}
+                        }
+                    };
+
+                    // Classification counts
+                    new Chart(document.getElementById('chart-grazing-class'), {
+                        type: 'bar',
+                        data: {
+                            labels: g.classification.labels,
+                            datasets: [{
+                                label: 'Antal block',
+                                data: g.classification.counts,
+                                backgroundColor: g.classification.colors,
+                                borderColor: g.classification.borders,
+                                borderWidth: 1
+                            }]
+                        },
+                        options: Object.assign({}, gBarOpts, {
+                            scales: Object.assign({}, gBarOpts.scales, {
+                                x: {beginAtZero:true, title:{display:true, text:'Antal block'},
+                                    grid:{color:'rgba(255,255,255,0.04)'}}
+                            })
+                        })
+                    });
+
+                    // Classification area
+                    new Chart(document.getElementById('chart-grazing-area'), {
+                        type: 'bar',
+                        data: {
+                            labels: g.classification.labels,
+                            datasets: [{
+                                label: 'Areal (ha)',
+                                data: g.classification.areas,
+                                backgroundColor: g.classification.colors,
+                                borderColor: g.classification.borders,
+                                borderWidth: 1
+                            }]
+                        },
+                        options: Object.assign({}, gBarOpts, {
+                            scales: Object.assign({}, gBarOpts.scales, {
+                                x: {beginAtZero:true, title:{display:true, text:'Areal (ha)'},
+                                    grid:{color:'rgba(255,255,255,0.04)'}}
+                            })
+                        })
+                    });
+
+                    // Confidence distribution
+                    new Chart(document.getElementById('chart-grazing-conf'), {
+                        type: 'bar',
+                        data: {
+                            labels: g.confidence.labels,
+                            datasets: [{
+                                label: 'Antal block',
+                                data: g.confidence.counts,
+                                backgroundColor: g.confidence.colors,
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {legend:{display:false}},
+                            scales: {
+                                x: {title:{display:true, text:'Konfidens'},
+                                    grid:{color:'rgba(255,255,255,0.04)'}},
+                                y: {beginAtZero:true, title:{display:true, text:'Antal block'},
+                                    grid:{color:'rgba(255,255,255,0.04)'}}
+                            }
+                        }
+                    });
+
+                    // Size distribution stacked
+                    new Chart(document.getElementById('chart-grazing-size'), {
+                        type: 'bar',
+                        data: {
+                            labels: g.size_distribution.labels,
+                            datasets: g.size_distribution.classes.map(function(cls) {
+                                return {
+                                    label: cls.label, data: cls.data,
+                                    backgroundColor: cls.color, borderColor: cls.border, borderWidth: 1
+                                };
+                            })
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {legend:{position:'top'}},
+                            scales: {
+                                x: {stacked:true, title:{display:true, text:'Blockstorlek'},
+                                    grid:{color:'rgba(255,255,255,0.04)'}},
+                                y: {stacked:true, beginAtZero:true, title:{display:true, text:'Antal block'},
+                                    grid:{color:'rgba(255,255,255,0.04)'}}
+                            }
+                        }
+                    });
+                }
+
                 // L2 chart
                 if (CHART_DATA.l2) {
                     new Chart(document.getElementById('chart-l2'), {
@@ -569,6 +723,7 @@
 
     handleEmbedMode();
     bindTabSwitching();
+    bindSubTabSwitching();
 
     // Render and initialize all tabs
     var tabIds = Object.keys(TAB_CONFIG);

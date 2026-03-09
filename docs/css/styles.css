@@ -64,6 +64,41 @@
             border-color: #1a4338;
         }
 
+        /* ── Sub-tabs (nested within a parent tab) ────────────────── */
+        .sub-tab-nav {
+            display: flex;
+            gap: 6px;
+            padding: 16px 20px 12px;
+        }
+        .sub-tab {
+            text-decoration: none;
+            padding: 8px 20px;
+            border-radius: 9999px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #6b7280;
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .sub-tab:hover {
+            color: #171717;
+            border-color: #9ca3af;
+            background: #e5e7eb;
+        }
+        .sub-tab.active {
+            color: #ffffff;
+            background: #245045;
+            border-color: #245045;
+        }
+        .sub-tab-content {
+            display: none;
+        }
+        .sub-tab-content.active {
+            display: block;
+        }
+
         /* ── Summary cards ───────────────────────────────────────────── */
         .summary-section {
             display: flex;

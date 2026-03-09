@@ -13,7 +13,7 @@
         <div class="header-left">
             <div>
                 <h1><span>IMINT</span> Analysrapport</h1>
-                <p>Showcase — Brand (2018-07-24) &middot; Marin (2025-07-10) &middot; Betesmark (2025-06-14) &middot; Kustlinje (2025-06-14) &middot; LULC</p>
+                <p>Showcase — Brand (2018-07-24) &middot; Marin (2025-07-10 / 2025-07-19) &middot; Betesmark (2025-06-14) &middot; Kustlinje (2025-06-14) &middot; LULC</p>
             </div>
         </div>
         <div class="header-nav">
@@ -106,58 +106,119 @@
     </div>
 
 
-    <!-- ── Marine tab ────────────────────────────────────────────── -->
+    <!-- ── Marine tab (parent with sub-tabs) ──────────────────── -->
     <div class="tab-content" id="tab-marine">
-        <div class="tab-dynamic"></div>
-        <div class="tab-description">
+        <div class="sub-tab-nav">
+            <a href="#" class="sub-tab active" data-subtab="marine_leisure">⛵ Fritid — Bohuslän</a>
+            <a href="#" class="sub-tab" data-subtab="marine_commercial">🚢 Sjöfart — Öresund</a>
+        </div>
 
-            <h3>Sentinel-2 RGB — Satellitbilden</h3>
-            <p>
-                Sentinel-2 är en konstellation av två satelliter (2A och 2B) som drivs av Europeiska rymdorganisationen (ESA) inom Copernicus-programmet. Satelliterna kretsar i en solsynkron bana på 786 km höjd och avbildar hela jorden var femte dag med en upplösning på 10 meter per pixel för de synliga banden. RGB-bilden visar området som det ser ut för ögat, med band 4 (rött), band 3 (grönt) och band 2 (blått). I kustmiljön syns land, öar, holmar och öppet vatten — och vid god sikt kan enskilda båtar och deras kölvatten urskiljas i bilden.
-                <br><em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" target="_blank">ESA Sentinel-2</a></em>
-            </p>
+        <div class="sub-tab-content active" id="tab-marine_leisure">
+            <div class="tab-dynamic"></div>
+            <div class="tab-description">
 
-            <h3>Båtdetektering (YOLO) — AI-objektdetektering</h3>
-            <p>
-                Båtdetekteringen använder YOLO11s (You Only Look Once, version 11 small), en modern AI-modell för objektdetektering i realtid. YOLO-arkitekturen bygger på ett djupt konvolutionellt neuralt nätverk (CNN) som analyserar hela bilden i ett enda steg — till skillnad från äldre metoder som först föreslår kandidatområden och sedan klassificerar dem separat. Modellen har tränats på satellitbilder av båtar och delar in bilden i ett rutnät där varje cell förutsäger bounding boxes (rektanglar) och sannolikheter för att en båt finns. Överlappande detektioner filtreras med Non-Maximum Suppression (NMS). En NMD-baserad landmask säkerställer att enbart detektioner på vatten behålls, vilket eliminerar falsklarm på land. Varje detekterad båt markeras med en cyan-färgad ruta i bilden.
-                <br><em>Källa: Jocher, G. et al., 2024. &quot;Ultralytics YOLO11.&quot; <a href="https://docs.ultralytics.com/" target="_blank">docs.ultralytics.com</a>; Redmon, J. et al., 2016. &quot;You Only Look Once: Unified, Real-Time Object Detection.&quot; CVPR 2016.</em>
-            </p>
+                <h3>Sentinel-2 RGB — Satellitbilden</h3>
+                <p>
+                    Sentinel-2 är en konstellation av två satelliter (2A och 2B) som drivs av Europeiska rymdorganisationen (ESA) inom Copernicus-programmet. Satelliterna kretsar i en solsynkron bana på 786 km höjd och avbildar hela jorden var femte dag med en upplösning på 10 meter per pixel för de synliga banden. RGB-bilden visar området som det ser ut för ögat, med band 4 (rött), band 3 (grönt) och band 2 (blått). I kustmiljön syns land, öar, holmar och öppet vatten — och vid god sikt kan enskilda båtar och deras kölvatten urskiljas i bilden.
+                    <br><em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" target="_blank">ESA Sentinel-2</a></em>
+                </p>
 
-            <h3>Båtaktivitet (heatmap) — Multitemporal analys</h3>
-            <p>
-                Heatmap-analysen aggregerar båtdetektioner från flera satellitöverfarter under en tidsperiod till en enda värmekarta som visar var båtar förekommer oftast. För varje molnfritt tillfälle körs YOLO-detektorn och resultaten ackumuleras i ett rutnät där varje cells intensitet ökar för varje detekterad båt. Områden med återkommande trafik — som farleder, hamninlopp och ankringsplatser — får höga värden (röda), medan enstaka passeringar ger lägre intensitet (gult). Bilder med för hög molntäckning filtreras automatiskt bort genom COT-analys för att undvika falsklarm. Resultatet ger en överblick av det maritima rörelsemönstret som enstaka ögonblicksbilder inte kan visa.
-            </p>
+                <h3>Båtdetektering (YOLO) — AI-objektdetektering</h3>
+                <p>
+                    Båtdetekteringen använder YOLO11s (You Only Look Once, version 11 small), en modern AI-modell för objektdetektering i realtid. YOLO-arkitekturen bygger på ett djupt konvolutionellt neuralt nätverk (CNN) som analyserar hela bilden i ett enda steg — till skillnad från äldre metoder som först föreslår kandidatområden och sedan klassificerar dem separat. Modellen har tränats på satellitbilder av båtar och delar in bilden i ett rutnät där varje cell förutsäger bounding boxes (rektanglar) och sannolikheter för att en båt finns. Överlappande detektioner filtreras med Non-Maximum Suppression (NMS). En NMD-baserad landmask säkerställer att enbart detektioner på vatten behålls, vilket eliminerar falsklarm på land. Varje detekterad båt markeras med en cyan-färgad ruta i bilden.
+                    <br><em>Källa: Jocher, G. et al., 2024. &quot;Ultralytics YOLO11.&quot; <a href="https://docs.ultralytics.com/" target="_blank">docs.ultralytics.com</a>; Redmon, J. et al., 2016. &quot;You Only Look Once: Unified, Real-Time Object Detection.&quot; CVPR 2016.</em>
+                </p>
 
-            <h3>NMD — Nationellt Marktäckedata</h3>
-            <p>
-                NMD (Nationellt Marktäckedata) är Sveriges rikstäckande kartläggning av marktäcke och markanvändning, producerad av Naturvårdsverket. Datat har 10 meters upplösning och klassificerar marken i över 25 kategorier — från tallskog och granskog till åkermark, bebyggelse och vatten. I den marina analysen fyller NMD en dubbel funktion: dels som bakgrundsinformation som visar vilka landtyper som finns längs kusten, dels som landmask för båtdetekteringen. Genom att identifiera vilka pixlar som är land respektive vatten kan analyskedjan filtrera bort falsklarm på land och begränsa detektionerna till sjö- och havsområden.
-                <br><em>Källa: Naturvårdsverket, &quot;Nationellt Marktäckedata (NMD).&quot; <a href="https://www.naturvardsverket.se/verktyg-och-tjanster/kartor-och-karttjanster/nationella-marktackedata/" target="_blank">naturvardsverket.se</a></em>
-            </p>
+                <h3>Båtaktivitet (heatmap) — Multitemporal analys</h3>
+                <p>
+                    Heatmap-analysen aggregerar båtdetektioner från flera satellitöverfarter under en tidsperiod till en enda värmekarta som visar var båtar förekommer oftast. För varje molnfritt tillfälle körs YOLO-detektorn och resultaten ackumuleras i ett rutnät där varje cells intensitet ökar för varje detekterad båt. Områden med återkommande trafik — som farleder, hamninlopp och ankringsplatser — får höga värden (röda), medan enstaka passeringar ger lägre intensitet (gult). Bilder med för hög molntäckning filtreras automatiskt bort genom COT-analys för att undvika falsklarm. Resultatet ger en överblick av det maritima rörelsemönstret som enstaka ögonblicksbilder inte kan visa.
+                </p>
 
-            <h3>NDVI — Vegetationsindex</h3>
-            <p>
-                NDVI (Normalized Difference Vegetation Index) är det mest använda vegetationsindexet inom fjärranalys. Det beräknas som (NIR − Röd) / (NIR + Röd) där NIR är det nära infraröda bandet (B08) och Röd är det synliga röda bandet (B04). Frisk vegetation reflekterar starkt i NIR och absorberar rött ljus, vilket ger höga NDVI-värden (0.3–0.9). Vatten och bar mark ger värden nära eller under noll. I kustanalysen används NDVI för att skilja vegetationsklädda öar och strandremsor från kala klippor, vatten och bebyggelse — och för att bedöma kustvegetationens hälsotillstånd.
-                <br><em>Källa: Rouse et al., 1974. &quot;Monitoring vegetation systems in the Great Plains with ERTS.&quot; Third Earth Resources Technology Satellite-1 Symposium, NASA SP-351.</em>
-            </p>
+                <h3>NMD — Nationellt Marktäckedata</h3>
+                <p>
+                    NMD (Nationellt Marktäckedata) är Sveriges rikstäckande kartläggning av marktäcke och markanvändning, producerad av Naturvårdsverket. Datat har 10 meters upplösning och klassificerar marken i över 25 kategorier — från tallskog och granskog till åkermark, bebyggelse och vatten. I den marina analysen fyller NMD en dubbel funktion: dels som bakgrundsinformation som visar vilka landtyper som finns längs kusten, dels som landmask för båtdetekteringen. Genom att identifiera vilka pixlar som är land respektive vatten kan analyskedjan filtrera bort falsklarm på land och begränsa detektionerna till sjö- och havsområden.
+                    <br><em>Källa: Naturvårdsverket, &quot;Nationellt Marktäckedata (NMD).&quot; <a href="https://www.naturvardsverket.se/verktyg-och-tjanster/kartor-och-karttjanster/nationella-marktackedata/" target="_blank">naturvardsverket.se</a></em>
+                </p>
 
-            <h3>NDWI — Vattenindex</h3>
-            <p>
-                NDWI (Normalized Difference Water Index) mäter förekomsten av vatten och fuktighet i landskapet. Det beräknas som (Grön − NIR) / (Grön + NIR) med band B03 och B08. Positiva värden (blått på kartan) indikerar öppet vatten, medan negativa värden visar torr mark. I den marina analysen ger NDWI en tydlig bild av gränsen mellan land och vatten samt hjälper till att identifiera grunda vattenområden, inlopp och vikar. Indexet kompletterar NMD-landmasken genom att visa vattenytor med högre detaljeringsgrad.
-                <br><em>Källa: McFeeters, S.K., 1996. &quot;The use of the Normalized Difference Water Index (NDWI) in the delineation of open water features.&quot; Int. J. Remote Sensing, 17(7).</em>
-            </p>
+                <h3>NDVI — Vegetationsindex</h3>
+                <p>
+                    NDVI (Normalized Difference Vegetation Index) är det mest använda vegetationsindexet inom fjärranalys. Det beräknas som (NIR − Röd) / (NIR + Röd) där NIR är det nära infraröda bandet (B08) och Röd är det synliga röda bandet (B04). Frisk vegetation reflekterar starkt i NIR och absorberar rött ljus, vilket ger höga NDVI-värden (0.3–0.9). Vatten och bar mark ger värden nära eller under noll. I kustanalysen används NDVI för att skilja vegetationsklädda öar och strandremsor från kala klippor, vatten och bebyggelse — och för att bedöma kustvegetationens hälsotillstånd.
+                    <br><em>Källa: Rouse et al., 1974. &quot;Monitoring vegetation systems in the Great Plains with ERTS.&quot; Third Earth Resources Technology Satellite-1 Symposium, NASA SP-351.</em>
+                </p>
 
-            <h3>COT — Molnoptisk tjocklek</h3>
-            <p>
-                COT (Cloud Optical Thickness) anger hur optiskt tjockt molntäcket är över analysområdet. Värden nära noll (ljusgult) innebär klar himmel och tillförlitliga satellitdata, medan högre värden (orange till rött) visar molniga områden där underliggande mark eller hav inte kan ses. Modellen är en ensemble av fem MLP5-nätverk (fem lager djupa neurala nät) som tränats på syntetiska molndata från SMHI. Varje nätverk tar emot 11 Sentinel-2-band (B02–B12, exklusive B01 och B10) och predikterar ett kontinuerligt COT-värde per pixel. Genom att använda medelvärdet av alla fem modellers prediktioner fås ett robust och brusreducerat resultat. Molnanalysen är särskilt viktig i den marina kedjan: om ett datum har för hög molntäckning exkluderas det automatiskt från heatmap-ackumuleringen för att undvika att moln feldetekteras som båtar.
-                <br><em>Källa: Pirinen, A. et al., 2024. &quot;Creating and Leveraging a Synthetic Dataset of Cloud Optical Thickness Measures for Cloud Detection in MSI.&quot; Remote Sensing. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">GitHub</a></em>
-            </p>
+                <h3>NDWI — Vattenindex</h3>
+                <p>
+                    NDWI (Normalized Difference Water Index) mäter förekomsten av vatten och fuktighet i landskapet. Det beräknas som (Grön − NIR) / (Grön + NIR) med band B03 och B08. Positiva värden (blått på kartan) indikerar öppet vatten, medan negativa värden visar torr mark. I den marina analysen ger NDWI en tydlig bild av gränsen mellan land och vatten samt hjälper till att identifiera grunda vattenområden, inlopp och vikar. Indexet kompletterar NMD-landmasken genom att visa vattenytor med högre detaljeringsgrad.
+                    <br><em>Källa: McFeeters, S.K., 1996. &quot;The use of the Normalized Difference Water Index (NDWI) in the delineation of open water features.&quot; Int. J. Remote Sensing, 17(7).</em>
+                </p>
+
+                <h3>COT — Molnoptisk tjocklek</h3>
+                <p>
+                    COT (Cloud Optical Thickness) anger hur optiskt tjockt molntäcket är över analysområdet. Värden nära noll (ljusgult) innebär klar himmel och tillförlitliga satellitdata, medan högre värden (orange till rött) visar molniga områden där underliggande mark eller hav inte kan ses. Modellen är en ensemble av fem MLP5-nätverk (fem lager djupa neurala nät) som tränats på syntetiska molndata från SMHI. Varje nätverk tar emot 11 Sentinel-2-band (B02–B12, exklusive B01 och B10) och predikterar ett kontinuerligt COT-värde per pixel. Genom att använda medelvärdet av alla fem modellers prediktioner fås ett robust och brusreducerat resultat. Molnanalysen är särskilt viktig i den marina kedjan: om ett datum har för hög molntäckning exkluderas det automatiskt från heatmap-ackumuleringen för att undvika att moln feldetekteras som båtar.
+                    <br><em>Källa: Pirinen, A. et al., 2024. &quot;Creating and Leveraging a Synthetic Dataset of Cloud Optical Thickness Measures for Cloud Detection in MSI.&quot; Remote Sensing. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">GitHub</a></em>
+                </p>
+            </div>
+        </div>
+
+        <div class="sub-tab-content" id="tab-marine_commercial">
+            <div class="tab-dynamic"></div>
+            <div class="tab-description">
+
+                <h3>Sentinel-2 RGB — Satellitbilden</h3>
+                <p>
+                    Sentinel-2 RGB visar Öresunds smalaste punkt mellan Helsingborg och Helsingör — ett av världens mest trafikerade sund. Här passerar dagligen lastfartyg, tankers, containerfartyg och HH Ferries passagerarfärjor över den 4 km breda sunden. Vid 10 meters upplösning kan enskilda fartyg och deras kölvatten urskiljas.
+                    <br><em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" target="_blank">ESA Sentinel-2</a></em>
+                </p>
+
+                <h3>Båtdetektering (YOLO) — AI-objektdetektering</h3>
+                <p>
+                    YOLO11s (You Only Look Once, version 11 small) detekterar fartyg i ett enda steg genom ett djupt CNN som analyserar hela bilden simultant. En NMD-baserad landmask säkerställer att enbart detektioner på vatten behålls. Varje detekterat fartyg markeras med en cyan-färgad ruta. I sundet detekterades 54 fartyg.
+                    <br><em>Källa: Jocher, G. et al., 2024. &quot;Ultralytics YOLO11.&quot; <a href="https://docs.ultralytics.com/" target="_blank">docs.ultralytics.com</a></em>
+                </p>
+
+                <h3>AI2 Fartygsdetektering (Swin V2 B) — Attributprediktion</h3>
+                <p>
+                    Allen AI:s rslearn-modell använder en Swin Transformer V2 Base backbone (förtränad via SatlasPretrain på Sentinel-2) kopplad till en Faster R-CNN detektionshuvud. Utöver bounding-box-detektering predikterar modellen fartygsattribut: typ (cargo, tanker, passenger, etc.), hastighet (knop), kurs (grader) och längd (meter). Attributen visas som klickbara popups i vektoröverlagringen. Färgkodningen baseras på hastighet: blå = stationär, gul = låg fart, orange = medelfart, röd = hög fart. I sundet detekterades 20 fartyg med attribut.
+                    <br><em>Källa: Bastani, F. et al., 2024. &quot;SatlasPretrain: A Large-Scale Dataset for Remote Sensing Image Understanding.&quot; ICLR 2024. <a href="https://github.com/allenai/rslearn" target="_blank">github.com/allenai/rslearn</a> (Apache 2.0)</em>
+                </p>
+
+                <h3>Heatmaps — Multitemporal fartygsaktivitet</h3>
+                <p>
+                    Heatmap-analyserna aggregerar fartygsdetektioner från flera satellitöverfarter (juli 2025) till värmekartor. Både YOLO- och AI2-modellen körs separat för varje molnfritt datum, och resultaten ackumuleras med Gaussisk utslätning. Farleder, hamninlopp och ankringsplatser framträder som intensiva zoner.
+                </p>
+
+                <h3>NMD, NDVI, NDWI, COT</h3>
+                <p>
+                    Samma spektrala index och stöddatalager som i den marina Bohuslän-analysen. Öresund ligger delvis utanför NMD:s täckningsområde (dansk sida, 65% oklassificerat). Den svenska sidan visar Helsingborg med bebyggelse, infrastruktur och hav. NDVI och NDWI ger spektrala karakteristiker av vattenytan, och COT verifierar molnfria förhållanden (94.7% klart).
+                </p>
+            </div>
         </div>
     </div>
-
 
     <!-- ── Grazing tab ──────────────────────────────────────────── -->
     <div class="tab-content" id="tab-grazing">
         <div class="tab-dynamic"></div>
+        <div class="section-header">
+            <h2>Betesmarksklassificering — Statistik</h2>
+        </div>
+        <div class="charts-grid">
+            <div class="chart-card">
+                <h3>Klassificeringsresultat (antal block)</h3>
+                <canvas id="chart-grazing-class"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Areal per klassificering (ha)</h3>
+                <canvas id="chart-grazing-area"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Konfidensfördelning (antal block)</h3>
+                <canvas id="chart-grazing-conf"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Blockstorlek per klassificering</h3>
+                <canvas id="chart-grazing-size"></canvas>
+            </div>
+        </div>
         <div class="tab-description">
 
             <h3>Sentinel-2 RGB — Satellitbilden</h3>

@@ -65,6 +65,10 @@ var LEGENDS = {
     vessel: [
         {color:'#00E5FF',label:'Detekterad båt / anomali'}
     ],
+    ai2_vessel: [
+        {color:'#50A0FF',label:'Stationär (0 kn)'},{color:'#FFE600',label:'Låg fart (< 5 kn)'},
+        {color:'#FF6600',label:'Medelfart (5–15 kn)'},{color:'#FF0000',label:'Hög fart (> 15 kn)'}
+    ],
     heatmap: [
         {color:'#FFFFB2',label:'Låg'},{color:'#FD8D3C',label:'Medel'},
         {color:'#BD0026',label:'Hög'}
@@ -114,6 +118,8 @@ var LEGENDS = {
 // ── GeoJSON file paths (loaded async) ────────────────────────────────
 var GEOJSON_FILES = {
     vessels:              'data/vessels.geojson',
+    mc_vessels:           'data/mc_vessels.geojson',
+    mc_ai2_vessels:       'data/mc_ai2_vessels.geojson',
     lpis:                 'data/lpis.geojson',
     erosion:              'data/erosion.geojson',
     segformer_shorelines: 'data/segformer-shorelines.geojson',
@@ -164,8 +170,8 @@ var TAB_CONFIG = {
         chartSectionTitle: 'Korsreferens mot NMD (Nationellt Marktackedata)'
     },
 
-    marine: {
-        title: 'Marin analys — 2025-07-10',
+    marine_leisure: {
+        title: 'Marin analys — Fritid (2025-07-10)',
         summary: [
             {title:'Båtdetektering',value:'130 båtar',detail:'5 datum (4 skippade)'},
             {title:'Bästa datum',value:'50 båtar',detail:'2025-07-17'},
@@ -201,6 +207,52 @@ var TAB_CONFIG = {
             'm-sjokort':        'showcase/marine/sjokort.png'
         },
         imgH: 573, imgW: 324,
+        hasBgToggle: true
+    },
+
+    marine_commercial: {
+        title: 'Marin analys — Sjöfart (2025-07-19)',
+        summary: [
+            {title:'YOLO-detektering',value:'54 båtar',detail:'Primärdatum 2025-07-19'},
+            {title:'AI2-detektering',value:'20 båtar',detail:'Swin V2 B + attribut'},
+            {title:'Analysområde',value:'~50 km²',detail:'Helsingborg–Helsingör'},
+            {title:'NMD Marktäcke',value:'28% Hav',detail:'65% utanför NMD (DK)'},
+            {title:'Molnanalys (COT)',value:'94.7% klart',detail:'COT medel: 0.009'}
+        ],
+        intro: 'Analysområdet visar Öresunds smalaste punkt mellan Helsingborg och Helsingör — ett av världens mest trafikerade sund med intensiv kommersiell sjöfart. Här passerar dagligen lastfartyg, tankers, containerfartyg och HH Ferries passagerarfärjor över den 4 km breda sundet. Sentinel-2-data har analyserats med två kompletterande AI-modeller för fartygsdetektering: YOLO11s (snabb objektdetektering, 54 detektioner) och Allen AI:s rslearn-modell (Swin V2 B + Faster R-CNN med attributprediktion för fartygstyp, hastighet och kurs, 20 detektioner).',
+        panels: [
+            {id:'mc-rgb',            key:'rgb',            title:'Sentinel-2 RGB',                    legend:null,
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'mc-vessels',        key:'vessels',        title:'Båtdetektering (YOLO)',              legend:'vessel',      vector:true, geojsonFile:'mc_vessels',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'mc-ai2-vessels',    key:'ai2_vessels',    title:'AI2 Fartygsdetektering (Swin V2)',   legend:'ai2_vessel',  vector:true, geojsonFile:'mc_ai2_vessels',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'mc-vessel-heatmap', key:'vessel_heatmap', title:'Båtaktivitet — YOLO (heatmap)',      legend:'heatmap',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'mc-ai2-heatmap',    key:'ai2_heatmap',    title:'Fartygsaktivitet — AI2 (heatmap)',   legend:'heatmap',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'mc-nmd',            key:'nmd',            title:'NMD Marktäcke',                      legend:'nmd',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'mc-ndvi',           key:'ndvi',           title:'NDVI (Vegetationsindex)',             legend:'ndvi',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'mc-ndwi',           key:'ndwi',           title:'NDWI (Vattenindex)',                  legend:'ndwi',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
+            {id:'mc-cot',            key:'cot',            title:'Molnoptisk tjocklek (COT)',           legend:'cot',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]}
+        ],
+        images: {
+            'mc-rgb':            'showcase/marine_commercial/rgb.png',
+            'mc-vessels':        'showcase/marine_commercial/vessels_clean.png',
+            'mc-ai2-vessels':    'showcase/marine_commercial/ai2_vessels_clean.png',
+            'mc-vessel-heatmap': 'showcase/marine_commercial/vessel_heatmap_clean.png',
+            'mc-ai2-heatmap':    'showcase/marine_commercial/ai2_vessel_heatmap_clean.png',
+            'mc-nmd':            'showcase/marine_commercial/nmd_overlay.png',
+            'mc-ndvi':           'showcase/marine_commercial/ndvi_clean.png',
+            'mc-ndwi':           'showcase/marine_commercial/ndwi_clean.png',
+            'mc-cot':            'showcase/marine_commercial/cot_clean.png',
+            'mc-sjokort':        'showcase/marine_commercial/sjokort.png'
+        },
+        imgH: 588, imgW: 893,
         hasBgToggle: true
     },
 
