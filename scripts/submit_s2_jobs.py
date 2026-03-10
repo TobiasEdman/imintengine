@@ -388,6 +388,12 @@ def main():
         "--workers", type=int, default=4,
         help="Number of parallel workers for local mode (default: 4)",
     )
+    parser.add_argument(
+        "--from-existing", type=str, default=None,
+        help="Read tile coordinates from existing tile directory instead of "
+             "generating grid (e.g. data/lulc_full). Reuses the same "
+             "geographic coverage including any densification.",
+    )
     args = parser.parse_args()
 
     years = [y.strip() for y in args.years.split(",")]
@@ -404,23 +410,41 @@ def main():
     print("=" * 60)
 
     # ── Generate grid ────────────────────────────────────────────────
-    config = TrainingConfig(grid_spacing_m=args.grid_spacing)
     patch_size_m = args.tile_size_px * 10  # 256 px × 10 m = 2560 m
+    half = patch_size_m // 2
 
-    print("\n  Generating grid...")
-    cells = generate_grid(
-        spacing_m=args.grid_spacing,
-        patch_size_m=patch_size_m,
-    )
-    print(f"  Total grid cells: {len(cells)}")
+    if args.from_existing:
+        # Read tile coordinates from existing directory
+        from imint.training.sampler import GridCell
+        existing_tiles_dir = Path(args.from_existing)
+        if (existing_tiles_dir / "tiles").is_dir():
+            existing_tiles_dir = existing_tiles_dir / "tiles"
+        print(f"\n  Reading tile coordinates from {existing_tiles_dir}...")
+        cells = []
+        for f in sorted(existing_tiles_dir.glob("tile_*.npz")):
+            m = _TILE_RE.search(f.name)
+            if m:
+                e, n = int(m.group(1)), int(m.group(2))
+                cells.append(GridCell(
+                    easting=e, northing=n,
+                    west_3006=e - half, east_3006=e + half,
+                    south_3006=n - half, north_3006=n + half,
+                ))
+        print(f"  Found {len(cells)} tile locations")
+        land_cells = grid_to_wgs84(cells)
+    else:
+        print("\n  Generating grid...")
+        cells = generate_grid(
+            spacing_m=args.grid_spacing,
+            patch_size_m=patch_size_m,
+        )
+        print(f"  Total grid cells: {len(cells)}")
 
-    # ── NMD pre-filter ───────────────────────────────────────────────
-    print("  Filtering land cells...")
-    land_cells = filter_land_cells(cells)
-    print(f"  Land cells: {len(land_cells)}")
-
-    # ── Compute WGS84 coordinates ────────────────────────────────────
-    land_cells = grid_to_wgs84(land_cells)
+        # ── NMD pre-filter ───────────────────────────────────────────
+        print("  Filtering land cells...")
+        land_cells = filter_land_cells(cells)
+        print(f"  Land cells: {len(land_cells)}")
+        land_cells = grid_to_wgs84(land_cells)
 
     # Parse windows for local mode
     windows_list = []
@@ -432,12 +456,29 @@ def main():
     if args.local:
         tiles_dir = Path(args.tiles_dir)
         if not tiles_dir.exists():
-            tiles_dir = Path("data/lulc_full/tiles")
+            if args.from_existing:
+                # Writing to a new directory — create it
+                tiles_dir.mkdir(parents=True, exist_ok=True)
+                print(f"  Created output directory: {tiles_dir}")
+            else:
+                tiles_dir = Path("data/lulc_full/tiles")
         if not tiles_dir.exists():
             tiles_dir.mkdir(parents=True, exist_ok=True)
             print(f"  Created tiles directory: {tiles_dir}")
 
         print(f"\n  Found {len(land_cells)} land cells")
+
+        if args.dry_run:
+            # Count how many tiles would be fetched
+            existing_local = _list_existing_tiles_local(tiles_dir)
+            todo_count = sum(
+                1 for c in land_cells
+                if f"{c.easting}_{c.northing}" not in existing_local
+            )
+            print(f"  Already exist: {len(existing_local)}")
+            print(f"  [DRY-RUN] Would fetch: {todo_count} tiles")
+            return
+
         _run_local(
             cells=land_cells,
             tiles_dir=tiles_dir,

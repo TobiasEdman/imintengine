@@ -178,6 +178,8 @@ Backend:   Sentinel Hub Process API (CDSE)
 
 8 parallel containers on M1 Max, processing tiles autonomously.
 
+**Final fetch result**: 4,305/4,381 tiles (98.3%) successfully fetched via `--local` mode. 76 far-north failures due to persistent cloud cover. See [25_seasonal_s2_fetch_completion.md](25_seasonal_s2_fetch_completion.md) for full data inventory and tile format details.
+
 ---
 
 ## File Reference

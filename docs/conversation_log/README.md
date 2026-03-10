@@ -30,6 +30,7 @@ This directory contains Claude Code conversation logs split into topic-based mar
 | 22 | [22_phenology_seasonal_strategy.md](22_phenology_seasonal_strategy.md) | Phenology Strategy — VPP/seasonal impact on forest classes, SOSD/EOSD, 3 architectural options, literature review |
 | 23 | [23_final_model_evaluation.md](23_final_model_evaluation.md) | Final Model Evaluation — 44.14% mIoU, 0.9334 AUC-ROC, user/producer accuracy, ROC curves, dashboard deployment |
 | 24 | [24_colonyos_operations_runbook.md](24_colonyos_operations_runbook.md) | ColonyOS Runbook — CFS networking fix, OOM diagnosis, container regulation, watchdog/backup/safe-down, SSH config |
+| 25 | [25_seasonal_s2_fetch_completion.md](25_seasonal_s2_fetch_completion.md) | Seasonal S2 Fetch — 4,305/4,381 multitemporal tiles via CDSE, tile format, VPP status, H100 training plan |
 
 ## Sources
 
@@ -38,5 +39,6 @@ Files 02, 11-15: Second pipeline conversation (`Data preperation and training pi
 Files 16-18: Third pipeline conversation (S2 Process API, training results, VPP phenology)
 Files 19-20: Fourth pipeline conversation (marine commercial showcase, LULC inference dashboard)
 Files 21-24: Fifth pipeline conversation (`Train_fetch_prompt.txt` — NMD accuracy research, phenology strategy, final evaluation, ColonyOS runbook)
+File 25: Sixth pipeline conversation (seasonal S2 fetch completion, data inventory, VPP status, H100 training preparation)
 
 The conversations cover satellite imagery analysis with ImintEngine, including Sentinel-2 data processing, LULC classification with Prithvi-EO-2.0, auxiliary data fusion, distributed computing with ColonyOS, vessel detection, nautical chart integration, change detection, grazing analysis, shoreline mapping, and web deployment.
