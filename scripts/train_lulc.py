@@ -203,7 +203,8 @@ def main():
         from imint.fm.upernet import PrithviSegmentationModel
 
         # Load model
-        backbone = _load_prithvi_from_hf(pretrained=True)
+        num_frames = config.num_temporal_frames if config.enable_multitemporal else 1
+        backbone = _load_prithvi_from_hf(pretrained=True, num_frames=num_frames)
         model = PrithviSegmentationModel(
             encoder=backbone,
             feature_indices=config.feature_indices,

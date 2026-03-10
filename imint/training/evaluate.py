@@ -112,11 +112,18 @@ def evaluate_model(
 
     for i in range(n_samples):
         sample = dataset[i]
-        image = sample["image"].unsqueeze(0).to(device)  # (1, 6, H, W)
+        image = sample["image"].unsqueeze(0).to(device)
         label = sample["label"].numpy()                    # (H, W)
 
-        # Add temporal dimension: (1, 6, H, W) → (1, 6, 1, H, W)
-        image_5d = image.unsqueeze(2)
+        # Reshape to 5D for Prithvi Conv3d: (1, C=6, T, H, W)
+        CT = image.shape[1]
+        if CT > 6:
+            # Multitemporal: (1, T*6, H, W) → (1, 6, T, H, W)
+            T = CT // 6
+            image_5d = image.view(1, T, 6, image.shape[2], image.shape[3]).permute(0, 2, 1, 3, 4)
+        else:
+            # Single-date: (1, 6, H, W) → (1, 6, 1, H, W)
+            image_5d = image.unsqueeze(2)
 
         # Collect auxiliary channels if present
         aux_parts = []

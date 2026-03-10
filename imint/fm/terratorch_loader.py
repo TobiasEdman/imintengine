@@ -112,11 +112,17 @@ def load_backbone(model_name: str, pretrained: bool = True):
     )
 
 
-def _load_prithvi_from_hf(pretrained: bool = True):
+def _load_prithvi_from_hf(pretrained: bool = True, num_frames: int = 1):
     """Load Prithvi-EO-2.0 directly from bundled code + HuggingFace weights.
 
     Uses prithvi_mae.py bundled in imint/fm/prithvi_mae/ and downloads
     weights from HuggingFace Hub.
+
+    Args:
+        pretrained: Whether to load pretrained weights.
+        num_frames: Number of temporal frames (1 for single-date, 4 for
+            multitemporal seasonal). Positional embeddings are recomputed
+            for the target num_frames.
 
     Returns:
         PrithviMAE model ready for inference.
@@ -136,10 +142,10 @@ def _load_prithvi_from_hf(pretrained: bool = True):
     with open(config_path) as f:
         config = json.load(f)["pretrained_cfg"]
 
-    # Create model with num_frames=1 (single timestep for our use case)
+    # Create model with specified num_frames
     model = PrithviMAE(
         img_size=config["img_size"],
-        num_frames=1,
+        num_frames=num_frames,
         in_chans=config["in_chans"],
         embed_dim=config["embed_dim"],
         depth=config["depth"],

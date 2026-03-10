@@ -100,8 +100,10 @@ class LULCTrainer:
         from ..fm.terratorch_loader import _load_prithvi_from_hf
         from ..fm.upernet import PrithviSegmentationModel, get_default_pool_sizes
 
-        print(f"  Loading Prithvi backbone ({self.config.backbone})...")
-        backbone = _load_prithvi_from_hf(pretrained=True)
+        num_frames = self.config.num_temporal_frames if self.config.enable_multitemporal else 1
+        print(f"  Loading Prithvi backbone ({self.config.backbone}, "
+              f"num_frames={num_frames})...")
+        backbone = _load_prithvi_from_hf(pretrained=True, num_frames=num_frames)
 
         n_aux = self._count_aux_channels()
 
@@ -318,11 +320,18 @@ class LULCTrainer:
             t0 = time.time()
 
             for batch in train_loader:
-                images = batch["image"].to(self.device)   # (B, 6, H, W)
+                images = batch["image"].to(self.device)
                 labels = batch["label"].to(self.device)    # (B, H, W)
 
-                # Add temporal dim: (B, 6, H, W) → (B, 6, 1, H, W)
-                images_5d = images.unsqueeze(2)
+                # Reshape to 5D for Prithvi Conv3d: (B, C=6, T, H, W)
+                B, CT, H, W = images.shape
+                if CT > 6:
+                    # Multitemporal: (B, T*6, H, W) → (B, 6, T, H, W)
+                    T = CT // 6
+                    images_5d = images.view(B, T, 6, H, W).permute(0, 2, 1, 3, 4)
+                else:
+                    # Single-date: (B, 6, H, W) → (B, 6, 1, H, W)
+                    images_5d = images.unsqueeze(2)
 
                 # Collect auxiliary channels (height/volume/etc.)
                 aux = self._collect_aux(batch, self.device)

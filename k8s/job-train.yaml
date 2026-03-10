@@ -4,48 +4,97 @@ metadata:
   name: prithvi-seasonal-train
   namespace: prithvi-training-default
 spec:
-  backoffLimit: 0
+  backoffLimit: 1
+  activeDeadlineSeconds: 50400  # 14h max, auto-kill if stuck
   template:
     metadata:
       labels:
         app: prithvi-training
     spec:
-      containers:
-        - name: trainer
-          image: IMAGE_PLACEHOLDER  # Replace with actual image
+      initContainers:
+        # Clone repo and install dependencies
+        - name: setup
+          image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
           command:
-            - python3
-            - scripts/train_lulc.py
-            - --data-dir
-            - /data/lulc_seasonal
-            - --device
-            - cuda
-            - --num-classes
-            - "19"
-            - --enable-multitemporal
-            - --enable-all-aux
-            - --batch-size
-            - "16"
-            - --num-workers
-            - "8"
-            - --epochs
-            - "50"
-            - --dashboard
+            - /bin/bash
+            - -c
+            - |
+              set -ex
+              apt-get update && apt-get install -y --no-install-recommends \
+                python3.11 python3.11-venv python3-pip \
+                libgdal30 git
+              update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+              # Clone repo
+              git clone --depth 1 https://github.com/TobiasEdman/imintengine.git /app
+
+              # Create venv + install deps
+              cd /app
+              python3 -m venv .venv
+              .venv/bin/pip install --no-cache-dir \
+                torch --index-url https://download.pytorch.org/whl/cu124
+              .venv/bin/pip install --no-cache-dir -r requirements.txt
+
+              echo "Setup complete!"
           resources:
             requests:
               cpu: "4"
-              memory: 32Gi
+              memory: 16Gi
+            limits:
+              cpu: "4"
+              memory: 16Gi
+          volumeMounts:
+            - name: app
+              mountPath: /app
+      containers:
+        - name: trainer
+          image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -ex
+              apt-get update && apt-get install -y --no-install-recommends \
+                python3.11 libgdal30
+              update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+              cd /app
+              .venv/bin/python scripts/train_lulc.py \
+                --data-dir /data/lulc_seasonal \
+                --device cuda \
+                --num-classes 19 \
+                --enable-multitemporal \
+                --enable-all-aux \
+                --batch-size 16 \
+                --num-workers 8 \
+                --epochs 50 \
+                --checkpoint-dir /checkpoints \
+                --dashboard
+          resources:
+            requests:
+              cpu: "8"
+              memory: 64Gi
               nvidia.com/gpu: "1"
             limits:
               cpu: "8"
               memory: 64Gi
               nvidia.com/gpu: "1"
           volumeMounts:
+            - name: app
+              mountPath: /app
             - name: data
               mountPath: /data
             - name: checkpoints
-              mountPath: /app/checkpoints
+              mountPath: /checkpoints
+            - name: dshm
+              mountPath: /dev/shm
       volumes:
+        - name: app
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
         - name: data
           persistentVolumeClaim:
             claimName: training-data
@@ -53,7 +102,9 @@ spec:
           persistentVolumeClaim:
             claimName: training-checkpoints
       restartPolicy: Never
-      # Prefer A100/H100 nodes if available
+      # Target H100 nodes (override project default 2080ti)
+      nodeSelector:
+        accelerator: nvidia-h100
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists
