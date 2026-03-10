@@ -534,7 +534,10 @@ class LULCTrainer:
         # GPU usage (MPS doesn't expose util, but we can get memory)
         if self.device.type == "cuda":
             import torch
-            metrics["gpu_percent"] = torch.cuda.utilization(self.device)
+            try:
+                metrics["gpu_percent"] = torch.cuda.utilization(self.device)
+            except (ModuleNotFoundError, RuntimeError):
+                metrics["gpu_percent"] = None  # pynvml not available
             metrics["gpu_memory_used_gb"] = round(
                 torch.cuda.memory_allocated(self.device) / (1024**3), 1)
             metrics["gpu_memory_total_gb"] = round(
