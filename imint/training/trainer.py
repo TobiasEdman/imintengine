@@ -540,8 +540,9 @@ class LULCTrainer:
                 metrics["gpu_percent"] = None  # pynvml not available
             metrics["gpu_memory_used_gb"] = round(
                 torch.cuda.memory_allocated(self.device) / (1024**3), 1)
-            metrics["gpu_memory_total_gb"] = round(
-                torch.cuda.get_device_properties(self.device).total_mem / (1024**3), 1)
+            props = torch.cuda.get_device_properties(self.device)
+            total = getattr(props, "total_memory", None) or getattr(props, "total_mem", 0)
+            metrics["gpu_memory_total_gb"] = round(total / (1024**3), 1)
         elif self.device.type == "mps":
             import torch
             metrics["gpu_percent"] = None  # Not exposed by MPS
