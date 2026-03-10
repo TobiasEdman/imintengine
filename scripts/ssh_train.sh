@@ -15,7 +15,10 @@ VM_HOST="${1:?Usage: $0 <user>@<host> [extra args for train_lulc.py]}"
 shift
 EXTRA_ARGS="${*:-}"
 
-echo "  Launching training on $VM_HOST..."
+# Allow overriding data directory via DATA_DIR env var or --data-dir in EXTRA_ARGS
+DATA_DIR="${DATA_DIR:-data/lulc_seasonal}"
+
+echo "  Launching training on $VM_HOST (data: $DATA_DIR)..."
 
 ssh "$VM_HOST" "bash -s" <<EOF
 cd ~/ImintEngine
@@ -27,17 +30,17 @@ tmux kill-session -t training 2>/dev/null || true
 tmux new-session -d -s training \
     "source ~/ImintEngine/.venv/bin/activate && \\
      python3 scripts/train_lulc.py \\
-        --data-dir data/lulc_full \\
+        --data-dir $DATA_DIR \\
         --device cuda \\
         --batch-size 16 \\
         --num-workers 8 \\
         --dashboard \\
         $EXTRA_ARGS \\
-        2>&1 | tee data/lulc_full/train.log"
+        2>&1 | tee $DATA_DIR/train.log"
 
 echo ""
 echo "  Training started in tmux session 'training'."
 echo "  Attach:    tmux attach -t training"
 echo "  GPU:       nvidia-smi"
-echo "  Logs:      tail -f data/lulc_full/train.log"
+echo "  Logs:      tail -f $DATA_DIR/train.log"
 EOF

@@ -104,6 +104,8 @@ def main():
                         help="Enable HR-VPP phenology aux channels (5 bands)")
     parser.add_argument("--enable-all-aux", action="store_true",
                         help="Enable all auxiliary channels (incl. VPP)")
+    parser.add_argument("--enable-multitemporal", action="store_true",
+                        help="Enable multitemporal mode (4 seasonal frames)")
 
     # Dashboard
     parser.add_argument("--dashboard", action="store_true",
@@ -174,6 +176,7 @@ def main():
         early_stop_metric=args.early_stop_metric,
         unfreeze_backbone_layers=args.unfreeze_layers,
         backbone_lr_factor=args.backbone_lr_factor,
+        enable_multitemporal=args.enable_multitemporal,
         enable_height_channel=all_aux or args.enable_height,
         enable_volume_channel=all_aux or args.enable_volume,
         enable_basal_area_channel=all_aux or args.enable_basal_area,

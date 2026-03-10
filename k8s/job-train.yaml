@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prithvi-seasonal-train
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: prithvi-training
+    spec:
+      containers:
+        - name: trainer
+          image: IMAGE_PLACEHOLDER  # Replace with actual image
+          command:
+            - python3
+            - scripts/train_lulc.py
+            - --data-dir
+            - /data/lulc_seasonal
+            - --device
+            - cuda
+            - --num-classes
+            - "19"
+            - --enable-multitemporal
+            - --enable-all-aux
+            - --batch-size
+            - "16"
+            - --num-workers
+            - "8"
+            - --epochs
+            - "50"
+            - --dashboard
+          resources:
+            requests:
+              cpu: "4"
+              memory: 32Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: 64Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /app/checkpoints
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+      restartPolicy: Never
+      # Prefer A100/H100 nodes if available
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule

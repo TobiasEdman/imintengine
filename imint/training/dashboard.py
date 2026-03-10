@@ -521,6 +521,50 @@ def _html_seasonal_fetch_section() -> str:
   </div>"""
 
 
+def _html_aux_prefetch_section() -> str:
+    """Return the auxiliary channel prefetch section."""
+    return f"""  <!-- Aux Prefetch Section -->
+  <div class="section" id="section-aux">
+    <div class="section-header">
+      <div class="section-title">Aux + VPP Prefetch</div>
+      <span class="section-badge pending" id="aux-badge">pending</span>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Progress</div>
+        <div class="card-value" id="aux-progress-text">-</div>
+        <div class="progress-bar-outer">
+          <div class="progress-bar-inner" id="aux-progress" style="width: 0%"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-label">Completed</div>
+        <div class="card-value" id="aux-ok" style="color: #22c55e">-</div>
+        <div class="card-sub">tiles enriched</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Failed</div>
+        <div class="card-value" id="aux-fail" style="color: #ef4444">-</div>
+        <div class="card-sub">fetch errors</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Rate</div>
+        <div class="card-value" id="aux-rate">-</div>
+        <div class="card-sub">tiles / sec</div>
+      </div>
+      <div class="card">
+        <div class="card-label">ETA</div>
+        <div class="card-value" id="aux-eta">-</div>
+        <div class="card-sub" id="aux-elapsed"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Channels</div>
+        <div class="card-value" id="aux-channels" style="font-size: 0.75rem">-</div>
+      </div>
+    </div>
+  </div>"""
+
+
 def _html_dataprep_section() -> str:
     """Return the data preparation section."""
     return f"""  <!-- Data Preparation Section -->
@@ -1147,6 +1191,48 @@ function updateSeasonalFetch(sf) {{
   }}
 }}
 
+// ── Aux Prefetch ────────────────────────────────────────────────
+function updateAuxPrefetch(ax) {{
+  const badge = document.getElementById('aux-badge');
+  if (!ax) return;
+
+  const total = ax.total || 0;
+  const ok = ax.ok || 0;
+  const fail = ax.fail || 0;
+  const done = ok + fail;
+
+  // Badge
+  if (done >= total && total > 0) {{
+    badge.className = 'section-badge done';
+    badge.textContent = 'done';
+  }} else if (ok > 0 || fail > 0) {{
+    badge.className = 'section-badge active';
+    badge.textContent = 'running';
+  }} else {{
+    badge.className = 'section-badge pending';
+    badge.textContent = 'pending';
+  }}
+
+  document.getElementById('aux-progress-text').textContent =
+    total > 0 ? ok + '/' + total : '-';
+  document.getElementById('aux-ok').textContent = ok;
+  document.getElementById('aux-fail').textContent = fail;
+  document.getElementById('aux-rate').textContent =
+    ax.rate_tiles_per_s ? ax.rate_tiles_per_s.toFixed(2) : '-';
+  document.getElementById('aux-eta').textContent = fmtTime(ax.eta_s);
+  document.getElementById('aux-elapsed').textContent =
+    ax.elapsed_s ? fmtTime(ax.elapsed_s) + ' elapsed' : '';
+
+  if (total > 0) {{
+    const pct = Math.round(ok / total * 100);
+    document.getElementById('aux-progress').style.width = pct + '%';
+  }}
+
+  const chans = ax.channels || [];
+  document.getElementById('aux-channels').textContent =
+    chans.length > 0 ? chans.join(', ') : '-';
+}}
+
 // ── Global status logic ─────────────────────────────────────────
 function updateGlobalStatus(nmdLog, prepLog, trainLog) {{
   const badge = document.getElementById('status-badge');
@@ -1682,7 +1768,7 @@ function updateLulcInference(summary, gallery) {{
 }}
 
 async function refresh() {{
-  const [nmdLog, prepLog, trainLog, stats, sysMetrics, evalTest, sfLog, lulcSummary, lulcGallery] = await Promise.all([
+  const [nmdLog, prepLog, trainLog, stats, sysMetrics, evalTest, sfLog, auxLog, lulcSummary, lulcGallery] = await Promise.all([
     fetchJSON('nmd_prefilter_log.json'),
     fetchJSON('prepare_log.json'),
     fetchJSON('training_log.json'),
@@ -1690,6 +1776,7 @@ async function refresh() {{
     fetchJSON('system_metrics.json'),
     fetchJSON('eval_test.json'),
     fetchJSON('seasonal_fetch_log.json'),
+    fetchJSON('aux_prefetch_progress.json'),
     fetchJSON('predictions/val/prediction_summary.json'),
     fetchJSON('predictions/val/gallery.json'),
   ]);
@@ -1701,6 +1788,7 @@ async function refresh() {{
   if (stats) _lastGoodData.stats = stats;
   if (evalTest) _lastGoodData.evalTest = evalTest;
   if (sfLog) _lastGoodData.sfLog = sfLog;
+  if (auxLog) _lastGoodData.auxLog = auxLog;
   if (lulcSummary) _lastGoodData.lulcSummary = lulcSummary;
   if (lulcGallery) _lastGoodData.lulcGallery = lulcGallery;
 
@@ -1710,12 +1798,14 @@ async function refresh() {{
   const s = stats || _lastGoodData.stats;
   const ev = evalTest || _lastGoodData.evalTest;
   const sf = sfLog || _lastGoodData.sfLog;
+  const ax = auxLog || _lastGoodData.auxLog;
   const ls = lulcSummary || _lastGoodData.lulcSummary;
   const lg = lulcGallery || _lastGoodData.lulcGallery;
 
   updateGlobalStatus(n, p, t);
   if (n) updateNmdPrefilter(n);
   if (sf) updateSeasonalFetch(sf);
+  if (ax) updateAuxPrefetch(ax);
   if (p || s) updateDataPrep(p, s);
   if (ev) updateEvaluation(ev);
   if (t) updateTraining(t);
@@ -1780,6 +1870,8 @@ def _build_html(chart_js_src: str) -> str:
 {_html_nmd_section()}
 
 {_html_seasonal_fetch_section()}
+
+{_html_aux_prefetch_section()}
 
 {_html_dataprep_section()}
 
