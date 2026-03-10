@@ -26,11 +26,17 @@ This directory contains Claude Code conversation logs split into topic-based mar
 | 18 | [18_vpp_phenology_pipeline.md](18_vpp_phenology_pipeline.md) | HR-VPP Phenology — PPI, SOSD/EOSD/LENGTH, Sentinel Hub BYOC collection, integration with AuxEncoder |
 | 19 | [19_marine_commercial_showcase.md](19_marine_commercial_showcase.md) | Marine Commercial Showcase — Kalmarsund shipping tab, AI2 vessel detection, coordinate convention fix, grazing statistics |
 | 20 | [20_lulc_inference_dashboard.md](20_lulc_inference_dashboard.md) | LULC Inference Dashboard — Per-tile prediction pipeline, NIR false-color, tile gallery, modular dashboard refactoring |
+| 21 | [21_nmd_accuracy_and_label_noise.md](21_nmd_accuracy_and_label_noise.md) | NMD Label Accuracy — Label noise analysis, 70-80% NMD accuracy, per-class explanation, 5 label cleaning approaches |
+| 22 | [22_phenology_seasonal_strategy.md](22_phenology_seasonal_strategy.md) | Phenology Strategy — VPP/seasonal impact on forest classes, SOSD/EOSD, 3 architectural options, literature review |
+| 23 | [23_final_model_evaluation.md](23_final_model_evaluation.md) | Final Model Evaluation — 44.14% mIoU, 0.9334 AUC-ROC, user/producer accuracy, ROC curves, dashboard deployment |
+| 24 | [24_colonyos_operations_runbook.md](24_colonyos_operations_runbook.md) | ColonyOS Runbook — CFS networking fix, OOM diagnosis, container regulation, watchdog/backup/safe-down, SSH config |
 
 ## Sources
 
 Files 01-10: Original conversation log (`Data preperation and training pipeline.txt`, ~1 MB)
 Files 02, 11-15: Second pipeline conversation (`Data preperation and training pipeline_2.txt`, ~585 KB)
 Files 16-18: Third pipeline conversation (S2 Process API, training results, VPP phenology)
+Files 19-20: Fourth pipeline conversation (marine commercial showcase, LULC inference dashboard)
+Files 21-24: Fifth pipeline conversation (`Train_fetch_prompt.txt` — NMD accuracy research, phenology strategy, final evaluation, ColonyOS runbook)
 
 The conversations cover satellite imagery analysis with ImintEngine, including Sentinel-2 data processing, LULC classification with Prithvi-EO-2.0, auxiliary data fusion, distributed computing with ColonyOS, vessel detection, nautical chart integration, change detection, grazing analysis, shoreline mapping, and web deployment.

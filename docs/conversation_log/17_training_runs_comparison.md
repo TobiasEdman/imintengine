@@ -33,14 +33,16 @@ Very low accuracy due to 19-class fragmentation and tiny dataset.
 | **Loss** | Focal (gamma=2.0) |
 | **Device** | MPS (M1 Max) |
 | **Backbone** | Partial unfreeze (last 6 blocks, lr_factor=0.1) |
-| **Epochs** | 44/50 (still running) |
-| **Best mIoU** | **40.89%** (epoch 44) |
+| **Epochs** | 42/50 (crashed, patience 2/15) |
+| **Best mIoU** | **40.89%** (epoch 40) |
 | **Aux channels** | None |
 | **Checkpoint** | `checkpoints/lulc/` |
 | **Date** | Mar 1-6, 2026 |
-| **Status** | Running (was accidentally restarted) |
+| **Status** | Crashed at epoch 42 (process died, dashboard showed stale data at epoch 25) |
 
 Improvements over Run 1: grouped classes, focal loss, backbone unfreezing, full dataset.
+
+**Investigation notes**: The dashboard appeared stuck at epoch 25 for days, but checkpoints revealed training had actually reached epoch 40-42. The dashboard HTTP server kept serving stale JSON after the training process died. The crash was likely MPS memory leak or macOS sleep/wake recovery issue. Training was resumed from checkpoint to finish remaining epochs.
 
 ---
 
@@ -60,7 +62,7 @@ Improvements over Run 1: grouped classes, focal loss, backbone unfreezing, full 
 | **Date** | Mar 3, 2026 |
 | **Status** | Stopped (early stopping) |
 
-This is the best performing model. The AuxEncoder provides +2.4% mIoU improvement.
+After further training, the best model reached **44.14% mIoU** with a mean AUC-ROC of **0.9334** (see [23_final_model_evaluation.md](23_final_model_evaluation.md) for full evaluation results including per-class user/producer accuracy and ROC curves).
 
 ---
 
@@ -241,10 +243,10 @@ python scripts/train_lulc.py \
 
 ## Next Steps
 
-1. **Resume AuxEncoder training** -- the model was still improving (43.27% at epoch 23, train loss still decreasing). Consider increasing patience or resuming from `last_checkpoint.pt`
-2. **Add VPP channels** -- HR-VPP phenology (5 bands: SOSD, EOSD, length, maxV, minV) already supported in config but not yet trained
-3. **Evaluate on test set** -- run `--evaluate-only` on the aux best checkpoint with the test split
-4. **Forest deciduous** -- worst class at 9.9% IoU, needs investigation (class imbalance? spectral confusion with mixed forest?)
+1. **Label cleaning** -- NMD label noise identified as the primary performance ceiling. See [21_nmd_accuracy_and_label_noise.md](21_nmd_accuracy_and_label_noise.md) for 5 approaches with phased recommendation
+2. **Add VPP channels** -- HR-VPP phenology (5 bands: SOSD, EOSD, length, maxV, minV) already supported in config but not yet trained. See [22_phenology_seasonal_strategy.md](22_phenology_seasonal_strategy.md) for impact analysis
+3. **Forest deciduous** -- worst class at 9.9% IoU, caused by NMD label noise (NMD's own accuracy for deciduous is ~50-60%). Phenology data (SOSD/EOSD) is the textbook solution
+4. **Multi-temporal backbone** -- feed spring + summer frames through Prithvi for direct temporal feature learning
 
 ---
 

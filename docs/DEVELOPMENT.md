@@ -225,6 +225,29 @@ Enable all: `--enable-all-aux`
 
 Skogsstyrelsen endpoints require `.skg_endpoints` config file or `SKG_HEIGHT_URL` / `SKG_GRUNDDATA_URL` env vars (see `config/environments/template.env`).
 
+### Model Evaluation Results
+
+Best model: Prithvi-EO-2.0 + UPerNet + AuxEncoder (5 aux channels).
+
+| Metric | Value |
+|--------|-------|
+| Best mIoU | **44.14%** |
+| Mean AUC-ROC | **0.9334** |
+| Overall agreement | 57.3% |
+| Validation tiles | 949 |
+
+Top classes: water (93.4% IoU, AUC 0.999), cropland (71.3%, AUC 0.998). Worst: forest_deciduous (9.9% IoU) due to NMD label noise.
+
+For full per-class results including user/producer accuracy and ROC curves, see [conversation_log/23_final_model_evaluation.md](conversation_log/23_final_model_evaluation.md).
+
+### Known Limitations
+
+1. **NMD label noise ceiling** -- NMD's own accuracy for deciduous and mixed forest is 50-60%. The model cannot exceed the accuracy of its training labels. See [conversation_log/21_nmd_accuracy_and_label_noise.md](conversation_log/21_nmd_accuracy_and_label_noise.md) for 5 label cleaning approaches.
+
+2. **Geographic bias** -- NMD accuracy decreases northward. Our validation split (lat 64-66 N) is in the worst region. The model likely performs better in southern Sweden.
+
+3. **Temporal limitation** -- Single summer frame (Jun-Aug). Adding spring/autumn/winter via phenology data or multi-temporal backbone would improve forest type separation by +5-15pp per literature. See [conversation_log/22_phenology_seasonal_strategy.md](conversation_log/22_phenology_seasonal_strategy.md).
+
 ---
 
 ## ColonyOS (Distributed Fetch)
