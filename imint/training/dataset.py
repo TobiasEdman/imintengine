@@ -117,7 +117,12 @@ class LULCDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         tile_path = self.tiles_dir / self.tile_names[idx]
-        data = np.load(tile_path, allow_pickle=True)
+        try:
+            data = np.load(tile_path, allow_pickle=True)
+        except Exception:
+            # Corrupted tile — return a random valid tile instead
+            alt = (idx + 1) % len(self.tile_names)
+            return self.__getitem__(alt)
 
         image = data["image"].astype(np.float32)
         label = data["label"].astype(np.int64)
