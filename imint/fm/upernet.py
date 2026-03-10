@@ -361,8 +361,22 @@ class PrithviSegmentationModel(nn.Module):
         selected = [all_features[i] for i in self.feature_indices]
 
         # Reshape tokens → spatial maps using backbone's method
-        # Result: list of (B, embed_dim, grid_h, grid_w)
+        # Result: list of (B, embed_dim, grid_h, grid_w) for T=1
+        #     or: list of (B, T*embed_dim, grid_h, grid_w) for T>1
         spatial = self.encoder.prepare_features_for_image_model(selected)
+
+        # For multitemporal (T>1), pool over temporal dimension
+        # prepare_features_for_image_model stacks as (B, T*E, H, W)
+        embed_dim = self.encoder.embed_dim
+        if spatial[0].shape[1] > embed_dim:
+            T = spatial[0].shape[1] // embed_dim
+            pooled = []
+            for feat in spatial:
+                B, TE, H, W = feat.shape
+                # (B, T*E, H, W) → (B, T, E, H, W) → mean over T
+                feat = feat.view(B, T, embed_dim, H, W).mean(dim=1)
+                pooled.append(feat)
+            spatial = pooled
 
         # Apply scale modules to create multi-scale
         # spatial[0] = level 0 features → fpn1 (1024→256, 4× upsample)
