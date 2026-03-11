@@ -4,7 +4,7 @@ metadata:
   name: prithvi-seasonal-train
   namespace: prithvi-training-default
 spec:
-  backoffLimit: 1
+  backoffLimit: 0
   activeDeadlineSeconds: 50400  # 14h max, auto-kill if stuck
   template:
     metadata:
@@ -62,12 +62,13 @@ spec:
               .venv/bin/python scripts/train_lulc.py \
                 --data-dir /data/lulc_seasonal \
                 --device cuda \
-                --num-classes 19 \
+                --num-classes 10 \
                 --enable-multitemporal \
                 --enable-all-aux \
                 --batch-size 16 \
                 --num-workers 8 \
                 --epochs 50 \
+                --save-every 10 \
                 --checkpoint-dir /checkpoints \
                 --dashboard
           resources:
