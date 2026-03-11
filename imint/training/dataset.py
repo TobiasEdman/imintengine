@@ -155,6 +155,27 @@ class LULCDataset(Dataset):
         if self.config.use_grouped_classes:
             label = _LUT_19_TO_10[np.clip(label, 0, 19)].astype(np.int64)
 
+        if is_mt and not self.multitemporal:
+            # ── Single-frame extraction from multitemporal tile ───────
+            # Extract best single frame (prefer summer = index 1)
+            n_frames = int(data.get("num_frames", self.n_frames))
+            n_bands = int(data.get("num_bands", self.n_bands))
+            temporal_mask = data.get("temporal_mask",
+                                     np.ones(n_frames, dtype=np.uint8))
+
+            # Prefer summer frame (index 1); fallback to first valid
+            summer_idx = 1
+            if n_frames > 1 and temporal_mask[summer_idx]:
+                frame_idx = summer_idx
+            else:
+                # First valid frame
+                valid = np.where(temporal_mask > 0)[0]
+                frame_idx = int(valid[0]) if len(valid) > 0 else 0
+
+            start_ch = frame_idx * n_bands
+            image = image[start_ch:start_ch + n_bands]  # (6, H, W)
+            is_mt = False  # Treat as single-date from here
+
         if is_mt and self.multitemporal:
             # ── Multitemporal path ────────────────────────────────────
             n_frames = int(data.get("num_frames", self.n_frames))
