@@ -107,6 +107,12 @@ def main():
     parser.add_argument("--enable-multitemporal", action="store_true",
                         help="Enable multitemporal mode (4 seasonal frames)")
 
+    # Two-stage training
+    parser.add_argument("--freeze-spectral", action="store_true",
+                        help="Stage 2: freeze backbone+decoder, train only AuxEncoder")
+    parser.add_argument("--resume-from", type=str, default=None,
+                        help="Path to checkpoint to load (spectral model for stage 2)")
+
     # Dashboard
     parser.add_argument("--dashboard", action="store_true",
                         help="Launch live training dashboard in browser")
@@ -183,6 +189,8 @@ def main():
         enable_diameter_channel=all_aux or args.enable_diameter,
         enable_dem_channel=all_aux or args.enable_dem,
         enable_vpp_channels=all_aux or args.enable_vpp,
+        freeze_spectral=args.freeze_spectral,
+        resume_from_checkpoint=args.resume_from,
     )
 
     # Load datasets

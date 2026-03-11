@@ -68,13 +68,16 @@ class LULCTrainer:
 
     def _count_aux_channels(self) -> int:
         """Count how many auxiliary raster channels are enabled."""
-        return sum([
+        count = sum([
             self.config.enable_height_channel,
             self.config.enable_volume_channel,
             self.config.enable_basal_area_channel,
             self.config.enable_diameter_channel,
             self.config.enable_dem_channel,
         ])
+        if self.config.enable_vpp_channels:
+            count += 5  # sosd, eosd, length, maxv, minv
+        return count
 
     @staticmethod
     def _collect_aux(
@@ -150,6 +153,18 @@ class LULCTrainer:
                            if p.requires_grad) - trainable_enc
         print(f"  Frozen: {frozen:,} | Trainable encoder: {trainable_enc:,} "
               f"| Trainable decoder: {trainable_dec:,}")
+
+    def _freeze_for_aux_training(self) -> None:
+        """Stage 2: freeze backbone + decoder + head, train only AuxEncoder + aux_fusion."""
+        for name, param in self.model.named_parameters():
+            if "aux_encoder" in name or "aux_fusion" in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+
+        trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        frozen = sum(p.numel() for p in self.model.parameters() if not p.requires_grad)
+        print(f"  Stage 2 (aux-only): Frozen: {frozen:,} | Trainable (aux): {trainable:,}")
 
     # ── Training ──────────────────────────────────────────────────────
 
@@ -296,17 +311,25 @@ class LULCTrainer:
                 resume_path = auto_path
 
         if resume_path and resume_path.exists():
-            state = self._load_resume_checkpoint(
-                resume_path, optimizer, scheduler,
-            )
-            start_epoch = state["epoch"] + 1
-            step = state["step"]
-            best_metric = state["best_metric"]
-            best_miou = state["best_miou"]
-            best_epoch = state["best_epoch"]
-            patience_counter = state["patience_counter"]
-            train_loss_history = state.get("train_loss_history", [])
+            if cfg.freeze_spectral:
+                # Stage 2: load spectral model, keep aux layers random
+                self._load_spectral_checkpoint(resume_path)
+                self._freeze_for_aux_training()
+                self._init_training_log()
+            else:
+                state = self._load_resume_checkpoint(
+                    resume_path, optimizer, scheduler,
+                )
+                start_epoch = state["epoch"] + 1
+                step = state["step"]
+                best_metric = state["best_metric"]
+                best_miou = state["best_miou"]
+                best_epoch = state["best_epoch"]
+                patience_counter = state["patience_counter"]
+                train_loss_history = state.get("train_loss_history", [])
         else:
+            if cfg.freeze_spectral:
+                self._freeze_for_aux_training()
             self._init_training_log()
 
         for epoch in range(start_epoch, cfg.epochs + 1):
@@ -604,6 +627,48 @@ class LULCTrainer:
         tmp = path.with_suffix(".pt.tmp")
         torch.save(checkpoint, tmp)
         tmp.rename(path)
+
+    def _load_spectral_checkpoint(self, path: Path) -> None:
+        """Load spectral-only checkpoint for stage-2 aux training.
+
+        Loads encoder + decoder + head weights from a best_model.pt
+        checkpoint. Missing aux_encoder/aux_fusion keys are expected
+        and left at their random initialization.
+        """
+        import torch
+        print(f"  Loading spectral checkpoint for stage 2: {path}")
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
+
+        # Extract state dict (handles both best_model.pt and resume format)
+        if isinstance(ckpt, dict):
+            if "state_dict" in ckpt:
+                raw_sd = ckpt["state_dict"]
+            elif "model_state_dict" in ckpt:
+                raw_sd = ckpt["model_state_dict"]
+            else:
+                raw_sd = ckpt
+        else:
+            raw_sd = ckpt
+
+        # Strip "model." prefix from Lightning-format checkpoints
+        sd = {}
+        for k, v in raw_sd.items():
+            key = k[len("model."):] if k.startswith("model.") else k
+            sd[key] = v
+
+        missing, unexpected = self.model.load_state_dict(sd, strict=False)
+        # aux_encoder and aux_fusion are expected to be missing
+        real_missing = [k for k in missing
+                        if "aux_encoder" not in k and "aux_fusion" not in k]
+        if real_missing:
+            print(f"  WARNING: {len(real_missing)} unexpected missing keys:")
+            for k in real_missing[:10]:
+                print(f"    {k}")
+        aux_missing = [k for k in missing
+                       if "aux_encoder" in k or "aux_fusion" in k]
+        if aux_missing:
+            print(f"  Aux layers initialized randomly ({len(aux_missing)} params)")
+        print(f"  Spectral model loaded successfully")
 
     def _load_resume_checkpoint(
         self,

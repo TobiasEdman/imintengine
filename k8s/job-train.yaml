@@ -59,16 +59,33 @@ spec:
               update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
               cd /app
+
+              # Stage 1: spectral-only multitemporal (no aux)
+              .venv/bin/python scripts/train_lulc.py \
+                --data-dir /data/lulc_seasonal \
+                --device cuda \
+                --num-classes 10 \
+                --enable-multitemporal \
+                --batch-size 16 \
+                --num-workers 8 \
+                --epochs 50 \
+                --save-every 10 \
+                --checkpoint-dir /checkpoints \
+                --dashboard
+
+              # Stage 2: freeze spectral, train aux+VPP on top
               .venv/bin/python scripts/train_lulc.py \
                 --data-dir /data/lulc_seasonal \
                 --device cuda \
                 --num-classes 10 \
                 --enable-multitemporal \
                 --enable-all-aux \
+                --freeze-spectral \
+                --resume-from /checkpoints/best_model.pt \
                 --batch-size 16 \
                 --num-workers 8 \
-                --epochs 50 \
-                --save-every 10 \
+                --epochs 25 \
+                --save-every 5 \
                 --checkpoint-dir /checkpoints \
                 --dashboard
           resources:
