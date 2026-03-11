@@ -269,34 +269,35 @@ class PrithviSegmentationModel(nn.Module):
 
         self.embed_dim = self.encoder.embed_dim  # 1024 for 300M
 
+        # Compute effective feature dimension: embed_dim * effective_time_dim
+        # For multitemporal (T>1), prepare_features_for_image_model produces
+        # (B, T*embed_dim, h, w) — the decoder must accept T*embed_dim channels.
+        pe = self.encoder.patch_embed
+        effective_t = pe.input_size[0] // pe.patch_size[0]  # e.g. 4/1=4
+        self.feature_dim = self.embed_dim * effective_t     # 1024*4=4096
+
         # Scale modules: create multi-scale from ViT's uniform-scale features
-        # fpn1: 1024 → 512 (2× upsample) → 256 (2× upsample) → level 0
-        # fpn2: 1024 → 512 (2× upsample) → level 1
-        # level 2: 1024 (pass-through)
-        # level 3: 1024 (pass-through, goes to PSP)
         self.decoder = nn.Module()
-        # We need to register sub-modules manually to match checkpoint paths
 
-        # fpn1: ConvTranspose2d(1024→512, 2×2, stride 2) + BN + ReLU
-        #        + ConvTranspose2d(512→256, 2×2, stride 2)
+        # fpn1: feature_dim → feature_dim//2 (2× up) → feature_dim//4 (2× up)
         self.decoder.fpn1 = nn.Sequential(
-            nn.ConvTranspose2d(self.embed_dim, self.embed_dim // 2, kernel_size=2, stride=2),
-            nn.BatchNorm2d(self.embed_dim // 2),
+            nn.ConvTranspose2d(self.feature_dim, self.feature_dim // 2, kernel_size=2, stride=2),
+            nn.BatchNorm2d(self.feature_dim // 2),
             nn.GELU(),
-            nn.ConvTranspose2d(self.embed_dim // 2, self.embed_dim // 4, kernel_size=2, stride=2),
+            nn.ConvTranspose2d(self.feature_dim // 2, self.feature_dim // 4, kernel_size=2, stride=2),
         )
 
-        # fpn2: ConvTranspose2d(1024→512, 2×2, stride 2)
+        # fpn2: feature_dim → feature_dim//2 (2× up)
         self.decoder.fpn2 = nn.Sequential(
-            nn.ConvTranspose2d(self.embed_dim, self.embed_dim // 2, kernel_size=2, stride=2),
+            nn.ConvTranspose2d(self.feature_dim, self.feature_dim // 2, kernel_size=2, stride=2),
         )
 
-        # UperNet decoder expects channels [256, 512, 1024, 1024]
+        # UperNet decoder channel sizes (scale with temporal dim)
         scale_channels = [
-            self.embed_dim // 4,  # 256 (after fpn1)
-            self.embed_dim // 2,  # 512 (after fpn2)
-            self.embed_dim,       # 1024 (pass-through)
-            self.embed_dim,       # 1024 (deepest, goes to PSP)
+            self.feature_dim // 4,  # after fpn1
+            self.feature_dim // 2,  # after fpn2
+            self.feature_dim,       # pass-through
+            self.feature_dim,       # deepest → PSP
         ]
 
         # PSP modules — pool sizes depend on compute device.
@@ -361,33 +362,17 @@ class PrithviSegmentationModel(nn.Module):
         selected = [all_features[i] for i in self.feature_indices]
 
         # Reshape tokens → spatial maps using backbone's method
-        # Result: list of (B, embed_dim, grid_h, grid_w) for T=1
-        #     or: list of (B, T*embed_dim, grid_h, grid_w) for T>1
+        # Result: list of (B, T*embed_dim, grid_h, grid_w)
+        # For T=1: (B, 1024, 14, 14), for T=4: (B, 4096, 14, 14)
+        # Temporal info is preserved as extra channels (TerraTorch convention)
         spatial = self.encoder.prepare_features_for_image_model(selected)
 
-        # For multitemporal (T>1), pool over temporal dimension
-        # prepare_features_for_image_model stacks as (B, T*E, H, W)
-        embed_dim = self.encoder.embed_dim
-        if spatial[0].shape[1] > embed_dim:
-            T = spatial[0].shape[1] // embed_dim
-            pooled = []
-            for feat in spatial:
-                B, TE, H, W = feat.shape
-                # (B, T*E, H, W) → (B, T, E, H, W) → mean over T
-                feat = feat.view(B, T, embed_dim, H, W).mean(dim=1)
-                pooled.append(feat)
-            spatial = pooled
-
         # Apply scale modules to create multi-scale
-        # spatial[0] = level 0 features → fpn1 (1024→256, 4× upsample)
-        # spatial[1] = level 1 features → fpn2 (1024→512, 2× upsample)
-        # spatial[2] = level 2 features → pass-through (1024)
-        # spatial[3] = level 3 features → pass-through (1024, goes to PSP)
         scaled = [
-            self.decoder.fpn1(spatial[0]),   # (B, 256, 4*grid_h, 4*grid_w)
-            self.decoder.fpn2(spatial[1]),   # (B, 512, 2*grid_h, 2*grid_w)
-            spatial[2],                      # (B, 1024, grid_h, grid_w)
-            spatial[3],                      # (B, 1024, grid_h, grid_w)
+            self.decoder.fpn1(spatial[0]),   # (B, feature_dim//4, 4*gh, 4*gw)
+            self.decoder.fpn2(spatial[1]),   # (B, feature_dim//2, 2*gh, 2*gw)
+            spatial[2],                      # (B, feature_dim, gh, gw)
+            spatial[3],                      # (B, feature_dim, gh, gw)
         ]
 
         return scaled
