@@ -108,7 +108,10 @@ def evaluate_model(
     n_samples = len(dataset) if max_samples is None else min(max_samples, len(dataset))
 
     # Ordered aux channel names (must match trainer._collect_aux order)
-    _AUX_NAMES = ("height", "volume", "basal_area", "diameter", "dem")
+    _AUX_NAMES = (
+        "height", "volume", "basal_area", "diameter", "dem",
+        "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
+    )
 
     for i in range(n_samples):
         sample = dataset[i]
