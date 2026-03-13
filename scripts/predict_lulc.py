@@ -117,7 +117,10 @@ def predict_split(
     """Run inference on a dataset split, save per-tile predictions."""
     import torch
 
-    _AUX_NAMES = ("height", "volume", "basal_area", "diameter", "dem")
+    _AUX_NAMES = (
+        "height", "volume", "basal_area", "diameter", "dem",
+        "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

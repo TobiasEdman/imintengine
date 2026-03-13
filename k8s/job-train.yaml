@@ -60,18 +60,8 @@ spec:
 
               cd /app
 
-              # Stage 1: spectral-only multitemporal (no aux)
-              .venv/bin/python scripts/train_lulc.py \
-                --data-dir /data/lulc_seasonal \
-                --device cuda \
-                --num-classes 10 \
-                --enable-multitemporal \
-                --batch-size 16 \
-                --num-workers 8 \
-                --epochs 50 \
-                --save-every 10 \
-                --checkpoint-dir /checkpoints \
-                --dashboard
+              # Stage 1 already completed (best_model.pt on PVC)
+              # Best spectral mIoU=0.3637 at epoch 36 (early stopped at 45)
 
               # Stage 2: freeze spectral, train aux+VPP on top
               .venv/bin/python scripts/train_lulc.py \

@@ -91,7 +91,10 @@ class LULCTrainer:
         subset is enabled, ensuring consistent channel indexing.
         """
         parts: list["torch.Tensor"] = []
-        for name in ("height", "volume", "basal_area", "diameter", "dem"):
+        for name in (
+            "height", "volume", "basal_area", "diameter", "dem",
+            "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
+        ):
             if name in batch:
                 parts.append(batch[name].to(device))  # (B, 1, H, W)
         if not parts:
