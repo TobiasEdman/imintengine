@@ -117,10 +117,8 @@ def predict_split(
     """Run inference on a dataset split, save per-tile predictions."""
     import torch
 
-    _AUX_NAMES = (
-        "height", "volume", "basal_area", "diameter", "dem",
-        "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
-    )
+    # Use canonical aux channel names from config
+    _AUX_NAMES = config.enabled_aux_names
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -68,33 +68,19 @@ class LULCTrainer:
 
     def _count_aux_channels(self) -> int:
         """Count how many auxiliary raster channels are enabled."""
-        count = sum([
-            self.config.enable_height_channel,
-            self.config.enable_volume_channel,
-            self.config.enable_basal_area_channel,
-            self.config.enable_diameter_channel,
-            self.config.enable_dem_channel,
-        ])
-        if self.config.enable_vpp_channels:
-            count += 5  # sosd, eosd, length, maxv, minv
-        return count
+        return len(self.config.enabled_aux_names)
 
-    @staticmethod
     def _collect_aux(
+        self,
         batch: dict,
         device: "torch.device",
     ) -> "torch.Tensor | None":
         """Stack enabled aux channels from a batch dict → (B, N, H, W).
 
-        Channels are always collected in a fixed order
-        (height, volume, basal_area, diameter) regardless of which
-        subset is enabled, ensuring consistent channel indexing.
+        Uses config.enabled_aux_names for canonical channel ordering.
         """
         parts: list["torch.Tensor"] = []
-        for name in (
-            "height", "volume", "basal_area", "diameter", "dem",
-            "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
-        ):
+        for name in self.config.enabled_aux_names:
             if name in batch:
                 parts.append(batch[name].to(device))  # (B, 1, H, W)
         if not parts:

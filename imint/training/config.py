@@ -152,6 +152,31 @@ class TrainingConfig:
         default_factory=lambda: ["B02", "B03", "B04", "B8A", "B11", "B12"]
     )
 
+    @property
+    def enabled_aux_names(self) -> tuple[str, ...]:
+        """Canonical ordered list of enabled auxiliary channel names.
+
+        Use this everywhere instead of hardcoding channel name lists.
+        Order must match how channels are stacked in the dataset.
+        """
+        names: list[str] = []
+        if self.enable_height_channel:
+            names.append("height")
+        if self.enable_volume_channel:
+            names.append("volume")
+        if self.enable_basal_area_channel:
+            names.append("basal_area")
+        if self.enable_diameter_channel:
+            names.append("diameter")
+        if self.enable_dem_channel:
+            names.append("dem")
+        if self.enable_vpp_channels:
+            names.extend([
+                "vpp_sosd", "vpp_eosd", "vpp_length",
+                "vpp_maxv", "vpp_minv",
+            ])
+        return tuple(names)
+
     def __post_init__(self) -> None:
         """Override defaults from ``IMINT_*`` environment variables.
 

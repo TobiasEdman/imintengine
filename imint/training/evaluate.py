@@ -107,11 +107,8 @@ def evaluate_model(
 
     n_samples = len(dataset) if max_samples is None else min(max_samples, len(dataset))
 
-    # Ordered aux channel names (must match trainer._collect_aux order)
-    _AUX_NAMES = (
-        "height", "volume", "basal_area", "diameter", "dem",
-        "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
-    )
+    # Use canonical aux channel names from config
+    aux_names = config.enabled_aux_names if hasattr(config, 'enabled_aux_names') else ()
 
     for i in range(n_samples):
         sample = dataset[i]
@@ -130,7 +127,7 @@ def evaluate_model(
 
         # Collect auxiliary channels if present
         aux_parts = []
-        for name in _AUX_NAMES:
+        for name in aux_names:
             if name in sample:
                 aux_parts.append(sample[name].unsqueeze(0).to(device))
         aux = torch.cat(aux_parts, dim=1) if aux_parts else None

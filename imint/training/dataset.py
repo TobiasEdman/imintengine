@@ -90,24 +90,8 @@ class LULCDataset(Dataset):
             self.mean_mt = np.tile(self.mean, (self.n_frames, 1, 1))
             self.std_mt = np.tile(self.std, (self.n_frames, 1, 1))
 
-        # Auxiliary channels: list of npz key names
-        self.aux_channels: list[str] = []
-        if self.config.enable_height_channel:
-            self.aux_channels.append("height")
-        if self.config.enable_volume_channel:
-            self.aux_channels.append("volume")
-        if self.config.enable_basal_area_channel:
-            self.aux_channels.append("basal_area")
-        if self.config.enable_diameter_channel:
-            self.aux_channels.append("diameter")
-        if self.config.enable_dem_channel:
-            self.aux_channels.append("dem")
-        if self.config.enable_vpp_channels:
-            # VPP adds 5 channels stored as separate keys in .npz
-            self.aux_channels.extend([
-                "vpp_sosd", "vpp_eosd", "vpp_length",
-                "vpp_maxv", "vpp_minv",
-            ])
+        # Auxiliary channels: canonical ordered list from config
+        self.aux_channels: list[str] = list(self.config.enabled_aux_names)
 
         # Augmentation only for training
         self.augment = split == "train"
