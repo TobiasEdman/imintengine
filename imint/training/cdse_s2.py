@@ -131,6 +131,7 @@ def fetch_s2_scene(
             token=token,
         )
     except Exception as e:
+        print(f"    [SH HTTP] {date}: {e}")
         return None
 
     # Parse multi-band TIFF

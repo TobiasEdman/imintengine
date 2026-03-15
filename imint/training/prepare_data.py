@@ -339,36 +339,28 @@ def prepare_training_data(config: TrainingConfig) -> None:
     print(f"  Progress: {len(completed)} completed, {len(failed)} failed")
 
     # ── Step 4: Verify data source connections ───────────────────────
-    # In multitemporal mode, the primary fetch path uses CDSE Sentinel Hub
-    # Process API (HTTP), so openEO connections are only needed for fallback.
-    # Connection failures are non-fatal in multitemporal mode.
+    # Multitemporal mode uses CDSE Sentinel Hub Process API (HTTP) for
+    # spectral data — no openEO needed.  DES STAC is used for date
+    # discovery (plain HTTP, no connection required).
+    # Single-temporal mode still uses openEO.
     sources = config.fetch_sources
     connections = {}
-    for src in sources:
-        if src == "copernicus":
-            print("\n  Verifying CDSE connection...")
-            try:
+    if not config.enable_multitemporal:
+        for src in sources:
+            if src == "copernicus":
+                print("\n  Verifying CDSE connection...")
                 connections["copernicus"] = _connect_cdse()
-                print("  CDSE openEO connection OK")
-            except Exception as e:
-                if config.enable_multitemporal:
-                    print(f"  CDSE openEO connection failed: {e}")
-                    print("  → OK: multitemporal uses Sentinel Hub HTTP as primary")
-                    connections["copernicus"] = None  # Placeholder
-                else:
-                    raise
-        else:
-            print(f"\n  Verifying DES connection...")
-            try:
+                print("  CDSE connection OK")
+            else:
+                print(f"\n  Verifying DES connection...")
                 connections["des"] = _connect()
                 print("  DES connection OK")
-            except Exception as e:
-                if config.enable_multitemporal:
-                    print(f"  DES connection failed: {e}")
-                    print("  → OK: multitemporal uses Sentinel Hub HTTP as primary")
-                    connections["des"] = None
-                else:
-                    raise
+    else:
+        print("\n  Multitemporal mode: using CDSE Sentinel Hub HTTP")
+        print("  Date discovery: DES STAC (explorer.digitalearth.se)")
+        # No openEO connections needed
+        for src in sources:
+            connections[src] = None  # Placeholder for worker distribution
 
     # Worker distribution: more workers to faster source (CDSE)
     workers_per_source = {}
@@ -1113,10 +1105,10 @@ def prepare_training_data(config: TrainingConfig) -> None:
                             compute_growing_season_windows,
                         )
                         vpp = fetch_vpp_tiles(
-                            west=projected["left"],
-                            south=projected["bottom"],
-                            east=projected["right"],
-                            north=projected["top"],
+                            west=projected["west"],
+                            south=projected["south"],
+                            east=projected["east"],
+                            north=projected["north"],
                             size_px=64,
                         )
                         doy_windows = compute_growing_season_windows(
@@ -1143,10 +1135,11 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     active_windows = windows
 
                 # ── Phase 2: Spectral + SCL fetch per season ────────────
-                # Primary: CDSE Sentinel Hub Process API (single HTTP POST
-                #   fetches spectral + SCL, checks cloud/nodata/haze)
-                # Fallback: openEO (if HTTP fails)
-                from .cdse_s2 import fetch_s2_scene_with_fallback
+                # CDSE Sentinel Hub Process API: single HTTP POST per
+                # candidate — fetches spectral + SCL, checks cloud/nodata/
+                # haze locally.  No openEO fallback (same CDSE platform,
+                # same rate limits).
+                from .cdse_s2 import fetch_s2_scene
 
                 frames = []       # list of (6, H, W) arrays
                 frame_dates = []  # list of date strings
@@ -1181,14 +1174,12 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     for cand_date, scene_cc in top_cands:
                         t0 = time.monotonic()
                         try:
-                            result = fetch_s2_scene_with_fallback(
+                            result = fetch_s2_scene(
                                 sh_west, sh_south, sh_east, sh_north,
                                 date=cand_date,
-                                coords_wgs84=coords,
                                 size_px=sh_size,
                                 cloud_threshold=config.seasonal_cloud_threshold,
                                 haze_threshold=config.b02_haze_threshold,
-                                source=_source,
                             )
                         except Exception:
                             result = None
@@ -1209,7 +1200,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                                   f"{cand_date} ✓ (cloud={cloud_frac:.0%})")
                             found = True
                             break
-                        time.sleep(0.5)
+                        time.sleep(1.5)  # Rate limit: ~1 req/s per worker
 
                     if not found:
                         print(f"    {cell_key} {win_label}: "
