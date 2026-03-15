@@ -1049,9 +1049,10 @@ def prepare_training_data(config: TrainingConfig) -> None:
         _source = worker_source
 
         n_frames = config.num_temporal_frames
-        windows = config.seasonal_windows[:n_frames]
+        default_windows = config.seasonal_windows[:n_frames]
         prithvi_bands = config.prithvi_bands
         n_bands = len(prithvi_bands)
+        use_vpp_guided = getattr(config, 'enable_vpp_guided_windows', False)
 
         while True:
             item = approved_q.get()
@@ -1074,20 +1075,56 @@ def prepare_training_data(config: TrainingConfig) -> None:
             try:
                 projected = _to_nmd_grid(coords)
 
+                # ── VPP-guided per-tile windows ─────────────────────────
+                doy_windows = None
+                windows = default_windows
+                if use_vpp_guided:
+                    try:
+                        from .cdse_vpp import fetch_vpp_tiles
+                        from .vpp_windows import (
+                            compute_growing_season_windows,
+                        )
+                        vpp = fetch_vpp_tiles(
+                            west=projected["left"],
+                            south=projected["bottom"],
+                            east=projected["right"],
+                            north=projected["top"],
+                            size_px=64,
+                        )
+                        doy_windows = compute_growing_season_windows(
+                            vpp["sosd"], vpp["eosd"],
+                            num_frames=n_frames,
+                        )
+                    except Exception as e:
+                        print(f"    {cell_key} VPP failed ({e}), "
+                              f"using default windows")
+
                 # ── Phase 1: STAC discovery per season ──────────────────
-                season_candidates = fetch_seasonal_dates(
-                    coords, windows, years_order,
-                    scene_cloud_max=50.0,
-                )
+                if doy_windows is not None:
+                    from ..fetch import fetch_seasonal_dates_doy
+                    season_candidates = fetch_seasonal_dates_doy(
+                        coords, doy_windows, years_order,
+                        scene_cloud_max=50.0,
+                    )
+                    active_windows = doy_windows
+                else:
+                    season_candidates = fetch_seasonal_dates(
+                        coords, windows, years_order,
+                        scene_cloud_max=50.0,
+                    )
+                    active_windows = windows
 
                 # ── Phase 2: SCL pre-screen + spectral fetch per season ─
                 frames = []       # list of (6, H, W) arrays
                 frame_dates = []  # list of date strings
                 frame_mask = []   # 1 = valid, 0 = padded
 
-                for win_idx, (m_start, m_end) in enumerate(windows):
+                for win_idx, (w_start, w_end) in enumerate(active_windows):
                     candidates = season_candidates[win_idx]
-                    win_label = f"m{m_start}-{m_end}"
+                    if doy_windows is not None:
+                        win_label = f"doy{w_start}-{w_end}"
+                    else:
+                        win_label = f"m{w_start}-{w_end}"
 
                     if not candidates:
                         print(f"    {cell_key} {win_label}: no STAC candidates")

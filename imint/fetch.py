@@ -1341,6 +1341,57 @@ def fetch_seasonal_image(
     return image, date
 
 
+def fetch_seasonal_dates_doy(
+    coords: dict,
+    doy_windows: list[tuple[int, int]],
+    years: list[str],
+    scene_cloud_max: float = 50.0,
+) -> list[list[tuple[str, float]]]:
+    """Find best S2 dates for DOY-based seasonal windows (VPP-guided).
+
+    Like ``fetch_seasonal_dates`` but accepts day-of-year windows instead
+    of month-based windows, enabling per-tile phenology-guided fetching.
+
+    Args:
+        coords: WGS84 bounding box dict.
+        doy_windows: List of (doy_start, doy_end) tuples, e.g.
+            [(100, 140), (141, 180), (181, 220), (221, 273)].
+        years: Years to search, e.g. ["2019", "2018"].
+        scene_cloud_max: Max scene cloud % for STAC pre-filter.
+
+    Returns:
+        List of lists (one per window), each containing
+        ``[(date_str, scene_cloud_pct), ...]`` sorted by cloud ascending.
+    """
+    from datetime import datetime, timedelta
+
+    results = []
+    for doy_start, doy_end in doy_windows:
+        window_candidates = []
+        for year in years:
+            yr = int(year)
+            # Convert DOY to ISO date strings
+            dt_start = datetime(yr, 1, 1) + timedelta(days=doy_start - 1)
+            dt_end = datetime(yr, 1, 1) + timedelta(days=doy_end - 1)
+            date_start = dt_start.strftime("%Y-%m-%d")
+            date_end = dt_end.strftime("%Y-%m-%d")
+
+            try:
+                dates = _stac_available_dates(
+                    coords, date_start, date_end,
+                    scene_cloud_max=scene_cloud_max,
+                )
+                window_candidates.extend(dates)
+            except Exception:
+                pass  # STAC timeout — skip this year/window
+
+        # Sort all candidates across years by cloud ascending
+        window_candidates.sort(key=lambda x: x[1])
+        results.append(window_candidates)
+
+    return results
+
+
 # ── Multi-temporal vessel heatmap ────────────────────────────────────────────
 
 

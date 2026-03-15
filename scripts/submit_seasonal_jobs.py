@@ -75,6 +75,7 @@ def _build_job_spec(
     cfs_dir: str,
     num_classes: int,
     b02_haze_threshold: float,
+    vpp_guided: bool = True,
     des_token: str = "",
     des_user: str = "",
     des_password: str = "",
@@ -110,6 +111,7 @@ def _build_job_spec(
             "FETCH_SOURCE": "auto",
             "YEARS": ",".join(years),
             "SEASONAL_WINDOWS": windows,
+            "VPP_GUIDED": str(vpp_guided).lower(),
             "SEASONAL_CLOUD_THRESHOLD": str(cloud_threshold),
             "TILES_DIR": "/cfs/tiles",
             "NUM_CLASSES": str(num_classes),
@@ -190,8 +192,16 @@ def main():
         help="Comma-separated years to search (default: 2019,2018)",
     )
     parser.add_argument(
-        "--windows", default="4-5,6-7,8-9,1-2",
-        help="Seasonal windows (default: 4-5,6-7,8-9,1-2)",
+        "--windows", default="4-4,5-6,7-7,8-9",
+        help="Fallback seasonal windows (default: 4-4,5-6,7-7,8-9)",
+    )
+    parser.add_argument(
+        "--vpp-guided", action="store_true", default=True,
+        help="Use VPP phenology for per-tile windows (default: True)",
+    )
+    parser.add_argument(
+        "--no-vpp-guided", action="store_true",
+        help="Disable VPP-guided windows, use fixed month windows",
     )
     parser.add_argument(
         "--cloud-threshold", type=float, default=0.10,
@@ -225,12 +235,14 @@ def main():
 
     sources = [s.strip() for s in args.sources.split(",")]
     years = [y.strip() for y in args.years.split(",")]
+    vpp_guided = args.vpp_guided and not args.no_vpp_guided
 
     print("=" * 60)
     print("  Seasonal Tile Fetch — ColonyOS Coordinator")
     print(f"  Sources: {', '.join(s.upper() for s in sources)}")
     print(f"  Years: {', '.join(years)}")
-    print(f"  Windows: {args.windows}")
+    print(f"  Fallback windows: {args.windows}")
+    print(f"  VPP-guided: {vpp_guided}")
     print(f"  Cloud threshold: {args.cloud_threshold:.0%}")
     print(f"  Grid spacing: {args.grid_spacing}m")
     print("=" * 60)
@@ -318,6 +330,7 @@ def main():
             cfs_dir=args.tiles_dir,
             num_classes=args.num_classes,
             b02_haze_threshold=config.b02_haze_threshold,
+            vpp_guided=vpp_guided,
             des_token=des_token,
             des_user=des_user,
             des_password=des_password,

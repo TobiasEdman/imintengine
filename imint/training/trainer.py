@@ -617,6 +617,34 @@ class LULCTrainer:
         torch.save(checkpoint, tmp)
         tmp.rename(path)
 
+    def _validate_checkpoint_compat(self, ckpt: dict) -> None:
+        """Validate checkpoint compatibility with current config.
+
+        Warns if the checkpoint was saved with a different number of
+        temporal frames or aux channels than the current config.
+        """
+        if not isinstance(ckpt, dict) or "config" not in ckpt:
+            return  # Old checkpoint format, skip validation
+
+        ckpt_cfg = ckpt["config"]
+        current_frames = (
+            self.config.num_temporal_frames
+            if self.config.enable_multitemporal else 1
+        )
+        ckpt_frames = ckpt_cfg.get("num_temporal_frames")
+
+        if ckpt_frames is not None and ckpt_frames != current_frames:
+            print(f"  ⚠ WARNING: Checkpoint was saved with "
+                  f"num_temporal_frames={ckpt_frames}, but current "
+                  f"config has {current_frames}. Feature dimensions "
+                  f"may differ — decoder weights may not be compatible.")
+
+        ckpt_n_aux = ckpt_cfg.get("n_aux_channels")
+        current_n_aux = self._count_aux_channels()
+        if ckpt_n_aux is not None and ckpt_n_aux != current_n_aux:
+            print(f"  ⚠ WARNING: Checkpoint has n_aux_channels="
+                  f"{ckpt_n_aux}, current config has {current_n_aux}.")
+
     def _load_spectral_checkpoint(self, path: Path) -> None:
         """Load spectral-only checkpoint for stage-2 aux training.
 
@@ -627,6 +655,9 @@ class LULCTrainer:
         import torch
         print(f"  Loading spectral checkpoint for stage 2: {path}")
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
+
+        # ── Checkpoint compatibility guard ───────────────────────
+        self._validate_checkpoint_compat(ckpt)
 
         # Extract state dict (handles both best_model.pt and resume format)
         if isinstance(ckpt, dict):
@@ -705,6 +736,10 @@ class LULCTrainer:
         for key, value in self.model.state_dict().items():
             state_dict[f"model.{key}"] = value
 
+        num_frames = (
+            self.config.num_temporal_frames
+            if self.config.enable_multitemporal else 1
+        )
         checkpoint = {
             "state_dict": state_dict,
             "epoch": epoch,
@@ -717,6 +752,8 @@ class LULCTrainer:
                 "feature_indices": self.config.feature_indices,
                 "dropout": self.config.dropout,
                 "n_aux_channels": self._count_aux_channels(),
+                "num_temporal_frames": num_frames,
+                "enable_multitemporal": self.config.enable_multitemporal,
             },
         }
         torch.save(checkpoint, path)

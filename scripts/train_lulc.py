@@ -106,6 +106,8 @@ def main():
                         help="Enable all auxiliary channels (incl. VPP)")
     parser.add_argument("--enable-multitemporal", action="store_true",
                         help="Enable multitemporal mode (4 seasonal frames)")
+    parser.add_argument("--num-frames", type=int, default=None,
+                        help="Override num_temporal_frames (default: 4)")
 
     # Two-stage training
     parser.add_argument("--freeze-spectral", action="store_true",
@@ -183,6 +185,7 @@ def main():
         unfreeze_backbone_layers=args.unfreeze_layers,
         backbone_lr_factor=args.backbone_lr_factor,
         enable_multitemporal=args.enable_multitemporal,
+        num_temporal_frames=args.num_frames or 4,
         enable_height_channel=all_aux or args.enable_height,
         enable_volume_channel=all_aux or args.enable_volume,
         enable_basal_area_channel=all_aux or args.enable_basal_area,

@@ -39,13 +39,14 @@ class TrainingConfig:
     num_temporal_frames: int = 4                       # Prithvi max = 4
     seasonal_windows: list[tuple[int, int]] = field(
         default_factory=lambda: [
-            (4, 5),    # spring:  April – May
-            (6, 7),    # summer:  June – July
-            (8, 9),    # autumn:  August – September
-            (1, 2),    # winter:  January – February
+            (4, 4),    # early spring:  April (leaf-out)
+            (5, 6),    # early summer:  May – June (green-up)
+            (7, 7),    # peak summer:   July (peak NDVI)
+            (8, 9),    # late summer:   August – September (senescence)
         ]
     )
-    seasonal_cloud_threshold: float = 0.10            # Slightly relaxed for winter
+    enable_vpp_guided_windows: bool = True             # Use VPP phenology per tile
+    seasonal_cloud_threshold: float = 0.10             # Slightly relaxed
     seasonal_require_all: bool = False                 # If False, pad missing seasons
                                                        # with zeros (masked in model)
 

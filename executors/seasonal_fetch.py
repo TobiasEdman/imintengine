@@ -43,10 +43,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from imint.fetch import (
     _connect, _connect_cdse, _to_nmd_grid,
     _fetch_scl, _fetch_scl_batch,
-    fetch_seasonal_dates, fetch_seasonal_image,
+    fetch_seasonal_dates, fetch_seasonal_dates_doy,
+    fetch_seasonal_image,
     fetch_nmd_data, FetchError,
 )
 from imint.training.class_schema import nmd_raster_to_lulc
+from imint.training.vpp_windows import (
+    compute_growing_season_windows,
+    doy_windows_to_month_windows,
+)
 
 # ── Defaults ─────────────────────────────────────────────────────────────
 _SCL_CANDIDATES = 3       # max STAC dates to pre-screen per season
@@ -191,9 +196,10 @@ class SeasonalFetchExecutor:
 
         preferred = os.environ.get("FETCH_SOURCE", "auto")
         years = os.environ.get("YEARS", "2019,2018").split(",")
-        windows = _parse_windows(
-            os.environ.get("SEASONAL_WINDOWS", "4-5,6-7,8-9,1-2")
+        default_windows = _parse_windows(
+            os.environ.get("SEASONAL_WINDOWS", "4-4,5-6,7-7,8-9")
         )
+        vpp_guided = os.environ.get("VPP_GUIDED", "true").lower() == "true"
         cloud_threshold = float(
             os.environ.get("SEASONAL_CLOUD_THRESHOLD", "0.10")
         )
@@ -203,9 +209,36 @@ class SeasonalFetchExecutor:
             os.environ.get("B02_HAZE_THRESHOLD", "0.06")
         )
 
-        n_frames = len(windows)
         n_bands = len(_PRITHVI_BANDS)
         tile_path = tiles_dir / f"tile_{cell_key}.npz"
+
+        # ── VPP-guided windows ────────────────────────────────────────
+        # Fetch VPP phenology to compute per-tile growing season
+        windows = default_windows  # start with default
+        doy_windows = None
+        if vpp_guided:
+            try:
+                from imint.training.cdse_vpp import fetch_vpp_tiles
+                # Convert WGS84 coords to EPSG:3006 for VPP fetch
+                vpp = fetch_vpp_tiles(
+                    west=float(os.environ.get("WEST_3006", easting)),
+                    south=float(os.environ.get("SOUTH_3006", northing)),
+                    east=float(os.environ.get("EAST_3006", easting + 2560)),
+                    north=float(os.environ.get("NORTH_3006", northing + 2560)),
+                    size_px=64,  # low-res is fine for median
+                )
+                doy_windows = compute_growing_season_windows(
+                    vpp["sosd"], vpp["eosd"],
+                    num_frames=len(default_windows),
+                )
+                month_approx = doy_windows_to_month_windows(doy_windows)
+                print(f"  VPP-guided DOY windows: {doy_windows}")
+                print(f"  (approx months: {month_approx})")
+            except Exception as e:
+                print(f"  VPP fetch failed ({e}), using default windows")
+                doy_windows = None
+
+        n_frames = len(doy_windows or windows)
 
         primary, secondary = _pick_source(tiles_dir, preferred)
 
@@ -221,10 +254,12 @@ class SeasonalFetchExecutor:
                 )
         stats_str = ", ".join(stats_info) if stats_info else "no history"
 
+        win_label = (f"DOY {doy_windows}" if doy_windows
+                     else f"months {windows}")
         print(f"[SeasonalFetch] Tile {cell_key} "
               f"(primary={primary.upper()}, fallback={secondary.upper()})")
         print(f"  Stats: {stats_str}")
-        print(f"  Windows: {windows}, Years: {years}")
+        print(f"  Windows: {win_label}, Years: {years}")
         print(f"  Cloud threshold: {cloud_threshold:.0%}")
         t_start = time.monotonic()
 
@@ -247,6 +282,7 @@ class SeasonalFetchExecutor:
                     coords=coords,
                     years=years,
                     windows=windows,
+                    doy_windows=doy_windows,
                     cloud_threshold=cloud_threshold,
                     b02_haze_threshold=b02_haze_threshold,
                     n_frames=n_frames,
@@ -287,6 +323,7 @@ class SeasonalFetchExecutor:
         coords: dict,
         years: list[str],
         windows: list[tuple[int, int]],
+        doy_windows: list[tuple[int, int]] | None = None,
         cloud_threshold: float,
         b02_haze_threshold: float,
         n_frames: int,
@@ -298,6 +335,9 @@ class SeasonalFetchExecutor:
         northing: int,
     ) -> None:
         """Fetch all seasonal frames from *source* and save tile.
+
+        If ``doy_windows`` is provided, uses DOY-based STAC queries
+        (VPP-guided). Otherwise falls back to month-based ``windows``.
 
         Raises on failure so the caller can fall back to another source.
         """
@@ -313,10 +353,18 @@ class SeasonalFetchExecutor:
         years_offset = cell_hash % len(years)
         years_order = years[years_offset:] + years[:years_offset]
 
-        season_candidates = fetch_seasonal_dates(
-            coords, windows, years_order,
-            scene_cloud_max=50.0,
-        )
+        if doy_windows is not None:
+            season_candidates = fetch_seasonal_dates_doy(
+                coords, doy_windows, years_order,
+                scene_cloud_max=50.0,
+            )
+            active_windows = doy_windows
+        else:
+            season_candidates = fetch_seasonal_dates(
+                coords, windows, years_order,
+                scene_cloud_max=50.0,
+            )
+            active_windows = windows
 
         # SCL pre-screen + spectral fetch per season
         projected = _to_nmd_grid(coords)
@@ -324,9 +372,12 @@ class SeasonalFetchExecutor:
         frame_dates = []   # list of date strings
         frame_mask = []    # 1 = valid, 0 = padded
 
-        for win_idx, (m_start, m_end) in enumerate(windows):
+        for win_idx, (w_start, w_end) in enumerate(active_windows):
             candidates = season_candidates[win_idx]
-            win_label = f"m{m_start}-{m_end}"
+            if doy_windows is not None:
+                win_label = f"doy{w_start}-{w_end}"
+            else:
+                win_label = f"m{w_start}-{w_end}"
 
             if not candidates:
                 print(f"  {win_label}: no STAC candidates")

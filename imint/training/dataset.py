@@ -168,6 +168,14 @@ class LULCDataset(Dataset):
                                      np.ones(n_frames, dtype=np.uint8))
             doy = data.get("doy", np.zeros(n_frames, dtype=np.int32))
 
+            # ── Zero-frame replacement ────────────────────────────────
+            # Replace zero-padded frames with nearest valid frame to
+            # avoid injecting noise from all-zero images. Prefer summer
+            # frames (indices 1 or 2) as replacement sources.
+            image = self._replace_zero_frames(
+                image, temporal_mask, n_frames, n_bands,
+            )
+
             # Normalise each frame: reflectance → DN → Prithvi norm
             # image is (T*6, H, W), mean_mt is (T*6, 1, 1)
             expected_c = n_frames * n_bands
@@ -258,6 +266,58 @@ class LULCDataset(Dataset):
                 result["doy"] = doy
 
             return result
+
+    @staticmethod
+    def _replace_zero_frames(
+        image: np.ndarray,
+        temporal_mask: np.ndarray,
+        n_frames: int,
+        n_bands: int,
+    ) -> np.ndarray:
+        """Replace zero-padded frames with the nearest valid frame.
+
+        When a temporal frame is all zeros (temporal_mask[t] == 0), copy
+        the nearest valid frame's spectral data.  Prefer summer frames
+        (indices 1 or 2) as replacement sources since they typically have
+        the richest spectral information.
+
+        Args:
+            image: (T*C, H, W) float32 multitemporal image.
+            temporal_mask: (T,) uint8, 1=valid 0=padded.
+            n_frames: Number of temporal frames T.
+            n_bands: Number of spectral bands C.
+
+        Returns:
+            Modified image with zero frames replaced.
+        """
+        valid_indices = np.where(temporal_mask > 0)[0]
+        if len(valid_indices) == 0 or len(valid_indices) == n_frames:
+            return image  # all valid or all zero — nothing to do
+
+        # Preferred replacement order: summer frames first
+        preferred = [idx for idx in [1, 2, 0, 3] if idx in valid_indices]
+        if not preferred:
+            preferred = list(valid_indices)
+
+        for t in range(n_frames):
+            if temporal_mask[t] == 0:
+                # Find nearest valid frame, preferring summer
+                best = preferred[0]
+                best_dist = abs(t - best)
+                for cand in preferred[1:]:
+                    d = abs(t - cand)
+                    if d < best_dist:
+                        best = cand
+                        best_dist = d
+
+                # Copy the valid frame's spectral data
+                src_start = best * n_bands
+                dst_start = t * n_bands
+                image[dst_start:dst_start + n_bands] = (
+                    image[src_start:src_start + n_bands]
+                )
+
+        return image
 
     def _augment(
         self, image: np.ndarray, label: np.ndarray,
