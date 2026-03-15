@@ -339,17 +339,36 @@ def prepare_training_data(config: TrainingConfig) -> None:
     print(f"  Progress: {len(completed)} completed, {len(failed)} failed")
 
     # ── Step 4: Verify data source connections ───────────────────────
+    # In multitemporal mode, the primary fetch path uses CDSE Sentinel Hub
+    # Process API (HTTP), so openEO connections are only needed for fallback.
+    # Connection failures are non-fatal in multitemporal mode.
     sources = config.fetch_sources
     connections = {}
     for src in sources:
         if src == "copernicus":
             print("\n  Verifying CDSE connection...")
-            connections["copernicus"] = _connect_cdse()
-            print("  CDSE connection OK")
+            try:
+                connections["copernicus"] = _connect_cdse()
+                print("  CDSE openEO connection OK")
+            except Exception as e:
+                if config.enable_multitemporal:
+                    print(f"  CDSE openEO connection failed: {e}")
+                    print("  → OK: multitemporal uses Sentinel Hub HTTP as primary")
+                    connections["copernicus"] = None  # Placeholder
+                else:
+                    raise
         else:
             print(f"\n  Verifying DES connection...")
-            connections["des"] = _connect()
-            print("  DES connection OK")
+            try:
+                connections["des"] = _connect()
+                print("  DES connection OK")
+            except Exception as e:
+                if config.enable_multitemporal:
+                    print(f"  DES connection failed: {e}")
+                    print("  → OK: multitemporal uses Sentinel Hub HTTP as primary")
+                    connections["des"] = None
+                else:
+                    raise
 
     # Worker distribution: more workers to faster source (CDSE)
     workers_per_source = {}
