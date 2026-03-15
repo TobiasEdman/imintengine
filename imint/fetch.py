@@ -1,7 +1,13 @@
 """
 imint/fetch.py — Sentinel-2 data fetching (DES + CDSE) and cloud detection
 
-Fetches Sentinel-2 L2A data via openEO from two backends:
+**openEO-based fetchers** — used as fallback when the primary CDSE
+Sentinel Hub HTTP fetch (``imint/training/cdse_s2.py``) fails.  For bulk
+training data preparation, ``prepare_data.py`` uses the Sentinel Hub
+Process API first (fast, single HTTP POST per tile) and falls back to
+these openEO functions on error.
+
+openEO backends:
   - DES (Digital Earth Sweden): ``fetch_des_data()``
   - CDSE (Copernicus Data Space Ecosystem): ``fetch_copernicus_data()``
   - Dispatcher: ``fetch_sentinel2_data(source="des"|"copernicus")``

@@ -1,8 +1,15 @@
 """
 imint/training/prepare_data.py — Fetch and cache LULC training data
 
-Orchestrates bulk fetching of Sentinel-2 + NMD tile pairs from DES,
-with progress tracking for resumability.
+Orchestrates bulk fetching of Sentinel-2 + NMD tile pairs with progress
+tracking for resumability.
+
+Data fetch pipeline:
+    STAC discovery:   DES STAC (explorer.digitalearth.se)
+    Spectral + SCL:   CDSE Sentinel Hub Process API (primary, fast HTTP)
+                      openEO (fallback if HTTP fails)
+    NMD labels:       DES openEO
+    Aux channels:     SKS WMS, Copernicus DEM, HR-VPP
 
 NMD pre-filter and STAC/spectral fetch run in parallel: a background
 thread filters cells via NMD while worker threads fetch spectral data
@@ -1035,18 +1042,20 @@ def prepare_training_data(config: TrainingConfig) -> None:
         """Fetch T seasonal frames per cell and save as multitemporal tile.
 
         For each cell:
-        1. Query STAC for each seasonal window across all years
-        2. SCL pre-screen the best candidate per window
-        3. Full spectral fetch for each passing date
-        4. Stack into (T*6, H, W) and save .npz with dates array
+        1. Query DES STAC for each seasonal window across all years
+        2. Try top candidates via CDSE Sentinel Hub Process API (HTTP):
+           - Fetches spectral + SCL in one call
+           - Checks cloud, nodata, haze locally
+           - Falls back to openEO if HTTP fails
+        3. Stack into (T*6, H, W) and save .npz with dates array
 
         Falls back gracefully: if a season has no clear image,
         that frame is filled with zeros and flagged in the mask.
         """
-        # Use provided conn/pool/source or fall back to shared defaults
+        # openEO conn/pool kept for fallback if CDSE HTTP fails
         _conn = worker_conn if worker_conn is not None else conn
         _pool = worker_pool if worker_pool is not None else pool
-        _source = worker_source
+        _source = worker_source  # "des" or "copernicus" — used for openEO fallback
 
         n_frames = config.num_temporal_frames
         default_windows = config.seasonal_windows[:n_frames]
@@ -1114,10 +1123,22 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     )
                     active_windows = windows
 
-                # ── Phase 2: SCL pre-screen + spectral fetch per season ─
+                # ── Phase 2: Spectral + SCL fetch per season ────────────
+                # Primary: CDSE Sentinel Hub Process API (single HTTP POST
+                #   fetches spectral + SCL, checks cloud/nodata/haze)
+                # Fallback: openEO (if HTTP fails)
+                from .cdse_s2 import fetch_s2_scene_with_fallback
+
                 frames = []       # list of (6, H, W) arrays
                 frame_dates = []  # list of date strings
                 frame_mask = []   # 1 = valid, 0 = padded
+
+                # Compute EPSG:3006 bbox for Sentinel Hub
+                sh_west = projected["west"]
+                sh_south = projected["south"]
+                sh_east = projected["east"]
+                sh_north = projected["north"]
+                sh_size = config.fetch_pixels
 
                 for win_idx, (w_start, w_end) in enumerate(active_windows):
                     candidates = season_candidates[win_idx]
@@ -1133,128 +1154,47 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         frame_mask.append(0)
                         continue
 
-                    # Try top candidates with SCL pre-screening
-                    frame_image = None
-                    frame_date = None
+                    # Try top candidates — each is one fast HTTP call
+                    # (spectral + SCL + cloud/nodata/haze gates in one shot)
                     top_cands = candidates[:_SCL_CANDIDATES]
-                    cand_strs = [d for d, _ in top_cands]
+                    found = False
 
-                    # Batch SCL pre-screen
-                    good_date = None
-                    if len(cand_strs) > 1:
-                        _pool.acquire()
+                    for cand_date, scene_cc in top_cands:
                         t0 = time.monotonic()
-                        batch_err = False
                         try:
-                            batch_results = _fetch_scl_batch(
-                                _conn, projected, cand_strs,
+                            result = fetch_s2_scene_with_fallback(
+                                sh_west, sh_south, sh_east, sh_north,
+                                date=cand_date,
+                                coords_wgs84=coords,
+                                size_px=sh_size,
+                                cloud_threshold=config.seasonal_cloud_threshold,
+                                haze_threshold=config.b02_haze_threshold,
                                 source=_source,
                             )
-                            for cand_date, aoi_cloud in batch_results:
-                                if aoi_cloud <= config.seasonal_cloud_threshold:
-                                    good_date = cand_date
-                                    break
                         except Exception:
-                            batch_err = True
-                        finally:
-                            _pool.record(time.monotonic() - t0, batch_err)
-                            _pool.release()
-                        time.sleep(0.5)
-
-                    # Per-date fallback
-                    if good_date is None:
-                        from datetime import timedelta as _td
-                        for cand_date, _ in top_cands:
-                            try:
-                                cand_dt = datetime.strptime(cand_date, "%Y-%m-%d")
-                                temporal = [
-                                    cand_date,
-                                    (cand_dt + _td(days=1)).strftime("%Y-%m-%d"),
-                                ]
-                                _pool.acquire()
-                                t0 = time.monotonic()
-                                scl_err = False
-                                try:
-                                    _scl, aoi_cloud, _crs, _tr = _fetch_scl(
-                                        _conn, projected, temporal,
-                                        date_window=0, source=_source,
-                                    )
-                                except Exception:
-                                    scl_err = True
-                                    raise
-                                finally:
-                                    _pool.record(time.monotonic() - t0, scl_err)
-                                    _pool.release()
-                                time.sleep(0.5)
-
-                                if aoi_cloud <= config.seasonal_cloud_threshold:
-                                    good_date = cand_date
-                                    break
-                            except Exception:
-                                time.sleep(1)
-
-                    if good_date is None:
-                        print(f"    {cell_key} {win_label}: "
-                              f"no clear date (tried {len(cand_strs)})")
-                        frames.append(None)
-                        frame_dates.append("")
-                        frame_mask.append(0)
-                        continue
-
-                    # Full spectral fetch using existing pipeline
-                    # (includes grid snapping + sub-pixel correction)
-                    _pool.acquire()
-                    t0_spec = time.monotonic()
-                    spec_err = False
-                    try:
-                        img_result = fetch_seasonal_image(
-                            good_date, coords, prithvi_bands,
-                            source=_source,
-                        )
-                    except Exception:
-                        spec_err = True
-                        img_result = None
-                    finally:
-                        spec_lat = time.monotonic() - t0_spec
-                        _pool.record(spec_lat, spec_err)
-                        _pool.release()
+                            result = None
+                        spec_lat = time.monotonic() - t0
                         _record_des_call(
                             des_stats, "full_spectral",
-                            cell_key=cell_key, date=good_date,
+                            cell_key=cell_key, date=cand_date,
                             latency_s=spec_lat, band_count=n_bands,
-                            success=img_result is not None,
+                            success=result is not None,
                         )
-                    time.sleep(1)
 
-                    if img_result is not None:
-                        frame_img, frame_dt = img_result
+                        if result is not None:
+                            frame_img, _scl, cloud_frac = result
+                            frames.append(frame_img)
+                            frame_dates.append(cand_date)
+                            frame_mask.append(1)
+                            print(f"    {cell_key} {win_label}: "
+                                  f"{cand_date} ✓ (cloud={cloud_frac:.0%})")
+                            found = True
+                            break
+                        time.sleep(0.5)
 
-                        # Quality gates
-                        nodata_frac = float((frame_img[0] == 0).mean())
-                        if nodata_frac > 0.10:
-                            print(f"    {cell_key} {win_label} {good_date}: "
-                                  f"nodata={nodata_frac:.0%}, skip")
-                            frames.append(None)
-                            frame_dates.append("")
-                            frame_mask.append(0)
-                            continue
-
-                        b02_idx = prithvi_bands.index("B02") \
-                            if "B02" in prithvi_bands else 0
-                        b02_mean = float(frame_img[b02_idx].mean())
-                        if b02_mean > config.b02_haze_threshold:
-                            print(f"    {cell_key} {win_label} {good_date}: "
-                                  f"haze B02={b02_mean:.4f}, skip")
-                            frames.append(None)
-                            frame_dates.append("")
-                            frame_mask.append(0)
-                            continue
-
-                        frames.append(frame_img)
-                        frame_dates.append(frame_dt)
-                        frame_mask.append(1)
-                        print(f"    {cell_key} {win_label}: {frame_dt} ✓")
-                    else:
+                    if not found:
+                        print(f"    {cell_key} {win_label}: "
+                              f"no clear date (tried {len(top_cands)})")
                         frames.append(None)
                         frame_dates.append("")
                         frame_mask.append(0)

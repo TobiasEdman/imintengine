@@ -1,34 +1,56 @@
 """Sentinel-2 L2A data fetching via CDSE Sentinel Hub Process API.
 
-Single-stage fetch: downloads 6 spectral bands + SCL in one HTTP POST,
-checks cloud fraction locally, and discards cloudy scenes.  This replaces
-the two-stage openEO approach (SCL pre-screen → spectral fetch) with a
-simpler, faster pipeline.
+Primary HTTP-based fetcher for Sentinel-2 spectral and SCL data from the
+Copernicus Data Space Ecosystem.  Uses the Sentinel Hub Process API (direct
+HTTP POST) instead of openEO, providing lower latency and fewer dependencies.
 
-Typical per-tile workflow:
-    1. STAC discovery (DES STAC, same as before)
+**OpenEO is the fallback** — if the HTTP fetch fails (network error, rate
+limit, token issue), the pipeline falls back to the openEO-based fetcher
+(``fetch_copernicus_data`` / ``fetch_des_data`` in ``imint/fetch.py``).
+See ``fetch_s2_scene_with_fallback()`` for the combined approach.
+
+Fetch strategy:
+    1. STAC discovery via DES STAC (``explorer.digitalearth.se``)
     2. For each seasonal window, try top candidate dates:
        a. Fetch 7 bands (B02..B12 + SCL) via Sentinel Hub Process API
        b. Check SCL cloud fraction locally (same logic as openEO path)
        c. Check quality gates (nodata %, B02 haze)
        d. Accept or try next candidate
-    3. Stack frames → (T*6, H, W) multitemporal tile
+    3. If SH Process API fails → fall back to openEO for that tile
+    4. Stack frames → (T*6, H, W) multitemporal tile
 
 Access:
+    STAC discovery (date/cloud search):
+    DES STAC: https://explorer.digitalearth.se/stac/search
+
+    Data fetch (primary):
     Sentinel Hub Process API (CDSE)
     Collection: sentinel-2-l2a (built-in, no BYOC)
     Endpoint: https://sh.dataspace.copernicus.eu/api/v1/process
     Auth: CDSE OAuth2 client_credentials (same as VPP)
 
+    Data fetch (fallback — used if HTTP fails):
+    openEO via ``imint/fetch.py``
+    CDSE openEO: https://openeo.dataspace.copernicus.eu/
+    DES openEO:  https://openeo.digitalearth.se
+
 License: Copernicus Open Access
 
 Typical usage::
 
-    from imint.training.cdse_s2 import fetch_s2_scene
+    from imint.training.cdse_s2 import fetch_s2_scene, fetch_s2_scene_with_fallback
+
+    # HTTP only (fast, no openEO dependency)
     result = fetch_s2_scene(west, south, east, north, date="2019-07-15")
     if result is not None:
         spectral, scl, cloud_frac = result
         # spectral.shape == (6, 256, 256), dtype float32, reflectance [0,1]
+
+    # HTTP primary + openEO fallback
+    result = fetch_s2_scene_with_fallback(
+        west, south, east, north, date="2019-07-15",
+        coords_wgs84={"west": 18.0, "south": 59.0, "east": 18.1, "north": 59.1},
+    )
 """
 from __future__ import annotations
 
@@ -297,6 +319,92 @@ def fetch_s2_seasonal_tile(
         "easting": easting,
         "northing": northing,
     }
+
+
+def fetch_s2_scene_with_fallback(
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    date: str,
+    *,
+    coords_wgs84: dict | None = None,
+    size_px: int | tuple[int, int] = 256,
+    cloud_threshold: float = 0.10,
+    haze_threshold: float = 0.06,
+    source: str = "copernicus",
+) -> tuple[np.ndarray, np.ndarray, float] | None:
+    """Fetch S2 scene via HTTP, falling back to openEO if HTTP fails.
+
+    Primary: Sentinel Hub Process API (fast, single HTTP POST)
+    Fallback: openEO (``fetch_copernicus_data`` or ``fetch_des_data``)
+
+    Args:
+        west, south, east, north: EPSG:3006 bbox (snapped to NMD grid).
+        date: ISO date string.
+        coords_wgs84: WGS84 bbox dict for openEO fallback. If None,
+            openEO fallback is skipped.
+        size_px: Output size — int for square or (H, W) tuple.
+        cloud_threshold: Max cloud+shadow fraction (0–1).
+        haze_threshold: Max mean B02 reflectance for haze gate.
+        source: openEO fallback source ("copernicus" or "des").
+
+    Returns:
+        Tuple of (spectral, scl, cloud_fraction) on success, or None.
+    """
+    # ── Primary: Sentinel Hub HTTP ────────────────────────────────────
+    result = fetch_s2_scene(
+        west, south, east, north, date,
+        size_px=size_px,
+        cloud_threshold=cloud_threshold,
+        haze_threshold=haze_threshold,
+    )
+    if result is not None:
+        return result
+
+    # ── Fallback: openEO ──────────────────────────────────────────────
+    if coords_wgs84 is None:
+        return None
+
+    try:
+        from ..fetch import fetch_sentinel2_data, check_cloud_fraction
+        print(f"    [openEO fallback] Trying {source}...")
+        fetch_result = fetch_sentinel2_data(
+            source=source,
+            date=date,
+            coords=coords_wgs84,
+            cloud_threshold=1.0,    # check manually below
+            include_scl=True,
+        )
+        # Extract Prithvi bands
+        missing = [b for b in _PRITHVI_BANDS if b not in fetch_result.bands]
+        if missing:
+            return None
+
+        spectral = np.stack(
+            [fetch_result.bands[b] for b in _PRITHVI_BANDS], axis=0,
+        ).astype(np.float32)
+
+        scl = fetch_result.scl
+        if scl is None:
+            scl = np.zeros(spectral.shape[1:], dtype=np.uint8)
+        cloud_frac = check_cloud_fraction(scl)
+
+        if cloud_frac > cloud_threshold:
+            return None
+
+        nodata_frac = float((spectral[0] == 0).mean())
+        if nodata_frac > 0.10:
+            return None
+
+        b02_mean = float(spectral[0].mean())
+        if b02_mean > haze_threshold:
+            return None
+
+        return spectral, scl, cloud_frac
+    except Exception as e:
+        print(f"    [openEO fallback] Also failed: {e}")
+        return None
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────
