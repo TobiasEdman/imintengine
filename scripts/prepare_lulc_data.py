@@ -146,6 +146,13 @@ def main():
         help="Fetch Copernicus DEM GLO-30 terrain elevation (meters) per tile",
     )
 
+    # ── Fetch backend selection ───────────────────────────────────────
+    parser.add_argument(
+        "--fetch-sources", nargs="+", default=None,
+        help="Data fetch backends: 'copernicus' (CDSE) and/or 'des' "
+             "(default: copernicus des). Use 'copernicus' alone if no DES creds.",
+    )
+
     args = parser.parse_args()
 
     # Parse seasonal windows from CLI (e.g. "4-5 6-7 8-9 1-2")
@@ -189,6 +196,8 @@ def main():
     )
     if seasonal_windows is not None:
         config_kwargs["seasonal_windows"] = seasonal_windows
+    if args.fetch_sources is not None:
+        config_kwargs["fetch_sources"] = args.fetch_sources
 
     config = TrainingConfig(**config_kwargs)
 
