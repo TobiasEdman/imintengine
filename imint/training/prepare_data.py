@@ -563,8 +563,10 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         nmd_result.nmd_raster, num_classes=config.num_classes,
                     )
                     # Skip tiles that are entirely nodata (background)
+                    # — unless it's a sea-densified cell (known water)
                     valid_frac = float(np.mean(labels > 0))
-                    if valid_frac < 0.01:
+                    is_sea_cell = getattr(cell, "skip_land_filter", False)
+                    if valid_frac < 0.01 and not is_sea_cell:
                         water_skipped += 1
                         with lock:
                             failed.add(cell_key)
@@ -1265,6 +1267,15 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     nmd_result.nmd_raster,
                     num_classes=config.num_classes,
                 )
+
+                # Sea-densified cells with no NMD coverage: assign water
+                is_sea_cell = getattr(cell, "skip_land_filter", False)
+                if is_sea_cell and float(np.mean(labels > 0)) < 0.01:
+                    water_class = (
+                        10 if config.num_classes == 10
+                        else 19  # 19-class: water_sea
+                    )
+                    labels = np.full_like(labels, water_class)
 
                 # ── Compute day-of-year for temporal position encoding ──
                 doy_values = []
