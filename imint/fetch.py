@@ -473,6 +473,45 @@ def _polygon_to_projected_bbox(
 
 # ── DES connection ───────────────────────────────────────────────────────────
 
+_ROOT_DOTENV_LOADED = False
+
+
+def _try_load_root_dotenv():
+    """Try loading .env from the project root (auto-discover).
+
+    Injects DES_USER, DES_PASSWORD, CDSE_CLIENT_ID, etc. into os.environ
+    without overwriting values already set.  Runs at most once.
+    """
+    global _ROOT_DOTENV_LOADED
+    if _ROOT_DOTENV_LOADED:
+        return
+    _ROOT_DOTENV_LOADED = True
+
+    from pathlib import Path
+
+    # Walk up from this file to find the project root (.git marker)
+    for ancestor in Path(__file__).resolve().parents:
+        env_file = ancestor / ".env"
+        if env_file.exists():
+            with open(env_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" not in line:
+                        continue
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip()
+                    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                        value = value[1:-1]
+                    if key not in os.environ:
+                        os.environ[key] = value
+            return
+        if (ancestor / ".git").exists():
+            break
+
+
 def _connect(token: str | None = None, token_path: str | None = None):
     """Connect and authenticate to DES.
 
@@ -505,6 +544,11 @@ def _connect(token: str | None = None, token_path: str | None = None):
     # Basic Auth — requires DES_USER + DES_PASSWORD env vars (or .env file)
     des_user = os.environ.get("DES_USER")
     des_password = os.environ.get("DES_PASSWORD")
+    if not des_user or not des_password:
+        # Try loading from root .env file before giving up
+        _try_load_root_dotenv()
+        des_user = os.environ.get("DES_USER")
+        des_password = os.environ.get("DES_PASSWORD")
     if not des_user or not des_password:
         raise FetchError(
             "DES credentials not configured. "
@@ -546,6 +590,10 @@ def _connect_cdse():
     # 1. Client credentials (service account)
     client_id = os.environ.get("CDSE_CLIENT_ID")
     client_secret = os.environ.get("CDSE_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        _try_load_root_dotenv()
+        client_id = os.environ.get("CDSE_CLIENT_ID")
+        client_secret = os.environ.get("CDSE_CLIENT_SECRET")
 
     if client_id and client_secret:
         try:
