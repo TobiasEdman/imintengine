@@ -42,6 +42,7 @@ _SCL_CANDIDATES = 3   # max STAC dates to pre-screen with SCL before giving up
 _INITIAL_WORKERS = 3
 _MIN_WORKERS = 1
 _MAX_WORKERS = 3
+_NMD_WORKERS = int(os.environ.get("IMINT_NMD_WORKERS", "3"))
 _ADAPT_WINDOW = 10          # requests to consider for adaptation
 _LATENCY_HIGH_S = 60.0      # p90 above this → scale down
 _LATENCY_LOW_S = 30.0       # p90 below this → scale up
@@ -510,42 +511,36 @@ def prepare_training_data(config: TrainingConfig) -> None:
     t_start = time.time()
     _write_prepare_log(prep_log_path, prep_log)
 
-    # ── NMD producer thread ───────────────────────────────────────────
+    # ── NMD producer thread (parallel) ──────────────────────────────
     def _nmd_producer():
-        water_skipped = 0
-        nmd_failed = 0
-        land_kept = 0
+        nmd_workers = _NMD_WORKERS
+        nmd_counters = {"water": 0, "failed": 0, "land": 0, "processed": 0}
+        nmd_lock = threading.Lock()
 
-        for ci, (split_name, cell) in enumerate(all_cells_with_split):
+        def _nmd_fetch_one(ci, split_name, cell):
+            """Fetch NMD for a single cell. Thread-safe."""
             cell_key = f"{cell.easting}_{cell.northing}"
 
             # Already processed in a previous run
             with lock:
                 already = cell_key in completed or cell_key in failed
             if already:
-                nmd_log["already_done"] = nmd_log.get("already_done", 0) + 1
-                nmd_log["processed"] = ci + 1
-                # Restore counters for previously-processed cells
+                with nmd_lock:
+                    nmd_counters["processed"] += 1
                 with lock:
                     if cell_key in completed:
-                        land_kept += 1
+                        nmd_counters["land"] += 1
                         tile_name = f"tile_{cell_key}.npz"
                         if (tiles_dir / tile_name).exists():
                             tile_names_by_split[split_name].append(tile_name)
                     elif cell_key in failed:
-                        water_skipped += 1  # most failed cells are water/empty
-                nmd_log["land_kept"] = land_kept
-                nmd_log["water_skipped"] = water_skipped
-                if (ci + 1) % 50 == 0:
-                    nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    _write_prepare_log(nmd_log_path, nmd_log)
-                continue
+                        nmd_counters["water"] += 1
+                return
 
             coords_nmd = {
                 "west": cell.west_wgs84, "east": cell.east_wgs84,
                 "south": cell.south_wgs84, "north": cell.north_wgs84,
             }
-            nmd_ok = False
             for attempt in range(_MAX_RETRIES + 1):
                 try:
                     t0_nmd = time.monotonic()
@@ -558,25 +553,23 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     )
                     # Polite pause if we had to hit DES (not cache)
                     if not nmd_result.from_cache:
-                        time.sleep(1)
+                        time.sleep(0.5)
                     labels = nmd_raster_to_lulc(
                         nmd_result.nmd_raster, num_classes=config.num_classes,
                     )
-                    # Skip tiles that are entirely nodata (background)
-                    # — unless it's a sea-densified cell (known water)
                     valid_frac = float(np.mean(labels > 0))
                     is_sea_cell = getattr(cell, "skip_land_filter", False)
                     if valid_frac < 0.01 and not is_sea_cell:
-                        water_skipped += 1
+                        with nmd_lock:
+                            nmd_counters["water"] += 1
                         with lock:
                             failed.add(cell_key)
                         print(f"    NMD {cell_key}: SKIP nodata — "
                               f"valid={valid_frac:.1%}")
                     else:
-                        land_kept += 1
-                        # Push approved cell to fetch queue
+                        with nmd_lock:
+                            nmd_counters["land"] += 1
                         approved_q.put((split_name, cell, cell_key))
-                    nmd_ok = True
                     break
                 except Exception as e:
                     _record_des_call(
@@ -590,7 +583,8 @@ def prepare_training_data(config: TrainingConfig) -> None:
                               f"after {type(e).__name__}, wait {wait}s")
                         time.sleep(wait)
                     else:
-                        nmd_failed += 1
+                        with nmd_lock:
+                            nmd_counters["failed"] += 1
                         with lock:
                             failed.add(cell_key)
                         err_msg = str(e)
@@ -599,34 +593,45 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         print(f"    NMD fail {cell_key}: "
                               f"{type(e).__name__}: {err_msg}")
 
-            # Update NMD log
-            nmd_log["processed"] = ci + 1
-            nmd_log["land_kept"] = land_kept
-            nmd_log["water_skipped"] = water_skipped
-            nmd_log["failed"] = nmd_failed
-            nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
-            if (ci + 1) % 5 == 0 or ci + 1 == total_cells:
-                _write_prepare_log(nmd_log_path, nmd_log)
+            with nmd_lock:
+                nmd_counters["processed"] += 1
+                ci_done = nmd_counters["processed"]
+            if ci_done % 50 == 0:
+                print(f"    NMD pre-filter: {ci_done}/{total_cells} "
+                      f"(kept {nmd_counters['land']}, "
+                      f"water={nmd_counters['water']}, "
+                      f"fail={nmd_counters['failed']})")
 
-            if (ci + 1) % 50 == 0:
-                print(f"    NMD pre-filter: {ci+1}/{total_cells} "
-                      f"(kept {land_kept}, water={water_skipped}, "
-                      f"fail={nmd_failed})")
+        # Run NMD fetches in parallel
+        print(f"    NMD pre-filter: {nmd_workers} workers")
+        with ThreadPoolExecutor(max_workers=nmd_workers) as pool:
+            futures = []
+            for ci, (split_name, cell) in enumerate(all_cells_with_split):
+                futures.append(
+                    pool.submit(_nmd_fetch_one, ci, split_name, cell)
+                )
+            # Wait for all to complete
+            for f in as_completed(futures):
+                try:
+                    f.result()
+                except Exception:
+                    pass  # errors handled inside _nmd_fetch_one
 
-        # Signal done
+        # Update log
         nmd_log["status"] = "completed"
         nmd_log["processed"] = total_cells
-        nmd_log["land_kept"] = land_kept
-        nmd_log["water_skipped"] = water_skipped
-        nmd_log["failed"] = nmd_failed
+        nmd_log["land_kept"] = nmd_counters["land"]
+        nmd_log["water_skipped"] = nmd_counters["water"]
+        nmd_log["failed"] = nmd_counters["failed"]
         nmd_log["updated_at"] = datetime.now(timezone.utc).isoformat()
         _write_prepare_log(nmd_log_path, nmd_log)
 
         with lock:
             _save_progress(progress_path, completed, failed)
 
-        print(f"  NMD pre-filter done: {land_kept} land, "
-              f"{water_skipped} water, {nmd_failed} failed")
+        print(f"  NMD pre-filter done: {nmd_counters['land']} land, "
+              f"{nmd_counters['water']} water, "
+              f"{nmd_counters['failed']} failed")
 
         # Signal all fetch workers to stop
         n_fetch_workers = sum(workers_per_source.values())
@@ -1493,7 +1498,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
     source_desc = ", ".join(
         f"{n}×{s.upper()}" for s, n in workers_per_source.items()
     )
-    print(f"\n  Starting parallel pipeline: NMD filter + "
+    print(f"\n  Starting parallel pipeline: NMD filter ({_NMD_WORKERS}w) + "
           f"{total_workers} fetch workers ({source_desc})...")
 
     nmd_thread = threading.Thread(target=_nmd_producer, daemon=True)
