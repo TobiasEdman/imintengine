@@ -511,11 +511,18 @@ def prepare_training_data(config: TrainingConfig) -> None:
     t_start = time.time()
     _write_prepare_log(prep_log_path, prep_log)
 
-    # ── NMD producer thread (parallel) ──────────────────────────────
+    # ── NMD producer thread (parallel, adaptive) ───────────────────
     def _nmd_producer():
         nmd_workers = _NMD_WORKERS
         nmd_counters = {"water": 0, "failed": 0, "land": 0, "processed": 0}
         nmd_lock = threading.Lock()
+
+        # Adaptive pool for DES NMD — scales workers based on DES health.
+        # Cache hits bypass the pool (no DES call), only actual DES
+        # fetches go through acquire/release.
+        nmd_pool = _AdaptiveWorkerPool(
+            initial=nmd_workers, lo=_MIN_WORKERS, hi=nmd_workers,
+        )
 
         def _nmd_fetch_one(ci, split_name, cell):
             """Fetch NMD for a single cell. Thread-safe."""
@@ -543,11 +550,22 @@ def prepare_training_data(config: TrainingConfig) -> None:
             }
             for attempt in range(_MAX_RETRIES + 1):
                 try:
-                    t0_nmd = time.monotonic()
-                    nmd_result = fetch_nmd_data(coords=coords_nmd)
+                    # Acquire adaptive slot before hitting DES
+                    nmd_pool.acquire()
+                    try:
+                        t0_nmd = time.monotonic()
+                        nmd_result = fetch_nmd_data(coords=coords_nmd)
+                        latency = time.monotonic() - t0_nmd
+                    finally:
+                        nmd_pool.release()
+
+                    # Record outcome for adaptive scaling (skip cache hits)
+                    if not nmd_result.from_cache:
+                        nmd_pool.record(latency, error=False)
+
                     _record_des_call(
                         des_stats, "nmd_fetch", cell_key=cell_key,
-                        latency_s=time.monotonic() - t0_nmd,
+                        latency_s=latency,
                         band_count=1, success=True, retry=attempt,
                         from_cache=nmd_result.from_cache,
                     )
@@ -572,9 +590,14 @@ def prepare_training_data(config: TrainingConfig) -> None:
                         approved_q.put((split_name, cell, cell_key))
                     break
                 except Exception as e:
+                    # Record error for adaptive scaling
+                    nmd_pool.record(
+                        time.monotonic() - t0_nmd if 't0_nmd' in dir() else 60.0,
+                        error=True,
+                    )
                     _record_des_call(
                         des_stats, "nmd_fetch", cell_key=cell_key,
-                        latency_s=time.monotonic() - t0_nmd,
+                        latency_s=time.monotonic() - t0_nmd if 't0_nmd' in dir() else 60.0,
                         band_count=1, success=False, error=e, retry=attempt,
                     )
                     if attempt < _MAX_RETRIES:
@@ -600,10 +623,11 @@ def prepare_training_data(config: TrainingConfig) -> None:
                 print(f"    NMD pre-filter: {ci_done}/{total_cells} "
                       f"(kept {nmd_counters['land']}, "
                       f"water={nmd_counters['water']}, "
-                      f"fail={nmd_counters['failed']})")
+                      f"fail={nmd_counters['failed']}, "
+                      f"des_w={nmd_pool.active})")
 
-        # Run NMD fetches in parallel
-        print(f"    NMD pre-filter: {nmd_workers} workers")
+        # Run NMD fetches in parallel with adaptive DES concurrency
+        print(f"    NMD pre-filter: {nmd_workers} workers (adaptive)")
         with ThreadPoolExecutor(max_workers=nmd_workers) as pool:
             futures = []
             for ci, (split_name, cell) in enumerate(all_cells_with_split):
