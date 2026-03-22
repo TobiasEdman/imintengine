@@ -41,7 +41,7 @@ _SCL_CANDIDATES = 3   # max STAC dates to pre-screen with SCL before giving up
 # ── Adaptive concurrency defaults ────────────────────────────────────────
 _INITIAL_WORKERS = 3
 _MIN_WORKERS = 1
-_MAX_WORKERS = 3
+_MAX_WORKERS = int(os.environ.get("IMINT_FETCH_WORKERS", "3"))
 _NMD_WORKERS = int(os.environ.get("IMINT_NMD_WORKERS", "3"))
 _ADAPT_WINDOW = 10          # requests to consider for adaptation
 _LATENCY_HIGH_S = 60.0      # p90 above this → scale down
