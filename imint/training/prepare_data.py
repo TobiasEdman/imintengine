@@ -1271,10 +1271,11 @@ def prepare_training_data(config: TrainingConfig) -> None:
                 # Sea-densified cells with no NMD coverage: assign water
                 is_sea_cell = getattr(cell, "skip_land_filter", False)
                 if is_sea_cell and float(np.mean(labels > 0)) < 0.01:
-                    water_class = (
-                        10 if config.num_classes == 10
-                        else 19  # 19-class: water_sea
-                    )
+                    water_class = {
+                        10: 10,   # 10-class: water
+                        12: 12,   # 12-class: water
+                        19: 19,   # 19-class: water_sea
+                    }.get(config.num_classes, 19)
                     labels = np.full_like(labels, water_class)
 
                 # ── Compute day-of-year for temporal position encoding ──

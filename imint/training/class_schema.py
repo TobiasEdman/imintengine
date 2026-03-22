@@ -101,6 +101,53 @@ for k, v in _MAP_19_TO_10.items():
     _LUT_19_TO_10[k] = v
 
 
+# ── 12-class schema (10-class + buildings + temp non-forest) ─────────────
+
+LULC_CLASS_NAMES_12 = {
+    0: "background",
+    1: "forest_pine",
+    2: "forest_spruce",
+    3: "forest_deciduous",
+    4: "forest_mixed",
+    5: "forest_temp_non_forest",
+    6: "forest_wetland",
+    7: "open_wetland",
+    8: "cropland",
+    9: "open_land",
+    10: "developed",           # infrastructure + roads (no buildings)
+    11: "buildings",
+    12: "water",
+}
+
+# Map 19-class indices to 12-class indices
+_MAP_19_TO_12 = {
+    0: 0,    # background
+    1: 1,    # forest_pine
+    2: 2,    # forest_spruce
+    3: 3,    # forest_deciduous
+    4: 4,    # forest_mixed
+    5: 5,    # forest_temp_non_forest (own class)
+    6: 6,    # forest_wetland_pine → forest_wetland
+    7: 6,    # forest_wetland_spruce → forest_wetland
+    8: 6,    # forest_wetland_deciduous → forest_wetland
+    9: 6,    # forest_wetland_mixed → forest_wetland
+    10: 6,   # forest_wetland_temp → forest_wetland
+    11: 7,   # open_wetland
+    12: 8,   # cropland
+    13: 9,   # open_land_bare → open_land
+    14: 9,   # open_land_vegetated → open_land
+    15: 11,  # developed_buildings → buildings
+    16: 10,  # developed_infrastructure → developed
+    17: 10,  # developed_roads → developed
+    18: 12,  # water_lakes → water
+    19: 12,  # water_sea → water
+}
+
+_LUT_19_TO_12 = np.zeros(20, dtype=np.uint8)
+for k, v in _MAP_19_TO_12.items():
+    _LUT_19_TO_12[k] = v
+
+
 # ── Public API ────────────────────────────────────────────────────────────
 
 def nmd_raster_to_lulc(
@@ -119,6 +166,8 @@ def nmd_raster_to_lulc(
     labels_19 = _LUT_19[nmd_raster.clip(0, 255)]
     if num_classes == 19:
         return labels_19
+    if num_classes == 12:
+        return _LUT_19_TO_12[labels_19.clip(0, 19)]
     return _LUT_19_TO_10[labels_19.clip(0, 19)]
 
 
@@ -126,6 +175,8 @@ def get_class_names(num_classes: int = 19) -> dict[int, str]:
     """Return class name mapping for the given schema."""
     if num_classes == 19:
         return LULC_CLASS_NAMES_19
+    if num_classes == 12:
+        return LULC_CLASS_NAMES_12
     if num_classes == 10:
         return LULC_CLASS_NAMES_10
     return LULC_CLASS_NAMES_19

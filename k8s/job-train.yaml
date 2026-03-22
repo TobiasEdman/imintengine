@@ -61,13 +61,13 @@ spec:
               cd /app
 
               # End-to-end training: backbone (partial unfreeze) + decoder + aux
+              # 12 classes: 10-class + buildings + temp_non_forest
               # 4 growing-season frames, VPP-guided per-tile windows
               # Gap-filled with 2020/2021 data for missing frames
-              # Target: >43% mIoU (beat M1 Max single-temporal 43.3%)
               .venv/bin/python scripts/train_lulc.py \
                 --data-dir /data/lulc_seasonal_vpp \
                 --device cuda \
-                --num-classes 10 \
+                --num-classes 12 \
                 --num-frames 4 \
                 --enable-multitemporal \
                 --enable-height --enable-volume \
