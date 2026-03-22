@@ -26,37 +26,45 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.fetch import _to_nmd_grid, _nmd_cache_key, _resample_nearest
-from imint.training.sampler import _sweref99_to_wgs84
 from imint.training.class_schema import nmd_raster_to_lulc, get_class_names
+
+
+# NMD is fetched for the actual tile extent (256px × 10m = 2560m),
+# not the full grid cell. The half-width is 1280m.
+_TILE_HALF_M = 1280.0
 
 
 def _tile_to_nmd_cache_path(
     easting: float,
     northing: float,
-    grid_half: float,
     nmd_cache_dir: Path,
 ) -> Path | None:
     """Compute the NMD cache file path for a tile.
 
-    Replicates the exact flow used by prepare_data.py:
-      1. _sweref99_to_wgs84 to get WGS84 bbox corners
-      2. _to_nmd_grid to project back to 3006 and snap
-      3. _nmd_cache_key to hash the snapped coords
+    The NMD cache key is based on the 2560m tile bbox (not the grid
+    cell bbox). The flow matches prepare_data.py:
+      1. Build WGS84 bbox from EPSG:3006 tile center ± 1280m
+      2. _to_nmd_grid: project WGS84 → 3006, snap to 10m grid
+      3. _nmd_cache_key: hash the snapped coords
     """
-    w3006 = easting - grid_half
-    s3006 = northing - grid_half
-    e3006 = easting + grid_half
-    n3006 = northing + grid_half
+    w3006 = easting - _TILE_HALF_M
+    s3006 = northing - _TILE_HALF_M
+    e3006 = easting + _TILE_HALF_M
+    n3006 = northing + _TILE_HALF_M
 
-    # Same as grid_to_wgs84: sw corner with (east, south), ne with (west, north)
-    sw = _sweref99_to_wgs84(e3006, s3006)  # (lat, lon)
-    ne = _sweref99_to_wgs84(w3006, n3006)  # (lat, lon)
+    try:
+        from rasterio.crs import CRS
+        from rasterio.warp import transform_bounds
+
+        w84, s84, e84, n84 = transform_bounds(
+            CRS.from_epsg(3006), CRS.from_epsg(4326),
+            w3006, s3006, e3006, n3006,
+        )
+    except ImportError:
+        return None
 
     coords_wgs84 = {
-        "west": min(sw[1], ne[1]),
-        "south": min(sw[0], ne[0]),
-        "east": max(sw[1], ne[1]),
-        "north": max(sw[0], ne[0]),
+        "west": w84, "south": s84, "east": e84, "north": n84,
     }
 
     projected = _to_nmd_grid(coords_wgs84)
@@ -68,7 +76,6 @@ def remap_tile(
     tile_path: Path,
     num_classes: int,
     nmd_cache_dir: Path,
-    grid_half: float,
     dry_run: bool = False,
 ) -> str:
     """Remap a single tile's labels using raw NMD from cache.
@@ -87,7 +94,7 @@ def remap_tile(
         return "fail"
 
     cache_path = _tile_to_nmd_cache_path(
-        easting, northing, grid_half, nmd_cache_dir,
+        easting, northing, nmd_cache_dir,
     )
     if cache_path is None or not cache_path.exists():
         return "fail"
@@ -123,7 +130,6 @@ def main():
     parser.add_argument("--data-dir", required=True, help="Data directory")
     parser.add_argument("--num-classes", type=int, required=True, help="Target class count")
     parser.add_argument("--nmd-cache", default=None, help="NMD cache dir (default: .nmd_cache/)")
-    parser.add_argument("--grid-spacing", type=int, default=10000, help="Grid spacing in meters")
     parser.add_argument("--workers", type=int, default=None, help="Parallel workers")
     parser.add_argument("--dry-run", action="store_true", help="Preview changes only")
     args = parser.parse_args()
@@ -136,17 +142,15 @@ def main():
     n_cached = len(list(nmd_cache_dir.glob("nmd_*.npy"))) if nmd_cache_dir.exists() else 0
 
     n_workers = args.workers or int(os.environ.get("IMINT_NMD_WORKERS", "4"))
-    grid_half = args.grid_spacing / 2.0
 
     print("Found %d tiles to remap to %d-class schema" % (len(tile_files), args.num_classes))
     print("NMD cache: %s (%d entries)" % (nmd_cache_dir, n_cached))
-    print("Grid spacing: %dm (half=%dm)" % (args.grid_spacing, int(grid_half)))
     print("Workers: %d" % n_workers)
     print("Classes: %s" % get_class_names(args.num_classes))
 
     if args.dry_run:
         for f in tile_files[:10]:
-            remap_tile(f, args.num_classes, nmd_cache_dir, grid_half, dry_run=True)
+            remap_tile(f, args.num_classes, nmd_cache_dir, dry_run=True)
         return
 
     ok = 0
@@ -154,7 +158,7 @@ def main():
     skip = 0
 
     def _process(tile_path):
-        return remap_tile(tile_path, args.num_classes, nmd_cache_dir, grid_half)
+        return remap_tile(tile_path, args.num_classes, nmd_cache_dir)
 
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         futures = {pool.submit(_process, f): f for f in tile_files}
