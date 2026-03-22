@@ -26,6 +26,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.fetch import _to_nmd_grid, _nmd_cache_key, _resample_nearest
+from imint.training.sampler import _sweref99_to_wgs84
 from imint.training.class_schema import nmd_raster_to_lulc, get_class_names
 
 
@@ -41,30 +42,20 @@ def _tile_to_nmd_cache_path(
 ) -> Path | None:
     """Compute the NMD cache file path for a tile.
 
-    The NMD cache key is based on the 2560m tile bbox (not the grid
-    cell bbox). The flow matches prepare_data.py:
-      1. Build WGS84 bbox from EPSG:3006 tile center ± 1280m
-      2. _to_nmd_grid: project WGS84 → 3006, snap to 10m grid
+    Replicates the exact flow from prepare_data.py:
+      1. _sweref99_to_wgs84 to get WGS84 bbox (same as grid_to_wgs84)
+      2. _to_nmd_grid: project WGS84 → 3006 via rasterio, snap to 10m
       3. _nmd_cache_key: hash the snapped coords
     """
-    w3006 = easting - _TILE_HALF_M
-    s3006 = northing - _TILE_HALF_M
-    e3006 = easting + _TILE_HALF_M
-    n3006 = northing + _TILE_HALF_M
-
-    try:
-        from rasterio.crs import CRS
-        from rasterio.warp import transform_bounds
-
-        w84, s84, e84, n84 = transform_bounds(
-            CRS.from_epsg(3006), CRS.from_epsg(4326),
-            w3006, s3006, e3006, n3006,
-        )
-    except ImportError:
-        return None
+    # Same corner logic as grid_to_wgs84: sw=(east,south), ne=(west,north)
+    sw = _sweref99_to_wgs84(easting + _TILE_HALF_M, northing - _TILE_HALF_M)
+    ne = _sweref99_to_wgs84(easting - _TILE_HALF_M, northing + _TILE_HALF_M)
 
     coords_wgs84 = {
-        "west": w84, "south": s84, "east": e84, "north": n84,
+        "west": min(sw[1], ne[1]),
+        "south": min(sw[0], ne[0]),
+        "east": max(sw[1], ne[1]),
+        "north": max(sw[0], ne[0]),
     }
 
     projected = _to_nmd_grid(coords_wgs84)
