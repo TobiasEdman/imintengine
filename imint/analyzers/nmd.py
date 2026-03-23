@@ -6,13 +6,25 @@ Instead of just reporting "40% change", we can say "change occurred in
 60% forest, 30% cropland, 10% developed land".
 
 NMD 2018 Basskikt class codes:
-    111-118  Forest outside wetland (pine, spruce, deciduous, mixed, temp. non-forest)
-    121-128  Forest on wetland
+    111      Tallskog (pine forest)
+    112      Granskog (spruce forest)
+    113      Lövskog (deciduous forest)
+    114      Barrblandskog (mixed coniferous)
+    115      Triviallövskog (trivial deciduous: birch, aspen, alder)
+    116      Ädellövskog (noble deciduous: oak, beech, elm)
+    117      Triviallövskog med ädellövinslag (trivial+noble deciduous)
+    118      Temporärt ej skog (clearcuts / young regeneration)
+    121-128  Forest on wetland (same subtypes as 111-118)
     2        Open wetland
     3        Cropland
-    41-42    Other open land (without/with vegetation)
-    51-53    Developed land (buildings, infrastructure, roads)
-    61-62    Water (lakes, sea)
+    41       Other open land without vegetation
+    42       Other open land with vegetation
+    51       Developed — buildings
+    52       Developed — infrastructure
+    53       Developed — roads
+    61       Water — lakes
+    62       Water — sea
+    241      Open land (exploited / alpine)
     255      Unclassified / cloud
 
 This analyzer runs last and consumes previous_results from change_detection,
@@ -42,17 +54,17 @@ NMD_LEVEL1 = {
 NMD_LEVEL2 = {
     "forest_pine": {111},
     "forest_spruce": {112},
-    "forest_deciduous": {113},
+    "forest_deciduous": {113, 115, 116, 117},  # 115=triviallöv, 116=ädellöv, 117=mixed
     "forest_mixed": {114},
-    "forest_temp_non_forest": {115, 116, 117, 118},
+    "forest_temp_non_forest": {118},            # only clearcuts/young regen
     "forest_wetland_pine": {121},
     "forest_wetland_spruce": {122},
-    "forest_wetland_deciduous": {123},
+    "forest_wetland_deciduous": {123, 125, 126, 127},  # 125-127 = wetland deciduous subtypes
     "forest_wetland_mixed": {124},
-    "forest_wetland_temp": {125, 126, 127, 128},
+    "forest_wetland_temp": {128},               # only wetland clearcuts
     "open_wetland": {2},
     "cropland": {3},
-    "open_land_bare": {41},
+    "open_land_bare": {41, 241},                # 241 = exploaterad/alpine open
     "open_land_vegetated": {42},
     "developed_buildings": {51},
     "developed_infrastructure": {52},

@@ -68,21 +68,44 @@ def scan_incomplete_tiles(tiles_dir: Path) -> list[dict]:
     return incomplete
 
 
+def _tile_bbox(easting: float, northing: float, grid_half: float = 5000.0):
+    """Compute WGS84 and snapped EPSG:3006 bboxes for a tile center.
+
+    Uses the same coordinate flow as prepare_data.py:
+      1. _sweref99_to_wgs84 (center ± grid_half) → WGS84 bbox
+      2. _to_nmd_grid → snapped EPSG:3006 bbox
+
+    Returns (coords_wgs84, projected_3006) dicts.
+    """
+    from imint.training.sampler import _sweref99_to_wgs84
+    from imint.fetch import _to_nmd_grid
+
+    # Same corner logic as grid_to_wgs84: sw=(east_3006, south_3006)
+    sw = _sweref99_to_wgs84(easting + grid_half, northing - grid_half)
+    ne = _sweref99_to_wgs84(easting - grid_half, northing + grid_half)
+
+    coords_wgs84 = {
+        "west": min(sw[1], ne[1]),
+        "south": min(sw[0], ne[0]),
+        "east": max(sw[1], ne[1]),
+        "north": max(sw[0], ne[0]),
+    }
+    projected = _to_nmd_grid(coords_wgs84)
+    return coords_wgs84, projected
+
+
 def get_vpp_windows(easting: float, northing: float,
                     n_frames: int = 4) -> list[tuple[int, int]]:
     """Re-derive VPP-guided DOY windows for a tile location."""
     from imint.training.cdse_vpp import fetch_vpp_tiles
     from imint.training.vpp_windows import compute_growing_season_windows
 
-    # Convert easting/northing to EPSG:3006 bbox (10km tile)
-    west = easting
-    south = northing
-    east = easting + 10_000
-    north = northing + 10_000
+    _wgs84, projected = _tile_bbox(easting, northing)
 
     try:
         vpp = fetch_vpp_tiles(
-            west=west, south=south, east=east, north=north,
+            west=projected["west"], south=projected["south"],
+            east=projected["east"], north=projected["north"],
             size_px=64,
         )
         windows = compute_growing_season_windows(
@@ -125,30 +148,22 @@ def gapfill_tile(
     dates = list(data["dates"])
     doy_vals = data["doy"].copy()
 
+    # Get aligned bboxes (same flow as prepare_data.py)
+    coords, projected = _tile_bbox(easting, northing)
+
     # Get VPP windows for this tile
     windows = get_vpp_windows(easting, northing, n_frames)
 
-    # Build WGS84 coords for STAC search
-    from rasterio.warp import transform_bounds
-    from rasterio.crs import CRS
-    west = easting
-    south = northing
-    east = easting + 10_000
-    north = northing + 10_000
-
-    lon_min, lat_min, lon_max, lat_max = transform_bounds(
-        CRS.from_epsg(3006), CRS.from_epsg(4326),
-        west, south, east, north,
-    )
-    coords = {
-        "west": lon_min, "south": lat_min,
-        "east": lon_max, "north": lat_max,
-    }
+    # S2 fetch uses the snapped EPSG:3006 bbox (from _to_nmd_grid)
+    sh_west = projected["west"]
+    sh_south = projected["south"]
+    sh_east = projected["east"]
+    sh_north = projected["north"]
 
     # Only fetch windows for missing frames
     missing_windows = [windows[i] for i in missing]
 
-    # STAC discovery for all missing windows at once (efficient)
+    # STAC discovery uses WGS84 coords
     from imint.fetch import fetch_seasonal_dates_doy
     season_candidates = fetch_seasonal_dates_doy(
         coords, missing_windows, years, scene_cloud_max=50.0,
@@ -171,7 +186,7 @@ def gapfill_tile(
         for cand_date, scene_cc in candidates_all[:3]:
             try:
                 result = fetch_s2_scene(
-                    west, south, east, north,
+                    sh_west, sh_south, sh_east, sh_north,
                     date=cand_date,
                     size_px=(h, w),
                     cloud_threshold=cloud_threshold,
