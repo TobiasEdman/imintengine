@@ -94,6 +94,16 @@ var LEGENDS = {
         {color:'#d73027',label:'Erosion'},{color:'#ffffbf',label:'Stabil'},
         {color:'#1a9850',label:'Ackumulation'}
     ],
+    vegetation_seg: [
+        {color:'#1E78B4',label:'Vatten'},{color:'#D9C799',label:'Ej vegetation'},
+        {color:'#2BA22B',label:'Vegetation'}
+    ],
+    vegetation_edge_years: [
+        {color:'#e41a1c',label:'2018'},{color:'#ff7f00',label:'2019'},
+        {color:'#ffd700',label:'2020'},{color:'#4daf4a',label:'2021'},
+        {color:'#00ced1',label:'2022'},{color:'#377eb8',label:'2023'},
+        {color:'#984ea3',label:'2024'},{color:'#e41a9d',label:'2025'}
+    ],
     lulc_grouped: [
         {color:'#006400',label:'Tallskog'},{color:'#228B22',label:'Granskog'},
         {color:'#32CD32',label:'Lövskog'},{color:'#3CB371',label:'Blandskog'},
@@ -123,7 +133,8 @@ var GEOJSON_FILES = {
     lpis:                 'data/lpis.geojson',
     erosion:              'data/erosion.geojson',
     segformer_shorelines: 'data/segformer-shorelines.geojson',
-    coastline_shorelines: 'data/coastline-shorelines.geojson'
+    coastline_shorelines: 'data/coastline-shorelines.geojson',
+    vegetation_edges:     'data/vegetation-edge-vectors.geojson'
 };
 
 // ── Tab configurations ───────────────────────────────────────────────
@@ -289,7 +300,7 @@ var TAB_CONFIG = {
         hasBgToggle: false
     },
 
-    coastline: {
+    kustlinje: {
         title: 'Kustlinjeanalys — 2025-06-14',
         summary: [
             {title:'Analysperiod',value:'8 år',detail:'2018–2025'},
@@ -330,6 +341,39 @@ var TAB_CONFIG = {
             'c-sf-change':      'showcase/kustlinje/segformer_shoreline_change.png'
         },
         imgH: 508, imgW: 577,
+        hasBgToggle: false
+    },
+
+    vegetationskant: {
+        title: 'Vegetationskantanalys — Vänern',
+        summary: [
+            {title:'Analysperiod',value:'8 år',detail:'2018–2025'},
+            {title:'Metod',value:'VedgeSat',detail:'NDVI + Otsu'},
+            {title:'Analysområde',value:'Vänern',detail:'Lidköping/Läckö'},
+            {title:'Upplösning',value:'10 m',detail:'Sentinel-2 L2A'},
+            {title:'Referens',value:'Muir et al.',detail:'2024 + Nugraha 2026'}
+        ],
+        intro: 'Analysområdet visar Vänerns södra strand nära Lidköping och Läckö slott — en strandzon med blandning av skog, jordbruksmark och strandvegetation. Sentinel-2-data från åtta år (2018–2025) har analyserats med VedgeSat-metoden (NDVI-tröskling + morfologisk kantextraktion) för att detektera och följa vegetationskantens förändring över tid. Metoden identifierar gränsen mellan vegeterat och icke-vegeterat område utan behov av fältdata eller modellomträning.',
+        panels: [
+            {id:'ve-rgb',    key:'rgb',    title:'Sentinel-2 RGB',                              legend:null},
+            {id:'ve-ndvi',   key:'ndvi',   title:'NDVI (Vegetationsindex)',                     legend:'ndvi'},
+            {id:'ve-seg',    key:'seg',    title:'Vegetationssegmentering (3-klass)',            legend:'vegetation_seg'},
+            {id:'ve-edge',   key:'edge',   title:'Vegetationskant (referensår)',                 legend:null},
+            {id:'ve-change', key:'change', title:'Vegetationskantförändring 2018–2025',          legend:'vegetation_edge_years',
+                vector:true, geojsonFile:'vegetation_edges'},
+            {id:'ve-ndwi',   key:'ndwi',   title:'NDWI (Vattenindex)',                          legend:'ndwi'},
+            {id:'ve-evi',    key:'evi',    title:'EVI (Enhanced Vegetation Index)',              legend:'evi'}
+        ],
+        images: {
+            've-rgb':    'showcase/vegetationskant/rgb.png',
+            've-ndvi':   'showcase/vegetationskant/ndvi_clean.png',
+            've-seg':    'showcase/vegetationskant/vegetation_seg.png',
+            've-edge':   'showcase/vegetationskant/vegetation_edge_overlay.png',
+            've-change': 'showcase/vegetationskant/vegetation_edge_change.png',
+            've-ndwi':   'showcase/vegetationskant/ndwi_clean.png',
+            've-evi':    'showcase/vegetationskant/evi_clean.png'
+        },
+        imgH: 0, imgW: 0,
         hasBgToggle: false
     },
 

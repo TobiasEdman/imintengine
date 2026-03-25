@@ -21,6 +21,7 @@ from .analyzers.prithvi import PrithviAnalyzer
 from .analyzers.nmd import NMDAnalyzer
 from .analyzers.cot import COTAnalyzer
 from .analyzers.marine_vessels import MarineVesselAnalyzer
+from .analyzers.vegetation_edge import VegetationEdgeAnalyzer
 from .exporters.export import (
     save_rgb_png, save_change_overlay, save_ndvi_colormap,
     save_regions_geojson, save_geotiff, save_summary_report,
@@ -31,6 +32,8 @@ from .exporters.export import (
     save_cot_clean_png, save_cloud_class_clean_png,
     save_dnbr_clean_png, save_change_gradient_png,
     save_vessel_overlay,
+    save_shoreline_overlay,
+    save_ndvi_clean_png as _save_ndvi_clean,
 )
 from .exporters.html_report import save_html_report
 
@@ -43,6 +46,7 @@ ANALYZER_REGISTRY = {
     "nmd": NMDAnalyzer,
     "cot": COTAnalyzer,
     "marine_vessels": MarineVesselAnalyzer,
+    "vegetation_edge": VegetationEdgeAnalyzer,
 }
 
 
@@ -325,6 +329,52 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
             if class_stats:
                 save_nmd_stats(class_stats, cross_ref, os.path.join(out, f"{prefix}nmd_stats.json"))
 
+    elif result.analyzer == "vegetation_edge":
+        seg_map = result.outputs.get("segmentation_map")
+        edge_mask = result.outputs.get("vegetation_edge_mask")
+        ndvi = result.outputs.get("ndvi")
+
+        if seg_map is not None:
+            # Vegetation segmentation map (3-class)
+            from .analyzers.vegetation_edge import CLASS_NAMES as VE_CLASSES
+            _save_vegetation_seg_png(
+                seg_map, os.path.join(out, f"{prefix}vegetation_seg_clean.png"),
+            )
+        if edge_mask is not None:
+            # Vegetation edge overlay on RGB
+            save_shoreline_overlay(
+                job.rgb, edge_mask,
+                os.path.join(out, f"{prefix}vegetation_edge_clean.png"),
+                color=(0.13, 0.87, 0.27),  # green for vegetation edge
+            )
+        if ndvi is not None:
+            _save_ndvi_clean(ndvi, os.path.join(out, f"{prefix}ndvi_veg_clean.png"))
+
+
+def _save_vegetation_seg_png(seg_map: np.ndarray, path: str) -> str:
+    """Save a 3-class vegetation segmentation map as a coloured PNG.
+
+    Classes: 0=water (blue), 1=non-vegetated (beige), 2=vegetated (green).
+    """
+    from PIL import Image
+
+    colors = {
+        0: (0.12, 0.47, 0.71),   # water — blue
+        1: (0.85, 0.78, 0.60),   # non-vegetated — beige
+        2: (0.17, 0.63, 0.17),   # vegetated — green
+    }
+    h, w = seg_map.shape
+    out_img = np.zeros((h, w, 3), dtype=np.float32)
+    for cls, color in colors.items():
+        mask = seg_map == cls
+        for c in range(3):
+            out_img[:, :, c][mask] = color[c]
+
+    img = (out_img * 255).astype(np.uint8)
+    Image.fromarray(img).save(path)
+    print(f"    saved: {path}")
+    return path
+
 
 def _generate_html_report(job: IMINTJob, prefix: str) -> None:
     """Generate interactive HTML report after all analyzers complete."""
@@ -347,6 +397,9 @@ def _generate_html_report(job: IMINTJob, prefix: str) -> None:
         "cot": f"{prefix}cot_clean.png",
         "vessels": f"{prefix}vessels_clean.png",
         "vessel_heatmap": f"{prefix}vessel_heatmap_clean.png",
+        "vegetation_seg": f"{prefix}vegetation_seg_clean.png",
+        "vegetation_edge": f"{prefix}vegetation_edge_clean.png",
+        "ndvi_veg": f"{prefix}ndvi_veg_clean.png",
         "sjokort": f"{prefix}sjokort.png",
     }
     image_paths = {}

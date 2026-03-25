@@ -13,14 +13,14 @@
         <div class="header-left">
             <div>
                 <h1><span>IMINT</span> Analysrapport</h1>
-                <p>Showcase — Brand (2018-07-24) &middot; Marin (2025-07-10 / 2025-07-19) &middot; Betesmark (2025-06-14) &middot; Kustlinje (2025-06-14)</p>
+                <p>Showcase — Brand (2018-07-24) &middot; Marin (2025-07-10 / 2025-07-19) &middot; Betesmark (2025-06-14) &middot; Kust (Kustlinje + Vegetationskant)</p>
             </div>
         </div>
         <div class="header-nav">
             <a href="#" class="theme-tab active" data-tab="fire">🔥 Brand</a>
             <a href="#" class="theme-tab" data-tab="marine">⚓ Marin</a>
             <a href="#" class="theme-tab" data-tab="grazing">🐄 Betesmark</a>
-            <a href="#" class="theme-tab" data-tab="coastline">🌊 Kustlinje</a>
+            <a href="#" class="theme-tab" data-tab="kust">🌊 Kust</a>
             <!-- LULC tab hidden — moved to training dashboard on M1 Max -->
             <!-- <a href="#" class="theme-tab" data-tab="lulc">🌲 LULC</a> -->
         </div>
@@ -279,59 +279,101 @@
     </div>
 
 
-    <!-- ── Coastline tab ────────────────────────────────────────── -->
-    <div class="tab-content" id="tab-coastline">
-        <div class="tab-dynamic"></div>
-        <div class="tab-description">
+    <!-- ── Kust tab (parent with sub-tabs) ────────────────────── -->
+    <div class="tab-content" id="tab-kust">
+        <div class="sub-tab-nav">
+            <a href="#" class="sub-tab active" data-subtab="kustlinje">🏖️ Kustlinje — Skåne</a>
+            <a href="#" class="sub-tab" data-subtab="vegetationskant">🌿 Vegetationskant — Vänern</a>
+        </div>
 
-            <h3>Sentinel-2 RGB — Satellitbilden</h3>
-            <p>
-                Sentinel-2 är en konstellation av två satelliter (2A och 2B) som drivs av Europeiska rymdorganisationen (ESA) inom Copernicus-programmet. RGB-bilden visar kustområdet utanför Ystad som det ser ut för ögat.
-                <br><em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" target="_blank">ESA Sentinel-2</a></em>
-            </p>
+        <div class="sub-tab-content active" id="tab-kustlinje">
+            <div class="tab-dynamic"></div>
+            <div class="tab-description">
 
-            <h3>Strandlinjeförändring — CoastSat-metoden</h3>
-            <p>
-                Strandlinjens position extraheras automatiskt från Sentinel-2-bilder med CoastSat-metoden. NDWI/MNDWI-index beräknas och Otsu-tröskling används för att separera land från vatten. Genom att jämföra strandlinjer från 2018 till 2025 kan erosion och ackumulation identifieras längs kuststräckan.
-                <br><em>Källa: Vos, K. et al., 2019. "CoastSat: A Google Earth Engine-enabled Python toolkit to extract shorelines from publicly available satellite imagery." Environmental Modelling &amp; Software. <a href="https://github.com/kvos/CoastSat" target="_blank">github.com/kvos/CoastSat</a></em>
-            </p>
+                <h3>Sentinel-2 RGB — Satellitbilden</h3>
+                <p>
+                    Sentinel-2 är en konstellation av två satelliter (2A och 2B) som drivs av Europeiska rymdorganisationen (ESA) inom Copernicus-programmet. RGB-bilden visar kustområdet utanför Ystad som det ser ut för ögat.
+                    <br><em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" target="_blank">ESA Sentinel-2</a></em>
+                </p>
 
-            <h3>NDVI — Vegetationsindex</h3>
-            <p>
-                NDVI (Normalized Difference Vegetation Index) beräknas som (NIR - Röd) / (NIR + Röd). I kustanalysen visar NDVI vegetationens tillstånd i strandzonen och bakomliggande landskap.
-                <br><em>Källa: Rouse et al., 1974. "Monitoring vegetation systems in the Great Plains with ERTS."</em>
-            </p>
+                <h3>Strandlinjeförändring — CoastSat-metoden</h3>
+                <p>
+                    Strandlinjens position extraheras automatiskt från Sentinel-2-bilder med CoastSat-metoden. NDWI/MNDWI-index beräknas och Otsu-tröskling används för att separera land från vatten. Genom att jämföra strandlinjer från 2018 till 2025 kan erosion och ackumulation identifieras längs kuststräckan.
+                    <br><em>Källa: Vos, K. et al., 2019. "CoastSat: A Google Earth Engine-enabled Python toolkit to extract shorelines from publicly available satellite imagery." Environmental Modelling &amp; Software. <a href="https://github.com/kvos/CoastSat" target="_blank">github.com/kvos/CoastSat</a></em>
+                </p>
 
-            <h3>NDWI — Vattenindex</h3>
-            <p>
-                NDWI (Normalized Difference Water Index) är centralt för kustlinjeanalysen. Det beräknas som (Grön - NIR) / (Grön + NIR) och används för att separera land från vatten vid strandlinjeextraktion.
-                <br><em>Källa: McFeeters, S.K., 1996. "The use of the Normalized Difference Water Index (NDWI) in the delineation of open water features." Int. J. Remote Sensing, 17(7).</em>
-            </p>
+                <h3>NDVI — Vegetationsindex</h3>
+                <p>
+                    NDVI (Normalized Difference Vegetation Index) beräknas som (NIR - Röd) / (NIR + Röd). I kustanalysen visar NDVI vegetationens tillstånd i strandzonen och bakomliggande landskap.
+                    <br><em>Källa: Rouse et al., 1974. "Monitoring vegetation systems in the Great Plains with ERTS."</em>
+                </p>
 
-            <h3>EVI — Förbättrat vegetationsindex</h3>
-            <p>
-                EVI (Enhanced Vegetation Index) korrigerar för atmosfäriska störningar och ger mer nyanserad information i kustzonens vegetation.
-                <br><em>Källa: Huete et al., 2002. "Overview of the radiometric and biophysical performance of the MODIS vegetation indices." Remote Sensing of Environment, 83(1-2).</em>
-            </p>
+                <h3>NDWI — Vattenindex</h3>
+                <p>
+                    NDWI (Normalized Difference Water Index) är centralt för kustlinjeanalysen. Det beräknas som (Grön - NIR) / (Grön + NIR) och används för att separera land från vatten vid strandlinjeextraktion.
+                    <br><em>Källa: McFeeters, S.K., 1996. "The use of the Normalized Difference Water Index (NDWI) in the delineation of open water features." Int. J. Remote Sensing, 17(7).</em>
+                </p>
 
-            <h3>COT — Molnoptisk tjocklek</h3>
-            <p>
-                COT (Cloud Optical Thickness) anger hur optiskt tjockt molntäcket är. Värden nära noll innebär klar himmel och tillförlitliga satellitdata.
-                <br><em>Källa: Pirinen, A. et al., 2024. "Creating and Leveraging a Synthetic Dataset of Cloud Optical Thickness Measures for Cloud Detection in MSI." Remote Sensing. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">GitHub</a></em>
-            </p>
+                <h3>EVI — Förbättrat vegetationsindex</h3>
+                <p>
+                    EVI (Enhanced Vegetation Index) korrigerar för atmosfäriska störningar och ger mer nyanserad information i kustzonens vegetation.
+                    <br><em>Källa: Huete et al., 2002. "Overview of the radiometric and biophysical performance of the MODIS vegetation indices." Remote Sensing of Environment, 83(1-2).</em>
+                </p>
 
-            <h3>Indexbaserad vs CoastSeg SegFormer — Kustsegmentering</h3>
-            <p>
-                Två metoder för kustsegmentering visas sida vid sida för jämförelse:
-            </p>
-            <p>
-                <strong>Indexbaserad (NDWI/MNDWI + Otsu):</strong> Använder spektrala vattenindex (NDWI och MNDWI) med automatisk Otsu-tröskling för att skilja vatten från land. Metoden är transparent, fysikbaserad och kräver ingen GPU. Den identifierar fyra klasser: djupt vatten, grunt vatten, sediment och land.
-                <br><em>Källa: Vos, K. et al., 2019. "CoastSat: A Google Earth Engine-enabled Python toolkit to extract shorelines." Environmental Modelling &amp; Software.</em>
-            </p>
-            <p>
-                <strong>CoastSeg SegFormer (neuralt nätverk):</strong> En SegFormer-B0 transformer-modell (3,7 M parametrar) tränad på märkt satellitdata för kustsegmentering. Modellen lär sig komplexa spatiala mönster direkt från RGB-bilddata och producerar samma fyra klasser. Jämför de två metodernas resultat för att se var de överensstämmer och var de skiljer sig — särskilt vid komplexa kustlinjer med sediment och grunt vatten.
-                <br><em>Källa: Vos, K. et al., CoastSeg — <a href="https://github.com/SatelliteShorelines/CoastSeg" target="_blank">GitHub</a></em>
-            </p>
+                <h3>COT — Molnoptisk tjocklek</h3>
+                <p>
+                    COT (Cloud Optical Thickness) anger hur optiskt tjockt molntäcket är. Värden nära noll innebär klar himmel och tillförlitliga satellitdata.
+                    <br><em>Källa: Pirinen, A. et al., 2024. "Creating and Leveraging a Synthetic Dataset of Cloud Optical Thickness Measures for Cloud Detection in MSI." Remote Sensing. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">GitHub</a></em>
+                </p>
+
+                <h3>Indexbaserad vs CoastSeg SegFormer — Kustsegmentering</h3>
+                <p>
+                    Två metoder för kustsegmentering visas sida vid sida för jämförelse:
+                </p>
+                <p>
+                    <strong>Indexbaserad (NDWI/MNDWI + Otsu):</strong> Använder spektrala vattenindex (NDWI och MNDWI) med automatisk Otsu-tröskling för att skilja vatten från land. Metoden är transparent, fysikbaserad och kräver ingen GPU. Den identifierar fyra klasser: djupt vatten, grunt vatten, sediment och land.
+                    <br><em>Källa: Vos, K. et al., 2019. "CoastSat: A Google Earth Engine-enabled Python toolkit to extract shorelines." Environmental Modelling &amp; Software.</em>
+                </p>
+                <p>
+                    <strong>CoastSeg SegFormer (neuralt nätverk):</strong> En SegFormer-B0 transformer-modell (3,7 M parametrar) tränad på märkt satellitdata för kustsegmentering. Modellen lär sig komplexa spatiala mönster direkt från RGB-bilddata och producerar samma fyra klasser. Jämför de två metodernas resultat för att se var de överensstämmer och var de skiljer sig — särskilt vid komplexa kustlinjer med sediment och grunt vatten.
+                    <br><em>Källa: Vos, K. et al., CoastSeg — <a href="https://github.com/SatelliteShorelines/CoastSeg" target="_blank">GitHub</a></em>
+                </p>
+            </div>
+        </div>
+
+        <div class="sub-tab-content" id="tab-vegetationskant">
+            <div class="tab-dynamic"></div>
+            <div class="tab-description">
+
+                <h3>Sentinel-2 RGB — Satellitbilden</h3>
+                <p>
+                    Sentinel-2 RGB visar Vänerns södra strand nära Lidköping/Läckö. Området har en blandning av skog, jordbruksmark och strandvegetation som möter sjöns strandlinje — ett idealiskt testområde för vegetationskantdetektion.
+                    <br><em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" target="_blank">ESA Sentinel-2</a></em>
+                </p>
+
+                <h3>NDVI — Vegetationsindex</h3>
+                <p>
+                    NDVI (Normalized Difference Vegetation Index) beräknas som (NIR − Röd) / (NIR + Röd) med band B08 och B04. I vegetationskantanalysen är NDVI det centrala indexet: gränsen mellan vegetation och icke-vegetation bestäms genom tröskling av NDVI-värden. Frisk vegetation ger höga NDVI-värden (0.3–0.9) medan vatten och bar mark ger låga värden. Den exakta tröskeln avgör var vegetationskanten placeras.
+                    <br><em>Källa: Rouse et al., 1974. "Monitoring vegetation systems in the Great Plains with ERTS."</em>
+                </p>
+
+                <h3>Vegetationssegmentering — VedgeSat-metoden</h3>
+                <p>
+                    Vegetationen klassificeras i tre klasser med NDVI-tröskling: vatten (blått), icke-vegeterat (beige) och vegeterat (grönt). Tröskeln bestäms automatiskt med Otsu-metoden eller VedgeSats Weighted Peaks-algoritm. Morfologisk rensning (close + open) appliceras för att ta bort brus och småfragment.
+                    <br><em>Källa: Muir, F.M.E. et al., 2024. "VedgeSat: An automated, open-source toolkit for coastal change monitoring using satellite-derived vegetation edges." Earth Surf. Process. Landf., 49, 2405–2423.</em>
+                </p>
+
+                <h3>Vegetationskant — Kantextraktion</h3>
+                <p>
+                    Vegetationskanten extraheras som en 1-pixel-bred centerlinje längs gränsen mellan vegeterat och icke-vegeterat område. Metoden använder morfologisk gradient för att hitta kantbandet (~3 px brett) och sedan skeletonisering för att reducera till en enda pixel. Resultatet är en vektoriserad linje som representerar vegetationens yttre gräns mot strand, vatten eller bar mark. Genom att jämföra vegetationskanter från 2018 till 2025 kan förändringar i vegetationstäckning identifieras — både erosion av vegetation och nyetablering.
+                    <br><em>Källa: Nugraha, I. et al., 2026. "Extending a scalable satellite-based vegetation edge detection framework to diverse tropical coasts." Front. Mar. Sci., 13, 1757991.</em>
+                </p>
+
+                <h3>Vegetationskantförändring — Multitemporal analys</h3>
+                <p>
+                    Vegetationskantens position jämförs år för år från 2018 till 2025. Varje års kant visas med en färggradient från gult (äldst) till rött (nyast). Förflyttningar av vegetationskanten indikerar förändringar i strandvegetationens utbredning — antingen tillbakadragning (erosion, röjning) eller framryckning (ackumulation, nyetablering). Denna metod ger en kostnadseffektiv och skalbar övervakning av kustzonens vegetation utan behov av fältundersökningar.
+                </p>
+            </div>
         </div>
     </div>
 
