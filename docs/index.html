@@ -373,6 +373,11 @@
                 <p>
                     Vegetationskantens position jämförs år för år från 2018 till 2025. Varje års kant visas med en färggradient från gult (äldst) till rött (nyast). Förflyttningar av vegetationskanten indikerar förändringar i strandvegetationens utbredning — antingen tillbakadragning (erosion, röjning) eller framryckning (ackumulation, nyetablering). Denna metod ger en kostnadseffektiv och skalbar övervakning av kustzonens vegetation utan behov av fältundersökningar.
                 </p>
+
+                <h3>Spektral stabilitet — Multispektral förändringsanalys</h3>
+                <p>
+                    Stabilitetskartorna visar hur mycket varje pixel har förändrats spektralt mellan 2018 och efterföljande år. Analysen använder samma metod som branddetekteringen: den euklidiska normen beräknas över sex Sentinel-2-band (B02, B03, B04, B08, B11, B12) — synligt ljus, nära infrarött och kortvågigt infrarött. Medelvärdet av alla års förändringsmagnituder ger en stabilitetskarta där mörka områden är spektralt stabila (oförändrad vegetation) och ljusa/heta områden har genomgått störst förändring. Max-kartan visar den största förändringen som observerats under någon enskild jämförelse. Tillsammans kompletterar dessa den NDVI-baserade vegetationskantanalysen med en bredare spektral bild av landskapsförändringen.
+                </p>
             </div>
         </div>
     </div>

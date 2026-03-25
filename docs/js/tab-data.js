@@ -358,9 +358,10 @@ var TAB_CONFIG = {
             {id:'ve-rgb',    key:'rgb',    title:'Sentinel-2 RGB',                              legend:null},
             {id:'ve-ndvi',   key:'ndvi',   title:'NDVI (Vegetationsindex)',                     legend:'ndvi'},
             {id:'ve-seg',    key:'seg',    title:'Vegetationssegmentering (3-klass)',            legend:'vegetation_seg'},
-            {id:'ve-edge',   key:'edge',   title:'Vegetationskant (referensår)',                 legend:null},
-            {id:'ve-change', key:'change', title:'Vegetationskantförändring 2018–2025',          legend:'vegetation_edge_years',
-                vector:true, geojsonFile:'vegetation_edges'},
+            {id:'ve-change', key:'change', title:'Vegetationskantförändring 2018–2025',          legend:'vegetation_edge_years'},
+            {id:'ve-nmd',    key:'nmd',    title:'NMD Marktäcke',                               legend:'nmd'},
+            {id:'ve-stability', key:'stability', title:'Spektral stabilitet (medel 2018–2025)',  legend:'change_gradient'},
+            {id:'ve-maxchange', key:'maxchange', title:'Max spektral förändring (2018–2025)',    legend:'change_gradient'},
             {id:'ve-ndwi',   key:'ndwi',   title:'NDWI (Vattenindex)',                          legend:'ndwi'},
             {id:'ve-evi',    key:'evi',    title:'EVI (Enhanced Vegetation Index)',              legend:'evi'}
         ],
@@ -368,12 +369,14 @@ var TAB_CONFIG = {
             've-rgb':    'showcase/vegetationskant/rgb.png',
             've-ndvi':   'showcase/vegetationskant/ndvi_clean.png',
             've-seg':    'showcase/vegetationskant/vegetation_seg.png',
-            've-edge':   'showcase/vegetationskant/vegetation_edge_overlay.png',
             've-change': 'showcase/vegetationskant/vegetation_edge_change.png',
+            've-nmd':    'showcase/vegetationskant/nmd_overlay.png',
+            've-stability': 'showcase/vegetationskant/spectral_stability.png',
+            've-maxchange': 'showcase/vegetationskant/spectral_max_change.png',
             've-ndwi':   'showcase/vegetationskant/ndwi_clean.png',
             've-evi':    'showcase/vegetationskant/evi_clean.png'
         },
-        imgH: 0, imgW: 0,
+        imgH: 1145, imgW: 1194,
         hasBgToggle: false
     },
 

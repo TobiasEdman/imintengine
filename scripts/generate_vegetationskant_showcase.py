@@ -1,15 +1,17 @@
 """Generate showcase images for the Vegetationskant (Vegetation Edge) tab.
 
-Fetches Sentinel-2 timeseries for 2018–2025, runs VedgeSat-inspired
-NDVI-based vegetation edge detection per year, and saves PNGs to
-outputs/showcase/vegetationskant/.
+Pipeline:
+  1. DES STAC — discover best cloud-free summer date per year (metadata only)
+  2. CDSE — fetch single-date Sentinel-2 bands for each selected date
+  3. Compute NDVI, NDWI, EVI from bands
+  4. Run VegetationEdgeAnalyzer (NDVI threshold + edge extraction) per year
+  5. Save PNGs + GeoJSON to outputs/showcase/vegetationskant/
 
 Target area: southern shore of Lake Vanern near Lidkoping/Lacko.
 
 Usage:
     .venv/bin/python scripts/generate_vegetationskant_showcase.py
-
-    DES credentials needed for Sentinel-2 fetching.
+    .venv/bin/python scripts/generate_vegetationskant_showcase.py --workers 5
 
 References:
     Muir et al. (2024) VedgeSat
@@ -27,42 +29,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import numpy as np
 
-# Band order in cached timeseries: B01(0), B02(1), B03(2), B04(3),
-# B05(4), B06(5), B07(6), B08(7), B8A(8), B09(9), B11(10), B12(11)
-_BAND_NAMES = ["B01", "B02", "B03", "B04", "B05", "B06", "B07",
-               "B08", "B8A", "B09", "B11", "B12"]
-
 YEARS = list(range(2018, 2026))
 
 
-def _pick_best_date(dates: list[str], cloud_fractions: list[float]) -> int:
-    """Pick the best cloud-free date, preferring summer months (Jun-Aug)."""
-    best_idx = 0
-    best_score = -1.0
-    for i, (d, cf) in enumerate(zip(dates, cloud_fractions)):
-        month = int(d[5:7])
-        season_bonus = 1.0 if 6 <= month <= 8 else 0.5 if month in (5, 9) else 0.0
-        score = (1.0 - cf) + season_bonus
-        if score > best_score:
-            best_score = score
-            best_idx = i
-    return best_idx
-
-
-def _build_rgb(snapshot: np.ndarray) -> np.ndarray:
-    """Build contrast-stretched RGB from a (12, H, W) band stack."""
-    # B04(3)=Red, B03(2)=Green, B02(1)=Blue
-    rgb = np.stack([snapshot[3], snapshot[2], snapshot[1]], axis=-1)  # (H, W, 3)
-    p2, p98 = np.percentile(rgb, [2, 98])
-    rgb = np.clip((rgb - p2) / (p98 - p2 + 1e-8), 0.0, 1.0).astype(np.float32)
-    return rgb
-
-
 def _save_vegetation_seg_png(seg_map: np.ndarray, path: str) -> str:
-    """Save 3-class vegetation segmentation as coloured PNG.
-
-    Classes: 0=water (blue), 1=non-vegetated (beige), 2=vegetated (green).
-    """
+    """Save 3-class vegetation segmentation as coloured PNG."""
     from PIL import Image
 
     colors = {
@@ -91,7 +62,7 @@ def main():
     )
     parser.add_argument(
         "--cloud-threshold", type=float, default=0.05,
-        help="Max cloud fraction within bbox to keep a date (default 0.05)",
+        help="Max cloud fraction to accept a date (default 0.05)",
     )
     parser.add_argument(
         "--threshold-method", choices=["otsu", "weighted_peaks", "fixed"],
@@ -100,15 +71,23 @@ def main():
     )
     parser.add_argument(
         "--ndvi-threshold", type=float, default=None,
-        help="Fixed NDVI threshold (only used with --threshold-method fixed)",
+        help="Fixed NDVI threshold (only with --threshold-method fixed)",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=3,
+        help="Number of parallel CDSE fetch workers (default: 3)",
     )
     args = parser.parse_args()
 
-    from shapely.geometry import box as shapely_box
-    from rasterio.transform import from_origin
-    from imint.fetch import fetch_grazing_timeseries, GeoContext
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from imint.fetch import (
+        _stac_available_dates,
+        fetch_sentinel2_data,
+        GeoContext,
+    )
     from imint.analyzers.spectral import SpectralAnalyzer
     from imint.analyzers.vegetation_edge import VegetationEdgeAnalyzer
+    from imint.analyzers.nmd import NMDAnalyzer
     from imint.exporters.export import (
         save_rgb_png,
         save_ndvi_clean_png,
@@ -116,6 +95,7 @@ def main():
         save_shoreline_overlay,
         save_shoreline_change_png,
         save_coastline_geojson,
+        save_nmd_overlay,
     )
 
     # -- Area: Lake Vanern southern shore near Lidkoping/Lacko --------
@@ -125,142 +105,190 @@ def main():
     }
 
     out_dir = str(PROJECT_ROOT / "outputs" / "showcase" / "vegetationskant")
-    cache_dir = str(PROJECT_ROOT / "outputs" / "vegetationskant_model")
+    cache_dir = str(PROJECT_ROOT / "outputs" / "vegetationskant_cache")
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(cache_dir, exist_ok=True)
-
-    bbox_polygon = shapely_box(
-        coords["west"], coords["south"], coords["east"], coords["north"]
-    )
 
     print("=" * 60)
     print("  Vegetationskant Showcase Image Generator")
     print(f"  Area: Vanern — {coords['west']:.3f}–{coords['east']:.3f}°E, "
           f"{coords['south']:.3f}–{coords['north']:.3f}°N")
     print(f"  Years: {YEARS[0]}–{YEARS[-1]}")
-    print(f"  Threshold method: {args.threshold_method}")
+    print(f"  Dates: DES STAC  |  Bands: CDSE ({args.workers} workers)")
+    print(f"  Threshold: {args.threshold_method}")
     print(f"  Output: {out_dir}")
     print("=" * 60)
 
-    # -- Step 1: Fetch / load S2 timeseries per year ------------------
-    print("\n[1] Loading Sentinel-2 timeseries (2018–2025)...")
-    yearly_data = {}       # year -> (T, 12, H, W)
-    yearly_meta = {}       # year -> {dates, cloud_fractions, ...}
-    geo = None
+    # ── Step 1: DES STAC — find best summer date per year ────────────
+    print("\n[1] Discovering dates via DES STAC...")
+    yearly_dates: dict[int, str] = {}
 
     for year in YEARS:
-        cache_npz = os.path.join(cache_dir, f"bbox_timeseries_{year}.npz")
-        cache_json = os.path.join(cache_dir, f"bbox_timeseries_{year}_meta.json")
+        date_start = f"{year}-05-15"
+        date_end = f"{year}-08-31"
+        try:
+            stac_dates = _stac_available_dates(
+                coords, date_start, date_end,
+                scene_cloud_max=50.0,
+            )
+        except Exception as e:
+            print(f"    {year}: STAC failed — {e}")
+            continue
 
-        if os.path.isfile(cache_npz) and os.path.isfile(cache_json):
-            print(f"    {year}: Loading from cache...")
-            data = np.load(cache_npz)["data"]
-            with open(cache_json) as f:
-                meta = json.load(f)
-        else:
-            print(f"    {year}: Fetching from DES...")
-            try:
-                ts_list = fetch_grazing_timeseries(
-                    bbox_polygon,
-                    year=year,
-                    cloud_threshold=args.cloud_threshold,
-                    scene_cloud_max=50.0,
-                    buffer_m=0.0,
-                    chunk_days=14,
-                    polygon_crs="EPSG:4326",
-                )
-            except Exception as e:
-                print(f"    {year}: FAILED — {e}")
-                continue
+        if not stac_dates:
+            print(f"    {year}: no dates found")
+            continue
 
-            if not ts_list or ts_list[0].data.shape[0] == 0:
-                print(f"    {year}: No cloud-free dates found")
-                continue
+        # Pick best: lowest cloud, prefer Jun-Aug
+        best_date, best_cloud = stac_dates[0]  # already sorted by cloud
+        for d, cf in stac_dates:
+            month = int(d[5:7])
+            if 6 <= month <= 8 and cf < 15.0:
+                best_date, best_cloud = d, cf
+                break
 
-            ts = ts_list[0]
-            data = ts.data
+        yearly_dates[year] = best_date
+        print(f"    {year}: {best_date} (scene cloud {best_cloud:.1f}%, "
+              f"{len(stac_dates)} candidates)")
 
-            meta = {
-                "dates": ts.dates,
-                "cloud_fractions": ts.cloud_fractions,
-                "west": float(ts.geo.bounds_projected["west"]),
-                "south": float(ts.geo.bounds_projected["south"]),
-                "east": float(ts.geo.bounds_projected["east"]),
-                "north": float(ts.geo.bounds_projected["north"]),
-                "pixel_size": 10,
-            }
-
-            # Cache
-            np.savez_compressed(cache_npz, data=data)
-            with open(cache_json, "w") as f:
-                json.dump(meta, f, indent=2)
-            print(f"    {year}: Cached ({data.shape[0]} dates)")
-
-            if geo is None:
-                geo = ts.geo
-
-        yearly_data[year] = data
-        yearly_meta[year] = meta
-        T = data.shape[0]
-        print(f"    {year}: {T} dates, shape {data.shape}")
-
-    if not yearly_data:
-        print("ERROR: No data for any year. Aborting.")
+    if not yearly_dates:
+        print("ERROR: No dates found for any year. Aborting.")
         return
 
-    # Build GeoContext from first available year if not set
-    if geo is None:
-        first_meta = next(iter(yearly_meta.values()))
-        H, W = next(iter(yearly_data.values())).shape[2:]
-        pixel_size = first_meta.get("pixel_size", 10)
-        geo = GeoContext(
-            crs="EPSG:3006",
-            transform=from_origin(
-                first_meta["west"], first_meta["north"],
-                pixel_size, pixel_size,
-            ),
-            bounds_projected={
-                "west": first_meta["west"],
-                "south": first_meta["south"],
-                "east": first_meta["east"],
-                "north": first_meta["north"],
-            },
-            bounds_wgs84=None,
-            shape=(H, W),
+    # ── Step 2: CDSE — fetch bands for each date (parallel) ─────────
+    print(f"\n[2] Fetching {len(yearly_dates)} dates via CDSE "
+          f"({args.workers} workers)...")
+
+    yearly_results: dict[int, dict] = {}  # year -> {bands, rgb, geo, ...}
+    geo = None
+
+    def _fetch_year(year_date):
+        yr, date = year_date
+        cache_npz = os.path.join(cache_dir, f"scene_{yr}_{date}.npz")
+        cache_json = os.path.join(cache_dir, f"scene_{yr}_{date}_meta.json")
+
+        # Check cache
+        if os.path.isfile(cache_npz) and os.path.isfile(cache_json):
+            with open(cache_json) as f:
+                meta = json.load(f)
+            if meta.get("cloud_fraction", 0) > 0.05:
+                print(f"    {yr}: {date} cached but cloudy "
+                      f"({meta['cloud_fraction']:.1%}), skip", flush=True)
+                return None
+            if meta.get("nodata_fraction", 0) > 0.01:
+                print(f"    {yr}: {date} cached but partial "
+                      f"({meta['nodata_fraction']:.1%}), skip", flush=True)
+                return None
+            print(f"    {yr}: Loading {date} from cache", flush=True)
+            cached = np.load(cache_npz)
+            bands = {name: cached[name] for name in meta["band_names"]}
+            rgb = cached["rgb"]
+            return yr, date, bands, rgb, meta
+
+        print(f"    {yr}: Fetching {date} from CDSE...", flush=True)
+        result = fetch_sentinel2_data(
+            source="copernicus",
+            date=date,
+            coords=coords,
+            cloud_threshold=0.05,  # 5% SCL-based cloud filter
+            date_window=3,
         )
 
-    # -- Step 2: Pick best summer RGB per year ------------------------
-    print("\n[2] Selecting best summer date per year...")
-    yearly_rgbs = {}     # year -> (H, W, 3) float32
-    yearly_bands = {}    # year -> {name: (H, W)}
-    yearly_dates = {}    # year -> str
+        # Reject partial coverage (SCL=0 is nodata)
+        if result.scl is not None:
+            nodata_frac = float((result.scl == 0).sum()) / result.scl.size
+            if nodata_frac > 0.01:  # >1% nodata = partial tile
+                print(f"    {yr}: {date} rejected — partial coverage "
+                      f"({nodata_frac:.1%} nodata)", flush=True)
+                return None
 
-    for year in sorted(yearly_data.keys()):
-        data = yearly_data[year]
-        meta = yearly_meta[year]
-        best_idx = _pick_best_date(meta["dates"], meta["cloud_fractions"])
-        date = meta["dates"][best_idx]
-        cloud = meta["cloud_fractions"][best_idx]
-        snapshot = data[best_idx]  # (12, H, W)
+        if result.cloud_fraction > 0.05:
+            print(f"    {yr}: {date} rejected — SCL cloud "
+                  f"{result.cloud_fraction:.1%} > 5%", flush=True)
+            return None
+        bands = result.bands
+        rgb = result.rgb
 
-        rgb = _build_rgb(snapshot)
-        yearly_rgbs[year] = rgb
-        yearly_bands[year] = {name: snapshot[i] for i, name in enumerate(_BAND_NAMES)}
-        yearly_dates[year] = date
-        print(f"    {year}: {date} (cloud: {cloud:.1%})")
+        # Cache bands + rgb
+        save_dict = {name: arr for name, arr in bands.items()}
+        save_dict["rgb"] = rgb
+        np.savez_compressed(cache_npz, **save_dict)
 
-    # Use latest year as reference
-    ref_year = max(yearly_rgbs.keys())
+        nodata_frac = float((result.scl == 0).sum()) / result.scl.size if result.scl is not None else 0.0
+        meta = {
+            "date": date,
+            "year": yr,
+            "band_names": list(bands.keys()),
+            "cloud_fraction": result.cloud_fraction,
+            "nodata_fraction": nodata_frac,
+            "shape": list(rgb.shape[:2]),
+        }
+        if result.geo:
+            meta["geo"] = {
+                "crs": str(result.geo.crs),
+                "bounds_projected": result.geo.bounds_projected,
+                "bounds_wgs84": result.geo.bounds_wgs84,
+                "transform": list(result.geo.transform)[:6],
+            }
+        with open(cache_json, "w") as f:
+            json.dump(meta, f, indent=2)
+
+        print(f"    {yr}: {date} OK — cloud={result.cloud_fraction:.1%}, "
+              f"shape={rgb.shape[:2]}", flush=True)
+        return yr, date, bands, rgb, meta
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {
+            pool.submit(_fetch_year, (yr, d)): yr
+            for yr, d in sorted(yearly_dates.items())
+        }
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                if result is None:
+                    continue  # rejected by cloud filter
+                yr, date, bands, rgb, meta = result
+                yearly_results[yr] = {
+                    "bands": bands, "rgb": rgb, "meta": meta,
+                }
+                # Build GeoContext from first result
+                if geo is None and "geo" in meta:
+                    from rasterio.transform import Affine
+                    g = meta["geo"]
+                    t = g["transform"]
+                    geo = GeoContext(
+                        crs=g["crs"],
+                        transform=Affine(t[0], t[1], t[2], t[3], t[4], t[5]),
+                        bounds_projected=g.get("bounds_projected", {}),
+                        bounds_wgs84=g.get("bounds_wgs84"),
+                        shape=tuple(meta["shape"]),
+                    )
+            except Exception as e:
+                yr = futures[future]
+                print(f"    {yr}: FAILED — {e}", flush=True)
+
+    if not yearly_results:
+        print("ERROR: No data fetched. Aborting.")
+        return
+
+    print(f"    Fetched {len(yearly_results)} years successfully")
+
+    # Build convenience dicts
+    yearly_rgbs = {yr: r["rgb"] for yr, r in yearly_results.items()}
+    yearly_bands = {yr: r["bands"] for yr, r in yearly_results.items()}
+    yearly_date_str = {yr: yearly_dates[yr] for yr in yearly_results}
+
+    ref_year = max(yearly_results.keys())
     ref_rgb = yearly_rgbs[ref_year]
-    ref_date = yearly_dates[ref_year]
     ref_bands = yearly_bands[ref_year]
+    ref_date = yearly_date_str[ref_year]
     H, W = ref_rgb.shape[:2]
 
-    # -- Step 3: Save reference RGB -----------------------------------
+    # ── Step 3: Save reference RGB ───────────────────────────────────
     print(f"\n[3] Saving reference RGB ({ref_year})...")
     save_rgb_png(ref_rgb, os.path.join(out_dir, "rgb.png"))
 
-    # -- Step 4: Spectral indices (reference year) --------------------
+    # ── Step 4: Spectral indices (reference year) ────────────────────
     print("\n[4] Running spectral analysis...")
     spectral = SpectralAnalyzer()
     spec_result = spectral.run(
@@ -282,10 +310,24 @@ def main():
             cmap_name="RdYlGn", vmin=-0.5, vmax=1,
         )
 
-    # -- Step 5: Vegetation edge detection (all years) ----------------
-    print("\n[5] Running NDVI vegetation edge detection...")
+    # ── Step 5: NMD land cover ──────────────────────────────────────
+    print("\n[5] Running NMD analysis...")
+    try:
+        nmd = NMDAnalyzer()
+        nmd_result = nmd.run(
+            ref_rgb, bands=ref_bands, date=ref_date,
+            coords=coords, output_dir=out_dir, geo=geo,
+        )
+        if nmd_result.success and nmd_result.outputs.get("nmd_available"):
+            l2_raster = nmd_result.outputs.get("l2_raster")
+            if l2_raster is not None:
+                save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"))
+    except Exception as e:
+        print(f"    NMD skipped: {e}")
 
-    # Configure analyzer
+    # ── Step 6: Vegetation edge detection (all years) ────────────────
+    print("\n[6] Running NDVI vegetation edge detection...")
+
     ve_config = {}
     if args.threshold_method == "weighted_peaks":
         ve_config["weighted_peaks"] = True
@@ -294,11 +336,10 @@ def main():
 
     analyzer = VegetationEdgeAnalyzer(config=ve_config)
 
-    # Vegetation edge detection per year
-    yearly_seg = {}         # year -> seg_map (H, W)
-    yearly_info = {}        # year -> info dict
-    yearly_edges = {}       # year -> edge_mask (H, W)
-    yearly_contours = {}    # year -> [contour arrays]
+    yearly_seg = {}
+    yearly_info = {}
+    yearly_edges = {}
+    yearly_contours = {}
 
     for year in sorted(yearly_bands.keys()):
         print(f"    {year}...", end=" ", flush=True)
@@ -316,45 +357,84 @@ def main():
               f"NDVI thresh={info['ndvi_threshold']:.3f} "
               f"({info['threshold_method']})")
 
-    # Save reference year segmentation
+    # Save outputs
     _save_vegetation_seg_png(
         yearly_seg[ref_year],
         os.path.join(out_dir, "vegetation_seg.png"),
     )
-
-    # Save vegetation edge overlay on RGB (green line)
     save_shoreline_overlay(
         ref_rgb, yearly_edges[ref_year],
         os.path.join(out_dir, "vegetation_edge_overlay.png"),
-        color=(0.13, 0.87, 0.27),  # green
+        color=(0.13, 0.87, 0.27),
     )
-
-    # Save multi-year vegetation edge change
     save_shoreline_change_png(
-        yearly_edges,
-        ref_rgb,
+        yearly_edges, ref_rgb,
         os.path.join(out_dir, "vegetation_edge_change.png"),
     )
+    if geo is not None:
+        save_coastline_geojson(
+            yearly_contours, geo,
+            os.path.join(out_dir, "vegetation_edge_vectors.json"),
+            img_shape=(H, W),
+            pixel_coords=True,
+            smooth_sigma=3.0,
+            subsample_step=3,
+        )
 
-    # Save GeoJSON with all years' contours (pixel coords for Leaflet)
-    save_coastline_geojson(
-        yearly_contours,
-        geo,
-        os.path.join(out_dir, "vegetation_edge_vectors.json"),
-        img_shape=(H, W),
-        pixel_coords=True,
-        smooth_sigma=3.0,
-        subsample_step=3,
+    # ── Step 7: Multitemporal spectral stability ──────────────────────
+    print("\n[7] Computing multitemporal spectral stability...")
+    from imint.analyzers.change_detection import CHANGE_BANDS, _build_stack
+    from imint.exporters.export import save_change_gradient_png
+
+    sorted_years = sorted(yearly_bands.keys())
+    baseline_year = sorted_years[0]
+    baseline_stack, _ = _build_stack(
+        yearly_rgbs[baseline_year], yearly_bands[baseline_year],
     )
 
-    # -- Step 6: Compute statistics and save metadata -----------------
-    print("\n[6] Computing statistics...")
+    # Compute spectral distance (L2 norm) from baseline for each year
+    yearly_diffs = {}
+    for year in sorted_years[1:]:
+        current_stack, _ = _build_stack(yearly_rgbs[year], yearly_bands[year])
+        # Crop to common shape if needed
+        min_h = min(baseline_stack.shape[0], current_stack.shape[0])
+        min_w = min(baseline_stack.shape[1], current_stack.shape[1])
+        diff = np.linalg.norm(
+            current_stack[:min_h, :min_w].astype(np.float32)
+            - baseline_stack[:min_h, :min_w].astype(np.float32),
+            axis=-1,
+        )
+        yearly_diffs[year] = diff
+        mean_change = float(np.mean(diff))
+        print(f"    {baseline_year}→{year}: mean spectral change = {mean_change:.4f}")
+
+    # Mean stability map (average change magnitude across all years)
+    if yearly_diffs:
+        diff_stack = np.stack(list(yearly_diffs.values()), axis=0)
+        stability_map = np.mean(diff_stack, axis=0)  # (H, W) mean L2 dist
+        save_change_gradient_png(
+            stability_map,
+            os.path.join(out_dir, "spectral_stability.png"),
+        )
+
+        # Max change map (worst-case change across any year)
+        max_change = np.max(diff_stack, axis=0)
+        save_change_gradient_png(
+            max_change,
+            os.path.join(out_dir, "spectral_max_change.png"),
+        )
+
+        print(f"    Mean stability: {float(np.mean(stability_map)):.4f}")
+        print(f"    Max change pixel: {float(np.max(max_change)):.4f}")
+
+    # ── Step 8: Statistics + metadata ────────────────────────────────
+    print("\n[8] Computing statistics...")
 
     per_year_stats = {}
     for year in sorted(yearly_seg.keys()):
         info = yearly_info[year]
         per_year_stats[year] = {
-            "date": yearly_dates[year],
+            "date": yearly_date_str[year],
             "water_fraction": round(info["water_fraction"], 4),
             "non_vegetated_fraction": round(info["non_vegetated_fraction"], 4),
             "vegetation_fraction": round(info["vegetation_fraction"], 4),
@@ -365,10 +445,7 @@ def main():
         print(f"    {year}: veg={per_year_stats[year]['vegetation_fraction']:.1%}, "
               f"NDVI thresh={info['ndvi_threshold']:.3f}")
 
-    # NDVI stats for reference year
-    ndvi_mean = 0.0
-    if "NDVI" in indices:
-        ndvi_mean = float(np.nanmean(indices["NDVI"]))
+    ndvi_mean = float(np.nanmean(indices["NDVI"])) if "NDVI" in indices else 0.0
 
     vegetationskant_meta = {
         "date": ref_date,
@@ -381,6 +458,7 @@ def main():
         "method": "NDVI + Otsu/Weighted Peaks (VedgeSat approach)",
         "reference": "Muir et al. (2024) VedgeSat; Nugraha et al. (2026)",
         "threshold_method": args.threshold_method,
+        "fetch_pipeline": "DES STAC (dates) + CDSE (bands)",
         "per_year": per_year_stats,
         "ndvi_mean": round(ndvi_mean, 4),
     }

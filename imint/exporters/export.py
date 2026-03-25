@@ -1514,13 +1514,13 @@ def save_regions_leaflet_geojson(
         x_min, y_min = bbox["x_min"], bbox["y_min"]
         x_max, y_max = bbox["x_max"], bbox["y_max"]
 
-        # Flip Y for Leaflet CRS.Simple (lat=0 at bottom, lat=H at top)
+        # Raw pixel coordinates — Leaflet coordsToLatLng handles Y-flip
         polygon = [
-            [float(x_min), float(img_h - y_max)],
-            [float(x_max), float(img_h - y_max)],
-            [float(x_max), float(img_h - y_min)],
-            [float(x_min), float(img_h - y_min)],
-            [float(x_min), float(img_h - y_max)],
+            [float(x_min), float(y_min)],
+            [float(x_max), float(y_min)],
+            [float(x_max), float(y_max)],
+            [float(x_min), float(y_max)],
+            [float(x_min), float(y_min)],
         ]
 
         properties = {k: v for k, v in region.items() if k != "bbox"}
@@ -1715,9 +1715,10 @@ def save_coastline_geojson(
                 xs, ys = xs_s, ys_s
 
             if pixel_coords:
-                # Y-flip for Leaflet Simple CRS (origin at bottom-left)
+                # Raw pixel coordinates — Leaflet coordsToLatLng handles
+                # the Y-flip (row 0 = top → lat = imgH) at render time.
                 coords = [
-                    [round(float(x), 2), round(float(img_h - y), 2)]
+                    [round(float(x), 2), round(float(y), 2)]
                     for x, y in zip(xs, ys)
                 ]
                 # Length in meters (10 m/pixel)

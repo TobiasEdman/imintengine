@@ -2076,6 +2076,58 @@ def _process_grazing_tif(
     print(f"    {date_str}  cloud={cloud_frac:.1%}  OK")
 
 
+def _process_grazing_inline(
+    full_bands: np.ndarray,
+    scl: np.ndarray,
+    date_str: str,
+    projected_bbox: dict,
+    polygon_mask: np.ndarray,
+    cloud_threshold: float,
+    clean_dates: list,
+    clean_cloud_fracs: list,
+    clean_bands_stack: list,
+    clean_transforms: list,
+) -> None:
+    """Process pre-assembled bands from CDSE HTTP for the grazing pipeline.
+
+    Unlike ``_process_grazing_tif`` this receives arrays directly
+    (no GeoTIFF parsing). Band layout matches the openEO download order:
+        10m:  b02(0) b03(1) b04(2) b08(3)
+        20m:  b05(4) b06(5) b07(6) b8a(7) b11(8) b12(9)
+        60m:  b01(10) b09(11)
+        cat:  scl(12)
+
+    Args:
+        full_bands: (13, H, W) float32 — already in reflectance [0, 1].
+        scl: (H, W) uint8 — Scene Classification Layer.
+    """
+    from rasterio.transform import from_origin
+
+    H, W = scl.shape
+
+    # Cloud check (full bbox since HTTP mode has no polygon mask rasterization)
+    cloud_frac = check_cloud_fraction(scl)
+    if cloud_frac > cloud_threshold:
+        print(f"    {date_str}  cloud={cloud_frac:.1%}  (skip)")
+        return
+
+    # Reorder to GRAZING_BAND_ORDER: B01, B02, ..., B12
+    spectral_ref = full_bands[_GRAZING_REORDER]  # (12, H, W)
+
+    # Build transform from projected bbox
+    target_bounds = {k: v for k, v in projected_bbox.items() if k != "crs"}
+    transform = from_origin(
+        target_bounds["west"], target_bounds["north"],
+        NMD_GRID_SIZE, NMD_GRID_SIZE,
+    )
+
+    clean_dates.append(date_str)
+    clean_cloud_fracs.append(cloud_frac)
+    clean_bands_stack.append(spectral_ref)
+    clean_transforms.append(transform)
+    print(f"    {date_str}  cloud={cloud_frac:.1%}  OK  [cdse_http]")
+
+
 # ── LPIS (Jordbruksverket) polygon fetching ──────────────────────────────
 
 def _lpis_bbox_string(bbox, bbox_crs: str | None = None) -> tuple[str, str]:
@@ -2302,14 +2354,16 @@ def fetch_grazing_timeseries(
     token: str | None = None,
     polygon_id_col: str | None = None,
     polygon_crs: str = "EPSG:4326",
+    source: str = "des",
+    n_workers: int = 3,
 ) -> list[GrazingTimeseriesResult]:
-    """Fetch multi-date 12-band Sentinel-2 timeseries for grazing polygons.
+    """Fetch multi-date 12-band Sentinel-2 timeseries for polygons.
 
-    Designed for the pib-ml-grazing CNN-LSTM model. For each polygon:
+    For each polygon:
 
     1. Compute projected bbox from polygon geometry (+buffer)
-    2. Discover available dates via STAC (April 1 – October 21)
-    3. Fetch all 12 bands + SCL in 14-day chunks via openEO
+    2. Discover available dates via DES STAC (always, regardless of source)
+    3. Fetch all 12 bands + SCL in temporal chunks
     4. Filter by polygon-level cloud fraction (default 1%)
     5. Co-register all timesteps (integer + sub-pixel alignment)
     6. Stack cloud-free dates into (T, 12, H, W) array
@@ -2332,19 +2386,35 @@ def fetch_grazing_timeseries(
         scene_cloud_max: STAC pre-filter for scene-level cloud %.
             Default: 50%.
         buffer_m: Buffer in metres around polygon bbox. Default: 50m.
-        chunk_days: Days per temporal chunk for DES calls. Default: 14.
-        token: Optional DES access token.
+        chunk_days: Days per temporal chunk for openEO calls. Default: 14.
+        token: Optional DES/CDSE access token.
         polygon_id_col: Column name in GeoDataFrame to use as polygon ID.
             If None, uses integer index.
         polygon_crs: CRS of input polygon geometries. Default: EPSG:4326.
             Ignored if *polygons* is a GeoDataFrame (uses ``.crs``).
+        source: Data fetch backend. Options:
+
+            - ``"des"`` (default): DES openEO (``openeo.digitalearth.se``).
+              Reliable, full band set, moderate speed.
+            - ``"copernicus"``: CDSE openEO
+              (``openeo.dataspace.copernicus.eu``). Same interface,
+              alternative backend.  Date discovery still uses DES STAC.
+            - ``"cdse_http"``: CDSE Sentinel Hub Process API (HTTP).
+              Fastest option for single-date fetches. Fetches 6 Prithvi
+              bands (B02, B03, B04, B8A, B11, B12) + SCL. Missing bands
+              (B01, B05, B06, B07, B08, B09) are synthesised from
+              available bands where possible (B08 ≈ B8A).
+
+            All sources use DES STAC for date discovery.
+        n_workers: Number of parallel workers for chunk fetching.
+            Default: 3.
 
     Returns:
         List of :class:`GrazingTimeseriesResult`, one per polygon.
 
     Raises:
-        FetchError: If DES calls fail.
-        ValueError: If no valid polygons provided.
+        FetchError: If data fetch calls fail.
+        ValueError: If no valid polygons provided or unknown source.
     """
     import re
     import tarfile
@@ -2386,8 +2456,22 @@ def fetch_grazing_timeseries(
     _start = date_start or f"{year}-04-01"
     _end = date_end or f"{year}-10-21"
 
-    # ── Connect to DES ───────────────────────────────────────────────
-    conn = _connect(token=token)
+    # ── Connect to backend ─────────────────────────────────────────────
+    if source in ("des", "copernicus"):
+        if source == "des":
+            conn = _connect(token=token)
+            _collection = COLLECTION
+        else:
+            conn = _connect_cdse()
+            _collection = CDSE_COLLECTION
+    elif source == "cdse_http":
+        conn = None  # HTTP mode — no openEO connection
+        _collection = None
+    else:
+        raise ValueError(
+            f"Unknown source '{source}'. "
+            f"Use 'des', 'copernicus', or 'cdse_http'."
+        )
     results: list[GrazingTimeseriesResult] = []
 
     _DATE_RE = re.compile(r"out_(\d{4})_(\d{2})_(\d{2})T")
@@ -2467,58 +2551,70 @@ def fetch_grazing_timeseries(
             ))
             _cur = _c_end
 
-        # ── Fetch per chunk (parallel with 3 workers) ─────────────
+        # ── Fetch per chunk (parallel with configurable workers) ────
         import threading
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        _GRAZING_WORKERS = 3
         _chunk_lock = threading.Lock()
         clean_dates: list[str] = []
         clean_cloud_fracs: list[float] = []
         clean_bands_stack: list[np.ndarray] = []
         clean_transforms: list = []
 
-        def _fetch_chunk(c_start_end):
+        def _fetch_chunk_openeo(c_start_end):
+            """Fetch a temporal chunk via openEO (DES or CDSE)."""
             c_start, c_end = c_start_end
             chunk_dates = []
             chunk_fracs = []
             chunk_bands = []
             chunk_tfs = []
-            print(f"  -- {c_start} to {c_end} --", flush=True)
+            print(f"  -- {c_start} to {c_end} [{source}] --", flush=True)
             try:
+                # Band names differ between DES (lowercase) and CDSE (uppercase)
+                if source == "des":
+                    _b10m = BANDS_10M
+                    _b20m = BANDS_20M_SPECTRAL
+                    _b60m = BANDS_60M_ALL
+                    _bscl = BANDS_20M_CATEGORICAL
+                else:
+                    _b10m = CDSE_BANDS_10M
+                    _b20m = CDSE_BANDS_20M_SPECTRAL
+                    _b60m = CDSE_BANDS_60M
+                    _bscl = CDSE_BANDS_20M_CATEGORICAL
+
                 # 10m bands
                 cube_10m = conn.load_collection(
-                    collection_id=COLLECTION,
+                    collection_id=_collection,
                     spatial_extent=projected_bbox,
                     temporal_extent=[c_start, c_end],
-                    bands=BANDS_10M,
+                    bands=_b10m,
                 )
                 # 20m spectral → bilinear resample to 10m
                 cube_20m = conn.load_collection(
-                    collection_id=COLLECTION,
+                    collection_id=_collection,
                     spatial_extent=projected_bbox,
                     temporal_extent=[c_start, c_end],
-                    bands=BANDS_20M_SPECTRAL,
+                    bands=_b20m,
                 )
                 cube_20m = cube_20m.resample_cube_spatial(
                     target=cube_10m, method="bilinear",
                 )
                 # 60m bands (B01 + B09) → bilinear resample to 10m
                 cube_60m = conn.load_collection(
-                    collection_id=COLLECTION,
+                    collection_id=_collection,
                     spatial_extent=projected_bbox,
                     temporal_extent=[c_start, c_end],
-                    bands=BANDS_60M_ALL,
+                    bands=_b60m,
                 )
                 cube_60m = cube_60m.resample_cube_spatial(
                     target=cube_10m, method="bilinear",
                 )
                 # SCL → nearest resample to 10m
                 cube_scl = conn.load_collection(
-                    collection_id=COLLECTION,
+                    collection_id=_collection,
                     spatial_extent=projected_bbox,
                     temporal_extent=[c_start, c_end],
-                    bands=BANDS_20M_CATEGORICAL,
+                    bands=_bscl,
                 )
                 cube_scl = cube_scl.resample_cube_spatial(
                     target=cube_10m, method="near",
@@ -2577,11 +2673,92 @@ def fetch_grazing_timeseries(
                 clean_bands_stack.extend(chunk_bands)
                 clean_transforms.extend(chunk_tfs)
 
+        def _fetch_chunk_cdse_http(c_start_end):
+            """Fetch dates in a chunk via CDSE Sentinel Hub HTTP API.
+
+            Fetches 6 Prithvi bands + SCL per date. Missing bands
+            (B01, B05, B06, B07, B08, B09) are filled: B08 ≈ B8A,
+            others set to zero.
+            """
+            from .training.cdse_s2 import fetch_s2_scene
+
+            c_start, c_end = c_start_end
+            chunk_dates = []
+            chunk_fracs = []
+            chunk_bands = []
+            chunk_tfs = []
+            print(f"  -- {c_start} to {c_end} [cdse_http] --", flush=True)
+
+            # Which STAC dates fall in this chunk?
+            chunk_stac = [
+                (d, cf) for d, cf in stac_dates
+                if c_start <= d < c_end
+            ]
+
+            for d_str, _scene_cf in chunk_stac:
+                try:
+                    result = fetch_s2_scene(
+                        west=proj_bounds["west"],
+                        south=proj_bounds["south"],
+                        east=proj_bounds["east"],
+                        north=proj_bounds["north"],
+                        date=d_str,
+                        size_px=(polygon_mask.shape[0],
+                                 polygon_mask.shape[1]),
+                        cloud_threshold=1.0,  # we do our own filtering
+                        haze_threshold=1.0,
+                    )
+                    if result is None:
+                        continue
+                    spectral, scl, _cf = result
+                    # spectral: (6, H, W) — B02, B03, B04, B8A, B11, B12
+                    # Expand to (13, H, W) matching openEO band order:
+                    # 10m: b02(0) b03(1) b04(2) b08(3)
+                    # 20m: b05(4) b06(5) b07(6) b8a(7) b11(8) b12(9)
+                    # 60m: b01(10) b09(11)
+                    # cat: scl(12)
+                    H_s, W_s = spectral.shape[1], spectral.shape[2]
+                    full = np.zeros((13, H_s, W_s), dtype=np.float32)
+                    # Map Prithvi bands to openEO positions
+                    full[0] = spectral[0]   # B02
+                    full[1] = spectral[1]   # B03
+                    full[2] = spectral[2]   # B04
+                    full[3] = spectral[3]   # B8A → proxy for B08
+                    full[7] = spectral[3]   # B8A
+                    full[8] = spectral[4]   # B11
+                    full[9] = spectral[5]   # B12
+                    full[12] = scl.astype(np.float32)
+
+                    # Convert to tif-like bytes for _process_grazing_tif
+                    # or process inline
+                    _process_grazing_inline(
+                        full, scl, d_str, projected_bbox,
+                        polygon_mask, cloud_threshold,
+                        chunk_dates, chunk_fracs,
+                        chunk_bands, chunk_tfs,
+                    )
+                except Exception as e:
+                    print(f"    {d_str} [cdse_http] failed: {e}",
+                          flush=True)
+                    continue
+
+            with _chunk_lock:
+                clean_dates.extend(chunk_dates)
+                clean_cloud_fracs.extend(chunk_fracs)
+                clean_bands_stack.extend(chunk_bands)
+                clean_transforms.extend(chunk_tfs)
+
+        # Select fetch function based on source
+        if source == "cdse_http":
+            _fetch_fn = _fetch_chunk_cdse_http
+        else:
+            _fetch_fn = _fetch_chunk_openeo
+
         print(f"  Fetching {len(_chunk_ranges)} chunks with "
-              f"{_GRAZING_WORKERS} workers ...", flush=True)
-        with ThreadPoolExecutor(max_workers=_GRAZING_WORKERS) as pool:
+              f"{n_workers} workers [{source}] ...", flush=True)
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = {
-                pool.submit(_fetch_chunk, cr): cr
+                pool.submit(_fetch_fn, cr): cr
                 for cr in _chunk_ranges
             }
             for future in as_completed(futures):
