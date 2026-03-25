@@ -509,5 +509,17 @@
     <script src="js/vendor/chart.min.js"></script>
     <script src="js/tab-data.js"></script>
     <script src="js/app.js"></script>
+    <script>
+    // Auto-resize parent iframe (for digitalearth.se/case/ embedding)
+    if (window.parent !== window) {
+        function notifyHeight() {
+            var h = document.documentElement.scrollHeight;
+            window.parent.postMessage({type:'imint-resize', height: h}, '*');
+        }
+        window.addEventListener('load', notifyHeight);
+        new MutationObserver(notifyHeight).observe(document.body, {childList:true, subtree:true});
+        setInterval(notifyHeight, 2000);
+    }
+    </script>
 </body>
 </html>
