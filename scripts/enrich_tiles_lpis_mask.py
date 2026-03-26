@@ -270,8 +270,10 @@ def rasterize_parcels(
 
     west, south, east, north = bbox_3006
 
-    # Clip LPIS parcels to tile bbox using spatial index
-    tile_box = box(west, south, east, north)
+    # LPIS SWEREF99 TM has N,E axis order (Northing=x, Easting=y)
+    # Tile bbox is in E,N order (standard GIS x,y)
+    # Swap to match LPIS: box(N_south, E_west, N_north, E_east)
+    tile_box = box(south, west, north, east)
     candidates_idx = list(gdf.sindex.intersection(tile_box.bounds))
 
     if not candidates_idx:
@@ -293,9 +295,10 @@ def rasterize_parcels(
         for geom, crop_cls in zip(clipped.geometry, clipped["crop_class"])
     ]
 
-    # Affine transform: maps pixel coordinates to EPSG:3006
-    # from_bounds(west, south, east, north, width, height)
-    transform = from_bounds(west, south, east, north, tile_size, tile_size)
+    # Affine transform: match LPIS N,E axis order
+    # from_bounds(min_x, min_y, max_x, max_y, width, height)
+    # In LPIS: x=Northing, y=Easting → from_bounds(N_south, E_west, N_north, E_east)
+    transform = from_bounds(south, west, north, east, tile_size, tile_size)
 
     mask = rasterize(
         shapes,
@@ -343,12 +346,11 @@ def process_tile(
 
     bbox_3006 = data["bbox_3006"]
 
-    # Read year — may not be present in older tiles
+    # Read year — default to 2022 (most tiles are from LUCAS 2022)
     if "year" in data:
         year = int(data["year"])
     else:
-        # No year stored: cannot determine which LPIS to use
-        return {"tile": tile_name, "status": "skipped", "reason": "no year field in tile"}
+        year = 2022
 
     label = int(data["label"]) if "label" in data else 0
     point_id = str(data["point_id"]) if "point_id" in data else tile_name
@@ -415,10 +417,9 @@ def preload_lpis_years(tiles_dir: str, lpis_dir: str) -> set[int]:
     for tp in tile_paths:
         try:
             data = np.load(str(tp), allow_pickle=True)
-            if "year" in data:
-                y = int(data["year"])
-                if y not in NO_LPIS_YEARS and y in LPIS_FILES:
-                    needed_years.add(y)
+            y = int(data["year"]) if "year" in data else 2022
+            if y not in NO_LPIS_YEARS and y in LPIS_FILES:
+                needed_years.add(y)
         except Exception:
             continue
 
