@@ -71,6 +71,11 @@ class CropDataset(Dataset):
     Loads multitemporal .npz tiles (18 bands = 3 timesteps × 6 Prithvi bands)
     and returns normalised image tensors with scalar crop labels.
 
+    Supports optional auxiliary channels:
+      - ERA5 weather: t2m, precipitation, soil moisture, solar radiation, GDD
+      - VPP phenology: start/end of season, season length, max/min PPI
+      - DEM: terrain elevation
+
     Args:
         data_dir: Directory containing .npz tiles (from fetch_lucas_tiles.py).
         split: "train" or "val". If split files exist, use them; otherwise
@@ -78,8 +83,29 @@ class CropDataset(Dataset):
         patch_size: Output spatial size (default 224 for Prithvi).
         val_fraction: Fraction of tiles for validation (default 0.15).
         use_torchgeo_transforms: Use TorchGeo augmentations if available.
+        enable_era5: Include ERA5 weather auxiliary channels.
+        enable_vpp: Include HR-VPP phenology channels.
+        enable_dem: Include Copernicus DEM channel.
         seed: Random seed for reproducible splits.
     """
+
+    # Auxiliary channel names and normalisation (mean, std)
+    AUX_CHANNELS = {
+        # ERA5 weather (from era5_aux.py)
+        "era5_t2m_mean":   (12.0, 5.0),
+        "era5_tp_sum":     (350.0, 100.0),
+        "era5_swvl1_mean": (0.25, 0.08),
+        "era5_ssrd_sum":   (3500.0, 500.0),
+        "era5_gdd":        (1200.0, 400.0),
+        # VPP phenology
+        "vpp_sosd":   (21130.90, 49.13),
+        "vpp_eosd":   (21280.29, 78.28),
+        "vpp_length": (141.61, 41.39),
+        "vpp_maxv":   (0.88, 0.57),
+        "vpp_minv":   (0.04, 0.05),
+        # DEM
+        "dem": (264.03, 215.37),
+    }
 
     def __init__(
         self,
@@ -88,11 +114,28 @@ class CropDataset(Dataset):
         patch_size: int = 224,
         val_fraction: float = 0.15,
         use_torchgeo_transforms: bool = True,
+        enable_era5: bool = False,
+        enable_vpp: bool = False,
+        enable_dem: bool = False,
         seed: int = 42,
     ):
         self.data_dir = Path(data_dir)
         self.split = split
         self.patch_size = patch_size
+
+        # Build list of enabled aux channels
+        self.aux_names: list[str] = []
+        if enable_era5:
+            self.aux_names.extend([
+                "era5_t2m_mean", "era5_tp_sum", "era5_swvl1_mean",
+                "era5_ssrd_sum", "era5_gdd",
+            ])
+        if enable_vpp:
+            self.aux_names.extend([
+                "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
+            ])
+        if enable_dem:
+            self.aux_names.append("dem")
 
         # Prithvi normalisation: tiled for 3 timesteps
         mean_1t = PRITHVI_MEAN.reshape(6, 1, 1)
@@ -178,7 +221,7 @@ class CropDataset(Dataset):
         if self.augment and not self.use_torchgeo:
             image_tensor = self._manual_augment(image_tensor)
 
-        return {
+        result = {
             "image": image_tensor,
             "label": torch.tensor(label, dtype=torch.int64),
             "seasons_valid": torch.from_numpy(
@@ -191,6 +234,33 @@ class CropDataset(Dataset):
                 "lon": float(data.get("lon", 0)),
             },
         }
+
+        # Load and normalise auxiliary channels
+        if self.aux_names:
+            h, w = image_tensor.shape[-2:]
+            aux_arrays = []
+            for ch_name in self.aux_names:
+                if ch_name in data:
+                    arr = data[ch_name].astype(np.float32)
+                    # Crop to match spectral
+                    if arr.shape != (h, w):
+                        arr = arr[:h, :w]
+                else:
+                    arr = np.zeros((h, w), dtype=np.float32)
+
+                # Z-score normalisation
+                if ch_name in self.AUX_CHANNELS:
+                    mean, std = self.AUX_CHANNELS[ch_name]
+                    arr = (arr - mean) / max(std, 1e-6)
+
+                aux_arrays.append(arr)
+
+            aux_tensor = torch.from_numpy(
+                np.stack(aux_arrays, axis=0).copy()
+            )  # (N_aux, H, W)
+            result["aux"] = aux_tensor
+
+        return result
 
     @staticmethod
     def _replace_zero_frames(
