@@ -31,3 +31,12 @@ prithvi:
 
 nmd:
   enabled: true             # NMD LULC analysis (requires DES connection + coords)
+
+samgeo:
+  enabled: false            # SAMGeo zero-shot segmentation (requires: pip install segment-geospatial)
+  mode: automatic           # "automatic", "points", or "text"
+  model_type: vit_h         # "vit_h" (best), "vit_l", "vit_b" (fastest)
+  sam_version: 2            # 2 (SAM2, recommended) or 1 (original SAM)
+  min_mask_area: 100        # Filter segments smaller than this (pixels)
+  # points: [[100,200]]     # Pixel coords for point mode
+  # text_prompt: "buildings" # For text mode (requires groundingdino-py)

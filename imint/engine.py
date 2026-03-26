@@ -22,6 +22,7 @@ from .analyzers.nmd import NMDAnalyzer
 from .analyzers.cot import COTAnalyzer
 from .analyzers.marine_vessels import MarineVesselAnalyzer
 from .analyzers.vegetation_edge import VegetationEdgeAnalyzer
+from .analyzers.samgeo import SAMGeoAnalyzer
 from .exporters.export import (
     save_rgb_png, save_change_overlay, save_ndvi_colormap,
     save_regions_geojson, save_geotiff, save_summary_report,
@@ -47,6 +48,7 @@ ANALYZER_REGISTRY = {
     "cot": COTAnalyzer,
     "marine_vessels": MarineVesselAnalyzer,
     "vegetation_edge": VegetationEdgeAnalyzer,
+    "samgeo": SAMGeoAnalyzer,
 }
 
 
@@ -350,6 +352,52 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
         if ndvi is not None:
             _save_ndvi_clean(ndvi, os.path.join(out, f"{prefix}ndvi_veg_clean.png"))
 
+    elif result.analyzer == "samgeo":
+        seg_mask = result.outputs.get("seg_mask")
+        if seg_mask is not None:
+            _save_samgeo_seg_png(
+                seg_mask, job.rgb,
+                os.path.join(out, f"{prefix}samgeo_clean.png"),
+            )
+            save_geotiff(
+                seg_mask, os.path.join(out, f"{prefix}samgeo_seg.tif"),
+                geo=job.geo, coords=job.coords,
+            )
+
+
+def _save_samgeo_seg_png(seg_mask: np.ndarray, rgb: np.ndarray, path: str) -> str:
+    """Save SAMGeo segmentation as semi-transparent overlay on RGB."""
+    from PIL import Image
+
+    h, w = seg_mask.shape
+    # Create random but consistent colors per segment ID
+    rng = np.random.RandomState(42)
+    unique_ids = np.unique(seg_mask)
+    color_map = {}
+    for uid in unique_ids:
+        if uid == 0:
+            continue
+        color_map[uid] = rng.rand(3) * 0.7 + 0.3  # bright colors
+
+    # Blend: RGB base with colored overlay where segmented
+    rgb_f = rgb.astype(np.float32) if rgb.max() > 1.0 else rgb.astype(np.float32)
+    if rgb_f.max() > 1.0:
+        rgb_f = rgb_f / 255.0
+    overlay = rgb_f.copy()
+    alpha = 0.4
+
+    for uid, color in color_map.items():
+        mask = seg_mask == uid
+        for c in range(3):
+            overlay[:, :, c][mask] = (
+                rgb_f[:, :, c][mask] * (1 - alpha) + color[c] * alpha
+            )
+
+    img = (np.clip(overlay, 0, 1) * 255).astype(np.uint8)
+    Image.fromarray(img).save(path)
+    print(f"    saved: {path}")
+    return path
+
 
 def _save_vegetation_seg_png(seg_map: np.ndarray, path: str) -> str:
     """Save a 3-class vegetation segmentation map as a coloured PNG.
@@ -401,6 +449,7 @@ def _generate_html_report(job: IMINTJob, prefix: str) -> None:
         "vegetation_edge": f"{prefix}vegetation_edge_clean.png",
         "ndvi_veg": f"{prefix}ndvi_veg_clean.png",
         "sjokort": f"{prefix}sjokort.png",
+        "samgeo": f"{prefix}samgeo_clean.png",
     }
     image_paths = {}
     for key, filename in path_candidates.items():
