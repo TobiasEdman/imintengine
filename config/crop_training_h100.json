@@ -1,0 +1,63 @@
+{
+    "conditions": {
+        "colonyname": "imint",
+        "executortype": "container-executor",
+        "nodes": 1,
+        "gpu": {
+            "name": "h100",
+            "count": 1
+        },
+        "mem": "64Gi"
+    },
+    "env": {
+        "TASK": "train_crop_sweden",
+        "TILES_DIR": "/cfs/crop_tiles",
+        "CHECKPOINT_DIR": "/cfs/checkpoints/crop_sweden",
+        "BACKBONE": "prithvi_eo_v2_300m_tl",
+        "DECODER": "upernet",
+        "NUM_CLASSES": "8",
+        "EPOCHS": "50",
+        "BATCH_SIZE": "32",
+        "LR": "1e-4",
+        "LR_SCHEDULER": "cosine",
+        "WARMUP_EPOCHS": "5",
+        "WEIGHT_DECAY": "0.05",
+        "TILE_SIZE": "224",
+        "MULTITEMPORAL": "true",
+        "NUM_TIMESTEPS": "3",
+        "BANDS_PER_TIMESTEP": "6",
+        "AUG_FLIP": "true",
+        "AUG_ROTATE": "true",
+        "AUG_SCALE": "0.8,1.2",
+        "VAL_SPLIT": "0.15",
+        "EVAL_EVERY": "5",
+        "SAVE_BEST": "true",
+        "LOG_DIR": "/cfs/logs/crop_sweden",
+        "WANDB_PROJECT": "imint-crop-sweden",
+        "SEED": "42"
+    },
+    "funcname": "train-crop-model",
+    "kwargs": {
+        "docker-image": "imint-engine:latest",
+        "rebuild-image": true
+    },
+    "maxexectime": 14400,
+    "maxretries": 1,
+    "fs": [
+        {
+            "mount": "/cfs/crop_tiles",
+            "dir": "lucas-crop-tiles",
+            "keepfiles": true
+        },
+        {
+            "mount": "/cfs/checkpoints/crop_sweden",
+            "dir": "crop-sweden-checkpoints",
+            "keepfiles": true
+        },
+        {
+            "mount": "/cfs/logs/crop_sweden",
+            "dir": "crop-sweden-logs",
+            "keepfiles": true
+        }
+    ]
+}

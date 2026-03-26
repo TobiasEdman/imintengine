@@ -267,6 +267,56 @@ TASK_HEAD_REGISTRY = {
         "class_names": {0: "no_burn", 1: "burned"},
         "description": "Burn scar segmentation (HLS Burn Scars dataset)",
     },
+    "crop_classification": {
+        "repo_id": "ibm-nasa-geospatial/Prithvi-100M-multi-temporal-crop-classification",
+        "filename": "multi_temporal_crop_classification_Prithvi_100M.pth",
+        "num_classes": 13,
+        "feature_indices": [2, 5, 8, 11],  # Prithvi-100M encoder layers
+        "decoder_channels": 256,
+        "decoder_type": "upernet",
+        "dropout": 0.1,
+        "multitemporal": True,  # Requires 3 timesteps × 6 bands = 18 input bands
+        "class_names": {
+            0: "natural_vegetation",
+            1: "forest",
+            2: "corn",
+            3: "soybeans",
+            4: "wetlands",
+            5: "developed_open",
+            6: "open_water",
+            7: "winter_wheat",
+            8: "developed_low",
+            9: "developed_mid",
+            10: "developed_high",
+            11: "cotton",
+            12: "hay_pasture",
+        },
+        "description": "Crop type classification (CDL 13 classes, multi-temporal HLS)",
+    },
+    "crop_sweden": {
+        "local_path": "checkpoints/crop_sweden/best_model.pt",
+        "num_classes": 8,
+        "feature_indices": [5, 11, 17, 23],  # Prithvi-EO-2.0-300M layers
+        "decoder_channels": 256,
+        "decoder_type": "upernet",
+        "dropout": 0.1,
+        "multitemporal": True,
+        "class_names": {
+            0: "other",
+            1: "wheat",
+            2: "barley",
+            3: "oats",
+            4: "rapeseed",
+            5: "ley_grass",
+            6: "potato",
+            7: "other_crop",
+        },
+        "description": (
+            "Swedish crop type classification (LUCAS + Sentinel-2, fine-tuned). "
+            "8 classes based on LUCAS Copernicus 2018 field survey points "
+            "filtered for Sweden, trained on multi-temporal Sentinel-2 from CDSE."
+        ),
+    },
     "nmd_lulc": {
         "local_path": "checkpoints/lulc/best_model.pt",
         "num_classes": 20,  # 19 NMD L2 classes + background at index 0
