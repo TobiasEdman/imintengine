@@ -58,8 +58,8 @@ from imint.fetch import _to_nmd_grid, _stac_available_dates
 
 # ── Constants ─────────────────────────────────────────────────────────────
 
-# Seasonal windows: (start_month, end_month)
-SEASONAL_WINDOWS = [
+# Default seasonal windows (fallback if VPP unavailable): (start_month, end_month)
+DEFAULT_SEASONAL_WINDOWS = [
     (4, 5),   # Spring: April–May
     (6, 7),   # Summer: June–July
     (8, 9),   # Autumn: August–September
@@ -68,6 +68,78 @@ SEASONAL_WINDOWS = [
 TILE_SIZE_M = 2560   # 256 pixels × 10m = 2560m bounding box
 TILE_SIZE_PX = 256
 PRITHVI_BANDS = ["B02", "B03", "B04", "B8A", "B11", "B12"]
+NUM_SEASONS = 3
+
+
+def _get_vpp_guided_windows(bbox_3006: dict) -> list[tuple[int, int]] | None:
+    """Get VPP-guided seasonal DOY windows for a tile.
+
+    Uses HR-VPP phenology (SOSD/EOSD) to compute per-tile growing
+    season windows, same as the LULC training pipeline.
+
+    Returns:
+        List of 3 (doy_start, doy_end) tuples, or None if VPP fails.
+    """
+    try:
+        from imint.training.cdse_vpp import fetch_vpp_tiles
+        from imint.training.vpp_windows import compute_growing_season_windows
+
+        vpp = fetch_vpp_tiles(
+            west=bbox_3006["west"],
+            south=bbox_3006["south"],
+            east=bbox_3006["east"],
+            north=bbox_3006["north"],
+            size_px=64,  # Low-res for speed (just need median SOSD/EOSD)
+        )
+        doy_windows = compute_growing_season_windows(
+            vpp["sosd"], vpp["eosd"],
+            num_frames=NUM_SEASONS,
+        )
+        return doy_windows
+    except Exception:
+        return None
+
+
+def _fetch_aux_channels(bbox_3006: dict) -> dict[str, np.ndarray]:
+    """Fetch auxiliary channels (VPP + DEM) for a tile.
+
+    Returns dict of channel_name → (H, W) float32 arrays.
+    Missing channels are silently skipped.
+    """
+    aux = {}
+
+    # VPP phenology (5 bands)
+    try:
+        from imint.training.cdse_vpp import fetch_vpp_tiles
+        vpp = fetch_vpp_tiles(
+            west=bbox_3006["west"],
+            south=bbox_3006["south"],
+            east=bbox_3006["east"],
+            north=bbox_3006["north"],
+            size_px=TILE_SIZE_PX,
+        )
+        for band in ["sosd", "eosd", "length", "maxv", "minv"]:
+            if band in vpp and vpp[band] is not None:
+                aux[f"vpp_{band}"] = vpp[band].astype(np.float32)
+    except Exception:
+        pass
+
+    # DEM (Copernicus GLO-30)
+    try:
+        from imint.training.copernicus_dem import fetch_dem_tile
+        dem = fetch_dem_tile(
+            west=bbox_3006["west"],
+            south=bbox_3006["south"],
+            east=bbox_3006["east"],
+            north=bbox_3006["north"],
+            size_px=TILE_SIZE_PX,
+        )
+        if dem is not None:
+            aux["dem"] = dem.astype(np.float32)
+    except Exception:
+        pass
+
+    return aux
 
 
 # ── Tile fetching ─────────────────────────────────────────────────────────
@@ -97,28 +169,55 @@ def _fetch_seasonal_scenes(
     *,
     scene_cloud_max: float = 30.0,
     max_candidates: int = 3,
+    doy_windows: list[tuple[int, int]] | None = None,
 ) -> list[np.ndarray | None]:
     """Fetch 3 seasonal S2 scenes: CDSE HTTP primary, DES openEO fallback.
+
+    If doy_windows is provided (from VPP phenology), uses DOY-based
+    date ranges instead of fixed monthly windows. This matches the
+    actual growing season per tile.
+
+    Args:
+        doy_windows: List of (doy_start, doy_end) from VPP. If None,
+                     falls back to DEFAULT_SEASONAL_WINDOWS.
 
     Returns:
         List of 3 arrays, each (6, 256, 256) float32 or None if unavailable.
     """
     from imint.training.cdse_s2 import fetch_s2_scene
 
+    # Build windows: VPP-guided DOY or fixed monthly
+    if doy_windows and len(doy_windows) >= NUM_SEASONS:
+        windows = doy_windows[:NUM_SEASONS]
+        use_doy = True
+    else:
+        windows = DEFAULT_SEASONAL_WINDOWS
+        use_doy = False
+
     scenes = []
-    for window_start, window_end in SEASONAL_WINDOWS:
+    for window in windows:
+        if use_doy:
+            doy_start, doy_end = window
+        else:
+            window_start, window_end = window
         scene = None
 
         # STAC discovery (all years, sorted by cloud)
         candidates = []
         for year in years:
-            date_start = f"{year}-{window_start:02d}-01"
-            if window_end in (1, 3, 5, 7, 8, 10, 12):
-                date_end = f"{year}-{window_end:02d}-31"
-            elif window_end in (4, 6, 9, 11):
-                date_end = f"{year}-{window_end:02d}-30"
+            if use_doy:
+                # DOY → ISO date strings
+                from imint.training.vpp_windows import doy_to_date_str
+                date_start = doy_to_date_str(int(year), doy_start)
+                date_end = doy_to_date_str(int(year), doy_end)
             else:
-                date_end = f"{year}-{window_end:02d}-28"
+                date_start = f"{year}-{window_start:02d}-01"
+                if window_end in (1, 3, 5, 7, 8, 10, 12):
+                    date_end = f"{year}-{window_end:02d}-31"
+                elif window_end in (4, 6, 9, 11):
+                    date_end = f"{year}-{window_end:02d}-30"
+                else:
+                    date_end = f"{year}-{window_end:02d}-28"
 
             try:
                 dates = _stac_available_dates(
@@ -173,15 +272,19 @@ def _process_point(
     years_override: list[str] | None,
     output_dir: str,
     scene_cloud_max: float = 30.0,
+    fetch_aux: bool = True,
 ) -> dict:
-    """Process a single LUCAS point: fetch S2 tiles and save .npz.
+    """Process a single LUCAS point: VPP → seasonal windows → S2 → aux → .npz.
 
-    S2 imagery is matched to the LUCAS survey year by default — a point
-    surveyed in 2018 fetches S2 from 2018, a 2022 point from 2022.
+    Pipeline per point:
+      1. Compute EPSG:3006 bounding box
+      2. Fetch VPP phenology → compute growing season windows
+      3. Fetch 3 seasonal S2 scenes (CDSE primary, DES fallback)
+      4. Fetch aux channels (VPP bands + DEM)
+      5. Save as .npz
+
+    S2 imagery is matched to the LUCAS survey year by default.
     Use years_override to search across multiple years instead.
-
-    Returns:
-        Status dict with point_id, success, path, etc.
     """
     point_id = point["point_id"]
     lat, lon = point["lat"], point["lon"]
@@ -200,10 +303,15 @@ def _process_point(
         "north": lat + 0.012,
     }
 
-    # Fetch 3 seasonal scenes
+    # Step 1: VPP phenology → seasonal windows
+    doy_windows = _get_vpp_guided_windows(bbox_3006)
+    vpp_guided = doy_windows is not None
+
+    # Step 2: Fetch 3 seasonal S2 scenes
     scenes = _fetch_seasonal_scenes(
         bbox_3006, coords_wgs84, years,
         scene_cloud_max=scene_cloud_max,
+        doy_windows=doy_windows,
     )
 
     # Check completeness — need at least 2 of 3 seasons
@@ -224,10 +332,14 @@ def _process_point(
             stacked.append(np.zeros((6, TILE_SIZE_PX, TILE_SIZE_PX), dtype=np.float32))
     multitemporal = np.concatenate(stacked, axis=0)  # (18, 256, 256)
 
-    # Save as .npz
+    # Step 3: Fetch auxiliary channels (VPP + DEM)
+    aux_data = {}
+    if fetch_aux:
+        aux_data = _fetch_aux_channels(bbox_3006)
+
+    # Save as .npz (spectral + label + aux)
     out_path = os.path.join(output_dir, f"{point_id}.npz")
-    np.savez_compressed(
-        out_path,
+    save_kwargs = dict(
         spectral=multitemporal,              # (18, 256, 256) float32
         label=np.uint8(crop_class),          # scalar
         label_name=CLASS_NAMES[crop_class],
@@ -235,11 +347,17 @@ def _process_point(
         lon=np.float64(lon),
         point_id=point_id,
         seasons_valid=np.array(valid),
+        vpp_guided=np.bool_(vpp_guided),
         bbox_3006=np.array([
             bbox_3006["west"], bbox_3006["south"],
             bbox_3006["east"], bbox_3006["north"],
         ]),
     )
+    # Add aux channels
+    for ch_name, ch_data in aux_data.items():
+        save_kwargs[ch_name] = ch_data
+
+    np.savez_compressed(out_path, **save_kwargs)
 
     return {
         "point_id": point_id,
@@ -300,8 +418,9 @@ def main():
         with open(args.balanced_json) as f:
             data = json.load(f)
         points = data["points"]
-        print(f"  {data['metadata']['total_balanced']} balanced points "
-              f"(from {data['metadata']['total_original']} original)")
+        meta = data.get("metadata", {})
+        total = meta.get("total_balanced") or meta.get("total") or len(points)
+        print(f"  {total} balanced points loaded")
     elif args.lucas_csv:
         csv_paths = args.lucas_csv if len(args.lucas_csv) > 1 else args.lucas_csv[0]
         print(f"Loading LUCAS points from {args.lucas_csv}...")
