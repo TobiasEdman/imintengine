@@ -1,99 +1,134 @@
 """
 imint/training/crop_schema.py — Swedish crop class schema and LUCAS mapping
 
-Maps LUCAS Copernicus 2018 land cover codes to an 8-class Swedish crop
-type schema for fine-tuning Prithvi on Swedish agricultural land.
+Maps LUCAS Copernicus 2018/2022 land cover codes to Swedish crop classes
+based on Jordbruksverkets (SJV) grödgrupper and SCB crop statistics.
 
-LUCAS crop classes (B-codes) are mapped to:
-    0: other          Non-agricultural land
-    1: wheat          B11 (common wheat), B13 (durum wheat)
-    2: barley         B14 (barley)
-    3: oats           B15 (oats)
-    4: rapeseed       B32 (rape/turnip rape)
-    5: ley_grass      B51-B55 (fodder crops, grassland, clover, lucerne, mixed)
-    6: potato         B21 (potato)
-    7: other_crop     B12, B16, B22-B45 (rye, triticale, sugar beet, etc.)
+Only crops actually grown in Sweden are included. Exotic crops not present
+in Swedish agriculture (soya B33, tobacco B45) are excluded.
 
-Data source: LUCAS Copernicus 2018 (Figshare doi:10.6084/m9.figshare.12382667)
-Reference: Jordbruksverket (Swedish Board of Agriculture) crop statistics
+SJV grödgrupper (Jordbruksmarkens användning 2024):
+    Spannmål (33%): vete, korn, havre, råg, rågvete
+    Vall och grönfoderväxter (38%): slåttervall, betesvall, grönfoder
+    Oljeväxter (3%): raps, rybs, solros, lin
+    Trindsäd (2%): ärtor, åkerbönor
+    Potatis (1%): matpotatis, stärkelsepotatis
+    Sockerbetor (1%): sockerbeta
+    Träda (5%): träda
+    Övriga växter (2%): grönsaker, blommor, jordgubbar, frukt, bär
+
+Data: LUCAS Copernicus 2018+2022, Figshare + Eurostat
+Reference: Jordbruksverket grödkoder (jordbruksverket.se/stod/.../grodkoder)
+           SCB Jordbruksstatistisk sammanställning 2024
 """
 from __future__ import annotations
 
-# ── Swedish crop class schema ─────────────────────────────────────────────
+# ── Swedish crop class schema (SJV/SCB grödgrupper) ──────────────────────
 
-NUM_CLASSES = 8
+NUM_CLASSES = 9
 
 CLASS_NAMES = {
-    0: "other",
-    1: "wheat",
-    2: "barley",
-    3: "oats",
-    4: "rapeseed",
-    5: "ley_grass",
-    6: "potato",
-    7: "other_crop",
+    0: "other",             # Ej jordbruksmark
+    1: "vete",              # SJV grödkod 1-2 (höstvete, vårvete)
+    2: "korn",              # SJV grödkod 3-4 (höstkorn, vårkorn)
+    3: "havre",             # SJV grödkod 5 (havre)
+    4: "oljevaxter",        # SJV grödkod 85-92 (raps, rybs, solros, lin)
+    5: "vall",              # SJV grödkod 49-52, 80 (slåttervall, betesvall, grönfoder)
+    6: "potatis",           # SJV grödkod 70-72 (matpotatis, stärkelsepotatis)
+    7: "trindsad",          # SJV grödkod 30-43 (ärtor, åkerbönor, bruna bönor)
+    8: "ovrig_akergroda",   # SJV: sockerbeta, råg, rågvete, grönsaker, frukt, bär, blommor
+}
+
+# Swedish names for display
+CLASS_NAMES_SV = {
+    0: "Ej jordbruk",
+    1: "Vete",
+    2: "Korn",
+    3: "Havre",
+    4: "Oljeväxter",
+    5: "Vall/grönfoder",
+    6: "Potatis",
+    7: "Trindsäd",
+    8: "Övriga åkergrödor",
 }
 
 CLASS_COLORS = {
     0: (0.50, 0.50, 0.50),  # grey
-    1: (0.93, 0.79, 0.13),  # gold
-    2: (0.85, 0.65, 0.13),  # dark gold
-    3: (0.96, 0.87, 0.70),  # wheat
-    4: (0.80, 0.90, 0.10),  # yellow-green
-    5: (0.20, 0.80, 0.20),  # green
-    6: (0.60, 0.40, 0.20),  # brown
-    7: (0.70, 0.70, 0.50),  # khaki
+    1: (0.93, 0.79, 0.13),  # gold — wheat
+    2: (0.85, 0.65, 0.13),  # dark gold — barley
+    3: (0.96, 0.87, 0.70),  # light wheat — oats
+    4: (0.80, 0.90, 0.10),  # yellow-green — rapeseed
+    5: (0.20, 0.80, 0.20),  # green — ley/grass
+    6: (0.60, 0.40, 0.20),  # brown — potato
+    7: (0.40, 0.70, 0.40),  # medium green — legumes
+    8: (0.70, 0.70, 0.50),  # khaki — other
 }
 
-# ── LUCAS land cover → Swedish crop class ─────────────────────────────────
+# ── LUCAS → SJV crop class mapping ───────────────────────────────────────
+#
+# Only LUCAS codes for crops ACTUALLY GROWN in Sweden are mapped.
+# Codes for crops NOT grown in Sweden (B33 soya, B36 sunflower,
+# B45 tobacco, etc.) are EXCLUDED → mapped to 0 ("other").
+#
+# Source: Jordbruksverket grödkoder + SCB jordbruksstatistik 2024
 
-# LUCAS level-3 crop codes (B-series) → class index
-# Full reference: https://ec.europa.eu/eurostat/statistics-explained/index.php/LUCAS
 LUCAS_TO_CROP = {
-    # Wheat
-    "B11": 1,  # Common wheat
-    "B13": 1,  # Durum wheat
+    # ── Spannmål (SJV grödgrupp: Spannmål, 33%) ─────────────────────
+    # Vete (SJV 1-2)
+    "B11": 1,  # Common wheat (höstvete/vårvete)
+    "B13": 1,  # Durum wheat (durumvete — liten areal, Skåne)
 
-    # Barley
-    "B14": 2,  # Barley
+    # Korn (SJV 3-4)
+    "B14": 2,  # Barley (höst-/vårkorn)
 
-    # Oats
-    "B15": 3,  # Oats
+    # Havre (SJV 5)
+    "B15": 3,  # Oats (havre)
 
-    # Rapeseed
-    "B32": 4,  # Rape and turnip rape
-    "B36": 4,  # Sunflower (rare in SE, but same oil crop class)
+    # ── Oljeväxter (SJV grödgrupp: Oljeväxter, 3%) ──────────────────
+    "B32": 4,  # Rape/turnip rape (höstraps, vårraps, rybs — SJV 85-88)
+    "B34": 4,  # Flax/linseed (lin — SJV 91, ~3000 ha Västergötland)
+    "B35": 4,  # Other oil crops (övriga oljeväxter — SJV 92)
+    "B36": 4,  # Sunflower (solros — SJV 90, ~5000 ha, ökar, Skåne/Gotland)
 
-    # Ley / grass / fodder
-    "B51": 5,  # Fodder crops (e.g., maize for silage)
-    "B52": 5,  # Grassland / permanent pasture
-    "B53": 5,  # Clover
-    "B54": 5,  # Lucerne (alfalfa)
-    "B55": 5,  # Mixed ley
+    # ── Vall och grönfoderväxter (SJV grödgrupp: Vall, 38%) ──────────
+    "B51": 5,  # Fodder crops (grönfoder, fodermajs — SJV 80)
+    "B52": 5,  # Grassland / permanent pasture (betesvall — SJV 52)
+    "B53": 5,  # Clover (klövervall)
+    "B54": 5,  # Lucerne (lusern — södra Sverige)
+    "B55": 5,  # Mixed ley (slåttervall, blandvall — SJV 49-50)
 
-    # Potato
-    "B21": 6,  # Potato
+    # ── Potatis (SJV grödgrupp: Potatis, 1%) ─────────────────────────
+    "B21": 6,  # Potato (matpotatis, stärkelsepotatis — SJV 70-72)
 
-    # Other crops
-    "B12": 7,  # Rye
-    "B16": 7,  # Triticale
-    "B17": 7,  # Mixed cereals
-    "B18": 7,  # Other cereals
-    "B22": 7,  # Sugar beet
-    "B23": 7,  # Other root crops
-    "B31": 7,  # Peas
-    "B33": 7,  # Soya
-    "B34": 7,  # Flax/linseed
-    "B35": 7,  # Other oil crops
-    "B37": 7,  # Fibre crops
-    "B41": 7,  # Vegetables
-    "B42": 7,  # Flowers
-    "B43": 7,  # Strawberry
-    "B44": 7,  # Other industrial crops
-    "B45": 7,  # Tobacco (unlikely in SE)
+    # ── Trindsäd (SJV grödgrupp: Trindsäd, 2%) ──────────────────────
+    "B31": 7,  # Peas / field beans (ärtor, åkerbönor — SJV 30-43)
+
+    # ── Övriga åkergrödor (SJV: diverse, ~7%) ────────────────────────
+    "B12": 8,  # Rye (råg — SJV 11)
+    "B16": 8,  # Triticale (rågvete — SJV 13)
+    "B17": 8,  # Mixed cereals (blandsäd — SJV 14)
+    "B18": 8,  # Other cereals (övrig spannmål)
+    "B22": 8,  # Sugar beet (sockerbeta — SJV 22, Skåne/Gotland)
+    "B23": 8,  # Other root crops (övriga rotfrukter)
+    "B37": 8,  # Fibre crops (hampa — SJV 93, odlas i Sverige)
+    "B41": 8,  # Vegetables (grönsaker — SJV 74)
+    "B42": 8,  # Flowers (blommor, frilandsodling — SJV 75)
+    "B43": 8,  # Strawberry (jordgubbar — SJV 73)
+    "B44": 8,  # Other industrial crops (övriga industrigrödor)
+    "B71": 8,  # Apple/pear (äpple/päron — Skåne, Gotland)
+    "B73": 8,  # Cherry (körsbär)
+    "B74": 8,  # Plum (plommon)
+    "B75": 8,  # Berry plantation (bärplantering — SJV 76)
 }
 
-# All LUCAS codes that are agricultural (B-series)
+# Codes EXCLUDED (not grown in Sweden):
+# B33 Soya — not grown in Sweden (for och kall)
+# B45 Tobacco — not grown in Sweden
+# B81 Nursery — not a field crop
+# B84 Christmas trees — forestry, not crop
+# Bx1/Bx2 Unknown — unclear classification
+
+# All LUCAS codes that are Swedish agricultural
 AGRICULTURAL_CODES = set(LUCAS_TO_CROP.keys())
 
 

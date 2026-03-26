@@ -295,7 +295,7 @@ TASK_HEAD_REGISTRY = {
     },
     "crop_sweden": {
         "local_path": "checkpoints/crop_sweden/best_model.pt",
-        "num_classes": 8,
+        "num_classes": 9,
         "feature_indices": [5, 11, 17, 23],  # Prithvi-EO-2.0-300M layers
         "decoder_channels": 256,
         "decoder_type": "upernet",
@@ -303,18 +303,19 @@ TASK_HEAD_REGISTRY = {
         "multitemporal": True,
         "class_names": {
             0: "other",
-            1: "wheat",
-            2: "barley",
-            3: "oats",
-            4: "rapeseed",
-            5: "ley_grass",
-            6: "potato",
-            7: "other_crop",
+            1: "vete",
+            2: "korn",
+            3: "havre",
+            4: "oljevaxter",
+            5: "vall",
+            6: "potatis",
+            7: "trindsad",
+            8: "ovrig_akergroda",
         },
         "description": (
-            "Swedish crop type classification (LUCAS + Sentinel-2, fine-tuned). "
-            "8 classes based on LUCAS Copernicus 2018 field survey points "
-            "filtered for Sweden, trained on multi-temporal Sentinel-2 from CDSE."
+            "Swedish crop type classification (SJV/SCB grödgrupper). "
+            "9 classes based on Jordbruksverket grödkoder, trained on "
+            "LUCAS Copernicus 2018+2022 Sweden + multi-temporal Sentinel-2."
         ),
     },
     "nmd_lulc": {
