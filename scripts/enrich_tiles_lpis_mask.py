@@ -270,9 +270,7 @@ def rasterize_parcels(
 
     west, south, east, north = bbox_3006
 
-    # LPIS SWEREF99 TM has N,E axis order (Northing=x, Easting=y)
-    # Tile bbox is in E,N order (standard GIS x,y)
-    # Swap to match LPIS: box(N_south, E_west, N_north, E_east)
+    # Clip LPIS parcels to tile bbox using spatial index
     tile_box = box(south, west, north, east)
     candidates_idx = list(gdf.sindex.intersection(tile_box.bounds))
 
@@ -295,9 +293,7 @@ def rasterize_parcels(
         for geom, crop_cls in zip(clipped.geometry, clipped["crop_class"])
     ]
 
-    # Affine transform: match LPIS N,E axis order
-    # from_bounds(min_x, min_y, max_x, max_y, width, height)
-    # In LPIS: x=Northing, y=Easting → from_bounds(N_south, E_west, N_north, E_east)
+    # Affine transform: maps pixel coordinates to EPSG:3006
     transform = from_bounds(south, west, north, east, tile_size, tile_size)
 
     mask = rasterize(
