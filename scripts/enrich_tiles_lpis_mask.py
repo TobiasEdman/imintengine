@@ -84,8 +84,17 @@ _lpis_cache: dict[int, "gpd.GeoDataFrame"] = {}
 _lpis_cache_lock = Lock()
 
 
+def _load_lpis_parquet(parquet_path: str, year: int) -> "gpd.GeoDataFrame":
+    """Load LPIS from GeoParquet (fast, preferred)."""
+    import geopandas as gpd
+    print(f"  Loading GeoParquet: {parquet_path}")
+    gdf = gpd.read_parquet(parquet_path)
+    print(f"    {len(gdf)} features loaded")
+    return _process_lpis_gdf(gdf, year)
+
+
 def _load_lpis_shapefile(zip_path: str, year: int) -> "gpd.GeoDataFrame":
-    """Load an LPIS shapefile from a zip archive."""
+    """Load an LPIS shapefile from a zip archive (fallback if no parquet)."""
     import geopandas as gpd
 
     abs_path = str(Path(zip_path).resolve())
@@ -94,14 +103,13 @@ def _load_lpis_shapefile(zip_path: str, year: int) -> "gpd.GeoDataFrame":
     gdf = None
     for uri in [abs_path, f"zip://{abs_path}"]:
         try:
-            gdf = gpd.read_file(uri)
+            gdf = gpd.read_file(uri, layer="arslager_skiftePolygon")
             print(f"    Read via: {uri[:80]}...")
             break
         except Exception:
             continue
 
     if gdf is None:
-        # Fallback: extract to temp dir
         print("    Fallback: extracting zip to temp directory...")
         with tempfile.TemporaryDirectory() as tmpdir:
             with zipfile.ZipFile(abs_path, "r") as zf:
@@ -219,7 +227,11 @@ def get_lpis_gdf(year: int, lpis_dir: str) -> "gpd.GeoDataFrame | None":
     print(f"\nLoading LPIS {year}...")
     t0 = time.time()
 
-    if fmt == "gml":
+    # Prefer GeoParquet (much faster) over shapefile/GML
+    parquet_path = os.path.join(lpis_dir, f"jordbruksskiften_{year}.parquet")
+    if os.path.exists(parquet_path):
+        gdf = _load_lpis_parquet(parquet_path, year)
+    elif fmt == "gml":
         gdf = _load_lpis_gml(zip_path, year)
     else:
         gdf = _load_lpis_shapefile(zip_path, year)
