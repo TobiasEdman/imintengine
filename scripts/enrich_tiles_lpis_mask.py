@@ -305,8 +305,8 @@ def rasterize_parcels(
         all_touched=False,
     )
 
-    # LPIS N,E axis order → S2 pixel grid: flip left-right
-    mask = np.fliplr(mask)
+    # LPIS N,E axis order → S2 pixel grid: rot180 + transpose
+    mask = np.rot90(mask, 2).T
 
     return mask, n_parcels
 
