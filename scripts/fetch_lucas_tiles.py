@@ -3,7 +3,7 @@
 scripts/fetch_lucas_tiles.py — Fetch Sentinel-2 multitemporal tiles for LUCAS-SE crop points
 
 Builds the training dataset for Swedish crop classification by:
-  1. Loading LUCAS Copernicus 2018 points filtered for Sweden
+  1. Loading LUCAS Copernicus 2018 + 2022 points filtered for Sweden
   2. For each point, fetching 3 seasonal Sentinel-2 scenes (spring, summer, autumn)
   3. Stacking into (18, 224, 224) multitemporal tiles with crop class labels
   4. Saving as .npz files ready for Prithvi fine-tuning
@@ -15,16 +15,22 @@ Data fetch strategy (per docstring in imint/training/cdse_s2.py):
 STAC discovery always uses DES STAC (explorer.digitalearth.se).
 
 Usage:
+    # Both 2018 and 2022 surveys (recommended — maximizes Swedish crop points)
     python scripts/fetch_lucas_tiles.py \\
-        --lucas-csv data/lucas_copernicus_2018.csv \\
+        --lucas-csv data/lucas_copernicus_2018.csv data/lucas_copernicus_2022.csv \\
         --output-dir data/crop_tiles \\
-        --workers 3 \\
-        --years 2018 2019 2020
+        --workers 3
+
+    # Single survey
+    python scripts/fetch_lucas_tiles.py \\
+        --lucas-csv data/lucas_copernicus_2022.csv \\
+        --output-dir data/crop_tiles
 
 Prerequisites:
     - CDSE credentials: export CDSE_CLIENT_ID=... CDSE_CLIENT_SECRET=...
     - DES token (for STAC + fallback): .des_token in project root
-    - LUCAS CSV: download from https://doi.org/10.6084/m9.figshare.12382667
+    - LUCAS 2018 CSV: https://doi.org/10.6084/m9.figshare.12382667
+    - LUCAS 2022 CSV: https://doi.org/10.6084/m9.figshare.24090553
 """
 from __future__ import annotations
 
@@ -164,11 +170,15 @@ def _fetch_seasonal_scenes(
 
 def _process_point(
     point: dict,
-    years: list[str],
+    years_override: list[str] | None,
     output_dir: str,
     scene_cloud_max: float = 30.0,
 ) -> dict:
     """Process a single LUCAS point: fetch S2 tiles and save .npz.
+
+    S2 imagery is matched to the LUCAS survey year by default — a point
+    surveyed in 2018 fetches S2 from 2018, a 2022 point from 2022.
+    Use years_override to search across multiple years instead.
 
     Returns:
         Status dict with point_id, success, path, etc.
@@ -176,6 +186,10 @@ def _process_point(
     point_id = point["point_id"]
     lat, lon = point["lat"], point["lon"]
     crop_class = point["crop_class"]
+    survey_year = point.get("year", 2018)
+
+    # Match S2 year to LUCAS survey year (default), or use override
+    years = years_override or [str(survey_year)]
 
     # Bounding box in EPSG:3006
     bbox_3006 = _point_to_bbox_3006(lat, lon)
@@ -243,8 +257,8 @@ def main():
         description="Fetch S2 multitemporal tiles for LUCAS-SE crop points"
     )
     parser.add_argument(
-        "--lucas-csv", required=True,
-        help="Path to LUCAS Copernicus 2018 CSV file",
+        "--lucas-csv", required=True, nargs="+",
+        help="Path(s) to LUCAS Copernicus CSV files (2018 and/or 2022)",
     )
     parser.add_argument(
         "--output-dir", default="data/crop_tiles",
@@ -255,8 +269,12 @@ def main():
         help="Parallel fetch workers (default: 3)",
     )
     parser.add_argument(
-        "--years", nargs="+", default=["2018", "2019", "2020"],
-        help="Years to search for S2 data (default: 2018 2019 2020)",
+        "--years", nargs="+", default=None,
+        help=(
+            "Override S2 search years. Default: match LUCAS survey year "
+            "(2018 point → S2 2018, 2022 point → S2 2022). "
+            "Use --years 2018 2019 to search across multiple years."
+        ),
     )
     parser.add_argument(
         "--cloud-max", type=float, default=30.0,
@@ -272,9 +290,10 @@ def main():
     )
     args = parser.parse_args()
 
-    # Load LUCAS-SE points
+    # Load LUCAS-SE points (supports multiple CSVs, e.g. 2018 + 2022)
+    csv_paths = args.lucas_csv if len(args.lucas_csv) > 1 else args.lucas_csv[0]
     print(f"Loading LUCAS points from {args.lucas_csv}...")
-    points = load_lucas_sweden(args.lucas_csv, crop_only=args.crop_only)
+    points = load_lucas_sweden(csv_paths, crop_only=args.crop_only)
     summary = summarize_lucas_sweden(points)
     print(f"  Found {summary['total']} Swedish crop points:")
     for cls_name, count in summary["per_class"].items():
@@ -300,7 +319,8 @@ def main():
         return
 
     # Fetch in parallel
-    print(f"\nFetching S2 tiles ({args.workers} workers, years={args.years})...")
+    year_mode = args.years if args.years else "matched to LUCAS survey year"
+    print(f"\nFetching S2 tiles ({args.workers} workers, years={year_mode})...")
     print(f"  Primary: CDSE Sentinel Hub HTTP")
     print(f"  Fallback: DES openEO")
 

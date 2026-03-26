@@ -116,105 +116,125 @@ def is_agricultural(lc_code: str) -> bool:
 
 # ── LUCAS data loading ────────────────────────────────────────────────────
 
-LUCAS_COPERNICUS_URL = (
+LUCAS_COPERNICUS_2018_URL = (
     "https://figshare.com/ndownloader/articles/12382667/versions/4"
+)
+LUCAS_COPERNICUS_2022_URL = (
+    "https://figshare.com/ndownloader/articles/24090553/versions/1"
 )
 LUCAS_HARMONISED_URL = (
     "https://figshare.com/ndownloader/articles/12841202/versions/2"
 )
 
+# Supported survey years with Copernicus module (EO-ready polygons)
+LUCAS_SUPPORTED_YEARS = [2018, 2022]
+
 
 def load_lucas_sweden(
-    csv_path: str,
+    csv_path: str | list[str],
     *,
     min_year: int = 2018,
     crop_only: bool = True,
 ) -> list[dict]:
     """Load LUCAS points filtered for Sweden.
 
-    Reads LUCAS Copernicus CSV and filters for Swedish points (NUTS0 == "SE").
-    Optionally filters for agricultural points only.
+    Reads one or more LUCAS Copernicus CSV files (2018 and/or 2022) and
+    filters for Swedish points (NUTS0 == "SE"). Points appearing in both
+    surveys are deduplicated (2022 takes precedence).
 
     Args:
-        csv_path: Path to LUCAS Copernicus 2018 CSV file.
+        csv_path: Path to LUCAS CSV, or list of paths (e.g. 2018 + 2022).
         min_year: Minimum survey year to include (default 2018).
         crop_only: If True, only return agricultural (B-series) points.
 
     Returns:
         List of dicts with keys: point_id, lat, lon, lc_code, crop_class,
-        crop_name, year, nuts0.
+        crop_name, year, nuts0. Deduplicated by point_id (latest year wins).
     """
     import csv
 
-    points = []
-    with open(csv_path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+    # Normalize to list of paths
+    if isinstance(csv_path, str):
+        csv_paths = [csv_path]
+    else:
+        csv_paths = list(csv_path)
 
-        # Detect column names (LUCAS uses varying headers)
-        # Common headers: POINT_ID, GPS_LAT, GPS_LONG, LC1, NUTS0, SURVEY_YEAR
-        # Or: id, th_lat, th_long, lc1, nuts0
-        fieldnames = reader.fieldnames or []
-        fn_lower = {fn.lower(): fn for fn in fieldnames}
+    # Collect all points, keyed by point_id for deduplication
+    seen: dict[str, dict] = {}
 
-        # Map to standardized names
-        col_id = fn_lower.get("point_id") or fn_lower.get("id", "POINT_ID")
-        col_lat = (
-            fn_lower.get("gps_lat")
-            or fn_lower.get("th_lat")
-            or fn_lower.get("y", "GPS_LAT")
-        )
-        col_lon = (
-            fn_lower.get("gps_long")
-            or fn_lower.get("th_long")
-            or fn_lower.get("x", "GPS_LONG")
-        )
-        col_lc = fn_lower.get("lc1") or fn_lower.get("lc1_label", "LC1")
-        col_nuts = fn_lower.get("nuts0", "NUTS0")
-        col_year = fn_lower.get("survey_year") or fn_lower.get("year", "SURVEY_YEAR")
+    for path in csv_paths:
+        with open(path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
 
-        for row in reader:
-            # Filter for Sweden
-            nuts0 = row.get(col_nuts, "")
-            if nuts0.upper() != "SE":
-                continue
+            # Detect column names (LUCAS uses varying headers across years)
+            # 2018: POINT_ID, GPS_LAT, GPS_LONG, LC1, NUTS0, SURVEY_YEAR
+            # 2022: id, th_lat, th_long, lc1, nuts0 (or similar)
+            fieldnames = reader.fieldnames or []
+            fn_lower = {fn.lower(): fn for fn in fieldnames}
 
-            # Filter year
-            try:
-                year = int(row.get(col_year, "0"))
-            except (ValueError, TypeError):
-                year = 2018
-            if year < min_year:
-                continue
+            col_id = fn_lower.get("point_id") or fn_lower.get("id", "POINT_ID")
+            col_lat = (
+                fn_lower.get("gps_lat")
+                or fn_lower.get("th_lat")
+                or fn_lower.get("y", "GPS_LAT")
+            )
+            col_lon = (
+                fn_lower.get("gps_long")
+                or fn_lower.get("th_long")
+                or fn_lower.get("x", "GPS_LONG")
+            )
+            col_lc = fn_lower.get("lc1") or fn_lower.get("lc1_label", "LC1")
+            col_nuts = fn_lower.get("nuts0", "NUTS0")
+            col_year = (
+                fn_lower.get("survey_year")
+                or fn_lower.get("year", "SURVEY_YEAR")
+            )
 
-            lc_code = row.get(col_lc, "").strip().upper()
+            for row in reader:
+                nuts0 = row.get(col_nuts, "")
+                if nuts0.upper() != "SE":
+                    continue
 
-            # Filter for crop points if requested
-            if crop_only and not is_agricultural(lc_code):
-                continue
+                try:
+                    year = int(row.get(col_year, "0"))
+                except (ValueError, TypeError):
+                    year = 2018
+                if year < min_year:
+                    continue
 
-            try:
-                lat = float(row.get(col_lat, 0))
-                lon = float(row.get(col_lon, 0))
-            except (ValueError, TypeError):
-                continue
+                lc_code = row.get(col_lc, "").strip().upper()
 
-            if lat == 0 or lon == 0:
-                continue
+                if crop_only and not is_agricultural(lc_code):
+                    continue
 
-            crop_class = lucas_code_to_class(lc_code)
+                try:
+                    lat = float(row.get(col_lat, 0))
+                    lon = float(row.get(col_lon, 0))
+                except (ValueError, TypeError):
+                    continue
 
-            points.append({
-                "point_id": row.get(col_id, ""),
-                "lat": lat,
-                "lon": lon,
-                "lc_code": lc_code,
-                "crop_class": crop_class,
-                "crop_name": CLASS_NAMES[crop_class],
-                "year": year,
-                "nuts0": "SE",
-            })
+                if lat == 0 or lon == 0:
+                    continue
 
-    return points
+                crop_class = lucas_code_to_class(lc_code)
+                point_id = row.get(col_id, "")
+
+                entry = {
+                    "point_id": point_id,
+                    "lat": lat,
+                    "lon": lon,
+                    "lc_code": lc_code,
+                    "crop_class": crop_class,
+                    "crop_name": CLASS_NAMES[crop_class],
+                    "year": year,
+                    "nuts0": "SE",
+                }
+
+                # Deduplicate: latest survey year wins
+                if point_id not in seen or year > seen[point_id]["year"]:
+                    seen[point_id] = entry
+
+    return list(seen.values())
 
 
 def summarize_lucas_sweden(points: list[dict]) -> dict:
