@@ -167,26 +167,37 @@ def load_lucas_sweden(
             reader = csv.DictReader(f)
 
             # Detect column names (LUCAS uses varying headers across years)
-            # 2018: POINT_ID, GPS_LAT, GPS_LONG, LC1, NUTS0, SURVEY_YEAR
-            # 2022: id, th_lat, th_long, lc1, nuts0 (or similar)
+            # 2018 Copernicus: POINT_ID, GPS_LAT, GPS_LONG, LC1, NUTS0, SURVEY_YEAR
+            # 2022 Eurostat:   POINT_ID, POINT_LAT, POINT_LONG, SURVEY_LC1,
+            #                  POINT_NUTS0, SURVEY_DATE
             fieldnames = reader.fieldnames or []
             fn_lower = {fn.lower(): fn for fn in fieldnames}
 
             col_id = fn_lower.get("point_id") or fn_lower.get("id", "POINT_ID")
             col_lat = (
                 fn_lower.get("gps_lat")
+                or fn_lower.get("point_lat")
                 or fn_lower.get("th_lat")
                 or fn_lower.get("y", "GPS_LAT")
             )
             col_lon = (
                 fn_lower.get("gps_long")
+                or fn_lower.get("point_long")
                 or fn_lower.get("th_long")
                 or fn_lower.get("x", "GPS_LONG")
             )
-            col_lc = fn_lower.get("lc1") or fn_lower.get("lc1_label", "LC1")
-            col_nuts = fn_lower.get("nuts0", "NUTS0")
+            col_lc = (
+                fn_lower.get("lc1")
+                or fn_lower.get("survey_lc1")
+                or fn_lower.get("lc1_label", "LC1")
+            )
+            col_nuts = (
+                fn_lower.get("nuts0")
+                or fn_lower.get("point_nuts0", "NUTS0")
+            )
             col_year = (
                 fn_lower.get("survey_year")
+                or fn_lower.get("survey_date")
                 or fn_lower.get("year", "SURVEY_YEAR")
             )
 
@@ -196,7 +207,20 @@ def load_lucas_sweden(
                     continue
 
                 try:
-                    year = int(row.get(col_year, "0"))
+                    year_raw = row.get(col_year, "0").strip().strip('"')
+                    # Handle multiple date formats:
+                    #   "2018"              → 2018
+                    #   "2022-06-15"        → 2022
+                    #   "6/27/2022 11:06"   → 2022 (M/D/YYYY from Eurostat)
+                    if "/" in year_raw:
+                        # M/D/YYYY or D/M/YYYY — year is last segment before space
+                        date_part = year_raw.split()[0]  # "6/27/2022"
+                        parts = date_part.split("/")
+                        year = int(parts[-1]) if len(parts) >= 3 else int(parts[0])
+                    elif "-" in year_raw:
+                        year = int(year_raw[:4])
+                    else:
+                        year = int(year_raw)
                 except (ValueError, TypeError):
                     year = 2018
                 if year < min_year:

@@ -257,8 +257,12 @@ def main():
         description="Fetch S2 multitemporal tiles for LUCAS-SE crop points"
     )
     parser.add_argument(
-        "--lucas-csv", required=True, nargs="+",
+        "--lucas-csv", nargs="+", default=None,
         help="Path(s) to LUCAS Copernicus CSV files (2018 and/or 2022)",
+    )
+    parser.add_argument(
+        "--balanced-json", default=None,
+        help="Path to balanced_points.json (overrides --lucas-csv)",
     )
     parser.add_argument(
         "--output-dir", default="data/crop_tiles",
@@ -290,10 +294,20 @@ def main():
     )
     args = parser.parse_args()
 
-    # Load LUCAS-SE points (supports multiple CSVs, e.g. 2018 + 2022)
-    csv_paths = args.lucas_csv if len(args.lucas_csv) > 1 else args.lucas_csv[0]
-    print(f"Loading LUCAS points from {args.lucas_csv}...")
-    points = load_lucas_sweden(csv_paths, crop_only=args.crop_only)
+    # Load points: balanced JSON or raw CSV
+    if args.balanced_json:
+        print(f"Loading balanced points from {args.balanced_json}...")
+        with open(args.balanced_json) as f:
+            data = json.load(f)
+        points = data["points"]
+        print(f"  {data['metadata']['total_balanced']} balanced points "
+              f"(from {data['metadata']['total_original']} original)")
+    elif args.lucas_csv:
+        csv_paths = args.lucas_csv if len(args.lucas_csv) > 1 else args.lucas_csv[0]
+        print(f"Loading LUCAS points from {args.lucas_csv}...")
+        points = load_lucas_sweden(csv_paths, crop_only=args.crop_only)
+    else:
+        parser.error("Provide --balanced-json or --lucas-csv")
     summary = summarize_lucas_sweden(points)
     print(f"  Found {summary['total']} Swedish crop points:")
     for cls_name, count in summary["per_class"].items():
