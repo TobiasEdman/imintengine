@@ -40,3 +40,12 @@ samgeo:
   min_mask_area: 100        # Filter segments smaller than this (pixels)
   # points: [[100,200]]     # Pixel coords for point mode
   # text_prompt: "buildings" # For text mode (requires groundingdino-py)
+
+insar:
+  enabled: false            # InSAR ground displacement (requires: pip install mintpy)
+  mode: differential        # "velocity", "timeseries", or "differential"
+  wavelength: 0.05546       # Sentinel-1 C-band wavelength (meters)
+  threshold_mm_yr: 5.0      # Flag pixels above this displacement
+  temporal_coherence_threshold: 0.7
+  # ifg_dir: /path/to/interferograms  # Required for velocity/timeseries modes
+  # reference_point: [59.33, 18.07]   # Stable reference (lat, lon)
