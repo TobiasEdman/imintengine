@@ -1,0 +1,233 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: crop-train-v2
+  namespace: prithvi-training-default
+  labels:
+    app: crop-training
+    version: v2
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 14400
+  template:
+    metadata:
+      labels:
+        app: crop-training
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: trainer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "=== Crop Training v2 — Focal Loss + Prithvi Norm ==="
+
+              TILE_COUNT=$(ls /data/crop_tiles/*.npz 2>/dev/null | wc -l)
+              echo "Found $TILE_COUNT tiles"
+
+              echo "Installing dependencies..."
+              pip install --quiet torch torchvision --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet numpy scipy scikit-learn
+
+              cat > /tmp/train.py << 'TRAINEOF'
+              import os, sys, time, glob, json
+              import numpy as np
+              import torch
+              import torch.nn as nn
+              import torch.nn.functional as F
+              from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+              from torch.optim import AdamW
+              from torch.optim.lr_scheduler import CosineAnnealingLR
+              from sklearn.metrics import classification_report
+
+              TILES_DIR = os.environ.get("TILES_DIR", "/data/crop_tiles")
+              CHECKPOINT_DIR = os.environ.get("CHECKPOINT_DIR", "/checkpoints/crop_v2")
+              NUM_CLASSES = 8
+              EPOCHS = int(os.environ.get("EPOCHS", "50"))
+              BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "8"))
+              LR = float(os.environ.get("LR", "1e-4"))
+              TILE_SIZE = int(os.environ.get("TILE_SIZE", "224"))
+              FOCAL_GAMMA = 2.0
+              MAX_CLASS_WEIGHT = 10.0
+              CLASS_NAMES = ["vete","korn","havre","oljevaxter","vall","potatis","trindsad","ovrig"]
+
+              # Prithvi normalisation (DN scale, per band)
+              PRITHVI_MEAN = np.array([1087,1342,1433,2734,1958,1363], dtype=np.float32)
+              PRITHVI_STD  = np.array([2248,2179,2178,1850,1242,1049], dtype=np.float32)
+
+              torch.manual_seed(42); np.random.seed(42)
+              os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+
+              class FocalLoss(nn.Module):
+                  def __init__(self, gamma=2.0, weight=None):
+                      super().__init__(); self.gamma=gamma; self.weight=weight
+                  def forward(self, logits, targets):
+                      ce = F.cross_entropy(logits, targets, weight=self.weight, reduction="none")
+                      p_t = torch.exp(-ce)
+                      return ((1-p_t)**self.gamma * ce).mean()
+
+              class CropDataset(Dataset):
+                  def __init__(self, files, tile_size=224, augment=False):
+                      self.files=files; self.tile_size=tile_size; self.augment=augment
+                  def __len__(self): return len(self.files)
+                  def __getitem__(self, idx):
+                      d = np.load(self.files[idx])
+                      s = d["spectral"].copy()  # (18, H, W)
+                      label = max(0, min(int(d["label"])-1, NUM_CLASSES-1))
+                      c,h,w = s.shape
+                      # Prithvi norm per band per timestep
+                      for t in range(3):
+                          for b in range(6):
+                              ch=t*6+b
+                              if ch<c: s[ch]=(s[ch]*10000-PRITHVI_MEAN[b])/PRITHVI_STD[b]
+                      # Pad/crop
+                      ts=self.tile_size
+                      if h<ts or w<ts:
+                          p=np.zeros((c,ts,ts),dtype=s.dtype)
+                          p[:,:min(h,ts),:min(w,ts)]=s[:,:min(h,ts),:min(w,ts)]
+                          s=p
+                      elif h>ts or w>ts:
+                          i=np.random.randint(0,max(1,h-ts+1)) if self.augment else (h-ts)//2
+                          j=np.random.randint(0,max(1,w-ts+1)) if self.augment else (w-ts)//2
+                          s=s[:,i:i+ts,j:j+ts]
+                      if self.augment:
+                          if np.random.random()>0.5: s=np.flip(s,1).copy()
+                          if np.random.random()>0.5: s=np.flip(s,2).copy()
+                          k=np.random.randint(0,4)
+                          if k>0: s=np.rot90(s,k,(1,2)).copy()
+                      return {"image":torch.from_numpy(s),"label":torch.tensor(label,dtype=torch.long)}
+
+              # Load splits
+              tf=os.path.join(TILES_DIR,"split_train.txt"); vf=os.path.join(TILES_DIR,"split_val.txt")
+              if os.path.exists(tf):
+                  with open(tf) as f: train_files=[os.path.join(TILES_DIR,l.strip()) for l in f if l.strip()]
+                  with open(vf) as f: val_files=[os.path.join(TILES_DIR,l.strip()) for l in f if l.strip()]
+              else:
+                  af=sorted(glob.glob(os.path.join(TILES_DIR,"*.npz"))); np.random.shuffle(af)
+                  sp=int(len(af)*0.85); train_files,val_files=af[:sp],af[sp:]
+              print(f"Train: {len(train_files)}, Val: {len(val_files)}")
+
+              # Class weights (capped 10x)
+              labels=[]
+              for f in train_files:
+                  try: labels.append(max(0,min(int(np.load(f)["label"])-1,NUM_CLASSES-1)))
+                  except: labels.append(0)
+              lc=np.bincount(labels,minlength=NUM_CLASSES).astype(np.float64)
+              lc=np.maximum(lc,1.0)
+              cw=len(labels)/(NUM_CLASSES*lc); cw=np.minimum(cw,MAX_CLASS_WEIGHT)
+              print("Classes:")
+              for c in range(NUM_CLASSES): print(f"  {CLASS_NAMES[c]:12s}: {int(lc[c]):4d} w={cw[c]:.2f}")
+
+              sw=[float(cw[l]) for l in labels]
+              sampler=WeightedRandomSampler(sw,len(sw))
+              train_ds=CropDataset(train_files,TILE_SIZE,True); val_ds=CropDataset(val_files,TILE_SIZE,False)
+              tdl=DataLoader(train_ds,batch_size=BATCH_SIZE,sampler=sampler,num_workers=0,pin_memory=True,drop_last=True)
+              vdl=DataLoader(val_ds,batch_size=BATCH_SIZE,shuffle=False,num_workers=0,pin_memory=True)
+
+              class MultiTemporalCNN(nn.Module):
+                  def __init__(self,inc=18,nc=8):
+                      super().__init__()
+                      self.f=nn.Sequential(
+                          nn.Conv2d(inc,64,3,padding=1),nn.BatchNorm2d(64),nn.ReLU(),
+                          nn.Conv2d(64,64,3,padding=1),nn.BatchNorm2d(64),nn.ReLU(),nn.MaxPool2d(2),
+                          nn.Conv2d(64,128,3,padding=1),nn.BatchNorm2d(128),nn.ReLU(),
+                          nn.Conv2d(128,128,3,padding=1),nn.BatchNorm2d(128),nn.ReLU(),nn.MaxPool2d(2),
+                          nn.Conv2d(128,256,3,padding=1),nn.BatchNorm2d(256),nn.ReLU(),
+                          nn.Conv2d(256,256,3,padding=1),nn.BatchNorm2d(256),nn.ReLU(),nn.AdaptiveAvgPool2d(1))
+                      self.c=nn.Sequential(nn.Flatten(),nn.Dropout(0.3),nn.Linear(256,128),nn.ReLU(),nn.Dropout(0.15),nn.Linear(128,nc))
+                  def forward(self,x): return self.c(self.f(x))
+
+              dev=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+              print(f"Device: {dev}")
+              if torch.cuda.is_available(): print(f"GPU: {torch.cuda.get_device_name(0)}")
+
+              model=MultiTemporalCNN(18,NUM_CLASSES).to(dev)
+              print(f"Params: {sum(p.numel() for p in model.parameters()):,}")
+              wt=torch.tensor(cw,dtype=torch.float32).to(dev)
+              criterion=FocalLoss(FOCAL_GAMMA,wt); print(f"Loss: Focal(gamma={FOCAL_GAMMA})")
+              opt=AdamW(model.parameters(),lr=LR,weight_decay=0.01)
+              sched=CosineAnnealingLR(opt,T_max=EPOCHS)
+
+              best_va,best_ep,pat=0.0,0,0
+              for ep in range(EPOCHS):
+                  model.train(); tl,co,to=0,0,0; t0=time.time()
+                  for b in tdl:
+                      x,y=b["image"].to(dev),b["label"].to(dev)
+                      opt.zero_grad(); o=model(x); l=criterion(o,y); l.backward(); opt.step()
+                      tl+=l.item()*x.size(0); co+=(o.argmax(1)==y).sum().item(); to+=x.size(0)
+                  sched.step(); ta=co/max(to,1); dt=time.time()-t0
+
+                  if (ep+1)%5==0 or ep==0 or ep==EPOCHS-1:
+                      model.eval(); vc,vt=0,0; ap,al=[],[]
+                      pc={c:{"c":0,"t":0} for c in range(NUM_CLASSES)}
+                      with torch.no_grad():
+                          for b in vdl:
+                              x,y=b["image"].to(dev),b["label"].to(dev)
+                              o=model(x); p=o.argmax(1)
+                              vc+=(p==y).sum().item(); vt+=x.size(0)
+                              ap.extend(p.cpu().numpy()); al.extend(y.cpu().numpy())
+                              for c in range(NUM_CLASSES):
+                                  m=y==c; pc[c]["t"]+=m.sum().item(); pc[c]["c"]+=(p[m]==c).sum().item()
+                      va=vc/max(vt,1)
+                      pca=[pc[c]["c"]/max(pc[c]["t"],1) for c in range(NUM_CLASSES)]
+                      wo=min(pca)
+                      print(f"Epoch {ep+1}/{EPOCHS} | loss={tl/max(to,1):.4f} train={ta:.3f} val={va:.3f} worst={wo:.3f} | {dt:.1f}s")
+                      for c in range(NUM_CLASSES): print(f"  {CLASS_NAMES[c]:12s}: {pca[c]:.3f} ({pc[c]['t']})")
+                      if va>best_va:
+                          best_va=va; best_ep=ep+1; pat=0
+                          torch.save({"epoch":ep+1,"model":model.state_dict(),"val_acc":va,"per_class":pca,"names":CLASS_NAMES},
+                                     os.path.join(CHECKPOINT_DIR,"best_model.pt"))
+                          print(f"  -> Best (val={va:.3f})")
+                      else: pat+=5
+                      if pat>=25: print(f"Early stop ep {ep+1}"); break
+                  else:
+                      print(f"Epoch {ep+1}/{EPOCHS} | loss={tl/max(to,1):.4f} train={ta:.3f} | {dt:.1f}s")
+
+              print(f"\nBest: {best_va:.3f} (ep {best_ep})")
+              print(classification_report(al,ap,target_names=CLASS_NAMES,zero_division=0))
+              torch.save(model.state_dict(),os.path.join(CHECKPOINT_DIR,"final.pt"))
+              json.dump({"best_val":best_va,"best_ep":best_ep,"focal":FOCAL_GAMMA,"bs":BATCH_SIZE,"prithvi_norm":True},
+                        open(os.path.join(CHECKPOINT_DIR,"config.json"),"w"),indent=2)
+              print(f"Saved to {CHECKPOINT_DIR}")
+              TRAINEOF
+
+              python /tmp/train.py
+          env:
+            - name: TILES_DIR
+              value: "/data/crop_tiles"
+            - name: CHECKPOINT_DIR
+              value: "/checkpoints/crop_v2"
+            - name: EPOCHS
+              value: "50"
+            - name: BATCH_SIZE
+              value: "8"
+            - name: LR
+              value: "1e-4"
+            - name: TILE_SIZE
+              value: "224"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints

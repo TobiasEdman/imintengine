@@ -108,6 +108,7 @@ class TrainingConfig:
     enable_diameter_channel: bool = False                # Medeldiameter (Dgv), cm
     enable_dem_channel: bool = False                     # Copernicus DEM (terrain elev.)
     enable_vpp_channels: bool = False                    # HR-VPP phenology (5 bands)
+    enable_harvest_probability: bool = False              # SKS harvest probability (1 band)
     aux_cache_enabled: bool = True                       # Cache aux tiles as .npy
 
     # Z-score normalization for aux channels: {name: (mean, std)}
@@ -176,6 +177,8 @@ class TrainingConfig:
                 "vpp_sosd", "vpp_eosd", "vpp_length",
                 "vpp_maxv", "vpp_minv",
             ])
+        if self.enable_harvest_probability:
+            names.append("harvest_probability")
         return tuple(names)
 
     def __post_init__(self) -> None:

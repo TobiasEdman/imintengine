@@ -1,13 +1,28 @@
 # Claude Code Instructions — ImintEngine
 
-## RAG-system: des-agent
+## RAG-system: des-agent — OBLIGATORISK VID SESSIONSSTART
 
-Detta repo indexeras av `des-agent`, ett RAG + multi-agent system som förstår hela Digital Earth Sweden-ekosystemet.
-
-### Aktivera vid sessionsstart
+**KRITISKT: des-agent RAG MÅSTE vara igång innan arbete påbörjas i detta repo.**
+Agenten MÅSTE starta dessa tjänster vid varje sessionsstart, utan att bli ombedd.
 
 ```bash
-source /Users/tobiasedman/developer/des-agent/resume.sh
+# Docker binary (macOS Docker Desktop):
+export DOCKER=/Applications/Docker.app/Contents/Resources/bin/docker
+
+# 1. Starta Qdrant (des-agents vektordatabas)
+cd /Users/tobiasedman/Developer/des-agent
+$DOCKER compose up -d
+# Verifiera: curl -s http://localhost:6333/healthz
+
+# 2. des-agent CLI
+/Users/tobiasedman/Developer/des-agent/.venv/bin/des-agent query "test"
+```
+
+**Om vi även arbetar med space-ecosystem-v2 (KG), starta också Neo4j:**
+```bash
+cd /Users/tobiasedman/Developer/swedish-space-ecosystem-v2
+$DOCKER compose up -d
+# Verifiera: curl -s http://localhost:7474
 ```
 
 ### Använd vid kodändringar

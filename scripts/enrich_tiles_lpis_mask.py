@@ -60,6 +60,8 @@ TILE_SIZE_M = 2560  # 256 px * 10m
 
 # LPIS file mapping: year -> (filename, format)
 LPIS_FILES = {
+    2018: ("jordbruksskiften_2018.zip", "shp"),
+    2019: ("jordbruksskiften_2019.zip", "shp"),
     2022: ("jordbruksskiften_2022.zip", "shp"),
     2023: ("jordbruksskiften_2023.zip", "shp"),
     2024: ("jordbruksskiften_2024.zip", "shp"),
@@ -67,7 +69,7 @@ LPIS_FILES = {
 }
 
 # Years without LPIS data
-NO_LPIS_YEARS = {2018}
+NO_LPIS_YEARS = set()
 
 # Column name for grödkod in LPIS data
 COL_GRODKOD = "grdkod_mar"
@@ -219,16 +221,16 @@ def get_lpis_gdf(year: int, lpis_dir: str) -> "gpd.GeoDataFrame | None":
     # Load outside lock (slow I/O), but check again after
     filename, fmt = LPIS_FILES[year]
     zip_path = os.path.join(lpis_dir, filename)
+    parquet_path = os.path.join(lpis_dir, f"jordbruksskiften_{year}.parquet")
 
-    if not os.path.exists(zip_path):
-        print(f"  WARNING: LPIS file not found: {zip_path}")
+    # Prefer GeoParquet (much faster) over shapefile/GML
+    if not os.path.exists(parquet_path) and not os.path.exists(zip_path):
+        print(f"  WARNING: No LPIS data for {year} (checked {parquet_path} and {zip_path})")
         return None
 
     print(f"\nLoading LPIS {year}...")
     t0 = time.time()
 
-    # Prefer GeoParquet (much faster) over shapefile/GML
-    parquet_path = os.path.join(lpis_dir, f"jordbruksskiften_{year}.parquet")
     if os.path.exists(parquet_path):
         gdf = _load_lpis_parquet(parquet_path, year)
     elif fmt == "gml":

@@ -321,6 +321,21 @@ class CropDataset(Dataset):
             image = torch.rot90(image, k, [-2, -1])
         return image
 
+    def class_counts(self) -> dict[int, int]:
+        """Count samples per class across all tiles."""
+        counts: dict[int, int] = {}
+        for tile_path in self.tiles:
+            try:
+                data = np.load(tile_path)
+                label = int(data["label"])
+                # Convert 1-indexed to 0-indexed if needed
+                if label >= 1 and label <= NUM_CLASSES:
+                    label = label - 1
+                counts[label] = counts.get(label, 0) + 1
+            except Exception:
+                pass
+        return counts
+
 
 def build_crop_sampler(dataset: CropDataset) -> WeightedRandomSampler:
     """Build a WeightedRandomSampler to handle class imbalance.
