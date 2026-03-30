@@ -103,13 +103,13 @@ class LULCTrainer:
             encoder=backbone,
             feature_indices=self.config.feature_indices,
             decoder_channels=self.config.decoder_channels,
-            num_classes=self.config.num_classes + 1,  # +1 for background at 0
+            num_classes=self.config.num_classes,  # includes background at 0
             dropout=self.config.dropout,
             n_aux_channels=n_aux,
             pool_sizes=get_default_pool_sizes(self.device),
         )
         aux_str = f", aux={n_aux} channels" if n_aux else ""
-        print(f"  Model built: {self.config.num_classes + 1} classes, "
+        print(f"  Model built: {self.config.num_classes} classes, "
               f"decoder={self.config.decoder_type}{aux_str}")
         return model
 

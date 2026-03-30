@@ -13,6 +13,7 @@ except ImportError:
     raise ImportError("PyTorch is required. Install with: pip install torch")
 
 from .class_schema import get_class_names
+from .unified_schema import UNIFIED_CLASSES
 
 
 def compute_miou(
@@ -36,14 +37,17 @@ def compute_miou(
     pred = pred.flatten()
     target = target.flatten()
 
-    # Confusion matrix
-    n = num_classes + 1
+    # Confusion matrix — num_classes already includes background (class 0)
+    n = num_classes
     cm = np.zeros((n, n), dtype=np.int64)
     valid = (target >= 0) & (target < n) & (pred >= 0) & (pred < n)
     np.add.at(cm, (target[valid], pred[valid]), 1)
 
-    # Per-class IoU
-    class_names = get_class_names(num_classes)
+    # Per-class IoU — use unified schema names when training unified model
+    if num_classes == 19 and UNIFIED_CLASSES:
+        class_names = UNIFIED_CLASSES
+    else:
+        class_names = get_class_names(num_classes)
     per_class_iou = {}
     ious = []
 
