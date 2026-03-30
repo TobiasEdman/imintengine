@@ -7,6 +7,32 @@
             line-height: 1.56;
         }
 
+        /* ── Testimonial quote ────────────────────────────────────── */
+        .testimonial {
+            max-width: 900px;
+            margin: 32px auto;
+            padding: 28px 36px;
+            background: #f8faf9;
+            border-left: 4px solid #1A4338;
+            border-radius: 0 8px 8px 0;
+            font-size: 16px;
+            line-height: 1.7;
+            color: #2d3a35;
+        }
+        .testimonial p {
+            margin-bottom: 12px;
+        }
+        .testimonial p:last-of-type {
+            margin-bottom: 16px;
+        }
+        .testimonial cite {
+            display: block;
+            font-style: normal;
+            font-weight: 600;
+            font-size: 14px;
+            color: #1A4338;
+        }
+
         /* ── Header (white background, black text) ─────────────────── */
         .header {
             background: #ffffff;
