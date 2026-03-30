@@ -238,7 +238,6 @@ def main():
         tiles = tiles[:args.limit]
 
     print(f"Enriching {len(tiles)} tiles with SKS harvest data...")
-    print(f"Using per-tile bbox-filtered GeoParquet reads (no full load)")
 
     # Paths
     utforda_path = os.path.join(args.sks_dir, "utforda_avverkningar_spatial.parquet")
@@ -246,15 +245,18 @@ def main():
         utforda_path = os.path.join(args.sks_dir, "utforda_avverkningar.parquet")
     anmalda_path = os.path.join(args.sks_dir, "avverkningsanmalningar.parquet")
 
-    # Load anmälda (small, 60 MB — fits in RAM)
+    # Load both datasets into RAM with spatial index
+    print(f"Loading utförda avverkningar ({utforda_path})...")
+    t0 = time.time()
+    utforda = gpd.read_parquet(utforda_path)
+    _ = utforda.sindex  # Build R-tree spatial index
+    print(f"  {len(utforda)} polygoner loaded in {time.time()-t0:.0f}s")
+
     print(f"Loading avverkningsanmälningar ({anmalda_path})...")
     t0 = time.time()
     anmalda = gpd.read_parquet(anmalda_path)
     _ = anmalda.sindex
     print(f"  {len(anmalda)} anmälningar loaded in {time.time()-t0:.0f}s")
-
-    # Utförda (3.5 GB) — read per-tile with bbox filter
-    print(f"Utförda: {utforda_path} (bbox-filtered per tile)")
 
     ok, skip, error = 0, 0, 0
     total_harvest_pct = 0.0
@@ -262,30 +264,7 @@ def main():
     t0 = time.time()
 
     for i, tile_path in enumerate(tiles):
-        name = os.path.basename(tile_path)
-        try:
-            data = dict(np.load(tile_path, allow_pickle=True))
-            if "harvest_mask" in data and "harvest_probability" in data:
-                skip += 1
-                continue
-
-            bbox = _bbox_from_tile(data)
-            if bbox is None:
-                error += 1
-                continue
-
-            west, south, east, north = bbox
-
-            # Read only utförda within tile bbox
-            try:
-                utforda_tile = gpd.read_parquet(utforda_path, bbox=(west, south, east, north))
-                _ = utforda_tile.sindex if len(utforda_tile) > 0 else None
-            except Exception:
-                utforda_tile = gpd.GeoDataFrame()
-
-            result = process_tile(tile_path, utforda_tile, anmalda)
-        except Exception as e:
-            result = {"name": name, "status": "error", "msg": str(e)}
+        result = process_tile(tile_path, utforda, anmalda)
 
         if result["status"] == "ok":
             ok += 1

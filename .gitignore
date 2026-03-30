@@ -56,6 +56,10 @@ ssh-copy-id*
 # M1 Max (ColonyOS worker)
 # SSH: tobiasedm@192.168.50.100
 
+# WordPress (Digital Earth Sweden)
+# Admin: https://digitalearth.se/wp-login.php
+# IMINT showcase iframe height needs to be increased when adding new tabs/panels
+
 # Environment configs (secrets) — keep template.env only
 !config/environments/template.env
 config/environments/dev.env

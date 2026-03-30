@@ -1,0 +1,108 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unified-train-v1
+  namespace: prithvi-training-default
+  labels:
+    app: unified-training
+    version: v1
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 21600  # 6 hours max
+  template:
+    metadata:
+      labels:
+        app: unified-training
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: trainer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+
+              echo "=== Unified 19-class Segmentation Training ==="
+              echo "Checking data..."
+              LULC_COUNT=$(ls /data/lulc_seasonal/tiles/*.npz 2>/dev/null | wc -l)
+              CROP_COUNT=$(ls /data/crop_tiles/*.npz 2>/dev/null | wc -l)
+              echo "LULC tiles: $LULC_COUNT, Crop tiles: $CROP_COUNT"
+
+              if [ "$LULC_COUNT" -lt 100 ]; then
+                echo "ERROR: Not enough LULC tiles"
+                # Try unpacking
+                if [ -f /data/unified_tiles.tar.gz ]; then
+                  echo "Unpacking tiles..."
+                  cd /data && tar xzf unified_tiles.tar.gz
+                  LULC_COUNT=$(ls /data/lulc_seasonal/tiles/*.npz 2>/dev/null | wc -l)
+                  CROP_COUNT=$(ls /data/crop_tiles/*.npz 2>/dev/null | wc -l)
+                  echo "After unpack: LULC=$LULC_COUNT, Crop=$CROP_COUNT"
+                fi
+              fi
+
+              echo "Installing dependencies..."
+              pip install --quiet torch torchvision --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet timm numpy scipy scikit-learn
+
+              # Clone imint-engine for training scripts
+              pip install --quiet git+https://github.com/TobiasEdman/imintengine.git || true
+
+              # If imint not installable, copy scripts
+              if ! python -c "import imint" 2>/dev/null; then
+                echo "Installing imint from repo..."
+                cd /tmp && git clone --depth 1 https://github.com/TobiasEdman/imintengine.git
+                cd /tmp/imintengine && pip install -e . || pip install --quiet -r requirements.txt
+                cd /data
+              fi
+
+              echo "Starting unified training..."
+              python /tmp/imintengine/scripts/train_unified.py \
+                --data-dirs /data/lulc_seasonal/tiles,/data/crop_tiles \
+                --checkpoint-dir /checkpoints/unified_v1 \
+                --num-classes 19 \
+                --epochs 50 \
+                --batch-size 8 \
+                --lr 1e-4 \
+                --unfreeze-layers 6 \
+                --backbone-lr-factor 0.1 \
+                --loss-type focal \
+                --focal-gamma 2.0 \
+                --patience 15 \
+                --num-workers 4 \
+                --device cuda
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "16"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "16"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
