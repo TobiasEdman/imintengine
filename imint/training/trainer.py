@@ -407,6 +407,12 @@ class LULCTrainer:
 
             # ── Log epoch to JSON ─────────────────────────────────────
             is_new_best = metric_value > best_metric
+            # Serialize confusion matrix for dashboard (only on best epochs)
+            cm_data = None
+            if is_new_best and "confusion_matrix" in val_metrics:
+                cm = val_metrics["confusion_matrix"]
+                cm_data = cm.tolist() if hasattr(cm, 'tolist') else None
+
             self._update_training_log({
                 "epoch": epoch,
                 "train_loss": round(avg_loss, 6),
@@ -419,6 +425,7 @@ class LULCTrainer:
                 "elapsed_s": round(elapsed, 1),
                 "metric_value": round(metric_value, 6),
                 "is_best": is_new_best,
+                **({"confusion_matrix": cm_data} if cm_data else {}),
             })
 
             # ── Checkpointing ─────────────────────────────────────────
