@@ -86,7 +86,7 @@ while true; do
   export PVC_COUNT
 
   python3 -c "
-import re, json, sys
+import re, json, sys, os
 from datetime import datetime
 
 with open('$LOGFILE') as f:
