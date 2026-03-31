@@ -540,18 +540,24 @@ def main():
         finally:
             concurrency.release()
 
+    # Process in chunks of ~1/10 total to limit memory
+    CHUNK = max(max_w * 2, len(work) // 10)
+    completed = 0
     with ThreadPoolExecutor(max_workers=max_w) as pool:
-        futs = {pool.submit(_run, w): w for w in work}
-        for i, f in enumerate(as_completed(futs)):
-            r = f.result()
-            if r:
-                stats[r.get("status", "failed")] = \
-                    stats.get(r.get("status", "failed"), 0) + 1
-                _adapt_on_result(r)
-                if (i + 1) % 50 == 0:
-                    elapsed = time.time() - t0
-                    print(f"  [{i+1}/{len(work)}] {r['name']}: {r['status']} "
-                          f"| {(i+1)/elapsed*3600:.0f}/h | workers={active_workers}")
+        for chunk_start in range(0, len(work), CHUNK):
+            chunk = work[chunk_start:chunk_start + CHUNK]
+            futs = {pool.submit(_run, w): w for w in chunk}
+            for f in as_completed(futs):
+                r = f.result()
+                completed += 1
+                if r:
+                    stats[r.get("status", "failed")] = \
+                        stats.get(r.get("status", "failed"), 0) + 1
+                    _adapt_on_result(r)
+                    if completed % 10 == 0:
+                        elapsed = time.time() - t0
+                        print(f"  [{completed}/{len(work)}] {r['name']}: {r['status']} "
+                              f"| {completed/elapsed*3600:.0f}/h | workers={active_workers}")
 
     elapsed = time.time() - t0
     print(f"\n=== Done in {elapsed/60:.1f} min ===")

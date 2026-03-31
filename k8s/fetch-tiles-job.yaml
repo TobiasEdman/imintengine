@@ -76,10 +76,10 @@ spec:
           resources:
             requests:
               cpu: "8"
-              memory: "16Gi"
+              memory: "32Gi"
             limits:
               cpu: "8"
-              memory: "16Gi"
+              memory: "32Gi"
           volumeMounts:
             - name: training-data
               mountPath: /data

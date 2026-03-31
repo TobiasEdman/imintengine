@@ -941,7 +941,7 @@ def fetch_des_data(
 
     # ── Fetch all bands in a single request ──────────────────────────────
     try:
-        print(f"    Fetching spectral bands{' + SCL' if include_scl else ''}...")
+        pass  # Suppressed — too noisy for batch fetch logs
 
         # Load 10m bands (EPSG:3006, snapped to NMD grid)
         cube_10m = conn.load_collection(
@@ -1132,7 +1132,7 @@ def fetch_copernicus_data(
 
     # ── Fetch all bands in a single request ──────────────────────────────
     try:
-        print(f"    [CDSE] Fetching spectral bands{' + SCL' if include_scl else ''}...")
+        pass  # Suppressed — too noisy for batch fetch logs
 
         # Load 10m bands (EPSG:3006, snapped to NMD grid)
         cube_10m = conn.load_collection(
