@@ -328,6 +328,24 @@ def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict
                 loc["year"] = tile_year
             locs.append(loc)
         except Exception:
+            # Corrupt .npz — still recover bbox from filename
+            m = re.search(r'tile_(\d+)_(\d+)', os.path.basename(path))
+            if m:
+                e, n = int(m.group(1)), int(m.group(2))
+                half = TILE_SIZE_M // 2
+                bbox = {"west": e - half, "south": n - half,
+                        "east": e + half, "north": n + half}
+                name = os.path.basename(path).replace(".npz", "")
+                locs.append({
+                    "name": name,
+                    "source": "lulc",
+                    "bbox_3006": bbox,
+                    "coords_wgs84": bbox_3006_to_wgs84(bbox),
+                    "_existing_path": path,
+                    "_has_lpis": False,
+                })
+            else:
+                skipped += 1
             continue
 
     if skipped > 0:
