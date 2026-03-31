@@ -79,6 +79,17 @@ Modellen tränas med 4 temporala ramar per tile:
 - Aux-kanaler: 11 st (träddata, DEM, VPP-fenologi, avverknings­sannolikhet)
 - Input: `(4×6 + 11, H, W)` = 35 kanaler
 
+## Dual-head arkitektur
+
+Modellen har två output-huvuden från samma backbone:
+
+1. **Head 1: LULC** — 20-klassers segmentering (softmax, focal loss)
+2. **Head 2: Avverkningsmogen** — binär sannolikhetskarta (sigmoid, BCE loss)
+   - Träningsdata: `n_mature_polygons > 0` från SKS avverkningsanmälan
+   - Overlay på skogsklasser — visar vilka skogspixlar som är mogna för avverkning
+   - Modellen lär sig spektral/aux-signatur för avverkningsmogen skog
+   - Vid inferens: LULC-klass + avverkningsmogen-sannolikhet per pixel
+
 ## Nyckelmoduler — träning
 
 | Modul | Syfte |
