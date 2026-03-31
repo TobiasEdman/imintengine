@@ -1,0 +1,149 @@
+{
+  "num_classes": 20,
+  "class_names": [
+    "bakgrund",
+    "tallskog",
+    "granskog",
+    "lövskog",
+    "blandskog",
+    "sumpskog",
+    "tillfälligt ej skog",
+    "våtmark",
+    "öppen mark",
+    "bebyggelse",
+    "vatten",
+    "vete",
+    "korn",
+    "havre",
+    "oljeväxter",
+    "vall",
+    "potatis",
+    "trindsäd",
+    "övrig åker",
+    "hygge"
+  ],
+  "colors_rgb": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      100,
+      0
+    ],
+    [
+      34,
+      139,
+      34
+    ],
+    [
+      50,
+      205,
+      50
+    ],
+    [
+      60,
+      179,
+      113
+    ],
+    [
+      46,
+      79,
+      46
+    ],
+    [
+      160,
+      200,
+      120
+    ],
+    [
+      139,
+      90,
+      43
+    ],
+    [
+      210,
+      180,
+      140
+    ],
+    [
+      255,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      255
+    ],
+    [
+      230,
+      180,
+      34
+    ],
+    [
+      212,
+      130,
+      23
+    ],
+    [
+      255,
+      255,
+      100
+    ],
+    [
+      45,
+      180,
+      90
+    ],
+    [
+      100,
+      200,
+      100
+    ],
+    [
+      180,
+      80,
+      40
+    ],
+    [
+      140,
+      180,
+      50
+    ],
+    [
+      170,
+      170,
+      170
+    ],
+    [
+      180,
+      120,
+      60
+    ]
+  ],
+  "colors_css": {
+    "bakgrund": "rgb(0,0,0)",
+    "tallskog": "rgb(0,100,0)",
+    "granskog": "rgb(34,139,34)",
+    "lövskog": "rgb(50,205,50)",
+    "blandskog": "rgb(60,179,113)",
+    "sumpskog": "rgb(46,79,46)",
+    "tillfälligt ej skog": "rgb(160,200,120)",
+    "våtmark": "rgb(139,90,43)",
+    "öppen mark": "rgb(210,180,140)",
+    "bebyggelse": "rgb(255,0,0)",
+    "vatten": "rgb(0,0,255)",
+    "vete": "rgb(230,180,34)",
+    "korn": "rgb(212,130,23)",
+    "havre": "rgb(255,255,100)",
+    "oljeväxter": "rgb(45,180,90)",
+    "vall": "rgb(100,200,100)",
+    "potatis": "rgb(180,80,40)",
+    "trindsäd": "rgb(140,180,50)",
+    "övrig åker": "rgb(170,170,170)",
+    "hygge": "rgb(180,120,60)"
+  }
+}

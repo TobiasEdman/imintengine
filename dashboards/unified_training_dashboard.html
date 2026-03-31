@@ -229,13 +229,17 @@ body {
 </div>
 
 <script>
-const CLASS_NAMES = ['bakgrund','tallskog','granskog','lovskog','blandskog','sumpskog',
-  'vatmark','oppen_mark','bebyggelse','vatten','vete','korn','havre',
-  'oljevaxter','vall','potatis','trindsad','ovrig_aker','hygge'];
+// From unified_schema.py — 20 classes
+const CLASS_NAMES = ['bakgrund','tallskog','granskog','lövskog','blandskog','sumpskog',
+  'tillfälligt ej skog','våtmark','öppen mark','bebyggelse','vatten',
+  'vete','korn','havre','oljeväxter','vall','potatis','trindsäd','övrig åker','hygge'];
 
-const CLASS_COLORS = ['#6b7280','#166534','#15803d','#4ade80','#22c55e','#065f46',
-  '#0d9488','#fbbf24','#ef4444','#3b82f6','#f59e0b','#d97706','#b45309',
-  '#eab308','#84cc16','#a855f7','#ec4899','#f97316','#78350f'];
+// RGB from unified_schema.py UNIFIED_COLORS
+const CLASS_COLORS = [
+  'rgb(0,0,0)','rgb(0,100,0)','rgb(34,139,34)','rgb(50,205,50)','rgb(60,179,113)','rgb(46,79,46)',
+  'rgb(160,200,120)','rgb(139,90,43)','rgb(210,180,140)','rgb(255,0,0)','rgb(0,0,255)',
+  'rgb(230,180,34)','rgb(212,130,23)','rgb(255,255,100)','rgb(45,180,90)','rgb(100,200,100)',
+  'rgb(180,80,40)','rgb(140,180,50)','rgb(170,170,170)','rgb(180,120,60)'];
 
 // Map from log class names to display names
 const CLASS_MAP = {

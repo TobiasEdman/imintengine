@@ -56,6 +56,7 @@ UNIFIED_CLASSES = {
 
 UNIFIED_CLASS_NAMES = [UNIFIED_CLASSES[i] for i in range(NUM_UNIFIED_CLASSES)]
 
+# Color palette as flat list (index-aligned with UNIFIED_CLASS_NAMES)
 # Color palette for visualization (RGB tuples)
 UNIFIED_COLORS = {
     0: (0, 0, 0),           # bakgrund
@@ -253,3 +254,40 @@ def get_class_weights(
 
     weights[0] = 0.0  # ignore background
     return weights
+
+
+# ── Convenience exports for dashboards/scripts ───────────────────────────────
+
+UNIFIED_COLOR_LIST = [UNIFIED_COLORS[i] for i in range(NUM_UNIFIED_CLASSES)]
+"""Index-aligned color list: UNIFIED_COLOR_LIST[cls_id] → (R, G, B)."""
+
+
+def export_schema_json(path: str | None = None) -> dict:
+    """Export unified schema as JSON for dashboards and visualization scripts.
+
+    Returns dict and optionally writes to file. Eliminates the need for
+    hardcoded class names/colors in HTML/JS/bash files.
+
+    Args:
+        path: Optional file path to write JSON. If None, just returns dict.
+
+    Returns:
+        Schema dict with class_names, colors_rgb, colors_css, num_classes.
+    """
+    import json
+
+    schema = {
+        "num_classes": NUM_UNIFIED_CLASSES,
+        "class_names": UNIFIED_CLASS_NAMES,
+        "colors_rgb": [list(UNIFIED_COLORS[i]) for i in range(NUM_UNIFIED_CLASSES)],
+        "colors_css": {
+            UNIFIED_CLASS_NAMES[i]: f"rgb({UNIFIED_COLORS[i][0]},{UNIFIED_COLORS[i][1]},{UNIFIED_COLORS[i][2]})"
+            for i in range(NUM_UNIFIED_CLASSES)
+        },
+    }
+
+    if path:
+        with open(path, "w") as f:
+            json.dump(schema, f, indent=2, ensure_ascii=False)
+
+    return schema

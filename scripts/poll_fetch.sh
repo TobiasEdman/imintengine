@@ -14,12 +14,10 @@ if [ ! -f "$CLASS_STATS" ]; then
   POD_INIT=$(kubectl get pods -n prithvi-training-default -l "$JOB_LABEL" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
   if [ -n "$POD_INIT" ]; then
     kubectl exec -n prithvi-training-default "$POD_INIT" -- python3 -c "
-import numpy as np, glob, json, os
+import numpy as np, glob, json, os, sys
+sys.path.insert(0, '/workspace/imintengine')
 from collections import Counter
-
-CLASS_NAMES = ['background','tallskog','granskog','lövskog','blandskog','sumpskog',
-    'tillfälligt ej skog','våtmark','öppen mark','bebyggelse','vatten',
-    'vete','korn','havre','oljeväxter','vall','potatis','trindsäd','övrig åker','hygge']
+from imint.training.unified_schema import UNIFIED_CLASS_NAMES as CLASS_NAMES
 
 pixel_counts = Counter()
 tile_dominant = Counter()

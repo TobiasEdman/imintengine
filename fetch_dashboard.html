@@ -226,20 +226,12 @@ function drawRateChart(history) {
   ctx.fill();
 }
 
-// Class colors matching unified schema
-// Colors from unified_schema.py UNIFIED_COLORS — single source of truth
-const CLASS_COLORS = {
-  'background': 'rgb(0,0,0)',           'tallskog': 'rgb(0,100,0)',
-  'granskog': 'rgb(34,139,34)',         'lövskog': 'rgb(50,205,50)',
-  'blandskog': 'rgb(60,179,113)',       'sumpskog': 'rgb(46,79,46)',
-  'tillfälligt ej skog': 'rgb(160,200,120)', 'våtmark': 'rgb(139,90,43)',
-  'öppen mark': 'rgb(210,180,140)',     'bebyggelse': 'rgb(255,0,0)',
-  'vatten': 'rgb(0,0,255)',             'vete': 'rgb(230,180,34)',
-  'korn': 'rgb(212,130,23)',            'havre': 'rgb(255,255,100)',
-  'oljeväxter': 'rgb(45,180,90)',       'vall': 'rgb(100,200,100)',
-  'potatis': 'rgb(180,80,40)',          'trindsäd': 'rgb(140,180,50)',
-  'övrig åker': 'rgb(170,170,170)',     'hygge': 'rgb(180,120,60)'
-};
+// Class colors loaded from schema.json (generated from unified_schema.py)
+let CLASS_COLORS = {};
+fetch('schema.json').then(r => r.json()).then(s => { CLASS_COLORS = s.colors_css; }).catch(() => {
+  // Fallback if schema.json not available
+  CLASS_COLORS = {'tallskog':'rgb(0,100,0)','granskog':'rgb(34,139,34)','vatten':'rgb(0,0,255)'};
+});
 
 let classStatsRendered = false;
 
@@ -286,27 +278,6 @@ function renderClassStats(cs) {
     ctx.fillText((pct * 100).toFixed(1) + '%', pad.l + 105 + barW, y + barH - 2);
   });
 
-  // Dominant class per tile
-  const dom = cs.tile_dominant_class || {};
-  const domSorted = Object.entries(dom).sort((a, b) => b[1] - a[1]);
-  const domTotal = domSorted.reduce((a, b) => a + b[1], 0);
-
-  if (domTotal > 0) {
-    document.getElementById('dominant-section').style.display = 'block';
-    const html = domSorted.map(([name, count]) => {
-      const pct = (count / domTotal * 100).toFixed(1);
-      const color = CLASS_COLORS[name] || '#6b7280';
-      return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0">
-        <span style="color:${color};width:140px;text-align:right">${name}</span>
-        <div style="background:#1e293b;height:10px;flex:1;border-radius:4px;overflow:hidden">
-          <div style="background:${color};height:100%;width:${pct}%;border-radius:4px"></div>
-        </div>
-        <span style="color:#6b7280;width:60px">${count} (${pct}%)</span>
-      </div>`;
-    }).join('');
-    document.getElementById('dominant-bars').innerHTML = html +
-      `<div style="color:#4b5563;margin-top:6px">Tiles with crops: ${cs.tiles_with_crop}/${cs.tiles_scanned} (${(cs.tiles_with_crop/cs.tiles_scanned*100).toFixed(1)}%)</div>`;
-  }
 }
 
 function renderLatestTiles(tiles) {
