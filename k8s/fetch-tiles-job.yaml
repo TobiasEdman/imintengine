@@ -24,13 +24,15 @@ spec:
 
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
 
-              pip install --quiet --no-cache-dir numpy scipy rasterio geopandas shapely requests pyproj openeo pyyaml
+              # Only install fetch dependencies — NO torch/CUDA (saves ~2GB disk)
+              pip install --quiet --no-cache-dir numpy scipy rasterio geopandas shapely requests pyproj openeo pyyaml Pillow httpx
 
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
-              pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
-              pip install --no-cache-dir -e . 2>/dev/null || true
+
+              # Skip full requirements.txt (pulls torch+CUDA), install minimal
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
 
               mkdir -p /data/unified_v2
 
@@ -76,10 +78,10 @@ spec:
           resources:
             requests:
               cpu: "8"
-              memory: "32Gi"
+              memory: "16Gi"
             limits:
               cpu: "8"
-              memory: "32Gi"
+              memory: "16Gi"
           volumeMounts:
             - name: training-data
               mountPath: /data
