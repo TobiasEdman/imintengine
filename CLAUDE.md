@@ -54,6 +54,46 @@ Detta sker automatiskt via post-commit hook om den är installerad.
 - **Nyckelgränssnitt:** `run_job(IMINTJob) → IMINTResult`, `BaseAnalyzer`, `ANALYZER_REGISTRY`
 - **Beroenden:** Inga kodberoenden till andra repos. Syskonprojekt med space-ecosystem-v2.
 
+## Schema — 20-klassers Unified Schema (v3)
+
+Det enhetliga schemat (`imint/training/unified_schema.py`) slår samman NMD + LPIS-grödor + SKS-avverkning:
+
+| Klass | Namn | Källa |
+|-------|------|-------|
+| 0 | background | — |
+| 1–5 | tallskog, granskog, lövskog, blandskog, sumpskog | NMD |
+| 6 | tillfälligt ej skog | NMD (uppdelat från blandskog) |
+| 7 | våtmark | NMD |
+| 8 | öppen mark | NMD |
+| 9 | bebyggelse | NMD |
+| 10 | vatten | NMD |
+| 11–18 | vete, korn, havre, oljeväxter, vall, potatis, trindsäd, övrig åker | LPIS |
+| 19 | hygge | SKS |
+
+## Multitemporal träning
+
+Modellen tränas med 4 temporala ramar per tile:
+- **Ram 0**: Höst (Sep–Okt) från *år-1* — stubble, höstsäd
+- **Ramar 1–3**: VPP-styrda växtsäsongsramar (anpassade per tile-latitud)
+- Backbone: Prithvi-EO-2.0 med `num_temporal_frames=4`
+- Aux-kanaler: 11 st (träddata, DEM, VPP-fenologi, avverknings­sannolikhet)
+- Input: `(4×6 + 11, H, W)` = 35 kanaler
+
+## Nyckelmoduler — träning
+
+| Modul | Syfte |
+|-------|-------|
+| `imint/training/unified_schema.py` | 20-klassers schemadefinition |
+| `imint/training/unified_dataset.py` | Multitemporal dataset loader |
+| `imint/training/tile_fetch.py` | Delad hämtningslogik (STAC → CDSE → DES fallback) |
+| `scripts/fetch_unified_tiles.py` | Enhetlig 4-rams tile-hämtare (LULC + crop + urban) |
+| `scripts/train_unified.py` | Träningsskript med `--enable-multitemporal` |
+| `k8s/unified-training-job.yaml` | K8s-jobbspec för H100 |
+
+## Dataregler — Tilehantering
+
+- **Alla tiles i samma katalog.** LULC, crop och urban tiles blandas inte i underkatalog — allt ligger i en platt `unified_v2/`-katalog. Datasetet filtrerar/samplar internt.
+
 ## Viktiga regler
 
 - **Verifiera varje steg.** När du gör en transformation (flip, transpose, rotation), verifiera visuellt att resultatet är korrekt INNAN du applicerar på alla tiles. Gör INTE flera ändringar utan att kontrollera varje.

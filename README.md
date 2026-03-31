@@ -41,9 +41,12 @@ imint/                      Core engine (executor-agnostic)
 
   training/                 Training pipeline
     trainer.py              Training loop orchestrator
-    dataset.py              Tile dataset with augmentation
+    unified_dataset.py      Multitemporal unified dataset (4-frame)
+    unified_schema.py       20-class schema (NMD + LPIS crops + SKS harvest)
+    tile_fetch.py           Shared fetch primitives (STAC → CDSE → DES)
+    dataset.py              Legacy tile dataset with augmentation
     config.py               Training configuration
-    class_schema.py         LULC class hierarchy
+    class_schema.py         LULC class hierarchy (10-class legacy)
     prepare_data.py         Data preparation from NMD/DEM/SCB
     sampler.py              Balanced sampling strategies
     evaluate.py             Model evaluation & metrics
@@ -77,7 +80,9 @@ scripts/                    Standalone utility scripts
   generate_kustlinje_showcase.py   Generate coastline showcase images
   generate_grazing_showcase.py     Generate grazing showcase images
   generate_lulc_showcase.py        Generate LULC tile gallery + chart data
-  train_lulc.py                    Train LULC segmentation model
+  fetch_unified_tiles.py           Unified 4-frame tile fetcher (LULC + crop + urban)
+  train_unified.py                 Train with unified 20-class schema
+  train_lulc.py                    Train LULC segmentation model (legacy 10-class)
   predict_lulc.py                  Run LULC inference, save per-tile predictions
   run_lulc_pipeline.py             Run LULC classification pipeline
   run_grazing_model.py             Run grazing model inference
@@ -96,8 +101,13 @@ tests/                      Pytest test suite
   test_integration.py       End-to-end integration tests
   ...
 
+k8s/                        Kubernetes job specs (ICE Connect H100)
+  unified-training-job.yaml Training on H100 (GPU)
+  fetch-lulc-job.yaml       Tile fetching (CPU-only)
+
 data/                       Training data & caches
-  lulc_full/                Full LULC training dataset
+  unified_v2/               Unified tiles (LULC + crop + urban, 4-frame)
+  lulc_full/                Full LULC training dataset (legacy)
   seasonal_tiles/           Multi-year seasonal tiles
   symbols/                  Map symbol library
 
@@ -197,21 +207,33 @@ The ColonyOS executor reads `DATE`, `WEST`, `SOUTH`, `EAST`, `NORTH` from enviro
 
 ## Training (LULC segmentation)
 
+### Current: Unified 20-class multitemporal (v3)
+
 ```bash
-# Prepare training data from NMD + Sentinel-2
-python scripts/prepare_lulc_data.py
+# Fetch tiles with 4-frame temporal pattern (1 autumn + 3 VPP-guided growing season)
+python scripts/fetch_unified_tiles.py --mode all --output-dir data/unified_v2
 
-# Train (dev = M1 Max / MPS)
-make train-dev
+# Train on H100 (ICE Connect k8s)
+kubectl apply -f k8s/unified-training-job.yaml
 
-# Run inference on val split (saves per-tile .npz with predictions)
-make predict-aux ARGS="--splits val"
-
-# Generate tile gallery for the training dashboard
-make lulc-gallery
+# Or train locally (M1 Max / MPS)
+python scripts/train_unified.py --data-dirs data/unified_v2 \
+  --enable-multitemporal --num-temporal-frames 4 --num-classes 20
 ```
 
-Training uses Prithvi-EO-2.0 as backbone with UPerNet segmentation head and 5 auxiliary channels (tree height, volume, basal area, diameter, DEM) fused via late fusion. Best result: **44.14% mIoU** at epoch 42 (10-class schema).
+The unified schema merges NMD (forest, water, wetland, urban) + LPIS crops (vete, korn, havre, oljeväxter, vall, potatis, trindsäd) + SKS harvest (hygge) into **20 classes**. Each tile has 4 temporal frames: autumn (Sep–Oct from year-1) + 3 VPP-guided growing season frames adapted per-tile to local phenology. Training uses Prithvi-EO-2.0 backbone with 11 auxiliary channels (tree metrics, DEM, VPP phenology, harvest probability).
+
+All tile types (LULC grid, crop, urban) are stored in a single flat directory and handled identically by the dataset.
+
+**Results:** Best **37.5% mIoU** at epoch 49 (single-frame, 19-class). Multitemporal 4-frame training pending.
+
+### Legacy: 10-class single-frame
+
+```bash
+python scripts/train_lulc.py
+```
+
+Best: **44.14% mIoU** at epoch 42 (10-class schema, single summer frame, 5 aux channels).
 
 The training dashboard shows live progress and, after inference, a per-tile gallery comparing S2 pseudocolor (B8/B3/B4), NMD ground truth, model predictions, and a quality overlay highlighting correct/wrong/high-confidence-wrong pixels.
 

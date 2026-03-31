@@ -259,24 +259,42 @@ def fetch_tile(
 def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict]:
     """Read tile locations from existing .npz files on disk."""
     import glob
+    import re
     tiles = sorted(glob.glob(os.path.join(tiles_dir, "*.npz")))
     print(f"  Found {len(tiles)} existing tiles in {tiles_dir}")
 
     locs = []
+    skipped = 0
     for path in tiles:
         try:
             data = np.load(path, allow_pickle=True)
+            bbox = None
+
+            # Method 1: bbox_3006 array
             bbox_arr = data.get("bbox_3006", None)
             if bbox_arr is not None:
                 b = bbox_arr.flatten()
                 bbox = {"west": int(b[0]), "south": int(b[1]),
                         "east": int(b[2]), "north": int(b[3])}
-            elif "easting" in data and "northing" in data:
+
+            # Method 2: easting/northing keys
+            if bbox is None and "easting" in data and "northing" in data:
                 e, n = int(data["easting"]), int(data["northing"])
                 half = TILE_SIZE_M // 2
                 bbox = {"west": e - half, "south": n - half,
                         "east": e + half, "north": n + half}
-            else:
+
+            # Method 3: parse from filename (tile_EASTING_NORTHING.npz)
+            if bbox is None:
+                m = re.search(r'tile_(\d+)_(\d+)', os.path.basename(path))
+                if m:
+                    e, n = int(m.group(1)), int(m.group(2))
+                    half = TILE_SIZE_M // 2
+                    bbox = {"west": e - half, "south": n - half,
+                            "east": e + half, "north": n + half}
+
+            if bbox is None:
+                skipped += 1
                 continue
 
             # Read tile's base year (LPIS/LUCAS survey year)
@@ -311,6 +329,9 @@ def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict
             locs.append(loc)
         except Exception:
             continue
+
+    if skipped > 0:
+        print(f"  Skipped {skipped} tiles (no bbox recoverable)")
 
     if max_tiles and len(locs) > max_tiles:
         random.shuffle(locs)
@@ -433,24 +454,23 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
             for loc in gen_from_existing(d, args.max_tiles):
                 work.append((loc, args.output_dir))
-    elif args.mode in ("lulc", "all"):
-        d = os.path.join(args.output_dir, "lulc") if args.mode == "all" else args.output_dir
-        os.makedirs(d, exist_ok=True)
-        for loc in gen_lulc(args.grid_spacing, args.max_tiles):
-            work.append((loc, d))
+    else:
+        # All modes write to same output dir — no subdirs.
+        # LULC, crop, and urban tiles are handled identically.
+        os.makedirs(args.output_dir, exist_ok=True)
 
-    if args.mode in ("rare-crops", "all"):
-        d = os.path.join(args.output_dir, "crop") if args.mode == "all" else args.output_dir
-        os.makedirs(d, exist_ok=True)
-        for loc in gen_rare_crops(args.lpis_dir, args.n_oljevaxter, args.n_havre):
-            work.append((loc, d))
+        if args.mode in ("lulc", "all"):
+            for loc in gen_lulc(args.grid_spacing, args.max_tiles):
+                work.append((loc, args.output_dir))
 
-    if args.mode in ("urban", "all"):
-        d = os.path.join(args.output_dir, "urban") if args.mode == "all" else args.output_dir
-        os.makedirs(d, exist_ok=True)
-        for loc in gen_urban(max_tiles=args.max_tiles or 500,
-                             min_pop=args.min_population):
-            work.append((loc, d))
+        if args.mode in ("rare-crops", "all"):
+            for loc in gen_rare_crops(args.lpis_dir, args.n_oljevaxter, args.n_havre):
+                work.append((loc, args.output_dir))
+
+        if args.mode in ("urban", "all"):
+            for loc in gen_urban(max_tiles=args.max_tiles or 500,
+                                 min_pop=args.min_population):
+                work.append((loc, args.output_dir))
 
     print(f"Total: {len(work)} tiles\n")
     if not work:

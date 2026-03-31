@@ -123,11 +123,11 @@ spec:
               # Copy LPIS parquets from data PVC (if available)
               ls -lh /data/lpis/ 2>/dev/null || echo "No LPIS on PVC"
 
-              mkdir -p /data/unified_v2/crop
+              mkdir -p /data/unified_v2
 
               python scripts/fetch_unified_tiles.py \
                 --mode rare-crops \
-                --output-dir /data/unified_v2/crop \
+                --output-dir /data/unified_v2 \
                 --years 2022 2023 \
                 --n-oljevaxter 500 \
                 --n-havre 500 \
@@ -208,11 +208,11 @@ spec:
               cd /workspace/imintengine
               pip install --no-cache-dir -e . 2>/dev/null || true
 
-              mkdir -p /data/unified_v2/urban
+              mkdir -p /data/unified_v2
 
               python scripts/fetch_unified_tiles.py \
                 --mode urban \
-                --output-dir /data/unified_v2/urban \
+                --output-dir /data/unified_v2 \
                 --years 2022 2023 \
                 --min-population 2000 \
                 --max-tiles 500 \

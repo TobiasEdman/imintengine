@@ -27,21 +27,14 @@ spec:
               set -e
               export PYTHONUNBUFFERED=1
 
-              echo "=== Unified 19-class Multi-Temporal Training (v3) ==="
+              echo "=== Unified 20-class Multi-Temporal Training (v3) ==="
               echo "Checking data..."
-              LULC_COUNT=$(ls /data/lulc_seasonal/tiles/*.npz 2>/dev/null | wc -l)
-              CROP_COUNT=$(ls /data/crop_tiles/*.npz 2>/dev/null | wc -l)
-              echo "LULC tiles: $LULC_COUNT, Crop tiles: $CROP_COUNT"
+              TILE_COUNT=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
+              echo "Unified tiles: $TILE_COUNT"
 
-              if [ "$LULC_COUNT" -lt 100 ]; then
-                echo "ERROR: Not enough LULC tiles"
-                if [ -f /data/unified_tiles.tar.gz ]; then
-                  echo "Unpacking tiles..."
-                  cd /data && tar xzf unified_tiles.tar.gz
-                  LULC_COUNT=$(ls /data/lulc_seasonal/tiles/*.npz 2>/dev/null | wc -l)
-                  CROP_COUNT=$(ls /data/crop_tiles/*.npz 2>/dev/null | wc -l)
-                  echo "After unpack: LULC=$LULC_COUNT, Crop=$CROP_COUNT"
-                fi
+              if [ "$TILE_COUNT" -lt 100 ]; then
+                echo "ERROR: Not enough tiles in /data/unified_v2/"
+                exit 1
               fi
 
               echo "Installing system deps..."
@@ -62,7 +55,7 @@ spec:
 
               echo "Starting 4-frame multi-temporal training..."
               python /workspace/imintengine/scripts/train_unified.py \
-                --data-dirs /data/unified_v2/lulc \
+                --data-dirs /data/unified_v2 \
                 --checkpoint-dir /checkpoints/unified_v3 \
                 --num-classes 20 \
                 --enable-multitemporal \
