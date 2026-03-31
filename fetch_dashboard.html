@@ -366,9 +366,10 @@ async function poll() {
     document.getElementById('subtitle').textContent = sub;
 
     // Cards
-    document.getElementById('processed').textContent = d.processed.toLocaleString();
-    const procPct = d.tiles_total > 0 ? (d.processed / d.tiles_total * 100).toFixed(1) : 0;
-    document.getElementById('processed-sub').textContent = `${procPct}% of total`;
+    const realCount = d.pvc_count || d.processed || 0;
+    document.getElementById('processed').textContent = realCount.toLocaleString();
+    const procPct = d.tiles_total > 0 ? (realCount / d.tiles_total * 100).toFixed(1) : 0;
+    document.getElementById('processed-sub').textContent = `${procPct}% of total (PVC: ${d.pvc_count || '?'})`;
     document.getElementById('ok').textContent = d.tiles_ok.toLocaleString();
     const okPct = d.processed > 0 ? (d.tiles_ok / d.processed * 100).toFixed(0) : 0;
     document.getElementById('ok-sub').textContent = `${okPct}% success`;

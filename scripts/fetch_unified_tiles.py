@@ -557,7 +557,8 @@ def main():
                     if completed % 10 == 0:
                         elapsed = time.time() - t0
                         print(f"  [{completed}/{len(work)}] {r['name']}: {r['status']} "
-                              f"| {completed/elapsed*3600:.0f}/h | workers={active_workers}")
+                              f"| {completed/elapsed*3600:.0f}/h | workers={active_workers}",
+                              flush=True)
 
     elapsed = time.time() - t0
     print(f"\n=== Done in {elapsed/60:.1f} min ===")

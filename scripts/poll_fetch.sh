@@ -81,6 +81,10 @@ while true; do
 
   kubectl logs "$POD" -n prithvi-training-default --tail=500 > "$LOGFILE" 2>&1
 
+  # Ground truth: count actual tiles on PVC
+  PVC_COUNT=$(kubectl exec -n prithvi-training-default "$POD" -- python3 -c "import glob; print(len(glob.glob('/data/unified_v2/*.npz')))" 2>/dev/null || echo "0")
+  export PVC_COUNT
+
   python3 -c "
 import re, json, sys
 from datetime import datetime
@@ -182,6 +186,14 @@ try:
 except:
     pass
 
+# Use PVC tile count as ground truth for progress
+pvc_count = int(os.environ.get('PVC_COUNT', '0'))
+if pvc_count > processed:
+    processed = pvc_count
+    tiles_ok = max(tiles_ok, pvc_count - tiles_failed - tiles_skipped)
+    if phase == 'installing' and pvc_count > 0:
+        phase = 'fetching'
+
 result = {
     'phase': phase,
     'pod': '$POD',
@@ -191,6 +203,7 @@ result = {
     'tiles_skipped': tiles_skipped,
     'tiles_total': tiles_total,
     'processed': processed,
+    'pvc_count': pvc_count,
     'rate_per_hour': rate,
     'workers': workers,
     'history': history,
