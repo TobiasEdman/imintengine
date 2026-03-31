@@ -497,23 +497,61 @@ def main():
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     t0 = time.time()
 
-    def _run(item):
-        loc, d = item
-        if use_refetch:
-            return refetch_tile(loc, args.years, d, args.cloud_max)
-        return fetch_tile(loc, args.years, d, args.cloud_max)
+    # Adaptive concurrency: start at max_workers, back off on rate limits
+    import threading
+    max_w = args.workers
+    min_w = 1
+    concurrency = threading.Semaphore(max_w)
+    active_workers = max_w
+    rate_limit_count = 0
+    _lock = threading.Lock()
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+    def _adapt_on_result(result):
+        nonlocal active_workers, rate_limit_count
+        # Check if result indicates rate limiting (failed with 429-like errors)
+        was_limited = result and result.get("_rate_limited", False)
+        with _lock:
+            if was_limited:
+                rate_limit_count += 1
+                if active_workers > min_w:
+                    active_workers -= 1
+                    # Don't release semaphore — effectively reduces concurrency
+                    print(f"    [adaptive] Rate limited — reducing to {active_workers} workers")
+            else:
+                # Slowly recover: every 20 successful tiles, try +1 worker
+                if rate_limit_count > 0 and stats["ok"] % 20 == 0 and active_workers < max_w:
+                    active_workers += 1
+                    concurrency.release()  # Add a permit back
+                    print(f"    [adaptive] Recovering — increasing to {active_workers} workers")
+
+    def _run(item):
+        concurrency.acquire()
+        try:
+            t_start = time.time()
+            loc, d = item
+            if use_refetch:
+                r = refetch_tile(loc, args.years, d, args.cloud_max)
+            else:
+                r = fetch_tile(loc, args.years, d, args.cloud_max)
+            # If tile took >60s, CDSE was probably rate-limiting internally
+            if r and time.time() - t_start > 60:
+                r["_rate_limited"] = True
+            return r
+        finally:
+            concurrency.release()
+
+    with ThreadPoolExecutor(max_workers=max_w) as pool:
         futs = {pool.submit(_run, w): w for w in work}
         for i, f in enumerate(as_completed(futs)):
             r = f.result()
             if r:
                 stats[r.get("status", "failed")] = \
                     stats.get(r.get("status", "failed"), 0) + 1
+                _adapt_on_result(r)
                 if (i + 1) % 50 == 0:
                     elapsed = time.time() - t0
                     print(f"  [{i+1}/{len(work)}] {r['name']}: {r['status']} "
-                          f"| {(i+1)/elapsed*3600:.0f}/h")
+                          f"| {(i+1)/elapsed*3600:.0f}/h | workers={active_workers}")
 
     elapsed = time.time() - t0
     print(f"\n=== Done in {elapsed/60:.1f} min ===")
