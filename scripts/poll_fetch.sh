@@ -26,7 +26,7 @@ tile_dominant = Counter()
 tiles_with_crop = 0
 tiles_scanned = 0
 
-for d in ['/data/lulc_seasonal/tiles', '/data/crop_tiles']:
+for d in ['/data/unified_v2']:
     files = sorted(glob.glob(os.path.join(d, '*.npz')))
     for f in files[:3000]:  # Sample up to 3000
         try:
