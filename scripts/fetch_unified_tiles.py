@@ -420,10 +420,12 @@ def refetch_tile(
         except Exception:
             pass
 
-    # Remap NMD label from raw 19-class → unified 20-class
+    # Remap NMD label → unified 20-class (with LPIS crops + SKS harvest)
     if "label" in save:
-        from imint.training.unified_schema import nmd19_to_unified
-        save["label"] = nmd19_to_unified(save["label"])
+        from imint.training.unified_schema import merge_all
+        lpis_mask = save.get("label_mask", None)
+        harvest_mask = save.get("harvest_mask", None)
+        save["label"] = merge_all(save["label"], lpis_mask, harvest_mask)
 
     # Write new spectral + temporal metadata
     save["image"] = image
