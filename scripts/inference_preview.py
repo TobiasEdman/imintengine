@@ -69,10 +69,19 @@ def load_model(checkpoint_path: str, device: torch.device):
 
     ckpt_config = ckpt.get("config", {})
     n_aux = ckpt_config.get("n_aux_channels", 0)
-    num_classes = ckpt_config.get("num_classes", 20)
     num_frames = ckpt_config.get("num_temporal_frames", 4)
     feature_indices = ckpt_config.get("feature_indices", [2, 5, 8, 11])
     decoder_channels = ckpt_config.get("decoder_channels", 256)
+
+    # Extract state dict first to detect actual num_classes from head
+    sd = ckpt.get("state_dict", ckpt.get("model_state_dict", ckpt))
+    sd = {(k[len("model."):] if k.startswith("model.") else k): v
+          for k, v in sd.items()}
+    head_key = "head.head.2.bias"
+    if head_key in sd:
+        num_classes = sd[head_key].shape[0]
+    else:
+        num_classes = ckpt_config.get("num_classes", 20)
 
     print(f"  classes={num_classes}, frames={num_frames}, aux={n_aux}")
     backbone = _load_prithvi_from_hf(pretrained=True, num_frames=num_frames)
@@ -84,10 +93,6 @@ def load_model(checkpoint_path: str, device: torch.device):
         n_aux_channels=n_aux,
         pool_sizes=get_default_pool_sizes(device),
     )
-
-    sd = ckpt.get("state_dict", ckpt.get("model_state_dict", ckpt))
-    sd = {(k[len("model."):] if k.startswith("model.") else k): v
-          for k, v in sd.items()}
     missing, unexpected = model.load_state_dict(sd, strict=False)
     print(f"  Loaded ({len(missing)} missing, {len(unexpected)} unexpected)")
     return model.to(device).eval()
