@@ -148,9 +148,9 @@ def fetch_s2_scene(
     if cloud_fraction > cloud_threshold:
         return None
 
-    # Nodata check (band 0 = B02)
+    # Nodata check — reject tiles with >5% zero pixels (outside swath/edge)
     nodata_frac = float((spectral[0] == 0).mean())
-    if nodata_frac > 0.10:
+    if nodata_frac > 0.05:
         return None
 
     # Haze check (mean B02 reflectance)
