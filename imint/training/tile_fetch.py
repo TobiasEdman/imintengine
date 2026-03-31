@@ -75,6 +75,16 @@ def _fetch_single_scene(
     except Exception:
         pass
 
+    # If STAC found nothing (e.g. pre-2018 data not in DES catalog),
+    # generate synthetic date candidates and try CDSE directly
+    if not candidates:
+        from datetime import datetime as _dt, timedelta as _td
+        d0 = _dt.strptime(date_start, "%Y-%m-%d")
+        d1 = _dt.strptime(date_end, "%Y-%m-%d")
+        step = max(1, (d1 - d0).days // 6)
+        for i in range(0, (d1 - d0).days + 1, step):
+            candidates.append(((d0 + _td(days=i)).strftime("%Y-%m-%d"), 50.0))
+
     candidates.sort(key=lambda x: x[1])
 
     # Primary: CDSE Sentinel Hub HTTP
