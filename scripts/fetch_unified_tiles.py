@@ -420,6 +420,11 @@ def refetch_tile(
         except Exception:
             pass
 
+    # Remap NMD label from raw 19-class → unified 20-class
+    if "label" in save:
+        from imint.training.unified_schema import nmd19_to_unified
+        save["label"] = nmd19_to_unified(save["label"])
+
     # Write new spectral + temporal metadata
     save["image"] = image
     save["temporal_mask"] = temporal_mask
