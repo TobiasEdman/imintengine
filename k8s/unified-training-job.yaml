@@ -1,14 +1,14 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: unified-train-v1
+  name: unified-train-v3
   namespace: prithvi-training-default
   labels:
     app: unified-training
-    version: v1
+    version: v3
 spec:
-  backoffLimit: 1
-  activeDeadlineSeconds: 21600  # 6 hours max
+  backoffLimit: 2
+  activeDeadlineSeconds: 43200  # 12 hours max (4-frame = slower)
   template:
     metadata:
       labels:
@@ -27,7 +27,7 @@ spec:
               set -e
               export PYTHONUNBUFFERED=1
 
-              echo "=== Unified 19-class Segmentation Training ==="
+              echo "=== Unified 19-class Multi-Temporal Training (v3) ==="
               echo "Checking data..."
               LULC_COUNT=$(ls /data/lulc_seasonal/tiles/*.npz 2>/dev/null | wc -l)
               CROP_COUNT=$(ls /data/crop_tiles/*.npz 2>/dev/null | wc -l)
@@ -35,7 +35,6 @@ spec:
 
               if [ "$LULC_COUNT" -lt 100 ]; then
                 echo "ERROR: Not enough LULC tiles"
-                # Try unpacking
                 if [ -f /data/unified_tiles.tar.gz ]; then
                   echo "Unpacking tiles..."
                   cd /data && tar xzf unified_tiles.tar.gz
@@ -45,35 +44,38 @@ spec:
                 fi
               fi
 
-              echo "Installing dependencies..."
-              pip install --quiet torch torchvision --index-url https://download.pytorch.org/whl/cu121
-              pip install --quiet timm numpy scipy scikit-learn
+              echo "Installing system deps..."
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
 
-              # Clone imint-engine for training scripts
-              pip install --quiet git+https://github.com/TobiasEdman/imintengine.git || true
+              echo "Installing Python dependencies..."
+              pip install --quiet --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir timm numpy scipy scikit-learn
 
-              # If imint not installable, copy scripts
-              if ! python -c "import imint" 2>/dev/null; then
-                echo "Installing imint from repo..."
-                cd /tmp && git clone --depth 1 https://github.com/TobiasEdman/imintengine.git
-                cd /tmp/imintengine && pip install -e . || pip install --quiet -r requirements.txt
-                cd /data
-              fi
+              echo "Cleaning stale checkpoint temp files..."
+              rm -f /checkpoints/unified_v3/*.pt.tmp 2>/dev/null || true
 
-              echo "Starting unified training..."
-              python /tmp/imintengine/scripts/train_unified.py \
+              echo "Cloning ImintEngine..."
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine && pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+              cd /data
+
+              echo "Starting 4-frame multi-temporal training..."
+              python /workspace/imintengine/scripts/train_unified.py \
                 --data-dirs /data/lulc_seasonal/tiles,/data/crop_tiles \
-                --checkpoint-dir /checkpoints/unified_v1 \
+                --checkpoint-dir /checkpoints/unified_v3 \
                 --num-classes 19 \
-                --epochs 50 \
-                --batch-size 8 \
+                --enable-multitemporal \
+                --num-temporal-frames 4 \
+                --epochs 80 \
+                --batch-size 4 \
                 --lr 1e-4 \
                 --unfreeze-layers 6 \
                 --backbone-lr-factor 0.1 \
                 --loss-type focal \
                 --focal-gamma 2.0 \
-                --patience 15 \
-                --num-workers 4 \
+                --patience 20 \
+                --num-workers 2 \
                 --device cuda
 
           env:
@@ -99,6 +101,8 @@ spec:
               mountPath: /data
             - name: checkpoints
               mountPath: /checkpoints
+            - name: dshm
+              mountPath: /dev/shm
       volumes:
         - name: training-data
           persistentVolumeClaim:
@@ -106,3 +110,7 @@ spec:
         - name: checkpoints
           persistentVolumeClaim:
             claimName: training-checkpoints
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
