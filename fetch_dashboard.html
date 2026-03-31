@@ -14,7 +14,7 @@ h1 { font-size: 18px; color: #f1f5f9; margin-bottom: 6px; }
 .tile-card { background: #111827; border-radius: 10px; padding: 12px; border: 1px solid #1e293b; }
 .tile-card .tile-name { font-size: 10px; color: #60a5fa; margin-bottom: 6px; letter-spacing: 0.5px; }
 .tile-card .tile-meta { font-size: 9px; color: #4b5563; margin-top: 4px; }
-.tile-imgs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.tile-imgs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
 .tile-imgs img { width: 100%; border-radius: 4px; image-rendering: pixelated; }
 .tile-imgs .img-label { font-size: 8px; color: #4b5563; text-align: center; margin-top: 2px; }
 
@@ -128,7 +128,7 @@ canvas { width: 100% !important; height: 120px !important; }
 </div>
 
 <div class="chart-section" id="class-section" style="display:none">
-  <div class="label">Class Distribution (Source Tiles) — Pixel Fraction</div>
+  <div class="label">Class Distribution (Fetched Tiles) — Pixel Fraction</div>
   <canvas id="classChart" style="height:200px !important"></canvas>
   <div style="display:flex; gap:16px; margin-top:10px; flex-wrap:wrap" id="class-legend"></div>
 </div>
@@ -314,26 +314,21 @@ function renderClassStats(cs) {
 
 function renderLatestTiles(tiles) {
   const el = document.getElementById('latestTiles');
-  el.innerHTML = tiles.map(t => `
+  el.innerHTML = tiles.map(t => {
+    const frames = t.frames || [];
+    const labels = t.frame_labels || ['Autumn','Spring','Summer','Late'];
+    const dates = t.dates || [];
+    return `
     <div class="tile-card">
-      <div class="tile-name">${t.name}</div>
+      <div class="tile-name">${t.name} — ${t.frames_ok}/4 frames</div>
       <div class="tile-imgs">
-        <div>
-          <img src="data:image/png;base64,${t.rgb}" title="Summer RGB">
-          <div class="img-label">RGB</div>
-        </div>
-        <div>
-          <img src="data:image/png;base64,${t.nmd}" title="NMD Label">
-          <div class="img-label">NMD</div>
-        </div>
-        <div>
-          <img src="data:image/png;base64,${t.autumn}" title="Autumn Frame">
-          <div class="img-label">Autumn</div>
-        </div>
+        ${frames.map((f, i) => `<div>
+          <img src="data:image/jpeg;base64,${f}" title="${labels[i]} ${dates[i] || ''}">
+          <div class="img-label">${labels[i]}${dates[i] ? '<br>' + dates[i] : ''}</div>
+        </div>`).join('')}
       </div>
-      <div class="tile-meta">${t.dates || ''} — ${t.frames_ok || '?'}/4 frames</div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
 // Rate history stored client-side for smoother chart
