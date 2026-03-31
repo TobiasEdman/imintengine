@@ -54,6 +54,12 @@ from imint.training.crop_schema import (
     NUM_CLASSES,
 )
 from imint.fetch import _to_nmd_grid, _stac_available_dates
+from imint.training.tile_fetch import (
+    point_to_bbox_3006,
+    fetch_aux_channels,
+    fetch_seasonal_scenes,
+    stack_frames,
+)
 
 
 # ── Constants ─────────────────────────────────────────────────────────────

@@ -39,10 +39,10 @@ class TrainingConfig:
     num_temporal_frames: int = 4                       # Prithvi max = 4
     seasonal_windows: list[tuple[int, int]] = field(
         default_factory=lambda: [
-            (4, 4),    # early spring:  April (leaf-out)
-            (5, 6),    # early summer:  May – June (green-up)
-            (7, 7),    # peak summer:   July (peak NDVI)
-            (8, 9),    # late summer:   August – September (senescence)
+            (9, 10),   # autumn:        Sep – Oct (post-harvest stubble, autumn-sown)
+            (4, 5),    # early spring:  Apr – May (bare soil vs green, spring plowing)
+            (6, 7),    # peak summer:   Jun – Jul (max crop diff, peak NDVI)
+            (8, 8),    # late summer:   Aug (harvest timing, rapeseed done vs cereals)
         ]
     )
     enable_vpp_guided_windows: bool = True             # Use VPP phenology per tile

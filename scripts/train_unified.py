@@ -132,6 +132,12 @@ def main():
     parser.add_argument("--disable-all-aux", action="store_true",
                         help="Disable all auxiliary channels")
 
+    # Temporal
+    parser.add_argument("--enable-multitemporal", action="store_true",
+                        help="Use 4-frame multi-temporal input (autumn + 3 growing season)")
+    parser.add_argument("--num-temporal-frames", type=int, default=4,
+                        help="Number of temporal frames (default: 4)")
+
     # Two-stage training
     parser.add_argument("--freeze-spectral", action="store_true",
                         help="Stage 2: freeze backbone+decoder, train only AuxEncoder")
@@ -210,9 +216,9 @@ def main():
         early_stop_metric=args.early_stop_metric,
         unfreeze_backbone_layers=args.unfreeze_layers,
         backbone_lr_factor=args.backbone_lr_factor,
-        # Single-date mode — UnifiedDataset handles frame selection internally
-        enable_multitemporal=False,
-        num_temporal_frames=1,
+        # Multi-temporal: 4-frame autumn-first pattern when enabled
+        enable_multitemporal=args.enable_multitemporal,
+        num_temporal_frames=args.num_temporal_frames if args.enable_multitemporal else 1,
         # 5 skogliga + VPP (5 band) + harvest_probability = 11 aux
         enable_height_channel=True,
         enable_volume_channel=True,
@@ -244,6 +250,8 @@ def main():
         split="train",
         patch_size=config.patch_pixels,
         enable_aux=True,
+        multitemporal=config.enable_multitemporal,
+        num_temporal_frames=config.num_temporal_frames,
     )
     val_dataset = UnifiedDataset(
         lulc_dir=lulc_dir,
@@ -251,6 +259,8 @@ def main():
         split="val",
         patch_size=config.patch_pixels,
         enable_aux=True,
+        multitemporal=config.enable_multitemporal,
+        num_temporal_frames=config.num_temporal_frames,
     )
     print(f"  Train: {len(train_dataset)} tiles, Val: {len(val_dataset)} tiles")
 

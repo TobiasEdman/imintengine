@@ -169,11 +169,15 @@ class UnifiedDataset(Dataset):
         patch_size: int = 224,
         enable_aux: bool = True,
         augment_override: bool | None = None,
+        multitemporal: bool = False,
+        num_temporal_frames: int = 4,
     ):
         super().__init__()
         self.patch_size = patch_size
         self.enable_aux = enable_aux
         self.augment = (split == "train") if augment_override is None else augment_override
+        self.multitemporal = multitemporal
+        self.num_temporal_frames = num_temporal_frames
 
         # Prithvi normalization reshaped for broadcasting over (6, H, W)
         self._mean = PRITHVI_MEAN.reshape(N_BANDS, 1, 1)
@@ -287,11 +291,18 @@ class UnifiedDataset(Dataset):
 
         source = entry["source"]
 
-        # --- Spectral image: extract single peak-summer frame -----------
-        if source == "lulc":
-            image = self._extract_lulc_frame(data)
+        # --- Spectral image ---------------------------------------------
+        if self.multitemporal:
+            image, temporal_mask, doy = self._extract_all_frames(
+                data, source, self.num_temporal_frames
+            )
         else:
-            image = self._extract_crop_frame(data)
+            if source == "lulc":
+                image = self._extract_lulc_frame(data)
+            else:
+                image = self._extract_crop_frame(data)
+            temporal_mask = None
+            doy = None
 
         # --- Label construction ----------------------------------------
         label = self._build_label(data, source)
@@ -301,7 +312,11 @@ class UnifiedDataset(Dataset):
         aux_stack = self._load_aux_channels(data, h, w) if self.enable_aux else None
 
         # --- Prithvi normalization: reflectance [0,1] -> DN -> z-score -
-        image = (image * 10000.0 - self._mean) / self._std
+        # Normalize all T frames identically (mean/std tile across frames)
+        n_frames = image.shape[0] // N_BANDS
+        mean_t = np.tile(self._mean, (n_frames, 1, 1))  # (T*6, 1, 1)
+        std_t = np.tile(self._std, (n_frames, 1, 1))
+        image = (image * 10000.0 - mean_t) / std_t
 
         # --- Spatial augmentation / crop --------------------------------
         if self.augment:
@@ -318,6 +333,14 @@ class UnifiedDataset(Dataset):
                 "source": source,
             },
         }
+
+        # Multitemporal metadata
+        if temporal_mask is not None:
+            result["temporal_mask"] = torch.from_numpy(
+                np.ascontiguousarray(temporal_mask)
+            )
+        if doy is not None:
+            result["doy"] = torch.from_numpy(np.ascontiguousarray(doy))
 
         # Attach each auxiliary channel as (1, H, W) tensor
         if aux_stack is not None:
@@ -459,6 +482,67 @@ class UnifiedDataset(Dataset):
             unified[is_forest & is_harvested] = HARVEST_CLASS
 
         return unified
+
+    @staticmethod
+    def _extract_all_frames(
+        data: np.lib.npyio.NpzFile,
+        source: str,
+        num_frames: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Extract all temporal frames for multi-temporal training.
+
+        Returns:
+            image: (T*6, H, W) float32 stacked frames.
+            temporal_mask: (T,) uint8, 1 = valid frame, 0 = padded.
+            doy: (T,) int32 day-of-year per frame.
+        """
+        key = "image" if source == "lulc" else "spectral"
+        raw = data[key].astype(np.float32)
+        c, h, w = raw.shape
+        tile_frames = c // N_BANDS
+
+        # Temporal metadata from tile
+        tile_mask = data.get("temporal_mask", None)
+        tile_doy = data.get("doy", None)
+        if tile_mask is not None:
+            tile_mask = np.asarray(tile_mask).ravel()[:tile_frames]
+        else:
+            tile_mask = np.ones(tile_frames, dtype=np.uint8)
+        if tile_doy is not None:
+            tile_doy = np.asarray(tile_doy).ravel()[:tile_frames].astype(np.int32)
+        else:
+            tile_doy = np.zeros(tile_frames, dtype=np.int32)
+
+        if tile_frames >= num_frames:
+            # Tile has enough frames — take first num_frames
+            image = raw[:num_frames * N_BANDS]
+            temporal_mask = tile_mask[:num_frames]
+            doy = tile_doy[:num_frames]
+        else:
+            # Pad with zeros (and mask)
+            image = np.zeros((num_frames * N_BANDS, h, w), dtype=np.float32)
+            image[:tile_frames * N_BANDS] = raw
+            temporal_mask = np.zeros(num_frames, dtype=np.uint8)
+            temporal_mask[:tile_frames] = tile_mask
+            doy = np.zeros(num_frames, dtype=np.int32)
+            doy[:tile_frames] = tile_doy
+
+        # Replace zero-padded frames with nearest valid frame
+        for t in range(num_frames):
+            if temporal_mask[t] == 0:
+                # Find nearest valid frame
+                valid_indices = np.where(temporal_mask > 0)[0]
+                if len(valid_indices) > 0:
+                    nearest = valid_indices[
+                        np.argmin(np.abs(valid_indices - t))
+                    ]
+                    start_dst = t * N_BANDS
+                    start_src = nearest * N_BANDS
+                    image[start_dst:start_dst + N_BANDS] = (
+                        image[start_src:start_src + N_BANDS]
+                    )
+
+        return image, temporal_mask, doy
 
     # ------------------------------------------------------------------
     # Auxiliary channels
