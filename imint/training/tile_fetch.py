@@ -7,6 +7,7 @@ Used by both fetch_lucas_tiles.py and fetch_unified_tiles.py.
 from __future__ import annotations
 
 import calendar
+import os
 from datetime import datetime
 
 import numpy as np
@@ -175,9 +176,57 @@ def fetch_aux_channels(bbox_3006: dict) -> dict[str, np.ndarray]:
     return aux
 
 
-def fetch_nmd_label(coords_wgs84: dict) -> np.ndarray | None:
-    """Fetch NMD land cover label for a tile. Returns (H, W) uint8 or None."""
+_NMD_SRC = None  # lazy-opened rasterio handle
+
+
+def fetch_nmd_label_local(
+    bbox_3006: dict,
+    nmd_raster: str = "data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif",
+    num_classes: int = 10,
+) -> np.ndarray | None:
+    """Read NMD label from local GeoTIFF raster (no internet).
+
+    Falls back to openEO if local raster is unavailable.
+    Returns (H, W) uint8 or None.
+    """
+    global _NMD_SRC
+
     try:
+        import rasterio
+        from rasterio.windows import from_bounds
+
+        if _NMD_SRC is None:
+            if not os.path.exists(nmd_raster):
+                return _fetch_nmd_label_remote(bbox_3006)
+            _NMD_SRC = rasterio.open(nmd_raster)
+
+        w, s, e, n = bbox_3006["west"], bbox_3006["south"], bbox_3006["east"], bbox_3006["north"]
+
+        # Bounds check
+        b = _NMD_SRC.bounds
+        if w < b.left or e > b.right or s < b.bottom or n > b.top:
+            return None
+
+        window = from_bounds(w, s, e, n, _NMD_SRC.transform)
+        nmd_raw = _NMD_SRC.read(1, window=window)
+
+        # Resize to tile size if needed
+        if nmd_raw.shape != (TILE_SIZE_PX, TILE_SIZE_PX):
+            from scipy.ndimage import zoom
+            zy = TILE_SIZE_PX / nmd_raw.shape[0]
+            zx = TILE_SIZE_PX / nmd_raw.shape[1]
+            nmd_raw = zoom(nmd_raw, (zy, zx), order=0)
+
+        from imint.training.class_schema import nmd_raster_to_lulc
+        return nmd_raster_to_lulc(nmd_raw, num_classes=num_classes).astype(np.uint8)
+    except Exception:
+        return _fetch_nmd_label_remote(bbox_3006)
+
+
+def _fetch_nmd_label_remote(bbox_3006: dict) -> np.ndarray | None:
+    """Fallback: fetch NMD via openEO (requires internet)."""
+    try:
+        coords_wgs84 = bbox_3006_to_wgs84(bbox_3006)
         from imint.fetch import fetch_nmd_data
         result = fetch_nmd_data(
             coords_wgs84, target_shape=(TILE_SIZE_PX, TILE_SIZE_PX),

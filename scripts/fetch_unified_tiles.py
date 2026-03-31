@@ -41,7 +41,7 @@ from imint.training.tile_fetch import (
     N_BANDS,
     bbox_3006_to_wgs84,
     fetch_aux_channels,
-    fetch_nmd_label,
+    fetch_nmd_label_local,
     fetch_seasonal_scenes,
     stack_frames,
 )
@@ -237,7 +237,7 @@ def fetch_tile(
     if int(temporal_mask.sum()) == 0:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
-    nmd_label = fetch_nmd_label(coords)
+    nmd_label = fetch_nmd_label_local(bbox)
     aux = fetch_aux_channels(bbox)
 
     save = {
