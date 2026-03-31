@@ -279,14 +279,32 @@ def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict
             else:
                 continue
 
+            # Read tile's base year (LPIS/LUCAS survey year)
+            tile_year = None
+            if "year" in data:
+                tile_year = int(data["year"])
+            elif "lpis_year" in data:
+                tile_year = int(data["lpis_year"])
+            elif "dates" in data:
+                # Infer from first valid date
+                dates = data["dates"]
+                for d in dates:
+                    d_str = str(d)
+                    if d_str and len(d_str) >= 4:
+                        tile_year = int(d_str[:4])
+                        break
+
             name = os.path.basename(path).replace(".npz", "")
-            locs.append({
+            loc = {
                 "name": name,
                 "source": str(data.get("source", "lulc")),
                 "bbox_3006": bbox,
                 "coords_wgs84": bbox_3006_to_wgs84(bbox),
                 "_existing_path": path,
-            })
+            }
+            if tile_year:
+                loc["year"] = tile_year
+            locs.append(loc)
         except Exception:
             continue
 
@@ -321,9 +339,16 @@ def refetch_tile(
     bbox = loc["bbox_3006"]
     coords = loc.get("coords_wgs84") or bbox_3006_to_wgs84(bbox)
 
+    # Use tile's own year first, then fallback to CLI years
+    tile_year = loc.get("year")
+    if tile_year:
+        fetch_years = [str(tile_year)] + [y for y in years if y != str(tile_year)]
+    else:
+        fetch_years = years
+
     # Fetch 4 new spectral frames
     scene_results = fetch_4frame_scenes(
-        bbox, coords, years, scene_cloud_max=cloud_max,
+        bbox, coords, fetch_years, scene_cloud_max=cloud_max,
     )
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES)
 
