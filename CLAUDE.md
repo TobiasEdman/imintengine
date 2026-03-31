@@ -105,6 +105,17 @@ Modellen har två output-huvuden från samma backbone:
 
 - **Alla tiles i samma katalog.** LULC, crop och urban tiles blandas inte i underkatalog — allt ligger i en platt `unified_v2/`-katalog. Datasetet filtrerar/samplar internt.
 
+## Post-processing pipeline (efter fetch, före träning)
+
+Fetchen sparar rå data. Följande steg körs lokalt/på PVC efteråt:
+
+1. **Label-remapping** — `python scripts/remap_labels.py --data-dir /data/unified_v2`
+   - Applicerar `merge_all()`: NMD→unified + LPIS-overlay + SKS-hygge
+2. **Nodata-filtrering** — ta bort tiles med >5% nollpixlar i någon ram
+   - Kant-tiles vid stråkgräns, havsytor, korrupta scener
+3. **Kvalitetskontroll** — verifiera att temporal_mask har minst 3/4 giltiga ramar
+4. **Klassfördelning** — generera `class_stats.json` från remappade labels
+
 ## Viktiga regler
 
 - **Verifiera varje steg.** När du gör en transformation (flip, transpose, rotation), verifiera visuellt att resultatet är korrekt INNAN du applicerar på alla tiles. Gör INTE flera ändringar utan att kontrollera varje.
