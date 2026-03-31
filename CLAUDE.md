@@ -60,6 +60,13 @@ Detta sker automatiskt via post-commit hook om den är installerad.
 - **En ändring i taget.** Byt aldrig flera transformationer samtidigt — det gör det omöjligt att debugga.
 - **Genomför instruktioner exakt.** Om användaren säger "applicera X" — gör exakt X, inte en approximation.
 
+## Dataregler — Temporal matchning
+
+- **Spektraldata och etiketter MÅSTE matcha per år.** En tile med LPIS-etiketter från 2022 ska ha Sentinel-2-spektraldata från 2022 (höstram från 2021). Blanda ALDRIG år mellan spektral och etiketter.
+- **Ramstrategi:** 1 höstram (Sep–Okt, år-1) + 3 VPP-styrda växtsäsongsramar. Ingen fast månadsindelning — VPP-fenologi per tile styr ramfönstren.
+- **SKS-årsmatchning:** SKS-avverkningsdata (2021–2026) måste överlappa med spektralets år. Tiles med 2018/2019-spektral kommer att sakna hygges-etiketter.
+- **Refetch-mönster:** Vid omhämtning av spektral (`--mode refetch`), läs tile-året från befintligt `.npz` (`year`, `lpis_year` eller `dates`) och använd som primärt sökår.
+
 ## Arkitekturregler
 
 - Nya analyzers ska subklassa `BaseAnalyzer` och registreras i `ANALYZER_REGISTRY`
