@@ -294,6 +294,9 @@ def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict
                         tile_year = int(d_str[:4])
                         break
 
+            # Check if tile has LPIS crop labels
+            has_lpis = "label_mask" in data or "lpis_year" in data
+
             name = os.path.basename(path).replace(".npz", "")
             loc = {
                 "name": name,
@@ -301,6 +304,7 @@ def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict
                 "bbox_3006": bbox,
                 "coords_wgs84": bbox_3006_to_wgs84(bbox),
                 "_existing_path": path,
+                "_has_lpis": has_lpis,
             }
             if tile_year:
                 loc["year"] = tile_year
@@ -339,9 +343,17 @@ def refetch_tile(
     bbox = loc["bbox_3006"]
     coords = loc.get("coords_wgs84") or bbox_3006_to_wgs84(bbox)
 
-    # Use tile's own year first, then fallback to CLI years
+    # Determine fetch years based on tile type
+    # Crop tiles: strict year match only (LPIS labels are year-specific)
+    # Forest/water tiles: tile year first, other years as fallback
     tile_year = loc.get("year")
-    if tile_year:
+    has_crop_labels = loc.get("source") == "crop" or loc.get("_has_lpis", False)
+
+    if tile_year and has_crop_labels:
+        # Crop tile — NO year fallback, spectral must match label year
+        fetch_years = [str(tile_year)]
+    elif tile_year:
+        # LULC tile — tile year first, others as fallback (forest/water OK)
         fetch_years = [str(tile_year)] + [y for y in years if y != str(tile_year)]
     else:
         fetch_years = years

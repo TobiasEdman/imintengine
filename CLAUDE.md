@@ -66,6 +66,7 @@ Detta sker automatiskt via post-commit hook om den är installerad.
 - **Ramstrategi:** 1 höstram (Sep–Okt, år-1) + 3 VPP-styrda växtsäsongsramar. Ingen fast månadsindelning — VPP-fenologi per tile styr ramfönstren.
 - **SKS-årsmatchning:** SKS-avverkningsdata (2021–2026) måste överlappa med spektralets år. Tiles med 2018/2019-spektral kommer att sakna hygges-etiketter.
 - **Refetch-mönster:** Vid omhämtning av spektral (`--mode refetch`), läs tile-året från befintligt `.npz` (`year`, `lpis_year` eller `dates`) och använd som primärt sökår.
+- **Ingen årsfallback för grödor:** Tiles med LPIS-etiketter (crop) får ALDRIG falla tillbaka till andra år. Spektral måste matcha etikettåret exakt. Årsfallback är bara tillåtet för rena skog/vatten-tiles (NMD-klasser utan årsspecifika etiketter).
 
 ## Arkitekturregler
 
