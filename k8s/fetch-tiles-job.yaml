@@ -1,0 +1,257 @@
+---
+# Job 1: LULC grid tiles (~6000 tiles, ~4-5h)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fetch-lulc
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 43200  # 12h
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fetcher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Fetch LULC Grid Tiles (4-frame autumn-first) ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir numpy scipy rasterio geopandas shapely requests pyproj openeo pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
+              pip install --no-cache-dir -e . 2>/dev/null || true
+
+              mkdir -p /data/unified_v2/lulc
+
+              python scripts/fetch_unified_tiles.py \
+                --mode lulc \
+                --output-dir /data/unified_v2/lulc \
+                --years 2018 2019 2022 2023 \
+                --grid-spacing 2500 \
+                --workers 3 \
+                --cloud-max 30
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+---
+# Job 2: Rare crop tiles (~1000 tiles, ~45min)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fetch-crops
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 14400  # 4h
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fetcher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Fetch Rare Crop Tiles (oljeväxter + havre) ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir numpy scipy rasterio geopandas shapely requests pyproj openeo pyarrow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . 2>/dev/null || true
+
+              # Copy LPIS parquets from data PVC (if available)
+              ls -lh /data/lpis/ 2>/dev/null || echo "No LPIS on PVC"
+
+              mkdir -p /data/unified_v2/crop
+
+              python scripts/fetch_unified_tiles.py \
+                --mode rare-crops \
+                --output-dir /data/unified_v2/crop \
+                --years 2022 2023 \
+                --n-oljevaxter 500 \
+                --n-havre 500 \
+                --workers 3 \
+                --lpis-dir /data/lpis
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+---
+# Job 3: Urban tiles (~500 tiles, ~30min)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fetch-urban
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 14400  # 4h
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fetcher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Fetch Urban Tiles (SCB tätort) ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir numpy scipy rasterio geopandas shapely requests pyproj openeo
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . 2>/dev/null || true
+
+              mkdir -p /data/unified_v2/urban
+
+              python scripts/fetch_unified_tiles.py \
+                --mode urban \
+                --output-dir /data/unified_v2/urban \
+                --years 2022 2023 \
+                --min-population 2000 \
+                --max-tiles 500 \
+                --workers 3
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
