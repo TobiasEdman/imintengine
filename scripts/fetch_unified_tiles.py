@@ -423,9 +423,12 @@ def refetch_tile(
     # Remap NMD label → unified 20-class (with LPIS crops + SKS harvest)
     if "label" in save:
         from imint.training.unified_schema import merge_all
+        # Use raw NMD label (before any previous remapping)
+        nmd_raw = save.get("nmd_label_raw", save["label"])
         lpis_mask = save.get("label_mask", None)
         harvest_mask = save.get("harvest_mask", None)
-        save["label"] = merge_all(save["label"], lpis_mask, harvest_mask)
+        save["nmd_label_raw"] = nmd_raw.copy()  # Preserve for future re-runs
+        save["label"] = merge_all(nmd_raw, lpis_mask, harvest_mask)
 
     # Write new spectral + temporal metadata
     save["image"] = image
