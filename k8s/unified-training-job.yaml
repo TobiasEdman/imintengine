@@ -62,9 +62,9 @@ spec:
 
               echo "Starting 4-frame multi-temporal training..."
               python /workspace/imintengine/scripts/train_unified.py \
-                --data-dirs /data/lulc_seasonal/tiles,/data/crop_tiles \
+                --data-dirs /data/unified_v2/lulc \
                 --checkpoint-dir /checkpoints/unified_v3 \
-                --num-classes 19 \
+                --num-classes 20 \
                 --enable-multitemporal \
                 --num-temporal-frames 4 \
                 --epochs 80 \

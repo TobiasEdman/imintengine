@@ -85,9 +85,9 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Total classes: 0-17 from unified_schema + class 18 (harvest)
-NUM_CLASSES = NUM_UNIFIED_CLASSES + 1  # 19
-HARVEST_CLASS = 18
+# Total classes: 0-19 (20 classes including harvest)
+NUM_CLASSES = NUM_UNIFIED_CLASSES  # 20 (hygge/harvest is already in unified schema)
+HARVEST_CLASS = 19
 
 # Prithvi-EO-2.0 normalization constants (DN scale, per band)
 # Bands: B02, B03, B04, B8A, B11, B12
