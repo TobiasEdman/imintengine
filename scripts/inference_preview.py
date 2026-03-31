@@ -26,6 +26,8 @@ from imint.training.unified_schema import (
     nmd10_to_unified,
 )
 
+from imint.training.unified_dataset import AUX_CHANNEL_NAMES, AUX_NORM
+
 CLASS_NAMES = [UNIFIED_CLASSES.get(i, f"cls_{i}") for i in range(NUM_UNIFIED_CLASSES)]
 
 NMD_COLORS = {
@@ -146,18 +148,39 @@ def main():
         rgb = make_summer_rgb(spectral)
 
         # Extract single frame for model (num_frames=1 means 6 channels)
-        # Use same summer frame as RGB
         c = spectral.shape[0]
         bands_per_frame = 6
-        n_frames = c // bands_per_frame
-        summer_idx = min(1, n_frames - 1) if n_frames == 3 else min(2, n_frames - 1)
+        n_frames_tile = c // bands_per_frame
+        summer_idx = min(1, n_frames_tile - 1) if n_frames_tile == 3 else min(2, n_frames_tile - 1)
         base = summer_idx * bands_per_frame
         model_input = spectral[base:base + bands_per_frame]  # (6, H, W)
 
+        # Load aux channels (same as UnifiedDataset._load_aux_channels)
+        h, w = model_input.shape[1], model_input.shape[2]
+        aux_arrays = []
+        for ch_name in AUX_CHANNEL_NAMES:
+            if ch_name in data:
+                arr = data[ch_name].astype(np.float32)
+                if arr.shape != (h, w):
+                    padded = np.zeros((h, w), dtype=np.float32)
+                    sh = min(arr.shape[0], h)
+                    sw = min(arr.shape[1], w)
+                    padded[:sh, :sw] = arr[:sh, :sw]
+                    arr = padded
+            else:
+                arr = np.zeros((h, w), dtype=np.float32)
+            # Z-score normalize
+            if ch_name in AUX_NORM:
+                mean, std = AUX_NORM[ch_name]
+                arr = (arr - mean) / max(std, 1e-6)
+            aux_arrays.append(arr)
+        aux_stack = np.stack(aux_arrays, axis=0)  # (11, H, W)
+
         # Inference
         inp = torch.from_numpy(model_input).unsqueeze(0).to(device)
+        aux_t = torch.from_numpy(aux_stack).unsqueeze(0).to(device)
         with torch.no_grad():
-            out = model(inp)
+            out = model(inp, aux=aux_t)
             if isinstance(out, dict):
                 logits = out.get("out", list(out.values())[0])
             else:
