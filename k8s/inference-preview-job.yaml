@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inference-preview
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: infer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Inference Preview — 10 Tiles ==="
+
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir timm numpy Pillow scikit-learn
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . 2>/dev/null || pip install --quiet --no-cache-dir -r requirements.txt 2>/dev/null || true
+
+              mkdir -p /data/inference_output
+              python3 /workspace/imintengine/scripts/inference_preview.py \
+                --checkpoint /checkpoints/unified_v1/best_model.pt \
+                --tiles-dir /data/lulc_seasonal/tiles \
+                --output-dir /data/inference_output \
+                --num-tiles 10
+
+              echo "=== Output files ==="
+              ls -lh /data/inference_output/
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
