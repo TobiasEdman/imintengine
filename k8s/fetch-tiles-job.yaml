@@ -32,13 +32,17 @@ spec:
               pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
               pip install --no-cache-dir -e . 2>/dev/null || true
 
-              mkdir -p /data/unified_v2/lulc
+              mkdir -p /data/unified_v2
+
+              echo "Re-fetching existing tiles with 4-frame VPP strategy..."
+              echo "LULC tiles: $(ls /data/lulc_seasonal/tiles/*.npz 2>/dev/null | wc -l)"
+              echo "Crop tiles: $(ls /data/crop_tiles/*.npz 2>/dev/null | wc -l)"
 
               python scripts/fetch_unified_tiles.py \
-                --mode lulc \
-                --output-dir /data/unified_v2/lulc \
+                --mode refetch \
+                --from-existing /data/lulc_seasonal/tiles /data/crop_tiles \
+                --output-dir /data/unified_v2 \
                 --years 2018 2019 2022 2023 \
-                --grid-spacing 2500 \
                 --workers 3 \
                 --cloud-max 30
 

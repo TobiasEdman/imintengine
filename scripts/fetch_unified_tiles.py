@@ -256,15 +256,117 @@ def fetch_tile(
             "valid_frames": int(temporal_mask.sum())}
 
 
+def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict]:
+    """Read tile locations from existing .npz files on disk."""
+    import glob
+    tiles = sorted(glob.glob(os.path.join(tiles_dir, "*.npz")))
+    print(f"  Found {len(tiles)} existing tiles in {tiles_dir}")
+
+    locs = []
+    for path in tiles:
+        try:
+            data = np.load(path, allow_pickle=True)
+            bbox_arr = data.get("bbox_3006", None)
+            if bbox_arr is not None:
+                b = bbox_arr.flatten()
+                bbox = {"west": int(b[0]), "south": int(b[1]),
+                        "east": int(b[2]), "north": int(b[3])}
+            elif "easting" in data and "northing" in data:
+                e, n = int(data["easting"]), int(data["northing"])
+                half = TILE_SIZE_M // 2
+                bbox = {"west": e - half, "south": n - half,
+                        "east": e + half, "north": n + half}
+            else:
+                continue
+
+            name = os.path.basename(path).replace(".npz", "")
+            locs.append({
+                "name": name,
+                "source": str(data.get("source", "lulc")),
+                "bbox_3006": bbox,
+                "coords_wgs84": bbox_3006_to_wgs84(bbox),
+                "_existing_path": path,
+            })
+        except Exception:
+            continue
+
+    if max_tiles and len(locs) > max_tiles:
+        random.shuffle(locs)
+        locs = locs[:max_tiles]
+
+    print(f"  Using {len(locs)} tile locations")
+    return locs
+
+
+def refetch_tile(
+    loc: dict,
+    years: list[str],
+    output_dir: str,
+    cloud_max: float = 30.0,
+) -> dict:
+    """Re-fetch spectral data for an existing tile, keep all other fields."""
+    name = loc["name"]
+    existing_path = loc.get("_existing_path")
+    out_path = os.path.join(output_dir, f"{name}.npz")
+
+    # Skip if already re-fetched (check for multitemporal flag)
+    if os.path.exists(out_path):
+        try:
+            d = np.load(out_path, allow_pickle=True)
+            if d.get("multitemporal", 0) == 1 and d.get("num_frames", 0) == 4:
+                return {"name": name, "status": "skipped"}
+        except Exception:
+            pass
+
+    bbox = loc["bbox_3006"]
+    coords = loc.get("coords_wgs84") or bbox_3006_to_wgs84(bbox)
+
+    # Fetch 4 new spectral frames
+    scene_results = fetch_4frame_scenes(
+        bbox, coords, years, scene_cloud_max=cloud_max,
+    )
+    image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES)
+
+    if int(temporal_mask.sum()) == 0:
+        return {"name": name, "status": "failed", "reason": "no_scenes"}
+
+    # Load existing tile data (labels, aux, etc.)
+    save = {}
+    if existing_path and os.path.exists(existing_path):
+        try:
+            old = dict(np.load(existing_path, allow_pickle=True))
+            # Keep everything except old spectral/temporal
+            for k, v in old.items():
+                if k not in ("image", "spectral", "temporal_mask", "doy",
+                             "dates", "multitemporal", "num_frames",
+                             "num_bands", "seasons_valid"):
+                    save[k] = v
+        except Exception:
+            pass
+
+    # Write new spectral + temporal metadata
+    save["image"] = image
+    save["temporal_mask"] = temporal_mask
+    save["doy"] = doy
+    save["dates"] = np.array(dates)
+    save["multitemporal"] = np.int32(1)
+    save["num_frames"] = np.int32(NUM_FRAMES)
+    save["num_bands"] = np.int32(N_BANDS)
+
+    np.savez_compressed(out_path, **save)
+    return {"name": name, "status": "ok",
+            "valid_frames": int(temporal_mask.sum())}
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
 def main():
     p = argparse.ArgumentParser(description="Unified 4-frame tile fetcher")
     p.add_argument("--mode", required=True,
-                   choices=["lulc", "rare-crops", "urban", "all"])
+                   choices=["lulc", "rare-crops", "urban", "all", "refetch"])
     p.add_argument("--output-dir", required=True)
-    p.add_argument("--years", nargs="+", default=["2022", "2023"])
+    p.add_argument("--years", nargs="+", default=["2018", "2019", "2022", "2023"])
     p.add_argument("--workers", type=int, default=3)
     p.add_argument("--cloud-max", type=float, default=30.0)
     p.add_argument("--max-tiles", type=int, default=None)
@@ -274,6 +376,8 @@ def main():
     p.add_argument("--n-oljevaxter", type=int, default=500)
     p.add_argument("--n-havre", type=int, default=500)
     p.add_argument("--min-population", type=int, default=2000)
+    p.add_argument("--from-existing", nargs="+", default=None,
+                   help="Directories with existing tiles to re-fetch spectral for")
     args = p.parse_args()
     random.seed(args.seed)
 
@@ -282,9 +386,17 @@ def main():
     print(f"  Frame 0: Autumn (Sep-Oct, year-1)")
     print(f"  Frames 1-3: VPP-guided growing season\n")
 
+    use_refetch = args.mode == "refetch" or args.from_existing
     work: list[tuple[dict, str]] = []
 
-    if args.mode in ("lulc", "all"):
+    # Refetch mode: read existing tile locations, re-fetch spectral only
+    if use_refetch:
+        dirs = args.from_existing or [args.output_dir]
+        for d in dirs:
+            os.makedirs(args.output_dir, exist_ok=True)
+            for loc in gen_from_existing(d, args.max_tiles):
+                work.append((loc, args.output_dir))
+    elif args.mode in ("lulc", "all"):
         d = os.path.join(args.output_dir, "lulc") if args.mode == "all" else args.output_dir
         os.makedirs(d, exist_ok=True)
         for loc in gen_lulc(args.grid_spacing, args.max_tiles):
@@ -312,6 +424,8 @@ def main():
 
     def _run(item):
         loc, d = item
+        if use_refetch:
+            return refetch_tile(loc, args.years, d, args.cloud_max)
         return fetch_tile(loc, args.years, d, args.cloud_max)
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
