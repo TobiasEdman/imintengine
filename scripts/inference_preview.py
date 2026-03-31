@@ -145,8 +145,17 @@ def main():
 
         rgb = make_summer_rgb(spectral)
 
+        # Extract single frame for model (num_frames=1 means 6 channels)
+        # Use same summer frame as RGB
+        c = spectral.shape[0]
+        bands_per_frame = 6
+        n_frames = c // bands_per_frame
+        summer_idx = min(1, n_frames - 1) if n_frames == 3 else min(2, n_frames - 1)
+        base = summer_idx * bands_per_frame
+        model_input = spectral[base:base + bands_per_frame]  # (6, H, W)
+
         # Inference
-        inp = torch.from_numpy(spectral).unsqueeze(0).to(device)
+        inp = torch.from_numpy(model_input).unsqueeze(0).to(device)
         with torch.no_grad():
             out = model(inp)
             if isinstance(out, dict):
