@@ -40,22 +40,15 @@ from imint.training.tile_fetch import (
     TILE_SIZE_M,
     N_BANDS,
     bbox_3006_to_wgs84,
+    fetch_4frame_scenes,
     fetch_aux_channels,
     fetch_nmd_label_local,
-    fetch_seasonal_scenes,
     stack_frames,
 )
 from imint.training.sampler import generate_grid, grid_to_wgs84
 from imint.training.scb_tatort import generate_scb_densification_regions
 
-# Autumn-first seasonal windows
-SEASONAL_WINDOWS = [
-    (9, 10),  # Frame 0: Autumn
-    (4, 5),   # Frame 1: Early spring
-    (6, 7),   # Frame 2: Peak summer
-    (8, 8),   # Frame 3: Late summer
-]
-NUM_FRAMES = 4
+NUM_FRAMES = 4  # 1 autumn (year-1) + 3 VPP-guided growing season
 
 # Rare crop grödkoder
 SJV_OLJEVAXTER = {85, 86, 87, 88, 90, 91, 92}
@@ -228,8 +221,8 @@ def fetch_tile(
     coords = loc.get("coords_wgs84") or bbox_3006_to_wgs84(bbox)
     tile_years = [str(loc["year"])] if "year" in loc else years
 
-    scene_results = fetch_seasonal_scenes(
-        bbox, coords, SEASONAL_WINDOWS, tile_years,
+    scene_results = fetch_4frame_scenes(
+        bbox, coords, tile_years,
         scene_cloud_max=cloud_max,
     )
 
@@ -286,7 +279,8 @@ def main():
 
     print(f"=== Unified 4-Frame Tile Fetcher ===")
     print(f"  Mode: {args.mode}  Years: {args.years}")
-    print(f"  Windows: {SEASONAL_WINDOWS}\n")
+    print(f"  Frame 0: Autumn (Sep-Oct, year-1)")
+    print(f"  Frames 1-3: VPP-guided growing season\n")
 
     work: list[tuple[dict, str]] = []
 
@@ -338,7 +332,8 @@ def main():
 
     json.dump({
         "mode": args.mode, "years": args.years,
-        "windows": SEASONAL_WINDOWS, "stats": stats,
+        "strategy": "autumn(year-1) + 3 VPP-guided growing season",
+        "stats": stats,
     }, open(os.path.join(args.output_dir, "manifest.json"), "w"), indent=2)
 
 

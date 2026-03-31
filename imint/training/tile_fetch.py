@@ -48,89 +48,165 @@ def bbox_3006_to_wgs84(bbox: dict) -> dict:
     return {"west": w, "south": s, "east": e, "north": n}
 
 
-def fetch_seasonal_scenes(
+def _fetch_single_scene(
     bbox_3006: dict,
     coords_wgs84: dict,
-    seasonal_windows: list[tuple[int, int]],
+    date_start: str,
+    date_end: str,
+    *,
+    scene_cloud_max: float = 30.0,
+    max_candidates: int = 3,
+) -> tuple[np.ndarray | None, str]:
+    """Fetch best S2 scene within a date range. STAC → CDSE → DES fallback.
+
+    Returns:
+        (scene, date_str). scene is (6, H, W) float32 or None.
+    """
+    from imint.fetch import _stac_available_dates
+    from imint.training.cdse_s2 import fetch_s2_scene
+
+    candidates = []
+    try:
+        dates = _stac_available_dates(
+            coords_wgs84, date_start, date_end,
+            scene_cloud_max=scene_cloud_max,
+        )
+        candidates.extend(dates)
+    except Exception:
+        pass
+
+    candidates.sort(key=lambda x: x[1])
+
+    # Primary: CDSE Sentinel Hub HTTP
+    for date_str, _cloud in candidates[:max_candidates]:
+        try:
+            result = fetch_s2_scene(
+                bbox_3006["west"], bbox_3006["south"],
+                bbox_3006["east"], bbox_3006["north"],
+                date=date_str,
+                size_px=TILE_SIZE_PX,
+                cloud_threshold=0.15,
+                haze_threshold=0.08,
+            )
+            if result is not None:
+                return result[0], date_str
+        except Exception:
+            continue
+
+    # Fallback: DES openEO
+    if candidates:
+        try:
+            from imint.fetch import fetch_seasonal_image
+            result = fetch_seasonal_image(
+                date=candidates[0][0],
+                coords=coords_wgs84,
+                prithvi_bands=PRITHVI_BANDS,
+                source="des",
+            )
+            if result is not None:
+                return result[0], candidates[0][0]
+        except Exception:
+            pass
+
+    return None, ""
+
+
+def _get_vpp_doy_windows(bbox_3006: dict, num_growing_frames: int = 3) -> list[tuple[int, int]] | None:
+    """Get VPP-guided growing season DOY windows for a tile.
+
+    Returns list of (doy_start, doy_end) tuples, or None if VPP fails.
+    """
+    try:
+        from imint.training.cdse_vpp import fetch_vpp_tiles
+        from imint.training.vpp_windows import compute_growing_season_windows
+
+        vpp = fetch_vpp_tiles(
+            west=bbox_3006["west"],
+            south=bbox_3006["south"],
+            east=bbox_3006["east"],
+            north=bbox_3006["north"],
+            size_px=64,
+        )
+        return compute_growing_season_windows(
+            vpp["sosd"], vpp["eosd"],
+            num_frames=num_growing_frames,
+        )
+    except Exception:
+        return None
+
+
+def doy_to_date_range(year: int, doy_start: int, doy_end: int) -> tuple[str, str]:
+    """Convert DOY range to ISO date strings for a given year."""
+    from datetime import timedelta
+    base = datetime(year, 1, 1)
+    d_start = base + timedelta(days=doy_start - 1)
+    d_end = base + timedelta(days=min(doy_end - 1, 364))
+    return d_start.strftime("%Y-%m-%d"), d_end.strftime("%Y-%m-%d")
+
+
+def fetch_4frame_scenes(
+    bbox_3006: dict,
+    coords_wgs84: dict,
     years: list[str],
     *,
     scene_cloud_max: float = 30.0,
     max_candidates: int = 3,
 ) -> list[tuple[np.ndarray | None, str]]:
-    """Fetch N seasonal S2 scenes using STAC + CDSE primary + DES fallback.
+    """Fetch 4-frame tile: 1 autumn (year-1) + 3 VPP-guided growing season.
+
+    Frame layout:
+        0: Autumn (Sep-Oct from previous year)
+        1-3: Growing season (VPP-guided DOY windows)
 
     Args:
-        bbox_3006: Tile bbox in EPSG:3006 (west, south, east, north keys).
-        coords_wgs84: Approximate WGS84 bbox for STAC queries.
-        seasonal_windows: List of (start_month, end_month) per frame.
-        years: S2 search years, e.g. ["2022", "2023"].
-        scene_cloud_max: Max scene cloud % for STAC pre-filter.
-        max_candidates: Try this many candidate dates per window.
+        bbox_3006: Tile bbox in EPSG:3006.
+        coords_wgs84: WGS84 bbox for STAC queries.
+        years: Growing season years to search, e.g. ["2022", "2023"].
 
     Returns:
-        List of (scene, date_str) tuples. scene is (6, H, W) float32
-        or None if no scene found. date_str is ISO date or "".
+        List of 4 (scene, date_str) tuples.
     """
-    from imint.fetch import _stac_available_dates
-    from imint.training.cdse_s2 import fetch_s2_scene
+    # Get VPP-guided growing season windows (3 frames)
+    vpp_windows = _get_vpp_doy_windows(bbox_3006, num_growing_frames=3)
+    # vpp_windows is None if VPP fails — will be handled below
 
-    results = []
-    for month_start, month_end in seasonal_windows:
-        candidates = []
-        for year in years:
-            last_day = calendar.monthrange(int(year), month_end)[1]
-            date_start = f"{year}-{month_start:02d}-01"
-            date_end = f"{year}-{month_end:02d}-{last_day:02d}"
+    results: list[tuple[np.ndarray | None, str]] = []
 
-            try:
-                dates = _stac_available_dates(
-                    coords_wgs84, date_start, date_end,
+    # --- Frame 0: Autumn (Sep-Oct from year-1) ---
+    autumn_scene, autumn_date = None, ""
+    for year in years:
+        prev_year = str(int(year) - 1)
+        s, a = _fetch_single_scene(
+            bbox_3006, coords_wgs84,
+            f"{prev_year}-09-01", f"{prev_year}-10-31",
+            scene_cloud_max=scene_cloud_max,
+            max_candidates=max_candidates,
+        )
+        if s is not None:
+            autumn_scene, autumn_date = s, a
+            break
+    results.append((autumn_scene, autumn_date))
+
+    # --- Frames 1-3: VPP-guided growing season ---
+    if vpp_windows and len(vpp_windows) >= 3:
+        for doy_start, doy_end in vpp_windows[:3]:
+            best_scene, best_date = None, ""
+            for year in years:
+                ds, de = doy_to_date_range(int(year), doy_start, doy_end)
+                s, d = _fetch_single_scene(
+                    bbox_3006, coords_wgs84, ds, de,
                     scene_cloud_max=scene_cloud_max,
+                    max_candidates=max_candidates,
                 )
-                candidates.extend(dates)
-            except Exception:
-                pass
-
-        candidates.sort(key=lambda x: x[1])  # sort by cloud ascending
-
-        scene = None
-        scene_date = ""
-
-        # Primary: CDSE Sentinel Hub HTTP
-        for date_str, _cloud in candidates[:max_candidates]:
-            try:
-                result = fetch_s2_scene(
-                    bbox_3006["west"], bbox_3006["south"],
-                    bbox_3006["east"], bbox_3006["north"],
-                    date=date_str,
-                    size_px=TILE_SIZE_PX,
-                    cloud_threshold=0.15,
-                    haze_threshold=0.08,
-                )
-                if result is not None:
-                    scene = result[0]  # (6, H, W) float32
-                    scene_date = date_str
+                if s is not None:
+                    best_scene, best_date = s, d
                     break
-            except Exception:
-                continue
-
-        # Fallback: DES openEO
-        if scene is None and candidates:
-            try:
-                from imint.fetch import fetch_seasonal_image
-                result = fetch_seasonal_image(
-                    date=candidates[0][0],
-                    coords=coords_wgs84,
-                    prithvi_bands=PRITHVI_BANDS,
-                    source="des",
-                )
-                if result is not None:
-                    scene = result[0]
-                    scene_date = candidates[0][0]
-            except Exception:
-                pass
-
-        results.append((scene, scene_date))
+            results.append((best_scene, best_date))
+    else:
+        # VPP unavailable — should not happen, but handle gracefully
+        # Leave frames 1-3 as None (will be zero-padded by stack_frames)
+        for _ in range(3):
+            results.append((None, ""))
 
     return results
 
