@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<title>Tile Fetch — Live Status</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'SF Mono', 'Fira Code', monospace; background: #0b0e17; color: #d8dae5; min-height: 100vh; padding: 24px 32px; }
+.page-layout { display: grid; grid-template-columns: 1fr 320px; gap: 24px; }
+@media (max-width: 1100px) { .page-layout { grid-template-columns: 1fr; } }
+h1 { font-size: 18px; color: #f1f5f9; margin-bottom: 6px; }
+.subtitle { font-size: 12px; color: #6b7280; margin-bottom: 20px; }
+.side-panel { display: flex; flex-direction: column; gap: 12px; }
+.tile-card { background: #111827; border-radius: 10px; padding: 12px; border: 1px solid #1e293b; }
+.tile-card .tile-name { font-size: 10px; color: #60a5fa; margin-bottom: 6px; letter-spacing: 0.5px; }
+.tile-card .tile-meta { font-size: 9px; color: #4b5563; margin-top: 4px; }
+.tile-imgs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.tile-imgs img { width: 100%; border-radius: 4px; image-rendering: pixelated; }
+.tile-imgs .img-label { font-size: 8px; color: #4b5563; text-align: center; margin-top: 2px; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: #111827; border-radius: 10px; padding: 14px; border: 1px solid #1e293b; }
+.card-label { font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+.card-value { font-size: 24px; font-weight: 700; color: #f1f5f9; }
+.card-sub { font-size: 10px; color: #6b7280; margin-top: 2px; }
+.card-value.ok { color: #22c55e; }
+.card-value.fail { color: #ef4444; }
+.card-value.skip { color: #f59e0b; }
+
+.progress-section { background: #111827; border-radius: 10px; padding: 16px; border: 1px solid #1e293b; margin-bottom: 20px; }
+.progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.progress-header .label { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; }
+.progress-header .pct { font-size: 14px; font-weight: 700; color: #60a5fa; }
+.progress-outer { background: #1e293b; border-radius: 6px; height: 18px; overflow: hidden; position: relative; }
+.progress-ok { height: 100%; border-radius: 6px 0 0 6px; background: linear-gradient(90deg, #22c55e, #4ade80); transition: width 0.8s ease; position: absolute; left: 0; }
+.progress-fail { height: 100%; background: #ef4444; transition: width 0.8s ease; position: absolute; }
+.progress-skip { height: 100%; background: #f59e0b; transition: width 0.8s ease; position: absolute; }
+.progress-labels { display: flex; gap: 16px; margin-top: 8px; font-size: 10px; color: #6b7280; }
+.progress-labels span { display: flex; align-items: center; gap: 4px; }
+.progress-labels .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+.chart-section { background: #111827; border-radius: 10px; padding: 16px; border: 1px solid #1e293b; margin-bottom: 20px; }
+.chart-section .label { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+canvas { width: 100% !important; height: 120px !important; }
+
+.log-section { margin-bottom: 20px; }
+.log-label { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+.log-box { background: #111827; border-radius: 10px; padding: 14px; border: 1px solid #1e293b; font-size: 11px; max-height: 280px; overflow-y: auto; white-space: pre-wrap; color: #9ca3af; line-height: 1.7; }
+.log-box .ok { color: #4ade80; }
+.log-box .fail { color: #f87171; }
+.log-box .info { color: #60a5fa; }
+
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
+.status-dot.running { background: #22c55e; animation: pulse 2s ease-in-out infinite; }
+.status-dot.done { background: #22c55e; }
+.status-dot.error { background: #ef4444; }
+.status-dot.waiting { background: #60a5fa; animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+.footer { font-size: 10px; color: #374151; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1><span class="status-dot waiting" id="dot"></span>Tile Fetch — <span id="phase">Loading...</span></h1>
+<div class="subtitle" id="subtitle">Connecting to cluster...</div>
+<div class="page-layout">
+<div class="main-panel">
+
+<div class="cards">
+  <div class="card">
+    <div class="card-label">Processed</div>
+    <div class="card-value" id="processed">—</div>
+    <div class="card-sub" id="processed-sub">&nbsp;</div>
+  </div>
+  <div class="card">
+    <div class="card-label">OK</div>
+    <div class="card-value ok" id="ok">—</div>
+    <div class="card-sub" id="ok-sub">&nbsp;</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Failed</div>
+    <div class="card-value fail" id="failed">—</div>
+    <div class="card-sub" id="fail-sub">&nbsp;</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Skipped</div>
+    <div class="card-value skip" id="skipped">—</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Total</div>
+    <div class="card-value" id="total">—</div>
+    <div class="card-sub">tiles</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Rate</div>
+    <div class="card-value" id="rate">—</div>
+    <div class="card-sub">tiles/hour</div>
+  </div>
+  <div class="card">
+    <div class="card-label">ETA</div>
+    <div class="card-value" id="eta">—</div>
+    <div class="card-sub" id="eta-sub">&nbsp;</div>
+  </div>
+</div>
+
+<div class="progress-section">
+  <div class="progress-header">
+    <span class="label">Progress</span>
+    <span class="pct" id="pct">0%</span>
+  </div>
+  <div class="progress-outer">
+    <div class="progress-ok" id="bar-ok" style="width:0%"></div>
+    <div class="progress-fail" id="bar-fail" style="width:0%; left:0%"></div>
+    <div class="progress-skip" id="bar-skip" style="width:0%; left:0%"></div>
+  </div>
+  <div class="progress-labels">
+    <span><span class="dot" style="background:#4ade80"></span> OK</span>
+    <span><span class="dot" style="background:#ef4444"></span> Failed</span>
+    <span><span class="dot" style="background:#f59e0b"></span> Skipped</span>
+    <span><span class="dot" style="background:#1e293b"></span> Remaining</span>
+  </div>
+</div>
+
+<div class="chart-section">
+  <div class="label">Fetch Rate Over Time</div>
+  <canvas id="rateChart"></canvas>
+</div>
+
+<div class="chart-section" id="class-section" style="display:none">
+  <div class="label">Class Distribution (Source Tiles) — Pixel Fraction</div>
+  <canvas id="classChart" style="height:200px !important"></canvas>
+  <div style="display:flex; gap:16px; margin-top:10px; flex-wrap:wrap" id="class-legend"></div>
+</div>
+
+<div class="chart-section" id="dominant-section" style="display:none">
+  <div class="label">Dominant Class Per Tile</div>
+  <div id="dominant-bars" style="font-size:11px"></div>
+</div>
+
+<div class="log-section">
+  <div class="log-label">Recent Activity</div>
+  <div class="log-box" id="log">Waiting for data...</div>
+</div>
+
+</div><!-- end main-panel -->
+<div class="side-panel">
+  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Latest Fetched Tiles</div>
+  <div id="latestTiles">
+    <div style="color:#4b5563;font-size:11px">Waiting for tiles...</div>
+  </div>
+</div>
+</div><!-- end page-layout -->
+<div class="footer" id="footer">Auto-refresh every 10s</div>
+
+<script>
+// Simple canvas chart
+function drawRateChart(history) {
+  const canvas = document.getElementById('rateChart');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (!history || history.length < 2) {
+    ctx.fillStyle = '#374151';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Collecting data...', W/2, H/2);
+    return;
+  }
+
+  const rates = history.map(h => h.rate);
+  const tiles = history.map(h => h.n);
+  const maxRate = Math.max(...rates, 1);
+  const maxN = Math.max(...tiles, 1);
+
+  const pad = { t: 8, r: 40, b: 20, l: 50 };
+  const cw = W - pad.l - pad.r;
+  const ch = H - pad.t - pad.b;
+
+  // Grid lines
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.t + (ch / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(pad.l, y);
+    ctx.lineTo(W - pad.r, y);
+    ctx.stroke();
+  }
+
+  // Y axis labels (rate)
+  ctx.fillStyle = '#6b7280';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const val = Math.round(maxRate * (4 - i) / 4);
+    const y = pad.t + (ch / 4) * i;
+    ctx.fillText(val + '/h', pad.l - 6, y + 3);
+  }
+
+  // X axis labels (tile count)
+  ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(history.length / 5));
+  for (let i = 0; i < history.length; i += step) {
+    const x = pad.l + (i / (history.length - 1)) * cw;
+    ctx.fillText(tiles[i], x, H - 4);
+  }
+
+  // Rate line
+  ctx.strokeStyle = '#3b82f6';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < history.length; i++) {
+    const x = pad.l + (i / (history.length - 1)) * cw;
+    const y = pad.t + ch - (rates[i] / maxRate) * ch;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Fill under
+  ctx.lineTo(pad.l + cw, pad.t + ch);
+  ctx.lineTo(pad.l, pad.t + ch);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(59, 130, 246, 0.1)';
+  ctx.fill();
+}
+
+// Class colors matching unified schema
+const CLASS_COLORS = {
+  'background': '#374151', 'tallskog': '#166534', 'granskog': '#15803d',
+  'lövskog': '#4ade80', 'blandskog': '#86efac', 'sumpskog': '#065f46',
+  'tillfälligt ej skog': '#a3e635', 'våtmark': '#06b6d4', 'öppen mark': '#fbbf24',
+  'bebyggelse': '#ef4444', 'vatten': '#3b82f6',
+  'vete': '#f59e0b', 'korn': '#d97706', 'havre': '#b45309',
+  'oljeväxter': '#eab308', 'vall': '#84cc16', 'potatis': '#a16207',
+  'trindsäd': '#ca8a04', 'övrig åker': '#92400e', 'hygge': '#9333ea'
+};
+
+let classStatsRendered = false;
+
+function renderClassStats(cs) {
+  if (classStatsRendered) return;  // Only render once
+  classStatsRendered = true;
+
+  const pc = cs.pixel_counts || {};
+  const total = Object.values(pc).reduce((a, b) => a + b, 0);
+  if (total === 0) return;
+
+  // Sort by pixel count descending
+  const sorted = Object.entries(pc).sort((a, b) => b[1] - a[1]);
+
+  // Show pixel fraction bar chart
+  document.getElementById('class-section').style.display = 'block';
+  const canvas = document.getElementById('classChart');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+
+  const pad = { t: 8, r: 10, b: 30, l: 10 };
+  const barH = Math.min(14, (H - pad.t - pad.b) / sorted.length - 2);
+  const maxPct = sorted[0][1] / total;
+
+  sorted.forEach(([name, count], i) => {
+    const pct = count / total;
+    const y = pad.t + i * (barH + 2);
+    const barW = (pct / maxPct) * (W - pad.l - pad.r - 120);
+
+    ctx.fillStyle = CLASS_COLORS[name] || '#6b7280';
+    ctx.fillRect(pad.l + 100, y, barW, barH);
+
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(name, pad.l + 95, y + barH - 2);
+
+    ctx.textAlign = 'left';
+    ctx.fillText((pct * 100).toFixed(1) + '%', pad.l + 105 + barW, y + barH - 2);
+  });
+
+  // Dominant class per tile
+  const dom = cs.tile_dominant_class || {};
+  const domSorted = Object.entries(dom).sort((a, b) => b[1] - a[1]);
+  const domTotal = domSorted.reduce((a, b) => a + b[1], 0);
+
+  if (domTotal > 0) {
+    document.getElementById('dominant-section').style.display = 'block';
+    const html = domSorted.map(([name, count]) => {
+      const pct = (count / domTotal * 100).toFixed(1);
+      const color = CLASS_COLORS[name] || '#6b7280';
+      return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0">
+        <span style="color:${color};width:140px;text-align:right">${name}</span>
+        <div style="background:#1e293b;height:10px;flex:1;border-radius:4px;overflow:hidden">
+          <div style="background:${color};height:100%;width:${pct}%;border-radius:4px"></div>
+        </div>
+        <span style="color:#6b7280;width:60px">${count} (${pct}%)</span>
+      </div>`;
+    }).join('');
+    document.getElementById('dominant-bars').innerHTML = html +
+      `<div style="color:#4b5563;margin-top:6px">Tiles with crops: ${cs.tiles_with_crop}/${cs.tiles_scanned} (${(cs.tiles_with_crop/cs.tiles_scanned*100).toFixed(1)}%)</div>`;
+  }
+}
+
+function renderLatestTiles(tiles) {
+  const el = document.getElementById('latestTiles');
+  el.innerHTML = tiles.map(t => `
+    <div class="tile-card">
+      <div class="tile-name">${t.name}</div>
+      <div class="tile-imgs">
+        <div>
+          <img src="data:image/png;base64,${t.rgb}" title="Summer RGB">
+          <div class="img-label">RGB</div>
+        </div>
+        <div>
+          <img src="data:image/png;base64,${t.nmd}" title="NMD Label">
+          <div class="img-label">NMD</div>
+        </div>
+        <div>
+          <img src="data:image/png;base64,${t.autumn}" title="Autumn Frame">
+          <div class="img-label">Autumn</div>
+        </div>
+      </div>
+      <div class="tile-meta">${t.dates || ''} — ${t.frames_ok || '?'}/4 frames</div>
+    </div>
+  `).join('');
+}
+
+// Rate history stored client-side for smoother chart
+let rateHistory = [];
+
+function formatLogLine(line) {
+  if (/:\s*ok\s*\|/i.test(line)) return `<span class="ok">${line}</span>`;
+  if (/:\s*failed\s*\|/i.test(line)) return `<span class="fail">${line}</span>`;
+  if (/Found|Total|Using|Scanning/i.test(line)) return `<span class="info">${line}</span>`;
+  return line;
+}
+
+async function poll() {
+  try {
+    const r = await fetch('fetch_status.json?t=' + Date.now());
+    if (!r.ok) throw new Error('no data');
+    const d = await r.json();
+
+    // Phase
+    const phaseMap = {
+      installing: 'Installing Dependencies',
+      scanning: 'Scanning Existing Tiles',
+      fetching: 'Fetching',
+      completed: 'Completed'
+    };
+    document.getElementById('phase').textContent = phaseMap[d.phase] || d.phase;
+
+    // Subtitle
+    const sub = d.pod ? `Pod: ${d.pod} (${d.pod_status})` : '';
+    document.getElementById('subtitle').textContent = sub;
+
+    // Cards
+    document.getElementById('processed').textContent = d.processed.toLocaleString();
+    const procPct = d.tiles_total > 0 ? (d.processed / d.tiles_total * 100).toFixed(1) : 0;
+    document.getElementById('processed-sub').textContent = `${procPct}% of total`;
+    document.getElementById('ok').textContent = d.tiles_ok.toLocaleString();
+    const okPct = d.processed > 0 ? (d.tiles_ok / d.processed * 100).toFixed(0) : 0;
+    document.getElementById('ok-sub').textContent = `${okPct}% success`;
+    document.getElementById('failed').textContent = d.tiles_failed.toLocaleString();
+    const failPct = d.processed > 0 ? (d.tiles_failed / d.processed * 100).toFixed(1) : 0;
+    document.getElementById('fail-sub').textContent = `${failPct}% fail rate`;
+    document.getElementById('skipped').textContent = d.tiles_skipped.toLocaleString();
+    document.getElementById('total').textContent = d.tiles_total.toLocaleString();
+    document.getElementById('rate').textContent = d.rate_per_hour > 0 ? d.rate_per_hour.toLocaleString() : '—';
+
+    // Progress bar (stacked)
+    const total = d.tiles_total || 1;
+    const okW = d.tiles_ok / total * 100;
+    const failW = d.tiles_failed / total * 100;
+    const skipW = d.tiles_skipped / total * 100;
+    document.getElementById('bar-ok').style.width = okW + '%';
+    document.getElementById('bar-fail').style.width = failW + '%';
+    document.getElementById('bar-fail').style.left = okW + '%';
+    document.getElementById('bar-skip').style.width = skipW + '%';
+    document.getElementById('bar-skip').style.left = (okW + failW) + '%';
+    document.getElementById('pct').textContent = procPct + '%';
+
+    // ETA
+    if (d.rate_per_hour > 0 && d.tiles_total > d.processed) {
+      const remaining = (d.tiles_total - d.processed) / d.rate_per_hour;
+      const h = Math.floor(remaining);
+      const m = Math.round((remaining - h) * 60);
+      document.getElementById('eta').textContent = h > 0 ? `${h}h ${m}m` : `${m}m`;
+      const now = new Date();
+      const done = new Date(now.getTime() + remaining * 3600000);
+      document.getElementById('eta-sub').textContent = `~${done.toLocaleTimeString('sv-SE', {hour:'2-digit', minute:'2-digit'})}`;
+    } else {
+      document.getElementById('eta').textContent = d.phase === 'completed' ? 'Done' : '—';
+      document.getElementById('eta-sub').textContent = '';
+    }
+
+    // Rate chart — accumulate history
+    if (d.history && d.history.length > 0) {
+      rateHistory = d.history;
+    } else if (d.rate_per_hour > 0 && d.processed > 0) {
+      const last = rateHistory.length > 0 ? rateHistory[rateHistory.length-1].n : 0;
+      if (d.processed > last) {
+        rateHistory.push({n: d.processed, rate: d.rate_per_hour});
+      }
+    }
+    drawRateChart(rateHistory);
+
+    // Workers card (update subtitle to show worker count)
+    if (d.workers) {
+      document.getElementById('subtitle').textContent =
+        (d.pod ? `Pod: ${d.pod} (${d.pod_status})` : '') + ` — ${d.workers} workers`;
+    }
+
+    // Class distribution
+    if (d.class_stats) {
+      renderClassStats(d.class_stats);
+    }
+
+    // Latest tiles
+    if (d.latest_tiles && d.latest_tiles.length > 0) {
+      renderLatestTiles(d.latest_tiles);
+    }
+
+    // Log
+    const logLines = (d.last_log_lines || []).map(formatLogLine).join('\n');
+    document.getElementById('log').innerHTML = logLines || 'Waiting for log output...';
+
+    // Status dot
+    const dot = document.getElementById('dot');
+    if (d.phase === 'completed') { dot.className = 'status-dot done'; }
+    else if (d.pod_status === 'Failed') { dot.className = 'status-dot error'; }
+    else if (d.phase === 'fetching') { dot.className = 'status-dot running'; }
+    else { dot.className = 'status-dot waiting'; }
+
+    // Footer
+    document.getElementById('footer').textContent =
+      `Last update: ${new Date(d.last_update).toLocaleTimeString('sv-SE')} — Auto-refresh every 10s`;
+  } catch (e) {
+    document.getElementById('phase').textContent = 'Waiting for fetch_status.json...';
+    document.getElementById('dot').className = 'status-dot error';
+    document.getElementById('footer').textContent = 'Could not load fetch_status.json — is poll_fetch.sh running?';
+  }
+}
+
+poll();
+setInterval(poll, 10000);
+window.addEventListener('resize', () => drawRateChart(rateHistory));
+</script>
+</body>
+</html>

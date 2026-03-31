@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unified 19-Class Training — Live Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  background: #0b0e17;
+  color: #d8dae5;
+  min-height: 100vh;
+}
+.header {
+  background: linear-gradient(135deg, #111827, #1e293b);
+  padding: 20px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #1e293b;
+}
+.header h1 { font-size: 18px; font-weight: 600; color: #f1f5f9; }
+.header-right { display: flex; align-items: center; gap: 12px; }
+.status-badge {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; padding: 6px 14px; border-radius: 20px;
+  background: #111827; border: 1px solid #374151;
+}
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #22c55e; animation: pulse 2s ease-in-out infinite;
+}
+.status-dot.done { background: #22c55e; animation: none; }
+.status-dot.error { background: #ef4444; animation: none; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+.container { padding: 24px 32px; max-width: 1400px; margin: 0 auto; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.card {
+  background: #111827; border-radius: 10px; padding: 16px 18px;
+  border: 1px solid #1e293b;
+}
+.card-label { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+.card-value { font-size: 22px; font-weight: 700; color: #f1f5f9; }
+.card-sub { font-size: 11px; color: #6b7280; margin-top: 2px; }
+
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+.chart-box {
+  background: #111827; border-radius: 10px; padding: 14px;
+  border: 1px solid #1e293b; min-height: 240px;
+}
+.chart-box h3 { font-size: 12px; color: #94a3b8; margin-bottom: 8px; font-weight: 500; }
+.chart-box canvas { width: 100% !important; max-height: 220px; }
+.full-width { grid-column: 1 / -1; }
+
+.progress-outer {
+  background: #1e293b; border-radius: 6px; height: 10px;
+  overflow: hidden; margin-top: 8px;
+}
+.progress-inner {
+  height: 100%; border-radius: 6px;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  transition: width 0.5s ease;
+}
+.patience-row { display: flex; gap: 5px; margin-top: 6px; }
+.patience-dot {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid #374151; transition: background 0.3s;
+}
+.patience-dot.used { background: #eab308; border-color: #eab308; }
+
+.iou-bar-container { margin-bottom: 24px; }
+.iou-row {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 6px; font-size: 12px;
+}
+.iou-label { width: 200px; text-align: right; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iou-bar-bg { flex: 1; height: 18px; background: #1e293b; border-radius: 4px; overflow: hidden; position: relative; }
+.iou-bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+.iou-val { width: 60px; text-align: right; font-weight: 600; color: #f1f5f9; }
+
+.log-box {
+  background: #111827; border-radius: 10px; padding: 14px;
+  border: 1px solid #1e293b; font-size: 11px;
+  max-height: 200px; overflow-y: auto; white-space: pre-wrap;
+  color: #6b7280; line-height: 1.6;
+}
+.update-note { font-size: 11px; color: #4b5563; text-align: center; margin-top: 12px; }
+
+/* Class color palette */
+.cls-0 { background: #6b7280; } /* bakgrund */
+.cls-1 { background: #166534; } /* tallskog */
+.cls-2 { background: #15803d; } /* granskog */
+.cls-3 { background: #4ade80; } /* lovskog */
+.cls-4 { background: #22c55e; } /* blandskog */
+.cls-5 { background: #065f46; } /* sumpskog */
+.cls-6 { background: #0d9488; } /* vatmark */
+.cls-7 { background: #fbbf24; } /* oppen mark */
+.cls-8 { background: #ef4444; } /* bebyggelse */
+.cls-9 { background: #3b82f6; } /* vatten */
+.cls-10 { background: #f59e0b; } /* vete */
+.cls-11 { background: #d97706; } /* korn */
+.cls-12 { background: #b45309; } /* havre */
+.cls-13 { background: #eab308; } /* oljevaxter */
+.cls-14 { background: #84cc16; } /* vall */
+.cls-15 { background: #a855f7; } /* potatis */
+.cls-16 { background: #ec4899; } /* trindsad */
+.cls-17 { background: #f97316; } /* ovrig aker */
+.cls-18 { background: #78350f; } /* hygge */
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Unified 19-Class Segmentation — H100 Training</h1>
+  <div class="header-right">
+    <div class="status-badge" id="statusBadge">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Loading...</span>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Summary Cards -->
+  <div class="cards" id="summaryCards">
+    <div class="card"><div class="card-label">Epoch</div><div class="card-value" id="cEpoch">—</div><div class="card-sub" id="cEpochSub"></div></div>
+    <div class="card"><div class="card-label">Best mIoU</div><div class="card-value" id="cMiou">—</div><div class="card-sub" id="cMiouSub"></div></div>
+    <div class="card"><div class="card-label">Loss</div><div class="card-value" id="cLoss">—</div></div>
+    <div class="card"><div class="card-label">Learning Rate</div><div class="card-value" id="cLR">—</div></div>
+    <div class="card"><div class="card-label">Train Tiles</div><div class="card-value" id="cTrain">—</div></div>
+    <div class="card"><div class="card-label">Val Tiles</div><div class="card-value" id="cVal">—</div></div>
+    <div class="card"><div class="card-label">Time/Epoch</div><div class="card-value" id="cTime">—</div></div>
+    <div class="card"><div class="card-label">ETA</div><div class="card-value" id="cETA">—</div></div>
+  </div>
+
+  <!-- Progress bar -->
+  <div class="card" style="margin-bottom:24px">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div class="card-label">Training Progress</div>
+      <div class="card-sub" id="progressPct">0%</div>
+    </div>
+    <div class="progress-outer"><div class="progress-inner" id="progressBar" style="width:0%"></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+      <div class="card-label" style="margin:0">Patience (15)</div>
+      <div class="patience-row" id="patienceRow"></div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="chart-grid">
+    <div class="chart-box">
+      <h3>Validation mIoU</h3>
+      <canvas id="chartMiou"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Training Loss</h3>
+      <canvas id="chartLoss"></canvas>
+    </div>
+  </div>
+
+  <!-- Per-class IoU bars -->
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-label" style="margin-bottom:12px">Per-Class IoU (Latest Epoch)</div>
+    <div id="iouBars"></div>
+  </div>
+
+  <!-- Per-class IoU over time -->
+  <div class="chart-grid">
+    <div class="chart-box full-width">
+      <h3>Per-Class IoU Over Time (Top 8)</h3>
+      <canvas id="chartClassIoU"></canvas>
+    </div>
+  </div>
+
+  <!-- NMD Baseline Comparison -->
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-label" style="margin-bottom:12px">Our Model vs NMD Reference Accuracy</div>
+    <div class="card-sub" style="margin-bottom:10px">NMD level-2 accuracy from Naturvårdsverket/Metria validation. Crop classes (10-17) are not in NMD — it only has generic "åkermark".</div>
+    <div style="overflow-x:auto">
+      <table id="nmdCompare" style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead>
+          <tr style="border-bottom:1px solid #374151">
+            <th style="text-align:left;padding:6px;color:#94a3b8">Class</th>
+            <th style="text-align:right;padding:6px;color:#94a3b8">Our IoU</th>
+            <th style="text-align:right;padding:6px;color:#94a3b8">NMD Ref</th>
+            <th style="text-align:right;padding:6px;color:#94a3b8">Note</th>
+          </tr>
+        </thead>
+        <tbody id="nmdCompareBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Confusion Matrix -->
+  <div class="card" style="margin-bottom:24px" id="confMatrixCard">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div class="card-label" style="margin:0">Confusion Matrix (Row-Normalized %)</div>
+      <div class="card-sub" id="confMatrixNote">Rows = ground truth, Columns = predicted</div>
+    </div>
+    <div id="confMatrix" style="overflow-x:auto;font-size:10px">
+      <div style="color:#4b5563">Available after next training run with confusion matrix logging</div>
+    </div>
+  </div>
+
+  <!-- Top Confused Pairs -->
+  <div class="card" style="margin-bottom:24px" id="confPairsCard">
+    <div class="card-label" style="margin-bottom:12px">Top Confused Class Pairs</div>
+    <div id="confPairs" style="font-size:12px">
+      <div style="color:#4b5563">Available after next training run</div>
+    </div>
+  </div>
+
+  <!-- Example Tiles -->
+  <div class="card" style="margin-bottom:24px" id="exampleTilesCard">
+    <div class="card-label" style="margin-bottom:12px">Example Tiles — RGB / Ground Truth / Prediction</div>
+    <div id="exampleTiles" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+      <div style="color:#4b5563;font-size:12px;grid-column:1/-1">Available after next training run with tile export enabled</div>
+    </div>
+  </div>
+
+  <!-- Raw log -->
+  <div class="card-label" style="margin-bottom:8px">Raw Training Log (last 20 lines)</div>
+  <div class="log-box" id="logBox">Waiting for data...</div>
+
+  <div class="update-note" id="updateNote">Auto-refresh every 30s</div>
+</div>
+
+<script>
+const CLASS_NAMES = ['bakgrund','tallskog','granskog','lovskog','blandskog','sumpskog',
+  'vatmark','oppen_mark','bebyggelse','vatten','vete','korn','havre',
+  'oljevaxter','vall','potatis','trindsad','ovrig_aker','hygge'];
+
+const CLASS_COLORS = ['#6b7280','#166534','#15803d','#4ade80','#22c55e','#065f46',
+  '#0d9488','#fbbf24','#ef4444','#3b82f6','#f59e0b','#d97706','#b45309',
+  '#eab308','#84cc16','#a855f7','#ec4899','#f97316','#78350f'];
+
+// Map from log class names to display names
+const CLASS_MAP = {
+  'forest_pine': 'tallskog',
+  'forest_spruce': 'granskog',
+  'forest_deciduous': 'lovskog',
+  'forest_mixed': 'blandskog',
+  'forest_wetland_pine': 'sumpskog',
+  'forest_wetland_spruce': 'sumpskog',
+  'forest_wetland_deciduous': 'sumpskog',
+  'forest_wetland_mixed': 'sumpskog',
+  'forest_wetland_temp': 'sumpskog',
+  'forest_temp_non_forest': 'blandskog',
+  'open_wetland': 'vatmark',
+  'open_land_vegetated': 'oppen_mark',
+  'open_land_bare': 'oppen_mark',
+  'developed_buildings': 'bebyggelse',
+  'developed_roads': 'bebyggelse',
+  'developed_infrastructure': 'bebyggelse',
+  'cropland': 'ovrig_aker',
+};
+
+const chartDefaults = {
+  responsive: true,
+  animation: { duration: 500 },
+  plugins: { legend: { display: false } },
+  scales: {
+    x: { grid: { color: '#1e293b' }, ticks: { color: '#6b7280', font: { size: 10 } } },
+    y: { grid: { color: '#1e293b' }, ticks: { color: '#6b7280', font: { size: 10 } } }
+  }
+};
+
+let chartMiou, chartLoss, chartClassIoU;
+let allEpochClassIoU = {};
+
+function initCharts() {
+  chartMiou = new Chart(document.getElementById('chartMiou'), {
+    type: 'line',
+    data: { labels: [], datasets: [{ data: [], borderColor: '#3b82f6', borderWidth: 2, pointRadius: 3, fill: false }] },
+    options: { ...chartDefaults, scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, min: 0, max: 0.6 } } }
+  });
+
+  chartLoss = new Chart(document.getElementById('chartLoss'), {
+    type: 'line',
+    data: { labels: [], datasets: [{ data: [], borderColor: '#ef4444', borderWidth: 2, pointRadius: 3, fill: false }] },
+    options: chartDefaults
+  });
+
+  chartClassIoU = new Chart(document.getElementById('chartClassIoU'), {
+    type: 'line',
+    data: { labels: [], datasets: [] },
+    options: {
+      ...chartDefaults,
+      plugins: { legend: { display: true, position: 'right', labels: { color: '#94a3b8', font: { size: 10 } } } },
+      scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, min: 0, max: 0.7 } }
+    }
+  });
+}
+
+function updateDashboard(data) {
+  const epochs = data.epochs || [];
+  const last = epochs[epochs.length - 1];
+
+  if (!last) {
+    // No epochs yet — show preparing state
+    document.getElementById('statusText').textContent = data.status === 'installing_deps'
+      ? 'Installing dependencies...' : 'Waiting for first epoch...';
+    document.getElementById('statusDot').className = 'status-dot';
+    document.getElementById('statusDot').style.background = '#60a5fa';
+    document.getElementById('cEpoch').textContent = '0/50';
+    document.getElementById('cMiou').textContent = '—';
+    document.getElementById('cLoss').textContent = '—';
+    document.getElementById('cLR').textContent = '—';
+    document.getElementById('cTrain').textContent = data.train_tiles ? data.train_tiles.toLocaleString() : '—';
+    document.getElementById('cVal').textContent = data.val_tiles ? data.val_tiles.toLocaleString() : '—';
+    document.getElementById('cTime').textContent = '—';
+    document.getElementById('cETA').textContent = '—';
+    document.getElementById('progressPct').textContent = '0%';
+    document.getElementById('progressBar').style.width = '0%';
+    document.getElementById('updateNote').textContent =
+      `Last update: ${new Date(data.last_update).toLocaleTimeString('sv-SE')} — Auto-refresh every 30s`;
+    return;
+  }
+
+  // Status
+  document.getElementById('statusText').textContent = `Training — Epoch ${last.epoch}/${last.total}`;
+  document.getElementById('statusDot').className = 'status-dot';
+  document.getElementById('statusDot').style.background = '#22c55e';
+
+  // Summary cards
+  document.getElementById('cEpoch').textContent = `${last.epoch}/${last.total}`;
+  document.getElementById('cMiou').textContent = data.best_miou.toFixed(4);
+  document.getElementById('cMiouSub').textContent = last.val_miou === data.best_miou ? 'current best' : `current: ${last.val_miou.toFixed(4)}`;
+  document.getElementById('cLoss').textContent = last.loss.toFixed(4);
+  document.getElementById('cLR').textContent = last.lr.toExponential(2);
+  document.getElementById('cTrain').textContent = data.train_tiles.toLocaleString();
+  document.getElementById('cVal').textContent = data.val_tiles.toLocaleString();
+  document.getElementById('cTime').textContent = `${last.time_s}s`;
+
+  const remaining = (last.total - last.epoch) * last.time_s;
+  const mins = Math.floor(remaining / 60);
+  document.getElementById('cETA').textContent = mins > 60 ? `${Math.floor(mins/60)}h ${mins%60}m` : `${mins}m`;
+
+  // Progress
+  const pct = (last.epoch / last.total * 100).toFixed(1);
+  document.getElementById('progressPct').textContent = `${pct}%`;
+  document.getElementById('progressBar').style.width = `${pct}%`;
+
+  // Patience dots
+  let patienceUsed = 0;
+  let bestSoFar = 0;
+  for (const ep of epochs) {
+    if (ep.val_miou > bestSoFar) { bestSoFar = ep.val_miou; patienceUsed = 0; }
+    else { patienceUsed++; }
+  }
+  const pRow = document.getElementById('patienceRow');
+  pRow.innerHTML = '';
+  for (let i = 0; i < 15; i++) {
+    const dot = document.createElement('div');
+    dot.className = 'patience-dot' + (i < patienceUsed ? ' used' : '');
+    pRow.appendChild(dot);
+  }
+
+  // Charts
+  const labels = epochs.map(e => e.epoch);
+  chartMiou.data.labels = labels;
+  chartMiou.data.datasets[0].data = epochs.map(e => e.val_miou);
+  chartMiou.options.scales.y.max = Math.max(0.5, data.best_miou + 0.1);
+  chartMiou.update();
+
+  chartLoss.data.labels = labels;
+  chartLoss.data.datasets[0].data = epochs.map(e => e.loss);
+  chartLoss.update();
+
+  // Per-class IoU bars
+  const iou = data.per_class_iou || {};
+  const sorted = Object.entries(iou).sort((a, b) => b[1] - a[1]);
+  const barsEl = document.getElementById('iouBars');
+  barsEl.innerHTML = '';
+  for (const [cls, val] of sorted) {
+    const mapped = CLASS_MAP[cls] || cls;
+    const idx = CLASS_NAMES.indexOf(mapped);
+    const color = idx >= 0 ? CLASS_COLORS[idx] : '#6b7280';
+    barsEl.innerHTML += `
+      <div class="iou-row">
+        <div class="iou-label">${cls}</div>
+        <div class="iou-bar-bg">
+          <div class="iou-bar-fill" style="width:${val*100}%;background:${color}"></div>
+        </div>
+        <div class="iou-val">${val.toFixed(4)}</div>
+      </div>`;
+  }
+
+  // Per-class IoU over time chart
+  // Store current epoch class data
+  if (last.epoch && Object.keys(iou).length > 0) {
+    allEpochClassIoU[last.epoch] = { ...iou };
+  }
+  // Build datasets for top 8 classes
+  const top8 = sorted.slice(0, 8).map(x => x[0]);
+  const epLabels = Object.keys(allEpochClassIoU).map(Number).sort((a,b) => a-b);
+  chartClassIoU.data.labels = epLabels;
+  chartClassIoU.data.datasets = top8.map((cls, i) => {
+    const mapped = CLASS_MAP[cls] || cls;
+    const idx = CLASS_NAMES.indexOf(mapped);
+    const color = idx >= 0 ? CLASS_COLORS[idx] : CLASS_COLORS[i % CLASS_COLORS.length];
+    return {
+      label: cls,
+      data: epLabels.map(ep => allEpochClassIoU[ep]?.[cls] || null),
+      borderColor: color,
+      borderWidth: 1.5,
+      pointRadius: 2,
+      fill: false,
+      spanGaps: true,
+    };
+  });
+  chartClassIoU.update();
+
+  // NMD Baseline Comparison
+  renderNMDComparison(iou);
+
+  // Confusion matrix
+  if (data.confusion_matrix) {
+    renderConfusionMatrix(data.confusion_matrix);
+    renderTopConfusedPairs(data.confusion_matrix);
+  }
+
+  // Update note
+  document.getElementById('updateNote').textContent =
+    `Last update: ${new Date(data.last_update).toLocaleTimeString('sv-SE')} — Auto-refresh every 30s`;
+}
+
+// NMD reference accuracy (Naturvårdsverket/Metria published values, level-2)
+const NMD_REF = {
+  'tallskog':   { ref: '~75%', note: 'NMD level-2 pine' },
+  'granskog':   { ref: '~75%', note: 'NMD level-2 spruce' },
+  'lövskog':    { ref: '50-60%', note: 'NMD label noise ceiling' },
+  'blandskog':  { ref: '50-60%', note: 'NMD label noise ceiling' },
+  'sumpskog':   { ref: '~65%', note: 'NMD wetland forest' },
+  'våtmark':    { ref: '~80%', note: 'NMD open wetland' },
+  'öppen mark': { ref: '~70%', note: 'NMD open land' },
+  'bebyggelse': { ref: '~85%', note: 'NMD developed' },
+  'vatten':     { ref: '~95%', note: 'NMD water, easy class' },
+  'vete':       { ref: '—', note: 'Not in NMD (crop detail)' },
+  'korn':       { ref: '—', note: 'Not in NMD' },
+  'havre':      { ref: '—', note: 'Not in NMD' },
+  'oljeväxter': { ref: '—', note: 'Not in NMD' },
+  'vall':       { ref: '—', note: 'Not in NMD' },
+  'potatis':    { ref: '—', note: 'Not in NMD' },
+  'trindsäd':   { ref: '—', note: 'Not in NMD' },
+  'övrig åker': { ref: '~71%', note: 'NMD generic cropland' },
+  'hygge':      { ref: '—', note: 'From SKS, not NMD' },
+};
+
+function renderNMDComparison(iou) {
+  const body = document.getElementById('nmdCompareBody');
+  if (!iou || Object.keys(iou).length === 0) return;
+  const sorted = Object.entries(iou).sort((a, b) => b[1] - a[1]);
+  body.innerHTML = sorted.map(([cls, val]) => {
+    const ref = NMD_REF[cls] || { ref: '—', note: '' };
+    const mapped = CLASS_MAP[cls] || cls;
+    const idx = CLASS_NAMES.indexOf(mapped);
+    const color = idx >= 0 ? CLASS_COLORS[idx] : '#6b7280';
+    return `<tr style="border-bottom:1px solid #1e293b">
+      <td style="padding:5px 6px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:6px"></span>${cls}</td>
+      <td style="text-align:right;padding:5px 6px;color:#f1f5f9;font-weight:600">${(val*100).toFixed(1)}%</td>
+      <td style="text-align:right;padding:5px 6px;color:#94a3b8">${ref.ref}</td>
+      <td style="text-align:right;padding:5px 6px;color:#4b5563;font-size:10px">${ref.note}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderConfusionMatrix(cm) {
+  const el = document.getElementById('confMatrix');
+  if (!cm || cm.length === 0) return;
+  const n = cm.length;
+  const names = CLASS_NAMES.slice(0, n);
+
+  // Row-normalize
+  const norm = cm.map(row => {
+    const sum = row.reduce((a, b) => a + b, 0);
+    return sum > 0 ? row.map(v => v / sum * 100) : row.map(() => 0);
+  });
+
+  let html = '<table style="border-collapse:collapse;font-size:9px;width:auto">';
+  html += '<tr><th style="padding:3px;min-width:20px"></th>';
+  for (let j = 0; j < n; j++) {
+    html += `<th style="padding:2px 3px;writing-mode:vertical-lr;transform:rotate(180deg);color:#94a3b8;max-width:18px;font-weight:400">${names[j] || j}</th>`;
+  }
+  html += '</tr>';
+
+  for (let i = 0; i < n; i++) {
+    html += `<tr><td style="padding:2px 4px;color:#94a3b8;text-align:right;white-space:nowrap;font-weight:400">${names[i] || i}</td>`;
+    for (let j = 0; j < n; j++) {
+      const val = norm[i][j];
+      const isDiag = i === j;
+      let bg;
+      if (isDiag) {
+        bg = `rgba(34, 197, 94, ${Math.min(val / 100, 1) * 0.8 + 0.1})`;
+      } else if (val > 0.5) {
+        bg = `rgba(239, 68, 68, ${Math.min(val / 50, 1) * 0.7})`;
+      } else {
+        bg = 'transparent';
+      }
+      const text = val >= 1 ? Math.round(val) : val >= 0.5 ? '<1' : '';
+      html += `<td style="padding:2px;text-align:center;min-width:18px;background:${bg};color:${val >= 5 ? '#f1f5f9' : '#4b5563'};border:1px solid #1e293b" title="${names[i]}→${names[j]}: ${val.toFixed(1)}%">${text}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</table>';
+  el.innerHTML = html;
+}
+
+function renderTopConfusedPairs(cm) {
+  const el = document.getElementById('confPairs');
+  if (!cm || cm.length === 0) return;
+  const n = cm.length;
+  const names = CLASS_NAMES.slice(0, n);
+
+  // Row-normalize
+  const pairs = [];
+  for (let i = 0; i < n; i++) {
+    const rowSum = cm[i].reduce((a, b) => a + b, 0);
+    if (rowSum === 0) continue;
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const pct = cm[i][j] / rowSum * 100;
+      if (pct >= 1) {
+        pairs.push({ from: names[i] || `${i}`, to: names[j] || `${j}`, pct, count: cm[i][j] });
+      }
+    }
+  }
+  pairs.sort((a, b) => b.pct - a.pct);
+  const top = pairs.slice(0, 12);
+
+  if (top.length === 0) {
+    el.innerHTML = '<div style="color:#4b5563">No significant confusions found</div>';
+    return;
+  }
+
+  el.innerHTML = top.map((p, i) => {
+    const barW = Math.min(p.pct / top[0].pct * 100, 100);
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="color:#6b7280;width:16px;text-align:right">${i+1}.</span>
+      <span style="width:200px;white-space:nowrap">${p.from} <span style="color:#ef4444">→</span> ${p.to}</span>
+      <div style="flex:1;height:12px;background:#1e293b;border-radius:3px;overflow:hidden">
+        <div style="width:${barW}%;height:100%;background:linear-gradient(90deg,#ef4444,#f87171);border-radius:3px"></div>
+      </div>
+      <span style="width:50px;text-align:right;font-weight:600;color:#f1f5f9">${p.pct.toFixed(1)}%</span>
+    </div>`;
+  }).join('');
+}
+
+async function fetchData() {
+  try {
+    const resp = await fetch('training_log.json?t=' + Date.now());
+    if (!resp.ok) throw new Error('No data');
+    const data = await resp.json();
+    updateDashboard(data);
+  } catch (e) {
+    document.getElementById('statusText').textContent = 'Waiting for training_log.json...';
+    document.getElementById('statusDot').className = 'status-dot error';
+  }
+  // Fetch example tiles (separate file, optional)
+  try {
+    const tResp = await fetch('example_tiles.json?t=' + Date.now());
+    if (tResp.ok) {
+      const tData = await tResp.json();
+      renderExampleTiles(tData);
+    }
+  } catch (e) { /* not available yet */ }
+}
+
+function renderExampleTiles(data) {
+  const el = document.getElementById('exampleTiles');
+  if (!data || !data.tiles || data.tiles.length === 0) return;
+  el.innerHTML = data.tiles.map(t => `
+    <div style="background:#0f1729;border-radius:8px;padding:8px;border:1px solid #1e293b">
+      <div style="font-size:10px;color:#6b7280;margin-bottom:4px">${t.name || 'tile'}</div>
+      <div style="display:flex;gap:2px">
+        <div style="flex:1;text-align:center">
+          <img src="${t.rgb}" style="width:100%;border-radius:4px;image-rendering:pixelated" title="RGB">
+          <div style="font-size:8px;color:#4b5563;margin-top:2px">RGB</div>
+        </div>
+        <div style="flex:1;text-align:center">
+          <img src="${t.truth}" style="width:100%;border-radius:4px;image-rendering:pixelated" title="Ground Truth">
+          <div style="font-size:8px;color:#4b5563;margin-top:2px">Truth</div>
+        </div>
+        <div style="flex:1;text-align:center">
+          <img src="${t.pred}" style="width:100%;border-radius:4px;image-rendering:pixelated" title="Prediction">
+          <div style="font-size:8px;color:#4b5563;margin-top:2px">Pred</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+initCharts();
+fetchData();
+setInterval(fetchData, 30000);
+</script>
+</body>
+</html>
