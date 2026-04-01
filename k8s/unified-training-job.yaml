@@ -56,8 +56,8 @@ spec:
               echo "Starting 4-frame multi-temporal training..."
               python /workspace/imintengine/scripts/train_unified.py \
                 --data-dirs /data/unified_v2 \
-                --checkpoint-dir /checkpoints/unified_v3 \
-                --num-classes 20 \
+                --checkpoint-dir /checkpoints/unified_v4 \
+                --num-classes 23 \
                 --enable-multitemporal \
                 --num-temporal-frames 4 \
                 --epochs 80 \
