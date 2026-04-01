@@ -54,21 +54,34 @@ Detta sker automatiskt via post-commit hook om den är installerad.
 - **Nyckelgränssnitt:** `run_job(IMINTJob) → IMINTResult`, `BaseAnalyzer`, `ANALYZER_REGISTRY`
 - **Beroenden:** Inga kodberoenden till andra repos. Syskonprojekt med space-ecosystem-v2.
 
-## Schema — 20-klassers Unified Schema (v3)
+## Schema — 23-klassers Unified Schema (v4)
 
 Det enhetliga schemat (`imint/training/unified_schema.py`) slår samman NMD + LPIS-grödor + SKS-avverkning:
 
-| Klass | Namn | Källa |
-|-------|------|-------|
-| 0 | background | — |
-| 1–5 | tallskog, granskog, lövskog, blandskog, sumpskog | NMD |
-| 6 | tillfälligt ej skog | NMD (uppdelat från blandskog) |
-| 7 | våtmark | NMD |
-| 8 | öppen mark | NMD |
-| 9 | bebyggelse | NMD |
-| 10 | vatten | NMD |
-| 11–18 | vete, korn, havre, oljeväxter, vall, potatis, trindsäd, övrig åker | LPIS |
-| 19 | hygge | SKS |
+| Klass | Namn | Källa | SJV-koder |
+|-------|------|-------|-----------|
+| 0 | bakgrund | — | — |
+| 1–5 | tallskog, granskog, lövskog, blandskog, sumpskog | NMD | — |
+| 6 | tillfälligt ej skog | NMD | — |
+| 7 | våtmark | NMD | — |
+| 8 | öppen mark | NMD | — |
+| 9 | bebyggelse | NMD | — |
+| 10 | vatten | NMD | — |
+| 11 | vete | LPIS | 4, 5, 307, 316 |
+| 12 | korn | LPIS | 1, 2, 12, 13, 315 |
+| 13 | havre | LPIS | 3, 10, 15 |
+| 14 | oljeväxter | LPIS | 20-28, 38, 40-42, 85-88 |
+| 15 | slåttervall | LPIS | 49, 50, 57-59, 62, 63, 302 |
+| 16 | bete | LPIS | 52-56, 61, 89, 90, 95 |
+| 17 | potatis | LPIS | 45, 46, 70-72, 311 |
+| 18 | sockerbetor | LPIS | 47, 48 |
+| 19 | trindsäd | LPIS | 30-37, 39, 43 |
+| 20 | råg | LPIS | 7, 8, 11, 14, 29, 317 |
+| 21 | övrig åker | LPIS/NMD | 9, 60, 74, 77, 80, 81 + resten |
+| 22 | hygge | SKS | Avvdatum inom 5 år före tile-år |
+
+**SJV-koder är konsekventa 2018–2024.** Nya koder (7-9, 20-28, 45-47, 60) tillkom 2022 men gamla koder ändrades inte.
+**LPIS rasteriseras med rå SJV-koder (uint16).** Mappning till unified sker i `merge_all()`.
 
 ## Multitemporal träning
 

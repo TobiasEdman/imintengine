@@ -170,13 +170,12 @@ def _process_lpis_gdf(gdf: "gpd.GeoDataFrame", year: int) -> "gpd.GeoDataFrame":
     # Drop rows without grödkod
     gdf = gdf.dropna(subset=[grodkod_col])
 
-    # Map grödkod to crop class
+    # Store raw SJV grödkod as int
     gdf["grodkod_int"] = gdf[grodkod_col].astype(int)
-    gdf["crop_class"] = gdf["grodkod_int"].apply(sjv_grodkod_to_class)
 
-    # Keep only mapped parcels (class > 0)
-    gdf = gdf[gdf["crop_class"] > 0].copy()
-    print(f"    After mapping: {len(gdf)} parcels with valid crop class")
+    # Keep all parcels with a grödkod (mapping done in unified_schema.py)
+    gdf = gdf[gdf["grodkod_int"] > 0].copy()
+    print(f"    After filtering: {len(gdf)} parcels with grödkod")
 
     gdf["year"] = year
 
@@ -290,9 +289,12 @@ def rasterize_parcels(
     n_parcels = len(clipped)
 
     # Build (geometry, value) pairs for rasterization
+    # Use raw SJV grödkod (grodkod_int) for direct mapping in unified_schema
+    code_col = "grodkod_int" if "grodkod_int" in clipped.columns else "crop_class"
     shapes = [
-        (geom, int(crop_cls))
-        for geom, crop_cls in zip(clipped.geometry, clipped["crop_class"])
+        (geom, int(code))
+        for geom, code in zip(clipped.geometry, clipped[code_col])
+        if code > 0
     ]
 
     # Affine transform: maps pixel coordinates to EPSG:3006
@@ -303,7 +305,7 @@ def rasterize_parcels(
         out_shape=(tile_size, tile_size),
         transform=transform,
         fill=0,
-        dtype=np.uint8,
+        dtype=np.uint16,  # SJV codes can be >255 (e.g. 300-318)
         all_touched=False,
     )
 

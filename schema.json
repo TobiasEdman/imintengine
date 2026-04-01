@@ -1,5 +1,5 @@
 {
-  "num_classes": 20,
+  "num_classes": 23,
   "class_names": [
     "bakgrund",
     "tallskog",
@@ -16,9 +16,12 @@
     "korn",
     "havre",
     "oljeväxter",
-    "vall",
+    "slåttervall",
+    "bete",
     "potatis",
+    "sockerbetor",
     "trindsäd",
+    "råg",
     "övrig åker",
     "hygge"
   ],
@@ -104,14 +107,29 @@
       100
     ],
     [
+      80,
+      160,
+      60
+    ],
+    [
       180,
       80,
       40
     ],
     [
+      200,
+      100,
+      200
+    ],
+    [
       140,
       180,
       50
+    ],
+    [
+      190,
+      150,
+      80
     ],
     [
       170,
@@ -140,9 +158,12 @@
     "korn": "rgb(212,130,23)",
     "havre": "rgb(255,255,100)",
     "oljeväxter": "rgb(45,180,90)",
-    "vall": "rgb(100,200,100)",
+    "slåttervall": "rgb(100,200,100)",
+    "bete": "rgb(80,160,60)",
     "potatis": "rgb(180,80,40)",
+    "sockerbetor": "rgb(200,100,200)",
     "trindsäd": "rgb(140,180,50)",
+    "råg": "rgb(190,150,80)",
     "övrig åker": "rgb(170,170,170)",
     "hygge": "rgb(180,120,60)"
   }
