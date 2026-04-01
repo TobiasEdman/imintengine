@@ -462,6 +462,8 @@ def main():
     p.add_argument("--min-population", type=int, default=2000)
     p.add_argument("--from-existing", nargs="+", default=None,
                    help="Directories with existing tiles to re-fetch spectral for")
+    p.add_argument("--from-json", default=None,
+                   help="JSON file with tile locations [{name, bbox, year, source}, ...]")
     args = p.parse_args()
     random.seed(args.seed)
 
@@ -470,11 +472,41 @@ def main():
     print(f"  Frame 0: Autumn (Sep-Oct, year-1)")
     print(f"  Frames 1-3: VPP-guided growing season\n")
 
-    use_refetch = args.mode == "refetch" or args.from_existing
+    use_refetch = args.mode == "refetch" or args.from_existing or args.from_json
     work: list[tuple[dict, str]] = []
 
-    # Refetch mode: read existing tile locations, re-fetch spectral only
-    if use_refetch:
+    # JSON mode: read tile locations from a JSON file (bbox + year)
+    if args.from_json:
+        import json as _json
+        os.makedirs(args.output_dir, exist_ok=True)
+        with open(args.from_json) as f:
+            tile_locs = _json.load(f)
+        print(f"  Loaded {len(tile_locs)} tile locations from {args.from_json}")
+
+        # Skip tiles already fetched in output dir
+        existing = set(os.path.basename(f).replace(".npz", "")
+                       for f in glob.glob(os.path.join(args.output_dir, "*.npz")))
+        skipped = 0
+        for t in tile_locs:
+            if t["name"] in existing:
+                skipped += 1
+                continue
+            bbox = {"west": t["bbox"][0], "south": t["bbox"][1],
+                    "east": t["bbox"][2], "north": t["bbox"][3]}
+            loc = {
+                "name": t["name"],
+                "source": t.get("source", "lulc"),
+                "bbox_3006": bbox,
+                "coords_wgs84": bbox_3006_to_wgs84(bbox),
+                "_has_lpis": t.get("source") == "crop",
+            }
+            if t.get("year"):
+                loc["year"] = t["year"]
+            work.append((loc, args.output_dir))
+        print(f"  Skipped {skipped} already-fetched, {len(work)} to fetch")
+
+    # Refetch mode: read existing tile locations from .npz dirs
+    elif use_refetch:
         dirs = args.from_existing or [args.output_dir]
         for d in dirs:
             os.makedirs(args.output_dir, exist_ok=True)

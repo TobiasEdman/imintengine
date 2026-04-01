@@ -36,13 +36,12 @@ spec:
 
               mkdir -p /data/unified_v2
 
-              echo "Re-fetching existing tiles with 4-frame VPP strategy..."
-              echo "LULC tiles: $(ls /data/lulc_seasonal/tiles/*.npz 2>/dev/null | wc -l)"
-              echo "Crop tiles: $(ls /data/crop_tiles/*.npz 2>/dev/null | wc -l)"
+              echo "Fetching from tile_locations.json..."
+              echo "Existing: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l) tiles"
 
               python scripts/fetch_unified_tiles.py \
                 --mode refetch \
-                --from-existing /data/lulc_seasonal/tiles /data/crop_tiles \
+                --from-json /data/tile_locations.json \
                 --output-dir /data/unified_v2 \
                 --years 2018 2019 2022 2023 \
                 --workers 6 \
