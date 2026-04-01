@@ -39,10 +39,10 @@ spec:
           resources:
             requests:
               cpu: "4"
-              memory: "16Gi"
+              memory: "32Gi"
             limits:
               cpu: "4"
-              memory: "16Gi"
+              memory: "32Gi"
           volumeMounts:
             - name: data
               mountPath: /data
