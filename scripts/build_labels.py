@@ -153,15 +153,24 @@ def build_tile_label(
             data["label_mask"] = lpis_mask
             data["n_parcels"] = np.int32(n_parcels)
 
-        # --- Step 3: SKS harvest mask ---
+        # --- Step 3: SKS harvest mask (filtered by tile year) ---
+        # Hygge = avverkat inom 5 år före tile-året
         harvest_mask = None
         _load_sks(sks_dir)
         bbox_tuple = (bbox_3006["west"], bbox_3006["south"],
                       bbox_3006["east"], bbox_3006["north"])
         if _sks_utforda is not None:
-            harvest_mask, n_harvest = _rasterize_sks(_sks_utforda, bbox_tuple)
-            data["harvest_mask"] = harvest_mask
-            data["n_harvest_polygons"] = np.int32(n_harvest)
+            import pandas as pd
+            min_date = pd.Timestamp(f"{tile_year - 5}-01-01")
+            max_date = pd.Timestamp(f"{tile_year}-12-31")
+            sks_filtered = _sks_utforda[
+                (_sks_utforda["Avvdatum"] >= min_date) &
+                (_sks_utforda["Avvdatum"] <= max_date)
+            ]
+            if len(sks_filtered) > 0:
+                harvest_mask, n_harvest = _rasterize_sks(sks_filtered, bbox_tuple)
+                data["harvest_mask"] = harvest_mask
+                data["n_harvest_polygons"] = np.int32(n_harvest)
 
         if _sks_anmalda is not None:
             mature_mask, n_mature = _rasterize_sks(_sks_anmalda, bbox_tuple)

@@ -221,10 +221,10 @@ def merge_all(
         else nmd10_to_unified(nmd_label)
     )
 
-    # Overlay harvest (only on forest pixels)
+    # Overlay harvest — SKS overrides NMD unconditionally
+    # (NMD often classifies recent clearcuts as forest or tillfälligt ej skog)
     if harvest_mask is not None:
-        is_forest = np.isin(unified, list(_FOREST_UNIFIED))
-        unified[is_forest & (harvest_mask > 0)] = HARVEST_CLASS
+        unified[harvest_mask > 0] = HARVEST_CLASS
 
     return unified
 
