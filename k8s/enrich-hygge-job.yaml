@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-hygge
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: enricher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml pandas
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              echo "Tiles: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)"
+              echo "SKS: $(ls /data/sks/*.parquet 2>/dev/null | wc -l) parquets"
+
+              python scripts/enrich_hygge.py \
+                --data-dir /data/unified_v2 \
+                --sks-dir /data/sks
+
+              echo ""
+              echo "=== QC ==="
+              python scripts/postprocess_qc.py --data-dir /data/unified_v2
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data
