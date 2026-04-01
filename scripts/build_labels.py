@@ -193,7 +193,8 @@ def main():
     p.add_argument("--sks-dir", default="data/sks")
     p.add_argument("--num-classes", type=int, default=19,
                    help="NMD class count: 10 or 19 (default 19 for full detail)")
-    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--workers", type=int, default=1,
+                   help="Parallel workers (use 1 to minimize memory)")
     args = p.parse_args()
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))

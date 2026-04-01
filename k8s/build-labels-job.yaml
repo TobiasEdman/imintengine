@@ -39,7 +39,7 @@ spec:
                 --lpis-dir /data/lpis \
                 --sks-dir /data/sks \
                 --num-classes 19 \
-                --workers 4
+                --workers 1
 
               echo ""
               echo "=== QC ==="
@@ -48,10 +48,10 @@ spec:
           resources:
             requests:
               cpu: "4"
-              memory: "16Gi"
+              memory: "32Gi"
             limits:
               cpu: "4"
-              memory: "16Gi"
+              memory: "32Gi"
           volumeMounts:
             - name: data
               mountPath: /data
