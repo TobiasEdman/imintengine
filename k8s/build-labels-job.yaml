@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-labels
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: builder
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Build Labels from Scratch ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              echo "Tiles: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)"
+              echo "NMD raster: $(ls -lh /data/nmd/*.tif 2>/dev/null | head -1)"
+              echo "LPIS: $(ls /data/lpis/*.parquet 2>/dev/null | wc -l) parquets"
+              echo "SKS: $(ls /data/sks/*.parquet 2>/dev/null | wc -l) parquets"
+
+              python scripts/build_labels.py \
+                --data-dir /data/unified_v2 \
+                --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
+                --lpis-dir /data/lpis \
+                --sks-dir /data/sks \
+                --num-classes 19 \
+                --workers 4
+
+              echo ""
+              echo "=== QC ==="
+              python scripts/postprocess_qc.py --data-dir /data/unified_v2
+
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data
