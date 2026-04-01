@@ -105,16 +105,31 @@ Modellen har två output-huvuden från samma backbone:
 
 - **Alla tiles i samma katalog.** LULC, crop och urban tiles blandas inte i underkatalog — allt ligger i en platt `unified_v2/`-katalog. Datasetet filtrerar/samplar internt.
 
-## Post-processing pipeline (efter fetch, före träning)
+## Datapipeline — 2 steg
 
-Fetchen sparar rå data. Följande steg körs lokalt/på PVC efteråt:
+### Steg 1: Fetch spektral (CDSE, CPU-pod, ~5h)
+```bash
+kubectl apply -f k8s/fetch-tiles-job.yaml   # fetch-lulc jobbet
+```
+- Hämtar 4-frame spektral från CDSE (höst + 3 VPP-ramar)
+- Sparar rå data till `/data/unified_v2/` — INGEN label-remapping
+- Raderar INTE source-tiles
+- Skippar tiles som redan finns i unified_v2
 
-1. **Label-remapping** — `python scripts/remap_labels.py --data-dir /data/unified_v2`
-   - Applicerar `merge_all()`: NMD→unified + LPIS-overlay + SKS-hygge
-2. **Nodata-filtrering** — ta bort tiles med >5% nollpixlar i någon ram
-   - Kant-tiles vid stråkgräns, havsytor, korrupta scener
-3. **Kvalitetskontroll** — verifiera att temporal_mask har minst 3/4 giltiga ramar
-4. **Klassfördelning** — generera `class_stats.json` från remappade labels
+### Steg 2: Build labels (CPU-pod, ~20min)
+```bash
+kubectl apply -f k8s/build-labels-job.yaml
+```
+- Bygger unified 20-class labels från scratch per tile
+- Läser NMD-raster + LPIS-parquets + SKS-parquets (alla på PVC)
+- Kör `merge_all()`: NMD-bas → LPIS-overlay → SKS-hygge
+- Kör QC: nodata-filter (>5%) + frame-check (≥3/4) + class_stats.json
+- Referensdata måste finnas på PVC: `/data/nmd/`, `/data/lpis/`, `/data/sks/`
+
+### ALDRIG blanda fetch och label-logik
+Fetch-scriptet (`fetch_unified_tiles.py`) hanterar BARA spektral.
+Label-scriptet (`build_labels.py`) hanterar BARA NMD/LPIS/SKS → labels.
+De är helt oberoende och körs i sekvens.
 
 ## Viktiga regler
 

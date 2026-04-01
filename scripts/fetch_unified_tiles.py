@@ -435,12 +435,8 @@ def refetch_tile(
 
     np.savez_compressed(out_path, **save)
 
-    # Delete source tile to free disk space (data is now in unified_v2)
-    if existing_path and os.path.exists(existing_path) and existing_path != out_path:
-        try:
-            os.remove(existing_path)
-        except OSError:
-            pass
+    # NOTE: Do NOT delete source tiles — they contain bbox info needed
+    # for future re-fetches. Labels are built separately by build_labels.py.
 
     return {"name": name, "status": "ok",
             "valid_frames": int(temporal_mask.sum())}
