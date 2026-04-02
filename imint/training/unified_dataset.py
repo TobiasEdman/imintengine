@@ -448,6 +448,10 @@ class UnifiedDataset(Dataset):
         """
         # Step 1: NMD base label
         if source == "lulc":
+            if "label" not in data:
+                # Tile fetched but labels not yet built — return background
+                h, w = data["spectral"].shape[1], data["spectral"].shape[2]
+                return np.zeros((h, w), dtype=np.int64)
             nmd_label = data["label"]
         else:
             nmd_label = data.get("nmd_label", data.get("label", None))
