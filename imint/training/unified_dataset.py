@@ -284,8 +284,9 @@ class UnifiedDataset(Dataset):
         entry = self._entries[idx]
         try:
             data = np.load(entry["path"], allow_pickle=True)
-            if "spectral" not in data:
-                raise KeyError("missing spectral")
+            img_key = "image" if entry["source"] == "lulc" else "spectral"
+            if img_key not in data:
+                raise KeyError(f"missing {img_key}")
         except Exception:
             if _retries >= 50:
                 raise RuntimeError(f"No valid tiles found after {_retries} retries from idx {idx}")
@@ -453,7 +454,8 @@ class UnifiedDataset(Dataset):
         if source == "lulc":
             if "label" not in data:
                 # Tile fetched but labels not yet built — return background
-                h, w = data["spectral"].shape[1], data["spectral"].shape[2]
+                img = data.get("image", data.get("spectral"))
+                h, w = img.shape[1], img.shape[2]
                 return np.zeros((h, w), dtype=np.int64)
             nmd_label = data["label"]
         else:
