@@ -43,8 +43,9 @@ def compute_miou(
     valid = (target >= 0) & (target < n) & (pred >= 0) & (pred < n)
     np.add.at(cm, (target[valid], pred[valid]), 1)
 
-    # Per-class IoU — use unified schema names when training unified model
-    if num_classes == 19 and UNIFIED_CLASSES:
+    # Per-class IoU — use unified 23-class names when applicable
+    from .unified_schema import NUM_UNIFIED_CLASSES
+    if num_classes == NUM_UNIFIED_CLASSES:
         class_names = UNIFIED_CLASSES
     else:
         class_names = get_class_names(num_classes)

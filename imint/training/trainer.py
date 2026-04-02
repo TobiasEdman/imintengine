@@ -180,26 +180,45 @@ class LULCTrainer:
         if stats_path.exists():
             with open(stats_path) as f:
                 stats = json.load(f)
-            class_counts_19 = {int(k): v for k, v in stats.get("class_counts", {}).items()}
 
-            # If using grouped classes, aggregate 19-class counts to grouped schema
-            if cfg.use_grouped_classes:
-                from .class_schema import _MAP_19_TO_10
+            # Support both formats:
+            #   - "class_counts": {int_idx: count}  (old format)
+            #   - "pixel_counts": {class_name: count} (unified schema QC)
+            if "class_counts" in stats:
+                class_counts = {int(k): v for k, v in stats["class_counts"].items()}
+            elif "pixel_counts" in stats:
+                # Map class names to indices using unified schema
+                from .unified_schema import UNIFIED_CLASS_NAMES
+                name_to_idx = {name: i for i, name in enumerate(UNIFIED_CLASS_NAMES)}
                 class_counts = {}
-                for idx_19, count in class_counts_19.items():
-                    idx_grouped = _MAP_19_TO_10.get(idx_19, 0)
-                    class_counts[idx_grouped] = class_counts.get(idx_grouped, 0) + count
+                for name, count in stats["pixel_counts"].items():
+                    idx = name_to_idx.get(name)
+                    if idx is not None:
+                        class_counts[idx] = count
             else:
-                class_counts = class_counts_19
+                class_counts = {}
 
-            weights = compute_class_weights(
-                class_counts,
-                num_classes=cfg.num_classes,
-                max_weight=cfg.max_class_weight,
-                ignore_index=cfg.ignore_index,
-            )
-            weights_tensor = torch.from_numpy(weights).to(self.device)
-            print(f"  Class weights: {weights.round(2).tolist()}")
+            # If using grouped classes, aggregate to grouped schema
+            if cfg.use_grouped_classes and cfg.num_classes <= 12:
+                from .class_schema import _MAP_19_TO_10
+                grouped = {}
+                for idx, count in class_counts.items():
+                    idx_grouped = _MAP_19_TO_10.get(idx, 0)
+                    grouped[idx_grouped] = grouped.get(idx_grouped, 0) + count
+                class_counts = grouped
+
+            if class_counts:
+                weights = compute_class_weights(
+                    class_counts,
+                    num_classes=cfg.num_classes,
+                    max_weight=cfg.max_class_weight,
+                    ignore_index=cfg.ignore_index,
+                )
+                weights_tensor = torch.from_numpy(weights).to(self.device)
+                print(f"  Class weights: {weights.round(2).tolist()}")
+            else:
+                weights_tensor = None
+                print("  WARNING: class_stats.json has no counts — using uniform weights")
         else:
             weights_tensor = None
             print("  WARNING: No class_stats.json — using uniform weights")

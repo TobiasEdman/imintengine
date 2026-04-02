@@ -173,6 +173,9 @@ def nmd_raster_to_lulc(
 
 def get_class_names(num_classes: int = 19) -> dict[int, str]:
     """Return class name mapping for the given schema."""
+    if num_classes == 23:
+        from .unified_schema import UNIFIED_CLASSES
+        return UNIFIED_CLASSES
     if num_classes == 19:
         return LULC_CLASS_NAMES_19
     if num_classes == 12:
