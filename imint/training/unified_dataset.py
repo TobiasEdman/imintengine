@@ -284,8 +284,10 @@ class UnifiedDataset(Dataset):
         entry = self._entries[idx]
         try:
             data = np.load(entry["path"], allow_pickle=True)
+            if "spectral" not in data:
+                raise KeyError("missing spectral")
         except Exception:
-            # Corrupted tile -- fall back to next valid tile
+            # Corrupted or incomplete tile -- fall back to next valid tile
             alt = (idx + 1) % len(self._entries)
             return self.__getitem__(alt)
 
