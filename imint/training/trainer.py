@@ -753,7 +753,7 @@ class LULCTrainer:
             "metrics": {k: v for k, v in metrics.items()
                         if k != "confusion_matrix"},
             "config": {
-                "num_classes": self.config.num_classes + 1,
+                "num_classes": self.config.num_classes,
                 "decoder_type": self.config.decoder_type,
                 "decoder_channels": self.config.decoder_channels,
                 "feature_indices": self.config.feature_indices,

@@ -197,9 +197,9 @@ def compute_class_weights(
         ignore_index: Class index to assign zero weight.
 
     Returns:
-        (num_classes+1,) float32 array of weights (index 0 = ignore).
+        (num_classes,) float32 array of weights (index 0 = ignore).
     """
-    n = num_classes + 1  # include background at index 0
+    n = num_classes  # num_classes already includes background at index 0
     counts = np.array([class_counts.get(i, 0) for i in range(n)], dtype=np.float64)
 
     # Avoid division by zero
