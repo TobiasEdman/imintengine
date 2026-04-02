@@ -92,7 +92,7 @@ def rasterize_sks(
     from shapely.geometry import box as shapely_box
 
     west, south, east, north = bbox
-    tile_box = shapely_box(south, west, north, east)
+    tile_box = shapely_box(west, south, east, north)
 
     # Spatial index query
     candidates = list(gdf.sindex.intersection(tile_box.bounds))
@@ -107,7 +107,7 @@ def rasterize_sks(
 
     n = len(clipped)
     shapes = [(geom, 1) for geom in clipped.geometry]
-    transform = from_bounds(south, west, north, east, tile_size, tile_size)
+    transform = from_bounds(west, south, east, north, tile_size, tile_size)
 
     mask = rasterize(
         shapes,
