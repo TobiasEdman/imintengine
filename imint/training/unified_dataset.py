@@ -274,7 +274,7 @@ class UnifiedDataset(Dataset):
     def __len__(self) -> int:
         return len(self._entries)
 
-    def __getitem__(self, idx: int) -> dict:
+    def __getitem__(self, idx: int, _retries: int = 0) -> dict:
         """Load a single tile and return the trainer-compatible dict.
 
         Returns:
@@ -287,9 +287,10 @@ class UnifiedDataset(Dataset):
             if "spectral" not in data:
                 raise KeyError("missing spectral")
         except Exception:
-            # Corrupted or incomplete tile -- fall back to next valid tile
+            if _retries >= 50:
+                raise RuntimeError(f"No valid tiles found after {_retries} retries from idx {idx}")
             alt = (idx + 1) % len(self._entries)
-            return self.__getitem__(alt)
+            return self.__getitem__(alt, _retries=_retries + 1)
 
         source = entry["source"]
 
