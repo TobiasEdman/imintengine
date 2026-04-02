@@ -10,7 +10,7 @@ results = []
 for p in tiles:
     try:
         d = np.load(p, allow_pickle=True)
-        img = d["image"]
+        img = d.get("spectral", d.get("image"))
         name = os.path.basename(p).replace(".npz", "")
         n_frames = img.shape[0] // 6
 

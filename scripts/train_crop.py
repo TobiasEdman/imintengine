@@ -232,7 +232,7 @@ def train(args):
         t0 = time.time()
 
         for batch in train_dl:
-            images = batch["image"].to(device)
+            images = batch["spectral"].to(device)
             labels = batch["label"].to(device)
 
             optimizer.zero_grad()
@@ -263,7 +263,7 @@ def train(args):
 
             with torch.no_grad():
                 for batch in val_dl:
-                    images = batch["image"].to(device)
+                    images = batch["spectral"].to(device)
                     labels = batch["label"].to(device)
                     logits = model(images)
                     preds = logits.argmax(1)

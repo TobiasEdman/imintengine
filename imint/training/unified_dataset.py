@@ -284,9 +284,8 @@ class UnifiedDataset(Dataset):
         entry = self._entries[idx]
         try:
             data = np.load(entry["path"], allow_pickle=True)
-            img_key = "image" if entry["source"] == "lulc" else "spectral"
-            if img_key not in data:
-                raise KeyError(f"missing {img_key}")
+            if "spectral" not in data and "image" not in data:
+                raise KeyError("missing spectral")
         except Exception:
             if _retries >= 50:
                 raise RuntimeError(f"No valid tiles found after {_retries} retries from idx {idx}")
@@ -330,7 +329,7 @@ class UnifiedDataset(Dataset):
 
         # --- Build output dict ------------------------------------------
         result: dict = {
-            "image": torch.from_numpy(np.ascontiguousarray(image)),
+            "spectral": torch.from_numpy(np.ascontiguousarray(image)),
             "label": torch.from_numpy(np.ascontiguousarray(label)),
             "metadata": {
                 "tile": entry["name"],
@@ -374,7 +373,8 @@ class UnifiedDataset(Dataset):
         Returns:
             (6, H, W) float32 single-date reflectance.
         """
-        image = data["image"].astype(np.float32)  # (24, H, W)
+        raw = data.get("spectral", data.get("image"))
+        image = raw.astype(np.float32)  # (24, H, W)
         n_frames = image.shape[0] // N_BANDS
 
         # Determine best frame via day-of-year
@@ -454,7 +454,7 @@ class UnifiedDataset(Dataset):
         if source == "lulc":
             if "label" not in data:
                 # Tile fetched but labels not yet built — return background
-                img = data.get("image", data.get("spectral"))
+                img = data.get("spectral", data.get("image"))
                 h, w = img.shape[1], img.shape[2]
                 return np.zeros((h, w), dtype=np.int64)
             nmd_label = data["label"]
@@ -505,8 +505,7 @@ class UnifiedDataset(Dataset):
             temporal_mask: (T,) uint8, 1 = valid frame, 0 = padded.
             doy: (T,) int32 day-of-year per frame.
         """
-        key = "image" if source == "lulc" else "spectral"
-        raw = data[key].astype(np.float32)
+        raw = data.get("spectral", data.get("image")).astype(np.float32)
         c, h, w = raw.shape
         tile_frames = c // N_BANDS
 

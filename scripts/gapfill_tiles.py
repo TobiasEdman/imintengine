@@ -140,7 +140,7 @@ def gapfill_tile(
 
     # Load the full tile
     data = dict(np.load(npz_path, allow_pickle=True))
-    image = data["image"]
+    image = data.get("spectral", data.get("image"))
     n_bands = int(data["num_bands"])
     h, w = image.shape[1], image.shape[2]
 
@@ -228,7 +228,7 @@ def gapfill_tile(
 
     if filled_any:
         # Save updated tile
-        data["image"] = image
+        data["spectral"] = image
         data["temporal_mask"] = temporal_mask
         data["dates"] = np.array(dates)
         data["doy"] = doy_vals

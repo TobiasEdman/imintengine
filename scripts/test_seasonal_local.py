@@ -75,7 +75,7 @@ def _inspect_tile(path: Path):
         return
 
     data = np.load(path, allow_pickle=True)
-    image = data["image"]
+    image = data.get("spectral", data.get("image"))
     label = data["label"]
     dates = data["dates"]
     mask = data["temporal_mask"]
@@ -117,8 +117,10 @@ def _compare_tiles(path_cdse: Path, path_des: Path):
 
     for t in range(n_frames):
         if cdse_mask[t] and des_mask[t]:
-            cdse_frame = cdse["image"][t * n_bands:(t + 1) * n_bands]
-            des_frame = des["image"][t * n_bands:(t + 1) * n_bands]
+            cdse_img = cdse.get("spectral", cdse.get("image"))
+            des_img = des.get("spectral", des.get("image"))
+            cdse_frame = cdse_img[t * n_bands:(t + 1) * n_bands]
+            des_frame = des_img[t * n_bands:(t + 1) * n_bands]
             diff = np.abs(cdse_frame - des_frame).mean()
             print(f"  Frame {t}: CDSE date={cdse['dates'][t]}, "
                   f"DES date={des['dates'][t]}, "

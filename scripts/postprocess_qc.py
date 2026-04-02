@@ -46,7 +46,7 @@ def main():
     for i, f in enumerate(tiles):
         try:
             d = np.load(f, allow_pickle=True)
-            img = d["image"]
+            img = d.get("spectral", d.get("image"))
             n_frames = img.shape[0] // 6
 
             # Nodata filter: >threshold zero pixels in any frame

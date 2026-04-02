@@ -116,7 +116,7 @@ def evaluate_model(
 
     for i in range(n_samples):
         sample = dataset[i]
-        image = sample["image"].unsqueeze(0).to(device)
+        image = sample["spectral"].unsqueeze(0).to(device)
         label = sample["label"].numpy()                    # (H, W)
 
         # Reshape to 5D for Prithvi Conv3d: (1, C=6, T, H, W)

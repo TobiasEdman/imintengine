@@ -235,7 +235,7 @@ def fetch_tile(
     aux = fetch_aux_channels(bbox)
 
     save = {
-        "image": image,
+        "spectral": image,
         "temporal_mask": temporal_mask,
         "doy": doy,
         "dates": np.array(dates),
@@ -426,7 +426,7 @@ def refetch_tile(
     # See scripts/remap_labels.py. Raw labels are preserved as-is here.
 
     # Write new spectral + temporal metadata
-    save["image"] = image
+    save["spectral"] = image
     save["temporal_mask"] = temporal_mask
     save["doy"] = doy
     save["dates"] = np.array(dates)

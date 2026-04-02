@@ -171,7 +171,7 @@ class TestCropDataset:
         from imint.training.crop_dataset import CropDataset
         ds = CropDataset(tile_dir, split="train", patch_size=224)
         sample = ds[0]
-        assert sample["image"].shape == (18, 224, 224)
+        assert sample["spectral"].shape == (18, 224, 224)
         assert sample["label"].shape == ()
         assert sample["label"].dtype == torch.int64
 

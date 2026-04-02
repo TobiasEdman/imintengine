@@ -108,7 +108,7 @@ class LULCDataset(Dataset):
             alt = (idx + 1) % len(self.tile_names)
             return self.__getitem__(alt)
 
-        image = data["image"].astype(np.float32)
+        image = data.get("spectral", data.get("image")).astype(np.float32)
         label = data["label"].astype(np.int64)
 
         # Load and stack auxiliary channels → (N, H, W) or None
@@ -196,7 +196,7 @@ class LULCDataset(Dataset):
                     image, label, aux_stack)
 
             result = {
-                "image": torch.from_numpy(image.copy()),
+                "spectral": torch.from_numpy(image.copy()),
                 "label": torch.from_numpy(label.copy()),
                 "temporal_mask": torch.from_numpy(
                     temporal_mask.astype(np.float32)),
@@ -233,7 +233,7 @@ class LULCDataset(Dataset):
                     image, label, aux_stack)
 
             result = {
-                "image": torch.from_numpy(image.copy()),
+                "spectral": torch.from_numpy(image.copy()),
                 "label": torch.from_numpy(label.copy()),
                 "metadata": {
                     "tile": self.tile_names[idx],
@@ -252,10 +252,10 @@ class LULCDataset(Dataset):
             # replicate the single frame T times (with mask indicating
             # only the first frame is real)
             if self.multitemporal and not is_mt:
-                img = result["image"]  # (6, H, W)
+                img = result["spectral"]  # (6, H, W)
                 # Repeat T times along channel axis
                 img_mt = img.repeat(self.n_frames, 1, 1)  # (T*6, H, W)
-                result["image"] = img_mt
+                result["spectral"] = img_mt
                 # Only first frame is real
                 mask = torch.zeros(self.n_frames, dtype=torch.float32)
                 mask[0] = 1.0

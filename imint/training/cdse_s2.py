@@ -309,7 +309,7 @@ def fetch_s2_seasonal_tile(
             doy_values.append(0)
 
     return {
-        "image": image,
+        "spectral": image,
         "dates": np.array(frame_dates),
         "doy": np.array(doy_values, dtype=np.int32),
         "temporal_mask": np.array(frame_mask, dtype=np.int32),

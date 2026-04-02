@@ -332,7 +332,7 @@ class LULCTrainer:
             t0 = time.time()
 
             for batch in train_loader:
-                images = batch["image"].to(self.device)
+                images = batch["spectral"].to(self.device)
                 labels = batch["label"].to(self.device)    # (B, H, W)
 
                 # Reshape to 5D for Prithvi Conv3d: (B, C=6, T, H, W)

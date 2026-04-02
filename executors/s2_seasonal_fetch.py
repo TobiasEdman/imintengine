@@ -118,7 +118,7 @@ class S2SeasonalFetchExecutor:
 
         n_valid = int(result["temporal_mask"].sum())
         n_frames = len(windows)
-        image = result["image"]
+        image = result["spectral"]
         ref_shape = (image.shape[-2], image.shape[-1])  # (H, W)
 
         print(f"  Spectral: {n_valid}/{n_frames} frames, "

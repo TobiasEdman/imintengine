@@ -145,7 +145,7 @@ def predict_split(
 
     for i in range(len(dataset)):
         sample = dataset[i]
-        image = sample["image"].unsqueeze(0).to(device)
+        image = sample["spectral"].unsqueeze(0).to(device)
         label = sample["label"].numpy()
         metadata = sample.get("metadata", {})
         tile_name = metadata.get("tile", f"tile_{i:04d}.npz")

@@ -255,7 +255,7 @@ def _run_local(
             if result is None:
                 return {"status": "fail", "key": key, "error": "no valid frames"}
 
-            image = result["image"]
+            image = result["spectral"]
             ref_shape = (image.shape[-2], image.shape[-1])
             n_valid = int(result["temporal_mask"].sum())
 

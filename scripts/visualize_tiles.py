@@ -226,7 +226,7 @@ h2 { color: #0f3460; background: #e94560; padding: 8px 16px; border-radius: 6px;
 
         for frac, tile_path in tiles_for_class:
             d = np.load(tile_path)
-            image = d["image"]
+            image = d.get("spectral", d.get("image"))
             label = d["label"]
             temporal_mask = d.get("temporal_mask", np.ones(4))
             dates = d.get("dates", np.array(["?", "?", "?", "?"]))

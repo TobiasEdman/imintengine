@@ -21,7 +21,7 @@ Usage:
 
     ds = CropDataset("data/crop_tiles", split="train", patch_size=224)
     sample = ds[0]
-    # sample["image"]: (18, 224, 224) float32 normalised
+    # sample["spectral"]: (18, 224, 224) float32 normalised
     # sample["label"]: scalar int64, crop class
 """
 from __future__ import annotations
@@ -222,7 +222,7 @@ class CropDataset(Dataset):
             image_tensor = self._manual_augment(image_tensor)
 
         result = {
-            "image": image_tensor,
+            "spectral": image_tensor,
             "label": torch.tensor(label, dtype=torch.int64),
             "seasons_valid": torch.from_numpy(
                 seasons_valid.astype(np.float32),
