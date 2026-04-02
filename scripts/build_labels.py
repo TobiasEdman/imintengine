@@ -73,7 +73,11 @@ def _load_sks(sks_dir: str):
     for name in ["utforda_avverkningar_spatial.parquet", "utforda_avverkningar.parquet"]:
         path = os.path.join(sks_dir, name)
         if os.path.exists(path):
+            import pandas as pd
             _sks_utforda = gpd.read_parquet(path)
+            _sks_utforda["Avvdatum"] = pd.to_datetime(
+                _sks_utforda["Avvdatum"], errors="coerce"
+            )
             _ = _sks_utforda.sindex
             print(f"  Loaded SKS utförda: {len(_sks_utforda):,} polygons", flush=True)
             break
