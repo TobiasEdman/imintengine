@@ -263,7 +263,7 @@ body {
       <div class="card-label" style="margin:0">Model Tile Previews — Latest 5 Epochs (newest first)</div>
       <div class="card-sub" id="tilePreviewAge"></div>
     </div>
-    <div id="tilePreviewGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+    <div id="tilePreviewGrid" style="display:flex;flex-direction:column;gap:14px">
       <div style="color:#4b5563;font-size:12px;grid-column:1/-1">Run <code>python scripts/generate_tile_previews.py</code> on the training pod to populate tile_previews.json</div>
     </div>
   </div>
@@ -706,42 +706,48 @@ function renderTilePreviews(data) {
   const grid = document.getElementById('tilePreviewGrid');
   if (!grid) return;
 
-  const IMG_SIZE = 96;
+  const N = 224;  // native PNG size
+  const D = 448;  // display size — 2× for crisp pixel boundaries
+
+  function imgBlock(b64, label, labelColor, border, title, extraHtml) {
+    return `<div class="tile-img-block" style="width:${D}px;flex-shrink:0">
+      <img src="data:image/png;base64,${b64}"
+           width="${N}" height="${N}"
+           style="display:block;width:${D}px;height:${D}px;border:${border}"
+           title="${title}">
+      <div class="tile-img-label" style="color:${labelColor}">${label}</div>
+      ${extraHtml}
+    </div>`;
+  }
 
   grid.innerHTML = data.tiles.map(tile => {
     // Sort predictions latest-first, keep ≤5
     const preds = [...(tile.predictions || [])].sort((a, b) => b.epoch - a.epoch).slice(0, 5);
 
-    // Ground truth block
-    const gtBlock = `
-      <div class="tile-img-block" style="width:${IMG_SIZE}px">
-        <img src="data:image/png;base64,${tile.ground_truth_b64}"
-             width="${IMG_SIZE}" height="${IMG_SIZE}"
-             style="border:2px solid #3b82f6"
-             title="Ground truth">
-        <div class="tile-img-label" style="color:#3b82f6">Ground Truth</div>
-      </div>`;
+    // Satellite RGB (natural colour composite)
+    const satBlock = tile.satellite_b64
+      ? imgBlock(tile.satellite_b64, 'Satellite (RGB)', '#a0c878', '2px solid #a0c878', 'Sentinel-2 natural colour', '')
+      : '';
 
-    // Prediction blocks
+    // Ground truth
+    const gtBlock = imgBlock(
+      tile.ground_truth_b64, 'Ground Truth', '#3b82f6',
+      '2px solid #3b82f6', 'Ground truth label', ''
+    );
+
+    // Epoch predictions
     const predBlocks = preds.map(p => {
       const iouHtml = (p.hygge_iou != null)
         ? `<div class="tile-img-iou">hygge ${(p.hygge_iou * 100).toFixed(1)}%</div>`
         : '';
-      return `
-        <div class="tile-img-block" style="width:${IMG_SIZE}px">
-          <img src="data:image/png;base64,${p.image_b64}"
-               width="${IMG_SIZE}" height="${IMG_SIZE}"
-               style="border:1px solid #374151"
-               title="Epoch ${p.epoch}">
-          <div class="tile-img-label">${p.label}</div>
-          ${iouHtml}
-        </div>`;
+      return imgBlock(p.image_b64, p.label, '#6b7280', '1px solid #374151', `Epoch ${p.epoch}`, iouHtml);
     }).join('');
 
     return `
       <div class="tile-col">
         <div class="tile-col-header">${tile.name} · <span style="color:#60a5fa">${tile.description}</span></div>
         <div class="tile-scroll">
+          ${satBlock}
           ${gtBlock}
           ${predBlocks}
         </div>

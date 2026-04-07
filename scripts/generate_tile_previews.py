@@ -63,6 +63,30 @@ def rgb_to_b64(rgb: np.ndarray) -> str:
         return base64.b64encode(raw).decode()
 
 
+def spectral_to_rgb(spectral: np.ndarray, frame_idx: int = -1) -> np.ndarray:
+    """Convert (T*6, H, W) z-scored spectral tensor to (H, W, 3) uint8 natural colour.
+
+    Uses B04 (Red), B03 (Green), B02 (Blue) — Sentinel-2 band order per frame:
+    [B02, B03, B04, B8A, B11, B12].  Defaults to the last temporal frame.
+    Applies 2–98th percentile stretch per channel for contrast.
+    """
+    T = spectral.shape[0] // 6
+    f = T - 1 if frame_idx < 0 else min(frame_idx, T - 1)
+    base = f * 6
+    r = spectral[base + 2].astype(np.float32)  # B04
+    g = spectral[base + 1].astype(np.float32)  # B03
+    b = spectral[base + 0].astype(np.float32)  # B02
+    rgb = np.stack([r, g, b], axis=-1)
+    for c in range(3):
+        p2, p98 = np.percentile(rgb[..., c], (2, 98))
+        span = p98 - p2
+        if span < 1e-6:
+            rgb[..., c] = 0.0
+        else:
+            rgb[..., c] = np.clip((rgb[..., c] - p2) / span, 0.0, 1.0)
+    return (rgb * 255).astype(np.uint8)
+
+
 def find_representative_tiles(ds: UnifiedDataset, n: int = 3) -> list[int]:
     """Find n tiles that together cover hygge, forest confusion, and crops."""
     hygge_idx = None
@@ -216,10 +240,15 @@ def main():
         lbl = sample["label"].numpy()
         gt_rgb = label_to_rgb(lbl)
         gt_b64 = rgb_to_b64(gt_rgb)
+        # Natural-colour satellite composite (last temporal frame, B04/B03/B02)
+        spec = sample["spectral"].numpy()
+        sat_rgb = spectral_to_rgb(spec)
+        sat_b64 = rgb_to_b64(sat_rgb)
         tile_name = ds._entries[idx].get("path", f"tile_{idx}")
         tiles_out.append({
             "name": Path(str(tile_name)).name if tile_name else f"tile_{idx}",
             "description": desc,
+            "satellite_b64": sat_b64,
             "ground_truth_b64": gt_b64,
             "predictions": [],
         })
