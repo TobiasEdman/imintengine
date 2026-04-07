@@ -1,11 +1,11 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: unified-train-v3
+  name: unified-train-v5
   namespace: prithvi-training-default
   labels:
     app: unified-training
-    version: v3
+    version: v5
 spec:
   backoffLimit: 2
   activeDeadlineSeconds: 43200  # 12 hours max (4-frame = slower)
@@ -27,7 +27,7 @@ spec:
               set -e
               export PYTHONUNBUFFERED=1
 
-              echo "=== Unified 20-class Multi-Temporal Training (v3) ==="
+              echo "=== Unified 23-class Multi-Temporal Training (v5) ==="
               echo "Checking data..."
               TILE_COUNT=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
               echo "Unified tiles: $TILE_COUNT"
@@ -45,7 +45,7 @@ spec:
               pip install --quiet --no-cache-dir timm numpy scipy scikit-learn
 
               echo "Cleaning stale checkpoint temp files..."
-              rm -f /checkpoints/unified_v3/*.pt.tmp 2>/dev/null || true
+              rm -f /checkpoints/unified_v5/*.pt.tmp 2>/dev/null || true
 
               echo "Cloning ImintEngine..."
               mkdir -p /workspace && cd /workspace
@@ -56,7 +56,7 @@ spec:
               echo "Starting 4-frame multi-temporal training..."
               python /workspace/imintengine/scripts/train_unified.py \
                 --data-dirs /data/unified_v2 \
-                --checkpoint-dir /checkpoints/unified_v4 \
+                --checkpoint-dir /checkpoints/unified_v5 \
                 --num-classes 23 \
                 --enable-multitemporal \
                 --num-temporal-frames 4 \
@@ -65,7 +65,7 @@ spec:
                 --lr 1e-4 \
                 --unfreeze-layers 6 \
                 --backbone-lr-factor 0.1 \
-                --loss-type focal \
+                --loss-type focal_dice \
                 --focal-gamma 2.0 \
                 --patience 20 \
                 --num-workers 2 \

@@ -182,15 +182,11 @@ class TerraTorchUperNetDecoder(nn.Module):
 
 
 class AuxEncoder(nn.Module):
-    """Lightweight CNN encoder for auxiliary raster channels.
+    """Lightweight CNN encoder for auxiliary raster channels (legacy late-fusion).
 
     Processes (B, N, H, W) auxiliary channels (e.g. tree height, timber
     volume, basal area, DEM) into (B, out_ch, H, W) feature maps at full
     input resolution.  Used for late fusion with the decoder output.
-
-    Two 3×3 conv layers with BatchNorm and ReLU provide enough capacity
-    to transform heterogeneous forestry variables into a shared feature
-    space, without over-parameterising for only 1–5 input channels.
     """
 
     def __init__(self, in_channels: int, out_channels: int = 64):
@@ -202,6 +198,107 @@ class AuxEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
+
+
+class LiDARBranch(nn.Module):
+    """Dual-branch CNN encoder for LiDAR/auxiliary channels.
+
+    Produces a feature map that is fused at multiple decoder levels
+    via GatedFusion, instead of only at the final layer.
+
+    Architecture: 2× Conv(3×3) + BN + ReLU at full input resolution.
+    No downsampling — spatial alignment is handled by F.interpolate
+    at each FPN level in _decode().
+
+    Args:
+        in_channels: Number of auxiliary input channels.
+        out_channels: Feature dimension (default 64).
+    """
+
+    def __init__(self, in_channels: int, out_channels: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(
+            ConvBnRelu(in_channels, 32, kernel=3, padding=1),
+            ConvBnRelu(32, out_channels, kernel=3, padding=1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class GatedFusion(nn.Module):
+    """Gated fusion between spectral (S2) and auxiliary (LiDAR) features.
+
+    Learns a per-pixel gate that blends spectral and auxiliary features:
+        fused = S2 + gate * (aux_proj - S2)
+
+    This residual form is more stable than direct interpolation because
+    the gradient flows directly through S2 even when the gate is near 0.
+
+    Args:
+        s2_channels: Channel dim of spectral features (typically 256).
+        aux_channels: Channel dim of auxiliary features (typically 64).
+    """
+
+    def __init__(self, s2_channels: int = 256, aux_channels: int = 64):
+        super().__init__()
+        # Project aux to match S2 channels
+        self.aux_proj = ConvBnRelu(aux_channels, s2_channels, kernel=1, padding=0)
+        # Gate: takes concatenated [S2, aux_proj] → sigmoid weight
+        self.gate = nn.Sequential(
+            nn.Conv2d(s2_channels * 2, s2_channels, 1, bias=False),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, s2: torch.Tensor, aux: torch.Tensor) -> torch.Tensor:
+        """Fuse spectral and auxiliary features.
+
+        Args:
+            s2: (B, C, H, W) spectral decoder features.
+            aux: (B, C_aux, H, W) auxiliary features (resized to match s2).
+
+        Returns:
+            (B, C, H, W) fused features.
+        """
+        aux_p = self.aux_proj(aux)
+        weight = self.gate(torch.cat([s2, aux_p], dim=1))
+        return s2 + weight * (aux_p - s2)
+
+
+class TemporalPooling(nn.Module):
+    """Temporal mean+max pooling for multi-temporal feature aggregation.
+
+    Reshapes (B, T*C, H, W) → (B, T, C, H, W), computes mean and max
+    over T, concatenates → (B, 2*C, H, W).
+
+    This provides explicit temporal aggregation while preserving both
+    the average signal (mean) and peak responses (max) across frames.
+
+    Args:
+        embed_dim: Per-frame channel dimension (e.g. 1024 for Prithvi-300M).
+        num_frames: Number of temporal frames T.
+    """
+
+    def __init__(self, embed_dim: int, num_frames: int):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_frames = num_frames
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Pool temporal frames.
+
+        Args:
+            x: (B, T*embed_dim, H, W)
+
+        Returns:
+            (B, 2*embed_dim, H, W) concatenated mean+max pooled features.
+        """
+        B, _, H, W = x.shape
+        # Reshape: (B, T*C, H, W) → (B, T, C, H, W)
+        x = x.view(B, self.num_frames, self.embed_dim, H, W)
+        mean_pool = x.mean(dim=1)   # (B, C, H, W)
+        max_pool = x.max(dim=1)[0]  # (B, C, H, W)
+        return torch.cat([mean_pool, max_pool], dim=1)  # (B, 2*C, H, W)
 
 
 class SegmentationHead(nn.Module):
@@ -256,10 +353,14 @@ class PrithviSegmentationModel(nn.Module):
         dropout: float = 0.1,
         n_aux_channels: int = 0,
         pool_sizes: tuple[int, ...] | None = None,
+        enable_temporal_pooling: bool = True,
+        enable_multilevel_aux: bool = True,
     ):
         super().__init__()
         self.feature_indices = list(feature_indices)
         self.n_aux_channels = n_aux_channels
+        self.enable_temporal_pooling = enable_temporal_pooling
+        self.enable_multilevel_aux = enable_multilevel_aux
 
         # Get the ViT encoder from PrithviMAE if needed
         if hasattr(encoder, "encoder"):
@@ -269,12 +370,19 @@ class PrithviSegmentationModel(nn.Module):
 
         self.embed_dim = self.encoder.embed_dim  # 1024 for 300M
 
-        # Compute effective feature dimension: embed_dim * effective_time_dim
-        # For multitemporal (T>1), prepare_features_for_image_model produces
-        # (B, T*embed_dim, h, w) — the decoder must accept T*embed_dim channels.
+        # Compute effective temporal dimension
         pe = self.encoder.patch_embed
         effective_t = pe.input_size[0] // pe.patch_size[0]  # e.g. 4/1=4
-        self.feature_dim = self.embed_dim * effective_t     # 1024*4=4096
+        self.effective_t = effective_t
+        raw_feature_dim = self.embed_dim * effective_t  # 1024*4=4096
+
+        # Temporal pooling: mean+max → 2*embed_dim channels (halves raw_feature_dim)
+        if enable_temporal_pooling and effective_t > 1:
+            self.temporal_pool = TemporalPooling(self.embed_dim, effective_t)
+            self.feature_dim = self.embed_dim * 2  # 2048 (mean+max)
+        else:
+            self.temporal_pool = None
+            self.feature_dim = raw_feature_dim  # 4096 (legacy)
 
         # Scale modules: create multi-scale from ViT's uniform-scale features
         self.decoder = nn.Module()
@@ -292,7 +400,7 @@ class PrithviSegmentationModel(nn.Module):
             nn.ConvTranspose2d(self.feature_dim, self.feature_dim // 2, kernel_size=2, stride=2),
         )
 
-        # UperNet decoder channel sizes (scale with temporal dim)
+        # UperNet decoder channel sizes
         scale_channels = [
             self.feature_dim // 4,  # after fpn1
             self.feature_dim // 2,  # after fpn2
@@ -300,12 +408,9 @@ class PrithviSegmentationModel(nn.Module):
             self.feature_dim,       # deepest → PSP
         ]
 
-        # PSP modules — pool sizes depend on compute device.
-        # Standard (1,2,3,6) is optimal but crashes on Apple MPS;
-        # (1,2,7,14) divides the 14×14 feature map and works everywhere.
-        # Use get_default_pool_sizes(device) to select automatically.
+        # PSP modules
         if pool_sizes is None:
-            pool_sizes = get_default_pool_sizes()  # MPS-safe default
+            pool_sizes = get_default_pool_sizes()
         self.decoder.psp_modules = nn.ModuleList()
         for pool_size in pool_sizes:
             self.decoder.psp_modules.append(nn.Sequential(
@@ -339,19 +444,37 @@ class PrithviSegmentationModel(nn.Module):
         # Segmentation head
         self.head = SegmentationHead(decoder_channels, num_classes, dropout)
 
-        # Late fusion: auxiliary raster channels (height, volume, etc.)
-        if n_aux_channels > 0:
+        # Auxiliary fusion: mid-level (gated per FPN level) or legacy late fusion
+        if n_aux_channels > 0 and enable_multilevel_aux:
+            # Mid-level gated fusion at each FPN level + PSP level
+            self.lidar_branch = LiDARBranch(n_aux_channels, out_channels=64)
+            n_levels = len(scale_channels)
+            self.gated_fusions = nn.ModuleList([
+                GatedFusion(decoder_channels, 64) for _ in range(n_levels)
+            ])
+            # No late fusion — mid-level handles everything
+            self.aux_encoder = None
+            self.aux_fusion = None
+        elif n_aux_channels > 0:
+            # Legacy late fusion (backward compat)
+            self.lidar_branch = None
+            self.gated_fusions = None
             self.aux_encoder = AuxEncoder(n_aux_channels, out_channels=64)
             self.aux_fusion = ConvBnRelu(
                 decoder_channels + 64, decoder_channels,
                 kernel=1, padding=0,
             )
         else:
+            self.lidar_branch = None
+            self.gated_fusions = None
             self.aux_encoder = None
             self.aux_fusion = None
 
     def _extract_multi_scale_features(self, x: torch.Tensor) -> list[torch.Tensor]:
         """Extract and rescale features from selected transformer blocks.
+
+        When temporal pooling is enabled, applies mean+max pooling over the
+        temporal dimension before scaling, reducing T*embed_dim → 2*embed_dim.
 
         Returns list of [level_0 (highest res), ..., level_3 (lowest/deepest)].
         """
@@ -361,11 +484,12 @@ class PrithviSegmentationModel(nn.Module):
         # Select features at specified indices
         selected = [all_features[i] for i in self.feature_indices]
 
-        # Reshape tokens → spatial maps using backbone's method
-        # Result: list of (B, T*embed_dim, grid_h, grid_w)
-        # For T=1: (B, 1024, 14, 14), for T=4: (B, 4096, 14, 14)
-        # Temporal info is preserved as extra channels (TerraTorch convention)
+        # Reshape tokens → spatial maps: list of (B, T*embed_dim, gh, gw)
         spatial = self.encoder.prepare_features_for_image_model(selected)
+
+        # Temporal pooling: (B, T*embed_dim, H, W) → (B, 2*embed_dim, H, W)
+        if self.temporal_pool is not None:
+            spatial = [self.temporal_pool(feat) for feat in spatial]
 
         # Apply scale modules to create multi-scale
         scaled = [
@@ -377,8 +501,18 @@ class PrithviSegmentationModel(nn.Module):
 
         return scaled
 
-    def _decode(self, features: list[torch.Tensor]) -> torch.Tensor:
-        """Run UperNet decode on multi-scale features.
+    def _decode(
+        self,
+        features: list[torch.Tensor],
+        aux_feat: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Run UperNet decode on multi-scale features with optional aux fusion.
+
+        Args:
+            features: Multi-scale feature maps from _extract_multi_scale_features.
+            aux_feat: Optional (B, 64, H, W) LiDAR branch features at input
+                resolution. If provided and gated_fusions is set, fuses at
+                each FPN level via GatedFusion.
 
         Returns (B, 256, H_0, W_0) feature map.
         """
@@ -394,6 +528,13 @@ class PrithviSegmentationModel(nn.Module):
             psp_outs.append(pooled)
         psp_out = self.decoder.bottleneck(torch.cat(psp_outs, dim=1))
 
+        # Mid-level aux fusion at PSP level (level 3)
+        if self.gated_fusions is not None and aux_feat is not None:
+            aux_resized = F.interpolate(
+                aux_feat, size=(h, w), mode="bilinear", align_corners=True,
+            ).contiguous()
+            psp_out = self.gated_fusions[-1](psp_out, aux_resized)
+
         # FPN top-down
         n = len(features)
         fpn_outs = [psp_out]
@@ -405,6 +546,15 @@ class PrithviSegmentationModel(nn.Module):
                 mode="bilinear", align_corners=True,
             ).contiguous()
             fpn_out = self.decoder.fpn_convs[i](lateral + upsampled)
+
+            # Mid-level aux fusion at this FPN level
+            if self.gated_fusions is not None and aux_feat is not None:
+                aux_resized = F.interpolate(
+                    aux_feat, size=(target_h, target_w),
+                    mode="bilinear", align_corners=True,
+                ).contiguous()
+                fpn_out = self.gated_fusions[i](fpn_out, aux_resized)
+
             fpn_outs.insert(0, fpn_out)
 
         # Resize all to highest resolution
@@ -425,14 +575,12 @@ class PrithviSegmentationModel(nn.Module):
         x: torch.Tensor,
         aux: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Full forward pass: encoder → scale → UperNet → head.
+        """Full forward pass: encoder → temporal pool → scale → UperNet → head.
 
         Args:
             x: (B, C, H, W) or (B, C, T, H, W) input tensor.
             aux: Optional (B, N, H, W) auxiliary raster channels
-                (e.g. height, volume, basal area).  If provided and
-                ``n_aux_channels > 0``, features are fused with the
-                decoder output at full resolution before the head.
+                (e.g. height, volume, basal area).
 
         Returns:
             (B, num_classes, H, W) logits at input resolution.
@@ -443,22 +591,27 @@ class PrithviSegmentationModel(nn.Module):
             input_h, input_w = x.shape[3:]
 
         features = self._extract_multi_scale_features(x)
-        decoded = self._decode(features)
 
-        # Late fusion: aux channels processed at full resolution
-        if self.aux_encoder is not None and aux is not None:
-            # Upsample decoder output to input resolution for fusion
+        # Mid-level fusion: LiDAR branch → gated fusion at each FPN level
+        if self.lidar_branch is not None and aux is not None:
+            aux_feat = self.lidar_branch(aux)  # (B, 64, H, W)
+            decoded = self._decode(features, aux_feat=aux_feat)
+        # Legacy late fusion
+        elif self.aux_encoder is not None and aux is not None:
+            decoded = self._decode(features)
             decoded = F.interpolate(
                 decoded, size=(input_h, input_w),
                 mode="bilinear", align_corners=True,
             ).contiguous()
-            aux_feat = self.aux_encoder(aux)   # (B, 64, H, W)
+            aux_enc = self.aux_encoder(aux)
             decoded = self.aux_fusion(
-                torch.cat([decoded, aux_feat], dim=1))  # (B, 256, H, W)
+                torch.cat([decoded, aux_enc], dim=1))
             logits = self.head(decoded)
             return logits
+        else:
+            decoded = self._decode(features)
 
-        # Standard path (no aux or aux not provided)
+        # Final head + upsample to input resolution
         logits = self.head(decoded)
         if logits.shape[2:] != (input_h, input_w):
             logits = F.interpolate(

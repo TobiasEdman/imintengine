@@ -105,10 +105,11 @@ PEAK_SUMMER_DOY = 195
 N_BANDS = 6
 
 # Auxiliary channel z-score normalization: (mean, std)
+# volume and basal_area use log(1+x) pre-transform (lognormal distributions)
 AUX_NORM = {
     "height": (7.36, 6.55),
-    "volume": (118.53, 112.67),
-    "basal_area": (15.98, 10.20),
+    "volume": (3.56, 1.14),          # log1p-transformed
+    "basal_area": (2.42, 0.71),      # log1p-transformed
     "diameter": (16.33, 7.84),
     "dem": (264.03, 215.37),
     "vpp_sosd": (21130.90, 49.13),
@@ -118,6 +119,9 @@ AUX_NORM = {
     "vpp_minv": (0.04, 0.05),
     "harvest_probability": (0.1, 0.2),
 }
+
+# Channels that need log(1+x) pre-transform before z-score
+AUX_LOG_TRANSFORM = {"volume", "basal_area"}
 
 # Canonical ordered list of auxiliary channels
 # Must match order from config.enabled_aux_names
@@ -590,8 +594,10 @@ class UnifiedDataset(Dataset):
 
         aux_stack = np.stack(aux_arrays, axis=0)  # (N, H, W)
 
-        # Z-score normalization
+        # Log-transform skewed channels, then z-score normalize
         for i, ch_name in enumerate(AUX_CHANNEL_NAMES):
+            if ch_name in AUX_LOG_TRANSFORM:
+                aux_stack[i] = np.log1p(np.maximum(aux_stack[i], 0.0))
             if ch_name in AUX_NORM:
                 mean, std = AUX_NORM[ch_name]
                 aux_stack[i] = (aux_stack[i] - mean) / max(std, 1e-6)

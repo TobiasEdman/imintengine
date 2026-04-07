@@ -79,8 +79,12 @@ class TrainingConfig:
     max_class_weight: float = 10.0
     device: str | None = None                          # Auto-detect
 
+    # ── Architecture v5 ──────────────────────────────────────────────────
+    enable_temporal_pooling: bool = True                # Mean+max temporal pooling
+    enable_multilevel_aux: bool = True                  # Gated LiDAR fusion per FPN level
+
     # ── Loss ───────────────────────────────────────────────────────────
-    loss_type: str = "focal"                           # "cross_entropy" or "focal"
+    loss_type: str = "focal_dice"                      # "cross_entropy", "focal", "focal_dice"
     focal_gamma: float = 2.0                           # Focal loss focusing parameter
 
     # ── Rare class handling ────────────────────────────────────────────

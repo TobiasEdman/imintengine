@@ -107,10 +107,14 @@ class LULCTrainer:
             dropout=self.config.dropout,
             n_aux_channels=n_aux,
             pool_sizes=get_default_pool_sizes(self.device),
+            enable_temporal_pooling=self.config.enable_temporal_pooling,
+            enable_multilevel_aux=self.config.enable_multilevel_aux,
         )
         aux_str = f", aux={n_aux} channels" if n_aux else ""
+        tp_str = ", temporal_pool" if self.config.enable_temporal_pooling else ""
+        ml_str = ", multilevel_aux" if self.config.enable_multilevel_aux else ""
         print(f"  Model built: {self.config.num_classes} classes, "
-              f"decoder={self.config.decoder_type}{aux_str}")
+              f"decoder={self.config.decoder_type}{aux_str}{tp_str}{ml_str}")
         return model
 
     def _freeze_backbone(self) -> None:
@@ -224,7 +228,18 @@ class LULCTrainer:
             print("  WARNING: No class_stats.json — using uniform weights")
 
         # Loss function
-        if cfg.loss_type == "focal":
+        if cfg.loss_type == "focal_dice":
+            from .losses import FocalLoss, DiceLoss, CombinedLoss
+            focal = FocalLoss(
+                weight=weights_tensor,
+                gamma=cfg.focal_gamma,
+                ignore_index=cfg.ignore_index,
+            )
+            dice = DiceLoss(ignore_index=cfg.ignore_index)
+            criterion = CombinedLoss(focal, dice,
+                                     focal_weight=0.5, dice_weight=0.5)
+            print(f"  Loss: Focal+Dice (gamma={cfg.focal_gamma}, 0.5/0.5)")
+        elif cfg.loss_type == "focal":
             from .losses import FocalLoss
             criterion = FocalLoss(
                 weight=weights_tensor,

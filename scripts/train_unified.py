@@ -102,7 +102,7 @@ def main():
 
     # Loss
     parser.add_argument("--loss-type", type=str, default=_defaults.loss_type,
-                        choices=["cross_entropy", "focal"],
+                        choices=["cross_entropy", "focal", "focal_dice"],
                         help="Loss function")
     parser.add_argument("--focal-gamma", type=float, default=_defaults.focal_gamma,
                         help="Focal loss gamma")
