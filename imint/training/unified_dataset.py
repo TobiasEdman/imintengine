@@ -62,6 +62,7 @@ Unified 19-class schema (from unified_schema.py + harvest):
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import random
 from pathlib import Path
@@ -77,7 +78,9 @@ except ImportError:
         "PyTorch is required for training. Install with: pip install torch"
     )
 
-from .unified_schema import nmd10_to_unified, merge_nmd_lpis, NUM_UNIFIED_CLASSES
+from .unified_schema import (
+    nmd10_to_unified, merge_nmd_lpis, NUM_UNIFIED_CLASSES, HARVEST_CLASS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +88,8 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Total classes: 0-19 (20 classes including harvest)
-NUM_CLASSES = NUM_UNIFIED_CLASSES  # 20 (hygge/harvest is already in unified schema)
-HARVEST_CLASS = 19
+# Total classes: 0-22 (23 classes including hygge/harvest at index 22)
+NUM_CLASSES = NUM_UNIFIED_CLASSES  # 23
 
 # Prithvi-EO-2.0 normalization constants (DN scale, per band)
 # Bands: B02, B03, B04, B8A, B11, B12
@@ -253,7 +255,20 @@ class UnifiedDataset(Dataset):
                 if p.name in allowed
             )
         else:
-            tile_paths = sorted(tiles_dir.glob("*.npz"))
+            # Deterministic 90/10 train/val split by MD5 hash of tile name.
+            # This ensures consistent splits without needing split files.
+            all_tiles = sorted(tiles_dir.glob("*.npz"))
+            VAL_FRACTION = 10  # 10% val (every tile where hash % 100 < 10)
+            if split == "val":
+                tile_paths = [
+                    p for p in all_tiles
+                    if int(hashlib.md5(p.name.encode()).hexdigest(), 16) % 100 < VAL_FRACTION
+                ]
+            else:  # train
+                tile_paths = [
+                    p for p in all_tiles
+                    if int(hashlib.md5(p.name.encode()).hexdigest(), 16) % 100 >= VAL_FRACTION
+                ]
 
         for p in tile_paths:
             self._entries.append({
@@ -438,14 +453,14 @@ class UnifiedDataset(Dataset):
 
     @staticmethod
     def _build_label(data: np.lib.npyio.NpzFile, source: str) -> np.ndarray:
-        """Construct unified 19-class label from NMD + LPIS + harvest.
+        """Construct unified 23-class label from NMD + LPIS + harvest.
 
         Steps:
-            1. Map NMD 10-class label to unified classes (1-9, 17=cropland).
+            1. Map NMD base label to unified classes via nmd10_to_unified.
             2. Where LPIS ``label_mask`` > 0, override with crop classes
-               (10-17).
-            3. Where ``harvest_mask`` > 0 and the pixel is forest (1-5),
-               set to class 18 (harvest).
+               (11-21).
+            3. Where ``harvest_mask`` > 0, unconditionally set to HARVEST_CLASS
+               (= 22, hygge). This matches enrich_hygge.py behaviour.
 
         Args:
             data: Loaded .npz file.
@@ -485,14 +500,11 @@ class UnifiedDataset(Dataset):
         # Cast to int64 for label dtype
         unified = unified.astype(np.int64)
 
-        # Step 3: Harvest override -- forest pixels with harvest_mask > 0
+        # Step 3: Harvest override -- unconditional (matches enrich_hygge.py)
         harvest_mask = data.get("harvest_mask", None)
         if harvest_mask is not None:
             harvest_mask = np.asarray(harvest_mask)
-            # Build boolean mask: pixel is forest AND has harvest
-            is_forest = np.isin(unified, list(_FOREST_CLASSES))
-            is_harvested = harvest_mask > 0
-            unified[is_forest & is_harvested] = HARVEST_CLASS
+            unified[harvest_mask > 0] = HARVEST_CLASS
 
         return unified
 
