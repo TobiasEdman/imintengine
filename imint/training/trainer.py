@@ -476,12 +476,11 @@ class LULCTrainer:
             else:
                 patience_counter += 1
 
-            # Per-class IoU table on new best or periodically
-            if is_new_best or epoch % cfg.save_every_n_epochs == 0:
-                print(f"    Per-class IoU:")
-                for name, iou in sorted(valid_ious.items(), key=lambda x: x[1]):
-                    bar = "#" * int(iou * 20)
-                    print(f"      {name:35s} {iou:.4f}  {bar}")
+            # Per-class IoU table — every epoch
+            print(f"    Per-class IoU:")
+            for name, iou in sorted(valid_ious.items(), key=lambda x: x[1]):
+                bar = "#" * int(iou * 20)
+                print(f"      {name:35s} {iou:.4f}  {bar}")
 
             if epoch % cfg.save_every_n_epochs == 0:
                 self._save_checkpoint(
