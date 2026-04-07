@@ -270,7 +270,7 @@ def main():
             "group": (
                 "forest" if i in range(1, 7) else
                 "wetland" if i == 7 else
-                "open" if i in (8, 21) else
+                "open" if i == 8 else
                 "developed" if i == 9 else
                 "water" if i == 10 else
                 "crops" if i in range(11, 22) else

@@ -748,10 +748,8 @@ function renderTilePreviews(data) {
       </div>`;
   }).join('');
 
-  // Render legend from tile_previews.json if available
-  if (data.legend && data.legend.length > 0) {
-    renderLegendFromData(data.legend);
-  }
+  // Legend is always rendered from hardcoded CLASS_GROUPS (authoritative)
+  renderLegendStatic();
 }
 
 // ── Class Legend ─────────────────────────────────────────────────────────────
