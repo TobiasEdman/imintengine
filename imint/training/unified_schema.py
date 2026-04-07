@@ -87,7 +87,7 @@ UNIFIED_COLORS = {
     19: (140, 180, 50),     # trindsäd — olive
     20: (190, 150, 80),     # råg — wheat/tan
     21: (170, 170, 170),    # övrig åker — grey
-    22: (180, 120, 60),     # hygge — light brown
+    22: (0, 206, 209),      # hygge — turquoise
 }
 
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unified 19-Class Training — Live Dashboard</title>
+<title>Unified 23-Class Training — Live Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -89,32 +89,76 @@ body {
 }
 .update-note { font-size: 11px; color: #4b5563; text-align: center; margin-top: 12px; }
 
-/* Class color palette */
-.cls-0 { background: #6b7280; } /* bakgrund */
-.cls-1 { background: #166534; } /* tallskog */
-.cls-2 { background: #15803d; } /* granskog */
-.cls-3 { background: #4ade80; } /* lovskog */
-.cls-4 { background: #22c55e; } /* blandskog */
-.cls-5 { background: #065f46; } /* sumpskog */
-.cls-6 { background: #0d9488; } /* vatmark */
-.cls-7 { background: #fbbf24; } /* oppen mark */
-.cls-8 { background: #ef4444; } /* bebyggelse */
-.cls-9 { background: #3b82f6; } /* vatten */
-.cls-10 { background: #f59e0b; } /* vete */
-.cls-11 { background: #d97706; } /* korn */
-.cls-12 { background: #b45309; } /* havre */
-.cls-13 { background: #eab308; } /* oljevaxter */
-.cls-14 { background: #84cc16; } /* vall */
-.cls-15 { background: #a855f7; } /* potatis */
-.cls-16 { background: #ec4899; } /* trindsad */
-.cls-17 { background: #f97316; } /* ovrig aker */
-.cls-18 { background: #78350f; } /* hygge */
+/* Tile preview section */
+.tile-col {
+  background: #0b1221; border-radius: 8px; padding: 10px;
+  border: 1px solid #1e293b;
+}
+.tile-col-header {
+  font-size: 10px; color: #6b7280; margin-bottom: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tile-scroll {
+  display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px;
+}
+.tile-scroll::-webkit-scrollbar { height: 4px; }
+.tile-scroll::-webkit-scrollbar-track { background: #1e293b; border-radius: 2px; }
+.tile-scroll::-webkit-scrollbar-thumb { background: #374151; border-radius: 2px; }
+.tile-img-block { text-align: center; flex-shrink: 0; }
+.tile-img-block img {
+  display: block; border-radius: 3px;
+  image-rendering: pixelated; image-rendering: crisp-edges;
+}
+.tile-img-label { font-size: 9px; color: #6b7280; margin-top: 2px; line-height: 1.2; }
+.tile-img-iou { font-size: 9px; color: #00ced1; }
+
+/* Legend grid */
+.legend-group-label {
+  grid-column: 1 / -1;
+  font-size: 10px; color: #4b5563;
+  text-transform: uppercase; letter-spacing: 1px;
+  margin-top: 10px; margin-bottom: 3px;
+  border-top: 1px solid #1e293b; padding-top: 8px;
+}
+.legend-item {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: #94a3b8; line-height: 1.4;
+}
+.legend-swatch {
+  width: 14px; height: 14px; border-radius: 3px;
+  flex-shrink: 0; border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Class color palette — 23-class unified schema */
+.cls-0  { background: #000000; } /* bakgrund */
+.cls-1  { background: #006400; } /* tallskog */
+.cls-2  { background: #228b22; } /* granskog */
+.cls-3  { background: #32cd32; } /* lövskog */
+.cls-4  { background: #3cb371; } /* blandskog */
+.cls-5  { background: #2e4f2e; } /* sumpskog */
+.cls-6  { background: #a0c878; } /* tillfälligt ej skog */
+.cls-7  { background: #8b5a2b; } /* våtmark */
+.cls-8  { background: #d2b48c; } /* öppen mark */
+.cls-9  { background: #ff0000; } /* bebyggelse */
+.cls-10 { background: #0000ff; } /* vatten */
+.cls-11 { background: #e6b422; } /* vete */
+.cls-12 { background: #d48217; } /* korn */
+.cls-13 { background: #ffff64; } /* havre */
+.cls-14 { background: #2db45a; } /* oljeväxter */
+.cls-15 { background: #64c864; } /* slåttervall */
+.cls-16 { background: #50a03c; } /* bete */
+.cls-17 { background: #b45028; } /* potatis */
+.cls-18 { background: #c864c8; } /* sockerbetor */
+.cls-19 { background: #8cb432; } /* trindsäd */
+.cls-20 { background: #be9650; } /* råg */
+.cls-21 { background: #aaaaaa; } /* övrig åker */
+.cls-22 { background: #00ced1; } /* hygge — turquoise */
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>Unified 19-Class Segmentation — H100 Training</h1>
+  <h1>Unified 23-Class Segmentation — H100 Training</h1>
   <div class="header-right">
     <div class="status-badge" id="statusBadge">
       <div class="status-dot" id="statusDot"></div>
@@ -178,7 +222,7 @@ body {
   <!-- NMD Baseline Comparison -->
   <div class="card" style="margin-bottom:24px">
     <div class="card-label" style="margin-bottom:12px">Our Model vs NMD Reference Accuracy</div>
-    <div class="card-sub" style="margin-bottom:10px">NMD level-2 accuracy from Naturvårdsverket/Metria validation. Crop classes (10-17) are not in NMD — it only has generic "åkermark".</div>
+    <div class="card-sub" style="margin-bottom:10px">NMD level-2 accuracy from Naturvårdsverket/Metria validation. Crop classes (11-21) are not in NMD — it only has generic "åkermark". Hygge (22) comes from SKS.</div>
     <div style="overflow-x:auto">
       <table id="nmdCompare" style="width:100%;border-collapse:collapse;font-size:11px">
         <thead>
@@ -213,12 +257,21 @@ body {
     </div>
   </div>
 
-  <!-- Example Tiles -->
-  <div class="card" style="margin-bottom:24px" id="exampleTilesCard">
-    <div class="card-label" style="margin-bottom:12px">Example Tiles — RGB / Ground Truth / Prediction</div>
-    <div id="exampleTiles" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
-      <div style="color:#4b5563;font-size:12px;grid-column:1/-1">Available after next training run with tile export enabled</div>
+  <!-- Tile Previews (latest 5 epochs × 3 representative tiles) -->
+  <div class="card" style="margin-bottom:24px" id="tilePreviews">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div class="card-label" style="margin:0">Model Tile Previews — Latest 5 Epochs (newest first)</div>
+      <div class="card-sub" id="tilePreviewAge"></div>
     </div>
+    <div id="tilePreviewGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+      <div style="color:#4b5563;font-size:12px;grid-column:1/-1">Run <code>python scripts/generate_tile_previews.py</code> on the training pod to populate tile_previews.json</div>
+    </div>
+  </div>
+
+  <!-- Class Legend — 23 classes -->
+  <div class="card" style="margin-bottom:24px" id="classLegendCard">
+    <div class="card-label" style="margin-bottom:4px">Class Legend — Unified 23-Class Schema</div>
+    <div id="legendGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:4px 12px"></div>
   </div>
 
   <!-- Raw log -->
@@ -229,34 +282,124 @@ body {
 </div>
 
 <script>
-const CLASS_NAMES = ['bakgrund','tallskog','granskog','lovskog','blandskog','sumpskog',
-  'vatmark','oppen_mark','bebyggelse','vatten','vete','korn','havre',
-  'oljevaxter','vall','potatis','trindsad','ovrig_aker','hygge'];
+// ── 23-class unified schema (mirrors unified_schema.py) ──────────────────────
+const CLASS_NAMES = [
+  'bakgrund',              // 0
+  'tallskog',              // 1
+  'granskog',              // 2
+  'lövskog',               // 3
+  'blandskog',             // 4
+  'sumpskog',              // 5
+  'tillfälligt ej skog',   // 6
+  'våtmark',               // 7
+  'öppen mark',            // 8
+  'bebyggelse',            // 9
+  'vatten',                // 10
+  'vete',                  // 11
+  'korn',                  // 12
+  'havre',                 // 13
+  'oljeväxter',            // 14
+  'slåttervall',           // 15
+  'bete',                  // 16
+  'potatis',               // 17
+  'sockerbetor',           // 18
+  'trindsäd',              // 19
+  'råg',                   // 20
+  'övrig åker',            // 21
+  'hygge',                 // 22
+];
 
-const CLASS_COLORS = ['#6b7280','#166534','#15803d','#4ade80','#22c55e','#065f46',
-  '#0d9488','#fbbf24','#ef4444','#3b82f6','#f59e0b','#d97706','#b45309',
-  '#eab308','#84cc16','#a855f7','#ec4899','#f97316','#78350f'];
+// RGB → hex: mirrors UNIFIED_COLORS in unified_schema.py
+const CLASS_COLORS = [
+  '#000000', // 0  bakgrund
+  '#006400', // 1  tallskog
+  '#228b22', // 2  granskog
+  '#32cd32', // 3  lövskog
+  '#3cb371', // 4  blandskog
+  '#2e4f2e', // 5  sumpskog
+  '#a0c878', // 6  tillfälligt ej skog
+  '#8b5a2b', // 7  våtmark
+  '#d2b48c', // 8  öppen mark
+  '#ff0000', // 9  bebyggelse
+  '#0000ff', // 10 vatten
+  '#e6b422', // 11 vete
+  '#d48217', // 12 korn
+  '#ffff64', // 13 havre
+  '#2db45a', // 14 oljeväxter
+  '#64c864', // 15 slåttervall
+  '#50a03c', // 16 bete
+  '#b45028', // 17 potatis
+  '#c864c8', // 18 sockerbetor
+  '#8cb432', // 19 trindsäd
+  '#be9650', // 20 råg
+  '#aaaaaa', // 21 övrig åker
+  '#00ced1', // 22 hygge — turquoise
+];
 
-// Map from log class names to display names
+// Class groups for legend
+const CLASS_GROUPS = [
+  null,       // 0  bakgrund
+  'forest',   // 1
+  'forest',   // 2
+  'forest',   // 3
+  'forest',   // 4
+  'forest',   // 5
+  'forest',   // 6  tillfälligt ej skog
+  'wetland',  // 7
+  'open',     // 8
+  'developed',// 9
+  'water',    // 10
+  'crops',    // 11
+  'crops',    // 12
+  'crops',    // 13
+  'crops',    // 14
+  'crops',    // 15
+  'crops',    // 16
+  'crops',    // 17
+  'crops',    // 18
+  'crops',    // 19
+  'crops',    // 20
+  'crops',    // 21
+  'harvest',  // 22
+];
+
+// Map from trainer log names (may use Swedish from schema) to CLASS_NAMES index
+// Supports both Swedish names and old English keys for backward compat
 const CLASS_MAP = {
-  'forest_pine': 'tallskog',
-  'forest_spruce': 'granskog',
-  'forest_deciduous': 'lovskog',
-  'forest_mixed': 'blandskog',
-  'forest_wetland_pine': 'sumpskog',
-  'forest_wetland_spruce': 'sumpskog',
-  'forest_wetland_deciduous': 'sumpskog',
-  'forest_wetland_mixed': 'sumpskog',
-  'forest_wetland_temp': 'sumpskog',
-  'forest_temp_non_forest': 'blandskog',
-  'open_wetland': 'vatmark',
-  'open_land_vegetated': 'oppen_mark',
-  'open_land_bare': 'oppen_mark',
-  'developed_buildings': 'bebyggelse',
-  'developed_roads': 'bebyggelse',
-  'developed_infrastructure': 'bebyggelse',
-  'cropland': 'ovrig_aker',
+  // Old English log keys
+  'forest_pine':             'tallskog',
+  'forest_spruce':           'granskog',
+  'forest_deciduous':        'lövskog',
+  'forest_mixed':            'blandskog',
+  'forest_wetland':          'sumpskog',
+  'forest_temp_non_forest':  'tillfälligt ej skog',
+  'open_wetland':            'våtmark',
+  'open_land':               'öppen mark',
+  'open_land_vegetated':     'öppen mark',
+  'open_land_bare':          'öppen mark',
+  'developed':               'bebyggelse',
+  'developed_buildings':     'bebyggelse',
+  'developed_roads':         'bebyggelse',
+  'developed_infrastructure':'bebyggelse',
+  'water':                   'vatten',
+  'cropland':                'övrig åker',
+  // Swedish aliases
+  'lovskog':                 'lövskog',
+  'oppen_mark':              'öppen mark',
+  'vatmark':                 'våtmark',
+  'ovrig_aker':              'övrig åker',
+  'slattervall':             'slåttervall',
+  'sockerbeta':              'sockerbetor',
+  'sockerbettor':            'sockerbetor',
+  'trindsad':                'trindsäd',
+  'oljevaxter':              'oljeväxter',
 };
+
+function getClassColor(logName) {
+  const display = CLASS_MAP[logName] || logName;
+  const idx = CLASS_NAMES.indexOf(display);
+  return idx >= 0 ? CLASS_COLORS[idx] : '#6b7280';
+}
 
 const chartDefaults = {
   responsive: true,
@@ -300,12 +443,11 @@ function updateDashboard(data) {
   const last = epochs[epochs.length - 1];
 
   if (!last) {
-    // No epochs yet — show preparing state
     document.getElementById('statusText').textContent = data.status === 'installing_deps'
       ? 'Installing dependencies...' : 'Waiting for first epoch...';
     document.getElementById('statusDot').className = 'status-dot';
     document.getElementById('statusDot').style.background = '#60a5fa';
-    document.getElementById('cEpoch').textContent = '0/50';
+    document.getElementById('cEpoch').textContent = '0/80';
     document.getElementById('cMiou').textContent = '—';
     document.getElementById('cLoss').textContent = '—';
     document.getElementById('cLR').textContent = '—';
@@ -320,27 +462,32 @@ function updateDashboard(data) {
     return;
   }
 
-  // Status
-  document.getElementById('statusText').textContent = `Training — Epoch ${last.epoch}/${last.total}`;
+  const totalEpochs = last.total || (data.config && data.config.epochs) || 80;
+  const bestMiou = data.best_miou || data.best_metric || 0;
+  const lastLoss = last.loss || last.train_loss || 0;
+  const lastTime = last.time_s || last.elapsed_s || 0;
+  const trainTiles = data.train_tiles || (data.config && data.config.train_tiles) || '—';
+  const valTiles = data.val_tiles || (data.config && data.config.val_tiles) || '—';
+
+  const statusLabel = data.status === 'completed' ? 'Completed' : data.status === 'stopped' ? 'Early stopped' : `Training — Epoch ${last.epoch}/${totalEpochs}`;
+  document.getElementById('statusText').textContent = statusLabel;
   document.getElementById('statusDot').className = 'status-dot';
-  document.getElementById('statusDot').style.background = '#22c55e';
+  document.getElementById('statusDot').style.background = data.status === 'running' ? '#22c55e' : '#60a5fa';
 
-  // Summary cards
-  document.getElementById('cEpoch').textContent = `${last.epoch}/${last.total}`;
-  document.getElementById('cMiou').textContent = data.best_miou.toFixed(4);
-  document.getElementById('cMiouSub').textContent = last.val_miou === data.best_miou ? 'current best' : `current: ${last.val_miou.toFixed(4)}`;
-  document.getElementById('cLoss').textContent = last.loss.toFixed(4);
+  document.getElementById('cEpoch').textContent = `${last.epoch}/${totalEpochs}`;
+  document.getElementById('cMiou').textContent = bestMiou.toFixed(4);
+  document.getElementById('cMiouSub').textContent = last.val_miou === bestMiou ? 'current best' : `current: ${last.val_miou.toFixed(4)}`;
+  document.getElementById('cLoss').textContent = lastLoss.toFixed(4);
   document.getElementById('cLR').textContent = last.lr.toExponential(2);
-  document.getElementById('cTrain').textContent = data.train_tiles.toLocaleString();
-  document.getElementById('cVal').textContent = data.val_tiles.toLocaleString();
-  document.getElementById('cTime').textContent = `${last.time_s}s`;
+  document.getElementById('cTrain').textContent = typeof trainTiles === 'number' ? trainTiles.toLocaleString() : trainTiles;
+  document.getElementById('cVal').textContent = typeof valTiles === 'number' ? valTiles.toLocaleString() : valTiles;
+  document.getElementById('cTime').textContent = `${Math.round(lastTime)}s`;
 
-  const remaining = (last.total - last.epoch) * last.time_s;
+  const remaining = (totalEpochs - last.epoch) * lastTime;
   const mins = Math.floor(remaining / 60);
   document.getElementById('cETA').textContent = mins > 60 ? `${Math.floor(mins/60)}h ${mins%60}m` : `${mins}m`;
 
-  // Progress
-  const pct = (last.epoch / last.total * 100).toFixed(1);
+  const pct = (last.epoch / totalEpochs * 100).toFixed(1);
   document.getElementById('progressPct').textContent = `${pct}%`;
   document.getElementById('progressBar').style.width = `${pct}%`;
 
@@ -363,22 +510,20 @@ function updateDashboard(data) {
   const labels = epochs.map(e => e.epoch);
   chartMiou.data.labels = labels;
   chartMiou.data.datasets[0].data = epochs.map(e => e.val_miou);
-  chartMiou.options.scales.y.max = Math.max(0.5, data.best_miou + 0.1);
+  chartMiou.options.scales.y.max = Math.max(0.5, bestMiou + 0.1);
   chartMiou.update();
 
   chartLoss.data.labels = labels;
-  chartLoss.data.datasets[0].data = epochs.map(e => e.loss);
+  chartLoss.data.datasets[0].data = epochs.map(e => e.loss || e.train_loss);
   chartLoss.update();
 
   // Per-class IoU bars
-  const iou = data.per_class_iou || {};
+  const iou = last.per_class_iou || data.per_class_iou || {};
   const sorted = Object.entries(iou).sort((a, b) => b[1] - a[1]);
   const barsEl = document.getElementById('iouBars');
   barsEl.innerHTML = '';
   for (const [cls, val] of sorted) {
-    const mapped = CLASS_MAP[cls] || cls;
-    const idx = CLASS_NAMES.indexOf(mapped);
-    const color = idx >= 0 ? CLASS_COLORS[idx] : '#6b7280';
+    const color = getClassColor(cls);
     barsEl.innerHTML += `
       <div class="iou-row">
         <div class="iou-label">${cls}</div>
@@ -389,65 +534,65 @@ function updateDashboard(data) {
       </div>`;
   }
 
-  // Per-class IoU over time chart
-  // Store current epoch class data
+  // Per-class IoU over time
   if (last.epoch && Object.keys(iou).length > 0) {
     allEpochClassIoU[last.epoch] = { ...iou };
   }
-  // Build datasets for top 8 classes
+  // Rebuild from all stored epochs for completeness
+  for (const ep of epochs) {
+    if (ep.per_class_iou && Object.keys(ep.per_class_iou).length > 0) {
+      allEpochClassIoU[ep.epoch] = { ...ep.per_class_iou };
+    }
+  }
   const top8 = sorted.slice(0, 8).map(x => x[0]);
   const epLabels = Object.keys(allEpochClassIoU).map(Number).sort((a,b) => a-b);
   chartClassIoU.data.labels = epLabels;
-  chartClassIoU.data.datasets = top8.map((cls, i) => {
-    const mapped = CLASS_MAP[cls] || cls;
-    const idx = CLASS_NAMES.indexOf(mapped);
-    const color = idx >= 0 ? CLASS_COLORS[idx] : CLASS_COLORS[i % CLASS_COLORS.length];
-    return {
-      label: cls,
-      data: epLabels.map(ep => allEpochClassIoU[ep]?.[cls] || null),
-      borderColor: color,
-      borderWidth: 1.5,
-      pointRadius: 2,
-      fill: false,
-      spanGaps: true,
-    };
-  });
+  chartClassIoU.data.datasets = top8.map((cls) => ({
+    label: cls,
+    data: epLabels.map(ep => allEpochClassIoU[ep]?.[cls] || null),
+    borderColor: getClassColor(cls),
+    borderWidth: 1.5,
+    pointRadius: 2,
+    fill: false,
+    spanGaps: true,
+  }));
   chartClassIoU.update();
 
-  // NMD Baseline Comparison
   renderNMDComparison(iou);
 
-  // Confusion matrix
   if (data.confusion_matrix) {
     renderConfusionMatrix(data.confusion_matrix);
     renderTopConfusedPairs(data.confusion_matrix);
   }
 
-  // Update note
   document.getElementById('updateNote').textContent =
     `Last update: ${new Date(data.last_update).toLocaleTimeString('sv-SE')} — Auto-refresh every 30s`;
 }
 
-// NMD reference accuracy (Naturvårdsverket/Metria published values, level-2)
+// NMD reference accuracy
 const NMD_REF = {
-  'tallskog':   { ref: '~75%', note: 'NMD level-2 pine' },
-  'granskog':   { ref: '~75%', note: 'NMD level-2 spruce' },
-  'lövskog':    { ref: '50-60%', note: 'NMD label noise ceiling' },
-  'blandskog':  { ref: '50-60%', note: 'NMD label noise ceiling' },
-  'sumpskog':   { ref: '~65%', note: 'NMD wetland forest' },
-  'våtmark':    { ref: '~80%', note: 'NMD open wetland' },
-  'öppen mark': { ref: '~70%', note: 'NMD open land' },
-  'bebyggelse': { ref: '~85%', note: 'NMD developed' },
-  'vatten':     { ref: '~95%', note: 'NMD water, easy class' },
-  'vete':       { ref: '—', note: 'Not in NMD (crop detail)' },
-  'korn':       { ref: '—', note: 'Not in NMD' },
-  'havre':      { ref: '—', note: 'Not in NMD' },
-  'oljeväxter': { ref: '—', note: 'Not in NMD' },
-  'vall':       { ref: '—', note: 'Not in NMD' },
-  'potatis':    { ref: '—', note: 'Not in NMD' },
-  'trindsäd':   { ref: '—', note: 'Not in NMD' },
-  'övrig åker': { ref: '~71%', note: 'NMD generic cropland' },
-  'hygge':      { ref: '—', note: 'From SKS, not NMD' },
+  'tallskog':               { ref: '~75%', note: 'NMD level-2 tallskog' },
+  'granskog':               { ref: '~75%', note: 'NMD level-2 granskog' },
+  'lövskog':                { ref: '50-60%', note: 'NMD label noise ceiling' },
+  'blandskog':              { ref: '50-60%', note: 'NMD label noise ceiling' },
+  'sumpskog':               { ref: '~65%', note: 'NMD sumpskog' },
+  'tillfälligt ej skog':    { ref: '~50%', note: 'NMD klass 5, svår' },
+  'våtmark':                { ref: '~80%', note: 'NMD öppen våtmark' },
+  'öppen mark':             { ref: '~70%', note: 'NMD öppen mark' },
+  'bebyggelse':             { ref: '~85%', note: 'NMD bebyggelse' },
+  'vatten':                 { ref: '~95%', note: 'NMD vatten, enkel klass' },
+  'vete':                   { ref: '—', note: 'Ej i NMD (LPIS-detalj)' },
+  'korn':                   { ref: '—', note: 'Ej i NMD' },
+  'havre':                  { ref: '—', note: 'Ej i NMD' },
+  'oljeväxter':             { ref: '—', note: 'Ej i NMD' },
+  'slåttervall':            { ref: '—', note: 'Ej i NMD' },
+  'bete':                   { ref: '—', note: 'Ej i NMD' },
+  'potatis':                { ref: '—', note: 'Ej i NMD' },
+  'sockerbetor':            { ref: '—', note: 'Ej i NMD' },
+  'trindsäd':               { ref: '—', note: 'Ej i NMD' },
+  'råg':                    { ref: '—', note: 'Ej i NMD' },
+  'övrig åker':             { ref: '~71%', note: 'NMD generisk åkermark' },
+  'hygge':                  { ref: '—', note: 'Från SKS, ej NMD' },
 };
 
 function renderNMDComparison(iou) {
@@ -455,10 +600,9 @@ function renderNMDComparison(iou) {
   if (!iou || Object.keys(iou).length === 0) return;
   const sorted = Object.entries(iou).sort((a, b) => b[1] - a[1]);
   body.innerHTML = sorted.map(([cls, val]) => {
-    const ref = NMD_REF[cls] || { ref: '—', note: '' };
-    const mapped = CLASS_MAP[cls] || cls;
-    const idx = CLASS_NAMES.indexOf(mapped);
-    const color = idx >= 0 ? CLASS_COLORS[idx] : '#6b7280';
+    const display = CLASS_MAP[cls] || cls;
+    const ref = NMD_REF[display] || NMD_REF[cls] || { ref: '—', note: '' };
+    const color = getClassColor(cls);
     return `<tr style="border-bottom:1px solid #1e293b">
       <td style="padding:5px 6px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:6px"></span>${cls}</td>
       <td style="text-align:right;padding:5px 6px;color:#f1f5f9;font-weight:600">${(val*100).toFixed(1)}%</td>
@@ -474,7 +618,6 @@ function renderConfusionMatrix(cm) {
   const n = cm.length;
   const names = CLASS_NAMES.slice(0, n);
 
-  // Row-normalize
   const norm = cm.map(row => {
     const sum = row.reduce((a, b) => a + b, 0);
     return sum > 0 ? row.map(v => v / sum * 100) : row.map(() => 0);
@@ -515,7 +658,6 @@ function renderTopConfusedPairs(cm) {
   const n = cm.length;
   const names = CLASS_NAMES.slice(0, n);
 
-  // Row-normalize
   const pairs = [];
   for (let i = 0; i < n; i++) {
     const rowSum = cm[i].reduce((a, b) => a + b, 0);
@@ -549,6 +691,154 @@ function renderTopConfusedPairs(cm) {
   }).join('');
 }
 
+// ── Tile Preview Sidebar ─────────────────────────────────────────────────────
+
+function renderTilePreviews(data) {
+  if (!data || !data.tiles || data.tiles.length === 0) return;
+
+  // Update age label
+  const ageEl = document.getElementById('tilePreviewAge');
+  if (ageEl && data.generated_at) {
+    const d = new Date(data.generated_at * 1000);
+    ageEl.textContent = `Generated: ${d.toLocaleString('sv-SE')} · Epoch ${data.latest_epoch || '?'}`;
+  }
+
+  const grid = document.getElementById('tilePreviewGrid');
+  if (!grid) return;
+
+  const IMG_SIZE = 96;
+
+  grid.innerHTML = data.tiles.map(tile => {
+    // Sort predictions latest-first, keep ≤5
+    const preds = [...(tile.predictions || [])].sort((a, b) => b.epoch - a.epoch).slice(0, 5);
+
+    // Ground truth block
+    const gtBlock = `
+      <div class="tile-img-block" style="width:${IMG_SIZE}px">
+        <img src="data:image/png;base64,${tile.ground_truth_b64}"
+             width="${IMG_SIZE}" height="${IMG_SIZE}"
+             style="border:2px solid #3b82f6"
+             title="Ground truth">
+        <div class="tile-img-label" style="color:#3b82f6">Ground Truth</div>
+      </div>`;
+
+    // Prediction blocks
+    const predBlocks = preds.map(p => {
+      const iouHtml = (p.hygge_iou != null)
+        ? `<div class="tile-img-iou">hygge ${(p.hygge_iou * 100).toFixed(1)}%</div>`
+        : '';
+      return `
+        <div class="tile-img-block" style="width:${IMG_SIZE}px">
+          <img src="data:image/png;base64,${p.image_b64}"
+               width="${IMG_SIZE}" height="${IMG_SIZE}"
+               style="border:1px solid #374151"
+               title="Epoch ${p.epoch}">
+          <div class="tile-img-label">${p.label}</div>
+          ${iouHtml}
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="tile-col">
+        <div class="tile-col-header">${tile.name} · <span style="color:#60a5fa">${tile.description}</span></div>
+        <div class="tile-scroll">
+          ${gtBlock}
+          ${predBlocks}
+        </div>
+      </div>`;
+  }).join('');
+
+  // Render legend from tile_previews.json if available
+  if (data.legend && data.legend.length > 0) {
+    renderLegendFromData(data.legend);
+  }
+}
+
+// ── Class Legend ─────────────────────────────────────────────────────────────
+
+function renderLegendFromData(legend) {
+  const el = document.getElementById('legendGrid');
+  if (!el) return;
+
+  const groupLabels = {
+    forest:    'Skog (1–6)',
+    wetland:   'Våtmark (7)',
+    open:      'Öppen mark (8)',
+    developed: 'Bebyggelse (9)',
+    water:     'Vatten (10)',
+    crops:     'Grödor / Åkermark (11–21)',
+    harvest:   'Hygge (22)',
+  };
+  const groupOrder = ['forest','wetland','open','developed','water','crops','harvest'];
+
+  // Group entries
+  const groups = {};
+  for (const grp of groupOrder) groups[grp] = [];
+  for (const c of legend) {
+    const g = c.group || 'harvest';
+    if (groups[g]) groups[g].push(c);
+    else groups.harvest.push(c);
+  }
+
+  let html = '';
+  for (const grp of groupOrder) {
+    const items = groups[grp];
+    if (items.length === 0) continue;
+    html += `<div class="legend-group-label">${groupLabels[grp] || grp}</div>`;
+    for (const c of items) {
+      html += `<div class="legend-item">
+        <div class="legend-swatch" style="background:${c.color}"></div>
+        <span style="color:#6b7280;font-size:10px">${c.id}</span>
+        <span>${c.name}</span>
+      </div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+function renderLegendStatic() {
+  // Fallback legend from hardcoded CLASS_NAMES/COLORS when tile_previews.json not yet available
+  const el = document.getElementById('legendGrid');
+  if (!el) return;
+
+  const groupOrder = ['forest','wetland','open','developed','water','crops','harvest'];
+  const groupLabels = {
+    forest:    'Skog (1–6)',
+    wetland:   'Våtmark (7)',
+    open:      'Öppen mark (8)',
+    developed: 'Bebyggelse (9)',
+    water:     'Vatten (10)',
+    crops:     'Grödor / Åkermark (11–21)',
+    harvest:   'Hygge (22)',
+  };
+
+  const groups = {};
+  for (const grp of groupOrder) groups[grp] = [];
+  for (let i = 1; i < CLASS_NAMES.length; i++) {
+    const grp = CLASS_GROUPS[i];
+    if (grp && groups[grp]) {
+      groups[grp].push({ id: i, name: CLASS_NAMES[i], color: CLASS_COLORS[i] });
+    }
+  }
+
+  let html = '';
+  for (const grp of groupOrder) {
+    const items = groups[grp];
+    if (items.length === 0) continue;
+    html += `<div class="legend-group-label">${groupLabels[grp] || grp}</div>`;
+    for (const c of items) {
+      html += `<div class="legend-item">
+        <div class="legend-swatch" style="background:${c.color}"></div>
+        <span style="color:#6b7280;font-size:10px">${c.id}</span>
+        <span>${c.name}</span>
+      </div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+// ── Data Fetching ────────────────────────────────────────────────────────────
+
 async function fetchData() {
   try {
     const resp = await fetch('training_log.json?t=' + Date.now());
@@ -559,41 +849,26 @@ async function fetchData() {
     document.getElementById('statusText').textContent = 'Waiting for training_log.json...';
     document.getElementById('statusDot').className = 'status-dot error';
   }
-  // Fetch example tiles (separate file, optional)
+
+  // Fetch tile previews (optional — populated by generate_tile_previews.py on pod)
   try {
-    const tResp = await fetch('example_tiles.json?t=' + Date.now());
+    const tResp = await fetch('tile_previews.json?t=' + Date.now());
     if (tResp.ok) {
       const tData = await tResp.json();
-      renderExampleTiles(tData);
+      renderTilePreviews(tData);
+    } else {
+      // Show static legend even without tile_previews.json
+      renderLegendStatic();
     }
-  } catch (e) { /* not available yet */ }
+  } catch (e) {
+    renderLegendStatic();
+  }
 }
 
-function renderExampleTiles(data) {
-  const el = document.getElementById('exampleTiles');
-  if (!data || !data.tiles || data.tiles.length === 0) return;
-  el.innerHTML = data.tiles.map(t => `
-    <div style="background:#0f1729;border-radius:8px;padding:8px;border:1px solid #1e293b">
-      <div style="font-size:10px;color:#6b7280;margin-bottom:4px">${t.name || 'tile'}</div>
-      <div style="display:flex;gap:2px">
-        <div style="flex:1;text-align:center">
-          <img src="${t.rgb}" style="width:100%;border-radius:4px;image-rendering:pixelated" title="RGB">
-          <div style="font-size:8px;color:#4b5563;margin-top:2px">RGB</div>
-        </div>
-        <div style="flex:1;text-align:center">
-          <img src="${t.truth}" style="width:100%;border-radius:4px;image-rendering:pixelated" title="Ground Truth">
-          <div style="font-size:8px;color:#4b5563;margin-top:2px">Truth</div>
-        </div>
-        <div style="flex:1;text-align:center">
-          <img src="${t.pred}" style="width:100%;border-radius:4px;image-rendering:pixelated" title="Prediction">
-          <div style="font-size:8px;color:#4b5563;margin-top:2px">Pred</div>
-        </div>
-      </div>
-    </div>
-  `).join('');
-}
+// ── Init ─────────────────────────────────────────────────────────────────────
 
 initCharts();
+renderLegendStatic(); // show legend immediately on load
 fetchData();
 setInterval(fetchData, 30000);
 </script>
