@@ -47,8 +47,8 @@ from imint.training.tile_fetch import (
 )
 
 SCENE_CLOUD_MAX  = 60.0  # full S2 swath filter for STAC/synthetic candidates (0-100 %)
-TILE_CLOUD_MAX   = 0.30  # tile spectral cutout acceptance — more permissive than
-                          # growing season (0.15) but still rejects very cloudy tiles
+TILE_CLOUD_MAX   = 0.20  # tile spectral cutout acceptance — more permissive than
+                          # growing season (0.15) but not so noisy as to mislead
 TILE_HAZE_MAX    = 0.12  # tile haze acceptance (0-1 fraction)
 MAX_CANDIDATES   = 16    # probe many dates; 3-day step × 75 days = ~25 candidates
 

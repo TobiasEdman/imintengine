@@ -191,7 +191,7 @@ def fetch_4frame_scenes(
     # --- Frame 0: Autumn (Sep-Oct from year-1) ---
     # Two-pass cloud filtering, same pattern as growing season but more permissive:
     #   scene_cloud_max: full S2 swath STAC filter (up to 2× scene_cloud_max, max 60%)
-    #   cloud_threshold: tile spectral cutout acceptance (0.30 vs 0.15 for crops)
+    #   cloud_threshold: tile spectral cutout acceptance (0.20 vs 0.15 for crops)
     # DES STAC skipped automatically for pre-2018 in _fetch_single_scene.
     autumn_scene_cloud_max = min(scene_cloud_max * 2.0, 60.0)
     autumn_scene, autumn_date = None, ""
@@ -202,7 +202,7 @@ def fetch_4frame_scenes(
             f"{prev_year}-08-15", f"{prev_year}-10-31",
             scene_cloud_max=autumn_scene_cloud_max,
             max_candidates=max(max_candidates, 16),
-            cloud_threshold=0.30,
+            cloud_threshold=0.20,
             haze_threshold=0.12,
         )
         if s is not None:

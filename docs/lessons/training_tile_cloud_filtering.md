@@ -71,7 +71,7 @@ cloud checks:
 | Pass | Parameter | Scale | Source | Autumn value | Growing season value |
 |------|-----------|-------|--------|--------------|----------------------|
 | 1 — full swath | `scene_cloud_max` | 0–100 % | STAC `eo:cloud_cover` metadata | 60.0 | 30.0 |
-| 2 — tile cutout | `cloud_threshold` | 0–1 fraction | `fetch_s2_scene` SCL check | 0.30 | 0.15 |
+| 2 — tile cutout | `cloud_threshold` | 0–1 fraction | `fetch_s2_scene` SCL check | 0.20 | 0.15 |
 
 **Why different values per frame type:**
 - A full 290 km Sentinel-2 swath can be 60% cloudy globally yet still have
@@ -98,7 +98,7 @@ python scripts/patch_autumn_frame.py \
 Key constants (after fix):
 ```python
 SCENE_CLOUD_MAX  = 60.0   # STAC swath filter (0-100 %)
-TILE_CLOUD_MAX   = 0.30   # tile spectral acceptance (0-1 fraction)
+TILE_CLOUD_MAX   = 0.20   # tile spectral acceptance (0-1 fraction)
 TILE_HAZE_MAX    = 0.12
 MAX_CANDIDATES   = 16     # 3-day step over 75-day window ≈ 25 tries
 ```
