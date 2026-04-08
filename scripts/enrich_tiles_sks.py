@@ -117,9 +117,8 @@ def rasterize_sks(
         dtype=np.uint8,
         all_touched=False,
     )
-    # Same axis transform as LPIS: rot180 + transpose
-    mask = np.rot90(mask, 2).T
-
+    # SKS uses standard E,N (EPSG:3006) — rasterize() with from_bounds(west,south,east,north)
+    # already produces a correct North-up array. No rotation needed (unlike LPIS which is N,E).
     return mask, n
 
 

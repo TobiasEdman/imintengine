@@ -79,7 +79,7 @@ except ImportError:
     )
 
 from .unified_schema import (
-    nmd10_to_unified, merge_nmd_lpis, NUM_UNIFIED_CLASSES, HARVEST_CLASS,
+    nmd10_to_unified, merge_nmd_lpis, merge_all, NUM_UNIFIED_CLASSES, HARVEST_CLASS,
 )
 
 logger = logging.getLogger(__name__)
@@ -455,12 +455,10 @@ class UnifiedDataset(Dataset):
     def _build_label(data: np.lib.npyio.NpzFile, source: str) -> np.ndarray:
         """Construct unified 23-class label from NMD + LPIS + harvest.
 
-        Steps:
-            1. Map NMD base label to unified classes via nmd10_to_unified.
-            2. Where LPIS ``label_mask`` > 0, override with crop classes
-               (11-21).
-            3. Where ``harvest_mask`` > 0, unconditionally set to HARVEST_CLASS
-               (= 22, hygge). This matches enrich_hygge.py behaviour.
+        Uses merge_all() with semantic NMD gating:
+          - LPIS crops only where NMD says agricultural land (åker=21, öppen mark=8)
+          - SKS harvest only where NMD says forest (classes 1–6)
+          - Infrastructure (9) and water (10) are never overridden
 
         Args:
             data: Loaded .npz file.
@@ -469,10 +467,9 @@ class UnifiedDataset(Dataset):
         Returns:
             (H, W) int64 unified label array.
         """
-        # Step 1: NMD base label
+        # NMD base label
         if source == "lulc":
             if "label" not in data:
-                # Tile fetched but labels not yet built — return background
                 img = data.get("spectral", data.get("image"))
                 h, w = img.shape[1], img.shape[2]
                 return np.zeros((h, w), dtype=np.int64)
@@ -480,33 +477,16 @@ class UnifiedDataset(Dataset):
         else:
             nmd_label = data.get("nmd_label", data.get("label", None))
             if nmd_label is None:
-                # No NMD label available -- return all background
                 h, w = data["spectral"].shape[1], data["spectral"].shape[2]
                 return np.zeros((h, w), dtype=np.int64)
 
-        nmd_label = np.asarray(nmd_label)
-
-        # Step 2: Merge with LPIS crop detail if available
-        lpis_mask = data.get("label_mask", None)
-        if lpis_mask is not None:
-            lpis_mask = np.asarray(lpis_mask)
-            if np.any(lpis_mask > 0):
-                unified = merge_nmd_lpis(nmd_label, lpis_mask)
-            else:
-                unified = nmd10_to_unified(nmd_label)
-        else:
-            unified = nmd10_to_unified(nmd_label)
-
-        # Cast to int64 for label dtype
-        unified = unified.astype(np.int64)
-
-        # Step 3: Harvest override -- unconditional (matches enrich_hygge.py)
+        nmd_label   = np.asarray(nmd_label)
+        lpis_mask   = data.get("label_mask",   None)
         harvest_mask = data.get("harvest_mask", None)
-        if harvest_mask is not None:
-            harvest_mask = np.asarray(harvest_mask)
-            unified[harvest_mask > 0] = HARVEST_CLASS
+        if lpis_mask    is not None: lpis_mask    = np.asarray(lpis_mask)
+        if harvest_mask is not None: harvest_mask = np.asarray(harvest_mask)
 
-        return unified
+        return merge_all(nmd_label, lpis_mask, harvest_mask).astype(np.int64)
 
     @staticmethod
     def _extract_all_frames(

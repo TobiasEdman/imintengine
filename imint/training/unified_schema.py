@@ -256,7 +256,14 @@ def merge_all(
 ) -> np.ndarray:
     """Merge NMD + LPIS + SKS harvest into unified label.
 
-    Priority: LPIS crops > SKS harvest > NMD background.
+    Semantic gating rules (NMD acts as gate for each source):
+      Forest (1–6)   + SKS clearcut   → Hygge (22)
+      Åker (21)      + LPIS crop       → Crop class (11–21)
+      Öppen mark (8) + LPIS crop       → Crop class (11–21)
+      Bebyggelse (9)                   → stays as NMD (infra/buildings not overridable)
+      Vatten (10)                      → stays as NMD
+
+    Priority within eligible pixels: LPIS > SKS > NMD.
 
     Args:
         nmd_label: (H, W) uint8, NMD (10-class or raw 19-class)
@@ -267,29 +274,45 @@ def merge_all(
     Returns:
         (H, W) uint8, unified classes (0-{NUM_UNIFIED_CLASSES-1})
     """
-    # Start with NMD
-    if lpis_mask is not None:
+    # Step 1: NMD baseline (used both as output and as gate)
+    if nmd_label.max() > 10:
+        unified = nmd19_to_unified(nmd_label)
+    else:
+        unified = nmd10_to_unified(nmd_label)
+
+    nmd_base = unified.copy()   # gate reference — never modified
+
+    # Step 2: LPIS crops — where NMD says agricultural (övrig åker=21)
+    #          OR open land (öppen mark bar=8).
+    #          Infrastructure (9) and buildings (9) are NOT eligible — NMD wins.
+    _NMD_AGRI = np.array([21, 8], dtype=np.uint8)
+    where_agri = np.isin(nmd_base, _NMD_AGRI)
+
+    if lpis_mask is not None and where_agri.any():
         # Auto-detect: old 0-8 intermediate or raw SJV codes
         if lpis_mask.max() > 10:
-            # Raw SJV grödkoder (direct from LPIS rasterization)
-            unified = merge_nmd_sjv(nmd_label, lpis_mask)
+            sjv_codes = lpis_mask.astype(np.uint16)
         else:
-            # Old-style intermediate classes (backward compat)
-            # Map old classes to SJV-equivalent
             _OLD_TO_SJV = {1: 4, 2: 2, 3: 3, 4: 20, 5: 50, 6: 70, 7: 30, 8: 9}
-            sjv_approx = np.zeros_like(lpis_mask, dtype=np.uint16)
+            sjv_codes = np.zeros_like(lpis_mask, dtype=np.uint16)
             for old_cls, sjv_code in _OLD_TO_SJV.items():
-                sjv_approx[lpis_mask == old_cls] = sjv_code
-            unified = merge_nmd_sjv(nmd_label, sjv_approx)
-    else:
-        if nmd_label.max() > 10:
-            unified = nmd19_to_unified(nmd_label)
-        else:
-            unified = nmd10_to_unified(nmd_label)
+                sjv_codes[lpis_mask == old_cls] = sjv_code
 
-    # Overlay harvest — SKS overrides NMD unconditionally
-    if harvest_mask is not None:
-        unified[harvest_mask > 0] = HARVEST_CLASS
+        has_parcel = (sjv_codes > 0) & where_agri   # gate: parcel AND NMD=agri
+        if has_parcel.any():
+            for sjv_code, unified_class in SJV_TO_UNIFIED.items():
+                mask = sjv_codes == sjv_code
+                if mask.any():
+                    unified[mask & where_agri] = unified_class
+            unmapped = has_parcel & ~np.isin(sjv_codes, list(SJV_TO_UNIFIED.keys()))
+            unified[unmapped] = _SJV_DEFAULT
+
+    # Step 3: SKS harvest — only where NMD says forest (classes 1–6)
+    _NMD_FOREST = np.array([1, 2, 3, 4, 5, 6], dtype=np.uint8)
+    where_forest = np.isin(nmd_base, _NMD_FOREST)
+
+    if harvest_mask is not None and where_forest.any():
+        unified[(harvest_mask > 0) & where_forest] = HARVEST_CLASS
 
     return unified
 
