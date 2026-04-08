@@ -8,7 +8,7 @@
 #
 # The 3850 "same-year-2018" tiles (all dates 2018, frame-0 should be 2017)
 # are handled separately by patch-autumn-frames-job.yaml using the fixed
-# tile_fetch.py (skips DES STAC pre-2018, cloud_threshold=0.30 for tile).
+# tile_fetch.py (skips DES STAC pre-2018, cloud_threshold=0.20 for tile).
 #
 # After this job, labels must be rebuilt with build_labels.py.
 #
