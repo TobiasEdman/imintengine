@@ -1,11 +1,26 @@
+---
+# Job: Rebuild all labels (NMD + LPIS + SKS) from scratch for all ~5600 tiles.
+#
+# Prerequisites (already completed on PVC):
+#   ✓ strip_bad_keys.py  — removed stale label/harvest_mask/nmd_label_raw keys
+#   ✓ blank-crop-failed  — zeroed frame-0 on crop tiles with no 2017 data
+#   ✓ phase-a/b patches  — autumn frames patched
+#
+# What this writes to each tile .npz:
+#   label           (H×W int8)   unified 23-class via merge_all()
+#   label_mask      (H×W uint16) raw LPIS SJV crop codes
+#   parcel_area_ha  (H×W float32) per-pixel parcel area for loss weighting
+#   harvest_mask    (H×W uint8)  SKS clearcut, no rotation (fixed geometry)
+#   n_parcels       (int32)
+#
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: build-labels
+  name: build-labels-v2
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 7200
+  activeDeadlineSeconds: 18000   # 5h (5600 tiles × ~3s/tile ÷ 4 workers ≈ 70 min, give headroom)
   template:
     spec:
       restartPolicy: Never
@@ -18,40 +33,50 @@ spec:
             - |
               set -e
               export PYTHONUNBUFFERED=1
-              echo "=== Build Labels from Scratch ==="
+              echo "=== Build Labels v2 — NMD + LPIS + SKS ==="
+              echo "Started: $(date)"
 
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
-              pip install -q numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
+              pip install -q --no-cache-dir numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
 
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
 
-              echo "Tiles: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)"
-              echo "NMD raster: $(ls -lh /data/nmd/*.tif 2>/dev/null | head -1)"
-              echo "LPIS: $(ls /data/lpis/*.parquet 2>/dev/null | wc -l) parquets"
-              echo "SKS: $(ls /data/sks/*.parquet 2>/dev/null | wc -l) parquets"
+              echo ""
+              echo "Data inventory:"
+              echo "  Tiles:      $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)"
+              echo "  NMD raster: $(ls -lh /data/nmd/*.tif 2>/dev/null | head -1)"
+              echo "  LPIS:       $(ls /data/lpis/*.parquet 2>/dev/null | wc -l) parquets"
+              echo "  SKS:        $(ls /data/sks/*.parquet 2>/dev/null | wc -l) parquets"
+              echo ""
 
               python scripts/build_labels.py \
-                --data-dir /data/unified_v2 \
+                --data-dir  /data/unified_v2 \
                 --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
-                --lpis-dir /data/lpis \
-                --sks-dir /data/sks \
+                --lpis-dir  /data/lpis \
+                --sks-dir   /data/sks \
                 --num-classes 19 \
-                --workers 1
+                --workers 4
 
               echo ""
               echo "=== QC ==="
-              python scripts/postprocess_qc.py --data-dir /data/unified_v2
+              python scripts/postprocess_qc.py --data-dir /data/unified_v2 || true
 
+              echo ""
+              echo "=== Done: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
           resources:
             requests:
-              cpu: "4"
-              memory: "32Gi"
+              cpu: "6"
+              memory: "48Gi"
             limits:
-              cpu: "4"
-              memory: "32Gi"
+              cpu: "6"
+              memory: "48Gi"
           volumeMounts:
             - name: data
               mountPath: /data
