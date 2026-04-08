@@ -1,0 +1,146 @@
+---
+# Job: Fix tile date inconsistencies
+#
+# Runs two sequential operations:
+#
+# Phase A — Patch autumn frame (frame 0) for ~3850 same-year-2018 tiles
+#   These tiles have d[0] = fall 2018 instead of fall 2017.
+#   Fetches Sep-Oct 2017 from CDSE and replaces only bands 0-5.
+#
+# Phase B — Full re-fetch for ~666 scrambled tiles
+#   These tiles have dates from mixed years (e.g. fall 2021 + spring 2018).
+#   Re-fetches all 4 frames with the correct target year.
+#   Deletes each tile before re-fetching so the skip-if-exists check passes.
+#
+# After both phases, labels must be rebuilt with build_labels.py.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fix-tile-dates
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 86400   # 24h
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fixer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Fix tile date inconsistencies ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio geopandas shapely requests pyproj \
+                httpx pyyaml Pillow pyarrow openeo
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              DATA_DIR=/data/unified_v2
+              echo "Tiles in $DATA_DIR: $(ls $DATA_DIR/tile_*.npz 2>/dev/null | wc -l)"
+
+              # ── Step 1: Generate the two fix lists ──────────────────────────
+              echo ""
+              echo "=== Step 1: Analyze date issues ==="
+              python3 /workspace/imintengine/scripts/analyze_date_issues.py \
+                --data-dir $DATA_DIR \
+                --refetch-out /tmp/refetch_list.json \
+                --patch-out   /tmp/patch_list.json
+
+              echo "refetch_list: $(python3 -c "import json; d=json.load(open('/tmp/refetch_list.json')); print(len(d))")"
+              echo "patch_list:   $(python3 -c "import json; d=json.load(open('/tmp/patch_list.json')); print(len(d))")"
+
+              # ── Phase A: Patch autumn frame for same-year tiles ─────────────
+              echo ""
+              echo "=== Phase A: Patch frame-0 (autumn y-1) for same-year tiles ==="
+              python3 /workspace/imintengine/scripts/patch_autumn_frame.py \
+                --patch-list /tmp/patch_list.json \
+                --data-dir   $DATA_DIR \
+                --workers    6
+              echo "Phase A done: $(date)"
+
+              # ── Phase B: Full re-fetch for scrambled tiles ──────────────────
+              echo ""
+              echo "=== Phase B: Delete + re-fetch scrambled tiles ==="
+
+              # Delete the inconsistent tiles so refetch skips don't trigger
+              python3 - <<'PYEOF'
+              import json
+              from pathlib import Path
+              DATA = Path("/data/unified_v2")
+              tiles = json.load(open("/tmp/refetch_list.json"))
+              removed = 0
+              for t in tiles:
+                  p = DATA / f"{t['name']}.npz"
+                  if p.exists():
+                      p.unlink()
+                      removed += 1
+              print(f"Removed {removed} scrambled tiles from {DATA}")
+              PYEOF
+
+              python3 /workspace/imintengine/scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json /tmp/refetch_list.json \
+                --output-dir $DATA_DIR \
+                --years 2018 2019 2022 2023 \
+                --workers 6 \
+                --cloud-max 30
+
+              echo "Phase B done: $(date)"
+              echo ""
+              echo "=== All done ==="
+              echo "Run build_labels.py next to rebuild labels for patched/refetched tiles."
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "6"
+              memory: "12Gi"
+            limits:
+              cpu: "6"
+              memory: "12Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
