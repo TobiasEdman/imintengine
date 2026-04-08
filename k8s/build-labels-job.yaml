@@ -20,7 +20,7 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 18000   # 5h (5600 tiles × ~3s/tile ÷ 4 workers ≈ 70 min, give headroom)
+  activeDeadlineSeconds: 7200    # 2h (5600 tiles × ~3s/tile ÷ 16 workers ≈ 18 min + load time)
   template:
     spec:
       restartPolicy: Never
@@ -58,7 +58,7 @@ spec:
                 --lpis-dir  /data/lpis \
                 --sks-dir   /data/sks \
                 --num-classes 19 \
-                --workers 4
+                --workers 16
 
               echo ""
               echo "=== QC ==="
@@ -72,11 +72,11 @@ spec:
               value: "1"
           resources:
             requests:
-              cpu: "6"
-              memory: "48Gi"
+              cpu: "16"
+              memory: "64Gi"
             limits:
-              cpu: "6"
-              memory: "48Gi"
+              cpu: "16"
+              memory: "64Gi"
           volumeMounts:
             - name: data
               mountPath: /data
