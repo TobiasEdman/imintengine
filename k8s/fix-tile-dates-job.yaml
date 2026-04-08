@@ -1,18 +1,16 @@
 ---
-# Job: Fix tile date inconsistencies
+# Job: Re-fetch 524 genuinely scrambled tiles.
 #
-# Runs two sequential operations:
+# Scrambled = dates from mixed years, e.g. [fall-2021, spring-2018, fall-2019].
+# These are deleted and re-fetched from scratch with correct year alignment.
+#   target_year 2018 → autumn=2017 (or 2018 fallback), LPIS 2018
+#   target_year 2019 → autumn=2018, LPIS 2019
 #
-# Phase A — Patch autumn frame (frame 0) for ~3850 same-year-2018 tiles
-#   These tiles have d[0] = fall 2018 instead of fall 2017.
-#   Fetches Sep-Oct 2017 from CDSE and replaces only bands 0-5.
+# The 3850 "same-year-2018" tiles (all dates 2018, frame-0 should be 2017)
+# are handled separately by patch-autumn-frames-job.yaml using the fixed
+# tile_fetch.py (skips DES STAC pre-2018, cloud_threshold=0.30 for tile).
 #
-# Phase B — Full re-fetch for ~666 scrambled tiles
-#   These tiles have dates from mixed years (e.g. fall 2021 + spring 2018).
-#   Re-fetches all 4 frames with the correct target year.
-#   Deletes each tile before re-fetching so the skip-if-exists check passes.
-#
-# After both phases, labels must be rebuilt with build_labels.py.
+# After this job, labels must be rebuilt with build_labels.py.
 #
 apiVersion: batch/v1
 kind: Job
@@ -54,32 +52,21 @@ spec:
               # ── Step 1: Use pre-computed lists from PVC (or re-generate) ────
               echo ""
               echo "=== Step 1: Load fix lists ==="
-              if [ -f /data/refetch_list.json ] && [ -f /data/patch_list.json ]; then
+              if [ -f /data/refetch_list.json ]; then
                 cp /data/refetch_list.json /tmp/refetch_list.json
-                cp /data/patch_list.json   /tmp/patch_list.json
-                echo "  Using pre-computed lists from /data/"
+                echo "  Using pre-computed list from /data/"
               else
-                echo "  Generating lists (no pre-computed lists found)..."
+                echo "  Generating list (not found on PVC)..."
                 python3 /workspace/imintengine/scripts/analyze_date_issues.py \
                   --data-dir $DATA_DIR \
                   --refetch-out /tmp/refetch_list.json \
                   --patch-out   /tmp/patch_list.json
               fi
               echo "  refetch: $(python3 -c "import json; print(len(json.load(open('/tmp/refetch_list.json'))))")"
-              echo "  patch:   $(python3 -c "import json; print(len(json.load(open('/tmp/patch_list.json'))))")"
 
-              # ── Phase A: Patch autumn frame for same-year tiles ─────────────
+              # ── Re-fetch scrambled tiles ────────────────────────────────────
               echo ""
-              echo "=== Phase A: Patch frame-0 (autumn y-1) for same-year tiles ==="
-              python3 /workspace/imintengine/scripts/patch_autumn_frame.py \
-                --patch-list /tmp/patch_list.json \
-                --data-dir   $DATA_DIR \
-                --workers    6
-              echo "Phase A done: $(date)"
-
-              # ── Phase B: Full re-fetch for scrambled tiles ──────────────────
-              echo ""
-              echo "=== Phase B: Delete + re-fetch scrambled tiles ==="
+              echo "=== Delete + re-fetch 524 scrambled tiles ==="
 
               # Delete the inconsistent tiles so refetch skips don't trigger
               python3 - <<'PYEOF'
@@ -104,10 +91,9 @@ spec:
                 --workers 6 \
                 --cloud-max 30
 
-              echo "Phase B done: $(date)"
               echo ""
-              echo "=== All done ==="
-              echo "Run build_labels.py next to rebuild labels for patched/refetched tiles."
+              echo "=== All done: $(date) ==="
+              echo "Run build_labels.py next to rebuild labels for refetched tiles."
 
           env:
             - name: PYTHONUNBUFFERED

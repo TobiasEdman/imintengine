@@ -56,6 +56,8 @@ def _fetch_single_scene(
     *,
     scene_cloud_max: float = 30.0,
     max_candidates: int = 3,
+    cloud_threshold: float = 0.15,
+    haze_threshold: float = 0.08,
 ) -> tuple[np.ndarray | None, str]:
     """Fetch best S2 scene within a date range. STAC → CDSE → DES fallback.
 
@@ -66,22 +68,26 @@ def _fetch_single_scene(
     from imint.training.cdse_s2 import fetch_s2_scene
 
     candidates = []
-    try:
-        dates = _stac_available_dates(
-            coords_wgs84, date_start, date_end,
-            scene_cloud_max=scene_cloud_max,
-        )
-        candidates.extend(dates)
-    except Exception:
-        pass
+    # DES STAC only indexes S2 from 2018 onwards — skip for pre-2018 ranges
+    if date_end >= "2018-01-01":
+        try:
+            dates = _stac_available_dates(
+                coords_wgs84, date_start, date_end,
+                scene_cloud_max=scene_cloud_max,
+            )
+            candidates.extend(dates)
+        except Exception:
+            pass
 
-    # If STAC found nothing (e.g. pre-2018 data not in DES catalog),
+    # If STAC found nothing (pre-2018, or simply no clear scenes indexed),
     # generate synthetic date candidates and try CDSE directly
     if not candidates:
         from datetime import datetime as _dt, timedelta as _td
         d0 = _dt.strptime(date_start, "%Y-%m-%d")
         d1 = _dt.strptime(date_end, "%Y-%m-%d")
-        step = max(1, (d1 - d0).days // 6)
+        # Pre-2018: probe every 3 days (S2 revisit ~5 days with single satellite)
+        # Post-2018: every 5 days is fine (STAC already found candidates above)
+        step = 3 if date_end < "2018-01-01" else max(1, (d1 - d0).days // 6)
         for i in range(0, (d1 - d0).days + 1, step):
             candidates.append(((d0 + _td(days=i)).strftime("%Y-%m-%d"), 50.0))
 
@@ -95,8 +101,8 @@ def _fetch_single_scene(
                 bbox_3006["east"], bbox_3006["north"],
                 date=date_str,
                 size_px=TILE_SIZE_PX,
-                cloud_threshold=0.15,
-                haze_threshold=0.08,
+                cloud_threshold=cloud_threshold,
+                haze_threshold=haze_threshold,
             )
             if result is not None:
                 return result[0], date_str
@@ -183,14 +189,21 @@ def fetch_4frame_scenes(
     results: list[tuple[np.ndarray | None, str]] = []
 
     # --- Frame 0: Autumn (Sep-Oct from year-1) ---
+    # Two-pass cloud filtering, same pattern as growing season but more permissive:
+    #   scene_cloud_max: full S2 swath STAC filter (up to 2× scene_cloud_max, max 60%)
+    #   cloud_threshold: tile spectral cutout acceptance (0.30 vs 0.15 for crops)
+    # DES STAC skipped automatically for pre-2018 in _fetch_single_scene.
+    autumn_scene_cloud_max = min(scene_cloud_max * 2.0, 60.0)
     autumn_scene, autumn_date = None, ""
     for year in years:
         prev_year = str(int(year) - 1)
         s, a = _fetch_single_scene(
             bbox_3006, coords_wgs84,
-            f"{prev_year}-09-01", f"{prev_year}-10-31",
-            scene_cloud_max=scene_cloud_max,
-            max_candidates=max_candidates,
+            f"{prev_year}-08-15", f"{prev_year}-10-31",
+            scene_cloud_max=autumn_scene_cloud_max,
+            max_candidates=max(max_candidates, 16),
+            cloud_threshold=0.30,
+            haze_threshold=0.12,
         )
         if s is not None:
             autumn_scene, autumn_date = s, a
