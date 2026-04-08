@@ -177,6 +177,9 @@ def _process_lpis_gdf(gdf: "gpd.GeoDataFrame", year: int) -> "gpd.GeoDataFrame":
     gdf = gdf[gdf["grodkod_int"] > 0].copy()
     print(f"    After filtering: {len(gdf)} parcels with grödkod")
 
+    # Parcel area in hectares (CRS 3006 is metric — geometry.area is m²)
+    gdf["area_ha"] = gdf.geometry.area / 10_000.0
+
     gdf["year"] = year
 
     # Ensure CRS is EPSG:3006
@@ -253,21 +256,27 @@ def rasterize_parcels(
     gdf: "gpd.GeoDataFrame",
     bbox_3006: np.ndarray,
     tile_size: int = TILE_SIZE_PX,
-) -> tuple[np.ndarray, int]:
-    """Rasterize LPIS parcels within a bbox to a segmentation mask.
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Rasterize LPIS parcels within a bbox to a segmentation mask + area map.
 
     Args:
-        gdf: Full LPIS GeoDataFrame (with spatial index).
+        gdf: Full LPIS GeoDataFrame (with spatial index, must have area_ha column).
         bbox_3006: [west, south, east, north] in EPSG:3006.
         tile_size: Output raster size in pixels (default 256).
 
     Returns:
-        (mask, n_parcels): uint8 mask (tile_size, tile_size) and parcel count.
-        Pixels inside parcel = crop_class (1-8), outside = 0.
+        (mask, area_map, n_parcels):
+          mask     — uint16 (tile_size, tile_size), raw SJV grödkod per pixel (0 = no parcel)
+          area_map — float32 (tile_size, tile_size), parcel area in hectares per pixel
+                     (0.0 for background; used for inverse-area loss weighting)
+          n_parcels — int, number of parcels intersecting the tile
     """
     from rasterio.features import rasterize
     from rasterio.transform import from_bounds
     from shapely.geometry import box
+
+    _empty_mask = np.zeros((tile_size, tile_size), dtype=np.uint16)
+    _empty_area = np.zeros((tile_size, tile_size), dtype=np.float32)
 
     west, south, east, north = bbox_3006
 
@@ -276,7 +285,7 @@ def rasterize_parcels(
     candidates_idx = list(gdf.sindex.intersection(tile_box.bounds))
 
     if not candidates_idx:
-        return np.zeros((tile_size, tile_size), dtype=np.uint8), 0
+        return _empty_mask, _empty_area, 0
 
     clipped = gdf.iloc[candidates_idx]
 
@@ -284,24 +293,22 @@ def rasterize_parcels(
     clipped = clipped[clipped.geometry.intersects(tile_box)]
 
     if clipped.empty:
-        return np.zeros((tile_size, tile_size), dtype=np.uint8), 0
+        return _empty_mask, _empty_area, 0
 
     n_parcels = len(clipped)
-
-    # Build (geometry, value) pairs for rasterization
-    # Use raw SJV grödkod (grodkod_int) for direct mapping in unified_schema
-    code_col = "grodkod_int" if "grodkod_int" in clipped.columns else "crop_class"
-    shapes = [
-        (geom, int(code))
-        for geom, code in zip(clipped.geometry, clipped[code_col])
-        if code > 0
-    ]
 
     # Affine transform: maps pixel coordinates to EPSG:3006
     transform = from_bounds(south, west, north, east, tile_size, tile_size)
 
+    # --- Crop-class mask (uint16, raw SJV grödkod) ---
+    code_col = "grodkod_int" if "grodkod_int" in clipped.columns else "crop_class"
+    code_shapes = [
+        (geom, int(code))
+        for geom, code in zip(clipped.geometry, clipped[code_col])
+        if code > 0
+    ]
     mask = rasterize(
-        shapes,
+        code_shapes,
         out_shape=(tile_size, tile_size),
         transform=transform,
         fill=0,
@@ -309,10 +316,32 @@ def rasterize_parcels(
         all_touched=False,
     )
 
-    # LPIS N,E axis order → S2 pixel grid: rot180 + transpose
-    mask = np.rot90(mask, 2).T
+    # --- Parcel area map (float32, hectares per pixel) ---
+    # Each pixel gets the area of its parcel — used for inverse-area loss weighting
+    # so small parcels (<0.25 ha) receive proportionally higher gradient.
+    area_col = "area_ha" if "area_ha" in clipped.columns else None
+    if area_col is not None:
+        area_shapes = [
+            (geom, float(area))
+            for geom, area in zip(clipped.geometry, clipped[area_col])
+            if area > 0
+        ]
+        area_map = rasterize(
+            area_shapes,
+            out_shape=(tile_size, tile_size),
+            transform=transform,
+            fill=0.0,
+            dtype=np.float32,
+            all_touched=False,
+        ).astype(np.float32)
+    else:
+        area_map = _empty_area
 
-    return mask, n_parcels
+    # LPIS N,E axis order → S2 pixel grid: rot180 + transpose
+    mask     = np.rot90(mask,     2).T
+    area_map = np.rot90(area_map, 2).T
+
+    return mask, area_map, n_parcels
 
 
 # ── Per-tile processing ──────────────────────────────────────────────────

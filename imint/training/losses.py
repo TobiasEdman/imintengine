@@ -15,6 +15,47 @@ except ImportError:
     raise ImportError("PyTorch is required. Install with: pip install torch")
 
 
+def parcel_area_to_pixel_weights(
+    area_ha: "torch.Tensor",
+    mmu_ha: float = 0.25,
+    max_weight: float = 4.0,
+) -> "torch.Tensor":
+    """Per-pixel loss weights derived from LPIS parcel area.
+
+    Ensures small parcels receive proportionally higher gradient so the model
+    learns to delineate sub-hectare field boundaries, not just bulk crop types.
+
+    Weight function:
+        area == 0  (background)      →  0.0
+        0 < area < mmu_ha  (sub-MMU) →  max_weight        (highest emphasis)
+        area >= mmu_ha               →  clip(1/√area, 1.0, max_weight)
+
+    At 0.25 ha: w = 1/√0.25 = 2.0
+    At 1.00 ha: w = 1/√1.00 = 1.0  (floor — large parcels carry standard weight)
+    At 0.05 ha: w = max_weight = 4.0
+
+    Args:
+        area_ha:    (B, H, W) or (H, W) float32 tensor of parcel area per pixel.
+        mmu_ha:     Minimum Mapping Unit in hectares (default 0.25, matching NMD).
+        max_weight: Maximum weight cap for sub-MMU pixels (default 4.0).
+
+    Returns:
+        Float32 tensor of same shape as area_ha.
+    """
+    weight = torch.zeros_like(area_ha)
+
+    crop_mask = area_ha > 0.0
+    sub_mmu   = crop_mask & (area_ha < mmu_ha)
+    normal    = area_ha >= mmu_ha
+
+    weight[sub_mmu] = max_weight
+    weight[normal]  = torch.clamp(
+        1.0 / torch.sqrt(area_ha[normal]),
+        min=1.0, max=max_weight,
+    )
+    return weight
+
+
 class FocalLoss(nn.Module):
     """Focal Loss for multi-class segmentation.
 
@@ -45,13 +86,19 @@ class FocalLoss(nn.Module):
         self.register_buffer("weight", weight)
 
     def forward(
-        self, logits: torch.Tensor, targets: torch.Tensor,
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        pixel_weight: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute focal loss.
 
         Args:
-            logits: (B, C, H, W) raw class scores.
-            targets: (B, H, W) integer class labels.
+            logits:       (B, C, H, W) raw class scores.
+            targets:      (B, H, W) integer class labels.
+            pixel_weight: Optional (B, H, W) float32 per-pixel weights.
+                          Use parcel_area_to_pixel_weights() to derive from
+                          parcel area so small parcels get higher emphasis.
 
         Returns:
             Scalar loss tensor.
@@ -73,6 +120,10 @@ class FocalLoss(nn.Module):
 
         # Apply focal modulation
         focal_loss = focal_factor * ce_loss
+
+        # Per-pixel area weighting (emphasises small parcels)
+        if pixel_weight is not None:
+            focal_loss = focal_loss * pixel_weight.to(focal_loss)
 
         # Mask out ignored pixels
         valid_mask = targets != self.ignore_index
@@ -99,13 +150,17 @@ class DiceLoss(nn.Module):
         self.smooth = smooth
 
     def forward(
-        self, logits: torch.Tensor, targets: torch.Tensor,
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        pixel_weight: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute soft dice loss.
 
         Args:
-            logits: (B, C, H, W) raw class scores.
-            targets: (B, H, W) integer class labels.
+            logits:       (B, C, H, W) raw class scores.
+            targets:      (B, H, W) integer class labels.
+            pixel_weight: Optional (B, H, W) float32 per-pixel weights.
 
         Returns:
             Scalar loss tensor (1 - mean_dice).
@@ -118,8 +173,11 @@ class DiceLoss(nn.Module):
             targets.clamp(0, num_classes - 1).long(), num_classes
         ).permute(0, 3, 1, 2).float()  # (B, C, H, W)
 
-        # Mask out ignored pixels
-        valid_mask = (targets != self.ignore_index).unsqueeze(1).float()
+        # Combined mask: ignore_index pixels AND per-pixel area weights
+        valid_mask = (targets != self.ignore_index).float()
+        if pixel_weight is not None:
+            valid_mask = valid_mask * pixel_weight.to(valid_mask)
+        valid_mask = valid_mask.unsqueeze(1)   # (B, 1, H, W)
         probs = probs * valid_mask
         targets_oh = targets_oh * valid_mask
 
@@ -169,7 +227,12 @@ class CombinedLoss(nn.Module):
         self.dice_weight = dice_weight
 
     def forward(
-        self, logits: torch.Tensor, targets: torch.Tensor,
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        pixel_weight: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return (self.focal_weight * self.focal(logits, targets)
-                + self.dice_weight * self.dice(logits, targets))
+        return (
+            self.focal_weight * self.focal(logits, targets, pixel_weight)
+            + self.dice_weight * self.dice(logits, targets, pixel_weight)
+        )

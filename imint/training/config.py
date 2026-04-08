@@ -55,6 +55,15 @@ class TrainingConfig:
     use_grouped_classes: bool = True                   # Remap 19→10 at load time
     ignore_index: int = 0                              # Background
 
+    # ── Fine-detail / small parcel weighting ──────────────────────────────
+    # Pixels belonging to small LPIS parcels are up-weighted in the loss so
+    # the model learns to delineate sub-hectare field boundaries.
+    # Weight function: w = clip(1/√area_ha, 1.0, area_weight_max)
+    #                  with w = area_weight_max for parcels < mmu_ha.
+    mmu_ha: float = 0.25                               # NMD standard MMU (ha)
+    area_weight_max: float = 4.0                       # Max weight for sub-MMU pixels
+    enable_area_weighting: bool = True                 # Set False to disable
+
     # ── Model ─────────────────────────────────────────────────────────────
     backbone: str = "prithvi_eo_v2_300m_tl"
     decoder_type: str = "upernet"

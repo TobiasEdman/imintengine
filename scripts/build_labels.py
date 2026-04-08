@@ -153,9 +153,10 @@ def build_tile_label(
         if gdf is not None:
             bbox_arr = np.array([bbox_3006["west"], bbox_3006["south"],
                                  bbox_3006["east"], bbox_3006["north"]])
-            lpis_mask, n_parcels = _rasterize_parcels(gdf, bbox_arr)
-            data["label_mask"] = lpis_mask
-            data["n_parcels"] = np.int32(n_parcels)
+            lpis_mask, area_map, n_parcels = _rasterize_parcels(gdf, bbox_arr)
+            data["label_mask"]     = lpis_mask   # uint16 raw SJV codes
+            data["parcel_area_ha"] = area_map    # float32 ha/pixel (for loss weighting)
+            data["n_parcels"]      = np.int32(n_parcels)
 
         # --- Step 3: SKS harvest mask (filtered by tile year) ---
         # Hygge = avverkat inom 5 år före tile-året

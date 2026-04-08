@@ -179,6 +179,13 @@ class LULCTrainer:
         ckpt_dir = Path(cfg.checkpoint_dir)
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
+        # Thread area-weighting config into datasets so __getitem__ uses
+        # the right MMU and max-weight values from TrainingConfig.
+        if cfg.enable_area_weighting:
+            for ds in (train_dataset, val_dataset):
+                ds._mmu_ha = cfg.mmu_ha
+                ds._area_weight_max = cfg.area_weight_max
+
         # Class weights
         stats_path = Path(cfg.data_dir) / "class_stats.json"
         if stats_path.exists():
@@ -253,6 +260,15 @@ class LULCTrainer:
                 ignore_index=cfg.ignore_index,
             )
             print(f"  Loss: CrossEntropy")
+
+        if cfg.enable_area_weighting and cfg.loss_type != "cross_entropy":
+            print(f"  Area weighting: enabled  "
+                  f"(mmu_ha={cfg.mmu_ha}, max_weight={cfg.area_weight_max})")
+        elif cfg.enable_area_weighting:
+            print(f"  Area weighting: enabled in config but CrossEntropyLoss "
+                  f"does not support pixel_weight — weighting disabled")
+        else:
+            print(f"  Area weighting: disabled")
 
         # Differential learning rate: backbone gets lower LR
         backbone_params = []
@@ -388,9 +404,19 @@ class LULCTrainer:
                     for pg in optimizer.param_groups:
                         pg["lr"] = cfg.lr * lr_scale
 
+                # Per-pixel area weighting: give small parcels higher loss weight
+                pixel_weight = None
+                if cfg.enable_area_weighting and cfg.loss_type != "cross_entropy":
+                    pw = batch.get("pixel_weight")
+                    if pw is not None:
+                        pixel_weight = pw.to(self.device)
+
                 optimizer.zero_grad()
                 logits = self.model(images_5d, aux=aux).contiguous()
-                loss = criterion(logits, labels)
+                if pixel_weight is not None:
+                    loss = criterion(logits, labels, pixel_weight=pixel_weight)
+                else:
+                    loss = criterion(logits, labels)
                 loss.backward()
                 optimizer.step()
 

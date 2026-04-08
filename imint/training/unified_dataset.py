@@ -81,6 +81,7 @@ except ImportError:
 from .unified_schema import (
     nmd10_to_unified, merge_nmd_lpis, merge_all, NUM_UNIFIED_CLASSES, HARVEST_CLASS,
 )
+from .losses import parcel_area_to_pixel_weights
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +332,25 @@ class UnifiedDataset(Dataset):
 
         # --- Auxiliary channels ----------------------------------------
         h, w = label.shape
+
+        # Load parcel_area_ha (float32 H×W, 0 for background).
+        # Prepend to aux_stack so it receives identical spatial transforms.
+        raw_area = data.get("parcel_area_ha", None)
+        if raw_area is not None:
+            area_map = np.asarray(raw_area, dtype=np.float32)
+            if area_map.shape != (h, w):
+                area_map = area_map[:h, :w]
+        else:
+            area_map = np.zeros((h, w), dtype=np.float32)
+
         aux_stack = self._load_aux_channels(data, h, w) if self.enable_aux else None
+
+        # Fold area_map into aux_stack as channel 0 for spatial consistency
+        area_as_channel = area_map[np.newaxis]  # (1, H, W)
+        if aux_stack is not None:
+            aug_stack = np.concatenate([area_as_channel, aux_stack], axis=0)
+        else:
+            aug_stack = area_as_channel
 
         # --- Prithvi normalization: reflectance [0,1] -> DN -> z-score -
         # Normalize all T frames identically (mean/std tile across frames)
@@ -342,16 +361,29 @@ class UnifiedDataset(Dataset):
 
         # --- Spatial augmentation / crop --------------------------------
         if self.augment:
-            image, label, aux_stack = self._augment(image, label, aux_stack)
+            image, label, aug_stack = self._augment(image, label, aug_stack)
         else:
-            image, label, aux_stack = self._center_crop(image, label, aux_stack)
+            image, label, aug_stack = self._center_crop(image, label, aug_stack)
+
+        # Extract area_map back out (was channel 0); restore aux_stack
+        area_map_cropped = aug_stack[0]                          # (H', W')
+        aux_stack = aug_stack[1:] if self.enable_aux else None   # (N, H', W')
+
+        # Compute per-pixel loss weights from cropped area map
+        area_t = torch.from_numpy(np.ascontiguousarray(area_map_cropped))
+        pixel_weight = parcel_area_to_pixel_weights(
+            area_t,
+            mmu_ha=getattr(self, "_mmu_ha", 0.25),
+            max_weight=getattr(self, "_area_weight_max", 4.0),
+        )
 
         # --- Build output dict ------------------------------------------
         result: dict = {
-            "spectral": torch.from_numpy(np.ascontiguousarray(image)),
-            "label": torch.from_numpy(np.ascontiguousarray(label)),
+            "spectral":     torch.from_numpy(np.ascontiguousarray(image)),
+            "label":        torch.from_numpy(np.ascontiguousarray(label)),
+            "pixel_weight": pixel_weight,
             "metadata": {
-                "tile": entry["name"],
+                "tile":   entry["name"],
                 "source": source,
             },
         }
