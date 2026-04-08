@@ -1,0 +1,69 @@
+---
+# Job: Handle tiles that failed autumn-frame patching (1,998 tiles).
+#
+# Strategy:
+#   n_parcels == 0  →  non-crop tile: keep existing 2018 autumn frame
+#   n_parcels  > 0  →  crop tile: zero out frame 0 + set dates[0]=''
+#
+# This is the final step before build_labels.py.
+# Reads /data/patch_autumn_failed.json written by patch-autumn-frames job.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blank-crop-failed
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200   # 2h
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: blanker
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Blank failed crop tile autumn frames ==="
+              echo "Started: $(date)"
+
+              pip install --quiet --no-cache-dir numpy
+
+              mkdir -p /workspace && cd /workspace
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+
+              COUNT=$(python3 -c "import json; print(len(json.load(open('/data/patch_autumn_failed.json'))))")
+              echo "Failed tiles to process: $COUNT"
+
+              python3 /workspace/imintengine/scripts/blank_failed_crop_tiles.py \
+                --fail-log  /data/patch_autumn_failed.json \
+                --data-dir  /data/unified_v2 \
+                --out-log   /data/blank_crop_result.json \
+                --workers   6
+
+              echo ""
+              echo "=== All done: $(date) ==="
+              echo "Run build_labels.py next."
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
