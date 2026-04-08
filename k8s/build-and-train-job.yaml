@@ -1,0 +1,169 @@
+---
+# Job: Build labels from scratch, then immediately start training.
+#
+# Phase 1 — build_labels.py  (~20 min, 16 workers, GPU idle)
+#   Rebuilds NMD+LPIS+SKS labels and writes parcel_area_ha to every tile.
+#
+# Phase 2 — train_unified.py  (GPU active, ~4-8 h depending on convergence)
+#   23-class 4-frame multi-temporal segmentation with inverse-area pixel weighting.
+#
+# Usage:
+#   kubectl apply -f k8s/build-and-train-job.yaml
+#   kubectl logs -f job/build-and-train-v1 -n prithvi-training-default
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-and-train-v1
+  namespace: prithvi-training-default
+  labels:
+    app: unified-training
+    version: build-and-train-v1
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 54000   # 15h  (1h build headroom + 12h training + buffer)
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: build-and-train
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+
+              echo "========================================"
+              echo "=== Build + Train  $(date) ==="
+              echo "========================================"
+
+              # ── System dependencies ──────────────────────────────────
+              echo ""
+              echo "--- Installing system deps ---"
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+
+              # ── Python dependencies ──────────────────────────────────
+              echo "--- Installing Python deps (geo + torch) ---"
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml \
+                scikit-learn timm
+              pip install --quiet --no-cache-dir \
+                torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+              # ── Clone repo ───────────────────────────────────────────
+              echo "--- Cloning ImintEngine ---"
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --quiet --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              # ── Inventory ─────────────────────────────────────────────
+              echo ""
+              echo "Data inventory:"
+              echo "  Tiles:      $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)"
+              echo "  NMD raster: $(ls -lh /data/nmd/*.tif 2>/dev/null | head -1)"
+              echo "  LPIS:       $(ls /data/lpis/*.parquet 2>/dev/null | wc -l) parquets"
+              echo "  SKS:        $(ls /data/sks/*.parquet 2>/dev/null | wc -l) parquets"
+              echo ""
+
+              # ════════════════════════════════════════════════════════
+              # PHASE 1 — Build labels
+              # ════════════════════════════════════════════════════════
+              echo "========================================"
+              echo "=== PHASE 1: Build Labels  $(date) ==="
+              echo "========================================"
+
+              python scripts/build_labels.py \
+                --data-dir   /data/unified_v2 \
+                --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
+                --lpis-dir   /data/lpis \
+                --sks-dir    /data/sks \
+                --num-classes 19 \
+                --workers 16
+
+              echo ""
+              echo "=== Build Labels done: $(date) ==="
+              echo ""
+
+              # Quick sanity check: count tiles with label key
+              LABELED=$(python3 -c "
+              import glob, numpy as np
+              tiles = glob.glob('/data/unified_v2/*.npz')[:50]
+              ok = sum(1 for t in tiles if 'label' in np.load(t, allow_pickle=True).files)
+              print(ok)
+              ")
+              echo "Spot-check: $LABELED/50 tiles have 'label' key"
+
+              # ════════════════════════════════════════════════════════
+              # PHASE 2 — Training
+              # ════════════════════════════════════════════════════════
+              echo "========================================"
+              echo "=== PHASE 2: Training  $(date) ==="
+              echo "========================================"
+
+              echo "Cleaning stale checkpoint temp files..."
+              rm -f /checkpoints/unified_v6/*.pt.tmp 2>/dev/null || true
+
+              python scripts/train_unified.py \
+                --data-dirs             /data/unified_v2 \
+                --checkpoint-dir        /checkpoints/unified_v6 \
+                --num-classes           23 \
+                --enable-multitemporal \
+                --num-temporal-frames   4 \
+                --epochs                80 \
+                --batch-size            4 \
+                --lr                    1e-4 \
+                --unfreeze-layers       6 \
+                --backbone-lr-factor    0.1 \
+                --loss-type             focal_dice \
+                --focal-gamma           2.0 \
+                --patience              20 \
+                --num-workers           4 \
+                --device                cuda
+
+              echo ""
+              echo "========================================"
+              echo "=== ALL DONE  $(date) ==="
+              echo "========================================"
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "16"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "16"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
