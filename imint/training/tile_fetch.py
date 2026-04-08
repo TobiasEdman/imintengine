@@ -202,7 +202,7 @@ def fetch_4frame_scenes(
             f"{prev_year}-08-15", f"{prev_year}-10-31",
             scene_cloud_max=autumn_scene_cloud_max,
             max_candidates=max(max_candidates, 16),
-            cloud_threshold=0.20,
+            cloud_threshold=0.30,
             haze_threshold=0.12,
         )
         if s is not None:

@@ -47,8 +47,8 @@ from imint.training.tile_fetch import (
 )
 
 SCENE_CLOUD_MAX  = 60.0  # full S2 swath filter for STAC/synthetic candidates (0-100 %)
-TILE_CLOUD_MAX   = 0.20  # tile spectral cutout acceptance — more permissive than
-                          # growing season (0.15) but not so noisy as to mislead
+TILE_CLOUD_MAX   = 0.30  # tile spectral cutout acceptance — permissive for autumn
+                          # (growing season = 0.15; data shows 0.20 too strict for 2017)
 TILE_HAZE_MAX    = 0.12  # tile haze acceptance (0-1 fraction)
 MAX_CANDIDATES   = 16    # probe many dates; 3-day step × 75 days = ~25 candidates
 
@@ -59,6 +59,15 @@ def patch_one(entry: dict, data_dir: Path, dry_run: bool) -> dict:
 
     if not fp.exists():
         return {"name": name, "status": "missing"}
+
+    # Skip if already patched: dates[0] already starts with the target year (e.g. "2017")
+    target_year = entry["fetch_from"][:4]
+    try:
+        d_check = dict(np.load(fp, allow_pickle=True))
+        if str(d_check["dates"][0]).startswith(target_year):
+            return {"name": name, "status": "already_patched"}
+    except Exception:
+        pass  # corrupted tile — try to re-patch anyway
 
     # Build bbox dicts from stored [W, S, E, N]
     W, S, E, N = entry["bbox"]
@@ -165,7 +174,7 @@ def main() -> None:
             if s in ("ok", "dry_ok"):
                 ok += 1
                 done_list.append(r)
-            elif s == "missing":
+            elif s in ("missing", "already_patched"):
                 skip += 1
             else:
                 fail += 1
