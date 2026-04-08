@@ -51,16 +51,22 @@ spec:
               DATA_DIR=/data/unified_v2
               echo "Tiles in $DATA_DIR: $(ls $DATA_DIR/tile_*.npz 2>/dev/null | wc -l)"
 
-              # ── Step 1: Generate the two fix lists ──────────────────────────
+              # ── Step 1: Use pre-computed lists from PVC (or re-generate) ────
               echo ""
-              echo "=== Step 1: Analyze date issues ==="
-              python3 /workspace/imintengine/scripts/analyze_date_issues.py \
-                --data-dir $DATA_DIR \
-                --refetch-out /tmp/refetch_list.json \
-                --patch-out   /tmp/patch_list.json
-
-              echo "refetch_list: $(python3 -c "import json; d=json.load(open('/tmp/refetch_list.json')); print(len(d))")"
-              echo "patch_list:   $(python3 -c "import json; d=json.load(open('/tmp/patch_list.json')); print(len(d))")"
+              echo "=== Step 1: Load fix lists ==="
+              if [ -f /data/refetch_list.json ] && [ -f /data/patch_list.json ]; then
+                cp /data/refetch_list.json /tmp/refetch_list.json
+                cp /data/patch_list.json   /tmp/patch_list.json
+                echo "  Using pre-computed lists from /data/"
+              else
+                echo "  Generating lists (no pre-computed lists found)..."
+                python3 /workspace/imintengine/scripts/analyze_date_issues.py \
+                  --data-dir $DATA_DIR \
+                  --refetch-out /tmp/refetch_list.json \
+                  --patch-out   /tmp/patch_list.json
+              fi
+              echo "  refetch: $(python3 -c "import json; print(len(json.load(open('/tmp/refetch_list.json'))))")"
+              echo "  patch:   $(python3 -c "import json; print(len(json.load(open('/tmp/patch_list.json'))))")"
 
               # ── Phase A: Patch autumn frame for same-year tiles ─────────────
               echo ""
