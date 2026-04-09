@@ -333,15 +333,25 @@ class UnifiedDataset(Dataset):
         # --- Auxiliary channels ----------------------------------------
         h, w = label.shape
 
-        # Load parcel_area_ha (float32 H×W, 0 for background).
-        # Prepend to aux_stack so it receives identical spatial transforms.
-        raw_area = data.get("parcel_area_ha", None)
-        if raw_area is not None:
-            area_map = np.asarray(raw_area, dtype=np.float32)
-            if area_map.shape != (h, w):
-                area_map = area_map[:h, :w]
-        else:
-            area_map = np.zeros((h, w), dtype=np.float32)
+        # Unified area map for inverse-area pixel weighting.
+        # LPIS parcel area takes precedence for crop pixels; NMD connected-
+        # component area fills in for all other labeled pixels (forest, water,
+        # wetland, urban etc.).  Both are float32 ha-per-pixel rasters built
+        # by build_labels.py.  Tiles that predate the NMD area stamp fall back
+        # to zeros, which parcel_area_to_pixel_weights treats as weight=1.0.
+        raw_lpis = data.get("parcel_area_ha", None)
+        raw_nmd  = data.get("nmd_area_ha",    None)
+
+        lpis_arr = (np.asarray(raw_lpis, dtype=np.float32)
+                    if raw_lpis is not None else np.zeros((h, w), dtype=np.float32))
+        nmd_arr  = (np.asarray(raw_nmd,  dtype=np.float32)
+                    if raw_nmd  is not None else np.zeros((h, w), dtype=np.float32))
+
+        if lpis_arr.shape != (h, w): lpis_arr = lpis_arr[:h, :w]
+        if nmd_arr.shape  != (h, w): nmd_arr  = nmd_arr[:h, :w]
+
+        # LPIS area where crop parcel exists, NMD component area everywhere else
+        area_map = np.where(lpis_arr > 0, lpis_arr, nmd_arr)
 
         aux_stack = self._load_aux_channels(data, h, w) if self.enable_aux else None
 

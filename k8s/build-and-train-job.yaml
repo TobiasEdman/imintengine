@@ -14,11 +14,11 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: build-and-train-v1
+  name: build-and-train-v2
   namespace: prithvi-training-default
   labels:
     app: unified-training
-    version: build-and-train-v1
+    version: build-and-train-v2
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 54000   # 15h  (1h build headroom + 12h training + buffer)
@@ -38,7 +38,7 @@ spec:
               export PYTHONUNBUFFERED=1
 
               echo "========================================"
-              echo "=== Build + Train  $(date) ==="
+              echo "=== Build + Train v2  $(date) ==="
               echo "========================================"
 
               # ── System dependencies ──────────────────────────────────
@@ -107,11 +107,11 @@ spec:
               echo "========================================"
 
               echo "Cleaning stale checkpoint temp files..."
-              rm -f /checkpoints/unified_v6/*.pt.tmp 2>/dev/null || true
+              rm -f /checkpoints/unified_v7/*.pt.tmp 2>/dev/null || true
 
               python scripts/train_unified.py \
                 --data-dirs             /data/unified_v2 \
-                --checkpoint-dir        /checkpoints/unified_v6 \
+                --checkpoint-dir        /checkpoints/unified_v7 \
                 --num-classes           23 \
                 --enable-multitemporal \
                 --num-temporal-frames   4 \

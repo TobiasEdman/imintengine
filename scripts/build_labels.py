@@ -25,11 +25,37 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
+from scipy.ndimage import label as nd_label
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.tile_fetch import fetch_nmd_label_local
 from imint.training.unified_schema import merge_all, UNIFIED_CLASS_NAMES
+
+def _compute_nmd_area_map(nmd_label: np.ndarray, pixel_ha: float = 0.01) -> np.ndarray:
+    """Per-pixel area map derived from NMD raster via connected components.
+
+    Each pixel receives the area (ha) of its contiguous same-class region,
+    matching the inverse-area weighting applied to LPIS parcels.
+
+    At 10 m Sentinel-2 resolution one pixel = 100 m² = 0.01 ha (default).
+    A 25-pixel patch = 0.25 ha = NMD MMU → weight floor of 1.0.
+    A 5-pixel fragment = 0.05 ha → weight 4.0 (max).
+
+    Background (class 0) pixels are left at 0.0 — the loss already ignores
+    them via ignore_index.
+    """
+    area_map = np.zeros(nmd_label.shape, dtype=np.float32)
+    for cls in np.unique(nmd_label):
+        if cls == 0:
+            continue
+        labeled, _ = nd_label(nmd_label == cls)
+        flat = labeled.ravel()
+        counts = np.bincount(flat).astype(np.float32)
+        counts[0] = 0.0                          # background region → 0 ha
+        area_map.ravel()[:] += (counts * pixel_ha)[flat]
+    return area_map
+
 
 # Lazy-loaded shared data (loaded once, reused across threads)
 _lpis_gdfs: dict = {}  # year → GeoDataFrame
@@ -146,6 +172,10 @@ def build_tile_label(
         )
         if nmd_label is None:
             return {"name": name, "status": "failed", "reason": "no_nmd"}
+
+        # Connected-component area map: same inverse-area weighting as LPIS.
+        # Stored separately; unified_dataset.py merges with parcel_area_ha.
+        data["nmd_area_ha"] = _compute_nmd_area_map(nmd_label)
 
         # --- Step 2: LPIS crop mask ---
         lpis_mask = None
