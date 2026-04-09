@@ -1,0 +1,123 @@
+---
+# Training-only job — Phase 1 (build_labels) already completed via build-and-train-v1.
+# Labels rebuilt with gated merge_all + parcel_area_ha (inverse-area pixel weighting).
+#
+# Usage:
+#   kubectl apply -f k8s/unified-train-v6-job.yaml
+#   kubectl logs -f job/unified-train-v6 -n prithvi-training-default
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unified-train-v6
+  namespace: prithvi-training-default
+  labels:
+    app: unified-training
+    version: v6
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 43200  # 12h
+  template:
+    metadata:
+      labels:
+        app: unified-training
+        version: v6
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: trainer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+
+              echo "=== Unified 23-class Training v6 — $(date) ==="
+              echo "=== Labels: gated merge_all + parcel_area_ha pixel weighting ==="
+
+              TILE_COUNT=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
+              echo "Tiles: $TILE_COUNT"
+              if [ "$TILE_COUNT" -lt 100 ]; then
+                echo "ERROR: Not enough tiles in /data/unified_v2/"
+                exit 1
+              fi
+
+              echo "Installing system deps..."
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+
+              echo "Installing Python deps..."
+              pip install --quiet --no-cache-dir \
+                torch torchvision --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm einops numpy scipy scikit-learn
+
+              echo "Cleaning stale checkpoint temp files..."
+              rm -f /checkpoints/unified_v6/*.pt.tmp 2>/dev/null || true
+
+              echo "Cloning ImintEngine..."
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --quiet --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              echo ""
+              echo "=== Starting training ==="
+              python scripts/train_unified.py \
+                --data-dirs             /data/unified_v2 \
+                --checkpoint-dir        /checkpoints/unified_v6 \
+                --num-classes           23 \
+                --enable-multitemporal \
+                --num-temporal-frames   4 \
+                --epochs                80 \
+                --batch-size            4 \
+                --lr                    1e-4 \
+                --unfreeze-layers       6 \
+                --backbone-lr-factor    0.1 \
+                --loss-type             focal_dice \
+                --focal-gamma           2.0 \
+                --patience              20 \
+                --num-workers           4 \
+                --device                cuda
+
+              echo "=== Done: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "16"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "16"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi

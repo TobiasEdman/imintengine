@@ -51,7 +51,7 @@ spec:
               echo "--- Installing Python deps (geo + torch) ---"
               pip install --quiet --no-cache-dir \
                 numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml \
-                scikit-learn timm
+                scikit-learn timm einops
               pip install --quiet --no-cache-dir \
                 torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
