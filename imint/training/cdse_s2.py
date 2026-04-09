@@ -599,42 +599,68 @@ def cdse_catalog_search(
     max_cloud: float = 40.0,
     max_results: int = 100,
 ) -> list[tuple[str, float]]:
-    """Search CDSE Catalog STAC for Sentinel-2 scenes.
+    """Search CDSE OData catalog for Sentinel-2 L2A scenes.
 
-    Queries the CDSE STAC API which covers S2A/B from 2015 onwards
-    (unlike DES STAC which only indexes from 2018).  No authentication
-    is required for catalog queries.
+    Uses the CDSE OData v1 API with ``$expand=Attributes`` to retrieve
+    cloud cover.  Requires CDSE client credentials (env vars
+    ``CDSE_CLIENT_ID`` / ``CDSE_CLIENT_SECRET``) for attribute expansion.
+
+    Note: The CDSE STAC endpoint no longer indexes Sentinel-2 and the
+    OpenSearch/Resto API now requires auth.  OData is the only reliable
+    unauthenticated entry-point for catalog queries, but cloud cover
+    only appears when ``$expand=Attributes`` is combined with an auth
+    Bearer token.
 
     Args:
         bbox_4326: ``(west, south, east, north)`` in WGS84.
         date_start: ISO date string, e.g. ``"2016-06-01"``.
         date_end: ISO date string, e.g. ``"2016-08-16"``.
         max_cloud: Scene-level cloud cover ceiling (0–100 %).
-        max_results: Max items per STAC page.
+        max_results: Max items per OData page.
 
     Returns:
         List of ``(date_str, cloud_pct)`` tuples sorted by
         ``cloud_pct`` ascending (clearest first).  ``date_str``
         is ``"YYYY-MM-DD"``; ``cloud_pct`` is 0–100.
-        Returns an empty list on network failure.
+        Returns an empty list on network or auth failure.
     """
     west, south, east, north = bbox_4326
 
-    url = "https://catalogue.dataspace.copernicus.eu/stac/search"
-    request_body = {
-        "collections": ["SENTINEL-2"],
-        "bbox": [west, south, east, north],
-        "datetime": f"{date_start}T00:00:00Z/{date_end}T23:59:59Z",
-        "limit": max_results,
-    }
+    # ── Auth token (needed for $expand=Attributes → cloud cover) ──
+    token: str | None = None
+    try:
+        token = _get_cdse_token()
+    except Exception:
+        pass  # fall through — will proceed without cloud filter
+
+    # ── OData filter ──────────────────────────────────────────────
+    wkt = (
+        f"POLYGON(({west} {south},{east} {south},"
+        f"{east} {north},{west} {north},{west} {south}))"
+    )
+    filt_parts = [
+        "Collection/Name eq 'SENTINEL-2'",
+        f"OData.CSC.Intersects(area=geography'SRID=4326;{wkt}')",
+        f"ContentDate/Start gt {date_start}T00:00:00.000Z",
+        f"ContentDate/Start lt {date_end}T23:59:59.000Z",
+        "contains(Name,'L2A')",
+    ]
+    filt = " and ".join(filt_parts)
+
+    base = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
+    url = (
+        base
+        + "?$top=" + str(max_results)
+        + "&$expand=Attributes"
+        + "&$filter=" + urllib.parse.quote(filt)
+    )
+
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
     try:
-        body_bytes = json.dumps(request_body).encode()
-        req = urllib.request.Request(
-            url,
-            data=body_bytes,
-            headers={"Content-Type": "application/json"},
-        )
+        req = urllib.request.Request(url, headers=headers)
         resp = urllib.request.urlopen(req, timeout=30)
         payload = json.loads(resp.read())
     except Exception:
@@ -642,24 +668,20 @@ def cdse_catalog_search(
 
     best: dict[str, float] = {}   # date → lowest cloud
 
-    for item in payload.get("features", []):
-        props = item.get("properties", {})
-
-        # Cloud cover field: CDSE uses "eo:cloud_cover" (0–100 %)
-        cloud = (
-            props.get("eo:cloud_cover")
-            or props.get("cloudCover")
-            or props.get("cloud_cover")
-        )
-        if cloud is None:
+    for item in payload.get("value", []):
+        # Cloud cover is in the expanded Attributes list
+        attrs = {a["Name"]: a.get("Value") for a in item.get("Attributes", [])}
+        cloud_raw = attrs.get("cloudCover")
+        if cloud_raw is None:
             cloud = 50.0   # unknown — treat as 50 %
-        cloud = float(cloud)
+        else:
+            cloud = float(cloud_raw)
 
         if cloud > max_cloud:
             continue
 
-        # Extract date (prefer "datetime", fall back to "start_datetime")
-        raw_dt = props.get("datetime") or props.get("start_datetime", "")
+        # Date from ContentDate.Start ("2016-07-24T10:30:32.000Z")
+        raw_dt = (item.get("ContentDate") or {}).get("Start", "")
         if not raw_dt:
             continue
         date_str = raw_dt[:10]  # "YYYY-MM-DD"

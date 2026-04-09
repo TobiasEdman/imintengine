@@ -125,8 +125,11 @@ def _process_tile(path: Path, skip_existing: bool) -> str:
         status = f"FAIL {name}: no qualifying scene (2016 + 2015)"
         ok = 0
 
-    # Atomic write: save to temp file then rename
-    tmp_path = path.with_suffix(".npz.tmp")
+    # Atomic write: save to temp file then rename.
+    # NOTE: np.savez_compressed appends ".npz" only if the filename does NOT
+    # already end in ".npz".  Use ".tmp.npz" so numpy writes to exactly that
+    # path, then rename to the final ".npz" destination.
+    tmp_path = path.with_name(path.stem + ".tmp.npz")
     try:
         np.savez_compressed(tmp_path, **data)
         tmp_path.rename(path)
