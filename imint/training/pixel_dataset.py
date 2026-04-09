@@ -14,13 +14,22 @@ Frame layout (T=5 when frame_2016 present, T=4 otherwise):
 If ``has_frame_2016 == 0`` or the tile lacks the key, T falls back to 4
 and the caller is expected to build the model with matching ``num_frames``.
 
+When ``enable_aux=True`` (default), ``__getitem__`` returns a 3-tuple
+``(patch, aux_vec, label)`` where ``aux_vec`` is a ``(N_AUX,)`` float32
+vector of center-pixel auxiliary values (height, volume, DEM, VPP, …)
+normalized with the same log+z-score pipeline as UnifiedDataset.
+
 Usage::
 
     from imint.training.pixel_dataset import PixelContextDataset
 
     tile_paths = list(Path("/data/unified_v2").glob("*.npz"))
     ds = PixelContextDataset(tile_paths, context_px=32, split="train")
-    patch, label = ds[0]        # patch: (30, 32, 32) float32, label: int64
+    patch, aux, label = ds[0]   # patch: (30,32,32), aux: (11,), label: int64
+
+    # Without AUX (legacy 2-tuple):
+    ds_no_aux = PixelContextDataset(tile_paths, enable_aux=False)
+    patch, label = ds_no_aux[0]
 """
 from __future__ import annotations
 
@@ -39,11 +48,17 @@ except ImportError:
     _TORCH_AVAILABLE = False
 
 from .unified_schema import NUM_UNIFIED_CLASSES
+from .unified_dataset import (
+    AUX_CHANNEL_NAMES,
+    AUX_LOG_TRANSFORM,
+    AUX_NORM,
+)
 
 # ── Constants ────────────────────────────────────────────────────────────
 
 N_BANDS = 6
 IGNORE_CLASS = 0   # background — excluded from training
+N_AUX = len(AUX_CHANNEL_NAMES)  # 11 auxiliary channels
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────
@@ -62,6 +77,9 @@ class PixelContextDataset:
         split: One of ``"train"``, ``"val"``, ``"test"``.
         samples_per_tile: Number of pixel samples drawn per tile.
         use_frame_2016: Prepend ``frame_2016`` as T=0 if available.
+        enable_aux: Return center-pixel AUX vector as second element
+            of each item (default: True).  Set False for legacy
+            2-tuple ``(patch, label)`` output.
         oversample_rare: Weight rare classes (id < 10 AND id > 10 but
             small frequency) with ``rare_weight`` vs 1.0 for common.
         rare_weight: Sampling multiplier for rare classes.
@@ -76,6 +94,7 @@ class PixelContextDataset:
         split: str = "train",
         samples_per_tile: int = 512,
         use_frame_2016: bool = True,
+        enable_aux: bool = True,
         oversample_rare: bool = True,
         rare_weight: float = 3.0,
         boundary_weight: float = 2.0,
@@ -88,6 +107,7 @@ class PixelContextDataset:
         self.half = context_px // 2
         self.split = split
         self.use_frame_2016 = use_frame_2016
+        self.enable_aux = enable_aux
         self.transform = transform
 
         rng = np.random.default_rng(seed + {"train": 0, "val": 1, "test": 2}.get(split, 0))
@@ -178,12 +198,19 @@ class PixelContextDataset:
         if self.transform is not None:
             patch = self.transform(patch)
 
+        if self.enable_aux:
+            aux_vec = self._build_aux_vector(data, row, col)
+
         if _TORCH_AVAILABLE:
             import torch
-            return (
-                torch.from_numpy(patch),
-                torch.tensor(cls, dtype=torch.long),
-            )
+            patch_t = torch.from_numpy(patch)
+            label_t = torch.tensor(cls, dtype=torch.long)
+            if self.enable_aux:
+                return patch_t, torch.from_numpy(aux_vec), label_t
+            return patch_t, label_t
+
+        if self.enable_aux:
+            return patch, aux_vec, cls
         return patch, cls
 
     # ------------------------------------------------------------------
@@ -217,6 +244,47 @@ class PixelContextDataset:
             patch = patch_base
 
         return patch  # (T*6, context_px, context_px)
+
+    def _build_aux_vector(
+        self,
+        data: "np.lib.npyio.NpzFile",
+        row: int,
+        col: int,
+    ) -> np.ndarray:
+        """Extract center-pixel auxiliary values as a (N_AUX,) float32 vector.
+
+        Applies the same log(1+x) pre-transform and z-score normalization
+        as ``UnifiedDataset._load_aux_channels()``.  Missing channels are
+        zero-filled before normalization (→ yields the channel mean after
+        subtraction, i.e. ≈ 0 in normalized space).
+
+        Args:
+            data: Loaded .npz tile.
+            row: Center pixel row index.
+            col: Center pixel column index.
+
+        Returns:
+            (N_AUX,) float32 normalized auxiliary vector.
+        """
+        aux_vec = np.zeros(N_AUX, dtype=np.float32)
+        for i, ch_name in enumerate(AUX_CHANNEL_NAMES):
+            if ch_name in data:
+                arr = np.asarray(data[ch_name], dtype=np.float32)
+                # Clamp to valid range in case of slight shape mismatch
+                r = min(row, arr.shape[0] - 1)
+                c = min(col, arr.shape[1] - 1)
+                val = float(arr[r, c])
+            else:
+                val = 0.0  # missing channel — will normalize to ~0
+
+            if ch_name in AUX_LOG_TRANSFORM:
+                val = float(np.log1p(max(val, 0.0)))
+            if ch_name in AUX_NORM:
+                mean, std = AUX_NORM[ch_name]
+                val = (val - mean) / max(std, 1e-6)
+
+            aux_vec[i] = val
+        return aux_vec
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────

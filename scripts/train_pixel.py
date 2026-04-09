@@ -5,10 +5,17 @@ Trains a center-pixel classifier using Prithvi-EO-2.0 as a frozen / fine-tuned
 backbone.  Each sample is a (T×6, 32, 32) spectral context patch; the label is
 the unified 23-class integer at the center pixel.
 
+AUX channel injection (enabled by default):
+    The classifier fuses the Prithvi CLS token with a small MLP projection
+    of 11 center-pixel auxiliary scalars (tree height, timber volume, basal
+    area, stem diameter, DEM, HR-VPP phenology metrics, harvest probability).
+    These are z-score normalized identically to UnifiedDataset.  Pass
+    ``--no-aux`` to train the spectral-only baseline.
+
 Two-stage training:
     Stage 1 (``--stage1-epochs``, default 5):
-        Backbone frozen (except pos_embed).  Only the MLP head and positional
-        embeddings are trained.  Allows rapid feature adaptation.
+        Backbone frozen (except pos_embed).  MLP head, AUX projector and
+        positional embeddings are trained.
     Stage 2 (remaining epochs):
         Full fine-tuning.  Backbone LR = ``--backbone-lr-factor`` × head LR
         (default 0.1×).  Discriminative LR prevents catastrophic forgetting.
@@ -30,6 +37,11 @@ Usage::
         --limit-tiles 200 \\
         --epochs 3 --batch-size 64 \\
         --device cuda
+
+    # Spectral-only baseline (no AUX)
+    python scripts/train_pixel.py \\
+        --data-dir /data/unified_v2 --no-aux \\
+        --checkpoint-dir /checkpoints/pixel_spectral_only
 
     # Evaluate existing checkpoint
     python scripts/train_pixel.py \\
@@ -56,14 +68,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 
-from imint.training.pixel_dataset import PixelContextDataset
+from imint.training.pixel_dataset import PixelContextDataset, N_AUX
 from imint.training.unified_schema import (
     NUM_UNIFIED_CLASSES,
     UNIFIED_CLASS_NAMES,
     get_class_weights,
 )
 from imint.training.losses import FocalLoss
-from imint.fm.pixel_head import PrithviPixelClassifier, build_pixel_classifier
+from imint.fm.pixel_head import PrithviPixelClassifier, build_pixel_classifier, N_AUX_DEFAULT
 
 
 # ── Argument parser ───────────────────────────────────────────────────────
@@ -84,6 +96,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Prepend 2016 background frame (T=5, default True)")
     p.add_argument("--no-frame-2016", dest="use_frame_2016", action="store_false",
                    help="Disable 2016 background frame (T=4)")
+    p.add_argument("--use-aux", action="store_true", default=True,
+                   help="Inject center-pixel AUX channels into head (default True)")
+    p.add_argument("--no-aux", dest="use_aux", action="store_false",
+                   help="Disable AUX injection (spectral-only baseline)")
     p.add_argument("--context-px", type=int, default=32,
                    help="Context window side length in pixels (default: 32)")
     p.add_argument("--samples-per-tile", type=int, default=512,
@@ -181,18 +197,30 @@ def _run_epoch(
     optimizer: torch.optim.Optimizer | None,
     device: torch.device,
     train: bool,
+    use_aux: bool = True,
 ) -> tuple[float, np.ndarray, np.ndarray]:
-    """Run one epoch. Returns (loss, preds, labels)."""
+    """Run one epoch. Returns (loss, preds, labels).
+
+    When ``use_aux=True`` the DataLoader is expected to yield 3-tuples
+    ``(patches, aux_vec, labels)``; otherwise 2-tuples ``(patches, labels)``.
+    """
     model.train(train)
     total_loss = 0.0
     all_preds, all_labels = [], []
 
     with torch.set_grad_enabled(train):
-        for patches, labels in loader:
+        for batch in loader:
+            if use_aux:
+                patches, aux_vec, labels = batch
+                aux_vec = aux_vec.to(device, non_blocking=True)
+            else:
+                patches, labels = batch
+                aux_vec = None
+
             patches = patches.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
 
-            logits = model(patches)  # (B, num_classes)
+            logits = model(patches, aux_vec)  # (B, num_classes)
             loss = criterion(logits, labels)
 
             if train:
@@ -292,10 +320,12 @@ def main() -> None:
 
     # num_frames: 5 if using 2016 frame, else 4
     num_frames = 5 if args.use_frame_2016 else 4
+    n_aux = N_AUX if args.use_aux else 0
 
     # ── Datasets ──────────────────────────────────────────────────
+    aux_label = f"+{n_aux}aux" if n_aux > 0 else "spectral-only"
     print(f"\n  Building datasets (context={args.context_px}px, "
-          f"frames={num_frames}, samples/tile={args.samples_per_tile}) …")
+          f"frames={num_frames}, {aux_label}, samples/tile={args.samples_per_tile}) …")
     t0 = time.time()
 
     train_ds = PixelContextDataset(
@@ -304,6 +334,7 @@ def main() -> None:
         split="train",
         samples_per_tile=args.samples_per_tile,
         use_frame_2016=args.use_frame_2016,
+        enable_aux=args.use_aux,
     )
     val_ds = PixelContextDataset(
         val_tiles,
@@ -311,18 +342,21 @@ def main() -> None:
         split="val",
         samples_per_tile=args.samples_per_tile // 2,
         use_frame_2016=args.use_frame_2016,
+        enable_aux=args.use_aux,
     ) if val_tiles else None
 
     print(f"  Train samples: {len(train_ds):,}, "
           f"Val samples: {len(val_ds):,}  ({time.time()-t0:.0f}s)")
 
     # ── Model ─────────────────────────────────────────────────────
-    print(f"\n  Loading PrithviPixelClassifier (T={num_frames}, pretrained=True) …")
+    print(f"\n  Loading PrithviPixelClassifier "
+          f"(T={num_frames}, n_aux={n_aux}, pretrained=True) …")
     t0 = time.time()
     model = PrithviPixelClassifier(
         num_classes=NUM_UNIFIED_CLASSES,
         context_px=args.context_px,
         num_frames=num_frames,
+        n_aux=n_aux,
         pretrained=True,
     )
     model = model.to(device)
@@ -354,7 +388,9 @@ def main() -> None:
             eval_ds, batch_size=512, num_workers=4, pin_memory=True,
         )
         criterion = nn.CrossEntropyLoss(ignore_index=0)
-        _, preds, labels = _run_epoch(model, loader, criterion, None, device, train=False)
+        _, preds, labels = _run_epoch(
+            model, loader, criterion, None, device, train=False, use_aux=args.use_aux,
+        )
         metrics = compute_metrics(preds, labels)
         print(f"  Mean Accuracy : {metrics['mean_acc']:.4f}")
         print(f"  Overall Acc   : {metrics['overall_acc']:.4f}")
@@ -420,6 +456,7 @@ def main() -> None:
     print(f"  Training: {args.epochs} epochs total, "
           f"Stage 1 = first {args.stage1_epochs} epochs")
     print(f"  Batch size: {args.batch_size}, LR: {args.lr}")
+    print(f"  AUX channels: {n_aux} ({'enabled' if n_aux > 0 else 'disabled'})")
     print(f"{'='*60}\n")
 
     for epoch in range(start_epoch, args.epochs):
@@ -439,7 +476,8 @@ def main() -> None:
 
         t0 = time.time()
         train_loss, train_preds, train_labels = _run_epoch(
-            model, train_loader, criterion, optimizer, device, train=True
+            model, train_loader, criterion, optimizer, device,
+            train=True, use_aux=args.use_aux,
         )
         train_metrics = compute_metrics(train_preds, train_labels)
         scheduler.step()
@@ -448,7 +486,8 @@ def main() -> None:
         val_acc = 0.0
         if val_loader is not None:
             val_loss, val_preds, val_labels = _run_epoch(
-                model, val_loader, criterion, None, device, train=False
+                model, val_loader, criterion, None, device,
+                train=False, use_aux=args.use_aux,
             )
             val_metrics = compute_metrics(val_preds, val_labels)
             val_acc = val_metrics["mean_acc"]
@@ -476,6 +515,8 @@ def main() -> None:
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "val_mean_acc": val_acc,
+                "n_aux": n_aux,
+                "num_frames": num_frames,
                 "args": vars(args),
             }, save_path)
             print(f"    ↑ New best mAcc={best_val_acc:.4f} → {save_path}")
@@ -508,7 +549,8 @@ def main() -> None:
                                map_location=device, weights_only=True)
         model.load_state_dict(best_ckpt["model_state_dict"])
         _, val_preds, val_labels = _run_epoch(
-            model, val_loader, criterion, None, device, train=False
+            model, val_loader, criterion, None, device,
+            train=False, use_aux=args.use_aux,
         )
         metrics = compute_metrics(val_preds, val_labels)
         for name, acc in metrics["per_class_acc"].items():
