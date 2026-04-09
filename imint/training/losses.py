@@ -26,9 +26,14 @@ def parcel_area_to_pixel_weights(
     learns to delineate sub-hectare field boundaries, not just bulk crop types.
 
     Weight function:
-        area == 0  (background)      →  0.0
-        0 < area < mmu_ha  (sub-MMU) →  max_weight        (highest emphasis)
-        area >= mmu_ha               →  clip(1/√area, 1.0, max_weight)
+        area == 0  (NMD non-crop / background)  →  1.0  (uniform weight)
+        0 < area < mmu_ha  (sub-MMU crop)        →  max_weight  (highest emphasis)
+        area >= mmu_ha     (normal crop)          →  clip(1/√area, 1.0, max_weight)
+
+    NMD non-crop pixels (forest, water, urban, etc.) have area_ha==0 because
+    they carry no LPIS parcel. Defaulting to 1.0 ensures the model trains on
+    all 23 classes, not just LPIS crop classes.  The ignore_index in FocalLoss /
+    DiceLoss handles true background (label==0) independently of pixel_weight.
 
     At 0.25 ha: w = 1/√0.25 = 2.0
     At 1.00 ha: w = 1/√1.00 = 1.0  (floor — large parcels carry standard weight)
@@ -42,7 +47,7 @@ def parcel_area_to_pixel_weights(
     Returns:
         Float32 tensor of same shape as area_ha.
     """
-    weight = torch.zeros_like(area_ha)
+    weight = torch.ones_like(area_ha)   # default 1.0 for NMD/non-LPIS pixels
 
     crop_mask = area_ha > 0.0
     sub_mmu   = crop_mask & (area_ha < mmu_ha)
