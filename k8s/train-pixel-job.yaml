@@ -1,0 +1,122 @@
+---
+# Job: Train Prithvi pixel-context classifier (23-class unified LULC).
+#
+# Architecture:
+#   Input   : (B, T*6, 32, 32) context patches  (T=5 with 2016 frame, T=4 without)
+#   Backbone: Prithvi-EO-2.0-300M (PrithviViT encoder, ~300M params)
+#   Readout : [CLS] token from last transformer block
+#   Head    : Linear(1024→512) → GELU → Dropout(0.2) → Linear(512→23)
+#
+# Two-stage training:
+#   Stage 1 (5 epochs):  backbone frozen, train head + pos_embed
+#   Stage 2 (30 epochs): full fine-tune, backbone LR = 0.1× head LR
+#
+# Estimated runtime: ~4 h on H100 SXM5 (35 epochs, 3.4M samples, batch 512)
+#
+# Prerequisites:
+#   - PVC "training-data" with /data/unified_v2/ containing labelled tiles
+#   - PVC "training-checkpoints" for output
+#   - Tiles should have has_frame_2016=1 for T=5 training
+#     (run add-background-frame job first)
+#   - Labels rebuilt via build-labels-v2 job
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-pixel-v1
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800    # 8 h safety cap (expected ~4 h)
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: trainer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Pixel Classifier Training ==="
+              echo "Started: $(date)"
+              nvidia-smi || true
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir \
+                torch torchvision --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm numpy Pillow scikit-learn scipy rasterio geopandas \
+                shapely pyproj huggingface_hub
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . 2>/dev/null || \
+                pip install --quiet --no-cache-dir -r requirements.txt 2>/dev/null || true
+
+              echo ""
+              echo "Data inventory:"
+              echo "  Tiles:             $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)"
+              echo "  With frame_2016:   $(python3 -c \"
+              import numpy as np, glob
+              tiles = glob.glob('/data/unified_v2/*.npz')
+              ok = sum(1 for t in tiles[:500] if int(np.load(t, allow_pickle=False).get('has_frame_2016', 0)) == 1)
+              print(f'{ok}/500 sampled tiles have has_frame_2016=1')
+              \" 2>/dev/null || echo 'check skipped')"
+              echo ""
+
+              mkdir -p /checkpoints/pixel_v1
+
+              python scripts/train_pixel.py \
+                --data-dir /data/unified_v2 \
+                --use-frame-2016 \
+                --epochs 35 \
+                --stage1-epochs 5 \
+                --batch-size 512 \
+                --lr 3e-4 \
+                --backbone-lr-factor 0.1 \
+                --weight-decay 1e-4 \
+                --focal-gamma 2.0 \
+                --num-workers 8 \
+                --patience 10 \
+                --context-px 32 \
+                --samples-per-tile 512 \
+                --checkpoint-dir /checkpoints/pixel_v1 \
+                --device cuda
+
+              echo ""
+              echo "=== Done: $(date) ==="
+              echo "Checkpoint: $(ls -lh /checkpoints/pixel_v1/best_model.pt 2>/dev/null || echo 'not found')"
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGINGFACE_HUB_VERBOSITY
+              value: "warning"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "16"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints

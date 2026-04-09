@@ -338,6 +338,134 @@ def _fetch_nmd_label_remote(bbox_3006: dict) -> np.ndarray | None:
     return None
 
 
+def fetch_background_frame(
+    bbox_3006: dict,
+    *,
+    primary_year: int = 2016,
+    fallback_year: int = 2015,
+    doy_start: int = 152,   # Jun  1
+    doy_end: int = 228,     # Aug 16
+    scene_cloud_max: float = 40.0,
+    cloud_threshold: float = 0.15,
+    haze_threshold: float = 0.10,
+    nodata_threshold: float = 0.20,
+    max_candidates: int = 5,
+) -> dict | None:
+    """Fetch the best summer background frame for a tile.
+
+    Uses the CDSE Catalog STAC to enumerate **all** available S2A
+    acquisitions in a fixed DOY window (Jun 1–Aug 16), then fetches
+    each candidate via the Sentinel Hub Process API and scores it on
+    tile-level quality (valid-pixel fraction, cloud fraction).
+
+    The primary year is tried first; if no qualifying scene is found,
+    the fallback year is used.  VPP is deliberately bypassed (VPP only
+    covers 2017+).
+
+    Args:
+        bbox_3006: Tile bbox as ``{"west", "south", "east", "north"}``.
+        primary_year: First year to search (default 2016).
+        fallback_year: Second year if primary fails (default 2015).
+        doy_start: Start DOY of summer window (default 152 = Jun 1).
+        doy_end: End DOY of summer window (default 228 = Aug 16).
+        scene_cloud_max: Scene-level cloud ceiling for catalog filter.
+        cloud_threshold: Max tile-level cloud fraction (0–1).
+        haze_threshold: Max B02 mean reflectance for haze gate (0–1).
+        nodata_threshold: Max nodata (zero-pixel) fraction (0–1).
+        max_candidates: Max catalog candidates to try per year.
+
+    Returns:
+        Dict with keys::
+
+            frame_2016         (6, 256, 256) float32 spectral
+            frame_2016_date    "YYYY-MM-DD"
+            frame_2016_doy     int32
+            frame_2016_cloud_pct float32 (tile-level, 0–1)
+            frame_2016_year    int32 (actual year used; may be 2015)
+            has_frame_2016     int32 (1 = success, 0 = failure)
+
+        Returns ``None`` only if both years completely fail (e.g.
+        network unreachable).  On a per-tile failure the caller should
+        store ``has_frame_2016 = 0`` and a zero-filled ``frame_2016``.
+    """
+    from imint.training.cdse_s2 import fetch_s2_scene, cdse_catalog_search
+
+    coords_wgs84 = bbox_3006_to_wgs84(bbox_3006)
+    bbox_4326 = (
+        coords_wgs84["west"], coords_wgs84["south"],
+        coords_wgs84["east"], coords_wgs84["north"],
+    )
+    w, s, e, n = (
+        bbox_3006["west"], bbox_3006["south"],
+        bbox_3006["east"], bbox_3006["north"],
+    )
+
+    for year in [primary_year, fallback_year]:
+        date_start, date_end = doy_to_date_range(year, doy_start, doy_end)
+
+        # Query CDSE Catalog STAC — returns all acquisitions sorted by cloud %
+        candidates = cdse_catalog_search(
+            bbox_4326, date_start, date_end,
+            max_cloud=scene_cloud_max,
+        )
+
+        if not candidates:
+            print(f"    [BG {year}] no catalog results ({date_start}..{date_end})")
+            continue
+
+        print(
+            f"    [BG {year}] {len(candidates)} catalog scenes, "
+            f"best cloud={candidates[0][1]:.0f}%"
+        )
+
+        for cand_date, _scene_cloud in candidates[:max_candidates]:
+            try:
+                result = fetch_s2_scene(
+                    w, s, e, n,
+                    date=cand_date,
+                    size_px=TILE_SIZE_PX,
+                    cloud_threshold=cloud_threshold,
+                    haze_threshold=haze_threshold,
+                    nodata_threshold=nodata_threshold,
+                )
+            except Exception:
+                continue
+
+            if result is None:
+                continue
+
+            spectral, _scl, cloud_frac = result
+
+            valid_pct = float((spectral[0] > 0).mean())
+            if valid_pct < 0.80:
+                print(
+                    f"    [BG {year}] {cand_date}: rejected "
+                    f"(valid_pct={valid_pct:.0%})"
+                )
+                continue
+
+            doy_val = datetime.strptime(cand_date, "%Y-%m-%d").timetuple().tm_yday
+            print(
+                f"    [BG {year}] {cand_date} OK "
+                f"(cloud={cloud_frac:.0%}, valid={valid_pct:.0%})"
+            )
+            return {
+                "frame_2016": spectral,
+                "frame_2016_date": np.bytes_(cand_date),
+                "frame_2016_doy": np.int32(doy_val),
+                "frame_2016_cloud_pct": np.float32(cloud_frac),
+                "frame_2016_year": np.int32(year),
+                "has_frame_2016": np.int32(1),
+            }
+
+        print(
+            f"    [BG {year}]: no qualifying scene "
+            f"(tried {min(len(candidates), max_candidates)} of {len(candidates)})"
+        )
+
+    return None
+
+
 def stack_frames(
     scene_results: list[tuple[np.ndarray | None, str]],
     num_frames: int,

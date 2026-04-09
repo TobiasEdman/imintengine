@@ -83,6 +83,10 @@ _RETRY_DELAY_S = 2.0
 
 # ── Public API ───────────────────────────────────────────────────────────
 
+_CRS_3006 = "http://www.opengis.net/def/crs/EPSG/0/3006"
+_CRS_4326 = "http://www.opengis.net/def/crs/EPSG/0/4326"
+
+
 def fetch_s2_scene(
     west: float,
     south: float,
@@ -90,73 +94,83 @@ def fetch_s2_scene(
     north: float,
     date: str,
     *,
+    crs: str = _CRS_3006,
     size_px: int | tuple[int, int] = 256,
     cloud_threshold: float = 0.10,
     haze_threshold: float = 0.06,
+    nodata_threshold: float | None = 0.05,
 ) -> tuple[np.ndarray, np.ndarray, float] | None:
     """Fetch a single Sentinel-2 L2A scene via Sentinel Hub Process API.
 
-    Downloads 6 spectral bands + SCL in one HTTP POST, then checks
-    cloud fraction and haze locally.
+    Downloads 6 spectral bands + SCL in one HTTP POST, then applies
+    quality gates (cloud, haze, nodata).
 
     Args:
-        west, south, east, north: Bounding box in EPSG:3006 (meters).
-        date: ISO date string, e.g. "2019-07-15".
+        west, south, east, north: Bounding box coordinates.
+        date: ISO date string, e.g. "2024-07-15".
+        crs: Coordinate reference system URI.
+            Default: EPSG:3006 (Sweden). Use ``_CRS_4326`` for WGS84.
         size_px: Output size — int for square or (H, W) tuple.
-        cloud_threshold: Max cloud+shadow fraction (0–1).  Scenes above
-            this are rejected (returns None).
+        cloud_threshold: Max cloud+shadow fraction (0–1).
         haze_threshold: Max mean B02 reflectance for haze gate.
-            Scenes above this are rejected (returns None).
+        nodata_threshold: Max fraction of zero pixels (0–1).
+            None = skip check (for AOIs larger than a single granule swath).
 
     Returns:
-        Tuple of (spectral, scl, cloud_fraction) on success:
+        (spectral, scl, cloud_fraction) on success, None on rejection.
             spectral: (6, H, W) float32 reflectance [0, 1]
             scl: (H, W) uint8 Scene Classification Layer
-            cloud_fraction: float cloud+shadow fraction
-        Returns None if scene is too cloudy, too hazy, or fetch fails.
+            cloud_fraction: float
     """
-    if isinstance(size_px, int):
-        h_px, w_px = size_px, size_px
-    else:
-        h_px, w_px = size_px
-
+    h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
     token = _get_token()
 
-    # Fetch 7-band TIFF (6 spectral + SCL)
     try:
         tiff_bytes = _fetch_s2_tiff(
-            west, south, east, north,
-            w_px, h_px,
-            date=date,
-            token=token,
+            west, south, east, north, w_px, h_px,
+            date=date, token=token, crs=crs,
         )
     except Exception as e:
         print(f"    [SH HTTP] {date}: {e}")
         return None
 
-    # Parse multi-band TIFF
     bands = _parse_multiband_tiff(tiff_bytes, h_px, w_px, len(_ALL_BANDS))
     if bands is None or len(bands) < len(_ALL_BANDS):
         return None
 
-    # Split spectral (0-5) and SCL (6)
-    spectral = np.stack(bands[:6], axis=0)  # (6, H, W) float32 reflectance
-    scl = bands[6].astype(np.uint8)         # (H, W) SCL class values
+    spectral = np.stack(bands[:6], axis=0)  # (6, H, W) float32
+    scl = bands[6].astype(np.uint8)         # (H, W) uint8
 
-    # Cloud fraction check
     cloud_fraction = _check_cloud_fraction(scl)
     if cloud_fraction > cloud_threshold:
         return None
 
-    # Nodata check — reject tiles with >5% zero pixels (outside swath/edge)
-    nodata_frac = float((spectral[0] == 0).mean())
-    if nodata_frac > 0.05:
-        return None
+    if nodata_threshold is not None:
+        nodata_frac = float((spectral[0] == 0).mean())
+        if nodata_frac > nodata_threshold:
+            return None
 
-    # Haze check (mean B02 reflectance)
-    b02_mean = float(spectral[0].mean())
-    if b02_mean > haze_threshold:
-        return None
+    # Haze check on valid pixels only (avoids bias from nodata zeros)
+    valid = spectral[0] > 0
+    if valid.any():
+        if float(spectral[0][valid].mean()) > haze_threshold:
+            return None
+
+    return spectral, scl, cloud_fraction
+
+
+def fetch_s2_scene_wgs84(
+    west: float, south: float, east: float, north: float, date: str, **kwargs,
+) -> tuple[np.ndarray, np.ndarray, float] | None:
+    """Convenience wrapper: fetch_s2_scene with WGS84 defaults.
+
+    Defaults: crs=EPSG:4326, cloud<0.30, haze<0.10, nodata=None (disabled).
+    """
+    kwargs.setdefault("crs", _CRS_4326)
+    kwargs.setdefault("cloud_threshold", 0.30)
+    kwargs.setdefault("haze_threshold", 0.10)
+    kwargs.setdefault("nodata_threshold", None)
+    return fetch_s2_scene(west, south, east, north, date, **kwargs)
 
     return spectral, scl, cloud_fraction
 
@@ -465,11 +479,13 @@ def _fetch_s2_tiff(
     *,
     date: str,
     token: str,
+    crs: str = "http://www.opengis.net/def/crs/EPSG/0/3006",
 ) -> bytes:
     """Fetch S2 L2A data as multi-band GeoTIFF from Sentinel Hub Process API.
 
-    Uses EPSG:3006 bbox directly — output is already aligned to the
-    NMD 10 m grid, no reprojection needed.
+    Args:
+        crs: Coordinate reference system URI. Default EPSG:3006 (Sweden).
+            Use "http://www.opengis.net/def/crs/EPSG/0/4326" for WGS84.
     """
     # Time range: single day
     time_from = f"{date}T00:00:00Z"
@@ -480,7 +496,7 @@ def _fetch_s2_tiff(
             "bounds": {
                 "bbox": [west, south, east, north],
                 "properties": {
-                    "crs": "http://www.opengis.net/def/crs/EPSG/0/3006"
+                    "crs": crs
                 },
             },
             "data": [{
@@ -573,6 +589,86 @@ def _fetch_s2_tiff(
             ) from e
 
     raise RuntimeError("S2 fetch failed: exhausted all retries")
+
+
+def cdse_catalog_search(
+    bbox_4326: tuple[float, float, float, float],
+    date_start: str,
+    date_end: str,
+    *,
+    max_cloud: float = 40.0,
+    max_results: int = 100,
+) -> list[tuple[str, float]]:
+    """Search CDSE Catalog STAC for Sentinel-2 scenes.
+
+    Queries the CDSE STAC API which covers S2A/B from 2015 onwards
+    (unlike DES STAC which only indexes from 2018).  No authentication
+    is required for catalog queries.
+
+    Args:
+        bbox_4326: ``(west, south, east, north)`` in WGS84.
+        date_start: ISO date string, e.g. ``"2016-06-01"``.
+        date_end: ISO date string, e.g. ``"2016-08-16"``.
+        max_cloud: Scene-level cloud cover ceiling (0–100 %).
+        max_results: Max items per STAC page.
+
+    Returns:
+        List of ``(date_str, cloud_pct)`` tuples sorted by
+        ``cloud_pct`` ascending (clearest first).  ``date_str``
+        is ``"YYYY-MM-DD"``; ``cloud_pct`` is 0–100.
+        Returns an empty list on network failure.
+    """
+    west, south, east, north = bbox_4326
+
+    url = "https://catalogue.dataspace.copernicus.eu/stac/search"
+    request_body = {
+        "collections": ["SENTINEL-2"],
+        "bbox": [west, south, east, north],
+        "datetime": f"{date_start}T00:00:00Z/{date_end}T23:59:59Z",
+        "limit": max_results,
+    }
+
+    try:
+        body_bytes = json.dumps(request_body).encode()
+        req = urllib.request.Request(
+            url,
+            data=body_bytes,
+            headers={"Content-Type": "application/json"},
+        )
+        resp = urllib.request.urlopen(req, timeout=30)
+        payload = json.loads(resp.read())
+    except Exception:
+        return []
+
+    best: dict[str, float] = {}   # date → lowest cloud
+
+    for item in payload.get("features", []):
+        props = item.get("properties", {})
+
+        # Cloud cover field: CDSE uses "eo:cloud_cover" (0–100 %)
+        cloud = (
+            props.get("eo:cloud_cover")
+            or props.get("cloudCover")
+            or props.get("cloud_cover")
+        )
+        if cloud is None:
+            cloud = 50.0   # unknown — treat as 50 %
+        cloud = float(cloud)
+
+        if cloud > max_cloud:
+            continue
+
+        # Extract date (prefer "datetime", fall back to "start_datetime")
+        raw_dt = props.get("datetime") or props.get("start_datetime", "")
+        if not raw_dt:
+            continue
+        date_str = raw_dt[:10]  # "YYYY-MM-DD"
+
+        # Keep only the lowest-cloud entry per date
+        if date_str not in best or cloud < best[date_str]:
+            best[date_str] = cloud
+
+    return sorted(best.items(), key=lambda x: x[1])
 
 
 def _parse_multiband_tiff(

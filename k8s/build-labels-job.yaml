@@ -1,10 +1,11 @@
 ---
-# Job: Rebuild all labels (NMD + LPIS + SKS) from scratch for all ~5600 tiles.
+# Job: Rebuild all labels (NMD + LPIS + SKS) from scratch for all ~6,600 tiles.
 #
-# Prerequisites (already completed on PVC):
-#   ✓ strip_bad_keys.py  — removed stale label/harvest_mask/nmd_label_raw keys
-#   ✓ blank-crop-failed  — zeroed frame-0 on crop tiles with no 2017 data
-#   ✓ phase-a/b patches  — autumn frames patched
+# Fixes applied in this run vs previous builds:
+#   ✓ NMD seam removed — rasterio out_shape instead of scipy.ndimage.zoom
+#   ✓ LPIS gated — only applied where NMD says åker/öppen mark (merge_all)
+#   ✓ SKS gated  — only applied where NMD says forest (merge_all)
+#   ✓ 23-class unified schema (10-class stubs removed)
 #
 # What this writes to each tile .npz:
 #   label           (H×W int8)   unified 23-class via merge_all()
@@ -13,6 +14,10 @@
 #   harvest_mask    (H×W uint8)  SKS clearcut, no rotation (fixed geometry)
 #   n_parcels       (int32)
 #
+# Runtime estimate: 6,597 tiles ÷ 32 workers × ~3 s/tile ≈ 10 min
+#   + LPIS/SKS load overhead (~5 min) → ~15 min total
+# Memory: LPIS 4 years × ~3 Gi + SKS ~3 Gi + worker headroom → 96 Gi safe
+#
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -20,7 +25,7 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 7200    # 2h (5600 tiles × ~3s/tile ÷ 16 workers ≈ 18 min + load time)
+  activeDeadlineSeconds: 5400    # 90 min safety cap (expected ~15 min)
   template:
     spec:
       restartPolicy: Never
@@ -57,7 +62,7 @@ spec:
                 --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
                 --lpis-dir  /data/lpis \
                 --sks-dir   /data/sks \
-                --workers 16
+                --workers 32
 
               echo ""
               echo "=== QC ==="
@@ -71,11 +76,11 @@ spec:
               value: "1"
           resources:
             requests:
-              cpu: "16"
-              memory: "64Gi"
+              cpu: "32"
+              memory: "96Gi"
             limits:
-              cpu: "16"
-              memory: "64Gi"
+              cpu: "32"
+              memory: "96Gi"
           volumeMounts:
             - name: data
               mountPath: /data

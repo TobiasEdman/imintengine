@@ -1,0 +1,112 @@
+---
+# Persistent tile server Deployment + Service for the interactive tile viewer.
+#
+# The tile server (scripts/tile_server.py) serves:
+#   GET /index.json              — WGS84 coords for all ~6,600 tiles
+#   GET /tile/{id}/rgb.png       — True-colour RGB (adaptive p2→p98 stretch)
+#   GET /tile/{id}/nmd.png       — NMD 23-class label overlay
+#   GET /tile/{id}/thumb.png     — 64px thumbnail
+#   GET /tile/{id}/meta.json     — Tile metadata (class histogram, dates, etc.)
+#
+# Access from local machine:
+#   kubectl port-forward svc/tile-server 8094:8000 \
+#       -n prithvi-training-default
+#   Then open tile_viewer.html which connects to localhost:8094
+#
+# Unlike the debug pod, this Deployment restarts automatically and does not
+# expire after 2 hours.
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tile-server
+  namespace: prithvi-training-default
+  labels:
+    app: tile-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tile-server
+  template:
+    metadata:
+      labels:
+        app: tile-server
+    spec:
+      containers:
+        - name: tile-server
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Tile Server Starting ==="
+
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir \
+                numpy Pillow pyproj rasterio scipy
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              echo "Tiles available: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)"
+              echo "Starting tile server on :8000 ..."
+
+              exec python scripts/tile_server.py
+
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /index.json
+              port: 8000
+            initialDelaySeconds: 60    # Allow time for tile index build
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /index.json
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tile-server
+  namespace: prithvi-training-default
+  labels:
+    app: tile-server
+spec:
+  selector:
+    app: tile-server
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
