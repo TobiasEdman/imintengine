@@ -73,27 +73,9 @@ spec:
                 --fallback-year 2015
 
               echo ""
-              echo "=== Quick QC: sample 5 tiles ==="
-              python3 - << 'PYEOF'
-              import numpy as np, glob, random, sys
-              tiles = glob.glob("/data/unified_v2/*.npz")
-              random.shuffle(tiles)
-              ok = fail = 0
-              for t in tiles[:20]:
-                  d = np.load(t, allow_pickle=False)
-                  has = int(d.get("has_frame_2016", 0))
-                  if has == 1:
-                      f = d["frame_2016"]
-                      assert f.shape == (6, 256, 256), f"bad shape {f.shape}"
-                      assert f.max() > 0, "all zeros"
-                      ok += 1
-                  else:
-                      fail += 1
-              print(f"  Sample QC: {ok} OK, {fail} failed/missing")
-              if ok == 0:
-                  print("WARNING: no tiles with has_frame_2016==1 in sample!")
-                  sys.exit(1)
-              PYEOF
+              echo "=== Quick QC ==="
+              python scripts/check_tiles.py /data/unified_v2 qc-frame2016 --sample 20
+              python scripts/check_tiles.py /data/unified_v2 frame2016 --sample 500 --warn
 
               echo ""
               echo "=== Done: $(date) ==="

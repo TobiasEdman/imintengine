@@ -62,8 +62,8 @@ spec:
 
               echo ""
               echo "Data inventory:"
-              echo "  Tiles: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)"
-              python3 -c "import numpy as np,glob; t=glob.glob('/data/unified_v2/*.npz'); n=sum(1 for f in t[:500] if int(np.load(f,allow_pickle=False).get('has_frame_2016',0))==1); print('  frame_2016: '+str(n)+'/500 sampled')" 2>/dev/null || true
+              python scripts/check_tiles.py /data/unified_v2 count
+              python scripts/check_tiles.py /data/unified_v2 frame2016 --sample 500 --warn
               echo ""
 
               mkdir -p /checkpoints/pixel_v1

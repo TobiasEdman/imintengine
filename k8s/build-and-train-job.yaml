@@ -91,13 +91,7 @@ spec:
               echo ""
 
               # Quick sanity check: count tiles with label key
-              LABELED=$(python3 -c "
-              import glob, numpy as np
-              tiles = glob.glob('/data/unified_v2/*.npz')[:50]
-              ok = sum(1 for t in tiles if 'label' in np.load(t, allow_pickle=True).files)
-              print(ok)
-              ")
-              echo "Spot-check: $LABELED/50 tiles have 'label' key"
+              python scripts/check_tiles.py /data/unified_v2 labels --sample 50
 
               # ════════════════════════════════════════════════════════
               # PHASE 2 — Training
