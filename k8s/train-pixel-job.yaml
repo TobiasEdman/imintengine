@@ -63,12 +63,7 @@ spec:
               echo ""
               echo "Data inventory:"
               echo "  Tiles: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)"
-              python3 - << 'PYEOF' 2>/dev/null || echo "  frame_2016 check skipped"
-import numpy as np, glob
-tiles = glob.glob('/data/unified_v2/*.npz')
-ok = sum(1 for t in tiles[:500] if int(np.load(t, allow_pickle=False).get('has_frame_2016', 0)) == 1)
-print(f'  With frame_2016:   {ok}/500 sampled tiles')
-PYEOF
+              python3 -c "import numpy as np,glob; t=glob.glob('/data/unified_v2/*.npz'); n=sum(1 for f in t[:500] if int(np.load(f,allow_pickle=False).get('has_frame_2016',0))==1); print('  frame_2016: '+str(n)+'/500 sampled')" 2>/dev/null || true
               echo ""
 
               mkdir -p /checkpoints/pixel_v1
