@@ -32,15 +32,14 @@ spec:
               cd /workspace/imintengine
               pip install --no-cache-dir -e . 2>/dev/null || pip install --quiet --no-cache-dir -r requirements.txt 2>/dev/null || true
 
-              mkdir -p /data/inference_output
+              # --checkpoint is optional; omit for NMD+NIR preview without a model
+              mkdir -p /data/viewer_tiles
               python3 /workspace/imintengine/scripts/inference_preview.py \
-                --checkpoint /checkpoints/unified_v1/best_model.pt \
-                --tiles-dir /data/lulc_seasonal/tiles \
-                --output-dir /data/inference_output \
-                --num-tiles 10
+                --tiles-dir /data/unified_v2 \
+                --output-dir /data/viewer_tiles
 
               echo "=== Output files ==="
-              ls -lh /data/inference_output/
+              ls -lh /data/viewer_tiles/
 
           env:
             - name: PYTHONUNBUFFERED

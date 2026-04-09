@@ -57,7 +57,6 @@ spec:
                 --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
                 --lpis-dir  /data/lpis \
                 --sks-dir   /data/sks \
-                --num-classes 19 \
                 --workers 16
 
               echo ""

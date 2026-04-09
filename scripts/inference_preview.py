@@ -22,19 +22,12 @@ from imint.training.unified_schema import (
     UNIFIED_CLASSES,
     UNIFIED_COLORS,
     NUM_UNIFIED_CLASSES,
-    merge_nmd_lpis,
-    nmd10_to_unified,
+    nmd19_to_unified,
 )
 
 from imint.training.unified_dataset import AUX_CHANNEL_NAMES, AUX_NORM
 
 CLASS_NAMES = [UNIFIED_CLASSES.get(i, f"cls_{i}") for i in range(NUM_UNIFIED_CLASSES)]
-
-NMD_COLORS = {
-    0: (0, 0, 0), 1: (0, 100, 0), 2: (34, 139, 34), 3: (50, 205, 50),
-    4: (60, 179, 113), 5: (46, 79, 46), 6: (139, 90, 43), 7: (200, 150, 50),
-    8: (210, 180, 140), 9: (255, 0, 0), 10: (0, 0, 255),
-}
 
 
 def label_to_rgb(label: np.ndarray, colors: dict) -> np.ndarray:
@@ -102,9 +95,12 @@ def load_model(checkpoint_path: str, device: torch.device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--checkpoint", default=None,
+                        help="Model checkpoint path. Omit to generate NIR+NMD only (no prediction).")
     parser.add_argument("--tiles-dir", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--tile-ids", nargs="+",
+                        help="Only process these tile IDs (filename stems, e.g. 45843596)")
     parser.add_argument("--num-tiles", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -113,13 +109,20 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    model = load_model(args.checkpoint, device)
+    model = load_model(args.checkpoint, device) if args.checkpoint else None
+    if model is None:
+        print("No checkpoint — generating NIR + NMD panels only (skipping prediction)")
 
     tiles = sorted(glob.glob(os.path.join(args.tiles_dir, "*.npz")))
-    random.seed(args.seed)
-    indices = [i * len(tiles) // args.num_tiles for i in range(args.num_tiles)]
-    selected = [tiles[i] for i in indices]
-    print(f"Selected {len(selected)}/{len(tiles)} tiles")
+    if args.tile_ids:
+        ids = set(args.tile_ids)
+        selected = [t for t in tiles if os.path.basename(t).replace(".npz", "") in ids]
+        print(f"Selected {len(selected)} specified tiles")
+    else:
+        random.seed(args.seed)
+        indices = [i * len(tiles) // args.num_tiles for i in range(args.num_tiles)]
+        selected = [tiles[i] for i in indices]
+        print(f"Selected {len(selected)}/{len(tiles)} tiles")
 
     results = []
     for i, tile_path in enumerate(selected):
@@ -131,78 +134,72 @@ def main():
             data.get("image", data.get("spectral")), dtype=np.float32
         )
 
-        nmd_label = data.get("label", None)
-        if nmd_label is not None:
-            nmd_label = np.array(nmd_label)
+        # Unified ground truth: pre-built label stored directly in tile
+        unified_gt = np.asarray(
+            data.get("label", np.zeros((256, 256), dtype=np.uint8)), dtype=np.uint8
+        )
 
-        # Build unified ground truth
-        lpis = data.get("label_mask", None)
-        if nmd_label is not None and nmd_label.ndim == 2:
-            if lpis is not None:
-                unified_gt = merge_nmd_lpis(nmd_label, np.array(lpis))
-            else:
-                unified_gt = nmd10_to_unified(nmd_label)
-        else:
-            unified_gt = np.zeros((256, 256), dtype=np.uint8)
+        # NMD display: use nmd_label_raw (19-class sequential) if available,
+        # else fall back to unified label (still meaningful for forest/water/infra)
+        nmd_raw = data.get("nmd_label_raw", None)
+        nmd_display = (
+            nmd19_to_unified(np.asarray(nmd_raw, dtype=np.uint8))
+            if nmd_raw is not None
+            else unified_gt
+        )
 
-        rgb = make_summer_rgb(spectral)
-
-        # Extract single frame for model (num_frames=1 means 6 channels)
+        # NIR false-colour: B8A / B04 / B03 → R/G/B (bands index 3/2/1 in PRITHVI_BANDS)
         c = spectral.shape[0]
         bands_per_frame = 6
         n_frames_tile = c // bands_per_frame
         summer_idx = min(1, n_frames_tile - 1) if n_frames_tile == 3 else min(2, n_frames_tile - 1)
         base = summer_idx * bands_per_frame
-        model_input = spectral[base:base + bands_per_frame]  # (6, H, W)
+        # PRITHVI_BANDS = [B02, B03, B04, B8A, B11, B12] → NIR false-colour: B8A=3, B04=2, B03=1
+        nir = spectral[base + 3].astype(np.float32)   # B8A
+        red = spectral[base + 2].astype(np.float32)   # B04
+        grn = spectral[base + 1].astype(np.float32)   # B03
+        nir_stack = np.stack([nir, red, grn], axis=-1)
+        p2, p98 = np.percentile(nir_stack, [2, 98])
+        nir_rgb = np.clip((nir_stack - p2) / (p98 - p2 + 1e-6), 0, 1)
+        nir_img = (nir_rgb * 255).astype(np.uint8)
 
-        # Load aux channels (same as UnifiedDataset._load_aux_channels)
-        h, w = model_input.shape[1], model_input.shape[2]
-        aux_arrays = []
-        for ch_name in AUX_CHANNEL_NAMES:
-            if ch_name in data:
-                arr = data[ch_name].astype(np.float32)
-                if arr.shape != (h, w):
-                    padded = np.zeros((h, w), dtype=np.float32)
-                    sh = min(arr.shape[0], h)
-                    sw = min(arr.shape[1], w)
-                    padded[:sh, :sw] = arr[:sh, :sw]
-                    arr = padded
-            else:
-                arr = np.zeros((h, w), dtype=np.float32)
-            # Z-score normalize
-            if ch_name in AUX_NORM:
-                mean, std = AUX_NORM[ch_name]
-                arr = (arr - mean) / max(std, 1e-6)
-            aux_arrays.append(arr)
-        aux_stack = np.stack(aux_arrays, axis=0)  # (11, H, W)
-
-        # Inference
-        inp = torch.from_numpy(model_input).unsqueeze(0).to(device)
-        aux_t = torch.from_numpy(aux_stack).unsqueeze(0).to(device)
-        with torch.no_grad():
-            out = model(inp, aux=aux_t)
-            if isinstance(out, dict):
-                logits = out.get("out", list(out.values())[0])
-            else:
-                logits = out
-            pred = logits.argmax(1).squeeze(0).cpu().numpy().astype(np.uint8)
-
-        gt_rgb = label_to_rgb(unified_gt, UNIFIED_COLORS)
-        pred_rgb = label_to_rgb(pred, UNIFIED_COLORS)
-        nmd_rgb = (
-            label_to_rgb(nmd_label, NMD_COLORS)
-            if nmd_label is not None and nmd_label.ndim == 2
-            else np.zeros_like(rgb)
-        )
-
-        Image.fromarray(rgb).save(f"{args.output_dir}/{name}_rgb.png")
-        Image.fromarray(gt_rgb).save(f"{args.output_dir}/{name}_truth.png")
-        Image.fromarray(pred_rgb).save(f"{args.output_dir}/{name}_pred.png")
+        nmd_rgb = label_to_rgb(nmd_display, UNIFIED_COLORS)
+        Image.fromarray(nir_img).save(f"{args.output_dir}/{name}_nir.png")
         Image.fromarray(nmd_rgb).save(f"{args.output_dir}/{name}_nmd.png")
+
+        pred_classes: list[str] = []
+        if model is not None:
+            model_input = spectral[base:base + bands_per_frame]  # (6, H, W)
+            h, w = model_input.shape[1], model_input.shape[2]
+            aux_arrays = []
+            for ch_name in AUX_CHANNEL_NAMES:
+                if ch_name in data:
+                    arr = data[ch_name].astype(np.float32)
+                    if arr.shape != (h, w):
+                        padded = np.zeros((h, w), dtype=np.float32)
+                        sh = min(arr.shape[0], h); sw = min(arr.shape[1], w)
+                        padded[:sh, :sw] = arr[:sh, :sw]
+                        arr = padded
+                else:
+                    arr = np.zeros((h, w), dtype=np.float32)
+                if ch_name in AUX_NORM:
+                    mean, std = AUX_NORM[ch_name]
+                    arr = (arr - mean) / max(std, 1e-6)
+                aux_arrays.append(arr)
+            aux_stack = np.stack(aux_arrays, axis=0)
+            inp   = torch.from_numpy(model_input).unsqueeze(0).to(device)
+            aux_t = torch.from_numpy(aux_stack).unsqueeze(0).to(device)
+            with torch.no_grad():
+                out = model(inp, aux=aux_t)
+                logits = out.get("out", list(out.values())[0]) if isinstance(out, dict) else out
+                pred = logits.argmax(1).squeeze(0).cpu().numpy().astype(np.uint8)
+            pred_rgb = label_to_rgb(pred, UNIFIED_COLORS)
+            Image.fromarray(pred_rgb).save(f"{args.output_dir}/{name}_pred.png")
+            pred_classes = [CLASS_NAMES[c] for c in np.unique(pred) if c < len(CLASS_NAMES)]
 
         results.append({
             "name": name,
-            "pred": [CLASS_NAMES[c] for c in np.unique(pred) if c < len(CLASS_NAMES)],
+            "pred": pred_classes,
             "gt": [CLASS_NAMES[c] for c in np.unique(unified_gt) if c < len(CLASS_NAMES)],
         })
         print(f"    pred: {results[-1]['pred']}")

@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-inspect5
+  namespace: prithvi-training-default
+spec:
+  restartPolicy: Never
+  containers:
+    - name: debug
+      image: python:3.11-slim
+      command: ["sleep", "7200"]
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+        limits:
+          cpu: "4"
+          memory: "16Gi"
+      volumeMounts:
+        - mountPath: /data
+          name: training-data
+  nodeSelector:
+    accelerator: nvidia-h100
+  volumes:
+    - name: training-data
+      persistentVolumeClaim:
+        claimName: training-data

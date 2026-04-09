@@ -120,9 +120,8 @@ def build_tile_label(
     nmd_raster: str,
     lpis_dir: str,
     sks_dir: str,
-    num_classes: int = 19,
 ) -> dict:
-    """Build unified 20-class label for one tile from scratch."""
+    """Build unified 23-class label for one tile from scratch."""
     name = os.path.basename(tile_path).replace(".npz", "")
     try:
         data = dict(np.load(tile_path, allow_pickle=True))
@@ -167,9 +166,7 @@ def build_tile_label(
             tile_year = 2022  # default
 
         # --- Step 1: NMD label from local raster ---
-        nmd_label = fetch_nmd_label_local(
-            bbox_3006, nmd_raster=nmd_raster, num_classes=num_classes,
-        )
+        nmd_label = fetch_nmd_label_local(bbox_3006, nmd_raster=nmd_raster)
         if nmd_label is None:
             return {"name": name, "status": "failed", "reason": "no_nmd"}
 
@@ -235,13 +232,16 @@ def main():
     p.add_argument("--nmd-raster", default="data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif")
     p.add_argument("--lpis-dir", default="data/lpis")
     p.add_argument("--sks-dir", default="data/sks")
-    p.add_argument("--num-classes", type=int, default=19,
-                   help="NMD class count: 10 or 19 (default 19 for full detail)")
+    p.add_argument("--tile-ids", nargs="+",
+                   help="Only process these tile IDs (filename stems, e.g. 45843596)")
     p.add_argument("--workers", type=int, default=1,
                    help="Parallel workers (use 1 to minimize memory)")
     args = p.parse_args()
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
+    if args.tile_ids:
+        ids = set(args.tile_ids)
+        tiles = [t for t in tiles if os.path.basename(t).replace(".npz", "") in ids]
     print(f"=== Build Labels from Scratch ===")
     print(f"  Tiles: {len(tiles)}")
     print(f"  NMD: {args.nmd_raster}")
@@ -250,11 +250,8 @@ def main():
     print(f"  Schema: {len(UNIFIED_CLASS_NAMES)} classes")
     print()
 
-    # Pre-load LPIS for common years
-    for year in [2018, 2019, 2022, 2023]:
-        _load_lpis(year, args.lpis_dir)
-
-    # Pre-load SKS
+    # LPIS and SKS are lazy-loaded on demand per tile (see _load_lpis / _load_sks).
+    # Pre-loading all years at once would exceed memory on small pods.
     _load_sks(args.sks_dir)
 
     stats = {"ok": 0, "failed": 0}
@@ -263,7 +260,7 @@ def main():
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futs = {
             pool.submit(build_tile_label, t, args.nmd_raster,
-                        args.lpis_dir, args.sks_dir, args.num_classes): t
+                        args.lpis_dir, args.sks_dir): t
             for t in tiles
         }
         for i, f in enumerate(as_completed(futs)):
