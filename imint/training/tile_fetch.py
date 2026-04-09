@@ -281,12 +281,11 @@ _NMD_SRC = None  # lazy-opened rasterio handle
 def fetch_nmd_label_local(
     bbox_3006: dict,
     nmd_raster: str = "data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif",
-    num_classes: int = 10,
 ) -> np.ndarray | None:
-    """Read NMD label from local GeoTIFF raster (no internet).
+    """Read NMD 19-class sequential label from local GeoTIFF raster.
 
-    Falls back to openEO if local raster is unavailable.
-    Returns (H, W) uint8 or None.
+    Returns (H, W) uint8 with indices 0-19, or None if unavailable.
+    Falls back to openEO remote fetch if the local raster is missing.
     """
     global _NMD_SRC
 
@@ -301,23 +300,25 @@ def fetch_nmd_label_local(
 
         w, s, e, n = bbox_3006["west"], bbox_3006["south"], bbox_3006["east"], bbox_3006["north"]
 
-        # Bounds check
         b = _NMD_SRC.bounds
         if w < b.left or e > b.right or s < b.bottom or n > b.top:
             return None
 
         window = from_bounds(w, s, e, n, _NMD_SRC.transform)
-        nmd_raw = _NMD_SRC.read(1, window=window)
-
-        # Resize to tile size if needed
-        if nmd_raw.shape != (TILE_SIZE_PX, TILE_SIZE_PX):
-            from scipy.ndimage import zoom
-            zy = TILE_SIZE_PX / nmd_raw.shape[0]
-            zx = TILE_SIZE_PX / nmd_raw.shape[1]
-            nmd_raw = zoom(nmd_raw, (zy, zx), order=0)
+        # Read directly into the target shape so rasterio handles the
+        # sub-pixel alignment via its own nearest-neighbour resampling.
+        # Never use scipy.ndimage.zoom here — it distributes dropped rows
+        # unevenly and creates visible seams when the window is fractional.
+        from rasterio.enums import Resampling
+        nmd_raw = _NMD_SRC.read(
+            1,
+            window=window,
+            out_shape=(TILE_SIZE_PX, TILE_SIZE_PX),
+            resampling=Resampling.nearest,
+        )
 
         from imint.training.class_schema import nmd_raster_to_lulc
-        return nmd_raster_to_lulc(nmd_raw, num_classes=num_classes).astype(np.uint8)
+        return nmd_raster_to_lulc(nmd_raw).astype(np.uint8)
     except Exception:
         return _fetch_nmd_label_remote(bbox_3006)
 
