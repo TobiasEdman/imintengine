@@ -204,7 +204,7 @@ class SeasonalFetchExecutor:
             os.environ.get("SEASONAL_CLOUD_THRESHOLD", "0.10")
         )
         tiles_dir = Path(os.environ.get("TILES_DIR", "/cfs/tiles"))
-        num_classes = int(os.environ.get("NUM_CLASSES", "10"))
+        num_classes = int(os.environ.get("NUM_CLASSES", "19"))
         b02_haze_threshold = float(
             os.environ.get("B02_HAZE_THRESHOLD", "0.06")
         )

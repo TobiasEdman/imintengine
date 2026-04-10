@@ -4,9 +4,9 @@
 Post-processing step after spectral fetching. Applies merge_all()
 which combines NMD + LPIS + SKS harvest into unified labels.
 
-Pipeline: raw NMD labels → nmd19_to_unified() or nmd10_to_unified()
-         + LPIS label_mask overlay (crop classes 11-18)
-         + SKS harvest_mask overlay (hygge class 19)
+Pipeline: NMD 19-class sequential → nmd19_to_unified()
+         + LPIS label_mask SJV codes → crop classes 11-21
+         + SKS harvest_mask → hygge class 22
 
 Usage:
     python scripts/remap_labels.py --data-dir /data/unified_v2

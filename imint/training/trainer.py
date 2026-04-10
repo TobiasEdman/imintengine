@@ -209,15 +209,6 @@ class LULCTrainer:
             else:
                 class_counts = {}
 
-            # If using grouped classes, aggregate to grouped schema
-            if cfg.use_grouped_classes and cfg.num_classes <= 12:
-                from .class_schema import _MAP_19_TO_10
-                grouped = {}
-                for idx, count in class_counts.items():
-                    idx_grouped = _MAP_19_TO_10.get(idx, 0)
-                    grouped[idx_grouped] = grouped.get(idx_grouped, 0) + count
-                class_counts = grouped
-
             if class_counts:
                 weights = compute_class_weights(
                     class_counts,

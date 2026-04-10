@@ -43,6 +43,10 @@ _RETRY_DELAY_S = 2.0
 
 # ── Public API ───────────────────────────────────────────────────────────
 
+_CRS_3006 = "http://www.opengis.net/def/crs/EPSG/0/3006"
+_CRS_4326 = "http://www.opengis.net/def/crs/EPSG/0/4326"
+
+
 def fetch_s1_scene(
     west: float,
     south: float,
@@ -50,65 +54,63 @@ def fetch_s1_scene(
     north: float,
     date: str,
     *,
+    crs: str = _CRS_3006,
     size_px: int | tuple[int, int] = 256,
     orbit_direction: str | None = None,
     output_db: bool = False,
-    nodata_threshold: float = 0.10,
+    nodata_threshold: float | None = 0.10,
 ) -> tuple[np.ndarray, str] | None:
     """Fetch a single Sentinel-1 GRD scene via Sentinel Hub Process API.
 
-    Downloads VV and VH polarizations in one HTTP POST.
-
     Args:
-        west, south, east, north: Bounding box in EPSG:3006 (meters).
-        date: ISO date string, e.g. "2022-06-15".
+        west, south, east, north: Bounding box coordinates.
+        date: ISO date string.
+        crs: Coordinate reference system URI. Default EPSG:3006.
         size_px: Output size — int for square or (H, W) tuple.
         orbit_direction: "ASCENDING" or "DESCENDING" (None = any).
         output_db: If True, output in dB scale. Default False (linear σ⁰).
-        nodata_threshold: Reject scenes with more than this fraction of nodata.
+        nodata_threshold: Max nodata fraction (0–1). None = skip check.
 
     Returns:
-        Tuple of (sar, orbit_direction) on success:
-            sar: (2, H, W) float32 — VV, VH (linear σ⁰ or dB)
-            orbit_direction: "ASCENDING" or "DESCENDING"
-        Returns None if fetch fails or too much nodata.
+        (sar, orbit_direction) on success, None on rejection.
+            sar: (2, H, W) float32 — VV, VH
     """
-    if isinstance(size_px, int):
-        h_px, w_px = size_px, size_px
-    else:
-        h_px, w_px = size_px
-
+    h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
     token = _get_token()
 
     try:
         tiff_bytes = _fetch_s1_tiff(
-            west, south, east, north,
-            w_px, h_px,
-            date=date,
-            token=token,
-            orbit_direction=orbit_direction,
-            output_db=output_db,
+            west, south, east, north, w_px, h_px,
+            date=date, token=token,
+            orbit_direction=orbit_direction, output_db=output_db, crs=crs,
         )
     except Exception as e:
         print(f"    [SH S1] {date}: {e}")
         return None
 
-    # Parse multi-band TIFF (VV + VH = 2 bands)
     bands = _parse_multiband_tiff(tiff_bytes, h_px, w_px, 2)
     if bands is None or len(bands) < 2:
         return None
 
     sar = np.stack(bands, axis=0)  # (2, H, W) float32
 
-    # Nodata check (zero = no coverage)
-    nodata_frac = float((sar[0] == 0).mean())
-    if nodata_frac > nodata_threshold:
-        return None
+    if nodata_threshold is not None:
+        if float((sar[0] == 0).mean()) > nodata_threshold:
+            return None
 
-    # Determine orbit direction (from request, or default "UNKNOWN")
-    orbit = orbit_direction or "UNKNOWN"
+    return sar, (orbit_direction or "UNKNOWN")
 
-    return sar, orbit
+
+def fetch_s1_scene_wgs84(
+    west: float, south: float, east: float, north: float, date: str, **kwargs,
+) -> tuple[np.ndarray, str] | None:
+    """Convenience wrapper: fetch_s1_scene with WGS84 defaults.
+
+    Defaults: crs=EPSG:4326, nodata=None (disabled).
+    """
+    kwargs.setdefault("crs", _CRS_4326)
+    kwargs.setdefault("nodata_threshold", None)
+    return fetch_s1_scene(west, south, east, north, date, **kwargs)
 
 
 def fetch_s1_pair(
@@ -193,6 +195,7 @@ def _fetch_s1_tiff(
     token: str,
     orbit_direction: str | None = None,
     output_db: bool = False,
+    crs: str = "http://www.opengis.net/def/crs/EPSG/0/3006",
 ) -> bytes:
     """Fetch S1 GRD data as multi-band GeoTIFF from Sentinel Hub Process API."""
     import time
@@ -217,7 +220,7 @@ def _fetch_s1_tiff(
             "bounds": {
                 "bbox": [west, south, east, north],
                 "properties": {
-                    "crs": "http://www.opengis.net/def/crs/EPSG/0/3006"
+                    "crs": crs
                 },
             },
             "data": [{

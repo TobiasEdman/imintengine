@@ -3,7 +3,7 @@
 Enrich crop tiles with NMD (Nationella Marktäckedata) labels.
 
 Fetches NMD raster data from DES openEO for each crop tile's bbox,
-converts to 10-class LULC labels, and saves as 'nmd_label' in the .npz.
+converts to 19-class LULC labels, and saves as 'nmd_label' in the .npz.
 
 Usage:
     python scripts/enrich_tiles_nmd.py --data-dir data/crop_tiles
@@ -31,7 +31,7 @@ from imint.fetch import fetch_nmd_data
 from imint.training.class_schema import nmd_raster_to_lulc
 
 
-def process_tile(tile_path: str, num_classes: int = 10) -> dict:
+def process_tile(tile_path: str) -> dict:
     """Fetch NMD label for a single crop tile and save it.
 
     Returns dict with status info.
@@ -66,8 +66,8 @@ def process_tile(tile_path: str, num_classes: int = 10) -> dict:
         if nmd_result is None or nmd_result.nmd_raster is None:
             return {"name": name, "status": "error", "msg": "NMD fetch returned None"}
 
-        # Convert raw NMD codes to 10-class LULC
-        nmd_label = nmd_raster_to_lulc(nmd_result.nmd_raster, num_classes=num_classes)
+        # Convert raw NMD codes to 19-class sequential labels
+        nmd_label = nmd_raster_to_lulc(nmd_result.nmd_raster)
 
         # Save back
         data["nmd_label"] = nmd_label.astype(np.uint8)

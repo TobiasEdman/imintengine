@@ -199,7 +199,6 @@ def main():
     config = TrainingConfig(
         data_dir=data_dirs[0],  # Primary dir for TrainingConfig compatibility
         num_classes=args.num_classes,
-        use_grouped_classes=False,  # Unified schema, no grouping
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,

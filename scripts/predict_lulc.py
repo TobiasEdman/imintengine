@@ -404,7 +404,6 @@ def main():
     config = TrainingConfig(
         data_dir=args.data_dir,
         num_classes=args.num_classes,
-        use_grouped_classes=(args.num_classes < 19),
         device=args.device,
         checkpoint_dir=args.checkpoint_dir,
         enable_height_channel=all_aux or args.enable_height,

@@ -1,30 +1,19 @@
 """
 imint/training/unified_dataset.py -- Unified PyTorch Dataset for LULC + Crop segmentation
 
-Loads both LULC seasonal tiles and crop tiles, producing a unified
-19-class per-pixel segmentation output compatible with LULCDataset
-and the existing trainer.py training loop.
+Loads tiles from unified_v2/ producing 23-class per-pixel segmentation labels.
+Labels are pre-built offline by build_labels.py (NMD 19-class + gated LPIS + gated SKS)
+and stored directly in data["label"] — no runtime merging.
 
-Tile sources:
-    - LULC tiles (data/lulc_seasonal/tiles/*.npz):
-        image (24, 256, 256) = 4 frames x 6 bands, reflectance [0, 1]
-        label (256, 256) NMD 10-class
-        label_mask (256, 256) LPIS crop class 0-8
-        harvest_mask (256, 256) binary harvest indicator
-        harvest_probability (256, 256) harvest likelihood
-        height/volume/basal_area/diameter/dem (256, 256) forest/terrain
-        vpp_sosd/vpp_eosd (256, 256) phenology
-        dates (4,), temporal_mask (4,), doy (4,)
-
-    - Crop tiles (data/crop_tiles/*.npz):
-        spectral (18, 256, 256) = 3 frames x 6 bands, reflectance [0, 1]
-        nmd_label (256, 256) NMD 10-class
-        label_mask (256, 256) LPIS crop class 0-8
-        harvest_mask (256, 256) binary harvest indicator
-        harvest_probability (256, 256) harvest likelihood
-        height/volume/basal_area/diameter/dem (256, 256)
-        vpp_sosd/vpp_eosd (256, 256)
-        seasons_valid (3,)
+Tile sources (unified_v2/*.npz):
+    spectral  (24, 256, 256) = 4 frames × 6 bands, reflectance [0, 1]
+    label     (256, 256)     unified 23-class label (pre-built by build_labels.py)
+    label_mask (256, 256)    raw SJV grödkoder (uint16, for reference)
+    harvest_mask (256, 256)  binary SKS harvest indicator
+    bbox_3006 (4,)           [west, south, east, north] in SWEREF 99 TM
+    height/volume/basal_area/diameter/dem (256, 256) forest/terrain aux
+    vpp_sosd/vpp_eosd (256, 256) phenology aux
+    dates (4,), temporal_mask (4,), doy (4,)
 
 Output dict (matches LULCDataset format for trainer.py compatibility):
     image:               (6, 224, 224) float32, single-date Prithvi-normalized
@@ -78,9 +67,7 @@ except ImportError:
         "PyTorch is required for training. Install with: pip install torch"
     )
 
-from .unified_schema import (
-    nmd10_to_unified, merge_nmd_lpis, merge_all, NUM_UNIFIED_CLASSES, HARVEST_CLASS,
-)
+from .unified_schema import NUM_UNIFIED_CLASSES, HARVEST_CLASS
 from .losses import parcel_area_to_pixel_weights
 
 logger = logging.getLogger(__name__)
@@ -495,12 +482,11 @@ class UnifiedDataset(Dataset):
 
     @staticmethod
     def _build_label(data: np.lib.npyio.NpzFile, source: str) -> np.ndarray:
-        """Construct unified 23-class label from NMD + LPIS + harvest.
+        """Return the pre-built unified 23-class label from the tile.
 
-        Uses merge_all() with semantic NMD gating:
-          - LPIS crops only where NMD says agricultural land (åker=21, öppen mark=8)
-          - SKS harvest only where NMD says forest (classes 1–6)
-          - Infrastructure (9) and water (10) are never overridden
+        Tiles built by build_labels.py store the fully-merged label in
+        data["label"] (NMD + gated LPIS + gated SKS). Return it directly —
+        no runtime merging needed.
 
         Args:
             data: Loaded .npz file.
@@ -509,26 +495,12 @@ class UnifiedDataset(Dataset):
         Returns:
             (H, W) int64 unified label array.
         """
-        # NMD base label
-        if source == "lulc":
-            if "label" not in data:
-                img = data.get("spectral", data.get("image"))
-                h, w = img.shape[1], img.shape[2]
-                return np.zeros((h, w), dtype=np.int64)
-            nmd_label = data["label"]
-        else:
-            nmd_label = data.get("nmd_label", data.get("label", None))
-            if nmd_label is None:
-                h, w = data["spectral"].shape[1], data["spectral"].shape[2]
-                return np.zeros((h, w), dtype=np.int64)
-
-        nmd_label   = np.asarray(nmd_label)
-        lpis_mask   = data.get("label_mask",   None)
-        harvest_mask = data.get("harvest_mask", None)
-        if lpis_mask    is not None: lpis_mask    = np.asarray(lpis_mask)
-        if harvest_mask is not None: harvest_mask = np.asarray(harvest_mask)
-
-        return merge_all(nmd_label, lpis_mask, harvest_mask).astype(np.int64)
+        key = "nmd_label" if (source != "lulc" and "nmd_label" in data) else "label"
+        if key not in data:
+            img = data.get("spectral", data.get("image"))
+            h, w = img.shape[1], img.shape[2]
+            return np.zeros((h, w), dtype=np.int64)
+        return np.asarray(data[key]).astype(np.int64)
 
     @staticmethod
     def _extract_all_frames(

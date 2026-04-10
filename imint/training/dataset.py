@@ -35,7 +35,6 @@ except ImportError:
     raise ImportError("PyTorch is required for training. Install with: pip install torch")
 
 from .config import TrainingConfig
-from .class_schema import _LUT_19_TO_10
 
 
 class LULCDataset(Dataset):
@@ -135,9 +134,7 @@ class LULCDataset(Dataset):
         # or if image has more than 6 bands
         is_mt = bool(data.get("multitemporal", False))
 
-        # Remap 19-class labels to grouped schema if configured
-        if self.config.use_grouped_classes:
-            label = _LUT_19_TO_10[np.clip(label, 0, 19)].astype(np.int64)
+        # Labels are unified 23-class — no remapping needed
 
         if is_mt and not self.multitemporal:
             # ── Single-frame extraction from multitemporal tile ───────

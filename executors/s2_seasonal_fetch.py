@@ -25,7 +25,7 @@ Environment variables are set by ColonyOS from the job spec:
     SEASONAL_CLOUD_THRESHOLD     — max cloud fraction, e.g. "0.10"
     B02_HAZE_THRESHOLD           — max mean B02 reflectance (default: 0.06)
     TILES_DIR                    — output directory (default: /cfs/tiles)
-    NUM_CLASSES                  — NMD class count (default: 10)
+    NUM_CLASSES                  — NMD class count (default: 19)
     TILE_SIZE_PX                 — tile size in pixels (default: 256)
     CDSE_CLIENT_ID               — CDSE OAuth client ID
     CDSE_CLIENT_SECRET           — CDSE OAuth client secret
@@ -82,7 +82,7 @@ class S2SeasonalFetchExecutor:
             os.environ.get("B02_HAZE_THRESHOLD", "0.06")
         )
         tiles_dir = Path(os.environ.get("TILES_DIR", "/cfs/tiles"))
-        num_classes = int(os.environ.get("NUM_CLASSES", "10"))
+        num_classes = int(os.environ.get("NUM_CLASSES", "19"))
         tile_size_px = int(os.environ.get("TILE_SIZE_PX", "256"))
 
         tile_path = tiles_dir / f"tile_{cell_key}.npz"

@@ -44,41 +44,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
-# ── 10-class grouped palette (matches LULC_CLASS_NAMES_10) ────────────────
-
-LULC_10_COLORS = {
-    0: (51, 51, 51),        # background
-    1: (0, 100, 0),         # forest_pine
-    2: (34, 139, 34),       # forest_spruce
-    3: (50, 205, 50),       # forest_deciduous
-    4: (60, 179, 113),      # forest_mixed
-    5: (46, 79, 46),        # forest_wetland
-    6: (139, 90, 43),       # open_wetland
-    7: (255, 215, 0),       # cropland
-    8: (210, 180, 140),     # open_land
-    9: (255, 0, 0),         # developed
-    10: (0, 0, 255),        # water
-}
-
-LULC_10_NAMES_SV = {
-    0: "Bakgrund",
-    1: "Tallskog",
-    2: "Granskog",
-    3: "Lövskog",
-    4: "Blandskog",
-    5: "Sumpskog",
-    6: "Öppen våtmark",
-    7: "Åkermark",
-    8: "Öppen mark",
-    9: "Bebyggelse",
-    10: "Vatten",
-}
-
-LULC_10_HEX = {
-    1: "#006400", 2: "#228B22", 3: "#32CD32", 4: "#3CB371",
-    5: "#2E4F2E", 6: "#8B5A2B", 7: "#FFD700", 8: "#D2B48C",
-    9: "#FF0000", 10: "#0000FF",
-}
+from imint.training.unified_schema import UNIFIED_COLORS, UNIFIED_CLASSES
 
 
 def _hex_to_rgba(hex_color: str, alpha: float = 0.85) -> str:
@@ -93,9 +59,9 @@ def render_class_map(class_map: np.ndarray, output_path: str) -> str:
     """Render a class index map as a color-coded PNG."""
     from PIL import Image
 
-    max_class = max(LULC_10_COLORS.keys())
+    max_class = max(UNIFIED_COLORS.keys())
     palette = np.zeros((max_class + 1, 3), dtype=np.uint8)
-    for cls_id, color in LULC_10_COLORS.items():
+    for cls_id, color in UNIFIED_COLORS.items():
         palette[cls_id] = color
 
     clamped = np.clip(class_map, 0, max_class)
@@ -196,7 +162,7 @@ def score_tiles(predictions_dir: Path) -> list[dict]:
             # Dominant class
             unique, counts = np.unique(label[valid], return_counts=True)
             dominant_class = int(unique[counts.argmax()])
-            dominant_name = LULC_10_NAMES_SV.get(dominant_class, f"Klass {dominant_class}")
+            dominant_name = UNIFIED_CLASSES.get(dominant_class, f"Klass {dominant_class}")
 
             # Score: balance class diversity with interesting disagreement
             score = (unique_classes / 10.0) * 0.5 + disagree_ratio * 0.3 + (n_valid / 50176) * 0.2

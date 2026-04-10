@@ -2,7 +2,7 @@
 """
 Enrich LULC seasonal tiles with LPIS crop parcel segmentation masks.
 
-LULC tiles have NMD labels (10-class) but NMD class 7 (cropland) has no
+LULC tiles have NMD labels (19-class sequential) but NMD cropland (class 12) has no
 crop-type detail. This script overlays LPIS parcel data to add per-pixel
 crop class (vete=1, korn=2, havre=3, ..., övrig=8) within NMD cropland.
 

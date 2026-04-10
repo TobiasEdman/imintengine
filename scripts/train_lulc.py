@@ -167,7 +167,6 @@ def main():
     config = TrainingConfig(
         data_dir=args.data_dir,
         num_classes=args.num_classes,
-        use_grouped_classes=(args.num_classes < 19),
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,

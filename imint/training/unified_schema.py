@@ -1,24 +1,23 @@
 """
 imint/training/unified_schema.py — Unified LULC + Crop + Harvest class schema
 
-Merges NMD land cover (10-class) with LPIS crop detail (8 classes)
-and SKS harvest data into a single 19-class segmentation schema.
+Merges NMD land cover (19-class sequential) with LPIS crop detail and SKS harvest
+data into a single 23-class segmentation schema.
 
-NMD provides background (forest, water, developed, wetland), LPIS
-provides crop-specific detail within agricultural pixels, and SKS
-provides harvested forest areas.
+NMD provides background (forest, water, developed, wetland). LPIS overrides NMD on
+agricultural pixels with crop-specific classes. SKS marks harvested forest (hygge).
 
 Usage:
     from imint.training.unified_schema import merge_all, UNIFIED_CLASSES
 
-    # For tiles with NMD + LPIS + SKS harvest:
-    unified = merge_all(nmd_10class, lpis_mask, harvest_mask)
+    # NMD-only tile:
+    unified = nmd19_to_unified(nmd_19class)
 
-    # For crop tiles with both NMD and LPIS:
-    unified = merge_nmd_lpis(nmd_10class, lpis_mask)
+    # NMD + LPIS:
+    unified = merge_nmd_sjv(nmd_19class, sjv_codes)
 
-    # For LULC tiles with only NMD:
-    unified = nmd10_to_unified(nmd_10class)
+    # Full pipeline (NMD + LPIS + SKS):
+    unified = merge_all(nmd_19class, lpis_mask, harvest_mask)
 """
 from __future__ import annotations
 
@@ -119,20 +118,6 @@ _NMD19_TO_UNIFIED[17] = 9    # developed_roads → bebyggelse
 _NMD19_TO_UNIFIED[18] = 10   # water_lakes → vatten
 _NMD19_TO_UNIFIED[19] = 10   # water_sea → vatten
 
-# Backward compat: 10-class → Unified (for tiles with pre-mapped 10-class labels)
-_NMD10_TO_UNIFIED = np.zeros(11, dtype=np.uint8)
-_NMD10_TO_UNIFIED[0] = 0     # background
-_NMD10_TO_UNIFIED[1] = 1     # pine → tallskog
-_NMD10_TO_UNIFIED[2] = 2     # spruce → granskog
-_NMD10_TO_UNIFIED[3] = 3     # deciduous → lövskog
-_NMD10_TO_UNIFIED[4] = 4     # mixed → blandskog (temp_non_forest lost in 10-class)
-_NMD10_TO_UNIFIED[5] = 5     # wetland forest → sumpskog
-_NMD10_TO_UNIFIED[6] = 7     # open wetland → våtmark
-_NMD10_TO_UNIFIED[7] = 21    # cropland → övrig åker (overridden by LPIS)
-_NMD10_TO_UNIFIED[8] = 8     # open land → öppen mark
-_NMD10_TO_UNIFIED[9] = 9     # developed → bebyggelse
-_NMD10_TO_UNIFIED[10] = 10   # water → vatten
-
 # ── SJV grödkod → Unified class mapping ──────────────────────────────────────
 # Direct mapping from SJV crop codes (grdkod_mar) to unified class.
 # Codes are consistent across years (2018-2026). New codes added from 2022.
@@ -183,21 +168,6 @@ _SJV_DEFAULT = 21  # övrig åker
 HARVEST_CLASS = 22
 
 
-def nmd10_to_unified(nmd_label: np.ndarray) -> np.ndarray:
-    """Convert NMD 10-class labels to unified schema.
-
-    Note: 10-class input has temp_non_forest merged into mixed.
-    Use nmd19_to_unified() for full-resolution NMD labels.
-
-    Args:
-        nmd_label: (H, W) uint8, NMD 10-class indices (0-10)
-
-    Returns:
-        (H, W) uint8, unified indices (0-18)
-    """
-    return _NMD10_TO_UNIFIED[np.clip(nmd_label, 0, 10)]
-
-
 def nmd19_to_unified(nmd_label: np.ndarray) -> np.ndarray:
     """Convert NMD raw 19-class labels to unified schema.
 
@@ -213,40 +183,28 @@ def nmd19_to_unified(nmd_label: np.ndarray) -> np.ndarray:
 
 
 def merge_nmd_sjv(nmd_label: np.ndarray, sjv_codes: np.ndarray) -> np.ndarray:
-    """Merge NMD labels with LPIS SJV grödkoder.
+    """Merge NMD 19-class labels with LPIS SJV grödkoder.
 
-    Accepts either 10-class or 19-class NMD input (auto-detected).
     SJV crop codes override NMD where parcels exist (sjv_codes > 0).
+    Input must be 19-class sequential NMD (output of nmd_raster_to_lulc).
 
     Args:
-        nmd_label: (H, W) uint8, NMD indices (0-10 or 0-19)
-        sjv_codes: (H, W) uint16, raw SJV grödkoder (0=no parcel)
+        nmd_label: (H, W) uint8, NMD 19-class sequential indices (0-19).
+        sjv_codes: (H, W) uint16, raw SJV grödkoder (0 = no parcel).
 
     Returns:
-        (H, W) uint8, unified indices
+        (H, W) uint8, unified class indices (0-22).
     """
-    # Auto-detect: 19-class if max > 10
-    if nmd_label.max() > 10:
-        unified = nmd19_to_unified(nmd_label)
-    else:
-        unified = nmd10_to_unified(nmd_label)
-
-    # Override with SJV crop detail where parcels exist
+    unified = nmd19_to_unified(nmd_label)
     has_parcel = sjv_codes > 0
     if has_parcel.any():
+        sjv_mapped = np.isin(sjv_codes, list(SJV_TO_UNIFIED.keys()))
         for sjv_code, unified_class in SJV_TO_UNIFIED.items():
             mask = sjv_codes == sjv_code
             if mask.any():
                 unified[mask] = unified_class
-        # Unmapped SJV codes → övrig åker
-        unmapped = has_parcel & ~np.isin(sjv_codes, list(SJV_TO_UNIFIED.keys()))
-        unified[unmapped] = _SJV_DEFAULT
-
+        unified[has_parcel & ~sjv_mapped] = _SJV_DEFAULT
     return unified
-
-
-# Backward compat alias
-merge_nmd_lpis = merge_nmd_sjv
 
 
 def merge_all(
@@ -254,31 +212,28 @@ def merge_all(
     lpis_mask: np.ndarray | None = None,
     harvest_mask: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Merge NMD + LPIS + SKS harvest into unified label.
+    """Merge NMD 19-class + LPIS + SKS harvest into unified 23-class label.
 
-    Semantic gating rules (NMD acts as gate for each source):
+    Semantic gating rules (NMD baseline acts as gate for each overlay):
       Forest (1–6)   + SKS clearcut   → Hygge (22)
       Åker (21)      + LPIS crop       → Crop class (11–21)
       Öppen mark (8) + LPIS crop       → Crop class (11–21)
-      Bebyggelse (9)                   → stays as NMD (infra/buildings not overridable)
-      Vatten (10)                      → stays as NMD
+      Bebyggelse (9)                   → NMD wins, never overridden
+      Vatten (10)                      → NMD wins, never overridden
 
-    Priority within eligible pixels: LPIS > SKS > NMD.
+    Priority: LPIS > SKS > NMD.
 
     Args:
-        nmd_label: (H, W) uint8, NMD (10-class or raw 19-class)
-        lpis_mask: (H, W) uint8 or uint16, LPIS SJV grödkoder or
-            old-style crop classes (0-8). Auto-detected by max value.
-        harvest_mask: (H, W) uint8, binary harvest mask (0/1), or None
+        nmd_label: (H, W) uint8, NMD 19-class sequential indices (0-19).
+                   Must be output of nmd_raster_to_lulc() from class_schema.
+        lpis_mask: (H, W) uint16, raw SJV grödkoder (0 = no parcel), or None.
+        harvest_mask: (H, W) uint8, binary SKS harvest mask (0/1), or None.
 
     Returns:
-        (H, W) uint8, unified classes (0-{NUM_UNIFIED_CLASSES-1})
+        (H, W) uint8, unified class indices (0-{NUM_UNIFIED_CLASSES-1}).
     """
-    # Step 1: NMD baseline (used both as output and as gate)
-    if nmd_label.max() > 10:
-        unified = nmd19_to_unified(nmd_label)
-    else:
-        unified = nmd10_to_unified(nmd_label)
+    # Step 1: NMD baseline
+    unified = nmd19_to_unified(nmd_label)
 
     nmd_base = unified.copy()   # gate reference — never modified
 
@@ -289,23 +244,15 @@ def merge_all(
     where_agri = np.isin(nmd_base, _NMD_AGRI)
 
     if lpis_mask is not None and where_agri.any():
-        # Auto-detect: old 0-8 intermediate or raw SJV codes
-        if lpis_mask.max() > 10:
-            sjv_codes = lpis_mask.astype(np.uint16)
-        else:
-            _OLD_TO_SJV = {1: 4, 2: 2, 3: 3, 4: 20, 5: 50, 6: 70, 7: 30, 8: 9}
-            sjv_codes = np.zeros_like(lpis_mask, dtype=np.uint16)
-            for old_cls, sjv_code in _OLD_TO_SJV.items():
-                sjv_codes[lpis_mask == old_cls] = sjv_code
-
-        has_parcel = (sjv_codes > 0) & where_agri   # gate: parcel AND NMD=agri
+        sjv_codes = np.asarray(lpis_mask, dtype=np.uint16)
+        has_parcel = (sjv_codes > 0) & where_agri
         if has_parcel.any():
+            sjv_mapped = np.isin(sjv_codes, list(SJV_TO_UNIFIED.keys()))
             for sjv_code, unified_class in SJV_TO_UNIFIED.items():
-                mask = sjv_codes == sjv_code
+                mask = (sjv_codes == sjv_code) & where_agri
                 if mask.any():
-                    unified[mask & where_agri] = unified_class
-            unmapped = has_parcel & ~np.isin(sjv_codes, list(SJV_TO_UNIFIED.keys()))
-            unified[unmapped] = _SJV_DEFAULT
+                    unified[mask] = unified_class
+            unified[has_parcel & ~sjv_mapped] = _SJV_DEFAULT
 
     # Step 3: SKS harvest — only where NMD says forest (classes 1–6)
     _NMD_FOREST = np.array([1, 2, 3, 4, 5, 6], dtype=np.uint8)

@@ -97,8 +97,8 @@ def main():
                 zx = TILE_SIZE / nmd_raw.shape[1]
                 nmd_raw = zoom(nmd_raw, (zy, zx), order=0)  # nearest neighbor
 
-            # Convert raw NMD codes to 10-class
-            nmd_label = nmd_raster_to_lulc(nmd_raw, num_classes=args.num_classes)
+            # Convert raw NMD codes to 19-class sequential labels
+            nmd_label = nmd_raster_to_lulc(nmd_raw)
 
             data["nmd_label"] = nmd_label.astype(np.uint8)
             np.savez(tile_path, **data)

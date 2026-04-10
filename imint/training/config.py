@@ -51,8 +51,7 @@ class TrainingConfig:
                                                        # with zeros (masked in model)
 
     # ── Class schema ─────────────────────────────────────────────────────
-    num_classes: int = 10                              # Grouped schema (pine/spruce separate)
-    use_grouped_classes: bool = True                   # Remap 19→10 at load time
+    num_classes: int = 23                              # Unified 23-class schema
     ignore_index: int = 0                              # Background
 
     # ── Fine-detail / small parcel weighting ──────────────────────────────
