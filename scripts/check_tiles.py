@@ -45,7 +45,11 @@ TILE_PX = 256
 
 
 def _tile_paths(data_dir: str, sample: int | None = None) -> list[str]:
-    tiles = sorted(glob.glob(str(Path(data_dir) / "*.npz")))
+    # Exclude *.npz.tmp.npz leftover files from interrupted fetch jobs.
+    tiles = sorted(
+        p for p in glob.glob(str(Path(data_dir) / "*.npz"))
+        if ".tmp" not in Path(p).name
+    )
     if sample and sample < len(tiles):
         random.shuffle(tiles)
         tiles = tiles[:sample]
@@ -55,8 +59,14 @@ def _tile_paths(data_dir: str, sample: int | None = None) -> list[str]:
 # ── Subcommands ──────────────────────────────────────────────────────────
 
 def cmd_count(data_dir: str, **_) -> int:
-    tiles = sorted(glob.glob(str(Path(data_dir) / "*.npz")))
+    tiles = [
+        p for p in glob.glob(str(Path(data_dir) / "*.npz"))
+        if ".tmp" not in Path(p).name
+    ]
+    tmp_count = len(glob.glob(str(Path(data_dir) / "*.npz"))) - len(tiles)
     print(f"  Tiles: {len(tiles):,}")
+    if tmp_count:
+        print(f"  (ignored {tmp_count:,} .tmp.npz leftover files)")
     return 0
 
 

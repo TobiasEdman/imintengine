@@ -316,7 +316,10 @@ def main() -> None:
 
     # ── Discover tiles ────────────────────────────────────────────
     data_dir = Path(args.data_dir)
-    all_tiles = sorted(data_dir.glob("*.npz"))
+    # Exclude *.npz.tmp.npz leftover files from interrupted fetch jobs — these
+    # share the *.npz suffix but are incomplete/duplicate tiles that would
+    # double-count any tile that has both a real and a .tmp version.
+    all_tiles = sorted(p for p in data_dir.glob("*.npz") if ".tmp" not in p.name)
     if args.limit_tiles:
         all_tiles = all_tiles[:args.limit_tiles]
     print(f"  Tiles: {len(all_tiles):,}")
