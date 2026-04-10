@@ -25,6 +25,14 @@
 
 ---
 
+## Flawed / Invalid Runs
+
+See `flawed/` — all runs between the 44% baseline and the current train-pixel-v1 are quarantined
+there. Do not use those results. See `flawed/README.md` for details, including a list of M1 Max
+checkpoints to mark when back on the same network.
+
+---
+
 ## Current / In-Progress (ICE H100)
 
 | Run | Config | Status |
