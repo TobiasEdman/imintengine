@@ -68,6 +68,37 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 
+
+# ── Safe collate (avoids worker-side shared-memory resize crash) ───────────
+#
+# PyTorch's default_collate(), when called inside a DataLoader worker process,
+# pre-allocates the stacked output tensor in shared memory via:
+#
+#   storage = elem.storage()._new_shared(numel, device=elem.device)
+#   out = elem.new(storage).resize_(len(batch), *list(elem.size()))
+#
+# On some PyTorch/Linux combinations (notably PyTorch 2.x + Python 3.11 on
+# CUDA workers) the mmap-backed shared storage is fixed-size and rejects
+# resize_(), raising:
+#   RuntimeError: Trying to resize storage that is not resizable
+#
+# The fix is a custom collate_fn that never calls _new_shared() + resize_().
+# It produces identical results to default_collate but always stacks into a
+# freshly-allocated tensor.  The tiny extra copy cost is irrelevant at this
+# batch size (32×32 patches ≈ 62 MB/batch).
+#
+def _safe_collate(batch):
+    """Like default_collate but skips worker-side shared-memory pre-allocation."""
+    elem = batch[0]
+    if isinstance(elem, torch.Tensor):
+        return torch.stack(batch, 0)
+    if isinstance(elem, (tuple, list)):
+        transposed = list(zip(*batch))
+        return type(elem)(_safe_collate(s) for s in transposed)
+    # scalars / numpy arrays — fall through to default_collate
+    from torch.utils.data.dataloader import default_collate
+    return default_collate(batch)
+
 from imint.training.pixel_dataset import PixelContextDataset, N_AUX
 from imint.training.unified_schema import (
     NUM_UNIFIED_CLASSES,
@@ -385,7 +416,9 @@ def main() -> None:
 
         eval_ds = val_ds or train_ds
         loader = DataLoader(
-            eval_ds, batch_size=512, num_workers=4, pin_memory=True,
+            eval_ds, batch_size=512, num_workers=4,
+            pin_memory=(device.type == "cuda"),
+            collate_fn=_safe_collate,
         )
         criterion = nn.CrossEntropyLoss(ignore_index=0)
         _, preds, labels = _run_epoch(
@@ -419,24 +452,23 @@ def main() -> None:
     )
 
     # ── DataLoaders ───────────────────────────────────────────────
-    # pin_memory=False: PyTorch workers pre-allocate the collation output in
-    # shared memory via _new_shared() + resize_(), but mmap-backed shared
-    # storages are fixed-size and reject resize_() → RuntimeError.
-    # For 32×32 patches the CPU→GPU transfer is ~1 ms/batch and does not
-    # bottleneck training; pin_memory gives negligible benefit here.
+    # _safe_collate bypasses the worker-side _new_shared()+resize_() path
+    # that crashes on some PyTorch versions (see _safe_collate docstring).
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=False,
+        pin_memory=(device.type == "cuda"),
         drop_last=True,
+        collate_fn=_safe_collate,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=args.batch_size * 2,
         num_workers=args.num_workers,
-        pin_memory=False,
+        pin_memory=(device.type == "cuda"),
+        collate_fn=_safe_collate,
     ) if val_ds else None
 
     # ── Checkpoint dir ────────────────────────────────────────────

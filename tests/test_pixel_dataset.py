@@ -484,25 +484,30 @@ class TestDataLoaderCollation:
         os.name == "nt",
         reason="multiprocessing fork semantics differ on Windows",
     )
-    def test_dataloader_multiworker_pin_memory_false_no_resize_error(self, tmp_path):
-        """Regression: pin_memory=True + num_workers>0 triggers
-        RuntimeError: Trying to resize storage that is not resizable
-        because PyTorch workers pre-allocate collation output in mmap-backed
-        shared memory (fixed-size) and then call resize_() on it.
-        train_pixel.py must use pin_memory=False to avoid this.
+    def test_safe_collate_multiworker_no_resize_error(self, tmp_path):
+        """Regression: PyTorch's default_collate in worker processes calls
+        storage._new_shared() + resize_() to pre-allocate a shared-memory
+        output buffer.  On some PyTorch 2.x / Python 3.11 builds the
+        mmap-backed shared storage is fixed-size and rejects resize_():
+          RuntimeError: Trying to resize storage that is not resizable
 
-        This test verifies that num_workers=4 + pin_memory=False completes
-        without that error (the combination that broke 3 consecutive training
-        runs on the ICE H100 cluster).
+        This broke 3 consecutive H100 training runs.  The fix is _safe_collate
+        in train_pixel.py, which calls torch.stack() directly (no pre-alloc).
+
+        Verify that num_workers=4 + _safe_collate completes without error
+        (pin_memory=False to avoid needing CUDA in CI).
         """
+        from scripts.train_pixel import _safe_collate  # the fix under test
+
         ds = self._make_ds(tmp_path, n_tiles=8)
         loader = DataLoader(
             ds,
             batch_size=16,
             num_workers=4,
-            pin_memory=False,  # must stay False — see train_pixel.py comment
+            pin_memory=False,
             persistent_workers=False,
             drop_last=True,
+            collate_fn=_safe_collate,
         )
         # Consume all batches — must not raise RuntimeError
         for patch, aux, label in loader:
