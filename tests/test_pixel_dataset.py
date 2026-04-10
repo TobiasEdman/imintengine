@@ -480,6 +480,36 @@ class TestDataLoaderCollation:
         assert aux.ndim == 2
         assert label.ndim == 1
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="multiprocessing fork semantics differ on Windows",
+    )
+    def test_dataloader_multiworker_pin_memory_false_no_resize_error(self, tmp_path):
+        """Regression: pin_memory=True + num_workers>0 triggers
+        RuntimeError: Trying to resize storage that is not resizable
+        because PyTorch workers pre-allocate collation output in mmap-backed
+        shared memory (fixed-size) and then call resize_() on it.
+        train_pixel.py must use pin_memory=False to avoid this.
+
+        This test verifies that num_workers=4 + pin_memory=False completes
+        without that error (the combination that broke 3 consecutive training
+        runs on the ICE H100 cluster).
+        """
+        ds = self._make_ds(tmp_path, n_tiles=8)
+        loader = DataLoader(
+            ds,
+            batch_size=16,
+            num_workers=4,
+            pin_memory=False,  # must stay False — see train_pixel.py comment
+            persistent_workers=False,
+            drop_last=True,
+        )
+        # Consume all batches — must not raise RuntimeError
+        for patch, aux, label in loader:
+            assert patch.shape[1:] == (4 * N_BANDS, 32, 32)
+            assert aux.shape[1] == N_AUX
+            assert label.ndim == 1
+
     def test_batch_label_values_in_range(self, tmp_path):
         """All labels in a batch must be valid class indices (> 0 for training)."""
         ds = self._make_ds(tmp_path)

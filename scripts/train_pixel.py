@@ -419,19 +419,24 @@ def main() -> None:
     )
 
     # ── DataLoaders ───────────────────────────────────────────────
+    # pin_memory=False: PyTorch workers pre-allocate the collation output in
+    # shared memory via _new_shared() + resize_(), but mmap-backed shared
+    # storages are fixed-size and reject resize_() → RuntimeError.
+    # For 32×32 patches the CPU→GPU transfer is ~1 ms/batch and does not
+    # bottleneck training; pin_memory gives negligible benefit here.
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=(device.type == "cuda"),
+        pin_memory=False,
         drop_last=True,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=args.batch_size * 2,
         num_workers=args.num_workers,
-        pin_memory=(device.type == "cuda"),
+        pin_memory=False,
     ) if val_ds else None
 
     # ── Checkpoint dir ────────────────────────────────────────────
