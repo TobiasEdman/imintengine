@@ -203,14 +203,13 @@ class PixelContextDataset:
 
         if _TORCH_AVAILABLE:
             import torch
-            # np.ascontiguousarray() copies if the array is a non-contiguous
-            # slice (e.g. spectral[:, r0:r1, c0:c1] from an mmap-backed npz).
-            # Without this, torch.from_numpy() keeps the mmap storage which
-            # cannot be resized/pinned by the DataLoader collator.
-            patch_t = torch.from_numpy(np.ascontiguousarray(patch))
+            # torch.tensor() always allocates PyTorch-owned storage (a full copy).
+            # torch.from_numpy() shares numpy memory, which DataLoader's pin_memory
+            # collator cannot resize → "Trying to resize storage that is not resizable".
+            patch_t = torch.tensor(patch, dtype=torch.float32)
             label_t = torch.tensor(cls, dtype=torch.long)
             if self.enable_aux:
-                return patch_t, torch.from_numpy(np.ascontiguousarray(aux_vec)), label_t
+                return patch_t, torch.tensor(aux_vec, dtype=torch.float32), label_t
             return patch_t, label_t
 
         if self.enable_aux:
