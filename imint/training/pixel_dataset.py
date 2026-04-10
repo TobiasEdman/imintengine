@@ -238,11 +238,23 @@ class PixelContextDataset:
 
         patch_base = spectral[:, r0:r1, c0:c1]  # (T_base*6, ctx, ctx)
 
-        if self.use_frame_2016 and int(data.get("has_frame_2016", 0)) == 1:
-            frame_2016 = np.asarray(data["frame_2016"], dtype=np.float32)
-            # frame_2016 shape: (6, H, W)
-            patch_bg = frame_2016[:, r0:r1, c0:c1]  # (6, ctx, ctx)
-            patch = np.concatenate([patch_bg, patch_base], axis=0)
+        if self.use_frame_2016:
+            if int(data.get("has_frame_2016", 0)) == 1:
+                frame_2016 = np.asarray(data["frame_2016"], dtype=np.float32)
+                # frame_2016 shape: (6, H, W)
+                patch_bg = frame_2016[:, r0:r1, c0:c1]  # (6, ctx, ctx)
+                patch = np.concatenate([patch_bg, patch_base], axis=0)
+            else:
+                # Tile lacks a 2016 background frame — pad with zeros so that
+                # all patches have the same (T*6, ctx, ctx) shape regardless
+                # of which tiles have the frame.  This is required for
+                # torch.stack() inside DataLoader workers (mixed batches of
+                # tiles with and without frame_2016 would produce tensors of
+                # different channel counts and crash collation).
+                ctx_h = r1 - r0
+                ctx_w = c1 - c0
+                zeros = np.zeros((N_BANDS, ctx_h, ctx_w), dtype=np.float32)
+                patch = np.concatenate([zeros, patch_base], axis=0)
         else:
             patch = patch_base
 

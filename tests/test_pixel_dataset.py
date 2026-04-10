@@ -220,11 +220,32 @@ class TestPixelAlignment:
                 err_msg=f"Sample {i}: patch center mismatch at tile row={row} col={col}",
             )
 
-    def test_patch_shape_without_2016(self, tmp_path):
-        """Without 2016 frame: patch channels = T_base * 6."""
+    def test_patch_shape_without_2016_zeropads_to_T5(self, tmp_path):
+        """When use_frame_2016=True but has_frame_2016=0, the first 6 channels
+        must be zero-padded so patches are always (T_base+1)*6 channels wide.
+        This keeps batch shapes uniform across tiles with/without the frame.
+        """
         p = _make_tile_file(tmp_path, "no2016", H=64, W=64, T_base=4, has_frame_2016=False)
         ds = PixelContextDataset(
             [p], context_px=32, use_frame_2016=True, enable_aux=False
+        )
+        assert len(ds) > 0
+        item = ds[0]
+        patch = item[0]
+        expected_ch = 5 * N_BANDS  # T_base + 1 (zero-padded) = 30
+        assert patch.shape == (expected_ch, 32, 32), (
+            f"Expected ({expected_ch}, 32, 32) got {tuple(patch.shape)}"
+        )
+        # First 6 channels (the zero-padded frame_2016 slot) must be all zeros
+        if HAS_TORCH:
+            np.testing.assert_allclose(patch[:N_BANDS].numpy(), 0.0, atol=1e-6,
+                                       err_msg="Zero-pad channels should be 0.0")
+
+    def test_patch_shape_without_2016_use_frame_false(self, tmp_path):
+        """When use_frame_2016=False, patch channels = T_base * 6 exactly."""
+        p = _make_tile_file(tmp_path, "no2016_nouse", H=64, W=64, T_base=4, has_frame_2016=False)
+        ds = PixelContextDataset(
+            [p], context_px=32, use_frame_2016=False, enable_aux=False
         )
         assert len(ds) > 0
         item = ds[0]
@@ -257,6 +278,47 @@ class TestPixelAlignment:
             assert patch.shape[-2] == ctx and patch.shape[-1] == ctx, (
                 f"context_px={ctx}: got shape {tuple(patch.shape)}"
             )
+
+    def test_mixed_2016_batch_has_uniform_shape(self, tmp_path):
+        """Regression: batches containing tiles both with and without
+        frame_2016 must produce patches of the same channel count so that
+        torch.stack() inside DataLoader workers does not crash.
+
+        When use_frame_2016=True but has_frame_2016=0, the dataset must
+        zero-pad 6 channels so every patch is (T_base+1)*6 channels wide.
+        """
+        # Two tiles: one with frame_2016, one without
+        p_with    = _make_tile_file(tmp_path, "with2016",    H=64, W=64, has_frame_2016=True)
+        p_without = _make_tile_file(tmp_path, "without2016", H=64, W=64, has_frame_2016=False)
+
+        ds = PixelContextDataset(
+            [p_with, p_without],
+            context_px=32,
+            use_frame_2016=True,
+            enable_aux=False,
+            samples_per_tile=64,
+        )
+        assert len(ds) > 0
+
+        shapes = set()
+        for i in range(min(len(ds), 20)):
+            item = ds[i]
+            patch = item[0]
+            if HAS_TORCH:
+                shapes.add(tuple(patch.shape))
+            else:
+                shapes.add(patch.shape)
+
+        assert len(shapes) == 1, (
+            f"Mixed-tile batch has inconsistent patch shapes: {shapes}. "
+            "Tiles without frame_2016 must be zero-padded to the same channel count."
+        )
+        # Shape should be (30, 32, 32) = (T_base+1)*6 channels
+        expected_ch = 5 * N_BANDS  # 30
+        (shape,) = shapes
+        assert shape[0] == expected_ch, (
+            f"Expected {expected_ch} channels (T=5 with zero-pad), got {shape[0]}"
+        )
 
     def test_frame_2016_occupies_first_6_channels(self, tmp_path):
         """When has_frame_2016=1, channels [0:6] must come from frame_2016."""
@@ -444,12 +506,16 @@ class TestDataLoaderCollation:
         )
 
     def test_dataloader_pin_memory_false(self, tmp_path):
-        """Baseline: pin_memory=False, num_workers=0 must always work."""
+        """Baseline: pin_memory=False, num_workers=0 must always work.
+
+        Tiles have no frame_2016 but use_frame_2016 defaults to True, so
+        patches are zero-padded to (T_base+1)*6 = 30 channels.
+        """
         ds = self._make_ds(tmp_path)
         loader = DataLoader(ds, batch_size=16, num_workers=0, pin_memory=False)
         batch = next(iter(loader))
         patch, aux, label = batch
-        assert patch.shape == (16, 4 * N_BANDS, 32, 32)
+        assert patch.shape == (16, 5 * N_BANDS, 32, 32)  # 30 channels (zero-padded)
         assert aux.shape == (16, N_AUX)
         assert label.shape == (16,)
 
@@ -457,7 +523,7 @@ class TestDataLoaderCollation:
         ds = self._make_ds(tmp_path, enable_aux=False)
         loader = DataLoader(ds, batch_size=16, num_workers=0, pin_memory=False)
         patch, label = next(iter(loader))
-        assert patch.shape == (16, 4 * N_BANDS, 32, 32)
+        assert patch.shape == (16, 5 * N_BANDS, 32, 32)  # 30 channels (zero-padded)
         assert label.shape == (16,)
 
     @pytest.mark.skipif(
@@ -511,7 +577,7 @@ class TestDataLoaderCollation:
         )
         # Consume all batches — must not raise RuntimeError
         for patch, aux, label in loader:
-            assert patch.shape[1:] == (4 * N_BANDS, 32, 32)
+            assert patch.shape[1:] == (5 * N_BANDS, 32, 32)  # 30ch (zero-padded)
             assert aux.shape[1] == N_AUX
             assert label.ndim == 1
 
