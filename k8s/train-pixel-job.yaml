@@ -27,7 +27,7 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 28800    # 8 h safety cap (expected ~4 h)
+  activeDeadlineSeconds: 14400    # 4 h safety cap (5-epoch smoke test ~2 h)
   template:
     spec:
       restartPolicy: Never
@@ -71,15 +71,15 @@ spec:
               python scripts/train_pixel.py \
                 --data-dir /data/unified_v2 \
                 --use-frame-2016 \
-                --epochs 35 \
-                --stage1-epochs 5 \
+                --epochs 5 \
+                --stage1-epochs 1 \
                 --batch-size 512 \
                 --lr 3e-4 \
                 --backbone-lr-factor 0.1 \
                 --weight-decay 1e-4 \
                 --focal-gamma 2.0 \
                 --num-workers 8 \
-                --patience 10 \
+                --patience 5 \
                 --context-px 32 \
                 --samples-per-tile 512 \
                 --checkpoint-dir /checkpoints/pixel_v1 \
