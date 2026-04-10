@@ -1,0 +1,93 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: crop-train-v2
+  namespace: prithvi-training-default
+  labels:
+    app: crop-training
+    model: prithvi-crop-v2
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 14400
+  template:
+    metadata:
+      labels:
+        app: crop-training
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: trainer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "=== Crop Training v2 — Prithvi + Focal Loss ==="
+
+              # Check tiles
+              TILE_COUNT=$(ls /data/crop_tiles/*.npz 2>/dev/null | wc -l)
+              echo "Found $TILE_COUNT tiles"
+              if [ "$TILE_COUNT" -lt 100 ]; then
+                echo "ERROR: Not enough tiles"; exit 1
+              fi
+
+              # Install ImintEngine + deps
+              echo "Installing dependencies..."
+              pip install --quiet torch torchvision --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet numpy scipy scikit-learn timm
+
+              # Clone and install imint-engine
+              pip install --quiet git+https://github.com/TobiasEdman/imintengine.git 2>/dev/null || true
+
+              # Run training script
+              echo "Starting training..."
+              python /scripts/train_crop.py \
+                --data-dir /data/crop_tiles \
+                --checkpoint-dir /checkpoints/crop_v2 \
+                --epochs 50 \
+                --batch-size 8 \
+                --lr 1e-4 \
+                --focal-gamma 2.0 \
+                --unfreeze-layers 6 \
+                --backbone-lr-factor 0.1 \
+                --dropout 0.3 \
+                --patience 25 \
+                --num-workers 0 \
+                --device cuda
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+            - name: IMINT_ENV
+              value: "prod"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+        - name: scripts
+          configMap:
+            name: crop-train-scripts
