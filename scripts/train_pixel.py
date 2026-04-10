@@ -409,7 +409,7 @@ def main() -> None:
         {i: int(class_counts[i]) for i in range(NUM_UNIFIED_CLASSES)}
     )
     class_weights = torch.tensor(
-        list(class_weights_np.values()), dtype=torch.float32, device=device
+        class_weights_np, dtype=torch.float32, device=device
     )
 
     criterion = FocalLoss(
