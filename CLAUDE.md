@@ -163,3 +163,38 @@ De är helt oberoende och körs i sekvens.
 - Nya analyzers ska subklassa `BaseAnalyzer` och registreras i `ANALYZER_REGISTRY`
 - Executors bygger `IMINTJob` och anropar `run_job()` — engine är executor-agnostisk
 - Modifiera ALDRIG andra repos direkt härifrån
+
+## Kodgranskningsstandard — obligatorisk vid alla kodändringar
+
+**Agenten ska alltid följa detta arbetsflöde vid granskning och korrigering av kod:**
+
+### 1. Identifiera
+Granska koden och markera alla delar som är:
+- Ineffektiva (onödiga loopar, dåliga datastrukturer, O(n²) när O(n) räcker)
+- Redundanta (duplicerad logik, dead code, backward-compat-junk som aldrig används)
+- Svårförståeliga (oklara variabelnamn, avsaknad av typannoteringar, magiska konstanter)
+- Bryter mot god stil (PEP 8, explicit är bättre än implicit, YAGNI)
+
+**Motivera varje problem:** vad är fel, varför är det problematiskt (prestanda / läsbarhet / underhållbarhet / säkerhet).
+
+### 2. Ersätt
+Skriv om till optimerad, robust, lättläst kod. Förklara varför lösningen är bättre.
+
+```python
+# Dåligt — indexering via range(len(...)):
+for i in range(len(lst)):
+    result.append(lst[i] * 2)
+
+# Bra — direkt iteration, pythonisk, snabbare:
+result = [x * 2 for x in lst]
+```
+
+### 3. Testa
+Verifiera alltid förbättrad kod med explicita assertions eller pytest-tester. Visa att alla fall passerar.
+
+### Regler (nolltolerans)
+- **Ingen slarv** — inga onödiga rader, ineffektiva algoritmer eller dålig kodstil accepteras
+- **Inga backward-compat-shims** för schema-versioner som inte längre används (t.ex. 10-klassers NMD)
+- **Explicit > implicit** — auto-detect-logik som ändrar beteende baserat på indatans max-värde är förbjuden
+- **Motivera alltid** — varje ändring ska ha en tydlig motivering
+- **All kod ska vara framtidssäkrad** — inget junk som "kan behövas senare"

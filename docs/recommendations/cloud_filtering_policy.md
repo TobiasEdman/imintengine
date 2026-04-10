@@ -54,3 +54,36 @@ The multispectral change detection (L2 norm across B02, B03, B04, B08, B11, B12)
 - `scripts/generate_kustlinje_showcase.py` — Kust / Kustlinje
 - `imint/fetch.py` — `fetch_grazing_timeseries()`, `fetch_sentinel2_data()`
 - Any future showcase generators
+
+---
+
+## WordPress iframe embedding (digitalearth.se)
+
+### Auto-resize via postMessage
+
+The IMINT showcase at `tobiasedman.github.io/imintengine/` is embedded in an iframe on `digitalearth.se/case/`. The iframe height is managed automatically:
+
+**Our side** (`docs/index.html`):
+- Sends `postMessage({type:'imint-resize', height: scrollHeight})` to parent
+- Triggered on load, DOM mutations, and every 2 seconds
+- Only active when embedded in an iframe (`window.parent !== window`)
+
+**WordPress side** (WPCode footer snippet):
+```html
+<script>
+window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'imint-resize') {
+        var iframe = document.querySelector('iframe[src*="imintengine"]');
+        if (iframe) iframe.style.height = e.data.height + 'px';
+    }
+});
+</script>
+```
+
+### How to maintain
+
+- **No manual iframe height changes needed** when adding new tabs/panels
+- The iframe base style is `height:85vh` in `archive-case.php` (on the server)
+- PostMessage overrides this dynamically after content loads
+- The WPCode snippet was added via **WPCode plugin** in WordPress admin
+- WordPress Application Password for REST API: stored in `.wp_credentials` (gitignored)
