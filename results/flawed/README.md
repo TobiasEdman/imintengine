@@ -1,23 +1,53 @@
 # Flawed / Invalid Training Results
 
-These runs are preserved for reference only. **Do not use these checkpoints or metrics as baselines.**
-They were produced between the 44% mIoU lulc_full benchmark and the current train-pixel-v1 run,
-and are considered flawed due to incomplete training, wrong schema, or abandoned experiments.
+**All runs listed here are considered crap. Do not use any of these checkpoints or metrics.**
+The only valid baseline is `../lulc_full_10class_baseline.json` (44.14% mIoU).
+The next valid result will be `train-pixel-v1` (currently running).
 
-## Files
+---
+
+## Local JSON logs (this directory)
 
 | File | Date | Best mIoU | Why flawed |
 |------|------|-----------|------------|
-| `lulc_training_test.json` | 2026-02-24 | 6.6% | Early sanity-check run, stopped at 11/50 epochs, `lulc_training_test` dataset (toy subset) |
-| `lulc_seasonal_single_temporal.json` | 2026-03-11 | 33.7% | Single temporal frame only — deliberately crippled ablation, not a valid architecture |
-| `abandoned_mar30.json` | 2026-03-30 | 0 epochs | Abandoned before any epoch completed |
-| `ice_unified_v2_interrupted.json` | 2026-04 | 39.7% (ep 42/?) | ICE cluster run on `unified_v2` dataset, interrupted mid-train (status=running), Swedish class names (old schema), UperNet dense decoder — not pixel classifier architecture |
-| *(no file — 0 epochs)* | 2026-04 | — | `lulc_seasonal/tiles/training_log.json` on ICE PVC: config written but training never started |
+| `lulc_training_test.json` | 2026-02-24 | 6.6% | Early sanity-check, 11/50 epochs, toy dataset |
+| `lulc_seasonal_single_temporal.json` | 2026-03-11 | 33.7% | Single temporal frame ablation |
+| `abandoned_mar30.json` | 2026-03-30 | 0 epochs | Abandoned before first epoch |
+| `ice_unified_v2_interrupted.json` | 2026-04 | 39.7% | ICE PVC, interrupted mid-train, old Swedish schema, UperNet dense decoder |
 
-## M1 Max checkpoints (to be marked when back on same network)
+---
 
-The following checkpoint directories on M1 Max (192.168.50.100) also fall in the flawed window
-and need to be marked or moved when network access is restored:
+## ICE cluster — training-checkpoints PVC (`training-checkpoints`, 100Gi)
+
+All checkpoint directories on this PVC are flawed. Checkpoints are stored at `/ckpt/` on the PVC.
+
+| Directory | Checkpoints present | Notes |
+|-----------|-------------------|-------|
+| `unified_v1/` | ep 5–50 + best + last (15 GB) | No training log found — metrics unknown |
+| `unified_v3/` | empty (4 KB) | Aborted before any checkpoint saved |
+| `unified_v4/` | ep 5–65 + best + last (24 GB) | No training log — likely the ~55% run |
+| `unified_v5/` | ep 5–35 + best + last (12 GB) | No training log |
+| `unified_v6/` | ep 5 + best + last (5 GB) | Stopped very early |
+| `unified_v7/` | ep 5–45 + best + last (15 GB) | No training log |
+| `pixel_v1/` | empty (4 KB) | Current run — in progress, **not flawed** |
+| `crop_sweden/` | best + final (18 MB) | Crop classification side-experiment |
+| `crop_v2/` | best + final (9 MB) | Crop classification side-experiment |
+| *(root)* | `best_model.pt`, `epoch_005–020.pt`, `last_checkpoint.pt` | Orphaned — no run directory, origin unknown |
+
+No training logs were found inside the checkpoints PVC. The `unified_v2` log is on the training-data PVC.
+
+---
+
+## ICE cluster — training-data PVC (`training-data`, 50Gi)
+
+| Path | Epochs | mIoU | Notes |
+|------|--------|------|-------|
+| `/data/lulc_seasonal/tiles/training_log.json` | 0 | — | Config written, never trained |
+| `/data/unified_v2/training_log.json` | 48 | 39.7% | Interrupted, old schema → `ice_unified_v2_interrupted.json` |
+
+---
+
+## M1 Max checkpoints (mark when back on same network — 192.168.50.100)
 
 - `checkpoints/lulc_seasonal_10class/` (2026-03-27)
 - `checkpoints/lulc_seasonal_single_temporal/` (2026-03-27)
@@ -26,6 +56,8 @@ and need to be marked or moved when network access is restored:
 - `checkpoints/lulc_seasonal_twostage_novpp/` (2026-03-27)
 - `data/lulc_seasonal/training_log.json` (2026-03-20, empty/corrupt)
 
-## Valid baselines
+---
 
-See `../lulc_full_10class_baseline.json` — 44.14% mIoU, 10-class dense segmentation, epoch 42/50.
+## Valid baseline
+
+`../lulc_full_10class_baseline.json` — 44.14% mIoU, 10-class dense segmentation, epoch 42/50, M1 Max.
