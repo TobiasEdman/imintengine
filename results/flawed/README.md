@@ -11,6 +11,8 @@ and are considered flawed due to incomplete training, wrong schema, or abandoned
 | `lulc_training_test.json` | 2026-02-24 | 6.6% | Early sanity-check run, stopped at 11/50 epochs, `lulc_training_test` dataset (toy subset) |
 | `lulc_seasonal_single_temporal.json` | 2026-03-11 | 33.7% | Single temporal frame only — deliberately crippled ablation, not a valid architecture |
 | `abandoned_mar30.json` | 2026-03-30 | 0 epochs | Abandoned before any epoch completed |
+| `ice_unified_v2_interrupted.json` | 2026-04 | 39.7% (ep 42/?) | ICE cluster run on `unified_v2` dataset, interrupted mid-train (status=running), Swedish class names (old schema), UperNet dense decoder — not pixel classifier architecture |
+| *(no file — 0 epochs)* | 2026-04 | — | `lulc_seasonal/tiles/training_log.json` on ICE PVC: config written but training never started |
 
 ## M1 Max checkpoints (to be marked when back on same network)
 
