@@ -108,6 +108,8 @@ spec:
               mountPath: /data
             - name: checkpoints
               mountPath: /checkpoints
+            - name: dshm
+              mountPath: /dev/shm
       volumes:
         - name: training-data
           persistentVolumeClaim:
@@ -115,3 +117,12 @@ spec:
         - name: checkpoints
           persistentVolumeClaim:
             claimName: training-checkpoints
+        - name: dshm
+          # PyTorch DataLoader workers share tensors via /dev/shm.
+          # Default k8s pod /dev/shm is 64 MiB — one batch alone is ~62 MB
+          # (512 samples × 30 × 32 × 32 × 4 bytes).  With 8 workers × 2
+          # prefetch batches = ~1 GB required.  Mount a 4 Gi memory-backed
+          # emptyDir to avoid "No space left on device" bus errors.
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
