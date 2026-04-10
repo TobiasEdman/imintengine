@@ -229,18 +229,23 @@ def _run_epoch(
     device: torch.device,
     train: bool,
     use_aux: bool = True,
+    log_every: int = 200,
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """Run one epoch. Returns (loss, preds, labels).
 
     When ``use_aux=True`` the DataLoader is expected to yield 3-tuples
     ``(patches, aux_vec, labels)``; otherwise 2-tuples ``(patches, labels)``.
+    Prints a one-line progress update every ``log_every`` batches so we
+    can see within-epoch activity on long first epochs (cold NFS I/O).
     """
     model.train(train)
     total_loss = 0.0
     all_preds, all_labels = [], []
+    n_batches = len(loader)
+    t0 = time.time()
 
     with torch.set_grad_enabled(train):
-        for batch in loader:
+        for step, batch in enumerate(loader):
             if use_aux:
                 patches, aux_vec, labels = batch
                 aux_vec = aux_vec.to(device, non_blocking=True)
@@ -263,6 +268,22 @@ def _run_epoch(
             preds = logits.argmax(dim=1).cpu().numpy()
             all_preds.append(preds)
             all_labels.append(labels.cpu().numpy())
+
+            if log_every > 0 and (step + 1) % log_every == 0:
+                elapsed = time.time() - t0
+                ms_per_batch = elapsed / (step + 1) * 1000
+                eta = (n_batches - step - 1) * elapsed / (step + 1)
+                running_loss = total_loss / max(
+                    sum(len(l) for l in all_labels), 1
+                )
+                phase = "train" if train else "val"
+                print(
+                    f"    [{phase} {step+1:5d}/{n_batches}]"
+                    f"  loss={running_loss:.4f}"
+                    f"  {ms_per_batch:.0f}ms/batch"
+                    f"  ETA {eta:.0f}s",
+                    flush=True,
+                )
 
     preds_arr = np.concatenate(all_preds)
     labels_arr = np.concatenate(all_labels)
