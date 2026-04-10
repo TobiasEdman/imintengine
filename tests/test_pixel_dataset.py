@@ -42,6 +42,7 @@ from imint.training.pixel_dataset import (
     N_BANDS,
     PixelContextDataset,
     _compute_boundary_mask,
+    _TORCH_AVAILABLE,
 )
 from imint.training.unified_dataset import (
     AUX_CHANNEL_NAMES,
@@ -764,26 +765,89 @@ class TestOversamplingWeights:
 
 
 class TestSplitReproducibility:
-    """Different splits must produce different shuffles; same split reproducible."""
+    """Index is now sorted by tile path; shuffle lives in TileGroupSampler."""
 
-    def _get_index_order(self, tmp_path, split, seed=42):
-        p = _make_tile_file(tmp_path, f"rng_{split}", H=64, W=64, seed=0)
-        ds = PixelContextDataset(
-            [p], context_px=32, split=split, samples_per_tile=256, seed=seed
+    def _make_ds(self, tmp_path, paths, split="train", seed=42):
+        return PixelContextDataset(
+            paths, context_px=32, split=split, samples_per_tile=64, seed=seed
         )
-        return [(r, c) for _, r, c, _ in ds._index]
 
-    def test_train_val_produce_different_orders(self, tmp_path):
-        train_order = self._get_index_order(tmp_path, "train")
-        val_order   = self._get_index_order(tmp_path, "val")
-        assert train_order != val_order, "train and val should produce different orders"
+    def test_index_sorted_by_path(self, tmp_path):
+        """After init the index must be sorted ascending by tile path."""
+        paths = [_make_tile_file(tmp_path, f"z_{i}", H=64, W=64, seed=i) for i in range(3)]
+        ds = self._make_ds(tmp_path, paths)
+        paths_in_index = [entry[0] for entry in ds._index]
+        assert paths_in_index == sorted(paths_in_index), \
+            "Index must be sorted by tile path for tile-group caching to work"
 
-    def test_same_split_is_reproducible(self, tmp_path):
-        order1 = self._get_index_order(tmp_path, "train", seed=7)
-        order2 = self._get_index_order(tmp_path, "train", seed=7)
-        assert order1 == order2, "Same split + seed must produce identical order"
+    def test_same_args_produce_identical_index(self, tmp_path):
+        """Construction is deterministic — same args → same index twice."""
+        p = _make_tile_file(tmp_path, "repro", H=64, W=64, seed=0)
+        ds1 = self._make_ds(tmp_path, [p], seed=7)
+        ds2 = self._make_ds(tmp_path, [p], seed=7)
+        assert ds1._index == ds2._index, "Same args must produce identical index"
 
-    def test_different_seeds_differ(self, tmp_path):
-        order1 = self._get_index_order(tmp_path, "train", seed=1)
-        order2 = self._get_index_order(tmp_path, "train", seed=99)
-        assert order1 != order2, "Different seeds must produce different orders"
+    def test_different_splits_use_different_sampling_rngs(self, tmp_path):
+        """train / val use different RNG seeds → different sample draws."""
+        paths = [_make_tile_file(tmp_path, f"sp_{i}", H=64, W=64, seed=i) for i in range(2)]
+        ds_tr = self._make_ds(tmp_path, paths, split="train")
+        ds_vl = self._make_ds(tmp_path, paths, split="val")
+        # Both sorted by path but drawn with different RNG → different rows/cols
+        rows_tr = [(r, c) for _, r, c, _ in ds_tr._index]
+        rows_vl = [(r, c) for _, r, c, _ in ds_vl._index]
+        assert rows_tr != rows_vl, "train and val should draw different pixel locations"
+
+
+class TestTileGroupSampler:
+    """TileGroupSampler shuffles tile groups, keeps per-tile locality."""
+
+    def test_sampler_yields_all_indices(self, tmp_path):
+        """Every sample index must appear exactly once per epoch."""
+        if not _TORCH_AVAILABLE:
+            pytest.skip("torch not available")
+        from imint.training.pixel_dataset import TileGroupSampler
+        paths = [_make_tile_file(tmp_path, f"ts_{i}", H=64, W=64, seed=i) for i in range(3)]
+        ds = PixelContextDataset(paths, context_px=32, samples_per_tile=64, seed=0)
+        sampler = TileGroupSampler(ds, shuffle=True, seed=42)
+        indices = list(sampler)
+        assert sorted(indices) == list(range(len(ds))), \
+            "Sampler must yield each index exactly once"
+
+    def test_tile_locality_within_epoch(self, tmp_path):
+        """All samples from a tile must be contiguous in the sampler output."""
+        if not _TORCH_AVAILABLE:
+            pytest.skip("torch not available")
+        from imint.training.pixel_dataset import TileGroupSampler
+        paths = [_make_tile_file(tmp_path, f"loc_{i}", H=64, W=64, seed=i) for i in range(4)]
+        ds = PixelContextDataset(paths, context_px=32, samples_per_tile=32, seed=0)
+        sampler = TileGroupSampler(ds, shuffle=True, seed=42)
+        indices = list(sampler)
+        # Map index → tile path, verify no interleaving
+        tile_sequence = [ds._index[i][0] for i in indices]
+        # Count path-change events: must equal n_tiles - 1 (no interleaving)
+        changes = sum(1 for a, b in zip(tile_sequence, tile_sequence[1:]) if a != b)
+        n_tiles = len({e[0] for e in ds._index})
+        assert changes == n_tiles - 1, \
+            f"Tile paths should change exactly {n_tiles-1} times, got {changes}"
+
+    def test_set_epoch_reshuffles_tile_order(self, tmp_path):
+        """set_epoch() must produce a different tile order across epochs."""
+        if not _TORCH_AVAILABLE:
+            pytest.skip("torch not available")
+        from imint.training.pixel_dataset import TileGroupSampler
+        paths = [_make_tile_file(tmp_path, f"ep_{i}", H=64, W=64, seed=i) for i in range(5)]
+        ds = PixelContextDataset(paths, context_px=32, samples_per_tile=32, seed=0)
+        sampler = TileGroupSampler(ds, shuffle=True, seed=42)
+        sampler.set_epoch(0); order0 = list(sampler)
+        sampler.set_epoch(1); order1 = list(sampler)
+        assert order0 != order1, "Different epochs must produce different tile order"
+
+    def test_shuffle_false_is_deterministic(self, tmp_path):
+        """shuffle=False must produce the same order every call."""
+        if not _TORCH_AVAILABLE:
+            pytest.skip("torch not available")
+        from imint.training.pixel_dataset import TileGroupSampler
+        paths = [_make_tile_file(tmp_path, f"det_{i}", H=64, W=64, seed=i) for i in range(3)]
+        ds = PixelContextDataset(paths, context_px=32, samples_per_tile=32, seed=0)
+        sampler = TileGroupSampler(ds, shuffle=False, seed=0)
+        assert list(sampler) == list(sampler), "Deterministic sampler must be stable"

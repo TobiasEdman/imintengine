@@ -60,6 +60,28 @@ N_BANDS = 6
 IGNORE_CLASS = 0   # background — excluded from training
 N_AUX = len(AUX_CHANNEL_NAMES)  # 11 auxiliary channels
 
+# ── Per-worker tile file cache ────────────────────────────────────────────
+# Each DataLoader worker is a separate OS process; this dict is local to
+# each worker.  With TileGroupSampler (tile-level shuffle) consecutive
+# __getitem__ calls in the same worker usually share the same tile path
+# → cache hits reduce NFS file-opens from O(n_samples) to O(n_tiles).
+
+_TILE_CACHE_SIZE = 3          # tiles kept resident per worker process
+_tile_cache: dict[str, "np.lib.npyio.NpzFile"] = {}
+_tile_cache_order: list[str] = []
+
+
+def _load_tile_cached(path: str) -> "np.lib.npyio.NpzFile":
+    if path in _tile_cache:
+        return _tile_cache[path]
+    data = np.load(path, allow_pickle=False)
+    if len(_tile_cache_order) >= _TILE_CACHE_SIZE:
+        evict = _tile_cache_order.pop(0)
+        _tile_cache.pop(evict, None)
+    _tile_cache[path] = data
+    _tile_cache_order.append(path)
+    return data
+
 
 # ── Dataset ───────────────────────────────────────────────────────────────
 
@@ -179,8 +201,11 @@ class PixelContextDataset:
                     continue
                 self._index.append((path, r, c, cls))
 
-        # Shuffle (especially important for val/test where no augmentation)
-        rng.shuffle(self._index)
+        # Sort by tile path so same-tile samples are consecutive in the index.
+        # This enables the TileGroupSampler (see below) to shuffle at tile
+        # granularity, reducing NFS file-opens from O(n_samples) to O(n_tiles)
+        # per epoch.  Do NOT shuffle here — the sampler handles epoch shuffling.
+        self._index.sort(key=lambda x: x[0])
 
     # ------------------------------------------------------------------
     # PyTorch Dataset protocol (also works without torch as plain iter)
@@ -192,7 +217,11 @@ class PixelContextDataset:
     def __getitem__(self, idx: int):
         path, row, col, cls = self._index[idx]
 
-        data = np.load(path, allow_pickle=False)
+        # Per-worker file cache: keeps the last _TILE_CACHE_SIZE tiles in memory.
+        # Each DataLoader worker is a separate process, so _tile_cache is local
+        # to each worker.  With tile-group sampling, consecutive calls within a
+        # worker share the same tile → cache hit rate approaches 100%.
+        data = _load_tile_cached(path)
         patch = self._build_patch(data, row, col)
 
         if self.transform is not None:
@@ -325,10 +354,10 @@ def _compute_boundary_mask(label: np.ndarray, boundary_px: int) -> np.ndarray:
     return boundary
 
 
-# ── If torch is available, expose as Dataset subclass ────────────────────
+# ── If torch is available, expose as Dataset subclass + TileGroupSampler ──
 
 if _TORCH_AVAILABLE:
-    from torch.utils.data import Dataset
+    from torch.utils.data import Dataset, Sampler
 
     class PixelContextDatasetTorch(PixelContextDataset, Dataset):
         """PixelContextDataset exposed as a ``torch.utils.data.Dataset``."""
@@ -336,3 +365,64 @@ if _TORCH_AVAILABLE:
 
     # Alias for convenience
     PixelContextDataset = PixelContextDatasetTorch  # type: ignore[misc]
+
+    class TileGroupSampler(Sampler):
+        """Shuffle at tile-group granularity rather than sample level.
+
+        The dataset index is sorted by tile path so samples from the same tile
+        are consecutive.  This sampler shuffles the *order of tiles* each
+        epoch while keeping all samples from a tile together.  Combined with
+        the per-worker file cache in ``_load_tile_cached``, this reduces NFS
+        file-opens from O(n_samples) to O(n_tiles) per epoch — a ~512× win
+        for the default ``samples_per_tile=512``.
+
+        Usage::
+
+            sampler = TileGroupSampler(train_ds, shuffle=True, seed=42)
+            loader  = DataLoader(train_ds, batch_size=512,
+                                 sampler=sampler, num_workers=8, ...)
+
+            for epoch in range(n_epochs):
+                sampler.set_epoch(epoch)   # re-shuffles tile order
+                for batch in loader: ...
+        """
+
+        def __init__(
+            self,
+            dataset: PixelContextDataset,
+            shuffle: bool = True,
+            seed:    int  = 42,
+        ) -> None:
+            self._dataset = dataset
+            self._shuffle = shuffle
+            self._seed    = seed
+            self._epoch   = 0
+
+            # Build tile groups: list of (start_idx, length) per tile
+            groups: list[tuple[int, int]] = []
+            if dataset._index:
+                cur_path = dataset._index[0][0]
+                start    = 0
+                for i, (path, *_) in enumerate(dataset._index):
+                    if path != cur_path:
+                        groups.append((start, i - start))
+                        cur_path = path
+                        start    = i
+                groups.append((start, len(dataset._index) - start))
+            self._groups = groups
+
+        def set_epoch(self, epoch: int) -> None:
+            """Call before each epoch to re-shuffle tile order."""
+            self._epoch = epoch
+
+        def __len__(self) -> int:
+            return len(self._dataset)
+
+        def __iter__(self):
+            rng = np.random.default_rng(self._seed + self._epoch)
+            order = list(range(len(self._groups)))
+            if self._shuffle:
+                rng.shuffle(order)
+            for gi in order:
+                start, length = self._groups[gi]
+                yield from range(start, start + length)

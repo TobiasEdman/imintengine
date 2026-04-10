@@ -99,7 +99,7 @@ def _safe_collate(batch):
     from torch.utils.data.dataloader import default_collate
     return default_collate(batch)
 
-from imint.training.pixel_dataset import PixelContextDataset, N_AUX
+from imint.training.pixel_dataset import PixelContextDataset, TileGroupSampler, N_AUX
 from imint.training.unified_schema import (
     NUM_UNIFIED_CLASSES,
     UNIFIED_CLASS_NAMES,
@@ -170,6 +170,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--evaluate-only", action="store_true")
     p.add_argument("--checkpoint", default=None,
                    help="Checkpoint for --evaluate-only")
+
+    p.add_argument("--seed", type=int, default=42,
+                   help="Random seed for tile-group shuffle sampler (default: 42)")
 
     return p
 
@@ -476,16 +479,22 @@ def main() -> None:
     )
 
     # ── DataLoaders ───────────────────────────────────────────────
+    # TileGroupSampler shuffles at tile granularity (not sample level).
+    # The dataset index is sorted by tile path so each worker processes all
+    # 512 samples from a tile before moving to the next → ~512× fewer NFS
+    # file-opens per epoch vs shuffle=True with random index.
     # _safe_collate bypasses the worker-side _new_shared()+resize_() path
     # that crashes on some PyTorch versions (see _safe_collate docstring).
+    train_sampler = TileGroupSampler(train_ds, shuffle=True, seed=args.seed)
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
-        shuffle=True,
+        sampler=train_sampler,
         num_workers=args.num_workers,
         pin_memory=(device.type == "cuda"),
         drop_last=True,
         collate_fn=_safe_collate,
+        persistent_workers=(args.num_workers > 0),
     )
     val_loader = DataLoader(
         val_ds,
@@ -493,6 +502,7 @@ def main() -> None:
         num_workers=args.num_workers,
         pin_memory=(device.type == "cuda"),
         collate_fn=_safe_collate,
+        persistent_workers=(args.num_workers > 0),
     ) if val_ds else None
 
     # ── Checkpoint dir ────────────────────────────────────────────
@@ -521,6 +531,7 @@ def main() -> None:
     print(f"{'='*60}\n")
 
     for epoch in range(start_epoch, args.epochs):
+        train_sampler.set_epoch(epoch)   # re-shuffle tile order each epoch
         # Switch to Stage 2
         if epoch == args.stage1_epochs and current_stage == 1:
             print(f"\n  ── Stage 2: unfreezing backbone (epoch {epoch}) ──\n")
