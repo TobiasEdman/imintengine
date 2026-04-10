@@ -47,14 +47,21 @@ No training logs were found inside the checkpoints PVC. The `unified_v2` log is 
 
 ---
 
-## M1 Max checkpoints (mark when back on same network — 192.168.50.100)
+## M1 Max checkpoints — ✓ DONE (2026-04-10)
 
-- `checkpoints/lulc_seasonal_10class/` (2026-03-27)
-- `checkpoints/lulc_seasonal_single_temporal/` (2026-03-27)
-- `checkpoints/lulc_seasonal_stage1/` (2026-03-27)
-- `checkpoints/lulc_seasonal_twostage/` (2026-03-28)
-- `checkpoints/lulc_seasonal_twostage_novpp/` (2026-03-27)
-- `data/lulc_seasonal/training_log.json` (2026-03-20, empty/corrupt)
+All flawed checkpoints and stale logs deleted. Only `checkpoints/lulc_seasonal_v2/` (44% baseline, 1.5 GB) preserved.
+
+Deleted (~61 GB freed):
+- `checkpoints/lulc/` (15 GB)
+- `checkpoints/lulc_aux/` (15 GB)
+- `checkpoints/lulc_seasonal/` (15 GB)
+- `checkpoints/lulc_seasonal_10class/` (10 GB)
+- `checkpoints/lulc_seasonal_single_temporal/` (1.2 GB)
+- `checkpoints/lulc_seasonal_stage1/` (1.5 GB)
+- `checkpoints/lulc_seasonal_twostage/` (1.5 GB)
+- `checkpoints/lulc_seasonal_twostage_novpp/` (1.5 GB)
+- `data/lulc_seasonal/training_log.json` (0 B, empty)
+- `data/lulc_seasonal/training_log_single_temporal.json` (33 KB)
 
 ---
 
