@@ -77,15 +77,7 @@ spec:
                 echo "  Found: $N_LOC locations"
               else
                 echo "  Not found — regenerating from LULC grid (2500m, land-filtered)..."
-                python3 << 'PYEOF'
-import sys, json
-sys.path.insert(0, '/workspace/imintengine')
-from scripts.fetch_unified_tiles import gen_lulc
-locs = gen_lulc(spacing_m=2500)
-with open('/data/tile_locations.json', 'w') as f:
-    json.dump(locs, f)
-print(f"  Generated {len(locs)} LULC tile locations → /data/tile_locations.json")
-PYEOF
+                python3 -c "import sys,json; sys.path.insert(0,'/workspace/imintengine'); from scripts.fetch_unified_tiles import gen_lulc; locs=gen_lulc(spacing_m=2500); json.dump(locs,open('/data/tile_locations.json','w')); print(f'Generated {len(locs)} LULC locations -> /data/tile_locations.json')"
               fi
 
               # ── Step 3: Refetch missing LULC tiles ───────────────────────
