@@ -27,7 +27,7 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 14400    # 4 h safety cap (5-epoch smoke test ~2 h)
+  activeDeadlineSeconds: 21600    # 6 h safety cap (5-epoch smoke test + AMP ~3 h)
   template:
     spec:
       restartPolicy: Never
@@ -35,7 +35,7 @@ spec:
         accelerator: nvidia-h100
       containers:
         - name: trainer
-          image: python:3.11-slim
+          image: pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
           command:
             - /bin/bash
             - -c
@@ -46,10 +46,10 @@ spec:
               echo "Started: $(date)"
               nvidia-smi || true
 
+              # pytorch/pytorch base image has torch+cuda pre-installed.
+              # Only install the non-torch dependencies.
               apt-get update -qq && apt-get install -y -qq git libgdal-dev > /dev/null 2>&1
 
-              pip install --quiet --no-cache-dir \
-                torch torchvision --index-url https://download.pytorch.org/whl/cu121
               pip install --quiet --no-cache-dir \
                 timm numpy Pillow scikit-learn scipy rasterio geopandas \
                 shapely pyproj huggingface_hub
@@ -63,18 +63,28 @@ spec:
               echo ""
               echo "Data inventory:"
               python scripts/check_tiles.py /data/unified_v2 count
-              python scripts/check_tiles.py /data/unified_v2 frame2016 --sample 500 --warn
               echo ""
 
-              echo "Generating zone-stratified splits (odlingszoner 1-8) …"
-              python scripts/generate_splits.py \
-                --data-dir /data/unified_v2 \
-                --val-frac 0.15 \
-                --test-frac 0.05 \
-                --min-val-per-zone 10
+              if [ -f /data/unified_v2/train.txt ]; then
+                echo "Splits already exist — skipping generate_splits.py"
+                wc -l /data/unified_v2/train.txt /data/unified_v2/val.txt
+              else
+                echo "Generating zone-stratified splits (odlingszoner 1-8) …"
+                python scripts/generate_splits.py \
+                  --data-dir /data/unified_v2 \
+                  --val-frac 0.15 \
+                  --test-frac 0.05 \
+                  --min-val-per-zone 10
+              fi
               echo ""
 
               mkdir -p /checkpoints/pixel_v1
+
+              RESUME_FLAG=""
+              if [ -f /checkpoints/pixel_v1/best_model.pt ]; then
+                echo "Found existing checkpoint — resuming from /checkpoints/pixel_v1/best_model.pt"
+                RESUME_FLAG="--resume-from /checkpoints/pixel_v1/best_model.pt"
+              fi
 
               python scripts/train_pixel.py \
                 --data-dir /data/unified_v2 \
@@ -82,7 +92,7 @@ spec:
                 --use-frame-2016 \
                 --epochs 5 \
                 --stage1-epochs 1 \
-                --batch-size 512 \
+                --batch-size 1024 \
                 --lr 3e-4 \
                 --backbone-lr-factor 0.1 \
                 --weight-decay 1e-4 \
@@ -92,7 +102,10 @@ spec:
                 --context-px 32 \
                 --samples-per-tile 512 \
                 --checkpoint-dir /checkpoints/pixel_v1 \
-                --device cuda
+                --device cuda \
+                --amp \
+                --compile \
+                $RESUME_FLAG
 
               echo ""
               echo "=== Done: $(date) ==="

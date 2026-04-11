@@ -174,6 +174,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=42,
                    help="Random seed for tile-group shuffle sampler (default: 42)")
 
+    # Performance
+    p.add_argument("--amp", action="store_true", default=False,
+                   help="Automatic mixed precision (bfloat16) on CUDA — 2-3× speedup on H100")
+    p.add_argument("--compile", action="store_true", default=False,
+                   help="torch.compile() the model for ~20%% speedup (PyTorch 2.x, adds ~1 min startup)")
+
     return p
 
 
@@ -233,6 +239,7 @@ def _run_epoch(
     train: bool,
     use_aux: bool = True,
     log_every: int = 200,
+    use_amp: bool = False,
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """Run one epoch. Returns (loss, preds, labels).
 
@@ -240,7 +247,18 @@ def _run_epoch(
     ``(patches, aux_vec, labels)``; otherwise 2-tuples ``(patches, labels)``.
     Prints a one-line progress update every ``log_every`` batches so we
     can see within-epoch activity on long first epochs (cold NFS I/O).
+
+    When ``use_amp=True`` the forward pass runs under ``torch.autocast``
+    with ``bfloat16``.  BF16 does NOT require a GradScaler (unlike fp16),
+    so gradients are accumulated and applied in fp32.
     """
+    import contextlib
+    amp_ctx: contextlib.AbstractContextManager = (
+        torch.autocast("cuda", dtype=torch.bfloat16)
+        if use_amp and device.type == "cuda"
+        else contextlib.nullcontext()
+    )
+
     model.train(train)
     total_loss = 0.0
     all_preds, all_labels = [], []
@@ -259,9 +277,11 @@ def _run_epoch(
             patches = patches.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
 
-            logits = model(patches, aux_vec)  # (B, num_classes)
-            loss = criterion(logits, labels)
+            with amp_ctx:
+                logits = model(patches, aux_vec)  # (B, num_classes)
+                loss = criterion(logits, labels)
 
+            # Backward and optimiser step stay in fp32 (bf16 needs no scaler)
             if train:
                 optimizer.zero_grad()
                 loss.backward()
@@ -422,14 +442,26 @@ def main() -> None:
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {n_params/1e6:.1f}M  ({time.time()-t0:.0f}s)")
 
+    # cuDNN auto-tuner: safe because all patches are the same size (context_px²)
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+
+    if args.compile and device.type == "cuda":
+        print("  Compiling model with torch.compile() …")
+        model = torch.compile(model)
+        print("  Compile done.")
+
     # ── Resume ────────────────────────────────────────────────────
     start_epoch = 0
+    best_val_acc_resume = 0.0
     if args.resume_from:
         ckpt = torch.load(args.resume_from, map_location="cpu", weights_only=True)
         state = ckpt.get("model_state_dict", ckpt)
         model.load_state_dict(state, strict=False)
         start_epoch = int(ckpt.get("epoch", 0)) + 1
-        print(f"  Resumed from {args.resume_from} (epoch {start_epoch})")
+        best_val_acc_resume = float(ckpt.get("val_mean_acc", 0.0))
+        print(f"  Resumed from {args.resume_from} "
+              f"(start_epoch={start_epoch}, best_val_mAcc_so_far={best_val_acc_resume:.4f})")
 
     # ── Evaluate-only mode ────────────────────────────────────────
     if args.evaluate_only:
@@ -449,7 +481,8 @@ def main() -> None:
         )
         criterion = nn.CrossEntropyLoss(ignore_index=0)
         _, preds, labels = _run_epoch(
-            model, loader, criterion, None, device, train=False, use_aux=args.use_aux,
+            model, loader, criterion, None, device,
+            train=False, use_aux=args.use_aux, use_amp=args.amp,
         )
         metrics = compute_metrics(preds, labels)
         print(f"  Mean Accuracy : {metrics['mean_acc']:.4f}")
@@ -510,7 +543,7 @@ def main() -> None:
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Training loop ─────────────────────────────────────────────
-    best_val_acc = 0.0
+    best_val_acc = best_val_acc_resume   # restored from checkpoint (0.0 if fresh run)
     best_epoch = 0
     no_improve = 0
     current_stage = 1
@@ -549,7 +582,7 @@ def main() -> None:
         t0 = time.time()
         train_loss, train_preds, train_labels = _run_epoch(
             model, train_loader, criterion, optimizer, device,
-            train=True, use_aux=args.use_aux,
+            train=True, use_aux=args.use_aux, use_amp=args.amp,
         )
         train_metrics = compute_metrics(train_preds, train_labels)
         scheduler.step()
@@ -559,7 +592,7 @@ def main() -> None:
         if val_loader is not None:
             val_loss, val_preds, val_labels = _run_epoch(
                 model, val_loader, criterion, None, device,
-                train=False, use_aux=args.use_aux,
+                train=False, use_aux=args.use_aux, use_amp=args.amp,
             )
             val_metrics = compute_metrics(val_preds, val_labels)
             val_acc = val_metrics["mean_acc"]
@@ -622,7 +655,7 @@ def main() -> None:
         model.load_state_dict(best_ckpt["model_state_dict"])
         _, val_preds, val_labels = _run_epoch(
             model, val_loader, criterion, None, device,
-            train=False, use_aux=args.use_aux,
+            train=False, use_aux=args.use_aux, use_amp=args.amp,
         )
         metrics = compute_metrics(val_preds, val_labels)
         for name, acc in metrics["per_class_acc"].items():
