@@ -561,13 +561,22 @@ def main():
             if t["name"] in existing:
                 skipped += 1
                 continue
-            bbox = {"west": t["bbox"][0], "south": t["bbox"][1],
-                    "east": t["bbox"][2], "north": t["bbox"][3]}
+            # Support both JSON formats:
+            #   gen_lulc format: bbox_3006 = {"west":…,"south":…,"east":…,"north":…}
+            #   legacy format:   bbox = [west, south, east, north]
+            raw_bbox = t.get("bbox_3006") or t.get("bbox")
+            if raw_bbox is None:
+                continue
+            if isinstance(raw_bbox, dict):
+                bbox = raw_bbox
+            else:
+                bbox = {"west": raw_bbox[0], "south": raw_bbox[1],
+                        "east": raw_bbox[2], "north": raw_bbox[3]}
             loc = {
                 "name": t["name"],
                 "source": t.get("source", "lulc"),
                 "bbox_3006": bbox,
-                "coords_wgs84": bbox_3006_to_wgs84(bbox),
+                "coords_wgs84": t.get("coords_wgs84") or bbox_3006_to_wgs84(bbox),
                 "_has_lpis": t.get("source") == "crop",
             }
             if t.get("year"):
