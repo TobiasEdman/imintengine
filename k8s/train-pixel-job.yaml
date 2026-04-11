@@ -11,7 +11,11 @@
 #   Stage 1 (5 epochs):  backbone frozen, train head + pos_embed
 #   Stage 2 (30 epochs): full fine-tune, backbone LR = 0.1× head LR
 #
-# Estimated runtime: ~4 h on H100 SXM5 (35 epochs, 3.4M samples, batch 512)
+# NVMe scratch:
+#   Tiles are copied from the NFS PVC to the node's local NVMe (/scratch)
+#   before training begins.  This eliminates NFS I/O during training and
+#   reduces per-epoch time from ~90 min (NFS-bound) to ~30-40 min (GPU-bound).
+#   The copy takes ~5-7 min and is skipped if /scratch already has tiles.
 #
 # Prerequisites:
 #   - PVC "training-data" with /data/unified_v2/ containing labelled tiles
@@ -27,7 +31,7 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 21600    # 6 h safety cap (5-epoch smoke test + AMP ~3 h)
+  activeDeadlineSeconds: 21600    # 6 h safety cap
   template:
     spec:
       restartPolicy: Never
@@ -78,6 +82,31 @@ spec:
               fi
               echo ""
 
+              # ── Copy tiles to local NVMe scratch ──────────────────────────────
+              # The NFS PVC is ~200 MB/s.  The node's local NVMe is 5-7 GB/s.
+              # Copying once eliminates I/O wait for all training epochs.
+              # Uses 16 parallel cp workers to saturate NFS read bandwidth.
+              N_SCRATCH=$(ls /scratch/*.npz 2>/dev/null | wc -l)
+              N_NFS=$(find /data/unified_v2 -maxdepth 1 -name "*.npz" ! -name "*.tmp.*" | wc -l)
+              if [ "$N_SCRATCH" -eq "$N_NFS" ] && [ "$N_SCRATCH" -gt 0 ]; then
+                echo "Scratch already has $N_SCRATCH tiles — skipping copy"
+              else
+                echo "Copying $N_NFS tiles to local NVMe scratch (16 parallel workers) …"
+                time python3 -c "
+              import shutil, concurrent.futures, sys
+              from pathlib import Path
+              tiles = [f for f in Path('/data/unified_v2').glob('*.npz') if '.tmp' not in f.name]
+              dst = Path('/scratch')
+              dst.mkdir(exist_ok=True)
+              def cp(f): shutil.copy2(f, dst / f.name)
+              with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+                  list(ex.map(cp, tiles))
+              print(f'Copied {len(tiles)} tiles', flush=True)
+              "
+                echo "Tiles on scratch: $(ls /scratch/*.npz | wc -l)"
+              fi
+              echo ""
+
               mkdir -p /checkpoints/pixel_v1
 
               RESUME_FLAG=""
@@ -87,7 +116,7 @@ spec:
               fi
 
               python scripts/train_pixel.py \
-                --data-dir /data/unified_v2 \
+                --data-dir /scratch \
                 --split-dir /data/unified_v2 \
                 --use-frame-2016 \
                 --epochs 5 \
@@ -104,7 +133,6 @@ spec:
                 --checkpoint-dir /checkpoints/pixel_v1 \
                 --device cuda \
                 --amp \
-                --compile \
                 $RESUME_FLAG
 
               echo ""
@@ -130,6 +158,8 @@ spec:
               mountPath: /data
             - name: checkpoints
               mountPath: /checkpoints
+            - name: scratch
+              mountPath: /scratch
             - name: dshm
               mountPath: /dev/shm
       volumes:
@@ -139,12 +169,16 @@ spec:
         - name: checkpoints
           persistentVolumeClaim:
             claimName: training-checkpoints
+        - name: scratch
+          # Node-local NVMe scratch — no size limit, automatically cleaned up
+          # when pod terminates.  Used for NFS-free tile access during training.
+          emptyDir: {}
         - name: dshm
           # PyTorch DataLoader workers share tensors via /dev/shm.
-          # Default k8s pod /dev/shm is 64 MiB — one batch alone is ~62 MB
-          # (512 samples × 30 × 32 × 32 × 4 bytes).  With 8 workers × 2
-          # prefetch batches = ~1 GB required.  Mount a 4 Gi memory-backed
+          # Default k8s pod /dev/shm is 64 MiB — one batch alone is ~125 MB
+          # (1024 samples × 30 × 32 × 32 × 4 bytes).  With 8 workers × 2
+          # prefetch batches = ~2 GB required.  Mount a 8 Gi memory-backed
           # emptyDir to avoid "No space left on device" bus errors.
           emptyDir:
             medium: Memory
-            sizeLimit: 4Gi
+            sizeLimit: 8Gi
