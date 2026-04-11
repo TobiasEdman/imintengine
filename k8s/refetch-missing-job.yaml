@@ -1,0 +1,195 @@
+---
+# Job: refetch-missing — fill ~2,000 missing tiles in /data/unified_v2
+#
+# Background:
+#   Previous fetch runs left ~2,000 tiles as .tmp.* leftovers (interrupted writes).
+#   /data/unified_v2 has ~5,470 clean .npz tiles; expected target is ~7,500
+#   (6,000 LULC + 1,000 rare crops + 500 urban).
+#
+# What this job does:
+#   1. Delete all .tmp.* files (stale partial downloads — never committed)
+#   2. Ensure /data/tile_locations.json exists; regenerate LULC grid if missing
+#   3. Refetch missing LULC tiles  — reads full tile_locations.json, skips
+#      any tile whose .npz already exists (~6h for ~2,000 tiles at 6 workers)
+#   4. Refetch any missing crop tiles (oljeväxter + havre via LPIS centroids)
+#   5. Refetch any missing urban tiles (SCB tätort)
+#
+# All three fetch steps use the same skip-existing logic inside fetch_tile():
+#   if os.path.exists(out_path): return {"status": "skipped"}
+# → safe to run repeatedly without re-downloading completed tiles.
+#
+# After this job completes, run in order:
+#   kubectl delete job build-labels-v2 -n prithvi-training-default 2>/dev/null; \
+#     kubectl apply  -f k8s/build-labels-job.yaml
+#   kubectl delete job add-background-frame -n prithvi-training-default 2>/dev/null; \
+#     kubectl apply  -f k8s/add-background-frame-job.yaml
+#   kubectl exec ... -- rm -f /data/unified_v2/train.txt   # force split rebuild
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: refetch-missing
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 86400    # 24h — LULC ~6h + crops ~1h + urban ~30min
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fetcher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Refetch Missing Tiles ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio geopandas shapely requests \
+                pyproj openeo pyarrow pyyaml Pillow httpx
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              # ── Step 1: Clean .tmp leftovers ──────────────────────────────
+              echo ""
+              echo "=== Step 1: Clean partial downloads ==="
+              N_TMP=$(find /data/unified_v2 -maxdepth 1 -name "*.tmp*" 2>/dev/null | wc -l)
+              echo "  Found $N_TMP .tmp file(s) — deleting..."
+              find /data/unified_v2 -maxdepth 1 -name "*.tmp*" -delete 2>/dev/null || true
+              N_CLEAN=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
+              echo "  Clean .npz tiles: $N_CLEAN"
+
+              # ── Step 2: Ensure tile_locations.json ───────────────────────
+              echo ""
+              echo "=== Step 2: Check tile_locations.json ==="
+              if [ -f /data/tile_locations.json ]; then
+                N_LOC=$(python3 -c \
+                  "import json; print(len(json.load(open('/data/tile_locations.json'))))")
+                echo "  Found: $N_LOC locations"
+              else
+                echo "  Not found — regenerating from LULC grid (2500m, land-filtered)..."
+                python3 << 'PYEOF'
+import sys, json
+sys.path.insert(0, '/workspace/imintengine')
+from scripts.fetch_unified_tiles import gen_lulc
+locs = gen_lulc(spacing_m=2500)
+with open('/data/tile_locations.json', 'w') as f:
+    json.dump(locs, f)
+print(f"  Generated {len(locs)} LULC tile locations → /data/tile_locations.json")
+PYEOF
+              fi
+
+              # ── Step 3: Refetch missing LULC tiles ───────────────────────
+              # fetch_unified_tiles.py --from-json skips tiles whose .npz already
+              # exists in output-dir; only fetches the gap tiles.
+              echo ""
+              echo "=== Step 3: Refetch missing LULC tiles ==="
+              N_BEFORE=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
+              python scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json /data/tile_locations.json \
+                --output-dir /data/unified_v2 \
+                --years 2018 2019 2022 2023 \
+                --workers 6 \
+                --cloud-max 30
+              N_AFTER=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
+              echo "  LULC step: $N_BEFORE → $N_AFTER tiles (+$((N_AFTER - N_BEFORE)) new)"
+
+              # ── Step 4: Refetch missing crop tiles ───────────────────────
+              # Generates centroids from LPIS parquets; same centroids as the
+              # original run (deterministic LPIS source); skips existing tiles.
+              echo ""
+              echo "=== Step 4: Refetch rare-crop tiles (oljeväxter + havre) ==="
+              if [ -d /data/lpis ] && [ "$(ls /data/lpis/*.parquet 2>/dev/null | wc -l)" -gt 0 ]; then
+                N_BEFORE=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
+                python scripts/fetch_unified_tiles.py \
+                  --mode rare-crops \
+                  --output-dir /data/unified_v2 \
+                  --years 2022 2023 \
+                  --n-oljevaxter 500 \
+                  --n-havre 500 \
+                  --workers 3 \
+                  --lpis-dir /data/lpis
+                N_AFTER=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
+                echo "  Crops step: $N_BEFORE → $N_AFTER tiles (+$((N_AFTER - N_BEFORE)) new)"
+              else
+                echo "  Skipping — /data/lpis not found or empty"
+              fi
+
+              # ── Step 5: Refetch missing urban tiles ───────────────────────
+              # SCB tätort list is fully deterministic; skip-existing applies.
+              echo ""
+              echo "=== Step 5: Refetch urban tiles (SCB tätort) ==="
+              N_BEFORE=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
+              python scripts/fetch_unified_tiles.py \
+                --mode urban \
+                --output-dir /data/unified_v2 \
+                --years 2022 2023 \
+                --min-population 2000 \
+                --max-tiles 500 \
+                --workers 3
+              N_AFTER=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
+              echo "  Urban step: $N_BEFORE → $N_AFTER tiles (+$((N_AFTER - N_BEFORE)) new)"
+
+              # ── Final inventory ───────────────────────────────────────────
+              echo ""
+              echo "=== Done: $(date) ==="
+              python scripts/check_tiles.py /data/unified_v2 count
+              echo ""
+              echo "Next steps (run after this job completes):"
+              echo "  1. kubectl delete job build-labels-v2      -n prithvi-training-default"
+              echo "     kubectl apply  -f k8s/build-labels-job.yaml"
+              echo "  2. kubectl delete job add-background-frame -n prithvi-training-default"
+              echo "     kubectl apply  -f k8s/add-background-frame-job.yaml"
+              echo "  3. Delete /data/unified_v2/train.txt to force split rebuild on next training run"
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
