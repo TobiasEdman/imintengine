@@ -87,7 +87,7 @@ spec:
       volumes:
         - name: training-data
           persistentVolumeClaim:
-            claimName: training-data
+            claimName: training-data-cephfs
 ---
 # Job 2: Rare crop tiles (~1000 tiles, ~45min)
 apiVersion: batch/v1
@@ -175,7 +175,7 @@ spec:
       volumes:
         - name: training-data
           persistentVolumeClaim:
-            claimName: training-data
+            claimName: training-data-cephfs
 ---
 # Job 3: Urban tiles (~500 tiles, ~30min)
 apiVersion: batch/v1
@@ -259,4 +259,4 @@ spec:
       volumes:
         - name: training-data
           persistentVolumeClaim:
-            claimName: training-data
+            claimName: training-data-cephfs

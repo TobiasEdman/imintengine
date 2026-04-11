@@ -166,7 +166,7 @@ spec:
       volumes:
         - name: training-data
           persistentVolumeClaim:
-            claimName: training-data
+            claimName: training-data-cephfs
         - name: checkpoints
           persistentVolumeClaim:
             claimName: training-checkpoints

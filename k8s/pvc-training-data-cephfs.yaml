@@ -1,0 +1,33 @@
+---
+# PVC: training-data-cephfs — CephFS ReadWriteMany replacement for training-data
+#
+# Why CephFS (rook-ceph-fs) instead of Ceph RBD (rook-ceph-rbd)?
+#   rook-ceph-rbd is RWO: only ONE pod can mount the volume at a time.
+#   rook-ceph-fs  is RWX: multiple pods can mount simultaneously.
+#
+# This enables parallel operation:
+#   - Training pod (reads NVMe scratch, mounts CephFS for initial tile copy)
+#   - Fetch pods   (write new tiles directly to CephFS during training)
+#   - Analysis pods (read tiles without blocking training)
+#
+# Creation:
+#   kubectl apply -f k8s/pvc-training-data-cephfs.yaml
+#
+# Migration from old RWO PVC:
+#   kubectl apply -f k8s/migrate-to-cephfs-job.yaml
+#   kubectl wait --for=condition=complete job/migrate-to-cephfs -n prithvi-training-default --timeout=3600s
+#
+# After migration, update all job YAMLs: claimName: training-data → training-data-cephfs
+#
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: training-data-cephfs
+  namespace: prithvi-training-default
+spec:
+  accessModes:
+    - ReadWriteMany          # key: multiple pods can mount simultaneously
+  storageClassName: rook-ceph-fs
+  resources:
+    requests:
+      storage: 100Gi         # 50 Gi old PVC + room for future data growth

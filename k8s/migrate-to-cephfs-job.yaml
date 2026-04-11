@@ -1,0 +1,138 @@
+---
+# Job: migrate-to-cephfs — copy training-data (RWO) → training-data-cephfs (RWX)
+#
+# Run this ONCE after training-data-cephfs PVC is created and the RWO PVC is free
+# (no other pod mounting it).  rsync preserves permissions, timestamps, and skips
+# already-copied files — safe to re-run if interrupted.
+#
+# Prerequisites:
+#   kubectl apply -f k8s/pvc-training-data-cephfs.yaml
+#   # wait for training-data to be unoccupied (all jobs using it must have finished)
+#   kubectl apply  -f k8s/migrate-to-cephfs-job.yaml
+#   kubectl wait --for=condition=complete job/migrate-to-cephfs \
+#     -n prithvi-training-default --timeout=3600s
+#
+# After migration completes:
+#   kubectl delete job migrate-to-cephfs -n prithvi-training-default
+#   # Update all job YAMLs: claimName training-data → training-data-cephfs
+#   # The old training-data RWO PVC can be kept as a backup for one more run,
+#   # then deleted once the CephFS PVC is confirmed working.
+#
+# Expected runtime: ~15-30 min for ~15 GB of tile data + reference files
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate-to-cephfs
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 7200    # 2h safety cap
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrator
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Migrate training-data → training-data-cephfs ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq rsync pv > /dev/null 2>&1
+
+              # ── Inventory ──────────────────────────────────────────────────
+              echo ""
+              echo "Source (RWO /old-data):"
+              du -sh /old-data/* 2>/dev/null | sort -h || true
+              echo "  Total: $(du -sh /old-data 2>/dev/null | cut -f1)"
+              echo ""
+              echo "Destination (RWX /new-data):"
+              du -sh /new-data/* 2>/dev/null | sort -h || true
+              echo "  Total so far: $(du -sh /new-data 2>/dev/null | cut -f1)"
+              echo ""
+
+              # ── rsync: skip existing, verbose summary ──────────────────────
+              # --archive  : preserve permissions, timestamps, symlinks
+              # --no-times  : don't update mtime (CephFS may reset via NFS mount)
+              # --checksum  : compare by checksum, not just size+mtime (reliable)
+              # --info=progress2 : show overall progress bar
+              # --partial  : keep partial files on interrupt (allows resume)
+              echo "=== Syncing /old-data/ → /new-data/ ==="
+              rsync \
+                --archive \
+                --no-times \
+                --checksum \
+                --partial \
+                --info=progress2 \
+                --human-readable \
+                /old-data/ /new-data/
+
+              echo ""
+              echo "=== Verification ==="
+              OLD_NPZ=$(ls /old-data/unified_v2/*.npz 2>/dev/null | wc -l)
+              NEW_NPZ=$(ls /new-data/unified_v2/*.npz 2>/dev/null | wc -l)
+              echo "  .npz tiles — old: $OLD_NPZ  new: $NEW_NPZ"
+              if [ "$OLD_NPZ" -ne "$NEW_NPZ" ]; then
+                echo "  ERROR: tile count mismatch!" >&2
+                exit 1
+              fi
+
+              OLD_LPIS=$(ls /old-data/lpis/*.parquet 2>/dev/null | wc -l)
+              NEW_LPIS=$(ls /new-data/lpis/*.parquet 2>/dev/null | wc -l)
+              echo "  LPIS parquets — old: $OLD_LPIS  new: $NEW_LPIS"
+
+              OLD_SKS=$(ls /old-data/sks/*.parquet 2>/dev/null | wc -l)
+              NEW_SKS=$(ls /new-data/sks/*.parquet 2>/dev/null | wc -l)
+              echo "  SKS parquets  — old: $OLD_SKS   new: $NEW_SKS"
+
+              NMD_OLD=$(ls /old-data/nmd/*.tif 2>/dev/null | wc -l)
+              NMD_NEW=$(ls /new-data/nmd/*.tif 2>/dev/null | wc -l)
+              echo "  NMD rasters   — old: $NMD_OLD   new: $NMD_NEW"
+
+              # ── Clear stale split files ────────────────────────────────────
+              # Splits must be regenerated after new tiles are added.
+              # The training job skips generate_splits.py if train.txt exists.
+              echo ""
+              echo "=== Clearing stale splits (will regenerate with new tile count) ==="
+              rm -f /new-data/unified_v2/train.txt \
+                    /new-data/unified_v2/val.txt \
+                    /new-data/unified_v2/test.txt
+              echo "  Deleted train.txt / val.txt / test.txt on new PVC"
+
+              echo ""
+              echo "=== Done: $(date) ==="
+              echo "New PVC total: $(du -sh /new-data | cut -f1)"
+              echo ""
+              echo "Next steps:"
+              echo "  1. git diff k8s/ shows all jobs now use training-data-cephfs"
+              echo "  2. kubectl delete job train-pixel-v1 -n prithvi-training-default"
+              echo "  3. kubectl apply -f k8s/train-pixel-job.yaml"
+              echo "  4. Optional: keep old PVC as backup for one run, then delete:"
+              echo "     kubectl delete pvc training-data -n prithvi-training-default"
+
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: old-data
+              mountPath: /old-data
+              readOnly: true
+            - name: new-data
+              mountPath: /new-data
+      volumes:
+        - name: old-data
+          persistentVolumeClaim:
+            claimName: training-data
+            readOnly: true
+        - name: new-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

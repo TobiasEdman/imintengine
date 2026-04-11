@@ -87,4 +87,4 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: training-data
+            claimName: training-data-cephfs
