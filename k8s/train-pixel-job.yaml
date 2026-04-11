@@ -31,7 +31,7 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 21600    # 6 h safety cap
+  activeDeadlineSeconds: 36000    # 10 h — covers ~10 epochs/run at ~35 min/epoch
   template:
     spec:
       restartPolicy: Never
@@ -119,18 +119,19 @@ spec:
                 --data-dir /scratch \
                 --split-dir /data/unified_v2 \
                 --use-frame-2016 \
-                --epochs 5 \
-                --stage1-epochs 1 \
+                --epochs 35 \
+                --stage1-epochs 5 \
                 --batch-size 1024 \
                 --lr 3e-4 \
                 --backbone-lr-factor 0.1 \
                 --weight-decay 1e-4 \
                 --focal-gamma 2.0 \
                 --num-workers 8 \
-                --patience 5 \
+                --patience 10 \
                 --context-px 32 \
                 --samples-per-tile 512 \
                 --checkpoint-dir /checkpoints/pixel_v1 \
+                --log-file /checkpoints/pixel_v1/train_log.json \
                 --device cuda \
                 --amp \
                 $RESUME_FLAG

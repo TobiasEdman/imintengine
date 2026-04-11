@@ -179,6 +179,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Automatic mixed precision (bfloat16) on CUDA — 2-3× speedup on H100")
     p.add_argument("--compile", action="store_true", default=False,
                    help="torch.compile() the model for ~20%% speedup (PyTorch 2.x, adds ~1 min startup)")
+    p.add_argument("--log-file", default=None,
+                   help="Path to write JSON training log (per-epoch metrics + final summary). "
+                        "Written atomically after each epoch. "
+                        "E.g. /checkpoints/pixel_v1/train_log.json")
 
     return p
 
@@ -191,41 +195,100 @@ def compute_metrics(
     num_classes: int = NUM_UNIFIED_CLASSES,
     ignore_index: int = 0,
 ) -> dict:
-    """Compute per-class accuracy and mean accuracy (ignore index 0)."""
-    per_class_correct = np.zeros(num_classes, dtype=np.int64)
-    per_class_total = np.zeros(num_classes, dtype=np.int64)
+    """Compute per-class accuracy, per-class IoU, mAcc, mIoU, and OA.
 
-    for cls in range(1, num_classes):
-        mask = all_labels == cls
-        per_class_total[cls] = mask.sum()
-        per_class_correct[cls] = (all_preds[mask] == cls).sum()
+    Uses a confusion matrix for O(N) computation.
+    Background class (ignore_index=0) is excluded from mean metrics.
 
+    Returns keys:
+        mean_acc      – mean per-class recall  (mAcc)
+        mean_iou      – mean per-class IoU     (mIoU)  ← primary metric
+        overall_acc   – pixel-level accuracy   (OA)
+        per_class_acc – {class_name: float}
+        per_class_iou – {class_name: float}
+        per_class_n   – {class_name: int}  (true pixels per class)
+    """
+    # Exclude background and any out-of-range predictions
+    valid = (
+        (all_labels != ignore_index)
+        & (all_labels >= 0) & (all_labels < num_classes)
+        & (all_preds  >= 0) & (all_preds  < num_classes)
+    )
+    v_labels = all_labels[valid].astype(np.int64)
+    v_preds  = all_preds[valid].astype(np.int64)
+
+    # Confusion matrix — shape (num_classes, num_classes), rows=true, cols=pred
+    confusion = np.bincount(
+        num_classes * v_labels + v_preds,
+        minlength=num_classes * num_classes,
+    ).reshape(num_classes, num_classes)
+
+    tp = np.diag(confusion)                      # TP[c]
+    fn = confusion.sum(axis=1) - tp              # FN[c]
+    fp = confusion.sum(axis=0) - tp              # FP[c]
+    per_class_total = (tp + fn).astype(np.int64) # true pixels per class
+
+    # Per-class accuracy = recall = TP / (TP + FN)
     per_class_acc = np.where(
         per_class_total > 0,
-        per_class_correct / np.maximum(per_class_total, 1),
+        tp / np.maximum(per_class_total, 1).astype(np.float64),
         np.nan,
     )
 
-    valid = ~np.isnan(per_class_acc[1:])
-    mean_acc = float(per_class_acc[1:][valid].mean()) if valid.any() else 0.0
-    overall_acc = float(
-        (all_preds[all_labels != ignore_index] == all_labels[all_labels != ignore_index]).mean()
-        if (all_labels != ignore_index).any() else 0.0
+    # Per-class IoU = TP / (TP + FP + FN)
+    denom_iou = (tp + fp + fn).astype(np.float64)
+    per_class_iou = np.where(
+        denom_iou > 0,
+        tp / np.maximum(denom_iou, 1),
+        np.nan,
     )
+
+    # Mean metrics (exclude background class 0)
+    valid_acc = ~np.isnan(per_class_acc[1:])
+    mean_acc = float(per_class_acc[1:][valid_acc].mean()) if valid_acc.any() else 0.0
+
+    valid_iou = ~np.isnan(per_class_iou[1:])
+    mean_iou = float(per_class_iou[1:][valid_iou].mean()) if valid_iou.any() else 0.0
+
+    # Overall accuracy (fraction of correctly classified valid pixels)
+    overall_acc = float(tp[1:].sum() / max(int(valid.sum()), 1))
 
     return {
         "mean_acc": mean_acc,
+        "mean_iou": mean_iou,
         "overall_acc": overall_acc,
         "per_class_acc": {
             UNIFIED_CLASS_NAMES[i]: float(per_class_acc[i])
             for i in range(1, num_classes)
             if not np.isnan(per_class_acc[i])
         },
+        "per_class_iou": {
+            UNIFIED_CLASS_NAMES[i]: float(per_class_iou[i])
+            for i in range(1, num_classes)
+            if not np.isnan(per_class_iou[i])
+        },
         "per_class_n": {
             UNIFIED_CLASS_NAMES[i]: int(per_class_total[i])
             for i in range(1, num_classes)
         },
     }
+
+
+# ── Training log helper ───────────────────────────────────────────────────
+
+def _write_training_log(
+    log_path: Path,
+    config: dict,
+    epochs: list[dict],
+    summary: dict | None = None,
+) -> None:
+    """Atomically write training log JSON (tmp-rename so never half-written)."""
+    payload: dict = {"config": config, "epochs": epochs}
+    if summary is not None:
+        payload["summary"] = summary
+    tmp = log_path.with_suffix(".tmp.json")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+    tmp.replace(log_path)
 
 
 # ── Training ──────────────────────────────────────────────────────────────
@@ -459,9 +522,9 @@ def main() -> None:
         state = ckpt.get("model_state_dict", ckpt)
         model.load_state_dict(state, strict=False)
         start_epoch = int(ckpt.get("epoch", 0)) + 1
-        best_val_acc_resume = float(ckpt.get("val_mean_acc", 0.0))
+        best_val_acc_resume = float(ckpt.get("val_mean_iou", 0.0))
         print(f"  Resumed from {args.resume_from} "
-              f"(start_epoch={start_epoch}, best_val_mAcc_so_far={best_val_acc_resume:.4f})")
+              f"(start_epoch={start_epoch}, best_val_mIoU_so_far={best_val_acc_resume:.4f})")
 
     # ── Evaluate-only mode ────────────────────────────────────────
     if args.evaluate_only:
@@ -485,12 +548,15 @@ def main() -> None:
             train=False, use_aux=args.use_aux, use_amp=args.amp,
         )
         metrics = compute_metrics(preds, labels)
-        print(f"  Mean Accuracy : {metrics['mean_acc']:.4f}")
+        print(f"  mIoU          : {metrics['mean_iou']:.4f}")
+        print(f"  mAcc          : {metrics['mean_acc']:.4f}")
         print(f"  Overall Acc   : {metrics['overall_acc']:.4f}")
-        print(f"  Per-class accuracy:")
-        for name, acc in metrics["per_class_acc"].items():
-            n = metrics["per_class_n"].get(name, 0)
-            print(f"    {name:20s}  {acc:.3f}  (n={n:,})")
+        print(f"  Per-class IoU / Acc:")
+        for name in metrics["per_class_iou"]:
+            iou = metrics["per_class_iou"][name]
+            acc = metrics["per_class_acc"].get(name, float("nan"))
+            n   = metrics["per_class_n"].get(name, 0)
+            print(f"    {name:22s}  IoU={iou:.3f}  Acc={acc:.3f}  (n={n:,})")
         return
 
     # ── Class weights (inverse-frequency from training labels) ────
@@ -546,6 +612,23 @@ def main() -> None:
     best_val_acc = best_val_acc_resume   # restored from checkpoint (0.0 if fresh run)
     best_epoch = 0
     no_improve = 0
+
+    # ── JSON training log ─────────────────────────────────────────
+    log_path: Path | None = Path(args.log_file) if args.log_file else None
+    log_epochs: list[dict] = []
+    log_config: dict = {
+        "run_id": Path(args.checkpoint_dir).name,
+        "epochs_planned": args.epochs,
+        "stage1_epochs": args.stage1_epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "backbone_lr_factor": args.backbone_lr_factor,
+        "focal_gamma": args.focal_gamma,
+        "use_aux": args.use_aux,
+        "amp": args.amp,
+        "checkpoint_dir": str(args.checkpoint_dir),
+    }
+    val_metrics: dict = {}   # keeps last epoch val metrics in scope
     current_stage = 1
 
     # Stage 1: freeze backbone
@@ -595,9 +678,10 @@ def main() -> None:
                 train=False, use_aux=args.use_aux, use_amp=args.amp,
             )
             val_metrics = compute_metrics(val_preds, val_labels)
-            val_acc = val_metrics["mean_acc"]
+            val_acc = val_metrics["mean_iou"]
             val_str = (
-                f"  val_loss={val_loss:.4f}  val_mAcc={val_acc:.4f}"
+                f"  val_loss={val_loss:.4f}  val_mIoU={val_acc:.4f}"
+                f"  val_mAcc={val_metrics['mean_acc']:.4f}"
                 f"  val_OA={val_metrics['overall_acc']:.4f}"
             )
 
@@ -605,12 +689,13 @@ def main() -> None:
         head_lr = optimizer.param_groups[0]["lr"]
         print(
             f"  Epoch {epoch+1:3d}/{args.epochs}  "
-            f"loss={train_loss:.4f}  mAcc={train_metrics['mean_acc']:.4f}"
+            f"loss={train_loss:.4f}  mIoU={train_metrics['mean_iou']:.4f}  mAcc={train_metrics['mean_acc']:.4f}"
             f"{val_str}  lr={head_lr:.2e}  {elapsed:.0f}s"
         )
 
         # Save best
-        if val_acc > best_val_acc:
+        _is_new_best = bool(val_acc > best_val_acc)
+        if _is_new_best:
             best_val_acc = val_acc
             best_epoch = epoch + 1
             no_improve = 0
@@ -619,17 +704,40 @@ def main() -> None:
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
-                "val_mean_acc": val_acc,
+                "val_mean_iou": val_acc,
+                "val_mean_acc": val_metrics["mean_acc"],
                 "n_aux": n_aux,
                 "num_frames": num_frames,
                 "args": vars(args),
             }, save_path)
-            print(f"    ↑ New best mAcc={best_val_acc:.4f} → {save_path}")
+            print(f"    ↑ New best mIoU={best_val_acc:.4f} → {save_path}")
         else:
             no_improve += 1
             if no_improve >= args.patience:
                 print(f"\n  Early stopping (no improvement for {args.patience} epochs)")
                 break
+
+        # Append epoch record to JSON log and flush atomically
+        if log_path is not None:
+            rec: dict = {
+                "epoch": epoch + 1,
+                "stage": current_stage,
+                "train_loss": round(float(train_loss), 6),
+                "train_mIoU": round(float(train_metrics["mean_iou"]), 6),
+                "train_mAcc": round(float(train_metrics["mean_acc"]), 6),
+                "val_loss": round(float(val_loss), 6) if val_loader else None,
+                "val_mIoU": round(float(val_acc), 6) if val_loader else None,
+                "val_mAcc": round(float(val_metrics.get("mean_acc", 0.0)), 6) if val_loader else None,
+                "val_OA":   round(float(val_metrics.get("overall_acc", 0.0)), 6) if val_loader else None,
+                "per_class_iou": {k: round(v, 6) for k, v in val_metrics.get("per_class_iou", {}).items()},
+                "per_class_acc": {k: round(v, 6) for k, v in val_metrics.get("per_class_acc", {}).items()},
+                "per_class_n":   val_metrics.get("per_class_n", {}),
+                "lr": round(float(optimizer.param_groups[0]["lr"]), 8),
+                "elapsed_s": round(float(time.time() - t0), 1),
+                "is_best": _is_new_best,
+            }
+            log_epochs.append(rec)
+            _write_training_log(log_path, log_config, log_epochs)
 
         # Periodic checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
@@ -637,19 +745,22 @@ def main() -> None:
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
-                "val_mean_acc": val_acc,
+                "val_mean_iou": val_acc,
+                "val_mean_acc": val_metrics.get("mean_acc", 0.0) if val_loader else 0.0,
             }, periodic_path)
 
     # ── Final summary ─────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"  Training complete!")
-    print(f"  Best val mAcc: {best_val_acc:.4f} (epoch {best_epoch})")
+    print(f"  Best val mIoU: {best_val_acc:.4f} (epoch {best_epoch})")
     print(f"  Best model:    {ckpt_dir / 'best_model.pt'}")
     print(f"{'='*60}")
 
     # ── Final per-class eval on best model ────────────────────────
     if val_loader is not None:
-        print("\n  Final per-class accuracy (best model):")
+        print("\n  Final per-class results (best model):")
+        print(f"  {'Class':<22}  {'IoU':>6}  {'Acc':>6}  {'N':>8}")
+        print(f"  {'-'*22}  {'-'*6}  {'-'*6}  {'-'*8}")
         best_ckpt = torch.load(ckpt_dir / "best_model.pt",
                                map_location=device, weights_only=True)
         model.load_state_dict(best_ckpt["model_state_dict"])
@@ -658,9 +769,29 @@ def main() -> None:
             train=False, use_aux=args.use_aux, use_amp=args.amp,
         )
         metrics = compute_metrics(val_preds, val_labels)
-        for name, acc in metrics["per_class_acc"].items():
-            n = metrics["per_class_n"].get(name, 0)
-            print(f"    {name:20s}  {acc:.3f}  (n={n:,})")
+        for name in metrics["per_class_iou"]:
+            iou = metrics["per_class_iou"][name]
+            acc = metrics["per_class_acc"].get(name, float("nan"))
+            n   = metrics["per_class_n"].get(name, 0)
+            print(f"  {name:<22}  {iou:6.3f}  {acc:6.3f}  {n:>8,}")
+        print(f"\n  mIoU={metrics['mean_iou']:.4f}  mAcc={metrics['mean_acc']:.4f}"
+              f"  OA={metrics['overall_acc']:.4f}")
+
+        # Write final summary to JSON log
+        if log_path is not None:
+            summary = {
+                "best_epoch": best_epoch,
+                "best_val_mIoU": round(best_val_acc, 6),
+                "total_epochs_run": len(log_epochs),
+                "final_val_mIoU": round(metrics["mean_iou"], 6),
+                "final_val_mAcc": round(metrics["mean_acc"], 6),
+                "final_val_OA":   round(metrics["overall_acc"], 6),
+                "final_per_class_iou": {k: round(v, 6) for k, v in metrics["per_class_iou"].items()},
+                "final_per_class_acc": {k: round(v, 6) for k, v in metrics["per_class_acc"].items()},
+                "final_per_class_n":   metrics["per_class_n"],
+            }
+            _write_training_log(log_path, log_config, log_epochs, summary=summary)
+            print(f"  Training log → {log_path}")
 
 
 if __name__ == "__main__":
