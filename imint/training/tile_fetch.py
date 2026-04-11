@@ -167,6 +167,7 @@ def fetch_4frame_scenes(
     *,
     scene_cloud_max: float = 30.0,
     max_candidates: int = 3,
+    vpp_windows: list[tuple[int, int]] | None = ...,  # sentinel: fetch on demand
 ) -> list[tuple[np.ndarray | None, str]]:
     """Fetch 4-frame tile: 1 autumn (year-1) + 3 VPP-guided growing season.
 
@@ -178,13 +179,17 @@ def fetch_4frame_scenes(
         bbox_3006: Tile bbox in EPSG:3006.
         coords_wgs84: WGS84 bbox for STAC queries.
         years: Growing season years to search, e.g. ["2022", "2023"].
+        vpp_windows: Pre-fetched list of (doy_start, doy_end) tuples.
+            Pass None explicitly to skip VPP (use fixed seasonal dates).
+            Omit (default sentinel) to fetch VPP on demand for this tile.
 
     Returns:
         List of 4 (scene, date_str) tuples.
     """
     # Get VPP-guided growing season windows (3 frames)
-    vpp_windows = _get_vpp_doy_windows(bbox_3006, num_growing_frames=3)
-    # vpp_windows is None if VPP fails — will be handled below
+    if vpp_windows is ...:  # sentinel → fetch on demand for this tile
+        vpp_windows = _get_vpp_doy_windows(bbox_3006, num_growing_frames=3)
+    # vpp_windows is None if VPP was skipped or failed — handled below
 
     results: list[tuple[np.ndarray | None, str]] = []
 

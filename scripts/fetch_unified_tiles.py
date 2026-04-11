@@ -140,6 +140,13 @@ def gen_rare_crops(
         print(f"  {label}: {len(sub)} parcels")
         for _, row in sub.iterrows():
             cx, cy = row.geometry.centroid.x, row.geometry.centroid.y
+            # EPSG:3006 (SWEREF99 TM) axis-order fix:
+            #   EPSG authority defines axis order as (northing, easting).
+            #   Older pyproj/geopandas gave centroid.x = easting (~250k–920k).
+            #   Newer pyproj (≥2.2) respects authority order: centroid.x = northing
+            #   (~6.1M–7.7M).  Detect and normalise to (easting, northing).
+            if cx > 2_000_000:   # cx is clearly a northing value → swap
+                cx, cy = cy, cx  # cx = easting, cy = northing
             half = TILE_SIZE_M // 2
             bbox = {"west": int(cx - half), "south": int(cy - half),
                     "east": int(cx + half), "north": int(cy + half)}
@@ -203,6 +210,57 @@ def gen_urban(
     return locs
 
 
+# ── VPP Prefetch ──────────────────────────────────────────────────────────────
+
+
+def prefetch_vpp_batch(
+    work_items: list[tuple[dict, str]],
+    workers: int = 4,
+) -> dict[str, list[tuple[int, int]]]:
+    """Pre-fetch VPP growing-season windows for all tiles in parallel.
+
+    VPP requests are cheap (small DOY arrays) and use a separate CDSE
+    endpoint from S2 spectral.  Fetching them upfront in a burst means
+    the spectral pass can run 1-at-a-time without ever stalling on VPP.
+
+    Args:
+        work_items: List of (loc, output_dir) from the main work queue.
+        workers: Concurrent VPP requests (default 4; VPP is light-weight).
+
+    Returns:
+        Dict mapping tile name → list of (doy_start, doy_end) tuples.
+        Tiles where VPP fails are absent — fetch_4frame_scenes falls back
+        to fixed seasonal windows for those.
+    """
+    from imint.training.tile_fetch import _get_vpp_doy_windows
+
+    total = len(work_items)
+    print(f"\n=== VPP prefetch: {total} tiles ({workers} workers) ===")
+    vpp_cache: dict[str, list[tuple[int, int]]] = {}
+
+    def _fetch_one(item: tuple[dict, str]) -> tuple[str, list | None]:
+        loc, _ = item
+        windows = _get_vpp_doy_windows(loc["bbox_3006"], num_growing_frames=3)
+        return loc["name"], windows
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = {pool.submit(_fetch_one, item): item for item in work_items}
+        done = 0
+        for f in as_completed(futs):
+            name, windows = f.result()
+            if windows:
+                vpp_cache[name] = windows
+            done += 1
+            if done % 200 == 0 or done == total:
+                hit_pct = len(vpp_cache) / done * 100
+                print(f"  VPP {done}/{total}  hits={len(vpp_cache)} ({hit_pct:.0f}%)",
+                      flush=True)
+
+    miss = total - len(vpp_cache)
+    print(f"  VPP done — {len(vpp_cache)} hits, {miss} misses (fixed windows fallback)\n")
+    return vpp_cache
+
+
 # ── Core Fetch ────────────────────────────────────────────────────────────────
 
 
@@ -211,6 +269,7 @@ def fetch_tile(
     years: list[str],
     output_dir: str,
     cloud_max: float = 30.0,
+    vpp_cache: dict | None = None,
 ) -> dict:
     """Fetch one tile: 4 seasonal frames + NMD + aux → .npz."""
     name = loc["name"]
@@ -222,9 +281,13 @@ def fetch_tile(
     coords = loc.get("coords_wgs84") or bbox_3006_to_wgs84(bbox)
     tile_years = [str(loc["year"])] if "year" in loc else years
 
+    # Use pre-fetched VPP windows if available; falls back to on-demand fetch
+    vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
+
     scene_results = fetch_4frame_scenes(
         bbox, coords, tile_years,
         scene_cloud_max=cloud_max,
+        vpp_windows=vpp_windows,
     )
 
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES)
@@ -365,6 +428,7 @@ def refetch_tile(
     years: list[str],
     output_dir: str,
     cloud_max: float = 30.0,
+    vpp_cache: dict | None = None,
 ) -> dict:
     """Re-fetch spectral data for an existing tile, keep all other fields."""
     name = loc["name"]
@@ -398,9 +462,14 @@ def refetch_tile(
     else:
         fetch_years = years
 
+    # Use pre-fetched VPP windows if available; falls back to on-demand fetch
+    vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
+
     # Fetch 4 new spectral frames
     scene_results = fetch_4frame_scenes(
-        bbox, coords, fetch_years, scene_cloud_max=cloud_max,
+        bbox, coords, fetch_years,
+        scene_cloud_max=cloud_max,
+        vpp_windows=vpp_windows,
     )
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES)
 
@@ -452,7 +521,7 @@ def main():
                    choices=["lulc", "rare-crops", "urban", "all", "refetch"])
     p.add_argument("--output-dir", required=True)
     p.add_argument("--years", nargs="+", default=["2018", "2019", "2022", "2023"])
-    p.add_argument("--workers", type=int, default=3)
+    p.add_argument("--workers", type=int, default=1)
     p.add_argument("--cloud-max", type=float, default=30.0)
     p.add_argument("--max-tiles", type=int, default=None)
     p.add_argument("--grid-spacing", type=int, default=2500)
@@ -535,6 +604,11 @@ def main():
     if not work:
         return
 
+    # ── VPP prefetch: fetch all growing-season windows before spectral ─────────
+    # VPP uses a separate CDSE endpoint (lighter quota).  Fetching up-front
+    # means the spectral loop never stalls on VPP inside each tile.
+    vpp_cache = prefetch_vpp_batch(work, workers=min(4, max(1, args.workers * 4)))
+
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     t0 = time.time()
 
@@ -571,9 +645,11 @@ def main():
             t_start = time.time()
             loc, d = item
             if use_refetch:
-                r = refetch_tile(loc, args.years, d, args.cloud_max)
+                r = refetch_tile(loc, args.years, d, args.cloud_max,
+                                 vpp_cache=vpp_cache)
             else:
-                r = fetch_tile(loc, args.years, d, args.cloud_max)
+                r = fetch_tile(loc, args.years, d, args.cloud_max,
+                               vpp_cache=vpp_cache)
             # If tile took >60s, CDSE was probably rate-limiting internally
             if r and time.time() - t_start > 60:
                 r["_rate_limited"] = True
