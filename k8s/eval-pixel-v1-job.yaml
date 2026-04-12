@@ -1,0 +1,93 @@
+---
+# Job: eval-pixel-v1 — evaluate best_model.pt with mIoU + per-class metrics
+#
+# Runs train_pixel.py --evaluate-only against the current best checkpoint.
+# Outputs mIoU, mAcc, OA, and a per-class IoU / Acc table.
+#
+# Requires: training-data PVC free (not mounted by another job)
+#           training-checkpoints PVC with best_model.pt
+#
+# Apply after refetch-missing + build-labels complete (tiles need labels):
+#   kubectl apply -f k8s/eval-pixel-v1-job.yaml
+#   kubectl logs job/eval-pixel-v1 -n prithvi-training-default -f
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eval-pixel-v1
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600    # 1h — eval on 5,470 tiles takes ~20 min
+  template:
+    spec:
+      restartPolicy: Never
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: eval
+          image: nvcr.io/nvidia/pytorch:24.01-py3
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Pixel Classifier Evaluation (mIoU) ==="
+              echo "Started: $(date)"
+
+              # ── Copy tiles to local NVMe scratch ──────────────────────────
+              SCRATCH=/scratch/unified_v2
+              mkdir -p $SCRATCH
+              echo "Copying tiles to NVMe scratch …"
+              time cp /data/unified_v2/*.npz $SCRATCH/ 2>/dev/null || true
+              N=$(ls $SCRATCH/*.npz 2>/dev/null | wc -l)
+              echo "Tiles on scratch: $N"
+
+              # ── Clone repo ────────────────────────────────────────────────
+              cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd imintengine
+              pip install -e . --no-deps -q
+
+              # ── Evaluate ──────────────────────────────────────────────────
+              echo ""
+              python scripts/train_pixel.py \
+                --data-dir  $SCRATCH \
+                --checkpoint-dir /checkpoints/pixel_v1 \
+                --checkpoint     /checkpoints/pixel_v1/best_model.pt \
+                --evaluate-only \
+                --context-px 32 \
+                --frames 5 \
+                --use-aux \
+                --amp
+
+              echo ""
+              echo "=== Done: $(date) ==="
+
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+            - name: training-checkpoints
+              mountPath: /checkpoints
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs   # RWX — can co-mount with other jobs
+        - name: training-checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+            readOnly: true

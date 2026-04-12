@@ -58,8 +58,15 @@ kubectl apply -f "$(dirname "$0")/migrate-to-cephfs-job.yaml"
 wait_for_job migrate-to-cephfs 7200
 log ""
 
+# ── Step 2b: Eval smoke-test checkpoint (now that tiles are on CephFS) ────────
+log "Step 2b — eval-pixel-v1 (mIoU on smoke-test best_model.pt) …"
+log "  Running in background — results in: kubectl logs job/eval-pixel-v1 -n $NS"
+kubectl delete job eval-pixel-v1 -n "$NS" --ignore-not-found
+kubectl apply -f "$(dirname "$0")/eval-pixel-v1-job.yaml"
+# Don't block the pipeline on eval — fire and forget, check logs separately
+
 # ── Step 3: Rebuild labels on CephFS PVC ──────────────────────────────────────
-log "Step 3/5 — build-labels-v2 (all tiles including new ones) …"
+log "Step 3/6 — build-labels-v2 (all tiles including new ones) …"
 kubectl delete job build-labels-v2 -n "$NS" --ignore-not-found
 kubectl apply -f "$(dirname "$0")/build-labels-job.yaml"
 wait_for_job build-labels-v2 3600
