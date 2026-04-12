@@ -91,7 +91,7 @@ spec:
                 --from-json /data/tile_locations.json \
                 --output-dir /data/unified_v2 \
                 --years 2018 2019 2022 2023 \
-                --workers 6 \
+                --workers 1 \
                 --cloud-max 30
               N_AFTER=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
               echo "  LULC step: $N_BEFORE → $N_AFTER tiles (+$((N_AFTER - N_BEFORE)) new)"
@@ -109,7 +109,7 @@ spec:
                   --years 2022 2023 \
                   --n-oljevaxter 500 \
                   --n-havre 500 \
-                  --workers 3 \
+                  --workers 1 \
                   --lpis-dir /data/lpis
                 N_AFTER=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
                 echo "  Crops step: $N_BEFORE → $N_AFTER tiles (+$((N_AFTER - N_BEFORE)) new)"
@@ -128,7 +128,7 @@ spec:
                 --years 2022 2023 \
                 --min-population 2000 \
                 --max-tiles 500 \
-                --workers 3
+                --workers 1
               N_AFTER=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
               echo "  Urban step: $N_BEFORE → $N_AFTER tiles (+$((N_AFTER - N_BEFORE)) new)"
 
@@ -184,4 +184,4 @@ spec:
       volumes:
         - name: training-data
           persistentVolumeClaim:
-            claimName: training-data-cephfs
+            claimName: training-data    # RWO: must run before migration to CephFS
