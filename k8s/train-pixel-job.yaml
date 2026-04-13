@@ -31,7 +31,7 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 36000    # 10 h — covers ~10 epochs/run at ~35 min/epoch
+  activeDeadlineSeconds: 129600   # 36 h — covers full 35-epoch run (~20h) with headroom
   template:
     spec:
       restartPolicy: Never
