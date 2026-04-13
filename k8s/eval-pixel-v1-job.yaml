@@ -50,6 +50,9 @@ spec:
               cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd imintengine
+              pip install --quiet --no-cache-dir \
+                timm numpy Pillow scikit-learn scipy rasterio geopandas \
+                shapely pyproj huggingface_hub
               pip install -e . --no-deps -q 2>/dev/null || true
 
               # ── Evaluate ──────────────────────────────────────────────────
