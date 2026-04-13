@@ -121,12 +121,12 @@ spec:
                 --use-frame-2016 \
                 --epochs 35 \
                 --stage1-epochs 5 \
-                --batch-size 1024 \
+                --batch-size 4096 \
                 --lr 3e-4 \
                 --backbone-lr-factor 0.1 \
                 --weight-decay 1e-4 \
                 --focal-gamma 2.0 \
-                --num-workers 8 \
+                --num-workers 16 \
                 --patience 10 \
                 --context-px 32 \
                 --samples-per-tile 512 \
@@ -134,6 +134,7 @@ spec:
                 --log-file /checkpoints/pixel_v1/train_log.json \
                 --device cuda \
                 --amp \
+                --compile \
                 $RESUME_FLAG
 
               echo ""
@@ -176,10 +177,11 @@ spec:
           emptyDir: {}
         - name: dshm
           # PyTorch DataLoader workers share tensors via /dev/shm.
-          # Default k8s pod /dev/shm is 64 MiB — one batch alone is ~125 MB
-          # (1024 samples × 30 × 32 × 32 × 4 bytes).  With 8 workers × 2
-          # prefetch batches = ~2 GB required.  Mount a 8 Gi memory-backed
-          # emptyDir to avoid "No space left on device" bus errors.
+          # Default k8s pod /dev/shm is 64 MiB — one batch alone is ~500 MB
+          # (4096 samples × 30 × 32 × 32 × 4 bytes).  With 16 workers ×
+          # prefetch_factor=4 up to ~16 GB may be resident simultaneously.
+          # Mount a 16 Gi memory-backed emptyDir to avoid "No space left on
+          # device" bus errors.
           emptyDir:
             medium: Memory
-            sizeLimit: 8Gi
+            sizeLimit: 16Gi

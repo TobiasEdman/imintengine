@@ -509,9 +509,9 @@ def main() -> None:
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
 
-    if args.compile and device.type == "cuda":
-        print("  Compiling model with torch.compile() …")
-        model = torch.compile(model)
+    if args.compile and hasattr(torch, "compile") and device.type == "cuda":
+        print("  Compiling model with torch.compile(mode='reduce-overhead') …")
+        model = torch.compile(model, mode="reduce-overhead")
         print("  Compile done.")
 
     # ── Resume ────────────────────────────────────────────────────
@@ -563,7 +563,8 @@ def main() -> None:
     print("\n  Computing class weights …")
     class_counts = np.zeros(NUM_UNIFIED_CLASSES, dtype=np.int64)
     for _, _, _, cls in train_ds._index:
-        class_counts[cls] += 1
+        if 0 <= cls < NUM_UNIFIED_CLASSES:
+            class_counts[cls] += 1
     class_weights_np = get_class_weights(
         {i: int(class_counts[i]) for i in range(NUM_UNIFIED_CLASSES)}
     )
@@ -594,6 +595,7 @@ def main() -> None:
         drop_last=True,
         collate_fn=_safe_collate,
         persistent_workers=(args.num_workers > 0),
+        prefetch_factor=4 if args.num_workers > 0 else None,
     )
     val_loader = DataLoader(
         val_ds,
@@ -602,6 +604,7 @@ def main() -> None:
         pin_memory=(device.type == "cuda"),
         collate_fn=_safe_collate,
         persistent_workers=(args.num_workers > 0),
+        prefetch_factor=4 if args.num_workers > 0 else None,
     ) if val_ds else None
 
     # ── Checkpoint dir ────────────────────────────────────────────

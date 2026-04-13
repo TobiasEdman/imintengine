@@ -197,7 +197,7 @@ class PixelContextDataset:
 
             for idx in chosen:
                 r, c, cls = int(valid_rows[idx]), int(valid_cols[idx]), int(classes[idx])
-                if cls == IGNORE_CLASS:
+                if cls == IGNORE_CLASS or cls >= NUM_UNIFIED_CLASSES:
                     continue
                 self._index.append((path, r, c, cls))
 
