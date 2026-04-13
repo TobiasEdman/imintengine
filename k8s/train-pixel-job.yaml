@@ -126,7 +126,7 @@ spec:
                 --backbone-lr-factor 0.1 \
                 --weight-decay 1e-4 \
                 --focal-gamma 2.0 \
-                --num-workers 16 \
+                --num-workers 32 \
                 --patience 10 \
                 --context-px 32 \
                 --samples-per-tile 512 \
@@ -148,12 +148,12 @@ spec:
               value: "warning"
           resources:
             requests:
-              cpu: "16"
-              memory: "64Gi"
+              cpu: "48"
+              memory: "180Gi"
               nvidia.com/gpu: "1"
             limits:
-              cpu: "16"
-              memory: "64Gi"
+              cpu: "48"
+              memory: "180Gi"
               nvidia.com/gpu: "1"
           volumeMounts:
             - name: training-data
@@ -178,7 +178,7 @@ spec:
         - name: dshm
           # PyTorch DataLoader workers share tensors via /dev/shm.
           # Default k8s pod /dev/shm is 64 MiB — one batch alone is ~500 MB
-          # (4096 samples × 30 × 32 × 32 × 4 bytes).  With 16 workers ×
+          # (4096 samples × 30 × 32 × 32 × 4 bytes).  With 32 workers ×
           # prefetch_factor=4 up to ~16 GB may be resident simultaneously.
           # Mount a 16 Gi memory-backed emptyDir to avoid "No space left on
           # device" bus errors.
