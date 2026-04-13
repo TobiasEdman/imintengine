@@ -60,7 +60,7 @@ spec:
                 --checkpoint     /checkpoints/pixel_v1/best_model.pt \
                 --evaluate-only \
                 --context-px 32 \
-                --frames 5 \
+                --use-frame-2016 \
                 --use-aux \
                 --amp
 
