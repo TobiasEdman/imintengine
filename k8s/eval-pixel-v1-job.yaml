@@ -4,8 +4,7 @@
 # Runs train_pixel.py --evaluate-only against the current best checkpoint.
 # Outputs mIoU, mAcc, OA, and a per-class IoU / Acc table.
 #
-# Requires: training-data PVC free (not mounted by another job)
-#           training-checkpoints PVC with best_model.pt
+# Requires: training-checkpoints PVC with best_model.pt
 #
 # Apply after refetch-missing + build-labels complete (tiles need labels):
 #   kubectl apply -f k8s/eval-pixel-v1-job.yaml
@@ -18,7 +17,7 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 3600    # 1h — eval on 5,470 tiles takes ~20 min
+  activeDeadlineSeconds: 3600    # 1h — eval on ~8k tiles takes ~20-30 min
   template:
     spec:
       restartPolicy: Never
@@ -65,7 +64,7 @@ spec:
                 --context-px 32 \
                 --use-frame-2016 \
                 --use-aux \
-                --num-workers 0
+                --num-workers 4
 
               echo ""
               echo "=== Done: $(date) ==="
@@ -73,11 +72,11 @@ spec:
           resources:
             requests:
               cpu: "8"
-              memory: "32Gi"
+              memory: "64Gi"
               nvidia.com/gpu: "1"
             limits:
               cpu: "8"
-              memory: "32Gi"
+              memory: "64Gi"
               nvidia.com/gpu: "1"
           volumeMounts:
             - name: training-data
@@ -86,11 +85,16 @@ spec:
             - name: training-checkpoints
               mountPath: /checkpoints
               readOnly: true
+            - name: dshm
+              mountPath: /dev/shm
       volumes:
         - name: training-data
           persistentVolumeClaim:
-            claimName: training-data-cephfs   # RWX — can co-mount with other jobs
+            claimName: training-data-cephfs
         - name: training-checkpoints
           persistentVolumeClaim:
             claimName: training-checkpoints
             readOnly: true
+        - name: dshm
+          emptyDir:
+            medium: Memory
