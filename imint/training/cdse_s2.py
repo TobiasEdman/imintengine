@@ -573,6 +573,12 @@ def _fetch_s2_tiff(
                 time.sleep(retry_after)
                 continue
 
+            # Server overload — raise immediately, no point retrying
+            if e.code in (502, 503, 504):
+                raise RuntimeError(
+                    f"Sentinel Hub S2 error (HTTP {e.code}): server overload"
+                ) from e
+
             if attempt < _MAX_RETRIES:
                 time.sleep(_RETRY_DELAY_S * (attempt + 1))
                 continue
