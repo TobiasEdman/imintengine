@@ -49,10 +49,6 @@
                 <canvas id="chart-dnbr"></canvas>
             </div>
             <div class="chart-card">
-                <h3>Brandsegmentering per markklass (Prithvi)</h3>
-                <canvas id="chart-prithvi"></canvas>
-            </div>
-            <div class="chart-card">
                 <h3>Marktäcke — detaljerade klasser (Nivå 2)</h3>
                 <canvas id="chart-l2"></canvas>
             </div>
@@ -62,6 +58,23 @@
             <p>
                 Sentinel-2 är en konstellation av två satelliter (2A och 2B) som drivs av Europeiska rymdorganisationen (ESA) inom Copernicus-programmet. Satelliterna kretsar i en solsynkron bana på 786 km höjd och avbildar hela jorden var femte dag med en upplösning på 10 meter per pixel för de synliga banden. RGB-bilden visar området som det ser ut för ögat, med band 4 (rött), band 3 (grönt) och band 2 (blått). De bruna och grå områdena är brandskadat landskap där vegetationen har förstörts.
                 <br><em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" target="_blank">ESA Sentinel-2</a></em>
+            </p>
+
+            <h3>NMD — Nationellt Marktäckedata</h3>
+            <p>
+                NMD (Nationellt Marktäckedata) är Sveriges rikstäckande kartläggning av marktäcke och markanvändning, producerad av Naturvårdsverket. Datat har 10 meters upplösning och klassificerar marken i över 25 kategorier — från tallskog och granskog till åkermark, bebyggelse och vatten. I brandanalysen används NMD för att korsreferera vilka naturtyper som drabbats hårdast: diagrammet visar hur stor andel av varje markklass som ligger inom det brandpåverkade området. Detta ger viktig kontext för ekologisk bedömning och återställningsplanering.
+                <br><em>Källa: Naturvårdsverket, &quot;Nationellt Marktäckedata (NMD).&quot; <a href="https://www.naturvardsverket.se/verktyg-och-tjanster/kartor-och-karttjanster/nationella-marktackedata/" target="_blank">naturvardsverket.se</a></em>
+            </p>
+
+            <h3>dNBR — Brandsvårighetsgrad</h3>
+            <p>
+                dNBR (differentierat Normalized Burn Ratio) är standardmetoden för att kvantifiera hur allvarligt en brand har skadat vegetationen. Först beräknas NBR-indexet som (NIR − SWIR) / (NIR + SWIR) med band B08 och B12 både för ett datum före branden (baslinje) och för branddatumet. Sedan tas differensen: dNBR = NBR<sub>före</sub> − NBR<sub>efter</sub>. Höga positiva värden (röda på kartan) innebär hög brandsvårighetsgrad där träd och markvegetation har förstörts, medan värden nära noll (gult/grönt) visar obrända eller lätt påverkade områden. Klassificeringen följer USGS standard med sju klasser från hög återväxt till hög svårighetsgrad.
+                <br><em>Källa: Key, C.H. &amp; Benson, N.C., 2006. &quot;Landscape Assessment: Ground measure of severity.&quot; USGS FIREMON, LA1-LA51.</em>
+            </p>
+
+            <h3>Förändring (gradient) — Multispektral förändringsdetektering</h3>
+            <p>
+                Förändringsgradientkartan visar hur mycket varje pixel har förändrats jämfört med en molnfri baslinjebild från före branden. Analysen använder sex Sentinel-2-band (B02, B03, B04, B08, B11, B12) — alltså synligt ljus, nära infrarött och kortvågigt infrarött — och beräknar den euklidiska normen av skillnaden mellan de två datumen. Baslinjejustering sker med IMINT Engines koregistreringsmodul som korrigerar både heltals- och subpixelförskjutningar mellan olika satellitöverfarter. Resultatet visas som en värmekarta där mörka områden är oförändrade och ljusa/heta områden visar störst förändring.
             </p>
 
             <h3>NDVI — Vegetationsindex</h3>
@@ -86,29 +99,6 @@
             <p>
                 COT (Cloud Optical Thickness) anger hur optiskt tjockt molntäcket är över analysområdet. Värden nära noll (ljusgult) innebär klar himmel och tillförlitliga satellitdata, medan högre värden (orange till rött) visar molniga områden där underliggande mark eller hav inte kan ses. Modellen är en ensemble av fem MLP5-nätverk (fem lager djupa neurala nät) som tränats på syntetiska molndata från SMHI. Varje nätverk tar emot 11 Sentinel-2-band (B02–B12, exklusive B01 och B10) och predikterar ett kontinuerligt COT-värde per pixel. Genom att använda medelvärdet av alla fem modellers prediktioner fås ett robust och brusreducerat resultat. Molnanalysen används här för att säkerställa att det valda datumet har tillräckligt molnfria förhållanden för en pålitlig analys.
                 <br><em>Källa: Pirinen, A. et al., 2024. &quot;Creating and Leveraging a Synthetic Dataset of Cloud Optical Thickness Measures for Cloud Detection in MSI.&quot; Remote Sensing. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">GitHub</a></em>
-            </p>
-
-            <h3>dNBR — Brandsvårighetsgrad</h3>
-            <p>
-                dNBR (differentierat Normalized Burn Ratio) är standardmetoden för att kvantifiera hur allvarligt en brand har skadat vegetationen. Först beräknas NBR-indexet som (NIR − SWIR) / (NIR + SWIR) med band B08 och B12 både för ett datum före branden (baslinje) och för branddatumet. Sedan tas differensen: dNBR = NBR<sub>före</sub> − NBR<sub>efter</sub>. Höga positiva värden (röda på kartan) innebär hög brandsvårighetsgrad där träd och markvegetation har förstörts, medan värden nära noll (gult/grönt) visar obrända eller lätt påverkade områden. Klassificeringen följer USGS standard med sju klasser från hög återväxt till hög svårighetsgrad.
-                <br><em>Källa: Key, C.H. &amp; Benson, N.C., 2006. &quot;Landscape Assessment: Ground measure of severity.&quot; USGS FIREMON, LA1-LA51.</em>
-            </p>
-
-            <h3>Förändring (gradient) — Multispektral förändringsdetektering</h3>
-            <p>
-                Förändringsgradientkartan visar hur mycket varje pixel har förändrats jämfört med en molnfri baslinjebild från före branden. Analysen använder sex Sentinel-2-band (B02, B03, B04, B08, B11, B12) — alltså synligt ljus, nära infrarött och kortvågigt infrarött — och beräknar den euklidiska normen av skillnaden mellan de två datumen. Baslinjejustering sker med IMINT Engines koregistreringsmodul som korrigerar både heltals- och subpixelförskjutningar mellan olika satellitöverfarter. Resultatet visas som en värmekarta där mörka områden är oförändrade och ljusa/heta områden visar störst förändring.
-            </p>
-
-            <h3>Prithvi — AI-segmentering av brandområdet</h3>
-            <p>
-                Prithvi är en geospatial foundation model utvecklad av NASA och IBM inom projektet NASA Earth Science. Modellen är förtränad på stora mängder HLS-satellitdata (Harmonized Landsat Sentinel-2) med en Masked Autoencoder-arkitektur (ViT-MAE) som lär sig representera markanvändning och landskap genom att rekonstruera maskerade delar av satellitbilder. För brandanalys har modellen finjusterats med uppgiftsspecifika segmenteringshuvuden (UPerNet) på datamängden "burn scars" som klassificerar varje pixel som antingen bränt (orange) eller obränt (grönt). Resultatet är en pixelnivåklassificering som kompletterar de spektrala indexen med en inlärd förståelse för hur brandskadat landskap ser ut.
-                <br><em>Källa: Jakubik et al., 2023. &quot;Prithvi-100M: Foundation Model for Geospatial Applications.&quot; arXiv:2310.18660. <a href="https://huggingface.co/ibm-nasa-geospatial/Prithvi-100M" target="_blank">HuggingFace</a></em>
-            </p>
-
-            <h3>NMD — Nationellt Marktäckedata</h3>
-            <p>
-                NMD (Nationellt Marktäckedata) är Sveriges rikstäckande kartläggning av marktäcke och markanvändning, producerad av Naturvårdsverket. Datat har 10 meters upplösning och klassificerar marken i över 25 kategorier — från tallskog och granskog till åkermark, bebyggelse och vatten. I brandanalysen används NMD för att korsreferera vilka naturtyper som drabbats hårdast: diagrammet visar hur stor andel av varje markklass som ligger inom det brandpåverkade området. Detta ger viktig kontext för ekologisk bedömning och återställningsplanering.
-                <br><em>Källa: Naturvårdsverket, &quot;Nationellt Marktäckedata (NMD).&quot; <a href="https://www.naturvardsverket.se/verktyg-och-tjanster/kartor-och-karttjanster/nationella-marktackedata/" target="_blank">naturvardsverket.se</a></em>
             </p>
         </div>
     </div>

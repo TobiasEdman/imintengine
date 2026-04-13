@@ -145,23 +145,22 @@ var TAB_CONFIG = {
         summary: [
             {title:'Förändringsdetektering',value:'22.8%',detail:'49 regioner'},
             {title:'dNBR Hög svårighetsgrad',value:'1.2 km²',detail:'8.9% av området'},
-            {title:'Prithvi (burn_scars)',value:'64.8% burned',detail:'96677 px'},
             {title:'NMD Marktäcke',value:'82.4% Skog',detail:'6 klasser'},
             {title:'Molnanalys (COT)',value:'99.9% klart',detail:'COT medel: 0.0017'}
         ],
         intro: 'Analysområdet är beläget i Ljusdals kommun, Gävleborgs län, och visar Kårbölebranden — en av de största skogsbränderna i Sveriges moderna historia sommaren 2018. Den 14 juli 2018 startade en skogsbrand som till slut bredde ut sig över cirka 9 500 hektar skog, vilket gjorde den till den största skogsbranden i Sverige på över 50 år. Här har Sentinel-2-data från 2018-07-24 analyserats med flera kompletterande metoder för att kartlägga brandens utbredning och intensitet.',
         panels: [
-            {id:'f-rgb',    key:'rgb',     title:'Sentinel-2 RGB',                    legend:null},
+            {id:'f-rgb',    key:'rgb',     title:'Sentinel-2 RGB',                    legend:null,
+                bgToggle:[{label:'Efter',key:'rgb',active:true},{label:'Före',key:'baseline'}]},
             {id:'f-nmd',    key:'nmd',     title:'NMD Marktäcke',                     legend:'nmd'},
-            {id:'f-ndvi',   key:'ndvi',    title:'NDVI (Vegetationsindex)',            legend:'ndvi'},
-            {id:'f-ndwi',   key:'ndwi',    title:'NDWI (Vattenindex)',                 legend:'ndwi'},
-            {id:'f-evi',    key:'evi',     title:'EVI (Enhanced Vegetation Index)',    legend:'evi'},
-            {id:'f-cot',    key:'cot',     title:'Molnoptisk tjocklek (COT)',          legend:'cot'},
             {id:'f-dnbr',   key:'dnbr',    title:'dNBR (Brandsvårighetsgrad)',         legend:'dnbr',
                 bgToggle:[{label:'Efter',key:'rgb',active:true},{label:'Före',key:'baseline'}]},
             {id:'f-gradient',key:'gradient',title:'Förändring (gradient)',             legend:'change_gradient',
                 bgToggle:[{label:'Efter',key:'rgb',active:true},{label:'Före',key:'baseline'}]},
-            {id:'f-prithvi',key:'prithvi', title:'Prithvi Segmentering',              legend:'prithvi_fire'}
+            {id:'f-ndvi',   key:'ndvi',    title:'NDVI (Vegetationsindex)',            legend:'ndvi'},
+            {id:'f-ndwi',   key:'ndwi',    title:'NDWI (Vattenindex)',                 legend:'ndwi'},
+            {id:'f-evi',    key:'evi',     title:'EVI (Enhanced Vegetation Index)',    legend:'evi'},
+            {id:'f-cot',    key:'cot',     title:'Molnoptisk tjocklek (COT)',          legend:'cot'}
         ],
         images: {
             'f-rgb':       'showcase/fire/rgb.png',
@@ -172,7 +171,6 @@ var TAB_CONFIG = {
             'f-cot':       'showcase/fire/cot_clean.png',
             'f-dnbr':      'showcase/fire/dnbr_clean.png',
             'f-gradient':  'showcase/fire/change_gradient.png',
-            'f-prithvi':   'showcase/fire/prithvi_seg_clean.png',
             'f-baseline':  'showcase/fire/baseline_rgb.png'
         },
         imgH: 559, imgW: 267,
