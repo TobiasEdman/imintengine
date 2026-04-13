@@ -21,8 +21,9 @@
 # Idempotent: tiles with has_frame_2016==1 are skipped by default.
 # Re-run with --no-skip-existing to force re-fetch.
 #
-# Estimated runtime: 6,597 tiles × ~8 s/tile ÷ 32 workers ≈ 27 min
+# Estimated runtime: 6,597 tiles × ~8 s/tile ÷ 4 workers ≈ 3.7h
 #   (8 s = 1 catalog query ~1 s + up to 3 Process API fetches ~2 s each)
+#   4 workers = consistent with CDSE quota policy (1-4 concurrent requests)
 #
 # Prerequisites:
 #   - CDSE_CLIENT_ID / CDSE_CLIENT_SECRET in a k8s secret "cdse-credentials"
@@ -68,7 +69,7 @@ spec:
 
               python scripts/add_background_frame.py \
                 --data-dir /data/unified_v2 \
-                --workers 32 \
+                --workers 4 \
                 --primary-year 2016 \
                 --fallback-year 2015
 
@@ -95,11 +96,11 @@ spec:
                   key: client_secret
           resources:
             requests:
-              cpu: "32"
-              memory: "64Gi"
+              cpu: "4"
+              memory: "8Gi"
             limits:
-              cpu: "32"
-              memory: "64Gi"
+              cpu: "4"
+              memory: "8Gi"
           volumeMounts:
             - name: training-data
               mountPath: /data

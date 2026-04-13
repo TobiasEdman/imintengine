@@ -184,8 +184,8 @@ def main() -> None:
     )
     p.add_argument("--data-dir", required=True,
                    help="Directory containing unified_v2 .npz tiles")
-    p.add_argument("--workers", type=int, default=32,
-                   help="Parallel worker threads (default: 32)")
+    p.add_argument("--workers", type=int, default=4,
+                   help="Parallel worker threads (default: 4)")
     p.add_argument("--tile-ids", nargs="+", default=None,
                    help="Process only these tile IDs (e.g. 471280_6621280)")
     p.add_argument("--no-skip-existing", action="store_true",
