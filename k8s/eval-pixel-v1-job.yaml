@@ -21,6 +21,8 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists
