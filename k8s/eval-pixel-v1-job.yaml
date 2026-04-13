@@ -64,8 +64,7 @@ spec:
                 --evaluate-only \
                 --context-px 32 \
                 --use-frame-2016 \
-                --use-aux \
-                --amp
+                --use-aux
 
               echo ""
               echo "=== Done: $(date) ==="
