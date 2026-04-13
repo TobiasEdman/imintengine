@@ -86,7 +86,7 @@ log ""
 log "Step 4/6 — build-labels-v2 (all tiles including new ones) …"
 kubectl delete job build-labels-v2 -n "$NS" --ignore-not-found
 kubectl apply -f "$(dirname "$0")/build-labels-job.yaml"
-wait_for_job build-labels-v2 3600
+wait_for_job build-labels-v2 7200
 log ""
 
 # ── Step 5/6: Add 2016 background frames ──────────────────────────────────────
