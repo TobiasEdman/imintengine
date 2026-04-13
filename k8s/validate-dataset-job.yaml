@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: validate-dataset
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: validate-dataset
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install numpy -q
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git /repo
+              python3 /repo/scripts/validate_dataset.py /data/unified_v2
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
