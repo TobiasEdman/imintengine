@@ -50,7 +50,7 @@ spec:
               cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd imintengine
-              pip install -e . --no-deps -q
+              pip install -e . --no-deps -q 2>/dev/null || true
 
               # ── Evaluate ──────────────────────────────────────────────────
               echo ""
