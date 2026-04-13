@@ -133,6 +133,7 @@ spec:
                 --checkpoint-dir /checkpoints/pixel_v1 \
                 --log-file /checkpoints/pixel_v1/train_log.json \
                 --device cuda \
+                --amp \
                 $RESUME_FLAG
 
               echo ""
