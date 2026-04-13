@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: label-check
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: label-check
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              pip install numpy -q
+              apt-get install -y -qq git > /dev/null 2>&1
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git /repo
+              python3 /repo/scripts/check_label_values.py /data/unified_v2
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
