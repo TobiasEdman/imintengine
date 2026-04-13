@@ -64,7 +64,8 @@ spec:
                 --evaluate-only \
                 --context-px 32 \
                 --use-frame-2016 \
-                --use-aux
+                --use-aux \
+                --num-workers 0
 
               echo ""
               echo "=== Done: $(date) ==="
