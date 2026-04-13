@@ -132,6 +132,7 @@ spec:
                 --samples-per-tile 512 \
                 --checkpoint-dir /checkpoints/pixel_v1 \
                 --log-file /checkpoints/pixel_v1/train_log.json \
+                --tile-pred-n 6 \
                 --device cuda \
                 --amp \
                 --compile \

@@ -183,6 +183,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Path to write JSON training log (per-epoch metrics + final summary). "
                         "Written atomically after each epoch. "
                         "E.g. /checkpoints/pixel_v1/train_log.json")
+    p.add_argument("--tile-pred-n", type=int, default=0,
+                   help="Save colorized prediction/GT images for N representative val tiles "
+                        "after every epoch, for dashboard visualization (0 = disabled).")
 
     return p
 
@@ -406,6 +409,257 @@ def _build_optimizer(
     return torch.optim.AdamW(params, weight_decay=weight_decay)
 
 
+# ── Tile prediction visualization ─────────────────────────────────────────
+
+# RGB color per unified class index (0=background, 1-22=land cover/crop/hygge)
+_CLASS_COLORS_RGB: list[tuple[int, int, int]] = [
+    (  0,   0,   0),   #  0 background
+    ( 22, 101,  52),   #  1 tallskog
+    ( 21, 128,  61),   #  2 granskog
+    ( 74, 222, 128),   #  3 lövskog
+    ( 52, 211, 153),   #  4 blandskog
+    ( 19,  78,  74),   #  5 sumpskog
+    (163, 230,  53),   #  6 tillfälligt ej skog
+    (133,  77,  14),   #  7 våtmark
+    (217, 119,   6),   #  8 öppen mark
+    (107, 114, 128),   #  9 bebyggelse
+    ( 59, 130, 246),   # 10 vatten
+    (251, 191,  36),   # 11 vete
+    (245, 158,  11),   # 12 korn
+    (253, 224,  71),   # 13 havre
+    (234, 179,   8),   # 14 oljeväxter
+    (132, 204,  22),   # 15 slåttervall
+    (134, 239, 172),   # 16 bete
+    (168,  85, 247),   # 17 potatis
+    (236,  72, 153),   # 18 sockerbetor
+    (249, 115,  22),   # 19 trindsäd
+    (220,  38,  38),   # 20 råg
+    (234,  88,  12),   # 21 övrig åker
+    (  6, 182, 212),   # 22 hygge
+]
+
+
+def _colorize_classmap(class_map: np.ndarray) -> np.ndarray:
+    """Map (H, W) int class indices → (H, W, 3) uint8 RGB."""
+    H, W = class_map.shape
+    rgb = np.zeros((H, W, 3), dtype=np.uint8)
+    for cls_idx, color in enumerate(_CLASS_COLORS_RGB):
+        mask = class_map == cls_idx
+        if mask.any():
+            rgb[mask] = color
+    return rgb
+
+
+def _infer_tile_grid(
+    model,
+    tile_path: Path,
+    context_px: int,
+    use_frame_2016: bool,
+    use_aux: bool,
+    device: torch.device,
+    stride: int = 4,
+    batch_size: int = 2048,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Grid-sampled inference on a full tile.
+
+    Samples every ``stride``-th pixel as a center pixel, extracts its
+    context patch, runs inference, and reconstructs a spatial prediction map.
+
+    Returns:
+        pred_map: (grid_h, grid_w) int32 — predicted class indices
+        gt_map:   (grid_h, grid_w) int32 — ground-truth labels
+    """
+    import contextlib
+    from imint.training.unified_dataset import AUX_CHANNEL_NAMES, AUX_LOG_TRANSFORM, AUX_NORM
+
+    data = np.load(str(tile_path), allow_pickle=False)
+    spectral = np.asarray(data.get("spectral", data.get("image")), dtype=np.float32)
+    label = np.asarray(data["label"], dtype=np.int32)
+    H, W = label.shape
+    half = context_px // 2
+
+    rows = np.arange(half, H - half, stride)
+    cols = np.arange(half, W - half, stride)
+    grid_h, grid_w = len(rows), len(cols)
+    N = grid_h * grid_w
+
+    # Build all patches at once
+    patches = np.empty((N, (5 if use_frame_2016 else 4) * 6, context_px, context_px), dtype=np.float32)
+    has_2016 = use_frame_2016 and int(data.get("has_frame_2016", 0)) == 1
+    if has_2016:
+        frame_2016 = np.asarray(data["frame_2016"], dtype=np.float32)
+
+    for i, r in enumerate(rows):
+        for j, c in enumerate(cols):
+            r0, r1, c0, c1 = r - half, r + half, c - half, c + half
+            patch_base = spectral[:, r0:r1, c0:c1]
+            if use_frame_2016:
+                if has_2016:
+                    patch_bg = frame_2016[:, r0:r1, c0:c1]
+                else:
+                    patch_bg = np.zeros((6, context_px, context_px), dtype=np.float32)
+                patches[i * grid_w + j] = np.concatenate([patch_bg, patch_base], axis=0)
+            else:
+                patches[i * grid_w + j] = patch_base
+
+    # Build aux vectors
+    aux_all = None
+    if use_aux:
+        from imint.training.pixel_dataset import N_AUX
+        aux_all = np.zeros((N, N_AUX), dtype=np.float32)
+        for k, ch_name in enumerate(AUX_CHANNEL_NAMES):
+            if ch_name not in data:
+                continue
+            arr = np.asarray(data[ch_name], dtype=np.float32)
+            for i, r in enumerate(rows):
+                for j, c in enumerate(cols):
+                    val = float(arr[min(r, arr.shape[0]-1), min(c, arr.shape[1]-1)])
+                    if AUX_LOG_TRANSFORM.get(ch_name, False):
+                        val = float(np.log1p(val))
+                    mu, sigma = AUX_NORM.get(ch_name, (0.0, 1.0))
+                    aux_all[i * grid_w + j, k] = (val - mu) / max(sigma, 1e-8)
+
+    # Inference in batches
+    model.eval()
+    preds_all = []
+    amp_ctx = (torch.autocast("cuda", dtype=torch.bfloat16)
+               if device.type == "cuda" else contextlib.nullcontext())
+    with torch.no_grad():
+        for start in range(0, N, batch_size):
+            end = min(start + batch_size, N)
+            bp = torch.tensor(patches[start:end], dtype=torch.float32, device=device)
+            ba = (torch.tensor(aux_all[start:end], dtype=torch.float32, device=device)
+                  if aux_all is not None else None)
+            with amp_ctx:
+                logits = model(bp, ba)
+            preds_all.append(logits.argmax(dim=1).cpu().numpy())
+
+    pred_flat = np.concatenate(preds_all)
+    gt_flat = label[rows[:, None], cols[None, :]].flatten()
+    return pred_flat.reshape(grid_h, grid_w).astype(np.int32), \
+           gt_flat.reshape(grid_h, grid_w).astype(np.int32)
+
+
+def _select_representative_tiles(val_tiles: list[Path], n: int) -> list[Path]:
+    """Pick up to ``n`` visually diverse tiles from the val set.
+
+    Strategy: scan tiles for dominant class and select the most class-diverse
+    subset.  Falls back to the first ``n`` tiles if labels aren't readable.
+    """
+    scored: list[tuple[int, Path]] = []  # (dominant_class, path)
+    for p in val_tiles:
+        try:
+            d = np.load(str(p), allow_pickle=False)
+            lbl = np.asarray(d["label"], dtype=np.int32)
+            counts = np.bincount(lbl.ravel(), minlength=23)
+            counts[0] = 0  # ignore background
+            dominant = int(counts.argmax()) if counts.max() > 0 else -1
+            scored.append((dominant, p))
+        except Exception:
+            continue
+
+    if not scored:
+        return val_tiles[:n]
+
+    # One tile per dominant class (to maximize diversity), then fill remainder
+    seen_classes: set[int] = set()
+    selected: list[Path] = []
+    for cls, path in sorted(scored, key=lambda x: x[0]):
+        if cls not in seen_classes:
+            selected.append(path)
+            seen_classes.add(cls)
+        if len(selected) >= n:
+            break
+
+    # If we still need more tiles, fill with remaining
+    if len(selected) < n:
+        used = set(selected)
+        for _, p in scored:
+            if p not in used:
+                selected.append(p)
+            if len(selected) >= n:
+                break
+
+    return selected[:n]
+
+
+def _save_tile_preds_epoch(
+    model,
+    pred_tiles: list[Path],
+    epoch: int,
+    ckpt_dir: Path,
+    context_px: int,
+    use_frame_2016: bool,
+    use_aux: bool,
+    device: torch.device,
+) -> None:
+    """Save colorized prediction PNGs for ``pred_tiles`` at this epoch.
+
+    Directory layout::
+        {ckpt_dir}/tile_preds/
+            manifest.json
+            gt/
+                {tile_stem}_gt.png      ← saved once (epoch==1)
+            epoch_{N}/
+                {tile_stem}_pred.png    ← saved every epoch
+    """
+    from PIL import Image
+
+    preds_root = ckpt_dir / "tile_preds"
+    gt_dir     = preds_root / "gt"
+    ep_dir     = preds_root / f"epoch_{epoch}"
+    gt_dir.mkdir(parents=True, exist_ok=True)
+    ep_dir.mkdir(parents=True, exist_ok=True)
+
+    tile_entries = []
+    for tile_path in pred_tiles:
+        stem = tile_path.stem
+        short = stem[:28] + "…" if len(stem) > 28 else stem
+
+        try:
+            pred_map, gt_map = _infer_tile_grid(
+                model, tile_path, context_px,
+                use_frame_2016, use_aux, device,
+            )
+        except Exception as e:
+            print(f"    [tile_preds] {stem}: skipped ({e})", flush=True)
+            continue
+
+        # Save prediction image for this epoch
+        pred_rgb = _colorize_classmap(pred_map)
+        img_size = max(64, pred_map.shape[0] * 4)  # upscale for visibility
+        Image.fromarray(pred_rgb).resize((img_size, img_size), Image.NEAREST).save(
+            ep_dir / f"{stem}_pred.png"
+        )
+
+        # Save ground truth once (stable across epochs)
+        gt_png = gt_dir / f"{stem}_gt.png"
+        if not gt_png.exists():
+            gt_rgb = _colorize_classmap(gt_map)
+            Image.fromarray(gt_rgb).resize((img_size, img_size), Image.NEAREST).save(gt_png)
+
+        tile_entries.append({"name": stem, "short": short})
+
+    # Update manifest atomically
+    manifest_path = preds_root / "manifest.json"
+    manifest: dict = {"tiles": [], "epochs": []}
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except Exception:
+            pass
+
+    manifest["tiles"] = tile_entries
+    if epoch not in manifest["epochs"]:
+        manifest["epochs"].append(epoch)
+        manifest["epochs"].sort()
+
+    tmp = manifest_path.with_suffix(".tmp.json")
+    tmp.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+    tmp.replace(manifest_path)
+    print(f"    [tile_preds] epoch {epoch}: saved {len(tile_entries)} tiles → {ep_dir}", flush=True)
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -488,6 +742,12 @@ def main() -> None:
 
     print(f"  Train samples: {len(train_ds):,}, "
           f"Val samples: {len(val_ds):,}  ({time.time()-t0:.0f}s)")
+
+    # Select representative val tiles for per-epoch prediction visualization
+    pred_tiles: list[Path] = []
+    if args.tile_pred_n > 0 and val_tiles:
+        pred_tiles = _select_representative_tiles(val_tiles, args.tile_pred_n)
+        print(f"  Tile predictions: {len(pred_tiles)} representative val tiles selected")
 
     # ── Model ─────────────────────────────────────────────────────
     print(f"\n  Loading PrithviPixelClassifier "
@@ -719,6 +979,13 @@ def main() -> None:
             if no_improve >= args.patience:
                 print(f"\n  Early stopping (no improvement for {args.patience} epochs)")
                 break
+
+        # Per-epoch tile predictions for dashboard visualization
+        if pred_tiles:
+            _save_tile_preds_epoch(
+                model, pred_tiles, epoch + 1, ckpt_dir,
+                args.context_px, args.use_frame_2016, args.use_aux, device,
+            )
 
         # Append epoch record to JSON log and flush atomically
         if log_path is not None:
