@@ -439,9 +439,19 @@ class UnifiedDataset(Dataset):
                 year = 2022
 
         temporal_coords = np.zeros((n_frames, 2), dtype=np.float32)
-        temporal_coords[:, 0] = float(year)
         if doy is not None:
             temporal_coords[:len(doy), 1] = doy[:n_frames].astype(np.float32)
+
+        # Per-frame year: frame_2016 gets its own year, autumn gets year-1
+        bg_year = int(data.get("frame_2016_year", 2016))
+        has_bg = int(data.get("has_frame_2016", 0)) == 1
+        if n_frames >= 5 and has_bg:
+            temporal_coords[0, 0] = float(bg_year)       # frame 0: background
+            temporal_coords[1, 0] = float(year - 1)      # frame 1: autumn yr-1
+            temporal_coords[2:, 0] = float(year)          # frames 2-4: growing season
+        else:
+            temporal_coords[0, 0] = float(year - 1) if n_frames >= 2 else float(year)
+            temporal_coords[1:, 0] = float(year)
 
         easting = float(data.get("easting", 500_000))
         northing = float(data.get("northing", 6_500_000))
@@ -568,6 +578,14 @@ class UnifiedDataset(Dataset):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Extract all temporal frames for multi-temporal training.
 
+        Frame layout when ``num_frames=5`` and ``frame_2016`` is present:
+            0: 2016 summer background (clearcut change detection anchor)
+            1: autumn year-1 (Sep-Oct)
+            2-4: VPP-guided growing season
+
+        When ``frame_2016`` is absent, frame 0 is zero-padded (masked).
+        When ``num_frames=4``, the background frame is omitted entirely.
+
         Returns:
             image: (T*6, H, W) float32 stacked frames.
             temporal_mask: (T,) uint8, 1 = valid frame, 0 = padded.
@@ -577,7 +595,7 @@ class UnifiedDataset(Dataset):
         c, h, w = raw.shape
         tile_frames = c // N_BANDS
 
-        # Temporal metadata from tile
+        # Temporal metadata from the 4 base frames in the tile
         tile_mask = data.get("temporal_mask", None)
         tile_doy = data.get("doy", None)
         if tile_mask is not None:
@@ -589,24 +607,48 @@ class UnifiedDataset(Dataset):
         else:
             tile_doy = np.zeros(tile_frames, dtype=np.int32)
 
-        if tile_frames >= num_frames:
-            # Tile has enough frames — take first num_frames
-            image = raw[:num_frames * N_BANDS]
-            temporal_mask = tile_mask[:num_frames]
-            doy = tile_doy[:num_frames]
-        else:
-            # Pad with zeros (and mask)
+        # --- Prepend frame_2016 as background anchor (frame 0) ---
+        # Only when num_frames > tile_frames (i.e. 5 requested, tile has 4)
+        use_bg = num_frames > tile_frames
+        if use_bg:
+            has_bg = int(data.get("has_frame_2016", 0)) == 1
+            if has_bg:
+                bg_frame = np.asarray(data["frame_2016"], dtype=np.float32)  # (6, H, W)
+                bg_doy = int(data.get("frame_2016_doy", 166))
+            else:
+                bg_frame = np.zeros((N_BANDS, h, w), dtype=np.float32)
+                bg_doy = 0
+
+            # Build output: [bg_frame, base_frames..., zero-pad if needed]
+            n_base = min(tile_frames, num_frames - 1)
             image = np.zeros((num_frames * N_BANDS, h, w), dtype=np.float32)
-            image[:tile_frames * N_BANDS] = raw
+            image[:N_BANDS] = bg_frame
+            image[N_BANDS:N_BANDS + n_base * N_BANDS] = raw[:n_base * N_BANDS]
+
             temporal_mask = np.zeros(num_frames, dtype=np.uint8)
-            temporal_mask[:tile_frames] = tile_mask
+            temporal_mask[0] = 1 if has_bg else 0
+            temporal_mask[1:1 + n_base] = tile_mask[:n_base]
+
             doy = np.zeros(num_frames, dtype=np.int32)
-            doy[:tile_frames] = tile_doy
+            doy[0] = bg_doy
+            doy[1:1 + n_base] = tile_doy[:n_base]
+        else:
+            # Standard 4-frame path (no background frame)
+            if tile_frames >= num_frames:
+                image = raw[:num_frames * N_BANDS]
+                temporal_mask = tile_mask[:num_frames]
+                doy = tile_doy[:num_frames]
+            else:
+                image = np.zeros((num_frames * N_BANDS, h, w), dtype=np.float32)
+                image[:tile_frames * N_BANDS] = raw
+                temporal_mask = np.zeros(num_frames, dtype=np.uint8)
+                temporal_mask[:tile_frames] = tile_mask
+                doy = np.zeros(num_frames, dtype=np.int32)
+                doy[:tile_frames] = tile_doy
 
         # Replace zero-padded frames with nearest valid frame
         for t in range(num_frames):
             if temporal_mask[t] == 0:
-                # Find nearest valid frame
                 valid_indices = np.where(temporal_mask > 0)[0]
                 if len(valid_indices) > 0:
                     nearest = valid_indices[

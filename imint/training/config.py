@@ -37,7 +37,7 @@ class TrainingConfig:
     # When enabled, each tile stores T temporal frames as (T*6, H, W).
     # Prithvi-EO-2.0 supports up to num_frames=4 temporal steps.
     enable_multitemporal: bool = False                 # Single-date by default
-    num_temporal_frames: int = 4                       # Prithvi max = 4
+    num_temporal_frames: int = 5                       # 1 background + 1 autumn + 3 growing
     seasonal_windows: list[tuple[int, int]] = field(
         default_factory=lambda: [
             (9, 10),   # autumn:        Sep – Oct (post-harvest stubble, autumn-sown)

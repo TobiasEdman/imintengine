@@ -43,6 +43,7 @@ from imint.training.tile_fetch import (
     bbox_3006_to_wgs84,
     fetch_4frame_scenes,
     fetch_aux_channels,
+    fetch_background_frame,
     fetch_nmd_label_local,
     stack_frames,
 )
@@ -315,9 +316,15 @@ def fetch_tile(
         save["label"] = nmd_label
     save.update(aux)
 
+    # Background frame (2016 summer) for clearcut change detection
+    bg_result = fetch_background_frame(bbox, coords)
+    save.update(bg_result)
+
     np.savez_compressed(out_path, **save)
+    has_bg = int(save.get("has_frame_2016", 0))
     return {"name": name, "status": "ok",
-            "valid_frames": int(temporal_mask.sum())}
+            "valid_frames": int(temporal_mask.sum()),
+            "has_bg": has_bg}
 
 
 def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict]:
