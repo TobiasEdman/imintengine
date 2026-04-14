@@ -470,7 +470,12 @@ class PrithviSegmentationModel(nn.Module):
             self.aux_encoder = None
             self.aux_fusion = None
 
-    def _extract_multi_scale_features(self, x: torch.Tensor) -> list[torch.Tensor]:
+    def _extract_multi_scale_features(
+        self,
+        x: torch.Tensor,
+        temporal_coords: torch.Tensor | None = None,
+        location_coords: torch.Tensor | None = None,
+    ) -> list[torch.Tensor]:
         """Extract and rescale features from selected transformer blocks.
 
         When temporal pooling is enabled, applies mean+max pooling over the
@@ -479,7 +484,9 @@ class PrithviSegmentationModel(nn.Module):
         Returns list of [level_0 (highest res), ..., level_3 (lowest/deepest)].
         """
         # Get all block outputs: list of (B, N_tokens+1, embed_dim)
-        all_features = self.encoder.forward_features(x)
+        all_features = self.encoder.forward_features(
+            x, temporal_coords=temporal_coords, location_coords=location_coords,
+        )
 
         # Select features at specified indices
         selected = [all_features[i] for i in self.feature_indices]
@@ -574,6 +581,8 @@ class PrithviSegmentationModel(nn.Module):
         self,
         x: torch.Tensor,
         aux: torch.Tensor | None = None,
+        temporal_coords: torch.Tensor | None = None,
+        location_coords: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Full forward pass: encoder → temporal pool → scale → UperNet → head.
 
@@ -581,6 +590,8 @@ class PrithviSegmentationModel(nn.Module):
             x: (B, C, H, W) or (B, C, T, H, W) input tensor.
             aux: Optional (B, N, H, W) auxiliary raster channels
                 (e.g. height, volume, basal area).
+            temporal_coords: Optional (B, T, 2) float32 [year, doy] per frame.
+            location_coords: Optional (B, 2) float32 [lat, lon] in WGS84.
 
         Returns:
             (B, num_classes, H, W) logits at input resolution.
@@ -590,7 +601,9 @@ class PrithviSegmentationModel(nn.Module):
         else:
             input_h, input_w = x.shape[3:]
 
-        features = self._extract_multi_scale_features(x)
+        features = self._extract_multi_scale_features(
+            x, temporal_coords=temporal_coords, location_coords=location_coords,
+        )
 
         # Mid-level fusion: LiDAR branch → gated fusion at each FPN level
         if self.lidar_branch is not None and aux is not None:

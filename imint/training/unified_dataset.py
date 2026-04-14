@@ -69,6 +69,7 @@ except ImportError:
 
 from .unified_schema import NUM_UNIFIED_CLASSES, HARVEST_CLASS
 from .losses import parcel_area_to_pixel_weights
+from .sampler import _sweref99_to_wgs84
 
 logger = logging.getLogger(__name__)
 
@@ -374,11 +375,19 @@ class UnifiedDataset(Dataset):
             max_weight=getattr(self, "_area_weight_max", 4.0),
         )
 
+        # --- Prithvi TL coordinate tensors ------------------------------
+        n_frames = image.shape[0] // N_BANDS
+        temporal_coords, location_coords = self._build_coords(
+            data, doy, n_frames,
+        )
+
         # --- Build output dict ------------------------------------------
         result: dict = {
             "spectral":     torch.from_numpy(np.ascontiguousarray(image)),
             "label":        torch.from_numpy(np.ascontiguousarray(label)),
             "pixel_weight": pixel_weight,
+            "temporal_coords": temporal_coords,
+            "location_coords": location_coords,
             "metadata": {
                 "tile":   entry["name"],
                 "source": source,
@@ -401,6 +410,48 @@ class UnifiedDataset(Dataset):
                 )  # (1, H', W')
 
         return result
+
+    # ------------------------------------------------------------------
+    # Prithvi TL coordinates
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_coords(
+        data: dict,
+        doy: np.ndarray | None,
+        n_frames: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build Prithvi TL coordinate tensors from tile metadata.
+
+        Returns:
+            temporal_coords: (T, 2) float32 [year, doy] per frame.
+            location_coords: (2,) float32 [lat, lon] in WGS84 degrees.
+        """
+        year = int(data.get("year", data.get("lpis_year", 0)))
+        if year == 0:
+            dates = data.get("dates", [])
+            if len(dates) > 0:
+                try:
+                    year = int(str(dates[0])[:4])
+                except (ValueError, IndexError):
+                    year = 2022
+            else:
+                year = 2022
+
+        temporal_coords = np.zeros((n_frames, 2), dtype=np.float32)
+        temporal_coords[:, 0] = float(year)
+        if doy is not None:
+            temporal_coords[:len(doy), 1] = doy[:n_frames].astype(np.float32)
+
+        easting = float(data.get("easting", 500_000))
+        northing = float(data.get("northing", 6_500_000))
+        lat, lon = _sweref99_to_wgs84(easting, northing)
+        location_coords = np.array([lat, lon], dtype=np.float32)
+
+        return (
+            torch.from_numpy(temporal_coords),
+            torch.from_numpy(location_coords),
+        )
 
     # ------------------------------------------------------------------
     # Frame selection

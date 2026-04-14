@@ -272,16 +272,17 @@ class LULCTrainer:
             else:
                 decoder_params.append(param)
 
+        backbone_lr = cfg.lr * cfg.backbone_lr_factor
         param_groups = [
             {"params": decoder_params, "lr": cfg.lr},
         ]
         if backbone_params:
             param_groups.append({
                 "params": backbone_params,
-                "lr": cfg.lr * cfg.backbone_lr_factor,
+                "lr": backbone_lr,
             })
             print(f"  Optimizer: decoder_lr={cfg.lr}, "
-                  f"backbone_lr={cfg.lr * cfg.backbone_lr_factor}")
+                  f"backbone_lr={backbone_lr}")
         else:
             print(f"  Optimizer: lr={cfg.lr}")
 
@@ -289,6 +290,13 @@ class LULCTrainer:
             param_groups,
             weight_decay=cfg.weight_decay,
         )
+
+        # Store per-group target LRs for warmup scaling.
+        # Critical: warmup must scale each group from its own base LR,
+        # not from cfg.lr.  Previously all groups were ramped to cfg.lr,
+        # giving the backbone 10× its intended LR during warmup and
+        # corrupting pretrained features → mode collapse to water class.
+        base_lrs = [pg["lr"] for pg in optimizer.param_groups]
 
         total_steps = cfg.epochs * math.ceil(len(train_dataset) / cfg.batch_size)
         warmup_steps = int(total_steps * cfg.warmup_fraction)
@@ -389,11 +397,16 @@ class LULCTrainer:
                 # Collect auxiliary channels (height/volume/etc.)
                 aux = self._collect_aux(batch, self.device)
 
-                # Warmup: linear LR ramp
+                # Warmup: linear LR ramp preserving per-group differential
                 if step < warmup_steps:
                     lr_scale = (step + 1) / warmup_steps
-                    for pg in optimizer.param_groups:
-                        pg["lr"] = cfg.lr * lr_scale
+                    for pg, base_lr in zip(optimizer.param_groups, base_lrs):
+                        pg["lr"] = base_lr * lr_scale
+                    # On final warmup step, restore exact base LRs so the
+                    # CosineAnnealing scheduler starts from correct values
+                    if step == warmup_steps - 1:
+                        for pg, base_lr in zip(optimizer.param_groups, base_lrs):
+                            pg["lr"] = base_lr
 
                 # Per-pixel area weighting: give small parcels higher loss weight
                 pixel_weight = None
@@ -402,8 +415,20 @@ class LULCTrainer:
                     if pw is not None:
                         pixel_weight = pw.to(self.device)
 
+                # Prithvi TL coordinate tensors
+                temporal_coords = batch.get("temporal_coords")
+                if temporal_coords is not None:
+                    temporal_coords = temporal_coords.to(self.device)
+                location_coords = batch.get("location_coords")
+                if location_coords is not None:
+                    location_coords = location_coords.to(self.device)
+
                 optimizer.zero_grad()
-                logits = self.model(images_5d, aux=aux).contiguous()
+                logits = self.model(
+                    images_5d, aux=aux,
+                    temporal_coords=temporal_coords,
+                    location_coords=location_coords,
+                ).contiguous()
                 if pixel_weight is not None:
                     loss = criterion(logits, labels, pixel_weight=pixel_weight)
                 else:

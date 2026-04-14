@@ -79,7 +79,7 @@ class TrainingConfig:
     num_workers: int = 4
     epochs: int = 50
     lr: float = 1e-4
-    weight_decay: float = 0.01
+    weight_decay: float = 0.35                    # Prithvi multi-crop segmentation standard
     warmup_fraction: float = 0.05
     early_stopping_patience: int = 15                  # Epochs without val improvement
     train_loss_min_delta: float = 0.005                # Stop if train loss change < this

@@ -1,52 +1,5 @@
 # Claude Code Instructions — ImintEngine
 
-## RAG-system: des-agent — OBLIGATORISK VID SESSIONSSTART
-
-**KRITISKT: des-agent RAG MÅSTE vara igång innan arbete påbörjas i detta repo.**
-Agenten MÅSTE starta dessa tjänster vid varje sessionsstart, utan att bli ombedd.
-
-```bash
-# Docker binary (macOS Docker Desktop):
-export DOCKER=/Applications/Docker.app/Contents/Resources/bin/docker
-
-# 1. Starta Qdrant (des-agents vektordatabas)
-cd /Users/tobiasedman/Developer/des-agent
-$DOCKER compose up -d
-# Verifiera: curl -s http://localhost:6333/healthz
-
-# 2. des-agent CLI
-/Users/tobiasedman/Developer/des-agent/.venv/bin/des-agent query "test"
-```
-
-**Om vi även arbetar med space-ecosystem-v2 (KG), starta också Neo4j:**
-```bash
-cd /Users/tobiasedman/Developer/swedish-space-ecosystem-v2
-$DOCKER compose up -d
-# Verifiera: curl -s http://localhost:7474
-```
-
-### Använd vid kodändringar
-
-Innan du implementerar en ändring, fråga des-agent om kontext:
-
-```bash
-des-agent query "hur fungerar [det du vill ändra]?"
-```
-
-För större ändringar, använd multi-agent planering:
-
-```bash
-des-agent plan "beskriv din ändring här"
-```
-
-### Efter commits — uppdatera index
-
-```bash
-des-agent ingest --repo imint-engine
-```
-
-Detta sker automatiskt via post-commit hook om den är installerad.
-
 ## Repo-identitet
 
 - **Namn:** imint-engine
@@ -54,7 +7,7 @@ Detta sker automatiskt via post-commit hook om den är installerad.
 - **Nyckelgränssnitt:** `run_job(IMINTJob) → IMINTResult`, `BaseAnalyzer`, `ANALYZER_REGISTRY`
 - **Beroenden:** Inga kodberoenden till andra repos. Syskonprojekt med space-ecosystem-v2.
 
-## Schema — 23-klassers Unified Schema (v4)
+## Schema — 23-klassers Unified Schema (v5)
 
 Det enhetliga schemat (`imint/training/unified_schema.py`) slår samman NMD + LPIS-grödor + SKS-avverkning:
 
@@ -71,14 +24,16 @@ Det enhetliga schemat (`imint/training/unified_schema.py`) slår samman NMD + LP
 | 12 | korn | LPIS | 1, 2, 12, 13, 315 |
 | 13 | havre | LPIS | 3, 10, 15 |
 | 14 | oljeväxter | LPIS | 20-28, 38, 40-42, 85-88 |
-| 15 | slåttervall | LPIS | 49, 50, 57-59, 62, 63, 302 |
+| 15 | slåttervall | LPIS | 49, 50, 57-59, 62, 63, 302, 16, 80, 81 |
 | 16 | bete | LPIS | 52-56, 61, 89, 90, 95 |
 | 17 | potatis | LPIS | 45, 46, 70-72, 311 |
 | 18 | sockerbetor | LPIS | 47, 48 |
 | 19 | trindsäd | LPIS | 30-37, 39, 43 |
 | 20 | råg | LPIS | 7, 8, 11, 14, 29, 317 |
-| 21 | övrig åker | LPIS/NMD | 9, 60, 74, 77, 80, 81 + resten |
+| 21 | majs | LPIS | 9 |
 | 22 | hygge | SKS | Avvdatum inom 5 år före tile-år |
+
+**v5 ändringar:** Klass 21 ändrad från "övrig åker" (noise catch-all) till "majs" (spektralt distinkt C4-gröda). NMD cropland (raw 12) → bakgrund (0). Grönfoder (SJV 16,80,81) → slåttervall (15). Träda (SJV 60) → öppen mark (8). Skyddszon (SJV 66,77) → bakgrund. Omappade SJV-koder → bakgrund (0).
 
 **SJV-koder är konsekventa 2018–2024.** Nya koder (7-9, 20-28, 45-47, 60) tillkom 2022 men gamla koder ändrades inte.
 **LPIS rasteriseras med rå SJV-koder (uint16).** Mappning till unified sker i `merge_all()`.

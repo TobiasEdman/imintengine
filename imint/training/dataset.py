@@ -35,6 +35,7 @@ except ImportError:
     raise ImportError("PyTorch is required for training. Install with: pip install torch")
 
 from .config import TrainingConfig
+from .sampler import _sweref99_to_wgs84
 
 
 class LULCDataset(Dataset):
@@ -192,12 +193,19 @@ class LULCDataset(Dataset):
                 image, label, aux_stack = self._center_crop(
                     image, label, aux_stack)
 
+            # Build Prithvi TL coordinate tensors
+            temporal_coords, location_coords = self._build_coords(
+                data, doy, n_frames,
+            )
+
             result = {
                 "spectral": torch.from_numpy(image.copy()),
                 "label": torch.from_numpy(label.copy()),
                 "temporal_mask": torch.from_numpy(
                     temporal_mask.astype(np.float32)),
                 "doy": torch.from_numpy(doy.astype(np.int64)),
+                "temporal_coords": temporal_coords,
+                "location_coords": location_coords,
                 "metadata": {
                     "tile": self.tile_names[idx],
                     "easting": int(data.get("easting", 0)),
@@ -229,9 +237,17 @@ class LULCDataset(Dataset):
                 image, label, aux_stack = self._center_crop(
                     image, label, aux_stack)
 
+            # Build Prithvi TL coordinate tensors (single-date: T=1)
+            sd_doy = np.array([182], dtype=np.int32)  # approximate summer DOY
+            temporal_coords, location_coords = self._build_coords(
+                data, sd_doy, 1,
+            )
+
             result = {
                 "spectral": torch.from_numpy(image.copy()),
                 "label": torch.from_numpy(label.copy()),
+                "temporal_coords": temporal_coords,
+                "location_coords": location_coords,
                 "metadata": {
                     "tile": self.tile_names[idx],
                     "easting": int(data.get("easting", 0)),
@@ -261,6 +277,9 @@ class LULCDataset(Dataset):
                 doy = torch.zeros(self.n_frames, dtype=torch.int64)
                 doy[0] = 182
                 result["doy"] = doy
+                # Expand temporal_coords from (1, 2) → (T, 2)
+                tc = result["temporal_coords"]  # (1, 2)
+                result["temporal_coords"] = tc.repeat(self.n_frames, 1)
 
             return result
 
@@ -315,6 +334,51 @@ class LULCDataset(Dataset):
                 )
 
         return image
+
+    @staticmethod
+    def _build_coords(
+        data: dict,
+        doy: np.ndarray,
+        n_frames: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build Prithvi TL coordinate tensors from tile metadata.
+
+        Args:
+            data: Raw .npz dict with 'dates', 'year'/'lpis_year',
+                  'easting', 'northing' keys.
+            doy: (T,) int32 day-of-year per frame.
+            n_frames: Number of temporal frames.
+
+        Returns:
+            temporal_coords: (T, 2) float32 [year, doy] per frame.
+            location_coords: (2,) float32 [lat, lon] in WGS84 degrees.
+        """
+        # --- Temporal: (T, 2) [year, doy] ---
+        year = int(data.get("year", data.get("lpis_year", 0)))
+        if year == 0:
+            # Try parsing from dates array
+            dates = data.get("dates", [])
+            if len(dates) > 0:
+                try:
+                    year = int(str(dates[0])[:4])
+                except (ValueError, IndexError):
+                    year = 2022  # fallback
+            else:
+                year = 2022
+        temporal_coords = np.zeros((n_frames, 2), dtype=np.float32)
+        temporal_coords[:, 0] = float(year)
+        temporal_coords[:len(doy), 1] = doy[:n_frames].astype(np.float32)
+
+        # --- Location: (2,) [lat, lon] in WGS84 ---
+        easting = float(data.get("easting", 500_000))
+        northing = float(data.get("northing", 6_500_000))
+        lat, lon = _sweref99_to_wgs84(easting, northing)
+        location_coords = np.array([lat, lon], dtype=np.float32)
+
+        return (
+            torch.from_numpy(temporal_coords),
+            torch.from_numpy(location_coords),
+        )
 
     def _augment(
         self, image: np.ndarray, label: np.ndarray,

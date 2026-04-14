@@ -137,7 +137,19 @@ def evaluate_model(
                 aux_parts.append(sample[name].unsqueeze(0).to(device))
         aux = torch.cat(aux_parts, dim=1) if aux_parts else None
 
-        logits = model(image_5d, aux=aux).contiguous()  # (1, C, H, W)
+        # Prithvi TL coordinate tensors
+        temporal_coords = sample.get("temporal_coords")
+        if temporal_coords is not None:
+            temporal_coords = temporal_coords.unsqueeze(0).to(device)
+        location_coords = sample.get("location_coords")
+        if location_coords is not None:
+            location_coords = location_coords.unsqueeze(0).to(device)
+
+        logits = model(
+            image_5d, aux=aux,
+            temporal_coords=temporal_coords,
+            location_coords=location_coords,
+        ).contiguous()  # (1, C, H, W)
         pred = logits.argmax(dim=1).squeeze(0).cpu().numpy()  # (H, W)
 
         all_preds.append(pred)

@@ -154,7 +154,8 @@ def _load_prithvi_from_hf(pretrained: bool = True, num_frames: int = 1):
         decoder_depth=config["decoder_depth"],
         decoder_num_heads=config["decoder_num_heads"],
         mlp_ratio=config["mlp_ratio"],
-        coords_encoding=[],
+        coords_encoding=config.get("coords_encoding", []),
+        coords_scale_learn=config.get("coords_scale_learn", False),
         patch_size=config["patch_size"],
     )
 
