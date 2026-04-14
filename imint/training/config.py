@@ -85,6 +85,7 @@ class TrainingConfig:
     train_loss_min_delta: float = 0.005                # Stop if train loss change < this
     train_loss_patience: int = 5                       # over this many epochs
     max_class_weight: float = 5.0
+    weighting_method: str = "sqrt"                    # "inverse", "sqrt", "effective_number"
     device: str | None = None                          # Auto-detect
 
     # ── Architecture v5 ──────────────────────────────────────────────────
@@ -94,6 +95,7 @@ class TrainingConfig:
     # ── Loss ───────────────────────────────────────────────────────────
     loss_type: str = "focal_dice"                      # "cross_entropy", "focal", "focal_dice"
     focal_gamma: float = 2.0                           # Focal loss focusing parameter
+    label_smoothing: float = 0.05                     # 0.0 = disabled
 
     # ── Rare class handling ────────────────────────────────────────────
     rare_class_threshold: float = 0.02                 # Classes < 2% are "rare"

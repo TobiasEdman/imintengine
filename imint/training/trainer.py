@@ -215,6 +215,7 @@ class LULCTrainer:
                     num_classes=cfg.num_classes,
                     max_weight=cfg.max_class_weight,
                     ignore_index=cfg.ignore_index,
+                    method=cfg.weighting_method,
                 )
                 weights_tensor = torch.from_numpy(weights).to(self.device)
                 print(f"  Class weights: {weights.round(2).tolist()}")
@@ -232,17 +233,20 @@ class LULCTrainer:
                 weight=weights_tensor,
                 gamma=cfg.focal_gamma,
                 ignore_index=cfg.ignore_index,
+                label_smoothing=cfg.label_smoothing,
             )
             dice = DiceLoss(ignore_index=cfg.ignore_index)
             criterion = CombinedLoss(focal, dice,
                                      focal_weight=0.5, dice_weight=0.5)
-            print(f"  Loss: Focal+Dice (gamma={cfg.focal_gamma}, 0.5/0.5)")
+            smooth_str = f", smooth={cfg.label_smoothing}" if cfg.label_smoothing else ""
+            print(f"  Loss: Focal+Dice (gamma={cfg.focal_gamma}, 0.5/0.5{smooth_str})")
         elif cfg.loss_type == "focal":
             from .losses import FocalLoss
             criterion = FocalLoss(
                 weight=weights_tensor,
                 gamma=cfg.focal_gamma,
                 ignore_index=cfg.ignore_index,
+                label_smoothing=cfg.label_smoothing,
             )
             print(f"  Loss: Focal (gamma={cfg.focal_gamma})")
         else:

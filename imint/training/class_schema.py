@@ -86,25 +86,41 @@ def compute_class_weights(
     num_classes: int = 19,
     max_weight: float = 10.0,
     ignore_index: int = 0,
+    method: str = "sqrt",
 ) -> np.ndarray:
-    """Inverse-frequency class weights for cross-entropy loss.
+    """Class weights for cross-entropy loss.
 
     Args:
         class_counts: Mapping of class index → pixel count.
         num_classes: Total classes including background at index 0.
         max_weight: Upper cap to prevent instability on rare classes.
         ignore_index: Class assigned weight 0 (background, not trained).
+        method: Weighting strategy:
+            ``"inverse"`` — pure inverse-frequency (total / (C * count)).
+                Wide range (~0.3–10x), can cause over-prediction of rare classes.
+            ``"sqrt"`` — sqrt of inverse-frequency. Dampened range (~0.5–3.5x).
+            ``"effective_number"`` — Cui et al. 2019 (beta=0.999).
+                Nearly uniform for large counts — can kill rare-class gradients.
 
     Returns:
         (num_classes,) float32 weight array.
     """
     counts = np.array([class_counts.get(i, 0) for i in range(num_classes)], dtype=np.float64)
     counts = np.maximum(counts, 1.0)
-    # Sqrt inverse-frequency: dampens extremes while still upweighting
-    # rare classes.  Range ~0.5–3.5x vs pure inverse (0.3–10x) or
-    # effective-number (nearly uniform → kills crop classes).
     raw = counts.sum() / (num_classes * counts)
-    weights = np.sqrt(raw)
+
+    if method == "inverse":
+        weights = raw
+    elif method == "sqrt":
+        weights = np.sqrt(raw)
+    elif method == "effective_number":
+        beta = 0.999
+        effective_num = 1.0 - np.power(beta, counts)
+        weights = (1.0 - beta) / effective_num
+        weights = weights / weights.mean()
+    else:
+        raise ValueError(f"Unknown weighting method: {method!r}")
+
     weights = np.minimum(weights, max_weight)
     weights[ignore_index] = 0.0
     return weights.astype(np.float32)

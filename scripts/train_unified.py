@@ -108,6 +108,11 @@ def main():
                         help="Focal loss gamma")
     parser.add_argument("--max-class-weight", type=float, default=_defaults.max_class_weight,
                         help="Cap for class frequency weights")
+    parser.add_argument("--weighting-method", type=str, default=_defaults.weighting_method,
+                        choices=["inverse", "sqrt", "effective_number"],
+                        help="Class weighting strategy")
+    parser.add_argument("--label-smoothing", type=float, default=_defaults.label_smoothing,
+                        help="Label smoothing for focal loss (0.0 = disabled)")
 
     # Early stopping metric
     parser.add_argument("--early-stop-metric", type=str,
@@ -215,6 +220,8 @@ def main():
         loss_type=args.loss_type,
         focal_gamma=args.focal_gamma,
         max_class_weight=args.max_class_weight,
+        weighting_method=args.weighting_method,
+        label_smoothing=args.label_smoothing,
         early_stop_metric=args.early_stop_metric,
         unfreeze_backbone_layers=args.unfreeze_layers,
         backbone_lr_factor=args.backbone_lr_factor,

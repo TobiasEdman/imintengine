@@ -77,6 +77,8 @@ spec:
                 --backbone-lr-factor 0.1 \
                 --loss-type focal_dice \
                 --focal-gamma 2.0 \
+                --weighting-method sqrt \
+                --label-smoothing 0.05 \
                 --patience 20 \
                 --num-workers 32 \
                 --device cuda
