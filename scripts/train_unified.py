@@ -106,6 +106,8 @@ def main():
                         help="Loss function")
     parser.add_argument("--focal-gamma", type=float, default=_defaults.focal_gamma,
                         help="Focal loss gamma")
+    parser.add_argument("--max-class-weight", type=float, default=_defaults.max_class_weight,
+                        help="Cap for class frequency weights")
 
     # Early stopping metric
     parser.add_argument("--early-stop-metric", type=str,
@@ -212,6 +214,7 @@ def main():
         save_every_n_epochs=args.save_every,
         loss_type=args.loss_type,
         focal_gamma=args.focal_gamma,
+        max_class_weight=args.max_class_weight,
         early_stop_metric=args.early_stop_metric,
         unfreeze_backbone_layers=args.unfreeze_layers,
         backbone_lr_factor=args.backbone_lr_factor,
