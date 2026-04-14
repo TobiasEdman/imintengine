@@ -300,8 +300,15 @@ _NMD_SRC = None  # lazy-opened rasterio handle
 def fetch_nmd_label_local(
     bbox_3006: dict,
     nmd_raster: str = "data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif",
+    size_px: int | None = None,
 ) -> np.ndarray | None:
     """Read NMD 19-class sequential label from local GeoTIFF raster.
+
+    Args:
+        bbox_3006: Tile bounding box in SWEREF99 TM.
+        nmd_raster: Path to NMD GeoTIFF.
+        size_px: Output resolution in pixels. Derived from bbox extent
+            at 10m/px if None.
 
     Returns (H, W) uint8 with indices 0-19, or None if unavailable.
     Falls back to openEO remote fetch if the local raster is missing.
@@ -329,10 +336,12 @@ def fetch_nmd_label_local(
         # Never use scipy.ndimage.zoom here — it distributes dropped rows
         # unevenly and creates visible seams when the window is fractional.
         from rasterio.enums import Resampling
+        # Derive output size from bbox extent at 10m/px if not specified
+        out_px = size_px or round((bbox_3006["east"] - bbox_3006["west"]) / 10)
         nmd_raw = _NMD_SRC.read(
             1,
             window=window,
-            out_shape=(TILE_SIZE_PX, TILE_SIZE_PX),
+            out_shape=(out_px, out_px),
             resampling=Resampling.nearest,
         )
 

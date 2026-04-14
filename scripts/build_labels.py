@@ -126,7 +126,7 @@ def build_tile_label(
     try:
         data = dict(np.load(tile_path, allow_pickle=True))
 
-        # Extract bbox
+        # Extract bbox — always from tile metadata, never hardcoded
         bbox_3006 = None
         if "bbox_3006" in data:
             b = data["bbox_3006"].flatten()
@@ -134,16 +134,20 @@ def build_tile_label(
                          "east": int(b[2]), "north": int(b[3])}
         elif "easting" in data and "northing" in data:
             e, n = int(data["easting"]), int(data["northing"])
-            half = 1280
+            # Derive tile extent from spectral shape (10m/px)
+            sp = data.get("spectral", data.get("image"))
+            tile_px = sp.shape[-1] if sp is not None else 256
+            half = (tile_px * 10) // 2
             bbox_3006 = {"west": e - half, "south": n - half,
                          "east": e + half, "north": n + half}
         else:
-            # Try filename
             import re
             m = re.search(r'tile_(\d+)_(\d+)', name)
             if m:
                 e, n = int(m.group(1)), int(m.group(2))
-                half = 1280
+                sp = data.get("spectral", data.get("image"))
+                tile_px = sp.shape[-1] if sp is not None else 256
+                half = (tile_px * 10) // 2
                 bbox_3006 = {"west": e - half, "south": n - half,
                              "east": e + half, "north": n + half}
 
