@@ -43,7 +43,7 @@ UNIFIED_CLASSES = {
     # LPIS crop detail (11-21) — replaces NMD cropland
     # SJV grödkoder: 1=korn(h), 2=korn(v), 3=havre, 4=vete(h), 5=vete(v)
     #                7=rågvete(h), 8=råg, 20-28=oljeväxter, 30-39=trindsäd
-    #                45-46=potatis, 47=sockerbetor, 49-50=vall, 52=bete, 80=grönfoder
+    #                45-46=potatis, 47=sockerbetor, 49-50=vall, 52=bete, 9=majs
     11: "vete",             # SJV 4, 5, 29, 307 (höst/vår/rågvete)
     12: "korn",             # SJV 1, 2, 12, 13, 315 (höst/vår/blandsäd)
     13: "havre",            # SJV 3
@@ -54,7 +54,7 @@ UNIFIED_CLASSES = {
     18: "sockerbetor",      # SJV 47, 48
     19: "trindsäd",         # SJV 30-37, 39, 43 (ärter/bönor)
     20: "råg",              # SJV 7, 8, 29, 317 (råg/rågvete)
-    21: "övrig åker",       # SJV 9, 60, 74, 77, 80, 81, 85, 87, 88 + unmapped cropland
+    21: "majs",             # SJV 9 — C4 photosynthesis, spectrally distinct
     # SKS harvest (22)
     22: "hygge",            # SKS utförda avverkningar (harvested forest)
 }
@@ -85,7 +85,7 @@ UNIFIED_COLORS = {
     18: (200, 100, 200),    # sockerbetor — purple
     19: (140, 180, 50),     # trindsäd — olive
     20: (190, 150, 80),     # råg — wheat/tan
-    21: (170, 170, 170),    # övrig åker — grey
+    21: (220, 200,   0),    # majs — corn yellow  #dcc800
     22: (0, 206, 209),      # hygge — turquoise
 }
 
@@ -109,7 +109,7 @@ _NMD19_TO_UNIFIED[8] = 5     # forest_wetland_deciduous → sumpskog
 _NMD19_TO_UNIFIED[9] = 5     # forest_wetland_mixed → sumpskog
 _NMD19_TO_UNIFIED[10] = 5    # forest_wetland_temp → sumpskog
 _NMD19_TO_UNIFIED[11] = 7    # open_wetland → våtmark
-_NMD19_TO_UNIFIED[12] = 21   # cropland → övrig åker (default, overridden by LPIS)
+_NMD19_TO_UNIFIED[12] = 0    # cropland → background (unknown w/o LPIS parcel)
 _NMD19_TO_UNIFIED[13] = 8    # open_land_bare → öppen mark
 _NMD19_TO_UNIFIED[14] = 8    # open_land_vegetated → öppen mark
 _NMD19_TO_UNIFIED[15] = 9    # developed_buildings → bebyggelse
@@ -153,16 +153,21 @@ SJV_TO_UNIFIED = {
     # Råg (unified 20)
     7: 20, 8: 20, 29: 20, 317: 20,            # rågvete höst/vår, råg, flerårigt
     11: 20, 14: 20,                             # spannmålsförsök, kanariefrö → råg/övrigt spannmål
-    # Övrig åker (unified 21)
-    9: 21, 16: 21,                              # majs, stråsäd till grönfoder
-    60: 21, 66: 21, 77: 21, 81: 21,           # träda, anpassad skyddszon, skyddszon, gröngödsling
-    74: 21, 79: 21,                             # grönsaksodling, kryddväxter
-    80: 21,                                     # grönfoder
-    # Ej mappade → övrig åker som default
+    # Majs (unified 21) — C4 photosynthesis, unique NIR/NDVI temporal signature
+    9: 21,                                      # majs
+    # Grönfoder/cut-green crops → slåttervall (unified 15)
+    # These are harvested green before maturity — phenology matches slåttervall
+    16: 15, 67: 15, 68: 15, 80: 15, 81: 15,   # stråsäd/baljväxt till grönfoder, gröngödsling
+    # Träda/fallow → öppen mark (unified 8) — bare or sparse vegetation
+    60: 8,
+    # Skyddszon (66,77), grönsaksodling (74), kryddväxter (79) fall through to
+    # _SJV_DEFAULT=0 (background) — sub-pixel geometry or insufficient spectral contrast
+    # Ej mappade → background (0) via _SJV_DEFAULT
 }
 
-# Default for unmapped SJV codes
-_SJV_DEFAULT = 21  # övrig åker
+# Default for unmapped SJV codes — background so unknown cropland does not
+# contaminate training with spectrally heterogeneous noise
+_SJV_DEFAULT = 0
 
 # Harvest class index
 HARVEST_CLASS = 22
@@ -214,12 +219,11 @@ def merge_all(
 ) -> np.ndarray:
     """Merge NMD 19-class + LPIS + SKS harvest into unified 23-class label.
 
-    Semantic gating rules (NMD baseline acts as gate for each overlay):
-      Forest (1–6)   + SKS clearcut   → Hygge (22)
-      Åker (21)      + LPIS crop       → Crop class (11–21)
-      Öppen mark (8) + LPIS crop       → Crop class (11–21)
-      Bebyggelse (9)                   → NMD wins, never overridden
-      Vatten (10)                      → NMD wins, never overridden
+    Semantic gating rules (raw NMD 19-class input acts as gate for LPIS overlay):
+      Forest (NMD 1–6)          + SKS clearcut   → Hygge (22)
+      Cropland (NMD 12–14)      + LPIS parcel    → Crop class (9–21)
+      Bebyggelse (unified 9)                      → NMD wins, never overridden
+      Vatten (unified 10)                         → NMD wins, never overridden
 
     Priority: LPIS > SKS > NMD.
 
@@ -235,13 +239,15 @@ def merge_all(
     # Step 1: NMD baseline
     unified = nmd19_to_unified(nmd_label)
 
-    nmd_base = unified.copy()   # gate reference — never modified
+    nmd_base = unified.copy()   # gate reference for forest (Step 3) — never modified
 
-    # Step 2: LPIS crops — where NMD says agricultural (övrig åker=21)
-    #          OR open land (öppen mark bar=8).
-    #          Infrastructure (9) and buildings (9) are NOT eligible — NMD wins.
-    _NMD_AGRI = np.array([21, 8], dtype=np.uint8)
-    where_agri = np.isin(nmd_base, _NMD_AGRI)
+    # Step 2: LPIS crops — gate on raw NMD 19-class input, NOT on unified output.
+    #   Raw NMD 12=cropland, 13=open_land_bare, 14=open_land_veg are eligible.
+    #   Must use raw input: NMD cropland (12) maps to background (0) in unified, so
+    #   gating on nmd_base would silently drop all LPIS parcels on cropland.
+    #   Developed (15-17) and water (18-19) are NOT eligible — NMD wins.
+    _NMD_AGRI_RAW = np.array([12, 13, 14], dtype=np.uint8)
+    where_agri = np.isin(nmd_label, _NMD_AGRI_RAW)
 
     if lpis_mask is not None and where_agri.any():
         sjv_codes = np.asarray(lpis_mask, dtype=np.uint16)

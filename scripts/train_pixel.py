@@ -459,7 +459,7 @@ _CLASS_COLORS_RGB: list[tuple[int, int, int]] = [
     (214,  51, 129),   # 18 sockerbetor           — beet magenta       #d63381
     (224, 112,  32),   # 19 trindsäd              — legume orange      #e07020
     (139,  32,  32),   # 20 råg                   — rye dark red       #8b2020
-    (200, 112,  56),   # 21 övrig åker            — other arable brown #c87038
+    (220, 200,   0),   # 21 majs                  — corn yellow        #dcc800
     (  0, 168, 198),   # 22 hygge                 — clearcut cyan      #00a8c6
 ]
 

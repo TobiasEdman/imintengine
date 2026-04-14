@@ -60,7 +60,7 @@ _CROP_PREFIX_TO_CLASS: dict[str, int] = {
     "sockerbetor":  18,
     "trindsad":     19,
     "rag":          20,
-    "ovrig_aker":   21,
+    "majs":         21,
     "hygge":        22,
 }
 
@@ -70,7 +70,7 @@ _UNIFORMITY_THRESH = 0.95  # fraction of pixels dominated by a single class
 _RARE_CLASS_MIN_TILES = 10
 
 _SJV_KNOWN_CODES: frozenset[int] = frozenset(SJV_TO_UNIFIED.keys())
-_SJV_DEFAULT_CLASS = 21  # övrig åker — destination for unmapped SJV codes
+_SJV_DEFAULT_CLASS = 0   # background — destination for unmapped SJV codes
 
 
 # ---------------------------------------------------------------------------
