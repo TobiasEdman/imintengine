@@ -599,7 +599,7 @@ class LULCTrainer:
     def _write_log_file(self) -> None:
         """Atomic write of training_log.json (tmp + rename)."""
         try:
-            log_path = Path(self.config.data_dir) / "training_log.json"
+            log_path = Path(self.config.checkpoint_dir) / "training_log.json"
             log_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = log_path.with_suffix(".json.tmp")
             with open(tmp_path, "w") as f:
