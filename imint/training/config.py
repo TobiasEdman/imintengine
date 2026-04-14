@@ -84,7 +84,7 @@ class TrainingConfig:
     early_stopping_patience: int = 15                  # Epochs without val improvement
     train_loss_min_delta: float = 0.005                # Stop if train loss change < this
     train_loss_patience: int = 5                       # over this many epochs
-    max_class_weight: float = 10.0
+    max_class_weight: float = 5.0
     device: str | None = None                          # Auto-detect
 
     # ── Architecture v5 ──────────────────────────────────────────────────

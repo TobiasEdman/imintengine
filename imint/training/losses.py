@@ -84,10 +84,12 @@ class FocalLoss(nn.Module):
         weight: torch.Tensor | None = None,
         gamma: float = 2.0,
         ignore_index: int = 0,
+        label_smoothing: float = 0.05,
     ):
         super().__init__()
         self.gamma = gamma
         self.ignore_index = ignore_index
+        self.label_smoothing = label_smoothing
         self.register_buffer("weight", weight)
 
     def forward(
@@ -108,12 +110,13 @@ class FocalLoss(nn.Module):
         Returns:
             Scalar loss tensor.
         """
-        # Standard cross-entropy per pixel (no reduction)
+        # Standard cross-entropy per pixel with label smoothing
         ce_loss = F.cross_entropy(
             logits, targets,
             weight=self.weight,
             ignore_index=self.ignore_index,
             reduction="none",
+            label_smoothing=self.label_smoothing,
         )  # (B, H, W)
 
         # p_t = probability of the correct class
