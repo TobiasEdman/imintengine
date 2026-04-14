@@ -236,7 +236,15 @@ def main():
                    help="Only process these tile IDs (filename stems, e.g. 45843596)")
     p.add_argument("--workers", type=int, default=1,
                    help="Parallel workers (use 1 to minimize memory)")
+    p.add_argument("--tile-size-px", type=int, default=256,
+                   help="Tile pixel resolution (256 or 512)")
     args = p.parse_args()
+
+    if args.tile_size_px != 256:
+        import imint.training.tile_fetch as _tf
+        _tf.TILE_SIZE_PX = args.tile_size_px
+        _tf.TILE_SIZE_M = args.tile_size_px * 10
+        print(f"  Tile size: {_tf.TILE_SIZE_PX}px ({_tf.TILE_SIZE_M}m)")
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
     if args.tile_ids:

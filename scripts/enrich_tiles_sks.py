@@ -43,8 +43,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-TILE_SIZE_PX = 256
-TILE_SIZE_M = 2560  # 256 * 10m
+import os as _os
+TILE_SIZE_PX = int(_os.environ.get("TILE_SIZE_PX", 256))
+TILE_SIZE_M = TILE_SIZE_PX * 10
 
 
 def _get_tile_dates(data: dict) -> list[str]:

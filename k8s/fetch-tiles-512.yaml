@@ -1,0 +1,86 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fetch-tiles-512
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 108000  # 30h
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fetcher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Fetch 512px tiles (5120m x 5120m at 10m) ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir numpy scipy rasterio geopandas shapely requests pyproj openeo pyyaml Pillow httpx
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              mkdir -p /data/unified_v2_512
+
+              echo "Fetching 512px tiles from tile_locations.json..."
+              echo "Existing 512px: $(ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l) tiles"
+
+              python scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json /data/tile_locations.json \
+                --output-dir /data/unified_v2_512 \
+                --tile-size-px 512 \
+                --years 2017 2018 2019 2022 2023 \
+                --workers 6 \
+                --cloud-max 40
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
