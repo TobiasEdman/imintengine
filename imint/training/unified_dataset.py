@@ -546,12 +546,19 @@ class UnifiedDataset(Dataset):
         Returns:
             (H, W) int64 unified label array.
         """
-        key = "nmd_label" if (source != "lulc" and "nmd_label" in data) else "label"
-        if key not in data:
+        # Always use "label" — it contains the unified 23-class output from
+        # build_labels.py.  "nmd_label" holds raw NMD indices (0-255) and
+        # must NOT be used as training labels (causes CUDA assert on
+        # values >= num_classes).
+        if "label" not in data:
             img = data.get("spectral", data.get("image"))
             h, w = img.shape[1], img.shape[2]
             return np.zeros((h, w), dtype=np.int64)
-        return np.asarray(data[key]).astype(np.int64)
+        label = np.asarray(data["label"]).astype(np.int64)
+        # Safety clamp: any out-of-range values → background (0)
+        label[label >= NUM_CLASSES] = 0
+        label[label < 0] = 0
+        return label
 
     @staticmethod
     def _extract_all_frames(

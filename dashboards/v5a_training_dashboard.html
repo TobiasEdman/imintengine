@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Unified v5a Training Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0b0e17; color: #e0e0e0;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 13px; padding: 16px;
+  }
+  h1 { font-size: 18px; color: #ffa726; margin-bottom: 4px; }
+  .subtitle { color: #888; font-size: 12px; margin-bottom: 16px; }
+
+  /* Status badge */
+  .status { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; }
+  .status .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    display: inline-block;
+  }
+  .dot-running { background: #4caf50; animation: pulse 1.5s infinite; }
+  .dot-completed { background: #2196f3; }
+  .dot-stopped { background: #f44336; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  /* Card grid */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px; margin-bottom: 16px;
+  }
+  .card {
+    background: #141826; border-radius: 8px; padding: 12px;
+    border: 1px solid #1e2234;
+  }
+  .card-label { font-size: 11px; color: #888; text-transform: uppercase; }
+  .card-value { font-size: 24px; font-weight: bold; color: #fff; margin-top: 4px; }
+  .card-value.best { color: #4caf50; }
+  .card-value.warn { color: #ff9800; }
+
+  /* Chart grid */
+  .chart-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px; margin-bottom: 16px;
+  }
+  @media (max-width: 900px) { .chart-grid { grid-template-columns: 1fr; } }
+  .chart-box {
+    background: #141826; border-radius: 8px; padding: 12px;
+    border: 1px solid #1e2234;
+  }
+  .chart-box h3 { font-size: 13px; color: #90caf9; margin-bottom: 8px; }
+  .chart-box canvas { max-height: 280px; }
+
+  /* Per-class bar */
+  .class-bar-container { margin-top: 16px; }
+  .class-bar-container h3 { font-size: 13px; color: #90caf9; margin-bottom: 8px; }
+
+  /* Confusion table */
+  .confusion-section { margin-top: 16px; }
+  .confusion-section h3 { font-size: 13px; color: #90caf9; margin-bottom: 8px; }
+  table.confusion {
+    border-collapse: collapse; font-size: 11px;
+    max-width: 100%; overflow-x: auto; display: block;
+  }
+  table.confusion th, table.confusion td {
+    padding: 3px 5px; border: 1px solid #222; text-align: center;
+  }
+  table.confusion th { background: #1a1d2e; color: #90caf9; }
+
+  /* Patience dots */
+  .patience-row { display: flex; gap: 4px; align-items: center; margin-top: 8px; }
+  .patience-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    border: 1px solid #444;
+  }
+  .patience-dot.best { background: #4caf50; }
+  .patience-dot.wait { background: #333; }
+  .patience-label { font-size: 11px; color: #888; margin-left: 8px; }
+
+  /* Config section */
+  .config-section {
+    margin-top: 16px; background: #141826; border-radius: 8px;
+    padding: 12px; border: 1px solid #1e2234;
+  }
+  .config-section h3 { font-size: 13px; color: #90caf9; margin-bottom: 8px; }
+  .config-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 4px 16px; font-size: 12px;
+  }
+  .config-grid .k { color: #888; }
+  .config-grid .v { color: #e0e0e0; }
+
+  #log-status { font-size: 11px; color: #666; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>Unified v5a Training
+  <span class="status" id="status-badge">
+    <span class="dot dot-running" id="status-dot"></span>
+    <span id="status-text">loading...</span>
+  </span>
+</h1>
+<div class="subtitle">23-class LULC + crop segmentation | Prithvi-EO-2.0-TL | 4-frame multitemporal</div>
+
+<!-- Summary cards -->
+<div class="cards" id="cards">
+  <div class="card"><div class="card-label">Epoch</div><div class="card-value" id="c-epoch">-</div></div>
+  <div class="card"><div class="card-label">Train Loss</div><div class="card-value" id="c-loss">-</div></div>
+  <div class="card"><div class="card-label">Val mIoU</div><div class="card-value best" id="c-miou">-</div></div>
+  <div class="card"><div class="card-label">Best mIoU</div><div class="card-value best" id="c-best">-</div></div>
+  <div class="card"><div class="card-label">Worst Class</div><div class="card-value warn" id="c-worst">-</div></div>
+  <div class="card"><div class="card-label">LR</div><div class="card-value" id="c-lr">-</div></div>
+</div>
+
+<!-- Patience -->
+<div class="patience-row" id="patience-row"></div>
+
+<!-- Charts -->
+<div class="chart-grid">
+  <div class="chart-box">
+    <h3>Training Loss</h3>
+    <canvas id="chart-loss"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>Validation mIoU</h3>
+    <canvas id="chart-miou"></canvas>
+  </div>
+</div>
+
+<!-- Per-class IoU bar chart -->
+<div class="chart-box class-bar-container">
+  <h3>Per-Class IoU (latest epoch)</h3>
+  <canvas id="chart-class-iou"></canvas>
+</div>
+
+<!-- Confusion top pairs -->
+<div class="confusion-section" id="confusion-section" style="display:none">
+  <h3>Top Confusion Pairs</h3>
+  <div id="confusion-content"></div>
+</div>
+
+<!-- Config -->
+<div class="config-section" id="config-section" style="display:none">
+  <h3>Training Configuration</h3>
+  <div class="config-grid" id="config-grid"></div>
+</div>
+
+<div id="log-status"></div>
+
+<script>
+const CLASS_NAMES = [
+  "bakgrund","tallskog","granskog","lovskog","blandskog","sumpskog",
+  "tillf. ej skog","vatmark","oppen mark","bebyggelse","vatten",
+  "vete","korn","havre","oljevaxter","slattervall","bete",
+  "potatis","sockerbetor","trindsad","rag","majs","hygge"
+];
+const CLASS_COLORS = [
+  "#000000","#1a5c35","#2d8a5b","#7bc67e","#4db380","#6b8e5a",
+  "#c9df6e","#9b7722","#d4b44a","#c0392b","#2471a3",
+  "#e8b800","#d4780a","#f0d060","#d4c600","#91c84c","#b8de86",
+  "#9b59b6","#d63381","#e07020","#8b2020","#dcc800","#00a8c6"
+];
+
+const chartDefaults = {
+  color: '#aaa',
+  borderColor: '#333',
+  font: { family: "'JetBrains Mono', monospace", size: 11 },
+};
+Chart.defaults.color = chartDefaults.color;
+Chart.defaults.font.family = chartDefaults.font.family;
+Chart.defaults.font.size = chartDefaults.font.size;
+
+// Loss chart
+const lossChart = new Chart(document.getElementById('chart-loss'), {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    label: 'Train Loss', data: [], borderColor: '#ff7043',
+    borderWidth: 2, pointRadius: 3, tension: 0.2,
+  }]},
+  options: { scales: { y: { beginAtZero: false, grid: { color: '#1e2234' } },
+                        x: { grid: { color: '#1e2234' } } },
+             plugins: { legend: { display: false } } },
+});
+
+// mIoU chart
+const miouChart = new Chart(document.getElementById('chart-miou'), {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    label: 'Val mIoU', data: [], borderColor: '#66bb6a',
+    borderWidth: 2, pointRadius: 3, tension: 0.2,
+    fill: { target: 'origin', above: 'rgba(102,187,106,0.08)' },
+  }]},
+  options: { scales: { y: { beginAtZero: true, max: 1, grid: { color: '#1e2234' } },
+                        x: { grid: { color: '#1e2234' } } },
+             plugins: { legend: { display: false } } },
+});
+
+// Per-class IoU bar
+const classChart = new Chart(document.getElementById('chart-class-iou'), {
+  type: 'bar',
+  data: { labels: [], datasets: [{
+    data: [], backgroundColor: [],
+    borderColor: 'transparent', borderWidth: 0,
+  }]},
+  options: {
+    indexAxis: 'y',
+    scales: { x: { beginAtZero: true, max: 1, grid: { color: '#1e2234' } },
+              y: { grid: { display: false } } },
+    plugins: { legend: { display: false } },
+  },
+});
+
+let lastEpochCount = 0;
+
+async function fetchLog() {
+  // Try multiple possible locations
+  const urls = [
+    'training_log.json',
+    '/data/unified_v2/training_log.json',
+    '../training_log.json',
+  ];
+  for (const url of urls) {
+    try {
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (resp.ok) return await resp.json();
+    } catch(e) {}
+  }
+  return null;
+}
+
+function updateDashboard(log) {
+  if (!log) return;
+
+  // Status
+  const status = log.status || 'unknown';
+  const dot = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  dot.className = 'dot dot-' + status;
+  text.textContent = status;
+
+  // Config (show once)
+  if (log.config && document.getElementById('config-grid').children.length === 0) {
+    const grid = document.getElementById('config-grid');
+    const show = ['lr','weight_decay','batch_size','epochs','loss_type','focal_gamma',
+                  'unfreeze_backbone_layers','backbone_lr_factor','num_classes',
+                  'num_temporal_frames','enable_multitemporal'];
+    for (const k of show) {
+      if (log.config[k] !== undefined) {
+        grid.innerHTML += `<div><span class="k">${k}:</span> <span class="v">${log.config[k]}</span></div>`;
+      }
+    }
+    document.getElementById('config-section').style.display = '';
+  }
+
+  const epochs = log.epochs || [];
+  if (epochs.length === 0) return;
+
+  const latest = epochs[epochs.length - 1];
+
+  // Cards
+  document.getElementById('c-epoch').textContent = `${latest.epoch + 1}/${log.config?.epochs || '?'}`;
+  document.getElementById('c-loss').textContent = latest.train_loss?.toFixed(4) || '-';
+  document.getElementById('c-miou').textContent = latest.val_miou?.toFixed(4) || '-';
+  document.getElementById('c-best').textContent = log.best_metric?.toFixed(4) || '-';
+  document.getElementById('c-worst').textContent =
+    `${latest.worst_class || '?'} (${(latest.worst_class_iou || 0).toFixed(3)})`;
+  document.getElementById('c-lr').textContent = latest.lr?.toExponential(2) || '-';
+
+  // Patience dots
+  if (log.best_epoch !== undefined) {
+    const patience = (log.config?.early_stopping_patience) || 20;
+    const sinceBest = latest.epoch - log.best_epoch;
+    const row = document.getElementById('patience-row');
+    let html = '';
+    for (let i = 0; i < patience; i++) {
+      html += `<span class="patience-dot ${i < sinceBest ? 'wait' : (i === 0 ? 'best' : '')}" ` +
+              `title="Epoch ${log.best_epoch + i}"></span>`;
+    }
+    html += `<span class="patience-label">${sinceBest}/${patience} patience</span>`;
+    row.innerHTML = html;
+  }
+
+  // Charts - only update if new data
+  if (epochs.length !== lastEpochCount) {
+    lastEpochCount = epochs.length;
+    const labels = epochs.map(e => e.epoch);
+    const losses = epochs.map(e => e.train_loss);
+    const mious = epochs.map(e => e.val_miou);
+
+    lossChart.data.labels = labels;
+    lossChart.data.datasets[0].data = losses;
+    lossChart.update('none');
+
+    miouChart.data.labels = labels;
+    miouChart.data.datasets[0].data = mious;
+    miouChart.update('none');
+
+    // Per-class IoU bar
+    const pci = latest.per_class_iou || {};
+    const entries = Object.entries(pci).sort((a, b) => b[1] - a[1]);
+    classChart.data.labels = entries.map(([k]) => k);
+    classChart.data.datasets[0].data = entries.map(([, v]) => v);
+    classChart.data.datasets[0].backgroundColor = entries.map(([k]) => {
+      const idx = CLASS_NAMES.indexOf(k.replace(/[^a-z ]/g, ''));
+      return idx >= 0 ? CLASS_COLORS[idx] : '#666';
+    });
+    classChart.update('none');
+
+    // Confusion matrix
+    if (latest.confusion_matrix) {
+      renderConfusion(latest.confusion_matrix);
+    }
+  }
+}
+
+function renderConfusion(cm) {
+  const section = document.getElementById('confusion-section');
+  section.style.display = '';
+  const content = document.getElementById('confusion-content');
+
+  // Find top confusion pairs (off-diagonal)
+  const pairs = [];
+  for (let i = 1; i < cm.length; i++) {
+    for (let j = 1; j < cm[i].length; j++) {
+      if (i !== j && cm[i][j] > 0) {
+        pairs.push({ true_cls: CLASS_NAMES[i] || i, pred_cls: CLASS_NAMES[j] || j, count: cm[i][j] });
+      }
+    }
+  }
+  pairs.sort((a, b) => b.count - a.count);
+
+  let html = '<table class="confusion"><thead><tr><th>True</th><th>Predicted</th><th>Count</th></tr></thead><tbody>';
+  for (const p of pairs.slice(0, 15)) {
+    html += `<tr><td>${p.true_cls}</td><td>${p.pred_cls}</td><td>${p.count.toLocaleString()}</td></tr>`;
+  }
+  html += '</tbody></table>';
+  content.innerHTML = html;
+}
+
+// Poll loop
+async function poll() {
+  const log = await fetchLog();
+  updateDashboard(log);
+  document.getElementById('log-status').textContent =
+    log ? `Last update: ${new Date().toLocaleTimeString()}` : 'Waiting for training_log.json...';
+  const interval = (log?.status === 'running') ? 5000 : 15000;
+  setTimeout(poll, interval);
+}
+
+poll();
+</script>
+</body>
+</html>

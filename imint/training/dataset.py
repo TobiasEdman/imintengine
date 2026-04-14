@@ -110,6 +110,8 @@ class LULCDataset(Dataset):
 
         image = data.get("spectral", data.get("image")).astype(np.float32)
         label = data["label"].astype(np.int64)
+        # Safety clamp: out-of-range labels → background (0)
+        label[(label < 0) | (label >= self.config.num_classes)] = 0
 
         # Load and stack auxiliary channels → (N, H, W) or None
         # Missing channels are zero-filled to ensure consistent batch keys

@@ -60,7 +60,7 @@ spec:
                 --num-classes 23 \
                 --enable-multitemporal \
                 --num-temporal-frames 4 \
-                --epochs 80 \
+                --epochs 10 \
                 --batch-size 4 \
                 --lr 1e-4 \
                 --weight-decay 0.35 \
