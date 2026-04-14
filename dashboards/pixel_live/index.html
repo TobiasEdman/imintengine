@@ -329,15 +329,24 @@ tbody tr.row-best td:first-child { padding-left: 8px; }
   </div>
 
   <div class="card">
-    <span class="clabel">Epoch Log</span>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px">
+      <span class="clabel" style="margin:0">Epoch Log</span>
+      <span style="font:10px var(--mono);color:var(--dim)">hover column headers for definitions</span>
+    </div>
     <div class="table-scroll">
       <table>
         <thead>
           <tr>
-            <th>Epoch</th><th>Stage</th>
-            <th>Train Loss</th><th>Val Loss</th>
-            <th>Val mIoU</th><th>Val OA</th><th>Val mAcc</th>
-            <th>LR</th><th>Time (s)</th><th>★</th>
+            <th title="Training epoch number">Epoch</th>
+            <th title="Stage 1 = backbone frozen, head only&#10;Stage 2 = full fine-tune at 0.1× backbone LR">Stage</th>
+            <th title="Focal loss (γ=2) on the training set&#10;Lower = better fit to training data">Train Loss</th>
+            <th title="Focal loss on the held-out validation set&#10;Lower = better generalisation">Val Loss</th>
+            <th title="Mean Intersection over Union across all 22 classes (background excluded)&#10;Primary metric — higher is better">Val mIoU</th>
+            <th title="Overall Accuracy: fraction of all valid validation pixels correctly classified&#10;Dominated by large classes (vatten, tallskog)">Val OA</th>
+            <th title="Mean per-class Accuracy (average recall across 22 classes)&#10;Less biased than OA toward large classes">Val mAcc</th>
+            <th title="Current learning rate of the head optimizer&#10;Stage 1: cosine decay from 3e-4&#10;Stage 2: cosine decay from 3e-4 (backbone at 0.1×)">LR</th>
+            <th title="Wall-clock seconds for the full train + val pass&#10;~2600–2700s per epoch on H100 NVL with batch 4096">Time (s)</th>
+            <th title="New best val mIoU achieved this epoch">★</th>
           </tr>
         </thead>
         <tbody id="epochTableBody"></tbody>
