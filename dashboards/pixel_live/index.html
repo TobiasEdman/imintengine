@@ -328,6 +328,28 @@ tbody tr.row-best td:first-child { padding-left: 8px; }
     </div>
   </div>
 
+  <!-- Top confusion pairs -->
+  <div class="card" id="confusionCard" style="display:none">
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px">
+      <span class="clabel" style="margin:0">Top Confusion Pairs — latest epoch</span>
+      <span style="font:10px var(--mono);color:var(--dim)">fraction of true-class pixels misclassified as the predicted class</span>
+    </div>
+    <div class="table-scroll" style="max-height:320px">
+      <table id="confusionTable">
+        <thead>
+          <tr>
+            <th style="text-align:left" title="Ground-truth class">True class</th>
+            <th style="text-align:left" title="What the model predicted instead">→ Predicted as</th>
+            <th title="Number of pixels misclassified this way">Count</th>
+            <th title="Fraction of all true-class pixels predicted as this other class&#10;= false-negative rate for this specific pair">Rate</th>
+            <th title="Severity bar — proportional to rate" style="width:120px"></th>
+          </tr>
+        </thead>
+        <tbody id="confusionBody"></tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="card">
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px">
       <span class="clabel" style="margin:0">Epoch Log</span>
@@ -682,6 +704,38 @@ function renderSparklines(epochs) {
   charts.spark.update('none');
 }
 
+function renderConfusions(last) {
+  const pairs = last.top_confusions;
+  const card = document.getElementById('confusionCard');
+  if (!pairs || pairs.length === 0) { card.style.display = 'none'; return; }
+  card.style.display = '';
+
+  const maxRate = pairs[0].rate;   // already sorted descending by rate
+  document.getElementById('confusionBody').innerHTML = pairs.map(p => {
+    const trueColor  = classColor(p.true);
+    const predColor  = classColor(p.pred);
+    const barWidth   = (p.rate / maxRate * 100).toFixed(1);
+    const rateClass  = p.rate >= 0.3 ? 'color:#dc2626;font-weight:700'
+                     : p.rate >= 0.15 ? 'color:#d97706;font-weight:600'
+                     : 'color:#475569';
+    return `<tr>
+      <td style="text-align:left">
+        <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${trueColor};margin-right:5px;vertical-align:middle"></span>${p.true}
+      </td>
+      <td style="text-align:left">
+        <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${predColor};margin-right:5px;vertical-align:middle"></span>${p.pred}
+      </td>
+      <td>${p.count.toLocaleString('sv-SE')}</td>
+      <td style="${rateClass}">${(p.rate * 100).toFixed(1)}%</td>
+      <td style="padding-right:12px">
+        <div style="background:#f1f5f9;border-radius:2px;height:6px;overflow:hidden">
+          <div style="width:${barWidth}%;height:100%;background:${p.rate>=0.3?'#dc2626':p.rate>=0.15?'#d97706':'#2563eb'};border-radius:2px"></div>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
 function renderTable(epochs) {
   document.getElementById('epochTableBody').innerHTML =
     [...epochs].reverse().map(ep => `
@@ -747,6 +801,7 @@ function render(data) {
   renderPerClass(last);
   renderPcLegend(last);
   renderSparklines(epochs);
+  renderConfusions(last);
   renderTable(epochs);
 
   document.getElementById('updateNote').textContent =

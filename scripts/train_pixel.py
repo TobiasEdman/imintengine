@@ -256,6 +256,29 @@ def compute_metrics(
     # Overall accuracy (fraction of correctly classified valid pixels)
     overall_acc = float(tp[1:].sum() / max(int(valid.sum()), 1))
 
+    # Top-K off-diagonal confusion pairs (true → predicted, normalised by true count).
+    # Excludes background (class 0).  Only pairs where true_class ≠ pred_class and
+    # true_count > 0 are included.  Stored as a compact list so JSON log stays small.
+    _confusion_pairs: list[dict] = []
+    for true_c in range(1, num_classes):
+        if per_class_total[true_c] == 0:
+            continue
+        for pred_c in range(1, num_classes):
+            if pred_c == true_c:
+                continue
+            count = int(confusion[true_c, pred_c])
+            if count == 0:
+                continue
+            _confusion_pairs.append({
+                "true": UNIFIED_CLASS_NAMES[true_c],
+                "pred": UNIFIED_CLASS_NAMES[pred_c],
+                "count": count,
+                # fraction of true_c pixels predicted as pred_c
+                "rate": round(count / int(per_class_total[true_c]), 4),
+            })
+    # Keep only the 30 highest-rate pairs — covers all practically significant confusions
+    top_confusions = sorted(_confusion_pairs, key=lambda x: x["rate"], reverse=True)[:30]
+
     return {
         "mean_acc": mean_acc,
         "mean_iou": mean_iou,
@@ -274,6 +297,7 @@ def compute_metrics(
             UNIFIED_CLASS_NAMES[i]: int(per_class_total[i])
             for i in range(1, num_classes)
         },
+        "top_confusions": top_confusions,
     }
 
 
@@ -1003,6 +1027,7 @@ def main() -> None:
                 "per_class_iou": {k: round(v, 6) for k, v in val_metrics.get("per_class_iou", {}).items()},
                 "per_class_acc": {k: round(v, 6) for k, v in val_metrics.get("per_class_acc", {}).items()},
                 "per_class_n":   val_metrics.get("per_class_n", {}),
+                "top_confusions": val_metrics.get("top_confusions", []),
                 "lr": round(float(optimizer.param_groups[0]["lr"]), 8),
                 "elapsed_s": round(float(time.time() - t0), 1),
                 "is_best": _is_new_best,
