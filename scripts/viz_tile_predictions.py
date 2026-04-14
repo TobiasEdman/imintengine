@@ -183,7 +183,7 @@ def _infer_tile(
     # Aux
     aux_all = None
     if use_aux and _has_aux_meta:
-        from imint.training.pixel_dataset import N_AUX
+        from imint.fm.pixel_head import N_AUX_DEFAULT as N_AUX
         aux_all = np.zeros((N, N_AUX), dtype=np.float32)
         for k, ch_name in enumerate(AUX_CHANNEL_NAMES):
             if ch_name not in data:
@@ -192,7 +192,7 @@ def _infer_tile(
             for i, r in enumerate(rows):
                 for j, c in enumerate(cols):
                     val = float(arr[min(r, arr.shape[0]-1), min(c, arr.shape[1]-1)])
-                    if AUX_LOG_TRANSFORM.get(ch_name, False):
+                    if ch_name in AUX_LOG_TRANSFORM:
                         val = float(np.log1p(val))
                     mu, sigma = AUX_NORM.get(ch_name, (0.0, 1.0))
                     aux_all[i * gw + j, k] = (val - mu) / max(sigma, 1e-8)
@@ -328,8 +328,15 @@ def main() -> None:
     val_txt = split_dir / "val.txt"
     if val_txt.exists():
         with open(val_txt) as f:
-            val_names = [l.strip() for l in f if l.strip()]
-        val_tiles = [data_dir / n for n in val_names if (data_dir / n).exists()]
+            raw_names = [l.strip() for l in f if l.strip()]
+        val_tiles = []
+        for n in raw_names:
+            # Handle both "tile.npz" and bare "tile" (append .npz if needed)
+            p = data_dir / n
+            if not p.exists():
+                p = data_dir / (n + ".npz")
+            if p.exists():
+                val_tiles.append(p)
         print(f"Val split: {len(val_tiles)} tiles from {val_txt}")
     else:
         val_tiles = sorted(data_dir.glob("*.npz"))
@@ -357,16 +364,17 @@ def main() -> None:
     print(f"Checkpoint: epoch={epoch_info}, val_metric={val_acc_info}")
 
     # Build model — same config as train-pixel-job.yaml
-    from imint.training.pixel_dataset import N_AUX
-    from imint.models.pixel_classifier import PrithviPixelClassifier
+    from imint.fm.pixel_head import PrithviPixelClassifier, N_AUX_DEFAULT
 
     use_aux = not args.no_aux
+    n_aux = N_AUX_DEFAULT if use_aux else 0
+    num_frames = 5 if args.use_frame_2016 else 4
     model = PrithviPixelClassifier(
         num_classes=23,
         context_px=args.context_px,
-        num_temporal_frames=(5 if args.use_frame_2016 else 4),
-        use_aux=use_aux,
-        n_aux=N_AUX,
+        num_frames=num_frames,
+        n_aux=n_aux,
+        pretrained=False,   # no pretrained weights needed — loading checkpoint
     )
     model.load_state_dict(state_dict, strict=False)
     model.to(device)
