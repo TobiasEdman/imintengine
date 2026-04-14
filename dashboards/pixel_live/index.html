@@ -7,20 +7,21 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <style>
 :root {
-  --bg:       #08090f;
-  --surface:  #0f1220;
-  --surface2: #161b2e;
-  --border:   #1e2840;
-  --border2:  #2d3a52;
-  --text:     #e2e8f0;
-  --dim:      #5a6a84;
-  --dim2:     #8899aa;
-  --accent:   #3b82f6;
-  --green:    #22c55e;
-  --red:      #ef4444;
-  --amber:    #f59e0b;
-  --cyan:     #06b6d4;
+  --bg:       #f0f4f8;
+  --surface:  #ffffff;
+  --surface2: #f1f5f9;
+  --border:   #dde3ed;
+  --border2:  #c8d3e0;
+  --text:     #1e293b;
+  --dim:      #64748b;
+  --dim2:     #475569;
+  --accent:   #2563eb;
+  --green:    #16a34a;
+  --red:      #dc2626;
+  --amber:    #d97706;
   --mono:     'Fira Code', 'Cascadia Code', 'Courier New', monospace;
+  --grid:     #e8edf4;
+  --tick:     #94a3b8;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -31,12 +32,11 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 13px;
   line-height: 1.5;
-  min-height: 100vh;
 }
 
 /* ── Header ─────────────────────────────────────────────────── */
 .header {
-  background: linear-gradient(135deg, #080c18 0%, #0f1a30 60%, #0d1525 100%);
+  background: #fff;
   border-bottom: 1px solid var(--border);
   padding: 0 28px;
   height: 52px;
@@ -46,37 +46,28 @@ body {
   position: sticky;
   top: 0;
   z-index: 100;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
 }
-.header-left  { display: flex; align-items: center; gap: 14px; }
+.header-left  { display: flex; align-items: center; gap: 12px; }
 .header-right { display: flex; align-items: center; gap: 10px; }
 
-.job-name {
-  font: 700 15px/1 var(--mono);
-  color: var(--text);
-  letter-spacing: -.02em;
-}
-.run-id { font: 11px var(--mono); color: var(--dim); }
+.job-name { font: 700 15px/1 var(--mono); color: var(--text); letter-spacing: -.02em; }
+.run-id   { font: 11px var(--mono); color: var(--dim); }
 
-.badge {
-  font: 700 10px/1 var(--mono);
-  letter-spacing: .07em;
-  padding: 3px 8px;
-  border-radius: 4px;
-  white-space: nowrap;
-}
-.badge-gpu   { background: linear-gradient(135deg, #1d3a8a, #5b21b6); color: #c4b5fd; }
+.badge { font: 700 10px/1 var(--mono); letter-spacing: .07em; padding: 3px 8px; border-radius: 4px; white-space: nowrap; }
+.badge-gpu   { background: #ede9fe; color: #5b21b6; border: 1px solid #c4b5fd; }
 .badge-stage { background: var(--surface2); border: 1px solid var(--border2); color: var(--dim2); }
-.badge-amp   { background: #1a2a1a; border: 1px solid #1e4a1e; color: #4ade80; }
+.badge-amp   { background: #f0fdf4; border: 1px solid #86efac; color: #16a34a; }
 
 .status-badge { display: flex; align-items: center; gap: 6px; font: 11px var(--mono); color: var(--dim2); }
-.s-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex-shrink: 0; }
+.s-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border2); flex-shrink: 0; }
 .s-dot.training { background: var(--green); animation: pulse 2s infinite; }
 .s-dot.done     { background: var(--accent); }
 .s-dot.stalled  { background: var(--amber); }
 .s-dot.error    { background: var(--red); }
 @keyframes pulse {
-  0%,100% { opacity:1; box-shadow:0 0 0 0 rgba(34,197,94,.5); }
-  50%      { opacity:.8; box-shadow:0 0 0 5px rgba(34,197,94,0); }
+  0%,100% { opacity:1; box-shadow:0 0 0 0 rgba(22,163,74,.4); }
+  50%      { opacity:.8; box-shadow:0 0 0 5px rgba(22,163,74,0); }
 }
 
 .refresh-btn {
@@ -102,6 +93,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px 18px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.04);
 }
 
 .clabel {
@@ -112,16 +104,10 @@ body {
   margin-bottom: 7px;
   display: block;
 }
-.cval {
-  font: 700 21px/1 var(--mono);
-  color: var(--text);
-  display: block;
-}
+.cval     { font: 700 21px/1 var(--mono); color: var(--text); display: block; }
 .cval.hi  { color: var(--green); }
-.cval.dim { color: var(--dim2); }
-.csub { font: 11px var(--mono); color: var(--dim); margin-top: 4px; display: block; }
+.csub     { font: 11px var(--mono); color: var(--dim); margin-top: 4px; display: block; }
 
-/* skeleton */
 .sk {
   display: inline-block;
   background: linear-gradient(90deg, var(--surface2) 25%, var(--border2) 50%, var(--surface2) 75%);
@@ -133,17 +119,13 @@ body {
 @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
 /* ── Summary row ─────────────────────────────────────────────── */
-.summary-row {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 10px;
-}
+.summary-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
 
 /* ── Progress ────────────────────────────────────────────────── */
 .progress-card { display: flex; flex-direction: column; gap: 10px; }
 .progress-header { display: flex; justify-content: space-between; align-items: center; }
 .prog-outer { background: var(--surface2); border-radius: 3px; height: 5px; overflow: hidden; }
-.prog-inner { height: 100%; background: linear-gradient(90deg, #2563eb, #06b6d4); border-radius: 3px; transition: width .4s ease; }
+.prog-inner { height: 100%; background: linear-gradient(90deg, #2563eb, #0891b2); border-radius: 3px; transition: width .4s ease; }
 .patience-row { display: flex; align-items: center; gap: 8px; }
 .plabel { font: 10px var(--mono); color: var(--dim); white-space: nowrap; }
 .pdots  { display: flex; gap: 3px; }
@@ -152,19 +134,39 @@ body {
 .pdot.alert { background: var(--red);   border-color: var(--red); }
 .pcount { font: 11px var(--mono); color: var(--dim); }
 
-/* ── Charts row ──────────────────────────────────────────────── */
+/* ── Charts ──────────────────────────────────────────────────── */
 .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .chart-title { font: 700 11px var(--mono); color: var(--dim2); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
-.chart-box   { position: relative; height: 210px; }
+.chart-box { position: relative; height: 210px; }
 
 /* ── Per-class panel ─────────────────────────────────────────── */
-.perclass-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.legend-strip { display: flex; gap: 14px; }
+.perclass-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 10px; gap: 12px; }
+.perclass-right  { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+.mode-btn {
+  font: 700 10px/1 var(--mono); letter-spacing: .05em;
+  padding: 4px 10px; border-radius: 5px; cursor: pointer; border: none;
+  background: var(--accent); color: #fff;
+  transition: background .15s;
+  white-space: nowrap;
+}
+.mode-btn:hover { background: #1d4ed8; }
+
+/* Source-mode legend (3 groups) */
+.src-legend { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .leg-item { display: flex; align-items: center; gap: 5px; font: 11px var(--mono); color: var(--dim2); }
-.leg-dot  { width: 9px; height: 9px; border-radius: 2px; }
-.leg-nmd   { background: rgba(34,197,94,.8); }
-.leg-lpis  { background: rgba(251,146,60,.8); }
-.leg-hygge { background: rgba(239,68,68,.8); }
+.leg-dot  { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+/* Class-mode legend (22 items compact grid) */
+.cls-legend {
+  display: grid;
+  grid-template-columns: repeat(4, auto);
+  gap: 2px 14px;
+  align-items: center;
+}
+.cls-item { display: flex; align-items: center; gap: 4px; font: 10px var(--mono); color: var(--dim2); white-space: nowrap; }
+.cls-dot  { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
 .chart-box-pc { position: relative; height: 618px; }
 
 /* ── Sparklines ──────────────────────────────────────────────── */
@@ -174,25 +176,12 @@ body {
 .tiles-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .slider-wrap  { display: flex; align-items: center; gap: 8px; font: 11px var(--mono); color: var(--dim2); }
 #epochSlider  { accent-color: var(--accent); width: 160px; cursor: pointer; }
-
 .tiles-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
-.tile-item {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.tile-item-name {
-  font: 9px var(--mono); color: var(--dim);
-  padding: 5px 7px 3px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
+.tile-item { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.tile-item-name { font: 9px var(--mono); color: var(--dim); padding: 5px 7px 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 4px; }
-.tile-pair img {
-  width: 100%; aspect-ratio: 1; display: block;
-  border-radius: 2px; object-fit: cover; image-rendering: pixelated;
-}
-.tile-pair img.missing { opacity: .15; background: var(--border); }
+.tile-pair img { width: 100%; aspect-ratio: 1; display: block; border-radius: 2px; object-fit: cover; image-rendering: pixelated; }
+.tile-pair img.missing { opacity: .2; background: var(--border); }
 .tile-pair-labels { display: grid; grid-template-columns: 1fr 1fr; }
 .tile-pair-labels span { font: 8px var(--mono); color: var(--dim); text-align: center; padding-bottom: 4px; }
 .tiles-empty { text-align: center; padding: 36px 20px; color: var(--dim); font: 12px var(--mono); line-height: 2; }
@@ -207,22 +196,21 @@ thead th {
   background: var(--surface2); color: var(--dim);
   font: 10px var(--mono); text-transform: uppercase; letter-spacing: .05em;
   padding: 7px 10px; text-align: right; position: sticky; top: 0; white-space: nowrap;
+  border-bottom: 1px solid var(--border);
 }
 thead th:first-child { text-align: left; }
 tbody td { padding: 5px 10px; text-align: right; border-top: 1px solid var(--border); color: var(--dim2); }
 tbody td:first-child { text-align: left; }
 tbody tr:hover td { background: var(--surface2); }
-tbody tr.row-best td { color: var(--text); background: rgba(245,158,11,.04); border-left: 2px solid var(--amber); }
+tbody tr.row-best td { color: var(--text); background: #fffbeb; border-left: 2px solid var(--amber); }
 tbody tr.row-best td:first-child { padding-left: 8px; }
 .star { color: var(--amber); }
 
-/* ── Update note ─────────────────────────────────────────────── */
 .update-note { font: 10px var(--mono); color: var(--dim); text-align: right; padding: 0 2px; }
 </style>
 </head>
 <body>
 
-<!-- ── Header ────────────────────────────────────────────────── -->
 <div class="header">
   <div class="header-left">
     <span class="job-name">train-pixel-v1</span>
@@ -240,10 +228,8 @@ tbody tr.row-best td:first-child { padding-left: 8px; }
   </div>
 </div>
 
-<!-- ── Main ──────────────────────────────────────────────────── -->
 <div class="container">
 
-  <!-- Summary cards -->
   <div class="summary-row">
     <div class="card">
       <span class="clabel">Epoch</span>
@@ -282,7 +268,6 @@ tbody tr.row-best td:first-child { padding-left: 8px; }
     </div>
   </div>
 
-  <!-- Progress + Patience -->
   <div class="card progress-card">
     <div class="progress-header">
       <span class="clabel" style="margin:0">Training Progress</span>
@@ -296,7 +281,6 @@ tbody tr.row-best td:first-child { padding-left: 8px; }
     </div>
   </div>
 
-  <!-- Charts row -->
   <div class="charts-row">
     <div class="card">
       <div class="chart-title">Validation mIoU</div>
@@ -311,23 +295,22 @@ tbody tr.row-best td:first-child { padding-left: 8px; }
   <!-- Per-class IoU -->
   <div class="card">
     <div class="perclass-header">
-      <span class="clabel" style="margin:0">Per-Class IoU — latest epoch</span>
-      <div class="legend-strip">
-        <div class="leg-item"><div class="leg-dot leg-nmd"></div>NMD (land cover)</div>
-        <div class="leg-item"><div class="leg-dot leg-lpis"></div>LPIS (crops)</div>
-        <div class="leg-item"><div class="leg-dot leg-hygge"></div>Hygge (SKS)</div>
+      <div>
+        <span class="clabel" style="margin-bottom:4px">Per-Class IoU — latest epoch</span>
+        <div id="pcLegend"></div>
+      </div>
+      <div class="perclass-right">
+        <button class="mode-btn" id="colorModeBtn" onclick="toggleColorMode()">By source</button>
       </div>
     </div>
     <div class="chart-box-pc"><canvas id="chartPerClass"></canvas></div>
   </div>
 
-  <!-- Top-8 class trajectories -->
   <div class="card">
     <div class="chart-title">Top 8 Classes — mIoU over epochs</div>
     <div class="chart-box-spark"><canvas id="chartSpark"></canvas></div>
   </div>
 
-  <!-- Evolving tile predictions -->
   <div class="card">
     <div class="tiles-header">
       <span class="clabel" style="margin:0">Evolving Predictions — Representative Tiles</span>
@@ -340,12 +323,11 @@ tbody tr.row-best td:first-child { padding-left: 8px; }
     <div id="tilesContent">
       <div class="tiles-empty">
         No tile predictions yet<br>
-        <span style="font-size:10px;opacity:.6">Enable with <code style="color:#94a3b8">--tile-pred-n 6</code> in training job</span>
+        <span style="font-size:10px;opacity:.6">Enable with <code>--tile-pred-n 6</code> in training job</span>
       </div>
     </div>
   </div>
 
-  <!-- Epoch table -->
   <div class="card">
     <span class="clabel">Epoch Log</span>
     <div class="table-scroll">
@@ -367,49 +349,78 @@ tbody tr.row-best td:first-child { padding-left: 8px; }
 </div>
 
 <script>
-// ── Class definitions ─────────────────────────────────────────────────────
+// ── Canonical class palette ───────────────────────────────────────────────
+// 22 entries, indexed 0-21 matching CLASS_NAMES.
+// Semantically grounded: NMD greens, crop ambers/yellows, hygge cyan.
 const CLASS_NAMES = [
   'tallskog','granskog','lövskog','blandskog','sumpskog',
-  'tillfälligt ej skog','våtmark','öppen mark','bebyggelse','vatten',   // NMD  0-9
+  'tillfälligt ej skog','våtmark','öppen mark','bebyggelse','vatten',
   'vete','korn','havre','oljeväxter','slåttervall','bete',
-  'potatis','sockerbetor','trindsäd','råg','övrig åker',                // LPIS 10-20
-  'hygge'                                                                // SKS  21
+  'potatis','sockerbetor','trindsäd','råg','övrig åker','hygge'
 ];
-const NMD_SET  = new Set(CLASS_NAMES.slice(0, 10));
-const LPIS_SET = new Set(CLASS_NAMES.slice(10, 21));
-
-// Colors for sparklines (indexed to match CLASS_NAMES)
-const SPARK_COLORS = [
-  '#166534','#15803d','#4ade80','#34d399','#0d9488',
-  '#a3e635','#854d0e','#d97706','#9ca3af','#60a5fa',
-  '#fbbf24','#f59e0b','#fde68a','#eab308','#84cc16',
-  '#86efac','#a855f7','#ec4899','#f97316','#dc2626',
-  '#ea580c','#22d3ee'
+// NMD: indices 0-9   LPIS: 10-20   SKS(hygge): 21
+const CLASS_COLORS = [
+  '#1a5c35',  // 0  tallskog          — deep pine green
+  '#2d8a5b',  // 1  granskog          — spruce green
+  '#7bc67e',  // 2  lövskog           — leaf green
+  '#4db380',  // 3  blandskog         — mixed green
+  '#6b8e5a',  // 4  sumpskog          — olive-green
+  '#c9df6e',  // 5  tillfälligt ej skog — yellow-green
+  '#9b7722',  // 6  våtmark           — wetland brown
+  '#d4b44a',  // 7  öppen mark        — straw
+  '#c0392b',  // 8  bebyggelse        — urban red
+  '#2471a3',  // 9  vatten            — water blue
+  '#e8b800',  // 10 vete              — wheat gold
+  '#d4780a',  // 11 korn              — barley amber
+  '#f0d060',  // 12 havre             — oat straw
+  '#d4c600',  // 13 oljeväxter        — rapeseed yellow
+  '#91c84c',  // 14 slåttervall       — meadow green
+  '#b8de86',  // 15 bete              — pasture light green
+  '#9b59b6',  // 16 potatis           — potato purple
+  '#d63381',  // 17 sockerbetor       — beet magenta
+  '#e07020',  // 18 trindsäd          — legume orange
+  '#8b2020',  // 19 råg               — rye dark red
+  '#c87038',  // 20 övrig åker        — other arable brown
+  '#00a8c6',  // 21 hygge             — clearcut cyan
 ];
 
-function barColor(cls) {
-  if (NMD_SET.has(cls))  return 'rgba(34,197,94,0.72)';
-  if (cls === 'hygge')   return 'rgba(239,68,68,0.72)';
-  return 'rgba(251,146,60,0.72)';
+const NMD_RANGE  = [0,  9];
+const LPIS_RANGE = [10, 20];
+
+// Source-mode group colors
+const SRC_COLOR = {
+  nmd:   'rgba(45,138,91,0.75)',
+  lpis:  'rgba(212,120,10,0.75)',
+  hygge: 'rgba(0,168,198,0.75)',
+};
+
+function srcColor(cls) {
+  const i = CLASS_NAMES.indexOf(cls);
+  if (i <= 9)  return SRC_COLOR.nmd;
+  if (i <= 20) return SRC_COLOR.lpis;
+  return SRC_COLOR.hygge;
 }
-
-const PATIENCE = 10;
+function classColor(cls) {
+  const i = CLASS_NAMES.indexOf(cls);
+  return i >= 0 ? CLASS_COLORS[i] : '#94a3b8';
+}
 
 // ── State ─────────────────────────────────────────────────────────────────
 let charts = { miou: null, loss: null, perClass: null, spark: null };
 let state  = { data: null, lastFetch: null, fetchError: false, countdown: 30 };
 let tileState = { manifest: null, currentEpoch: null };
+let colorMode = 'source';   // 'source' | 'class'
 
-// ── Per-class pixel-count afterDraw plugin ────────────────────────────────
+// ── Pixel-count afterDraw plugin ──────────────────────────────────────────
 const pixelCountPlugin = {
   id: 'pixelCount',
   afterDatasetsDraw(chart) {
     const labels = chart._pcLabels;
     if (!labels) return;
-    const { ctx, chartArea: { right }, scales: { y } } = chart;
+    const { ctx, chartArea: { right } } = chart;
     ctx.save();
     ctx.font = '9px monospace';
-    ctx.fillStyle = '#5a6a84';
+    ctx.fillStyle = '#94a3b8';
     ctx.textAlign = 'left';
     chart.getDatasetMeta(0).data.forEach((bar, i) => {
       if (labels[i]) ctx.fillText(labels[i], right + 5, bar.y + 3);
@@ -420,145 +431,139 @@ const pixelCountPlugin = {
 
 // ── initCharts ────────────────────────────────────────────────────────────
 function initCharts() {
-  const gridColor = '#1e2840';
-  const tickStyle = { color: '#5a6a84', font: { size: 10 } };
-  const baseScales = {
-    x: { grid: { color: gridColor }, ticks: tickStyle },
-    y: { grid: { color: gridColor }, ticks: tickStyle }
-  };
+  const grid = '#e8edf4', tick = { color: '#94a3b8', font: { size: 10 } };
+  const epAxis = { grid: { color: grid }, ticks: tick,
+    title: { display: true, text: 'Epoch', color: '#94a3b8', font: { size: 10 } } };
 
-  // mIoU chart
   charts.miou = new Chart(document.getElementById('chartMiou'), {
-    type: 'line',
-    data: { labels: [], datasets: [{}] },
+    type: 'line', data: { labels: [], datasets: [{}] },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: ctx => ` mIoU: ${ctx.parsed.y.toFixed(4)}` } }
-      },
+      plugins: { legend: { display: false } },
       scales: {
-        x: { ...baseScales.x, title: { display: true, text: 'Epoch', color: '#5a6a84', font: { size: 10 } } },
-        y: { ...baseScales.y, min: 0, ticks: { ...tickStyle, callback: v => v.toFixed(2) } }
+        x: epAxis,
+        y: { min: 0, grid: { color: grid }, ticks: { ...tick, callback: v => v.toFixed(2) } }
       }
     }
   });
 
-  // Loss chart
   charts.loss = new Chart(document.getElementById('chartLoss'), {
-    type: 'line',
-    data: { labels: [], datasets: [] },
+    type: 'line', data: { labels: [], datasets: [] },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: {
-          display: true, position: 'top',
-          labels: { color: '#8899aa', font: { size: 10 }, boxWidth: 10, padding: 8 }
-        }
-      },
+      plugins: { legend: { display: true, position: 'top',
+        labels: { color: '#64748b', font: { size: 10 }, boxWidth: 10, padding: 8 } } },
       scales: {
-        x: { ...baseScales.x, title: { display: true, text: 'Epoch', color: '#5a6a84', font: { size: 10 } } },
-        y: { ...baseScales.y, min: 0, ticks: { ...tickStyle, callback: v => v.toFixed(2) } }
+        x: epAxis,
+        y: { min: 0, grid: { color: grid }, ticks: { ...tick, callback: v => v.toFixed(2) } }
       }
     }
   });
 
-  // Per-class bar chart (horizontal)
   charts.perClass = new Chart(document.getElementById('chartPerClass'), {
-    type: 'bar',
-    data: { labels: [], datasets: [{}] },
+    type: 'bar', data: { labels: [], datasets: [{}] },
     options: {
-      indexAxis: 'y',
-      responsive: true, maintainAspectRatio: false, animation: false,
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false, animation: false,
       layout: { padding: { right: 68 } },
       plugins: {
         legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => {
-              const cls = ctx.label;
-              const iouVal = ctx.parsed.x.toFixed(4);
-              const count = charts.perClass._pcN?.[cls];
-              return count != null
-                ? [` IoU: ${iouVal}`, ` n: ${count.toLocaleString('sv-SE')}`]
-                : ` IoU: ${iouVal}`;
-            }
+        tooltip: { callbacks: {
+          label: ctx => {
+            const iouVal = ctx.parsed.x.toFixed(4);
+            const n = charts.perClass._pcN?.[ctx.label];
+            return n != null
+              ? [` IoU: ${iouVal}`, ` n: ${n.toLocaleString('sv-SE')}`]
+              : ` IoU: ${iouVal}`;
           }
-        }
+        }}
       },
       scales: {
-        x: { min: 0, max: 1, grid: { color: gridColor }, ticks: tickStyle },
-        y: { grid: { display: false }, ticks: { color: '#c4cdd8', font: { size: 11, family: 'monospace' } } }
+        x: { min: 0, max: 1, grid: { color: grid }, ticks: tick },
+        y: { grid: { display: false }, ticks: { color: '#334155', font: { size: 11, family: 'monospace' } } }
       }
     },
     plugins: [pixelCountPlugin]
   });
 
-  // Sparklines
   charts.spark = new Chart(document.getElementById('chartSpark'), {
-    type: 'line',
-    data: { labels: [], datasets: [] },
+    type: 'line', data: { labels: [], datasets: [] },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: {
-          display: true, position: 'right',
-          labels: { color: '#8899aa', font: { size: 10 }, boxWidth: 10, padding: 5 }
-        }
-      },
+      plugins: { legend: { display: true, position: 'right',
+        labels: { color: '#64748b', font: { size: 10 }, boxWidth: 10, padding: 5 } } },
       scales: {
-        x: { ...baseScales.x, title: { display: true, text: 'Epoch', color: '#5a6a84', font: { size: 10 } } },
-        y: { ...baseScales.y, min: 0, max: 1, ticks: { ...tickStyle, callback: v => v.toFixed(2) } }
+        x: epAxis,
+        y: { min: 0, max: 1, grid: { color: grid }, ticks: { ...tick, callback: v => v.toFixed(2) } }
       }
     }
   });
 }
 
+// ── Color-mode toggle ─────────────────────────────────────────────────────
+function toggleColorMode() {
+  colorMode = colorMode === 'source' ? 'class' : 'source';
+  document.getElementById('colorModeBtn').textContent =
+    colorMode === 'source' ? 'By source' : 'By class';
+  if (state.data?.epochs?.length) {
+    const last = state.data.epochs[state.data.epochs.length - 1];
+    renderPerClass(last);
+    renderPcLegend(last);
+  }
+}
+
+function renderPcLegend(last) {
+  const el = document.getElementById('pcLegend');
+  if (colorMode === 'source') {
+    el.innerHTML = `<div class="src-legend">
+      <div class="leg-item"><div class="leg-dot" style="background:${SRC_COLOR.nmd.replace('0.75','1')}"></div>NMD (land cover)</div>
+      <div class="leg-item"><div class="leg-dot" style="background:${SRC_COLOR.lpis.replace('0.75','1')}"></div>LPIS (crops)</div>
+      <div class="leg-item"><div class="leg-dot" style="background:${SRC_COLOR.hygge.replace('0.75','1')}"></div>Hygge (SKS)</div>
+    </div>`;
+  } else {
+    // Compact 4-column legend grid for all 22 classes
+    const items = CLASS_NAMES.map((cls, i) =>
+      `<span class="cls-item"><span class="cls-dot" style="background:${CLASS_COLORS[i]}"></span>${cls}</span>`
+    ).join('');
+    el.innerHTML = `<div class="cls-legend">${items}</div>`;
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 function computeBest(epochs) {
   return epochs.reduce(
-    (acc, ep) => ep.val_mIoU > acc.bestMiou ? { bestMiou: ep.val_mIoU, bestEpoch: ep.epoch } : acc,
+    (a, e) => e.val_mIoU > a.bestMiou ? { bestMiou: e.val_mIoU, bestEpoch: e.epoch } : a,
     { bestMiou: 0, bestEpoch: null }
   );
 }
-
 function computePatienceUsed(epochs) {
-  for (let i = epochs.length - 1; i >= 0; i--) {
+  for (let i = epochs.length - 1; i >= 0; i--)
     if (epochs[i].is_best) return epochs.length - 1 - i;
-  }
   return epochs.length;
 }
-
 function computeETA(epochs, total) {
   if (!epochs.length) return null;
   const w = Math.min(5, epochs.length);
   const avg = epochs.slice(-w).reduce((s, e) => s + e.elapsed_s, 0) / w;
   return (total - epochs[epochs.length - 1].epoch) * avg;
 }
-
 function fmtSec(s) {
   if (s == null || s < 0) return '—';
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
-
 function fmtN(n) {
-  if (n >= 1e6) return `${(n/1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `${Math.round(n/1e3)}K`;
-  return `${n}`;
+  return n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n/1e3)}K` : `${n}`;
 }
 
 // ── Render functions ──────────────────────────────────────────────────────
 function renderHeader(cfg, last, status) {
-  document.getElementById('hRunId').textContent = cfg.run_id || '—';
-  document.getElementById('hStage').textContent =
+  document.getElementById('hRunId').textContent   = cfg.run_id || '—';
+  document.getElementById('hStage').textContent   =
     last.stage === 1 ? 'Stage 1 — frozen backbone' : 'Stage 2 — full fine-tune';
-  const ampBadge = document.getElementById('hAmp');
-  if (cfg.amp) ampBadge.style.display = '';
-
+  if (cfg.amp) document.getElementById('hAmp').style.display = '';
   const dot  = document.getElementById('sDot');
   const text = document.getElementById('sText');
   dot.className = `s-dot ${status}`;
@@ -566,46 +571,37 @@ function renderHeader(cfg, last, status) {
 }
 
 function renderCards(cfg, last, bestMiou, bestEpoch, etaSec) {
-  const total = cfg.epochs_planned;
-
+  const total = cfg.epochs_planned ?? 35;
   document.getElementById('cEpoch').textContent    = `${last.epoch} / ${total}`;
-  document.getElementById('cEpochSub').textContent = `Stage ${last.stage}  ·  batch ${cfg.batch_size.toLocaleString()}`;
-
+  document.getElementById('cEpochSub').textContent = `Stage ${last.stage}  ·  batch ${cfg.batch_size?.toLocaleString()}`;
   document.getElementById('cBestMiou').textContent = bestMiou.toFixed(4);
   document.getElementById('cBestSub').textContent  = `@ epoch ${bestEpoch}`;
-
   document.getElementById('cCurMiou').textContent    = last.val_mIoU.toFixed(4);
   document.getElementById('cCurMiouSub').textContent = last.is_best ? '★ new best' : `Δ ${(last.val_mIoU - bestMiou).toFixed(4)}`;
-
   document.getElementById('cValLoss').textContent    = last.val_loss.toFixed(4);
   document.getElementById('cValLossSub').textContent = `train: ${last.train_loss.toFixed(4)}`;
-
   document.getElementById('cValOA').textContent    = last.val_OA.toFixed(4);
   document.getElementById('cValOASub').textContent = `mAcc: ${last.val_mAcc.toFixed(4)}`;
-
-  const backbone_lr = last.lr * cfg.backbone_lr_factor;
   document.getElementById('cTime').textContent    = `${Math.round(last.elapsed_s)}s`;
   document.getElementById('cTimeSub').textContent =
-    last.stage === 1 ? `lr: ${last.lr.toExponential(1)}` : `head: ${last.lr.toExponential(1)} · bb: ${backbone_lr.toExponential(1)}`;
-
+    last.stage === 1 ? `lr: ${last.lr.toExponential(1)}` :
+    `head: ${last.lr.toExponential(1)} · bb: ${(last.lr * (cfg.backbone_lr_factor ?? 0.1)).toExponential(1)}`;
   document.getElementById('cETA').textContent    = fmtSec(etaSec);
   document.getElementById('cETASub').textContent = `${total - last.epoch} epochs left`;
 }
 
 function renderProgress(last, total, patienceUsed) {
   const pct = (last.epoch / total * 100).toFixed(1);
-  document.getElementById('progPct').textContent   = `${pct}%`;
-  document.getElementById('progBar').style.width   = `${pct}%`;
-
-  const container = document.getElementById('pdots');
-  container.innerHTML = '';
-  for (let i = 0; i < PATIENCE; i++) {
+  document.getElementById('progPct').textContent = `${pct}%`;
+  document.getElementById('progBar').style.width = `${pct}%`;
+  const dots = document.getElementById('pdots');
+  dots.innerHTML = '';
+  for (let i = 0; i < 10; i++) {
     const d = document.createElement('div');
-    d.className = 'pdot' +
-      (i < patienceUsed ? (i >= PATIENCE - 2 ? ' alert' : ' used') : '');
-    container.appendChild(d);
+    d.className = 'pdot' + (i < patienceUsed ? (i >= 8 ? ' alert' : ' used') : '');
+    dots.appendChild(d);
   }
-  document.getElementById('pcount').textContent = `${patienceUsed} / ${PATIENCE}`;
+  document.getElementById('pcount').textContent = `${patienceUsed} / 10`;
 }
 
 function renderMiouChart(epochs, bestEpoch) {
@@ -613,56 +609,48 @@ function renderMiouChart(epochs, bestEpoch) {
   const vals   = epochs.map(e => e.val_mIoU);
   charts.miou.data.labels = labels;
   charts.miou.data.datasets = [{
-    label: 'val mIoU',
-    data:  vals,
-    borderColor: '#3b82f6',
-    backgroundColor: 'rgba(59,130,246,0.07)',
-    borderWidth: 2,
-    fill: true,
-    tension: 0.3,
+    label: 'val mIoU', data: vals,
+    borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.06)',
+    borderWidth: 2, fill: true, tension: 0.3,
     pointStyle:           epochs.map(e => e.epoch === bestEpoch ? 'star' : 'circle'),
     pointRadius:          epochs.map(e => e.epoch === bestEpoch ? 8 : 3),
-    pointBackgroundColor: epochs.map(e => e.epoch === bestEpoch ? '#f59e0b' : '#3b82f6'),
+    pointBackgroundColor: epochs.map(e => e.epoch === bestEpoch ? '#d97706' : '#2563eb'),
   }];
   charts.miou.options.scales.y.max = Math.max(0.5, ...vals) + 0.05;
   charts.miou.update('none');
 }
 
 function renderLossChart(epochs) {
-  const labels = epochs.map(e => e.epoch);
-  charts.loss.data.labels = labels;
+  charts.loss.data.labels = epochs.map(e => e.epoch);
   charts.loss.data.datasets = [
-    {
-      label: 'train loss',
-      data:  epochs.map(e => e.train_loss),
-      borderColor: '#f87171', backgroundColor: 'transparent',
-      borderWidth: 2, pointRadius: 2, fill: false, tension: 0.3,
-    },
-    {
-      label: 'val loss',
-      data:  epochs.map(e => e.val_loss),
-      borderColor: '#fb923c', backgroundColor: 'transparent',
-      borderDash: [5, 3],
-      borderWidth: 2, pointRadius: 2, fill: false, tension: 0.3,
-    }
+    { label: 'train loss', data: epochs.map(e => e.train_loss),
+      borderColor: '#dc2626', backgroundColor: 'transparent',
+      borderWidth: 2, pointRadius: 2, fill: false, tension: 0.3 },
+    { label: 'val loss', data: epochs.map(e => e.val_loss),
+      borderColor: '#ea580c', backgroundColor: 'transparent', borderDash: [5, 3],
+      borderWidth: 2, pointRadius: 2, fill: false, tension: 0.3 }
   ];
   charts.loss.update('none');
 }
 
 function renderPerClass(last) {
-  const iou = last.per_class_iou || {};
-  const n   = last.per_class_n   || {};
+  const iou = last.per_class_iou ?? {};
+  const n   = last.per_class_n   ?? {};
   const sorted = Object.entries(iou).sort(([,a],[,b]) => b - a);
   const labels = sorted.map(([cls]) => cls);
   const vals   = sorted.map(([,v]) => v);
+  const getColor = colorMode === 'source' ? srcColor : classColor;
+  const colors = labels.map(getColor);
 
   charts.perClass._pcLabels = labels.map(cls => fmtN(n[cls] ?? 0));
   charts.perClass._pcN      = n;
   charts.perClass.data.labels = labels;
   charts.perClass.data.datasets = [{
     data: vals,
-    backgroundColor: labels.map(barColor),
-    borderColor:     labels.map(cls => barColor(cls).replace('0.72', '0.95')),
+    backgroundColor: colorMode === 'source'
+      ? colors
+      : colors.map(c => c + 'cc'),      // add alpha in class mode
+    borderColor: colors,
     borderWidth: 1,
     barPercentage: 0.8,
   }];
@@ -674,12 +662,11 @@ function renderSparklines(epochs) {
   const last = epochs[epochs.length - 1];
   const top8 = Object.entries(last.per_class_iou ?? {})
     .sort(([,a],[,b]) => b - a).slice(0, 8).map(([cls]) => cls);
-  const labels = epochs.map(e => e.epoch);
-  charts.spark.data.labels = labels;
+  charts.spark.data.labels = epochs.map(e => e.epoch);
   charts.spark.data.datasets = top8.map(cls => ({
     label: cls,
     data:  epochs.map(e => e.per_class_iou?.[cls] ?? null),
-    borderColor: SPARK_COLORS[CLASS_NAMES.indexOf(cls)] ?? '#94a3b8',
+    borderColor: classColor(cls),   // always use per-class colors in sparklines
     backgroundColor: 'transparent',
     borderWidth: 1.5, pointRadius: 2, fill: false, tension: 0.2, spanGaps: true,
   }));
@@ -690,15 +677,11 @@ function renderTable(epochs) {
   document.getElementById('epochTableBody').innerHTML =
     [...epochs].reverse().map(ep => `
       <tr class="${ep.is_best ? 'row-best' : ''}">
-        <td>${ep.epoch}</td>
-        <td>${ep.stage}</td>
-        <td>${ep.train_loss.toFixed(4)}</td>
-        <td>${ep.val_loss?.toFixed(4) ?? '—'}</td>
-        <td>${ep.val_mIoU?.toFixed(4) ?? '—'}</td>
-        <td>${ep.val_OA?.toFixed(4) ?? '—'}</td>
+        <td>${ep.epoch}</td><td>${ep.stage}</td>
+        <td>${ep.train_loss.toFixed(4)}</td><td>${ep.val_loss?.toFixed(4) ?? '—'}</td>
+        <td>${ep.val_mIoU?.toFixed(4) ?? '—'}</td><td>${ep.val_OA?.toFixed(4) ?? '—'}</td>
         <td>${ep.val_mAcc?.toFixed(4) ?? '—'}</td>
-        <td>${ep.lr.toExponential(2)}</td>
-        <td>${Math.round(ep.elapsed_s)}</td>
+        <td>${ep.lr.toExponential(2)}</td><td>${Math.round(ep.elapsed_s)}</td>
         <td class="star">${ep.is_best ? '★' : ''}</td>
       </tr>`).join('');
 }
@@ -707,37 +690,27 @@ function renderTilePreds() {
   const m = tileState.manifest;
   const content = document.getElementById('tilesContent');
   const sliderWrap = document.getElementById('sliderWrap');
-
-  if (!m || !m.tiles?.length || !m.epochs?.length) {
-    content.innerHTML = `<div class="tiles-empty">
-      No tile predictions yet<br>
-      <span style="font-size:10px;opacity:.6">Enable with <code style="color:#94a3b8">--tile-pred-n 6</code> in training job</span>
-    </div>`;
+  if (!m?.tiles?.length || !m.epochs?.length) {
+    content.innerHTML = `<div class="tiles-empty">No tile predictions yet<br>
+      <span style="font-size:10px;opacity:.6">Enable with <code>--tile-pred-n 6</code></span></div>`;
     sliderWrap.style.display = 'none';
     return;
   }
-
-  const sortedEpochs = [...m.epochs].sort((a, b) => a - b);
-  if (!tileState.currentEpoch || !sortedEpochs.includes(tileState.currentEpoch)) {
+  const sortedEpochs = [...m.epochs].sort((a,b) => a-b);
+  if (!tileState.currentEpoch || !sortedEpochs.includes(tileState.currentEpoch))
     tileState.currentEpoch = sortedEpochs[sortedEpochs.length - 1];
-  }
-
   const slider = document.getElementById('epochSlider');
-  slider.min = sortedEpochs[0];
-  slider.max = sortedEpochs[sortedEpochs.length - 1];
+  slider.min = sortedEpochs[0]; slider.max = sortedEpochs[sortedEpochs.length-1];
   slider.value = tileState.currentEpoch;
   document.getElementById('sliderLabel').textContent = tileState.currentEpoch;
   sliderWrap.style.display = 'flex';
-
   const ep = tileState.currentEpoch;
   content.innerHTML = `<div class="tiles-grid">${m.tiles.map(t => `
     <div class="tile-item">
       <div class="tile-item-name" title="${t.name}">${t.short ?? t.name}</div>
       <div class="tile-pair">
-        <img src="tile_preds/epoch_${ep}/${t.name}_pred.png" alt="pred"
-             onerror="this.classList.add('missing')" loading="lazy">
-        <img src="tile_preds/gt/${t.name}_gt.png" alt="gt"
-             onerror="this.classList.add('missing')" loading="lazy">
+        <img src="tile_preds/epoch_${ep}/${t.name}_pred.png" alt="pred" loading="lazy" onerror="this.classList.add('missing')">
+        <img src="tile_preds/gt/${t.name}_gt.png" alt="gt" loading="lazy" onerror="this.classList.add('missing')">
       </div>
       <div class="tile-pair-labels"><span>pred</span><span>ground truth</span></div>
     </div>`).join('')}</div>`;
@@ -752,11 +725,10 @@ function render(data) {
   const last  = epochs[epochs.length - 1];
   const { bestMiou, bestEpoch } = computeBest(epochs);
   const patienceUsed = computePatienceUsed(epochs);
-  const etaSec = computeETA(epochs, cfg.epochs_planned ?? 35);
   const total  = cfg.epochs_planned ?? 35;
+  const etaSec = computeETA(epochs, total);
   const status = last.epoch >= total ? 'done'
-    : patienceUsed >= PATIENCE ? 'stalled'
-    : 'training';
+    : patienceUsed >= 10 ? 'stalled' : 'training';
 
   renderHeader(cfg, last, status);
   renderCards(cfg, last, bestMiou, bestEpoch, etaSec);
@@ -764,6 +736,7 @@ function render(data) {
   renderMiouChart(epochs, bestEpoch);
   renderLossChart(epochs);
   renderPerClass(last);
+  renderPcLegend(last);
   renderSparklines(epochs);
   renderTable(epochs);
 
@@ -773,10 +746,7 @@ function render(data) {
 
 function renderSkeleton() {
   document.getElementById('sDot').className = 's-dot';
-  document.getElementById('sText').textContent =
-    state.fetchError ? 'No data — check sync.sh' : 'Waiting for first epoch…';
-  document.getElementById('updateNote').textContent =
-    state.lastFetch ? `Last check: ${new Date(state.lastFetch).toLocaleTimeString('sv-SE')}` : '—';
+  document.getElementById('sText').textContent = state.fetchError ? 'No data — check sync.sh' : 'Waiting for first epoch…';
 }
 
 // ── Fetch ─────────────────────────────────────────────────────────────────
@@ -797,31 +767,23 @@ async function fetchData() {
     document.getElementById('updateNote').textContent =
       `Error at ${new Date().toLocaleTimeString('sv-SE')} — retrying in 30s`;
   }
-
-  // Optional tile prediction manifest
   try {
     const r = await fetch('tile_preds/manifest.json?t=' + Date.now());
-    if (r.ok) {
-      tileState.manifest = await r.json();
-      renderTilePreds();
-    }
+    if (r.ok) { tileState.manifest = await r.json(); renderTilePreds(); }
   } catch (_) {}
 }
 
-// ── Countdown ─────────────────────────────────────────────────────────────
 function tick() {
   state.countdown = Math.max(0, state.countdown - 1);
   document.getElementById('refreshBtn').textContent = `⟳ ${state.countdown}s`;
 }
 
-// ── Epoch slider ──────────────────────────────────────────────────────────
 document.getElementById('epochSlider').addEventListener('input', e => {
   tileState.currentEpoch = parseInt(e.target.value);
   document.getElementById('sliderLabel').textContent = tileState.currentEpoch;
   renderTilePreds();
 });
 
-// ── Bootstrap ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initCharts();
   fetchData();

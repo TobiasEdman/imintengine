@@ -411,31 +411,32 @@ def _build_optimizer(
 
 # ── Tile prediction visualization ─────────────────────────────────────────
 
-# RGB color per unified class index (0=background, 1-22=land cover/crop/hygge)
+# RGB color per unified class index (0=background, 1-22=land cover/crop/hygge).
+# Must stay in sync with CLASS_COLORS in dashboards/pixel_live/index.html.
 _CLASS_COLORS_RGB: list[tuple[int, int, int]] = [
-    (  0,   0,   0),   #  0 background
-    ( 22, 101,  52),   #  1 tallskog
-    ( 21, 128,  61),   #  2 granskog
-    ( 74, 222, 128),   #  3 lövskog
-    ( 52, 211, 153),   #  4 blandskog
-    ( 19,  78,  74),   #  5 sumpskog
-    (163, 230,  53),   #  6 tillfälligt ej skog
-    (133,  77,  14),   #  7 våtmark
-    (217, 119,   6),   #  8 öppen mark
-    (107, 114, 128),   #  9 bebyggelse
-    ( 59, 130, 246),   # 10 vatten
-    (251, 191,  36),   # 11 vete
-    (245, 158,  11),   # 12 korn
-    (253, 224,  71),   # 13 havre
-    (234, 179,   8),   # 14 oljeväxter
-    (132, 204,  22),   # 15 slåttervall
-    (134, 239, 172),   # 16 bete
-    (168,  85, 247),   # 17 potatis
-    (236,  72, 153),   # 18 sockerbetor
-    (249, 115,  22),   # 19 trindsäd
-    (220,  38,  38),   # 20 råg
-    (234,  88,  12),   # 21 övrig åker
-    (  6, 182, 212),   # 22 hygge
+    (  0,   0,   0),   #  0 background            — black (masked out)
+    ( 26,  92,  53),   #  1 tallskog              — deep pine green    #1a5c35
+    ( 45, 138,  91),   #  2 granskog              — spruce green       #2d8a5b
+    (123, 198, 126),   #  3 lövskog               — leaf green         #7bc67e
+    ( 77, 179, 128),   #  4 blandskog             — mixed green        #4db380
+    (107, 142,  90),   #  5 sumpskog              — olive-green        #6b8e5a
+    (201, 223, 110),   #  6 tillfälligt ej skog   — yellow-green       #c9df6e
+    (155, 119,  34),   #  7 våtmark               — wetland brown      #9b7722
+    (212, 180,  74),   #  8 öppen mark            — straw              #d4b44a
+    (192,  57,  43),   #  9 bebyggelse            — urban red          #c0392b
+    ( 36, 113, 163),   # 10 vatten                — water blue         #2471a3
+    (232, 184,   0),   # 11 vete                  — wheat gold         #e8b800
+    (212, 120,  10),   # 12 korn                  — barley amber       #d4780a
+    (240, 208,  96),   # 13 havre                 — oat straw          #f0d060
+    (212, 198,   0),   # 14 oljeväxter            — rapeseed yellow    #d4c600
+    (145, 200,  76),   # 15 slåttervall           — meadow green       #91c84c
+    (184, 222, 134),   # 16 bete                  — pasture green      #b8de86
+    (155,  89, 182),   # 17 potatis               — potato purple      #9b59b6
+    (214,  51, 129),   # 18 sockerbetor           — beet magenta       #d63381
+    (224, 112,  32),   # 19 trindsäd              — legume orange      #e07020
+    (139,  32,  32),   # 20 råg                   — rye dark red       #8b2020
+    (200, 112,  56),   # 21 övrig åker            — other arable brown #c87038
+    (  0, 168, 198),   # 22 hygge                 — clearcut cyan      #00a8c6
 ]
 
 
