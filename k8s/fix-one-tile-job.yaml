@@ -5,7 +5,7 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 300
+  activeDeadlineSeconds: 1200
   template:
     spec:
       restartPolicy: Never

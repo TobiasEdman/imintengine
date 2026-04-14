@@ -68,10 +68,15 @@ _NMD19_TO_UNIFIED[0] = 0; _NMD19_TO_UNIFIED[1] = 1; _NMD19_TO_UNIFIED[2] = 2
 _NMD19_TO_UNIFIED[3] = 3; _NMD19_TO_UNIFIED[4] = 4; _NMD19_TO_UNIFIED[5] = 6
 _NMD19_TO_UNIFIED[6] = 5; _NMD19_TO_UNIFIED[7] = 5; _NMD19_TO_UNIFIED[8] = 5
 _NMD19_TO_UNIFIED[9] = 5; _NMD19_TO_UNIFIED[10] = 5; _NMD19_TO_UNIFIED[11] = 7
-_NMD19_TO_UNIFIED[12] = 0   # NMD cropland → background (new schema)
+_NMD19_TO_UNIFIED[12] = 0   # NMD cropland → background (new schema v5)
 _NMD19_TO_UNIFIED[13] = 8; _NMD19_TO_UNIFIED[14] = 8
 _NMD19_TO_UNIFIED[15] = 9; _NMD19_TO_UNIFIED[16] = 9; _NMD19_TO_UNIFIED[17] = 9
 _NMD19_TO_UNIFIED[18] = 10; _NMD19_TO_UNIFIED[19] = 10
+
+# Old schema: NMD cropland → övrig åker (21) instead of background.
+# Used as 4th column to show what the schema change removes.
+_NMD19_TO_UNIFIED_OLD = _NMD19_TO_UNIFIED.copy()
+_NMD19_TO_UNIFIED_OLD[12] = 21   # cropland → övrig åker (old schema v4)
 
 
 def _colorize(class_map: np.ndarray) -> np.ndarray:
@@ -140,9 +145,10 @@ def _infer_tile(
     """Run inference on a tile.
 
     Returns:
-        pred_map: (gh, gw) int32  — predicted classes
-        gt_map:   (gh, gw) int32  — GT labels
-        nmd_map:  (gh, gw) int32  — NMD-only labels (no LPIS overlay)
+        pred_map:     (gh, gw) int32  — predicted classes
+        gt_map:       (gh, gw) int32  — GT labels
+        nmd_new_map:  (gh, gw) int32  — NMD-only, new schema (cropland → background)
+        nmd_old_map:  (gh, gw) int32  — NMD-only, old schema (cropland → övrig åker)
     """
     import contextlib
     import torch
@@ -215,23 +221,21 @@ def _infer_tile(
     pred_flat = np.concatenate(preds)
     gt_flat = label[rows[:, None], cols[None, :]].flatten()
 
-    # NMD-only labels (apply _NMD19_TO_UNIFIED to raw nmd_label key)
-    nmd_map = np.zeros((gh, gw), dtype=np.int32)
-    if "nmd_label_raw" in data:
-        nmd_raw = np.asarray(data["nmd_label_raw"], dtype=np.uint8)
-        nmd_unified = _NMD19_TO_UNIFIED[np.clip(nmd_raw, 0, 19)]
-        nmd_flat = nmd_unified[rows[:, None], cols[None, :]].flatten()
-        nmd_map = nmd_flat.reshape(gh, gw).astype(np.int32)
-    elif "nmd_label" in data:
-        nmd_raw = np.asarray(data["nmd_label"], dtype=np.uint8)
-        nmd_unified = _NMD19_TO_UNIFIED[np.clip(nmd_raw, 0, 19)]
-        nmd_flat = nmd_unified[rows[:, None], cols[None, :]].flatten()
-        nmd_map = nmd_flat.reshape(gh, gw).astype(np.int32)
+    # NMD-only labels — both new and old schema — from raw nmd_label key
+    nmd_new_map = np.zeros((gh, gw), dtype=np.int32)
+    nmd_old_map = np.zeros((gh, gw), dtype=np.int32)
+    nmd_key = "nmd_label_raw" if "nmd_label_raw" in data else ("nmd_label" if "nmd_label" in data else None)
+    if nmd_key:
+        nmd_raw = np.clip(np.asarray(data[nmd_key], dtype=np.uint8), 0, 19)
+        nmd_grid = nmd_raw[rows[:, None], cols[None, :]]  # (gh, gw)
+        nmd_new_map = _NMD19_TO_UNIFIED[nmd_grid].astype(np.int32)
+        nmd_old_map = _NMD19_TO_UNIFIED_OLD[nmd_grid].astype(np.int32)
 
     return (
         pred_flat.reshape(gh, gw).astype(np.int32),
         gt_flat.reshape(gh, gw).astype(np.int32),
-        nmd_map,
+        nmd_new_map,
+        nmd_old_map,
     )
 
 
@@ -273,21 +277,26 @@ def _build_legend(cell_w: int, n_cols: int) -> np.ndarray:
     return np.array(img)
 
 
-def _render_label_strip(cell_w: int) -> np.ndarray:
-    """Render a narrow 'Prediction | GT Unified | NMD-only' header bar."""
+def _render_label_strip(cell_w: int, n_cols: int = 4) -> np.ndarray:
+    """Render column header bar."""
     from PIL import Image, ImageDraw, ImageFont
 
     h = 28
-    w = cell_w * 3
+    w = cell_w * n_cols + 2 * (n_cols - 1)  # account for separators
     img = Image.new("RGB", (w, h), color=(30, 30, 30))
     draw = ImageDraw.Draw(img)
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 13)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
     except Exception:
         font = ImageFont.load_default()
-    labels = ["Prediction", "GT (unified label)", "NMD-only baseline"]
-    for i, lbl in enumerate(labels):
-        draw.text((i * cell_w + 8, 6), lbl, fill=(230, 230, 230), font=font)
+    col_labels = [
+        "Prediction",
+        "GT (träningsetikett)",
+        "NMD ny (åker→bakgrund)",
+        "NMD gammal (åker→övrig)",
+    ]
+    for i, lbl in enumerate(col_labels):
+        draw.text((i * (cell_w + 2) + 6, 7), lbl, fill=(230, 230, 230), font=font)
     return np.array(img)
 
 
@@ -385,16 +394,15 @@ def main() -> None:
     from PIL import Image
 
     cell_px = args.cell_px
-    n_rows = len(selected)
-    n_cols = 3
+    n_cols = 4
 
-    col_labels_strip = _render_label_strip(cell_px)
+    col_labels_strip = _render_label_strip(cell_px, n_cols)
     grid_rows: list[np.ndarray] = [col_labels_strip]
 
     for tile_path in selected:
         print(f"  Inferring {tile_path.name} …", flush=True)
         try:
-            pred, gt, nmd = _infer_tile(
+            pred, gt, nmd_new, nmd_old = _infer_tile(
                 model, tile_path,
                 context_px=args.context_px,
                 use_frame_2016=args.use_frame_2016,
@@ -404,24 +412,18 @@ def main() -> None:
             )
         except Exception as exc:
             print(f"    WARN: {exc}", file=sys.stderr)
-            # Render blank row on failure
-            blank = np.zeros((cell_px, cell_px * 3, 3), dtype=np.uint8)
+            blank = np.zeros((cell_px, cell_px * n_cols + 2 * (n_cols - 1), 3), dtype=np.uint8)
             grid_rows.append(blank)
             continue
 
-        row_cells = []
-        for map_data in (pred, gt, nmd):
-            cell_rgb = _colorize(map_data)
-            cell_resized = _resize_nearest(cell_rgb, cell_px, cell_px)
-            row_cells.append(cell_resized)
-
-        # Thin white separator between columns
         sep = np.full((cell_px, 2, 3), 200, dtype=np.uint8)
+        row_cells = [_resize_nearest(_colorize(m), cell_px, cell_px)
+                     for m in (pred, gt, nmd_new, nmd_old)]
         row = np.concatenate([
-            row_cells[0], sep, row_cells[1], sep, row_cells[2]
+            row_cells[0], sep, row_cells[1], sep, row_cells[2], sep, row_cells[3]
         ], axis=1)
 
-        # Add tile name bar
+        # Tile name bar
         tile_bar_h = 20
         bar = np.full((tile_bar_h, row.shape[1], 3), 245, dtype=np.uint8)
         try:
@@ -433,14 +435,13 @@ def main() -> None:
             except Exception:
                 font = ImageFont.load_default()
             dominant_cls = int(np.bincount(gt.ravel(), minlength=23)[1:].argmax() + 1)
-            label_text = f"{tile_path.stem}  (dominant GT: {_CLASS_NAMES[dominant_cls]})"
+            label_text = f"{tile_path.stem}  (GT dominant: {_CLASS_NAMES[dominant_cls]})"
             draw.text((4, 3), label_text, fill=(60, 60, 60), font=font)
             bar = np.array(bar_img)
         except Exception:
             pass
 
-        row_with_bar = np.concatenate([bar, row], axis=0)
-        grid_rows.append(row_with_bar)
+        grid_rows.append(np.concatenate([bar, row], axis=0))
         print(f"    done (pred_map {pred.shape})")
 
     legend = _build_legend(cell_px, n_cols)
