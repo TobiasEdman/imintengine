@@ -93,9 +93,12 @@ class LULCTrainer:
         from ..fm.upernet import PrithviSegmentationModel, get_default_pool_sizes
 
         num_frames = self.config.num_temporal_frames if self.config.enable_multitemporal else 1
+        img_size = self.config.img_size
         print(f"  Loading Prithvi backbone ({self.config.backbone}, "
-              f"num_frames={num_frames})...")
-        backbone = _load_prithvi_from_hf(pretrained=True, num_frames=num_frames)
+              f"num_frames={num_frames}, img_size={img_size})...")
+        backbone = _load_prithvi_from_hf(
+            pretrained=True, num_frames=num_frames, img_size=img_size,
+        )
 
         n_aux = self._count_aux_channels()
 
@@ -106,7 +109,7 @@ class LULCTrainer:
             num_classes=self.config.num_classes,  # includes background at 0
             dropout=self.config.dropout,
             n_aux_channels=n_aux,
-            pool_sizes=get_default_pool_sizes(self.device),
+            pool_sizes=get_default_pool_sizes(self.device, img_size=img_size),
             enable_temporal_pooling=self.config.enable_temporal_pooling,
             enable_multilevel_aux=self.config.enable_multilevel_aux,
         )
@@ -228,7 +231,7 @@ class LULCTrainer:
 
         # Loss function
         if cfg.loss_type == "focal_dice":
-            from .losses import FocalLoss, DiceLoss, CombinedLoss
+            from .losses import FocalLoss, DiceLoss, LovaszSoftmaxLoss, CombinedLoss
             focal = FocalLoss(
                 weight=weights_tensor,
                 gamma=cfg.focal_gamma,
@@ -236,10 +239,18 @@ class LULCTrainer:
                 label_smoothing=cfg.label_smoothing,
             )
             dice = DiceLoss(ignore_index=cfg.ignore_index)
-            criterion = CombinedLoss(focal, dice,
-                                     focal_weight=0.5, dice_weight=0.5)
+            lovasz = LovaszSoftmaxLoss(ignore_index=cfg.ignore_index) if cfg.lovasz_weight > 0 else None
+            # Re-normalize focal+dice weights when Lovász is active
+            f_w = 0.5 * (1.0 - cfg.lovasz_weight)
+            d_w = 0.5 * (1.0 - cfg.lovasz_weight)
+            criterion = CombinedLoss(
+                focal, dice, lovasz=lovasz,
+                focal_weight=f_w, dice_weight=d_w,
+                lovasz_weight=cfg.lovasz_weight,
+            )
             smooth_str = f", smooth={cfg.label_smoothing}" if cfg.label_smoothing else ""
-            print(f"  Loss: Focal+Dice (gamma={cfg.focal_gamma}, 0.5/0.5{smooth_str})")
+            lovasz_str = f", lovász={cfg.lovasz_weight}" if cfg.lovasz_weight > 0 else ""
+            print(f"  Loss: Focal+Dice (gamma={cfg.focal_gamma}, f={f_w:.2f}/d={d_w:.2f}{lovasz_str}{smooth_str})")
         elif cfg.loss_type == "focal":
             from .losses import FocalLoss
             criterion = FocalLoss(

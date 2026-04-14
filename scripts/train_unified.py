@@ -73,6 +73,12 @@ def main():
         help="Limit total tiles loaded (for quick local testing)",
     )
 
+    # Resolution
+    parser.add_argument("--patch-size", type=int, default=_defaults.patch_pixels,
+                        help="Training crop size (224, 256, or 448)")
+    parser.add_argument("--img-size", type=int, default=_defaults.img_size,
+                        help="ViT input resolution (224, 256, or 448)")
+
     # Training
     parser.add_argument("--epochs", type=int, default=_defaults.epochs)
     parser.add_argument("--batch-size", type=int, default=_defaults.batch_size)
@@ -113,6 +119,8 @@ def main():
                         help="Class weighting strategy")
     parser.add_argument("--label-smoothing", type=float, default=_defaults.label_smoothing,
                         help="Label smoothing for focal loss (0.0 = disabled)")
+    parser.add_argument("--lovasz-weight", type=float, default=_defaults.lovasz_weight,
+                        help="Lovász-softmax loss weight (0.0 = disabled, 0.3 = recommended)")
 
     # Early stopping metric
     parser.add_argument("--early-stop-metric", type=str,
@@ -215,6 +223,8 @@ def main():
         decoder_channels=args.decoder_channels,
         dropout=args.dropout,
         device=args.device,
+        patch_pixels=args.patch_size,
+        img_size=args.img_size,
         checkpoint_dir=args.checkpoint_dir,
         save_every_n_epochs=args.save_every,
         loss_type=args.loss_type,
@@ -222,6 +232,7 @@ def main():
         max_class_weight=args.max_class_weight,
         weighting_method=args.weighting_method,
         label_smoothing=args.label_smoothing,
+        lovasz_weight=args.lovasz_weight,
         early_stop_metric=args.early_stop_metric,
         unfreeze_backbone_layers=args.unfreeze_layers,
         backbone_lr_factor=args.backbone_lr_factor,

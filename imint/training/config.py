@@ -23,8 +23,9 @@ class TrainingConfig:
     years: list[str] = field(default_factory=lambda: ["2019", "2018"])
     growing_season: tuple[int, int] = (6, 8)          # June – August
     grid_spacing_m: int = 10_000                       # 10 km grid
-    patch_pixels: int = 224                            # Training patch size
-    fetch_pixels: int = 256                            # Fetch larger for crop
+    patch_pixels: int = 224                            # Training crop size
+    fetch_pixels: int = 256                            # Tile fetch resolution
+    img_size: int = 224                                # ViT input resolution (224, 256, 448)
     cloud_threshold: float = 0.05
     b02_haze_threshold: float = 0.06                  # Max mean B02 reflectance
                                                        # for clear-sky quality gate
@@ -96,6 +97,7 @@ class TrainingConfig:
     loss_type: str = "focal_dice"                      # "cross_entropy", "focal", "focal_dice"
     focal_gamma: float = 2.0                           # Focal loss focusing parameter
     label_smoothing: float = 0.05                     # 0.0 = disabled
+    lovasz_weight: float = 0.0                        # 0.0 = disabled, 0.3 = recommended
 
     # ── Rare class handling ────────────────────────────────────────────
     rare_class_threshold: float = 0.02                 # Classes < 2% are "rare"

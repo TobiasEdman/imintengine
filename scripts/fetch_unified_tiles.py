@@ -538,8 +538,17 @@ def main():
                    help="Directories with existing tiles to re-fetch spectral for")
     p.add_argument("--from-json", default=None,
                    help="JSON file with tile locations [{name, bbox, year, source}, ...]")
+    p.add_argument("--tile-size-px", type=int, default=256,
+                   help="Tile resolution in pixels (256 or 512). Sets TILE_SIZE_PX and TILE_SIZE_M.")
     args = p.parse_args()
     random.seed(args.seed)
+
+    # Override tile_fetch module constants for non-default tile sizes
+    if args.tile_size_px != 256:
+        import imint.training.tile_fetch as _tf
+        _tf.TILE_SIZE_PX = args.tile_size_px
+        _tf.TILE_SIZE_M = args.tile_size_px * 10
+        print(f"  Tile size overridden: {_tf.TILE_SIZE_PX}px ({_tf.TILE_SIZE_M}m)")
 
     print(f"=== Unified 4-Frame Tile Fetcher ===")
     print(f"  Mode: {args.mode}  Years: {args.years}")

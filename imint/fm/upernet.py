@@ -29,27 +29,30 @@ import torch.nn.functional as F
 
 def get_default_pool_sizes(
     device: str | torch.device | None = None,
+    img_size: int = 224,
 ) -> tuple[int, ...]:
-    """Return PSP pool sizes appropriate for the compute device.
+    """Return PSP pool sizes appropriate for feature map dimensions.
 
-    Standard UPerNet uses (1, 2, 3, 6).  Apple MPS has a bug with
-    AdaptiveAvgPool2d for pool sizes that don't evenly divide the
-    feature map (14x14 for 224 px input), so we use (1, 2, 7, 14)
-    on MPS.
+    The deepest PSP feature map has size ``img_size // 16``.  Pool sizes
+    must evenly divide this for AdaptiveAvgPool2d (especially on MPS).
 
     Args:
-        device: Target device string or torch.device.  If *None*,
-            returns MPS-safe sizes as a conservative default.
+        device: Target device string or torch.device.
+        img_size: Training input resolution (224, 256, or 448).
 
     Returns:
         Tuple of pool sizes for PSP modules.
     """
-    if device is not None:
-        device_str = str(device)
-        if "cuda" in device_str or "cpu" in device_str:
-            return (1, 2, 3, 6)
-    # MPS or unknown — use MPS-safe sizes
-    return (1, 2, 7, 14)
+    fm = img_size // 16  # feature map spatial size after ViT patch embedding
+
+    if fm >= 28:       # 448px → 28×28
+        return (1, 2, 4, 7, 14)
+    elif fm >= 16:     # 256px → 16×16
+        return (1, 2, 4, 8)
+    else:              # 224px → 14×14
+        if device is not None and ("cuda" in str(device) or "cpu" in str(device)):
+            return (1, 2, 3, 6)  # not all divide 14 cleanly but works on CUDA
+        return (1, 2, 7, 14)    # MPS-safe: all divide 14
 
 
 class ConvBnRelu(nn.Module):

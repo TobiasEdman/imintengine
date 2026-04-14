@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Training Comparison Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #fafafa; color: #222;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 13px; padding: 16px;
+  }
+  h1 { font-size: 18px; color: #d84315; margin-bottom: 4px; }
+  h2 { font-size: 14px; color: #1565c0; margin: 16px 0 8px; }
+  .subtitle { color: #666; font-size: 12px; margin-bottom: 16px; }
+
+  /* Run cards */
+  .runs { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .run-card {
+    background: #fff; border-radius: 8px; padding: 12px;
+    border: 2px solid #e0e0e0;
+  }
+  .run-card.best { border-color: #4caf50; }
+  .run-card h3 { font-size: 14px; margin-bottom: 8px; }
+  .run-card .metric { display: flex; justify-content: space-between; padding: 2px 0; }
+  .run-card .metric .k { color: #888; }
+  .run-card .metric .v { color: #111; font-weight: bold; }
+  .run-card .tag {
+    display: inline-block; font-size: 10px; padding: 2px 6px;
+    border-radius: 4px; margin-right: 4px;
+  }
+  .tag-running { background: #c8e6c9; color: #1b5e20; }
+  .tag-completed { background: #bbdefb; color: #0d47a1; }
+  .tag-stopped { background: #ffcdd2; color: #b71c1c; }
+
+  /* Charts */
+  .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 900px) { .chart-grid { grid-template-columns: 1fr; } }
+  .chart-box {
+    background: #fff; border-radius: 8px; padding: 12px;
+    border: 1px solid #e0e0e0;
+  }
+  .chart-box h3 { font-size: 13px; color: #1565c0; margin-bottom: 8px; }
+  .chart-box canvas { max-height: 300px; }
+
+  /* Per-class comparison table */
+  table.compare {
+    border-collapse: collapse; font-size: 12px; width: 100%;
+    margin-top: 8px;
+  }
+  table.compare th, table.compare td {
+    padding: 4px 8px; border: 1px solid #ddd; text-align: right;
+  }
+  table.compare th { background: #e3f2fd; color: #1565c0; text-align: left; }
+  table.compare td.best-cell { color: #2e7d32; font-weight: bold; }
+  table.compare .cls-name { text-align: left; }
+
+  /* Confusion matrix heatmap */
+  .cm-block { background: #fff; border-radius: 8px; padding: 12px; border: 1px solid #e0e0e0; }
+  .cm-block h3 { font-size: 13px; margin-bottom: 8px; }
+  .cm-block canvas { image-rendering: pixelated; }
+  table.cm-table { border-collapse: collapse; font-size: 9px; }
+  table.cm-table th, table.cm-table td { padding: 1px 3px; border: 1px solid #e0e0e0; text-align: center; min-width: 28px; }
+  table.cm-table th { background: #e3f2fd; color: #1565c0; font-size: 8px; }
+  table.cm-table td.diag { font-weight: bold; }
+
+  #log-status { font-size: 11px; color: #666; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<h1>Training Comparison</h1>
+<div class="subtitle">v5a (inverse-freq) vs v5b (effective-number) vs v5c (sqrt inverse-freq)</div>
+
+<div class="runs" id="run-cards"></div>
+
+<div class="chart-grid">
+  <div class="chart-box">
+    <h3>Validation mIoU</h3>
+    <canvas id="chart-miou"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>Training Loss</h3>
+    <canvas id="chart-loss"></canvas>
+  </div>
+</div>
+
+<h2>Per-Class IoU / Producer Acc / User Acc (best epoch per run)</h2>
+<div id="class-table-container"></div>
+
+<h2>Confusion Matrices (latest epoch with CM per run)</h2>
+<div id="cm-container" style="display:flex; flex-wrap:wrap; gap:16px;"></div>
+
+<div id="log-status"></div>
+
+<script>
+const RUNS = [
+  { id: 'v5a_r2', label: 'v5a-r2 (inverse)', color: '#ff7043', file: 'live_logs/v5a_r2_training_log.json' },
+  { id: 'v5b', label: 'v5b (eff-number)', color: '#42a5f5', file: 'live_logs/v5b_training_log.json' },
+  { id: 'v5c', label: 'v5c (sqrt, partial)', color: '#a5d6a7', file: 'live_logs/v5c_training_log.json' },
+  { id: 'v5c_r2', label: 'v5c-r2 (sqrt, full)', color: '#2e7d32', file: 'live_logs/v5c_r2_training_log.json' },
+];
+
+const CLASS_NAMES = [
+  "bakgrund","tallskog","granskog","lovskog","blandskog","sumpskog",
+  "tillf ej skog","vatmark","oppen mark","bebyggelse","vatten",
+  "vete","korn","havre","oljevaxter","slattervall","bete",
+  "potatis","sockerbetor","trindsad","rag","majs","hygge"
+];
+
+Chart.defaults.color = '#444';
+Chart.defaults.font.family = "'JetBrains Mono', monospace";
+Chart.defaults.font.size = 11;
+
+const miouChart = new Chart(document.getElementById('chart-miou'), {
+  type: 'line',
+  data: { labels: [], datasets: RUNS.map(r => ({
+    label: r.label, data: [], borderColor: r.color,
+    borderWidth: 2, pointRadius: 3, tension: 0.2,
+  }))},
+  options: {
+    scales: {
+      y: { beginAtZero: true, max: 0.5, grid: { color: '#e0e0e0' } },
+      x: { title: { display: true, text: 'Epoch' }, grid: { color: '#e0e0e0' } }
+    },
+  },
+});
+
+const lossChart = new Chart(document.getElementById('chart-loss'), {
+  type: 'line',
+  data: { labels: [], datasets: RUNS.map(r => ({
+    label: r.label, data: [], borderColor: r.color,
+    borderWidth: 2, pointRadius: 3, tension: 0.2,
+  }))},
+  options: {
+    scales: {
+      y: { beginAtZero: false, grid: { color: '#e0e0e0' } },
+      x: { title: { display: true, text: 'Epoch' }, grid: { color: '#e0e0e0' } }
+    },
+  },
+});
+
+const runData = {};
+
+async function fetchRun(run) {
+  try {
+    const resp = await fetch(run.file, { cache: 'no-store' });
+    if (resp.ok) return await resp.json();
+  } catch(e) {}
+  return null;
+}
+
+function renderCards() {
+  const container = document.getElementById('run-cards');
+  let bestMiou = 0;
+  let bestId = null;
+  for (const r of RUNS) {
+    const d = runData[r.id];
+    if (d && d._bestMiou > bestMiou) { bestMiou = d._bestMiou; bestId = r.id; }
+  }
+
+  container.innerHTML = RUNS.map(r => {
+    const d = runData[r.id];
+    if (!d) return `<div class="run-card"><h3 style="color:${r.color}">${r.label}</h3><div class="metric"><span class="k">No data yet</span></div></div>`;
+    const isBest = r.id === bestId;
+    const status = d.status || 'unknown';
+    const epochs = d.epochs || [];
+    const latest = epochs[epochs.length - 1] || {};
+    return `<div class="run-card${isBest ? ' best' : ''}">
+      <h3 style="color:${r.color}">${r.label} <span class="tag tag-${status}">${status}</span></h3>
+      <div class="metric"><span class="k">Epochs</span><span class="v">${epochs.length}/${d.config?.epochs || '?'}</span></div>
+      <div class="metric"><span class="k">Best mIoU</span><span class="v">${(d._bestMiou || 0).toFixed(4)}</span></div>
+      <div class="metric"><span class="k">Best epoch</span><span class="v">${d.best_epoch ?? '?'}</span></div>
+      <div class="metric"><span class="k">Latest loss</span><span class="v">${(latest.train_loss || 0).toFixed(4)}</span></div>
+      <div class="metric"><span class="k">Worst class</span><span class="v">${latest.worst_class || '?'} (${(latest.worst_class_iou || 0).toFixed(3)})</span></div>
+    </div>`;
+  }).join('');
+}
+
+function updateCharts() {
+  const maxEpochs = Math.max(...RUNS.map(r => (runData[r.id]?.epochs || []).length), 1);
+  const labels = Array.from({length: maxEpochs}, (_, i) => i + 1);
+
+  miouChart.data.labels = labels;
+  lossChart.data.labels = labels;
+
+  RUNS.forEach((r, idx) => {
+    const epochs = runData[r.id]?.epochs || [];
+    miouChart.data.datasets[idx].data = epochs.map(e => e.val_miou);
+    lossChart.data.datasets[idx].data = epochs.map(e => e.train_loss);
+  });
+
+  miouChart.update('none');
+  lossChart.update('none');
+}
+
+function renderClassTable() {
+  const container = document.getElementById('class-table-container');
+  const bestEpochs = {};
+  for (const r of RUNS) {
+    const d = runData[r.id];
+    if (!d || !d.epochs) continue;
+    let best = null;
+    for (const ep of d.epochs) {
+      if (!best || (ep.val_miou || 0) > (best.val_miou || 0)) best = ep;
+    }
+    if (best) bestEpochs[r.id] = best;
+  }
+
+  const activeRuns = RUNS.filter(r => bestEpochs[r.id]);
+  if (activeRuns.length === 0) return;
+
+  // Header: Class | run1 IoU | run1 Prod | run1 User | run2 IoU | ...
+  let html = '<table class="compare"><thead><tr><th>Class</th>';
+  for (const r of activeRuns) {
+    html += `<th style="color:${r.color}">${r.id} IoU</th>`;
+    html += `<th style="color:${r.color}">Prod</th>`;
+    html += `<th style="color:${r.color}">User</th>`;
+  }
+  html += '</tr></thead><tbody>';
+
+  for (let i = 1; i < CLASS_NAMES.length; i++) {
+    const cls = CLASS_NAMES[i];
+    html += `<tr><td class="cls-name">${cls}</td>`;
+    const ious = activeRuns.map(r => (bestEpochs[r.id]?.per_class_iou || {})[cls] ?? 0);
+    const maxIou = Math.max(...ious);
+
+    for (let j = 0; j < activeRuns.length; j++) {
+      const ep = bestEpochs[activeRuns[j].id];
+      const iou = ious[j];
+      const cm = ep?.confusion_matrix;
+      let pa = 0, ua = 0;
+      if (cm && cm[i]) {
+        const tp = cm[i][i];
+        const rowSum = cm[i].reduce((a, b) => a + b, 0);
+        let colSum = 0;
+        for (let k = 0; k < cm.length; k++) colSum += (cm[k]?.[i] || 0);
+        pa = rowSum > 0 ? tp / rowSum : 0;
+        ua = colSum > 0 ? tp / colSum : 0;
+      }
+      const isBest = iou === maxIou && maxIou > 0;
+      html += `<td${isBest ? ' class="best-cell"' : ''}>${iou.toFixed(3)}</td>`;
+      html += `<td>${pa.toFixed(3)}</td>`;
+      html += `<td>${ua.toFixed(3)}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function renderConfusionMatrices() {
+  const container = document.getElementById('cm-container');
+  let html = '';
+  for (const r of RUNS) {
+    const d = runData[r.id];
+    if (!d || !d.epochs) continue;
+    // Find latest epoch with CM
+    let cmEp = null;
+    for (const ep of [...d.epochs].reverse()) {
+      if (ep.confusion_matrix) { cmEp = ep; break; }
+    }
+    if (!cmEp) continue;
+    const cm = cmEp.confusion_matrix;
+    const n = cm.length;
+
+    // Normalize rows to percentages for display
+    html += `<div class="cm-block"><h3 style="color:${r.color}">${r.label} (ep ${cmEp.epoch})</h3>`;
+    html += '<table class="cm-table"><thead><tr><th>T\\P</th>';
+    for (let j = 1; j < n; j++) html += `<th>${CLASS_NAMES[j]?.slice(0,4) || j}</th>`;
+    html += '</tr></thead><tbody>';
+    for (let i = 1; i < n; i++) {
+      const rowSum = cm[i].reduce((a, b) => a + b, 0) || 1;
+      html += `<tr><th>${CLASS_NAMES[i]?.slice(0,4) || i}</th>`;
+      for (let j = 1; j < n; j++) {
+        const pct = (cm[i][j] / rowSum * 100);
+        const isDiag = i === j;
+        // Color intensity based on percentage
+        const intensity = Math.min(pct / 50, 1);
+        const bg = isDiag
+          ? `rgba(76,175,80,${intensity * 0.6})`
+          : `rgba(244,67,54,${intensity * 0.4})`;
+        html += `<td class="${isDiag ? 'diag' : ''}" style="background:${bg}">${pct >= 1 ? pct.toFixed(0) : (pct > 0 ? '<1' : '')}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table></div>';
+  }
+  container.innerHTML = html;
+}
+
+async function poll() {
+  for (const r of RUNS) {
+    const log = await fetchRun(r);
+    if (log) {
+      log._bestMiou = log.best_metric || 0;
+      runData[r.id] = log;
+    }
+  }
+  renderCards();
+  updateCharts();
+  renderClassTable();
+  renderConfusionMatrices();
+
+  const anyRunning = RUNS.some(r => runData[r.id]?.status === 'running');
+  document.getElementById('log-status').textContent =
+    `Last update: ${new Date().toLocaleTimeString()} | ${anyRunning ? 'Polling every 5s' : 'Polling every 15s'}`;
+  setTimeout(poll, anyRunning ? 5000 : 15000);
+}
+
+poll();
+</script>
+</body>
+</html>

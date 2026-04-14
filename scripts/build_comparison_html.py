@@ -61,6 +61,21 @@ if col6_data:
     col_labels.append(f"🆕 Ny modell ep{col6_epoch}")
     col_bg.append("#e8eaf6")
 
+# Auto-discover prediction JSON files from inference_comparison.py
+PRED_DIR = REPO / "data/viz_tiles/predictions"
+pred_data_list = []  # list of (label, data_dict)
+if PRED_DIR.exists():
+    for pf in sorted(PRED_DIR.glob("*_predictions.json")):
+        with open(pf) as f:
+            pd = json.load(f)
+        label = pd.get("_label", pf.stem.replace("_predictions", ""))
+        epoch = pd.get("_epoch", "?")
+        miou = pd.get("_miou", "?")
+        col_labels.append(f"🧪 {label} (ep{epoch})")
+        col_bg.append("#e8eaf6")
+        pred_data_list.append((label, pd))
+        print(f"Pred col: {label} epoch={epoch} miou={miou}")
+
 js5 = "{\n" + "".join(f'  "{k}": "{viz5[k]}",\n'
     for k in viz5 if not k.startswith("_") and not k.endswith("_shape")) + "}"
 js6 = "{}" if not col6_data else (
@@ -72,6 +87,18 @@ shapes_js = json.dumps({t: viz5.get(t+"_shape",[224,224]) for t,_ in tiles})
 tiles_js  = json.dumps([{"id":t,"dom":d} for t,d in tiles])
 n_cols = len(col_labels)
 has_col6 = "true" if col6_data else "false"
+
+# Build JS for prediction columns (base64 PNG, no pako needed)
+pred_js_blocks = []
+for label, pd in pred_data_list:
+    entries = {}
+    for t_id, _ in tiles:
+        key = f"{t_id}_pred"
+        if key in pd:
+            entries[key] = pd[key]
+    pred_js_blocks.append(json.dumps(entries))
+pred_array_js = "[" + ",".join(pred_js_blocks) + "]" if pred_js_blocks else "[]"
+n_pred = len(pred_data_list)
 
 leg = "".join(
     f'<div class="li"><span class="sw" style="background:{CLASS_COLORS[i]}"></span>{i} {CLASS_NAMES[i]}</div>'
@@ -133,6 +160,8 @@ const HAS6={has_col6};
 const SHAPES={shapes_js};
 const TILES={tiles_js};
 const COL_LABELS={json.dumps(col_labels)};
+const PRED_COLS={pred_array_js};
+const N_PRED={n_pred};
 const COL_BG={json.dumps(col_bg)};
 const NCOLS={n_cols};
 
@@ -195,6 +224,19 @@ async function buildGrid(){{
       const p6B=await inflate(VIZ6[t.id+"_pred"]);
       cells.push(makeCanvas(p6B,gh,gw,cellPx));
     }}else if(HAS6){{cells.push(null);}}
+    // Prediction columns from inference_comparison.py (base64 PNG)
+    for(let pi=0;pi<N_PRED;pi++){{
+      const pkey=t.id+"_pred";
+      if(PRED_COLS[pi]&&PRED_COLS[pi][pkey]){{
+        const img=new Image();
+        img.src="data:image/png;base64,"+PRED_COLS[pi][pkey];
+        await new Promise(r=>{{img.onload=r;if(img.complete)r();}});
+        const c=document.createElement("canvas");c.width=cellPx;c.height=cellPx;
+        const ctx=c.getContext("2d");ctx.imageSmoothingEnabled=false;
+        ctx.drawImage(img,0,0,img.width,img.height,0,0,cellPx,cellPx);
+        cells.push(c);
+      }}else{{cells.push(null);}}
+    }}
     cells.forEach((c,ci)=>{{
       const wrap=document.createElement("div");wrap.className="cell";wrap.style.background=COL_BG[ci];
       if(c){{c.style.width="100%";c.style.height="auto";c.onclick=e=>{{e.stopPropagation();openLB(c,COL_LABELS[ci]+" — "+t.id);}};wrap.appendChild(c);}}

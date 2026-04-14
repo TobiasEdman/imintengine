@@ -211,28 +211,41 @@ class DiceLoss(nn.Module):
         return 1.0 - mean_dice
 
 
-class CombinedLoss(nn.Module):
-    """Focal + Dice combined loss.
+# ── Lovász-softmax loss (Berman et al. 2018) ─────────────────────────────────
+
+
+def _lovasz_grad(gt_sorted: torch.Tensor) -> torch.Tensor:
+    """Gradient of the Lovász extension for the submodular Jaccard loss.
 
     Args:
-        focal: FocalLoss instance.
-        dice: DiceLoss instance.
-        focal_weight: Weight for focal loss (default 0.5).
-        dice_weight: Weight for dice loss (default 0.5).
+        gt_sorted: (P,) ground truth sorted by decreasing error.
+
+    Returns:
+        (P,) Lovász gradient weights.
+    """
+    p = len(gt_sorted)
+    gts = gt_sorted.sum()
+    intersection = gts - gt_sorted.float().cumsum(0)
+    union = gts + (1 - gt_sorted).float().cumsum(0)
+    jaccard = 1.0 - intersection / union
+    if p > 1:
+        jaccard[1:] = jaccard[1:] - jaccard[:-1]
+    return jaccard
+
+
+class LovaszSoftmaxLoss(nn.Module):
+    """Multi-class Lovász-softmax loss (Berman et al. 2018).
+
+    Directly optimises the mean IoU, providing stronger boundary gradients
+    than cross-entropy or Dice loss. Complementary to Focal+Dice.
+
+    Args:
+        ignore_index: Class index to exclude (background).
     """
 
-    def __init__(
-        self,
-        focal: FocalLoss,
-        dice: DiceLoss,
-        focal_weight: float = 0.5,
-        dice_weight: float = 0.5,
-    ):
+    def __init__(self, ignore_index: int = 0):
         super().__init__()
-        self.focal = focal
-        self.dice = dice
-        self.focal_weight = focal_weight
-        self.dice_weight = dice_weight
+        self.ignore_index = ignore_index
 
     def forward(
         self,
@@ -240,7 +253,91 @@ class CombinedLoss(nn.Module):
         targets: torch.Tensor,
         pixel_weight: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return (
+        """Compute mean Lovász-softmax loss over all active classes.
+
+        Args:
+            logits: (B, C, H, W) raw scores.
+            targets: (B, H, W) integer class labels.
+            pixel_weight: Ignored (interface compatibility).
+
+        Returns:
+            Scalar loss tensor.
+        """
+        num_classes = logits.shape[1]
+        probas = F.softmax(logits, dim=1)  # (B, C, H, W)
+
+        # Flatten spatial dims: (B*H*W,) and (B*H*W, C)
+        probas_flat = probas.permute(0, 2, 3, 1).reshape(-1, num_classes)
+        targets_flat = targets.reshape(-1)
+
+        # Mask out ignored pixels
+        valid = targets_flat != self.ignore_index
+        if not valid.any():
+            return torch.tensor(0.0, device=logits.device, requires_grad=True)
+
+        probas_flat = probas_flat[valid]
+        targets_flat = targets_flat[valid]
+
+        losses = []
+        for c in range(num_classes):
+            if c == self.ignore_index:
+                continue
+            fg = (targets_flat == c).float()
+            if fg.sum() == 0:
+                continue
+            errors = (1.0 - probas_flat[:, c]) * fg + probas_flat[:, c] * (1.0 - fg)
+            errors_sorted, perm = torch.sort(errors, descending=True)
+            fg_sorted = fg[perm]
+            grad = _lovasz_grad(fg_sorted)
+            losses.append(torch.dot(F.relu(errors_sorted), grad))
+
+        if not losses:
+            return torch.tensor(0.0, device=logits.device, requires_grad=True)
+        return torch.stack(losses).mean()
+
+
+# ── Combined loss ─────────────────────────────────────────────────────────────
+
+
+class CombinedLoss(nn.Module):
+    """Focal + Dice + optional Lovász combined loss.
+
+    Args:
+        focal: FocalLoss instance.
+        dice: DiceLoss instance.
+        lovasz: Optional LovaszSoftmaxLoss instance.
+        focal_weight: Weight for focal loss.
+        dice_weight: Weight for dice loss.
+        lovasz_weight: Weight for Lovász loss (0 = disabled).
+    """
+
+    def __init__(
+        self,
+        focal: FocalLoss,
+        dice: DiceLoss,
+        lovasz: LovaszSoftmaxLoss | None = None,
+        focal_weight: float = 0.5,
+        dice_weight: float = 0.5,
+        lovasz_weight: float = 0.0,
+    ):
+        super().__init__()
+        self.focal = focal
+        self.dice = dice
+        self.lovasz = lovasz
+        self.focal_weight = focal_weight
+        self.dice_weight = dice_weight
+        self.lovasz_weight = lovasz_weight
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        pixel_weight: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        loss = (
             self.focal_weight * self.focal(logits, targets, pixel_weight)
             + self.dice_weight * self.dice(logits, targets, pixel_weight)
         )
+        if self.lovasz is not None and self.lovasz_weight > 0:
+            loss = loss + self.lovasz_weight * self.lovasz(logits, targets)
+        return loss
