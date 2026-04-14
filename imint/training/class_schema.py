@@ -100,13 +100,11 @@ def compute_class_weights(
     """
     counts = np.array([class_counts.get(i, 0) for i in range(num_classes)], dtype=np.float64)
     counts = np.maximum(counts, 1.0)
-    # Effective-number-of-samples weighting (Cui et al. 2019).
-    # Compresses the weight range vs pure inverse-frequency, reducing
-    # over-prediction of rare classes (high recall, low precision).
-    beta = 0.999
-    effective_num = 1.0 - np.power(beta, counts)
-    weights = (1.0 - beta) / effective_num
-    weights = weights / weights.mean()  # normalize so mean ≈ 1.0
+    # Sqrt inverse-frequency: dampens extremes while still upweighting
+    # rare classes.  Range ~0.5–3.5x vs pure inverse (0.3–10x) or
+    # effective-number (nearly uniform → kills crop classes).
+    raw = counts.sum() / (num_classes * counts)
+    weights = np.sqrt(raw)
     weights = np.minimum(weights, max_weight)
     weights[ignore_index] = 0.0
     return weights.astype(np.float32)

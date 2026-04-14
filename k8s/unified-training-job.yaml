@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: unified-train-v5b
+  name: unified-train-v5c
   namespace: prithvi-training-default
   labels:
     app: unified-training
@@ -27,7 +27,7 @@ spec:
               set -e
               export PYTHONUNBUFFERED=1
 
-              echo "=== v5b: effective-number weights + label smoothing ==="
+              echo "=== v5c: sqrt inverse-freq weights + label smoothing ==="
               echo "Checking data..."
               TILE_COUNT=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
               echo "Unified tiles: $TILE_COUNT"
@@ -45,7 +45,7 @@ spec:
               pip install --quiet --no-cache-dir timm numpy scipy scikit-learn
 
               echo "Cleaning stale checkpoint temp files..."
-              rm -f /checkpoints/unified_v5b/*.pt.tmp 2>/dev/null || true
+              rm -f /checkpoints/unified_v5c/*.pt.tmp 2>/dev/null || true
 
               pip install --quiet --no-cache-dir huggingface_hub
 
@@ -65,7 +65,7 @@ spec:
               echo "Starting 4-frame multi-temporal training..."
               python /workspace/imintengine/scripts/train_unified.py \
                 --data-dirs /data/unified_v2 \
-                --checkpoint-dir /checkpoints/unified_v5b \
+                --checkpoint-dir /checkpoints/unified_v5c \
                 --num-classes 23 \
                 --enable-multitemporal \
                 --num-temporal-frames 4 \
