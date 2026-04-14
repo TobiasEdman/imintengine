@@ -4,7 +4,7 @@ Fetches Sentinel-2 data from CDSE Sentinel Hub HTTP API (no openEO),
 runs YOLO vessel detection, and generates both raster overlay and
 GeoJSON from the same analysis run to ensure coordinate consistency.
 
-Also regenerates RGB, spectral indices, NMD, and COT.
+Also regenerates RGB, spectral indices, and NMD.
 
 Usage:
     .venv/bin/python scripts/generate_marine_leisure_showcase.py
@@ -58,13 +58,11 @@ def main():
     from imint.training.cdse_s2 import fetch_s2_scene
     from imint.analyzers.spectral import SpectralAnalyzer
     from imint.analyzers.nmd import NMDAnalyzer
-    from imint.analyzers.cot import COTAnalyzer
     from imint.analyzers.marine_vessels import MarineVesselAnalyzer
     from imint.exporters.export import (
         save_rgb_png,
         save_ndvi_clean_png,
         save_spectral_index_clean_png,
-        save_cot_clean_png,
         save_nmd_overlay,
         save_vessel_overlay,
         save_regions_geojson,
@@ -92,7 +90,7 @@ def main():
     print(f"{'='*60}\n")
 
     # ── Step 1: Fetch Sentinel-2 via CDSE HTTP ────────────────────
-    print("[1/7] Fetching Sentinel-2 data from CDSE...")
+    print("[1/6] Fetching Sentinel-2 data from CDSE...")
     result = fetch_s2_scene(west, south, east, north, date,
                             size_px=(h_px, w_px),
                             cloud_threshold=args.cloud_threshold)
@@ -113,11 +111,11 @@ def main():
     print(f"  RGB shape: {rgb.shape}")
 
     # ── Step 2: Save RGB ──────────────────────────────────────────
-    print("\n[2/7] Saving RGB...")
+    print("\n[2/6] Saving RGB...")
     save_rgb_png(rgb, os.path.join(out_dir, "rgb.png"))
 
     # ── Step 3: Spectral indices ──────────────────────────────────
-    print("\n[3/7] Running spectral analyzer...")
+    print("\n[3/6] Running spectral analyzer...")
     spectral_analyzer = SpectralAnalyzer(config={"ndvi_threshold": 0.3, "ndwi_threshold": 0.3})
     spec_result = spectral_analyzer.run(
         rgb, bands=bands, date=date, coords=COORDS_WGS84,
@@ -138,7 +136,7 @@ def main():
         )
 
     # ── Step 4: NMD ───────────────────────────────────────────────
-    print("\n[4/7] Running NMD analyzer...")
+    print("\n[4/6] Running NMD analyzer...")
     nmd = NMDAnalyzer()
     nmd_result = nmd.run(
         rgb, bands=bands, date=date, coords=COORDS_WGS84,
@@ -150,21 +148,8 @@ def main():
     if l2_raster is not None:
         save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"))
 
-    # ── Step 5: COT ───────────────────────────────────────────────
-    print("\n[5/7] Running COT analyzer...")
-    cot_analyzer = COTAnalyzer(config={"device": "cpu"})
-    cot_result = cot_analyzer.run(
-        rgb, bands=bands, date=date, coords=COORDS_WGS84,
-        output_dir=out_dir, scl=scl,
-    )
-    print(f"  COT: {cot_result.summary()}")
-
-    cot_map = cot_result.outputs.get("cot_map")
-    if cot_map is not None:
-        save_cot_clean_png(cot_map, os.path.join(out_dir, "cot_clean.png"))
-
-    # ── Step 6: YOLO vessel detection ─────────────────────────────
-    print("\n[6/7] Running YOLO marine vessel detection...")
+    # ── Step 5: YOLO vessel detection ─────────────────────────────
+    print("\n[5/6] Running YOLO marine vessel detection...")
     yolo = MarineVesselAnalyzer(config={
         "confidence": 0.286,
         "chip_size": 320,
@@ -187,7 +172,7 @@ def main():
         print("  WARNING: No detections — vessels.geojson not written")
 
     # ── Step 7: Copy to docs ──────────────────────────────────────
-    print("\n[7/7] Copying outputs to docs/...")
+    print("\n[6/6] Copying outputs to docs/...")
     docs_showcase = str(PROJECT_ROOT / "docs" / "showcase" / "marine")
     docs_data = str(PROJECT_ROOT / "docs" / "data")
     os.makedirs(docs_showcase, exist_ok=True)
@@ -199,7 +184,6 @@ def main():
         "ndvi_clean.png": docs_showcase,
         "ndwi_clean.png": docs_showcase,
         "nmd_overlay.png": docs_showcase,
-        "cot_clean.png": docs_showcase,
         "vessels.geojson": docs_data,
     }
 

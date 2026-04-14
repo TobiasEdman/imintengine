@@ -70,13 +70,11 @@ def main():
     from rasterio.transform import from_origin
     from imint.fetch import fetch_grazing_timeseries, GeoContext
     from imint.analyzers.spectral import SpectralAnalyzer
-    from imint.analyzers.cot import COTAnalyzer
     from imint.analyzers.shoreline import ShorelineAnalyzer
     from imint.exporters.export import (
         save_rgb_png,
         save_ndvi_clean_png,
         save_spectral_index_clean_png,
-        save_cot_clean_png,
         save_segmentation_clean_png,
         save_shoreline_overlay,
         save_shoreline_change_png,
@@ -240,28 +238,9 @@ def main():
             indices["NDWI"], os.path.join(out_dir, "ndwi_clean.png"),
             cmap_name="RdBu", vmin=-1, vmax=1,
         )
-    if "EVI" in indices:
-        save_spectral_index_clean_png(
-            indices["EVI"], os.path.join(out_dir, "evi_clean.png"),
-            cmap_name="RdYlGn", vmin=-0.5, vmax=1,
-        )
 
-    # ── Step 5: COT ──────────────────────────────────────────────────
-    print("\n[5] Running COT analysis...")
-    try:
-        cot = COTAnalyzer()
-        cot_result = cot.run(
-            ref_rgb, bands=ref_bands, date=ref_date,
-            coords=coords, output_dir=out_dir,
-        )
-        cot_map = cot_result.outputs.get("cot_map")
-        if cot_map is not None:
-            save_cot_clean_png(cot_map, os.path.join(out_dir, "cot_clean.png"))
-    except Exception as e:
-        print(f"    COT skipped: {e}")
-
-    # ── Step 6: Shoreline segmentation (all years) ───────────────────
-    print("\n[6] Running NDWI/MNDWI shoreline segmentation...")
+    # ── Step 5: Shoreline segmentation (all years) ───────────────────
+    print("\n[5] Running NDWI/MNDWI shoreline segmentation...")
     analyzer = ShorelineAnalyzer()
 
     # Segmentation per year
@@ -316,7 +295,7 @@ def main():
     )
 
     # ── Step 7: Compute statistics and save metadata ─────────────────
-    print("\n[7] Computing statistics...")
+    print("\n[6] Computing statistics...")
 
     # Per-year stats
     per_year_stats = {}

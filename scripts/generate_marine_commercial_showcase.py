@@ -61,14 +61,12 @@ def main():
     from imint.fetch import fetch_copernicus_data, fetch_vessel_heatmap
     from imint.analyzers.spectral import SpectralAnalyzer
     from imint.analyzers.nmd import NMDAnalyzer
-    from imint.analyzers.cot import COTAnalyzer
     from imint.analyzers.marine_vessels import MarineVesselAnalyzer
     from imint.analyzers.ai2_vessels import AI2VesselAnalyzer
     from imint.exporters.export import (
         save_rgb_png,
         save_ndvi_clean_png,
         save_spectral_index_clean_png,
-        save_cot_clean_png,
         save_nmd_overlay,
         save_vessel_overlay,
         save_ai2_vessel_overlay,
@@ -116,8 +114,8 @@ def main():
     print("\n[2/9] Saving RGB...")
     save_rgb_png(rgb, os.path.join(out_dir, "rgb.png"))
 
-    # ── Step 3: Spectral, NMD, COT ──────────────────────────────────
-    print("\n[3/9] Running spectral, NMD, and COT analyzers...")
+    # ── Step 3: Spectral, NMD ────────────────────────────────────────
+    print("\n[3/9] Running spectral and NMD analyzers...")
 
     spectral = SpectralAnalyzer(config={"ndvi_threshold": 0.3, "ndwi_threshold": 0.3})
     spec_result = spectral.run(
@@ -149,17 +147,6 @@ def main():
     l2_raster = nmd_result.outputs.get("l2_raster")
     if l2_raster is not None:
         save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"))
-
-    cot = COTAnalyzer(config={"device": "cpu"})
-    cot_result = cot.run(
-        rgb, bands=bands, date=date, coords=coords,
-        output_dir=out_dir, scl=scl, geo=geo,
-    )
-    print(f"  COT: {cot_result.summary()}")
-
-    cot_map = cot_result.outputs.get("cot_map")
-    if cot_map is not None:
-        save_cot_clean_png(cot_map, os.path.join(out_dir, "cot_clean.png"))
 
     # ── Step 4: YOLO vessel detection ────────────────────────────────
     print("\n[4/9] Running YOLO marine vessel detection...")
@@ -269,7 +256,6 @@ def main():
         "yolo_vessels": len(yolo_regions),
         "ai2_vessels": len(ai2_regions),
         "nmd_stats": nmd_result.outputs.get("class_stats", {}),
-        "cot_stats": cot_result.outputs.get("stats", {}),
         "yolo_heatmap": yolo_heatmap_info,
         "ai2_heatmap": ai2_heatmap_info,
     }
@@ -289,7 +275,7 @@ def main():
         "rgb.png", "vessels_clean.png", "ai2_vessels_clean.png",
         "vessel_heatmap_clean.png", "ai2_vessel_heatmap_clean.png",
         "nmd_overlay.png", "ndvi_clean.png", "ndwi_clean.png",
-        "cot_clean.png", "sjokort.png",
+        "sjokort.png",
     ]:
         src = os.path.join(out_dir, fname)
         if os.path.exists(src):

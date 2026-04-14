@@ -2,7 +2,7 @@
 
 Uses the cached Sentinel-2 timeseries from run_grazing_model.py
 (bbox_timeseries_YYYY.npz) to pick the best cloud-free date,
-runs spectral + NMD + COT analysis, overlays LPIS polygons with
+runs spectral + NMD analysis, overlays LPIS polygons with
 grazing model predictions, and saves PNGs to outputs/showcase/grazing/.
 
 Usage:
@@ -54,12 +54,10 @@ def main():
     from rasterio.transform import from_origin
     from imint.fetch import fetch_lpis_polygons, fetch_nmd_data, GeoContext
     from imint.analyzers.spectral import SpectralAnalyzer
-    from imint.analyzers.cot import COTAnalyzer
     from imint.exporters.export import (
         save_rgb_png,
         save_ndvi_clean_png,
         save_spectral_index_clean_png,
-        save_cot_clean_png,
         save_nmd_overlay,
         save_lpis_overlay,
         save_lpis_geojson,
@@ -158,21 +156,8 @@ def main():
             cmap_name="RdYlGn", vmin=-0.5, vmax=1,
         )
 
-    # ── Step 4: COT ───────────────────────────────────────────────────
-    print("\n[4] Running COT analysis...")
-    try:
-        cot = COTAnalyzer()
-        cot_result = cot.run(
-            rgb, bands=bands, date=date, coords=coords, output_dir=out_dir,
-        )
-        cot_map = cot_result.outputs.get("cot_map")
-        if cot_map is not None:
-            save_cot_clean_png(cot_map, os.path.join(out_dir, "cot_clean.png"))
-    except Exception as e:
-        print(f"    COT skipped: {e}")
-
-    # ── Step 5: NMD ───────────────────────────────────────────────────
-    print("\n[5] Fetching NMD land cover...")
+    # ── Step 4: NMD ───────────────────────────────────────────────────
+    print("\n[4] Fetching NMD land cover...")
     nmd_result = None
     try:
         nmd_result = fetch_nmd_data(coords=coords, target_shape=(H, W))
@@ -181,8 +166,8 @@ def main():
     except Exception as e:
         print(f"    NMD skipped: {e}")
 
-    # ── Step 6: LPIS overlay with predictions ─────────────────────────
-    print("\n[6] Fetching LPIS pasture polygons...")
+    # ── Step 5: LPIS overlay with predictions ─────────────────────────
+    print("\n[5] Fetching LPIS pasture polygons...")
     lpis_gdf = None
     try:
         import geopandas as gpd
@@ -237,8 +222,8 @@ def main():
         traceback.print_exc()
         print(f"    LPIS overlay skipped: {e}")
 
-    # ── Step 7: Compute statistics and save metadata ──────────────────
-    print("\n[7] Computing statistics...")
+    # ── Step 6: Compute statistics and save metadata ──────────────────
+    print("\n[6] Computing statistics...")
     lpis_count = len(lpis_gdf) if lpis_gdf is not None else 0
 
     # Compute LPIS total area (ha) from clipped geometries in EPSG:3006
