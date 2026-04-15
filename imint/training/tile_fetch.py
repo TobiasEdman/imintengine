@@ -13,15 +13,76 @@ from datetime import datetime
 import numpy as np
 
 import threading
+import time as _time
 
 TILE_SIZE_M = 2560   # 256 pixels × 10m
 TILE_SIZE_PX = 256
 N_BANDS = 6
 PRITHVI_BANDS = ["B02", "B03", "B04", "B8A", "B11", "B12"]
 
-# Global concurrency limits — shared across all tiles and frames
-_DES_SEMAPHORE = threading.Semaphore(3)   # max 3 DES requests at once
-_CDSE_SEMAPHORE = threading.Semaphore(1)  # max 1 CDSE request at once
+
+class AdaptiveSemaphore:
+    """Semaphore that adjusts concurrency based on success/failure rates.
+
+    Starts at ``initial`` permits, increases by 1 (up to ``max_permits``)
+    after ``ramp_up_after`` consecutive successes, decreases by 1 (down to
+    ``min_permits``) on any failure or timeout.
+    """
+
+    def __init__(
+        self,
+        initial: int = 3,
+        min_permits: int = 1,
+        max_permits: int = 8,
+        ramp_up_after: int = 10,
+        name: str = "",
+    ):
+        self._lock = threading.Lock()
+        self._sem = threading.Semaphore(initial)
+        self._permits = initial
+        self._min = min_permits
+        self._max = max_permits
+        self._ramp_up_after = ramp_up_after
+        self._consecutive_ok = 0
+        self._name = name
+
+    @property
+    def permits(self) -> int:
+        return self._permits
+
+    def acquire(self, timeout: float | None = None) -> bool:
+        return self._sem.acquire(timeout=timeout)
+
+    def release(self) -> None:
+        self._sem.release()
+
+    def report_success(self) -> None:
+        with self._lock:
+            self._consecutive_ok += 1
+            if self._consecutive_ok >= self._ramp_up_after and self._permits < self._max:
+                self._permits += 1
+                self._consecutive_ok = 0
+                self._sem.release()  # add a permit
+                print(f"    [{self._name}] ↑ concurrency → {self._permits}")
+
+    def report_failure(self) -> None:
+        with self._lock:
+            self._consecutive_ok = 0
+            if self._permits > self._min:
+                self._permits -= 1
+                # consume a permit (don't release — effectively reduces slots)
+                self._sem.acquire(timeout=0)
+                print(f"    [{self._name}] ↓ concurrency → {self._permits}")
+
+
+_DES_SEMAPHORE = AdaptiveSemaphore(
+    initial=3, min_permits=1, max_permits=8,
+    ramp_up_after=10, name="DES",
+)
+_CDSE_SEMAPHORE = AdaptiveSemaphore(
+    initial=1, min_permits=1, max_permits=3,
+    ramp_up_after=20, name="CDSE",
+)
 
 
 def point_to_bbox_3006(lat: float, lon: float) -> dict:
@@ -116,9 +177,11 @@ def _fetch_single_scene(
                 haze_threshold=haze_threshold,
             )
             if result is not None:
+                _CDSE_SEMAPHORE.report_success()
                 return result[0], date_str
+            _CDSE_SEMAPHORE.report_failure()
         except Exception:
-            pass
+            _CDSE_SEMAPHORE.report_failure()
         finally:
             _CDSE_SEMAPHORE.release()
         return None, date_str
@@ -133,9 +196,11 @@ def _fetch_single_scene(
                 source="des",
             )
             if result is not None:
+                _DES_SEMAPHORE.report_success()
                 return result[0], date_str
+            _DES_SEMAPHORE.report_failure()
         except Exception:
-            pass
+            _DES_SEMAPHORE.report_failure()
         finally:
             _DES_SEMAPHORE.release()
         return None, date_str

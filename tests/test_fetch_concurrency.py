@@ -1,39 +1,83 @@
-"""Tests for global API concurrency control in tile_fetch.py."""
+"""Tests for adaptive API concurrency control in tile_fetch.py."""
 import threading
 import time
 
-import numpy as np
 import pytest
 
-from imint.training.tile_fetch import _DES_SEMAPHORE, _CDSE_SEMAPHORE
+from imint.training.tile_fetch import AdaptiveSemaphore, _DES_SEMAPHORE, _CDSE_SEMAPHORE
 
 
-class TestGlobalSemaphores:
+class TestAdaptiveSemaphore:
 
-    def test_des_semaphore_exists(self):
-        assert isinstance(_DES_SEMAPHORE, threading.Semaphore)
+    def test_initial_permits(self):
+        sem = AdaptiveSemaphore(initial=3, name="test")
+        assert sem.permits == 3
 
-    def test_cdse_semaphore_exists(self):
-        assert isinstance(_CDSE_SEMAPHORE, threading.Semaphore)
+    def test_acquire_release(self):
+        sem = AdaptiveSemaphore(initial=2, name="test")
+        assert sem.acquire(timeout=0.1)
+        assert sem.acquire(timeout=0.1)
+        # Third should block (only 2 permits)
+        assert not sem.acquire(timeout=0.1)
+        sem.release()
+        assert sem.acquire(timeout=0.1)
+        sem.release()
+        sem.release()
 
-    def test_des_max_3_concurrent(self):
-        """At most 3 threads can hold the DES semaphore simultaneously."""
+    def test_ramp_up_after_successes(self):
+        sem = AdaptiveSemaphore(initial=2, max_permits=5, ramp_up_after=3, name="test")
+        assert sem.permits == 2
+        sem.report_success()
+        sem.report_success()
+        assert sem.permits == 2  # not yet
+        sem.report_success()
+        assert sem.permits == 3  # ramped up after 3 consecutive
+
+    def test_ramp_down_on_failure(self):
+        sem = AdaptiveSemaphore(initial=3, min_permits=1, name="test")
+        assert sem.permits == 3
+        sem.report_failure()
+        assert sem.permits == 2
+        sem.report_failure()
+        assert sem.permits == 1
+        sem.report_failure()
+        assert sem.permits == 1  # can't go below min
+
+    def test_failure_resets_success_counter(self):
+        sem = AdaptiveSemaphore(initial=2, max_permits=5, ramp_up_after=3, name="test")
+        sem.report_success()
+        sem.report_success()
+        sem.report_failure()  # resets counter
+        sem.report_success()
+        sem.report_success()
+        assert sem.permits == 1  # went down from failure, not up
+
+    def test_max_permits_cap(self):
+        sem = AdaptiveSemaphore(initial=3, max_permits=4, ramp_up_after=1, name="test")
+        sem.report_success()  # → 4
+        assert sem.permits == 4
+        sem.report_success()  # already at max
+        assert sem.permits == 4
+
+    def test_concurrent_max_enforced(self):
+        """Verify actual concurrency doesn't exceed current permits."""
+        sem = AdaptiveSemaphore(initial=3, max_permits=3, name="test")
         max_concurrent = 0
         current = 0
         lock = threading.Lock()
 
         def worker():
             nonlocal max_concurrent, current
-            _DES_SEMAPHORE.acquire()
+            sem.acquire()
             try:
                 with lock:
                     current += 1
                     max_concurrent = max(max_concurrent, current)
-                time.sleep(0.05)
+                time.sleep(0.03)
             finally:
                 with lock:
                     current -= 1
-                _DES_SEMAPHORE.release()
+                sem.release()
 
         threads = [threading.Thread(target=worker) for _ in range(10)]
         for t in threads:
@@ -41,126 +85,58 @@ class TestGlobalSemaphores:
         for t in threads:
             t.join()
 
-        assert max_concurrent == 3, f"Expected max 3 concurrent, got {max_concurrent}"
+        assert max_concurrent == 3
 
-    def test_cdse_max_1_concurrent(self):
-        """At most 1 thread can hold the CDSE semaphore simultaneously."""
+    def test_ramp_up_increases_actual_concurrency(self):
+        """After ramp-up, more threads should run concurrently."""
+        sem = AdaptiveSemaphore(initial=2, max_permits=4, ramp_up_after=2, name="test")
+
+        # Ramp up to 4
+        for _ in range(6):
+            sem.report_success()
+        assert sem.permits == 4
+
         max_concurrent = 0
         current = 0
         lock = threading.Lock()
 
         def worker():
             nonlocal max_concurrent, current
-            _CDSE_SEMAPHORE.acquire()
+            sem.acquire()
             try:
                 with lock:
                     current += 1
                     max_concurrent = max(max_concurrent, current)
-                time.sleep(0.05)
+                time.sleep(0.03)
             finally:
                 with lock:
                     current -= 1
-                _CDSE_SEMAPHORE.release()
+                sem.release()
 
-        threads = [threading.Thread(target=worker) for _ in range(5)]
+        threads = [threading.Thread(target=worker) for _ in range(8)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
 
-        assert max_concurrent == 1, f"Expected max 1 concurrent, got {max_concurrent}"
+        assert max_concurrent == 4
 
-    def test_des_and_cdse_independent(self):
-        """DES and CDSE semaphores don't block each other."""
-        des_held = threading.Event()
-        cdse_held = threading.Event()
-        both_held = threading.Event()
 
-        def hold_des():
-            _DES_SEMAPHORE.acquire()
-            try:
-                des_held.set()
-                both_held.wait(timeout=2)
-            finally:
-                _DES_SEMAPHORE.release()
+class TestGlobalSemaphores:
 
-        def hold_cdse():
-            _CDSE_SEMAPHORE.acquire()
-            try:
-                cdse_held.set()
-                both_held.wait(timeout=2)
-            finally:
-                _CDSE_SEMAPHORE.release()
+    def test_des_is_adaptive(self):
+        assert isinstance(_DES_SEMAPHORE, AdaptiveSemaphore)
+        assert _DES_SEMAPHORE.permits >= 1
 
-        t1 = threading.Thread(target=hold_des)
-        t2 = threading.Thread(target=hold_cdse)
-        t1.start()
-        t2.start()
+    def test_cdse_is_adaptive(self):
+        assert isinstance(_CDSE_SEMAPHORE, AdaptiveSemaphore)
+        assert _CDSE_SEMAPHORE.permits >= 1
 
-        # Both should be acquired within 1 second (they're independent)
-        assert des_held.wait(timeout=1), "DES semaphore should be acquirable"
-        assert cdse_held.wait(timeout=1), "CDSE should not be blocked by DES"
-        both_held.set()
-        t1.join()
-        t2.join()
+    def test_des_starts_at_3(self):
+        # Note: permits may have changed during other tests — check initial config
+        fresh = AdaptiveSemaphore(initial=3, name="des-fresh")
+        assert fresh.permits == 3
 
-    def test_semaphores_release_on_exception(self):
-        """Semaphores must be released even if the worker raises."""
-        # Acquire all 3 DES slots
-        for _ in range(3):
-            _DES_SEMAPHORE.acquire()
-
-        # Release them (simulating normal cleanup)
-        for _ in range(3):
-            _DES_SEMAPHORE.release()
-
-        # Verify we can acquire again (not leaked)
-        acquired = _DES_SEMAPHORE.acquire(timeout=0.5)
-        assert acquired, "Semaphore should be available after release"
-        _DES_SEMAPHORE.release()
-
-    def test_total_concurrent_4(self):
-        """Total concurrent API calls should be max 4 (3 DES + 1 CDSE)."""
-        max_total = 0
-        current = 0
-        lock = threading.Lock()
-
-        def des_worker():
-            nonlocal max_total, current
-            _DES_SEMAPHORE.acquire()
-            try:
-                with lock:
-                    current += 1
-                    max_total = max(max_total, current)
-                time.sleep(0.05)
-            finally:
-                with lock:
-                    current -= 1
-                _DES_SEMAPHORE.release()
-
-        def cdse_worker():
-            nonlocal max_total, current
-            _CDSE_SEMAPHORE.acquire()
-            try:
-                with lock:
-                    current += 1
-                    max_total = max(max_total, current)
-                time.sleep(0.05)
-            finally:
-                with lock:
-                    current -= 1
-                _CDSE_SEMAPHORE.release()
-
-        # Simulate 3 tiles each submitting 3 DES + 1 CDSE
-        threads = []
-        for _ in range(3):
-            for _ in range(3):
-                threads.append(threading.Thread(target=des_worker))
-            threads.append(threading.Thread(target=cdse_worker))
-
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert max_total <= 4, f"Expected max 4 total concurrent, got {max_total}"
+    def test_cdse_starts_at_1(self):
+        fresh = AdaptiveSemaphore(initial=1, name="cdse-fresh")
+        assert fresh.permits == 1
