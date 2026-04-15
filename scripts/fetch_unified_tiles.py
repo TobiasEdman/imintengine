@@ -264,13 +264,27 @@ def prefetch_vpp_batch(
     # Only fetch tiles not already cached
     to_fetch = [(loc, d) for loc, d in work_items if loc["name"] not in vpp_cache]
 
+    from imint.training.tile_fetch import _CDSE_SEMAPHORE
+
     def _fetch_one(item: tuple[dict, str]) -> tuple[str, list | None]:
         loc, _ = item
-        windows = _get_vpp_doy_windows(loc["bbox_3006"], num_growing_frames=3)
-        return loc["name"], windows
+        _CDSE_SEMAPHORE.acquire()
+        try:
+            windows = _get_vpp_doy_windows(loc["bbox_3006"], num_growing_frames=3)
+            if windows:
+                _CDSE_SEMAPHORE.report_success()
+            else:
+                _CDSE_SEMAPHORE.report_failure()
+            return loc["name"], windows
+        except Exception:
+            _CDSE_SEMAPHORE.report_failure()
+            return loc["name"], None
+        finally:
+            _CDSE_SEMAPHORE.release()
 
     if to_fetch:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        # Use more threads than CDSE permits — the semaphore queues excess
+        with ThreadPoolExecutor(max_workers=max(workers, 8)) as pool:
             futs = {pool.submit(_fetch_one, item): item for item in to_fetch}
             done = 0
             for f in as_completed(futs):
@@ -279,7 +293,8 @@ def prefetch_vpp_batch(
                     vpp_cache[name] = windows
                 done += 1
                 if done % 200 == 0 or done == len(to_fetch):
-                    print(f"  VPP {done}/{len(to_fetch)}  hits={len(vpp_cache)}",
+                    print(f"  VPP {done}/{len(to_fetch)}  hits={len(vpp_cache)}"
+                          f"  (CDSE permits={_CDSE_SEMAPHORE.permits})",
                           flush=True)
 
     # Save to disk
@@ -670,7 +685,7 @@ def main():
     # ── VPP prefetch: fetch all growing-season windows before spectral ─────────
     # VPP uses a separate CDSE endpoint (lighter quota).  Fetching up-front
     # means the spectral loop never stalls on VPP inside each tile.
-    vpp_cache = prefetch_vpp_batch(work, workers=min(4, max(1, args.workers * 4)))
+    vpp_cache = prefetch_vpp_batch(work, workers=args.workers)
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     t0 = time.time()
