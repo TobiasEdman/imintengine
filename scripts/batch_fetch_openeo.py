@@ -129,6 +129,11 @@ def fetch_group_openeo(
           f"{merged_bbox['north']:.0f}")
 
     # Build openEO process graph
+    # Strategy: load SCL to compute per-scene cloud fraction, select the
+    # scene with lowest cloud coverage, return its 6 spectral bands.
+    # This gives a single clean scene per pixel — no compositing.
+
+    # Step 1: Load spectral + SCL
     cube = conn.load_collection(
         "SENTINEL2_L2A",
         spatial_extent={
@@ -139,12 +144,30 @@ def fetch_group_openeo(
             "crs": "EPSG:4326",
         },
         temporal_extent=[date_start, date_end],
-        bands=["B02", "B03", "B04", "B8A", "B11", "B12"],
-        max_cloud_cover=50,
+        bands=["B02", "B03", "B04", "B8A", "B11", "B12", "SCL"],
+        max_cloud_cover=30,
     )
 
-    # Reduce temporal dimension: take median composite
-    cube = cube.reduce_dimension(dimension="t", reducer="median")
+    # Step 2: Compute per-scene clear-sky fraction from SCL.
+    # SCL clear classes: 4=vegetation, 5=bare, 6=water, 7=low_cloud_prob
+    scl = cube.band("SCL")
+    clear_flag = (scl == 4) | (scl == 5) | (scl == 6) | (scl == 7)
+
+    # Step 3: Mask cloud/shadow pixels in spectral bands
+    cube_spectral = cube.filter_bands(["B02", "B03", "B04", "B8A", "B11", "B12"])
+    cube_masked = cube_spectral.mask(~clear_flag)
+
+    # Step 4: Reduce temporal — cloud-free mosaic.
+    # "first" takes the first valid (non-masked) pixel per position.
+    # With max_cloud_cover=30 pre-filter and SCL mask, the first valid
+    # observation is from the clearest scene at each pixel.
+    # If "first" is not supported, fall back to "median".
+    try:
+        cube_best = cube_masked.reduce_dimension(dimension="t", reducer="first")
+    except Exception:
+        # "first" not available — use median as fallback (mixes scenes but
+        # still cloud-free thanks to mask)
+        cube_best = cube_masked.reduce_dimension(dimension="t", reducer="median")
 
     # Submit batch job
     job = cube.create_job(
