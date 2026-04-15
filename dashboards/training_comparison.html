@@ -95,11 +95,14 @@
 <div id="log-status"></div>
 
 <script>
+// Results server: kubectl port-forward svc/results-server 8095:8095 -n prithvi-training-default
+// Fallback: local files in live_logs/
+const API_BASE = 'http://localhost:8095';
 const RUNS = [
-  { id: 'v5a_r2', label: 'v5a-r2 (inverse)', color: '#ff7043', file: 'live_logs/v5a_r2_training_log.json' },
-  { id: 'v5b', label: 'v5b (eff-number)', color: '#42a5f5', file: 'live_logs/v5b_training_log.json' },
-  { id: 'v5c', label: 'v5c (sqrt, partial)', color: '#a5d6a7', file: 'live_logs/v5c_training_log.json' },
-  { id: 'v5c_r2', label: 'v5c-r2 (sqrt, full)', color: '#2e7d32', file: 'live_logs/v5c_r2_training_log.json' },
+  { id: 'unified_v5a_r2', label: 'v5a-r2 (inverse)', color: '#ff7043' },
+  { id: 'unified_v5b', label: 'v5b (eff-number)', color: '#42a5f5' },
+  { id: 'unified_v5c_r2', label: 'v5c-r2 (sqrt)', color: '#2e7d32' },
+  { id: 'unified_v6a', label: 'v6a (256px+Lovász)', color: '#d84315' },
 ];
 
 const CLASS_NAMES = [
@@ -144,10 +147,18 @@ const lossChart = new Chart(document.getElementById('chart-loss'), {
 const runData = {};
 
 async function fetchRun(run) {
-  try {
-    const resp = await fetch(run.file, { cache: 'no-store' });
-    if (resp.ok) return await resp.json();
-  } catch(e) {}
+  // Try results server first, fall back to local files
+  const urls = [
+    `${API_BASE}/api/runs/${run.id}/log`,
+    `live_logs/${run.id}_training_log.json`,
+    `live_logs/${run.id.replace('unified_', '')}_training_log.json`,
+  ];
+  for (const url of urls) {
+    try {
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (resp.ok) return await resp.json();
+    } catch(e) {}
+  }
   return null;
 }
 

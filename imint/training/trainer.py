@@ -612,16 +612,24 @@ class LULCTrainer:
         self._write_log_file()
 
     def _write_log_file(self) -> None:
-        """Atomic write of training_log.json (tmp + rename)."""
-        try:
-            log_path = Path(self.config.checkpoint_dir) / "training_log.json"
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = log_path.with_suffix(".json.tmp")
-            with open(tmp_path, "w") as f:
-                json.dump(self._training_log, f, indent=2, default=str)
-            tmp_path.rename(log_path)
-        except Exception as e:
-            print(f"    WARNING: Failed to write training log: {e}")
+        """Atomic write of training_log.json to checkpoint dir + shared results dir.
+
+        Dual-write: the checkpoint dir may be on a RWO PVC (inaccessible after
+        pod terminates), so we also write to /data/results/{run_id}/ on the
+        CephFS RWX PVC for persistent access by the results server and dashboard.
+        """
+        run_id = Path(self.config.checkpoint_dir).name
+        log_content = json.dumps(self._training_log, indent=2, default=str)
+
+        for base_dir in [self.config.checkpoint_dir, f"/data/results/{run_id}"]:
+            try:
+                log_path = Path(base_dir) / "training_log.json"
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = log_path.with_suffix(".json.tmp")
+                tmp_path.write_text(log_content)
+                tmp_path.rename(log_path)
+            except Exception:
+                pass  # best-effort — at least one location should succeed
 
     def _write_system_metrics(self) -> None:
         """Write system_metrics.json with system-wide CPU/RAM and GPU usage."""
@@ -854,3 +862,24 @@ class LULCTrainer:
             },
         }
         torch.save(checkpoint, path)
+
+        # Mirror checkpoint metadata to shared results dir
+        if "best" in path.name:
+            run_id = Path(self.config.checkpoint_dir).name
+            try:
+                meta_dir = Path(f"/data/results/{run_id}")
+                meta_dir.mkdir(parents=True, exist_ok=True)
+                meta = {
+                    "run_id": run_id,
+                    "epoch": epoch,
+                    "miou": metrics.get("miou", 0),
+                    "per_class_iou": {k: round(v, 4) for k, v in
+                                      metrics.get("per_class_iou", {}).items()},
+                    "checkpoint_path": str(path),
+                    "size_mb": round(path.stat().st_size / 1e6, 1),
+                }
+                (meta_dir / "checkpoint_meta.json").write_text(
+                    json.dumps(meta, indent=2)
+                )
+            except Exception:
+                pass

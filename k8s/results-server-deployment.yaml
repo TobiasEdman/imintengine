@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: results-server
+  namespace: prithvi-training-default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: results-server
+  template:
+    metadata:
+      labels:
+        app: results-server
+    spec:
+      containers:
+        - name: server
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir httpx 2>/dev/null || true
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              python /workspace/imintengine/scripts/results_server.py \
+                --port 8095 \
+                --results-dir /data/results \
+                --checkpoints-dir /checkpoints
+          ports:
+            - containerPort: 8095
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8095
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: results-server
+  namespace: prithvi-training-default
+spec:
+  selector:
+    app: results-server
+  ports:
+    - port: 8095
+      targetPort: 8095
