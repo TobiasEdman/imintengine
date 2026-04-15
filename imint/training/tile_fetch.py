@@ -349,7 +349,8 @@ def fetch_aux_channels(bbox_3006: dict) -> dict[str, np.ndarray]:
     """
     aux = {}
 
-    # VPP phenology (5 bands)
+    # VPP phenology (5 bands) — goes through CDSE semaphore
+    _CDSE_SEMAPHORE.acquire()
     try:
         from imint.training.cdse_vpp import fetch_vpp_tiles
         vpp = fetch_vpp_tiles(
@@ -362,10 +363,13 @@ def fetch_aux_channels(bbox_3006: dict) -> dict[str, np.ndarray]:
         for band in ["sosd", "eosd", "length", "maxv", "minv"]:
             if band in vpp and vpp[band] is not None:
                 aux[f"vpp_{band}"] = vpp[band].astype(np.float32)
+        _CDSE_SEMAPHORE.report_success()
     except Exception:
-        pass
+        _CDSE_SEMAPHORE.report_failure()
+    finally:
+        _CDSE_SEMAPHORE.release()
 
-    # DEM (Copernicus GLO-30)
+    # DEM (Copernicus GLO-30) — separate API, no CDSE semaphore
     try:
         from imint.training.copernicus_dem import fetch_dem_tile
         dem = fetch_dem_tile(
