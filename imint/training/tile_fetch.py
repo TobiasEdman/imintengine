@@ -93,8 +93,12 @@ def _fetch_single_scene(
 
     candidates.sort(key=lambda x: x[1])
 
-    # Primary: CDSE Sentinel Hub HTTP
-    for date_str, _cloud in candidates[:max_candidates]:
+    # Race CDSE and DES in parallel for each candidate date.
+    # Both sources are tried simultaneously — first successful result wins.
+    from concurrent.futures import ThreadPoolExecutor, as_completed, FIRST_COMPLETED, wait
+    from imint.fetch import fetch_seasonal_image
+
+    def _cdse_try(date_str: str) -> tuple[np.ndarray | None, str, str]:
         try:
             result = fetch_s2_scene(
                 bbox_3006["west"], bbox_3006["south"],
@@ -105,38 +109,40 @@ def _fetch_single_scene(
                 haze_threshold=haze_threshold,
             )
             if result is not None:
-                return result[0], date_str
+                return result[0], date_str, "cdse"
         except Exception:
-            continue
+            pass
+        return None, date_str, "cdse"
 
-    # Fallback: DES openEO — try top candidates in parallel (3 workers)
-    # CDSE failed fast (5xx) or exhausted all candidates; DES is independent
-    # infrastructure so it won't share the same overload.
-    if candidates:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        from imint.fetch import fetch_seasonal_image
+    def _des_try(date_str: str) -> tuple[np.ndarray | None, str, str]:
+        try:
+            result = fetch_seasonal_image(
+                date=date_str,
+                coords=coords_wgs84,
+                prithvi_bands=PRITHVI_BANDS,
+                source="des",
+            )
+            if result is not None:
+                return result[0], date_str, "des"
+        except Exception:
+            pass
+        return None, date_str, "des"
 
-        def _des_try(date_str: str) -> tuple[np.ndarray | None, str]:
-            try:
-                result = fetch_seasonal_image(
-                    date=date_str,
-                    coords=coords_wgs84,
-                    prithvi_bands=PRITHVI_BANDS,
-                    source="des",
-                )
-                if result is not None:
-                    return result[0], date_str
-            except Exception:
-                pass
-            return None, ""
+    top_dates = [d for d, _ in candidates[:max_candidates]]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        # Submit both CDSE and DES for each candidate date
+        futures = []
+        for d in top_dates:
+            futures.append(pool.submit(_cdse_try, d))
+            futures.append(pool.submit(_des_try, d))
 
-        top_dates = [d for d, _ in candidates[:max_candidates]]
-        with ThreadPoolExecutor(max_workers=min(3, len(top_dates))) as pool:
-            futs = {pool.submit(_des_try, d): d for d in top_dates}
-            for f in as_completed(futs):
-                scene, date_str = f.result()
-                if scene is not None:
-                    return scene, date_str
+        for f in as_completed(futures):
+            scene, date_str, source = f.result()
+            if scene is not None:
+                # Cancel remaining futures (best-effort)
+                for pending in futures:
+                    pending.cancel()
+                return scene, date_str
 
     return None, ""
 
