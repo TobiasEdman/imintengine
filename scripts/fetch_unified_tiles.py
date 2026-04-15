@@ -641,55 +641,19 @@ def main():
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     t0 = time.time()
 
-    # Adaptive concurrency: start at max_workers, back off on rate limits
-    import threading
+    # Fixed concurrency — no adaptive backoff. Rate limiting is handled
+    # internally by the DES/CDSE retry logic per tile.
     max_w = args.workers
-    min_w = 1
-    concurrency = threading.Semaphore(max_w)
     active_workers = max_w
-    rate_limit_count = 0
-    _lock = threading.Lock()
-
-    def _adapt_on_result(result):
-        nonlocal active_workers, rate_limit_count
-        # Check if result indicates rate limiting (failed with 429-like errors)
-        was_limited = result and result.get("_rate_limited", False)
-        with _lock:
-            if was_limited:
-                rate_limit_count += 1
-                if active_workers > min_w:
-                    active_workers -= 1
-                    # Don't release semaphore — effectively reduces concurrency
-                    print(f"    [adaptive] Rate limited — reducing to {active_workers} workers")
-            else:
-                # Slowly recover: every 20 successful tiles, try +1 worker
-                if rate_limit_count > 0 and stats["ok"] % 20 == 0 and active_workers < max_w:
-                    active_workers += 1
-                    concurrency.release()  # Add a permit back
-                    print(f"    [adaptive] Recovering — increasing to {active_workers} workers")
 
     def _run(item):
-        concurrency.acquire()
-        try:
-            t_start = time.time()
-            loc, d = item
-            if use_refetch:
-                r = refetch_tile(loc, args.years, d, args.cloud_max,
-                                 vpp_cache=vpp_cache)
-            else:
-                r = fetch_tile(loc, args.years, d, args.cloud_max,
-                               vpp_cache=vpp_cache)
-            # Rate-limit detection: scale threshold with tile size
-            # 256px: 60s, 512px: 240s (4x pixels = 4x transfer time)
-            from imint.training.tile_fetch import TILE_SIZE_PX as _tsz
-            rl_threshold = 60 * (_tsz / 256) ** 2
-            if r and time.time() - t_start > rl_threshold:
-                r["_rate_limited"] = True
-            return r
-        finally:
-            concurrency.release()
+        loc, d = item
+        if use_refetch:
+            return refetch_tile(loc, args.years, d, args.cloud_max,
+                                vpp_cache=vpp_cache)
+        return fetch_tile(loc, args.years, d, args.cloud_max,
+                          vpp_cache=vpp_cache)
 
-    # Process in chunks of ~1/10 total to limit memory
     CHUNK = max(max_w * 2, len(work) // 10)
     completed = 0
     with ThreadPoolExecutor(max_workers=max_w) as pool:
@@ -702,7 +666,6 @@ def main():
                 if r:
                     stats[r.get("status", "failed")] = \
                         stats.get(r.get("status", "failed"), 0) + 1
-                    _adapt_on_result(r)
                     if completed % 10 == 0:
                         elapsed = time.time() - t0
                         print(f"  [{completed}/{len(work)}] {r['name']}: {r['status']} "
