@@ -176,11 +176,13 @@ def _fetch_single_scene(
                 cloud_threshold=cloud_threshold,
                 haze_threshold=haze_threshold,
             )
+            # Always report success — the API responded.
+            # result=None means cloud/haze rejection, not rate-limiting.
+            _CDSE_SEMAPHORE.report_success()
             if result is not None:
-                _CDSE_SEMAPHORE.report_success()
                 return result[0], date_str
-            _CDSE_SEMAPHORE.report_failure()
         except Exception:
+            # Network error, timeout, 5xx → real failure
             _CDSE_SEMAPHORE.report_failure()
         finally:
             _CDSE_SEMAPHORE.release()
@@ -195,10 +197,9 @@ def _fetch_single_scene(
                 prithvi_bands=PRITHVI_BANDS,
                 source="des",
             )
+            _DES_SEMAPHORE.report_success()
             if result is not None:
-                _DES_SEMAPHORE.report_success()
                 return result[0], date_str
-            _DES_SEMAPHORE.report_failure()
         except Exception:
             _DES_SEMAPHORE.report_failure()
         finally:

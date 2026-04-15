@@ -87,6 +87,38 @@ _CRS_3006 = "http://www.opengis.net/def/crs/EPSG/0/3006"
 _CRS_4326 = "http://www.opengis.net/def/crs/EPSG/0/4326"
 
 
+def _prescreen_scl(
+    west: float, south: float, east: float, north: float,
+    date: str, h_px: int, w_px: int,
+    token: str, crs: str,
+    cloud_threshold: float,
+) -> tuple[np.ndarray | None, float]:
+    """Fetch only SCL band for cloud pre-screening (6× less data).
+
+    Returns (scl, cloud_fraction) or (None, 1.0) on failure.
+    """
+    try:
+        tiff_bytes = _fetch_s2_tiff(
+            west, south, east, north, w_px, h_px,
+            date=date, token=token, crs=crs,
+            evalscript=_build_scl_only_evalscript(),
+        )
+    except Exception:
+        return None, 1.0
+
+    bands = _parse_multiband_tiff(tiff_bytes, h_px, w_px, 1)
+    if bands is None or len(bands) < 1:
+        return None, 1.0
+
+    scl = bands[0].astype(np.uint8)
+    cloud_fraction = _check_cloud_fraction(scl)
+    return scl, cloud_fraction
+
+
+# Tiles >= this size use two-stage fetch (SCL pre-screen + spectral)
+_TWO_STAGE_THRESHOLD = 384  # 512px tiles benefit; 256px overhead not worth it
+
+
 def fetch_s2_scene(
     west: float,
     south: float,
@@ -102,29 +134,27 @@ def fetch_s2_scene(
 ) -> tuple[np.ndarray, np.ndarray, float] | None:
     """Fetch a single Sentinel-2 L2A scene via Sentinel Hub Process API.
 
-    Downloads 6 spectral bands + SCL in one HTTP POST, then applies
-    quality gates (cloud, haze, nodata).
-
-    Args:
-        west, south, east, north: Bounding box coordinates.
-        date: ISO date string, e.g. "2024-07-15".
-        crs: Coordinate reference system URI.
-            Default: EPSG:3006 (Sweden). Use ``_CRS_4326`` for WGS84.
-        size_px: Output size — int for square or (H, W) tuple.
-        cloud_threshold: Max cloud+shadow fraction (0–1).
-        haze_threshold: Max mean B02 reflectance for haze gate.
-        nodata_threshold: Max fraction of zero pixels (0–1).
-            None = skip check (for AOIs larger than a single granule swath).
+    For tiles >= 384px, uses two-stage fetch: SCL-only pre-screen (cheap)
+    followed by full spectral (expensive) only if cloud gate passes.
+    Saves ~6× bandwidth on rejected cloudy scenes.
 
     Returns:
         (spectral, scl, cloud_fraction) on success, None on rejection.
-            spectral: (6, H, W) float32 reflectance [0, 1]
-            scl: (H, W) uint8 Scene Classification Layer
-            cloud_fraction: float
     """
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
     token = _get_token()
 
+    # Two-stage for large tiles: pre-screen with SCL only
+    use_two_stage = max(h_px, w_px) >= _TWO_STAGE_THRESHOLD
+    if use_two_stage:
+        scl, cloud_fraction = _prescreen_scl(
+            west, south, east, north, date, h_px, w_px,
+            token, crs, cloud_threshold,
+        )
+        if scl is None or cloud_fraction > cloud_threshold:
+            return None
+
+    # Fetch full spectral + SCL
     try:
         tiff_bytes = _fetch_s2_tiff(
             west, south, east, north, w_px, h_px,
@@ -141,16 +171,16 @@ def fetch_s2_scene(
     spectral = np.stack(bands[:6], axis=0)  # (6, H, W) float32
     scl = bands[6].astype(np.uint8)         # (H, W) uint8
 
-    cloud_fraction = _check_cloud_fraction(scl)
-    if cloud_fraction > cloud_threshold:
-        return None
+    if not use_two_stage:
+        cloud_fraction = _check_cloud_fraction(scl)
+        if cloud_fraction > cloud_threshold:
+            return None
 
     if nodata_threshold is not None:
         nodata_frac = float((spectral[0] == 0).mean())
         if nodata_frac > nodata_threshold:
             return None
 
-    # Haze check on valid pixels only (avoids bias from nodata zeros)
     valid = spectral[0] > 0
     if valid.any():
         if float(spectral[0][valid].mean()) > haze_threshold:
@@ -435,12 +465,7 @@ def _check_cloud_fraction(scl: np.ndarray) -> float:
 
 
 def _build_evalscript() -> str:
-    """Build Sentinel Hub evalscript for 7-band S2 L2A fetch.
-
-    Returns 6 spectral bands as reflectance [0,1] and SCL as class value.
-    Sentinel Hub auto-handles processing baseline offsets, so DN/10000
-    gives correct BOA reflectance for all baselines.
-    """
+    """Build Sentinel Hub evalscript for 7-band S2 L2A fetch."""
     return """//VERSION=3
 function setup() {
   return {
@@ -456,9 +481,6 @@ function setup() {
 }
 
 function evaluatePixel(sample) {
-  // Spectral bands: DN → reflectance [0, 1]
-  // Sentinel Hub normalizes baseline offsets, so DN/10000 is correct.
-  // SCL: pass through as integer class value (0-11)
   return [
     sample.B02 / 10000,
     sample.B03 / 10000,
@@ -472,6 +494,24 @@ function evaluatePixel(sample) {
 """
 
 
+def _build_scl_only_evalscript() -> str:
+    """Evalscript that fetches only the SCL band for cloud pre-screening.
+
+    At 512px this transfers ~250 KB instead of ~1.5 MB (6× less).
+    """
+    return """//VERSION=3
+function setup() {
+  return {
+    input: [{ bands: ["SCL"], units: "DN" }],
+    output: { bands: 1, sampleType: "UINT8" }
+  };
+}
+function evaluatePixel(sample) {
+  return [sample.SCL];
+}
+"""
+
+
 def _fetch_s2_tiff(
     west: float, south: float,
     east: float, north: float,
@@ -480,12 +520,13 @@ def _fetch_s2_tiff(
     date: str,
     token: str,
     crs: str = "http://www.opengis.net/def/crs/EPSG/0/3006",
+    evalscript: str | None = None,
 ) -> bytes:
     """Fetch S2 L2A data as multi-band GeoTIFF from Sentinel Hub Process API.
 
     Args:
         crs: Coordinate reference system URI. Default EPSG:3006 (Sweden).
-            Use "http://www.opengis.net/def/crs/EPSG/0/4326" for WGS84.
+        evalscript: Custom evalscript. Defaults to 7-band spectral+SCL.
     """
     # Time range: single day
     time_from = f"{date}T00:00:00Z"
@@ -520,7 +561,7 @@ def _fetch_s2_tiff(
                 },
             }],
         },
-        "evalscript": _build_evalscript(),
+        "evalscript": evalscript or _build_evalscript(),
     }
 
     body_bytes = json.dumps(request_body).encode()
