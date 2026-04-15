@@ -147,9 +147,18 @@ result = [x * 2 for x in lst]
 ### 3. Testa
 Verifiera alltid förbättrad kod med explicita assertions eller pytest-tester. Visa att alla fall passerar.
 
+**Testkrav:**
+- Unit-tester räcker INTE ensamt. Testa alltid integrationen: att koden fungerar i sitt riktiga kontext (K8s, med riktig data, med riktiga API:er).
+- Innan en ny feature deployas: verifiera att den fungerar end-to-end, inte bara att den parsar.
+- Disk-I/O: testa alltid att data faktiskt sparas till disk och kan läsas tillbaka.
+- Concurrency: testa med verklig belastning, inte bara mock-semaforer — verifiera att API:er inte throttlas.
+- Cacha alltid mellanresultat till disk. Data som tar tid att hämta/beräkna får ALDRIG bara leva i minnet.
+
 ### Regler (nolltolerans)
 - **Ingen slarv** — inga onödiga rader, ineffektiva algoritmer eller dålig kodstil accepteras
 - **Inga backward-compat-shims** för schema-versioner som inte längre används (t.ex. 10-klassers NMD)
 - **Explicit > implicit** — auto-detect-logik som ändrar beteende baserat på indatans max-värde är förbjuden
 - **Motivera alltid** — varje ändring ska ha en tydlig motivering
 - **All kod ska vara framtidssäkrad** — inget junk som "kan behövas senare"
+- **Starta aldrig om jobb som förkastar redan klart arbete** — fråga alltid användaren först
+- **Alla hämtade/beräknade data ska persisteras till disk** — aldrig bara i minnet
