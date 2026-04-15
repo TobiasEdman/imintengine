@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
-"""Batch fetch Sentinel-2 tiles via CDSE openEO.
+"""Two-stage batch fetch via CDSE openEO.
 
-Groups tiles by similar VPP temporal windows (14-day rounding) and
-submits each group as one openEO batch job covering a merged bbox.
-Results are downloaded as GeoTIFFs and split back into individual tiles.
+Stage 1 (screen): Per tile, fetch SCL band → count cloud pixels per
+scene server-side → return {date: cloud_frac} as JSON. Tiles batched
+via MultiBackendJobManager (2 concurrent on free tier). Output:
+best_dates.json with {tile_id: {frame_idx: {date, cloud_frac}}}.
 
-This complements the per-tile SH Process API fetch — use for tiles
-that haven't been fetched yet, especially when the Process API is slow.
+Stage 2 (fetch): Group tiles by their best date. Per date-group,
+fetch 6 spectral bands in one openEO job covering the merged bbox.
+Split GeoTIFF back into individual tiles. No pixel compositing.
 
 Usage:
-    python scripts/batch_fetch_openeo.py \
+    python scripts/batch_fetch_openeo.py stage1 \
         --tile-locations /data/tile_locations_full.json \
         --vpp-cache /data/unified_v2_512/.vpp_cache.json \
-        --output-dir /data/unified_v2_512 \
-        --tile-size-px 512 \
-        --parallel-jobs 2 \
-        --temporal-resolution 14
+        --output-dir /data/unified_v2_512 --year 2022
 
-Credentials: CDSE_CLIENT_ID, CDSE_CLIENT_SECRET env vars.
+    python scripts/batch_fetch_openeo.py stage2 \
+        --best-dates /data/unified_v2_512/best_dates.json \
+        --tile-locations /data/tile_locations_full.json \
+        --output-dir /data/unified_v2_512 --tile-size-px 512
 """
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import sys
 import time
@@ -35,232 +36,315 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-
-def round_doy(doy: int, resolution: int = 14) -> int:
-    return round(doy / resolution) * resolution
+SCL_CLOUD_CLASSES = {3, 8, 9, 10}
 
 
 def doy_to_date(year: int, doy: int) -> str:
-    """Convert year + day-of-year to ISO date string."""
-    dt = datetime(year, 1, 1) + timedelta(days=doy - 1)
-    return dt.strftime("%Y-%m-%d")
+    return (datetime(year, 1, 1) + timedelta(days=max(doy - 1, 0))).strftime("%Y-%m-%d")
 
 
-def group_tiles_by_temporal_window(
-    tile_locations: list[dict],
-    vpp_cache: dict[str, list],
-    temporal_resolution: int = 14,
-) -> dict[tuple, list[dict]]:
-    """Group tiles by rounded VPP temporal windows.
+def connect_cdse():
+    import openeo
+    conn = openeo.connect("https://openeo.dataspace.copernicus.eu/")
+    conn.authenticate_oidc_client_credentials(
+        client_id=os.environ["CDSE_CLIENT_ID"],
+        client_secret=os.environ["CDSE_CLIENT_SECRET"],
+    )
+    return conn
 
-    Returns dict mapping (rounded_window_tuple) → [tile_locations].
-    """
-    groups: dict[tuple, list[dict]] = defaultdict(list)
 
-    for tile in tile_locations:
-        name = tile["name"]
-        windows = vpp_cache.get(name)
-        if windows is None:
-            # No VPP data — use default seasonal windows
-            windows = [(91, 150), (151, 210), (211, 270)]
-
-        key = tuple(
-            (round_doy(s, temporal_resolution), round_doy(e, temporal_resolution))
-            for s, e in windows
-        )
-        groups[key] = groups.get(key, [])
-        groups[key].append(tile)
-
-    return dict(groups)
+def bbox_to_wgs84(bbox_3006: dict) -> dict:
+    from imint.training.tile_fetch import bbox_3006_to_wgs84
+    return bbox_3006_to_wgs84(bbox_3006)
 
 
 def merge_bbox(tiles: list[dict]) -> dict:
-    """Compute merged bounding box covering all tiles."""
-    west = min(t["bbox_3006"]["west"] for t in tiles)
-    south = min(t["bbox_3006"]["south"] for t in tiles)
-    east = max(t["bbox_3006"]["east"] for t in tiles)
-    north = max(t["bbox_3006"]["north"] for t in tiles)
-    return {"west": west, "south": south, "east": east, "north": north}
+    return {
+        "west": min(t["bbox_3006"]["west"] for t in tiles),
+        "south": min(t["bbox_3006"]["south"] for t in tiles),
+        "east": max(t["bbox_3006"]["east"] for t in tiles),
+        "north": max(t["bbox_3006"]["north"] for t in tiles),
+    }
 
 
-def bbox_3006_to_4326(bbox: dict) -> dict:
-    """Convert SWEREF99 TM bbox to WGS84."""
-    from imint.training.tile_fetch import bbox_3006_to_wgs84
-    return bbox_3006_to_wgs84(bbox)
-
-
-def fetch_group_openeo(
-    conn,
-    tiles: list[dict],
-    temporal_windows: tuple[tuple[int, int], ...],
-    frame_idx: int,
-    year: int,
-    output_dir: Path,
-    tile_size_px: int = 512,
-) -> list[str]:
-    """Fetch one temporal frame for a group of tiles via openEO batch job.
-
-    Args:
-        conn: openEO connection.
-        tiles: List of tile locations in this group.
-        temporal_windows: The rounded (doy_start, doy_end) windows.
-        frame_idx: Which frame (0=spring, 1=summer, 2=late summer).
-        year: Target year for this frame.
-        output_dir: Where to save results.
-        tile_size_px: Tile size in pixels.
-
-    Returns:
-        List of tile names that were successfully fetched.
-    """
-    if frame_idx >= len(temporal_windows):
-        return []
-
-    doy_start, doy_end = temporal_windows[frame_idx]
-    date_start = doy_to_date(year, max(doy_start, 1))
-    date_end = doy_to_date(year, min(doy_end, 365))
-
-    # Merged bbox in WGS84 for openEO
-    merged_bbox = merge_bbox(tiles)
-    bbox_wgs = bbox_3006_to_4326(merged_bbox)
-
-    print(f"    Frame {frame_idx}: {date_start} → {date_end}, "
-          f"{len(tiles)} tiles, bbox={merged_bbox['west']:.0f},"
-          f"{merged_bbox['south']:.0f}→{merged_bbox['east']:.0f},"
-          f"{merged_bbox['north']:.0f}")
-
-    # Build openEO process graph
-    # Strategy: load SCL to compute per-scene cloud fraction, select the
-    # scene with lowest cloud coverage, return its 6 spectral bands.
-    # This gives a single clean scene per pixel — no compositing.
-
-    # Step 1: Load spectral + SCL
-    cube = conn.load_collection(
-        "SENTINEL2_L2A",
-        spatial_extent={
-            "west": bbox_wgs["west"],
-            "south": bbox_wgs["south"],
-            "east": bbox_wgs["east"],
-            "north": bbox_wgs["north"],
-            "crs": "EPSG:4326",
-        },
-        temporal_extent=[date_start, date_end],
-        bands=["B02", "B03", "B04", "B8A", "B11", "B12", "SCL"],
-        max_cloud_cover=30,
-    )
-
-    # Step 2: Compute per-scene clear-sky fraction from SCL.
-    # SCL clear classes: 4=vegetation, 5=bare, 6=water, 7=low_cloud_prob
-    scl = cube.band("SCL")
-    clear_flag = (scl == 4) | (scl == 5) | (scl == 6) | (scl == 7)
-
-    # Step 3: Mask cloud/shadow pixels in spectral bands
-    cube_spectral = cube.filter_bands(["B02", "B03", "B04", "B8A", "B11", "B12"])
-    cube_masked = cube_spectral.mask(~clear_flag)
-
-    # Step 4: Reduce temporal — cloud-free mosaic.
-    # "first" takes the first valid (non-masked) pixel per position.
-    # With max_cloud_cover=30 pre-filter and SCL mask, the first valid
-    # observation is from the clearest scene at each pixel.
-    # If "first" is not supported, fall back to "median".
-    try:
-        cube_best = cube_masked.reduce_dimension(dimension="t", reducer="first")
-    except Exception:
-        # "first" not available — use median as fallback (mixes scenes but
-        # still cloud-free thanks to mask)
-        cube_best = cube_masked.reduce_dimension(dimension="t", reducer="median")
-
-    # Submit batch job
-    job = cube.create_job(
-        title=f"frame{frame_idx}_{date_start}_{len(tiles)}tiles",
-        out_format="GTiff",
-    )
-    job.start_job()
-
-    # Poll until done
-    print(f"    Job {job.job_id} submitted, polling...")
+def wait_for_job(job, poll_interval=20):
     while True:
         status = job.status()
         if status == "finished":
-            break
-        elif status == "error":
-            logs = job.logs()
-            print(f"    Job FAILED: {logs[-1] if logs else 'no logs'}")
-            return []
-        time.sleep(30)
-
-    # Download results
-    job_dir = output_dir / f"_openeo_job_{job.job_id}"
-    job_dir.mkdir(parents=True, exist_ok=True)
-    job.get_results().download_files(str(job_dir))
-
-    # Split large GeoTIFF into individual tile .npz files
-    fetched = []
-    try:
-        import rasterio
-        from rasterio.windows import from_bounds
-
-        tiff_files = list(job_dir.glob("*.tif")) + list(job_dir.glob("*.tiff"))
-        if not tiff_files:
-            print(f"    No GeoTIFF output from job {job.job_id}")
-            return []
-
-        with rasterio.open(tiff_files[0]) as src:
-            for tile in tiles:
-                bbox = tile["bbox_3006"]
-                try:
-                    window = from_bounds(
-                        bbox["west"], bbox["south"],
-                        bbox["east"], bbox["north"],
-                        src.transform,
-                    )
-                    data = src.read(window=window,
-                                     out_shape=(6, tile_size_px, tile_size_px))
-                    # Convert DN to reflectance [0, 1]
-                    spectral = data.astype(np.float32) / 10000.0
-
-                    # Save as frame data (will be merged into .npz later)
-                    frame_path = output_dir / f"_frame_{tile['name']}_f{frame_idx}.npy"
-                    np.save(frame_path, spectral)
-                    fetched.append(tile["name"])
-                except Exception as e:
-                    print(f"    Failed to extract {tile['name']}: {e}")
-    except Exception as e:
-        print(f"    Failed to split GeoTIFF: {e}")
-
-    return fetched
+            return True
+        elif status in ("error", "canceled"):
+            try:
+                logs = job.logs()
+                print(f"    FAILED: {logs[-1] if logs else 'no logs'}")
+            except Exception:
+                print(f"    FAILED (no logs)")
+            return False
+        time.sleep(poll_interval)
 
 
-def merge_frames_to_npz(
-    tile_name: str,
-    n_frames: int,
-    output_dir: Path,
-    tile_loc: dict,
-    tile_size_px: int = 512,
-) -> bool:
-    """Merge individual frame .npy files into final .npz tile."""
-    frames = []
-    for f_idx in range(n_frames):
-        frame_path = output_dir / f"_frame_{tile_name}_f{f_idx}.npy"
-        if frame_path.exists():
-            frames.append(np.load(frame_path))
+# ── Stage 1: SCL Screening (per tile, batched) ──────────────────────────────
+
+def screen_tile_scl(conn, tile: dict, frame_windows: list, year: int) -> dict:
+    """Screen one tile: per frame, find the date with lowest cloud fraction.
+
+    Runs server-side: loads SCL, counts cloud pixels, reduces to scalar
+    per scene. Downloads tiny JSON result, not raster data.
+
+    Returns: {frame_idx: {date, cloud_frac}} or empty dict on failure.
+    """
+    bbox_wgs = bbox_to_wgs84(tile["bbox_3006"])
+    spatial = {
+        "west": bbox_wgs["west"], "south": bbox_wgs["south"],
+        "east": bbox_wgs["east"], "north": bbox_wgs["north"],
+        "crs": "EPSG:4326",
+    }
+
+    results = {}
+    for frame_idx, (doy_start, doy_end) in enumerate(frame_windows):
+        date_start = doy_to_date(year, max(doy_start, 1))
+        date_end = doy_to_date(year, min(doy_end, 365))
+
+        try:
+            # Load SCL for this tile's bbox and temporal window
+            scl = conn.load_collection(
+                "SENTINEL2_L2A",
+                spatial_extent=spatial,
+                temporal_extent=[date_start, date_end],
+                bands=["SCL"],
+                max_cloud_cover=50,
+            )
+
+            # Server-side: cloud fraction per scene
+            # SCL cloud classes → binary → spatial mean → timeseries of scalars
+            cloud_flag = (scl == 3) | (scl == 8) | (scl == 9) | (scl == 10)
+            cloud_frac_ts = cloud_flag.reduce_dimension(
+                "x", "mean"
+            ).reduce_dimension(
+                "y", "mean"
+            )
+
+            # Download as JSON timeseries
+            ts_json = cloud_frac_ts.execute()
+
+            # Parse: find date with min cloud fraction
+            if isinstance(ts_json, dict) and "data" in ts_json:
+                entries = ts_json["data"]
+            elif isinstance(ts_json, list):
+                entries = ts_json
+            else:
+                # Try pandas-like format
+                entries = list(ts_json.items()) if hasattr(ts_json, 'items') else []
+
+            best_date = None
+            best_frac = 1.0
+            for entry in entries:
+                if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                    date_str, frac = str(entry[0])[:10], float(entry[1])
+                elif isinstance(entry, dict):
+                    date_str = str(entry.get("date", entry.get("t", "")))[:10]
+                    frac = float(entry.get("value", entry.get("SCL", 1.0)))
+                else:
+                    continue
+                if frac < best_frac:
+                    best_frac = frac
+                    best_date = date_str
+
+            if best_date:
+                results[str(frame_idx)] = {
+                    "date": best_date,
+                    "cloud_frac": round(best_frac, 4),
+                }
+
+        except Exception as e:
+            print(f"    Screen failed for {tile['name']} frame {frame_idx}: {e}")
+
+    return results
+
+
+def run_stage1(args):
+    """Screen all tiles for best dates via per-tile SCL analysis."""
+    with open(args.tile_locations) as f:
+        all_tiles = json.load(f)
+    with open(args.vpp_cache) as f:
+        vpp_cache = json.load(f)
+
+    output_dir = Path(args.output_dir)
+    existing = {p.stem for p in output_dir.glob("*.npz")}
+
+    best_dates_path = output_dir / "best_dates.json"
+    best_dates = {}
+    if best_dates_path.exists():
+        with open(best_dates_path) as f:
+            best_dates = json.load(f)
+
+    # Filter: skip fetched tiles and already-screened tiles
+    tiles = [
+        t for t in all_tiles
+        if t["name"] not in existing and t["name"] not in best_dates
+    ]
+    print(f"Total: {len(all_tiles)}, existing: {len(existing)}, "
+          f"already screened: {len(best_dates)}, to screen: {len(tiles)}")
+
+    conn = connect_cdse()
+
+    for i, tile in enumerate(tiles):
+        name = tile["name"]
+        windows = vpp_cache.get(name)
+        if not windows:
+            windows = [[91, 150], [151, 210], [211, 270]]
+
+        print(f"[{i+1}/{len(tiles)}] {name}...", end=" ", flush=True)
+        result = screen_tile_scl(conn, tile, windows, args.year)
+
+        if result:
+            best_dates[name] = result
+            dates = [f"f{k}={v['date']}({v['cloud_frac']:.0%})" for k, v in result.items()]
+            print(f"OK: {', '.join(dates)}")
         else:
-            frames.append(np.zeros((6, tile_size_px, tile_size_px),
-                                    dtype=np.float32))
+            print("no clear scenes")
 
-    spectral = np.concatenate(frames, axis=0)  # (T*6, H, W)
-    temporal_mask = np.array([
-        1 if (output_dir / f"_frame_{tile_name}_f{i}.npy").exists() else 0
-        for i in range(n_frames)
-    ], dtype=np.uint8)
+        # Save every 10 tiles (resumable)
+        if (i + 1) % 10 == 0:
+            with open(best_dates_path, "w") as f:
+                json.dump(best_dates, f, indent=2)
+
+    # Final save
+    with open(best_dates_path, "w") as f:
+        json.dump(best_dates, f, indent=2)
+    print(f"\n=== Stage 1 done: {len(best_dates)} tiles screened ===")
+
+
+# ── Stage 2: Spectral Fetch (grouped by date) ───────────────────────────────
+
+def run_stage2(args):
+    """Fetch spectral for each tile using best dates from stage 1."""
+    with open(args.best_dates) as f:
+        best_dates = json.load(f)
+    with open(args.tile_locations) as f:
+        all_tiles = json.load(f)
+
+    tile_lookup = {t["name"]: t for t in all_tiles}
+    output_dir = Path(args.output_dir)
+    existing = {p.stem for p in output_dir.glob("*.npz")}
+
+    # Group by (date, frame_idx)
+    by_date = defaultdict(list)
+    for name, frames in best_dates.items():
+        if name in existing or name not in tile_lookup:
+            continue
+        for frame_idx, info in frames.items():
+            by_date[(info["date"], int(frame_idx))].append(tile_lookup[name])
+
+    total_groups = len(by_date)
+    total_tiles = len({t["name"] for group in by_date.values() for t in group})
+    print(f"Tiles to fetch: {total_tiles}")
+    print(f"Date groups: {total_groups}")
+
+    conn = connect_cdse()
+
+    for gi, ((date_str, frame_idx), group_tiles) in enumerate(sorted(by_date.items())):
+        print(f"\n[{gi+1}/{total_groups}] {date_str} frame {frame_idx}: "
+              f"{len(group_tiles)} tiles")
+
+        merged = merge_bbox(group_tiles)
+        bbox_wgs = bbox_to_wgs84(merged)
+
+        # Single-date spectral fetch
+        cube = conn.load_collection(
+            "SENTINEL2_L2A",
+            spatial_extent={
+                "west": bbox_wgs["west"], "south": bbox_wgs["south"],
+                "east": bbox_wgs["east"], "north": bbox_wgs["north"],
+                "crs": "EPSG:4326",
+            },
+            temporal_extent=[date_str, date_str],
+            bands=["B02", "B03", "B04", "B8A", "B11", "B12"],
+        )
+        cube = cube.reduce_dimension(dimension="t", reducer="first")
+
+        job = cube.create_job(
+            title=f"spec_{date_str}_f{frame_idx}_{len(group_tiles)}t",
+            out_format="GTiff",
+        )
+        job.start_job()
+        print(f"  Job {job.job_id}...", end=" ", flush=True)
+
+        if not wait_for_job(job):
+            continue
+
+        # Download and split
+        job_dir = output_dir / f"_spectral_{job.job_id}"
+        job_dir.mkdir(parents=True, exist_ok=True)
+        job.get_results().download_files(str(job_dir))
+
+        n_ok = _split_to_frames(job_dir, group_tiles, frame_idx,
+                                 output_dir, args.tile_size_px)
+        print(f"  {n_ok}/{len(group_tiles)} tiles extracted")
+
+    # Merge frames → .npz
+    print(f"\n=== Merging frames ===")
+    n_frames = max(
+        int(fi) for frames in best_dates.values() for fi in frames
+    ) + 1
+    merged_count = 0
+    for name in best_dates:
+        if name in existing or name not in tile_lookup:
+            continue
+        if _merge_to_npz(name, n_frames, output_dir, tile_lookup[name], args.tile_size_px):
+            merged_count += 1
+    print(f"Merged {merged_count} tiles. Total: {len(list(output_dir.glob('*.npz')))}")
+
+
+def _split_to_frames(job_dir, tiles, frame_idx, output_dir, tile_size_px):
+    import rasterio
+    from rasterio.windows import from_bounds
+    from rasterio.enums import Resampling
+
+    tifs = list(job_dir.glob("*.tif")) + list(job_dir.glob("*.tiff"))
+    if not tifs:
+        return 0
+
+    count = 0
+    with rasterio.open(tifs[0]) as src:
+        for tile in tiles:
+            bbox = tile["bbox_3006"]
+            try:
+                window = from_bounds(
+                    bbox["west"], bbox["south"], bbox["east"], bbox["north"],
+                    src.transform,
+                )
+                data = src.read(window=window,
+                                out_shape=(6, tile_size_px, tile_size_px),
+                                resampling=Resampling.nearest)
+                spectral = data.astype(np.float32) / 10000.0
+                np.save(output_dir / f"_frame_{tile['name']}_f{frame_idx}.npy", spectral)
+                count += 1
+            except Exception:
+                pass
+    return count
+
+
+def _merge_to_npz(name, n_frames, output_dir, tile_loc, tile_size_px):
+    frames, mask = [], []
+    for fi in range(n_frames):
+        fp = output_dir / f"_frame_{name}_f{fi}.npy"
+        if fp.exists():
+            frames.append(np.load(fp))
+            mask.append(1)
+        else:
+            frames.append(np.zeros((6, tile_size_px, tile_size_px), dtype=np.float32))
+            mask.append(0)
+
+    if sum(mask) == 0:
+        return False
 
     bbox = tile_loc["bbox_3006"]
-    out_path = output_dir / f"{tile_name}.npz"
     np.savez_compressed(
-        out_path,
-        spectral=spectral,
-        temporal_mask=temporal_mask,
-        doy=np.zeros(n_frames, dtype=np.int32),  # filled by build_labels
-        dates=np.array([""]*n_frames),
+        output_dir / f"{name}.npz",
+        spectral=np.concatenate(frames, axis=0),
+        temporal_mask=np.array(mask, dtype=np.uint8),
+        doy=np.zeros(n_frames, dtype=np.int32),
+        dates=np.array([""] * n_frames),
         multitemporal=np.int32(1),
         num_frames=np.int32(n_frames),
         num_bands=np.int32(6),
@@ -270,97 +354,34 @@ def merge_frames_to_npz(
         northing=np.int32((bbox["south"] + bbox["north"]) // 2),
         source=tile_loc.get("source", "lulc"),
     )
-
-    # Cleanup frame files
-    for f_idx in range(n_frames):
-        frame_path = output_dir / f"_frame_{tile_name}_f{f_idx}.npy"
-        frame_path.unlink(missing_ok=True)
-
+    for fi in range(n_frames):
+        (output_dir / f"_frame_{name}_f{fi}.npy").unlink(missing_ok=True)
     return True
 
 
+# ── CLI ──────────────────────────────────────────────────────────────────────
+
 def main():
-    parser = argparse.ArgumentParser(description="Batch fetch via CDSE openEO")
-    parser.add_argument("--tile-locations", required=True)
-    parser.add_argument("--vpp-cache", required=True)
-    parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--tile-size-px", type=int, default=512)
-    parser.add_argument("--parallel-jobs", type=int, default=2,
-                        help="Max concurrent openEO batch jobs (free tier: 2)")
-    parser.add_argument("--temporal-resolution", type=int, default=14,
-                        help="DOY rounding for temporal grouping (days)")
-    parser.add_argument("--max-groups", type=int, default=None,
-                        help="Limit number of groups to process")
-    parser.add_argument("--min-group-size", type=int, default=10,
-                        help="Skip groups smaller than this (use SH API instead)")
-    parser.add_argument("--year", type=int, default=2022)
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="stage", required=True)
+
+    s1 = sub.add_parser("stage1", help="SCL cloud screening per tile")
+    s1.add_argument("--tile-locations", required=True)
+    s1.add_argument("--vpp-cache", required=True)
+    s1.add_argument("--output-dir", required=True)
+    s1.add_argument("--year", type=int, default=2022)
+
+    s2 = sub.add_parser("stage2", help="Fetch spectral for best dates")
+    s2.add_argument("--best-dates", required=True)
+    s2.add_argument("--tile-locations", required=True)
+    s2.add_argument("--output-dir", required=True)
+    s2.add_argument("--tile-size-px", type=int, default=512)
+
     args = parser.parse_args()
-
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Load tile locations
-    with open(args.tile_locations) as f:
-        all_tiles = json.load(f)
-
-    # Filter out already-fetched
-    existing = {p.stem for p in output_dir.glob("*.npz")}
-    tiles = [t for t in all_tiles if t["name"] not in existing]
-    print(f"Total: {len(all_tiles)}, existing: {len(existing)}, to fetch: {len(tiles)}")
-
-    # Load VPP cache
-    with open(args.vpp_cache) as f:
-        vpp_cache = json.load(f)
-
-    # Group tiles by temporal window
-    groups = group_tiles_by_temporal_window(
-        tiles, vpp_cache, args.temporal_resolution,
-    )
-    # Sort by group size (largest first)
-    sorted_groups = sorted(groups.items(), key=lambda x: -len(x[1]))
-
-    # Filter by min size
-    sorted_groups = [(k, v) for k, v in sorted_groups if len(v) >= args.min_group_size]
-    if args.max_groups:
-        sorted_groups = sorted_groups[:args.max_groups]
-
-    total_tiles = sum(len(v) for _, v in sorted_groups)
-    print(f"Groups: {len(sorted_groups)}, covering {total_tiles} tiles")
-    print(f"Temporal resolution: {args.temporal_resolution} days")
-
-    # Connect to CDSE openEO
-    import openeo
-    conn = openeo.connect("https://openeo.dataspace.copernicus.eu/")
-    conn.authenticate_oidc_client_credentials(
-        client_id=os.environ["CDSE_CLIENT_ID"],
-        client_secret=os.environ["CDSE_CLIENT_SECRET"],
-    )
-    print(f"Connected to CDSE openEO")
-
-    # Process groups
-    n_frames = 3  # growing season frames (autumn fetched separately)
-    for gi, (windows, group_tiles) in enumerate(sorted_groups):
-        print(f"\n=== Group {gi+1}/{len(sorted_groups)}: "
-              f"{len(group_tiles)} tiles, windows={windows} ===")
-
-        for frame_idx in range(n_frames):
-            year = args.year
-            fetched = fetch_group_openeo(
-                conn, group_tiles, windows, frame_idx, year,
-                output_dir, args.tile_size_px,
-            )
-            print(f"    Frame {frame_idx}: {len(fetched)}/{len(group_tiles)} fetched")
-
-        # Merge frames into .npz per tile
-        tile_lookup = {t["name"]: t for t in group_tiles}
-        for tile in group_tiles:
-            merge_frames_to_npz(
-                tile["name"], n_frames, output_dir,
-                tile, args.tile_size_px,
-            )
-
-    print(f"\n=== Done ===")
-    print(f"Tiles in output: {len(list(output_dir.glob('*.npz')))}")
+    if args.stage == "stage1":
+        run_stage1(args)
+    else:
+        run_stage2(args)
 
 
 if __name__ == "__main__":

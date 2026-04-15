@@ -1,0 +1,252 @@
+"""Tests for batch_fetch_openeo.py — two-stage SCL screening + spectral fetch."""
+import json
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pytest
+
+sys_path_set = False
+
+
+def _ensure_path():
+    global sys_path_set
+    if not sys_path_set:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        sys_path_set = True
+
+
+class TestScreenTileSCL:
+    """Test the per-tile SCL screening logic."""
+
+    def test_returns_dict_with_frame_keys(self):
+        _ensure_path()
+        from scripts.batch_fetch_openeo import screen_tile_scl
+
+        # Mock openEO connection
+        mock_conn = MagicMock()
+
+        # Mock: load_collection → chain of reduce_dimension → execute returns JSON
+        mock_cube = MagicMock()
+        mock_conn.load_collection.return_value = mock_cube
+        # SCL == 3 returns a mock that supports | and reduce_dimension
+        mock_cube.__eq__ = MagicMock(return_value=mock_cube)
+        mock_cube.__or__ = MagicMock(return_value=mock_cube)
+        mock_cube.reduce_dimension.return_value = mock_cube
+        mock_cube.execute.return_value = [
+            ["2022-07-01", 0.05],
+            ["2022-07-06", 0.15],
+            ["2022-07-11", 0.02],
+        ]
+
+        tile = {
+            "name": "test_tile",
+            "bbox_3006": {"west": 500000, "south": 6500000,
+                          "east": 505120, "north": 6505120},
+        }
+        windows = [(150, 210)]
+
+        with patch("scripts.batch_fetch_openeo.bbox_to_wgs84",
+                   return_value={"west": 15.0, "south": 58.0,
+                                  "east": 16.0, "north": 59.0}):
+            result = screen_tile_scl(mock_conn, tile, windows, 2022)
+
+        assert "0" in result
+        assert result["0"]["date"] == "2022-07-11"
+        assert result["0"]["cloud_frac"] == 0.02
+
+    def test_picks_lowest_cloud_fraction(self):
+        _ensure_path()
+        from scripts.batch_fetch_openeo import screen_tile_scl
+
+        mock_conn = MagicMock()
+        mock_cube = MagicMock()
+        mock_conn.load_collection.return_value = mock_cube
+        mock_cube.__eq__ = MagicMock(return_value=mock_cube)
+        mock_cube.__or__ = MagicMock(return_value=mock_cube)
+        mock_cube.reduce_dimension.return_value = mock_cube
+        mock_cube.execute.return_value = [
+            ["2022-06-01", 0.40],
+            ["2022-06-10", 0.01],
+            ["2022-06-20", 0.30],
+        ]
+
+        tile = {
+            "name": "tile_cloud_test",
+            "bbox_3006": {"west": 500000, "south": 6500000,
+                          "east": 505120, "north": 6505120},
+        }
+
+        with patch("scripts.batch_fetch_openeo.bbox_to_wgs84",
+                   return_value={"west": 15.0, "south": 58.0,
+                                  "east": 16.0, "north": 59.0}):
+            result = screen_tile_scl(mock_conn, tile, [(150, 180)], 2022)
+
+        assert result["0"]["date"] == "2022-06-10"
+        assert result["0"]["cloud_frac"] == 0.01
+
+    def test_multiple_frames(self):
+        _ensure_path()
+        from scripts.batch_fetch_openeo import screen_tile_scl
+
+        mock_conn = MagicMock()
+        mock_cube = MagicMock()
+        mock_conn.load_collection.return_value = mock_cube
+        mock_cube.__eq__ = MagicMock(return_value=mock_cube)
+        mock_cube.__or__ = MagicMock(return_value=mock_cube)
+        mock_cube.reduce_dimension.return_value = mock_cube
+
+        # Different results per call (frame 0, frame 1, frame 2)
+        mock_cube.execute.side_effect = [
+            [["2022-05-01", 0.10], ["2022-05-15", 0.05]],
+            [["2022-07-01", 0.03], ["2022-07-10", 0.20]],
+            [["2022-08-15", 0.08]],
+        ]
+
+        tile = {
+            "name": "tile_multi",
+            "bbox_3006": {"west": 500000, "south": 6500000,
+                          "east": 505120, "north": 6505120},
+        }
+        windows = [(120, 150), (170, 200), (220, 250)]
+
+        with patch("scripts.batch_fetch_openeo.bbox_to_wgs84",
+                   return_value={"west": 15.0, "south": 58.0,
+                                  "east": 16.0, "north": 59.0}):
+            result = screen_tile_scl(mock_conn, tile, windows, 2022)
+
+        assert result["0"]["date"] == "2022-05-15"
+        assert result["1"]["date"] == "2022-07-01"
+        assert result["2"]["date"] == "2022-08-15"
+
+    def test_handles_empty_response(self):
+        _ensure_path()
+        from scripts.batch_fetch_openeo import screen_tile_scl
+
+        mock_conn = MagicMock()
+        mock_cube = MagicMock()
+        mock_conn.load_collection.return_value = mock_cube
+        mock_cube.__eq__ = MagicMock(return_value=mock_cube)
+        mock_cube.__or__ = MagicMock(return_value=mock_cube)
+        mock_cube.reduce_dimension.return_value = mock_cube
+        mock_cube.execute.return_value = []
+
+        tile = {
+            "name": "tile_empty",
+            "bbox_3006": {"west": 500000, "south": 6500000,
+                          "east": 505120, "north": 6505120},
+        }
+
+        with patch("scripts.batch_fetch_openeo.bbox_to_wgs84",
+                   return_value={"west": 15.0, "south": 58.0,
+                                  "east": 16.0, "north": 59.0}):
+            result = screen_tile_scl(mock_conn, tile, [(150, 210)], 2022)
+
+        assert result == {}
+
+    def test_handles_exception(self):
+        _ensure_path()
+        from scripts.batch_fetch_openeo import screen_tile_scl
+
+        mock_conn = MagicMock()
+        mock_conn.load_collection.side_effect = Exception("API error")
+
+        tile = {
+            "name": "tile_error",
+            "bbox_3006": {"west": 500000, "south": 6500000,
+                          "east": 505120, "north": 6505120},
+        }
+
+        with patch("scripts.batch_fetch_openeo.bbox_to_wgs84",
+                   return_value={"west": 15.0, "south": 58.0,
+                                  "east": 16.0, "north": 59.0}):
+            result = screen_tile_scl(mock_conn, tile, [(150, 210)], 2022)
+
+        assert result == {}
+
+
+class TestMergeToNpz:
+
+    def test_merge_creates_npz(self):
+        _ensure_path()
+        from scripts.batch_fetch_openeo import _merge_to_npz
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            # Create 2 frame files
+            for fi in range(2):
+                np.save(output_dir / f"_frame_test_tile_f{fi}.npy",
+                        np.random.rand(6, 64, 64).astype(np.float32))
+
+            tile_loc = {
+                "bbox_3006": {"west": 500000, "south": 6500000,
+                              "east": 500640, "north": 6500640},
+                "source": "lulc",
+            }
+            ok = _merge_to_npz("test_tile", 2, output_dir, tile_loc, 64)
+            assert ok
+
+            # Verify .npz
+            npz = np.load(output_dir / "test_tile.npz", allow_pickle=True)
+            assert npz["spectral"].shape == (12, 64, 64)  # 2 frames × 6 bands
+            assert npz["temporal_mask"].tolist() == [1, 1]
+            assert int(npz["num_frames"]) == 2
+
+            # Frame files cleaned up
+            assert not (output_dir / "_frame_test_tile_f0.npy").exists()
+            assert not (output_dir / "_frame_test_tile_f1.npy").exists()
+
+    def test_merge_with_missing_frame(self):
+        _ensure_path()
+        from scripts.batch_fetch_openeo import _merge_to_npz
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            # Only frame 0, frame 1 missing
+            np.save(output_dir / "_frame_partial_f0.npy",
+                    np.random.rand(6, 32, 32).astype(np.float32))
+
+            tile_loc = {
+                "bbox_3006": {"west": 0, "south": 0, "east": 320, "north": 320},
+                "source": "lulc",
+            }
+            ok = _merge_to_npz("partial", 2, output_dir, tile_loc, 32)
+            assert ok
+
+            npz = np.load(output_dir / "partial.npz", allow_pickle=True)
+            assert npz["temporal_mask"].tolist() == [1, 0]
+
+    def test_merge_no_frames_returns_false(self):
+        _ensure_path()
+        from scripts.batch_fetch_openeo import _merge_to_npz
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tile_loc = {
+                "bbox_3006": {"west": 0, "south": 0, "east": 320, "north": 320},
+                "source": "lulc",
+            }
+            ok = _merge_to_npz("missing", 2, Path(tmpdir), tile_loc, 32)
+            assert not ok
+
+
+class TestBestDatesResumability:
+
+    def test_saves_and_loads_best_dates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "best_dates.json"
+
+            data = {
+                "tile_001": {"0": {"date": "2022-07-01", "cloud_frac": 0.03}},
+                "tile_002": {"0": {"date": "2022-07-05", "cloud_frac": 0.08}},
+            }
+            with open(path, "w") as f:
+                json.dump(data, f)
+
+            with open(path) as f:
+                loaded = json.load(f)
+
+            assert loaded["tile_001"]["0"]["date"] == "2022-07-01"
+            assert loaded["tile_002"]["0"]["cloud_frac"] == 0.08
