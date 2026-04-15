@@ -256,7 +256,9 @@ document.head.appendChild(ps);
 </script></body></html>"""
 
 with open(OUT,"w",encoding="utf-8") as f: f.write(html)
-# Spara viz5 till rätt plats för framtida bruk
+# Copy viz5 to canonical location (skip if already there)
 import shutil
-shutil.copy(str(viz5_path), str(REPO/"data/viz_tiles/viz_data5.json"))
+dst = REPO / "data/viz_tiles/viz_data5.json"
+if viz5_path.resolve() != dst.resolve():
+    shutil.copy(str(viz5_path), str(dst))
 print(f"HTML ({n_cols} cols): {OUT}  ({len(html)//1024}KB)")

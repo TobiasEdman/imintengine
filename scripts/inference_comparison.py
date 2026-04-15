@@ -79,7 +79,26 @@ def load_model(ckpt_path: str, device):
     cfg = TrainingConfig()
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
-    backbone = _load_prithvi_from_hf(pretrained=False, num_frames=cfg.num_temporal_frames)
+    # Read model config from checkpoint (img_size, num_frames may differ per run)
+    ck_cfg = ck.get("config", {})
+    num_frames = ck_cfg.get("num_temporal_frames", cfg.num_temporal_frames)
+    n_aux = ck_cfg.get("n_aux_channels", 11)
+
+    # Infer img_size from pos_embed shape in checkpoint
+    sd = {k.replace("model.", "", 1): v for k, v in
+          ck.get("model_state_dict", ck.get("state_dict", {})).items()}
+    pos_embed = sd.get("encoder.pos_embed")
+    if pos_embed is not None:
+        n_tokens = pos_embed.shape[1] - 1  # subtract CLS token
+        n_spatial = n_tokens // max(num_frames, 1)
+        grid_size = int(n_spatial ** 0.5)
+        img_size = grid_size * 16  # patch_size = 16
+    else:
+        img_size = cfg.img_size
+
+    backbone = _load_prithvi_from_hf(
+        pretrained=False, num_frames=num_frames, img_size=img_size,
+    )
     model = PrithviSegmentationModel(
         encoder=backbone,
         feature_indices=cfg.feature_indices,
@@ -87,20 +106,18 @@ def load_model(ckpt_path: str, device):
         num_classes=cfg.num_classes,
         enable_temporal_pooling=cfg.enable_temporal_pooling,
         enable_multilevel_aux=cfg.enable_multilevel_aux,
-        n_aux_channels=11,
-        pool_sizes=get_default_pool_sizes(device),
+        n_aux_channels=n_aux,
+        pool_sizes=get_default_pool_sizes(device, img_size=img_size),
     )
-    sd = {k.replace("model.", "", 1): v for k, v in
-          ck.get("model_state_dict", ck.get("state_dict", {})).items()}
     model.load_state_dict(sd, strict=False)
     model = model.to(device).eval()
 
     epoch = ck.get("epoch", "?")
     miou = ck.get("metrics", {}).get("miou", "?")
-    return model, epoch, miou
+    return model, epoch, miou, img_size
 
 
-def run_inference(model, tile_path: str, device):
+def run_inference(model, tile_path: str, device, img_size: int = 224):
     """Run inference on a single tile. Returns (H, W) prediction."""
     import torch
     from imint.training.unified_dataset import (
@@ -117,18 +134,19 @@ def run_inference(model, tile_path: str, device):
     std = np.tile(PRITHVI_STD.reshape(N_BANDS, 1, 1), (n_frames, 1, 1))
     spectral = (spectral * 10000.0 - mean) / std
 
-    # Center crop to 224
+    # Center crop to img_size (no crop if tile == img_size)
     _, h, w = spectral.shape
-    ch, cw = 224, 224
-    y0, x0 = (h - ch) // 2, (w - cw) // 2
-    spectral = spectral[:, y0:y0+ch, x0:x0+cw]
+    crop_sz = min(img_size, h, w)
+    y0 = (h - crop_sz) // 2
+    x0 = (w - crop_sz) // 2
+    spectral = spectral[:, y0:y0+crop_sz, x0:x0+crop_sz]
 
     # Aux channels
     aux_list = []
     for ch_name in AUX_CHANNEL_NAMES:
         if ch_name in data:
             arr = data[ch_name].astype(np.float32)
-            arr = arr[y0:y0+224, x0:x0+224]
+            arr = arr[y0:y0+crop_sz, x0:x0+crop_sz]
             if ch_name in AUX_LOG_TRANSFORM:
                 arr = np.log1p(arr)
             if ch_name in AUX_NORM:
@@ -136,11 +154,11 @@ def run_inference(model, tile_path: str, device):
                 arr = (arr - m) / max(s, 1e-6)
             aux_list.append(arr[np.newaxis])
         else:
-            aux_list.append(np.zeros((1, 224, 224), dtype=np.float32))
+            aux_list.append(np.zeros((1, crop_sz, crop_sz), dtype=np.float32))
 
     img = torch.from_numpy(spectral).unsqueeze(0).to(device)
     T = img.shape[1] // 6
-    img5d = img.view(1, T, 6, 224, 224).permute(0, 2, 1, 3, 4)
+    img5d = img.view(1, T, 6, crop_sz, crop_sz).permute(0, 2, 1, 3, 4)
 
     aux = torch.from_numpy(np.concatenate(aux_list, axis=0)).unsqueeze(0).to(device)
 
@@ -199,14 +217,14 @@ def main():
 
     for ckpt_path, label in zip(args.checkpoints, labels):
         print(f"\n=== {label}: {ckpt_path} ===")
-        model, epoch, miou = load_model(ckpt_path, device)
-        print(f"  Loaded: epoch={epoch}, miou={miou}")
+        model, epoch, miou, model_img_size = load_model(ckpt_path, device)
+        print(f"  Loaded: epoch={epoch}, miou={miou}, img_size={model_img_size}")
 
         result = {"_label": label, "_epoch": str(epoch), "_miou": str(miou)}
         for tile_path in tiles:
             name = tile_path.stem
             print(f"  {name}...", end=" ", flush=True)
-            pred = run_inference(model, str(tile_path), device)
+            pred = run_inference(model, str(tile_path), device, img_size=model_img_size)
             rgb = pred_to_rgb(pred)
             result[f"{name}_pred"] = rgb_to_b64png(rgb)
             result[f"{name}_shape"] = list(rgb.shape[:2])
