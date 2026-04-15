@@ -79,9 +79,10 @@ _DES_SEMAPHORE = AdaptiveSemaphore(
     initial=2, min_permits=1, max_permits=8,
     ramp_up_after=10, name="DES",
 )
-# CDSE allows 300 req/min. Start aggressive, back off only on real errors.
+# CDSE allows 300 req/min but each 512px request takes ~20s.
+# 10 concurrent = ~30 req/min, well within quota.
 _CDSE_SEMAPHORE = AdaptiveSemaphore(
-    initial=20, min_permits=3, max_permits=50,
+    initial=10, min_permits=3, max_permits=20,
     ramp_up_after=20, name="CDSE",
 )
 
