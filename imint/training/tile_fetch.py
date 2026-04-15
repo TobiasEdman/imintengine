@@ -76,12 +76,13 @@ class AdaptiveSemaphore:
 
 
 _DES_SEMAPHORE = AdaptiveSemaphore(
-    initial=1, min_permits=1, max_permits=4,
+    initial=2, min_permits=1, max_permits=8,
     ramp_up_after=10, name="DES",
 )
+# CDSE allows 300 req/min. Start aggressive, back off only on real errors.
 _CDSE_SEMAPHORE = AdaptiveSemaphore(
-    initial=3, min_permits=1, max_permits=6,
-    ramp_up_after=10, name="CDSE",
+    initial=20, min_permits=3, max_permits=50,
+    ramp_up_after=20, name="CDSE",
 )
 
 
