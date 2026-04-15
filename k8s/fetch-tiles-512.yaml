@@ -41,7 +41,7 @@ spec:
                 --output-dir /data/unified_v2_512 \
                 --tile-size-px 512 \
                 --years 2017 2018 2019 2022 2023 \
-                --workers 6 \
+                --workers 4 \
                 --cloud-max 40
 
               echo "=== Step 2: Build unified labels ==="

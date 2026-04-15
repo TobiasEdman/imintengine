@@ -12,10 +12,16 @@ from datetime import datetime
 
 import numpy as np
 
+import threading
+
 TILE_SIZE_M = 2560   # 256 pixels × 10m
 TILE_SIZE_PX = 256
 N_BANDS = 6
 PRITHVI_BANDS = ["B02", "B03", "B04", "B8A", "B11", "B12"]
+
+# Global concurrency limits — shared across all tiles and frames
+_DES_SEMAPHORE = threading.Semaphore(3)   # max 3 DES requests at once
+_CDSE_SEMAPHORE = threading.Semaphore(1)  # max 1 CDSE request at once
 
 
 def point_to_bbox_3006(lat: float, lon: float) -> dict:
@@ -99,6 +105,7 @@ def _fetch_single_scene(
     from imint.fetch import fetch_seasonal_image
 
     def _cdse_try(date_str: str) -> tuple[np.ndarray | None, str]:
+        _CDSE_SEMAPHORE.acquire()
         try:
             result = fetch_s2_scene(
                 bbox_3006["west"], bbox_3006["south"],
@@ -112,9 +119,12 @@ def _fetch_single_scene(
                 return result[0], date_str
         except Exception:
             pass
+        finally:
+            _CDSE_SEMAPHORE.release()
         return None, date_str
 
     def _des_try(date_str: str) -> tuple[np.ndarray | None, str]:
+        _DES_SEMAPHORE.acquire()
         try:
             result = fetch_seasonal_image(
                 date=date_str,
@@ -126,6 +136,8 @@ def _fetch_single_scene(
                 return result[0], date_str
         except Exception:
             pass
+        finally:
+            _DES_SEMAPHORE.release()
         return None, date_str
 
     top_dates = [d for d, _ in candidates[:max_candidates]]
