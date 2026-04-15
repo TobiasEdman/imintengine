@@ -715,7 +715,7 @@ def main():
                 if r:
                     stats[r.get("status", "failed")] = \
                         stats.get(r.get("status", "failed"), 0) + 1
-                    if completed % 10 == 0:
+                    if True:  # log every tile
                         elapsed = time.time() - t0
                         print(f"  [{completed}/{len(work)}] {r['name']}: {r['status']} "
                               f"| {completed/elapsed*3600:.0f}/h | workers={active_workers}",
