@@ -217,48 +217,82 @@ def gen_urban(
 def prefetch_vpp_batch(
     work_items: list[tuple[dict, str]],
     workers: int = 4,
+    cache_path: str | None = None,
 ) -> dict[str, list[tuple[int, int]]]:
     """Pre-fetch VPP growing-season windows for all tiles in parallel.
 
-    VPP requests are cheap (small DOY arrays) and use a separate CDSE
-    endpoint from S2 spectral.  Fetching them upfront in a burst means
-    the spectral pass can run 1-at-a-time without ever stalling on VPP.
+    Results are cached to disk so restarts skip the VPP phase entirely.
 
     Args:
         work_items: List of (loc, output_dir) from the main work queue.
         workers: Concurrent VPP requests (default 4; VPP is light-weight).
+        cache_path: Path to JSON cache file.  If None, derived from
+            the output directory.
 
     Returns:
         Dict mapping tile name → list of (doy_start, doy_end) tuples.
-        Tiles where VPP fails are absent — fetch_4frame_scenes falls back
-        to fixed seasonal windows for those.
     """
     from imint.training.tile_fetch import _get_vpp_doy_windows
+
+    # Try loading from disk cache
+    if cache_path is None and work_items:
+        cache_path = os.path.join(work_items[0][1], ".vpp_cache.json")
+
+    if cache_path and os.path.exists(cache_path):
+        with open(cache_path) as f:
+            cached = json.load(f)
+        # Convert lists back to tuples
+        vpp_cache = {k: [tuple(w) for w in v] for k, v in cached.items()}
+        # Check how many of our tiles are cached
+        needed = {loc["name"] for loc, _ in work_items}
+        hits = needed & set(vpp_cache.keys())
+        if len(hits) >= len(needed) * 0.95:
+            print(f"\n=== VPP cache: {len(hits)}/{len(needed)} tiles from {cache_path} ===\n")
+            return vpp_cache
+        print(f"  VPP cache: {len(hits)}/{len(needed)} (partial, re-fetching missing)")
 
     total = len(work_items)
     print(f"\n=== VPP prefetch: {total} tiles ({workers} workers) ===")
     vpp_cache: dict[str, list[tuple[int, int]]] = {}
+
+    # Keep any existing cached entries
+    if cache_path and os.path.exists(cache_path):
+        with open(cache_path) as f:
+            for k, v in json.load(f).items():
+                vpp_cache[k] = [tuple(w) for w in v]
+
+    # Only fetch tiles not already cached
+    to_fetch = [(loc, d) for loc, d in work_items if loc["name"] not in vpp_cache]
 
     def _fetch_one(item: tuple[dict, str]) -> tuple[str, list | None]:
         loc, _ = item
         windows = _get_vpp_doy_windows(loc["bbox_3006"], num_growing_frames=3)
         return loc["name"], windows
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = {pool.submit(_fetch_one, item): item for item in work_items}
-        done = 0
-        for f in as_completed(futs):
-            name, windows = f.result()
-            if windows:
-                vpp_cache[name] = windows
-            done += 1
-            if done % 200 == 0 or done == total:
-                hit_pct = len(vpp_cache) / done * 100
-                print(f"  VPP {done}/{total}  hits={len(vpp_cache)} ({hit_pct:.0f}%)",
-                      flush=True)
+    if to_fetch:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(_fetch_one, item): item for item in to_fetch}
+            done = 0
+            for f in as_completed(futs):
+                name, windows = f.result()
+                if windows:
+                    vpp_cache[name] = windows
+                done += 1
+                if done % 200 == 0 or done == len(to_fetch):
+                    print(f"  VPP {done}/{len(to_fetch)}  hits={len(vpp_cache)}",
+                          flush=True)
+
+    # Save to disk
+    if cache_path:
+        try:
+            os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+            with open(cache_path, "w") as f:
+                json.dump({k: list(v) for k, v in vpp_cache.items()}, f)
+        except Exception:
+            pass
 
     miss = total - len(vpp_cache)
-    print(f"  VPP done — {len(vpp_cache)} hits, {miss} misses (fixed windows fallback)\n")
+    print(f"  VPP done — {len(vpp_cache)} hits, {miss} misses\n")
     return vpp_cache
 
 
