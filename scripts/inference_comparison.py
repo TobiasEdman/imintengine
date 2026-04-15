@@ -117,8 +117,13 @@ def load_model(ckpt_path: str, device):
     return model, epoch, miou, img_size
 
 
-def run_inference(model, tile_path: str, device, img_size: int = 224):
-    """Run inference on a single tile. Returns (H, W) prediction."""
+def run_inference(model, tile_path: str, device, img_size: int = 224,
+                  return_probs: bool = False):
+    """Run inference on a single tile.
+
+    Returns (H, W) prediction, or ((C, H, W) softmax, (B, H, W) spectral_raw, (N, H, W) aux)
+    when return_probs=True (for superpixel refinement).
+    """
     import torch
     from imint.training.unified_dataset import (
         PRITHVI_MEAN, PRITHVI_STD, N_BANDS,
@@ -182,11 +187,27 @@ def run_inference(model, tile_path: str, device, img_size: int = 224):
         ).to(device)
 
     with torch.no_grad():
-        pred = model(
+        logits = model(
             img5d, aux=aux,
             temporal_coords=temporal_coords,
             location_coords=location_coords,
-        ).argmax(1).squeeze(0).cpu().numpy()
+        )
+        if return_probs:
+            import torch.nn.functional as F
+            probs = F.softmax(logits, dim=1).squeeze(0).cpu().numpy()  # (C, H, W)
+            # Return raw spectral (before normalization) + aux for superpixel generation
+            raw_spectral = data.get("spectral", data.get("image")).astype(np.float32)
+            _, h_full, w_full = raw_spectral.shape
+            raw_spectral = raw_spectral[:, y0:y0+crop_sz, x0:x0+crop_sz]
+            # Collect raw aux
+            raw_aux_list = []
+            for ch_name in AUX_CHANNEL_NAMES:
+                if ch_name in data:
+                    a = data[ch_name].astype(np.float32)[y0:y0+crop_sz, x0:x0+crop_sz]
+                    raw_aux_list.append(a[np.newaxis])
+            raw_aux = np.concatenate(raw_aux_list, axis=0) if raw_aux_list else None
+            return probs, raw_spectral, raw_aux
+        pred = logits.argmax(1).squeeze(0).cpu().numpy()
     return pred
 
 
@@ -194,9 +215,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--viz-dir", required=True)
     parser.add_argument("--checkpoints", nargs="+", required=True)
-    parser.add_argument("--labels", nargs="*", help="Labels for each checkpoint (e.g. v5a v5b v5c)")
+    parser.add_argument("--labels", nargs="*", help="Labels for each checkpoint")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--superpixel", action="store_true",
+                        help="Apply SLIC superpixel refinement")
+    parser.add_argument("--superpixel-segments", type=int, default=500)
+    parser.add_argument("--cleanup", action="store_true",
+                        help="Apply morphological cleanup (remove < MMU)")
     args = parser.parse_args()
 
     import torch
@@ -220,11 +246,34 @@ def main():
         model, epoch, miou, model_img_size = load_model(ckpt_path, device)
         print(f"  Loaded: epoch={epoch}, miou={miou}, img_size={model_img_size}")
 
-        result = {"_label": label, "_epoch": str(epoch), "_miou": str(miou)}
+        suffix = ""
+        if args.superpixel:
+            suffix += "_sp"
+        if args.cleanup:
+            suffix += "_clean"
+
+        result = {"_label": label + suffix, "_epoch": str(epoch), "_miou": str(miou)}
         for tile_path in tiles:
             name = tile_path.stem
             print(f"  {name}...", end=" ", flush=True)
-            pred = run_inference(model, str(tile_path), device, img_size=model_img_size)
+
+            if args.superpixel:
+                from imint.inference.superpixel_refine import superpixel_refine, morphological_cleanup
+                probs, raw_spec, raw_aux = run_inference(
+                    model, str(tile_path), device,
+                    img_size=model_img_size, return_probs=True,
+                )
+                pred = superpixel_refine(
+                    probs, raw_spec, aux=raw_aux,
+                    n_segments=args.superpixel_segments,
+                )
+                if args.cleanup:
+                    pred = morphological_cleanup(pred, min_pixels=25)
+            else:
+                pred = run_inference(model, str(tile_path), device, img_size=model_img_size)
+                if args.cleanup:
+                    from imint.inference.superpixel_refine import morphological_cleanup
+                    pred = morphological_cleanup(pred, min_pixels=25)
             rgb = pred_to_rgb(pred)
             result[f"{name}_pred"] = rgb_to_b64png(rgb)
             result[f"{name}_shape"] = list(rgb.shape[:2])
