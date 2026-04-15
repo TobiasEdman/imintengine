@@ -76,12 +76,12 @@ class AdaptiveSemaphore:
 
 
 _DES_SEMAPHORE = AdaptiveSemaphore(
-    initial=3, min_permits=1, max_permits=8,
+    initial=1, min_permits=1, max_permits=4,
     ramp_up_after=10, name="DES",
 )
 _CDSE_SEMAPHORE = AdaptiveSemaphore(
-    initial=1, min_permits=1, max_permits=3,
-    ramp_up_after=20, name="CDSE",
+    initial=3, min_permits=1, max_permits=6,
+    ramp_up_after=10, name="CDSE",
 )
 
 
