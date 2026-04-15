@@ -679,8 +679,11 @@ def main():
             else:
                 r = fetch_tile(loc, args.years, d, args.cloud_max,
                                vpp_cache=vpp_cache)
-            # If tile took >60s, CDSE was probably rate-limiting internally
-            if r and time.time() - t_start > 60:
+            # Rate-limit detection: scale threshold with tile size
+            # 256px: 60s, 512px: 240s (4x pixels = 4x transfer time)
+            from imint.training.tile_fetch import TILE_SIZE_PX as _tsz
+            rl_threshold = 60 * (_tsz / 256) ** 2
+            if r and time.time() - t_start > rl_threshold:
                 r["_rate_limited"] = True
             return r
         finally:

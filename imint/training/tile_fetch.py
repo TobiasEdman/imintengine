@@ -93,12 +93,12 @@ def _fetch_single_scene(
 
     candidates.sort(key=lambda x: x[1])
 
-    # Race CDSE and DES in parallel for each candidate date.
-    # Both sources are tried simultaneously — first successful result wins.
-    from concurrent.futures import ThreadPoolExecutor, as_completed, FIRST_COMPLETED, wait
+    # DES-primary with 3 workers, CDSE as single-worker fallback.
+    # DES has more capacity and doesn't rate-limit as aggressively.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from imint.fetch import fetch_seasonal_image
 
-    def _cdse_try(date_str: str) -> tuple[np.ndarray | None, str, str]:
+    def _cdse_try(date_str: str) -> tuple[np.ndarray | None, str]:
         try:
             result = fetch_s2_scene(
                 bbox_3006["west"], bbox_3006["south"],
@@ -109,12 +109,12 @@ def _fetch_single_scene(
                 haze_threshold=haze_threshold,
             )
             if result is not None:
-                return result[0], date_str, "cdse"
+                return result[0], date_str
         except Exception:
             pass
-        return None, date_str, "cdse"
+        return None, date_str
 
-    def _des_try(date_str: str) -> tuple[np.ndarray | None, str, str]:
+    def _des_try(date_str: str) -> tuple[np.ndarray | None, str]:
         try:
             result = fetch_seasonal_image(
                 date=date_str,
@@ -123,23 +123,26 @@ def _fetch_single_scene(
                 source="des",
             )
             if result is not None:
-                return result[0], date_str, "des"
+                return result[0], date_str
         except Exception:
             pass
-        return None, date_str, "des"
+        return None, date_str
 
     top_dates = [d for d, _ in candidates[:max_candidates]]
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        # Submit both CDSE and DES for each candidate date
+
+    # 3 DES + 1 CDSE in parallel per tile. First successful result wins.
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = []
-        for d in top_dates:
-            futures.append(pool.submit(_cdse_try, d))
+        # DES: submit up to 3 candidates
+        for d in top_dates[:3]:
             futures.append(pool.submit(_des_try, d))
+        # CDSE: submit best candidate (1 worker)
+        if top_dates:
+            futures.append(pool.submit(_cdse_try, top_dates[0]))
 
         for f in as_completed(futures):
-            scene, date_str, source = f.result()
+            scene, date_str = f.result()
             if scene is not None:
-                # Cancel remaining futures (best-effort)
                 for pending in futures:
                     pending.cancel()
                 return scene, date_str

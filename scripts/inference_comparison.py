@@ -221,6 +221,12 @@ def main():
     parser.add_argument("--superpixel", action="store_true",
                         help="Apply SLIC superpixel refinement")
     parser.add_argument("--superpixel-segments", type=int, default=500)
+    parser.add_argument("--guided-filter", action="store_true",
+                        help="Apply guided filter refinement (pixel-level, spectral edge transfer)")
+    parser.add_argument("--gf-radius", type=int, default=2,
+                        help="Guided filter radius (2=fine, 4=moderate)")
+    parser.add_argument("--gf-eps", type=float, default=0.01,
+                        help="Guided filter eps (0.001=sharp, 0.01=balanced)")
     parser.add_argument("--cleanup", action="store_true",
                         help="Apply morphological cleanup (remove < MMU)")
     args = parser.parse_args()
@@ -249,6 +255,8 @@ def main():
         suffix = ""
         if args.superpixel:
             suffix += "_sp"
+        if args.guided_filter:
+            suffix += "_gf"
         if args.cleanup:
             suffix += "_clean"
 
@@ -257,16 +265,24 @@ def main():
             name = tile_path.stem
             print(f"  {name}...", end=" ", flush=True)
 
-            if args.superpixel:
-                from imint.inference.superpixel_refine import superpixel_refine, morphological_cleanup
+            if args.superpixel or args.guided_filter:
+                from imint.inference.superpixel_refine import (
+                    superpixel_refine, guided_filter_refine, morphological_cleanup,
+                )
                 probs, raw_spec, raw_aux = run_inference(
                     model, str(tile_path), device,
                     img_size=model_img_size, return_probs=True,
                 )
-                pred = superpixel_refine(
-                    probs, raw_spec, aux=raw_aux,
-                    n_segments=args.superpixel_segments,
-                )
+                if args.guided_filter:
+                    pred = guided_filter_refine(
+                        probs, raw_spec,
+                        radius=args.gf_radius, eps=args.gf_eps,
+                    )
+                elif args.superpixel:
+                    pred = superpixel_refine(
+                        probs, raw_spec, aux=raw_aux,
+                        n_segments=args.superpixel_segments,
+                    )
                 if args.cleanup:
                     pred = morphological_cleanup(pred, min_pixels=25)
             else:

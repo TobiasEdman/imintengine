@@ -142,6 +142,70 @@ def _aggregate(
     return seg_pred[segments]
 
 
+def guided_filter_refine(
+    softmax_probs: np.ndarray,
+    spectral: np.ndarray,
+    radius: int = 2,
+    eps: float = 0.01,
+) -> np.ndarray:
+    """Pixel-level refinement using edge-preserving guided filter.
+
+    Transfers spectral edges to each class probability channel at full
+    pixel resolution.  No superpixel grouping — every pixel retains its
+    individual prediction while boundaries snap to spectral edges.
+
+    This replicates the effect of NMD's pixel-level classification with
+    spectral-edge-aware smoothing.
+
+    Args:
+        softmax_probs: (C, H, W) float32 per-class probabilities.
+        spectral: (B, H, W) float32 spectral bands (raw reflectance).
+        radius: Filter radius in pixels.  2 = very fine (10-20m edges),
+            4 = moderate smoothing, 8 = coarser.
+        eps: Regularization.  Smaller = sharper edge transfer.
+            0.001 = very sharp, 0.01 = balanced, 0.1 = soft.
+
+    Returns:
+        (H, W) uint8 refined class predictions.
+    """
+    import cv2
+
+    C, H, W = softmax_probs.shape
+
+    # Build guide image: use first 3 spectral bands (B02, B03, B04 = Blue, Green, Red)
+    # scaled to uint8 for OpenCV guided filter
+    if spectral.shape[0] >= 3:
+        guide = spectral[:3]  # (3, H, W)
+    else:
+        guide = np.stack([spectral[0]] * 3, axis=0)
+
+    # Percentile stretch to 0-255 uint8
+    guide_hwc = np.moveaxis(guide, 0, -1)  # (H, W, 3)
+    for ch in range(3):
+        band = guide_hwc[:, :, ch]
+        valid = band[band > 0]
+        if len(valid) > 0:
+            lo, hi = np.percentile(valid, [2, 98])
+            band = np.clip((band - lo) / max(hi - lo, 1e-6), 0, 1)
+            guide_hwc[:, :, ch] = band
+    guide_u8 = (guide_hwc * 255).astype(np.uint8)
+
+    # Apply guided filter to each class probability channel
+    filtered_probs = np.zeros_like(softmax_probs)
+    for c in range(C):
+        prob_c = softmax_probs[c].astype(np.float32)
+        filtered_probs[c] = cv2.ximgproc.guidedFilter(
+            guide_u8, prob_c, radius=radius, eps=eps,
+        )
+
+    # Re-normalize (guided filter can shift probabilities)
+    prob_sum = filtered_probs.sum(axis=0, keepdims=True)
+    prob_sum = np.maximum(prob_sum, 1e-8)
+    filtered_probs /= prob_sum
+
+    return filtered_probs.argmax(axis=0).astype(np.uint8)
+
+
 def morphological_cleanup(
     prediction: np.ndarray,
     min_pixels: int = 25,
