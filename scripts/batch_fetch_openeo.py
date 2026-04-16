@@ -144,26 +144,47 @@ def screen_tile_scl(conn, tile: dict, frame_windows: list, year: int) -> dict:
             # Download as JSON timeseries (tiny — one float per scene date)
             ts_json = cloud_frac_ts.execute()
 
-            # Parse: find date with min cloud fraction
+            # Parse result — format varies by backend:
+            # List of [date, value]: [["2022-07-01", 0.05], ...]
+            # List of [date, [value]]: [["2022-07-01", [0.05]], ...]
+            # Dict with data key: {"data": [...]}
+            # Log first entry for debugging
             if isinstance(ts_json, dict) and "data" in ts_json:
                 entries = ts_json["data"]
             elif isinstance(ts_json, list):
                 entries = ts_json
             else:
-                # Try pandas-like format
                 entries = list(ts_json.items()) if hasattr(ts_json, 'items') else []
+
+            if entries and frame_idx == 0:
+                print(f"      [debug] first entry: {entries[0]}", flush=True)
+
+            def _extract_frac(val):
+                """Extract float from value that may be nested."""
+                if isinstance(val, (int, float)):
+                    return float(val)
+                if isinstance(val, (list, tuple)):
+                    for v in val:
+                        if isinstance(v, (int, float)):
+                            return float(v)
+                        if isinstance(v, (list, tuple)) and v:
+                            return float(v[0])
+                return None
 
             best_date = None
             best_frac = 1.0
             for entry in entries:
                 if isinstance(entry, (list, tuple)) and len(entry) >= 2:
-                    date_str, frac = str(entry[0])[:10], float(entry[1])
+                    date_str = str(entry[0])[:10]
+                    frac = _extract_frac(entry[1])
                 elif isinstance(entry, dict):
                     date_str = str(entry.get("date", entry.get("t", "")))[:10]
-                    frac = float(entry.get("value", entry.get("SCL", 1.0)))
+                    frac = _extract_frac(
+                        entry.get("value", entry.get("SCL", entry.get("avg", None)))
+                    )
                 else:
                     continue
-                if frac < best_frac:
+                if frac is not None and frac < best_frac:
                     best_frac = frac
                     best_date = date_str
 
