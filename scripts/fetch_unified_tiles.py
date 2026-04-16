@@ -314,12 +314,55 @@ def prefetch_vpp_batch(
 # ── Core Fetch ────────────────────────────────────────────────────────────────
 
 
+def _fetch_frames_from_best_dates(
+    bbox: dict, best: dict, n_frames: int = 4,
+) -> tuple[list, np.ndarray, np.ndarray, list]:
+    """Fetch spectral frames using pre-screened best dates (from openEO stage 1).
+
+    Skips STAC search, VPP lookup, and cloud screening entirely — just
+    fetches spectral for the known-good dates.
+
+    Args:
+        bbox: Tile bbox in EPSG:3006.
+        best: {frame_idx: {date, cloud_frac}} from best_dates.json.
+        n_frames: Number of frames.
+
+    Returns:
+        (scene_results, temporal_mask, doy, dates) matching stack_frames input.
+    """
+    from datetime import datetime as _dt
+    from imint.training.cdse_s2 import fetch_s2_scene
+
+    results = []
+    for fi in range(n_frames):
+        info = best.get(str(fi))
+        if info and info.get("date"):
+            date_str = info["date"]
+            result = fetch_s2_scene(
+                bbox["west"], bbox["south"], bbox["east"], bbox["north"],
+                date=date_str,
+                size_px=TILE_SIZE_PX,
+                cloud_threshold=1.0,   # already screened, accept anything
+                haze_threshold=1.0,
+                nodata_threshold=None,
+            )
+            if result is not None:
+                results.append((result[0], date_str))
+            else:
+                results.append((None, date_str))
+        else:
+            results.append((None, ""))
+
+    return results
+
+
 def fetch_tile(
     loc: dict,
     years: list[str],
     output_dir: str,
     cloud_max: float = 30.0,
     vpp_cache: dict | None = None,
+    best_dates: dict | None = None,
 ) -> dict:
     """Fetch one tile: 4 seasonal frames + NMD + aux → .npz."""
     name = loc["name"]
@@ -329,16 +372,19 @@ def fetch_tile(
 
     bbox = loc["bbox_3006"]
     coords = loc.get("coords_wgs84") or bbox_3006_to_wgs84(bbox)
-    tile_years = [str(loc["year"])] if "year" in loc else years
 
-    # Use pre-fetched VPP windows if available; falls back to on-demand fetch
-    vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
-
-    scene_results = fetch_4frame_scenes(
-        bbox, coords, tile_years,
-        scene_cloud_max=cloud_max,
-        vpp_windows=vpp_windows,
-    )
+    # Fast path: use pre-screened best dates from openEO stage 1
+    tile_best = best_dates.get(name) if best_dates else None
+    if tile_best:
+        scene_results = _fetch_frames_from_best_dates(bbox, tile_best, NUM_FRAMES)
+    else:
+        tile_years = [str(loc["year"])] if "year" in loc else years
+        vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
+        scene_results = fetch_4frame_scenes(
+            bbox, coords, tile_years,
+            scene_cloud_max=cloud_max,
+            vpp_windows=vpp_windows,
+        )
 
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES)
     if int(temporal_mask.sum()) == 0:
@@ -485,6 +531,7 @@ def refetch_tile(
     output_dir: str,
     cloud_max: float = 30.0,
     vpp_cache: dict | None = None,
+    best_dates: dict | None = None,
 ) -> dict:
     """Re-fetch spectral data for an existing tile, keep all other fields."""
     name = loc["name"]
@@ -518,15 +565,17 @@ def refetch_tile(
     else:
         fetch_years = years
 
-    # Use pre-fetched VPP windows if available; falls back to on-demand fetch
-    vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
-
-    # Fetch 4 new spectral frames
-    scene_results = fetch_4frame_scenes(
-        bbox, coords, fetch_years,
-        scene_cloud_max=cloud_max,
-        vpp_windows=vpp_windows,
-    )
+    # Fast path: use pre-screened best dates from openEO stage 1
+    tile_best = best_dates.get(name) if best_dates else None
+    if tile_best:
+        scene_results = _fetch_frames_from_best_dates(bbox, tile_best, NUM_FRAMES)
+    else:
+        vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
+        scene_results = fetch_4frame_scenes(
+            bbox, coords, fetch_years,
+            scene_cloud_max=cloud_max,
+            vpp_windows=vpp_windows,
+        )
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES)
 
     if int(temporal_mask.sum()) == 0:
@@ -682,16 +731,30 @@ def main():
     if not work:
         return
 
-    # ── VPP prefetch: fetch all growing-season windows before spectral ─────────
-    # VPP uses a separate CDSE endpoint (lighter quota).  Fetching up-front
-    # means the spectral loop never stalls on VPP inside each tile.
-    vpp_cache = prefetch_vpp_batch(work, workers=args.workers)
+    # ── Load best_dates from openEO screening (if available) ───────────────
+    best_dates_path = os.path.join(args.output_dir, "best_dates.json")
+    best_dates_cache = None
+    if os.path.exists(best_dates_path):
+        with open(best_dates_path) as f:
+            best_dates_cache = json.load(f)
+        n_with_dates = sum(1 for loc, _ in work if loc["name"] in best_dates_cache)
+        print(f"  best_dates.json: {n_with_dates}/{len(work)} tiles have pre-screened dates")
+
+    # ── VPP prefetch (skip for tiles with best_dates) ─────────────────────
+    if best_dates_cache:
+        # Only prefetch VPP for tiles WITHOUT pre-screened dates
+        vpp_work = [(loc, d) for loc, d in work if loc["name"] not in best_dates_cache]
+        if vpp_work:
+            vpp_cache = prefetch_vpp_batch(vpp_work, workers=args.workers)
+        else:
+            vpp_cache = {}
+            print("  VPP prefetch skipped — all tiles have best_dates")
+    else:
+        vpp_cache = prefetch_vpp_batch(work, workers=args.workers)
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     t0 = time.time()
 
-    # Fixed concurrency — no adaptive backoff. Rate limiting is handled
-    # internally by the DES/CDSE retry logic per tile.
     max_w = args.workers
     active_workers = max_w
 
@@ -699,9 +762,9 @@ def main():
         loc, d = item
         if use_refetch:
             return refetch_tile(loc, args.years, d, args.cloud_max,
-                                vpp_cache=vpp_cache)
+                                vpp_cache=vpp_cache, best_dates=best_dates_cache)
         return fetch_tile(loc, args.years, d, args.cloud_max,
-                          vpp_cache=vpp_cache)
+                          vpp_cache=vpp_cache, best_dates=best_dates_cache)
 
     CHUNK = max(max_w * 2, len(work) // 10)
     completed = 0
