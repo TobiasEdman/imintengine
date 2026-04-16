@@ -95,11 +95,14 @@ class TestScreenTileSCL:
         _ensure_path()
         from scripts.batch_fetch_openeo import screen_tile_scl
 
-        mock_conn = self._make_mock_conn([
-            {"2022-05-01T00:00:00Z": [[0.10]], "2022-05-15T00:00:00Z": [[0.05]]},
-            {"2022-07-01T00:00:00Z": [[0.03]], "2022-07-10T00:00:00Z": [[0.20]]},
-            {"2022-08-15T00:00:00Z": [[0.08]]},
-        ])
+        # Single call returns all scenes across the full season
+        mock_conn = self._make_mock_conn({
+            "2022-05-01T00:00:00Z": [[0.10]],  # DOY 121 → frame 0 (120-150)
+            "2022-05-15T00:00:00Z": [[0.05]],  # DOY 135 → frame 0
+            "2022-07-01T00:00:00Z": [[0.03]],  # DOY 182 → frame 1 (170-200)
+            "2022-07-10T00:00:00Z": [[0.20]],  # DOY 191 → frame 1
+            "2022-08-15T00:00:00Z": [[0.08]],  # DOY 227 → frame 2 (220-250)
+        })
 
         tile = {
             "name": "tile_multi",

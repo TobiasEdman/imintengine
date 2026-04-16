@@ -97,86 +97,84 @@ def wait_for_job(job, poll_interval=20):
 # ── Stage 1: SCL Screening (per tile, batched) ──────────────────────────────
 
 def screen_tile_scl(conn, tile: dict, frame_windows: list, year: int) -> dict:
-    """Screen one tile: per frame, find the date with lowest cloud fraction.
+    """Screen one tile: ONE openEO call for the full season, then sort locally.
 
-    Runs server-side: loads SCL, counts cloud pixels, reduces to scalar
-    per scene. Downloads tiny JSON result, not raster data.
+    Single aggregate_spatial call covering Apr-Oct. Returns cloud fraction
+    per scene date. Locally assigns each date to the best matching frame
+    window based on DOY.
 
     Returns: {frame_idx: {date, cloud_frac}} or empty dict on failure.
     """
-    bbox_wgs = bbox_to_wgs84(_normalize_bbox(tile))
-    spatial = {
-        "west": bbox_wgs["west"], "south": bbox_wgs["south"],
-        "east": bbox_wgs["east"], "north": bbox_wgs["north"],
-        "crs": "EPSG:4326",
-    }
+    from shapely.geometry import box, mapping
 
+    bbox_wgs = bbox_to_wgs84(_normalize_bbox(tile))
+
+    # Single call: full growing season (earliest window start → latest window end)
+    all_doy_start = min(w[0] for w in frame_windows)
+    all_doy_end = max(w[1] for w in frame_windows)
+    date_start = doy_to_date(year, max(all_doy_start, 1))
+    date_end = doy_to_date(year, min(all_doy_end, 365))
+
+    try:
+        scl = conn.load_collection(
+            "SENTINEL2_L2A",
+            spatial_extent={
+                "west": bbox_wgs["west"], "south": bbox_wgs["south"],
+                "east": bbox_wgs["east"], "north": bbox_wgs["north"],
+                "crs": "EPSG:4326",
+            },
+            temporal_extent=[date_start, date_end],
+            bands=["SCL"],
+            max_cloud_cover=50,
+        )
+
+        cloud_flag = (scl.band("SCL") == 3) | (scl.band("SCL") == 8) | \
+                     (scl.band("SCL") == 9) | (scl.band("SCL") == 10)
+
+        geom = mapping(box(
+            bbox_wgs["west"], bbox_wgs["south"],
+            bbox_wgs["east"], bbox_wgs["north"],
+        ))
+        cloud_frac_ts = cloud_flag.aggregate_spatial(
+            geometries=geom, reducer="mean",
+        )
+
+        ts_json = cloud_frac_ts.execute()
+    except Exception as e:
+        print(f"    Screen failed for {tile['name']}: {e}")
+        return {}
+
+    # Parse all scenes: [(date_str, doy, cloud_frac), ...]
+    scenes = []
+    if isinstance(ts_json, dict):
+        for date_key, val in ts_json.items():
+            if date_key == "data":
+                continue
+            date_str = str(date_key)[:10]
+            frac = val
+            while isinstance(frac, list) and frac:
+                frac = frac[0]
+            if isinstance(frac, (int, float)):
+                try:
+                    doy = datetime.strptime(date_str, "%Y-%m-%d").timetuple().tm_yday
+                    scenes.append((date_str, doy, float(frac)))
+                except ValueError:
+                    pass
+
+    if not scenes:
+        return {}
+
+    # Assign best scene per frame window: lowest cloud frac within DOY range
     results = {}
     for frame_idx, (doy_start, doy_end) in enumerate(frame_windows):
-        date_start = doy_to_date(year, max(doy_start, 1))
-        date_end = doy_to_date(year, min(doy_end, 365))
-
-        try:
-            from shapely.geometry import box, mapping
-
-            # Load SCL for this tile's bbox and temporal window
-            scl = conn.load_collection(
-                "SENTINEL2_L2A",
-                spatial_extent=spatial,
-                temporal_extent=[date_start, date_end],
-                bands=["SCL"],
-                max_cloud_cover=50,
-            )
-
-            # Server-side cloud fraction: SCL cloud classes → boolean → spatial mean
-            cloud_flag = (scl.band("SCL") == 3) | (scl.band("SCL") == 8) | \
-                         (scl.band("SCL") == 9) | (scl.band("SCL") == 10)
-
-            # aggregate_spatial collapses x/y → scalar per scene per geometry
-            geom = mapping(box(
-                bbox_wgs["west"], bbox_wgs["south"],
-                bbox_wgs["east"], bbox_wgs["north"],
-            ))
-            cloud_frac_ts = cloud_flag.aggregate_spatial(
-                geometries=geom, reducer="mean",
-            )
-
-            # Download as JSON timeseries (tiny — one float per scene date)
-            ts_json = cloud_frac_ts.execute()
-
-            # CDSE openEO aggregate_spatial returns:
-            # {"2022-06-05T00:00:00Z": [[0.0003]], "2022-06-15T00:00:00Z": [[0.65]], ...}
-            # Keys = ISO timestamps, values = [[cloud_frac]] (double-nested list)
-            best_date = None
-            best_frac = 1.0
-
-            if isinstance(ts_json, dict):
-                for date_key, val in ts_json.items():
-                    if date_key == "data":
-                        continue  # skip metadata keys
-                    date_str = str(date_key)[:10]
-                    # Extract float from [[value]] or [value] or value
-                    frac = None
-                    if isinstance(val, (int, float)):
-                        frac = float(val)
-                    elif isinstance(val, list):
-                        flat = val
-                        while isinstance(flat, list) and flat:
-                            flat = flat[0]
-                        if isinstance(flat, (int, float)):
-                            frac = float(flat)
-                    if frac is not None and frac < best_frac:
-                        best_frac = frac
-                        best_date = date_str
-
-            if best_date:
-                results[str(frame_idx)] = {
-                    "date": best_date,
-                    "cloud_frac": round(best_frac, 4),
-                }
-
-        except Exception as e:
-            print(f"    Screen failed for {tile['name']} frame {frame_idx}: {e}")
+        candidates = [(d, doy, f) for d, doy, f in scenes
+                      if doy_start <= doy <= doy_end]
+        if candidates:
+            best = min(candidates, key=lambda x: x[2])
+            results[str(frame_idx)] = {
+                "date": best[0],
+                "cloud_frac": round(best[2], 4),
+            }
 
     return results
 
@@ -206,29 +204,41 @@ def run_stage1(args):
           f"already screened: {len(best_dates)}, to screen: {len(tiles)}")
 
     conn = connect_cdse()
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    for i, tile in enumerate(tiles):
+    lock = threading.Lock()
+    completed = 0
+
+    def _screen_one(tile):
+        nonlocal completed
         name = tile["name"]
         windows = vpp_cache.get(name)
         if not windows:
             windows = [[91, 150], [151, 210], [211, 270]]
-
-        print(f"[{i+1}/{len(tiles)}] {name}...", end=" ", flush=True)
         result = screen_tile_scl(conn, tile, windows, args.year)
+        with lock:
+            completed += 1
+            if result:
+                best_dates[name] = result
+                dates = [f"f{k}={v['date']}({v['cloud_frac']:.0%})" for k, v in result.items()]
+                print(f"[{completed}/{len(tiles)}] {name}: {', '.join(dates)}", flush=True)
+            else:
+                print(f"[{completed}/{len(tiles)}] {name}: no clear scenes", flush=True)
+            # Save every 50 tiles (resumable)
+            if completed % 50 == 0:
+                with open(best_dates_path, "w") as f:
+                    json.dump(best_dates, f, indent=2)
+        return name, result
 
-        if result:
-            best_dates[name] = result
-            dates = [f"f{k}={v['date']}({v['cloud_frac']:.0%})" for k, v in result.items()]
-            print(f"OK: {', '.join(dates)}")
-        else:
-            print("no clear scenes")
+    # Parallel screening — openEO sync calls are I/O bound
+    n_workers = 4  # 4 parallel openEO requests
+    print(f"Screening with {n_workers} parallel workers...")
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futs = {pool.submit(_screen_one, t): t for t in tiles}
+        for f in as_completed(futs):
+            f.result()  # propagate exceptions
 
-        # Save every 10 tiles (resumable)
-        if (i + 1) % 10 == 0:
-            with open(best_dates_path, "w") as f:
-                json.dump(best_dates, f, indent=2)
-
-    # Final save
     with open(best_dates_path, "w") as f:
         json.dump(best_dates, f, indent=2)
     print(f"\n=== Stage 1 done: {len(best_dates)} tiles screened ===")
