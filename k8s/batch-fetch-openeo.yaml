@@ -29,15 +29,19 @@ spec:
               cd /workspace/imintengine
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
 
-              python scripts/batch_fetch_openeo.py \
+              # Stage 1: SCL cloud screening per tile
+              python scripts/batch_fetch_openeo.py stage1 \
                 --tile-locations /data/tile_locations_full.json \
                 --vpp-cache /data/unified_v2_512/.vpp_cache.json \
                 --output-dir /data/unified_v2_512 \
-                --tile-size-px 512 \
-                --parallel-jobs 2 \
-                --temporal-resolution 14 \
-                --min-group-size 10 \
                 --year 2022
+
+              # Stage 2: Fetch spectral for best dates
+              python scripts/batch_fetch_openeo.py stage2 \
+                --best-dates /data/unified_v2_512/best_dates.json \
+                --tile-locations /data/tile_locations_full.json \
+                --output-dir /data/unified_v2_512 \
+                --tile-size-px 512
 
           env:
             - name: PYTHONUNBUFFERED
