@@ -53,17 +53,29 @@ def connect_cdse():
     return conn
 
 
+def _normalize_bbox(tile: dict) -> dict:
+    """Extract bbox_3006 dict from tile, handling both formats."""
+    if "bbox_3006" in tile and isinstance(tile["bbox_3006"], dict):
+        return tile["bbox_3006"]
+    if "bbox" in tile:
+        b = tile["bbox"]
+        if isinstance(b, (list, tuple)) and len(b) == 4:
+            return {"west": b[0], "south": b[1], "east": b[2], "north": b[3]}
+    raise KeyError(f"No bbox in tile: {tile.get('name', '?')}")
+
+
 def bbox_to_wgs84(bbox_3006: dict) -> dict:
     from imint.training.tile_fetch import bbox_3006_to_wgs84
     return bbox_3006_to_wgs84(bbox_3006)
 
 
 def merge_bbox(tiles: list[dict]) -> dict:
+    bboxes = [_normalize_bbox(t) for t in tiles]
     return {
-        "west": min(t["bbox_3006"]["west"] for t in tiles),
-        "south": min(t["bbox_3006"]["south"] for t in tiles),
-        "east": max(t["bbox_3006"]["east"] for t in tiles),
-        "north": max(t["bbox_3006"]["north"] for t in tiles),
+        "west": min(b["west"] for b in bboxes),
+        "south": min(b["south"] for b in bboxes),
+        "east": max(b["east"] for b in bboxes),
+        "north": max(b["north"] for b in bboxes),
     }
 
 
@@ -92,7 +104,7 @@ def screen_tile_scl(conn, tile: dict, frame_windows: list, year: int) -> dict:
 
     Returns: {frame_idx: {date, cloud_frac}} or empty dict on failure.
     """
-    bbox_wgs = bbox_to_wgs84(tile["bbox_3006"])
+    bbox_wgs = bbox_to_wgs84(_normalize_bbox(tile))
     spatial = {
         "west": bbox_wgs["west"], "south": bbox_wgs["south"],
         "east": bbox_wgs["east"], "north": bbox_wgs["north"],
@@ -338,7 +350,7 @@ def _merge_to_npz(name, n_frames, output_dir, tile_loc, tile_size_px):
     if sum(mask) == 0:
         return False
 
-    bbox = tile_loc["bbox_3006"]
+    bbox = _normalize_bbox(tile_loc)
     np.savez_compressed(
         output_dir / f"{name}.npz",
         spectral=np.concatenate(frames, axis=0),
