@@ -23,9 +23,9 @@ class TestScreenTileSCL:
     """Test the per-tile SCL screening logic."""
 
     def _make_mock_conn(self, execute_returns):
-        """Create a mock openEO connection with chained method support.
+        """Create a mock openEO connection.
 
-        execute_returns: single list (one call) or list of lists (per-frame calls).
+        execute_returns: dict (CDSE format) or list of dicts (per-frame).
         """
         mock_conn = MagicMock()
         mock_cube = MagicMock()
@@ -34,12 +34,7 @@ class TestScreenTileSCL:
         mock_cube.__eq__ = MagicMock(return_value=mock_cube)
         mock_cube.__or__ = MagicMock(return_value=mock_cube)
         mock_cube.aggregate_spatial.return_value = mock_cube
-        # Check if nested list (multi-frame) or flat (single frame)
-        if (isinstance(execute_returns, list) and len(execute_returns) > 0
-                and isinstance(execute_returns[0], list)
-                and len(execute_returns[0]) > 0
-                and isinstance(execute_returns[0][0], list)):
-            # Multi-frame: each inner list is a separate .execute() call
+        if isinstance(execute_returns, list):
             mock_cube.execute.side_effect = execute_returns
         else:
             mock_cube.execute.return_value = execute_returns
@@ -49,11 +44,12 @@ class TestScreenTileSCL:
         _ensure_path()
         from scripts.batch_fetch_openeo import screen_tile_scl
 
-        mock_conn = self._make_mock_conn([
-            ["2022-07-01", 0.05],
-            ["2022-07-06", 0.15],
-            ["2022-07-11", 0.02],
-        ])
+        # Real CDSE format: {"date": [[cloud_frac]]}
+        mock_conn = self._make_mock_conn({
+            "2022-07-01T00:00:00Z": [[0.05]],
+            "2022-07-06T00:00:00Z": [[0.15]],
+            "2022-07-11T00:00:00Z": [[0.02]],
+        })
 
         tile = {
             "name": "test_tile",
@@ -75,11 +71,11 @@ class TestScreenTileSCL:
         _ensure_path()
         from scripts.batch_fetch_openeo import screen_tile_scl
 
-        mock_conn = self._make_mock_conn([
-            ["2022-06-01", 0.40],
-            ["2022-06-10", 0.01],
-            ["2022-06-20", 0.30],
-        ])
+        mock_conn = self._make_mock_conn({
+            "2022-06-01T00:00:00Z": [[0.40]],
+            "2022-06-10T00:00:00Z": [[0.01]],
+            "2022-06-20T00:00:00Z": [[0.30]],
+        })
 
         tile = {
             "name": "tile_cloud_test",
@@ -100,9 +96,9 @@ class TestScreenTileSCL:
         from scripts.batch_fetch_openeo import screen_tile_scl
 
         mock_conn = self._make_mock_conn([
-            [["2022-05-01", 0.10], ["2022-05-15", 0.05]],
-            [["2022-07-01", 0.03], ["2022-07-10", 0.20]],
-            [["2022-08-15", 0.08]],
+            {"2022-05-01T00:00:00Z": [[0.10]], "2022-05-15T00:00:00Z": [[0.05]]},
+            {"2022-07-01T00:00:00Z": [[0.03]], "2022-07-10T00:00:00Z": [[0.20]]},
+            {"2022-08-15T00:00:00Z": [[0.08]]},
         ])
 
         tile = {
@@ -125,7 +121,7 @@ class TestScreenTileSCL:
         _ensure_path()
         from scripts.batch_fetch_openeo import screen_tile_scl
 
-        mock_conn = self._make_mock_conn([])
+        mock_conn = self._make_mock_conn({})
 
         tile = {
             "name": "tile_empty",

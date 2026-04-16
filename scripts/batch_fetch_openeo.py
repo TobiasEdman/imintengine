@@ -144,49 +144,30 @@ def screen_tile_scl(conn, tile: dict, frame_windows: list, year: int) -> dict:
             # Download as JSON timeseries (tiny — one float per scene date)
             ts_json = cloud_frac_ts.execute()
 
-            # Parse result — format varies by backend:
-            # List of [date, value]: [["2022-07-01", 0.05], ...]
-            # List of [date, [value]]: [["2022-07-01", [0.05]], ...]
-            # Dict with data key: {"data": [...]}
-            # Log first entry for debugging
-            if isinstance(ts_json, dict) and "data" in ts_json:
-                entries = ts_json["data"]
-            elif isinstance(ts_json, list):
-                entries = ts_json
-            else:
-                entries = list(ts_json.items()) if hasattr(ts_json, 'items') else []
-
-            if entries and frame_idx == 0:
-                print(f"      [debug] first entry: {entries[0]}", flush=True)
-
-            def _extract_frac(val):
-                """Extract float from value that may be nested."""
-                if isinstance(val, (int, float)):
-                    return float(val)
-                if isinstance(val, (list, tuple)):
-                    for v in val:
-                        if isinstance(v, (int, float)):
-                            return float(v)
-                        if isinstance(v, (list, tuple)) and v:
-                            return float(v[0])
-                return None
-
+            # CDSE openEO aggregate_spatial returns:
+            # {"2022-06-05T00:00:00Z": [[0.0003]], "2022-06-15T00:00:00Z": [[0.65]], ...}
+            # Keys = ISO timestamps, values = [[cloud_frac]] (double-nested list)
             best_date = None
             best_frac = 1.0
-            for entry in entries:
-                if isinstance(entry, (list, tuple)) and len(entry) >= 2:
-                    date_str = str(entry[0])[:10]
-                    frac = _extract_frac(entry[1])
-                elif isinstance(entry, dict):
-                    date_str = str(entry.get("date", entry.get("t", "")))[:10]
-                    frac = _extract_frac(
-                        entry.get("value", entry.get("SCL", entry.get("avg", None)))
-                    )
-                else:
-                    continue
-                if frac is not None and frac < best_frac:
-                    best_frac = frac
-                    best_date = date_str
+
+            if isinstance(ts_json, dict):
+                for date_key, val in ts_json.items():
+                    if date_key == "data":
+                        continue  # skip metadata keys
+                    date_str = str(date_key)[:10]
+                    # Extract float from [[value]] or [value] or value
+                    frac = None
+                    if isinstance(val, (int, float)):
+                        frac = float(val)
+                    elif isinstance(val, list):
+                        flat = val
+                        while isinstance(flat, list) and flat:
+                            flat = flat[0]
+                        if isinstance(flat, (int, float)):
+                            frac = float(flat)
+                    if frac is not None and frac < best_frac:
+                        best_frac = frac
+                        best_date = date_str
 
             if best_date:
                 results[str(frame_idx)] = {
