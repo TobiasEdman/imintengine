@@ -22,25 +22,38 @@ def _ensure_path():
 class TestScreenTileSCL:
     """Test the per-tile SCL screening logic."""
 
+    def _make_mock_conn(self, execute_returns):
+        """Create a mock openEO connection with chained method support.
+
+        execute_returns: single list (one call) or list of lists (per-frame calls).
+        """
+        mock_conn = MagicMock()
+        mock_cube = MagicMock()
+        mock_conn.load_collection.return_value = mock_cube
+        mock_cube.band.return_value = mock_cube
+        mock_cube.__eq__ = MagicMock(return_value=mock_cube)
+        mock_cube.__or__ = MagicMock(return_value=mock_cube)
+        mock_cube.aggregate_spatial.return_value = mock_cube
+        # Check if nested list (multi-frame) or flat (single frame)
+        if (isinstance(execute_returns, list) and len(execute_returns) > 0
+                and isinstance(execute_returns[0], list)
+                and len(execute_returns[0]) > 0
+                and isinstance(execute_returns[0][0], list)):
+            # Multi-frame: each inner list is a separate .execute() call
+            mock_cube.execute.side_effect = execute_returns
+        else:
+            mock_cube.execute.return_value = execute_returns
+        return mock_conn
+
     def test_returns_dict_with_frame_keys(self):
         _ensure_path()
         from scripts.batch_fetch_openeo import screen_tile_scl
 
-        # Mock openEO connection
-        mock_conn = MagicMock()
-
-        # Mock: load_collection → chain of reduce_dimension → execute returns JSON
-        mock_cube = MagicMock()
-        mock_conn.load_collection.return_value = mock_cube
-        # SCL == 3 returns a mock that supports | and reduce_dimension
-        mock_cube.__eq__ = MagicMock(return_value=mock_cube)
-        mock_cube.__or__ = MagicMock(return_value=mock_cube)
-        mock_cube.reduce_dimension.return_value = mock_cube
-        mock_cube.execute.return_value = [
+        mock_conn = self._make_mock_conn([
             ["2022-07-01", 0.05],
             ["2022-07-06", 0.15],
             ["2022-07-11", 0.02],
-        ]
+        ])
 
         tile = {
             "name": "test_tile",
@@ -62,17 +75,11 @@ class TestScreenTileSCL:
         _ensure_path()
         from scripts.batch_fetch_openeo import screen_tile_scl
 
-        mock_conn = MagicMock()
-        mock_cube = MagicMock()
-        mock_conn.load_collection.return_value = mock_cube
-        mock_cube.__eq__ = MagicMock(return_value=mock_cube)
-        mock_cube.__or__ = MagicMock(return_value=mock_cube)
-        mock_cube.reduce_dimension.return_value = mock_cube
-        mock_cube.execute.return_value = [
+        mock_conn = self._make_mock_conn([
             ["2022-06-01", 0.40],
             ["2022-06-10", 0.01],
             ["2022-06-20", 0.30],
-        ]
+        ])
 
         tile = {
             "name": "tile_cloud_test",
@@ -92,19 +99,11 @@ class TestScreenTileSCL:
         _ensure_path()
         from scripts.batch_fetch_openeo import screen_tile_scl
 
-        mock_conn = MagicMock()
-        mock_cube = MagicMock()
-        mock_conn.load_collection.return_value = mock_cube
-        mock_cube.__eq__ = MagicMock(return_value=mock_cube)
-        mock_cube.__or__ = MagicMock(return_value=mock_cube)
-        mock_cube.reduce_dimension.return_value = mock_cube
-
-        # Different results per call (frame 0, frame 1, frame 2)
-        mock_cube.execute.side_effect = [
+        mock_conn = self._make_mock_conn([
             [["2022-05-01", 0.10], ["2022-05-15", 0.05]],
             [["2022-07-01", 0.03], ["2022-07-10", 0.20]],
             [["2022-08-15", 0.08]],
-        ]
+        ])
 
         tile = {
             "name": "tile_multi",
@@ -126,13 +125,7 @@ class TestScreenTileSCL:
         _ensure_path()
         from scripts.batch_fetch_openeo import screen_tile_scl
 
-        mock_conn = MagicMock()
-        mock_cube = MagicMock()
-        mock_conn.load_collection.return_value = mock_cube
-        mock_cube.__eq__ = MagicMock(return_value=mock_cube)
-        mock_cube.__or__ = MagicMock(return_value=mock_cube)
-        mock_cube.reduce_dimension.return_value = mock_cube
-        mock_cube.execute.return_value = []
+        mock_conn = self._make_mock_conn([])
 
         tile = {
             "name": "tile_empty",

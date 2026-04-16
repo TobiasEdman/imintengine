@@ -117,6 +117,8 @@ def screen_tile_scl(conn, tile: dict, frame_windows: list, year: int) -> dict:
         date_end = doy_to_date(year, min(doy_end, 365))
 
         try:
+            from shapely.geometry import box, mapping
+
             # Load SCL for this tile's bbox and temporal window
             scl = conn.load_collection(
                 "SENTINEL2_L2A",
@@ -126,16 +128,20 @@ def screen_tile_scl(conn, tile: dict, frame_windows: list, year: int) -> dict:
                 max_cloud_cover=50,
             )
 
-            # Server-side: cloud fraction per scene
-            # SCL cloud classes → binary → spatial mean → timeseries of scalars
-            cloud_flag = (scl == 3) | (scl == 8) | (scl == 9) | (scl == 10)
-            cloud_frac_ts = cloud_flag.reduce_dimension(
-                "x", "mean"
-            ).reduce_dimension(
-                "y", "mean"
+            # Server-side cloud fraction: SCL cloud classes → boolean → spatial mean
+            cloud_flag = (scl.band("SCL") == 3) | (scl.band("SCL") == 8) | \
+                         (scl.band("SCL") == 9) | (scl.band("SCL") == 10)
+
+            # aggregate_spatial collapses x/y → scalar per scene per geometry
+            geom = mapping(box(
+                bbox_wgs["west"], bbox_wgs["south"],
+                bbox_wgs["east"], bbox_wgs["north"],
+            ))
+            cloud_frac_ts = cloud_flag.aggregate_spatial(
+                geometries=geom, reducer="mean",
             )
 
-            # Download as JSON timeseries
+            # Download as JSON timeseries (tiny — one float per scene date)
             ts_json = cloud_frac_ts.execute()
 
             # Parse: find date with min cloud fraction
