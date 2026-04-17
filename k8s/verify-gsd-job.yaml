@@ -1,0 +1,73 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verify-gsd
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: verify
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== GSD verification probe ==="
+
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx matplotlib
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              # Pick one of the recently-written from-json tiles (5503914, 5523732, ...)
+              # and one from a gen_lulc-looking tile for cross-check
+              for TILE in tile_885060_7420060 tile_281280_6471280; do
+                echo ""
+                echo "===== Verifying: $TILE ====="
+                python3 scripts/verify_gsd.py \
+                  --data-dir /data/unified_v2_512 \
+                  --tile "$TILE" \
+                  --out "/data/unified_v2_512/.verify_gsd_${TILE}.png" \
+                  || echo "  Verification failed for $TILE, continuing"
+              done
+
+              echo ""
+              echo "=== Done. Output PNGs in /data/unified_v2_512/.verify_gsd_*.png ==="
+              ls -la /data/unified_v2_512/.verify_gsd_*.png
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

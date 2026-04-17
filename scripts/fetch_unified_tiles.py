@@ -446,6 +446,13 @@ def fetch_tile(
     nmd_label = fetch_nmd_label_local(bbox)
     aux = fetch_aux_channels(bbox)
 
+    # Store bbox matching the actual raster extent — cdse_s2 computes its
+    # own bbox from center + TILE_SIZE_PX*10 internally, so if `bbox` here
+    # came from a stale 256-era manifest (via --from-json), loc["bbox_3006"]
+    # would disagree with the raster. Derive from center + TILE_SIZE_M.
+    cx = (bbox["west"] + bbox["east"]) // 2
+    cy = (bbox["south"] + bbox["north"]) // 2
+    half = TILE_SIZE_M // 2
     save = {
         "spectral": image,
         "temporal_mask": temporal_mask,
@@ -454,10 +461,11 @@ def fetch_tile(
         "multitemporal": np.int32(1),
         "num_frames": np.int32(NUM_FRAMES),
         "num_bands": np.int32(N_BANDS),
-        "bbox_3006": np.array([bbox["west"], bbox["south"],
-                               bbox["east"], bbox["north"]], dtype=np.int32),
-        "easting": np.int32((bbox["west"] + bbox["east"]) // 2),
-        "northing": np.int32((bbox["south"] + bbox["north"]) // 2),
+        "bbox_3006": np.array(
+            [cx - half, cy - half, cx + half, cy + half], dtype=np.int32,
+        ),
+        "easting": np.int32(cx),
+        "northing": np.int32(cy),
         "source": loc["source"],
     }
     if nmd_label is not None:
@@ -665,16 +673,20 @@ def refetch_tile(
     save["num_frames"] = np.int32(NUM_FRAMES)
     save["num_bands"] = np.int32(N_BANDS)
 
-    # Persist bbox metadata so enrichment scripts (S1, B08, etc.) don't
-    # need to reconstruct it from filename/manifest. Matches the fresh-
-    # fetch path (line 457). Mirrors the key set expected by downstream
-    # consumers (imint.training.tile_bbox.resolve_tile_bbox).
+    # Persist bbox metadata matching the ACTUAL raster extent.
+    # cdse_s2._fetch_prithvi_bands computes its own bbox from
+    # (easting, northing, TILE_SIZE_PX * 10) internally, so loc["bbox_3006"]
+    # may be stale (e.g. 256-era 2560m from manifest while the raster is
+    # 5120m). Always derive from center + current TILE_SIZE_M to guarantee
+    # the saved bbox matches the raster we just wrote.
+    cx = (bbox["west"] + bbox["east"]) // 2
+    cy = (bbox["south"] + bbox["north"]) // 2
+    half = TILE_SIZE_M // 2
     save["bbox_3006"] = np.array(
-        [bbox["west"], bbox["south"], bbox["east"], bbox["north"]],
-        dtype=np.int32,
+        [cx - half, cy - half, cx + half, cy + half], dtype=np.int32,
     )
-    save["easting"] = np.int32((bbox["west"] + bbox["east"]) // 2)
-    save["northing"] = np.int32((bbox["south"] + bbox["north"]) // 2)
+    save["easting"] = np.int32(cx)
+    save["northing"] = np.int32(cy)
     save["source"] = loc.get("source", "lulc")
 
     np.savez_compressed(out_path, **save)
