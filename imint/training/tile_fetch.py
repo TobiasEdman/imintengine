@@ -45,10 +45,16 @@ class AdaptiveSemaphore:
         self._ramp_up_after = ramp_up_after
         self._consecutive_ok = 0
         self._name = name
+        self._total_success = 0
+        self._total_failure = 0
 
     @property
     def permits(self) -> int:
         return self._permits
+
+    @property
+    def stats(self) -> str:
+        return f"{self._name}: ok={self._total_success} fail={self._total_failure} permits={self._permits}"
 
     def acquire(self, timeout: float | None = None) -> bool:
         return self._sem.acquire(timeout=timeout)
@@ -58,6 +64,7 @@ class AdaptiveSemaphore:
 
     def report_success(self) -> None:
         with self._lock:
+            self._total_success += 1
             self._consecutive_ok += 1
             if self._consecutive_ok >= self._ramp_up_after and self._permits < self._max:
                 self._permits += 1
@@ -67,6 +74,7 @@ class AdaptiveSemaphore:
 
     def report_failure(self) -> None:
         with self._lock:
+            self._total_failure += 1
             self._consecutive_ok = 0
             if self._permits > self._min:
                 self._permits -= 1

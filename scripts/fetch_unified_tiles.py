@@ -832,9 +832,11 @@ def main():
                     stats[r.get("status", "failed")] = \
                         stats.get(r.get("status", "failed"), 0) + 1
                     if True:  # log every tile
+                        from imint.training.tile_fetch import _CDSE_SEMAPHORE, _DES_SEMAPHORE
                         elapsed = time.time() - t0
                         print(f"  [{completed}/{len(work)}] {r['name']}: {r['status']} "
-                              f"| {completed/elapsed*3600:.0f}/h | workers={active_workers}",
+                              f"| {completed/elapsed*3600:.0f}/h "
+                              f"| {_CDSE_SEMAPHORE.stats} | {_DES_SEMAPHORE.stats}",
                               flush=True)
 
     elapsed = time.time() - t0
