@@ -51,13 +51,6 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
     if skip_existing and int(data.get("has_s1", 0)) == 1:
         return {"name": name, "status": "skipped"}
 
-    # Get tile metadata
-    bbox_arr = data.get("bbox_3006")
-    if bbox_arr is None:
-        return {"name": name, "status": "failed", "reason": "no_bbox"}
-    b = bbox_arr.flatten()
-    bbox = {"west": int(b[0]), "south": int(b[1]), "east": int(b[2]), "north": int(b[3])}
-
     dates = data.get("dates", [])
     spectral = data.get("spectral", data.get("image"))
     if spectral is None:
@@ -67,6 +60,15 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
     h, w = spectral.shape[1], spectral.shape[2]
     n_frames = spectral.shape[0] // n_bands
     size_px = h  # tile pixel size (256 or 512)
+
+    # Resolve bbox via shared helper (tries npz bbox_3006, easting/northing,
+    # filename parse, manifest lookup — matches fetcher logic exactly).
+    from imint.training.tile_bbox import resolve_tile_bbox
+    bbox = resolve_tile_bbox(
+        name=name, npz_data=data, tile_size_m=size_px * 10,
+    )
+    if bbox is None:
+        return {"name": name, "status": "failed", "reason": "no_bbox"}
 
     # Fetch S1 for each frame date (±3 day window)
     s1_frames = []
@@ -163,8 +165,11 @@ def main():
             elapsed = time.time() - t0
             rate = completed / elapsed * 3600 if elapsed > 0 else 0
             valid = r.get("valid_frames", "")
+            reason = r.get("reason", "")
+            reason_str = f" [{reason}]" if r.get("status") == "failed" and reason else ""
             print(f"  [{completed}/{len(tiles)}] {r['name']}: {r['status']}"
                   f"{f' ({valid}/4 frames)' if valid != '' else ''}"
+                  f"{reason_str}"
                   f" | {rate:.0f}/h", flush=True)
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:

@@ -665,6 +665,18 @@ def refetch_tile(
     save["num_frames"] = np.int32(NUM_FRAMES)
     save["num_bands"] = np.int32(N_BANDS)
 
+    # Persist bbox metadata so enrichment scripts (S1, B08, etc.) don't
+    # need to reconstruct it from filename/manifest. Matches the fresh-
+    # fetch path (line 457). Mirrors the key set expected by downstream
+    # consumers (imint.training.tile_bbox.resolve_tile_bbox).
+    save["bbox_3006"] = np.array(
+        [bbox["west"], bbox["south"], bbox["east"], bbox["north"]],
+        dtype=np.int32,
+    )
+    save["easting"] = np.int32((bbox["west"] + bbox["east"]) // 2)
+    save["northing"] = np.int32((bbox["south"] + bbox["north"]) // 2)
+    save["source"] = loc.get("source", "lulc")
+
     np.savez_compressed(out_path, **save)
 
     # NOTE: Do NOT delete source tiles — they contain bbox info needed

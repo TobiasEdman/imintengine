@@ -88,11 +88,6 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
     if skip_existing and int(data.get("has_b08", 0)) == 1:
         return {"name": name, "status": "skipped"}
 
-    bbox_arr = data.get("bbox_3006")
-    if bbox_arr is None:
-        return {"name": name, "status": "failed", "reason": "no_bbox"}
-    b = bbox_arr.flatten()
-
     dates = data.get("dates", [])
     spectral = data.get("spectral", data.get("image"))
     if spectral is None:
@@ -101,6 +96,14 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
     h, w = spectral.shape[1], spectral.shape[2]
     n_frames = spectral.shape[0] // 6
     size_px = h
+
+    # Resolve bbox via shared helper (same logic as fetcher + S1 enrichment)
+    from imint.training.tile_bbox import resolve_tile_bbox
+    bbox = resolve_tile_bbox(
+        name=name, npz_data=data, tile_size_m=size_px * 10,
+    )
+    if bbox is None:
+        return {"name": name, "status": "failed", "reason": "no_bbox"}
 
     b08_frames = []
     valid = 0
@@ -111,7 +114,7 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
             continue
 
         frame = _fetch_b08_frame(
-            int(b[0]), int(b[1]), int(b[2]), int(b[3]),
+            bbox["west"], bbox["south"], bbox["east"], bbox["north"],
             date_str, size_px,
         )
         if frame is not None and frame.shape == (h, w):
