@@ -767,6 +767,19 @@ def main():
             else:
                 bbox = {"west": raw_bbox[0], "south": raw_bbox[1],
                         "east": raw_bbox[2], "north": raw_bbox[3]}
+            # CRITICAL: Always normalize incoming bbox to the current
+            # TILE_SIZE_M. Manifests may have been generated for an older
+            # tile size (256-era 2560m) while we now fetch at 512 px
+            # (5120m). Trust only the center; rebuild the bbox at the
+            # current size to guarantee (east-west) == TILE_SIZE_PX * 10
+            # and the fetched raster is at true 10m GSD.
+            cx = (bbox["west"] + bbox["east"]) // 2
+            cy = (bbox["south"] + bbox["north"]) // 2
+            _half = TILE_SIZE_M // 2
+            bbox = {
+                "west": cx - _half, "east": cx + _half,
+                "south": cy - _half, "north": cy + _half,
+            }
             loc = {
                 "name": t["name"],
                 "source": t.get("source", "lulc"),

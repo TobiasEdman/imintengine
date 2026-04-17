@@ -144,6 +144,21 @@ def fetch_s2_scene(
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
     token = _get_token()
 
+    # Defense: guarantee bbox / resolution consistency. Sentinel Hub
+    # Process API computes GSD as (east - west) / width_px, so mismatched
+    # (bbox, size_px) silently produces upsampled or downsampled rasters
+    # instead of native 10m. Catch this loudly.
+    expected_m = w_px * 10
+    actual_ew = east - west
+    actual_ns = north - south
+    if abs(actual_ew - expected_m) > 1 or abs(actual_ns - expected_m) > 1:
+        raise ValueError(
+            f"fetch_s2_scene: bbox/size_px mismatch → non-10m GSD. "
+            f"bbox=({west},{south},{east},{north}) ew={actual_ew}m "
+            f"ns={actual_ns}m size_px={w_px} → expected {expected_m}m extent. "
+            f"Fix the caller — always use center ± (size_px*10)//2."
+        )
+
     # Two-stage for large tiles: pre-screen with SCL only
     use_two_stage = max(h_px, w_px) >= _TWO_STAGE_THRESHOLD
     if use_two_stage:
