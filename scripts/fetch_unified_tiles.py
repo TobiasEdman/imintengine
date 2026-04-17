@@ -39,6 +39,7 @@ load_env()
 
 from imint.training.tile_fetch import (
     TILE_SIZE_M,
+    TILE_SIZE_PX,
     N_BANDS,
     bbox_3006_to_wgs84,
     fetch_4frame_scenes,
