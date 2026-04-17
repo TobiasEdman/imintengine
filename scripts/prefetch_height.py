@@ -89,7 +89,7 @@ def _add_height_to_tile(
         existing = dict(d)
 
     # Determine output pixel size from the image shape (C, H, W)
-    img = existing.get("image")
+    img = existing.get("spectral", existing.get("image"))
     if img is not None and img.ndim >= 2:
         h_px, w_px = img.shape[-2], img.shape[-1]
     else:

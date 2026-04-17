@@ -82,7 +82,7 @@ class VPPFetchExecutor:
         # Determine pixel size from existing tile
         with np.load(tile_path, allow_pickle=True) as data:
             existing = dict(data)
-            img = existing.get("image")
+            img = existing.get("spectral", existing.get("image"))
             if img is not None and img.ndim >= 2:
                 h_px, w_px = img.shape[-2], img.shape[-1]
             else:

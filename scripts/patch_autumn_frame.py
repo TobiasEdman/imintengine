@@ -104,7 +104,7 @@ def patch_one(entry: dict, data_dir: Path, dry_run: bool) -> dict:
 
     try:
         d = dict(np.load(fp, allow_pickle=True))
-        img = d["image"]   # (4*N_BANDS, H, W)
+        img = d.get("spectral", d.get("image"))   # (4*N_BANDS, H, W)
         H, W_px = img.shape[1], img.shape[2]
 
         # Resize if needed (should already be 256×256)
@@ -122,7 +122,7 @@ def patch_one(entry: dict, data_dir: Path, dry_run: bool) -> dict:
         dates      = list(d["dates"])
         old_d0     = str(dates[0])
         dates[0]   = date
-        d["image"] = img
+        d.get("spectral", d.get("image")) = img
         d["dates"] = np.array(dates)
 
         tmp = fp.with_suffix(".tmp.npz")

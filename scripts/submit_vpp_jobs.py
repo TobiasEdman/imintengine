@@ -223,7 +223,7 @@ def _run_local(
             existing = dict(data)
             if all(ch in existing for ch in _VPP_CHANNEL_NAMES):
                 return {"status": "skip", "key": f"{easting}_{northing}"}
-            img = existing.get("image")
+            img = existing.get("spectral", existing.get("image"))
             if img is not None and img.ndim >= 2:
                 h_px, w_px = img.shape[-2], img.shape[-1]
             else:

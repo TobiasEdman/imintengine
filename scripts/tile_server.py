@@ -193,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
             d = np.load(p, allow_pickle=True)
 
             if kind == "rgb.png":
-                sp  = np.array(d.get("image", d.get("spectral")), dtype=np.float32)
+                sp  = np.array(d.get("spectral", d.get("image")), dtype=np.float32)
                 img = Image.fromarray(make_rgb(sp))
                 buf = io.BytesIO(); img.save(buf, "PNG"); data = buf.getvalue()
                 cache_set(ck, data); self._send_png(data)

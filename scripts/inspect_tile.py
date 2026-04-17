@@ -455,7 +455,7 @@ def main():
     # ── Load tile ────────────────────────────────────────────────────────────
     print(f"\nLoading tile: {args.tile}")
     d = np.load(args.tile, allow_pickle=True)
-    image = d["image"]          # (T*6, H, W) float32 — already normalised
+    image = d.get("spectral", d.get("image"))          # (T*6, H, W) float32 — already normalised
     existing_label = d["label"] # existing label (may have bugs)
     tile_px = image.shape[-1]   # 256
 
