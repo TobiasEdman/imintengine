@@ -316,43 +316,95 @@ def prefetch_vpp_batch(
 
 
 def _fetch_frames_from_best_dates(
-    bbox: dict, best: dict, n_frames: int = 4,
-) -> tuple[list, np.ndarray, np.ndarray, list]:
+    bbox: dict,
+    coords_wgs84: dict,
+    best: dict,
+    n_frames: int = 4,
+) -> list:
     """Fetch spectral frames using pre-screened best dates (from openEO stage 1).
 
-    Skips STAC search, VPP lookup, and cloud screening entirely — just
-    fetches spectral for the known-good dates.
+    Races CDSE + DES in parallel for each frame — first result wins.
+    Skips STAC search, VPP lookup, and cloud screening entirely.
 
     Args:
         bbox: Tile bbox in EPSG:3006.
+        coords_wgs84: Tile center in WGS84.
         best: {frame_idx: {date, cloud_frac}} from best_dates.json.
         n_frames: Number of frames.
 
     Returns:
-        (scene_results, temporal_mask, doy, dates) matching stack_frames input.
+        List of (spectral, date_str) tuples matching stack_frames input.
     """
-    from datetime import datetime as _dt
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from imint.training.cdse_s2 import fetch_s2_scene
+    from imint.training.tile_fetch import (
+        _CDSE_SEMAPHORE, _DES_SEMAPHORE, PRITHVI_BANDS,
+    )
+    from imint.fetch import fetch_seasonal_image
 
-    results = []
-    for fi in range(n_frames):
-        info = best.get(str(fi))
-        if info and info.get("date"):
-            date_str = info["date"]
+    def _cdse_fetch(date_str):
+        _CDSE_SEMAPHORE.acquire()
+        try:
             result = fetch_s2_scene(
                 bbox["west"], bbox["south"], bbox["east"], bbox["north"],
                 date=date_str,
                 size_px=TILE_SIZE_PX,
-                cloud_threshold=1.0,   # already screened, accept anything
+                cloud_threshold=1.0,
                 haze_threshold=1.0,
                 nodata_threshold=None,
             )
+            _CDSE_SEMAPHORE.report_success()
             if result is not None:
-                results.append((result[0], date_str))
-            else:
-                results.append((None, date_str))
-        else:
+                return result[0], date_str
+        except Exception:
+            _CDSE_SEMAPHORE.report_failure()
+        finally:
+            _CDSE_SEMAPHORE.release()
+        return None, date_str
+
+    def _des_fetch(date_str):
+        _DES_SEMAPHORE.acquire()
+        try:
+            result = fetch_seasonal_image(
+                date=date_str,
+                coords=coords_wgs84,
+                prithvi_bands=PRITHVI_BANDS,
+                source="des",
+            )
+            _DES_SEMAPHORE.report_success()
+            if result is not None:
+                return result[0], date_str
+        except Exception:
+            _DES_SEMAPHORE.report_failure()
+        finally:
+            _DES_SEMAPHORE.release()
+        return None, date_str
+
+    results = []
+    for fi in range(n_frames):
+        info = best.get(str(fi))
+        if not info or not info.get("date"):
             results.append((None, ""))
+            continue
+
+        date_str = info["date"]
+
+        # Race CDSE + DES — first success wins
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futs = [
+                pool.submit(_cdse_fetch, date_str),
+                pool.submit(_des_fetch, date_str),
+            ]
+            got_result = False
+            for f in as_completed(futs):
+                spectral, d = f.result()
+                if spectral is not None and not got_result:
+                    results.append((spectral, d))
+                    got_result = True
+                    for pending in futs:
+                        pending.cancel()
+            if not got_result:
+                results.append((None, date_str))
 
     return results
 
@@ -377,7 +429,7 @@ def fetch_tile(
     # Fast path: use pre-screened best dates from openEO stage 1
     tile_best = best_dates.get(name) if best_dates else None
     if tile_best:
-        scene_results = _fetch_frames_from_best_dates(bbox, tile_best, NUM_FRAMES)
+        scene_results = _fetch_frames_from_best_dates(bbox, coords, tile_best, NUM_FRAMES)
     else:
         tile_years = [str(loc["year"])] if "year" in loc else years
         vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
@@ -569,7 +621,7 @@ def refetch_tile(
     # Fast path: use pre-screened best dates from openEO stage 1
     tile_best = best_dates.get(name) if best_dates else None
     if tile_best:
-        scene_results = _fetch_frames_from_best_dates(bbox, tile_best, NUM_FRAMES)
+        scene_results = _fetch_frames_from_best_dates(bbox, coords, tile_best, NUM_FRAMES)
     else:
         vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
         scene_results = fetch_4frame_scenes(
