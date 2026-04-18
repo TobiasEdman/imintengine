@@ -30,29 +30,37 @@ import torch.nn.functional as F
 def get_default_pool_sizes(
     device: str | torch.device | None = None,
     img_size: int = 224,
+    patch_size: int = 16,
 ) -> tuple[int, ...]:
     """Return PSP pool sizes appropriate for feature map dimensions.
 
-    The deepest PSP feature map has size ``img_size // 16``.  Pool sizes
-    must evenly divide this for AdaptiveAvgPool2d (especially on MPS).
+    The deepest PSP feature map has size ``img_size // patch_size``.
+    Pool sizes must evenly divide this for AdaptiveAvgPool2d (especially
+    on MPS). Supports patch_size=8 (Clay/CROMA), 14 (Prithvi-600M) and
+    16 (Prithvi-300M/TerraMind/THOR).
 
     Args:
         device: Target device string or torch.device.
         img_size: Training input resolution (224, 256, or 448).
+        patch_size: ViT patch size (8, 14, or 16).
 
     Returns:
         Tuple of pool sizes for PSP modules.
     """
-    fm = img_size // 16  # feature map spatial size after ViT patch embedding
+    fm = img_size // patch_size  # feature map spatial size after patch embed
 
-    if fm >= 28:       # 448px → 28×28
+    if fm >= 56:       # 448px/8 → 56×56 (Clay)
+        return (1, 2, 4, 7, 14, 28)
+    if fm >= 32:       # 448px/14 → 32×32 (Prithvi-600M)
+        return (1, 2, 4, 8, 16)
+    if fm >= 28:       # 448px/16 → 28×28, 224px/8 → 28×28
         return (1, 2, 4, 7, 14)
-    elif fm >= 16:     # 256px → 16×16
+    if fm >= 16:       # 256px/16 → 16×16, 224px/14 → 16×16
         return (1, 2, 4, 8)
-    else:              # 224px → 14×14
-        if device is not None and ("cuda" in str(device) or "cpu" in str(device)):
-            return (1, 2, 3, 6)  # not all divide 14 cleanly but works on CUDA
-        return (1, 2, 7, 14)    # MPS-safe: all divide 14
+    # 224px/16 → 14×14
+    if device is not None and ("cuda" in str(device) or "cpu" in str(device)):
+        return (1, 2, 3, 6)  # not all divide 14 cleanly but works on CUDA
+    return (1, 2, 7, 14)      # MPS-safe: all divide 14
 
 
 class ConvBnRelu(nn.Module):
@@ -846,3 +854,71 @@ class PrithviUNetSegmentationModel(nn.Module):
                 mode="bilinear", align_corners=True,
             )
         return logits
+
+
+# ── Foundation model segmentation factory (registry-aware) ───────────────────
+
+# Alias: FMSegmentationModel for forward-compat naming. The Prithvi model
+# is the reference implementation. TerraMind/Clay/CROMA will get family-
+# specific wrappers in Fas 3-5; they can import this alias now.
+FMSegmentationModel = PrithviSegmentationModel
+
+
+def build_segmentation_from_spec(
+    spec,
+    *,
+    encoder,
+    num_classes: int,
+    img_size: int = 224,
+    decoder_channels: int = 256,
+    dropout: float = 0.1,
+    n_aux_channels: int = 0,
+    enable_temporal_pooling: bool = True,
+    enable_multilevel_aux: bool = True,
+    device: str | torch.device | None = None,
+):
+    """Build a segmentation model from a ModelSpec + encoder.
+
+    Uses spec.feature_indices and spec.patch_size to configure the
+    UPerNet decoder correctly for the given backbone family.
+
+    Currently routes all Prithvi-family specs to PrithviSegmentationModel.
+    Non-Prithvi families raise NotImplementedError until their wrappers
+    land in Fas 3-5.
+
+    Args:
+        spec: imint.fm.registry.ModelSpec.
+        encoder: The backbone model from spec.loader_fn(...).
+        num_classes: Output classes.
+        img_size: Input resolution — used to pick safe PSP pool sizes.
+        decoder_channels: UPerNet internal channels.
+        dropout: Segmentation head dropout.
+        n_aux_channels: Auxiliary raster channels (DEM, VPP, etc.).
+        enable_temporal_pooling: Use mean+max over temporal frames.
+        enable_multilevel_aux: Use gated mid-level aux fusion.
+        device: Used to pick MPS-safe pool sizes.
+
+    Returns:
+        nn.Module ready for training/inference at input resolution.
+    """
+    pool_sizes = get_default_pool_sizes(
+        device=device, img_size=img_size, patch_size=spec.patch_size,
+    )
+
+    if spec.family in ("prithvi",):
+        return PrithviSegmentationModel(
+            encoder=encoder,
+            feature_indices=spec.feature_indices,
+            decoder_channels=decoder_channels,
+            num_classes=num_classes,
+            dropout=dropout,
+            n_aux_channels=n_aux_channels,
+            pool_sizes=pool_sizes,
+            enable_temporal_pooling=enable_temporal_pooling,
+            enable_multilevel_aux=enable_multilevel_aux,
+        )
+
+    raise NotImplementedError(
+        f"Segmentation wrapper for family={spec.family!r} not implemented yet. "
+        f"Prithvi is available. TerraMind/Clay/CROMA land in Fas 3-5."
+    )
