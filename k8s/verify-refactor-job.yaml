@@ -29,9 +29,9 @@ spec:
 
               mkdir -p /tmp/verify_256 /tmp/verify_512
 
-              # Use a known-reasonable Swedish tile center for both tests
-              CENTER_E=281280
-              CENTER_N=6471280
+              # Known forested tile in Mid-Sweden (Västerbotten)
+              CENTER_E=641280
+              CENTER_N=7201280
 
               # 1. Fetch one tile at 256 px via the refactored code path
               echo ""
@@ -158,6 +158,30 @@ spec:
               else:
                   print(f"  ✓ 512 fetch captures more spatial detail than 256 as expected")
               PYEOF
+
+              # Save images to PVC so we can inspect them
+              echo ""
+              echo "=== Writing RGB previews to /data/unified_v2_512/.verify_refactor ==="
+              python3 - <<PYEOF2
+              import numpy as np
+              from PIL import Image
+              import os
+              out_dir = "/data/unified_v2_512/.verify_refactor"
+              os.makedirs(out_dir, exist_ok=True)
+
+              for (sz, path) in [(256, "/tmp/verify_256/spectral.npy"),
+                                 (512, "/tmp/verify_512/spectral.npy")]:
+                  s = np.load(path)
+                  print(f"  {sz}: min={s.min():.4f} max={s.max():.4f} mean={s.mean():.4f}")
+                  for bi, name in enumerate(["B02","B03","B04","B8A","B11","B12"]):
+                      print(f"    {name}: min={s[bi].min():.4f} max={s[bi].max():.4f} mean={s[bi].mean():.4f}")
+                  rgb = np.stack([s[2], s[1], s[0]], axis=-1)
+                  lo, hi = np.percentile(rgb, [2, 98])
+                  rgb = np.clip((rgb - lo) / max(hi - lo, 1e-6), 0, 1)
+                  img = (rgb * 255).astype(np.uint8)
+                  Image.fromarray(img).save(f"{out_dir}/tile_{sz}px.png")
+                  print(f"  wrote {out_dir}/tile_{sz}px.png")
+              PYEOF2
 
               echo ""
               echo "=== Verify job done ==="
