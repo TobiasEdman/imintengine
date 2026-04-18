@@ -59,23 +59,26 @@ spec:
                   else:
                       raise
 
-              # Real 256-px fetch
-              result = fetch_s2_scene(
-                  bbox["west"], bbox["south"], bbox["east"], bbox["north"],
-                  date="2024-06-15", size_px=256,
-                  cloud_threshold=0.50, haze_threshold=0.30,
-              )
-              if result is None:
-                  print("  ! 256-px: no cloud-free scene for 2024-06-15; trying 2023-06-15")
+              # Try a series of summer dates; find any cloud-tolerant match
+              for date in ["2023-07-10", "2023-06-20", "2022-07-15", "2022-06-20",
+                           "2021-07-10", "2020-07-10", "2019-07-10", "2018-07-10"]:
                   result = fetch_s2_scene(
                       bbox["west"], bbox["south"], bbox["east"], bbox["north"],
-                      date="2023-06-15", size_px=256,
-                      cloud_threshold=0.50, haze_threshold=0.30,
+                      date=date, size_px=256,
+                      cloud_threshold=0.90, haze_threshold=0.50,
+                      nodata_threshold=0.50,
                   )
+                  if result is not None:
+                      print(f"  ✓ 256: fetched date={date}")
+                      break
+              if result is None:
+                  print("  ✗ 256: no scene found across all tries")
+                  import os; os._exit(3)
               spectral, _scl, cloud = result
               print(f"  ✓ 256: spectral shape={spectral.shape} cloud={cloud:.0%}")
               assert spectral.shape == (6, 256, 256), f"wrong 256 shape: {spectral.shape}"
               np.save("/tmp/verify_256/spectral.npy", spectral)
+              np.save("/tmp/verify_256/date.npy", np.array(date))
               PYEOF
 
               # 2. Fetch same tile at 512 px
@@ -91,18 +94,19 @@ spec:
               tile.assert_bbox_matches(bbox)
               print(f"  tile={tile}  bbox={bbox}")
 
+              # Use the date that worked for 256 to get a matched comparison
+              import numpy as np
+              date = str(np.load("/tmp/verify_256/date.npy"))
+              print(f"  matching 256 date: {date}")
               result = fetch_s2_scene(
                   bbox["west"], bbox["south"], bbox["east"], bbox["north"],
-                  date="2024-06-15", size_px=512,
-                  cloud_threshold=0.50, haze_threshold=0.30,
+                  date=date, size_px=512,
+                  cloud_threshold=0.90, haze_threshold=0.50,
+                  nodata_threshold=0.50,
               )
               if result is None:
-                  print("  ! 512-px: no cloud-free scene for 2024-06-15; trying 2023-06-15")
-                  result = fetch_s2_scene(
-                      bbox["west"], bbox["south"], bbox["east"], bbox["north"],
-                      date="2023-06-15", size_px=512,
-                      cloud_threshold=0.50, haze_threshold=0.30,
-                  )
+                  print(f"  ✗ 512: fetch for matched date {date} failed")
+                  import os; os._exit(3)
               spectral, _scl, cloud = result
               print(f"  ✓ 512: spectral shape={spectral.shape} cloud={cloud:.0%}")
               assert spectral.shape == (6, 512, 512), f"wrong 512 shape: {spectral.shape}"
