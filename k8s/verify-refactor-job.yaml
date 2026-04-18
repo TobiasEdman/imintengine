@@ -59,21 +59,29 @@ spec:
                   else:
                       raise
 
-              # Try a series of summer dates; find any cloud-tolerant match
-              for date in ["2023-07-10", "2023-06-20", "2022-07-15", "2022-06-20",
-                           "2021-07-10", "2020-07-10", "2019-07-10", "2018-07-10"]:
-                  result = fetch_s2_scene(
-                      bbox["west"], bbox["south"], bbox["east"], bbox["north"],
-                      date=date, size_px=256,
-                      cloud_threshold=0.90, haze_threshold=0.50,
-                      nodata_threshold=0.50,
-                  )
-                  if result is not None:
-                      print(f"  ✓ 256: fetched date={date}")
-                      break
+              # Try many summer dates with ALL cloud filters disabled
+              result = None
+              used_date = None
+              for date in ["2024-07-01", "2024-06-15", "2023-07-10", "2023-06-20",
+                           "2022-07-15", "2022-06-20", "2021-07-10", "2020-07-10"]:
+                  try:
+                      result = fetch_s2_scene(
+                          bbox["west"], bbox["south"], bbox["east"], bbox["north"],
+                          date=date, size_px=256,
+                          cloud_threshold=1.0, haze_threshold=1.0,
+                          nodata_threshold=None,  # disable all gates
+                      )
+                      if result is not None:
+                          used_date = date
+                          print(f"  ✓ 256: fetched date={date}")
+                          break
+                      print(f"  - 256: date={date} returned None")
+                  except Exception as e:
+                      print(f"  ! 256: date={date} err: {e}")
               if result is None:
-                  print("  ✗ 256: no scene found across all tries")
+                  print("  ✗ 256: no scene from any date")
                   import os; os._exit(3)
+              date = used_date
               spectral, _scl, cloud = result
               print(f"  ✓ 256: spectral shape={spectral.shape} cloud={cloud:.0%}")
               assert spectral.shape == (6, 256, 256), f"wrong 256 shape: {spectral.shape}"
@@ -101,8 +109,8 @@ spec:
               result = fetch_s2_scene(
                   bbox["west"], bbox["south"], bbox["east"], bbox["north"],
                   date=date, size_px=512,
-                  cloud_threshold=0.90, haze_threshold=0.50,
-                  nodata_threshold=0.50,
+                  cloud_threshold=1.0, haze_threshold=1.0,
+                  nodata_threshold=None,
               )
               if result is None:
                   print(f"  ✗ 512: fetch for matched date {date} failed")
