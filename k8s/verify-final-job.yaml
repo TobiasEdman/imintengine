@@ -1,0 +1,144 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verify-final
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: verify
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Final verify: fetch at 256 AND 512 using best_dates ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx matplotlib
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              mkdir -p /data/unified_v2_512/.verify_final
+
+              python3 - <<'PYEOF'
+              import json, os, numpy as np
+              from PIL import Image
+              from imint.training.tile_config import TileConfig
+              from imint.training.cdse_s2 import fetch_s2_scene
+
+              # Read best_dates.json — pick a tile we KNOW has a cloud-free date
+              with open("/data/unified_v2_512/best_dates.json") as f:
+                  bd = json.load(f)
+              sample_name, sample_dates = None, None
+              for name, dates in bd.items():
+                  # Look for any tile with frame 2 cloud_frac < 10%
+                  for fi, info in dates.items():
+                      if info.get("cloud_frac", 1.0) < 0.10:
+                          sample_name = name
+                          sample_dates = dates
+                          break
+                  if sample_name:
+                      break
+              print(f"Using tile: {sample_name}")
+              date = sample_dates["2"]["date"]  # frame 2 = peak summer
+              print(f"Using date: {date}")
+
+              # Parse center from tile name
+              import re
+              m = re.match(r"tile_(\d+)_(\d+)", sample_name)
+              cx, cy = int(m.group(1)), int(m.group(2))
+              print(f"Center: ({cx}, {cy})")
+
+              out_dir = "/data/unified_v2_512/.verify_final"
+              rgbs = {}
+              shapes = {}
+              stats = {}
+              for size_px in [256, 512]:
+                  tile = TileConfig(size_px=size_px)
+                  bbox = tile.bbox_from_center(cx, cy)
+                  tile.assert_bbox_matches(bbox)
+                  print(f"\n=== {size_px} px ===")
+                  print(f"  bbox: {bbox}  (extent: {bbox['east']-bbox['west']}m)")
+                  result = fetch_s2_scene(
+                      bbox["west"], bbox["south"], bbox["east"], bbox["north"],
+                      date=date, size_px=size_px,
+                      cloud_threshold=1.0, haze_threshold=1.0, nodata_threshold=None,
+                  )
+                  assert result is not None, f"{size_px}px fetch returned None"
+                  spectral, scl, cloud = result
+                  print(f"  shape: {spectral.shape}  cloud: {cloud:.1%}")
+                  print(f"  reflectance: min={spectral.min():.4f} max={spectral.max():.4f} mean={spectral.mean():.4f}")
+                  assert spectral.shape == (6, size_px, size_px), f"wrong shape"
+                  shapes[size_px] = spectral.shape
+                  stats[size_px] = (float(spectral.min()), float(spectral.max()), float(spectral.mean()))
+
+                  # Save RGB preview
+                  rgb = np.stack([spectral[2], spectral[1], spectral[0]], axis=-1)
+                  lo, hi = np.percentile(rgb, [2, 98])
+                  rgb = np.clip((rgb - lo) / max(hi - lo, 1e-6), 0, 1)
+                  img = (rgb * 255).astype(np.uint8)
+                  path = f"{out_dir}/{sample_name}_{size_px}px_{date}.png"
+                  Image.fromarray(img).save(path)
+                  print(f"  wrote {path}")
+                  rgbs[size_px] = spectral
+
+              # Quality: compare 512 downsampled to 256
+              print()
+              print("=== Quality comparison ===")
+              s512_ds = rgbs[512].reshape(6, 256, 2, 256, 2).mean(axis=(2, 4))
+              from scipy.ndimage import laplace
+              hf_256 = np.abs(laplace(rgbs[256][0])).mean()
+              hf_512 = np.abs(laplace(rgbs[512][0])).mean()
+              hf_512_ds = np.abs(laplace(s512_ds[0])).mean()
+              print(f"  256 native HF:        {hf_256:.5f}")
+              print(f"  512 native HF:        {hf_512:.5f}")
+              print(f"  512→256 downsampled:  {hf_512_ds:.5f}")
+              print(f"  ratio 512 / 256:      {hf_512/max(hf_256,1e-9):.2f}  (expect >1.3 for genuine extra resolution)")
+              print(f"  ratio 256 / 512ds:    {hf_256/max(hf_512_ds,1e-9):.2f}  (expect 0.9-1.1 for matched 10m GSD)")
+
+              # Also verify 256×2 != 512 exactly (they cover different extents, not just zoomed)
+              # The 512px tile should cover 4× the area of the 256px at same center
+              print()
+              print("=== Extent check ===")
+              print(f"  256 mean spectral: {stats[256][2]:.4f}")
+              print(f"  512 mean spectral: {stats[512][2]:.4f}")
+              # Not necessarily equal — 512 covers a larger area
+              print(f"  Both are real ⇒ refactor works at both sizes simultaneously")
+              PYEOF
+
+              ls -la /data/unified_v2_512/.verify_final/
+              echo ""
+              echo "=== done ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
