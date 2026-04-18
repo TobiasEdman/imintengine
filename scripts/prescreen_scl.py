@@ -32,6 +32,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from imint.training.tile_config import TileConfig  # noqa: E402
+
 SCL_CLOUD_CLASSES = {3, 8, 9, 10}
 
 
@@ -39,7 +41,8 @@ def doy_to_date(year: int, doy: int) -> str:
     return (datetime(year, 1, 1) + timedelta(days=max(doy - 1, 0))).strftime("%Y-%m-%d")
 
 
-def screen_tile(tile: dict, frame_windows: list, year: int) -> dict:
+def screen_tile(tile_loc: dict, frame_windows: list, year: int,
+                tile_cfg: "TileConfig") -> dict:
     """Screen one tile: fetch SCL per candidate date, pick clearest per frame.
 
     Uses SH Process API SCL-only fetch (250 KB per scene) + STAC catalog
@@ -48,12 +51,20 @@ def screen_tile(tile: dict, frame_windows: list, year: int) -> dict:
     Returns: {frame_idx: {date, cloud_frac}} or empty dict.
     """
     from imint.training.tile_fetch import (
-        TILE_SIZE_PX, bbox_3006_to_wgs84, _CDSE_SEMAPHORE,
+        bbox_3006_to_wgs84, _CDSE_SEMAPHORE,
     )
     from imint.training.cdse_s2 import _prescreen_scl, _get_token
     from imint.fetch import _stac_available_dates
 
-    bbox = tile["bbox_3006"]
+    # Normalize bbox to current tile size — manifest bbox may be stale
+    raw_bbox = tile_loc["bbox_3006"]
+    if isinstance(raw_bbox, dict):
+        cx = (raw_bbox["west"] + raw_bbox["east"]) // 2
+        cy = (raw_bbox["south"] + raw_bbox["north"]) // 2
+    else:
+        cx = (raw_bbox[0] + raw_bbox[2]) // 2
+        cy = (raw_bbox[1] + raw_bbox[3]) // 2
+    bbox = tile_cfg.bbox_from_center(cx, cy)
     coords = bbox_3006_to_wgs84(bbox)
 
     results = {}
@@ -91,7 +102,7 @@ def screen_tile(tile: dict, frame_windows: list, year: int) -> dict:
                 scl, cloud_frac = _prescreen_scl(
                     bbox["west"], bbox["south"], bbox["east"], bbox["north"],
                     cand_date,
-                    TILE_SIZE_PX, TILE_SIZE_PX,
+                    tile_cfg.size_px, tile_cfg.size_px,
                     token, "http://www.opengis.net/def/crs/EPSG/0/3006",
                     cloud_threshold=1.0,  # don't reject, just measure
                 )
@@ -126,6 +137,8 @@ def main():
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--year", type=int, default=2022)
+    parser.add_argument("--tile-size-px", type=int, default=256,
+                        help="Tile pixel resolution for SCL fetch (must match fetch).")
     args = parser.parse_args()
 
     with open(args.tile_locations) as f:
@@ -155,12 +168,8 @@ def main():
         print("Nothing to screen")
         return
 
-    # Override tile size for 512px
-    import imint.training.tile_fetch as _tf
-    if args.output_dir and "512" in args.output_dir:
-        _tf.TILE_SIZE_PX = 512
-        _tf.TILE_SIZE_M = 5120
-        print(f"Tile size: {_tf.TILE_SIZE_PX}px")
+    tile_cfg = TileConfig(size_px=args.tile_size_px)
+    print(f"Tile size: {tile_cfg.size_px}px ({tile_cfg.size_m}m)")
 
     lock = threading.Lock()
     completed = 0
@@ -172,7 +181,7 @@ def main():
         windows = vpp_cache.get(name)
         if not windows:
             windows = [[91, 150], [151, 210], [211, 270]]
-        result = screen_tile(tile, windows, args.year)
+        result = screen_tile(tile, windows, args.year, tile_cfg)
         with lock:
             completed += 1
             if result:

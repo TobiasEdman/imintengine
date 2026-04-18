@@ -45,13 +45,13 @@ spec:
                 --cloud-max 40
 
               echo "=== Step 2: Build unified labels ==="
-              export TILE_SIZE_PX=512
+              # build_labels now derives tile size per-tile from the raster
+              # shape or the persisted tile_size_px key. No env var or flag.
               python scripts/build_labels.py \
                 --data-dir /data/unified_v2_512 \
                 --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
                 --lpis-dir /data/lpis \
                 --sks-dir /data/sks \
-                --tile-size-px 512 \
                 --workers 4
 
               echo "=== All done ==="

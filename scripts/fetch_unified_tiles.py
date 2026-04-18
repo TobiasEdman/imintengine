@@ -38,8 +38,6 @@ from imint.config.env import load_env
 load_env()
 
 from imint.training.tile_fetch import (
-    TILE_SIZE_M,
-    TILE_SIZE_PX,
     N_BANDS,
     bbox_3006_to_wgs84,
     fetch_4frame_scenes,
@@ -48,6 +46,7 @@ from imint.training.tile_fetch import (
     fetch_nmd_label_local,
     stack_frames,
 )
+from imint.training.tile_config import TileConfig
 from imint.training.sampler import generate_grid, grid_to_wgs84
 from imint.training.scb_tatort import generate_scb_densification_regions
 
@@ -61,11 +60,11 @@ SJV_HAVRE = {5}
 # ── Location Generators ──────────────────────────────────────────────────────
 
 
-def gen_lulc(spacing_m: int = 2500, max_tiles: int | None = None) -> list[dict]:
+def gen_lulc(tile: TileConfig, spacing_m: int = 2500, max_tiles: int | None = None) -> list[dict]:
     """LULC grid locations across Sweden."""
     print("  Generating LULC grid...")
     cells = grid_to_wgs84(generate_grid(
-        spacing_m=spacing_m, patch_size_m=TILE_SIZE_M, land_filter=True,
+        spacing_m=spacing_m, patch_size_m=tile.size_m, land_filter=True,
     ))
     print(f"  {len(cells)} land cells at {spacing_m}m")
 
@@ -85,6 +84,7 @@ def gen_lulc(spacing_m: int = 2500, max_tiles: int | None = None) -> list[dict]:
 
 
 def gen_rare_crops(
+    tile: TileConfig,
     lpis_dir: str = "data/lpis",
     n_oljevaxter: int = 500,
     n_havre: int = 500,
@@ -149,9 +149,7 @@ def gen_rare_crops(
             #   (~6.1M–7.7M).  Detect and normalise to (easting, northing).
             if cx > 2_000_000:   # cx is clearly a northing value → swap
                 cx, cy = cy, cx  # cx = easting, cy = northing
-            half = TILE_SIZE_M // 2
-            bbox = {"west": int(cx - half), "south": int(cy - half),
-                    "east": int(cx + half), "north": int(cy + half)}
+            bbox = tile.bbox_from_center(cx, cy)
             locs.append({
                 "name": f"crop_{label}_{int(cx)}_{int(cy)}",
                 "source": "crop",
@@ -163,6 +161,7 @@ def gen_rare_crops(
 
 
 def gen_urban(
+    tile: TileConfig,
     cache_dir: str = "data/cache",
     min_pop: int = 2000,
     spacing_m: int = 2500,
@@ -175,12 +174,12 @@ def gen_urban(
     print("  Fetching SCB tätort regions...")
     regions = generate_scb_densification_regions(
         cache_dir=Path(cache_dir), min_population=min_pop,
-        patch_size_m=TILE_SIZE_M,
+        patch_size_m=tile.size_m,
     )
     print(f"  {len(regions)} tätorter (pop ≥ {min_pop})")
 
     locs = []
-    half = TILE_SIZE_M // 2
+    half = tile.half_m
     for region in regions:
         w, e, s, n = region["bbox_3006"]
         cx = w + half
@@ -193,8 +192,7 @@ def gen_urban(
                 if lats[0] >= 64.0:
                     cy += spacing_m
                     continue
-                bbox = {"west": cx - half, "south": cy - half,
-                        "east": cx + half, "north": cy + half}
+                bbox = tile.bbox_from_center(cx, cy)
                 locs.append({
                     "name": f"urban_{int(cx)}_{int(cy)}",
                     "source": "urban",
@@ -319,6 +317,7 @@ def _fetch_frames_from_best_dates(
     bbox: dict,
     coords_wgs84: dict,
     best: dict,
+    tile: TileConfig,
     n_frames: int = 4,
 ) -> list:
     """Fetch spectral frames using pre-screened best dates (from openEO stage 1).
@@ -348,7 +347,7 @@ def _fetch_frames_from_best_dates(
             result = fetch_s2_scene(
                 bbox["west"], bbox["south"], bbox["east"], bbox["north"],
                 date=date_str,
-                size_px=TILE_SIZE_PX,
+                size_px=tile.size_px,
                 cloud_threshold=1.0,
                 haze_threshold=1.0,
                 nodata_threshold=None,
@@ -413,6 +412,7 @@ def fetch_tile(
     loc: dict,
     years: list[str],
     output_dir: str,
+    tile: TileConfig,
     cloud_max: float = 30.0,
     vpp_cache: dict | None = None,
     best_dates: dict | None = None,
@@ -423,36 +423,35 @@ def fetch_tile(
     if os.path.exists(out_path):
         return {"name": name, "status": "skipped"}
 
-    bbox = loc["bbox_3006"]
-    coords = loc.get("coords_wgs84") or bbox_3006_to_wgs84(bbox)
+    # Always normalize bbox to the current tile size. Manifest/loc bboxes
+    # may carry stale 256-era extents; trust only the center.
+    raw_bbox = loc["bbox_3006"]
+    cx = (raw_bbox["west"] + raw_bbox["east"]) // 2
+    cy = (raw_bbox["south"] + raw_bbox["north"]) // 2
+    bbox = tile.bbox_from_center(cx, cy)
+    coords = bbox_3006_to_wgs84(bbox)
+    tile.assert_bbox_matches(bbox)
 
     # Fast path: use pre-screened best dates from openEO stage 1
     tile_best = best_dates.get(name) if best_dates else None
     if tile_best:
-        scene_results = _fetch_frames_from_best_dates(bbox, coords, tile_best, NUM_FRAMES)
+        scene_results = _fetch_frames_from_best_dates(bbox, coords, tile_best, tile, NUM_FRAMES)
     else:
         tile_years = [str(loc["year"])] if "year" in loc else years
         vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
         scene_results = fetch_4frame_scenes(
-            bbox, coords, tile_years,
+            bbox, coords, tile_years, tile,
             scene_cloud_max=cloud_max,
             vpp_windows=vpp_windows,
         )
 
-    image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES)
+    image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
     if int(temporal_mask.sum()) == 0:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
-    nmd_label = fetch_nmd_label_local(bbox)
-    aux = fetch_aux_channels(bbox)
+    nmd_label = fetch_nmd_label_local(bbox, tile)
+    aux = fetch_aux_channels(bbox, tile)
 
-    # Store bbox matching the actual raster extent — cdse_s2 computes its
-    # own bbox from center + TILE_SIZE_PX*10 internally, so if `bbox` here
-    # came from a stale 256-era manifest (via --from-json), loc["bbox_3006"]
-    # would disagree with the raster. Derive from center + TILE_SIZE_M.
-    cx = (bbox["west"] + bbox["east"]) // 2
-    cy = (bbox["south"] + bbox["north"]) // 2
-    half = TILE_SIZE_M // 2
     save = {
         "spectral": image,
         "temporal_mask": temporal_mask,
@@ -462,10 +461,12 @@ def fetch_tile(
         "num_frames": np.int32(NUM_FRAMES),
         "num_bands": np.int32(N_BANDS),
         "bbox_3006": np.array(
-            [cx - half, cy - half, cx + half, cy + half], dtype=np.int32,
+            [bbox["west"], bbox["south"], bbox["east"], bbox["north"]],
+            dtype=np.int32,
         ),
         "easting": np.int32(cx),
         "northing": np.int32(cy),
+        "tile_size_px": np.int32(tile.size_px),
         "source": loc["source"],
     }
     if nmd_label is not None:
@@ -473,8 +474,9 @@ def fetch_tile(
     save.update(aux)
 
     # Background frame (2016 summer) for clearcut change detection
-    bg_result = fetch_background_frame(bbox, coords)
-    save.update(bg_result)
+    bg_result = fetch_background_frame(bbox, tile)
+    if bg_result is not None:
+        save.update(bg_result)
 
     np.savez_compressed(out_path, **save)
     has_bg = int(save.get("has_frame_2016", 0))
@@ -483,43 +485,28 @@ def fetch_tile(
             "has_bg": has_bg}
 
 
-def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict]:
-    """Read tile locations from existing .npz files on disk."""
+def gen_from_existing(
+    tiles_dir: str, tile: TileConfig, max_tiles: int | None = None,
+) -> list[dict]:
+    """Read tile locations from existing .npz files on disk.
+
+    Always normalizes bbox to the current tile size via resolve_tile_bbox,
+    so stale bboxes from earlier fetches (e.g. 256-era 2560m) are silently
+    upgraded to the caller's current TileConfig extent.
+    """
     import glob
-    import re
+    from imint.training.tile_bbox import resolve_tile_bbox
+
     tiles = sorted(glob.glob(os.path.join(tiles_dir, "*.npz")))
     print(f"  Found {len(tiles)} existing tiles in {tiles_dir}")
 
     locs = []
     skipped = 0
     for path in tiles:
+        name = os.path.basename(path).replace(".npz", "")
         try:
             data = np.load(path, allow_pickle=True)
-            bbox = None
-
-            # Method 1: bbox_3006 array
-            bbox_arr = data.get("bbox_3006", None)
-            if bbox_arr is not None:
-                b = bbox_arr.flatten()
-                bbox = {"west": int(b[0]), "south": int(b[1]),
-                        "east": int(b[2]), "north": int(b[3])}
-
-            # Method 2: easting/northing keys
-            if bbox is None and "easting" in data and "northing" in data:
-                e, n = int(data["easting"]), int(data["northing"])
-                half = TILE_SIZE_M // 2
-                bbox = {"west": e - half, "south": n - half,
-                        "east": e + half, "north": n + half}
-
-            # Method 3: parse from filename (tile_EASTING_NORTHING.npz)
-            if bbox is None:
-                m = re.search(r'tile_(\d+)_(\d+)', os.path.basename(path))
-                if m:
-                    e, n = int(m.group(1)), int(m.group(2))
-                    half = TILE_SIZE_M // 2
-                    bbox = {"west": e - half, "south": n - half,
-                            "east": e + half, "north": n + half}
-
+            bbox = resolve_tile_bbox(name=name, tile=tile, npz_data=data)
             if bbox is None:
                 skipped += 1
                 continue
@@ -531,7 +518,6 @@ def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict
             elif "lpis_year" in data:
                 tile_year = int(data["lpis_year"])
             elif "dates" in data:
-                # Infer from first valid date
                 dates = data["dates"]
                 for d in dates:
                     d_str = str(d)
@@ -539,10 +525,8 @@ def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict
                         tile_year = int(d_str[:4])
                         break
 
-            # Check if tile has LPIS crop labels
             has_lpis = "label_mask" in data or "lpis_year" in data
 
-            name = os.path.basename(path).replace(".npz", "")
             loc = {
                 "name": name,
                 "source": str(data.get("source", "lulc")),
@@ -555,24 +539,19 @@ def gen_from_existing(tiles_dir: str, max_tiles: int | None = None) -> list[dict
                 loc["year"] = tile_year
             locs.append(loc)
         except Exception:
-            # Corrupt .npz — still recover bbox from filename
-            m = re.search(r'tile_(\d+)_(\d+)', os.path.basename(path))
-            if m:
-                e, n = int(m.group(1)), int(m.group(2))
-                half = TILE_SIZE_M // 2
-                bbox = {"west": e - half, "south": n - half,
-                        "east": e + half, "north": n + half}
-                name = os.path.basename(path).replace(".npz", "")
-                locs.append({
-                    "name": name,
-                    "source": "lulc",
-                    "bbox_3006": bbox,
-                    "coords_wgs84": bbox_3006_to_wgs84(bbox),
-                    "_existing_path": path,
-                    "_has_lpis": False,
-                })
-            else:
+            # Corrupt .npz — still try filename-based recovery
+            bbox = resolve_tile_bbox(name=name, tile=tile, npz_data=None)
+            if bbox is None:
                 skipped += 1
+                continue
+            locs.append({
+                "name": name,
+                "source": "lulc",
+                "bbox_3006": bbox,
+                "coords_wgs84": bbox_3006_to_wgs84(bbox),
+                "_existing_path": path,
+                "_has_lpis": False,
+            })
             continue
 
     if skipped > 0:
@@ -590,6 +569,7 @@ def refetch_tile(
     loc: dict,
     years: list[str],
     output_dir: str,
+    tile: TileConfig,
     cloud_max: float = 30.0,
     vpp_cache: dict | None = None,
     best_dates: dict | None = None,
@@ -608,8 +588,15 @@ def refetch_tile(
         except Exception:
             pass
 
-    bbox = loc["bbox_3006"]
-    coords = loc.get("coords_wgs84") or bbox_3006_to_wgs84(bbox)
+    # Always normalize bbox to the current TileConfig extent — never
+    # trust the incoming loc bbox blindly; it may carry a stale 256-era
+    # extent. Trust only the center.
+    raw_bbox = loc["bbox_3006"]
+    cx = (raw_bbox["west"] + raw_bbox["east"]) // 2
+    cy = (raw_bbox["south"] + raw_bbox["north"]) // 2
+    bbox = tile.bbox_from_center(cx, cy)
+    coords = bbox_3006_to_wgs84(bbox)
+    tile.assert_bbox_matches(bbox)
 
     # Determine fetch years based on tile type
     # Crop tiles: strict year match only (LPIS labels are year-specific)
@@ -618,44 +605,37 @@ def refetch_tile(
     has_crop_labels = loc.get("source") == "crop" or loc.get("_has_lpis", False)
 
     if tile_year and has_crop_labels:
-        # Crop tile — NO year fallback, spectral must match label year
         fetch_years = [str(tile_year)]
     elif tile_year:
-        # LULC tile — tile year first, others as fallback (forest/water OK)
         fetch_years = [str(tile_year)] + [y for y in years if y != str(tile_year)]
     else:
         fetch_years = years
 
-    # Fast path: use pre-screened best dates from openEO stage 1
+    # Fast path: pre-screened best dates from openEO stage 1
     tile_best = best_dates.get(name) if best_dates else None
     if tile_best:
-        scene_results = _fetch_frames_from_best_dates(bbox, coords, tile_best, NUM_FRAMES)
+        scene_results = _fetch_frames_from_best_dates(bbox, coords, tile_best, tile, NUM_FRAMES)
     else:
         vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
         scene_results = fetch_4frame_scenes(
-            bbox, coords, fetch_years,
+            bbox, coords, fetch_years, tile,
             scene_cloud_max=cloud_max,
             vpp_windows=vpp_windows,
         )
-    image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES)
+    image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
 
     if int(temporal_mask.sum()) == 0:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
-    # Load existing tile data (labels, aux, etc.)
     save = {}
     if existing_path and os.path.exists(existing_path):
         try:
             old = dict(np.load(existing_path, allow_pickle=True))
-            # Spectral arrays are always overwritten by the new fetch.
-            # Label arrays are always regenerated by build_labels.py — never
-            # carry them forward, or a stale label (wrong schema, wrong axis
-            # orientation, etc.) silently survives a refetch indefinitely.
+            # Spectral is always overwritten; labels always rebuilt.
             _DROP = frozenset((
                 "image", "spectral", "temporal_mask", "doy",
                 "dates", "multitemporal", "num_frames", "num_bands",
                 "seasons_valid",
-                # label keys — always rebuilt by build_labels, never propagated
                 "label", "label_mask", "label_year",
             ))
             for k, v in old.items():
@@ -664,7 +644,6 @@ def refetch_tile(
         except Exception:
             pass
 
-    # Write new spectral + temporal metadata
     save["spectral"] = image
     save["temporal_mask"] = temporal_mask
     save["doy"] = doy
@@ -673,20 +652,14 @@ def refetch_tile(
     save["num_frames"] = np.int32(NUM_FRAMES)
     save["num_bands"] = np.int32(N_BANDS)
 
-    # Persist bbox metadata matching the ACTUAL raster extent.
-    # cdse_s2._fetch_prithvi_bands computes its own bbox from
-    # (easting, northing, TILE_SIZE_PX * 10) internally, so loc["bbox_3006"]
-    # may be stale (e.g. 256-era 2560m from manifest while the raster is
-    # 5120m). Always derive from center + current TILE_SIZE_M to guarantee
-    # the saved bbox matches the raster we just wrote.
-    cx = (bbox["west"] + bbox["east"]) // 2
-    cy = (bbox["south"] + bbox["north"]) // 2
-    half = TILE_SIZE_M // 2
+    # Persist bbox that matches the raster we just wrote.
     save["bbox_3006"] = np.array(
-        [cx - half, cy - half, cx + half, cy + half], dtype=np.int32,
+        [bbox["west"], bbox["south"], bbox["east"], bbox["north"]],
+        dtype=np.int32,
     )
     save["easting"] = np.int32(cx)
     save["northing"] = np.int32(cy)
+    save["tile_size_px"] = np.int32(tile.size_px)
     save["source"] = loc.get("source", "lulc")
 
     np.savez_compressed(out_path, **save)
@@ -721,18 +694,17 @@ def main():
     p.add_argument("--from-json", default=None,
                    help="JSON file with tile locations [{name, bbox, year, source}, ...]")
     p.add_argument("--tile-size-px", type=int, default=256,
-                   help="Tile resolution in pixels (256 or 512). Sets TILE_SIZE_PX and TILE_SIZE_M.")
+                   help="Tile resolution in pixels (256, 512, 1024, …). "
+                        "Sets the runtime TileConfig.size_px.")
     args = p.parse_args()
     random.seed(args.seed)
 
-    # Override tile_fetch module constants for non-default tile sizes
-    if args.tile_size_px != 256:
-        import imint.training.tile_fetch as _tf
-        _tf.TILE_SIZE_PX = args.tile_size_px
-        _tf.TILE_SIZE_M = args.tile_size_px * 10
-        print(f"  Tile size overridden: {_tf.TILE_SIZE_PX}px ({_tf.TILE_SIZE_M}m)")
-
+    # Single source of truth for tile geometry — threaded explicitly
+    # through every function that needs it. No monkey-patching, no
+    # module mutation.
+    tile = TileConfig(size_px=args.tile_size_px)
     print(f"=== Unified 4-Frame Tile Fetcher ===")
+    print(f"  TileConfig: {tile.size_px}px × {tile.size_m}m")
     print(f"  Mode: {args.mode}  Years: {args.years}")
     print(f"  Frame 0: Autumn (Sep-Oct, year-1)")
     print(f"  Frames 1-3: VPP-guided growing season\n")
@@ -756,35 +728,25 @@ def main():
             if t["name"] in existing:
                 skipped += 1
                 continue
-            # Support both JSON formats:
-            #   gen_lulc format: bbox_3006 = {"west":…,"south":…,"east":…,"north":…}
-            #   legacy format:   bbox = [west, south, east, north]
+            # Support both JSON formats (gen_lulc dict or legacy list).
+            # TileConfig.bbox_from_center normalizes to the current size —
+            # manifests produced for another tile size are fine, we trust
+            # only the center.
             raw_bbox = t.get("bbox_3006") or t.get("bbox")
             if raw_bbox is None:
                 continue
             if isinstance(raw_bbox, dict):
-                bbox = raw_bbox
+                cx = (raw_bbox["west"] + raw_bbox["east"]) // 2
+                cy = (raw_bbox["south"] + raw_bbox["north"]) // 2
             else:
-                bbox = {"west": raw_bbox[0], "south": raw_bbox[1],
-                        "east": raw_bbox[2], "north": raw_bbox[3]}
-            # CRITICAL: Always normalize incoming bbox to the current
-            # TILE_SIZE_M. Manifests may have been generated for an older
-            # tile size (256-era 2560m) while we now fetch at 512 px
-            # (5120m). Trust only the center; rebuild the bbox at the
-            # current size to guarantee (east-west) == TILE_SIZE_PX * 10
-            # and the fetched raster is at true 10m GSD.
-            cx = (bbox["west"] + bbox["east"]) // 2
-            cy = (bbox["south"] + bbox["north"]) // 2
-            _half = TILE_SIZE_M // 2
-            bbox = {
-                "west": cx - _half, "east": cx + _half,
-                "south": cy - _half, "north": cy + _half,
-            }
+                cx = (raw_bbox[0] + raw_bbox[2]) // 2
+                cy = (raw_bbox[1] + raw_bbox[3]) // 2
+            bbox = tile.bbox_from_center(cx, cy)
             loc = {
                 "name": t["name"],
                 "source": t.get("source", "lulc"),
                 "bbox_3006": bbox,
-                "coords_wgs84": t.get("coords_wgs84") or bbox_3006_to_wgs84(bbox),
+                "coords_wgs84": bbox_3006_to_wgs84(bbox),
                 "_has_lpis": t.get("source") == "crop",
             }
             if t.get("year"):
@@ -797,23 +759,23 @@ def main():
         dirs = args.from_existing or [args.output_dir]
         for d in dirs:
             os.makedirs(args.output_dir, exist_ok=True)
-            for loc in gen_from_existing(d, args.max_tiles):
+            for loc in gen_from_existing(d, tile, args.max_tiles):
                 work.append((loc, args.output_dir))
     else:
-        # All modes write to same output dir — no subdirs.
-        # LULC, crop, and urban tiles are handled identically.
         os.makedirs(args.output_dir, exist_ok=True)
 
         if args.mode in ("lulc", "all"):
-            for loc in gen_lulc(args.grid_spacing, args.max_tiles):
+            for loc in gen_lulc(tile, args.grid_spacing, args.max_tiles):
                 work.append((loc, args.output_dir))
 
         if args.mode in ("rare-crops", "all"):
-            for loc in gen_rare_crops(args.lpis_dir, args.n_oljevaxter, args.n_havre):
+            for loc in gen_rare_crops(tile, args.lpis_dir,
+                                      args.n_oljevaxter, args.n_havre):
                 work.append((loc, args.output_dir))
 
         if args.mode in ("urban", "all"):
-            for loc in gen_urban(max_tiles=args.max_tiles or 500,
+            for loc in gen_urban(tile,
+                                 max_tiles=args.max_tiles or 500,
                                  min_pop=args.min_population):
                 work.append((loc, args.output_dir))
 
@@ -851,9 +813,11 @@ def main():
     def _run(item):
         loc, d = item
         if use_refetch:
-            return refetch_tile(loc, args.years, d, args.cloud_max,
+            return refetch_tile(loc, args.years, d, tile,
+                                cloud_max=args.cloud_max,
                                 vpp_cache=vpp_cache, best_dates=best_dates_cache)
-        return fetch_tile(loc, args.years, d, args.cloud_max,
+        return fetch_tile(loc, args.years, d, tile,
+                          cloud_max=args.cloud_max,
                           vpp_cache=vpp_cache, best_dates=best_dates_cache)
 
     CHUNK = max(max_w * 2, len(work) // 10)

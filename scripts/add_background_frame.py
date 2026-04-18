@@ -53,10 +53,11 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from imint.training.tile_fetch import (
-    TILE_SIZE_PX,
     N_BANDS,
     fetch_background_frame,
 )
+from imint.training.tile_config import TileConfig
+from imint.training.tile_bbox import resolve_tile_bbox
 
 # ── Counter (thread-safe) ─────────────────────────────────────────────────
 
@@ -97,14 +98,19 @@ def _process_tile(path: Path, skip_existing: bool) -> str:
         _inc(done=1, skip=1)
         return f"SKIP {name}"
 
-    # Derive bbox_3006
-    bbox_3006 = _get_bbox(data, name)
+    # Derive TileConfig from persisted key or raster shape
+    sp = data.get("spectral", data.get("image"))
+    size_px = int(data.get("tile_size_px", sp.shape[-1] if sp is not None else 256))
+    tile_cfg = TileConfig(size_px=size_px)
+
+    # Derive bbox_3006 via shared helper (always matches current size)
+    bbox_3006 = resolve_tile_bbox(name=name, tile=tile_cfg, npz_data=data)
     if bbox_3006 is None:
         _inc(done=1, fail=1)
         return f"NO_BBOX {name}"
 
     # Fetch background frame
-    result = fetch_background_frame(bbox_3006)
+    result = fetch_background_frame(bbox_3006, tile_cfg)
 
     if result is not None:
         data.update(result)
@@ -117,7 +123,7 @@ def _process_tile(path: Path, skip_existing: bool) -> str:
     else:
         # Write sentinel so we don't retry endlessly
         data["has_frame_2016"] = np.int32(0)
-        data["frame_2016"] = np.zeros((N_BANDS, TILE_SIZE_PX, TILE_SIZE_PX), dtype=np.float32)
+        data["frame_2016"] = np.zeros((N_BANDS, tile_cfg.size_px, tile_cfg.size_px), dtype=np.float32)
         data["frame_2016_date"] = np.bytes_("")
         data["frame_2016_doy"] = np.int32(0)
         data["frame_2016_cloud_pct"] = np.float32(0.0)
@@ -143,37 +149,6 @@ def _process_tile(path: Path, skip_existing: bool) -> str:
 
     _inc(done=1, ok=ok, fail=1 - ok)
     return status
-
-
-def _get_bbox(data: dict, name: str) -> dict | None:
-    """Extract bbox_3006 from tile data or filename."""
-    # Method 1: bbox_3006 array stored in tile
-    if "bbox_3006" in data:
-        b = np.asarray(data["bbox_3006"]).ravel()
-        if b.shape[0] >= 4:
-            return {"west": int(b[0]), "south": int(b[1]),
-                    "east": int(b[2]), "north": int(b[3])}
-
-    # Method 2: easting/northing scalars
-    if "easting" in data and "northing" in data:
-        cx = int(data["easting"])
-        cy = int(data["northing"])
-        half = 1280
-        return {"west": cx - half, "south": cy - half,
-                "east": cx + half, "north": cy + half}
-
-    # Method 3: parse from filename  "tile_<easting>_<northing>.npz"
-    import re
-    m = re.search(r"tile_(\d+)_(\d+)", name)
-    if m:
-        cx, cy = int(m.group(1)), int(m.group(2))
-        half = 1280
-        return {"west": cx - half, "south": cy - half,
-                "east": cx + half, "north": cy + half}
-
-    # Method 4: old-style numeric filename "<id>.npz"
-    # These tiles have easting/northing stored differently
-    return None
 
 
 # ── Main ──────────────────────────────────────────────────────────────────

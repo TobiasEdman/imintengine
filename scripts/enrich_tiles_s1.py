@@ -39,8 +39,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
-    """Add S1 VV/VH to one tile .npz file."""
+    """Add S1 VV/VH to one tile .npz file.
+
+    Tile geometry is derived from the on-disk raster (``spectral`` shape)
+    and either the persisted ``tile_size_px`` key or the pixel dimension
+    itself. No module-level constants — fully size-agnostic.
+    """
     from imint.training.cdse_s1 import fetch_s1_scene
+    from imint.training.tile_config import TileConfig
+    from imint.training.tile_bbox import resolve_tile_bbox
 
     name = Path(tile_path).stem
     try:
@@ -59,16 +66,15 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
     n_bands = 6
     h, w = spectral.shape[1], spectral.shape[2]
     n_frames = spectral.shape[0] // n_bands
-    size_px = h  # tile pixel size (256 or 512)
 
-    # Resolve bbox via shared helper (tries npz bbox_3006, easting/northing,
-    # filename parse, manifest lookup — matches fetcher logic exactly).
-    from imint.training.tile_bbox import resolve_tile_bbox
-    bbox = resolve_tile_bbox(
-        name=name, npz_data=data, tile_size_m=size_px * 10,
-    )
+    # Prefer persisted tile_size_px; fall back to raster dimension
+    size_px = int(data.get("tile_size_px", h))
+    tile_cfg = TileConfig(size_px=size_px)
+
+    bbox = resolve_tile_bbox(name=name, tile=tile_cfg, npz_data=data)
     if bbox is None:
         return {"name": name, "status": "failed", "reason": "no_bbox"}
+    tile_cfg.assert_bbox_matches(bbox)
 
     # Fetch S1 for each frame date (±3 day window)
     s1_frames = []

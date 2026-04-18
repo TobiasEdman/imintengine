@@ -76,6 +76,19 @@ def fetch_s1_scene(
             sar: (2, H, W) float32 — VV, VH
     """
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
+
+    # Defense: guarantee bbox / size consistency — same pattern as fetch_s2_scene.
+    # S1 is acquired in linear SAR backscatter but Sentinel Hub still computes
+    # GSD as (east-west)/width_px when rendering. Mismatched bbox silently
+    # produces an up/downsampled raster with misregistered pixels.
+    expected_m = w_px * 10
+    if abs((east - west) - expected_m) > 1 or abs((north - south) - expected_m) > 1:
+        raise ValueError(
+            f"fetch_s1_scene: bbox/size_px mismatch. "
+            f"bbox ew={east - west}m ns={north - south}m size_px={w_px} "
+            f"→ expected {expected_m}m extent."
+        )
+
     token = _get_token()
 
     try:

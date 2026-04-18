@@ -121,36 +121,25 @@ def build_tile_label(
     lpis_dir: str,
     sks_dir: str,
 ) -> dict:
-    """Build unified 23-class label for one tile from scratch."""
+    """Build unified 23-class label for one tile from scratch.
+
+    Tile geometry is derived from the on-disk raster (``spectral`` shape)
+    or ``tile_size_px`` persisted by the fetcher — no global tile-size
+    constants.
+    """
+    from imint.training.tile_config import TileConfig
+    from imint.training.tile_bbox import resolve_tile_bbox
+
     name = os.path.basename(tile_path).replace(".npz", "")
     try:
         data = dict(np.load(tile_path, allow_pickle=True))
 
-        # Extract bbox — always from tile metadata, never hardcoded
-        bbox_3006 = None
-        if "bbox_3006" in data:
-            b = data["bbox_3006"].flatten()
-            bbox_3006 = {"west": int(b[0]), "south": int(b[1]),
-                         "east": int(b[2]), "north": int(b[3])}
-        elif "easting" in data and "northing" in data:
-            e, n = int(data["easting"]), int(data["northing"])
-            # Derive tile extent from spectral shape (10m/px)
-            sp = data.get("spectral", data.get("image"))
-            tile_px = sp.shape[-1] if sp is not None else 256
-            half = (tile_px * 10) // 2
-            bbox_3006 = {"west": e - half, "south": n - half,
-                         "east": e + half, "north": n + half}
-        else:
-            import re
-            m = re.search(r'tile_(\d+)_(\d+)', name)
-            if m:
-                e, n = int(m.group(1)), int(m.group(2))
-                sp = data.get("spectral", data.get("image"))
-                tile_px = sp.shape[-1] if sp is not None else 256
-                half = (tile_px * 10) // 2
-                bbox_3006 = {"west": e - half, "south": n - half,
-                             "east": e + half, "north": n + half}
+        # Derive tile size from raster (authoritative) or persisted key
+        sp = data.get("spectral", data.get("image"))
+        size_px = int(data.get("tile_size_px", sp.shape[-1] if sp is not None else 256))
+        tile_cfg = TileConfig(size_px=size_px)
 
+        bbox_3006 = resolve_tile_bbox(name=name, tile=tile_cfg, npz_data=data)
         if bbox_3006 is None:
             return {"name": name, "status": "failed", "reason": "no_bbox"}
 
@@ -170,7 +159,7 @@ def build_tile_label(
             tile_year = 2022  # default
 
         # --- Step 1: NMD label from local raster ---
-        nmd_label = fetch_nmd_label_local(bbox_3006, nmd_raster=nmd_raster)
+        nmd_label = fetch_nmd_label_local(bbox_3006, tile_cfg, nmd_raster=nmd_raster)
         if nmd_label is None:
             return {"name": name, "status": "failed", "reason": "no_nmd"}
 
@@ -240,15 +229,9 @@ def main():
                    help="Only process these tile IDs (filename stems, e.g. 45843596)")
     p.add_argument("--workers", type=int, default=1,
                    help="Parallel workers (use 1 to minimize memory)")
-    p.add_argument("--tile-size-px", type=int, default=256,
-                   help="Tile pixel resolution (256 or 512)")
     args = p.parse_args()
-
-    if args.tile_size_px != 256:
-        import imint.training.tile_fetch as _tf
-        _tf.TILE_SIZE_PX = args.tile_size_px
-        _tf.TILE_SIZE_M = args.tile_size_px * 10
-        print(f"  Tile size: {_tf.TILE_SIZE_PX}px ({_tf.TILE_SIZE_M}m)")
+    # Tile size is derived per-tile from the raster shape / tile_size_px key.
+    # No CLI flag needed — the script adapts to whatever fetch_unified_tiles wrote.
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
     if args.tile_ids:

@@ -95,15 +95,17 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
 
     h, w = spectral.shape[1], spectral.shape[2]
     n_frames = spectral.shape[0] // 6
-    size_px = h
 
-    # Resolve bbox via shared helper (same logic as fetcher + S1 enrichment)
+    # Derive TileConfig from persisted tile_size_px or fall back to raster dim
+    from imint.training.tile_config import TileConfig
     from imint.training.tile_bbox import resolve_tile_bbox
-    bbox = resolve_tile_bbox(
-        name=name, npz_data=data, tile_size_m=size_px * 10,
-    )
+    size_px = int(data.get("tile_size_px", h))
+    tile_cfg = TileConfig(size_px=size_px)
+
+    bbox = resolve_tile_bbox(name=name, tile=tile_cfg, npz_data=data)
     if bbox is None:
         return {"name": name, "status": "failed", "reason": "no_bbox"}
+    tile_cfg.assert_bbox_matches(bbox)
 
     b08_frames = []
     valid = 0

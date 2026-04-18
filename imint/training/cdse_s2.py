@@ -142,12 +142,11 @@ def fetch_s2_scene(
         (spectral, scl, cloud_fraction) on success, None on rejection.
     """
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
-    token = _get_token()
 
-    # Defense: guarantee bbox / resolution consistency. Sentinel Hub
-    # Process API computes GSD as (east - west) / width_px, so mismatched
-    # (bbox, size_px) silently produces upsampled or downsampled rasters
-    # instead of native 10m. Catch this loudly.
+    # Defense: guarantee bbox / resolution consistency BEFORE any network
+    # I/O. Sentinel Hub Process API computes GSD as (east-west) / width_px,
+    # so mismatched (bbox, size_px) silently produces up- or downsampled
+    # rasters instead of native 10m. Catch this loudly.
     expected_m = w_px * 10
     actual_ew = east - west
     actual_ns = north - south
@@ -158,6 +157,8 @@ def fetch_s2_scene(
             f"ns={actual_ns}m size_px={w_px} → expected {expected_m}m extent. "
             f"Fix the caller — always use center ± (size_px*10)//2."
         )
+
+    token = _get_token()
 
     # Two-stage for large tiles: pre-screen with SCL only
     use_two_stage = max(h_px, w_px) >= _TWO_STAGE_THRESHOLD

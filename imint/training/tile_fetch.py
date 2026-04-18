@@ -8,17 +8,26 @@ from __future__ import annotations
 
 import calendar
 import os
+import threading
+import time as _time
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-import threading
-import time as _time
+if TYPE_CHECKING:
+    from imint.training.tile_config import TileConfig
 
-TILE_SIZE_M = 2560   # 256 pixels × 10m
-TILE_SIZE_PX = 256
 N_BANDS = 6
 PRITHVI_BANDS = ["B02", "B03", "B04", "B8A", "B11", "B12"]
+
+# NOTE: Tile size (size_px, size_m, half_m) is NOT stored as a module-level
+# constant. It is a runtime parameter carried by TileConfig and threaded
+# explicitly through every function that needs it. See imint.training.tile_config.
+# Callers MUST pass TileConfig to every fetcher below; the previous mutable-
+# module-constant pattern caused a hard-to-diagnose GSD corruption bug where
+# `from tile_fetch import TILE_SIZE_M` snapshotted 2560 even after a CLI
+# override attempted to mutate _tf.TILE_SIZE_M = 5120.
 
 
 class AdaptiveSemaphore:
@@ -95,8 +104,8 @@ _CDSE_SEMAPHORE = AdaptiveSemaphore(
 )
 
 
-def point_to_bbox_3006(lat: float, lon: float) -> dict:
-    """Convert WGS84 point → 2560m × 2560m EPSG:3006 bounding box."""
+def point_to_bbox_3006(lat: float, lon: float, tile: "TileConfig") -> dict:
+    """Convert WGS84 point → tile-sized EPSG:3006 bounding box."""
     from rasterio.crs import CRS
     from rasterio.warp import transform
 
@@ -104,13 +113,7 @@ def point_to_bbox_3006(lat: float, lon: float) -> dict:
         CRS.from_epsg(4326), CRS.from_epsg(3006), [lon], [lat],
     )
     cx, cy = xs[0], ys[0]
-    half = TILE_SIZE_M / 2
-    return {
-        "west": int(cx - half),
-        "south": int(cy - half),
-        "east": int(cx + half),
-        "north": int(cy + half),
-    }
+    return tile.bbox_from_center(cx, cy)
 
 
 def bbox_3006_to_wgs84(bbox: dict) -> dict:
@@ -130,6 +133,7 @@ def _fetch_single_scene(
     coords_wgs84: dict,
     date_start: str,
     date_end: str,
+    tile: "TileConfig",
     *,
     scene_cloud_max: float = 30.0,
     max_candidates: int = 3,
@@ -182,7 +186,7 @@ def _fetch_single_scene(
                 bbox_3006["west"], bbox_3006["south"],
                 bbox_3006["east"], bbox_3006["north"],
                 date=date_str,
-                size_px=TILE_SIZE_PX,
+                size_px=tile.size_px,
                 cloud_threshold=cloud_threshold,
                 haze_threshold=haze_threshold,
             )
@@ -275,6 +279,7 @@ def fetch_4frame_scenes(
     bbox_3006: dict,
     coords_wgs84: dict,
     years: list[str],
+    tile: "TileConfig",
     *,
     scene_cloud_max: float = 30.0,
     max_candidates: int = 3,
@@ -316,6 +321,7 @@ def fetch_4frame_scenes(
         s, a = _fetch_single_scene(
             bbox_3006, coords_wgs84,
             f"{prev_year}-08-15", f"{prev_year}-10-31",
+            tile,
             scene_cloud_max=autumn_scene_cloud_max,
             max_candidates=max(max_candidates, 16),
             cloud_threshold=0.30,
@@ -334,6 +340,7 @@ def fetch_4frame_scenes(
                 ds, de = doy_to_date_range(int(year), doy_start, doy_end)
                 s, d = _fetch_single_scene(
                     bbox_3006, coords_wgs84, ds, de,
+                    tile,
                     scene_cloud_max=scene_cloud_max,
                     max_candidates=max_candidates,
                 )
@@ -350,11 +357,12 @@ def fetch_4frame_scenes(
     return results
 
 
-def fetch_aux_channels(bbox_3006: dict) -> dict[str, np.ndarray]:
+def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig") -> dict[str, np.ndarray]:
     """Fetch auxiliary channels (VPP phenology + DEM) for a tile.
 
     Returns dict of channel_name → (H, W) float32. Missing channels skipped.
     """
+    tile.assert_bbox_matches(bbox_3006)
     aux = {}
 
     # VPP phenology (5 bands) — goes through CDSE semaphore
@@ -366,7 +374,7 @@ def fetch_aux_channels(bbox_3006: dict) -> dict[str, np.ndarray]:
             south=bbox_3006["south"],
             east=bbox_3006["east"],
             north=bbox_3006["north"],
-            size_px=TILE_SIZE_PX,
+            size_px=tile.size_px,
         )
         for band in ["sosd", "eosd", "length", "maxv", "minv"]:
             if band in vpp and vpp[band] is not None:
@@ -385,7 +393,7 @@ def fetch_aux_channels(bbox_3006: dict) -> dict[str, np.ndarray]:
             south=bbox_3006["south"],
             east=bbox_3006["east"],
             north=bbox_3006["north"],
-            size_px=TILE_SIZE_PX,
+            size_px=tile.size_px,
         )
         if dem is not None:
             aux["dem"] = dem.astype(np.float32)
@@ -400,21 +408,21 @@ _NMD_SRC = None  # lazy-opened rasterio handle
 
 def fetch_nmd_label_local(
     bbox_3006: dict,
+    tile: "TileConfig",
     nmd_raster: str = "data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif",
-    size_px: int | None = None,
 ) -> np.ndarray | None:
     """Read NMD 19-class sequential label from local GeoTIFF raster.
 
     Args:
         bbox_3006: Tile bounding box in SWEREF99 TM.
+        tile: Tile geometry — used to size the output raster.
         nmd_raster: Path to NMD GeoTIFF.
-        size_px: Output resolution in pixels. Derived from bbox extent
-            at 10m/px if None.
 
     Returns (H, W) uint8 with indices 0-19, or None if unavailable.
     Falls back to openEO remote fetch if the local raster is missing.
     """
     global _NMD_SRC
+    tile.assert_bbox_matches(bbox_3006)
 
     try:
         import rasterio
@@ -422,7 +430,7 @@ def fetch_nmd_label_local(
 
         if _NMD_SRC is None:
             if not os.path.exists(nmd_raster):
-                return _fetch_nmd_label_remote(bbox_3006)
+                return _fetch_nmd_label_remote(bbox_3006, tile)
             _NMD_SRC = rasterio.open(nmd_raster)
 
         w, s, e, n = bbox_3006["west"], bbox_3006["south"], bbox_3006["east"], bbox_3006["north"]
@@ -437,28 +445,26 @@ def fetch_nmd_label_local(
         # Never use scipy.ndimage.zoom here — it distributes dropped rows
         # unevenly and creates visible seams when the window is fractional.
         from rasterio.enums import Resampling
-        # Derive output size from bbox extent at 10m/px if not specified
-        out_px = size_px or round((bbox_3006["east"] - bbox_3006["west"]) / 10)
         nmd_raw = _NMD_SRC.read(
             1,
             window=window,
-            out_shape=(out_px, out_px),
+            out_shape=(tile.size_px, tile.size_px),
             resampling=Resampling.nearest,
         )
 
         from imint.training.class_schema import nmd_raster_to_lulc
         return nmd_raster_to_lulc(nmd_raw).astype(np.uint8)
     except Exception:
-        return _fetch_nmd_label_remote(bbox_3006)
+        return _fetch_nmd_label_remote(bbox_3006, tile)
 
 
-def _fetch_nmd_label_remote(bbox_3006: dict) -> np.ndarray | None:
+def _fetch_nmd_label_remote(bbox_3006: dict, tile: "TileConfig") -> np.ndarray | None:
     """Fallback: fetch NMD via openEO (requires internet)."""
     try:
         coords_wgs84 = bbox_3006_to_wgs84(bbox_3006)
         from imint.fetch import fetch_nmd_data
         result = fetch_nmd_data(
-            coords_wgs84, target_shape=(TILE_SIZE_PX, TILE_SIZE_PX),
+            coords_wgs84, target_shape=(tile.size_px, tile.size_px),
         )
         if result and result.nmd_raster is not None:
             return result.nmd_raster
@@ -469,6 +475,7 @@ def _fetch_nmd_label_remote(bbox_3006: dict) -> np.ndarray | None:
 
 def fetch_background_frame(
     bbox_3006: dict,
+    tile: "TileConfig",
     *,
     primary_year: int = 2016,
     fallback_year: int = 2015,
@@ -552,7 +559,7 @@ def fetch_background_frame(
                 result = fetch_s2_scene(
                     w, s, e, n,
                     date=cand_date,
-                    size_px=TILE_SIZE_PX,
+                    size_px=tile.size_px,
                     cloud_threshold=cloud_threshold,
                     haze_threshold=haze_threshold,
                     nodata_threshold=nodata_threshold,
@@ -598,6 +605,7 @@ def fetch_background_frame(
 def stack_frames(
     scene_results: list[tuple[np.ndarray | None, str]],
     num_frames: int,
+    tile: "TileConfig",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Stack seasonal scenes into multitemporal array.
 
@@ -609,6 +617,7 @@ def stack_frames(
         doy: (T,) int32
         dates: list of date strings
     """
+    size_px = tile.size_px
     frames = []
     valid = []
     dates = []
@@ -617,17 +626,17 @@ def stack_frames(
     for scene, date_str in scene_results:
         if scene is not None:
             # Ensure correct size
-            if scene.shape[1] != TILE_SIZE_PX or scene.shape[2] != TILE_SIZE_PX:
-                padded = np.zeros((N_BANDS, TILE_SIZE_PX, TILE_SIZE_PX), dtype=np.float32)
-                h = min(scene.shape[1], TILE_SIZE_PX)
-                w = min(scene.shape[2], TILE_SIZE_PX)
+            if scene.shape[1] != size_px or scene.shape[2] != size_px:
+                padded = np.zeros((N_BANDS, size_px, size_px), dtype=np.float32)
+                h = min(scene.shape[1], size_px)
+                w = min(scene.shape[2], size_px)
                 padded[:, :h, :w] = scene[:, :h, :w]
                 frames.append(padded)
             else:
                 frames.append(scene)
             valid.append(True)
         else:
-            frames.append(np.zeros((N_BANDS, TILE_SIZE_PX, TILE_SIZE_PX), dtype=np.float32))
+            frames.append(np.zeros((N_BANDS, size_px, size_px), dtype=np.float32))
             valid.append(False)
 
         dates.append(date_str)
@@ -639,7 +648,7 @@ def stack_frames(
 
     # Pad/trim to num_frames
     while len(frames) < num_frames:
-        frames.append(np.zeros((N_BANDS, TILE_SIZE_PX, TILE_SIZE_PX), dtype=np.float32))
+        frames.append(np.zeros((N_BANDS, size_px, size_px), dtype=np.float32))
         valid.append(False)
         dates.append("")
         doys.append(0)
