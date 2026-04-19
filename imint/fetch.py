@@ -512,6 +512,73 @@ def _try_load_root_dotenv():
             break
 
 
+def _discover_openeo_endpoint(base_url: str, timeout: float = 10.0) -> tuple[str, str] | None:
+    """Query ``/.well-known/openeo`` and return the (url, api_version)
+    of the highest production version the server advertises.
+
+    openEO servers advertise version-pinned URLs (e.g.
+    ``https://openeo.dataspace.copernicus.eu/openeo/1.2/``). Connecting
+    to that pinned URL — instead of the root — forces the client to
+    speak exactly that version, protecting us from:
+
+        - Servers stuck on older API (DES is 1.1.0 only)
+        - Client library defaults drifting across upgrades
+        - Silent negotiation picking a version with process-graph
+          regressions (we had reduce_dimension issues before)
+
+    Args:
+        base_url: openEO root URL.
+        timeout: HTTP timeout.
+
+    Returns:
+        ``(pinned_url, api_version)`` or ``None`` when discovery fails.
+        Caller should fall back to implicit ``openeo.connect(base_url)``.
+    """
+    import json as _json
+    import urllib.request
+
+    url = base_url.rstrip("/") + "/.well-known/openeo"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            payload = _json.loads(resp.read().decode())
+    except Exception:
+        return None
+
+    versions = payload.get("versions") or []
+    prod = [v for v in versions if v.get("production") is True
+            and v.get("api_version") and v.get("url")]
+    if not prod:
+        prod = [v for v in versions if v.get("api_version") and v.get("url")]
+    if not prod:
+        return None
+
+    def _vkey(v):
+        try:
+            return tuple(int(p) for p in v["api_version"].split("."))
+        except Exception:
+            return (0,)
+
+    prod.sort(key=_vkey, reverse=True)
+    best = prod[0]
+    return best["url"], best["api_version"]
+
+
+def _connect_with_version(openeo_module, base_url: str, label: str):
+    """Connect to the version-pinned URL from ``/.well-known/openeo``.
+
+    Logs which API version was selected. Falls back to implicit
+    ``openeo.connect(base_url)`` when discovery fails (unreachable
+    well-known, malformed payload, empty versions list).
+    """
+    discovered = _discover_openeo_endpoint(base_url)
+    if discovered is not None:
+        pinned_url, version = discovered
+        print(f"    [{label}] openEO api={version} url={pinned_url}")
+        return openeo_module.connect(pinned_url)
+    print(f"    [{label}] openEO version discovery failed; implicit connect to {base_url}")
+    return openeo_module.connect(base_url)
+
+
 def _connect(token: str | None = None, token_path: str | None = None):
     """Connect and authenticate to DES.
 
@@ -537,7 +604,7 @@ def _connect(token: str | None = None, token_path: str | None = None):
         )
 
     try:
-        conn = openeo.connect(OPENEO_URL)
+        conn = _connect_with_version(openeo, OPENEO_URL, "DES")
     except Exception as e:
         raise FetchError(f"Failed to connect to {OPENEO_URL}: {e}")
 
@@ -583,7 +650,7 @@ def _connect_cdse():
         )
 
     try:
-        conn = openeo.connect(CDSE_OPENEO_URL)
+        conn = _connect_with_version(openeo, CDSE_OPENEO_URL, "CDSE")
     except Exception as e:
         raise FetchError(f"Failed to connect to {CDSE_OPENEO_URL}: {e}")
 
