@@ -42,6 +42,7 @@ spec:
                 --tile-size-px 512 \
                 --years 2017 2018 2019 2022 2023 \
                 --workers 6 \
+                --fetch-sources cdse \
                 --cloud-max 40
 
               echo "=== Step 2: Build unified labels ==="
