@@ -93,7 +93,7 @@ class AdaptiveSemaphore:
 
 
 _DES_SEMAPHORE = AdaptiveSemaphore(
-    initial=2, min_permits=1, max_permits=8,
+    initial=2, min_permits=1, max_permits=3,
     ramp_up_after=10, name="DES",
 )
 # CDSE allows 300 req/min but each 512px request takes ~20s.
