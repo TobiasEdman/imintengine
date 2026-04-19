@@ -319,10 +319,11 @@ def _fetch_frames_from_best_dates(
     best: dict,
     tile: TileConfig,
     n_frames: int = 4,
+    sources: tuple[str, ...] = ("cdse", "des"),
 ) -> list:
     """Fetch spectral frames using pre-screened best dates (from openEO stage 1).
 
-    Races CDSE + DES in parallel for each frame — first result wins.
+    Races selected providers in parallel for each frame — first result wins.
     Skips STAC search, VPP lookup, and cloud screening entirely.
 
     Args:
@@ -330,6 +331,8 @@ def _fetch_frames_from_best_dates(
         coords_wgs84: Tile center in WGS84.
         best: {frame_idx: {date, cloud_frac}} from best_dates.json.
         n_frames: Number of frames.
+        sources: Which backends to race. Subset of ("cdse", "des").
+            Pass ("des",) to skip CDSE during a CDSE outage.
 
     Returns:
         List of (spectral, date_str) tuples matching stack_frames input.
@@ -388,12 +391,18 @@ def _fetch_frames_from_best_dates(
 
         date_str = info["date"]
 
-        # Race CDSE + DES — first success wins
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            futs = [
-                pool.submit(_cdse_fetch, date_str),
-                pool.submit(_des_fetch, date_str),
-            ]
+        # Race selected providers — first success wins
+        submit_map = {}
+        if "cdse" in sources:
+            submit_map["cdse"] = _cdse_fetch
+        if "des" in sources:
+            submit_map["des"] = _des_fetch
+        if not submit_map:
+            results.append((None, date_str))
+            continue
+
+        with ThreadPoolExecutor(max_workers=max(len(submit_map), 1)) as pool:
+            futs = [pool.submit(fn, date_str) for fn in submit_map.values()]
             got_result = False
             for f in as_completed(futs):
                 spectral, d = f.result()
@@ -416,6 +425,7 @@ def fetch_tile(
     cloud_max: float = 30.0,
     vpp_cache: dict | None = None,
     best_dates: dict | None = None,
+    sources: tuple[str, ...] = ("cdse", "des"),
 ) -> dict:
     """Fetch one tile: 4 seasonal frames + NMD + aux → .npz."""
     name = loc["name"]
@@ -435,7 +445,9 @@ def fetch_tile(
     # Fast path: use pre-screened best dates from openEO stage 1
     tile_best = best_dates.get(name) if best_dates else None
     if tile_best:
-        scene_results = _fetch_frames_from_best_dates(bbox, coords, tile_best, tile, NUM_FRAMES)
+        scene_results = _fetch_frames_from_best_dates(
+            bbox, coords, tile_best, tile, NUM_FRAMES, sources=sources,
+        )
     else:
         tile_years = [str(loc["year"])] if "year" in loc else years
         vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
@@ -443,6 +455,7 @@ def fetch_tile(
             bbox, coords, tile_years, tile,
             scene_cloud_max=cloud_max,
             vpp_windows=vpp_windows,
+            sources=sources,
         )
 
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
@@ -573,6 +586,7 @@ def refetch_tile(
     cloud_max: float = 30.0,
     vpp_cache: dict | None = None,
     best_dates: dict | None = None,
+    sources: tuple[str, ...] = ("cdse", "des"),
 ) -> dict:
     """Re-fetch spectral data for an existing tile, keep all other fields."""
     name = loc["name"]
@@ -614,13 +628,16 @@ def refetch_tile(
     # Fast path: pre-screened best dates from openEO stage 1
     tile_best = best_dates.get(name) if best_dates else None
     if tile_best:
-        scene_results = _fetch_frames_from_best_dates(bbox, coords, tile_best, tile, NUM_FRAMES)
+        scene_results = _fetch_frames_from_best_dates(
+            bbox, coords, tile_best, tile, NUM_FRAMES, sources=sources,
+        )
     else:
         vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
         scene_results = fetch_4frame_scenes(
             bbox, coords, fetch_years, tile,
             scene_cloud_max=cloud_max,
             vpp_windows=vpp_windows,
+            sources=sources,
         )
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
 
@@ -696,8 +713,24 @@ def main():
     p.add_argument("--tile-size-px", type=int, default=256,
                    help="Tile resolution in pixels (256, 512, 1024, …). "
                         "Sets the runtime TileConfig.size_px.")
+    p.add_argument("--fetch-sources", default="cdse,des",
+                   help="Comma-separated list of S2 backends to race. "
+                        "Valid: cdse, des. Use --fetch-sources=des to "
+                        "skip CDSE during a Sentinel-Hub outage.")
     args = p.parse_args()
     random.seed(args.seed)
+
+    # Parse fetch sources (cdse and/or des)
+    sources_tuple = tuple(
+        s.strip().lower() for s in args.fetch_sources.split(",") if s.strip()
+    )
+    valid = {"cdse", "des"}
+    unknown = set(sources_tuple) - valid
+    if unknown:
+        p.error(f"Unknown fetch source(s): {sorted(unknown)}. Valid: {sorted(valid)}")
+    if not sources_tuple:
+        p.error("At least one fetch source required")
+    print(f"  Fetch sources: {', '.join(sources_tuple)}")
 
     # Single source of truth for tile geometry — threaded explicitly
     # through every function that needs it. No monkey-patching, no
@@ -815,10 +848,12 @@ def main():
         if use_refetch:
             return refetch_tile(loc, args.years, d, tile,
                                 cloud_max=args.cloud_max,
-                                vpp_cache=vpp_cache, best_dates=best_dates_cache)
+                                vpp_cache=vpp_cache, best_dates=best_dates_cache,
+                                sources=sources_tuple)
         return fetch_tile(loc, args.years, d, tile,
                           cloud_max=args.cloud_max,
-                          vpp_cache=vpp_cache, best_dates=best_dates_cache)
+                          vpp_cache=vpp_cache, best_dates=best_dates_cache,
+                          sources=sources_tuple)
 
     CHUNK = max(max_w * 2, len(work) // 10)
     completed = 0

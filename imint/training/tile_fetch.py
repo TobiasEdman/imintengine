@@ -139,6 +139,7 @@ def _fetch_single_scene(
     max_candidates: int = 3,
     cloud_threshold: float = 0.15,
     haze_threshold: float = 0.08,
+    sources: tuple[str, ...] = ("cdse", "des"),
 ) -> tuple[np.ndarray | None, str]:
     """Fetch best S2 scene within a date range. STAC → CDSE → DES fallback.
 
@@ -221,15 +222,21 @@ def _fetch_single_scene(
         return None, date_str
 
     top_dates = [d for d, _ in candidates[:max_candidates]]
+    use_des = "des" in sources
+    use_cdse = "cdse" in sources
 
-    # 3 DES + 1 CDSE in parallel per tile. First successful result wins.
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    # Race configured providers. Both enabled: 3 DES candidates + 1 CDSE.
+    # DES only: up to 3 DES candidates. CDSE only: 1 CDSE candidate.
+    max_workers = (3 if use_des else 0) + (1 if use_cdse else 0)
+    if max_workers == 0:
+        return None, ""
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = []
-        # DES: submit up to 3 candidates
-        for d in top_dates[:3]:
-            futures.append(pool.submit(_des_try, d))
-        # CDSE: submit best candidate (1 worker)
-        if top_dates:
+        if use_des:
+            for d in top_dates[:3]:
+                futures.append(pool.submit(_des_try, d))
+        if use_cdse and top_dates:
             futures.append(pool.submit(_cdse_try, top_dates[0]))
 
         for f in as_completed(futures):
@@ -284,6 +291,7 @@ def fetch_4frame_scenes(
     scene_cloud_max: float = 30.0,
     max_candidates: int = 3,
     vpp_windows: list[tuple[int, int]] | None = ...,  # sentinel: fetch on demand
+    sources: tuple[str, ...] = ("cdse", "des"),
 ) -> list[tuple[np.ndarray | None, str]]:
     """Fetch 4-frame tile: 1 autumn (year-1) + 3 VPP-guided growing season.
 
@@ -326,6 +334,7 @@ def fetch_4frame_scenes(
             max_candidates=max(max_candidates, 16),
             cloud_threshold=0.30,
             haze_threshold=0.12,
+            sources=sources,
         )
         if s is not None:
             autumn_scene, autumn_date = s, a
@@ -343,6 +352,7 @@ def fetch_4frame_scenes(
                     tile,
                     scene_cloud_max=scene_cloud_max,
                     max_candidates=max_candidates,
+                    sources=sources,
                 )
                 if s is not None:
                     best_scene, best_date = s, d
