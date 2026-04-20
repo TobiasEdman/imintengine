@@ -197,8 +197,16 @@ def _fetch_tessera_for_tile(
     return merged, n_used
 
 
-def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
-    """Add TESSERA 128-D embedding to one tile .npz file."""
+def enrich_one_tile(tile_path: str, gt, skip_existing: bool = True) -> dict:
+    """Add TESSERA 128-D embedding to one tile .npz file.
+
+    Args:
+        tile_path: Path to the .npz to modify in place.
+        gt: Pre-initialized ``geotessera.GeoTessera`` handle. Shared
+            across workers; heavy init (registry load, HF auth) is done
+            once in ``main()``.
+        skip_existing: Skip tiles that already have ``has_tessera=1``.
+    """
     from imint.training.tile_config import TileConfig
     from imint.training.tile_bbox import resolve_tile_bbox
 
@@ -231,9 +239,6 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
     tessera_years = (2018, 2019, 2020, 2021, 2022, 2023, 2024)
     tessera_year = _clamp_year_for_tessera(year, tessera_years)
 
-    from geotessera import GeoTessera
-    gt = GeoTessera()
-
     try:
         emb, n_used = _fetch_tessera_for_tile(
             gt, bbox, tessera_year, size_px,
@@ -265,6 +270,16 @@ def main():
     p.add_argument("--skip-existing", action="store_true", default=True)
     p.add_argument("--no-skip-existing", dest="skip_existing", action="store_false")
     p.add_argument("--max-tiles", type=int, default=None)
+    p.add_argument("--embeddings-dir", default="/data/tessera_cache/embeddings",
+                   help="Where geotessera stores downloaded embedding tiles. "
+                        "Point at a persistent volume; the default cwd fills "
+                        "ephemeral pod disk within a few tiles.")
+    p.add_argument("--registry-cache-dir", default="/data/tessera_cache/registry",
+                   help="Where geotessera stores its parquet registry metadata.")
+    p.add_argument("--purge-cache-after-each", action="store_true",
+                   help="Delete downloaded embedding tiles after baking them "
+                        "into our .npz, to cap disk usage. Costs re-downloads "
+                        "if neighboring tiles share a TESSERA source tile.")
     args = p.parse_args()
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
@@ -273,6 +288,20 @@ def main():
     print(f"=== TESSERA Enrichment ===")
     print(f"  Tiles: {len(tiles)}")
     print(f"  Workers: {args.workers}")
+    print(f"  Embeddings cache: {args.embeddings_dir}")
+    print(f"  Registry cache:   {args.registry_cache_dir}")
+
+    # One-time GeoTessera init — heavy (registry parquet load) so we
+    # do it once and share across workers. GeoTessera itself is
+    # thread-safe for read queries.
+    os.makedirs(args.embeddings_dir, exist_ok=True)
+    os.makedirs(args.registry_cache_dir, exist_ok=True)
+    from geotessera import GeoTessera
+    gt = GeoTessera(
+        embeddings_dir=args.embeddings_dir,
+        cache_dir=args.registry_cache_dir,
+    )
+    print(f"  GeoTessera initialized")
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     lock = threading.Lock()
@@ -281,7 +310,24 @@ def main():
 
     def _run(path):
         nonlocal completed
-        r = enrich_one_tile(path, skip_existing=args.skip_existing)
+        r = enrich_one_tile(path, gt, skip_existing=args.skip_existing)
+        if args.purge_cache_after_each and r.get("status") == "ok":
+            # Wipe the embeddings dir — keep registry cache intact.
+            # Conservative: only purge files older than 60s to avoid
+            # racing other workers mid-download.
+            try:
+                import shutil, time as _t
+                now = _t.time()
+                for root, dirs, files in os.walk(args.embeddings_dir):
+                    for fn in files:
+                        fp = os.path.join(root, fn)
+                        try:
+                            if now - os.path.getmtime(fp) > 60:
+                                os.remove(fp)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         with lock:
             completed += 1
             stats[r.get("status", "failed")] = stats.get(r.get("status", "failed"), 0) + 1
