@@ -131,9 +131,11 @@ def main():
             info = probe_tile(gt, t["name"], bbox_wgs, year)
             results.append(info)
             mark = "✓" if info["available"] else ("·" if info["error"] is None else "✗")
+            err_tail = ""
+            if info["error"]:
+                err_tail = " err=" + str(info["error"])[:60]
             print(f"  [{i+1}/{len(sample)}] {t['name']} year={year} "
-                  f"{mark} n={info['n_tiles_returned']}"
-                  f"{f' err={info[\"error\"][:60]}' if info['error'] else ''}",
+                  f"{mark} n={info['n_tiles_returned']}{err_tail}",
                   flush=True)
 
     elapsed = time.time() - t0
