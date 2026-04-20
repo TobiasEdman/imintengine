@@ -933,7 +933,22 @@ def build_segmentation_from_spec(
             dropout=dropout,
         )
 
+    if spec.family == "clay":
+        # Clay's encoder.forward pools to a (B, D) vector, so we hook
+        # the final transformer block to get pre-pool tokens and then
+        # run a linear-probe dense head. See imint/fm/clay_seg.py.
+        from imint.fm.clay_seg import ClaySegmentationModel
+        return ClaySegmentationModel(
+            encoder=encoder,
+            num_classes=num_classes,
+            img_size=img_size,
+            patch_size=spec.patch_size,
+            embed_dim=spec.embed_dim,
+            n_aux_channels=n_aux_channels,
+            dropout=dropout,
+        )
+
     raise NotImplementedError(
         f"Segmentation wrapper for family={spec.family!r} not implemented yet. "
-        f"Prithvi + TerraMind available. Clay/CROMA/THOR/TESSERA land in Fas 4-5c."
+        f"Prithvi + TerraMind + Clay available. CROMA/TESSERA land in Fas 5."
     )
