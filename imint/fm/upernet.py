@@ -948,7 +948,20 @@ def build_segmentation_from_spec(
             dropout=dropout,
         )
 
+    if spec.family == "croma":
+        from imint.fm.croma_seg import CromaSegmentationModel
+        return CromaSegmentationModel(
+            encoder=encoder,
+            num_classes=num_classes,
+            img_size=img_size,
+            patch_size=spec.patch_size,
+            embed_dim=spec.embed_dim,
+            modality="joint",
+            n_aux_channels=n_aux_channels,
+            dropout=dropout,
+        )
+
     raise NotImplementedError(
         f"Segmentation wrapper for family={spec.family!r} not implemented yet. "
-        f"Prithvi + TerraMind + Clay available. CROMA/TESSERA land in Fas 5."
+        f"Prithvi + TerraMind + Clay + CROMA available. TESSERA lands in Fas 5b."
     )

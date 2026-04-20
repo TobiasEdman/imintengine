@@ -202,16 +202,23 @@ MODEL_CONFIGS: dict[str, ModelSpec] = {
     "croma_base": ModelSpec(
         name="croma_base",
         family="croma",
-        description="CROMA (cross-modal S1+S2 contrastive pretraining)",
+        description=(
+            "CROMA-base (NeurIPS'23, antofuller): contrastive radar-optical MAE. "
+            "S1 (2-band) + S2 (12-band) dict input at 120 px, patch=8. "
+            "Missing B01/B09 are zero-padded."
+        ),
         embed_dim=768,
         depth=12,
         feature_indices=(2, 5, 8, 11),
         patch_size=8,
-        input_bands={"s2_full": "s2_full_12band", "s1": "s1_vv_vh"},
+        # Dataset keys: dataset emits s2_croma (pre-stacked 12-band) and
+        # reuses s1_vv_vh from existing enrichment.
+        input_bands={"s2_croma": "s2_croma", "s1": "s1_vv_vh"},
         supports_temporal=False,
         native_num_frames=(1,),
         supports_coords=False,
         loader_fn=_load_croma,
+        loader_kwargs={"variant": "base", "modality": "both"},
         normalizer_family="croma",
     ),
     "thor_v1_base": ModelSpec(

@@ -145,9 +145,11 @@ class TestBuildBackbone:
         )
         assert 4 in spec.native_num_frames
 
-    def test_stub_loaders_raise_notimplemented(self):
-        # Clay and CROMA are stubs
-        with pytest.raises(NotImplementedError):
+    def test_stub_loaders_raise_importerror(self):
+        # Clay (claymodel) and CROMA (use_croma) depend on external
+        # packages that aren't installed in the local dev env. The
+        # loaders should raise ImportError with a clear install message.
+        with pytest.raises(ImportError, match=r"clay|claymodel"):
             build_backbone("clay_v1_5", num_frames=1, pretrained=False)
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(ImportError, match=r"CROMA|use_croma"):
             build_backbone("croma_base", num_frames=1, pretrained=False)
