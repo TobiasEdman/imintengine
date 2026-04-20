@@ -1,0 +1,85 @@
+---
+# Job: Preprocess SKS + LPIS parquets into spatially-indexed GeoParquets.
+#
+# Why: the vanilla SKS utforda_avverkningar.parquet (3.5 GB) deserializes
+# to ~20 GB in RAM, which × 32 workers OOMs the label-build job even at
+# 96 Gi. This preprocess runs ONCE per data refresh and produces
+# *_spatial.parquet companions with small row groups sorted by a coarse
+# EPSG:3006 grid. Per-tile queries then only load the handful of row
+# groups that intersect the tile bbox (memory becomes O(few MB) instead
+# of O(full file)).
+#
+# Outputs (alongside originals on PVC):
+#   /data/sks/utforda_avverkningar_spatial.parquet
+#   /data/sks/avverkningsanmalningar_spatial.parquet
+#   /data/lpis/jordbruksskiften_<year>_spatial.parquet   (×5)
+#
+# Runtime estimate: ~10-20 min total (loads one ~3.5 GB parquet then
+# writes sorted + row-grouped version; same for each LPIS year).
+# Memory: needs ~48 Gi peak (utforda parquet load + geometry bounds).
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: preprocess-sks-lpis-spatial
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: preprocess
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Preprocess SKS + LPIS into spatial parquets ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy geopandas shapely pyproj pyarrow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              echo ""
+              echo "Inputs:"
+              ls -lh /data/sks/*.parquet /data/lpis/*.parquet 2>/dev/null || true
+              echo ""
+
+              python scripts/preprocess_sks_lpis_spatial.py \
+                --sks-dir /data/sks \
+                --lpis-dir /data/lpis \
+                --grid-m 100000 \
+                --row-group-size 10000
+
+              echo ""
+              echo "Outputs:"
+              ls -lh /data/sks/*_spatial.parquet /data/lpis/*_spatial.parquet 2>/dev/null || true
+
+              echo ""
+              echo "=== Done: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "64Gi"
+            limits:
+              cpu: "4"
+              memory: "64Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

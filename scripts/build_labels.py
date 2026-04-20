@@ -57,62 +57,97 @@ def _compute_nmd_area_map(nmd_label: np.ndarray, pixel_ha: float = 0.01) -> np.n
     return area_map
 
 
-# Lazy-loaded shared data (loaded once, reused across threads)
-_lpis_gdfs: dict = {}  # year → GeoDataFrame
-_sks_utforda = None
-_sks_anmalda = None
+# Shared state — function handles only. Data is queried on-demand via
+# SpatialParquet bbox-filtered reads; we never hold the full files in
+# memory. Each tile pulls only the polygons whose bbox intersects it.
 _rasterize_parcels = None
 _rasterize_sks = None
 _compute_harvest_probability = None
 
+# SpatialParquet handles (SKS + per-year LPIS). Populated on first use.
+_sks_utforda_sp = None    # spatial parquet for executed clearcuts
+_sks_anmalda_sp = None    # spatial parquet for announced clearcuts
+_lpis_sp: dict = {}       # year → SpatialParquet for LPIS
 
-def _load_lpis(year: int, lpis_dir: str):
-    """Load LPIS GeoDataFrame for a year (cached)."""
-    global _lpis_gdfs, _rasterize_parcels
-    if year in _lpis_gdfs:
-        return _lpis_gdfs[year]
+# Sentinels so we don't retry missing files on every query
+_SKS_UTFORDA_MISSING = object()
+_SKS_ANMALDA_MISSING = object()
 
+
+def _ensure_helpers_loaded():
+    """Lazy-import rasterize helpers once."""
+    global _rasterize_parcels, _rasterize_sks, _compute_harvest_probability
     if _rasterize_parcels is None:
-        from scripts.enrich_tiles_lpis_mask import get_lpis_gdf, rasterize_parcels
+        from scripts.enrich_tiles_lpis_mask import rasterize_parcels
         _rasterize_parcels = rasterize_parcels
-
-    from scripts.enrich_tiles_lpis_mask import get_lpis_gdf
-    gdf = get_lpis_gdf(year, lpis_dir)
-    if gdf is not None and len(gdf) > 0:
-        _lpis_gdfs[year] = gdf
-        print(f"  Loaded LPIS {year}: {len(gdf):,} parcels", flush=True)
-    return _lpis_gdfs.get(year)
+    if _rasterize_sks is None:
+        from scripts.enrich_tiles_sks import rasterize_sks, compute_harvest_probability
+        _rasterize_sks = rasterize_sks
+        _compute_harvest_probability = compute_harvest_probability
 
 
-def _load_sks(sks_dir: str):
-    """Load SKS GeoDataFrames (cached)."""
-    global _sks_utforda, _sks_anmalda, _rasterize_sks, _compute_harvest_probability
-    if _sks_utforda is not None:
-        return
+def _sks_utforda_handle(sks_dir: str):
+    """Return a SpatialParquet for utförda clearcuts, or None if missing.
 
-    from scripts.enrich_tiles_sks import rasterize_sks, compute_harvest_probability
-    _rasterize_sks = rasterize_sks
-    _compute_harvest_probability = compute_harvest_probability
+    Prefers the preprocessed ``*_spatial.parquet``; falls back to the
+    legacy full-file parquet with a warning (still works, just slow).
+    """
+    global _sks_utforda_sp
+    if _sks_utforda_sp is _SKS_UTFORDA_MISSING:
+        return None
+    if _sks_utforda_sp is not None:
+        return _sks_utforda_sp
 
-    import geopandas as gpd
+    from imint.training.spatial_parquet import SpatialParquet
+    spatial = os.path.join(sks_dir, "utforda_avverkningar_spatial.parquet")
+    fallback = os.path.join(sks_dir, "utforda_avverkningar.parquet")
+    if os.path.exists(spatial) or os.path.exists(fallback):
+        _sks_utforda_sp = SpatialParquet(
+            spatial, fallback_path=fallback if os.path.exists(fallback) else None,
+        )
+        return _sks_utforda_sp
 
-    for name in ["utforda_avverkningar_spatial.parquet", "utforda_avverkningar.parquet"]:
-        path = os.path.join(sks_dir, name)
-        if os.path.exists(path):
-            import pandas as pd
-            _sks_utforda = gpd.read_parquet(path)
-            _sks_utforda["Avvdatum"] = pd.to_datetime(
-                _sks_utforda["Avvdatum"], errors="coerce"
-            )
-            _ = _sks_utforda.sindex
-            print(f"  Loaded SKS utförda: {len(_sks_utforda):,} polygons", flush=True)
-            break
+    _sks_utforda_sp = _SKS_UTFORDA_MISSING
+    return None
 
-    path = os.path.join(sks_dir, "avverkningsanmalningar.parquet")
-    if os.path.exists(path):
-        _sks_anmalda = gpd.read_parquet(path)
-        _ = _sks_anmalda.sindex
-        print(f"  Loaded SKS anmälda: {len(_sks_anmalda):,} polygons", flush=True)
+
+def _sks_anmalda_handle(sks_dir: str):
+    """SpatialParquet for anmälda clearcuts, or None."""
+    global _sks_anmalda_sp
+    if _sks_anmalda_sp is _SKS_ANMALDA_MISSING:
+        return None
+    if _sks_anmalda_sp is not None:
+        return _sks_anmalda_sp
+
+    from imint.training.spatial_parquet import SpatialParquet
+    spatial = os.path.join(sks_dir, "avverkningsanmalningar_spatial.parquet")
+    fallback = os.path.join(sks_dir, "avverkningsanmalningar.parquet")
+    if os.path.exists(spatial) or os.path.exists(fallback):
+        _sks_anmalda_sp = SpatialParquet(
+            spatial, fallback_path=fallback if os.path.exists(fallback) else None,
+        )
+        return _sks_anmalda_sp
+
+    _sks_anmalda_sp = _SKS_ANMALDA_MISSING
+    return None
+
+
+def _lpis_handle(year: int, lpis_dir: str):
+    """SpatialParquet for LPIS year, or None if parquet missing."""
+    if year in _lpis_sp:
+        return _lpis_sp[year]
+
+    from imint.training.spatial_parquet import SpatialParquet
+    spatial = os.path.join(lpis_dir, f"jordbruksskiften_{year}_spatial.parquet")
+    fallback = os.path.join(lpis_dir, f"jordbruksskiften_{year}.parquet")
+    if os.path.exists(spatial) or os.path.exists(fallback):
+        _lpis_sp[year] = SpatialParquet(
+            spatial, fallback_path=fallback if os.path.exists(fallback) else None,
+        )
+        return _lpis_sp[year]
+
+    _lpis_sp[year] = None
+    return None
 
 
 def build_tile_label(
@@ -167,44 +202,59 @@ def build_tile_label(
         # Stored separately; unified_dataset.py merges with parcel_area_ha.
         data["nmd_area_ha"] = _compute_nmd_area_map(nmd_label)
 
-        # --- Step 2: LPIS crop mask ---
-        lpis_mask = None
-        gdf = _load_lpis(tile_year, lpis_dir)
-        if gdf is not None:
-            bbox_arr = np.array([bbox_3006["west"], bbox_3006["south"],
-                                 bbox_3006["east"], bbox_3006["north"]])
-            lpis_mask, area_map, n_parcels = _rasterize_parcels(gdf, bbox_arr)
-            data["label_mask"]     = lpis_mask   # uint16 raw SJV codes
-            data["parcel_area_ha"] = area_map    # float32 ha/pixel (for loss weighting)
-            data["n_parcels"]      = np.int32(n_parcels)
+        _ensure_helpers_loaded()
 
-        # --- Step 3: SKS harvest mask (filtered by tile year) ---
+        # --- Step 2: LPIS crop mask (bbox-filtered SpatialParquet query) ---
+        lpis_mask = None
+        lpis_sp = _lpis_handle(tile_year, lpis_dir)
+        if lpis_sp is not None:
+            gdf = lpis_sp.query(bbox_3006)
+            if len(gdf) > 0:
+                bbox_arr = np.array([bbox_3006["west"], bbox_3006["south"],
+                                     bbox_3006["east"], bbox_3006["north"]])
+                lpis_mask, area_map, n_parcels = _rasterize_parcels(gdf, bbox_arr)
+                data["label_mask"]     = lpis_mask   # uint16 raw SJV codes
+                data["parcel_area_ha"] = area_map    # float32 ha/pixel
+                data["n_parcels"]      = np.int32(n_parcels)
+
+        # --- Step 3: SKS harvest mask (filtered by tile year + tile bbox) ---
         # Hygge = avverkat inom 5 år före tile-året
         harvest_mask = None
-        _load_sks(sks_dir)
         bbox_tuple = (bbox_3006["west"], bbox_3006["south"],
                       bbox_3006["east"], bbox_3006["north"])
-        if _sks_utforda is not None:
+
+        sks_utforda_sp = _sks_utforda_handle(sks_dir)
+        if sks_utforda_sp is not None:
             import pandas as pd
-            min_date = pd.Timestamp(f"{tile_year - 5}-01-01")
-            max_date = pd.Timestamp(f"{tile_year}-12-31")
-            sks_filtered = _sks_utforda[
-                (_sks_utforda["Avvdatum"] >= min_date) &
-                (_sks_utforda["Avvdatum"] <= max_date)
-            ]
-            if len(sks_filtered) > 0:
-                harvest_mask, n_harvest = _rasterize_sks(sks_filtered, bbox_tuple)
-                data["harvest_mask"] = harvest_mask
-                data["n_harvest_polygons"] = np.int32(n_harvest)
-
-        if _sks_anmalda is not None:
-            mature_mask, n_mature = _rasterize_sks(_sks_anmalda, bbox_tuple)
-            data["n_mature_polygons"] = np.int32(n_mature)
-
-            if _compute_harvest_probability is not None and harvest_mask is not None:
-                data["harvest_probability"] = _compute_harvest_probability(
-                    harvest_mask, mature_mask,
+            sks_utforda_local = sks_utforda_sp.query(bbox_3006)
+            if len(sks_utforda_local) > 0:
+                # Parse Avvdatum lazily — only for polygons that intersect this tile
+                sks_utforda_local = sks_utforda_local.copy()
+                sks_utforda_local["Avvdatum"] = pd.to_datetime(
+                    sks_utforda_local["Avvdatum"], errors="coerce",
                 )
+                min_date = pd.Timestamp(f"{tile_year - 5}-01-01")
+                max_date = pd.Timestamp(f"{tile_year}-12-31")
+                sks_filtered = sks_utforda_local[
+                    (sks_utforda_local["Avvdatum"] >= min_date) &
+                    (sks_utforda_local["Avvdatum"] <= max_date)
+                ]
+                if len(sks_filtered) > 0:
+                    harvest_mask, n_harvest = _rasterize_sks(sks_filtered, bbox_tuple)
+                    data["harvest_mask"] = harvest_mask
+                    data["n_harvest_polygons"] = np.int32(n_harvest)
+
+        sks_anmalda_sp = _sks_anmalda_handle(sks_dir)
+        if sks_anmalda_sp is not None:
+            sks_anmalda_local = sks_anmalda_sp.query(bbox_3006)
+            if len(sks_anmalda_local) > 0:
+                mature_mask, n_mature = _rasterize_sks(sks_anmalda_local, bbox_tuple)
+                data["n_mature_polygons"] = np.int32(n_mature)
+
+                if _compute_harvest_probability is not None and harvest_mask is not None:
+                    data["harvest_probability"] = _compute_harvest_probability(
+                        harvest_mask, mature_mask,
+                    )
 
         # --- Step 4: Merge all → unified 20-class ---
         unified = merge_all(nmd_label, lpis_mask, harvest_mask)
@@ -245,9 +295,13 @@ def main():
     print(f"  Schema: {len(UNIFIED_CLASS_NAMES)} classes")
     print()
 
-    # LPIS and SKS are lazy-loaded on demand per tile (see _load_lpis / _load_sks).
+    # LPIS and SKS are read on-demand per tile via SpatialParquet — no
+    # startup preload. Each tile query pulls only the row groups that
+    # overlap its bbox.
     # Pre-loading all years at once would exceed memory on small pods.
-    _load_sks(args.sks_dir)
+    # Pre-open SpatialParquet handles once so we don't re-open per tile
+    _sks_utforda_handle(args.sks_dir)
+    _sks_anmalda_handle(args.sks_dir)
 
     stats = {"ok": 0, "failed": 0}
     t0 = time.time()

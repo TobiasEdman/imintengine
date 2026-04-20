@@ -57,6 +57,9 @@ spec:
               echo "  SKS:        $(ls /data/sks/*.parquet 2>/dev/null | wc -l) parquets"
               echo ""
 
+              # SpatialParquet readers only load row groups that overlap
+              # each tile bbox, so memory is ~MB/worker instead of ~GB/worker.
+              # 32 workers now safely fits in 24 Gi.
               python scripts/build_labels.py \
                 --data-dir  /data/unified_v2_512 \
                 --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
