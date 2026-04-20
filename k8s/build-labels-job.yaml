@@ -25,7 +25,7 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 5400    # 90 min safety cap (expected ~15 min)
+  activeDeadlineSeconds: 14400   # 4 h safety cap (8261 tiles @ ~3000/h ≈ 2.8 h)
   template:
     spec:
       restartPolicy: Never
