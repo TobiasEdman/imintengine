@@ -212,7 +212,9 @@ def build_tile_label(
             if len(gdf) > 0:
                 bbox_arr = np.array([bbox_3006["west"], bbox_3006["south"],
                                      bbox_3006["east"], bbox_3006["north"]])
-                lpis_mask, area_map, n_parcels = _rasterize_parcels(gdf, bbox_arr)
+                lpis_mask, area_map, n_parcels = _rasterize_parcels(
+                    gdf, bbox_arr, tile_size=tile_cfg.size_px,
+                )
                 data["label_mask"]     = lpis_mask   # uint16 raw SJV codes
                 data["parcel_area_ha"] = area_map    # float32 ha/pixel
                 data["n_parcels"]      = np.int32(n_parcels)
@@ -240,7 +242,9 @@ def build_tile_label(
                     (sks_utforda_local["Avvdatum"] <= max_date)
                 ]
                 if len(sks_filtered) > 0:
-                    harvest_mask, n_harvest = _rasterize_sks(sks_filtered, bbox_tuple)
+                    harvest_mask, n_harvest = _rasterize_sks(
+                        sks_filtered, bbox_tuple, tile_size=tile_cfg.size_px,
+                    )
                     data["harvest_mask"] = harvest_mask
                     data["n_harvest_polygons"] = np.int32(n_harvest)
 
@@ -248,7 +252,9 @@ def build_tile_label(
         if sks_anmalda_sp is not None:
             sks_anmalda_local = sks_anmalda_sp.query(bbox_3006)
             if len(sks_anmalda_local) > 0:
-                mature_mask, n_mature = _rasterize_sks(sks_anmalda_local, bbox_tuple)
+                mature_mask, n_mature = _rasterize_sks(
+                    sks_anmalda_local, bbox_tuple, tile_size=tile_cfg.size_px,
+                )
                 data["n_mature_polygons"] = np.int32(n_mature)
 
                 if _compute_harvest_probability is not None and harvest_mask is not None:
