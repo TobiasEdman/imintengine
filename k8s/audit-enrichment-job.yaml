@@ -1,0 +1,57 @@
+---
+# Job: audit every tile for partial/corrupt enrichment writes that
+# happened while the PVC was at 100% capacity. Resets the bad
+# sentinels so subsequent --skip-existing runs redo them cleanly.
+#
+# Runtime: ~8261 tiles × ~30ms/tile audit = ~4 min scan, plus fix
+# pass that rewrites bad tiles (usually small fraction).
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-enrichment
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: auditor
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Enrichment integrity audit ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              python scripts/audit_enrichment_integrity.py \
+                --data-dir /data/unified_v2_512 \
+                --fix
+
+              echo ""
+              echo "=== Done ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
