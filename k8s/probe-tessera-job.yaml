@@ -1,0 +1,67 @@
+---
+# Job: probe TESSERA embedding coverage for 100 random Swedish tiles
+# across years 2018-2024.
+#
+# TESSERA (ucam-eo) publishes pre-computed 128-D per-pixel S1+S2 annual
+# embeddings via the geotessera pip library. Advertised coverage is
+# 2017-2025 but actual availability per region varies. This probe
+# answers the go/no-go question before we build an enrichment script.
+#
+# Runtime: ~100 tiles × 5 years × ~2 s/query = ~15 min if HF responsive.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: probe-tessera-coverage
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 7200
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: probe
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== TESSERA coverage probe ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio pyproj geotessera
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              python scripts/probe_tessera_coverage.py \
+                --tile-locations /data/tile_locations_full.json \
+                --sample-size 100 \
+                --years 2018 2019 2022 2023 2024 \
+                --output /data/unified_v2_512/.tessera_coverage.json
+
+              echo ""
+              echo "Results written to /data/unified_v2_512/.tessera_coverage.json"
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
