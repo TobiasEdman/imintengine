@@ -55,13 +55,17 @@ spec:
               # into the tile .npz.
               mkdir -p /data/tessera_cache/embeddings /data/tessera_cache/registry
 
+              # --purge-cache-after-each caused a race: worker A deleted
+              # blocks mid-download by worker B. We now have 422 GB free
+              # on the expanded PVC, so letting the cache grow is fine
+              # (~500 GB max). The cache accelerates neighboring tiles
+              # too (adjacent 512 px tiles often share a TESSERA block).
               python scripts/enrich_tiles_tessera.py \
                 --data-dir /data/unified_v2_512 \
                 --embeddings-dir /data/tessera_cache/embeddings \
                 --registry-cache-dir /data/tessera_cache/registry \
                 --workers 2 \
-                --skip-existing \
-                --purge-cache-after-each
+                --skip-existing
 
           env:
             - name: PYTHONUNBUFFERED
