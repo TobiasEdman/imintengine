@@ -961,7 +961,19 @@ def build_segmentation_from_spec(
             dropout=dropout,
         )
 
+    if spec.family == "tessera":
+        # TESSERA has no encoder to call — embeddings are pre-computed
+        # and baked into tile .npz. Head consumes (B, 128, H, W) directly.
+        from imint.fm.tessera_seg import TesseraSegmentationModel
+        return TesseraSegmentationModel(
+            encoder=encoder,
+            num_classes=num_classes,
+            embed_dim=spec.embed_dim,
+            n_aux_channels=n_aux_channels,
+            dropout=dropout,
+        )
+
     raise NotImplementedError(
-        f"Segmentation wrapper for family={spec.family!r} not implemented yet. "
-        f"Prithvi + TerraMind + Clay + CROMA available. TESSERA lands in Fas 5b."
+        f"Segmentation wrapper for family={spec.family!r} not implemented. "
+        f"Available: prithvi, terramind, clay, croma, tessera."
     )

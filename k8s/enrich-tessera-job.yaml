@@ -1,0 +1,73 @@
+---
+# Job: bake TESSERA 128-D embeddings into every tile in
+# /data/unified_v2_512/. Uses the geotessera pip library to download
+# pre-computed annual Sentinel-1/2 embeddings from ucam-eo, then
+# reprojects + crops to our EPSG:3006 512-px grid.
+#
+# Why TESSERA: different signal from Prithvi/TerraMind/Clay/CROMA.
+# TESSERA is a per-pixel temporal encoder pretrained on full-year
+# time series — it captures phenology in a single embedding that
+# our other FMs can't see. Cheap ensemble diversity.
+#
+# Coverage: Sweden 100% for 2018-2024 (verified by probe job).
+# Year selection: tile_year clamped to nearest available TESSERA year.
+#
+# Size: 128 × 512 × 512 × fp16 = 67 MB/tile × 8261 = ~553 GB
+# uncompressed on disk (CephFS). After .npz compression: ~300 GB.
+#
+# Runtime: dominated by HF CDN bandwidth. Each TESSERA block is ~600 MB
+# to download; ~1-4 blocks per tile → 600 MB–2.4 GB per tile at ~10 MB/s
+# sustained from HF = 1-4 min/tile. With 2 workers → ~10-20 h total.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-tessera
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 172800   # 48 h safety cap
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: enricher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== TESSERA Enrichment ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy scipy rasterio pyproj pyyaml geotessera
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              python scripts/enrich_tiles_tessera.py \
+                --data-dir /data/unified_v2_512 \
+                --workers 2 \
+                --skip-existing
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

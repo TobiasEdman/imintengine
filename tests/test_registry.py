@@ -35,6 +35,11 @@ class TestRegistrySpecs:
     @pytest.mark.parametrize("name", sorted(MODEL_CONFIGS.keys()))
     def test_feature_indices_valid(self, name):
         spec = MODEL_CONFIGS[name]
+        # TESSERA has no per-block features (pre-computed embeddings);
+        # its feature_indices is a placeholder single-element tuple.
+        if spec.family == "tessera":
+            assert len(spec.feature_indices) >= 1
+            return
         assert len(spec.feature_indices) == 4, \
             f"{name}: expected 4 feature indices for UPerNet"
         assert max(spec.feature_indices) < spec.depth, \
@@ -44,9 +49,12 @@ class TestRegistrySpecs:
     @pytest.mark.parametrize("name", sorted(MODEL_CONFIGS.keys()))
     def test_patch_size_supported(self, name):
         spec = MODEL_CONFIGS[name]
-        # Known patch sizes across our registered FMs: 8 (Clay/CROMA),
-        # 14 (Prithvi-600M), 16 (Prithvi-300M/TerraMind/THOR-default).
-        assert spec.patch_size in (8, 14, 16), \
+        # Known patch sizes across our registered FMs:
+        #   1: TESSERA (per-pixel embeddings, no ViT patching)
+        #   8: Clay, CROMA
+        #   14: Prithvi-600M
+        #   16: Prithvi-300M, TerraMind, THOR (default)
+        assert spec.patch_size in (1, 8, 14, 16), \
             f"{name}: unexpected patch_size {spec.patch_size}"
 
     @pytest.mark.parametrize("name", sorted(MODEL_CONFIGS.keys()))

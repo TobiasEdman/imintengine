@@ -45,7 +45,7 @@ class ModelSpec:
     """
 
     name: str
-    family: Literal["prithvi", "clay", "terramind", "croma", "thor"]
+    family: Literal["prithvi", "clay", "terramind", "croma", "thor", "tessera"]
     description: str
 
     embed_dim: int
@@ -100,6 +100,11 @@ def _load_croma(**kwargs):
 def _load_thor(**kwargs):
     from imint.fm.loaders.thor import load_thor
     return load_thor(**kwargs)
+
+
+def _load_tessera(**kwargs):
+    from imint.fm.loaders.tessera import load_tessera
+    return load_tessera(**kwargs)
 
 
 # ── Registry ─────────────────────────────────────────────────────────────────
@@ -220,6 +225,29 @@ MODEL_CONFIGS: dict[str, ModelSpec] = {
         loader_fn=_load_croma,
         loader_kwargs={"variant": "base", "modality": "both"},
         normalizer_family="croma",
+    ),
+    "tessera_v1": ModelSpec(
+        name="tessera_v1",
+        family="tessera",
+        description=(
+            "TESSERA (ucam-eo, arXiv:2506.20380): pre-computed 128-D "
+            "annual S1+S2 embeddings at 10 m GSD. No encoder runs at "
+            "our train/inference time — embeddings are baked into "
+            "each tile's .npz by scripts/enrich_tiles_tessera.py."
+        ),
+        # These 'architecture' values are nominal — TESSERA's actual
+        # encoder is a per-pixel temporal transformer run once on the
+        # ucam-eo HPC cluster. What we see is the output embedding.
+        embed_dim=128,
+        depth=1,                 # no per-block features to hook
+        feature_indices=(0,),
+        patch_size=1,            # native per-pixel; no ViT patching
+        input_bands={"tessera": "tessera"},
+        supports_temporal=False, # embeddings aggregate one year → single frame
+        native_num_frames=(1,),
+        supports_coords=False,
+        loader_fn=_load_tessera,
+        normalizer_family="tessera",
     ),
     "thor_v1_base": ModelSpec(
         name="thor_v1_base",
