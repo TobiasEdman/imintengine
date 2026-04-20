@@ -45,17 +45,10 @@ spec:
                 --fetch-sources cdse \
                 --cloud-max 40
 
-              echo "=== Step 2: Build unified labels ==="
-              # build_labels now derives tile size per-tile from the raster
-              # shape or the persisted tile_size_px key. No env var or flag.
-              python scripts/build_labels.py \
-                --data-dir /data/unified_v2_512 \
-                --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
-                --lpis-dir /data/lpis \
-                --sks-dir /data/sks \
-                --workers 4
+              # Label build runs in a separate k8s job (build-labels-job.yaml)
+              # with its own memory profile. This job is fetch-only.
 
-              echo "=== All done ==="
+              echo "=== Fetch done ==="
               echo "512px tiles: $(ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l)"
 
           env:

@@ -21,7 +21,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: build-labels-v2
+  name: build-labels-512
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
@@ -51,14 +51,14 @@ spec:
 
               echo ""
               echo "Data inventory:"
-              echo "  Tiles:      $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)"
+              echo "  Tiles:      $(ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l)"
               echo "  NMD raster: $(ls -lh /data/nmd/*.tif 2>/dev/null | head -1)"
               echo "  LPIS:       $(ls /data/lpis/*.parquet 2>/dev/null | wc -l) parquets"
               echo "  SKS:        $(ls /data/sks/*.parquet 2>/dev/null | wc -l) parquets"
               echo ""
 
               python scripts/build_labels.py \
-                --data-dir  /data/unified_v2 \
+                --data-dir  /data/unified_v2_512 \
                 --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
                 --lpis-dir  /data/lpis \
                 --sks-dir   /data/sks \
@@ -66,7 +66,7 @@ spec:
 
               echo ""
               echo "=== QC ==="
-              python scripts/postprocess_qc.py --data-dir /data/unified_v2 || true
+              python scripts/postprocess_qc.py --data-dir /data/unified_v2_512 || true
 
               echo ""
               echo "=== Done: $(date) ==="
