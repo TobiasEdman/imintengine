@@ -150,27 +150,49 @@ MODEL_CONFIGS: dict[str, ModelSpec] = {
     "terramind_v1_base": ModelSpec(
         name="terramind_v1_base",
         family="terramind",
-        description="TerraMind v1.0-B (multi-modal S2+S1+DEM, IBM/ESA)",
+        description=(
+            "TerraMind v1.0-base (any-to-any multi-modal S2+S1 FM, "
+            "IBM/ESA, arXiv:2504.11171). ViT-Base, 196 tokens × 768 dim "
+            "output at 224×224/patch=16. Consumes dict inputs."
+        ),
         embed_dim=768,
         depth=12,
         feature_indices=(2, 5, 8, 11),
         patch_size=16,
-        input_bands={"s2": "spectral", "s1": "s1_vv_vh", "dem": "dem"},
+        # Modality keys use TerraMind's native naming to minimize surprise
+        # when reading dataset wiring; our unified_dataset emits the same
+        # tensors as Prithvi S2 + our S1 enrichment.
+        input_bands={"S2L2A": "spectral", "S1GRD": "s1_vv_vh"},
         supports_temporal=False,
         native_num_frames=(1,),
         supports_coords=False,
         loader_fn=_load_terramind,
+        loader_kwargs={
+            "variant": "terramind_v1_base",
+            "modalities": ["S2L2A", "S1GRD"],
+            "bands": {
+                "S2L2A": ["BLUE", "GREEN", "RED", "NIR_NARROW",
+                          "SWIR_1", "SWIR_2"],
+            },
+        },
         normalizer_family="terramind",
     ),
     "clay_v1_5": ModelSpec(
         name="clay_v1_5",
         family="clay",
-        description="Clay v1.5 Foundation Model (7-band S2, 8x8 patches)",
+        description=(
+            "Clay v1.5 MAE ViT-L (10-band S2L2A, patch=8, 311M encoder). "
+            "Requires rededge enrichment (B05/B06/B07)."
+        ),
         embed_dim=1024,
         depth=24,
         feature_indices=(5, 11, 17, 23),
         patch_size=8,
-        input_bands={"s2_clay": "s2_clay", "s1": "s1_vv_vh"},
+        # Clay consumes a stacked tensor built by
+        # imint.fm.loaders.clay.build_s2_clay_tensor from
+        # spectral + b08 + rededge. The dataset emits it under the
+        # "s2_clay" key when a Clay model is requested.
+        input_bands={"s2_clay": "s2_clay"},
         supports_temporal=False,
         native_num_frames=(1,),
         supports_coords=True,

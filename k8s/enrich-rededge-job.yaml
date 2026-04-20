@@ -1,0 +1,78 @@
+---
+# Job: add S2 red-edge bands B05 (705 nm), B06 (740 nm), B07 (783 nm)
+# to every tile in /data/unified_v2_512/.
+#
+# Why: Clay v1.5 expects 10 Sentinel-2 bands natively (blue, green, red,
+# rededge1-3, nir, nir08, swir16, swir22). We already have 7 on disk
+# (spectral + B08). Missing the red-edge trio is costly for crops —
+# these bands were literally designed for vegetation chlorophyll.
+#
+# Fetches all 3 bands in ONE evalscript per call → 3× API quota savings
+# vs. per-band. Idempotent via has_rededge sentinel (same pattern as
+# enrich_tiles_s1 / enrich_tiles_b08).
+#
+# Runtime estimate: 8261 tiles × 4 frames × 1 call/frame with 4 workers,
+# CDSE-only, ~720/h at peak → ~12 h. Lower if CDSE has spare capacity.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-rededge
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 86400    # 24h safety cap
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: enricher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Red-Edge (B05/B06/B07) Enrichment ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              python scripts/enrich_tiles_rededge.py \
+                --data-dir /data/unified_v2_512 \
+                --workers 4 \
+                --skip-existing
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
