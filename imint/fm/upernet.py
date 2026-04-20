@@ -918,7 +918,22 @@ def build_segmentation_from_spec(
             enable_multilevel_aux=enable_multilevel_aux,
         )
 
+    if spec.family == "terramind":
+        # TerraMind returns a token sequence, not per-block spatial
+        # features. Use a linear-probe-style head for the first ensemble
+        # member (see imint/fm/terramind_seg.py for rationale).
+        from imint.fm.terramind_seg import TerraMindSegmentationModel
+        return TerraMindSegmentationModel(
+            encoder=encoder,
+            num_classes=num_classes,
+            img_size=img_size,
+            embed_dim=spec.embed_dim,
+            patch_size=spec.patch_size,
+            n_aux_channels=n_aux_channels,
+            dropout=dropout,
+        )
+
     raise NotImplementedError(
         f"Segmentation wrapper for family={spec.family!r} not implemented yet. "
-        f"Prithvi is available. TerraMind/Clay/CROMA land in Fas 3-5."
+        f"Prithvi + TerraMind available. Clay/CROMA/THOR/TESSERA land in Fas 4-5c."
     )
