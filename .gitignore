@@ -16,6 +16,10 @@ data/
 *.tar.gz
 *.npz
 
+# Exception: track small pre-trained model weights needed for
+# out-of-the-box notebook execution. pib-ml-grazing is 540 KB, MIT.
+!imint/fm/pib_grazing/**/*.pth
+
 # Baselines (large numpy files)
 **/baselines/
 
