@@ -82,15 +82,30 @@ spec:
               pip install --no-cache-dir -e . || \
                 pip install --quiet --no-cache-dir -r requirements.txt
 
-              # Per-family deps. Best-effort — fail fast if the requested
-              # backbone needs a missing extra.
+              # Per-family deps. Fail fast if the requested backbone
+              # needs a missing extra — quieter to crash here than to
+              # burn H100 minutes discovering it later.
               case "${BACKBONE_NAME}" in
                 terramind_*|clay_*|thor_*)
                   pip install --quiet --no-cache-dir terratorch
                   ;;
               esac
+              if [ "${BACKBONE_NAME}" = "clay_v1_5" ]; then
+                pip install --quiet --no-cache-dir \
+                  "git+https://github.com/Clay-foundation/model.git"
+              fi
+              if [ "${BACKBONE_NAME}" = "croma_base" ]; then
+                # CROMA — source-only; clone to /workspace/CROMA and
+                # expose via PYTHONPATH.
+                if [ ! -d /workspace/CROMA ]; then
+                  git clone --depth 1 https://github.com/antofuller/CROMA \
+                    /workspace/CROMA
+                fi
+                export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}
+              fi
               if [ "${BACKBONE_NAME}" = "thor_v1_base" ]; then
-                pip install --quiet --no-cache-dir thor-terratorch-ext
+                pip install --quiet --no-cache-dir \
+                  "git+https://github.com/FM4CS/THOR.git#subdirectory=terratorch_ext"
               fi
 
               cd /data

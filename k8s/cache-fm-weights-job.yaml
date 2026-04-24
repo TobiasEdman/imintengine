@@ -60,8 +60,25 @@ spec:
               echo "Installing family-specific deps..."
               pip install --quiet --no-cache-dir terratorch || \
                 echo "  WARN: terratorch install failed (TerraMind/Clay/THOR will skip)"
-              pip install --quiet --no-cache-dir thor-terratorch-ext || \
-                echo "  WARN: thor-terratorch-ext install failed (THOR will skip)"
+
+              # Clay v1.5 — needs the Clay-foundation/model package.
+              pip install --quiet --no-cache-dir \
+                  "git+https://github.com/Clay-foundation/model.git" || \
+                echo "  WARN: Clay-foundation/model install failed (Clay will skip)"
+
+              # CROMA — not a pip package; clone to /workspace/CROMA and
+              # expose via PYTHONPATH for the heredoc below.
+              if [ ! -d /workspace/CROMA ]; then
+                git clone --depth 1 https://github.com/antofuller/CROMA \
+                  /workspace/CROMA 2>/dev/null || \
+                  echo "  WARN: CROMA clone failed (CROMA will skip)"
+              fi
+              export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}
+
+              # THOR — terratorch-ext lives in the THOR repo subdir.
+              pip install --quiet --no-cache-dir \
+                  "git+https://github.com/FM4CS/THOR.git#subdirectory=terratorch_ext" || \
+                echo "  WARN: THOR terratorch_ext install failed (THOR will skip)"
 
               cd /data
               python - <<'PY'
