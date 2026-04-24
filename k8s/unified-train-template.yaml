@@ -1,0 +1,164 @@
+# Parametric unified training job template.
+#
+# Replaces the per-run yamls (unified-train-v5a, v6a, ...). Substitute
+# placeholders with envsubst at apply time:
+#
+#   RUN_ID=v7-clay BACKBONE_NAME=clay_v1_5 \
+#     envsubst '$RUN_ID $BACKBONE_NAME $IMG_SIZE $BATCH_SIZE $EPOCHS' \
+#     < k8s/unified-train-template.yaml | kubectl apply -f -
+#
+# Required env:
+#   RUN_ID         — kebab-case suffix; job is named `unified-train-${RUN_ID}`,
+#                    checkpoints land in `/checkpoints/unified_${RUN_ID//-/_}/`
+#   BACKBONE_NAME  — registry key from imint.fm.registry.MODEL_CONFIGS
+#                    (prithvi_300m | prithvi_600m | terramind_v1_base |
+#                     clay_v1_5 | croma_base | thor_v1_base)
+#
+# Optional env (defaults match the v6a baseline):
+#   IMG_SIZE       — 256
+#   BATCH_SIZE     — 4
+#   EPOCHS         — 10
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unified-train-${RUN_ID}
+  namespace: prithvi-training-default
+  labels:
+    app: unified-training
+    run-id: "${RUN_ID}"
+    backbone: "${BACKBONE_NAME}"
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 43200  # 12 h
+  template:
+    metadata:
+      labels:
+        app: unified-training
+        run-id: "${RUN_ID}"
+        backbone: "${BACKBONE_NAME}"
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: trainer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              # Reuse PVC-backed weights cache from cache-fm-weights job.
+              export HF_HOME=/data/model_cache/hf
+              export HUGGINGFACE_HUB_CACHE=/data/model_cache/hf
+              export TORCH_HOME=/data/model_cache/torch
+
+              echo "=== unified-train-${RUN_ID} (backbone=${BACKBONE_NAME}) ==="
+              TILE_COUNT=$(ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l)
+              echo "Unified tiles: $TILE_COUNT"
+              if [ "$TILE_COUNT" -lt 100 ]; then
+                echo "ERROR: Not enough tiles in /data/unified_v2_512/"
+                exit 1
+              fi
+
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm numpy scipy scikit-learn huggingface_hub safetensors
+
+              CKPT_DIR=/checkpoints/unified_${RUN_ID//-/_}
+              mkdir -p "$CKPT_DIR"
+              rm -f "$CKPT_DIR"/*.pt.tmp 2>/dev/null || true
+
+              echo "Cloning ImintEngine..."
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . || \
+                pip install --quiet --no-cache-dir -r requirements.txt
+
+              # Per-family deps. Best-effort — fail fast if the requested
+              # backbone needs a missing extra.
+              case "${BACKBONE_NAME}" in
+                terramind_*|clay_*|thor_*)
+                  pip install --quiet --no-cache-dir terratorch
+                  ;;
+              esac
+              if [ "${BACKBONE_NAME}" = "thor_v1_base" ]; then
+                pip install --quiet --no-cache-dir thor-terratorch-ext
+              fi
+
+              cd /data
+              echo "Starting training: ${BACKBONE_NAME} → $CKPT_DIR"
+              python /workspace/imintengine/scripts/train_unified.py \
+                --backbone-name ${BACKBONE_NAME} \
+                --data-dirs /data/unified_v2_512 \
+                --checkpoint-dir "$CKPT_DIR" \
+                --num-classes 23 \
+                --enable-multitemporal \
+                --num-temporal-frames 4 \
+                --epochs ${EPOCHS:-10} \
+                --batch-size ${BATCH_SIZE:-4} \
+                --lr 1e-4 \
+                --weight-decay 0.35 \
+                --unfreeze-layers 6 \
+                --backbone-lr-factor 0.1 \
+                --loss-type focal_dice \
+                --focal-gamma 2.0 \
+                --patch-size ${IMG_SIZE:-256} \
+                --img-size ${IMG_SIZE:-256} \
+                --weighting-method sqrt \
+                --label-smoothing 0.05 \
+                --lovasz-weight 0.3 \
+                --patience 20 \
+                --num-workers 32 \
+                --device cuda
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: RUN_ID
+              value: "${RUN_ID}"
+            - name: BACKBONE_NAME
+              value: "${BACKBONE_NAME}"
+            - name: IMG_SIZE
+              value: "${IMG_SIZE:-256}"
+            - name: BATCH_SIZE
+              value: "${BATCH_SIZE:-4}"
+            - name: EPOCHS
+              value: "${EPOCHS:-10}"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "48"
+              memory: "192Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "48"
+              memory: "192Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi

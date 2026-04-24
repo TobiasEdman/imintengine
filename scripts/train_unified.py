@@ -89,6 +89,14 @@ def main():
     parser.add_argument("--num-workers", type=int, default=_defaults.num_workers)
 
     # Model
+    parser.add_argument(
+        "--backbone-name", type=str, default=None,
+        help="Registry key from imint.fm.registry.MODEL_CONFIGS "
+             "(e.g. prithvi_300m, prithvi_600m, terramind_v1_base, "
+             "clay_v1_5, croma_base, thor_v1_base). When omitted, "
+             "trainer falls back to the legacy `backbone` field "
+             "(default: prithvi_eo_v2_300m_tl).",
+    )
     parser.add_argument("--decoder-channels", type=int, default=_defaults.decoder_channels)
     parser.add_argument("--dropout", type=float, default=_defaults.dropout)
     parser.add_argument("--device", type=str, default=_defaults.device,
@@ -213,6 +221,7 @@ def main():
     all_disabled = args.disable_all_aux
     config = TrainingConfig(
         data_dir=data_dirs[0],  # Primary dir for TrainingConfig compatibility
+        backbone_name=args.backbone_name,
         num_classes=args.num_classes,
         epochs=args.epochs,
         batch_size=args.batch_size,

@@ -1,0 +1,149 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cache-fm-weights
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: weights-cache
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 7200  # 2 h max
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: cache
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              # Land all HF downloads on PVC so subsequent training pods
+              # can mount the same dir and skip re-downloading.
+              export HF_HOME=/data/model_cache/hf
+              export HUGGINGFACE_HUB_CACHE=/data/model_cache/hf
+              export TORCH_HOME=/data/model_cache/torch
+              mkdir -p "$HF_HOME" "$TORCH_HOME" /data/model_cache/legacy
+
+              echo "=== FM weights cache prep ==="
+              echo "  HF_HOME:    $HF_HOME"
+              echo "  TORCH_HOME: $TORCH_HOME"
+
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              # CPU torch is fine — we only need it to instantiate the
+              # backbones in eval mode to force weight downloads. No GPU
+              # math runs here.
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cpu
+              pip install --quiet --no-cache-dir \
+                timm numpy huggingface_hub safetensors
+
+              echo "Cloning ImintEngine..."
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || \
+                pip install --quiet --no-cache-dir -r requirements.txt
+
+              # ── Per-family deps (best-effort; failures are reported,
+              # not fatal — we want partial caches to still land) ────
+              echo ""
+              echo "Installing family-specific deps..."
+              pip install --quiet --no-cache-dir terratorch || \
+                echo "  WARN: terratorch install failed (TerraMind/Clay/THOR will skip)"
+              pip install --quiet --no-cache-dir thor-terratorch-ext || \
+                echo "  WARN: thor-terratorch-ext install failed (THOR will skip)"
+
+              cd /data
+              python - <<'PY'
+              import os, sys, traceback
+              from importlib import import_module
+
+              os.environ.setdefault("HF_HOME", "/data/model_cache/hf")
+              os.environ.setdefault("HUGGINGFACE_HUB_CACHE", "/data/model_cache/hf")
+              os.environ.setdefault("TORCH_HOME", "/data/model_cache/torch")
+
+              from imint.fm.registry import MODEL_CONFIGS, build_backbone
+
+              # Skip tessera (embeddings are baked into tile npz, no encoder).
+              # Order: cheap → expensive.
+              ORDER = [
+                  "prithvi_300m",
+                  "prithvi_600m",
+                  "terramind_v1_base",
+                  "clay_v1_5",
+                  "croma_base",
+                  "thor_v1_base",
+              ]
+
+              results = {}
+              for name in ORDER:
+                  if name not in MODEL_CONFIGS:
+                      results[name] = "missing-from-registry"
+                      continue
+                  print(f"\n=== {name} ===", flush=True)
+                  try:
+                      model, spec = build_backbone(
+                          name, num_frames=1, img_size=224, pretrained=True,
+                      )
+                      n_params = sum(p.numel() for p in model.parameters())
+                      results[name] = f"ok ({n_params/1e6:.1f}M params)"
+                      del model
+                  except Exception as e:
+                      results[name] = f"FAIL: {type(e).__name__}: {e}"
+                      traceback.print_exc()
+
+              print("\n=== Summary ===")
+              for name in ORDER:
+                  print(f"  {name:24s} {results[name]}")
+
+              # Mirror the legacy Prithvi 300M location so existing training
+              # manifests that symlink from /data/model_cache/Prithvi_*.pt
+              # keep working without changes.
+              import shutil, glob
+              for src in glob.glob(
+                  "/data/model_cache/hf/hub/models--ibm-nasa-geospatial--Prithvi-EO-2.0-*/snapshots/*/Prithvi_EO_V2_*.pt"
+              ):
+                  dst = f"/data/model_cache/{os.path.basename(src)}"
+                  if not os.path.exists(dst):
+                      shutil.copy2(src, dst)
+                      print(f"  Mirrored {src} → {dst}")
+
+              n_fail = sum(1 for v in results.values() if v.startswith("FAIL"))
+              sys.exit(1 if n_fail else 0)
+              PY
+
+              echo ""
+              echo "=== Cache contents ==="
+              du -sh /data/model_cache/* 2>/dev/null || true
+              echo "=== Done ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
