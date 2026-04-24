@@ -16,9 +16,13 @@
 #
 # Optional env (defaults match the v6a baseline):
 #   IMG_SIZE       — default 256; set before envsubst to override
-#   BATCH_SIZE     — default 32  (H100-optimized; sqrt-scaled lr ⇒ 3e-4)
-#   LR             — default 3e-4
+#   BATCH_SIZE     — default 16  (H100-safe; sqrt(16/4)·1e-4 ⇒ lr 2e-4)
+#   LR             — default 2e-4
 #   EPOCHS         — default 10
+#
+# bs=32/lr=3e-4 was tried as v7 and caused rare-class collapse (bete,
+# trindsäd, råg, majs all went to 0.0 IoU). Scaled back to bs=16/lr=2e-4
+# for v7b. See docs/training/hyperparameters.md.
 #
 # All optional vars MUST be set in the shell calling envsubst. Bash-style
 # defaults (${VAR:-default}) don't work here because envsubst does not

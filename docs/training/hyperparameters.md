@@ -81,22 +81,49 @@ otherwise drifts fast from pretrained features.
 **Do not lower** without retesting for mode collapse on a rare class
 (potatis, bebyggelse are the canonical canaries).
 
-## v6a → v7 optimizer changes
+## v6a → v7 → v7b optimizer changes
 
 The v6a baseline (`unified-train-v6a`, 62 min, mIoU 0.3663) ran in FP32
-at bs=4, lr=1e-4, num_workers=32. v7 uses:
+at bs=4, lr=1e-4, num_workers=32.
 
-| | v6a | v7 (H100-tuned) | Why |
-|---|---|---|---|
-| precision | FP32 | BF16 autocast | H100 Tensor Cores |
-| TF32 | off | on | Free matmul speedup |
-| cudnn.benchmark | off | on | Free conv speedup |
-| batch_size | 4 | 32 | 80 GB HBM3 headroom |
-| lr | 1e-4 | 3e-4 | sqrt(32/4) = 2.83 × 1e-4 |
-| num_workers | 32 | 16 | Less CPU contention |
+**v7** was the first H100-optimized attempt (bs=32, lr=3e-4). It
+reproducibly caused **rare-class collapse**: `bete`, `trindsäd`, `råg`,
+and `majs` all dropped to exactly 0.0 IoU, and v7-prithvi300 peaked at
+mIoU 0.3082 at epoch 5 before degrading to 0.2675 by epoch 10.
+Root cause: at bs=32, the sqrt class weighting can't hold rare-class
+signal against the majority-class gradient magnitudes, and lr=3e-4
+accelerates drift away from rare-class-friendly regions.
 
-v7-prithvi300 becomes the new reference number for the ensemble;
-per-class IoU comparisons happen within the v7 family.
+**v7b** is the corrected setting: bs=16, lr=2e-4. Still meaningfully
+H100-optimized vs v6a (4× batch, BF16, TF32), but sqrt-scaled from v6a
+with only a 2× effective-LR multiplier — preserving the per-update
+rare-class gradient signal. This is the baseline going forward.
+
+| | v6a | v7 (bad) | **v7b (current)** | Why |
+|---|---|---|---|---|
+| precision | FP32 | BF16 | **BF16** | H100 Tensor Cores |
+| TF32 | off | on | **on** | Free matmul speedup |
+| cudnn.benchmark | off | on | **on** | Free conv speedup |
+| batch_size | 4 | 32 | **16** | Compromise — keeps rare-class gradient above noise floor |
+| lr | 1e-4 | 3e-4 | **2e-4** | sqrt(16/4) × 1e-4 |
+| num_workers | 32 | 16 | **16** | Less CPU contention |
+
+v7b-prithvi300 becomes the new reference number for the ensemble;
+per-class IoU comparisons happen within the v7b family.
+
+### v7 post-mortem (what it taught us)
+
+- Rare-class collapse at 0.0 IoU is a distinct signature from general
+  training instability — it's specifically the sqrt-weighted loss
+  failing when batch variance washes out rare-class gradients.
+- The sqrt class weighting + focal loss works at bs=4 because each
+  batch is dominated by 1–2 tiles and rare-class pixels dominate within
+  those tiles. At bs=32 the per-step gradient averages too much.
+- Linear LR scaling `(lr ∝ bs)` from bs=4 to bs=32 would give 8× lr =
+  8e-4, which would be even worse. Sqrt scaling is the right shape,
+  but bs=32 is past the knee for this class-imbalanced task regardless.
+- Takeaway: when scaling batch for H100, test on canary classes
+  (potatis, bebyggelse, bete) before committing to the hyperparams.
 
 ## See also
 
