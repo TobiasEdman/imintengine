@@ -8,4 +8,4 @@ geopandas>=0.14
 contextily>=1.4
 openeo>=0.28
 papermill>=2.5
-git+https://github.com/TobiasEdman/imintengine.git
+git+https://github.com/TobiasEdman/imintengine.git@v0.1.0
