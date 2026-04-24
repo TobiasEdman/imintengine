@@ -25,6 +25,7 @@ set -euo pipefail
 : "${BATCH_SIZE:=16}"
 : "${LR:=2e-4}"
 : "${EPOCHS:=10}"
+: "${DISABLE_BF16:=}"  # empty = BF16 on. Set DISABLE_BF16=1 to force FP32.
 
 TEMPLATE="$(dirname "$0")/../k8s/unified-train-template.yaml"
 if [ ! -f "$TEMPLATE" ]; then
@@ -39,9 +40,10 @@ echo "  IMG_SIZE:      $IMG_SIZE"
 echo "  BATCH_SIZE:    $BATCH_SIZE"
 echo "  LR:            $LR"
 echo "  EPOCHS:        $EPOCHS"
+echo "  DISABLE_BF16:  ${DISABLE_BF16:-(unset → BF16 on)}"
 echo ""
 
-export RUN_ID BACKBONE_NAME IMG_SIZE BATCH_SIZE LR EPOCHS
-envsubst '$RUN_ID $BACKBONE_NAME $IMG_SIZE $BATCH_SIZE $LR $EPOCHS' \
+export RUN_ID BACKBONE_NAME IMG_SIZE BATCH_SIZE LR EPOCHS DISABLE_BF16
+envsubst '$RUN_ID $BACKBONE_NAME $IMG_SIZE $BATCH_SIZE $LR $EPOCHS $DISABLE_BF16' \
   < "$TEMPLATE" \
   | kubectl apply -f -

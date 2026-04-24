@@ -88,6 +88,13 @@ def main():
                         help="Early stopping patience")
     parser.add_argument("--num-workers", type=int, default=_defaults.num_workers)
 
+    # Precision
+    parser.add_argument(
+        "--disable-bf16", action="store_true",
+        help="Force FP32 training on CUDA (disables BF16 autocast). "
+             "Use to isolate BF16 as the cause of rare-class IoU collapse.",
+    )
+
     # Model
     parser.add_argument(
         "--backbone-name", type=str, default=None,
@@ -222,6 +229,7 @@ def main():
     config = TrainingConfig(
         data_dir=data_dirs[0],  # Primary dir for TrainingConfig compatibility
         backbone_name=args.backbone_name,
+        enable_bf16_autocast=not args.disable_bf16,
         num_classes=args.num_classes,
         epochs=args.epochs,
         batch_size=args.batch_size,

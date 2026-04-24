@@ -50,7 +50,13 @@ class LULCTrainer:
         # GradScaler needed because BF16 has the same exponent range as
         # FP32 (only mantissa precision is reduced). CPU/MPS fall back
         # to FP32 — autocast is a context-manager no-op when disabled.
-        self._amp_enabled = (self.device.type == "cuda")
+        #
+        # Config knob `enable_bf16_autocast` forces FP32 even on CUDA —
+        # used to isolate BF16 as the cause of rare-class IoU collapse
+        # observed in v7/v7b runs.
+        self._amp_enabled = (
+            self.device.type == "cuda" and self.config.enable_bf16_autocast
+        )
         self._amp_dtype = torch.bfloat16 if self._amp_enabled else torch.float32
         self._training_log = {
             "config": {},

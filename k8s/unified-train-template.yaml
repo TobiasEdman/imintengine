@@ -19,10 +19,13 @@
 #   BATCH_SIZE     — default 16  (H100-safe; sqrt(16/4)·1e-4 ⇒ lr 2e-4)
 #   LR             — default 2e-4
 #   EPOCHS         — default 10
+#   DISABLE_BF16   — default "" (BF16 on). Set to "1" to force FP32.
 #
 # bs=32/lr=3e-4 was tried as v7 and caused rare-class collapse (bete,
 # trindsäd, råg, majs all went to 0.0 IoU). Scaled back to bs=16/lr=2e-4
-# for v7b. See docs/training/hyperparameters.md.
+# for v7b — collapse persisted on 2 classes (vete, korn). v7c tests
+# whether BF16 autocast is the cause by forcing FP32 via DISABLE_BF16=1.
+# See docs/training/hyperparameters.md.
 #
 # All optional vars MUST be set in the shell calling envsubst. Bash-style
 # defaults (${VAR:-default}) don't work here because envsubst does not
@@ -85,6 +88,13 @@ spec:
               mkdir -p "$CKPT_DIR"
               rm -f "$CKPT_DIR"/*.pt.tmp 2>/dev/null || true
 
+              # Opt-in FP32 flag — empty string = no flag, "--disable-bf16" otherwise.
+              BF16_FLAG=""
+              if [ -n "${DISABLE_BF16}" ]; then
+                BF16_FLAG="--disable-bf16"
+                echo "=== DISABLE_BF16 set — forcing FP32 autocast ==="
+              fi
+
               echo "Cloning ImintEngine..."
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
@@ -142,7 +152,8 @@ spec:
                 --lovasz-weight 0.3 \
                 --patience 20 \
                 --num-workers 16 \
-                --device cuda
+                --device cuda \
+                ${BF16_FLAG}
 
           env:
             - name: PYTHONUNBUFFERED
@@ -159,6 +170,8 @@ spec:
               value: "${LR}"
             - name: EPOCHS
               value: "${EPOCHS}"
+            - name: DISABLE_BF16
+              value: "${DISABLE_BF16}"
             - name: HUGGING_FACE_HUB_TOKEN
               valueFrom:
                 secretKeyRef:

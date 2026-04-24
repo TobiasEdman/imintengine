@@ -64,6 +64,14 @@ class TrainingConfig:
     area_weight_max: float = 4.0                       # Max weight for sub-MMU pixels
     enable_area_weighting: bool = True                 # Set False to disable
 
+    # ── Precision ─────────────────────────────────────────────────────────
+    # BF16 autocast is a large H100 throughput win but halves mantissa
+    # precision (7 bits vs FP32's 23). In v7/v7b we observed rare-class
+    # IoU collapse to exactly 0.0 for classes (vete, korn, bete, trindsäd,
+    # råg, majs) that v6a's FP32 baseline kept healthy. Leave the knob
+    # exposed so runs can disable it to isolate the cause.
+    enable_bf16_autocast: bool = True
+
     # ── Model ─────────────────────────────────────────────────────────────
     # Preferred: registry key from imint.fm.registry.MODEL_CONFIGS.
     # When None, trainer falls back to `backbone` via LEGACY_BACKBONE_ALIAS.
