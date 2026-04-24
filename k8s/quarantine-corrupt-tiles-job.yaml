@@ -1,0 +1,133 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: quarantine-corrupt-tiles
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: tile-integrity
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 3600  # 1 h; scan is bounded by disk I/O
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: scanner
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+              python - <<'PY'
+              # Scan every tile .npz in /data/unified_v2_512/ for the
+              # failure modes we saw today:
+              #   * BadZipFile: 'spectral.npy' (possible zip bomb)
+              #     — zip central-directory corruption from interrupted
+              #     savez_compressed writes by the aborted enrich-s1 job.
+              #   * EOFError / truncated files.
+              #   * Missing 'spectral' key after load.
+              #
+              # Corrupt tiles are moved to /data/unified_v2_512_corrupted/
+              # (not deleted) so they can be inspected / re-fetched.
+              # Split files are regenerated on the clean survivor set
+              # using the same deterministic MD5 hash logic as
+              # imint.training.unified_dataset (VAL_FRACTION = 10).
+
+              import hashlib
+              import shutil
+              import sys
+              import zipfile
+              from pathlib import Path
+
+              import numpy as np
+
+              SRC = Path("/data/unified_v2_512")
+              QUAR = Path("/data/unified_v2_512_corrupted")
+              QUAR.mkdir(exist_ok=True)
+
+              tiles = sorted(SRC.glob("*.npz"))
+              if not tiles:
+                  raise SystemExit(f"No tiles in {SRC}")
+
+              print(f"Scanning {len(tiles)} tiles...")
+
+              bad = []
+              for i, p in enumerate(tiles, 1):
+                  if i % 500 == 0 or i == len(tiles):
+                      print(f"  [{i}/{len(tiles)}] checked, {len(bad)} bad so far", flush=True)
+                  try:
+                      with np.load(p, allow_pickle=True) as data:
+                          spectral = data.get("spectral", data.get("image"))
+                          if spectral is None:
+                              bad.append((p, "no_spectral_key"))
+                              continue
+                          # Force the zip read to actually happen
+                          _ = spectral.shape
+                  except (zipfile.BadZipFile, EOFError, OSError, ValueError) as e:
+                      bad.append((p, f"{type(e).__name__}: {e}"))
+                  except Exception as e:
+                      bad.append((p, f"UNEXPECTED {type(e).__name__}: {e}"))
+
+              print()
+              print(f"=== Scan complete ===")
+              print(f"  Total tiles:     {len(tiles)}")
+              print(f"  Corrupted:       {len(bad)}")
+              print(f"  Clean survivors: {len(tiles) - len(bad)}")
+              print()
+
+              if bad:
+                  print("Corruption breakdown (first 20):")
+                  for p, err in bad[:20]:
+                      print(f"  {p.name}: {err}")
+
+                  print()
+                  print(f"Quarantining {len(bad)} tiles → {QUAR}")
+                  for p, _ in bad:
+                      shutil.move(str(p), str(QUAR / p.name))
+
+              # Regenerate split files on the clean survivor set.
+              survivors = sorted(p.name for p in SRC.glob("*.npz"))
+              VAL_FRACTION = 10
+
+              def is_val(name):
+                  h = int(hashlib.md5(name.encode()).hexdigest(), 16)
+                  return h % 100 < VAL_FRACTION
+
+              val = [n for n in survivors if is_val(n)]
+              train = [n for n in survivors if not is_val(n)]
+
+              (SRC / "split_val.txt").write_text("\n".join(val) + "\n")
+              (SRC / "split_train.txt").write_text("\n".join(train) + "\n")
+
+              print()
+              print(f"=== Split files updated ===")
+              print(f"  Train: {len(train)} tiles")
+              print(f"  Val:   {len(val)} tiles")
+
+              # Also emit a quarantine manifest for auditability.
+              manifest = SRC / "quarantined_tiles.txt"
+              manifest.write_text(
+                  "\n".join(f"{p.name}\t{err}" for p, err in bad) + "\n"
+              )
+              print(f"  Manifest: {manifest}")
+              PY
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
