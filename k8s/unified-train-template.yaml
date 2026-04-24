@@ -15,9 +15,15 @@
 #                     clay_v1_5 | croma_base | thor_v1_base)
 #
 # Optional env (defaults match the v6a baseline):
-#   IMG_SIZE       — 256
-#   BATCH_SIZE     — 32  (H100-optimized; sqrt-scaled lr from bs=4 ⇒ 3e-4)
-#   EPOCHS         — 10
+#   IMG_SIZE       — default 256; set before envsubst to override
+#   BATCH_SIZE     — default 32  (H100-optimized; sqrt-scaled lr ⇒ 3e-4)
+#   LR             — default 3e-4
+#   EPOCHS         — default 10
+#
+# All optional vars MUST be set in the shell calling envsubst. Bash-style
+# defaults (${VAR:-default}) don't work here because envsubst does not
+# implement that syntax and mangles the value. Use the wrapper in
+# scripts/launch_train.sh (or set defaults inline before envsubst).
 #
 # Training knobs below are tuned for H100 80GB with BF16 autocast + TF32
 # enabled in imint.training.trainer (see docs/training/hyperparameters.md).
@@ -117,16 +123,16 @@ spec:
                 --num-classes 23 \
                 --enable-multitemporal \
                 --num-temporal-frames 4 \
-                --epochs ${EPOCHS:-10} \
-                --batch-size ${BATCH_SIZE:-32} \
-                --lr ${LR:-3e-4} \
+                --epochs ${EPOCHS} \
+                --batch-size ${BATCH_SIZE} \
+                --lr ${LR} \
                 --weight-decay 0.35 \
                 --unfreeze-layers 6 \
                 --backbone-lr-factor 0.1 \
                 --loss-type focal_dice \
                 --focal-gamma 2.0 \
-                --patch-size ${IMG_SIZE:-256} \
-                --img-size ${IMG_SIZE:-256} \
+                --patch-size ${IMG_SIZE} \
+                --img-size ${IMG_SIZE} \
                 --weighting-method sqrt \
                 --label-smoothing 0.05 \
                 --lovasz-weight 0.3 \
@@ -142,13 +148,13 @@ spec:
             - name: BACKBONE_NAME
               value: "${BACKBONE_NAME}"
             - name: IMG_SIZE
-              value: "${IMG_SIZE:-256}"
+              value: "${IMG_SIZE}"
             - name: BATCH_SIZE
-              value: "${BATCH_SIZE:-32}"
+              value: "${BATCH_SIZE}"
             - name: LR
-              value: "${LR:-3e-4}"
+              value: "${LR}"
             - name: EPOCHS
-              value: "${EPOCHS:-10}"
+              value: "${EPOCHS}"
             - name: HUGGING_FACE_HUB_TOKEN
               valueFrom:
                 secretKeyRef:
