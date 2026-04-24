@@ -6,8 +6,22 @@ Stores as separate keys in .npz — does not modify existing spectral data.
 
 Idempotent: skips tiles with has_s1=1.
 
-Uses separate CDSE S1 collection — does NOT compete with S2 rate limits.
-Can run in parallel with the S2 spectral fetch pipeline.
+Backends (``--s1-backend``):
+    sh    Sentinel Hub Process API via ``imint.training.cdse_s1``.
+          Bills CDSE Processing Units (10k/month free tier, 100 PU
+          minimum per S1 request — unsuitable for bulk enrichment at
+          our scale).
+    stac  CDSE STAC + direct COG + local σ⁰ calibration via
+          ``imint.training.cdse_s1_stac``. Bills OData bandwidth
+          (12 TB/month) and HTTP COG requests (50k/month). Requires
+          ``pystac-client`` + ``scipy`` + ``rasterio``. Preferred for
+          full dataset enrichment — see docs/training/s1_fetch.md.
+
+Atomicity:
+    Writes go to ``<tile>.npz.tmp`` and are atomically renamed on
+    success. Killing the job mid-write leaves the original .npz
+    untouched. Stale .tmp files from prior aborted runs are deleted
+    on next pass.
 
 Keys written:
     s1_vv_vh          (T*2, H, W) float32 — VV/VH per temporal frame
@@ -16,9 +30,10 @@ Keys written:
     has_s1            int32 — 1 if any frame has S1 data
 
 Usage:
-    python scripts/enrich_tiles_s1.py \
-        --data-dir /data/unified_v2_512 \
-        --workers 6 \
+    python scripts/enrich_tiles_s1.py \\
+        --data-dir /data/unified_v2_512 \\
+        --s1-backend stac \\
+        --workers 6 \\
         --skip-existing
 """
 from __future__ import annotations
@@ -38,14 +53,42 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
+def _resolve_fetch_fn(backend: str):
+    """Return the ``fetch_s1_scene`` implementation for the given backend.
+
+    Raises ValueError for unknown names. Import errors for optional
+    extras (pystac-client, scipy) surface here rather than per tile.
+    """
+    if backend == "sh":
+        from imint.training.cdse_s1 import fetch_s1_scene
+        return fetch_s1_scene
+    if backend == "stac":
+        from imint.training.cdse_s1_stac import fetch_s1_scene
+        return fetch_s1_scene
+    raise ValueError(
+        f"Unknown --s1-backend {backend!r}. "
+        "Valid choices: 'sh' (Sentinel Hub Process API), "
+        "'stac' (CDSE STAC + direct COG)."
+    )
+
+
+def enrich_one_tile(
+    tile_path: str,
+    *,
+    fetch_s1_scene,
+    skip_existing: bool = True,
+) -> dict:
     """Add S1 VV/VH to one tile .npz file.
 
     Tile geometry is derived from the on-disk raster (``spectral`` shape)
     and either the persisted ``tile_size_px`` key or the pixel dimension
     itself. No module-level constants — fully size-agnostic.
+
+    Writes atomically via ``<tile>.npz.tmp`` → ``os.replace(...)`` so
+    that killing the job mid-write leaves the original tile intact
+    instead of producing the BadZipFile / EOF-truncated archives we
+    saw after the previous aborted run.
     """
-    from imint.training.cdse_s1 import fetch_s1_scene
     from imint.training.tile_config import TileConfig
     from imint.training.tile_bbox import resolve_tile_bbox
 
@@ -135,7 +178,23 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
     data["s1_dates"] = np.array(s1_dates_out)
     data["has_s1"] = np.int32(1 if sum(s1_mask) > 0 else 0)
 
-    np.savez_compressed(tile_path, **data)
+    # Atomic write: compress into <tile>.npz.tmp, fsync, rename.
+    # np.savez_compressed appends ".npz" automatically unless the path
+    # already ends with ".npz", so give it a path without extension and
+    # rename the produced file.
+    tmp_path = tile_path + ".tmp.npz"
+    try:
+        np.savez_compressed(tmp_path[:-4], **data)  # strips .npz, then re-adds
+        # Best-effort flush before rename. savez_compressed closes the
+        # file before returning; rename itself is atomic on POSIX.
+        os.replace(tmp_path, tile_path)
+    except Exception:
+        # Never leave a half-written .tmp.npz behind to confuse the next run.
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
 
     valid = sum(s1_mask)
     return {"name": name, "status": "ok", "valid_frames": valid}
@@ -148,14 +207,38 @@ def main():
     parser.add_argument("--skip-existing", action="store_true", default=True)
     parser.add_argument("--no-skip-existing", dest="skip_existing", action="store_false")
     parser.add_argument("--max-tiles", type=int, default=None)
+    parser.add_argument(
+        "--s1-backend", choices=["sh", "stac"], default="sh",
+        help="S1 fetch backend. 'sh' = Sentinel Hub Process API (PU-billed, "
+             "blown the 10k/month free quota), 'stac' = CDSE STAC + direct "
+             "COG + local σ⁰ calibration (OData bandwidth quota, preferred "
+             "for bulk enrichment). See docs/training/s1_fetch.md.",
+    )
     args = parser.parse_args()
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
     if args.max_tiles:
         tiles = tiles[:args.max_tiles]
+
+    # Clean up stale .tmp.npz files from any prior aborted run — never
+    # let half-written archives poison skip_existing or get picked up
+    # as real tiles.
+    stale = glob.glob(os.path.join(args.data_dir, "*.npz.tmp.npz"))
+    stale += glob.glob(os.path.join(args.data_dir, "*.tmp.npz"))
+    for s in stale:
+        try:
+            os.unlink(s)
+        except FileNotFoundError:
+            pass
+    if stale:
+        print(f"  Cleaned {len(stale)} stale .tmp.npz file(s) from prior runs")
+
+    fetch_s1_scene = _resolve_fetch_fn(args.s1_backend)
+
     print(f"=== S1 SAR Enrichment ===")
-    print(f"  Tiles: {len(tiles)}")
+    print(f"  Tiles:   {len(tiles)}")
     print(f"  Workers: {args.workers}")
+    print(f"  Backend: {args.s1_backend}")
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     lock = threading.Lock()
@@ -164,7 +247,11 @@ def main():
 
     def _run(path):
         nonlocal completed
-        r = enrich_one_tile(path, skip_existing=args.skip_existing)
+        r = enrich_one_tile(
+            path,
+            fetch_s1_scene=fetch_s1_scene,
+            skip_existing=args.skip_existing,
+        )
         with lock:
             completed += 1
             stats[r.get("status", "failed")] = stats.get(r.get("status", "failed"), 0) + 1
