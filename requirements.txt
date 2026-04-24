@@ -37,3 +37,7 @@ svgpath2mpl>=0.2
 # Notebook development (optional)
 # jupyter>=1.0
 # ipykernel>=6.0
+
+# Shared contracts — 23-class schema, Analyzer base, KG JSON Schema,
+# embedding config. Extracted from this repo in 2026-04 (rollout W3.6).
+des-contracts @ git+https://github.com/TobiasEdman/des-contracts.git@v0.1.0
