@@ -88,36 +88,70 @@ class LULCTrainer:
         return torch.cat(parts, dim=1)  # (B, N, H, W)
 
     def _build_model(self):
-        """Build PrithviSegmentationModel using existing infrastructure."""
-        from ..fm.terratorch_loader import _load_prithvi_from_hf
-        from ..fm.upernet import PrithviSegmentationModel, get_default_pool_sizes
+        """Build a segmentation model via the foundation model registry.
 
-        num_frames = self.config.num_temporal_frames if self.config.enable_multitemporal else 1
-        img_size = self.config.img_size
-        print(f"  Loading Prithvi backbone ({self.config.backbone}, "
-              f"num_frames={num_frames}, img_size={img_size})...")
-        backbone = _load_prithvi_from_hf(
-            pretrained=True, num_frames=num_frames, img_size=img_size,
+        Resolution order:
+            1. ``cfg.backbone_name`` (new registry key) — preferred
+            2. ``cfg.backbone`` via ``LEGACY_BACKBONE_ALIAS``
+            3. Default "prithvi_300m"
+
+        Feature indices default to ``spec.feature_indices`` from the
+        registry unless explicitly overridden in ``cfg.feature_indices``.
+        """
+        from ..fm.registry import build_backbone, resolve_backbone_name
+        from ..fm.upernet import build_segmentation_from_spec
+
+        registry_name = resolve_backbone_name(
+            self.config.backbone_name, self.config.backbone,
         )
+
+        num_frames = (
+            self.config.num_temporal_frames
+            if self.config.enable_multitemporal else 1
+        )
+        img_size = self.config.img_size
+
+        print(f"  Loading backbone ({registry_name}, "
+              f"num_frames={num_frames}, img_size={img_size})...")
+        backbone, spec = build_backbone(
+            registry_name,
+            num_frames=num_frames,
+            img_size=img_size,
+            pretrained=True,
+        )
+
+        # Per-config override of spec.feature_indices (advanced use).
+        if self.config.feature_indices is not None:
+            from dataclasses import replace
+            spec = replace(
+                spec, feature_indices=tuple(self.config.feature_indices),
+            )
 
         n_aux = self._count_aux_channels()
 
-        model = PrithviSegmentationModel(
+        model = build_segmentation_from_spec(
+            spec,
             encoder=backbone,
-            feature_indices=self.config.feature_indices,
+            num_classes=self.config.num_classes,
+            img_size=img_size,
             decoder_channels=self.config.decoder_channels,
-            num_classes=self.config.num_classes,  # includes background at 0
             dropout=self.config.dropout,
             n_aux_channels=n_aux,
-            pool_sizes=get_default_pool_sizes(self.device, img_size=img_size),
             enable_temporal_pooling=self.config.enable_temporal_pooling,
             enable_multilevel_aux=self.config.enable_multilevel_aux,
+            device=self.device,
         )
+
+        # Stash the spec on the model for downstream code that needs
+        # input_bands, normalizer_family, etc.
+        model.fm_spec = spec
+
         aux_str = f", aux={n_aux} channels" if n_aux else ""
         tp_str = ", temporal_pool" if self.config.enable_temporal_pooling else ""
         ml_str = ", multilevel_aux" if self.config.enable_multilevel_aux else ""
         print(f"  Model built: {self.config.num_classes} classes, "
-              f"decoder={self.config.decoder_type}{aux_str}{tp_str}{ml_str}")
+              f"decoder={self.config.decoder_type}{aux_str}{tp_str}{ml_str} "
+              f"(family={spec.family}, embed_dim={spec.embed_dim}, depth={spec.depth})")
         return model
 
     def _freeze_backbone(self) -> None:

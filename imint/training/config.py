@@ -65,12 +65,17 @@ class TrainingConfig:
     enable_area_weighting: bool = True                 # Set False to disable
 
     # ── Model ─────────────────────────────────────────────────────────────
+    # Preferred: registry key from imint.fm.registry.MODEL_CONFIGS.
+    # When None, trainer falls back to `backbone` via LEGACY_BACKBONE_ALIAS.
+    # Valid keys: "prithvi_300m", "prithvi_600m", "terramind_v1_base",
+    #             "clay_v1_5", "croma_base", "thor_v1_base".
+    backbone_name: str | None = None
+    # Legacy field — kept for BC. Maps via LEGACY_BACKBONE_ALIAS.
     backbone: str = "prithvi_eo_v2_300m_tl"
     decoder_type: str = "upernet"
     decoder_channels: int = 256
-    feature_indices: list[int] = field(
-        default_factory=lambda: [5, 11, 17, 23]
-    )
+    # When None, trainer uses spec.feature_indices from the registry.
+    feature_indices: list[int] | None = None
     dropout: float = 0.1
     unfreeze_backbone_layers: int = 6                  # Unfreeze last N transformer blocks
     backbone_lr_factor: float = 0.1                    # Backbone LR = lr * this factor
