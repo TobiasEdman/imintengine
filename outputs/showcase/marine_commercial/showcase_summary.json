@@ -1,0 +1,93 @@
+{
+  "date": "2025-07-15",
+  "coords": {
+    "west": 12.56,
+    "south": 56.01,
+    "east": 12.7,
+    "north": 56.06
+  },
+  "image_shape": [
+    588,
+    893,
+    3
+  ],
+  "cloud_fraction": 0.07112766719229685,
+  "yolo_vessels": 54,
+  "ai2_vessels": 20,
+  "nmd_stats": {
+    "level1": {
+      "forest": {
+        "pixel_count": 3607,
+        "fraction": 0.0069
+      },
+      "open_land": {
+        "pixel_count": 7882,
+        "fraction": 0.015
+      },
+      "developed": {
+        "pixel_count": 24836,
+        "fraction": 0.0473
+      },
+      "water": {
+        "pixel_count": 146038,
+        "fraction": 0.2781
+      },
+      "unclassified": {
+        "pixel_count": 342721,
+        "fraction": 0.6527
+      }
+    },
+    "level2": {
+      "forest_pine": {
+        "pixel_count": 41,
+        "fraction": 0.0001
+      },
+      "forest_mixed": {
+        "pixel_count": 40,
+        "fraction": 0.0001
+      },
+      "forest_temp_non_forest": {
+        "pixel_count": 3526,
+        "fraction": 0.0067
+      },
+      "open_land_bare": {
+        "pixel_count": 378,
+        "fraction": 0.0007
+      },
+      "open_land_vegetated": {
+        "pixel_count": 7504,
+        "fraction": 0.0143
+      },
+      "developed_buildings": {
+        "pixel_count": 6929,
+        "fraction": 0.0132
+      },
+      "developed_infrastructure": {
+        "pixel_count": 10545,
+        "fraction": 0.0201
+      },
+      "developed_roads": {
+        "pixel_count": 7362,
+        "fraction": 0.014
+      },
+      "water_lakes": {
+        "pixel_count": 18,
+        "fraction": 0.0
+      },
+      "water_sea": {
+        "pixel_count": 146020,
+        "fraction": 0.2781
+      }
+    }
+  },
+  "cot_stats": {
+    "clear_fraction": 0.9473531853950987,
+    "thin_cloud_fraction": 0.025807299403524008,
+    "thick_cloud_fraction": 0.026839515201377305,
+    "cot_mean": 0.009240731596946716,
+    "cot_max": 1.0667524337768555,
+    "cot_min": 0.0
+  },
+  "yolo_heatmap": {},
+  "ai2_heatmap": {}
+}

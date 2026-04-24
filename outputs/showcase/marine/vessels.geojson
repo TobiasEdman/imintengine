@@ -1,0 +1,1020 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              126,
+              411
+            ],
+            [
+              134,
+              411
+            ],
+            [
+              134,
+              424
+            ],
+            [
+              126,
+              424
+            ],
+            [
+              126,
+              411
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 92,
+        "score": 0.6541628241539001,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              205,
+              113
+            ],
+            [
+              219,
+              113
+            ],
+            [
+              219,
+              124
+            ],
+            [
+              205,
+              124
+            ],
+            [
+              205,
+              113
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 153,
+        "score": 0.645355224609375,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              280,
+              64
+            ],
+            [
+              284,
+              64
+            ],
+            [
+              284,
+              69
+            ],
+            [
+              280,
+              69
+            ],
+            [
+              280,
+              64
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 18,
+        "score": 0.6405954957008362,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              155,
+              469
+            ],
+            [
+              161,
+              469
+            ],
+            [
+              161,
+              479
+            ],
+            [
+              155,
+              479
+            ],
+            [
+              155,
+              469
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 66,
+        "score": 0.632472813129425,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              168,
+              226
+            ],
+            [
+              174,
+              226
+            ],
+            [
+              174,
+              241
+            ],
+            [
+              168,
+              241
+            ],
+            [
+              168,
+              226
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 100,
+        "score": 0.6269424557685852,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              256,
+              91
+            ],
+            [
+              260,
+              91
+            ],
+            [
+              260,
+              95
+            ],
+            [
+              256,
+              95
+            ],
+            [
+              256,
+              91
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 19,
+        "score": 0.5892005562782288,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              251,
+              346
+            ],
+            [
+              256,
+              346
+            ],
+            [
+              256,
+              357
+            ],
+            [
+              251,
+              357
+            ],
+            [
+              251,
+              346
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 60,
+        "score": 0.574114978313446,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              76,
+              8
+            ],
+            [
+              81,
+              8
+            ],
+            [
+              81,
+              13
+            ],
+            [
+              76,
+              13
+            ],
+            [
+              76,
+              8
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 27,
+        "score": 0.5662106275558472,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              97,
+              149
+            ],
+            [
+              101,
+              149
+            ],
+            [
+              101,
+              153
+            ],
+            [
+              97,
+              153
+            ],
+            [
+              97,
+              149
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 15,
+        "score": 0.5430142283439636,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              2,
+              269
+            ],
+            [
+              6,
+              269
+            ],
+            [
+              6,
+              274
+            ],
+            [
+              2,
+              274
+            ],
+            [
+              2,
+              269
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 25,
+        "score": 0.5221667289733887,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              194,
+              116
+            ],
+            [
+              198,
+              116
+            ],
+            [
+              198,
+              120
+            ],
+            [
+              194,
+              120
+            ],
+            [
+              194,
+              116
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 14,
+        "score": 0.5170910358428955,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              252,
+              134
+            ],
+            [
+              256,
+              134
+            ],
+            [
+              256,
+              138
+            ],
+            [
+              252,
+              138
+            ],
+            [
+              252,
+              134
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 15,
+        "score": 0.496132493019104,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              202,
+              88
+            ],
+            [
+              205,
+              88
+            ],
+            [
+              205,
+              93
+            ],
+            [
+              202,
+              93
+            ],
+            [
+              202,
+              88
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 15,
+        "score": 0.48720070719718933,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              190,
+              421
+            ],
+            [
+              198,
+              421
+            ],
+            [
+              198,
+              428
+            ],
+            [
+              190,
+              428
+            ],
+            [
+              190,
+              421
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 54,
+        "score": 0.47832033038139343,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              220,
+              82
+            ],
+            [
+              225,
+              82
+            ],
+            [
+              225,
+              86
+            ],
+            [
+              220,
+              86
+            ],
+            [
+              220,
+              82
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 18,
+        "score": 0.4661247730255127,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              205,
+              82
+            ],
+            [
+              209,
+              82
+            ],
+            [
+              209,
+              87
+            ],
+            [
+              205,
+              87
+            ],
+            [
+              205,
+              82
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 20,
+        "score": 0.4212743937969208,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              240,
+              356
+            ],
+            [
+              248,
+              356
+            ],
+            [
+              248,
+              362
+            ],
+            [
+              240,
+              362
+            ],
+            [
+              240,
+              356
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 48,
+        "score": 0.40851593017578125,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              236,
+              388
+            ],
+            [
+              239,
+              388
+            ],
+            [
+              239,
+              392
+            ],
+            [
+              236,
+              392
+            ],
+            [
+              236,
+              388
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 15,
+        "score": 0.3928948938846588,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              266,
+              115
+            ],
+            [
+              269,
+              115
+            ],
+            [
+              269,
+              119
+            ],
+            [
+              266,
+              119
+            ],
+            [
+              266,
+              115
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 16,
+        "score": 0.3921780288219452,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              262,
+              125
+            ],
+            [
+              266,
+              125
+            ],
+            [
+              266,
+              131
+            ],
+            [
+              262,
+              131
+            ],
+            [
+              262,
+              125
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 25,
+        "score": 0.3841007649898529,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              269,
+              97
+            ],
+            [
+              273,
+              97
+            ],
+            [
+              273,
+              105
+            ],
+            [
+              269,
+              105
+            ],
+            [
+              269,
+              97
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 33,
+        "score": 0.37380191683769226,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              134,
+              437
+            ],
+            [
+              139,
+              437
+            ],
+            [
+              139,
+              443
+            ],
+            [
+              134,
+              443
+            ],
+            [
+              134,
+              437
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 25,
+        "score": 0.37004709243774414,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              303,
+              69
+            ],
+            [
+              306,
+              69
+            ],
+            [
+              306,
+              72
+            ],
+            [
+              303,
+              72
+            ],
+            [
+              303,
+              69
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 13,
+        "score": 0.3685104250907898,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              157,
+              271
+            ],
+            [
+              161,
+              271
+            ],
+            [
+              161,
+              275
+            ],
+            [
+              157,
+              275
+            ],
+            [
+              157,
+              271
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 19,
+        "score": 0.3578764796257019,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              149,
+              484
+            ],
+            [
+              153,
+              484
+            ],
+            [
+              153,
+              489
+            ],
+            [
+              149,
+              489
+            ],
+            [
+              149,
+              484
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 21,
+        "score": 0.3433499038219452,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              173,
+              88
+            ],
+            [
+              177,
+              88
+            ],
+            [
+              177,
+              92
+            ],
+            [
+              173,
+              92
+            ],
+            [
+              173,
+              88
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 13,
+        "score": 0.3291025459766388,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              274,
+              40
+            ],
+            [
+              277,
+              40
+            ],
+            [
+              277,
+              44
+            ],
+            [
+              274,
+              44
+            ],
+            [
+              274,
+              40
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 14,
+        "score": 0.30207252502441406,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              155,
+              232
+            ],
+            [
+              159,
+              232
+            ],
+            [
+              159,
+              237
+            ],
+            [
+              155,
+              237
+            ],
+            [
+              155,
+              232
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 19,
+        "score": 0.28874415159225464,
+        "label": "vessel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              163,
+              241
+            ],
+            [
+              169,
+              241
+            ],
+            [
+              169,
+              260
+            ],
+            [
+              163,
+              260
+            ],
+            [
+              163,
+              241
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 107,
+        "score": 0.2883773744106293,
+        "label": "vessel"
+      }
+    }
+  ]
+}

@@ -1,0 +1,825 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              613,
+              316
+            ],
+            [
+              643,
+              316
+            ],
+            [
+              643,
+              346
+            ],
+            [
+              613,
+              346
+            ],
+            [
+              613,
+              316
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.9963376522064209,
+        "label": "vessel",
+        "length_m": 191.7,
+        "width_m": 30.1,
+        "speed_knots": 13.6,
+        "heading_deg": 282.2,
+        "vessel_type": "cargo",
+        "type_confidence": 0.999
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              514,
+              188
+            ],
+            [
+              544,
+              188
+            ],
+            [
+              544,
+              218
+            ],
+            [
+              514,
+              218
+            ],
+            [
+              514,
+              188
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.9951776266098022,
+        "label": "vessel",
+        "length_m": 206.6,
+        "width_m": 31.9,
+        "speed_knots": 13.1,
+        "heading_deg": 249.3,
+        "vessel_type": "cargo",
+        "type_confidence": 1.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              314,
+              81
+            ],
+            [
+              344,
+              81
+            ],
+            [
+              344,
+              111
+            ],
+            [
+              314,
+              111
+            ],
+            [
+              314,
+              81
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.9946834444999695,
+        "label": "vessel",
+        "length_m": 33.0,
+        "width_m": 9.3,
+        "speed_knots": 17.4,
+        "heading_deg": 313.4,
+        "vessel_type": "service",
+        "type_confidence": 0.889
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              638,
+              219
+            ],
+            [
+              668,
+              219
+            ],
+            [
+              668,
+              249
+            ],
+            [
+              638,
+              249
+            ],
+            [
+              638,
+              219
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.9944642186164856,
+        "label": "vessel",
+        "length_m": 129.8,
+        "width_m": 20.3,
+        "speed_knots": 13.0,
+        "heading_deg": 114.2,
+        "vessel_type": "cargo",
+        "type_confidence": 0.99
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              561,
+              123
+            ],
+            [
+              591,
+              123
+            ],
+            [
+              591,
+              153
+            ],
+            [
+              561,
+              153
+            ],
+            [
+              561,
+              123
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.9888522624969482,
+        "label": "vessel",
+        "length_m": 177.2,
+        "width_m": 28.3,
+        "speed_knots": 10.0,
+        "heading_deg": 196.1,
+        "vessel_type": "tanker",
+        "type_confidence": 0.941
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              411,
+              265
+            ],
+            [
+              441,
+              265
+            ],
+            [
+              441,
+              294
+            ],
+            [
+              411,
+              294
+            ],
+            [
+              411,
+              265
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 870,
+        "score": 0.9760087728500366,
+        "label": "vessel",
+        "length_m": 94.5,
+        "width_m": 16.0,
+        "speed_knots": 5.9,
+        "heading_deg": 343.4,
+        "vessel_type": "passenger",
+        "type_confidence": 0.602
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              723,
+              192
+            ],
+            [
+              753,
+              192
+            ],
+            [
+              753,
+              221
+            ],
+            [
+              723,
+              221
+            ],
+            [
+              723,
+              192
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 870,
+        "score": 0.9655637145042419,
+        "label": "vessel",
+        "length_m": 45.3,
+        "width_m": 12.2,
+        "speed_knots": 1.4,
+        "heading_deg": 218.9,
+        "vessel_type": "pleasure",
+        "type_confidence": 0.693
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              677,
+              130
+            ],
+            [
+              707,
+              130
+            ],
+            [
+              707,
+              160
+            ],
+            [
+              677,
+              160
+            ],
+            [
+              677,
+              130
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.9630535840988159,
+        "label": "vessel",
+        "length_m": 41.5,
+        "width_m": 11.1,
+        "speed_knots": 7.9,
+        "heading_deg": 303.6,
+        "vessel_type": "service",
+        "type_confidence": 0.886
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              409,
+              228
+            ],
+            [
+              439,
+              228
+            ],
+            [
+              439,
+              258
+            ],
+            [
+              409,
+              258
+            ],
+            [
+              409,
+              228
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.9399038553237915,
+        "label": "vessel",
+        "length_m": 23.4,
+        "width_m": 6.7,
+        "speed_knots": 4.6,
+        "heading_deg": 278.9,
+        "vessel_type": "pleasure",
+        "type_confidence": 0.999
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              376,
+              352
+            ],
+            [
+              406,
+              352
+            ],
+            [
+              406,
+              382
+            ],
+            [
+              376,
+              382
+            ],
+            [
+              376,
+              352
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.9360714554786682,
+        "label": "vessel",
+        "length_m": 175.4,
+        "width_m": 26.6,
+        "speed_knots": 7.7,
+        "heading_deg": 331.6,
+        "vessel_type": "passenger",
+        "type_confidence": 0.573
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              417,
+              565
+            ],
+            [
+              447,
+              565
+            ],
+            [
+              447,
+              588
+            ],
+            [
+              417,
+              588
+            ],
+            [
+              417,
+              565
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 690,
+        "score": 0.929787814617157,
+        "label": "vessel",
+        "length_m": 245.0,
+        "width_m": 29.6,
+        "speed_knots": 12.5,
+        "heading_deg": 281.2,
+        "vessel_type": "cargo",
+        "type_confidence": 0.996
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              389,
+              152
+            ],
+            [
+              418,
+              152
+            ],
+            [
+              418,
+              182
+            ],
+            [
+              389,
+              182
+            ],
+            [
+              389,
+              152
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 870,
+        "score": 0.8961846232414246,
+        "label": "vessel",
+        "length_m": 29.5,
+        "width_m": 7.7,
+        "speed_knots": 2.8,
+        "heading_deg": 74.8,
+        "vessel_type": "pleasure",
+        "type_confidence": 0.962
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              398,
+              305
+            ],
+            [
+              428,
+              305
+            ],
+            [
+              428,
+              335
+            ],
+            [
+              398,
+              335
+            ],
+            [
+              398,
+              305
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.8661454916000366,
+        "label": "vessel",
+        "length_m": 92.0,
+        "width_m": 17.3,
+        "speed_knots": 3.5,
+        "heading_deg": 247.2,
+        "vessel_type": "passenger",
+        "type_confidence": 0.27
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              375,
+              323
+            ],
+            [
+              405,
+              323
+            ],
+            [
+              405,
+              353
+            ],
+            [
+              375,
+              353
+            ],
+            [
+              375,
+              323
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.7618163228034973,
+        "label": "vessel",
+        "length_m": 151.1,
+        "width_m": 18.8,
+        "speed_knots": 4.1,
+        "heading_deg": 66.7,
+        "vessel_type": "passenger",
+        "type_confidence": 0.827
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              216,
+              15
+            ],
+            [
+              246,
+              15
+            ],
+            [
+              246,
+              45
+            ],
+            [
+              216,
+              45
+            ],
+            [
+              216,
+              15
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.690879762172699,
+        "label": "vessel",
+        "length_m": 81.4,
+        "width_m": 14.1,
+        "speed_knots": 8.1,
+        "heading_deg": 309.0,
+        "vessel_type": "cargo",
+        "type_confidence": 0.474
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              221,
+              570
+            ],
+            [
+              251,
+              570
+            ],
+            [
+              251,
+              587
+            ],
+            [
+              221,
+              587
+            ],
+            [
+              221,
+              570
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 510,
+        "score": 0.657710075378418,
+        "label": "vessel",
+        "length_m": 76.3,
+        "width_m": 13.2,
+        "speed_knots": 3.5,
+        "heading_deg": 15.8,
+        "vessel_type": "pleasure",
+        "type_confidence": 0.784
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              679,
+              397
+            ],
+            [
+              709,
+              397
+            ],
+            [
+              709,
+              427
+            ],
+            [
+              679,
+              427
+            ],
+            [
+              679,
+              397
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.5886990427970886,
+        "label": "vessel",
+        "length_m": 174.0,
+        "width_m": 18.4,
+        "speed_knots": 12.7,
+        "heading_deg": 261.9,
+        "vessel_type": "cargo",
+        "type_confidence": 0.889
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              381,
+              375
+            ],
+            [
+              397,
+              375
+            ],
+            [
+              397,
+              405
+            ],
+            [
+              381,
+              405
+            ],
+            [
+              381,
+              375
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 480,
+        "score": 0.578221321105957,
+        "label": "vessel",
+        "length_m": 242.0,
+        "width_m": 32.6,
+        "speed_knots": 14.3,
+        "heading_deg": 237.3,
+        "vessel_type": "passenger",
+        "type_confidence": 0.982
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              778,
+              231
+            ],
+            [
+              808,
+              231
+            ],
+            [
+              808,
+              261
+            ],
+            [
+              778,
+              261
+            ],
+            [
+              778,
+              231
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 900,
+        "score": 0.5372475981712341,
+        "label": "vessel",
+        "length_m": 138.4,
+        "width_m": 20.5,
+        "speed_knots": 2.3,
+        "heading_deg": 25.7,
+        "vessel_type": "service",
+        "type_confidence": 0.444
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              381,
+              177
+            ],
+            [
+              395,
+              177
+            ],
+            [
+              395,
+              207
+            ],
+            [
+              381,
+              207
+            ],
+            [
+              381,
+              177
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "pixel_count": 420,
+        "score": 0.5023166537284851,
+        "label": "vessel",
+        "length_m": 44.6,
+        "width_m": 9.4,
+        "speed_knots": 1.3,
+        "heading_deg": 281.0,
+        "vessel_type": "pleasure",
+        "type_confidence": 0.725
+      }
+    }
+  ]
+}

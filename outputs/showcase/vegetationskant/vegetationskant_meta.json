@@ -1,0 +1,85 @@
+{
+  "date": "2025-07-17",
+  "reference_year": 2025,
+  "coords": {
+    "west": 13.15,
+    "south": 58.5,
+    "east": 13.35,
+    "north": 58.6
+  },
+  "area_name": "Vanern — Lidkoping/Lacko",
+  "shape": [
+    1145,
+    1194
+  ],
+  "years_analyzed": [
+    2018,
+    2019,
+    2021,
+    2022,
+    2023,
+    2025
+  ],
+  "num_years": 6,
+  "method": "NDVI + Otsu/Weighted Peaks (VedgeSat approach)",
+  "reference": "Muir et al. (2024) VedgeSat; Nugraha et al. (2026)",
+  "threshold_method": "otsu",
+  "fetch_pipeline": "DES STAC (dates) + CDSE (bands)",
+  "per_year": {
+    "2018": {
+      "date": "2018-06-02",
+      "water_fraction": 0.3658,
+      "non_vegetated_fraction": 0.5504,
+      "vegetation_fraction": 0.0839,
+      "ndvi_threshold": 0.3863,
+      "threshold_method": "otsu",
+      "n_contours": 27
+    },
+    "2019": {
+      "date": "2019-07-26",
+      "water_fraction": 0.6957,
+      "non_vegetated_fraction": 0.0385,
+      "vegetation_fraction": 0.2658,
+      "ndvi_threshold": 0.4,
+      "threshold_method": "otsu",
+      "n_contours": 121
+    },
+    "2021": {
+      "date": "2021-06-28",
+      "water_fraction": 0.695,
+      "non_vegetated_fraction": 0.0256,
+      "vegetation_fraction": 0.2795,
+      "ndvi_threshold": 0.4326,
+      "threshold_method": "otsu",
+      "n_contours": 68
+    },
+    "2022": {
+      "date": "2022-06-05",
+      "water_fraction": 0.6946,
+      "non_vegetated_fraction": 0.0294,
+      "vegetation_fraction": 0.276,
+      "ndvi_threshold": 0.4402,
+      "threshold_method": "otsu",
+      "n_contours": 85
+    },
+    "2023": {
+      "date": "2023-06-06",
+      "water_fraction": 0.3058,
+      "non_vegetated_fraction": 0.6115,
+      "vegetation_fraction": 0.0827,
+      "ndvi_threshold": 0.3802,
+      "threshold_method": "otsu",
+      "n_contours": 26
+    },
+    "2025": {
+      "date": "2025-07-17",
+      "water_fraction": 0.6949,
+      "non_vegetated_fraction": 0.0256,
+      "vegetation_fraction": 0.2795,
+      "ndvi_threshold": 0.411,
+      "threshold_method": "otsu",
+      "n_contours": 72
+    }
+  },
+  "ndvi_mean": 0.1353
+}
