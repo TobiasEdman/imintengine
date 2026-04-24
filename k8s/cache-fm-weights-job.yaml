@@ -48,8 +48,11 @@ spec:
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
-              pip install --no-cache-dir -e . --no-deps 2>/dev/null || \
-                pip install --quiet --no-cache-dir -r requirements.txt
+              # Don't swallow stderr — silent failure here is what bit us
+              # last attempt. -e install is preferred; if it errors, fall
+              # back to PYTHONPATH so the heredoc can still import imint.
+              pip install --no-cache-dir -e . --no-deps || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
 
               # ── Per-family deps (best-effort; failures are reported,
               # not fatal — we want partial caches to still land) ────
