@@ -42,9 +42,16 @@ class LULCTrainer:
     def __init__(self, config: TrainingConfig):
         self.config = config
         self.device = self._resolve_device()
+        self._setup_cuda_perf_knobs()
         self.model = self._build_model()
         self._freeze_backbone()
         self.model.to(self.device)
+        # BF16 autocast on CUDA only. H100/A100 have hardware BF16; no
+        # GradScaler needed because BF16 has the same exponent range as
+        # FP32 (only mantissa precision is reduced). CPU/MPS fall back
+        # to FP32 — autocast is a context-manager no-op when disabled.
+        self._amp_enabled = (self.device.type == "cuda")
+        self._amp_dtype = torch.bfloat16 if self._amp_enabled else torch.float32
         self._training_log = {
             "config": {},
             "epochs": [],
@@ -65,6 +72,24 @@ class LULCTrainer:
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return torch.device("mps")
         return torch.device("cpu")
+
+    def _setup_cuda_perf_knobs(self) -> None:
+        """Enable TF32 + cuDNN autotune on CUDA devices.
+
+        Noop on CPU/MPS. These flags are global and idempotent — safe
+        to call multiple times. TF32 trades ~3 bits of mantissa for
+        ~1.5× matmul throughput on H100/A100 at no measurable accuracy
+        cost for segmentation. cudnn.benchmark picks the fastest conv
+        kernel per input shape; we use fixed img_size so shapes are
+        stable across batches.
+        """
+        if self.device.type != "cuda":
+            return
+        # TF32 — same API covers matmul and cuDNN convolutions.
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
 
     def _count_aux_channels(self) -> int:
         """Count how many auxiliary raster channels are enabled."""
@@ -473,15 +498,25 @@ class LULCTrainer:
                     location_coords = location_coords.to(self.device)
 
                 optimizer.zero_grad()
-                logits = self.model(
-                    images_5d, aux=aux,
-                    temporal_coords=temporal_coords,
-                    location_coords=location_coords,
-                ).contiguous()
-                if pixel_weight is not None:
-                    loss = criterion(logits, labels, pixel_weight=pixel_weight)
-                else:
-                    loss = criterion(logits, labels)
+                # BF16 autocast on H100/A100 for the forward + loss.
+                # Backward inherits the autocast dtype; optimizer step
+                # runs in FP32 (standard PyTorch AMP pattern). No
+                # GradScaler for BF16 — full FP32 exponent range is
+                # preserved so gradients can't underflow.
+                with torch.autocast(
+                    device_type=self.device.type,
+                    dtype=self._amp_dtype,
+                    enabled=self._amp_enabled,
+                ):
+                    logits = self.model(
+                        images_5d, aux=aux,
+                        temporal_coords=temporal_coords,
+                        location_coords=location_coords,
+                    ).contiguous()
+                    if pixel_weight is not None:
+                        loss = criterion(logits, labels, pixel_weight=pixel_weight)
+                    else:
+                        loss = criterion(logits, labels)
                 loss.backward()
                 optimizer.step()
 

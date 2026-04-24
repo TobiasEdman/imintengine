@@ -16,8 +16,11 @@
 #
 # Optional env (defaults match the v6a baseline):
 #   IMG_SIZE       — 256
-#   BATCH_SIZE     — 4
+#   BATCH_SIZE     — 32  (H100-optimized; sqrt-scaled lr from bs=4 ⇒ 3e-4)
 #   EPOCHS         — 10
+#
+# Training knobs below are tuned for H100 80GB with BF16 autocast + TF32
+# enabled in imint.training.trainer (see docs/training/hyperparameters.md).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -100,8 +103,8 @@ spec:
                 --enable-multitemporal \
                 --num-temporal-frames 4 \
                 --epochs ${EPOCHS:-10} \
-                --batch-size ${BATCH_SIZE:-4} \
-                --lr 1e-4 \
+                --batch-size ${BATCH_SIZE:-32} \
+                --lr ${LR:-3e-4} \
                 --weight-decay 0.35 \
                 --unfreeze-layers 6 \
                 --backbone-lr-factor 0.1 \
@@ -113,7 +116,7 @@ spec:
                 --label-smoothing 0.05 \
                 --lovasz-weight 0.3 \
                 --patience 20 \
-                --num-workers 32 \
+                --num-workers 16 \
                 --device cuda
 
           env:
@@ -126,7 +129,9 @@ spec:
             - name: IMG_SIZE
               value: "${IMG_SIZE:-256}"
             - name: BATCH_SIZE
-              value: "${BATCH_SIZE:-4}"
+              value: "${BATCH_SIZE:-32}"
+            - name: LR
+              value: "${LR:-3e-4}"
             - name: EPOCHS
               value: "${EPOCHS:-10}"
             - name: HUGGING_FACE_HUB_TOKEN
