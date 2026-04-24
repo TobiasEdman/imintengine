@@ -52,6 +52,7 @@ utils/config.py
 *secret*
 *.env
 .env
+.env.*
 .des_token
 .des_token.bak
 ssh-copy-id*
@@ -73,3 +74,27 @@ config/environments/prod.env
 # IDE
 .vscode/
 .idea/
+
+# Run artifacts (training/eval logs, dashboards, sandbox dirs) — never commit
+/training_log.json
+/training_raw.log
+/training_dashboard.html
+/class_stats.json
+/confusion_matrix.png
+/system_metrics.json
+/fetch_status.json
+/tile_*.png
+/tile_*.html
+/tile_previews.json
+/hygge_tile_viz.png
+/tile_comparison.png
+dashboards/live_logs/
+dashboards/pixel_live/tile_preds/
+dashboards/pixel_live/training_log.json
+dashboards/pixel_training_dashboard.html
+/static/
+/viewer_tiles/
+docs/*.bak
+
+# Tooling caches
+.claude/
