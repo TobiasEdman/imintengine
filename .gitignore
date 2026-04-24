@@ -50,6 +50,7 @@ utils/config.py
 /config.py
 *credentials*
 *secret*
+!imint/config/secrets.py
 *.env
 .env
 .env.*
