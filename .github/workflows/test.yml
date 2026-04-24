@@ -21,6 +21,19 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Allow pip to clone private TobiasEdman repos (des-contracts).
+      # DES_CONTRACTS_TOKEN must be a PAT with `repo` read scope, added
+      # as a repo secret. Per agentic_workflow rollout W3.6.
+      - name: Configure git for private repo access
+        env:
+          PAT: ${{ secrets.DES_CONTRACTS_TOKEN }}
+        run: |
+          if [ -n "$PAT" ]; then
+            git config --global url."https://${PAT}@github.com/".insteadOf "https://github.com/"
+          else
+            echo "::warning::DES_CONTRACTS_TOKEN secret not set; private deps will fail to clone."
+          fi
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
