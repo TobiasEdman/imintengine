@@ -1,0 +1,72 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lock-val-split
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: val-split-lock
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 300  # 5 min — pure file ops
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: locker
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              python - <<'PY'
+              # Materialize the deterministic 90/10 train/val split that
+              # imint.training.unified_dataset already computes on the fly,
+              # so all subsequent runs read it from disk. Replicates the
+              # exact MD5-hash logic in unified_dataset._load_tile_list to
+              # preserve comparability with the v6a baseline (mIoU 0.3663).
+              import hashlib
+              from pathlib import Path
+
+              DATA_DIR = Path("/data/unified_v2_512")
+              VAL_FRACTION = 10  # match unified_dataset.VAL_FRACTION
+
+              all_tiles = sorted(p.name for p in DATA_DIR.glob("*.npz"))
+              if not all_tiles:
+                  raise SystemExit(f"No .npz tiles found in {DATA_DIR}")
+
+              def is_val(name: str) -> bool:
+                  h = int(hashlib.md5(name.encode()).hexdigest(), 16)
+                  return h % 100 < VAL_FRACTION
+
+              val = [n for n in all_tiles if is_val(n)]
+              train = [n for n in all_tiles if not is_val(n)]
+
+              (DATA_DIR / "split_val.txt").write_text("\n".join(val) + "\n")
+              (DATA_DIR / "split_train.txt").write_text("\n".join(train) + "\n")
+
+              print(f"Total tiles:  {len(all_tiles):>5}")
+              print(f"Train tiles:  {len(train):>5} ({len(train)/len(all_tiles):.1%})")
+              print(f"Val tiles:    {len(val):>5} ({len(val)/len(all_tiles):.1%})")
+              print(f"Wrote:")
+              print(f"  {DATA_DIR / 'split_train.txt'}")
+              print(f"  {DATA_DIR / 'split_val.txt'}")
+              PY
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
