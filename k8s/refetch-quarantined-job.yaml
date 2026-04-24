@@ -1,0 +1,160 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: refetch-quarantined
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: refetch-quarantined
+spec:
+  backoffLimit: 1
+  # 188 tiles × ~30 s/tile via DES (conservative) → ~1.5 h. 6 h cap.
+  activeDeadlineSeconds: 21600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: refetcher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Refetch 188 quarantined tiles via DES + CDSE openEO (SH PU quota blown) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio geopandas shapely requests \
+                pyproj openeo pyarrow pyyaml Pillow httpx
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # ── Step 1: Build subset JSON of the 188 quarantined tiles ──
+              echo ""
+              echo "=== Step 1: Filter tile_locations_full.json to quarantined set ==="
+              python - <<'PY'
+              import json
+              from pathlib import Path
+
+              MANIFEST = Path("/data/unified_v2_512/quarantined_tiles.txt")
+              LOCATIONS = Path("/data/tile_locations_full.json")
+              SUBSET = Path("/tmp/refetch_subset.json")
+
+              if not MANIFEST.exists():
+                  raise SystemExit(f"Missing quarantine manifest: {MANIFEST}")
+              if not LOCATIONS.exists():
+                  raise SystemExit(f"Missing tile locations: {LOCATIONS}")
+
+              names = set()
+              for line in MANIFEST.read_text().splitlines():
+                  line = line.strip()
+                  if not line:
+                      continue
+                  # Manifest rows are "<tile>.npz<tab><error>" — keep the name only.
+                  name = line.split("\t", 1)[0]
+                  if name.endswith(".npz"):
+                      name = name[:-4]
+                  names.add(name)
+
+              all_locs = json.load(open(LOCATIONS))
+              # --from-json accepts [{name, bbox, year, source}, ...]
+              subset = [loc for loc in all_locs if loc.get("name") in names]
+
+              # Report coverage — we care whether every quarantined tile has
+              # a known location, otherwise some will stay missing after refetch.
+              matched = {loc["name"] for loc in subset}
+              missing = sorted(names - matched)
+
+              json.dump(subset, open(SUBSET, "w"))
+              print(f"  Manifest names: {len(names)}")
+              print(f"  Matched in tile_locations_full.json: {len(subset)}")
+              if missing:
+                  print(f"  WARN: {len(missing)} manifest names had no location entry:")
+                  for n in missing[:10]:
+                      print(f"    {n}")
+                  if len(missing) > 10:
+                      print(f"    … and {len(missing) - 10} more")
+              print(f"  Wrote subset: {SUBSET}")
+              PY
+
+              # ── Step 2: Refetch via DES + CDSE openEO (race both; skip SH Process — PU exhausted) ──
+              echo ""
+              echo "=== Step 2: Refetch via DES + CDSE openEO ==="
+              echo "    Two independent quota pools racing per tile date,"
+              echo "    first success wins. skip-existing keeps the 8072 clean tiles."
+              python scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json /tmp/refetch_subset.json \
+                --output-dir /data/unified_v2_512 \
+                --tile-size-px 512 \
+                --years 2022 2023 \
+                --workers 4 \
+                --cloud-max 30 \
+                --fetch-sources=des,cdse-openeo
+
+              # ── Step 3: Report ─────────────────────────────────────────
+              echo ""
+              echo "=== Done: $(date) ==="
+              N=$(ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l)
+              echo "  Tiles in /data/unified_v2_512/: $N"
+              echo ""
+              echo "Next steps (manual, after this job completes):"
+              echo "  1. Re-run build-labels for the newly fetched tiles"
+              echo "     (the existing build-labels k8s job is idempotent)."
+              echo "  2. Re-run lock-val-split so new tiles are included"
+              echo "     in the deterministic MD5-hash split."
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # CDSE creds kept around even though we're forcing DES — some
+            # helpers still import _get_token unconditionally.
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

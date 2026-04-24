@@ -340,7 +340,8 @@ def _fetch_frames_from_best_dates(
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from imint.training.cdse_s2 import fetch_s2_scene
     from imint.training.tile_fetch import (
-        _CDSE_SEMAPHORE, _DES_SEMAPHORE, PRITHVI_BANDS,
+        _CDSE_SEMAPHORE, _DES_SEMAPHORE, _CDSE_OPENEO_SEMAPHORE,
+        PRITHVI_BANDS,
     )
     from imint.fetch import fetch_seasonal_image
 
@@ -382,6 +383,26 @@ def _fetch_frames_from_best_dates(
             _DES_SEMAPHORE.release()
         return None, date_str
 
+    def _cdse_openeo_fetch(date_str):
+        # CDSE openEO (openeo.dataspace.copernicus.eu) uses a separate
+        # monthly-credit pool from SH Process PUs.
+        _CDSE_OPENEO_SEMAPHORE.acquire()
+        try:
+            result = fetch_seasonal_image(
+                date=date_str,
+                coords=coords_wgs84,
+                prithvi_bands=PRITHVI_BANDS,
+                source="copernicus",
+            )
+            _CDSE_OPENEO_SEMAPHORE.report_success()
+            if result is not None:
+                return result[0], date_str
+        except Exception:
+            _CDSE_OPENEO_SEMAPHORE.report_failure()
+        finally:
+            _CDSE_OPENEO_SEMAPHORE.release()
+        return None, date_str
+
     results = []
     for fi in range(n_frames):
         info = best.get(str(fi))
@@ -397,6 +418,8 @@ def _fetch_frames_from_best_dates(
             submit_map["cdse"] = _cdse_fetch
         if "des" in sources:
             submit_map["des"] = _des_fetch
+        if "cdse-openeo" in sources:
+            submit_map["cdse-openeo"] = _cdse_openeo_fetch
         if not submit_map:
             results.append((None, date_str))
             continue
@@ -715,16 +738,19 @@ def main():
                         "Sets the runtime TileConfig.size_px.")
     p.add_argument("--fetch-sources", default="cdse,des",
                    help="Comma-separated list of S2 backends to race. "
-                        "Valid: cdse, des. Use --fetch-sources=des to "
-                        "skip CDSE during a Sentinel-Hub outage.")
+                        "Valid: cdse (SH Process, PU-billed), des (Digital "
+                        "Earth Sweden openEO), cdse-openeo (CDSE openEO, "
+                        "uses the separate 10k-credits/mo pool). Use "
+                        "--fetch-sources=des,cdse-openeo to skip SH Process "
+                        "during a CDSE PU outage.")
     args = p.parse_args()
     random.seed(args.seed)
 
-    # Parse fetch sources (cdse and/or des)
+    # Parse fetch sources
     sources_tuple = tuple(
         s.strip().lower() for s in args.fetch_sources.split(",") if s.strip()
     )
-    valid = {"cdse", "des"}
+    valid = {"cdse", "des", "cdse-openeo"}
     unknown = set(sources_tuple) - valid
     if unknown:
         p.error(f"Unknown fetch source(s): {sorted(unknown)}. Valid: {sorted(valid)}")

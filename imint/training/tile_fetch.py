@@ -96,11 +96,18 @@ _DES_SEMAPHORE = AdaptiveSemaphore(
     initial=2, min_permits=1, max_permits=3,
     ramp_up_after=10, name="DES",
 )
-# CDSE allows 300 req/min but each 512px request takes ~20s.
-# 10 concurrent = ~30 req/min, well within quota.
+# CDSE SH Process API allows 300 req/min but each 512px request takes
+# ~20s. 10 concurrent = ~30 req/min, well within quota.
 _CDSE_SEMAPHORE = AdaptiveSemaphore(
     initial=10, min_permits=3, max_permits=20,
     ramp_up_after=20, name="CDSE",
+)
+# CDSE openEO is rate-limited at 12 requests/min (synchronous). Keep
+# concurrency low — its credit pool is separate from the SH PU pool, so
+# it's a useful fallback when PUs are exhausted.
+_CDSE_OPENEO_SEMAPHORE = AdaptiveSemaphore(
+    initial=2, min_permits=1, max_permits=3,
+    ramp_up_after=10, name="CDSE-OPENEO",
 )
 
 
@@ -221,13 +228,40 @@ def _fetch_single_scene(
             _DES_SEMAPHORE.release()
         return None, date_str
 
+    def _cdse_openeo_try(date_str: str) -> tuple[np.ndarray | None, str]:
+        # CDSE openEO (https://openeo.dataspace.copernicus.eu/) uses a
+        # separate monthly-credit pool from the SH Process PU pool.
+        # Usable as a parallel fallback while PUs are drained.
+        _CDSE_OPENEO_SEMAPHORE.acquire()
+        try:
+            result = fetch_seasonal_image(
+                date=date_str,
+                coords=coords_wgs84,
+                prithvi_bands=PRITHVI_BANDS,
+                source="copernicus",
+            )
+            _CDSE_OPENEO_SEMAPHORE.report_success()
+            if result is not None:
+                return result[0], date_str
+        except Exception:
+            _CDSE_OPENEO_SEMAPHORE.report_failure()
+        finally:
+            _CDSE_OPENEO_SEMAPHORE.release()
+        return None, date_str
+
     top_dates = [d for d, _ in candidates[:max_candidates]]
     use_des = "des" in sources
     use_cdse = "cdse" in sources
+    use_cdse_openeo = "cdse-openeo" in sources
 
-    # Race configured providers. Both enabled: 3 DES candidates + 1 CDSE.
-    # DES only: up to 3 DES candidates. CDSE only: 1 CDSE candidate.
-    max_workers = (3 if use_des else 0) + (1 if use_cdse else 0)
+    # Race configured providers. Each can contribute up to 3 candidates
+    # except plain CDSE (SH Process), which is PU-expensive and rate-
+    # tolerant, so we only throw 1 at it. Zero enabled → no-op.
+    max_workers = (
+        (3 if use_des else 0)
+        + (1 if use_cdse else 0)
+        + (3 if use_cdse_openeo else 0)
+    )
     if max_workers == 0:
         return None, ""
 
@@ -236,6 +270,9 @@ def _fetch_single_scene(
         if use_des:
             for d in top_dates[:3]:
                 futures.append(pool.submit(_des_try, d))
+        if use_cdse_openeo:
+            for d in top_dates[:3]:
+                futures.append(pool.submit(_cdse_openeo_try, d))
         if use_cdse and top_dates:
             futures.append(pool.submit(_cdse_try, top_dates[0]))
 
