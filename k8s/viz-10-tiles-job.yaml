@@ -1,0 +1,116 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: viz-10-tiles
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: viz
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy Pillow matplotlib
+
+              python3 << 'PYEOF'
+              import numpy as np, glob, os, random
+              from PIL import Image
+              import matplotlib
+              matplotlib.use("Agg")
+              import matplotlib.pyplot as plt
+
+              out_dir = "/data/unified_v2_512/.viz_10_random"
+              os.makedirs(out_dir, exist_ok=True)
+
+              # Sample mix: 4 tile_, 2 crop_, 2 urban_, 2 numeric
+              buckets = {
+                  "tile_": sorted(glob.glob("/data/unified_v2_512/tile_*.npz")),
+                  "crop_": sorted(glob.glob("/data/unified_v2_512/crop_*.npz")),
+                  "urban_": sorted(glob.glob("/data/unified_v2_512/urban_*.npz")),
+                  "numeric": sorted(glob.glob("/data/unified_v2_512/[0-9]*.npz")),
+              }
+              random.seed(42)
+              picks = []
+              picks += random.sample(buckets["tile_"], min(4, len(buckets["tile_"])))
+              picks += random.sample(buckets["crop_"], min(2, len(buckets["crop_"])))
+              picks += random.sample(buckets["urban_"], min(2, len(buckets["urban_"])))
+              picks += random.sample(buckets["numeric"], min(2, len(buckets["numeric"])))
+
+              print(f"Picked {len(picks)} tiles")
+
+              # Build a 5x4 grid: 4 frames per tile for the first 10
+              n = len(picks)
+              fig, axes = plt.subplots(n, 4, figsize=(16, 4 * n))
+              if n == 1:
+                  axes = np.array([axes])
+
+              for ri, path in enumerate(picks):
+                  name = os.path.basename(path).replace(".npz", "")
+                  d = np.load(path, allow_pickle=True)
+                  sp = d["spectral"]  # (24, H, W) = 4 frames × 6 bands
+                  dates = list(d.get("dates", []))
+                  for fi in range(4):
+                      ax = axes[ri, fi]
+                      frame = sp[fi*6:(fi+1)*6]  # (6, H, W)
+                      # RGB: B04, B03, B02 = indices 2, 1, 0 in Prithvi order
+                      rgb = np.stack([frame[2], frame[1], frame[0]], axis=-1)
+                      lo, hi = np.percentile(rgb, [2, 98])
+                      rgb = np.clip((rgb - lo) / max(hi - lo, 1e-6), 0, 1)
+                      ax.imshow(rgb)
+                      d_str = str(dates[fi])[:10] if fi < len(dates) else ""
+                      if ri == 0:
+                          titles = ["autumn-year-1", "VPP frame 1", "VPP frame 2", "VPP frame 3"]
+                          ax.set_title(f"{titles[fi]}\n{d_str}", fontsize=9)
+                      else:
+                          ax.set_title(d_str, fontsize=8)
+                      ax.axis("off")
+                  axes[ri, 0].set_ylabel(name, fontsize=9, rotation=0, labelpad=80, ha="right")
+
+              plt.suptitle(
+                  f"10 random tiles from /data/unified_v2_512/ — all 512×512 @ 10m GSD\n"
+                  f"4 tile_ + 2 crop_ + 2 urban_ + 2 numeric",
+                  fontsize=12,
+              )
+              plt.tight_layout()
+              out_path = f"{out_dir}/grid.png"
+              plt.savefig(out_path, dpi=110, bbox_inches="tight")
+              print(f"wrote {out_path} ({os.path.getsize(out_path)/1024:.0f} KB)")
+
+              # Individual PNGs too
+              for path in picks:
+                  name = os.path.basename(path).replace(".npz", "")
+                  d = np.load(path, allow_pickle=True)
+                  sp = d["spectral"]
+                  for fi in range(4):
+                      frame = sp[fi*6:(fi+1)*6]
+                      rgb = np.stack([frame[2], frame[1], frame[0]], axis=-1)
+                      lo, hi = np.percentile(rgb, [2, 98])
+                      rgb = np.clip((rgb - lo) / max(hi - lo, 1e-6), 0, 1)
+                      img = (rgb * 255).astype(np.uint8)
+                      Image.fromarray(img).save(f"{out_dir}/{name}_f{fi}.png")
+              print(f"Also wrote {len(picks)*4} individual frame PNGs")
+              PYEOF
+              ls -la /data/unified_v2_512/.viz_10_random/ | head -50
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

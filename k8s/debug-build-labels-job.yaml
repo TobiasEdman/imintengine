@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: debug-build-labels
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: probe
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              echo "=== Inventory ==="
+              echo "Tiles:      $(ls /data/unified_v2_512/tile_*.npz 2>/dev/null | wc -l)"
+              echo "NMD raster: $(ls -la /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif 2>&1)"
+              echo "LPIS dir:   $(ls /data/lpis/*.parquet 2>/dev/null)"
+              echo "SKS dir:    $(ls /data/sks/*.parquet 2>/dev/null | head -3)"
+              echo ""
+
+              python3 << 'PYEOF'
+              import sys, traceback
+              sys.path.insert(0, '/workspace/imintengine')
+              from scripts.build_labels import build_tile_label, _load_sks
+              _load_sks('/data/sks')
+
+              # Probe 3 tiles of different types
+              import glob
+              candidates = [
+                  sorted(glob.glob('/data/unified_v2_512/tile_*.npz'))[0],
+                  sorted(glob.glob('/data/unified_v2_512/crop_*.npz'))[0],
+                  sorted(glob.glob('/data/unified_v2_512/[0-9]*.npz'))[0],
+              ]
+              for path in candidates:
+                  import os
+                  name = os.path.basename(path).replace('.npz','')
+                  print(f"\n=== {name} ===")
+                  try:
+                      r = build_tile_label(
+                          path,
+                          nmd_raster='/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif',
+                          lpis_dir='/data/lpis',
+                          sks_dir='/data/sks',
+                      )
+                      print(f"  result: {r}")
+                  except Exception:
+                      print("  EXCEPTION:")
+                      traceback.print_exc()
+              PYEOF
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits:   {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

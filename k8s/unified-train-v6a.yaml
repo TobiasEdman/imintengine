@@ -1,0 +1,124 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unified-train-v6a
+  namespace: prithvi-training-default
+  labels:
+    app: unified-training
+    version: v5
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 43200  # 12 hours max (4-frame = slower)
+  template:
+    metadata:
+      labels:
+        app: unified-training
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: trainer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+
+              echo "=== v5c: sqrt inverse-freq weights + label smoothing ==="
+              echo "Checking data..."
+              TILE_COUNT=$(ls /data/unified_v2/*.npz 2>/dev/null | wc -l)
+              echo "Unified tiles: $TILE_COUNT"
+
+              if [ "$TILE_COUNT" -lt 100 ]; then
+                echo "ERROR: Not enough tiles in /data/unified_v2/"
+                exit 1
+              fi
+
+              echo "Installing system deps..."
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+
+              echo "Installing Python dependencies..."
+              pip install --quiet --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir timm numpy scipy scikit-learn
+
+              echo "Cleaning stale checkpoint temp files..."
+              rm -f /checkpoints/unified_v6a/*.pt.tmp 2>/dev/null || true
+
+              pip install --quiet --no-cache-dir huggingface_hub
+
+              echo "Cloning ImintEngine..."
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine && pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+
+              # Symlink cached Prithvi weights from PVC (avoids HF download)
+              if [ -f /data/model_cache/Prithvi_EO_V2_300M_TL.pt ]; then
+                ln -sf /data/model_cache/Prithvi_EO_V2_300M_TL.pt \
+                  /workspace/imintengine/imint/fm/prithvi_mae/Prithvi_EO_V2_300M_TL.pt
+                echo "Using cached Prithvi weights from PVC"
+              fi
+              cd /data
+
+              echo "Starting 4-frame multi-temporal training..."
+              python /workspace/imintengine/scripts/train_unified.py \
+                --data-dirs /data/unified_v2 \
+                --checkpoint-dir /checkpoints/unified_v6a \
+                --num-classes 23 \
+                --enable-multitemporal \
+                --num-temporal-frames 4 \
+                --epochs 10 \
+                --batch-size 4 \
+                --lr 1e-4 \
+                --weight-decay 0.35 \
+                --unfreeze-layers 6 \
+                --backbone-lr-factor 0.1 \
+                --loss-type focal_dice \
+                --focal-gamma 2.0 \
+                --patch-size 256 \
+                --img-size 256 \
+                --weighting-method sqrt \
+                --label-smoothing 0.05 \
+                --lovasz-weight 0.3 \
+                --patience 20 \
+                --num-workers 32 \
+                --device cuda
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "48"
+              memory: "192Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "48"
+              memory: "192Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi
