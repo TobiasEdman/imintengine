@@ -162,3 +162,15 @@ Verifiera alltid förbättrad kod med explicita assertions eller pytest-tester. 
 - **All kod ska vara framtidssäkrad** — inget junk som "kan behövas senare"
 - **Starta aldrig om jobb som förkastar redan klart arbete** — fråga alltid användaren först
 - **Alla hämtade/beräknade data ska persisteras till disk** — aldrig bara i minnet
+
+### Verifiera alltid ändringar (repo-specifik tolkning av global regel §6)
+
+Varje icke-trivial ändring i detta repo måste avslutas med ett konkret verifieringssteg:
+
+- Schema-ändringar: `pytest tests/test_schema.py -v` — 40+ regressionstester ska passera.
+- Träningspipeline: kör en 1-epok smoke-test lokalt innan K8s-submit.
+- Fetch-kod: kör mot en känd tile och jämför bit-likhet mot cachad referens.
+- Dashboard/notebook: screenshot + rendera om — inga visuella regressioner.
+- K8s-manifester: `kubectl apply --dry-run=server -f` före verklig submit.
+
+Utan verifieringsartefakt: ingen commit. Se `~/.claude/CLAUDE.md` §6 + agentic_workflow `docs/lessons/external_patterns.md` §C2.
