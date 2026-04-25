@@ -1,0 +1,185 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fix-lpis-axes
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: fix-lpis-xy-swap
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 7200  # 2 h cap (5 LPIS files × 2 versions = 10 rewrites)
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fixer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Fix LPIS parquet X/Y axis swap ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy pandas pyarrow geopandas shapely
+
+              python - <<'PY'
+              # Each LPIS GeoParquet was written with shapely geometries whose
+              # coordinates are stored as (Y, X) instead of (X, Y). The CRS
+              # metadata declares EPSG:3006 with axis order [Northing, Easting]
+              # — technically correct per the EPSG authority, but every
+              # downstream consumer (rasterize_parcels, SpatialParquet.query,
+              # rasterio) expects standard [X, Y] so the geometries miss every
+              # tile bbox and merge_all() produces NMD-only labels.
+              #
+              # Fix: read each parquet, transform every geometry's coordinates
+              # so (Y, X) → (X, Y), drop the ill-formed `_bbox_*` columns
+              # (they were derived from the swapped geometry), and re-emit.
+              # The non-spatial fallback parquet is rewritten without bbox
+              # columns; the *_spatial.parquet is re-emitted with the same
+              # row-group / sort layout but RECOMPUTED bbox columns.
+              #
+              # Original files are renamed to *.bak so the fix is reversible.
+
+              import os
+              import shutil
+              from pathlib import Path
+
+              import geopandas as gpd
+              import numpy as np
+              from shapely.ops import transform as shp_transform
+
+              LPIS_DIR = Path("/data/lpis")
+              YEARS = [2018, 2019, 2022, 2023, 2024]
+
+              def swap_coords(geom):
+                  # (x, y) → (y, x) — shapely.ops.transform receives the
+                  # coordinate function; we just flip the two args.
+                  return shp_transform(lambda x, y: (y, x), geom)
+
+              def grid_cell(x: float, y: float, step: float = 50_000.0) -> int:
+                  # Coarse Z-order-ish cell index for sorting. Standard X/Y.
+                  ix = int(x // step)
+                  iy = int(y // step)
+                  return iy * 10_000 + ix
+
+              total_files = 0
+              for year in YEARS:
+                  base = LPIS_DIR / f"jordbruksskiften_{year}.parquet"
+                  spatial = LPIS_DIR / f"jordbruksskiften_{year}_spatial.parquet"
+
+                  if not base.exists():
+                      print(f"[{year}] base parquet missing — skipping")
+                      continue
+
+                  print(f"\n[{year}] reading base parquet...")
+                  gdf = gpd.read_parquet(base)
+                  n = len(gdf)
+                  print(f"  rows: {n}")
+
+                  # Sanity-check: are coords actually swapped?
+                  # Sweden in real EPSG:3006: easting 270k–920k, northing 6.1M–7.6M.
+                  # If minx > miny, axes are swapped (current state).
+                  bnds = gdf.total_bounds  # [minx, miny, maxx, maxy]
+                  swapped = bnds[0] > bnds[1]
+                  print(f"  total_bounds = {bnds.tolist()}")
+                  if not swapped:
+                      print(f"  axes already correct — skipping {year}")
+                      continue
+
+                  print(f"  axes swapped → flipping all geometries...")
+                  gdf["geometry"] = gdf.geometry.apply(swap_coords)
+                  bnds2 = gdf.total_bounds
+                  print(f"  new total_bounds = {bnds2.tolist()}")
+                  # Sanity: now minx should be < miny (easting < northing).
+                  if not (bnds2[0] < bnds2[1]):
+                      raise RuntimeError(
+                          f"  BAIL: post-swap bounds {bnds2.tolist()} still wrong"
+                      )
+
+                  # Backup original.
+                  bak = base.with_suffix(".parquet.bak")
+                  if not bak.exists():
+                      shutil.copy2(base, bak)
+                      print(f"  backed up → {bak.name}")
+                  gdf.to_parquet(base, index=False)
+                  print(f"  rewrote {base.name}")
+                  total_files += 1
+
+                  # Rewrite the spatial parquet too: same row groups,
+                  # recomputed bbox columns, sorted by coarse grid cell.
+                  if spatial.exists():
+                      bnd_xy = gdf.geometry.bounds  # standard X/Y
+                      gdf["_bbox_minx"] = bnd_xy["minx"].astype("float64").values
+                      gdf["_bbox_miny"] = bnd_xy["miny"].astype("float64").values
+                      gdf["_bbox_maxx"] = bnd_xy["maxx"].astype("float64").values
+                      gdf["_bbox_maxy"] = bnd_xy["maxy"].astype("float64").values
+                      cx = (gdf["_bbox_minx"].values + gdf["_bbox_maxx"].values) / 2
+                      cy = (gdf["_bbox_miny"].values + gdf["_bbox_maxy"].values) / 2
+                      gdf["_grid_x"] = (cx // 50_000).astype("int32")
+                      gdf["_grid_y"] = (cy // 50_000).astype("int32")
+                      gdf = gdf.sort_values(["_grid_y", "_grid_x"]).reset_index(drop=True)
+
+                      bak_sp = spatial.with_suffix(".parquet.bak")
+                      if not bak_sp.exists():
+                          shutil.copy2(spatial, bak_sp)
+                          print(f"  backed up → {bak_sp.name}")
+                      # 10 000 rows per row group preserves the original layout.
+                      gdf.to_parquet(spatial, index=False, row_group_size=10_000)
+                      print(f"  rewrote {spatial.name}")
+                      total_files += 1
+                  else:
+                      print(f"  spatial parquet missing — skipped")
+
+              print(f"\n=== Done. Rewrote {total_files} parquet(s). ===")
+              PY
+
+              echo ""
+              echo "=== Verification ==="
+              python - <<'PY'
+              # Sanity check: a known crop tile bbox should now match polygons.
+              import geopandas as gpd
+
+              gdf = gpd.read_parquet("/data/lpis/jordbruksskiften_2022.parquet")
+              print(f"2022 total_bounds: {gdf.total_bounds.tolist()}")
+
+              # Tile bbox from crop_havre_356976_6196795.npz: easting ~354–360k,
+              # northing ~6194–6199k.
+              tw, ts, te, tn = 354416, 6194235, 359536, 6199355
+              b = gdf.geometry.bounds
+              hits = gdf[~(
+                  (b["maxx"] < tw) | (b["minx"] > te)
+                  | (b["maxy"] < ts) | (b["miny"] > tn)
+              )]
+              print(f"polygons intersecting test tile bbox: {len(hits)}")
+              if len(hits) == 0:
+                  raise SystemExit("FAIL: still 0 hits after swap")
+              print(f"sample crop codes: "
+                    f"{sorted(hits['grdkod_mar'].dropna().unique())[:15]}")
+              PY
+
+              echo ""
+              echo "=== Done: $(date) ==="
+          resources:
+            requests:
+              cpu: "4"
+              memory: "32Gi"
+            limits:
+              cpu: "4"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
