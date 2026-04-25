@@ -16,7 +16,7 @@ Design notes:
    "infra-only"). The first customer pilot will require OAuth2 or an
    API-key middleware; placeholder hook is in place.
  - SLA telemetry (W4.5) is wired via the `instrumentation` module if
-   present (fail-open like des-agent / des-chatbot).
+   present (fail-open like omni-rag / des-chatbot).
 
 Run locally:
     uvicorn imint.api.v1:app --reload
@@ -103,7 +103,7 @@ app = FastAPI(
 # ── Telemetry middleware ───────────────────────────────────────────────────
 #
 # W4.5 SLA telemetry. Per-request: method, path, status, duration_ms.
-# Fail-open like des-agent / des-chatbot — no OTel installed → no-op.
+# Fail-open like omni-rag / des-chatbot — no OTel installed → no-op.
 
 try:
     from instrumentation import record_chat_ms, span  # type: ignore[import-not-found]
