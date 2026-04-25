@@ -57,18 +57,22 @@ spec:
               echo "  SKS:        $(ls /data/sks/*.parquet 2>/dev/null | wc -l) parquets"
               echo ""
 
-              # 2026-04-24: 32 workers OOM-killed at tile ~5900/8260.
-              # Comment claimed "safely fits in 24 Gi" — in practice the
-              # LPIS/SKS spatial queries over dense regions push well
-              # past that. Drop to 8 workers (4× memory headroom per
-              # worker). Still fits the 4 h cap: 8260 tiles × ~3 s/tile
-              # / 8 workers ≈ 52 min (vs claimed 10 min at 32 workers).
+              # 2026-04-24: 32 workers / 96 Gi → OOM at tile ~5900/8260
+              #             (≈ 3 Gi/worker peak in dense LPIS regions).
+              # 2026-04-25 morning: 8 workers / 96 Gi finished clean in
+              #             3h24m (~2500 tiles/h).
+              # 2026-04-25 evening (this run): scale up — 32 workers /
+              #             64 CPU / 128 Gi pod. That's 4 Gi/worker
+              #             (33% above the OOM threshold) and ~4× the
+              #             8-worker throughput. Namespace memory quota
+              #             has 117 Gi free; 128 Gi fits once the prior
+              #             96 Gi pod fully terminates. ETA ~30 min.
               python scripts/build_labels.py \
                 --data-dir  /data/unified_v2_512 \
                 --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
                 --lpis-dir  /data/lpis \
                 --sks-dir   /data/sks \
-                --workers 8
+                --workers 32
 
               echo ""
               echo "=== QC ==="
@@ -83,10 +87,10 @@ spec:
           resources:
             requests:
               cpu: "32"
-              memory: "96Gi"
+              memory: "128Gi"
             limits:
               cpu: "32"
-              memory: "96Gi"
+              memory: "128Gi"
           volumeMounts:
             - name: data
               mountPath: /data
