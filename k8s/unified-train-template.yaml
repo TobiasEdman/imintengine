@@ -20,6 +20,14 @@
 #   LR             — default 2e-4
 #   EPOCHS         — default 10
 #   DISABLE_BF16   — default "" (BF16 on). Set to "1" to force FP32.
+#   ACCELERATOR    — default "nvidia-h100". Other valid: "nvidia-gtx-2080ti".
+#                    The wrapper auto-rightsizes pod resources for 2080 Ti
+#                    (8 cpu / 24 Gi) since the H100 size (48 cpu / 192 Gi)
+#                    won't fit on the smaller worker nodes.
+#   POD_CPU        — default "48" (H100). Set to "8" for 2080 Ti.
+#   POD_MEM        — default "192Gi" (H100). Set to "24Gi" for 2080 Ti.
+#   DSHM_SIZE      — default "32Gi" (H100). Set to "8Gi" for 2080 Ti.
+#   NUM_WORKERS    — default 16 (H100). Set to 4 for 2080 Ti.
 #
 # bs=32/lr=3e-4 was tried as v7 and caused rare-class collapse (bete,
 # trindsäd, råg, majs all went to 0.0 IoU). Scaled back to bs=16/lr=2e-4
@@ -55,7 +63,7 @@ spec:
     spec:
       restartPolicy: Never
       nodeSelector:
-        accelerator: nvidia-h100
+        accelerator: ${ACCELERATOR}
       containers:
         - name: trainer
           image: python:3.11-slim
@@ -151,7 +159,7 @@ spec:
                 --label-smoothing 0.05 \
                 --lovasz-weight 0.3 \
                 --patience 20 \
-                --num-workers 16 \
+                --num-workers ${NUM_WORKERS} \
                 --device cuda \
                 ${BF16_FLAG}
 
@@ -180,12 +188,12 @@ spec:
                   optional: true
           resources:
             requests:
-              cpu: "48"
-              memory: "192Gi"
+              cpu: "${POD_CPU}"
+              memory: "${POD_MEM}"
               nvidia.com/gpu: "1"
             limits:
-              cpu: "48"
-              memory: "192Gi"
+              cpu: "${POD_CPU}"
+              memory: "${POD_MEM}"
               nvidia.com/gpu: "1"
           volumeMounts:
             - name: training-data
@@ -204,4 +212,4 @@ spec:
         - name: dshm
           emptyDir:
             medium: Memory
-            sizeLimit: 32Gi
+            sizeLimit: ${DSHM_SIZE}
