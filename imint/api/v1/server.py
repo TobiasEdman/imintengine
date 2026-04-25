@@ -45,6 +45,12 @@ from imint.api.v1.schemas import (
     JobStatus,
     JobStatusResponse,
 )
+from imint.api.v1.telemetry import (
+    emit_access_log,
+    metrics_payload,
+    new_request_id,
+    record_request,
+)
 
 # Schema + embedding identity surfaced via /health and /analyzers — pulled
 # from des-contracts (v0.1.0+) so the API advertises which contract version
@@ -116,29 +122,86 @@ except ImportError:
 
 @app.middleware("http")
 async def telemetry_middleware(request: Request, call_next):
+    """Per-request telemetry pipeline (W4.5).
+
+    Three signals per request:
+      1. Structured JSON access log to stderr (always on).
+      2. Prometheus histogram + counter (if prometheus_client installed).
+      3. OTel span (if opentelemetry installed).
+
+    Plus an X-Request-Id response header for distributed-trace stitching
+    and an X-Response-Time-MS header for client-side SLA monitoring.
+    """
     start = time.monotonic()
-    with span(f"http.{request.method.lower()}", path=request.url.path):
+    request_id = new_request_id()
+    # `route.path` is the parameterised pattern (e.g. /v1/jobs/{job_id});
+    # falls back to URL path if FastAPI hasn't matched yet.
+    route_template = getattr(request.scope.get("route"), "path", request.url.path)
+
+    with span(
+        f"http.{request.method.lower()}",
+        path=request.url.path,
+        route=route_template,
+        request_id=request_id,
+    ):
         try:
             response = await call_next(request)
             duration_ms = (time.monotonic() - start) * 1000
             response.headers["X-Response-Time-MS"] = f"{duration_ms:.1f}"
-            logger.info(
-                "%s %s -> %d (%.1f ms)",
-                request.method,
-                request.url.path,
-                response.status_code,
-                duration_ms,
+            response.headers["X-Request-Id"] = request_id
+            emit_access_log(
+                method=request.method,
+                path=request.url.path,
+                status=response.status_code,
+                duration_ms=duration_ms,
+                request_id=request_id,
+            )
+            record_request(
+                method=request.method,
+                route=route_template,
+                status=response.status_code,
+                duration_ms=duration_ms,
             )
             return response
         except Exception:
             duration_ms = (time.monotonic() - start) * 1000
+            emit_access_log(
+                method=request.method,
+                path=request.url.path,
+                status=500,
+                duration_ms=duration_ms,
+                request_id=request_id,
+                extra={"error": "unhandled"},
+            )
+            record_request(
+                method=request.method,
+                route=route_template,
+                status=500,
+                duration_ms=duration_ms,
+            )
             logger.exception(
-                "%s %s -> EXCEPTION (%.1f ms)",
+                "%s %s -> EXCEPTION (%.1f ms) [request_id=%s]",
                 request.method,
                 request.url.path,
                 duration_ms,
+                request_id,
             )
             raise
+
+
+@app.get("/v1/metrics", include_in_schema=False)
+async def metrics() -> "Response":  # type: ignore[name-defined]
+    """Prometheus scrape endpoint (W4.5).
+
+    Returns plain text in Prometheus exposition format if
+    prometheus_client is installed; an empty placeholder otherwise so
+    scrape configs don't 404. Excluded from OpenAPI to keep /v1/docs
+    focused on the analyze workflow.
+    """
+    from fastapi import Response  # local import to avoid top-level circulars
+
+    body, content_type = metrics_payload()
+    return Response(content=body, media_type=content_type)
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────

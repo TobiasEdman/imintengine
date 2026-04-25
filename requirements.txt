@@ -48,3 +48,7 @@ fastapi>=0.115,<0.120
 uvicorn[standard]>=0.32,<1
 gunicorn>=22,<24
 httpx>=0.27,<1   # used by /analyze callback hook + by tests
+
+# SLA telemetry (W4.5). Optional — telemetry module is fail-open when
+# this isn't installed; metrics endpoint still serves a placeholder.
+prometheus-client>=0.20,<1

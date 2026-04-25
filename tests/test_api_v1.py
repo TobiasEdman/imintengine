@@ -106,3 +106,38 @@ def test_openapi_schema_published():
     assert "/v1/analyzers" in paths
     assert "/v1/analyze" in paths
     assert "/v1/jobs/{job_id}" in paths
+    # /v1/metrics is excluded from OpenAPI on purpose (W4.5).
+    assert "/v1/metrics" not in paths
+
+
+def test_response_includes_request_id_header():
+    """W4.5: every response carries an X-Request-Id for trace stitching."""
+    from imint.api.v1 import app
+
+    client = TestClient(app)
+    r = client.get("/v1/health")
+    assert r.status_code == 200
+    rid = r.headers.get("X-Request-Id")
+    assert rid is not None and len(rid) >= 8
+
+
+def test_response_includes_response_time_header():
+    """W4.5: X-Response-Time-MS aids client-side SLA tracking."""
+    from imint.api.v1 import app
+
+    client = TestClient(app)
+    r = client.get("/v1/health")
+    assert r.status_code == 200
+    rt = r.headers.get("X-Response-Time-MS")
+    assert rt is not None
+    assert float(rt) >= 0.0
+
+
+def test_metrics_endpoint_reachable():
+    """W4.5: /v1/metrics returns text/plain even without prometheus_client."""
+    from imint.api.v1 import app
+
+    client = TestClient(app)
+    r = client.get("/v1/metrics")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
