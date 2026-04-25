@@ -58,6 +58,7 @@ esac
 # Run-shape knobs that don't depend on the accelerator.
 : "${IMG_SIZE:=256}"
 : "${EPOCHS:=10}"
+: "${COLLAPSE_REWIND:=}"  # empty = off. Set to "1" for v7d (collapse-rewind).
 
 TEMPLATE="$(dirname "$0")/../k8s/unified-train-template.yaml"
 if [ ! -f "$TEMPLATE" ]; then
@@ -74,11 +75,12 @@ echo "  BATCH_SIZE:    $BATCH_SIZE"
 echo "  LR:            $LR"
 echo "  EPOCHS:        $EPOCHS"
 echo "  DISABLE_BF16:  ${DISABLE_BF16:-(unset → BF16 on)}"
+echo "  COLLAPSE_REWIND: ${COLLAPSE_REWIND:-(unset → off)}"
 echo "  POD:           cpu=$POD_CPU mem=$POD_MEM dshm=$DSHM_SIZE workers=$NUM_WORKERS"
 echo ""
 
-export RUN_ID BACKBONE_NAME ACCELERATOR IMG_SIZE BATCH_SIZE LR EPOCHS DISABLE_BF16
+export RUN_ID BACKBONE_NAME ACCELERATOR IMG_SIZE BATCH_SIZE LR EPOCHS DISABLE_BF16 COLLAPSE_REWIND
 export POD_CPU POD_MEM DSHM_SIZE NUM_WORKERS
-envsubst '$RUN_ID $BACKBONE_NAME $ACCELERATOR $IMG_SIZE $BATCH_SIZE $LR $EPOCHS $DISABLE_BF16 $POD_CPU $POD_MEM $DSHM_SIZE $NUM_WORKERS' \
+envsubst '$RUN_ID $BACKBONE_NAME $ACCELERATOR $IMG_SIZE $BATCH_SIZE $LR $EPOCHS $DISABLE_BF16 $COLLAPSE_REWIND $POD_CPU $POD_MEM $DSHM_SIZE $NUM_WORKERS' \
   < "$TEMPLATE" \
   | kubectl apply -f -

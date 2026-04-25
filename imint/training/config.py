@@ -72,6 +72,26 @@ class TrainingConfig:
     # exposed so runs can disable it to isolate the cause.
     enable_bf16_autocast: bool = True
 
+    # ── Collapse-rewind ───────────────────────────────────────────────────
+    # Across v7/v7b/v7c-2080 we observed the same pattern: rare classes
+    # (vete, korn, bete, …) drop to exactly 0.0 IoU between consecutive
+    # epochs and never recover because the cosine LR has decayed too far.
+    # When enabled, the trainer detects collapse, reloads the best
+    # checkpoint, halves the LR, and re-anneals the cosine over the
+    # remaining epochs. Up to `collapse_max_rewinds` recoveries before
+    # giving up.
+    enable_collapse_rewind: bool = False
+    # Number of NEW classes hitting 0.0 IoU (vs the best-checkpoint
+    # epoch's collapsed set) that triggers a rewind. 1 is conservative;
+    # larger means we tolerate one or two collapses before reacting.
+    collapse_threshold: int = 2
+    # LR multiplier on each rewind. 0.5 = halve. Applied per-group so
+    # backbone-vs-decoder ratio is preserved.
+    collapse_lr_factor: float = 0.5
+    # Hard cap on rewinds per run. If we hit this, training continues
+    # without further rewinds (best checkpoint is whatever we had).
+    collapse_max_rewinds: int = 3
+
     # ── Model ─────────────────────────────────────────────────────────────
     # Preferred: registry key from imint.fm.registry.MODEL_CONFIGS.
     # When None, trainer falls back to `backbone` via LEGACY_BACKBONE_ALIAS.

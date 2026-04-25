@@ -95,6 +95,26 @@ def main():
              "Use to isolate BF16 as the cause of rare-class IoU collapse.",
     )
 
+    # Collapse rewind
+    parser.add_argument(
+        "--collapse-rewind", action="store_true",
+        help="On rare-class IoU collapse, restore best checkpoint and "
+             "halve LR (per-group). Up to --collapse-max-rewinds times.",
+    )
+    parser.add_argument(
+        "--collapse-threshold", type=int, default=2,
+        help="Number of NEW classes hitting 0.0 IoU (vs best epoch) "
+             "that triggers a rewind. Default 2.",
+    )
+    parser.add_argument(
+        "--collapse-lr-factor", type=float, default=0.5,
+        help="LR multiplier on each rewind. Default 0.5 (halve).",
+    )
+    parser.add_argument(
+        "--collapse-max-rewinds", type=int, default=3,
+        help="Hard cap on rewinds per run. Default 3.",
+    )
+
     # Model
     parser.add_argument(
         "--backbone-name", type=str, default=None,
@@ -230,6 +250,10 @@ def main():
         data_dir=data_dirs[0],  # Primary dir for TrainingConfig compatibility
         backbone_name=args.backbone_name,
         enable_bf16_autocast=not args.disable_bf16,
+        enable_collapse_rewind=args.collapse_rewind,
+        collapse_threshold=args.collapse_threshold,
+        collapse_lr_factor=args.collapse_lr_factor,
+        collapse_max_rewinds=args.collapse_max_rewinds,
         num_classes=args.num_classes,
         epochs=args.epochs,
         batch_size=args.batch_size,

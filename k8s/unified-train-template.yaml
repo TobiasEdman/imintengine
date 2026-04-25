@@ -103,6 +103,13 @@ spec:
                 echo "=== DISABLE_BF16 set — forcing FP32 autocast ==="
               fi
 
+              # Opt-in collapse-rewind. Empty = no flag.
+              REWIND_FLAG=""
+              if [ -n "${COLLAPSE_REWIND}" ]; then
+                REWIND_FLAG="--collapse-rewind"
+                echo "=== COLLAPSE_REWIND on — LR rewinds at rare-class collapse ==="
+              fi
+
               echo "Cloning ImintEngine..."
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
@@ -161,7 +168,8 @@ spec:
                 --patience 20 \
                 --num-workers ${NUM_WORKERS} \
                 --device cuda \
-                ${BF16_FLAG}
+                ${BF16_FLAG} \
+                ${REWIND_FLAG}
 
           env:
             - name: PYTHONUNBUFFERED
@@ -180,6 +188,8 @@ spec:
               value: "${EPOCHS}"
             - name: DISABLE_BF16
               value: "${DISABLE_BF16}"
+            - name: COLLAPSE_REWIND
+              value: "${COLLAPSE_REWIND}"
             - name: HUGGING_FACE_HUB_TOKEN
               valueFrom:
                 secretKeyRef:

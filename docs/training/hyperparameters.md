@@ -125,10 +125,49 @@ per-class IoU comparisons happen within the v7b family.
 - Takeaway: when scaling batch for H100, test on canary classes
   (potatis, bebyggelse, bete) before committing to the hyperparams.
 
+## v7d — Collapse rewind
+
+Empirically, all v7/v7b/v7c runs share the same failure mode: rare
+classes (vete, korn, bete, trindsäd, råg, majs, …) drop from healthy
+IoU to *exactly 0.0* between consecutive epochs and never recover. The
+common factor across the runs is **the cosine LR schedule decays past
+the threshold needed to recover rare-class predictions** before the
+schedule ends. v7c-2080 T2 (prithvi_600m, FP32, bs=4 — i.e. v6a
+hyperparams exactly, on different hardware) showed the cleanest
+example: epoch 1 collapsed (mIoU 0.31), epoch 2 fully recovered
+(0.36, all classes alive), epoch 3 re-collapsed (0.24).
+
+`enable_collapse_rewind` adds a recovery loop:
+
+1. After each val epoch, compute `now_collapsed` = set of classes with
+   IoU == 0.0.
+2. If `|now_collapsed - best_collapsed| ≥ collapse_threshold` (default
+   2 new classes), declare collapse.
+3. Reload weights from `best_model.pt`, multiply each optimizer param
+   group's LR by `collapse_lr_factor` (default 0.5), re-anneal cosine
+   over the **remaining** epochs.
+4. Reset `patience_counter` so we don't trip early-stop on the rewind.
+5. Allow up to `collapse_max_rewinds` (default 3) recoveries; after
+   that, training continues without further intervention.
+
+The flag is **opt-in** — `enable_collapse_rewind: bool = False` — so
+existing runs are unaffected. Enable via `--collapse-rewind` flag or
+`COLLAPSE_REWIND=1` env in the k8s template.
+
+Why per-group LR multiplication: backbone-vs-decoder LR ratio
+(`backbone_lr_factor=0.1`) was deliberately tuned in v6a; halving in
+place preserves it.
+
+Why reload weights, not just lower LR: once a class collapses, its
+output logits have drifted such that any positive update via gradient
+flow is too small to push them above the decision boundary. Restoring
+the pre-collapse weights is necessary; lowering LR alone doesn't help.
+
 ## See also
 
 - `imint/training/config.py` — canonical defaults
-- `imint/training/trainer.py` — the actual loop
+- `imint/training/trainer.py` — the actual loop (collapse-rewind block
+  is right after the per-class IoU print)
 - `k8s/unified-train-template.yaml` — how to launch a run
 - Commit `884fefc` — weight-decay rationale
 - Commit `9119fb6` — schema/pipeline showcase

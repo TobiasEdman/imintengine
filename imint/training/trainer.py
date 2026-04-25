@@ -414,6 +414,11 @@ class LULCTrainer:
         step = 0
         start_epoch = 1
 
+        # Collapse-rewind state (only used when cfg.enable_collapse_rewind=True)
+        best_collapsed = set()        # set of class names at IoU == 0.0 in best ckpt
+        best_per_class = {}           # per-class IoU dict from best ckpt epoch
+        rewinds_done = 0
+
         print(f"\n{'='*60}")
         print(f"  Training: {cfg.epochs} epochs, batch_size={cfg.batch_size}, "
               f"lr={cfg.lr}, device={self.device}")
@@ -600,6 +605,12 @@ class LULCTrainer:
                 best_miou = val_miou
                 best_epoch = epoch
                 patience_counter = 0
+                # Snapshot the collapse state at the best epoch — used by
+                # collapse-rewind detection below.
+                best_collapsed = {
+                    n for n, v in valid_ious.items() if v == 0.0
+                }
+                best_per_class = dict(valid_ious)
                 self._save_checkpoint(
                     ckpt_dir / "best_model.pt", epoch, val_metrics,
                 )
@@ -607,6 +618,67 @@ class LULCTrainer:
                       f"(mIoU={val_miou:.4f}, metric={metric_value:.4f})")
             else:
                 patience_counter += 1
+
+            # ── Collapse rewind ──────────────────────────────────────
+            # Detect rare-class collapse vs the best checkpoint, restore
+            # the pre-collapse weights, halve LR per-group, and continue.
+            if (
+                cfg.enable_collapse_rewind
+                and best_epoch > 0
+                and rewinds_done < cfg.collapse_max_rewinds
+                and not is_new_best  # Only react after we've seen regression
+            ):
+                now_collapsed = {
+                    n for n, v in valid_ious.items() if v == 0.0
+                }
+                new_collapses = now_collapsed - best_collapsed
+                if len(new_collapses) >= cfg.collapse_threshold:
+                    rewinds_done += 1
+                    print(
+                        f"    ⚠ Collapse detected at epoch {epoch}: "
+                        f"{len(new_collapses)} new class(es) hit 0.0 "
+                        f"({sorted(new_collapses)[:5]}...). "
+                        f"Rewinding to epoch {best_epoch} "
+                        f"(rewind {rewinds_done}/{cfg.collapse_max_rewinds})."
+                    )
+                    # 1. Restore weights from best_model.pt
+                    best_path = ckpt_dir / "best_model.pt"
+                    if best_path.exists():
+                        ckpt = torch.load(best_path, map_location=self.device,
+                                          weights_only=False)
+                        # _save_checkpoint stores under "model" with
+                        # Lightning-convention "model." prefix; strip it.
+                        sd = ckpt.get("model", ckpt)
+                        sd = {k[len("model."):] if k.startswith("model.") else k: v
+                              for k, v in sd.items()}
+                        self.model.load_state_dict(sd, strict=False)
+                    # 2. Halve LR per param group, preserving the
+                    #    backbone/decoder ratio. Re-build cosine over
+                    #    REMAINING epochs so we don't decay to zero.
+                    for pg, base_lr in zip(optimizer.param_groups, base_lrs):
+                        new_base = base_lr * cfg.collapse_lr_factor
+                        pg["lr"] = new_base
+                    # Update base_lrs in place so subsequent warmup math
+                    # (none after this point — we're past warmup) and
+                    # any future rewinds compose correctly.
+                    base_lrs = [
+                        pg["lr"] for pg in optimizer.param_groups
+                    ]
+                    remaining = max(1, cfg.epochs - epoch)
+                    steps_per_epoch = max(1, len(train_loader))
+                    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        optimizer,
+                        T_max=remaining * steps_per_epoch,
+                        eta_min=0.0,
+                    )
+                    print(
+                        f"    LR rewind: per-group lr ×"
+                        f"{cfg.collapse_lr_factor} → {base_lrs[0]:.2e}, "
+                        f"cosine re-annealed over {remaining} epoch(s)."
+                    )
+                    # Patience reset so we don't trip early-stop on the
+                    # rewind step.
+                    patience_counter = 0
 
             # Per-class IoU table — every epoch
             print(f"    Per-class IoU:")
