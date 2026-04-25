@@ -876,5 +876,15 @@ renderLegendStatic(); // show legend immediately on load
 fetchData();
 setInterval(fetchData, 30000);
 </script>
+
+<!-- Operational health overlay (W4.4). API + data-freshness + loss-plateau badges.
+     Override `apiBase` / `prometheusBase` if your deploy uses different URLs. -->
+<script>
+  window.HEALTH_OVERLAY_CONFIG = {
+    apiBase: "",  // same-origin: API at /v1/*. Override e.g. "https://imint.example.com"
+    prometheusBase: "",  // e.g. "https://prometheus.observability" — leave empty to disable data freshness
+  };
+</script>
+<script src="dashboards/health_overlay.js" defer></script>
 </body>
 </html>
