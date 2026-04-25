@@ -41,3 +41,10 @@ svgpath2mpl>=0.2
 # Shared contracts — 23-class schema, Analyzer base, KG JSON Schema,
 # embedding config. Extracted from this repo in 2026-04 (rollout W3.6).
 des-contracts @ git+https://github.com/TobiasEdman/des-contracts.git@v0.1.0
+
+# HTTP API (W4.1). Optional in dev; required in the deployed Docker
+# image. Pinned tight — fastapi 0.x has occasional breaking minor bumps.
+fastapi>=0.115,<0.120
+uvicorn[standard]>=0.32,<1
+gunicorn>=22,<24
+httpx>=0.27,<1   # used by /analyze callback hook + by tests

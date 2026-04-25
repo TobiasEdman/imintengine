@@ -1,0 +1,56 @@
+# Dockerfile for the ImintEngine HTTP API (W4.1).
+#
+# Reuses the multi-stage build pattern from the main Dockerfile but:
+#  - CMD runs gunicorn against imint.api.v1:app
+#  - Exposes port 8000
+#  - No ColonyOS executor in the image (smaller surface)
+#
+# Build:    docker build -f Dockerfile.api -t imint-engine-api:v0.1.0 .
+# Run:      docker run --rm -p 8000:8000 imint-engine-api:v0.1.0
+# Health:   curl http://localhost:8000/v1/health
+
+# Stage 1: Build native wheels (rasterio/GDAL/shapely/numpy)
+FROM python:3.11-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgdal-dev \
+    g++ \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /wheels
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt
+
+# Stage 2: Runtime
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgdal36 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /wheels /wheels
+COPY requirements.txt .
+RUN pip install --no-cache-dir --no-index --find-links=/wheels \
+    -r requirements.txt \
+    && rm -rf /wheels
+
+# Application code
+COPY imint/ imint/
+COPY config/ config/
+
+# Production env defaults — override via -e or K8s env block
+ENV PYTHONUNBUFFERED=1 \
+    PORT=8000 \
+    GUNICORN_WORKERS=4 \
+    GUNICORN_TIMEOUT=120
+
+EXPOSE 8000
+
+# Health check uses /v1/health (added by the API itself).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen(f'http://localhost:{__import__(\"os\").environ.get(\"PORT\", \"8000\")}/v1/health', timeout=3).getcode() == 200 else 1)"
+
+CMD ["sh", "-c", "exec gunicorn imint.api.v1:app -k uvicorn.workers.UvicornWorker -w ${GUNICORN_WORKERS} -t ${GUNICORN_TIMEOUT} -b 0.0.0.0:${PORT} --access-logfile - --error-logfile -"]
