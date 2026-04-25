@@ -1,0 +1,221 @@
+# Hardened weekly fetch CronJob (W4.2).
+#
+# Replaces the manual `make submit-live` workflow with a scheduled job
+# that:
+#   1. Runs scripts/incremental_fetch_scheduler.py to determine which
+#      tiles need re-fetch (LPIS/NMD updated since last fetch).
+#   2. If the planned-list is non-empty, runs scripts/fetch_unified_tiles.py
+#      against that list.
+#   3. Pushes counters + duration to the cluster's Prometheus Pushgateway
+#      so monitoring can alert on stale data.
+#
+# Schedule: every Monday 04:00 UTC. Tweak via the `schedule` field below.
+#
+# Prerequisites:
+#   - Pushgateway service at pushgateway.observability.svc.cluster.local:9091
+#     (skip the env if you don't have one — scheduler degrades to no-push)
+#   - PVC `training-data` mounted at /data with subdirs lpis/, unified_v2/
+#   - K8s Secret `imint-credentials` with DES_USER, DES_PASSWORD,
+#     CDSE_CLIENT_ID, CDSE_CLIENT_SECRET (W1.2 hardening)
+#
+# Apply:    kubectl apply -f k8s/scheduled-fetch-cronjob.yaml
+# Trigger manually:  kubectl create job --from=cronjob/imint-fetch-incremental fetch-now-$(date +%s)
+# Logs:     kubectl logs -l app=imint-fetch-incremental --tail=200
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: imint-fetch-incremental
+  namespace: imint
+  labels:
+    app: imint-fetch-incremental
+    component: fetch
+    rollout: w4.2
+spec:
+  schedule: "0 4 * * 1"   # Monday 04:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 14400  # 4h cap
+      template:
+        metadata:
+          labels:
+            app: imint-fetch-incremental
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: fetcher
+              image: python:3.11-slim
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                - name: LPIS_DIR
+                  value: /data/lpis
+                - name: MANIFEST
+                  value: /data/unified_v2/manifest.json
+                - name: PUSHGATEWAY
+                  value: http://pushgateway.observability.svc.cluster.local:9091
+                - name: DES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: imint-credentials
+                      key: DES_USER
+                - name: DES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: imint-credentials
+                      key: DES_PASSWORD
+                - name: CDSE_CLIENT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: imint-credentials
+                      key: CDSE_CLIENT_ID
+                - name: CDSE_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: imint-credentials
+                      key: CDSE_CLIENT_SECRET
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+
+                  echo "=== W4.2 incremental fetch — $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+
+                  apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin curl > /dev/null 2>&1
+
+                  # Clone ImintEngine pinned to v0.1.0+ (post-W3 contract migration).
+                  git clone --depth 1 --branch main https://github.com/TobiasEdman/imintengine.git /app
+                  cd /app
+                  pip install --no-cache-dir -q -r requirements.txt
+
+                  echo "=== plan ==="
+                  python3 scripts/incremental_fetch_scheduler.py \
+                    --lpis-dir   "$LPIS_DIR" \
+                    --manifest   "$MANIFEST" \
+                    --pushgateway "$PUSHGATEWAY" \
+                    --format     txt \
+                    > /tmp/refetch.txt
+
+                  PLANNED=$(wc -l < /tmp/refetch.txt | tr -d ' ')
+                  echo "planned tiles: $PLANNED"
+
+                  if [ "$PLANNED" = "0" ]; then
+                    echo "nothing to refetch — exiting clean"
+
+                    # Push a successful no-op completion so the alert rule
+                    # 'CronJob hasn't run in N days' clears.
+                    curl -s --max-time 5 -X POST \
+                      "${PUSHGATEWAY}/metrics/job/imint_fetch_run/instance/${HOSTNAME}" \
+                      --data-binary @- <<EOF || echo "WARN: push completion failed"
+                  # TYPE imint_fetch_run_status gauge
+                  imint_fetch_run_status 0
+                  # TYPE imint_fetch_run_planned gauge
+                  imint_fetch_run_planned 0
+                  # TYPE imint_fetch_run_completed_timestamp gauge
+                  imint_fetch_run_completed_timestamp $(date -u +%s)
+                  EOF
+                    exit 0
+                  fi
+
+                  echo "=== fetching $PLANNED tiles ==="
+                  START=$(date -u +%s)
+
+                  # Streaming fetch — fetch_unified_tiles supports --tiles-from.
+                  python3 scripts/fetch_unified_tiles.py \
+                    --mode refetch \
+                    --tiles-from /tmp/refetch.txt \
+                    --output-dir /data/unified_v2 \
+                    || EXIT=$?
+
+                  END=$(date -u +%s)
+                  EXIT=${EXIT:-0}
+                  ELAPSED=$((END - START))
+
+                  echo "=== fetch done — exit=$EXIT, elapsed=${ELAPSED}s ==="
+
+                  # Push completion metrics (success + duration + planned count)
+                  curl -s --max-time 5 -X POST \
+                    "${PUSHGATEWAY}/metrics/job/imint_fetch_run/instance/${HOSTNAME}" \
+                    --data-binary @- <<EOF || echo "WARN: completion push failed"
+                  # TYPE imint_fetch_run_status gauge
+                  imint_fetch_run_status $EXIT
+                  # TYPE imint_fetch_run_planned gauge
+                  imint_fetch_run_planned $PLANNED
+                  # TYPE imint_fetch_run_duration_seconds gauge
+                  imint_fetch_run_duration_seconds $ELAPSED
+                  # TYPE imint_fetch_run_completed_timestamp gauge
+                  imint_fetch_run_completed_timestamp $(date -u +%s)
+                  EOF
+
+                  exit $EXIT
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: "2Gi"
+                limits:
+                  cpu: "4"
+                  memory: "8Gi"
+              volumeMounts:
+                - name: training-data
+                  mountPath: /data
+          volumes:
+            - name: training-data
+              persistentVolumeClaim:
+                claimName: training-data
+---
+# PrometheusRule (Prometheus Operator format). If the cluster doesn't run
+# Operator, translate to the equivalent recording/alert rules in static
+# config.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: imint-fetch-alerts
+  namespace: imint
+  labels:
+    app: imint-fetch-incremental
+    rollout: w4.2
+spec:
+  groups:
+    - name: imint-fetch.rules
+      interval: 1m
+      rules:
+        # Fetch hasn't run in over 8 days (we expect weekly).
+        - alert: ImintFetchStale
+          expr: |
+            (time() - imint_fetch_run_completed_timestamp) > 8 * 86400
+          for: 1h
+          labels:
+            severity: warning
+            rollout: w4.2
+          annotations:
+            summary: "ImintEngine incremental fetch hasn't completed in {{ $value | humanizeDuration }}"
+            runbook: "Check `kubectl get cronjob imint-fetch-incremental -n imint`. Likely Pushgateway lost the metric or CronJob is failing."
+
+        # Last fetch run failed (non-zero exit code).
+        - alert: ImintFetchFailed
+          expr: imint_fetch_run_status != 0
+          for: 5m
+          labels:
+            severity: critical
+            rollout: w4.2
+          annotations:
+            summary: "Last ImintEngine fetch failed with exit code {{ $value }}"
+            runbook: "kubectl logs -n imint -l app=imint-fetch-incremental --tail=200"
+
+        # No tiles ever planned in last 14d — possible LPIS feed issue.
+        - alert: ImintFetchNothingPlanned
+          expr: |
+            sum_over_time(imint_fetch_run_planned[14d]) == 0
+          for: 1h
+          labels:
+            severity: warning
+            rollout: w4.2
+          annotations:
+            summary: "No tiles have been planned for refetch in 14 days — LPIS feed may be stale"
+            runbook: "Check /data/lpis/ mtimes against Jordbruksverket release schedule."
