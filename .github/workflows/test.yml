@@ -11,7 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.11", "3.12"]
+        # 3.9 dropped 2026-04: des-contracts requires >=3.11. ImintEngine
+        # itself is a torch/H100 codebase where 3.9 was legacy ballast.
+        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
