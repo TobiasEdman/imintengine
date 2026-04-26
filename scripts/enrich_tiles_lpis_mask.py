@@ -281,8 +281,15 @@ def rasterize_parcels(
 
     west, south, east, north = bbox_3006
 
-    # Clip LPIS parcels to tile bbox using spatial index
-    tile_box = box(south, west, north, east)
+    # Clip LPIS parcels to tile bbox using spatial index.
+    # 2026-04-26: previously this code passed (south, west, north, east)
+    # to shapely.box() and rasterio.from_bounds() — both of which expect
+    # (X, Y) order — i.e. (west, south, east, north). The original LPIS
+    # parquets stored geometry with X/Y axes swapped (a separate upstream
+    # bug, fixed in fix-lpis-axes job 2026-04-25), and these two bugs
+    # cancelled. After fixing the parquets, rasterize_parcels began
+    # producing empty masks. Correct order below.
+    tile_box = box(west, south, east, north)
     candidates_idx = list(gdf.sindex.intersection(tile_box.bounds))
 
     if not candidates_idx:
@@ -298,8 +305,10 @@ def rasterize_parcels(
 
     n_parcels = len(clipped)
 
-    # Affine transform: maps pixel coordinates to EPSG:3006
-    transform = from_bounds(south, west, north, east, tile_size, tile_size)
+    # Affine transform: maps pixel coordinates to EPSG:3006.
+    # rasterio.transform.from_bounds(west, south, east, north, w, h)
+    # expects (X, Y) order; same fix as above.
+    transform = from_bounds(west, south, east, north, tile_size, tile_size)
 
     # --- Crop-class mask (uint16, raw SJV grödkod) ---
     code_col = "grodkod_int" if "grodkod_int" in clipped.columns else "crop_class"
