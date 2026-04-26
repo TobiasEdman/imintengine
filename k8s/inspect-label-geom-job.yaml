@@ -1,0 +1,245 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inspect-label-geom
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: i
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq libexpat1 libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow geopandas shapely rasterio Pillow
+
+              python3 - <<'PY'
+              # Targeted forensic on crop_oljevaxter_366181_6296445.
+              #
+              # The viewer's label.npz panel shows a seam down the middle —
+              # left half ≈ black with thin red, right half ≈ dense green.
+              # The audit's geometry checks all passed for this tile, but
+              # the label clearly doesn't match the RGB.
+              #
+              # Hypotheses to test:
+              #   H1 The label raster is a concatenation of two halves
+              #      written by different build-labels passes (tile was
+              #      partially overwritten). → check column-wise stats,
+              #      look for sharp discontinuity at col 256.
+              #   H2 NMD raster sampling pulled the wrong patch (e.g. the
+              #      tile bbox extracted bands at a wrong window). → load
+              #      NMD locally for the same bbox and compare.
+              #   H3 The label has correct shape but wrong CRS-to-pixel
+              #      mapping (e.g. transposed). → check whether top-left
+              #      pixel of label corresponds to NW corner of bbox.
+              #   H4 The tile's spectral was overwritten by a refetch but
+              #      the label was kept from a different bbox. → compare
+              #      bbox_3006 to filename-derived bbox.
+
+              import io
+              import json
+              import os
+
+              import numpy as np
+              import rasterio
+              from rasterio.windows import from_bounds as window_from_bounds
+              from rasterio.transform import from_bounds
+              from rasterio.features import rasterize
+              from PIL import Image
+
+              import geopandas as gpd
+
+              TILE = "/data/unified_v2_512/crop_oljevaxter_366181_6296445.npz"
+              NMD_RASTER = "/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
+              LPIS_2022 = "/data/lpis/jordbruksskiften_2022.parquet"
+              OUT = "/data/debug/label_geom"
+              os.makedirs(OUT, exist_ok=True)
+
+              d = np.load(TILE, allow_pickle=True)
+
+              # ---- 1. Basic state
+              print("=== Keys ===")
+              for k in sorted(d.keys()):
+                  v = d[k]
+                  try:
+                      print(f"  {k}: shape={getattr(v, 'shape', None)} dtype={getattr(v, 'dtype', None)} "
+                            f"scalar={v if v.ndim == 0 else ''}")
+                  except Exception:
+                      print(f"  {k}: <unreadable>")
+
+              bbox = d["bbox_3006"].tolist()
+              W, S, E, N = bbox
+              print(f"\nbbox_3006 = {bbox}  (extent: {E-W}m x {N-S}m)")
+              print(f"persisted easting,northing = {int(d.get('easting', -1))}, {int(d.get('northing', -1))}")
+              print(f"persisted tile_size_px = {int(d.get('tile_size_px', -1))}")
+
+              label = d["label"]
+              nmd_raw = d["nmd_label_raw"]
+              spectral = d["spectral"]
+              print(f"\nshapes:  label={label.shape}  nmd_raw={nmd_raw.shape}  spectral={spectral.shape}")
+
+              # ---- 2. H1: column-wise discontinuity on label
+              print("\n=== H1: column-wise label discontinuity ===")
+              # For every column, compute the most common class and class diversity
+              n_classes_per_col = np.array(
+                  [len(np.unique(label[:, c])) for c in range(label.shape[1])]
+              )
+              # Look for a sharp jump in diversity at col 256
+              left_div = n_classes_per_col[:label.shape[1] // 2].mean()
+              right_div = n_classes_per_col[label.shape[1] // 2:].mean()
+              print(f"  mean unique classes per column: left={left_div:.2f} right={right_div:.2f}")
+              # Class 0 (background) fraction per column
+              bg_per_col = (label == 0).mean(axis=0)
+              left_bg = bg_per_col[:label.shape[1] // 2].mean()
+              right_bg = bg_per_col[label.shape[1] // 2:].mean()
+              print(f"  mean background fraction per column: left={left_bg:.3f} right={right_bg:.3f}")
+              # Suspicious if the two halves differ wildly on background frac
+              if abs(left_bg - right_bg) > 0.20:
+                  print(f"  >>> ANOMALOUS: left vs right halves differ in bg fraction by "
+                        f"{abs(left_bg - right_bg):.2f}")
+
+              # ---- 3. H2: re-read NMD locally and compare to nmd_label_raw
+              print("\n=== H2: NMD raster vs nmd_label_raw ===")
+              with rasterio.open(NMD_RASTER) as src:
+                  print(f"  NMD raster CRS: {src.crs}")
+                  print(f"  NMD raster bounds: {src.bounds}")
+                  print(f"  NMD raster shape: {src.shape}, transform: {src.transform}")
+                  # Read using the saved bbox. Note: we expect (W, S, E, N).
+                  win = window_from_bounds(W, S, E, N, transform=src.transform)
+                  print(f"  Window for tile bbox {bbox}: {win}")
+                  fresh = src.read(1, window=win,
+                                   out_shape=(512, 512),
+                                   resampling=rasterio.enums.Resampling.nearest)
+                  print(f"  Fresh NMD read: shape={fresh.shape} dtype={fresh.dtype} "
+                        f"unique={sorted(np.unique(fresh).tolist())[:20]}")
+
+                  saved_uniq = sorted(np.unique(nmd_raw).tolist())
+                  print(f"  Saved nmd_label_raw unique={saved_uniq[:20]}")
+
+                  # Equality?
+                  if fresh.shape == nmd_raw.shape:
+                      eq = np.array_equal(fresh, nmd_raw)
+                      print(f"  array_equal(fresh, nmd_label_raw) = {eq}")
+                      if not eq:
+                          diff = (fresh != nmd_raw).mean()
+                          print(f"  per-pixel disagreement: {diff*100:.2f}%")
+                          # Per-half diff to see if mismatch is one-sided
+                          left_d = (fresh[:, :256] != nmd_raw[:, :256]).mean()
+                          right_d = (fresh[:, 256:] != nmd_raw[:, 256:]).mean()
+                          print(f"  left half disagreement: {left_d*100:.2f}%")
+                          print(f"  right half disagreement: {right_d*100:.2f}%")
+                          # Save diff visualization
+                          dimg = np.zeros((512, 512, 3), dtype=np.uint8)
+                          dimg[fresh == nmd_raw] = (50, 50, 50)
+                          dimg[fresh != nmd_raw] = (255, 80, 80)
+                          Image.fromarray(dimg).save(f"{OUT}/h2_nmd_diff.png")
+
+              # ---- 4. H3: write label as direct RGB and inspect corners
+              # This reveals whether the saved label is rotated/flipped.
+              print("\n=== H3: corners of label ===")
+              corners = {
+                  "TL": label[0, 0],
+                  "TR": label[0, -1],
+                  "BL": label[-1, 0],
+                  "BR": label[-1, -1],
+                  "C": label[256, 256],
+              }
+              print(f"  label corners (class id): {corners}")
+              # Save as PNG directly so we can compare visually.
+              # Use a clear distinct color per class (no NMD colormap, just hash hue).
+              h, w = label.shape
+              rgb = np.zeros((h, w, 3), dtype=np.uint8)
+              uniq = np.unique(label)
+              rng = np.random.default_rng(seed=0)
+              for c in uniq:
+                  rgb[label == c] = rng.integers(40, 240, 3).astype(np.uint8)
+              Image.fromarray(rgb).save(f"{OUT}/h3_label_direct.png")
+
+              # ---- 5. H4: live LPIS rasterize using the same bbox as saved
+              print("\n=== H4: live LPIS rasterize from parquet ===")
+              gdf = gpd.read_parquet(LPIS_2022)
+              b = gdf.geometry.bounds
+              sub = gdf[~(
+                  (b["maxx"] < W) | (b["minx"] > E)
+                  | (b["maxy"] < S) | (b["miny"] > N)
+              )]
+              print(f"  polygons in bbox: {len(sub)}")
+              tx = from_bounds(W, S, E, N, 512, 512)
+              burn = rasterize(
+                  [(g, int(c) if c is not None else 1)
+                   for g, c in zip(sub.geometry,
+                                   sub.get("grdkod_mar", [None] * len(sub)))],
+                  out_shape=(512, 512),
+                  transform=tx,
+                  fill=0,
+                  dtype=np.uint16,
+              )
+              print(f"  live rasterize unique codes: {sorted(int(x) for x in np.unique(burn) if x>0)[:10]}")
+              print(f"  live rasterize nonzero px: {int((burn > 0).sum())}")
+
+              if "label_mask" in d:
+                  saved_lm = d["label_mask"]
+                  saved_uniq = sorted(int(x) for x in np.unique(saved_lm) if x > 0)
+                  print(f"  saved label_mask unique codes: {saved_uniq[:10]}")
+                  print(f"  saved label_mask nonzero px: {int((saved_lm > 0).sum())}")
+                  if saved_lm.shape == burn.shape:
+                      sl_nz = saved_lm > 0
+                      bl_nz = burn > 0
+                      if sl_nz.any() or bl_nz.any():
+                          inter = (sl_nz & bl_nz).sum()
+                          union = (sl_nz | bl_nz).sum()
+                          print(f"  saved-vs-live mask IoU: {inter/union if union else 0:.3f}")
+
+              # ---- 6. Save the saved-label, fresh-NMD, live-LPIS as PNGs side-by-side
+              # for visual comparison
+              # Already saved h2_nmd_diff and h3_label_direct above.
+              with rasterio.open(NMD_RASTER) as src:
+                  win = window_from_bounds(W, S, E, N, transform=src.transform)
+                  fresh = src.read(1, window=win, out_shape=(512, 512),
+                                   resampling=rasterio.enums.Resampling.nearest)
+              # NMD direct
+              rgb_nmd = np.zeros((512, 512, 3), dtype=np.uint8)
+              uniq = np.unique(fresh)
+              rng = np.random.default_rng(seed=42)
+              for c in uniq:
+                  rgb_nmd[fresh == c] = rng.integers(40, 240, 3).astype(np.uint8)
+              Image.fromarray(rgb_nmd).save(f"{OUT}/h4_nmd_fresh.png")
+
+              # Spectral RGB (frame 1) for reference
+              s = spectral
+              T = s.shape[0] // 6
+              block = s[1*6:2*6]
+              red, green, blue = block[2], block[1], block[0]
+              ref = np.stack([red, green, blue], axis=-1).astype(np.float32)
+              out = np.zeros_like(ref, dtype=np.uint8)
+              for c in range(3):
+                  lo, hi = np.percentile(ref[..., c], [2, 98])
+                  if hi > lo:
+                      out[..., c] = (np.clip((ref[..., c]-lo)/(hi-lo), 0, 1)*255).astype(np.uint8)
+              Image.fromarray(out).save(f"{OUT}/spectral_rgb.png")
+
+              print(f"\nFiles in {OUT}:")
+              for f in sorted(os.listdir(OUT)):
+                  print(f"  {f}: {os.path.getsize(f'{OUT}/{f}')} bytes")
+              PY
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

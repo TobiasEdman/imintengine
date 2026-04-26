@@ -1,0 +1,112 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inspect-spectral-seam
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: i
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python3 - <<'PY'
+              # Check if the left/right discontinuity in the label exists
+              # ALSO in the spectral. If yes → the tile's source data was
+              # stitched (different scenes for left vs right). If no → only
+              # the label is broken (rasterization issue).
+              import numpy as np
+
+              TILE = "/data/unified_v2_512/crop_oljevaxter_366181_6296445.npz"
+              d = np.load(TILE, allow_pickle=True)
+
+              spectral = d["spectral"]    # (24, 512, 512)
+              label = d["label"]
+              nmd_raw = d["nmd_label_raw"]
+              if "label_mask" in d:
+                  lm = d["label_mask"]
+
+              print(f"Tile: {TILE}")
+              print(f"spectral shape: {spectral.shape}")
+              print(f"label shape:    {label.shape}")
+              print(f"nmd_raw shape:  {nmd_raw.shape}")
+              print()
+
+              # Per-column statistic: mean of spectral frame 1 band 2 (red).
+              # If left and right halves come from different scenes, the
+              # RED brightness will jump.
+              mid = 256
+              for desc, arr in [
+                  ("spectral frame 1 RED (band 2)", spectral[2 + 6]),
+                  ("spectral frame 1 NIR (band 3)", spectral[3 + 6]),
+                  ("nmd_raw values",                nmd_raw),
+                  ("label classes",                 label),
+              ]:
+                  if arr.dtype.kind in "fc":
+                      l = float(arr[:, :mid].mean())
+                      r = float(arr[:, mid:].mean())
+                      delta = r - l
+                      # also pixel-precise check: jump at column 256
+                      jump = float(arr[:, 256].mean() - arr[:, 255].mean())
+                  else:
+                      l = float(arr[:, :mid].mean())
+                      r = float(arr[:, mid:].mean())
+                      delta = r - l
+                      jump = float(arr[:, 256].astype(np.float32).mean() - arr[:, 255].astype(np.float32).mean())
+                  print(f"{desc}:")
+                  print(f"  left half mean : {l:.4f}")
+                  print(f"  right half mean: {r:.4f}")
+                  print(f"  delta R-L      : {delta:+.4f}")
+                  print(f"  jump col 256-255: {jump:+.4f}")
+                  print()
+
+              # Look for hard column-level discontinuities anywhere
+              # (not just at the center) — could be a different stitch boundary
+              spectral_red_f1 = spectral[2 + 6].astype(np.float32)  # frame 1, band 2 (red)
+              col_mean = spectral_red_f1.mean(axis=0)
+              col_diff = np.abs(np.diff(col_mean))
+              top5 = np.argsort(col_diff)[-5:][::-1]
+              print(f"Top 5 column-jump locations in spectral frame 1 RED:")
+              for idx in top5:
+                  print(f"  col {idx}: jump={col_diff[idx]:.4f}")
+              print()
+
+              label_f = label.astype(np.float32)
+              col_mean_lbl = label_f.mean(axis=0)
+              col_diff_lbl = np.abs(np.diff(col_mean_lbl))
+              top5_lbl = np.argsort(col_diff_lbl)[-5:][::-1]
+              print(f"Top 5 column-jump locations in label:")
+              for idx in top5_lbl:
+                  print(f"  col {idx}: jump={col_diff_lbl[idx]:.4f}")
+              print()
+
+              # Same for ROW direction (top vs bottom seam?)
+              row_mean = spectral_red_f1.mean(axis=1)
+              row_diff = np.abs(np.diff(row_mean))
+              top5_row = np.argsort(row_diff)[-5:][::-1]
+              print(f"Top 5 row-jump locations in spectral frame 1 RED:")
+              for idx in top5_row:
+                  print(f"  row {idx}: jump={row_diff[idx]:.4f}")
+              PY
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

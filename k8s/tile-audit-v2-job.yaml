@@ -1,0 +1,254 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tile-audit-v2
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: tile-content-audit
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200  # 2 h cap; reading NMD per tile is the cost
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq git libexpat1 libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio
+              cd /tmp && git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine 2>&1 | tail -1
+              export PYTHONPATH=/tmp/imintengine
+
+              python3 - <<'PY'
+              # Fleet-wide tile content audit. For each tile, beyond the
+              # metadata/shape checks already in the v1 audit, NEW checks:
+              #
+              #   F1 NMD freshness: read the NMD raster window for the saved
+              #      bbox, apply nmd_raster_to_lulc, compare to saved
+              #      nmd_label_raw. Disagreement > 5% → MISALIGNED label.
+              #
+              #   F2 Column-jump / row-jump on the unified label. Natural
+              #      Swedish landscape tiles have <1.0 class-unit per-column
+              #      jumps. Tiles with any column or row jump > 2.0 units
+              #      are flagged as SEAMED.
+              #
+              #   F3 Bbox bound vs NMD raster bound: catch tiles that
+              #      requested a window outside the NMD coverage.
+              #
+              # All v1 checks (geometry, schema, LPIS overlay) are still
+              # included for backward compat.
+              import json
+              import os
+              import sys
+              import time
+              from collections import Counter, defaultdict
+              from pathlib import Path
+
+              import numpy as np
+              import rasterio
+              from rasterio.windows import from_bounds as window_from_bounds
+              from rasterio.enums import Resampling
+
+              sys.path.insert(0, "/tmp/imintengine")
+              from imint.training.class_schema import nmd_raster_to_lulc
+
+              SRC = Path("/data/unified_v2_512")
+              NMD = "/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
+              OUT = Path("/data/debug/audit_v2")
+              OUT.mkdir(parents=True, exist_ok=True)
+
+              SWEDEN_X = (200_000, 1_000_000)
+              SWEDEN_Y = (6_000_000, 7_800_000)
+
+              files = sorted(SRC.glob("*.npz"))
+              print(f"Auditing {len(files)} tiles...", flush=True)
+
+              records = []
+              integrity = Counter()
+              cohort = defaultdict(int)
+              problems_lines = []
+
+              # Open NMD once.
+              nmd_src = rasterio.open(NMD)
+              try:
+                  for i, p in enumerate(files):
+                      if i % 200 == 0:
+                          print(f"  [{i}/{len(files)}]", flush=True)
+
+                      rec = {"name": p.stem,
+                             "mtime_iso": time.strftime(
+                                 "%Y-%m-%d", time.gmtime(os.path.getmtime(p)))}
+                      problems = []
+                      try:
+                          d = np.load(p, allow_pickle=True)
+                          # ---- bbox + spectral
+                          bbox = d.get("bbox_3006")
+                          if bbox is None:
+                              problems.append("no_bbox")
+                              records.append(rec); continue
+                          b = np.asarray(bbox).flatten().tolist()
+                          W, S, E, N = b[0], b[1], b[2], b[3]
+                          rec["bbox"] = [int(W), int(S), int(E), int(N)]
+
+                          spectral = d.get("spectral", d.get("image"))
+                          label = d.get("label")
+                          nmd_saved = d.get("nmd_label_raw")
+                          rec["source"] = str(d["source"]) if "source" in d else "?"
+                          rec["mtime_day"] = rec["mtime_iso"]
+
+                          # ---- F1: NMD freshness ----
+                          nmd_disagreement = None
+                          col_jump = row_jump = None
+                          if nmd_saved is not None:
+                              try:
+                                  win = window_from_bounds(W, S, E, N, nmd_src.transform)
+                                  raw = nmd_src.read(
+                                      1, window=win, out_shape=(512, 512),
+                                      resampling=Resampling.nearest,
+                                  )
+                                  fresh_lulc = nmd_raster_to_lulc(raw)
+                                  if fresh_lulc.shape == nmd_saved.shape:
+                                      d_pct = float((fresh_lulc != nmd_saved).mean())
+                                      nmd_disagreement = d_pct
+                                      rec["nmd_disagreement"] = round(d_pct, 4)
+                                      if d_pct > 0.05:
+                                          problems.append(
+                                              f"nmd_misalignment_{int(d_pct*100):02d}pct"
+                                          )
+                              except Exception as e:
+                                  problems.append(f"nmd_read_err:{type(e).__name__}")
+
+                          # ---- F2: label column/row jumps ----
+                          if label is not None and label.ndim == 2 and label.shape == (512, 512):
+                              lf = label.astype(np.float32)
+                              col_mean = lf.mean(axis=0)
+                              col_jump = float(np.max(np.abs(np.diff(col_mean))))
+                              row_mean = lf.mean(axis=1)
+                              row_jump = float(np.max(np.abs(np.diff(row_mean))))
+                              rec["max_col_jump"] = round(col_jump, 3)
+                              rec["max_row_jump"] = round(row_jump, 3)
+                              if col_jump > 2.0:
+                                  problems.append(f"col_seam_{col_jump:.1f}")
+                              if row_jump > 2.0:
+                                  problems.append(f"row_seam_{row_jump:.1f}")
+
+                          # ---- F3: bbox vs NMD bounds ----
+                          nb = nmd_src.bounds
+                          if W < nb.left or E > nb.right or S < nb.bottom or N > nb.top:
+                              problems.append("bbox_outside_nmd")
+                          if not (SWEDEN_X[0] <= (W + E)/2 <= SWEDEN_X[1]):
+                              problems.append("center_outside_sweden_x")
+                          if not (SWEDEN_Y[0] <= (S + N)/2 <= SWEDEN_Y[1]):
+                              problems.append("center_outside_sweden_y")
+
+                          # ---- LPIS overlay state ----
+                          lm_nz = 0
+                          if "label_mask" in d:
+                              lm_nz = int((d["label_mask"] > 0).sum())
+                          n_parcels = int(d["n_parcels"]) if "n_parcels" in d else 0
+                          rec["lm_nz"] = lm_nz
+                          rec["n_parcels"] = n_parcels
+                          lpis_in_label = []
+                          if label is not None:
+                              uniq = np.unique(label)
+                              lpis_in_label = sorted(int(x) for x in uniq if 11 <= int(x) <= 21)
+                          rec["lpis_in_label"] = lpis_in_label
+                          if lm_nz > 0 and not lpis_in_label:
+                              problems.append("label_mask_present_but_no_lpis_in_label")
+                          if p.stem.startswith("crop_") and n_parcels == 0:
+                              problems.append("crop_named_no_parcels")
+
+                      except Exception as e:
+                          problems.append(f"load_err:{type(e).__name__}")
+
+                      rec["problems"] = problems
+                      for k in problems:
+                          integrity[k.split("_")[0] if "_" in k else k] += 1
+                          # finer key for cohort breakdown
+                          integrity[k] += 1
+                          problems_lines.append(f"{p.stem}\t{k}")
+                      ck = "|".join([
+                          f"src={rec.get('source','?')}",
+                          f"mtime={rec['mtime_day']}",
+                          f"nmd_ok={'Y' if (nmd_disagreement is not None and nmd_disagreement <= 0.05) else 'N'}",
+                          f"col_seam={'Y' if (col_jump is not None and col_jump > 2.0) else 'N'}",
+                          f"row_seam={'Y' if (row_jump is not None and row_jump > 2.0) else 'N'}",
+                          f"lpis_in_lbl={'Y' if lpis_in_label else 'N'}",
+                      ])
+                      cohort[ck] += 1
+                      records.append(rec)
+              finally:
+                  nmd_src.close()
+
+              # Outputs
+              with open(OUT / "audit_full.jsonl", "w") as f:
+                  for r in records:
+                      f.write(json.dumps(r, default=str) + "\n")
+              with open(OUT / "problems.txt", "w") as f:
+                  f.write("\n".join(problems_lines) + "\n")
+
+              summary = {
+                  "n_tiles": len(records),
+                  "integrity_failures": dict(integrity.most_common()),
+                  "cohorts_top_30": dict(list(sorted(cohort.items(), key=lambda x: -x[1]))[:30]),
+                  "n_distinct_cohorts": len(cohort),
+              }
+
+              # Severity distribution
+              n_misaligned = sum(1 for r in records
+                                if any(p.startswith("nmd_misalignment") for p in r.get("problems", [])))
+              n_col_seam = sum(1 for r in records
+                              if any(p.startswith("col_seam") for p in r.get("problems", [])))
+              n_row_seam = sum(1 for r in records
+                              if any(p.startswith("row_seam") for p in r.get("problems", [])))
+              n_clean = sum(1 for r in records if not r.get("problems"))
+              summary["severity"] = {
+                  "n_clean": n_clean,
+                  "n_nmd_misaligned": n_misaligned,
+                  "n_col_seam": n_col_seam,
+                  "n_row_seam": n_row_seam,
+                  "n_total": len(records),
+              }
+
+              # NMD disagreement distribution
+              ds = [r["nmd_disagreement"] for r in records if "nmd_disagreement" in r]
+              if ds:
+                  arr = np.array(ds)
+                  summary["nmd_disagreement_pct"] = {
+                      "n": int(arr.size),
+                      "mean": float(arr.mean()),
+                      "p50": float(np.median(arr)),
+                      "p95": float(np.percentile(arr, 95)),
+                      "p99": float(np.percentile(arr, 99)),
+                      "max": float(arr.max()),
+                  }
+
+              with open(OUT / "summary.json", "w") as f:
+                  json.dump(summary, f, indent=2, default=str)
+
+              print("\n" + "=" * 60)
+              print(json.dumps(summary, indent=2, default=str))
+              print("\nFiles:")
+              for fn in sorted(os.listdir(OUT)):
+                  print(f"  {fn}: {os.path.getsize(OUT / fn)} bytes")
+              PY
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

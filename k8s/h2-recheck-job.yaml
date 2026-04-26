@@ -1,0 +1,103 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: h2-recheck
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: h
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq git libexpat1 libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio
+              cd /tmp && git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine 2>&1 | tail -1
+              export PYTHONPATH=/tmp/imintengine
+
+              python3 - <<'PY'
+              # Properly compare nmd_label_raw against a fresh NMD read,
+              # both passed through nmd_raster_to_lulc so they're in the
+              # same value space.
+              import sys
+              sys.path.insert(0, "/tmp/imintengine")
+              import numpy as np
+              import rasterio
+              from rasterio.windows import from_bounds
+              from rasterio.enums import Resampling
+
+              from imint.training.class_schema import nmd_raster_to_lulc
+
+              TILE = "/data/unified_v2_512/crop_oljevaxter_366181_6296445.npz"
+              NMD = "/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
+
+              d = np.load(TILE, allow_pickle=True)
+              bbox = d["bbox_3006"].tolist()
+              W, S, E, N = bbox
+              saved = d["nmd_label_raw"]
+              print(f"saved nmd_label_raw shape={saved.shape} unique={sorted(np.unique(saved).tolist())}")
+
+              with rasterio.open(NMD) as src:
+                  win = from_bounds(W, S, E, N, src.transform)
+                  raw = src.read(1, window=win, out_shape=(512, 512), resampling=Resampling.nearest)
+              print(f"fresh raw NMD: shape={raw.shape} unique={sorted(np.unique(raw).tolist())[:30]}")
+
+              fresh_lulc = nmd_raster_to_lulc(raw)
+              print(f"fresh after nmd_raster_to_lulc: unique={sorted(np.unique(fresh_lulc).tolist())}")
+
+              eq = np.array_equal(fresh_lulc, saved)
+              print(f"\narray_equal(fresh_lulc, saved) = {eq}")
+              if not eq:
+                  diff = (fresh_lulc != saved).mean()
+                  print(f"per-pixel disagreement: {diff*100:.2f}%")
+                  ld = (fresh_lulc[:, :256] != saved[:, :256]).mean()
+                  rd = (fresh_lulc[:, 256:] != saved[:, 256:]).mean()
+                  print(f"left half disagreement:  {ld*100:.2f}%")
+                  print(f"right half disagreement: {rd*100:.2f}%")
+                  td = (fresh_lulc[:256, :] != saved[:256, :]).mean()
+                  bd = (fresh_lulc[256:, :] != saved[256:, :]).mean()
+                  print(f"top half disagreement:    {td*100:.2f}%")
+                  print(f"bottom half disagreement: {bd*100:.2f}%")
+
+              # Try shifting the bbox to see if the label matches a shifted patch
+              print("\n=== Try shifted bbox: maybe label was built for a different center ===")
+              best_offset = None
+              best_diff = 1.0
+              for dx in [0, -512, -256, 256, 512]:
+                  for dy in [0, -512, -256, 256, 512]:
+                      shifted_bbox = (W + dx*10, S + dy*10, E + dx*10, N + dy*10)
+                      try:
+                          with rasterio.open(NMD) as src:
+                              win = from_bounds(*shifted_bbox, src.transform)
+                              raw_s = src.read(1, window=win, out_shape=(512, 512),
+                                               resampling=Resampling.nearest)
+                          lulc_s = nmd_raster_to_lulc(raw_s)
+                          diff = (lulc_s != saved).mean()
+                          if diff < best_diff:
+                              best_diff = diff
+                              best_offset = (dx, dy)
+                      except Exception:
+                          pass
+              print(f"Best offset (px shift): dx={best_offset[0]} dy={best_offset[1]}  agreement={(1-best_diff)*100:.2f}%")
+              PY
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
