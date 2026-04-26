@@ -450,7 +450,40 @@ def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig") -> dict[str, np.ndar
     return aux
 
 
-_NMD_SRC = None  # lazy-opened rasterio handle
+# Per-thread rasterio handles for the NMD raster.
+#
+# Rasterio's DatasetReader.read() is NOT thread-safe: two threads
+# calling read() with different windows on the same handle can race
+# and return data from the wrong location. We saw this in the multi-
+# threaded build-labels pipeline (2026-04) — saved nmd_label_raw
+# disagreed with a fresh single-threaded read by 33%, with sharp
+# class-jump seams at unpredictable column positions.
+#
+# Fix: keep one rasterio handle per thread via threading.local(),
+# keyed by the file path so a thread that touches multiple NMD files
+# (rare, but possible) doesn't end up with the wrong handle.
+import threading as _threading
+
+_NMD_TLS = _threading.local()
+
+
+def _get_nmd_handle(path: str):
+    """Return a per-thread rasterio handle for ``path``.
+
+    The handle is opened lazily on first call from each thread and
+    cached for that thread's lifetime. Different threads each get
+    their own handle so rasterio reads can't race.
+    """
+    cache = getattr(_NMD_TLS, "by_path", None)
+    if cache is None:
+        cache = {}
+        _NMD_TLS.by_path = cache
+    src = cache.get(path)
+    if src is None:
+        import rasterio
+        src = rasterio.open(path)
+        cache[path] = src
+    return src
 
 
 def fetch_nmd_label_local(
@@ -467,32 +500,33 @@ def fetch_nmd_label_local(
 
     Returns (H, W) uint8 with indices 0-19, or None if unavailable.
     Falls back to openEO remote fetch if the local raster is missing.
+
+    Thread-safe: each calling thread gets its own rasterio handle.
     """
-    global _NMD_SRC
     tile.assert_bbox_matches(bbox_3006)
 
     try:
-        import rasterio
         from rasterio.windows import from_bounds
+        from rasterio.enums import Resampling
 
-        if _NMD_SRC is None:
-            if not os.path.exists(nmd_raster):
-                return _fetch_nmd_label_remote(bbox_3006, tile)
-            _NMD_SRC = rasterio.open(nmd_raster)
+        if not os.path.exists(nmd_raster):
+            return _fetch_nmd_label_remote(bbox_3006, tile)
 
-        w, s, e, n = bbox_3006["west"], bbox_3006["south"], bbox_3006["east"], bbox_3006["north"]
+        src = _get_nmd_handle(nmd_raster)
 
-        b = _NMD_SRC.bounds
+        w = bbox_3006["west"]; s = bbox_3006["south"]
+        e = bbox_3006["east"]; n = bbox_3006["north"]
+
+        b = src.bounds
         if w < b.left or e > b.right or s < b.bottom or n > b.top:
             return None
 
-        window = from_bounds(w, s, e, n, _NMD_SRC.transform)
+        window = from_bounds(w, s, e, n, src.transform)
         # Read directly into the target shape so rasterio handles the
         # sub-pixel alignment via its own nearest-neighbour resampling.
         # Never use scipy.ndimage.zoom here — it distributes dropped rows
         # unevenly and creates visible seams when the window is fractional.
-        from rasterio.enums import Resampling
-        nmd_raw = _NMD_SRC.read(
+        nmd_raw = src.read(
             1,
             window=window,
             out_shape=(tile.size_px, tile.size_px),

@@ -20,8 +20,13 @@ import argparse
 import glob
 import os
 import sys
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+)
 from pathlib import Path
 
 import numpy as np
@@ -65,13 +70,19 @@ _rasterize_sks = None
 _compute_harvest_probability = None
 
 # SpatialParquet handles (SKS + per-year LPIS). Populated on first use.
+# The handles themselves are thread-safe (each thread gets its own
+# pyarrow ParquetFile via threading.local() inside SpatialParquet —
+# see imint/training/spatial_parquet.py). We only need a lock around
+# the dict mutation below to avoid racy "first-use" double-init.
 _sks_utforda_sp = None    # spatial parquet for executed clearcuts
 _sks_anmalda_sp = None    # spatial parquet for announced clearcuts
 _lpis_sp: dict = {}       # year → SpatialParquet for LPIS
+_handles_lock = threading.Lock()
 
 # Sentinels so we don't retry missing files on every query
 _SKS_UTFORDA_MISSING = object()
 _SKS_ANMALDA_MISSING = object()
+_SENTINEL_UNSET = object()  # used by _lpis_handle to distinguish "not in cache" vs "cached as None"
 
 
 def _ensure_helpers_loaded():
@@ -93,22 +104,33 @@ def _sks_utforda_handle(sks_dir: str):
     legacy full-file parquet with a warning (still works, just slow).
     """
     global _sks_utforda_sp
+    # Read outside the lock — safe because writes are atomic for these
+    # singleton bindings on CPython, and the lock below ensures no
+    # double-init.
     if _sks_utforda_sp is _SKS_UTFORDA_MISSING:
         return None
     if _sks_utforda_sp is not None:
         return _sks_utforda_sp
 
-    from imint.training.spatial_parquet import SpatialParquet
-    spatial = os.path.join(sks_dir, "utforda_avverkningar_spatial.parquet")
-    fallback = os.path.join(sks_dir, "utforda_avverkningar.parquet")
-    if os.path.exists(spatial) or os.path.exists(fallback):
-        _sks_utforda_sp = SpatialParquet(
-            spatial, fallback_path=fallback if os.path.exists(fallback) else None,
-        )
-        return _sks_utforda_sp
+    with _handles_lock:
+        # Re-check under the lock to avoid races between threads that
+        # both reached the slow path before either could initialise.
+        if _sks_utforda_sp is _SKS_UTFORDA_MISSING:
+            return None
+        if _sks_utforda_sp is not None:
+            return _sks_utforda_sp
 
-    _sks_utforda_sp = _SKS_UTFORDA_MISSING
-    return None
+        from imint.training.spatial_parquet import SpatialParquet
+        spatial = os.path.join(sks_dir, "utforda_avverkningar_spatial.parquet")
+        fallback = os.path.join(sks_dir, "utforda_avverkningar.parquet")
+        if os.path.exists(spatial) or os.path.exists(fallback):
+            _sks_utforda_sp = SpatialParquet(
+                spatial, fallback_path=fallback if os.path.exists(fallback) else None,
+            )
+            return _sks_utforda_sp
+
+        _sks_utforda_sp = _SKS_UTFORDA_MISSING
+        return None
 
 
 def _sks_anmalda_handle(sks_dir: str):
@@ -119,35 +141,48 @@ def _sks_anmalda_handle(sks_dir: str):
     if _sks_anmalda_sp is not None:
         return _sks_anmalda_sp
 
-    from imint.training.spatial_parquet import SpatialParquet
-    spatial = os.path.join(sks_dir, "avverkningsanmalningar_spatial.parquet")
-    fallback = os.path.join(sks_dir, "avverkningsanmalningar.parquet")
-    if os.path.exists(spatial) or os.path.exists(fallback):
-        _sks_anmalda_sp = SpatialParquet(
-            spatial, fallback_path=fallback if os.path.exists(fallback) else None,
-        )
-        return _sks_anmalda_sp
+    with _handles_lock:
+        if _sks_anmalda_sp is _SKS_ANMALDA_MISSING:
+            return None
+        if _sks_anmalda_sp is not None:
+            return _sks_anmalda_sp
 
-    _sks_anmalda_sp = _SKS_ANMALDA_MISSING
-    return None
+        from imint.training.spatial_parquet import SpatialParquet
+        spatial = os.path.join(sks_dir, "avverkningsanmalningar_spatial.parquet")
+        fallback = os.path.join(sks_dir, "avverkningsanmalningar.parquet")
+        if os.path.exists(spatial) or os.path.exists(fallback):
+            _sks_anmalda_sp = SpatialParquet(
+                spatial, fallback_path=fallback if os.path.exists(fallback) else None,
+            )
+            return _sks_anmalda_sp
+
+        _sks_anmalda_sp = _SKS_ANMALDA_MISSING
+        return None
 
 
 def _lpis_handle(year: int, lpis_dir: str):
     """SpatialParquet for LPIS year, or None if parquet missing."""
-    if year in _lpis_sp:
-        return _lpis_sp[year]
+    # Cheap read; lock-free path for the common case.
+    cached = _lpis_sp.get(year, _SENTINEL_UNSET)
+    if cached is not _SENTINEL_UNSET:
+        return cached
 
-    from imint.training.spatial_parquet import SpatialParquet
-    spatial = os.path.join(lpis_dir, f"jordbruksskiften_{year}_spatial.parquet")
-    fallback = os.path.join(lpis_dir, f"jordbruksskiften_{year}.parquet")
-    if os.path.exists(spatial) or os.path.exists(fallback):
-        _lpis_sp[year] = SpatialParquet(
-            spatial, fallback_path=fallback if os.path.exists(fallback) else None,
-        )
-        return _lpis_sp[year]
+    with _handles_lock:
+        cached = _lpis_sp.get(year, _SENTINEL_UNSET)
+        if cached is not _SENTINEL_UNSET:
+            return cached
 
-    _lpis_sp[year] = None
-    return None
+        from imint.training.spatial_parquet import SpatialParquet
+        spatial = os.path.join(lpis_dir, f"jordbruksskiften_{year}_spatial.parquet")
+        fallback = os.path.join(lpis_dir, f"jordbruksskiften_{year}.parquet")
+        if os.path.exists(spatial) or os.path.exists(fallback):
+            _lpis_sp[year] = SpatialParquet(
+                spatial, fallback_path=fallback if os.path.exists(fallback) else None,
+            )
+            return _lpis_sp[year]
+
+        _lpis_sp[year] = None
+        return None
 
 
 def build_tile_label(
@@ -267,11 +302,57 @@ def build_tile_label(
         data["label"] = unified
         data["nmd_label_raw"] = nmd_label
 
-        # Save back
-        np.savez_compressed(tile_path, **data)
+        # ── Invariant assertions (catch bugs at write time, not 3h later) ──
+        # Shape match: label and spectral must agree spatially.
+        if sp is not None:
+            sp_h, sp_w = sp.shape[-2], sp.shape[-1]
+            if unified.shape != (sp_h, sp_w):
+                raise AssertionError(
+                    f"label.shape={unified.shape} != spectral HW=({sp_h},{sp_w})"
+                )
+        # NMD label must be in the 19-class sequential range.
+        if nmd_label.dtype != np.uint8 or int(nmd_label.max()) > 19:
+            raise AssertionError(
+                f"nmd_label_raw out of range: dtype={nmd_label.dtype} "
+                f"max={int(nmd_label.max())} (expected uint8, max <= 19)"
+            )
+        # Unified label must be in the 23-class range.
+        if int(unified.max()) > 22:
+            raise AssertionError(
+                f"unified label out of range: max={int(unified.max())} "
+                f"(expected <= 22)"
+            )
+        # Crop-named tiles must end up with at least one parcel — these
+        # were specifically fetched at LPIS centroids, so empty is a bug.
+        if name.startswith("crop_") and lpis_mask is None:
+            raise AssertionError(
+                f"crop-named tile {name} got no LPIS overlay — likely a "
+                f"thread-safety race or a bbox / parquet alignment bug"
+            )
+
+        # ── Atomic write: tmp + os.replace ──────────────────────────────
+        # Without atomic write, a failure mid-savez_compressed leaves a
+        # truncated .npz on disk (we hit BadZipFile / EOFError on those
+        # earlier). os.replace is atomic on POSIX so the original tile
+        # stays usable until the new write completes.
+        #
+        # np.savez_compressed unconditionally appends ".npz" to its path
+        # argument unless the path already ends in ".npz". We pass a
+        # path WITHOUT the .npz suffix (`tile.npz.tmp`) so the produced
+        # file lands at `tile.npz.tmp.npz`, then rename onto `tile.npz`.
+        tmp_base = tile_path + ".tmp"          # e.g. /…/foo.npz.tmp
+        np.savez_compressed(tmp_base, **data)  # writes /…/foo.npz.tmp.npz
+        os.replace(tmp_base + ".npz", tile_path)
         return {"name": name, "status": "ok"}
 
     except Exception as e:
+        # Clean up any half-written tmp file (.tmp.npz from savez)
+        stale = tile_path + ".tmp.npz"
+        if os.path.exists(stale):
+            try:
+                os.unlink(stale)
+            except OSError:
+                pass
         return {"name": name, "status": "failed", "reason": str(e)[:120]}
 
 
@@ -285,6 +366,19 @@ def main():
                    help="Only process these tile IDs (filename stems, e.g. 45843596)")
     p.add_argument("--workers", type=int, default=1,
                    help="Parallel workers (use 1 to minimize memory)")
+    p.add_argument(
+        "--executor",
+        choices=["thread", "process"],
+        default="thread",
+        help="Concurrency model. 'thread' uses ThreadPoolExecutor with "
+             "per-thread rasterio + pyarrow handles via threading.local() "
+             "(default; lower memory, fast startup). 'process' uses "
+             "ProcessPoolExecutor (each worker has its own address space, "
+             "guaranteed isolation against any not-thread-safe library; "
+             "higher memory, slower startup). Use 'process' as a safety "
+             "fallback if a future regression breaks the thread-safety "
+             "invariants in tile_fetch / spatial_parquet.",
+    )
     args = p.parse_args()
     # Tile size is derived per-tile from the raster shape / tile_size_px key.
     # No CLI flag needed — the script adapts to whatever fetch_unified_tiles wrote.
@@ -305,14 +399,20 @@ def main():
     # startup preload. Each tile query pulls only the row groups that
     # overlap its bbox.
     # Pre-loading all years at once would exceed memory on small pods.
-    # Pre-open SpatialParquet handles once so we don't re-open per tile
-    _sks_utforda_handle(args.sks_dir)
-    _sks_anmalda_handle(args.sks_dir)
+    # Pre-open SpatialParquet handles once so we don't re-open per tile.
+    # Only matters for the thread executor — process workers re-init
+    # their own globals.
+    if args.executor == "thread":
+        _sks_utforda_handle(args.sks_dir)
+        _sks_anmalda_handle(args.sks_dir)
 
     stats = {"ok": 0, "failed": 0}
     t0 = time.time()
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+    print(f"  Executor:  {args.executor} (workers={args.workers})")
+    Executor = ProcessPoolExecutor if args.executor == "process" else ThreadPoolExecutor
+
+    with Executor(max_workers=args.workers) as pool:
         futs = {
             pool.submit(build_tile_label, t, args.nmd_raster,
                         args.lpis_dir, args.sks_dir): t

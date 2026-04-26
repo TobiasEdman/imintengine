@@ -19,12 +19,22 @@ At query time we:
 Memory footprint at query time: O(polygons in 1-2 row groups × bbox
 size) ≈ a few MB, independent of total file size. No full-file load.
 
-Opens file lazily on first query; holds a ``pyarrow.parquet.ParquetFile``
-handle which is cheap (just an open FD).
+Thread safety
+-------------
+``pyarrow.parquet.ParquetFile`` holds an open file descriptor and
+mutable cursor state. Two threads calling ``read_row_groups()`` on the
+same handle can race and return data from the wrong row groups (this
+exact bug produced misaligned tile labels in the multi-threaded
+build-labels pipeline, 2026-04). To make ``SpatialParquet`` safe to
+share across threads we keep one ``ParquetFile`` (and one fallback
+``GeoDataFrame``) **per thread** via ``threading.local()``. The
+configuration (``path``, ``fallback_path``) and the immutable
+row-group bbox metadata are shared.
 """
 from __future__ import annotations
 
 import os
+import threading
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -43,23 +53,44 @@ class SpatialParquet:
             If the spatial version is missing, we fall back to loading
             the full file on first query and filtering in-memory.
             Emits a warning so the caller sees the perf hit.
+
+    The instance is safe to share across threads. Pyarrow / geopandas
+    handles are stored in ``threading.local()`` so each thread gets
+    its own ``ParquetFile`` cursor.
     """
 
     def __init__(self, path: str, fallback_path: str | None = None):
         self.path = path
         self.fallback_path = fallback_path
-        self._parq = None            # pyarrow.parquet.ParquetFile
-        self._rg_bboxes = None       # list[tuple[minx, miny, maxx, maxy]]
-        self._fallback_gdf = None    # loaded only if spatial file missing
+        # Immutable, computed once on first open from any thread.
+        self._rg_bboxes: list[tuple[float, float, float, float]] | None = None
+        self._rg_lock = threading.Lock()
+        # Per-thread mutable handles.
+        self._tls = threading.local()
+
+    # ── per-thread handle accessors ──────────────────────────────────────
 
     def _ensure_open(self) -> None:
-        if self._parq is not None or self._fallback_gdf is not None:
+        """Open the parquet file in the calling thread (if not yet open).
+
+        Computes ``self._rg_bboxes`` once across all threads (under a
+        lock) so we don't redo the metadata scan per worker.
+        """
+        # Already open in this thread → fast path.
+        if getattr(self._tls, "parq", None) is not None:
+            return
+        if getattr(self._tls, "fallback_gdf", None) is not None:
             return
 
         if os.path.exists(self.path):
             import pyarrow.parquet as pq
-            self._parq = pq.ParquetFile(self.path)
-            self._rg_bboxes = self._extract_row_group_bboxes()
+            self._tls.parq = pq.ParquetFile(self.path)
+            self._tls.fallback_gdf = None
+            with self._rg_lock:
+                if self._rg_bboxes is None:
+                    self._rg_bboxes = self._extract_row_group_bboxes(
+                        self._tls.parq,
+                    )
             return
 
         # Spatial parquet missing — fall back to slow path
@@ -71,25 +102,27 @@ class SpatialParquet:
                 RuntimeWarning,
             )
             import geopandas as gpd
-            self._fallback_gdf = gpd.read_parquet(self.fallback_path)
+            # Per-thread fallback — geopandas filtering uses pandas, which
+            # holds internal numpy buffers that are read-safe but better
+            # not to share across threads either.
+            self._tls.fallback_gdf = gpd.read_parquet(self.fallback_path)
+            self._tls.parq = None
             return
 
         raise FileNotFoundError(
             f"Neither {self.path} nor fallback {self.fallback_path} exists."
         )
 
-    def _extract_row_group_bboxes(self) -> list[tuple[float, float, float, float]]:
+    @staticmethod
+    def _extract_row_group_bboxes(parq) -> list[tuple[float, float, float, float]]:
         """Read min/max statistics for the bbox columns from each row group.
 
-        Returns a list aligned with ``self._parq.num_row_groups``.
-        Each entry is the axis-aligned bbox that encloses all polygon
-        bboxes in that row group — i.e. the union of per-polygon
-        bboxes restricted to the rows in that group.
+        Pure metadata read — no row data is materialized, so calling
+        this from a single thread once is cheap (~milliseconds for our
+        ~115 row-group LPIS files).
         """
-        assert self._parq is not None
-        md = self._parq.metadata
-        # Find column indices by name
-        schema = self._parq.schema_arrow
+        md = parq.metadata
+        schema = parq.schema_arrow
         col_names = schema.names
         try:
             idx_minx = col_names.index("_bbox_minx")
@@ -98,7 +131,7 @@ class SpatialParquet:
             idx_maxy = col_names.index("_bbox_maxy")
         except ValueError as e:
             raise ValueError(
-                f"{self.path} missing expected bbox columns "
+                f"missing expected bbox columns "
                 f"(_bbox_minx / _bbox_miny / _bbox_maxx / _bbox_maxy). "
                 f"Reprocess via preprocess_sks_lpis_spatial.py."
             ) from e
@@ -136,6 +169,9 @@ class SpatialParquet:
 
         Returns:
             GeoDataFrame. Empty (with correct CRS) when no polygons overlap.
+
+        Thread-safe: each calling thread gets its own pyarrow handle
+        via ``threading.local()``.
         """
         import geopandas as gpd
 
@@ -151,23 +187,24 @@ class SpatialParquet:
         self._ensure_open()
 
         # Slow path — spatial parquet missing
-        if self._fallback_gdf is not None:
-            b = self._fallback_gdf.geometry.bounds
+        fallback_gdf = getattr(self._tls, "fallback_gdf", None)
+        if fallback_gdf is not None:
+            b = fallback_gdf.geometry.bounds
             mask = ~(
                 (b["maxx"] < tw) | (b["minx"] > te)
                 | (b["maxy"] < ts) | (b["miny"] > tn)
             )
-            return self._fallback_gdf[mask].copy()
+            return fallback_gdf[mask].copy()
 
         # Fast path — row-group-filtered read
-        assert self._parq is not None
+        parq = getattr(self._tls, "parq", None)
+        assert parq is not None, "_ensure_open did not initialise per-thread parq"
         relevant = self._relevant_row_groups(tile_bbox_t)
         if not relevant:
-            # Return empty GeoDataFrame with correct schema
-            empty = self._parq.schema_arrow.empty_table()
+            empty = parq.schema_arrow.empty_table()
             return gpd.GeoDataFrame.from_arrow(empty)
 
-        table = self._parq.read_row_groups(relevant)
+        table = parq.read_row_groups(relevant)
         gdf = gpd.GeoDataFrame.from_arrow(table)
 
         # Exact per-row bbox filter (row group may contain polygons
