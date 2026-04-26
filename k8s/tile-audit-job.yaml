@@ -20,30 +20,53 @@ spec:
             - -c
             - |
               set -e
-              apt-get update -qq && apt-get install -y -qq libexpat1 > /dev/null 2>&1
-              pip install -q --no-cache-dir numpy
+              apt-get update -qq && apt-get install -y -qq git libexpat1 libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy geopandas pyarrow shapely rasterio
+
+              # Need the imint package for TileConfig + resolve_tile_bbox
+              cd /tmp
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine 2>&1 | tail -1
+              export PYTHONPATH=/tmp/imintengine
 
               mkdir -p /data/debug/audit
               python3 - <<'PY'
-              # Thorough tile state audit. For every tile in
-              # /data/unified_v2_512/*.npz, record:
-              #   - file mtime (epoch generation hint)
-              #   - key set (which fetch/enrich passes touched it)
-              #   - per-key shape/dtype/value-summary for diagnostic keys:
-              #       spectral, label, label_mask, nmd_label_raw,
-              #       harvest_mask, parcel_area_ha, n_parcels,
-              #       harvest_probability, rededge, tessera, year,
-              #       lpis_year, dates, source
-              #   - integrity: label.shape == spectral H/W,
-              #     bbox_3006 vs easting/northing,
-              #     LPIS class presence in label vs label_mask,
-              #     LPIS class presence in label vs n_parcels.
-              # Output:
-              #   /data/debug/audit/audit_full.json   — per-tile records
-              #   /data/debug/audit/cohorts.json      — grouped summary
-              #   /data/debug/audit/cohorts.txt       — human-readable
+              # Thorough tile state audit covering:
+              #
+              # A. Provenance fingerprint: which fetch + label run produced
+              #    each tile (mtime + key set + source).
+              #
+              # B. Schema/key consistency: spectral + label shape match;
+              #    expected aux keys present; n_frames consistent across the
+              #    fleet.
+              #
+              # C. Geometry alignment (the part missing in v1 of this audit):
+              #    1. TileConfig.assert_bbox_matches — extent matches size_px × 10m
+              #    2. All bbox sources agree — easting/northing/filename/bbox_3006
+              #       all reduce to the same center within 1 m.
+              #    3. Spectral H/W matches tile_size_px persisted in the tile.
+              #    4. bbox_3006 axis sanity — west < east, south < north, and
+              #       Sweden-plausible ranges.
+              #    5. Center inside Sweden EPSG:3006 envelope.
+              #
+              # D. LPIS overlay state:
+              #    - label_mask non-zero pixel count
+              #    - n_parcels declared
+              #    - LPIS classes (11–21) present in the final unified label
+              #    - cross-check: tiles with non-zero label_mask should also
+              #      have LPIS classes in label (broken merge_all flag)
+              #    - cross-check: crop_*-named tiles MUST have n_parcels>0
+              #
+              # E. SKS / harvest state.
+              #
+              # Outputs (all on PVC /data/debug/audit/):
+              #   audit_full.jsonl   — one JSON per tile (compact)
+              #   cohorts.json       — grouped summary statistics
+              #   problems.txt       — list of integrity-failed tile names
+              #                        + reason, ready for re-fetch / rebuild
               import json
               import os
+              import re
+              import sys
               import time
               import traceback
               from collections import Counter, defaultdict
@@ -52,38 +75,62 @@ spec:
 
               import numpy as np
 
+              sys.path.insert(0, "/tmp/imintengine")
+              from imint.training.tile_config import TileConfig
+
               SRC = Path("/data/unified_v2_512")
               OUT = Path("/data/debug/audit")
               OUT.mkdir(parents=True, exist_ok=True)
 
+              # The dataset directory is named "unified_v2_512" → 512 px
+              # canonical TileConfig. We compare each tile against this
+              # expected geometry.
+              TILE = TileConfig(size_px=512)
+              EXPECTED_M = TILE.size_m  # 5120
+
+              # Sweden EPSG:3006 envelope (rough): easting 200k–1000k,
+              # northing 6.0M–7.7M.
+              SWEDEN_X = (200_000, 1_000_000)
+              SWEDEN_Y = (6_000_000, 7_800_000)
+
+              FILENAME_RE = re.compile(r"tile_(\d+)_(\d+)|crop_[a-zåäö]+_(\d+)_(\d+)|urban_(\d+)_(\d+)")
+
               files = sorted(SRC.glob("*.npz"))
               print(f"Auditing {len(files)} tiles...", flush=True)
 
-              # Per-tile records — concise so the JSON file stays small
               records = []
-              # Buckets for the cohort summary
-              cohort_counts: dict = defaultdict(int)
               key_presence = Counter()
               source_counts = Counter()
               year_counts = Counter()
               shape_counts = Counter()
               n_frames_counts = Counter()
-              label_class_counts = Counter()  # how many tiles have each LPIS class
+              label_class_counts = Counter()  # tiles per LPIS unified class
               integrity_failures = Counter()
-              mtime_buckets = Counter()  # YYYY-MM-DD per file mtime
+              mtime_buckets = Counter()
+              cohort_counts = defaultdict(int)
+              problems_list = []  # (tile_name, kind, detail)
 
-              # Crop class indices in the unified schema (11..21)
-              LPIS_CLASSES = set(range(11, 22))
+              # Precompute filename → expected center
+              def parse_name_center(stem: str) -> tuple[int, int] | None:
+                  m = FILENAME_RE.search(stem)
+                  if not m:
+                      return None
+                  groups = [g for g in m.groups() if g is not None]
+                  if len(groups) != 2:
+                      return None
+                  return int(groups[0]), int(groups[1])
 
               for i, p in enumerate(files):
                   if i % 500 == 0:
                       print(f"  [{i}/{len(files)}]", flush=True)
+
                   rec = {"name": p.stem}
                   rec["mtime"] = os.path.getmtime(p)
                   rec["mtime_iso"] = time.strftime(
                       "%Y-%m-%d %H:%M", time.gmtime(rec["mtime"])
                   )
                   mtime_buckets[time.strftime("%Y-%m-%d", time.gmtime(rec["mtime"]))] += 1
+                  problems = []
 
                   try:
                       d = np.load(p, allow_pickle=True)
@@ -92,25 +139,31 @@ spec:
                       for k in keys:
                           key_presence[k] += 1
 
-                      # source / year metadata
-                      if "source" in d:
-                          src = str(d["source"])
-                          rec["source"] = src
-                          source_counts[src] += 1
-                      else:
-                          source_counts["<missing>"] += 1
+                      # ── source / year metadata ────────────────────────
+                      src = str(d["source"]) if "source" in d else "<missing>"
+                      rec["source"] = src
+                      source_counts[src] += 1
 
+                      year = None
                       if "year" in d:
-                          year_counts[f"year={int(d['year'])}"] += 1
+                          year = int(d["year"])
+                          year_counts[f"year={year}"] += 1
                       elif "lpis_year" in d:
-                          year_counts[f"lpis_year={int(d['lpis_year'])}"] += 1
+                          year = int(d["lpis_year"])
+                          year_counts[f"lpis_year={year}"] += 1
                       elif "dates" in d and len(d["dates"]) > 0:
-                          year_counts[f"dates[0]={str(d['dates'][0])[:4]}"] += 1
+                          try:
+                              year = int(str(d["dates"][0])[:4])
+                              year_counts[f"dates[0]={year}"] += 1
+                          except Exception:
+                              year_counts["<bad_dates>"] += 1
                       else:
                           year_counts["<no_year>"] += 1
+                      rec["year"] = year
 
-                      # spectral shape / frames
+                      # ── spectral shape / frames ───────────────────────
                       sp = d.get("spectral", d.get("image"))
+                      sp_h = sp_w = None
                       if sp is not None:
                           rec["spectral_shape"] = list(sp.shape)
                           shape_counts[tuple(sp.shape)] += 1
@@ -118,41 +171,43 @@ spec:
                               T = sp.shape[0] // 6
                               n_frames_counts[T] += 1
                               rec["n_frames"] = T
+                              sp_h, sp_w = sp.shape[1], sp.shape[2]
                           elif sp.ndim == 4:
                               n_frames_counts[sp.shape[0]] += 1
                               rec["n_frames"] = int(sp.shape[0])
+                              sp_h, sp_w = sp.shape[2], sp.shape[3]
                       else:
                           rec["spectral_shape"] = None
+                          problems.append(("missing_spectral", "no spectral key"))
 
-                      # label
+                      # ── label ─────────────────────────────────────────
                       label = d.get("label")
                       if label is not None:
                           rec["label_shape"] = list(label.shape)
                           uniq = np.unique(label)
                           rec["label_unique"] = sorted(int(x) for x in uniq)
                           lpis_in_label = sorted(
-                              int(x) for x in uniq if int(x) in LPIS_CLASSES
+                              int(x) for x in uniq if 11 <= int(x) <= 21
                           )
                           rec["lpis_classes_in_label"] = lpis_in_label
                           for c in lpis_in_label:
                               label_class_counts[c] += 1
 
-                      # label_mask (raw SJV codes)
+                      # ── label_mask / n_parcels ────────────────────────
+                      lm_nz = 0
                       if "label_mask" in d:
                           lm = d["label_mask"]
-                          nz = int((lm > 0).sum())
-                          rec["label_mask_nz_px"] = nz
-                          rec["label_mask_dtype"] = str(lm.dtype)
-                          if nz > 0:
+                          lm_nz = int((lm > 0).sum())
+                          rec["label_mask_nz_px"] = lm_nz
+                          if lm_nz > 0:
                               uniq = np.unique(lm[lm > 0])
                               rec["label_mask_top_codes"] = sorted(int(x) for x in uniq[:8])
                           else:
                               rec["label_mask_top_codes"] = []
+                      n_parcels = int(d["n_parcels"]) if "n_parcels" in d else 0
+                      rec["n_parcels"] = n_parcels
 
-                      if "n_parcels" in d:
-                          rec["n_parcels"] = int(d["n_parcels"])
-
-                      # SKS / harvest
+                      # ── SKS / harvest ─────────────────────────────────
                       rec["has_harvest_mask"] = "harvest_mask" in d
                       rec["has_harvest_probability"] = "harvest_probability" in d
                       if "n_harvest_polygons" in d:
@@ -160,65 +215,151 @@ spec:
                       if "n_mature_polygons" in d:
                           rec["n_mature_polygons"] = int(d["n_mature_polygons"])
 
-                      # bbox / geometry consistency
-                      if "bbox_3006" in d:
-                          rec["bbox_3006"] = d["bbox_3006"].tolist()
-                      if "tile_size_px" in d:
-                          rec["tile_size_px"] = int(d["tile_size_px"])
+                      # ── geometry: bbox sources + alignment ────────────
+                      bbox_arr = d.get("bbox_3006") if "bbox_3006" in d else None
+                      ts_persisted = int(d["tile_size_px"]) if "tile_size_px" in d else None
+                      east_npz = int(d["easting"]) if "easting" in d else None
+                      north_npz = int(d["northing"]) if "northing" in d else None
+                      rec["tile_size_px_persisted"] = ts_persisted
+                      rec["easting_persisted"] = east_npz
+                      rec["northing_persisted"] = north_npz
 
-                      # integrity checks
-                      problems = []
-                      if sp is not None and label is not None:
-                          if sp.ndim == 3:
-                              h_sp, w_sp = sp.shape[1], sp.shape[2]
-                          elif sp.ndim == 4:
-                              h_sp, w_sp = sp.shape[2], sp.shape[3]
-                          else:
-                              h_sp, w_sp = -1, -1
-                          if (h_sp, w_sp) != tuple(label.shape):
-                              problems.append(
-                                  f"spectral_label_shape_mismatch: "
-                                  f"sp={h_sp}x{w_sp} label={label.shape[0]}x{label.shape[1]}"
-                              )
-                              integrity_failures["spectral_label_shape_mismatch"] += 1
+                      # Center from each source
+                      centers: dict[str, tuple[float, float]] = {}
+                      if east_npz is not None and north_npz is not None:
+                          centers["en_npz"] = (east_npz, north_npz)
 
-                      # label_mask non-empty but no LPIS classes in label → broken merge
-                      if rec.get("label_mask_nz_px", 0) > 0 and not rec.get("lpis_classes_in_label"):
-                          problems.append("label_mask_present_but_no_lpis_in_label")
-                          integrity_failures["label_mask_present_but_no_lpis_in_label"] += 1
+                      fname_c = parse_name_center(p.stem)
+                      if fname_c is not None:
+                          centers["filename"] = fname_c
 
-                      # n_parcels > 0 but no LPIS classes in label → broken
-                      if rec.get("n_parcels", 0) > 0 and not rec.get("lpis_classes_in_label"):
-                          problems.append("n_parcels_positive_but_no_lpis_in_label")
-                          integrity_failures["n_parcels_positive_but_no_lpis_in_label"] += 1
+                      if bbox_arr is not None:
+                          b = np.asarray(bbox_arr).flatten().tolist()
+                          if len(b) >= 4:
+                              cx = (b[0] + b[2]) / 2
+                              cy = (b[1] + b[3]) / 2
+                              centers["bbox_3006"] = (cx, cy)
+                              rec["bbox_3006"] = b
 
-                      # 'crop_*' tile name but n_parcels == 0 → LPIS overlay missing
-                      if p.stem.startswith("crop_") and rec.get("n_parcels", 0) == 0:
-                          problems.append("crop_named_tile_without_parcels")
-                          integrity_failures["crop_named_tile_without_parcels"] += 1
+                              # Axis sanity: west < east AND south < north
+                              if b[0] >= b[2]:
+                                  problems.append(("bbox_axis_minx_ge_maxx", f"{b[:4]}"))
+                              if b[1] >= b[3]:
+                                  problems.append(("bbox_axis_miny_ge_maxy", f"{b[:4]}"))
+                              # Persisted axis swap detection (legacy):
+                              # For a Sweden tile, west should be in 200k..1M
+                              # and south in 6M..7.7M. If reversed, the tile
+                              # itself was saved with axes swapped.
+                              if SWEDEN_X[0] <= b[1] <= SWEDEN_X[1] and SWEDEN_Y[0] <= b[0] <= SWEDEN_Y[1]:
+                                  problems.append(("bbox_3006_axis_swapped",
+                                                   f"minx={b[0]:.0f} miny={b[1]:.0f}"))
 
-                      rec["integrity_problems"] = problems
+                              # extent vs expected
+                              ew = b[2] - b[0]
+                              ns = b[3] - b[1]
+                              if abs(ew - EXPECTED_M) > 1:
+                                  problems.append(("bbox_extent_ew_wrong",
+                                                   f"got {ew}m expected {EXPECTED_M}m"))
+                              if abs(ns - EXPECTED_M) > 1:
+                                  problems.append(("bbox_extent_ns_wrong",
+                                                   f"got {ns}m expected {EXPECTED_M}m"))
+
+                      # All centers agree to within 1 m
+                      if len(centers) >= 2:
+                          xs = [c[0] for c in centers.values()]
+                          ys = [c[1] for c in centers.values()]
+                          dx = max(xs) - min(xs)
+                          dy = max(ys) - min(ys)
+                          rec["center_max_drift_m"] = round(max(dx, dy), 3)
+                          if dx > 1 or dy > 1:
+                              detail = " ".join(f"{k}=({v[0]:.0f},{v[1]:.0f})"
+                                                for k, v in centers.items())
+                              problems.append(("center_drift", detail))
+
+                      # spectral H/W matches persisted tile_size_px
+                      if sp_h is not None and ts_persisted is not None:
+                          if sp_h != ts_persisted or sp_w != ts_persisted:
+                              problems.append((
+                                  "spectral_shape_vs_tile_size_px_mismatch",
+                                  f"sp={sp_h}x{sp_w} ts_persisted={ts_persisted}",
+                              ))
+
+                      # spectral H/W matches expected canonical 512
+                      if sp_h is not None and (sp_h != TILE.size_px or sp_w != TILE.size_px):
+                          problems.append((
+                              "spectral_shape_vs_expected_512_mismatch",
+                              f"sp={sp_h}x{sp_w} expected={TILE.size_px}",
+                          ))
+
+                      # spectral and label shape match
+                      if sp_h is not None and label is not None:
+                          if (sp_h, sp_w) != tuple(label.shape):
+                              problems.append((
+                                  "spectral_label_shape_mismatch",
+                                  f"sp={sp_h}x{sp_w} label={label.shape[0]}x{label.shape[1]}",
+                              ))
+
+                      # bbox_3006 center is inside Sweden envelope
+                      if "bbox_3006" in centers:
+                          cx, cy = centers["bbox_3006"]
+                          if not (SWEDEN_X[0] <= cx <= SWEDEN_X[1]):
+                              problems.append(("center_outside_sweden_x", f"cx={cx:.0f}"))
+                          if not (SWEDEN_Y[0] <= cy <= SWEDEN_Y[1]):
+                              problems.append(("center_outside_sweden_y", f"cy={cy:.0f}"))
+
+                      # ── LPIS overlay cross-checks ─────────────────────
+                      has_lpis_in_label = bool(rec.get("lpis_classes_in_label"))
+                      if lm_nz > 0 and not has_lpis_in_label:
+                          problems.append((
+                              "label_mask_present_but_no_lpis_in_label",
+                              f"lm_nz={lm_nz} sjv_codes={rec.get('label_mask_top_codes')}",
+                          ))
+                      if n_parcels > 0 and not has_lpis_in_label:
+                          problems.append((
+                              "n_parcels_positive_but_no_lpis_in_label",
+                              f"n_parcels={n_parcels}",
+                          ))
+                      if p.stem.startswith("crop_") and n_parcels == 0:
+                          problems.append((
+                              "crop_named_tile_without_parcels",
+                              "n_parcels=0",
+                          ))
+                      if p.stem.startswith("crop_") and not has_lpis_in_label:
+                          problems.append((
+                              "crop_named_tile_no_lpis_in_label",
+                              f"label_unique={rec.get('label_unique')}",
+                          ))
 
                   except Exception as e:
                       rec["error"] = f"{type(e).__name__}: {e}"
-                      integrity_failures["load_error"] += 1
+                      problems.append(("load_error", rec["error"]))
 
-                  records.append(rec)
+                  # Tally + persist
+                  for kind, _ in problems:
+                      integrity_failures[kind] += 1
+                      problems_list.append((p.stem, kind, _))
+                  rec["integrity_problems"] = [k for k, _ in problems]
 
-                  # Cohort: source + has_label_mask + has_lpis_in_label + day-of-mtime
                   cohort_key = "|".join([
                       f"src={rec.get('source', '?')}",
+                      f"yr={rec.get('year')}",
+                      f"sp={rec.get('spectral_shape')}",
+                      f"frames={rec.get('n_frames')}",
                       f"lm_nz={'Y' if rec.get('label_mask_nz_px', 0) > 0 else 'N'}",
-                      f"lpis_in_label={'Y' if rec.get('lpis_classes_in_label') else 'N'}",
+                      f"lpis_in_lbl={'Y' if rec.get('lpis_classes_in_label') else 'N'}",
                       f"mtime={time.strftime('%Y-%m-%d', time.gmtime(rec['mtime']))}",
                   ])
                   cohort_counts[cohort_key] += 1
+                  records.append(rec)
 
-              # Write per-tile JSON (compact)
-              full_path = OUT / "audit_full.json"
-              with open(full_path, "w") as f:
+              # ── Write outputs ────────────────────────────────────────
+              with open(OUT / "audit_full.jsonl", "w") as f:
                   for r in records:
                       f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
+
+              with open(OUT / "problems.txt", "w") as f:
+                  for name, kind, detail in problems_list:
+                      f.write(f"{name}\t{kind}\t{detail}\n")
 
               summary = {
                   "n_tiles": len(records),
@@ -230,7 +371,9 @@ spec:
                   "lpis_class_in_label_counts": dict(label_class_counts.most_common()),
                   "integrity_failures": dict(integrity_failures.most_common()),
                   "mtime_buckets": dict(mtime_buckets.most_common()),
-                  "cohorts": dict(cohort_counts.most_common()),
+                  "cohorts_top_30": dict(list(sorted(cohort_counts.items(),
+                                                     key=lambda x: -x[1]))[:30]),
+                  "n_distinct_cohorts": len(cohort_counts),
               }
 
               with open(OUT / "cohorts.json", "w") as f:
