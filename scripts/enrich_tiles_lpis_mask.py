@@ -311,11 +311,27 @@ def rasterize_parcels(
     transform = from_bounds(west, south, east, north, tile_size, tile_size)
 
     # --- Crop-class mask (uint16, raw SJV grödkod) ---
-    code_col = "grodkod_int" if "grodkod_int" in clipped.columns else "crop_class"
+    # When called via build_labels.py the gdf comes straight out of
+    # SpatialParquet.query() and the grödkod lives under its raw LPIS
+    # name (`grdkod_mar`). When called via the legacy enrich pipeline
+    # the column has been pre-renamed to `grodkod_int`. We accept either,
+    # plus `crop_class` for the oldest derived-column callers, and
+    # `grodkod`/`grdkod` for any future variant.
+    code_col = None
+    for cand in ("grodkod_int", "grdkod_mar", "grodkod_mar",
+                 "grodkod", "grdkod", "crop_class"):
+        if cand in clipped.columns:
+            code_col = cand
+            break
+    if code_col is None:
+        raise KeyError(
+            "rasterize_parcels: gdf has no SJV grödkod column. "
+            f"Columns: {list(clipped.columns)[:20]}"
+        )
     code_shapes = [
         (geom, int(code))
         for geom, code in zip(clipped.geometry, clipped[code_col])
-        if code > 0
+        if not (code is None) and int(code) > 0
     ]
     mask = rasterize(
         code_shapes,
@@ -329,12 +345,20 @@ def rasterize_parcels(
     # --- Parcel area map (float32, hectares per pixel) ---
     # Each pixel gets the area of its parcel — used for inverse-area loss weighting
     # so small parcels (<0.25 ha) receive proportionally higher gradient.
-    area_col = "area_ha" if "area_ha" in clipped.columns else None
+    # SpatialParquet.query() returns the raw LPIS column name `ansokt_are`
+    # (applied area in m²); legacy enrich path pre-derives `area_ha`.
+    area_col = None
+    for cand in ("area_ha", "ansokt_are", "areal_ha"):
+        if cand in clipped.columns:
+            area_col = cand
+            break
+    # Convert m² → ha if we landed on the raw `ansokt_are` column.
+    area_unit_factor = 1.0 / 10000.0 if area_col == "ansokt_are" else 1.0
     if area_col is not None:
         area_shapes = [
-            (geom, float(area))
+            (geom, float(area) * area_unit_factor)
             for geom, area in zip(clipped.geometry, clipped[area_col])
-            if area > 0
+            if not (area is None) and float(area) > 0
         ]
         area_map = rasterize(
             area_shapes,
