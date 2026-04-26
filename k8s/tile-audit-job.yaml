@@ -1,0 +1,259 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tile-audit
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: tile-state-audit
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600  # 1 h
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq libexpat1 > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy
+
+              mkdir -p /data/debug/audit
+              python3 - <<'PY'
+              # Thorough tile state audit. For every tile in
+              # /data/unified_v2_512/*.npz, record:
+              #   - file mtime (epoch generation hint)
+              #   - key set (which fetch/enrich passes touched it)
+              #   - per-key shape/dtype/value-summary for diagnostic keys:
+              #       spectral, label, label_mask, nmd_label_raw,
+              #       harvest_mask, parcel_area_ha, n_parcels,
+              #       harvest_probability, rededge, tessera, year,
+              #       lpis_year, dates, source
+              #   - integrity: label.shape == spectral H/W,
+              #     bbox_3006 vs easting/northing,
+              #     LPIS class presence in label vs label_mask,
+              #     LPIS class presence in label vs n_parcels.
+              # Output:
+              #   /data/debug/audit/audit_full.json   — per-tile records
+              #   /data/debug/audit/cohorts.json      — grouped summary
+              #   /data/debug/audit/cohorts.txt       — human-readable
+              import json
+              import os
+              import time
+              import traceback
+              from collections import Counter, defaultdict
+              from glob import glob
+              from pathlib import Path
+
+              import numpy as np
+
+              SRC = Path("/data/unified_v2_512")
+              OUT = Path("/data/debug/audit")
+              OUT.mkdir(parents=True, exist_ok=True)
+
+              files = sorted(SRC.glob("*.npz"))
+              print(f"Auditing {len(files)} tiles...", flush=True)
+
+              # Per-tile records — concise so the JSON file stays small
+              records = []
+              # Buckets for the cohort summary
+              cohort_counts: dict = defaultdict(int)
+              key_presence = Counter()
+              source_counts = Counter()
+              year_counts = Counter()
+              shape_counts = Counter()
+              n_frames_counts = Counter()
+              label_class_counts = Counter()  # how many tiles have each LPIS class
+              integrity_failures = Counter()
+              mtime_buckets = Counter()  # YYYY-MM-DD per file mtime
+
+              # Crop class indices in the unified schema (11..21)
+              LPIS_CLASSES = set(range(11, 22))
+
+              for i, p in enumerate(files):
+                  if i % 500 == 0:
+                      print(f"  [{i}/{len(files)}]", flush=True)
+                  rec = {"name": p.stem}
+                  rec["mtime"] = os.path.getmtime(p)
+                  rec["mtime_iso"] = time.strftime(
+                      "%Y-%m-%d %H:%M", time.gmtime(rec["mtime"])
+                  )
+                  mtime_buckets[time.strftime("%Y-%m-%d", time.gmtime(rec["mtime"]))] += 1
+
+                  try:
+                      d = np.load(p, allow_pickle=True)
+                      keys = sorted(d.keys())
+                      rec["keys"] = keys
+                      for k in keys:
+                          key_presence[k] += 1
+
+                      # source / year metadata
+                      if "source" in d:
+                          src = str(d["source"])
+                          rec["source"] = src
+                          source_counts[src] += 1
+                      else:
+                          source_counts["<missing>"] += 1
+
+                      if "year" in d:
+                          year_counts[f"year={int(d['year'])}"] += 1
+                      elif "lpis_year" in d:
+                          year_counts[f"lpis_year={int(d['lpis_year'])}"] += 1
+                      elif "dates" in d and len(d["dates"]) > 0:
+                          year_counts[f"dates[0]={str(d['dates'][0])[:4]}"] += 1
+                      else:
+                          year_counts["<no_year>"] += 1
+
+                      # spectral shape / frames
+                      sp = d.get("spectral", d.get("image"))
+                      if sp is not None:
+                          rec["spectral_shape"] = list(sp.shape)
+                          shape_counts[tuple(sp.shape)] += 1
+                          if sp.ndim == 3:
+                              T = sp.shape[0] // 6
+                              n_frames_counts[T] += 1
+                              rec["n_frames"] = T
+                          elif sp.ndim == 4:
+                              n_frames_counts[sp.shape[0]] += 1
+                              rec["n_frames"] = int(sp.shape[0])
+                      else:
+                          rec["spectral_shape"] = None
+
+                      # label
+                      label = d.get("label")
+                      if label is not None:
+                          rec["label_shape"] = list(label.shape)
+                          uniq = np.unique(label)
+                          rec["label_unique"] = sorted(int(x) for x in uniq)
+                          lpis_in_label = sorted(
+                              int(x) for x in uniq if int(x) in LPIS_CLASSES
+                          )
+                          rec["lpis_classes_in_label"] = lpis_in_label
+                          for c in lpis_in_label:
+                              label_class_counts[c] += 1
+
+                      # label_mask (raw SJV codes)
+                      if "label_mask" in d:
+                          lm = d["label_mask"]
+                          nz = int((lm > 0).sum())
+                          rec["label_mask_nz_px"] = nz
+                          rec["label_mask_dtype"] = str(lm.dtype)
+                          if nz > 0:
+                              uniq = np.unique(lm[lm > 0])
+                              rec["label_mask_top_codes"] = sorted(int(x) for x in uniq[:8])
+                          else:
+                              rec["label_mask_top_codes"] = []
+
+                      if "n_parcels" in d:
+                          rec["n_parcels"] = int(d["n_parcels"])
+
+                      # SKS / harvest
+                      rec["has_harvest_mask"] = "harvest_mask" in d
+                      rec["has_harvest_probability"] = "harvest_probability" in d
+                      if "n_harvest_polygons" in d:
+                          rec["n_harvest_polygons"] = int(d["n_harvest_polygons"])
+                      if "n_mature_polygons" in d:
+                          rec["n_mature_polygons"] = int(d["n_mature_polygons"])
+
+                      # bbox / geometry consistency
+                      if "bbox_3006" in d:
+                          rec["bbox_3006"] = d["bbox_3006"].tolist()
+                      if "tile_size_px" in d:
+                          rec["tile_size_px"] = int(d["tile_size_px"])
+
+                      # integrity checks
+                      problems = []
+                      if sp is not None and label is not None:
+                          if sp.ndim == 3:
+                              h_sp, w_sp = sp.shape[1], sp.shape[2]
+                          elif sp.ndim == 4:
+                              h_sp, w_sp = sp.shape[2], sp.shape[3]
+                          else:
+                              h_sp, w_sp = -1, -1
+                          if (h_sp, w_sp) != tuple(label.shape):
+                              problems.append(
+                                  f"spectral_label_shape_mismatch: "
+                                  f"sp={h_sp}x{w_sp} label={label.shape[0]}x{label.shape[1]}"
+                              )
+                              integrity_failures["spectral_label_shape_mismatch"] += 1
+
+                      # label_mask non-empty but no LPIS classes in label → broken merge
+                      if rec.get("label_mask_nz_px", 0) > 0 and not rec.get("lpis_classes_in_label"):
+                          problems.append("label_mask_present_but_no_lpis_in_label")
+                          integrity_failures["label_mask_present_but_no_lpis_in_label"] += 1
+
+                      # n_parcels > 0 but no LPIS classes in label → broken
+                      if rec.get("n_parcels", 0) > 0 and not rec.get("lpis_classes_in_label"):
+                          problems.append("n_parcels_positive_but_no_lpis_in_label")
+                          integrity_failures["n_parcels_positive_but_no_lpis_in_label"] += 1
+
+                      # 'crop_*' tile name but n_parcels == 0 → LPIS overlay missing
+                      if p.stem.startswith("crop_") and rec.get("n_parcels", 0) == 0:
+                          problems.append("crop_named_tile_without_parcels")
+                          integrity_failures["crop_named_tile_without_parcels"] += 1
+
+                      rec["integrity_problems"] = problems
+
+                  except Exception as e:
+                      rec["error"] = f"{type(e).__name__}: {e}"
+                      integrity_failures["load_error"] += 1
+
+                  records.append(rec)
+
+                  # Cohort: source + has_label_mask + has_lpis_in_label + day-of-mtime
+                  cohort_key = "|".join([
+                      f"src={rec.get('source', '?')}",
+                      f"lm_nz={'Y' if rec.get('label_mask_nz_px', 0) > 0 else 'N'}",
+                      f"lpis_in_label={'Y' if rec.get('lpis_classes_in_label') else 'N'}",
+                      f"mtime={time.strftime('%Y-%m-%d', time.gmtime(rec['mtime']))}",
+                  ])
+                  cohort_counts[cohort_key] += 1
+
+              # Write per-tile JSON (compact)
+              full_path = OUT / "audit_full.json"
+              with open(full_path, "w") as f:
+                  for r in records:
+                      f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
+
+              summary = {
+                  "n_tiles": len(records),
+                  "key_presence": dict(key_presence.most_common()),
+                  "source_counts": dict(source_counts.most_common()),
+                  "year_counts": dict(year_counts.most_common()),
+                  "spectral_shape_counts": {str(k): v for k, v in shape_counts.most_common()},
+                  "n_frames_counts": {str(k): v for k, v in n_frames_counts.most_common()},
+                  "lpis_class_in_label_counts": dict(label_class_counts.most_common()),
+                  "integrity_failures": dict(integrity_failures.most_common()),
+                  "mtime_buckets": dict(mtime_buckets.most_common()),
+                  "cohorts": dict(cohort_counts.most_common()),
+              }
+
+              with open(OUT / "cohorts.json", "w") as f:
+                  json.dump(summary, f, indent=2, default=str)
+
+              print("\n" + "=" * 60)
+              print(json.dumps(summary, indent=2, default=str))
+              PY
+
+              echo ""
+              echo "=== Files written ==="
+              ls -lh /data/debug/audit/
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
