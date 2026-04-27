@@ -371,9 +371,20 @@ def rasterize_parcels(
     else:
         area_map = _empty_area
 
-    # LPIS N,E axis order → S2 pixel grid: rot180 + transpose
-    mask     = np.rot90(mask,     2).T
-    area_map = np.rot90(area_map, 2).T
+    # 2026-04-27: removed `mask = np.rot90(mask, 2).T` post-transform.
+    # That transform was vestigial compensation for the upstream LPIS
+    # GeoParquet axis swap (geometries stored as (Y, X) instead of (X, Y)).
+    # After fix-lpis-axes (commit ae5fe17, 2026-04-25) rewrote the parquets
+    # in standard (X, Y), shapely geometries reach this function in
+    # standard orientation, and rasterio.features.rasterize emits a mask
+    # already in standard image-axis order (row 0 = north edge of bbox,
+    # col 0 = west edge). Applying rot90+T on top double-rotated the mask
+    # into nonsense — visible as a 0.018 IoU vs a fresh rasterize on the
+    # same parcels with the same bbox.
+    #
+    # Agent A's debug job (k8s/lpis-debug-A-job.yaml) confirmed:
+    #   IoU(saved_mask, fresh_rasterize) = 0.0188
+    #   IoU(rot90_inv_T(saved_mask), fresh_rasterize) = 1.0000
 
     return mask, area_map, n_parcels
 
