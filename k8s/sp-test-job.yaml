@@ -1,0 +1,73 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sp-test
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: t
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq git libexpat1 libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy geopandas pyarrow shapely rasterio
+              cd /tmp
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine 2>&1 | tail -1
+              export PYTHONPATH=/tmp/imintengine
+              python3 - <<'PY'
+              import sys; sys.path.insert(0, "/tmp/imintengine")
+              from imint.training.spatial_parquet import SpatialParquet
+
+              for bbox, name in [
+                  ((354416, 6194235, 359536, 6199355), "crop_havre"),
+                  ((363621, 6293885, 368741, 6299005), "crop_oljevaxter"),
+              ]:
+                  print(f"\n=== {name} bbox={bbox} ===")
+                  sp = SpatialParquet(
+                      "/data/lpis/jordbruksskiften_2022_spatial.parquet",
+                      fallback_path="/data/lpis/jordbruksskiften_2022.parquet",
+                  )
+                  g = sp.query({
+                      "west": bbox[0], "south": bbox[1],
+                      "east": bbox[2], "north": bbox[3],
+                  })
+                  print(f"  SpatialParquet.query: {len(g)} hits")
+                  if len(g) > 0:
+                      print(f"  first grdkod_mar: {g['grdkod_mar'].iloc[0]}")
+                      print(f"  geom bounds[0]: {g.geometry.iloc[0].bounds}")
+
+                  # Also: directly check that the on-PVC parquet's
+                  # _bbox_minx/y columns are now in the right ranges
+                  import pyarrow.parquet as pq
+                  pf = pq.ParquetFile(
+                      "/data/lpis/jordbruksskiften_2022_spatial.parquet"
+                  )
+                  tbl = pf.read_row_group(0, columns=[
+                      "_bbox_minx", "_bbox_miny", "_bbox_maxx", "_bbox_maxy",
+                  ])
+                  df = tbl.to_pandas()
+                  print(f"  rg0 _bbox_minx range: {df['_bbox_minx'].min()} .. {df['_bbox_minx'].max()}")
+                  print(f"  rg0 _bbox_miny range: {df['_bbox_miny'].min()} .. {df['_bbox_miny'].max()}")
+              PY
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

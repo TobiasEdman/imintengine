@@ -1,0 +1,466 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lpis-debug-d
+  namespace: prithvi-training-default
+  labels:
+    app: lpis-debug
+    purpose: D_spectral-frame-mismatch
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: lpis-debug
+        purpose: D_spectral-frame-mismatch
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: probe
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy pandas geopandas shapely rasterio pyarrow Pillow scipy matplotlib
+
+              OUT=/data/debug/lpis_debug
+              mkdir -p "$OUT"
+
+              python3 - <<'PY'
+              """
+              Hypothesis D: spectral / nmd / label_mask live in different bbox frames.
+              The user said NMD aligns visually with imagery. If we trust
+              persisted bbox_3006 and re-read NMD from local raster:
+                (a) if NMD-fresh == NMD-saved → bbox is correct → bug is in LPIS rasterize
+                (b) if NMD-fresh != NMD-saved → spectral was fetched at a different bbox
+                    than persisted, and NMD-saved happens to share that wrong frame.
+              Then sweep the saved label_mask by ±100 m (10 m steps) and find the
+              translation that maximises edge-alignment vs RGB gradient.
+              """
+              import io, base64, os
+              from pathlib import Path
+              import numpy as np
+              import rasterio
+              from rasterio.windows import from_bounds as win_from_bounds
+              from rasterio.transform import from_bounds as tx_from_bounds
+              from rasterio.enums import Resampling
+              from rasterio.features import rasterize
+              from PIL import Image
+              from scipy import ndimage as nd
+              import geopandas as gpd
+
+              TILE = "/data/unified_v2_512/crop_oljevaxter_442170_6171610.npz"
+              NMD  = "/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
+              OUT  = Path("/data/debug/lpis_debug")
+              OUT.mkdir(parents=True, exist_ok=True)
+
+              d = np.load(TILE, allow_pickle=True)
+              keys = sorted(d.keys())
+              print("Tile keys:", keys)
+
+              bbox = d["bbox_3006"].tolist() if "bbox_3006" in d else None
+              W_, S_, E_, N_ = bbox
+              print(f"bbox_3006: W={W_} S={S_} E={E_} N={N_}")
+              print(f"width={E_-W_}m height={N_-S_}m")
+
+              spectral = d["spectral"]
+              label_mask = d["label_mask"] if "label_mask" in d else None
+              nmd_saved  = d["nmd_label_raw"] if "nmd_label_raw" in d else None
+              print(f"spectral shape: {spectral.shape}")
+              print(f"label_mask shape: {None if label_mask is None else label_mask.shape}, dtype={None if label_mask is None else label_mask.dtype}")
+              print(f"nmd_saved shape: {None if nmd_saved is None else nmd_saved.shape}, dtype={None if nmd_saved is None else nmd_saved.dtype}")
+
+              # ------------------------------------------------------------------
+              # 1. Fresh NMD read at persisted bbox
+              # ------------------------------------------------------------------
+              with rasterio.open(NMD) as src:
+                  print(f"NMD raster bounds: {src.bounds}")
+                  print(f"NMD raster transform: {src.transform}")
+                  print(f"NMD raster crs: {src.crs}")
+                  win = win_from_bounds(W_, S_, E_, N_, src.transform)
+                  print(f"NMD window from persisted bbox: {win}")
+                  nmd_fresh_raw = src.read(
+                      1, window=win,
+                      out_shape=(512, 512),
+                      resampling=Resampling.nearest,
+                  )
+              print(f"NMD fresh raw min/max/unique-count: {nmd_fresh_raw.min()} / {nmd_fresh_raw.max()} / {len(np.unique(nmd_fresh_raw))}")
+
+              # nmd_saved is in the post-mapping 0-19 unified-NMD space; nmd_fresh_raw
+              # is the raw raster. We can't compare values directly, but we can compare
+              # CLASS-BOUNDARY EDGES — these survive the mapping if the mapping is monotonic.
+              def edges(a):
+                  a = a.astype(np.int32)
+                  ex = (np.diff(a, axis=1) != 0).astype(np.uint8)
+                  ey = (np.diff(a, axis=0) != 0).astype(np.uint8)
+                  e = np.zeros(a.shape, dtype=np.uint8)
+                  e[:, :-1] |= ex
+                  e[:-1, :] |= ey
+                  return e
+
+              # Also fetch with both bbox conventions: compare a few candidate shifts
+              # in the NMD read window itself (in case spectral was fetched with a
+              # half-pixel-shifted convention).
+              nmd_alt_reads = {}
+              with rasterio.open(NMD) as src:
+                  for name, (dx, dy) in [
+                      ("center", (0, 0)),
+                      ("plus5px", (50, 50)),
+                      ("minus5px", (-50, -50)),
+                      ("plus_half_tile", (W_+0, N_+0)),
+                  ][:3]:
+                      win = win_from_bounds(W_+dx, S_+dy, E_+dx, N_+dy, src.transform)
+                      nmd_alt_reads[name] = src.read(
+                          1, window=win, out_shape=(512, 512),
+                          resampling=Resampling.nearest,
+                      )
+
+              # Compute IoU of edge-mask between saved-NMD and fresh-NMD reads
+              if nmd_saved is not None:
+                  e_saved = edges(nmd_saved)
+                  e_fresh = edges(nmd_fresh_raw)
+                  inter = np.logical_and(e_saved, e_fresh).sum()
+                  uni   = np.logical_or(e_saved, e_fresh).sum()
+                  iou_nmd = float(inter) / max(uni, 1)
+                  print(f"IoU(edges saved-NMD vs fresh-NMD at persisted bbox): {iou_nmd:.3f}")
+              else:
+                  iou_nmd = None
+
+              # ------------------------------------------------------------------
+              # 2. RGB from spectral, frame 1 (growing season)
+              # ------------------------------------------------------------------
+              # spectral is (24, 512, 512) — 4 frames * 6 bands
+              T = 4
+              B = 6
+              if spectral.shape[0] == T*B:
+                  block = spectral[B:B*2]  # frame 1
+              else:
+                  block = spectral[:6]
+              # Bands order assumed B02,B03,B04,B8A,B11,B12 → R=B04(idx2), G=B03(idx1), B=B02(idx0)
+              red, green, blue = block[2], block[1], block[0]
+              rgb_f = np.stack([red, green, blue], axis=-1).astype(np.float32)
+              rgb = np.zeros_like(rgb_f, dtype=np.uint8)
+              for c in range(3):
+                  lo, hi = np.percentile(rgb_f[..., c], [2, 98])
+                  if hi > lo:
+                      v = np.clip((rgb_f[..., c] - lo) / (hi - lo), 0, 1) * 255
+                      rgb[..., c] = v.astype(np.uint8)
+
+              # ------------------------------------------------------------------
+              # 3. RGB-edge magnitude
+              # ------------------------------------------------------------------
+              gray = rgb.mean(axis=-1).astype(np.float32)
+              # Sobel
+              gx = nd.sobel(gray, axis=1)
+              gy = nd.sobel(gray, axis=0)
+              gmag = np.hypot(gx, gy)
+              # Threshold to top 15% of pixels → binary RGB-edge map
+              thr = np.percentile(gmag, 85)
+              rgb_edges = (gmag >= thr).astype(np.uint8)
+              print(f"RGB-edge density: {rgb_edges.mean():.4f} (target ~0.15)")
+
+              # ------------------------------------------------------------------
+              # 4. Sweep label_mask shifts ±100 m (=±10 px @ 10 m GSD), step 10 m (=1 px)
+              # ------------------------------------------------------------------
+              def label_edges(lm):
+                  return edges(lm)
+
+              best = {"iou": -1, "dx": 0, "dy": 0}
+              all_results = []
+              if label_mask is not None:
+                  le = label_edges(label_mask)
+                  print(f"Label-edge density: {le.mean():.4f}")
+                  for dy in range(-10, 11):  # rows: positive dy = shift down
+                      for dx in range(-10, 11):  # cols: positive dx = shift right
+                          # Roll the label edges by (dy, dx) and intersect with rgb_edges
+                          shifted = np.roll(le, shift=(dy, dx), axis=(0, 1))
+                          # Mask out wrap-around region
+                          if dy > 0:
+                              shifted[:dy, :] = 0
+                          elif dy < 0:
+                              shifted[dy:, :] = 0
+                          if dx > 0:
+                              shifted[:, :dx] = 0
+                          elif dx < 0:
+                              shifted[:, dx:] = 0
+                          inter = int(np.logical_and(shifted, rgb_edges).sum())
+                          le_sum = int(shifted.sum())
+                          re_sum = int(rgb_edges.sum())
+                          # Use precision: fraction of label-edges that are also RGB-edges
+                          # (more robust when label edges are sparser than RGB edges)
+                          prec = inter / max(le_sum, 1)
+                          rec  = inter / max(re_sum, 1)
+                          # F1-like score
+                          f = 2*prec*rec / max(prec+rec, 1e-9)
+                          all_results.append((dy, dx, prec, rec, f))
+                          if f > best["iou"]:
+                              best = {"iou": f, "dx": dx, "dy": dy, "prec": prec, "rec": rec}
+
+                  print(f"BEST shift: dy={best['dy']}px ({best['dy']*10}m N→S), "
+                        f"dx={best['dx']}px ({best['dx']*10}m W→E), "
+                        f"F1={best['iou']:.4f} (P={best['prec']:.3f}, R={best['rec']:.3f})")
+
+                  # Top 10 shifts
+                  all_results.sort(key=lambda r: -r[4])
+                  print("Top 10 shifts (dy, dx, P, R, F1):")
+                  for r in all_results[:10]:
+                      print(f"  dy={r[0]:+3d} dx={r[1]:+3d}  P={r[2]:.3f} R={r[3]:.3f} F={r[4]:.3f}")
+
+              # ------------------------------------------------------------------
+              # 5. NMD shift sweep: same thing for NMD-saved vs RGB
+              # ------------------------------------------------------------------
+              if nmd_saved is not None:
+                  nmd_e = edges(nmd_saved)
+                  best_nmd = {"iou": -1, "dx": 0, "dy": 0}
+                  for dy in range(-10, 11):
+                      for dx in range(-10, 11):
+                          shifted = np.roll(nmd_e, shift=(dy, dx), axis=(0, 1))
+                          if dy > 0:   shifted[:dy, :] = 0
+                          elif dy < 0: shifted[dy:, :] = 0
+                          if dx > 0:   shifted[:, :dx] = 0
+                          elif dx < 0: shifted[:, dx:] = 0
+                          inter = int(np.logical_and(shifted, rgb_edges).sum())
+                          le_sum = int(shifted.sum())
+                          re_sum = int(rgb_edges.sum())
+                          prec = inter / max(le_sum, 1)
+                          rec  = inter / max(re_sum, 1)
+                          f = 2*prec*rec / max(prec+rec, 1e-9)
+                          if f > best_nmd["iou"]:
+                              best_nmd = {"iou": f, "dx": dx, "dy": dy, "prec": prec, "rec": rec}
+                  print(f"BEST NMD shift: dy={best_nmd['dy']}px, dx={best_nmd['dx']}px, F1={best_nmd['iou']:.4f}")
+              else:
+                  best_nmd = None
+
+              # ------------------------------------------------------------------
+              # 6. LPIS fresh rasterize for comparison
+              # ------------------------------------------------------------------
+              year = 2022
+              if "year" in d:
+                  try: year = int(d["year"])
+                  except: pass
+              elif "lpis_year" in d:
+                  try: year = int(d["lpis_year"])
+                  except: pass
+              elif "dates" in d and len(d["dates"]) > 0:
+                  try: year = int(str(d["dates"][0])[:4])
+                  except: pass
+              print(f"LPIS year: {year}")
+
+              lpis_path = f"/data/lpis/jordbruksskiften_{year}.parquet"
+              lpis_fresh = np.zeros((512, 512), dtype=np.uint16)
+              n_polys = 0
+              if os.path.exists(lpis_path):
+                  gdf = gpd.read_parquet(lpis_path)
+                  b = gdf.geometry.bounds
+                  m = ~((b["maxx"] < W_) | (b["minx"] > E_) | (b["maxy"] < S_) | (b["miny"] > N_))
+                  sub = gdf[m].copy()
+                  n_polys = len(sub)
+                  if n_polys > 0:
+                      tx = tx_from_bounds(W_, S_, E_, N_, 512, 512)
+                      codes = sub.get("grdkod_mar", None)
+                      if codes is None:
+                          shapes = [(g, 1) for g in sub.geometry]
+                      else:
+                          shapes = [(g, int(v) if v is not None else 1)
+                                    for g, v in zip(sub.geometry, codes)]
+                      lpis_fresh = rasterize(
+                          shapes, out_shape=(512, 512),
+                          transform=tx, fill=0, dtype=np.uint16,
+                      )
+              print(f"LPIS polygons in bbox: {n_polys}, fresh-raster nonzero pct: {(lpis_fresh > 0).mean():.4f}")
+              if label_mask is not None:
+                  print(f"label_mask saved nonzero pct: {(label_mask > 0).mean():.4f}")
+                  # Compare saved label_mask to fresh raster
+                  inter = int(np.logical_and(label_mask > 0, lpis_fresh > 0).sum())
+                  uni   = int(np.logical_or(label_mask > 0, lpis_fresh > 0).sum())
+                  iou_lpis = inter / max(uni, 1)
+                  print(f"IoU(saved label_mask>0 vs fresh LPIS rasterize >0 at persisted bbox): {iou_lpis:.4f}")
+
+                  # Sweep saved label_mask vs FRESH raster too
+                  best_vs_fresh = {"iou": -1, "dx": 0, "dy": 0}
+                  for dy in range(-10, 11):
+                      for dx in range(-10, 11):
+                          shifted = np.roll((label_mask > 0).astype(np.uint8), shift=(dy, dx), axis=(0, 1))
+                          if dy > 0:   shifted[:dy, :] = 0
+                          elif dy < 0: shifted[dy:, :] = 0
+                          if dx > 0:   shifted[:, :dx] = 0
+                          elif dx < 0: shifted[:, dx:] = 0
+                          fresh_b = (lpis_fresh > 0).astype(np.uint8)
+                          inter = int(np.logical_and(shifted, fresh_b).sum())
+                          uni = int(np.logical_or(shifted, fresh_b).sum())
+                          iou = inter / max(uni, 1)
+                          if iou > best_vs_fresh["iou"]:
+                              best_vs_fresh = {"iou": iou, "dx": dx, "dy": dy}
+                  print(f"BEST shift (saved label_mask vs fresh LPIS): "
+                        f"dy={best_vs_fresh['dy']}px, dx={best_vs_fresh['dx']}px, "
+                        f"IoU={best_vs_fresh['iou']:.4f}")
+              else:
+                  best_vs_fresh = None
+                  iou_lpis = None
+
+              # ------------------------------------------------------------------
+              # 7. Render PNG: 3x4 grid showing the diagnostic
+              # ------------------------------------------------------------------
+              import matplotlib
+              matplotlib.use("Agg")
+              import matplotlib.pyplot as plt
+
+              fig, axes = plt.subplots(3, 4, figsize=(20, 15))
+
+              # Row 0: imagery + edges
+              axes[0, 0].imshow(rgb)
+              axes[0, 0].set_title("RGB (frame 1, B04/B03/B02)")
+              axes[0, 0].axis("off")
+
+              axes[0, 1].imshow(rgb_edges, cmap="gray")
+              axes[0, 1].set_title(f"RGB edges (Sobel >P85), density={rgb_edges.mean():.3f}")
+              axes[0, 1].axis("off")
+
+              axes[0, 2].imshow(nmd_saved if nmd_saved is not None else np.zeros((512,512)),
+                                cmap="tab20", vmin=0, vmax=20)
+              axes[0, 2].set_title("nmd_label_raw (saved)")
+              axes[0, 2].axis("off")
+
+              axes[0, 3].imshow(nmd_fresh_raw, cmap="tab20")
+              axes[0, 3].set_title("NMD fresh-read at persisted bbox")
+              axes[0, 3].axis("off")
+
+              # Row 1: label_mask + LPIS fresh + diff
+              axes[1, 0].imshow(rgb)
+              if label_mask is not None:
+                  ovl = (label_mask > 0).astype(np.uint8) * 255
+                  axes[1, 0].imshow(ovl, alpha=0.4, cmap="Reds")
+              axes[1, 0].set_title("RGB + saved label_mask (red, dx=0,dy=0)")
+              axes[1, 0].axis("off")
+
+              axes[1, 1].imshow(rgb)
+              if label_mask is not None and best["iou"] > 0:
+                  shifted = np.roll((label_mask > 0).astype(np.uint8), shift=(best["dy"], best["dx"]), axis=(0, 1))
+                  axes[1, 1].imshow(shifted * 255, alpha=0.4, cmap="Reds")
+              axes[1, 1].set_title(f"RGB + label_mask shifted by\n"
+                                   f"dy={best['dy']*10}m dx={best['dx']*10}m (best F1={best['iou']:.3f})")
+              axes[1, 1].axis("off")
+
+              axes[1, 2].imshow(rgb)
+              axes[1, 2].imshow((lpis_fresh > 0).astype(np.uint8) * 255, alpha=0.4, cmap="Greens")
+              axes[1, 2].set_title(f"RGB + FRESH-rasterize (green)\n{n_polys} polys, year={year}")
+              axes[1, 2].axis("off")
+
+              # Diff: saved label_mask vs fresh
+              if label_mask is not None:
+                  diff = np.zeros((512, 512, 3), dtype=np.uint8)
+                  saved_b = (label_mask > 0).astype(bool)
+                  fresh_b = (lpis_fresh > 0).astype(bool)
+                  diff[saved_b & ~fresh_b] = [255, 0, 0]      # red = only saved
+                  diff[~saved_b & fresh_b] = [0, 255, 0]      # green = only fresh
+                  diff[saved_b & fresh_b]  = [255, 255, 0]    # yellow = both
+                  axes[1, 3].imshow(diff)
+                  axes[1, 3].set_title(f"R=saved-only, G=fresh-only, Y=both\n"
+                                       f"IoU={iou_lpis:.3f}")
+              axes[1, 3].axis("off")
+
+              # Row 2: shift heatmap + best-shift overlay + nmd diff
+              if all_results:
+                  heat = np.zeros((21, 21), dtype=np.float32)
+                  for dy, dx, p, r, f in all_results:
+                      heat[dy+10, dx+10] = f
+                  im = axes[2, 0].imshow(heat, cmap="viridis", origin="lower",
+                                         extent=[-100, 100, -100, 100])
+                  axes[2, 0].set_xlabel("dx (m)")
+                  axes[2, 0].set_ylabel("dy (m)")
+                  axes[2, 0].set_title(f"F1 heatmap: label-edges vs RGB-edges\n"
+                                       f"best @ dx={best['dx']*10}m, dy={best['dy']*10}m")
+                  plt.colorbar(im, ax=axes[2, 0])
+
+              # NMD-saved vs NMD-fresh diff
+              if nmd_saved is not None:
+                  # Both have different value scales (saved is mapped, fresh is raw),
+                  # so just compare class-boundary masks.
+                  nmd_diff = np.zeros((512, 512, 3), dtype=np.uint8)
+                  e_s = edges(nmd_saved).astype(bool)
+                  e_f = edges(nmd_fresh_raw).astype(bool)
+                  nmd_diff[e_s & ~e_f] = [255, 0, 0]
+                  nmd_diff[~e_s & e_f] = [0, 255, 0]
+                  nmd_diff[e_s & e_f]  = [255, 255, 0]
+                  axes[2, 1].imshow(nmd_diff)
+                  axes[2, 1].set_title(f"NMD edges: R=saved-only, G=fresh-only, Y=both\n"
+                                       f"IoU(edges)={iou_nmd:.3f}")
+                  axes[2, 1].axis("off")
+
+              # NMD-saved overlay on RGB
+              axes[2, 2].imshow(rgb)
+              if nmd_saved is not None:
+                  e_s = edges(nmd_saved)
+                  axes[2, 2].imshow(e_s * 255, alpha=0.6, cmap="Reds")
+              if best_nmd is not None:
+                  axes[2, 2].set_title(f"RGB + NMD-saved class edges\n"
+                                       f"best NMD shift dy={best_nmd['dy']*10}m dx={best_nmd['dx']*10}m F1={best_nmd['iou']:.3f}")
+              axes[2, 2].axis("off")
+
+              # Saved vs Fresh LPIS shift heatmap
+              if best_vs_fresh is not None:
+                  text = (f"LPIS path comparison\n"
+                          f"------------\n"
+                          f"saved vs fresh @ dx=0,dy=0:\n  IoU = {iou_lpis:.4f}\n"
+                          f"saved vs fresh BEST shift:\n"
+                          f"  dy = {best_vs_fresh['dy']}px ({best_vs_fresh['dy']*10}m)\n"
+                          f"  dx = {best_vs_fresh['dx']}px ({best_vs_fresh['dx']*10}m)\n"
+                          f"  IoU = {best_vs_fresh['iou']:.4f}\n\n"
+                          f"label-edges vs RGB-edges:\n"
+                          f"  best shift dy={best['dy']*10}m dx={best['dx']*10}m\n"
+                          f"  F1 = {best['iou']:.4f}\n\n"
+                          f"NMD-edges vs RGB-edges:\n"
+                          f"  best shift dy={best_nmd['dy']*10}m dx={best_nmd['dx']*10}m\n"
+                          f"  F1 = {best_nmd['iou']:.4f}\n\n"
+                          f"NMD-saved vs NMD-fresh edges:\n"
+                          f"  IoU = {iou_nmd:.4f}\n"
+                  )
+                  axes[2, 3].text(0.02, 0.98, text, family="monospace", fontsize=10,
+                                  va="top", ha="left", transform=axes[2, 3].transAxes)
+              axes[2, 3].axis("off")
+
+              plt.suptitle("D_spectral-frame-mismatch: "
+                           f"crop_oljevaxter_442170_6171610  bbox=[{W_:.0f},{S_:.0f},{E_:.0f},{N_:.0f}]",
+                           fontsize=12)
+              plt.tight_layout()
+              out_png = OUT / "D_spectral-frame-mismatch.png"
+              plt.savefig(out_png, dpi=100, bbox_inches="tight")
+              print(f"\nWrote {out_png} ({out_png.stat().st_size} bytes)")
+
+              # Final summary line for log scraping
+              print("\n=== SUMMARY ===")
+              print(f"NMD saved-vs-fresh IoU:  {iou_nmd:.4f}")
+              print(f"LPIS label-edges best vs RGB-edges: dy={best['dy']*10}m, dx={best['dx']*10}m, F1={best['iou']:.4f}")
+              if best_nmd is not None:
+                  print(f"NMD edges best vs RGB-edges:        dy={best_nmd['dy']*10}m, dx={best_nmd['dx']*10}m, F1={best_nmd['iou']:.4f}")
+              if best_vs_fresh is not None:
+                  print(f"saved label_mask vs fresh LPIS best: dy={best_vs_fresh['dy']*10}m, dx={best_vs_fresh['dx']*10}m, IoU={best_vs_fresh['iou']:.4f}")
+              PY
+
+              echo ""
+              echo "=== Output files ==="
+              ls -lh /data/debug/lpis_debug/
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

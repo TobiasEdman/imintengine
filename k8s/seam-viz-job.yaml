@@ -1,0 +1,190 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seam-viz
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: v
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq libexpat1 > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy Pillow
+
+              python3 - <<'PY'
+              # Visualize column-wise discontinuities in the label vs
+              # spectral for crop_oljevaxter_366181_6296445.
+              #
+              # Six panels stacked vertically into one PNG:
+              #   1. RGB (frame 1, B04/B03/B02 percentile-stretched)
+              #   2. Label colored per class
+              #   3. Per-column class-mean curve (label) + jump markers
+              #   4. Per-column red-mean curve (spectral) for comparison
+              #   5. abs(diff) of column means — bar chart
+              #   6. Vertical lines on the label image marking the
+              #      previously-detected seams (cols 283, 284, 344, 346, 354)
+              import io
+              import os
+
+              import numpy as np
+              from PIL import Image, ImageDraw, ImageFont
+
+              TILE = "/data/unified_v2_512/crop_oljevaxter_366181_6296445.npz"
+              OUT = "/data/debug/seam_viz"
+              os.makedirs(OUT, exist_ok=True)
+
+              d = np.load(TILE, allow_pickle=True)
+              spectral = d["spectral"]   # (24, 512, 512)
+              label    = d["label"]       # (512, 512) uint8
+              H, W = label.shape
+
+              # --- Panel 1: RGB ---
+              # spectral order: B02 B03 B04 B8A B11 B12 (Prithvi 6-band)
+              block = spectral[1*6:2*6]   # frame 1
+              red, green, blue = block[2], block[1], block[0]
+              ref = np.stack([red, green, blue], axis=-1).astype(np.float32)
+              rgb = np.zeros_like(ref, dtype=np.uint8)
+              for c in range(3):
+                  lo, hi = np.percentile(ref[..., c], [2, 98])
+                  if hi > lo:
+                      rgb[..., c] = (np.clip((ref[..., c]-lo)/(hi-lo), 0, 1)*255).astype(np.uint8)
+
+              # --- Panel 2: label as RGB (deterministic per-class hue) ---
+              rng = np.random.default_rng(seed=0)
+              class_color = {int(c): rng.integers(40, 240, 3).astype(np.uint8)
+                             for c in np.unique(label)}
+              label_rgb = np.zeros((H, W, 3), dtype=np.uint8)
+              for c, col in class_color.items():
+                  label_rgb[label == c] = col
+
+              # --- Panel 3 & 4: per-column statistics ---
+              col_label = label.astype(np.float32).mean(axis=0)   # (W,)
+              col_red   = red.astype(np.float32).mean(axis=0)
+              col_diff_label = np.abs(np.diff(col_label))
+              col_diff_red   = np.abs(np.diff(col_red))
+
+              top5_lbl_cols = sorted(np.argsort(col_diff_label)[-5:][::-1].tolist())
+              print(f"top-5 label column-jump locations: {top5_lbl_cols}")
+              print(f"top-5 label jump magnitudes:      "
+                    f"{[round(float(col_diff_label[i]),3) for i in top5_lbl_cols]}")
+              print(f"max spectral column jump:         "
+                    f"{float(col_diff_red.max()):.4f} at col "
+                    f"{int(np.argmax(col_diff_red))}")
+
+              # --- Render plot panels using PIL (no matplotlib) ---
+              # 512×120 plots: y=0 is top, scale data into 0..120.
+              def line_plot(values, height=120, fg=(255, 80, 80), max_val=None,
+                            title=""):
+                  v = np.asarray(values, dtype=np.float32)
+                  vmax = float(max_val if max_val is not None else max(v.max(), 1e-6))
+                  img = np.full((height, len(v), 3), 255, dtype=np.uint8)
+                  ys = (height - 1) - (v / vmax * (height - 4)).astype(int)
+                  ys = np.clip(ys, 0, height - 1)
+                  for x in range(len(v)):
+                      img[ys[x], x] = fg
+                  # axis baseline
+                  img[height - 1, :] = (180, 180, 180)
+                  # top label
+                  pil = Image.fromarray(img)
+                  drw = ImageDraw.Draw(pil)
+                  drw.text((4, 2), f"{title}  max={vmax:.3f}", fill=(20, 20, 20))
+                  return np.array(pil)
+
+              p3 = line_plot(col_label, title="per-column label-class mean", fg=(220,40,40))
+              p4 = line_plot(col_red,   title="per-column RED reflectance (frame 1, spectral)",
+                             fg=(40,40,220))
+              # Jump magnitude bar chart (label)
+              jump_img = np.full((120, W, 3), 255, dtype=np.uint8)
+              jvmax = float(max(col_diff_label.max(), 0.01))
+              for x in range(W - 1):
+                  j = float(col_diff_label[x])
+                  bar_h = int(j / jvmax * 116)
+                  jump_img[120 - bar_h:120, x] = (
+                      (220, 40, 40) if j > 2.0 else (200, 200, 60) if j > 1.0
+                      else (180, 180, 180)
+                  )
+              jump_img[119, :] = (60, 60, 60)
+              pil = Image.fromarray(jump_img)
+              drw = ImageDraw.Draw(pil)
+              drw.text((4, 2), f"|Δ col mean|  red>2.0=SEAM  yellow>1.0  max={jvmax:.2f}",
+                       fill=(20, 20, 20))
+              p5 = np.array(pil)
+
+              # --- Panel 6: label image with seam columns highlighted ---
+              # Draw vertical green lines at the top-5 jump columns.
+              label_marked = label_rgb.copy()
+              for c in top5_lbl_cols:
+                  label_marked[:, c] = (0, 255, 0)
+                  if c + 1 < W:
+                      label_marked[:, c + 1] = (0, 255, 0)
+              p6 = label_marked
+
+              # --- Caption header ---
+              hdr = np.full((48, W, 3), 250, dtype=np.uint8)
+              pil_hdr = Image.fromarray(hdr)
+              drw = ImageDraw.Draw(pil_hdr)
+              drw.text((4, 4),
+                       f"crop_oljevaxter_366181_6296445  bbox=[363621,6293885,368741,6299005]",
+                       fill=(0, 0, 0))
+              drw.text((4, 22),
+                       f"top-5 label seams at cols {top5_lbl_cols}; "
+                       f"max spectral jump {col_diff_red.max():.4f} (no seams)",
+                       fill=(40, 40, 40))
+              hdr = np.array(pil_hdr)
+
+              # Section labels
+              def sect(text, h=22):
+                  s = np.full((h, W, 3), 230, dtype=np.uint8)
+                  pil = Image.fromarray(s)
+                  drw = ImageDraw.Draw(pil)
+                  drw.text((4, 4), text, fill=(0, 0, 0))
+                  return np.array(pil)
+
+              # Stack panels
+              stack = np.vstack([
+                  hdr,
+                  sect("1. RGB (spectral frame 1, B04/B03/B02 stretched)"),
+                  rgb,
+                  sect("2. Saved label (color-by-class) — spatial misregistration vs RGB"),
+                  label_rgb,
+                  sect("3. Per-column label-class mean — sharp drops = SEAMS"),
+                  p3,
+                  sect("4. Per-column RED reflectance — smooth, NO seams (compare to 3)"),
+                  p4,
+                  sect("5. |Δ column mean| of label — red bars > 2.0 are seam columns"),
+                  p5,
+                  sect("6. Label with top-5 seam columns marked GREEN"),
+                  p6,
+              ])
+
+              out_path = f"{OUT}/oljevaxter_seam.png"
+              Image.fromarray(stack).save(out_path)
+              print(f"\nWrote: {out_path}  size={os.path.getsize(out_path)} bytes")
+              PY
+
+              echo ""
+              echo "=== Files ==="
+              ls -lh /data/debug/seam_viz/
+          resources:
+            requests:
+              cpu: "1"
+              memory: "4Gi"
+            limits:
+              cpu: "1"
+              memory: "4Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

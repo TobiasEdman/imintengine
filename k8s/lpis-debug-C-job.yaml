@@ -1,0 +1,308 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lpis-debug-c
+  namespace: prithvi-training-default
+  labels:
+    app: lpis-debug
+    purpose: translation-offset-probe
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: lpis-debug
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: probe
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== LPIS debug C: translation / sub-pixel offset probe ==="
+              date
+
+              apt-get update -qq && apt-get install -y -qq libgdal-dev gdal-bin libgl1 > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy pandas geopandas shapely rasterio pyarrow Pillow scipy matplotlib
+
+              mkdir -p /data/debug/lpis_debug
+
+              python3 - <<'PY'
+              # ------------------------------------------------------------
+              # Hypothesis: the saved LPIS label_mask is misaligned with
+              # the spectral imagery by a pure translation (in pixels).
+              #
+              # Plan:
+              #   1. Load saved (label_mask) and freshly rasterize parcels for
+              #      the same bbox using rasterio.from_bounds(W, S, E, N).
+              #   2. Compute 2D normalized cross-correlation between the
+              #      binary masks (saved>0) vs (fresh>0).
+              #   3. Find argmax shift (dx, dy) and compute IoU after
+              #      applying that shift to the saved mask.
+              #   4. Render a 3-panel PNG:
+              #        (a) original misalignment (saved vs fresh)
+              #        (b) cross-correlation heatmap (dx, dy plane)
+              #        (c) shifted overlay
+              # ------------------------------------------------------------
+              import os, sys, json, traceback
+              import numpy as np
+              import geopandas as gpd
+              from shapely.geometry import box
+              from rasterio.features import rasterize
+              from rasterio.transform import from_bounds
+              from scipy.signal import fftconvolve
+              from scipy.ndimage import shift as nd_shift
+              import matplotlib
+              matplotlib.use("Agg")
+              import matplotlib.pyplot as plt
+
+              TILE_PATH = "/data/unified_v2_512/crop_oljevaxter_442170_6171610.npz"
+              OUT_DIR   = "/data/debug/lpis_debug"
+              SLUG      = "translation-offset"
+              OUT_PNG   = f"{OUT_DIR}/C_{SLUG}.png"
+              LPIS_DIR  = "/data/lpis"
+
+              BBOX = (439610.0, 6169050.0, 444730.0, 6174170.0)  # W,S,E,N
+              TILE_SIZE = 512
+              GSD = 10.0  # meters per pixel
+
+              print(f"Tile: {TILE_PATH}")
+              print(f"BBox W,S,E,N: {BBOX}")
+
+              # 1. Load saved mask + spectral RGB ----------------------------
+              z = np.load(TILE_PATH, allow_pickle=True)
+              print(f"npz keys: {sorted(z.files)}")
+              saved_mask = z["label_mask"].astype(np.uint16)
+              print(f"saved_mask shape={saved_mask.shape} nz={int((saved_mask>0).sum())}")
+
+              # Best-effort RGB for context (frame 1, B04/B03/B02 if 6-band stride)
+              try:
+                  spec = z["spectral"].astype(np.float32)  # (24, H, W)
+                  # Assume 4 frames × 6 bands; standard Sentinel-2 order B02,B03,B04,B08,B11,B12
+                  f1 = spec[6:12]  # frame 1
+                  rgb = np.stack([f1[2], f1[1], f1[0]], axis=-1)  # R,G,B = B04,B03,B02
+                  rgb = rgb / max(1.0, rgb.max()) * 1.0
+                  rgb = np.clip(rgb * 3.0, 0, 1)
+              except Exception as e:
+                  print(f"  RGB build failed: {e}")
+                  rgb = None
+
+              # 2. Determine year for LPIS parquet ---------------------------
+              year = None
+              for k in ("year", "lpis_year"):
+                  if k in z.files:
+                      try:
+                          year = int(z[k].item() if hasattr(z[k], "item") else z[k])
+                          break
+                      except Exception:
+                          pass
+              if year is None and "dates" in z.files:
+                  try:
+                      d0 = str(z["dates"][0])
+                      year = int(d0[:4])
+                  except Exception:
+                      pass
+              if year is None:
+                  year = 2022
+                  print(f"  (year not in npz; defaulting to {year})")
+              print(f"LPIS year: {year}")
+
+              # 3. Fresh rasterize from parquet ------------------------------
+              parquet = f"{LPIS_DIR}/jordbruksskiften_{year}.parquet"
+              print(f"Reading {parquet} ...")
+              gdf = gpd.read_parquet(parquet)
+              print(f"  total rows: {len(gdf)}  bounds: {gdf.total_bounds.tolist()}")
+
+              W, S, E, N = BBOX
+              tile_box = box(W, S, E, N)
+              # Use bounds-based filter (avoids potential CRS axis weirdness in shapely.intersects)
+              b = gdf.geometry.bounds
+              hits = gdf[~(
+                  (b["maxx"] < W) | (b["minx"] > E)
+                  | (b["maxy"] < S) | (b["miny"] > N)
+              )].copy()
+              print(f"  candidates by bbox: {len(hits)}")
+              if len(hits) == 0:
+                  print("FATAL: 0 LPIS parcels intersect this tile bbox")
+                  sys.exit(2)
+              hits = hits[hits.geometry.intersects(tile_box)]
+              print(f"  after intersects: {len(hits)}")
+
+              # Pick code column
+              code_col = None
+              for cand in ("grdkod_mar", "grodkod_int", "grodkod_mar", "grodkod", "grdkod", "crop_class"):
+                  if cand in hits.columns:
+                      code_col = cand
+                      break
+              print(f"  code column: {code_col}")
+
+              transform = from_bounds(W, S, E, N, TILE_SIZE, TILE_SIZE)
+              shapes = [
+                  (geom, int(c))
+                  for geom, c in zip(hits.geometry, hits[code_col])
+                  if c is not None and int(c) > 0
+              ]
+              fresh_wsen = rasterize(
+                  shapes, out_shape=(TILE_SIZE, TILE_SIZE),
+                  transform=transform, fill=0, dtype=np.uint16,
+                  all_touched=False,
+              )
+              print(f"fresh_wsen nz={int((fresh_wsen>0).sum())}")
+
+              # 4. Cross-correlation ----------------------------------------
+              A = (saved_mask > 0).astype(np.float32)
+              B = (fresh_wsen > 0).astype(np.float32)
+
+              if A.sum() == 0 or B.sum() == 0:
+                  print("FATAL: empty mask in correlation input")
+                  sys.exit(3)
+
+              # Center each mask (zero-mean) so cross-correlation peak ≈ shift
+              # of B onto A. We pad to avoid wraparound and use full mode.
+              # We restrict the search to ±MAX_SHIFT pixels around 0.
+              MAX_SHIFT = 64
+
+              # fftconvolve with B reversed gives correlation
+              corr = fftconvolve(A, B[::-1, ::-1], mode="full")
+              # Center index of zero shift in corr is (H-1, W-1) for two HxW inputs.
+              cy0, cx0 = TILE_SIZE - 1, TILE_SIZE - 1
+              # Crop window around (cy0, cx0)
+              y_lo, y_hi = cy0 - MAX_SHIFT, cy0 + MAX_SHIFT + 1
+              x_lo, x_hi = cx0 - MAX_SHIFT, cx0 + MAX_SHIFT + 1
+              corr_win = corr[y_lo:y_hi, x_lo:x_hi]
+
+              # argmax in window
+              ay, ax = np.unravel_index(np.argmax(corr_win), corr_win.shape)
+              # Convert to (dy, dx) relative to zero shift.
+              # corr[cy0+dy, cx0+dx] = sum A(y,x) * B(y-dy, x-dx)
+              # so the value of B should be shifted by (dy, dx) to match A.
+              dy = ay - MAX_SHIFT
+              dx = ax - MAX_SHIFT
+              print(f"\nBest shift to align FRESH onto SAVED: dy={dy} px, dx={dx} px")
+              # Equivalently the SAVED mask is offset by (-dy, -dx) vs fresh.
+              shift_saved_dy = -dy
+              shift_saved_dx = -dx
+              print(f"  → shift SAVED by (dy={shift_saved_dy}, dx={shift_saved_dx}) to align with FRESH")
+              print(f"  → in meters:    (dy={shift_saved_dy*GSD:.0f} m, dx={shift_saved_dx*GSD:.0f} m)")
+
+              # IoU before / after shift
+              def iou(a, b):
+                  inter = np.logical_and(a, b).sum()
+                  uni   = np.logical_or(a, b).sum()
+                  return float(inter) / float(uni) if uni > 0 else 0.0
+
+              iou_before = iou(A, B)
+              A_shift = nd_shift(A, shift=(shift_saved_dy, shift_saved_dx),
+                                 order=0, mode="constant", cval=0.0)
+              iou_after = iou(A_shift > 0.5, B)
+              print(f"\nIoU before shift: {iou_before:.4f}")
+              print(f"IoU after shift:  {iou_after:.4f}")
+
+              # 5. Render PNG ------------------------------------------------
+              fig, axes = plt.subplots(2, 2, figsize=(14, 14))
+
+              # (a) Original misalignment: saved (red) vs fresh (green) on RGB
+              ax_a = axes[0, 0]
+              if rgb is not None:
+                  ax_a.imshow(rgb, interpolation="nearest")
+              overlay = np.zeros((TILE_SIZE, TILE_SIZE, 4), dtype=np.float32)
+              overlay[..., 0] = A           # saved → red
+              overlay[..., 1] = B           # fresh → green
+              overlay[..., 3] = np.maximum(A, B) * 0.55
+              ax_a.imshow(overlay, interpolation="nearest")
+              ax_a.set_title(f"BEFORE: saved (red) vs fresh (green)\nIoU={iou_before:.3f}")
+              ax_a.set_xlabel("pixel x"); ax_a.set_ylabel("pixel y")
+
+              # (b) Cross-correlation heatmap (dx, dy plane)
+              ax_b = axes[0, 1]
+              im = ax_b.imshow(
+                  corr_win,
+                  extent=[-MAX_SHIFT, MAX_SHIFT, MAX_SHIFT, -MAX_SHIFT],
+                  cmap="viridis", interpolation="nearest",
+              )
+              ax_b.scatter([dx], [dy], marker="x", s=120, c="red", linewidths=2)
+              ax_b.axhline(0, color="white", lw=0.5, alpha=0.5)
+              ax_b.axvline(0, color="white", lw=0.5, alpha=0.5)
+              ax_b.set_title(
+                  f"NCC heatmap (search ±{MAX_SHIFT} px)\n"
+                  f"argmax dy={dy}, dx={dx}  ({dy*GSD:.0f} m, {dx*GSD:.0f} m)"
+              )
+              ax_b.set_xlabel("dx (px)"); ax_b.set_ylabel("dy (px)")
+              plt.colorbar(im, ax=ax_b, fraction=0.046, pad=0.04)
+
+              # (c) After shift overlay
+              ax_c = axes[1, 0]
+              if rgb is not None:
+                  ax_c.imshow(rgb, interpolation="nearest")
+              overlay2 = np.zeros((TILE_SIZE, TILE_SIZE, 4), dtype=np.float32)
+              overlay2[..., 0] = A_shift    # shifted saved → red
+              overlay2[..., 1] = B          # fresh        → green
+              overlay2[..., 3] = np.maximum(A_shift, B) * 0.55
+              ax_c.imshow(overlay2, interpolation="nearest")
+              ax_c.set_title(
+                  f"AFTER shift (dy={shift_saved_dy}, dx={shift_saved_dx} px)\n"
+                  f"IoU={iou_after:.3f}"
+              )
+              ax_c.set_xlabel("pixel x"); ax_c.set_ylabel("pixel y")
+
+              # (d) Saved mask alone (binary) for sanity
+              ax_d = axes[1, 1]
+              ax_d.imshow(A,  cmap="Reds",   alpha=0.6, interpolation="nearest")
+              ax_d.imshow(B,  cmap="Greens", alpha=0.6, interpolation="nearest")
+              ax_d.set_title("Saved (red) and Fresh (green) — raw binary masks")
+              ax_d.set_xlabel("pixel x"); ax_d.set_ylabel("pixel y")
+
+              fig.suptitle(
+                  f"LPIS debug C: translation hypothesis\n"
+                  f"{os.path.basename(TILE_PATH)}  bbox={BBOX}  year={year}",
+                  fontsize=13,
+              )
+              plt.tight_layout()
+              plt.savefig(OUT_PNG, dpi=110, bbox_inches="tight")
+              print(f"\nWrote PNG → {OUT_PNG}")
+
+              # Persist a small JSON summary alongside.
+              with open(f"{OUT_DIR}/C_{SLUG}.json", "w") as f:
+                  json.dump({
+                      "tile":          os.path.basename(TILE_PATH),
+                      "bbox_wsen":     list(BBOX),
+                      "tile_size_px":  TILE_SIZE,
+                      "gsd_m":         GSD,
+                      "year":          year,
+                      "saved_nz":      int(A.sum()),
+                      "fresh_nz":      int(B.sum()),
+                      "best_dy_px":    int(shift_saved_dy),
+                      "best_dx_px":    int(shift_saved_dx),
+                      "best_dy_m":     float(shift_saved_dy * GSD),
+                      "best_dx_m":     float(shift_saved_dx * GSD),
+                      "iou_before":    iou_before,
+                      "iou_after":     iou_after,
+                  }, f, indent=2)
+              print(f"Wrote JSON → {OUT_DIR}/C_{SLUG}.json")
+              PY
+
+              echo ""
+              echo "=== Done ==="
+              ls -la /data/debug/lpis_debug/
+              date
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

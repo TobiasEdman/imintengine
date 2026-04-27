@@ -1,0 +1,260 @@
+---
+# Diagnostic job: investigate LPIS-vs-imagery misalignment on a single tile.
+#
+# Hypothesis (agent A): scripts/enrich_tiles_lpis_mask.py:rasterize_parcels()
+# applies a stale post-rasterization transform `np.rot90(mask, 2).T` (lines
+# 374-376) that was added back when the LPIS parquets had X/Y swapped. The
+# upstream parquet axis bug was fixed (k8s/fix-lpis-axes-job.yaml, 2026-04-25)
+# AND the from_bounds() argument order was corrected to (west,south,east,north),
+# so the post-transform is now a *spurious* extra dihedral op that destroys
+# alignment. Removing it (i.e. using the raw rasterize output) should produce
+# a label that lines up with the spectral imagery.
+#
+# This job:
+#   1. Loads the saved tile crop_oljevaxter_442170_6171610.npz from PVC.
+#   2. Rasterizes LPIS parcels with the *correct* transform (from_bounds in
+#      standard west,south,east,north order, NO post-transform).
+#   3. Renders a 4-panel PNG to /data/debug/lpis_debug/A_stale_post_rot.png:
+#        a) RGB
+#        b) saved label_mask (the broken one)
+#        c) fresh rasterize under proposed correct transform
+#        d) RGB with edges of the fresh rasterize overlaid
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lpis-debug-a
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: debug
+          image: python:3.11-slim
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== LPIS Debug A: stale post-rasterization rot90+T hypothesis ==="
+              date
+
+              apt-get update -qq && apt-get install -y -qq libexpat1 libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas geopandas shapely rasterio pyarrow Pillow
+
+              mkdir -p /data/debug/lpis_debug
+
+              python - <<'PYEOF'
+              import json
+              import numpy as np
+              import geopandas as gpd
+              from pathlib import Path
+              from rasterio.features import rasterize
+              from rasterio.transform import from_bounds
+              from shapely.geometry import box
+              from PIL import Image, ImageDraw, ImageFont
+
+              TILE = "/data/unified_v2_512/crop_oljevaxter_442170_6171610.npz"
+              LPIS = "/data/lpis/jordbruksskiften_2022.parquet"
+              OUT  = "/data/debug/lpis_debug/A_stale_post_rot.png"
+              SIZE = 512
+
+              print(f"Loading tile: {TILE}")
+              data = dict(np.load(TILE, allow_pickle=True))
+              print(f"  keys: {sorted(data.keys())}")
+              bbox = data["bbox_3006"]
+              print(f"  bbox_3006 (raw)            = {bbox.tolist() if hasattr(bbox,'tolist') else bbox}")
+              # Accept several bbox storage formats
+              if isinstance(bbox, np.ndarray) and bbox.shape == ():
+                  bbox = bbox.item()
+              if isinstance(bbox, dict):
+                  west, south, east, north = (
+                      float(bbox["west"]), float(bbox["south"]),
+                      float(bbox["east"]), float(bbox["north"]),
+                  )
+              else:
+                  arr = np.asarray(bbox).astype(float).ravel()
+                  west, south, east, north = arr[0], arr[1], arr[2], arr[3]
+              print(f"  parsed bbox (W,S,E,N) = {west:.1f}, {south:.1f}, {east:.1f}, {north:.1f}")
+              print(f"  width  = {east-west:.1f} m   height = {north-south:.1f} m")
+
+              year = int(data.get("year", data.get("lpis_year", 2022)))
+              print(f"  tile year = {year}")
+
+              # ── 1. Build RGB (B04, B03, B02 from frame 0) ───────────────
+              spectral = data["spectral"]   # (24, 512, 512) = 4 frames * 6 bands
+              print(f"  spectral shape = {spectral.shape}, dtype = {spectral.dtype}")
+              # Prithvi 6-band order: B02, B03, B04, B8A, B11, B12
+              # frame 0 occupies channels 0..5
+              b02, b03, b04 = spectral[0], spectral[1], spectral[2]
+              def stretch(x):
+                  x = x.astype(np.float32)
+                  lo, hi = np.percentile(x, [2, 98])
+                  if hi <= lo: return np.zeros_like(x, dtype=np.uint8)
+                  y = np.clip((x - lo) / (hi - lo), 0, 1)
+                  return (y * 255).astype(np.uint8)
+              rgb = np.stack([stretch(b04), stretch(b03), stretch(b02)], axis=-1)
+              print(f"  rgb shape = {rgb.shape}")
+
+              # ── 2. Saved label_mask ─────────────────────────────────────
+              saved_mask = data["label_mask"]
+              print(f"  saved label_mask shape = {saved_mask.shape}, "
+                    f"dtype = {saved_mask.dtype}, nonzero = {int((saved_mask>0).sum())}, "
+                    f"unique = {np.unique(saved_mask)[:15]}")
+
+              # ── 3. Fresh rasterize under proposed correct transform ─────
+              print(f"\nReading LPIS parcels: {LPIS}")
+              gdf = gpd.read_parquet(LPIS)
+              print(f"  total parcels in parquet = {len(gdf)}")
+              print(f"  CRS = {gdf.crs}")
+              print(f"  total bounds = {gdf.total_bounds}")
+              tile_box = box(west, south, east, north)
+              cand_idx = list(gdf.sindex.intersection(tile_box.bounds))
+              print(f"  sindex candidates = {len(cand_idx)}")
+              clipped = gdf.iloc[cand_idx]
+              clipped = clipped[clipped.geometry.intersects(tile_box)]
+              print(f"  intersecting parcels = {len(clipped)}")
+              # Locate SJV grödkod column
+              code_col = None
+              for c in ("grodkod_int","grdkod_mar","grodkod_mar","grodkod","grdkod","crop_class"):
+                  if c in clipped.columns:
+                      code_col = c; break
+              print(f"  using code_col = {code_col}")
+
+              transform = from_bounds(west, south, east, north, SIZE, SIZE)
+              print(f"  affine transform = {transform}")
+              shapes = [(g, int(c)) for g, c in zip(clipped.geometry, clipped[code_col])
+                        if c is not None and int(c) > 0]
+              fresh = rasterize(
+                  shapes, out_shape=(SIZE, SIZE), transform=transform,
+                  fill=0, dtype=np.uint16, all_touched=False,
+              )
+              print(f"  fresh rasterize nonzero = {int((fresh>0).sum())}")
+
+              # ── 4. Sanity: compare to dihedral ops on saved_mask ───────
+              # The previous probe found the saved mask = some dihedral of fresh.
+              # Specifically, enrich_tiles_lpis_mask.py applies rot90(2).T
+              # which is equivalent to: m -> m[::-1, ::-1].T = m.T[::-1,::-1] flipped.
+              # We verify by inverting it on the saved mask and comparing to fresh.
+              # Inverse of (rot90_2 then transpose) is (transpose then rot90_2).
+              recovered = np.rot90(saved_mask.T, 2)
+              same = (recovered > 0) & (fresh > 0) & (recovered == fresh)
+              union = (recovered > 0) | (fresh > 0)
+              iou = float(same.sum()) / max(int(union.sum()), 1)
+              print(f"\nIoU(recovered_via_inverse_post_transform, fresh) = {iou:.4f}")
+              # Direct IoU
+              same2 = (saved_mask > 0) & (fresh > 0) & (saved_mask == fresh)
+              union2 = (saved_mask > 0) | (fresh > 0)
+              iou2 = float(same2.sum()) / max(int(union2.sum()), 1)
+              print(f"IoU(saved, fresh)                                  = {iou2:.4f}")
+
+              # ── 5. Render PNG ───────────────────────────────────────────
+              # Layout: 2x2 grid of 512x512 panels with captions.
+              CAPTION_H = 60
+              PAD = 10
+              panel = SIZE
+              W = 2*panel + 3*PAD
+              H = 2*(panel + CAPTION_H) + 3*PAD
+              canvas = Image.new("RGB", (W, H), (20, 20, 20))
+              draw = ImageDraw.Draw(canvas)
+              try:
+                  font  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+                  fontb = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+              except Exception:
+                  font  = ImageFont.load_default()
+                  fontb = ImageFont.load_default()
+
+              def paste_panel(img_arr, col, row, title, caption):
+                  x0 = PAD + col*(panel + PAD)
+                  y0 = PAD + row*(panel + CAPTION_H + PAD)
+                  pil = Image.fromarray(img_arr)
+                  canvas.paste(pil, (x0, y0))
+                  draw.text((x0, y0 + panel + 2), title, fill=(255, 220, 90), font=fontb)
+                  draw.text((x0, y0 + panel + 24), caption, fill=(220,220,220), font=font)
+
+              # palette for label visualisation
+              def colorize(mask):
+                  rng = np.random.default_rng(42)
+                  uniq = np.unique(mask)
+                  lut = {0: (0,0,0)}
+                  for u in uniq:
+                      if u == 0: continue
+                      lut[int(u)] = tuple(int(x) for x in rng.integers(60, 255, size=3))
+                  out = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+                  for u, c in lut.items():
+                      out[mask == u] = c
+                  return out
+
+              # Panel A: RGB
+              paste_panel(rgb, 0, 0,
+                          "(a) RGB (B04,B03,B02) frame 0",
+                          "Sentinel-2 imagery for tile bbox")
+              # Panel B: saved label_mask
+              paste_panel(colorize(saved_mask), 1, 0,
+                          "(b) Saved label_mask (BROKEN)",
+                          "what build_labels.py wrote to the .npz")
+              # Panel C: fresh rasterize
+              paste_panel(colorize(fresh), 0, 1,
+                          "(c) Fresh rasterize (proposed FIX)",
+                          "from_bounds(W,S,E,N), NO post rot90/T")
+              # Panel D: RGB + edges of fresh
+              edges = np.zeros_like(fresh, dtype=np.uint8)
+              edges[:-1, :] |= (fresh[:-1, :] != fresh[1:, :])
+              edges[:, :-1] |= (fresh[:, :-1] != fresh[:, 1:])
+              overlay = rgb.copy()
+              overlay[edges > 0] = (255, 50, 50)
+              paste_panel(overlay, 1, 1,
+                          "(d) RGB + fresh-rasterize edges (red)",
+                          "edges should follow visible field boundaries")
+
+              # Header text on top: hypothesis summary
+              header_y = H - 2  # nothing more
+              print(f"\nWriting {OUT}")
+              Path(OUT).parent.mkdir(parents=True, exist_ok=True)
+              canvas.save(OUT)
+              print(f"  wrote {Path(OUT).stat().st_size} bytes")
+
+              # Also dump a small JSON of evidence
+              evidence = {
+                  "tile": TILE,
+                  "bbox_wsen": [west, south, east, north],
+                  "extent_m": [east-west, north-south],
+                  "saved_mask_nonzero": int((saved_mask>0).sum()),
+                  "fresh_rasterize_nonzero": int((fresh>0).sum()),
+                  "iou_saved_vs_fresh": iou2,
+                  "iou_recovered_vs_fresh": iou,
+                  "interpretation": (
+                    "If iou_recovered_vs_fresh >> iou_saved_vs_fresh, then the "
+                    "saved mask is the fresh rasterize with rot90(2).T applied, "
+                    "confirming that the post-rasterize transform in "
+                    "scripts/enrich_tiles_lpis_mask.py:374-376 is the bug."
+                  ),
+              }
+              with open("/data/debug/lpis_debug/A_evidence.json", "w") as f:
+                  json.dump(evidence, f, indent=2)
+              print(json.dumps(evidence, indent=2))
+              PYEOF
+
+              echo ""
+              echo "=== Output files ==="
+              ls -la /data/debug/lpis_debug/
+              echo ""
+              echo "Done: $(date)"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

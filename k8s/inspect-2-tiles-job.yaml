@@ -1,0 +1,116 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inspect-2-tiles
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: i
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq libexpat1 libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy geopandas shapely rasterio
+              python3 - <<'PY'
+              import numpy as np
+              import os, sys
+              import geopandas as gpd
+              from rasterio.transform import from_bounds
+              from rasterio.features import rasterize
+
+              for name in ["crop_havre_356976_6196795",
+                           "crop_oljevaxter_366181_6296445"]:
+                  p = f"/data/unified_v2_512/{name}.npz"
+                  print(f"\n=== {name} ===")
+                  d = np.load(p, allow_pickle=True)
+
+                  bbox = d["bbox_3006"].tolist()
+                  print(f"  bbox_3006 (W,S,E,N): {bbox}")
+                  W = bbox[0]; S = bbox[1]; E = bbox[2]; N = bbox[3]
+                  print(f"  bbox extent (m): EW={E-W:.0f}  NS={N-S:.0f}")
+
+                  label = d["label"]
+                  print(f"  label shape: {label.shape}")
+                  u, c = np.unique(label, return_counts=True)
+                  print(f"  label histogram (class -> px):")
+                  for v, n in sorted(zip(u, c), key=lambda x: -x[1])[:8]:
+                      print(f"    {int(v):>3} -> {int(n):>8}")
+
+                  if "label_mask" in d:
+                      lm = d["label_mask"]
+                      u, c = np.unique(lm, return_counts=True)
+                      nz = sorted([(int(v), int(n)) for v, n in zip(u, c) if v > 0],
+                                  key=lambda x: -x[1])
+                      print(f"  label_mask sjv codes (top 8): {nz[:8]}")
+                      print(f"  label_mask total parcel pixels: {int((lm > 0).sum())}")
+
+                  if "n_parcels" in d:
+                      n_p = int(d["n_parcels"])
+                      print(f"  n_parcels: {n_p}")
+
+                  # Live LPIS rasterize using the same bbox the saved label
+                  # used. If the live rasterize differs significantly from
+                  # the saved label_mask, the on-disk label was built with
+                  # a different bbox interpretation.
+                  try:
+                      gdf = gpd.read_parquet(
+                          "/data/lpis/jordbruksskiften_2022.parquet"
+                      )
+                      b = gdf.geometry.bounds
+                      sub = gdf[~(
+                          (b["maxx"] < W) | (b["minx"] > E)
+                          | (b["maxy"] < S) | (b["miny"] > N)
+                      )]
+                      print(f"  live LPIS query: {len(sub)} polygons in bbox")
+                      if len(sub):
+                          tx = from_bounds(W, S, E, N, label.shape[1], label.shape[0])
+                          burn = rasterize(
+                              [(g, int(c) if c is not None else 1)
+                               for g, c in zip(sub.geometry,
+                                               sub.get("grdkod_mar", [None]*len(sub)))],
+                              out_shape=label.shape,
+                              transform=tx,
+                              fill=0,
+                              dtype=np.uint16,
+                          )
+                          live_codes = np.unique(burn[burn > 0])
+                          print(f"  live rasterize sjv codes: "
+                                f"{sorted(int(c) for c in live_codes)[:10]}")
+                          print(f"  live rasterize total px: {int((burn > 0).sum())}")
+                          # Difference between saved label_mask and live
+                          if "label_mask" in d:
+                              saved = (d["label_mask"] > 0)
+                              live = (burn > 0)
+                              # IoU-style: how much do they overlap?
+                              if saved.any() or live.any():
+                                  inter = (saved & live).sum()
+                                  union = (saved | live).sum()
+                                  print(f"  saved-vs-live IoU of parcel masks: "
+                                        f"{inter / union:.3f}")
+                                  print(f"  saved.sum={int(saved.sum())} "
+                                        f"live.sum={int(live.sum())}")
+                  except Exception as e:
+                      print(f"  live rasterize FAILED: {e}")
+              PY
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

@@ -1,0 +1,262 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lpis-viz
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: lpis-overlay-debug
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: viz
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy geopandas pyarrow shapely rasterio Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              OUT=/data/debug/lpis_viz
+              mkdir -p "$OUT"
+
+              python3 - <<'PY'
+              # For 5 representative tiles, render side-by-side:
+              #   1. RGB from spectral (frame 1, B04/B03/B02)
+              #   2. NMD label colormap
+              #   3. LPIS rasterized polygons (live, from the on-PVC parquets)
+              #   4. The label.npz value distribution (per-class pixel counts)
+              # Output: PNG per panel + an index.html that lays out all 4
+              # panels per tile horizontally.
+
+              import base64
+              import io
+              import os
+              from pathlib import Path
+
+              import geopandas as gpd
+              import numpy as np
+              import rasterio
+              from PIL import Image
+              from rasterio.features import rasterize
+              from rasterio.transform import from_bounds
+
+              from imint.training.unified_schema import (
+                  UNIFIED_CLASS_NAMES,
+                  UNIFIED_COLOR_LIST,
+              )
+
+              OUT = Path("/data/debug/lpis_viz")
+              OUT.mkdir(parents=True, exist_ok=True)
+
+              # Pick a deliberate mix of tile sources so we cover crop +
+              # non-crop areas in the same view.
+              TILE_NAMES = [
+                  "crop_havre_356976_6196795",     # should have havre parcels
+                  "crop_oljevaxter_366181_6296445",# should have oljeväxter
+                  "crop_potatis_409064_6201517",   # should have potatis
+                  "crop_vete_437841_6188604",      # should have vete
+                  "tile_613060_6595060",           # generic LULC
+              ]
+
+              # Build a 23-class colormap matching unified_schema
+              cmap = np.zeros((256, 3), dtype=np.uint8)
+              for i, rgb in enumerate(UNIFIED_COLOR_LIST[:23]):
+                  cmap[i] = rgb
+
+              def rgb_from_spectral(spectral_5d, frame=1):
+                  """Get an RGB preview from the spectral cube."""
+                  if spectral_5d.ndim == 3:  # (T*6, H, W) flattened
+                      spectral = spectral_5d
+                      T = spectral.shape[0] // 6
+                      block = spectral[frame*6:(frame+1)*6]
+                  else:  # (T, 6, H, W)
+                      block = spectral_5d[frame]
+                  # Bands: B02, B03, B04, B8A, B11, B12 → RGB = B04, B03, B02
+                  red, green, blue = block[2], block[1], block[0]
+                  rgb = np.stack([red, green, blue], axis=-1).astype(np.float32)
+                  # Stretch to 2nd–98th percentile per channel.
+                  out = np.zeros_like(rgb, dtype=np.uint8)
+                  for c in range(3):
+                      lo, hi = np.percentile(rgb[..., c], [2, 98])
+                      if hi > lo:
+                          v = np.clip((rgb[..., c] - lo) / (hi - lo), 0, 1) * 255
+                          out[..., c] = v.astype(np.uint8)
+                  return out
+
+              def label_to_rgb(label, cmap):
+                  return cmap[label.astype(np.uint8)]
+
+              def png_b64(arr):
+                  buf = io.BytesIO()
+                  Image.fromarray(arr).save(buf, format="PNG")
+                  return base64.b64encode(buf.getvalue()).decode("ascii")
+
+              # Pre-load LPIS parquet (2022 default — we'll match per-tile
+              # year if available).
+              LPIS = {}
+              def lpis_for(year):
+                  if year not in LPIS:
+                      p = f"/data/lpis/jordbruksskiften_{year}.parquet"
+                      if os.path.exists(p):
+                          LPIS[year] = gpd.read_parquet(p)
+                      else:
+                          LPIS[year] = None
+                  return LPIS[year]
+
+              tile_html = []
+              for name in TILE_NAMES:
+                  tp = Path(f"/data/unified_v2_512/{name}.npz")
+                  if not tp.exists():
+                      print(f"[skip] {name}: not found")
+                      tile_html.append(f"<div class='tile'><h3>{name}</h3><p>NOT FOUND</p></div>")
+                      continue
+
+                  d = np.load(tp, allow_pickle=True)
+                  print(f"[{name}]")
+                  print(f"  keys: {sorted(d.keys())[:20]}")
+
+                  bbox = d["bbox_3006"].tolist() if "bbox_3006" in d else None
+                  if bbox is None:
+                      print("  no bbox_3006 — skip")
+                      continue
+                  west, south, east, north = bbox
+                  print(f"  bbox_3006 = {bbox}")
+
+                  H = W = int(d.get("tile_size_px", 512))
+
+                  # 1. RGB preview
+                  spectral = d["spectral"]
+                  print(f"  spectral shape={spectral.shape}")
+                  rgb = rgb_from_spectral(spectral, frame=1)
+
+                  # 2. NMD label
+                  label = d["label"]
+                  label_rgb = label_to_rgb(label, cmap)
+                  uniq, cnt = np.unique(label, return_counts=True)
+                  label_dist = {
+                      f"{int(u)} {UNIFIED_CLASS_NAMES[int(u)] if int(u)<len(UNIFIED_CLASS_NAMES) else '?'}": int(c)
+                      for u, c in zip(uniq, cnt)
+                  }
+
+                  # 3. LPIS overlay (live rasterize)
+                  year = 2022
+                  if "year" in d:
+                      year = int(d["year"])
+                  elif "lpis_year" in d:
+                      year = int(d["lpis_year"])
+                  elif "dates" in d and len(d["dates"]) > 0:
+                      try:
+                          year = int(str(d["dates"][0])[:4])
+                      except Exception:
+                          pass
+                  print(f"  lpis year = {year}")
+
+                  lpis_gdf = lpis_for(year)
+                  lpis_rgb = np.zeros((H, W, 3), dtype=np.uint8)
+                  n_polys = 0
+                  if lpis_gdf is not None:
+                      b = lpis_gdf.geometry.bounds
+                      m = ~(
+                          (b["maxx"] < west) | (b["minx"] > east)
+                          | (b["maxy"] < south) | (b["miny"] > north)
+                      )
+                      sub = lpis_gdf[m].copy()
+                      n_polys = len(sub)
+                      print(f"  LPIS polygons in tile bbox: {n_polys}")
+                      if n_polys > 0:
+                          tx = from_bounds(west, south, east, north, W, H)
+                          burn = rasterize(
+                              [(g, int(v) if v is not None else 1)
+                               for g, v in zip(sub.geometry, sub.get("grdkod_mar", [None]*len(sub)))],
+                              out_shape=(H, W),
+                              transform=tx,
+                              fill=0,
+                              dtype=np.uint16,
+                          )
+                          # Simple colormap: any non-zero parcel → magenta,
+                          # different SJV codes → different hues.
+                          present = np.unique(burn)
+                          present = present[present > 0]
+                          rng = np.random.default_rng(seed=42)
+                          colors = {int(p): rng.integers(50, 255, 3).astype(np.uint8) for p in present}
+                          for code, col in colors.items():
+                              mask = burn == code
+                              lpis_rgb[mask] = col
+
+                  # Compose
+                  tile_html.append(f"""
+                  <div class='tile'>
+                    <h3>{name}</h3>
+                    <p>bbox_3006 = [{west:.0f}, {south:.0f}, {east:.0f}, {north:.0f}], year={year}</p>
+                    <p>LPIS polygons in bbox: <b>{n_polys}</b></p>
+                    <div class='row'>
+                      <figure><figcaption>RGB (frame 1)</figcaption>
+                        <img src='data:image/png;base64,{png_b64(rgb)}'></figure>
+                      <figure><figcaption>label.npz (NMD+LPIS as currently saved)</figcaption>
+                        <img src='data:image/png;base64,{png_b64(label_rgb)}'></figure>
+                      <figure><figcaption>LIVE LPIS rasterize from parquet</figcaption>
+                        <img src='data:image/png;base64,{png_b64(lpis_rgb)}'></figure>
+                    </div>
+                    <details><summary>label.npz value distribution</summary>
+                      <pre>{label_dist}</pre>
+                    </details>
+                  </div>
+                  """)
+
+              html = f"""<!doctype html><html><head>
+              <meta charset='utf-8'>
+              <title>LPIS overlay debug</title>
+              <style>
+                body {{ font-family: sans-serif; max-width: 1800px; margin: 1em auto; }}
+                .tile {{ border: 1px solid #ddd; padding: 1em; margin: 1em 0; }}
+                .row {{ display: flex; gap: 1em; }}
+                figure {{ margin: 0; }}
+                img {{ width: 400px; height: 400px; image-rendering: pixelated; }}
+                figcaption {{ font-size: 0.8em; }}
+                pre {{ font-size: 0.7em; max-height: 200px; overflow: auto; }}
+              </style></head><body>
+              <h1>LPIS overlay debug — 5 tiles</h1>
+              <p>For each tile, three images side by side:</p>
+              <ol>
+                <li><b>RGB</b>: B04/B03/B02 from spectral frame 1, percentile-stretched</li>
+                <li><b>label.npz</b>: what build_labels.py saved into the tile (this is what training sees). Class colors per unified_schema.</li>
+                <li><b>LIVE LPIS rasterize</b>: queries the on-PVC parquet right now and rasterizes polygons into the tile bbox. If this panel shows colored parcels but #2 is solid NMD, the bug is in build_labels.py — not the LPIS data.</li>
+              </ol>
+              {''.join(tile_html)}
+              </body></html>"""
+
+              out_html = OUT / "index.html"
+              out_html.write_text(html)
+              print(f"\n=== Wrote {out_html} ({out_html.stat().st_size} bytes) ===")
+              PY
+              echo "Files:"
+              ls -lh /data/debug/lpis_viz/
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

@@ -1,0 +1,523 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lpis-debug-b
+  namespace: prithvi-training-default
+  labels:
+    app: lpis-debug
+    purpose: b-legacy-spectral-vs-fixed-parquet
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900   # 15 min hard cap
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: lpis-debug
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: probe
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== lpis-debug-B: legacy-spectral-vs-fixed-parquet ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy pandas geopandas shapely rasterio pyarrow Pillow
+
+              mkdir -p /data512/debug/lpis_debug
+
+              python - <<'PY'
+              import os, glob, json, math, traceback
+              import numpy as np
+              import geopandas as gpd
+              from shapely.geometry import box
+              from rasterio.features import rasterize
+              from rasterio.transform import from_bounds
+              import rasterio
+              from rasterio.windows import from_bounds as win_from_bounds
+              from rasterio.enums import Resampling
+              from PIL import Image, ImageDraw, ImageFont
+
+              # ------------------------------------------------------------
+              # Inputs
+              # ------------------------------------------------------------
+              TILE_512 = "/data512/unified_v2_512/crop_oljevaxter_442170_6171610.npz"
+              # 256 dataset lives on RWO PVC, currently locked by debug-server-256.
+              # We pre-copied an overlapping 256 tile here for offline comparison.
+              DIR_256  = "/data512/debug/lpis_debug/256_overlap"
+              LPIS_DIR = "/data512/lpis"   # parquets live here (CephFS)
+              NMD_TIF  = "/data512/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
+              OUT_PNG  = "/data512/debug/lpis_debug/B_legacy-spectral-vs-fixed-parquet.png"
+
+              print(f"[load] 512 tile: {TILE_512}")
+              z512 = np.load(TILE_512, allow_pickle=True)
+              print(f"  keys: {list(z512.keys())}")
+              spectral_512 = z512["spectral"]
+              label_mask_512 = z512["label_mask"]
+              nmd_raw_512 = z512["nmd_label_raw"] if "nmd_label_raw" in z512.files else None
+              print(f"  spectral.shape={spectral_512.shape}, label_mask.shape={label_mask_512.shape}")
+              print(f"  nmd_label_raw present: {nmd_raw_512 is not None}")
+
+              # bbox from filename: crop_oljevaxter_442170_6171610.npz → centre (442170, 6171610)
+              # 512 px @ 10 m → 5120 m extent
+              cx, cy = 442170, 6171610
+              EXT_512 = 5120
+              W512 = cx - EXT_512//2; E512 = cx + EXT_512//2
+              S512 = cy - EXT_512//2; N512 = cy + EXT_512//2
+              print(f"[bbox-512] W={W512} S={S512} E={E512} N={N512}")
+
+              # Also try year discovery
+              tile_year = None
+              for k in ("year","lpis_year"):
+                  if k in z512.files:
+                      tile_year = int(np.atleast_1d(z512[k])[0])
+                      break
+              if tile_year is None and "dates" in z512.files:
+                  d = z512["dates"]
+                  try: tile_year = int(str(d.flat[0])[:4])
+                  except Exception: pass
+              print(f"[year] tile_year={tile_year}")
+
+              # ------------------------------------------------------------
+              # Find a 256-px tile whose centre lies inside the 512 bbox
+              # (256 tile extent = 2560 m centred on filename coords)
+              # ------------------------------------------------------------
+              cands = sorted(glob.glob(os.path.join(DIR_256, "*.npz")))
+              print(f"[scan] 256 dir contains {len(cands)} files")
+              chosen_256 = None
+              chosen_256_bbox = None
+              # Filename pattern is numeric — but we still need centre coords.
+              # The 256 dataset usually stores bbox inside the .npz; try that.
+              for p in cands[:20000]:
+                  try:
+                      with np.load(p, allow_pickle=True) as zz:
+                          # Try multiple key names
+                          bx = None
+                          for k in ("bbox_3006","bbox","tile_bbox","BBOX_3006"):
+                              if k in zz.files:
+                                  bx = zz[k]; break
+                          if bx is None:
+                              continue
+                          bxa = np.array(bx).flatten().astype(float)
+                          if bxa.size == 4:
+                              w,s,e,n = bxa.tolist()
+                          elif bxa.size == 2:
+                              continue
+                          else:
+                              continue
+                          ccx = (w+e)/2; ccy = (s+n)/2
+                          if W512 <= ccx <= E512 and S512 <= ccy <= N512:
+                              chosen_256 = p
+                              chosen_256_bbox = (w,s,e,n)
+                              break
+                  except Exception:
+                      continue
+
+              # Fallback if .npz has no bbox: parse from filename as cx_cy if possible
+              if chosen_256 is None:
+                  print("[scan] no bbox key found in .npz — falling back to filename parsing")
+                  for p in cands:
+                      base = os.path.basename(p).replace(".npz","")
+                      parts = base.split("_")
+                      nums = [x for x in parts if x.isdigit()]
+                      # Pick the last two big ints as cx, cy if they look like 3006 coords
+                      if len(nums) >= 2:
+                          try:
+                              ccx = int(nums[-2]); ccy = int(nums[-1])
+                              if 250000 <= ccx <= 1000000 and 6000000 <= ccy <= 7700000:
+                                  if W512 <= ccx <= E512 and S512 <= ccy <= N512:
+                                      EXT_256 = 2560
+                                      w = ccx - EXT_256/2; e = ccx + EXT_256/2
+                                      s = ccy - EXT_256/2; n = ccy + EXT_256/2
+                                      chosen_256 = p
+                                      chosen_256_bbox = (w,s,e,n)
+                                      break
+                          except Exception:
+                              pass
+
+              # If still nothing, just pick the geographically nearest 256 tile to log results
+              nearest_256 = None
+              if chosen_256 is None:
+                  print("[scan] no 256 tile inside 512 bbox — searching nearest by filename coords")
+                  best_d = float("inf")
+                  for p in cands[:50000]:
+                      base = os.path.basename(p).replace(".npz","")
+                      parts = base.split("_")
+                      nums = [x for x in parts if x.isdigit()]
+                      if len(nums) >= 2:
+                          try:
+                              ccx = int(nums[-2]); ccy = int(nums[-1])
+                              if 250000 <= ccx <= 1000000 and 6000000 <= ccy <= 7700000:
+                                  d = (ccx-cx)**2 + (ccy-cy)**2
+                                  if d < best_d:
+                                      best_d = d
+                                      EXT_256 = 2560
+                                      w = ccx - EXT_256/2; e = ccx + EXT_256/2
+                                      s = ccy - EXT_256/2; n = ccy + EXT_256/2
+                                      nearest_256 = (p, (w,s,e,n))
+                          except Exception:
+                              pass
+                  if nearest_256 is not None:
+                      chosen_256, chosen_256_bbox = nearest_256
+                      print(f"[scan] nearest 256: {chosen_256} dist^2={best_d}")
+
+              print(f"[256] chosen={chosen_256}")
+              print(f"[256] bbox={chosen_256_bbox}")
+
+              z256 = None; rgb_256 = None; label_mask_256 = None
+              if chosen_256 is not None:
+                  z256 = np.load(chosen_256, allow_pickle=True)
+                  print(f"  256 keys: {list(z256.keys())}")
+                  img_key = "spectral" if "spectral" in z256.files else ("image" if "image" in z256.files else None)
+                  if img_key:
+                      img = z256[img_key]
+                      print(f"  256 {img_key}.shape={img.shape} dtype={img.dtype}")
+                      # try to derive an RGB
+                      def make_rgb(arr):
+                          a = np.asarray(arr)
+                          # squeeze temporal axis if present
+                          if a.ndim == 4:
+                              a = a[0]   # first frame
+                          if a.ndim != 3:
+                              return None
+                          # If layout is (C,H,W)
+                          if a.shape[0] < a.shape[-1]:
+                              C,H,W = a.shape
+                          else:
+                              # (H,W,C)
+                              a = np.transpose(a,(2,0,1)); C,H,W = a.shape
+                          # Try band order: [B02,B03,B04,B08,...] (Sentinel-2). RGB = [B04,B03,B02]
+                          if C >= 6:
+                              # heuristic: 6 bands first frame
+                              r = a[2].astype(np.float32); g = a[1].astype(np.float32); b = a[0].astype(np.float32)
+                          elif C >= 3:
+                              r = a[0].astype(np.float32); g = a[1].astype(np.float32); b = a[2].astype(np.float32)
+                          else:
+                              return None
+                          stk = np.stack([r,g,b], axis=-1)
+                          # 2-98 percentile stretch
+                          lo = np.percentile(stk, 2); hi = np.percentile(stk, 98) + 1e-6
+                          stk = np.clip((stk - lo)/(hi-lo), 0, 1)
+                          return (stk*255).astype(np.uint8)
+                      rgb_256 = make_rgb(img)
+                  if "label_mask" in z256.files:
+                      label_mask_256 = z256["label_mask"]
+                      print(f"  256 label_mask.shape={label_mask_256.shape} unique={np.unique(label_mask_256)[:10]}")
+
+              # ------------------------------------------------------------
+              # Helpers: live LPIS rasterize, two flavours
+              # ------------------------------------------------------------
+              def lpis_for_year(year):
+                  pq = os.path.join(LPIS_DIR, f"jordbruksskiften_{year}.parquet")
+                  if not os.path.exists(pq):
+                      print(f"  [lpis] missing {pq}")
+                      return None
+                  print(f"  [lpis] reading {pq}")
+                  return gpd.read_parquet(pq)
+
+              def _get_codes_geoms(gdf, tile_box):
+                  cand = list(gdf.sindex.intersection(tile_box.bounds))
+                  if not cand: return [], 0
+                  sub = gdf.iloc[cand]
+                  sub = sub[sub.geometry.intersects(tile_box)]
+                  if sub.empty: return [], 0
+                  code_col = None
+                  for c in ("grdkod_mar","grdkod","gradkod","SJV_KOD","sjv_kod"):
+                      if c in sub.columns:
+                          code_col = c; break
+                  if code_col is None:
+                      return [], 0
+                  shapes = list(zip(sub.geometry.values,
+                                    sub[code_col].astype("uint16").values))
+                  return shapes, len(sub)
+
+              def rasterize_new(gdf, w, s, e, n, size=512):
+                  # NEW (current) logic: standard X/Y order
+                  tb = box(w, s, e, n)
+                  shapes, npar = _get_codes_geoms(gdf, tb)
+                  print(f"   [new] candidates={npar}")
+                  if not shapes:
+                      return np.zeros((size,size), dtype=np.uint16)
+                  tr = from_bounds(w, s, e, n, size, size)
+                  return rasterize(shapes, out_shape=(size,size), transform=tr,
+                                   fill=0, dtype="uint16",
+                                   all_touched=False)
+
+              def rasterize_legacy(gdf, w, s, e, n, size=512):
+                  # LEGACY (pre-fix) logic: (S,W,N,E) order passed where (W,S,E,N) expected.
+                  # Both shapely.box and from_bounds get the wrong order.
+                  tb = box(s, w, n, e)   # buggy
+                  shapes, npar = _get_codes_geoms(gdf, tb)
+                  print(f"   [legacy] candidates={npar}")
+                  if not shapes:
+                      return np.zeros((size,size), dtype=np.uint16)
+                  tr = from_bounds(s, w, n, e, size, size)   # buggy
+                  return rasterize(shapes, out_shape=(size,size), transform=tr,
+                                   fill=0, dtype="uint16",
+                                   all_touched=False)
+
+              # ------------------------------------------------------------
+              # Pick LPIS year — try tile_year first, fall back to 2022
+              # ------------------------------------------------------------
+              years_to_try = [tile_year] if tile_year else []
+              for y in (2022, 2023, 2024, 2018, 2019):
+                  if y not in years_to_try: years_to_try.append(y)
+              gdf = None; chosen_year = None
+              for y in years_to_try:
+                  if y is None: continue
+                  g = lpis_for_year(y)
+                  if g is None: continue
+                  bnds = g.total_bounds
+                  if not (bnds[0] < bnds[1]):
+                      print(f"  [lpis-{y}] WARNING parquet still axis-swapped! bounds={bnds.tolist()}")
+                  # Quick hit-test against the 512 bbox using NEW order
+                  bxs = g.geometry.bounds
+                  hits = ((bxs.maxx >= W512) & (bxs.minx <= E512)
+                          & (bxs.maxy >= S512) & (bxs.miny <= N512)).sum()
+                  print(f"  [lpis-{y}] bounds={bnds.tolist()}  hits-NEW={hits}")
+                  if hits > 0:
+                      gdf = g; chosen_year = y; break
+              print(f"[lpis] using year={chosen_year}")
+
+              current_mask = None; legacy_mask = None
+              if gdf is not None:
+                  print("[rasterize] NEW (W,S,E,N) for 512 bbox")
+                  current_mask = rasterize_new(gdf, W512, S512, E512, N512, size=512)
+                  print(f"  unique codes (top 8): {np.unique(current_mask)[:8]}")
+                  print(f"  nonzero pixels: {(current_mask>0).sum()}")
+
+                  print("[rasterize] LEGACY (S,W,N,E) for 512 bbox")
+                  legacy_mask = rasterize_legacy(gdf, W512, S512, E512, N512, size=512)
+                  print(f"  unique codes (top 8): {np.unique(legacy_mask)[:8]}")
+                  print(f"  nonzero pixels: {(legacy_mask>0).sum()}")
+
+              # ------------------------------------------------------------
+              # Live NMD rasterize for the 512 bbox (standard order) → compare
+              # against saved nmd_label_raw to test the spectral-frame hypothesis.
+              # ------------------------------------------------------------
+              fresh_nmd_512 = None
+              if os.path.exists(NMD_TIF):
+                  try:
+                      with rasterio.open(NMD_TIF) as src:
+                          win = win_from_bounds(W512, S512, E512, N512, src.transform)
+                          arr = src.read(1, window=win, out_shape=(512,512),
+                                         resampling=Resampling.nearest)
+                          fresh_nmd_512 = arr
+                          print(f"[nmd-fresh] shape={arr.shape} unique={np.unique(arr)[:8]} nonzero={(arr>0).sum()}")
+                  except Exception:
+                      traceback.print_exc()
+              else:
+                  print(f"[nmd-fresh] missing raster {NMD_TIF}")
+
+              # ------------------------------------------------------------
+              # IoU helpers
+              # ------------------------------------------------------------
+              def binary_iou(a, b):
+                  a = (a > 0); b = (b > 0)
+                  inter = np.logical_and(a, b).sum()
+                  uni   = np.logical_or(a, b).sum()
+                  return float(inter)/float(uni) if uni > 0 else float("nan")
+
+              def per_class_miou(a, b, ignore=(0,)):
+                  # raw SJV codes — class-wise IoU averaged
+                  cls = sorted(set(np.unique(a).tolist()) | set(np.unique(b).tolist()))
+                  cls = [c for c in cls if c not in ignore]
+                  if not cls: return float("nan")
+                  ious = []
+                  for c in cls:
+                      ai = (a==c); bi = (b==c)
+                      i = np.logical_and(ai,bi).sum()
+                      u = np.logical_or(ai,bi).sum()
+                      if u>0: ious.append(i/u)
+                  return float(np.mean(ious)) if ious else float("nan")
+
+              ious = {}
+              if current_mask is not None:
+                  ious["saved512_vs_currentNEW_binary"] = binary_iou(label_mask_512, current_mask)
+                  ious["saved512_vs_currentNEW_miou"]   = per_class_miou(label_mask_512, current_mask)
+              if legacy_mask is not None:
+                  ious["saved512_vs_legacy_binary"]     = binary_iou(label_mask_512, legacy_mask)
+                  ious["saved512_vs_legacy_miou"]       = per_class_miou(label_mask_512, legacy_mask)
+              if current_mask is not None and legacy_mask is not None:
+                  ious["currentNEW_vs_legacy_binary"]   = binary_iou(current_mask, legacy_mask)
+              if fresh_nmd_512 is not None and nmd_raw_512 is not None:
+                  ious["nmdfresh_vs_savedNMD_binary"]   = binary_iou(fresh_nmd_512, nmd_raw_512)
+                  # NMD raw codes — also overall agreement on raw equality:
+                  agree = float((fresh_nmd_512.astype(int) == np.asarray(nmd_raw_512).astype(int)).mean())
+                  ious["nmdfresh_eq_savedNMD_pixacc"]   = agree
+
+              print("\n=== IoU summary ===")
+              for k,v in ious.items():
+                  print(f"  {k:42s} = {v}")
+
+              # ------------------------------------------------------------
+              # Build PNG figure
+              # ------------------------------------------------------------
+              def rgb_from_spectral_512(sp):
+                  # sp shape is (24,512,512) → 4 frames × 6 bands
+                  a = np.asarray(sp).astype(np.float32)
+                  if a.ndim == 4:
+                      # (T,C,H,W)
+                      a = a[0]
+                  # (C,H,W) with C=24 expected
+                  if a.shape[0] >= 6:
+                      # bands B02 B03 B04 B08 B11 B12 typical
+                      r = a[2]; g = a[1]; b = a[0]
+                  else:
+                      r = a[0]; g = a[1]; b = a[2]
+                  stk = np.stack([r,g,b], axis=-1)
+                  lo = np.percentile(stk, 2); hi = np.percentile(stk, 98)+1e-6
+                  stk = np.clip((stk-lo)/(hi-lo), 0, 1)
+                  return (stk*255).astype(np.uint8)
+
+              def colorize_codes(arr, seed=42):
+                  arr = np.asarray(arr)
+                  uniq = np.unique(arr)
+                  rng = np.random.default_rng(seed)
+                  pal = {0: (0,0,0)}
+                  for c in uniq:
+                      if c == 0: continue
+                      pal[int(c)] = tuple(int(x) for x in rng.integers(40, 255, size=3))
+                  out = np.zeros((*arr.shape, 3), dtype=np.uint8)
+                  for c, col in pal.items():
+                      out[arr==c] = col
+                  return out
+
+              rgb_512 = rgb_from_spectral_512(spectral_512)
+              lab_512_vis = colorize_codes(label_mask_512)
+              cur_vis = colorize_codes(current_mask) if current_mask is not None else np.zeros((512,512,3),dtype=np.uint8)
+              leg_vis = colorize_codes(legacy_mask)  if legacy_mask  is not None else np.zeros((512,512,3),dtype=np.uint8)
+              nmd_fresh_vis = colorize_codes(fresh_nmd_512) if fresh_nmd_512 is not None else np.zeros((512,512,3),dtype=np.uint8)
+              nmd_saved_vis = colorize_codes(nmd_raw_512)   if nmd_raw_512   is not None else np.zeros((512,512,3),dtype=np.uint8)
+
+              if rgb_256 is None: rgb_256 = np.zeros((256,256,3),dtype=np.uint8)
+              if label_mask_256 is None:
+                  lab_256_vis = np.zeros((256,256,3),dtype=np.uint8)
+              else:
+                  lab_256_vis = colorize_codes(label_mask_256)
+
+              # Compose: 3 rows × 3 cols at 512 each (256 panels are upsampled to 512)
+              def to512(im):
+                  pi = Image.fromarray(im)
+                  if pi.size != (512,512):
+                      pi = pi.resize((512,512), Image.NEAREST)
+                  return np.array(pi)
+
+              tiles = [
+                  ("512 RGB (saved spectral)",        rgb_512),
+                  ("512 saved label_mask (BROKEN?)",  lab_512_vis),
+                  ("Live LPIS rasterize (NEW W,S,E,N)", cur_vis),
+
+                  ("256 RGB (overlap tile)",          to512(rgb_256)),
+                  ("256 saved label_mask (good)",     to512(lab_256_vis)),
+                  ("Live LPIS rasterize (LEGACY S,W,N,E)", leg_vis),
+
+                  ("Saved NMD raw (in 512 .npz)",     nmd_saved_vis),
+                  ("Fresh NMD rasterize (W,S,E,N)",   nmd_fresh_vis),
+                  ("IoU summary",                      None),
+              ]
+
+              W=H=512; cols=3; rows=3
+              pad=40; margin=24
+              fig_w = cols*W + (cols+1)*margin
+              fig_h = rows*H + (rows+1)*margin + pad*rows
+              canvas = Image.new("RGB", (fig_w, fig_h), (24,24,28))
+              draw = ImageDraw.Draw(canvas)
+              try:
+                  font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+                  font_s = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13)
+              except Exception:
+                  font = ImageFont.load_default(); font_s = font
+
+              for i,(title, im) in enumerate(tiles):
+                  r = i // cols; c = i % cols
+                  x = margin + c*(W+margin)
+                  y = margin + r*(H+margin+pad)
+                  draw.text((x, y), title, fill=(230,230,235), font=font)
+                  yy = y + pad - 6
+                  if im is None:
+                      # IoU panel — text dump
+                      lines = ["BBox 512 (W,S,E,N):",
+                               f"  {W512}, {S512}, {E512}, {N512}",
+                               f"LPIS year used: {chosen_year}",
+                               "",
+                               "Pairwise IoU / pixel agreement:"]
+                      for k,v in ious.items():
+                          if isinstance(v, float):
+                              lines.append(f"  {k:38s} {v:.4f}")
+                          else:
+                              lines.append(f"  {k:38s} {v}")
+                      lines.append("")
+                      lines.append("Hypothesis test:")
+                      if "nmdfresh_eq_savedNMD_pixacc" in ious:
+                          if ious["nmdfresh_eq_savedNMD_pixacc"] > 0.85:
+                              lines.append("  saved NMD ≈ fresh NMD → spectral IS in W,S,E,N frame.")
+                              lines.append("  -> bug is ONLY in LPIS path (label vs imagery).")
+                          else:
+                              lines.append("  saved NMD != fresh NMD → spectral itself is offset!")
+                              lines.append("  -> spectrals fetched in legacy frame; labels were")
+                              lines.append("     rebuilt against fixed parquets in standard frame.")
+                      else:
+                          lines.append("  (NMD comparison missing)")
+                      ty = yy
+                      for ln in lines:
+                          draw.text((x+8, ty), ln, fill=(220,220,225), font=font_s)
+                          ty += 18
+                      # frame
+                      draw.rectangle([x, yy, x+W, yy+H], outline=(80,80,90))
+                  else:
+                      pi = Image.fromarray(im)
+                      if pi.size != (W,H):
+                          pi = pi.resize((W,H), Image.NEAREST)
+                      canvas.paste(pi, (x, yy))
+                      draw.rectangle([x, yy, x+W, yy+H], outline=(80,80,90))
+
+              os.makedirs(os.path.dirname(OUT_PNG), exist_ok=True)
+              canvas.save(OUT_PNG, "PNG", optimize=True)
+              print(f"\n[png] wrote {OUT_PNG}")
+              print(f"[png] size on disk: {os.path.getsize(OUT_PNG)} bytes")
+
+              # also write JSON next to it
+              j = OUT_PNG.replace(".png", ".json")
+              with open(j, "w") as fh:
+                  json.dump({
+                      "tile_512": TILE_512,
+                      "bbox_512_WSEN": [W512,S512,E512,N512],
+                      "lpis_year": chosen_year,
+                      "tile_year": tile_year,
+                      "tile_256": chosen_256,
+                      "bbox_256": list(chosen_256_bbox) if chosen_256_bbox else None,
+                      "ious": ious,
+                  }, fh, indent=2, default=str)
+              print(f"[json] wrote {j}")
+              PY
+
+              echo ""
+              echo "=== Done: $(date) ==="
+              ls -la /data512/debug/lpis_debug/
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data-cephfs
+              mountPath: /data512
+      volumes:
+        - name: data-cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

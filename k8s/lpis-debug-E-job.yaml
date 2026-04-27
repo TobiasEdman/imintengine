@@ -1,0 +1,329 @@
+---
+# Diagnostic job: investigate LPIS-vs-imagery misalignment on a single tile.
+#
+# Hypothesis (agent E): center-vs-upper-left coordinate confusion. ONE code
+# path treats the persisted (easting, northing) as the tile CENTER (used by
+# bbox_from_center → spectral fetch & resolve_tile_bbox), while ANOTHER code
+# path may have treated the same coordinates as the tile UPPER-LEFT or
+# LOWER-LEFT corner — rasterizing LPIS parcels into a bbox offset by half
+# the tile extent (2560 m = 256 px) from the imagery's bbox.
+#
+# This job:
+#   1. Loads /data/unified_v2_512/crop_oljevaxter_442170_6171610.npz
+#   2. Computes 3 candidate bboxes from (easting=442170, northing=6171610):
+#        CENTER     = (E-2560, N-2560, E+2560, N+2560)  ← matches bbox_3006
+#        UPPER_LEFT = (E,      N-5120, E+5120, N     )  ← (E,N) is top-left
+#        LOWER_LEFT = (E,      N,      E+5120, N+5120)  ← (E,N) is bottom-left
+#   3. For each candidate: fresh-rasterizes LPIS parcels via from_bounds()
+#      into a 512×512 mask, and computes IoU vs the saved label_mask.
+#   4. The candidate with near-1.0 IoU is the bbox the LPIS rasterizer
+#      ACTUALLY used at write time. Since the user confirms NMD aligns and
+#      NMD uses bbox_3006 (= CENTER), any non-CENTER winner here proves a
+#      coordinate-semantics mismatch between the spectral path and the LPIS
+#      path.
+#   5. Renders a 6-panel PNG with RGB, saved_mask, and 3 candidate masks
+#      (each labelled with IoU), plus a final verdict panel naming the bbox.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lpis-debug-e
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: debug
+          image: python:3.11-slim
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== LPIS Debug E: center-vs-corner coordinate confusion ==="
+              date
+
+              # rasterio wheels need libexpat at runtime (not bundled in slim).
+              apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+                  libexpat1 libgdal-dev libproj-dev libgeos-dev fonts-dejavu-core \
+                  >/dev/null
+              pip install -q --no-cache-dir numpy pandas geopandas shapely rasterio pyarrow Pillow scipy
+
+              mkdir -p /data/debug/lpis_debug
+
+              python - <<'PYEOF'
+              import json
+              import numpy as np
+              import geopandas as gpd
+              from pathlib import Path
+              from rasterio.features import rasterize
+              from rasterio.transform import from_bounds
+              from shapely.geometry import box
+              from PIL import Image, ImageDraw, ImageFont
+
+              TILE = "/data/unified_v2_512/crop_oljevaxter_442170_6171610.npz"
+              LPIS = "/data/lpis/jordbruksskiften_2022.parquet"
+              OUT  = "/data/debug/lpis_debug/E_center_vs_corner.png"
+              SIZE = 512
+              EXTENT_M = 5120  # 512 px * 10 m
+              HALF_M   = 2560
+
+              print(f"Loading tile: {TILE}")
+              data = dict(np.load(TILE, allow_pickle=True))
+              print(f"  keys: {sorted(data.keys())}")
+
+              east     = int(data["easting"])
+              north    = int(data["northing"])
+              size_px  = int(data.get("tile_size_px", SIZE))
+              bbox_arr = np.asarray(data["bbox_3006"]).astype(float).ravel()
+              print(f"  easting   = {east}")
+              print(f"  northing  = {north}")
+              print(f"  tile_size_px = {size_px}")
+              print(f"  bbox_3006 = {bbox_arr.tolist()}")
+              assert size_px == SIZE, f"expected {SIZE}, got {size_px}"
+
+              # ── Candidate bboxes from (east, north) ────────────────────────
+              candidates = {
+                  "CENTER":     (east - HALF_M, north - HALF_M, east + HALF_M, north + HALF_M),
+                  "UPPER_LEFT": (east,          north - EXTENT_M, east + EXTENT_M, north),
+                  "LOWER_LEFT": (east,          north,           east + EXTENT_M, north + EXTENT_M),
+              }
+              print("\nCandidate bboxes (W, S, E, N):")
+              for k, b in candidates.items():
+                  print(f"  {k:11s} = {b}    extent = ({b[2]-b[0]}, {b[3]-b[1]})")
+              # Sanity: CENTER must equal persisted bbox_3006.
+              assert tuple(candidates["CENTER"]) == tuple(bbox_arr.tolist()), \
+                  "CENTER candidate does not match persisted bbox_3006"
+
+              # ── Build RGB from frame 0 ─────────────────────────────────────
+              spectral = data["spectral"]
+              print(f"  spectral shape = {spectral.shape}, dtype = {spectral.dtype}")
+              # Prithvi 6-band order: B02, B03, B04, B8A, B11, B12 → frame 0 = ch 0..5
+              b02, b03, b04 = spectral[0], spectral[1], spectral[2]
+              def stretch(x):
+                  x = x.astype(np.float32)
+                  lo, hi = np.percentile(x, [2, 98])
+                  if hi <= lo: return np.zeros_like(x, dtype=np.uint8)
+                  return (np.clip((x - lo) / (hi - lo), 0, 1) * 255).astype(np.uint8)
+              rgb = np.stack([stretch(b04), stretch(b03), stretch(b02)], axis=-1)
+
+              saved_mask = data["label_mask"]
+              saved_nz   = int((saved_mask > 0).sum())
+              print(f"\n  saved label_mask: shape={saved_mask.shape}, "
+                    f"dtype={saved_mask.dtype}, nonzero={saved_nz}")
+
+              # ── Read LPIS (load once; query each candidate via sindex) ─────
+              print(f"\nReading LPIS parcels: {LPIS}")
+              gdf = gpd.read_parquet(LPIS)
+              print(f"  total parcels = {len(gdf)}, CRS = {gdf.crs}")
+              code_col = None
+              for c in ("grodkod_int", "grdkod_mar", "grodkod_mar", "grodkod", "grdkod", "crop_class"):
+                  if c in gdf.columns:
+                      code_col = c; break
+              print(f"  code column   = {code_col}")
+              assert code_col is not None, "no SJV grödkod column found in LPIS parquet"
+
+              def fresh_rasterize(bbox_wsen):
+                  w, s, e, n = bbox_wsen
+                  tile_box = box(w, s, e, n)
+                  cand_idx = list(gdf.sindex.intersection(tile_box.bounds))
+                  if not cand_idx:
+                      return np.zeros((SIZE, SIZE), dtype=np.uint16), 0
+                  clipped = gdf.iloc[cand_idx]
+                  clipped = clipped[clipped.geometry.intersects(tile_box)]
+                  if clipped.empty:
+                      return np.zeros((SIZE, SIZE), dtype=np.uint16), 0
+                  transform = from_bounds(w, s, e, n, SIZE, SIZE)
+                  shapes = [(g, int(c)) for g, c in zip(clipped.geometry, clipped[code_col])
+                            if c is not None and int(c) > 0]
+                  m = rasterize(shapes, out_shape=(SIZE, SIZE), transform=transform,
+                                fill=0, dtype=np.uint16, all_touched=False)
+                  return m, len(clipped)
+
+              def iou_strict(a, b):
+                  """Pixel-class IoU: pixels where both nonzero AND class matches."""
+                  same  = (a > 0) & (b > 0) & (a == b)
+                  union = (a > 0) | (b > 0)
+                  u = int(union.sum())
+                  return float(same.sum()) / u if u else 0.0
+
+              def iou_binary(a, b):
+                  same  = (a > 0) & (b > 0)
+                  union = (a > 0) | (b > 0)
+                  u = int(union.sum())
+                  return float(same.sum()) / u if u else 0.0
+
+              # ── Fresh-rasterize each candidate, compute IoU vs saved ───────
+              results = {}
+              masks   = {}
+              for name, b in candidates.items():
+                  m, n_par = fresh_rasterize(b)
+                  iou_s = iou_strict(saved_mask, m)
+                  iou_b = iou_binary(saved_mask, m)
+                  results[name] = {
+                      "bbox":              [int(x) for x in b],
+                      "n_intersecting":    int(n_par),
+                      "fresh_nonzero":     int((m > 0).sum()),
+                      "iou_strict_class":  iou_s,
+                      "iou_binary_parcel": iou_b,
+                  }
+                  masks[name] = m
+                  print(f"  {name:11s}: parcels={n_par:4d}  fresh_nz={int((m>0).sum()):6d}  "
+                        f"iou_strict={iou_s:.4f}  iou_binary={iou_b:.4f}")
+
+              # ── Verdict ────────────────────────────────────────────────────
+              winner = max(results, key=lambda k: results[k]["iou_strict_class"])
+              winner_iou = results[winner]["iou_strict_class"]
+              print(f"\nWINNER: {winner}  (iou_strict = {winner_iou:.4f})")
+              if winner_iou >= 0.95:
+                  verdict = (f"LPIS rasterizer used the {winner} bbox "
+                             f"(IoU={winner_iou:.3f}).")
+              elif winner_iou >= 0.5:
+                  verdict = (f"Best match is {winner} (IoU={winner_iou:.3f}) — "
+                             f"likely but not pixel-perfect; check sub-pixel offset.")
+              else:
+                  verdict = (f"NO candidate bbox reproduces saved_mask "
+                             f"(best={winner} IoU={winner_iou:.3f}). "
+                             f"Bug is NOT pure center-vs-corner.")
+              print(f"VERDICT: {verdict}")
+
+              # ── Render PNG: 2 rows × 3 cols of 512px panels ────────────────
+              CAPTION_H = 70
+              PAD = 10
+              panel = SIZE
+              W = 3*panel + 4*PAD
+              H_TOP = 40
+              H = H_TOP + 2*(panel + CAPTION_H) + 3*PAD
+              canvas = Image.new("RGB", (W, H), (20, 20, 20))
+              draw = ImageDraw.Draw(canvas)
+              try:
+                  font  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13)
+                  fontb = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 15)
+                  fonth = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+              except Exception:
+                  font = fontb = fonth = ImageFont.load_default()
+
+              draw.text((PAD, PAD),
+                        f"LPIS Debug E — center-vs-corner — tile crop_oljevaxter_{east}_{north}",
+                        fill=(255,220,90), font=fonth)
+
+              def colorize(mask):
+                  rng = np.random.default_rng(42)
+                  uniq = np.unique(mask)
+                  out = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+                  for u in uniq:
+                      if u == 0: continue
+                      c = tuple(int(x) for x in rng.integers(60, 255, size=3))
+                      out[mask == u] = c
+                  return out
+
+              def paste_panel(img_arr, col, row, title, caption):
+                  x0 = PAD + col*(panel + PAD)
+                  y0 = H_TOP + PAD + row*(panel + CAPTION_H + PAD)
+                  pil = Image.fromarray(img_arr)
+                  canvas.paste(pil, (x0, y0))
+                  draw.text((x0, y0 + panel + 2),  title,   fill=(255,220,90), font=fontb)
+                  for i, line in enumerate(caption.split("\n")):
+                      draw.text((x0, y0 + panel + 22 + i*16), line,
+                                fill=(220,220,220), font=font)
+
+              # Row 0
+              paste_panel(rgb, 0, 0,
+                          "(1) RGB (B04,B03,B02) frame 0",
+                          f"bbox_3006 = ({int(bbox_arr[0])},{int(bbox_arr[1])}…)")
+              paste_panel(colorize(saved_mask), 1, 0,
+                          "(2) saved label_mask (broken)",
+                          f"nonzero = {saved_nz}")
+              # Verdict panel
+              vp = np.full((SIZE, SIZE, 3), (30,30,40), dtype=np.uint8)
+              vp_pil = Image.fromarray(vp)
+              vp_draw = ImageDraw.Draw(vp_pil)
+              y = 30
+              vp_draw.text((20, y),  "VERDICT", fill=(255,200,80), font=fonth); y += 36
+              vp_draw.text((20, y),  f"Winner: {winner}", fill=(120,255,120), font=fontb); y += 30
+              vp_draw.text((20, y),  f"IoU(strict) = {winner_iou:.4f}",
+                           fill=(220,220,220), font=fontb); y += 30
+              y += 8
+              for k, r in results.items():
+                  col = (120,255,120) if k == winner else (200,200,200)
+                  vp_draw.text((20, y),
+                               f"{k:11s} IoU={r['iou_strict_class']:.4f}  "
+                               f"(bin={r['iou_binary_parcel']:.4f})  "
+                               f"n_par={r['n_intersecting']}",
+                               fill=col, font=font)
+                  y += 22
+              y += 12
+              # Wrap verdict text
+              import textwrap
+              for line in textwrap.wrap(verdict, width=46):
+                  vp_draw.text((20, y), line, fill=(255,255,180), font=font); y += 18
+              vp_arr = np.array(vp_pil)
+              paste_panel(vp_arr, 2, 0,
+                          "(3) Verdict (which bbox was used)",
+                          f"persisted (E,N) = ({east},{north})")
+
+              # Row 1: each candidate
+              for col_idx, name in enumerate(["CENTER", "UPPER_LEFT", "LOWER_LEFT"]):
+                  m   = masks[name]
+                  r   = results[name]
+                  star = "  <-- WINNER" if name == winner else ""
+                  paste_panel(colorize(m), col_idx, 1,
+                              f"({4+col_idx}) fresh: {name}{star}",
+                              f"bbox=({r['bbox'][0]},{r['bbox'][1]},\n"
+                              f"      {r['bbox'][2]},{r['bbox'][3]})\n"
+                              f"IoU_strict={r['iou_strict_class']:.4f}  "
+                              f"IoU_bin={r['iou_binary_parcel']:.4f}")
+
+              print(f"\nWriting {OUT}")
+              Path(OUT).parent.mkdir(parents=True, exist_ok=True)
+              canvas.save(OUT)
+              print(f"  wrote {Path(OUT).stat().st_size} bytes")
+
+              # ── Evidence JSON ──────────────────────────────────────────────
+              evidence = {
+                  "tile":          TILE,
+                  "easting":       east,
+                  "northing":      north,
+                  "tile_size_px":  size_px,
+                  "bbox_3006":     [int(x) for x in bbox_arr.tolist()],
+                  "saved_mask_nonzero": saved_nz,
+                  "candidates":    results,
+                  "winner":        winner,
+                  "winner_iou":    winner_iou,
+                  "verdict":       verdict,
+                  "interpretation": (
+                    "If winner == CENTER with IoU≈1, the LPIS path used the "
+                    "same bbox as the spectral path — bug is NOT center/corner. "
+                    "If winner == UPPER_LEFT or LOWER_LEFT, the LPIS rasterizer "
+                    "interpreted (easting, northing) as a CORNER while the "
+                    "spectral fetcher used it as a CENTER (or vice versa)."
+                  ),
+              }
+              with open("/data/debug/lpis_debug/E_evidence.json", "w") as f:
+                  json.dump(evidence, f, indent=2)
+              print(json.dumps(evidence, indent=2))
+              PYEOF
+
+              echo ""
+              echo "=== Output files ==="
+              ls -la /data/debug/lpis_debug/
+              echo ""
+              echo "Done: $(date)"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
