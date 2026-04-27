@@ -954,6 +954,234 @@ def _fetch_scl_batch(
     return sorted(cloud_by_date.items())
 
 
+# ── Per-source openEO config ─────────────────────────────────────────────────
+#
+# Both DES and CDSE expose the same openEO API surface for Sentinel-2 L2A.
+# They differ only in:
+#   - which connection helper to call,
+#   - the collection id and band-name casing (DES lowercase / CDSE uppercase),
+#   - the DN→reflectance offset (`source` kwarg to `dn_to_reflectance`),
+#   - whether bands need a lowercase→uppercase remap on the way out,
+#   - the per-source cloud-fraction log prefix.
+#
+# This dict captures every divergence so the worker body can stay source-agnostic.
+_S2_SOURCES = {
+    "des": {
+        "collection_id":         COLLECTION,
+        "bands_10m":             BANDS_10M,
+        "bands_20m_spectral":    BANDS_20M_SPECTRAL,
+        "bands_60m":             BANDS_60M,
+        "bands_scl":             BANDS_20M_CATEGORICAL,
+        "reflectance_source":    "des",
+        "remap_to_imint":        True,   # lowercase b02 → IMINT uppercase B02
+        "cloud_log_prefix":      "    Cloud fraction:",
+        "empty_msg":             "DES returned empty data",
+        "fetch_failed_msg":      "DES fetch failed",
+        "parse_failed_msg":      "Failed to parse GeoTIFF",
+    },
+    "copernicus": {
+        "collection_id":         CDSE_COLLECTION,
+        "bands_10m":             CDSE_BANDS_10M,
+        "bands_20m_spectral":    CDSE_BANDS_20M_SPECTRAL,
+        "bands_60m":             CDSE_BANDS_60M,
+        "bands_scl":             CDSE_BANDS_20M_CATEGORICAL,
+        "reflectance_source":    "copernicus",
+        "remap_to_imint":        False,  # already uppercase IMINT names
+        "cloud_log_prefix":      "    [CDSE] Cloud fraction:",
+        "empty_msg":             "CDSE returned empty data",
+        "fetch_failed_msg":      "CDSE fetch failed",
+        "parse_failed_msg":      "Failed to parse CDSE GeoTIFF",
+    },
+}
+
+
+def _fetch_s2_via_openeo(
+    *,
+    source: str,
+    date: str,
+    coords: dict,
+    cloud_threshold: float,
+    token: str | None,
+    include_scl: bool,
+    date_window: int,
+) -> FetchResult:
+    """Unified Sentinel-2 L2A fetch via openEO (DES or CDSE).
+
+    Single implementation backing :func:`fetch_des_data` and
+    :func:`fetch_copernicus_data`.  Per-source differences are encoded in
+    :data:`_S2_SOURCES`; the body here is identical for every backend.
+
+    See :func:`fetch_des_data` for parameter docs — the public wrappers pin
+    *source* and otherwise forward kwargs unchanged.
+    """
+    import rasterio
+    from datetime import datetime, timedelta
+
+    cfg = _S2_SOURCES[source]
+
+    # STAC-guided date selection when using a date window
+    if date_window > 0:
+        date = _stac_best_date(coords, date, date_window)
+        date_window = 0  # fetch exact date
+
+    if source == "copernicus":
+        conn = _connect_cdse()
+    else:
+        conn = _connect(token=token)
+
+    # Project WGS84 coords to EPSG:3006 snapped to NMD 10m grid
+    projected_coords = _to_nmd_grid(coords)
+
+    # Temporal extent: single date (STAC already selected the best)
+    dt = datetime.strptime(date, "%Y-%m-%d")
+    start = dt.strftime("%Y-%m-%d")
+    end = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    temporal = [start, end]
+
+    # ── Fetch all bands in a single request ──────────────────────────────
+    try:
+        pass  # Suppressed — too noisy for batch fetch logs
+
+        # Load 10m bands (EPSG:3006, snapped to NMD grid)
+        cube_10m = conn.load_collection(
+            collection_id=cfg["collection_id"],
+            spatial_extent=projected_coords,
+            temporal_extent=temporal,
+            bands=cfg["bands_10m"],
+        )
+
+        # Load 20m spectral bands, resample to 10m with bilinear
+        cube_20m = conn.load_collection(
+            collection_id=cfg["collection_id"],
+            spatial_extent=projected_coords,
+            temporal_extent=temporal,
+            bands=cfg["bands_20m_spectral"],
+        )
+        cube_20m = cube_20m.resample_cube_spatial(
+            target=cube_10m, method="bilinear"
+        )
+
+        # Load 60m bands (B09), resample to 10m
+        cube_60m = conn.load_collection(
+            collection_id=cfg["collection_id"],
+            spatial_extent=projected_coords,
+            temporal_extent=temporal,
+            bands=cfg["bands_60m"],
+        )
+        cube_60m = cube_60m.resample_cube_spatial(
+            target=cube_10m, method="bilinear"
+        )
+
+        # Merge spectral bands
+        cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_60m)
+
+        # Optionally include SCL (resampled to 10m with nearest-neighbor)
+        if include_scl:
+            cube_scl = conn.load_collection(
+                collection_id=cfg["collection_id"],
+                spatial_extent=projected_coords,
+                temporal_extent=temporal,
+                bands=cfg["bands_scl"],
+            )
+            cube_scl = cube_scl.resample_cube_spatial(
+                target=cube_10m, method="near"
+            )
+            cube = cube.merge_cubes(cube_scl)
+
+        # If searching a date window, reduce temporal axis to get
+        # the most recent pixel values (last available observation)
+        if date_window > 0:
+            cube = cube.reduce_dimension(
+                dimension="t", reducer="last"
+            )
+
+        # Download as GeoTIFF
+        data = cube.download(format="gtiff")
+
+        if not data:
+            raise FetchError(f"{cfg['empty_msg']} for {date}")
+
+    except FetchError:
+        raise
+    except Exception as e:
+        raise FetchError(f"{cfg['fetch_failed_msg']} for {date}: {e}")
+
+    # Parse GeoTIFF
+    try:
+        with rasterio.open(io.BytesIO(data)) as src:
+            raw = src.read()  # (n_bands, H, W)
+            crs = src.crs
+            transform = src.transform
+    except Exception as e:
+        raise FetchError(f"{cfg['parse_failed_msg']} for {date}: {e}")
+
+    # Snap to target NMD grid — corrects pixel-level and sub-pixel offsets
+    # that arise from Sentinel-2 tile alignment during server-side
+    # reprojection.  Ensures all dates produce identical pixel grids.
+    target_bounds = {k: v for k, v in projected_coords.items() if k != "crs"}
+    raw, transform = _snap_to_target_grid(
+        raw, transform, crs, target_bounds, pixel_size=NMD_GRID_SIZE,
+    )
+    crs = rasterio.crs.CRS.from_epsg(3006)
+
+    # Split into individual bands (order follows merge order):
+    # 10m → 20m spectral → 60m → SCL (if included)
+    spectral_names = (
+        cfg["bands_10m"] + cfg["bands_20m_spectral"] + cfg["bands_60m"]
+    )
+    n_spectral = len(spectral_names)
+
+    # Convert spectral bands: DN → reflectance
+    raw_bands = {}
+    for i, band_name in enumerate(spectral_names):
+        raw_bands[band_name] = dn_to_reflectance(
+            raw[i], source=cfg["reflectance_source"]
+        )
+
+    # Extract SCL if present (last band)
+    scl = None
+    cloud_fraction = 0.0
+    if include_scl and raw.shape[0] > n_spectral:
+        scl = raw[n_spectral].astype(np.uint8)
+        cloud_fraction = check_cloud_fraction(scl)
+        print(f"{cfg['cloud_log_prefix']} {cloud_fraction:.1%}")
+
+        if cloud_fraction > cloud_threshold:
+            raise FetchError(
+                f"Scene too cloudy: {cloud_fraction:.1%} cloud "
+                f"(threshold: {cloud_threshold:.0%}). "
+                f"Try a different date or wider date_window."
+            )
+
+    # Map to IMINT (uppercase) names if the backend used lowercase
+    if cfg["remap_to_imint"]:
+        imint_bands = des_to_imint_bands(raw_bands)
+    else:
+        imint_bands = raw_bands
+
+    # Create RGB composite (mask clouds from stretch if SCL available)
+    rgb = bands_to_rgb(imint_bands, scl=scl)
+
+    # Build GeoContext — links this raster to the NMD 10m grid
+    geo = GeoContext(
+        crs=str(crs),
+        transform=transform,
+        bounds_projected={k: v for k, v in projected_coords.items() if k != "crs"},
+        bounds_wgs84=coords,
+        shape=rgb.shape[:2],
+    )
+
+    return FetchResult(
+        bands=imint_bands,
+        scl=scl,
+        cloud_fraction=cloud_fraction,
+        rgb=rgb,
+        geo=geo,
+        crs=crs,
+        transform=transform,
+    )
+
+
 def fetch_des_data(
     date: str,
     coords: dict,
@@ -987,162 +1215,10 @@ def fetch_des_data(
         FetchError: If data fetching fails or cloud cover exceeds threshold.
         ImportError: If openeo is not installed.
     """
-    import rasterio
-    from datetime import datetime, timedelta
-
-    # STAC-guided date selection when using a date window
-    if date_window > 0:
-        date = _stac_best_date(coords, date, date_window)
-        date_window = 0  # fetch exact date
-
-    conn = _connect(token=token)
-
-    # Project WGS84 coords to EPSG:3006 snapped to NMD 10m grid
-    projected_coords = _to_nmd_grid(coords)
-
-    # Temporal extent: single date (STAC already selected the best)
-    dt = datetime.strptime(date, "%Y-%m-%d")
-    start = dt.strftime("%Y-%m-%d")
-    end = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
-    temporal = [start, end]
-
-    # ── Fetch all bands in a single request ──────────────────────────────
-    try:
-        pass  # Suppressed — too noisy for batch fetch logs
-
-        # Load 10m bands (EPSG:3006, snapped to NMD grid)
-        cube_10m = conn.load_collection(
-            collection_id=COLLECTION,
-            spatial_extent=projected_coords,
-            temporal_extent=temporal,
-            bands=BANDS_10M,
-        )
-
-        # Load 20m spectral bands, resample to 10m with bilinear
-        cube_20m = conn.load_collection(
-            collection_id=COLLECTION,
-            spatial_extent=projected_coords,
-            temporal_extent=temporal,
-            bands=BANDS_20M_SPECTRAL,
-        )
-        cube_20m = cube_20m.resample_cube_spatial(
-            target=cube_10m, method="bilinear"
-        )
-
-        # Load 60m bands (B09), resample to 10m
-        cube_60m = conn.load_collection(
-            collection_id=COLLECTION,
-            spatial_extent=projected_coords,
-            temporal_extent=temporal,
-            bands=BANDS_60M,
-        )
-        cube_60m = cube_60m.resample_cube_spatial(
-            target=cube_10m, method="bilinear"
-        )
-
-        # Merge spectral bands
-        cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_60m)
-
-        # Optionally include SCL (resampled to 10m with nearest-neighbor)
-        if include_scl:
-            cube_scl = conn.load_collection(
-                collection_id=COLLECTION,
-                spatial_extent=projected_coords,
-                temporal_extent=temporal,
-                bands=BANDS_20M_CATEGORICAL,
-            )
-            cube_scl = cube_scl.resample_cube_spatial(
-                target=cube_10m, method="near"
-            )
-            cube = cube.merge_cubes(cube_scl)
-
-        # If searching a date window, reduce temporal axis to get
-        # the most recent pixel values (last available observation)
-        if date_window > 0:
-            cube = cube.reduce_dimension(
-                dimension="t", reducer="last"
-            )
-
-        # Download as GeoTIFF
-        data = cube.download(format="gtiff")
-
-        if not data:
-            raise FetchError(f"DES returned empty data for {date}")
-
-    except FetchError:
-        raise
-    except Exception as e:
-        raise FetchError(f"DES fetch failed for {date}: {e}")
-
-    # Parse GeoTIFF
-    try:
-        with rasterio.open(io.BytesIO(data)) as src:
-            raw = src.read()  # (n_bands, H, W)
-            crs = src.crs
-            transform = src.transform
-    except Exception as e:
-        raise FetchError(f"Failed to parse GeoTIFF for {date}: {e}")
-
-    # Snap to target NMD grid — corrects pixel-level and sub-pixel offsets
-    # that arise from Sentinel-2 tile alignment during server-side
-    # reprojection.  Ensures all dates produce identical pixel grids.
-    target_bounds = {k: v for k, v in projected_coords.items() if k != "crs"}
-    raw, transform = _snap_to_target_grid(
-        raw, transform, crs, target_bounds, pixel_size=NMD_GRID_SIZE,
-    )
-    crs = rasterio.crs.CRS.from_epsg(3006)
-
-    # Split into individual bands (order follows merge order)
-    # 10m: b02=0, b03=1, b04=2, b08=3
-    # 20m spectral: b05=4, b06=5, b07=6, b8a=7, b11=8, b12=9
-    # 60m: b09=10
-    # SCL: 11 (if included)
-    spectral_names = BANDS_10M + BANDS_20M_SPECTRAL + BANDS_60M
-    n_spectral = len(spectral_names)
-
-    # Convert spectral bands: DN → reflectance
-    des_bands = {}
-    for i, band_name in enumerate(spectral_names):
-        des_bands[band_name] = dn_to_reflectance(raw[i], source="des")
-
-    # Extract SCL if present (last band)
-    scl = None
-    cloud_fraction = 0.0
-    if include_scl and raw.shape[0] > n_spectral:
-        scl = raw[n_spectral].astype(np.uint8)
-        cloud_fraction = check_cloud_fraction(scl)
-        print(f"    Cloud fraction: {cloud_fraction:.1%}")
-
-        if cloud_fraction > cloud_threshold:
-            raise FetchError(
-                f"Scene too cloudy: {cloud_fraction:.1%} cloud "
-                f"(threshold: {cloud_threshold:.0%}). "
-                f"Try a different date or wider date_window."
-            )
-
-    # Map lowercase → uppercase band names
-    imint_bands = des_to_imint_bands(des_bands)
-
-    # Create RGB composite (mask clouds from stretch if SCL available)
-    rgb = bands_to_rgb(imint_bands, scl=scl)
-
-    # Build GeoContext — links this raster to the NMD 10m grid
-    geo = GeoContext(
-        crs=str(crs),
-        transform=transform,
-        bounds_projected={k: v for k, v in projected_coords.items() if k != "crs"},
-        bounds_wgs84=coords,
-        shape=rgb.shape[:2],
-    )
-
-    return FetchResult(
-        bands=imint_bands,
-        scl=scl,
-        cloud_fraction=cloud_fraction,
-        rgb=rgb,
-        geo=geo,
-        crs=crs,
-        transform=transform,
+    return _fetch_s2_via_openeo(
+        source="des", date=date, coords=coords,
+        cloud_threshold=cloud_threshold, token=token,
+        include_scl=include_scl, date_window=date_window,
     )
 
 
@@ -1178,156 +1254,10 @@ def fetch_copernicus_data(
     Raises:
         FetchError: If data fetching fails or cloud cover exceeds threshold.
     """
-    import rasterio
-    from datetime import datetime, timedelta
-
-    # STAC-guided date selection (uses DES STAC, same as fetch_des_data)
-    if date_window > 0:
-        date = _stac_best_date(coords, date, date_window)
-        date_window = 0
-
-    conn = _connect_cdse()
-
-    # Project WGS84 coords to EPSG:3006 snapped to NMD 10m grid
-    projected_coords = _to_nmd_grid(coords)
-
-    # Temporal extent: single date
-    dt = datetime.strptime(date, "%Y-%m-%d")
-    start = dt.strftime("%Y-%m-%d")
-    end = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
-    temporal = [start, end]
-
-    # ── Fetch all bands in a single request ──────────────────────────────
-    try:
-        pass  # Suppressed — too noisy for batch fetch logs
-
-        # Load 10m bands (EPSG:3006, snapped to NMD grid)
-        cube_10m = conn.load_collection(
-            collection_id=CDSE_COLLECTION,
-            spatial_extent=projected_coords,
-            temporal_extent=temporal,
-            bands=CDSE_BANDS_10M,
-        )
-
-        # Load 20m spectral bands, resample to 10m with bilinear
-        cube_20m = conn.load_collection(
-            collection_id=CDSE_COLLECTION,
-            spatial_extent=projected_coords,
-            temporal_extent=temporal,
-            bands=CDSE_BANDS_20M_SPECTRAL,
-        )
-        cube_20m = cube_20m.resample_cube_spatial(
-            target=cube_10m, method="bilinear"
-        )
-
-        # Load 60m bands (B09), resample to 10m
-        cube_60m = conn.load_collection(
-            collection_id=CDSE_COLLECTION,
-            spatial_extent=projected_coords,
-            temporal_extent=temporal,
-            bands=CDSE_BANDS_60M,
-        )
-        cube_60m = cube_60m.resample_cube_spatial(
-            target=cube_10m, method="bilinear"
-        )
-
-        # Merge spectral bands
-        cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_60m)
-
-        # Optionally include SCL (resampled to 10m with nearest-neighbor)
-        if include_scl:
-            cube_scl = conn.load_collection(
-                collection_id=CDSE_COLLECTION,
-                spatial_extent=projected_coords,
-                temporal_extent=temporal,
-                bands=CDSE_BANDS_20M_CATEGORICAL,
-            )
-            cube_scl = cube_scl.resample_cube_spatial(
-                target=cube_10m, method="near"
-            )
-            cube = cube.merge_cubes(cube_scl)
-
-        if date_window > 0:
-            cube = cube.reduce_dimension(
-                dimension="t", reducer="last"
-            )
-
-        # Download as GeoTIFF
-        data = cube.download(format="gtiff")
-
-        if not data:
-            raise FetchError(f"CDSE returned empty data for {date}")
-
-    except FetchError:
-        raise
-    except Exception as e:
-        raise FetchError(f"CDSE fetch failed for {date}: {e}")
-
-    # Parse GeoTIFF
-    try:
-        with rasterio.open(io.BytesIO(data)) as src:
-            raw = src.read()  # (n_bands, H, W)
-            crs = src.crs
-            transform = src.transform
-    except Exception as e:
-        raise FetchError(f"Failed to parse CDSE GeoTIFF for {date}: {e}")
-
-    # Snap to target NMD grid
-    target_bounds = {k: v for k, v in projected_coords.items() if k != "crs"}
-    raw, transform = _snap_to_target_grid(
-        raw, transform, crs, target_bounds, pixel_size=NMD_GRID_SIZE,
-    )
-    crs = rasterio.crs.CRS.from_epsg(3006)
-
-    # Split into individual bands (order follows merge order)
-    # 10m: B02=0, B03=1, B04=2, B08=3
-    # 20m spectral: B05=4, B06=5, B07=6, B8A=7, B11=8, B12=9
-    # 60m: B09=10
-    # SCL: 11 (if included)
-    spectral_names = CDSE_BANDS_10M + CDSE_BANDS_20M_SPECTRAL + CDSE_BANDS_60M
-    n_spectral = len(spectral_names)
-
-    # Convert spectral bands: DN → reflectance (CDSE offset)
-    # CDSE bands are already uppercase — map to IMINT names directly
-    imint_bands = {}
-    for i, band_name in enumerate(spectral_names):
-        imint_bands[band_name] = dn_to_reflectance(raw[i], source="copernicus")
-
-    # Extract SCL if present (last band)
-    scl = None
-    cloud_fraction = 0.0
-    if include_scl and raw.shape[0] > n_spectral:
-        scl = raw[n_spectral].astype(np.uint8)
-        cloud_fraction = check_cloud_fraction(scl)
-        print(f"    [CDSE] Cloud fraction: {cloud_fraction:.1%}")
-
-        if cloud_fraction > cloud_threshold:
-            raise FetchError(
-                f"Scene too cloudy: {cloud_fraction:.1%} cloud "
-                f"(threshold: {cloud_threshold:.0%}). "
-                f"Try a different date or wider date_window."
-            )
-
-    # Create RGB composite
-    rgb = bands_to_rgb(imint_bands, scl=scl)
-
-    # Build GeoContext
-    geo = GeoContext(
-        crs=str(crs),
-        transform=transform,
-        bounds_projected={k: v for k, v in projected_coords.items() if k != "crs"},
-        bounds_wgs84=coords,
-        shape=rgb.shape[:2],
-    )
-
-    return FetchResult(
-        bands=imint_bands,
-        scl=scl,
-        cloud_fraction=cloud_fraction,
-        rgb=rgb,
-        geo=geo,
-        crs=crs,
-        transform=transform,
+    return _fetch_s2_via_openeo(
+        source="copernicus", date=date, coords=coords,
+        cloud_threshold=cloud_threshold, token=None,
+        include_scl=include_scl, date_window=date_window,
     )
 
 

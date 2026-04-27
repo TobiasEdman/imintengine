@@ -105,3 +105,4 @@ k8s/lpis-viz-server.yaml
 
 # Tooling caches
 .claude/
+scripts/verify_fetch_refactor.py
