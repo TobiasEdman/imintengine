@@ -735,6 +735,143 @@ def _connect_cdse():
 
 # ── Main fetch function ─────────────────────────────────────────────────────
 
+def _load_s2_cube(
+    conn,
+    *,
+    projected_coords: dict,
+    temporal: list,
+    collection_id: str,
+    bands_10m: list[str],
+    bands_20m: list[str] | None = None,
+    bands_60m: list[str] | None = None,
+    scl_band: list[str] | None = None,
+    reduce_last: bool = False,
+    merge_reference_into_output: bool = True,
+    return_bytes: bool = False,
+    empty_msg: str = "openEO returned empty cube data",
+):
+    """Assemble + download (+ optionally parse) a Sentinel-2 openEO cube.
+
+    Captures the openEO load-collection / resample / merge / download-gtiff /
+    parse skeleton shared by all multi-band Sentinel-2 fetchers in this
+    module: :func:`_fetch_s2_via_openeo`, :func:`_fetch_tci_bands`,
+    :func:`_fetch_ai2_bands`, :func:`_fetch_scl`, :func:`_fetch_scl_batch`,
+    :func:`_fetch_tci_scl_batch`.  Each caller keeps its own DN→reflectance,
+    tar.gz extraction, RGB-composite, and FetchResult-build logic; this
+    helper only abstracts the cube-assembly stage.
+
+    Args:
+        conn: Authenticated openEO connection (DES or CDSE).
+        projected_coords: EPSG:3006 bbox dict including ``"crs"``.
+        temporal: Two-element ``[start, end]`` ISO date range.
+        collection_id: openEO collection id (e.g. ``"s2_msi_l2a"`` or
+            ``"SENTINEL2_L2A"``).
+        bands_10m: 10m bands. Used as the reference grid for all
+            ``resample_cube_spatial`` calls. Required.
+        bands_20m: 20m spectral bands, resampled to 10m with bilinear.
+        bands_60m: 60m bands, resampled to 10m with bilinear.
+        scl_band: SCL band list, resampled to 10m with nearest-neighbour.
+        reduce_last: If True, reduce the temporal dimension with the
+            ``last`` reducer before download (used when a date window
+            is in play and the freshest pixel is wanted).
+        merge_reference_into_output: If True (default), the 10m bands are
+            merged into the downloaded cube. If False, the 10m bands are
+            used purely as a resample target and the output cube contains
+            only the 20m / 60m / SCL bands. Used by SCL-only fetchers that
+            need a 10m grid reference but do not want the reference band
+            in the result.
+        return_bytes: If True, return the raw downloaded ``bytes`` (and a
+            ``None`` for crs/transform) so the caller can parse a tar.gz
+            archive or otherwise handle multi-date payloads. If False
+            (default), parse the bytes as a single GeoTIFF and return
+            ``(raw_array, crs, transform)``.
+        empty_msg: Error message used if the backend returns empty bytes.
+
+    Returns:
+        - If ``return_bytes=False`` (default): ``(raw, crs, transform)``
+          where *raw* is a ``(N, H, W)`` numpy array in band order
+          ``bands_10m + bands_20m + bands_60m + scl_band`` (omitting
+          groups not requested, and omitting bands_10m when
+          ``merge_reference_into_output=False``).
+        - If ``return_bytes=True``: ``(data_bytes, None, None)``.
+
+    Raises:
+        FetchError: If the backend returns empty bytes, or the caller
+            requests ``merge_reference_into_output=False`` without any
+            non-10m bands (no output to download).
+    """
+    import rasterio
+
+    cube_10m = conn.load_collection(
+        collection_id=collection_id,
+        spatial_extent=projected_coords,
+        temporal_extent=temporal,
+        bands=bands_10m,
+    )
+
+    # Choose the cube that gets downloaded: either the 10m cube + everything
+    # merged on top, or — for SCL-only fetchers — only the non-10m bands.
+    if merge_reference_into_output:
+        cube = cube_10m
+    else:
+        cube = None  # populated by the first non-10m group below
+
+    def _attach(extra_cube):
+        nonlocal cube
+        if cube is None:
+            cube = extra_cube
+        else:
+            cube = cube.merge_cubes(extra_cube)
+
+    if bands_20m:
+        cube_20m = conn.load_collection(
+            collection_id=collection_id,
+            spatial_extent=projected_coords,
+            temporal_extent=temporal,
+            bands=bands_20m,
+        )
+        _attach(cube_20m.resample_cube_spatial(target=cube_10m, method="bilinear"))
+    if bands_60m:
+        cube_60m = conn.load_collection(
+            collection_id=collection_id,
+            spatial_extent=projected_coords,
+            temporal_extent=temporal,
+            bands=bands_60m,
+        )
+        _attach(cube_60m.resample_cube_spatial(target=cube_10m, method="bilinear"))
+    if scl_band:
+        cube_scl = conn.load_collection(
+            collection_id=collection_id,
+            spatial_extent=projected_coords,
+            temporal_extent=temporal,
+            bands=scl_band,
+        )
+        _attach(cube_scl.resample_cube_spatial(target=cube_10m, method="near"))
+
+    if cube is None:
+        raise FetchError(
+            "_load_s2_cube: merge_reference_into_output=False requires at "
+            "least one of bands_20m / bands_60m / scl_band."
+        )
+
+    if reduce_last:
+        cube = cube.reduce_dimension(dimension="t", reducer="last")
+
+    data = cube.download(format="gtiff")
+    if not data:
+        raise FetchError(empty_msg)
+
+    if return_bytes:
+        return data, None, None
+
+    with rasterio.open(io.BytesIO(data)) as src:
+        raw = src.read()  # (N, H, W)
+        crs = src.crs
+        transform = src.transform
+
+    return raw, crs, transform
+
+
 def _fetch_scl(conn, projected_coords: dict, temporal: list, date_window: int,
                source: str = "des"):
     """Fetch only the SCL band and compute cloud fraction.
@@ -752,8 +889,6 @@ def _fetch_scl(conn, projected_coords: dict, temporal: list, date_window: int,
     Returns:
         Tuple of (scl_array, cloud_fraction, crs, transform).
     """
-    import rasterio
-
     # Select collection + band names based on source
     if source == "copernicus":
         _collection = CDSE_COLLECTION
@@ -764,32 +899,17 @@ def _fetch_scl(conn, projected_coords: dict, temporal: list, date_window: int,
         _ref_band = "b02"
         _scl_bands = BANDS_20M_CATEGORICAL
 
-    # Load SCL at native 20m, resample to 10m grid
-    cube_ref = conn.load_collection(
+    raw, crs, transform = _load_s2_cube(
+        conn,
+        projected_coords=projected_coords,
+        temporal=temporal,
         collection_id=_collection,
-        spatial_extent=projected_coords,
-        temporal_extent=temporal,
-        bands=[_ref_band],  # lightweight reference for grid alignment
+        bands_10m=[_ref_band],
+        scl_band=_scl_bands,
+        reduce_last=date_window > 0,
+        merge_reference_into_output=False,
+        empty_msg=f"{source.upper()} returned empty SCL data",
     )
-    cube_scl = conn.load_collection(
-        collection_id=_collection,
-        spatial_extent=projected_coords,
-        temporal_extent=temporal,
-        bands=_scl_bands,
-    )
-    cube_scl = cube_scl.resample_cube_spatial(target=cube_ref, method="near")
-
-    if date_window > 0:
-        cube_scl = cube_scl.reduce_dimension(dimension="t", reducer="last")
-
-    data = cube_scl.download(format="gtiff")
-    if not data:
-        raise FetchError(f"{source.upper()} returned empty SCL data")
-
-    with rasterio.open(io.BytesIO(data)) as src:
-        raw = src.read()
-        crs = src.crs
-        transform = src.transform
 
     scl = raw[0].astype(np.uint8)
     cloud_fraction = check_cloud_fraction(scl)
@@ -835,7 +955,6 @@ def _fetch_scl_batch(
         FetchError: If backend returns empty/unparseable data.
     """
     import re
-    import gzip
     import tarfile
     import rasterio
     from datetime import datetime as _dt, timedelta as _td
@@ -862,24 +981,19 @@ def _fetch_scl_batch(
     else:
         return []
 
-    # Load SCL, resample to 10m grid
-    cube_ref = conn.load_collection(
+    # Multi-date payload may be tar.gz (DES) or stacked-band gtiff (CDSE) —
+    # let the helper assemble + download, then parse the bytes here.
+    data, _, _ = _load_s2_cube(
+        conn,
+        projected_coords=projected_coords,
+        temporal=_temporal,
         collection_id=_collection,
-        spatial_extent=projected_coords,
-        temporal_extent=_temporal,
-        bands=[_ref_band],
+        bands_10m=[_ref_band],
+        scl_band=_scl_bands,
+        merge_reference_into_output=False,
+        return_bytes=True,
+        empty_msg=f"{source.upper()} returned empty SCL batch data",
     )
-    cube_scl = conn.load_collection(
-        collection_id=_collection,
-        spatial_extent=projected_coords,
-        temporal_extent=_temporal,
-        bands=_scl_bands,
-    )
-    cube_scl = cube_scl.resample_cube_spatial(target=cube_ref, method="near")
-
-    data = cube_scl.download(format="gtiff")
-    if not data:
-        raise FetchError(f"{source.upper()} returned empty SCL batch data")
 
     # DES returns tar.gz for multi-date results
     cloud_by_date: dict[str, float] = {}
@@ -978,7 +1092,6 @@ _S2_SOURCES = {
         "cloud_log_prefix":      "    Cloud fraction:",
         "empty_msg":             "DES returned empty data",
         "fetch_failed_msg":      "DES fetch failed",
-        "parse_failed_msg":      "Failed to parse GeoTIFF",
     },
     "copernicus": {
         "collection_id":         CDSE_COLLECTION,
@@ -991,7 +1104,6 @@ _S2_SOURCES = {
         "cloud_log_prefix":      "    [CDSE] Cloud fraction:",
         "empty_msg":             "CDSE returned empty data",
         "fetch_failed_msg":      "CDSE fetch failed",
-        "parse_failed_msg":      "Failed to parse CDSE GeoTIFF",
     },
 }
 
@@ -1041,80 +1153,22 @@ def _fetch_s2_via_openeo(
 
     # ── Fetch all bands in a single request ──────────────────────────────
     try:
-        pass  # Suppressed — too noisy for batch fetch logs
-
-        # Load 10m bands (EPSG:3006, snapped to NMD grid)
-        cube_10m = conn.load_collection(
+        raw, crs, transform = _load_s2_cube(
+            conn,
+            projected_coords=projected_coords,
+            temporal=temporal,
             collection_id=cfg["collection_id"],
-            spatial_extent=projected_coords,
-            temporal_extent=temporal,
-            bands=cfg["bands_10m"],
+            bands_10m=cfg["bands_10m"],
+            bands_20m=cfg["bands_20m_spectral"],
+            bands_60m=cfg["bands_60m"],
+            scl_band=cfg["bands_scl"] if include_scl else None,
+            reduce_last=date_window > 0,
+            empty_msg=f"{cfg['empty_msg']} for {date}",
         )
-
-        # Load 20m spectral bands, resample to 10m with bilinear
-        cube_20m = conn.load_collection(
-            collection_id=cfg["collection_id"],
-            spatial_extent=projected_coords,
-            temporal_extent=temporal,
-            bands=cfg["bands_20m_spectral"],
-        )
-        cube_20m = cube_20m.resample_cube_spatial(
-            target=cube_10m, method="bilinear"
-        )
-
-        # Load 60m bands (B09), resample to 10m
-        cube_60m = conn.load_collection(
-            collection_id=cfg["collection_id"],
-            spatial_extent=projected_coords,
-            temporal_extent=temporal,
-            bands=cfg["bands_60m"],
-        )
-        cube_60m = cube_60m.resample_cube_spatial(
-            target=cube_10m, method="bilinear"
-        )
-
-        # Merge spectral bands
-        cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_60m)
-
-        # Optionally include SCL (resampled to 10m with nearest-neighbor)
-        if include_scl:
-            cube_scl = conn.load_collection(
-                collection_id=cfg["collection_id"],
-                spatial_extent=projected_coords,
-                temporal_extent=temporal,
-                bands=cfg["bands_scl"],
-            )
-            cube_scl = cube_scl.resample_cube_spatial(
-                target=cube_10m, method="near"
-            )
-            cube = cube.merge_cubes(cube_scl)
-
-        # If searching a date window, reduce temporal axis to get
-        # the most recent pixel values (last available observation)
-        if date_window > 0:
-            cube = cube.reduce_dimension(
-                dimension="t", reducer="last"
-            )
-
-        # Download as GeoTIFF
-        data = cube.download(format="gtiff")
-
-        if not data:
-            raise FetchError(f"{cfg['empty_msg']} for {date}")
-
     except FetchError:
         raise
     except Exception as e:
         raise FetchError(f"{cfg['fetch_failed_msg']} for {date}: {e}")
-
-    # Parse GeoTIFF
-    try:
-        with rasterio.open(io.BytesIO(data)) as src:
-            raw = src.read()  # (n_bands, H, W)
-            crs = src.crs
-            transform = src.transform
-    except Exception as e:
-        raise FetchError(f"{cfg['parse_failed_msg']} for {date}: {e}")
 
     # Snap to target NMD grid — corrects pixel-level and sub-pixel offsets
     # that arise from Sentinel-2 tile alignment during server-side
@@ -1492,34 +1546,19 @@ def _fetch_tci_bands(
         has uppercase keys ``{"B02", "B03", "B04"}`` as float32
         reflectance, *scl_array* is uint8, and *geo* is a GeoContext.
     """
-    import rasterio
     from .utils import dn_to_reflectance, des_to_imint_bands
 
     tci_bands = ["b02", "b03", "b04"]
 
-    cube_tci = conn.load_collection(
+    raw, crs, transform = _load_s2_cube(
+        conn,
+        projected_coords=projected_coords,
+        temporal=temporal,
         collection_id=COLLECTION,
-        spatial_extent=projected_coords,
-        temporal_extent=temporal,
-        bands=tci_bands,
+        bands_10m=tci_bands,
+        scl_band=BANDS_20M_CATEGORICAL,
+        empty_msg="DES returned empty TCI data",
     )
-    cube_scl = conn.load_collection(
-        collection_id=COLLECTION,
-        spatial_extent=projected_coords,
-        temporal_extent=temporal,
-        bands=BANDS_20M_CATEGORICAL,
-    )
-    cube_scl = cube_scl.resample_cube_spatial(target=cube_tci, method="near")
-    cube = cube_tci.merge_cubes(cube_scl)
-
-    data = cube.download(format="gtiff")
-    if not data:
-        raise FetchError("DES returned empty TCI data")
-
-    with rasterio.open(io.BytesIO(data)) as src:
-        raw = src.read()  # (4, H, W): b02, b03, b04, scl
-        crs = src.crs
-        transform = src.transform
 
     # TCI bands → reflectance
     bands = {}
@@ -1568,47 +1607,19 @@ def _fetch_ai2_bands(
         has uppercase keys (B02, B03, B04, B05, B06, B07, B08, B11, B12)
         as float32 DN values, *scl_array* is uint8, and *geo* is a GeoContext.
     """
-    import rasterio
-
     bands_10m = ["b02", "b03", "b04", "b08"]
     bands_20m = ["b05", "b06", "b07", "b11", "b12"]
 
-    # Load 10 m bands (reference grid)
-    cube_10m = conn.load_collection(
+    raw, crs, transform = _load_s2_cube(
+        conn,
+        projected_coords=projected_coords,
+        temporal=temporal,
         collection_id=COLLECTION,
-        spatial_extent=projected_coords,
-        temporal_extent=temporal,
-        bands=bands_10m,
+        bands_10m=bands_10m,
+        bands_20m=bands_20m,
+        scl_band=BANDS_20M_CATEGORICAL,
+        empty_msg="DES returned empty AI2 band data",
     )
-
-    # Load 20 m spectral bands and resample to 10 m grid
-    cube_20m = conn.load_collection(
-        collection_id=COLLECTION,
-        spatial_extent=projected_coords,
-        temporal_extent=temporal,
-        bands=bands_20m,
-    )
-    cube_20m = cube_20m.resample_cube_spatial(target=cube_10m, method="bilinear")
-
-    # Load SCL (20 m categorical) and resample with nearest-neighbour
-    cube_scl = conn.load_collection(
-        collection_id=COLLECTION,
-        spatial_extent=projected_coords,
-        temporal_extent=temporal,
-        bands=BANDS_20M_CATEGORICAL,
-    )
-    cube_scl = cube_scl.resample_cube_spatial(target=cube_10m, method="near")
-
-    # Merge all cubes and download
-    cube = cube_10m.merge_cubes(cube_20m).merge_cubes(cube_scl)
-    data = cube.download(format="gtiff")
-    if not data:
-        raise FetchError("DES returned empty AI2 band data")
-
-    with rasterio.open(io.BytesIO(data)) as src:
-        raw = src.read()  # (10, H, W): b02,b03,b04,b08, b05,b06,b07,b11,b12, scl
-        crs = src.crs
-        transform = src.transform
 
     all_band_names = bands_10m + bands_20m  # 9 bands
     bands = {}
@@ -1658,24 +1669,18 @@ def _fetch_tci_scl_batch(
 
     tci_band_names = ["b02", "b03", "b04"]
 
-    cube_tci = conn.load_collection(
+    # Multi-date payload arrives as tar.gz of per-date GeoTIFFs — let the
+    # helper assemble + download, then handle the per-date split here.
+    data, _, _ = _load_s2_cube(
+        conn,
+        projected_coords=projected_coords,
+        temporal=temporal,
         collection_id=COLLECTION,
-        spatial_extent=projected_coords,
-        temporal_extent=temporal,
-        bands=tci_band_names,
+        bands_10m=tci_band_names,
+        scl_band=BANDS_20M_CATEGORICAL,
+        return_bytes=True,
+        empty_msg="DES returned empty TCI+SCL batch data",
     )
-    cube_scl = conn.load_collection(
-        collection_id=COLLECTION,
-        spatial_extent=projected_coords,
-        temporal_extent=temporal,
-        bands=BANDS_20M_CATEGORICAL,
-    )
-    cube_scl = cube_scl.resample_cube_spatial(target=cube_tci, method="near")
-    cube = cube_tci.merge_cubes(cube_scl)
-
-    data = cube.download(format="gtiff")
-    if not data:
-        raise FetchError("DES returned empty TCI+SCL batch data")
 
     _DATE_RE = re.compile(r"out_(\d{4})_(\d{2})_(\d{2})T")
     results: dict[str, tuple[dict, np.ndarray, "GeoContext"]] = {}
