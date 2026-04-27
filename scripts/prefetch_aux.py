@@ -230,10 +230,19 @@ def main():
 
     channels = args.channels
     data_dir = Path(args.data_dir)
+    # Support both layouts:
+    #   1. legacy "lulc_full/tiles/<tile>.npz" (data_dir = data/lulc_full)
+    #   2. unified "unified_v2/<tile>.npz"     (data_dir = data/unified_v2)
+    # Pick whichever has .npz files. The cache dir always lives under
+    # data_dir.
     tiles_dir = data_dir / "tiles"
+    if not tiles_dir.exists() or not any(tiles_dir.glob("*.npz")):
+        # Fall back to data_dir itself — the unified layout.
+        tiles_dir = data_dir
     half_m = args.patch_size_m // 2
 
-    # Build per-channel cache dirs
+    # Build per-channel cache dirs (always under data_dir, not tiles_dir,
+    # so caches are shared across crop_/urban_/tile_ naming conventions).
     cache_dirs: dict[str, Path | None] = {}
     for ch in channels:
         if args.no_cache:
@@ -246,7 +255,9 @@ def main():
         sys.exit(1)
 
     # ── Scan tiles ──
-    all_tiles = sorted(tiles_dir.glob("tile_*.npz"))
+    # Match all naming conventions: tile_*, crop_*, urban_*, plus legacy
+    # numeric-only names (e.g. "43963942.npz" from the original 256 dataset).
+    all_tiles = sorted(tiles_dir.glob("*.npz"))
     print(f"Found {len(all_tiles)} tiles in {tiles_dir}")
     print(f"Channels: {', '.join(channels)}")
 
