@@ -1,0 +1,159 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: diag-sh-s1
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: s1-credential-diagnosis
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: diag
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy rasterio requests
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              python - <<'PY'
+              # Isolate "S2 works but S1 doesn't" vs "creds totally broken".
+              # Same OAuth client, same Process URL, two different bbox/date
+              # requests against the two collections.
+              import os, sys, urllib.error, urllib.request, json
+
+              from imint.training.cdse_vpp import _get_token, _SH_PROCESS_URL
+
+              # Small Swedish bbox (EPSG:3006), well-known cloud-free area.
+              BBOX_3006 = (614000, 6395000, 616560, 6397560)  # 256 px @ 10 m
+              CRS = "http://www.opengis.net/def/crs/EPSG/0/3006"
+              DATE = "2023-06-15"
+
+              def _req(payload, label):
+                  body = json.dumps(payload).encode()
+                  req = urllib.request.Request(
+                      _SH_PROCESS_URL,
+                      data=body,
+                      headers={
+                          "Authorization": f"Bearer {_get_token()}",
+                          "Content-Type": "application/json",
+                          "Accept": "image/tiff",
+                      },
+                      method="POST",
+                  )
+                  try:
+                      with urllib.request.urlopen(req, timeout=60) as r:
+                          n = len(r.read())
+                          print(f"  [{label}] OK — {n} bytes")
+                          return True
+                  except urllib.error.HTTPError as e:
+                      detail = e.read()[:500].decode("utf-8", "replace")
+                      print(f"  [{label}] HTTP {e.code} — {detail}")
+                      return False
+                  except Exception as e:
+                      print(f"  [{label}] ERR — {type(e).__name__}: {e}")
+                      return False
+
+              def _payload(collection, bands, evalscript_input_units="DN"):
+                  west, south, east, north = BBOX_3006
+                  return {
+                      "input": {
+                          "bounds": {
+                              "bbox": [west, south, east, north],
+                              "properties": {"crs": CRS},
+                          },
+                          "data": [{
+                              "type": collection,
+                              "dataFilter": {
+                                  "timeRange": {
+                                      "from": f"{DATE}T00:00:00Z",
+                                      "to":   f"{DATE}T23:59:59Z",
+                                  },
+                              },
+                          }],
+                      },
+                      "output": {
+                          "width": 64,
+                          "height": 64,
+                          "responses": [{
+                              "identifier": "default",
+                              "format": {"type": "image/tiff"},
+                          }],
+                      },
+                      "evalscript": (
+                          "//VERSION=3\n"
+                          "function setup() { return {"
+                          f"input: [{json.dumps(bands)}],"
+                          f"output: {{ bands: {len(bands)}, "
+                          f"sampleType: 'FLOAT32' }} }}; }}\n"
+                          "function evaluatePixel(s) { return ["
+                          + ", ".join(f"s.{b}" for b in bands) +
+                          "]; }"
+                      ),
+                  }
+
+              print("=== SH credential plan-scope diagnosis ===")
+              print(f"Endpoint: {_SH_PROCESS_URL}")
+              print(f"BBox 3006: {BBOX_3006}, date: {DATE}")
+              print()
+
+              s2_ok = _req(
+                  _payload("sentinel-2-l2a", ["B04", "B03", "B02"]),
+                  "S2 L2A   (B04/B03/B02)",
+              )
+              s1_ok = _req(
+                  _payload("sentinel-1-grd", ["VV", "VH"]),
+                  "S1 GRD   (VV/VH)     ",
+              )
+
+              print()
+              if s2_ok and not s1_ok:
+                  print("→ Diagnosis: SH plan scope. Credentials are valid for "
+                        "S2 L2A but not for S1 GRD via Process API.")
+                  print("  Fix: upgrade CDSE SH plan to include S1GRD, OR "
+                        "switch S1 fetch to openEO / direct STAC+GRD download.")
+              elif not s2_ok and not s1_ok:
+                  print("→ Diagnosis: credentials globally rejected. Re-issue "
+                        "the OAuth client or check Keycloak realm.")
+              elif s2_ok and s1_ok:
+                  print("→ Diagnosis: both collections accessible — the prior "
+                        "403 storm was transient/throttling. Safe to relaunch "
+                        "enrich-s1 (consider lower worker count).")
+              sys.exit(0)
+              PY
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"

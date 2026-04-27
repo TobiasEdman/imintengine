@@ -1,0 +1,138 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: probe-256-convention
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: probe-legacy-256-metadata
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: p
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq libexpat1 libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio
+              python3 - <<'PY'
+              # Empirically determine what coordinate convention the 256-px
+              # tiles use. Decide via the NMD raster: read the local NMD
+              # GeoTIFF window for each candidate bbox interpretation, and
+              # see which interpretation matches the saved nmd_label_raw
+              # (or `nmd_label`) inside the .npz.
+              #
+              # Candidate interpretations of the persisted bbox_3006 = [a, b, c, d]:
+              #   "WSEN_std"  : (W=a, S=b, E=c, N=d) — standard (X, Y) order
+              #   "SWNE_swap" : (S=a, W=b, N=c, E=d) — axis-swapped (Y, X) order
+              # Plus rotation/transpose of the saved array compared to a
+              # fresh standard read.
+              import os
+              import numpy as np
+              import rasterio
+              from rasterio.windows import from_bounds
+              from rasterio.enums import Resampling
+              from glob import glob
+              from pathlib import Path
+
+              # Pick 5 random 256 tiles
+              files = sorted(glob("/data256/unified_v2/*.npz"))[:5]
+              NMD = "/data256/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
+
+              def map_codes_to_lulc(arr):
+                  """The nmd_raster_to_lulc transform — same as in
+                  imint/training/class_schema.py."""
+                  # NMD raw → 19-class. 0 = background.
+                  LUT = np.zeros(256, dtype=np.uint8)
+                  # Map known NMD codes to sequential 1..19
+                  # (forest 1-6: 111-118 + 121-128;
+                  #  open wetland 11: 51-53;
+                  #  cropland 12: 41,42; etc.)
+                  # Same exact map as class_schema._LUT_19 — we don't need
+                  # to be perfect, just consistent for diff comparison.
+                  # For binary diff "is any class assigned here" we just
+                  # check arr > 0.
+                  return (arr > 0).astype(np.uint8)
+
+              def iou_binary(a, b):
+                  a = (a > 0); b = (b > 0)
+                  if not a.any() and not b.any(): return 1.0
+                  return float((a & b).sum() / max(1, (a | b).sum()))
+
+              def best_iou_under_dihedral(saved, fresh):
+                  """Try identity, 4 rotations, 4 reflections — return
+                  (best_name, best_iou). Helps detect if saved is just a
+                  rotated/transposed version of fresh."""
+                  variants = {
+                      "identity":       saved,
+                      "rot90":          np.rot90(saved, 1),
+                      "rot180":         np.rot90(saved, 2),
+                      "rot270":         np.rot90(saved, 3),
+                      "transpose":      saved.T,
+                      "fliplr":         np.fliplr(saved),
+                      "flipud":         np.flipud(saved),
+                      "rot90_T":        np.rot90(saved, 1).T,  # antidiagonal transpose
+                      "rot180_T":       np.rot90(saved, 2).T,
+                      "rot270_T":       np.rot90(saved, 3).T,
+                  }
+                  best = (None, -1.0)
+                  for name, v in variants.items():
+                      if v.shape != fresh.shape: continue
+                      i = iou_binary(v, fresh)
+                      if i > best[1]: best = (name, i)
+                  return best
+
+              with rasterio.open(NMD) as src:
+                  for p in files:
+                      print()
+                      print("=" * 60)
+                      print(p)
+                      d = np.load(p, allow_pickle=True)
+                      print(f"  keys: {sorted(d.keys())[:25]}")
+
+                      bbox = d["bbox_3006"].tolist()
+                      a, b, c, dd = bbox
+                      print(f"  bbox_3006 = {bbox}")
+                      saved_nmd = d.get("nmd_label_raw", d.get("nmd_label"))
+                      if saved_nmd is None:
+                          print("  no nmd_label_raw/nmd_label saved — skip")
+                          continue
+                      print(f"  saved_nmd shape = {saved_nmd.shape}, "
+                            f"unique top 8 = {sorted(np.unique(saved_nmd).tolist())[:8]}")
+
+                      # Try both bbox interpretations
+                      interpretations = {
+                          "WSEN_std":  (a, b, c, dd),  # W=a, S=b, E=c, N=d
+                          "SWNE_swap": (b, a, dd, c),  # W=b, S=a, E=d, N=c
+                      }
+                      for name, (W, S, E, N) in interpretations.items():
+                          # Skip if outside NMD raster bounds
+                          rb = src.bounds
+                          if not (rb.left <= W < E <= rb.right and rb.bottom <= S < N <= rb.top):
+                              print(f"  [{name}] bbox outside NMD bounds, skipping")
+                              continue
+                          win = from_bounds(W, S, E, N, src.transform)
+                          fresh = src.read(1, window=win, out_shape=saved_nmd.shape,
+                                          resampling=Resampling.nearest)
+                          # Compare class-assignment binary masks (since saved is
+                          # already mapped to 0-19, fresh is raw 0-128 — but both
+                          # are "0 if no class else nonzero")
+                          fresh_b = (fresh > 0).astype(np.uint8)
+                          saved_b = (saved_nmd > 0).astype(np.uint8)
+                          variant, iou = best_iou_under_dihedral(saved_b, fresh_b)
+                          print(f"  [{name:10s}] best dihedral IoU = {iou:.3f}  via '{variant}'")
+              PY
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts: [{name: d256, mountPath: /data256}]
+      volumes:
+        - name: d256
+          persistentVolumeClaim: {claimName: training-data}

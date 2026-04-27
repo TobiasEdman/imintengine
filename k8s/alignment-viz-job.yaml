@@ -1,0 +1,281 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alignment-viz
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: geographic-alignment-check
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: v
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq libexpat1 > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy Pillow scipy
+
+              python3 - <<'PY'
+              # Geographic alignment checker.
+              #
+              # For a sample of tiles from each dataset, produce a single PNG
+              # composing four panels per tile, side by side:
+              #
+              #   1. RGB (spectral frame 1, B04/B03/B02 percentile-stretched)
+              #   2. RGB with label class boundaries OVERLAID as bright outlines.
+              #      If the label is geographically aligned with the imagery,
+              #      these outlines will follow visible features in the RGB:
+              #      field edges, road edges, water shorelines, urban borders.
+              #      If the label is misaligned, outlines will cross fields or
+              #      lie on top of homogeneous areas.
+              #   3. Label only, color-by-class (so we can see what the label
+              #      actually says).
+              #   4. Edge-overlap heatmap: a grayscale image where bright
+              #      pixels are RGB Sobel-edges that COINCIDE with label
+              #      class boundaries (within 1 px). Brighter = better
+              #      alignment. We also print the mean pixel value, the
+              #      "alignment score".
+              #
+              # Sample: 6 deterministically-chosen tiles per dataset. Pick:
+              #   - 2 crop_*-named tiles (LPIS-rich)
+              #   - 2 lulc tiles (NMD-only)
+              #   - 2 random tiles
+              # so we cover both LPIS and NMD class boundaries.
+              import io
+              import os
+              import sys
+              import json
+              import random
+              from glob import glob
+              from pathlib import Path
+
+              import numpy as np
+              from PIL import Image, ImageDraw, ImageFont
+              from scipy.ndimage import sobel
+
+              # ── Pick the dataset based on env ──
+              DATA_DIR = Path(os.environ["DATA_DIR"])
+              OUT_DIR = Path(os.environ.get("OUT_DIR", "/data/debug/alignment"))
+              OUT_DIR.mkdir(parents=True, exist_ok=True)
+              DATASET_TAG = os.environ.get("DATASET_TAG", DATA_DIR.name)
+
+              all_files = sorted(glob(str(DATA_DIR / "*.npz")))
+              print(f"[{DATASET_TAG}] dataset: {DATA_DIR}, {len(all_files)} tiles")
+
+              random.seed(42)
+              crop_tiles  = sorted(p for p in all_files if "/crop_" in p)
+              urban_tiles = sorted(p for p in all_files if "/urban_" in p)
+              other_tiles = sorted(p for p in all_files if "/crop_" not in p and "/urban_" not in p)
+
+              picks = []
+              if crop_tiles:
+                  picks.extend(random.sample(crop_tiles, min(2, len(crop_tiles))))
+              picks.extend(random.sample(other_tiles, min(4, len(other_tiles))))
+
+              print(f"[{DATASET_TAG}] picked {len(picks)} tiles:")
+              for p in picks:
+                  print(f"  {Path(p).name}")
+
+              # ── Helpers ─────────────────────────────────────────────────────
+              def rgb_from_spectral(d):
+                  sp = d.get("spectral", d.get("image"))
+                  if sp is None:
+                      return None
+                  # 24 channels = 4 frames × 6 bands  (B02 B03 B04 B8A B11 B12)
+                  if sp.ndim == 3 and sp.shape[0] >= 12:
+                      block = sp[1*6:2*6]   # frame 1
+                  elif sp.ndim == 4:
+                      block = sp[1]
+                  else:
+                      return None
+                  red, green, blue = block[2], block[1], block[0]
+                  ref = np.stack([red, green, blue], axis=-1).astype(np.float32)
+                  out = np.zeros_like(ref, dtype=np.uint8)
+                  for c in range(3):
+                      lo, hi = np.percentile(ref[..., c], [2, 98])
+                      if hi > lo:
+                          out[..., c] = (np.clip((ref[..., c]-lo)/(hi-lo), 0, 1)*255).astype(np.uint8)
+                  return out
+
+              def label_to_rgb(label, seed=0):
+                  rng = np.random.default_rng(seed=seed)
+                  cmap = {int(c): rng.integers(40, 240, 3).astype(np.uint8)
+                          for c in np.unique(label)}
+                  out = np.zeros((*label.shape, 3), dtype=np.uint8)
+                  for c, col in cmap.items():
+                      out[label == c] = col
+                  return out
+
+              def label_boundaries(label):
+                  """Pixels where the class differs from any 4-connected neighbour."""
+                  l = label.astype(np.int16)
+                  diff_x = np.zeros_like(l, dtype=bool)
+                  diff_y = np.zeros_like(l, dtype=bool)
+                  diff_x[:, 1:]  = l[:, 1:]  != l[:, :-1]
+                  diff_x[:, :-1] |= l[:, 1:]  != l[:, :-1]
+                  diff_y[1:, :]  = l[1:, :]  != l[:-1, :]
+                  diff_y[:-1, :] |= l[1:, :]  != l[:-1, :]
+                  return diff_x | diff_y
+
+              def rgb_edges(rgb):
+                  """Sobel edge magnitude on luminance, normalised to [0, 1]."""
+                  gray = rgb.astype(np.float32).mean(axis=-1)
+                  ex = sobel(gray, axis=1)
+                  ey = sobel(gray, axis=0)
+                  mag = np.sqrt(ex*ex + ey*ey)
+                  m = float(mag.max() or 1.0)
+                  return mag / m
+
+              def overlay_boundaries_on_rgb(rgb, bnd):
+                  """Draw label class boundaries on top of the RGB in cyan."""
+                  out = rgb.copy()
+                  out[bnd] = (0, 240, 255)
+                  return out
+
+              def alignment_heatmap(rgb_edge_mag, bnd):
+                  """Pixels where RGB edges coincide with label boundaries.
+
+                  We dilate the label boundary by 1 px (~10 m at our GSD)
+                  to absorb sub-pixel registration noise.
+                  """
+                  from scipy.ndimage import binary_dilation
+                  bnd_dil = binary_dilation(bnd, iterations=1)
+                  return (rgb_edge_mag * bnd_dil.astype(np.float32))
+
+              def alignment_score(heatmap, bnd):
+                  """Higher = more boundary edges coincide with RGB edges.
+
+                  Numerator: sum of edge magnitude on dilated boundary pixels.
+                  Denominator: count of dilated boundary pixels.
+                  """
+                  from scipy.ndimage import binary_dilation
+                  bnd_dil = binary_dilation(bnd, iterations=1)
+                  n = int(bnd_dil.sum())
+                  if n == 0:
+                      return 0.0
+                  return float(heatmap.sum() / n)
+
+              def section(text, w, h=22):
+                  s = np.full((h, w, 3), 230, dtype=np.uint8)
+                  pil = Image.fromarray(s)
+                  drw = ImageDraw.Draw(pil)
+                  drw.text((4, 4), text, fill=(0, 0, 0))
+                  return np.array(pil)
+
+              def header(text, w, h=46):
+                  s = np.full((h, w, 3), 250, dtype=np.uint8)
+                  pil = Image.fromarray(s)
+                  drw = ImageDraw.Draw(pil)
+                  for i, line in enumerate(text.split("\n")):
+                      drw.text((4, 4 + i*18), line, fill=(0, 0, 0))
+                  return np.array(pil)
+
+              # ── Process each tile ─────────────────────────────────────────
+              tile_strips = []
+              metrics = []
+              for tp in picks:
+                  d = np.load(tp, allow_pickle=True)
+                  rgb = rgb_from_spectral(d)
+                  label = d.get("label")
+                  if rgb is None or label is None:
+                      print(f"  [skip] {Path(tp).name}")
+                      continue
+                  H, W = label.shape
+                  bbox = d.get("bbox_3006")
+                  bbox_str = (f"[{int(bbox[0])}, {int(bbox[1])}, "
+                              f"{int(bbox[2])}, {int(bbox[3])}]")
+                  bnd = label_boundaries(label)
+                  edge_mag = rgb_edges(rgb)
+                  hmap = alignment_heatmap(edge_mag, bnd)
+                  score = alignment_score(hmap, bnd)
+
+                  hmap_rgb = (np.clip(hmap, 0, 1) * 255).astype(np.uint8)
+                  hmap_rgb = np.stack([hmap_rgb]*3, axis=-1)
+
+                  # Per-tile strip: header + 4 panels horizontally
+                  hdr = header(
+                      f"{Path(tp).name}  bbox={bbox_str}\n"
+                      f"  size={H}×{W}  alignment_score={score:.3f}  "
+                      f"(higher = label boundaries follow RGB edges better)",
+                      w=W * 4,
+                  )
+                  panels = np.hstack([
+                      rgb,
+                      overlay_boundaries_on_rgb(rgb, bnd),
+                      label_to_rgb(label),
+                      hmap_rgb,
+                  ])
+                  cap = section(
+                      "1) RGB    |    2) RGB + label boundaries (cyan)    "
+                      "|    3) Label colored by class    |    "
+                      "4) Boundary-edge alignment heatmap",
+                      w=panels.shape[1],
+                  )
+                  tile_strips.append(np.vstack([hdr, cap, panels]))
+                  metrics.append({"name": Path(tp).name, "score": round(score, 4),
+                                   "bbox": bbox.tolist() if bbox is not None else None})
+
+              # ── Final canvas ──────────────────────────────────────────────
+              if not tile_strips:
+                  print("no tiles processed")
+                  sys.exit(1)
+              max_w = max(s.shape[1] for s in tile_strips)
+              padded = []
+              for s in tile_strips:
+                  if s.shape[1] < max_w:
+                      pad = np.full((s.shape[0], max_w - s.shape[1], 3), 250, dtype=np.uint8)
+                      s = np.hstack([s, pad])
+                  padded.append(s)
+                  padded.append(np.full((6, max_w, 3), 200, dtype=np.uint8))  # divider
+              canvas = np.vstack(padded)
+
+              fname = f"alignment_{DATASET_TAG}.png"
+              fpath = OUT_DIR / fname
+              Image.fromarray(canvas).save(fpath)
+              print(f"\nWrote {fpath} ({fpath.stat().st_size} bytes)")
+
+              # Summary metrics file
+              summary = {
+                  "dataset_tag": DATASET_TAG,
+                  "data_dir": str(DATA_DIR),
+                  "n_tiles_total": len(all_files),
+                  "n_sampled": len(metrics),
+                  "tiles": metrics,
+                  "mean_score": (
+                      round(sum(m["score"] for m in metrics) / len(metrics), 4)
+                      if metrics else 0
+                  ),
+              }
+              with open(OUT_DIR / f"alignment_{DATASET_TAG}.json", "w") as f:
+                  json.dump(summary, f, indent=2)
+              print(json.dumps(summary, indent=2))
+              PY
+          env:
+            - name: DATA_DIR
+              value: "${DATA_DIR}"
+            - name: DATASET_TAG
+              value: "${DATASET_TAG}"
+            - name: OUT_DIR
+              value: "/data/debug/alignment"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "4Gi"
+            limits:
+              cpu: "1"
+              memory: "4Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ${PVC}

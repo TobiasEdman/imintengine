@@ -1,0 +1,72 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sjv-unmapped-list
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: a
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq git libexpat1 libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow geopandas
+              cd /tmp && git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine 2>&1 | tail -1
+              export PYTHONPATH=/tmp/imintengine
+              python3 - <<'PY'
+              import sys
+              sys.path.insert(0, "/tmp/imintengine")
+              import geopandas as gpd
+              import pandas as pd
+              from imint.training.unified_schema import SJV_TO_UNIFIED
+
+              gdf = gpd.read_parquet("/data/lpis/jordbruksskiften_2022.parquet")
+              print(f"rows: {len(gdf)}")
+
+              # Tally polygon counts per SJV code (mar = primary, und = secondary)
+              codes = pd.concat([
+                  gdf["grdkod_mar"].dropna().astype(int),
+                  gdf["grdkod_und"].dropna().astype(int) if "grdkod_und" in gdf.columns else pd.Series([], dtype=int),
+              ])
+              counts = codes.value_counts().sort_index()
+
+              mapped = set(SJV_TO_UNIFIED.keys())
+              unmapped_rows = []
+              for code, n in counts.items():
+                  if int(code) in mapped:
+                      continue
+                  unmapped_rows.append((int(code), int(n)))
+
+              # Sort by count descending so the high-impact codes show first
+              unmapped_rows.sort(key=lambda x: -x[1])
+              total_unmapped_polys = sum(n for _, n in unmapped_rows)
+              print(f"unmapped codes: {len(unmapped_rows)}")
+              print(f"total polygons with unmapped codes: {total_unmapped_polys}")
+              print()
+              print(f"{'code':>5}  {'n_polys':>8}  pct_of_unmapped")
+              for code, n in unmapped_rows:
+                  pct = 100 * n / total_unmapped_polys if total_unmapped_polys else 0
+                  print(f"{code:>5}  {n:>8}  {pct:>5.2f}%")
+              PY
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

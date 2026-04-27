@@ -1,0 +1,214 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: code-mapping-audit
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: a
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq git libexpat1 libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow geopandas shapely rasterio
+              cd /tmp && git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine 2>&1 | tail -1
+              export PYTHONPATH=/tmp/imintengine
+
+              python3 - <<'PY'
+              # Comprehensive code-mapping audit:
+              #
+              #   A. SJV → unified schema coverage
+              #      - List every SJV code we map and its target class.
+              #      - Cross-check against actual SJV codes seen in the
+              #        2022 LPIS parquet — flag any unmapped codes.
+              #
+              #   B. NMD raw → 19-class LUT coverage
+              #      - Show which NMD raw codes map where.
+              #      - Sample the actual NMD raster for codes that hit
+              #        the tile windows; flag any that fall to background (0)
+              #        because they're unmapped.
+              #
+              #   C. Build-labels v4 failure forensics
+              #      - Read /data/debug/audit_v2/audit_full.jsonl if present
+              #      - For tiles with status=failed (from the OK=7076/Failed=8
+              #        message), show the per-tile reason.
+              #
+              #   D. label_mask_present_but_no_lpis_in_label cohort
+              #      - For each, decode WHY: which NMD raw class gates the
+              #        agri overlay; if the tile is in NMD class 15-19
+              #        (developed/water) we expected suppression by design.
+
+              import sys
+              sys.path.insert(0, "/tmp/imintengine")
+
+              import numpy as np
+              from collections import Counter
+
+              from imint.training.unified_schema import (
+                  SJV_TO_UNIFIED, UNIFIED_CLASS_NAMES,
+              )
+              from imint.training.class_schema import _LUT_19
+              from imint.analyzers.nmd import NMD_LEVEL2
+
+              print("=" * 70)
+              print("A. SJV → unified mapping")
+              print("=" * 70)
+              by_target = Counter()
+              for sjv, target in SJV_TO_UNIFIED.items():
+                  by_target[target] += 1
+              for tidx in sorted(by_target):
+                  print(f"  unified={tidx:2d} {UNIFIED_CLASS_NAMES[tidx]:18s} ← {by_target[tidx]:>4} SJV codes")
+              print()
+              print(f"  Total mapped SJV codes: {len(SJV_TO_UNIFIED)}")
+              print(f"  Highest mapped: {max(SJV_TO_UNIFIED.keys())}")
+              print()
+
+              # Cross-check vs actual 2022 LPIS parquet
+              print("Cross-check vs 2022 LPIS parquet:")
+              import geopandas as gpd
+              gdf = gpd.read_parquet("/data/lpis/jordbruksskiften_2022.parquet")
+              print(f"  rows: {len(gdf)}")
+              codes_in_data = set()
+              if "grdkod_mar" in gdf.columns:
+                  codes_in_data |= set(gdf["grdkod_mar"].dropna().astype(int).unique())
+              if "grdkod_und" in gdf.columns:
+                  codes_in_data |= set(gdf["grdkod_und"].dropna().astype(int).unique())
+              codes_in_data = sorted(codes_in_data)
+              print(f"  unique SJV codes in 2022: {len(codes_in_data)}")
+
+              mapped = set(SJV_TO_UNIFIED.keys())
+              unmapped = sorted(c for c in codes_in_data if c not in mapped)
+              if unmapped:
+                  print(f"  UNMAPPED codes in data ({len(unmapped)}): {unmapped[:30]}")
+                  if len(unmapped) > 30:
+                      print(f"    ... and {len(unmapped)-30} more")
+                  # how many polygons use these unmapped codes?
+                  try:
+                      total_poly_unmapped = int(
+                          gdf["grdkod_mar"].astype("Int64").isin(unmapped).sum()
+                      )
+                  except Exception:
+                      total_poly_unmapped = -1
+                  print(f"  polygons with unmapped SJV: {total_poly_unmapped}/{len(gdf)}")
+              else:
+                  print("  ✓ all SJV codes in the 2022 LPIS data are mapped")
+
+              print()
+              print("=" * 70)
+              print("B. NMD raw → 19-class LUT")
+              print("=" * 70)
+              # Reverse lookup: which raw codes map to which class?
+              by_class = {}
+              for code in range(256):
+                  cls = int(_LUT_19[code])
+                  by_class.setdefault(cls, []).append(code)
+              for cls in sorted(by_class):
+                  if cls == 0:
+                      continue
+                  codes = by_class[cls]
+                  print(f"  class {cls:2d} ← {len(codes):3d} raw codes "
+                        f"(e.g. {codes[:6]}{'...' if len(codes) > 6 else ''})")
+
+              total_nz = sum(len(v) for k, v in by_class.items() if k != 0)
+              print(f"  Total raw codes mapped to a non-bg class: {total_nz}/256")
+              print(f"  Remaining (→ background): {len(by_class.get(0, []))}")
+              print()
+
+              # Sample the NMD raster — what unique codes does it actually
+              # contain? Any codes the raster has but the LUT maps to 0?
+              import rasterio
+              print("Sampling NMD raster (every 100th pixel)...")
+              with rasterio.open("/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif") as src:
+                  arr = src.read(1, out_shape=(src.height // 50, src.width // 50))
+              uniq = sorted(np.unique(arr).tolist())
+              print(f"  raw codes seen in sampled raster: {uniq}")
+              for c in uniq:
+                  cls = int(_LUT_19[c])
+                  print(f"    {c:3d} → class {cls:2d} ({'BACKGROUND/UNMAPPED' if cls == 0 and c != 0 else 'OK'})")
+
+              print()
+              print("=" * 70)
+              print("C. Build-labels v4 failure forensics")
+              print("=" * 70)
+              # Walk all tiles, find ones missing label / has zero pixels of any class
+              from pathlib import Path
+              from glob import glob
+              files = sorted(Path("/data/unified_v2_512").glob("*.npz"))
+              failures = []
+              for f in files:
+                  try:
+                      d = np.load(f, allow_pickle=True)
+                      if "label" not in d:
+                          failures.append((f.stem, "no_label_key"))
+                          continue
+                      if int(d["label"].max()) == 0:
+                          failures.append((f.stem, "label_all_zero"))
+                  except Exception as e:
+                      failures.append((f.stem, f"load_err:{type(e).__name__}"))
+              print(f"  total tiles scanned: {len(files)}")
+              print(f"  problematic tiles:   {len(failures)}")
+              for name, reason in failures[:20]:
+                  print(f"    {name}: {reason}")
+
+              print()
+              print("=" * 70)
+              print("D. label_mask present but no LPIS in label")
+              print("=" * 70)
+              # Look at tiles where label_mask has non-zero codes but
+              # the unified label has no LPIS class. Likely cause: NMD
+              # raw class isn't in the 12/13/14 agri set, so merge_all
+              # gates the LPIS overlay out.
+              n_checked = 0
+              n_lm_no_lpis = 0
+              gate_failure_reasons = Counter()
+              for f in files[:1000]:  # sample 1000
+                  try:
+                      d = np.load(f, allow_pickle=True)
+                      lm = d.get("label_mask")
+                      label = d.get("label")
+                      nmd_raw = d.get("nmd_label_raw")
+                      if lm is None or label is None or nmd_raw is None:
+                          continue
+                      n_checked += 1
+                      if (lm > 0).sum() == 0:
+                          continue
+                      lpis_in_label = any(11 <= int(x) <= 21 for x in np.unique(label))
+                      if not lpis_in_label:
+                          n_lm_no_lpis += 1
+                          # Where is the LPIS mask non-zero, what's NMD raw there?
+                          where_lm = lm > 0
+                          nmd_at_lm = nmd_raw[where_lm]
+                          uniq_nmd = sorted(int(x) for x in np.unique(nmd_at_lm))
+                          gate_failure_reasons[
+                              f"NMD raw under LPIS = {uniq_nmd[:6]}"
+                          ] += 1
+                  except Exception as e:
+                      pass
+              print(f"  sampled tiles: {n_checked}")
+              print(f"  tiles with non-zero label_mask but no LPIS in label: {n_lm_no_lpis}")
+              print(f"  Top reasons (NMD raw value under the LPIS pixels):")
+              for k, v in gate_failure_reasons.most_common(10):
+                  print(f"    {v:>4} tiles: {k}")
+              PY
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
