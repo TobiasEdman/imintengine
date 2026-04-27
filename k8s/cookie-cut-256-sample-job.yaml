@@ -1,0 +1,150 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cookie-cut-256-sample
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: cookie-cut-256-from-512
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1200
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: c
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python3 - <<'PY'
+              # Cookie-cut 5 sample 256-px tiles directly out of their 512-px
+              # parent tiles. Pixel-precise, no resampling — same 10m GSD.
+              #
+              # For each parent-512 tile, the 256 child sits at the central
+              # 256×256 window starting at offset (128, 128) (verified by
+              # check-256-512-overlap-job: 4917 / 5604 = 88 % of matched 256
+              # tiles use this exact offset).
+              #
+              # All array-shaped keys with last two dims == (512, 512) get
+              # cropped. Other keys (bbox_3006, easting, northing, dates,
+              # tile_size_px) are recomputed or rewritten for the new
+              # geometry. Output written to a STAGING directory so we
+              # don't overwrite the existing /data/unified_v2/ until
+              # alignment is verified.
+              import json
+              import os
+              from glob import glob
+              from pathlib import Path
+
+              import numpy as np
+
+              SRC_512 = Path("/data512/unified_v2_512")
+              OUT     = Path("/data512/debug/cookie_cut_sample")
+              OUT.mkdir(parents=True, exist_ok=True)
+
+              # Hand-picked candidates: numeric names where parent + child
+              # share the same filename and offset is (128, 128). Using
+              # filenames seen in the overlap probe output.
+              candidates = [
+                  "43983928", "44003936", "44023928", "44063896", "44123932",
+              ]
+
+              # Crop offset and target size
+              OFF = 128
+              N   = 256
+
+              def crop_value(v):
+                  """Cookie-cut the central 256×256 window from a (..., 512, 512)
+                  array; pass through anything not shaped like that."""
+                  if not isinstance(v, np.ndarray):
+                      return v
+                  if v.ndim < 2:
+                      return v
+                  if v.shape[-2:] != (512, 512):
+                      return v
+                  return v[..., OFF:OFF+N, OFF:OFF+N].copy()
+
+              report = []
+              for stem in candidates:
+                  src = SRC_512 / f"{stem}.npz"
+                  if not src.exists():
+                      report.append({"stem": stem, "status": "missing_parent"})
+                      continue
+
+                  d_in = dict(np.load(src, allow_pickle=True))
+                  bbox_in = d_in["bbox_3006"].tolist()
+                  W, S, E, N_ = bbox_in
+                  # Parent extent should be 5120 m
+                  assert (E - W == 5120) and (N_ - S == 5120), (
+                      f"parent bbox extent != 5120m: {bbox_in}"
+                  )
+                  # Child bbox is the central 2560 m
+                  W_c = W + 1280
+                  S_c = S + 1280
+                  E_c = E - 1280
+                  N_c = N_ - 1280
+
+                  d_out = {}
+                  cropped_keys = []
+                  passed_keys = []
+                  for k, v in d_in.items():
+                      vv = crop_value(v)
+                      if isinstance(v, np.ndarray) and v.ndim >= 2 and v.shape[-2:] == (512, 512):
+                          cropped_keys.append(k)
+                      else:
+                          passed_keys.append(k)
+                      d_out[k] = vv
+
+                  # Rewrite geometry metadata to the child window
+                  d_out["bbox_3006"]    = np.array([W_c, S_c, E_c, N_c], dtype=np.int32)
+                  d_out["tile_size_px"] = np.int32(256)
+                  # easting, northing remain the SAME (centre is the same).
+                  if "easting" in d_in and "northing" in d_in:
+                      pass  # keep as-is
+                  else:
+                      d_out["easting"]  = np.int32((W_c + E_c) // 2)
+                      d_out["northing"] = np.int32((S_c + N_c) // 2)
+                  # Source provenance hint
+                  d_out["source_512_stem"] = np.array(stem, dtype="<U64")
+                  d_out["cookie_cut_offset_px"] = np.array([OFF, OFF], dtype=np.int32)
+
+                  # Sanity: assert at least the critical channels were cropped
+                  for must in ["spectral", "label", "nmd_label_raw"]:
+                      if must in d_in:
+                          assert must in cropped_keys, f"{stem}: {must} not cropped"
+
+                  # Save
+                  out_path = OUT / f"{stem}.npz"
+                  np.savez_compressed(out_path, **d_out)
+                  report.append({
+                      "stem": stem,
+                      "status": "ok",
+                      "parent_bbox": bbox_in,
+                      "child_bbox": [W_c, S_c, E_c, N_c],
+                      "cropped_keys": cropped_keys,
+                      "passed_keys_sample": sorted(passed_keys)[:10],
+                      "spectral_shape": list(d_out["spectral"].shape) if "spectral" in d_out else None,
+                      "label_shape": list(d_out["label"].shape) if "label" in d_out else None,
+                  })
+
+              with open(OUT / "report.json", "w") as f:
+                  json.dump(report, f, indent=2, default=str)
+              print(json.dumps(report, indent=2, default=str))
+              print()
+              print(f"=== Wrote {len([r for r in report if r['status']=='ok'])} sample tiles to {OUT}")
+              print()
+              import subprocess
+              subprocess.run(["ls", "-lh", str(OUT)], check=True)
+              PY
+          resources:
+            requests: {cpu: "2", memory: "8Gi"}
+            limits:   {cpu: "2", memory: "8Gi"}
+          volumeMounts: [{name: d512, mountPath: /data512}]
+      volumes:
+        - name: d512
+          persistentVolumeClaim: {claimName: training-data-cephfs}

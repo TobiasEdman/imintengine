@@ -1,0 +1,144 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: check-256-512-overlap
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: c
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python3 - <<'PY'
+              # Map 256-px tiles to their parent 512-px tiles (geographically).
+              #
+              # For each 256 tile we have on PVC (training-data, /data256):
+              #   - Read its bbox_3006 and (easting, northing) center
+              # For each 512 tile (training-data-cephfs, /data512):
+              #   - Read its bbox_3006
+              # For each 256 tile, find the 512 tile whose bbox FULLY contains
+              # the 256 tile's bbox. Report:
+              #   - How many 256 tiles have a parent 512 tile
+              #   - How many do NOT (orphans — would need separate handling)
+              #   - Distribution of x/y offsets (where in the 512 bbox the 256
+              #     tile sits) — should be on a clean 10m grid
+
+              import numpy as np
+              import os
+              from glob import glob
+              from pathlib import Path
+              from collections import Counter
+
+              files_256 = sorted(glob("/data256/unified_v2/*.npz"))
+              files_512 = sorted(glob("/data512/unified_v2_512/*.npz"))
+              print(f"256 tiles: {len(files_256)}")
+              print(f"512 tiles: {len(files_512)}")
+
+              # Build 512 spatial index: bbox by tile name + center keyed (cx, cy)
+              # 512 tiles are on a 5120m grid, so we can hash by floor(cx/5120)
+              tiles_512 = {}     # (cx_grid, cy_grid) → list of (cx, cy, W, S, E, N, name)
+              for p in files_512:
+                  try:
+                      d = np.load(p, allow_pickle=True)
+                      bbox = d["bbox_3006"].tolist()
+                      cx = (bbox[0] + bbox[2]) / 2
+                      cy = (bbox[1] + bbox[3]) / 2
+                      gx = int(cx // 5120)
+                      gy = int(cy // 5120)
+                      tiles_512.setdefault((gx, gy), []).append(
+                          (cx, cy, bbox[0], bbox[1], bbox[2], bbox[3], Path(p).name)
+                      )
+                  except Exception:
+                      pass
+              print(f"Indexed {sum(len(v) for v in tiles_512.values())} 512 tiles into "
+                    f"{len(tiles_512)} 5120m grid cells")
+
+              # For each 256 tile, find a 512 tile whose bbox contains the 256 bbox
+              n_total = 0
+              n_with_parent = 0
+              orphans = []
+              offsets = Counter()
+              parent_examples = []
+              for p in files_256:
+                  try:
+                      d = np.load(p, allow_pickle=True)
+                      bbox = d["bbox_3006"].tolist()
+                      W, S, E, N = bbox
+                      n_total += 1
+                      # Search neighboring 5120m cells
+                      cx = (W + E) / 2
+                      cy = (S + N) / 2
+                      found = None
+                      for dx in (-1, 0, 1):
+                          for dy in (-1, 0, 1):
+                              for cand in tiles_512.get(
+                                  (int(cx // 5120) + dx, int(cy // 5120) + dy), []
+                              ):
+                                  cx512, cy512, W2, S2, E2, N2, name = cand
+                                  if W2 <= W and E <= E2 and S2 <= S and N <= N2:
+                                      found = cand
+                                      break
+                              if found:
+                                  break
+                          if found:
+                              break
+                      if found:
+                          n_with_parent += 1
+                          # Compute offset of 256 tile inside 512 (in pixels)
+                          dx_m = W - found[2]
+                          dy_m = N - found[5]  # north_256 - north_512 (will be negative or zero)
+                          dy_px = int(round(-dy_m / 10))   # offset from top of 512 image
+                          dx_px = int(round(dx_m / 10))    # offset from left
+                          offsets[(dx_px, dy_px)] += 1
+                          if len(parent_examples) < 5:
+                              parent_examples.append({
+                                  "child_256": Path(p).name,
+                                  "parent_512": found[6],
+                                  "offset_px": (dx_px, dy_px),
+                                  "child_bbox": [W, S, E, N],
+                                  "parent_bbox": [found[2], found[3], found[4], found[5]],
+                              })
+                      else:
+                          if len(orphans) < 10:
+                              orphans.append((Path(p).name, [W, S, E, N]))
+                  except Exception as e:
+                      pass
+
+              print(f"\nResults:")
+              print(f"  256 tiles total:                        {n_total}")
+              print(f"  256 tiles with a parent 512 tile:       {n_with_parent}")
+              print(f"  256 tiles WITHOUT parent (orphans):     {n_total - n_with_parent}")
+              print(f"\n  Coverage: {n_with_parent}/{n_total} = "
+                    f"{100*n_with_parent/n_total:.1f}%")
+              print(f"\n  Offset distribution (top 10 most common positions):")
+              for (dx, dy), n in offsets.most_common(10):
+                  print(f"    ({dx:>4}, {dy:>4}) px:  {n} tiles")
+              print(f"\n  Sample parent-child mappings:")
+              for ex in parent_examples:
+                  print(f"    {ex['child_256']} → {ex['parent_512']}")
+                  print(f"        offset_px = {ex['offset_px']}")
+              if orphans:
+                  print(f"\n  Orphans (first 10):")
+                  for name, bbox in orphans:
+                      print(f"    {name} bbox={bbox}")
+              PY
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - {name: d256, mountPath: /data256}
+            - {name: d512, mountPath: /data512}
+      volumes:
+        - name: d256
+          persistentVolumeClaim: {claimName: training-data}
+        - name: d512
+          persistentVolumeClaim: {claimName: training-data-cephfs}
