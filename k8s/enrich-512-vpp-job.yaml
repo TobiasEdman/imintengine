@@ -1,0 +1,98 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-512-vpp
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: enrich-512-with-vpp-phenology
+spec:
+  backoffLimit: 1
+  # 7084 tiles × 5 VPP bands per tile (one fetch returns all 5).
+  # ~2 s/fetch on CDSE SH Process. 4 workers → ~3500 fetches/h.
+  # 7084 / 3500 ≈ 2 h. 4 h cap.
+  activeDeadlineSeconds: 14400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: e
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== enrich 512 with VPP phenology (Season 1) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "Tile inventory:"
+              echo "  /data/unified_v2_512: $(ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l) tiles"
+
+              # VPP only — uses CDSE Sentinel Hub Process API (PU-fakturerat).
+              # Run only after the monthly PU quota has reset (1st of each month).
+              # frame_2016 is similarly PU-bound but deferred to a later pass
+              # since prithvi-eo-v2 already encodes a learned baseline frame
+              # — it's nice-to-have, not critical.
+              echo ""
+              echo "Running prefetch_aux --channels vpp on /data/unified_v2_512 ..."
+              python scripts/prefetch_aux.py \
+                --data-dir /data/unified_v2_512 \
+                --channels vpp \
+                --workers 4
+
+              echo ""
+              echo "=== Done: $(date) ==="
+              python3 -c "
+              import numpy as np, glob
+              files = sorted(glob.glob('/data/unified_v2_512/*.npz'))[:5]
+              for f in files:
+                  d = np.load(f, allow_pickle=True)
+                  found = [k for k in ['vpp_sosd','vpp_eosd','vpp_length','vpp_maxv','vpp_minv'] if k in d]
+                  print(f'  {f.split(\"/\")[-1]}: {found}')
+              "
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
