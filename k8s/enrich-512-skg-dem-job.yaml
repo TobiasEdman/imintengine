@@ -1,0 +1,100 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-512-skg-dem
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: enrich-512-with-forestry-aux
+spec:
+  backoffLimit: 1
+  # 7084 tiles. prefetch_aux on the 256 dataset took ~3-4 h at 4 workers
+  # for height + grunddata + dem. Bump to 8 workers and budget 6 h cap.
+  activeDeadlineSeconds: 21600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: e
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== enrich 512 with SKG + DEM ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # Wire the SKG endpoints config in.
+              cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
+              echo "  SKG endpoints:"
+              grep "url" /workspace/imintengine/.skg_endpoints || true
+
+              echo ""
+              echo "Tile inventory:"
+              echo "  /data/unified_v2_512: $(ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l) tiles"
+
+              # Channels NOT requiring CDSE PU quota:
+              #   height, basal_area, diameter, volume  → SKG ImageServer (free)
+              #   dem                                    → Copernicus DEM S3 (free)
+              # Skipped (need CDSE PU, deferred to 2026-05-01):
+              #   vpp                                    → CDSE Sentinel Hub
+              #   frame_2016                             → CDSE Sentinel Hub
+              echo ""
+              echo "Running prefetch_aux on /data/unified_v2_512 ..."
+              python scripts/prefetch_aux.py \
+                --data-dir /data/unified_v2_512 \
+                --channels height volume basal_area diameter dem \
+                --workers 8
+
+              echo ""
+              echo "=== Done: $(date) ==="
+              # Brief inventory check
+              python3 -c "
+              import numpy as np, glob
+              files = sorted(glob.glob('/data/unified_v2_512/*.npz'))[:5]
+              for f in files:
+                  d = np.load(f, allow_pickle=True)
+                  found = [k for k in ['height','volume','basal_area','diameter','dem'] if k in d]
+                  print(f'  {f.split(\"/\")[-1]}: {found}')
+              "
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "32Gi"
+            limits:
+              cpu: "16"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: skg-endpoints
+              mountPath: /etc/skg
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints
