@@ -96,6 +96,12 @@ dashboards/pixel_training_dashboard.html
 /static/
 /viewer_tiles/
 docs/*.bak
+docs/tile_inspect.html
+
+# Trivial one-shot kubectl helper jobs — easy to recreate, no need to track
+k8s/lpis-ls-job.yaml
+k8s/lpis-viz-pull-job.yaml
+k8s/lpis-viz-server.yaml
 
 # Tooling caches
 .claude/
