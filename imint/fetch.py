@@ -55,6 +55,7 @@ Usage:
 """
 from __future__ import annotations
 
+import calendar
 import hashlib
 import io
 import math
@@ -1289,6 +1290,41 @@ def fetch_sentinel2_data(
 # ── Seasonal / multitemporal fetching ────────────────────────────────────────
 
 
+def _seasonal_window_to_date_range(
+    year: int,
+    window: tuple[int, int],
+    mode: str,
+) -> tuple[str, str]:
+    """Convert a seasonal window into ISO ``(start, end)`` date strings.
+
+    Args:
+        year: Calendar year, e.g. 2024.
+        window: Two-element tuple. For ``mode="month"`` it is
+            ``(start_month, end_month)`` (1-12 inclusive). For ``mode="doy"``
+            it is ``(doy_start, doy_end)`` (1-366 inclusive).
+        mode: ``"month"`` or ``"doy"``.
+
+    Returns:
+        Tuple ``(date_start, date_end)`` of ISO ``YYYY-MM-DD`` strings.
+
+    For month mode the end-of-month is computed via :func:`calendar.monthrange`,
+    so February is correctly handled for leap and non-leap years.
+    """
+    if mode == "month":
+        m_start, m_end = window
+        date_start = f"{year:04d}-{m_start:02d}-01"
+        last_day = calendar.monthrange(year, m_end)[1]
+        date_end = f"{year:04d}-{m_end:02d}-{last_day:02d}"
+        return date_start, date_end
+    if mode == "doy":
+        from datetime import datetime, timedelta
+        doy_start, doy_end = window
+        dt_start = datetime(year, 1, 1) + timedelta(days=doy_start - 1)
+        dt_end = datetime(year, 1, 1) + timedelta(days=doy_end - 1)
+        return dt_start.strftime("%Y-%m-%d"), dt_end.strftime("%Y-%m-%d")
+    raise ValueError(f"Unknown mode {mode!r}; expected 'month' or 'doy'.")
+
+
 def fetch_seasonal_dates(
     coords: dict,
     seasonal_windows: list[tuple[int, int]],
@@ -1313,18 +1349,12 @@ def fetch_seasonal_dates(
         Empty list if no data found for that window.
     """
     results = []
-    for m_start, m_end in seasonal_windows:
+    for window in seasonal_windows:
         window_candidates = []
         for year in years:
-            date_start = f"{year}-{m_start:02d}-01"
-            # End of the last month in the window
-            if m_end in (1, 3, 5, 7, 8, 10, 12):
-                date_end = f"{year}-{m_end:02d}-31"
-            elif m_end in (4, 6, 9, 11):
-                date_end = f"{year}-{m_end:02d}-30"
-            else:  # February
-                date_end = f"{year}-{m_end:02d}-28"
-
+            date_start, date_end = _seasonal_window_to_date_range(
+                int(year), window, mode="month",
+            )
             try:
                 dates = _stac_available_dates(
                     coords, date_start, date_end,
@@ -1414,19 +1444,13 @@ def fetch_seasonal_dates_doy(
         List of lists (one per window), each containing
         ``[(date_str, scene_cloud_pct), ...]`` sorted by cloud ascending.
     """
-    from datetime import datetime, timedelta
-
     results = []
-    for doy_start, doy_end in doy_windows:
+    for window in doy_windows:
         window_candidates = []
         for year in years:
-            yr = int(year)
-            # Convert DOY to ISO date strings
-            dt_start = datetime(yr, 1, 1) + timedelta(days=doy_start - 1)
-            dt_end = datetime(yr, 1, 1) + timedelta(days=doy_end - 1)
-            date_start = dt_start.strftime("%Y-%m-%d")
-            date_end = dt_end.strftime("%Y-%m-%d")
-
+            date_start, date_end = _seasonal_window_to_date_range(
+                int(year), window, mode="doy",
+            )
             try:
                 dates = _stac_available_dates(
                     coords, date_start, date_end,

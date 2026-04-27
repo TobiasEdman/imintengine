@@ -899,3 +899,67 @@ class TestFetchSentinel2Data:
             cloud_threshold=0.5,
             date_window=3,
         )
+
+
+# ── _seasonal_window_to_date_range ───────────────────────────────────────────
+
+class TestSeasonalWindowToDateRange:
+    """Verify the seasonal-window → ISO date range helper used by both
+    fetch_seasonal_dates (month mode) and fetch_seasonal_dates_doy (doy mode).
+    """
+
+    def test_month_31_day(self):
+        """A 31-day month must end on day 31."""
+        from imint.fetch import _seasonal_window_to_date_range
+        assert _seasonal_window_to_date_range(2024, (1, 1), mode="month") == \
+            ("2024-01-01", "2024-01-31")
+
+    def test_month_30_day(self):
+        """A 30-day month must end on day 30 (not day 31)."""
+        from imint.fetch import _seasonal_window_to_date_range
+        assert _seasonal_window_to_date_range(2024, (4, 4), mode="month") == \
+            ("2024-04-01", "2024-04-30")
+
+    def test_month_february_leap_year(self):
+        """February in a leap year must end on day 29 (calendar.monthrange)."""
+        from imint.fetch import _seasonal_window_to_date_range
+        assert _seasonal_window_to_date_range(2024, (2, 2), mode="month") == \
+            ("2024-02-01", "2024-02-29")
+
+    def test_month_february_non_leap_year(self):
+        """February in a non-leap year must end on day 28."""
+        from imint.fetch import _seasonal_window_to_date_range
+        assert _seasonal_window_to_date_range(2023, (2, 2), mode="month") == \
+            ("2023-02-01", "2023-02-28")
+
+    def test_month_window_spanning_two_months(self):
+        """Multi-month window: start = first of m_start, end = last of m_end."""
+        from imint.fetch import _seasonal_window_to_date_range
+        assert _seasonal_window_to_date_range(2024, (4, 5), mode="month") == \
+            ("2024-04-01", "2024-05-31")
+
+    def test_month_window_february_to_april(self):
+        """Feb–Apr 2024 (leap year) — end date is April 30, not Feb 29."""
+        from imint.fetch import _seasonal_window_to_date_range
+        assert _seasonal_window_to_date_range(2024, (2, 4), mode="month") == \
+            ("2024-02-01", "2024-04-30")
+
+    def test_doy_basic(self):
+        """DOY mode converts day-of-year offsets to ISO dates."""
+        from imint.fetch import _seasonal_window_to_date_range
+        # 2024 is leap; doy 100 = 2024-04-09, doy 140 = 2024-05-19
+        assert _seasonal_window_to_date_range(2024, (100, 140), mode="doy") == \
+            ("2024-04-09", "2024-05-19")
+
+    def test_doy_first_day(self):
+        """doy=1 must map to Jan 1 (off-by-one safety)."""
+        from imint.fetch import _seasonal_window_to_date_range
+        assert _seasonal_window_to_date_range(2023, (1, 1), mode="doy") == \
+            ("2023-01-01", "2023-01-01")
+
+    def test_invalid_mode_raises(self):
+        """Unknown mode must raise ValueError, not silently misbehave."""
+        import pytest
+        from imint.fetch import _seasonal_window_to_date_range
+        with pytest.raises(ValueError, match="Unknown mode"):
+            _seasonal_window_to_date_range(2024, (1, 1), mode="bogus")
