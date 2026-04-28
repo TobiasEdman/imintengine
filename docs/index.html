@@ -402,7 +402,7 @@
             <h3>Single-pass-disciplin: en passage, en sensor</h3>
             <p>
                 Alla retrievals i denna analys kommer från <strong>en enda Sentinel-2-passage: S2B kl 10:30:19 UTC den 8 april 2026</strong>. Vi blandar inte data från olika dagar eller från S2A:s parallella passage 10 minuter senare (10:40:41 UTC). Anledningen är att klorofyllblom­nings­dynamik kan röra sig flera kilometer per timme i ytvatten — att mosaika över olika tidpunkter introducerar artefakter som ser ut som verkliga gradienter. Däremot mosaikar vi <em>inom samma passage</em> två angränsande MGRS-rutor (T32VPK + T33VUE, båda S2B 10:30:19) eftersom det är samma fysiska observation, bara delad mellan UTM-zon 32 och 33.
-                <br><em>Disciplin etablerad i denna analys 2026-04-28; detaljer i <a href="des_l1c_bug_report.md" target="_blank">DES L1C bug-rapport</a> och <a href="../SPEC.md" target="_blank">SPEC.md</a>.</em>
+                <br><em>Disciplin etablerad i denna analys 2026-04-28; detaljer i <a href="../SPEC.md" target="_blank">SPEC.md</a>.</em>
             </p>
 
             <h3>NDCI — Normalized Difference Chlorophyll Index</h3>
@@ -455,7 +455,7 @@
             </p>
             <p>
                 <strong>L1C-sidan (C2RCC):</strong>
-                SAFE-arkiven (T32VPK + T33VUE, båda S2B 10:30:19) hämtas från Google Clouds publika bucket via <code>imint.fetch.fetch_l1c_safe_from_gcp()</code> (DES openEO returnerar all-nodata för L1C på grund av en server-side bug, se separat rapport). SNAP c2rcc.msi körs på varje SAFE separat i Docker, output i UTM 32N respektive UTM 33N. Båda outputs reprojiceras till EPSG:3006-grid med första-valid-pixel-mosaik i Python.
+                SAFE-arkiven (T32VPK + T33VUE, båda S2B 10:30:19) hämtas från Google Clouds publika bucket via <code>imint.fetch.fetch_l1c_safe_from_gcp()</code>. SNAP c2rcc.msi körs på varje SAFE separat i Docker, output i UTM 32N respektive UTM 33N. Båda outputs reprojiceras till EPSG:3006-grid med första-valid-pixel-mosaik i Python.
             </p>
             <p>
                 <strong>Rendering:</strong>
