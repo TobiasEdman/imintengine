@@ -51,6 +51,9 @@ spec:
               echo "  /data/unified_v2: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l) tiles"
 
               # ── Step 1: rededge (B05/B06/B07) via DES openEO (no PU) ─────
+              # Workers=4: DES openEO has no PU quota but the backend
+              # rate-limits aggressive callers; q57ts confirmed 4 workers
+              # sustains ~200 tiles/h without throttling.
               echo ""
               echo "=== Step 1: rededge enrichment (DES openEO, no PU) ==="
               python scripts/enrich_tiles_rededge.py \
