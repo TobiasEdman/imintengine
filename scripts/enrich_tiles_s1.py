@@ -65,10 +65,16 @@ def _resolve_fetch_fn(backend: str):
     if backend == "stac":
         from imint.training.cdse_s1_stac import fetch_s1_scene
         return fetch_s1_scene
+    if backend == "cascade":
+        # CDSE → MPC → AWS chain. Resilient to single-provider outages;
+        # falls through to the next backend on exception or None.
+        from imint.training.s1_fetch import fetch_s1_scene
+        return fetch_s1_scene
     raise ValueError(
         f"Unknown --s1-backend {backend!r}. "
         "Valid choices: 'sh' (Sentinel Hub Process API), "
-        "'stac' (CDSE STAC + direct COG)."
+        "'stac' (CDSE STAC + direct COG), "
+        "'cascade' (CDSE → MPC → AWS fallback chain)."
     )
 
 
@@ -208,11 +214,12 @@ def main():
     parser.add_argument("--no-skip-existing", dest="skip_existing", action="store_false")
     parser.add_argument("--max-tiles", type=int, default=None)
     parser.add_argument(
-        "--s1-backend", choices=["sh", "stac"], default="sh",
+        "--s1-backend", choices=["sh", "stac", "cascade"], default="cascade",
         help="S1 fetch backend. 'sh' = Sentinel Hub Process API (PU-billed, "
              "blown the 10k/month free quota), 'stac' = CDSE STAC + direct "
-             "COG + local σ⁰ calibration (OData bandwidth quota, preferred "
-             "for bulk enrichment). See docs/training/s1_fetch.md.",
+             "COG + local σ⁰ calibration (OData bandwidth quota), "
+             "'cascade' (default) = CDSE → MPC → AWS fallback chain via "
+             "imint.training.s1_fetch. See docs/training/s1_fetch.md.",
     )
     args = parser.parse_args()
 

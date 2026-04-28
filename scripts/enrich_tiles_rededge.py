@@ -52,13 +52,13 @@ function evaluatePixel(sample) {
 """
 
 
-def _fetch_rededge_frame(
+def _fetch_rededge_frame_cdse(
     west: float, south: float, east: float, north: float,
     date_str: str, size_px: int,
 ) -> np.ndarray | None:
     """Fetch B05/B06/B07 (3 bands) for one date via CDSE Process API.
 
-    Returns (3, H, W) float32 or None on failure.
+    Returns (3, H, W) float32 or None on failure. PU-billed.
     """
     from imint.training.cdse_s2 import _fetch_s2_tiff, _parse_multiband_tiff, _get_token
     from imint.training.tile_fetch import _CDSE_SEMAPHORE
@@ -83,7 +83,99 @@ def _fetch_rededge_frame(
     return None
 
 
-def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
+# Re-use a single openEO connection across worker calls — each
+# ``_connect()`` does an OAuth round-trip that is wasted on per-frame use.
+# threading.local because the openEO client isn't documented as thread-safe.
+_des_conn_tls = threading.local()
+
+
+def _get_des_conn():
+    conn = getattr(_des_conn_tls, "conn", None)
+    if conn is None:
+        from imint.fetch import _connect
+        conn = _connect()
+        _des_conn_tls.conn = conn
+    return conn
+
+
+def _fetch_rededge_frame_des(
+    west: float, south: float, east: float, north: float,
+    date_str: str, size_px: int,
+) -> np.ndarray | None:
+    """Fetch B05/B06/B07 (3 bands) for one date via DES openEO.
+
+    DES openEO bills compute time, not Processing Units — so this path
+    is unaffected by the CDSE PU quota that previously blocked Stage B
+    256 enrichment until 1 May. Routes through the unified
+    ``_load_s2_cube`` helper introduced in commit 357d390.
+
+    Returns (3, H, W) float32 or None on failure.
+    """
+    from datetime import datetime, timedelta
+    from imint.fetch import (
+        _load_s2_cube,
+        dn_to_reflectance,
+        BANDS_10M,
+    )
+
+    try:
+        conn = _get_des_conn()
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        temporal = [
+            dt.strftime("%Y-%m-%d"),
+            (dt + timedelta(days=1)).strftime("%Y-%m-%d"),
+        ]
+        projected_coords = {
+            "west": west, "south": south, "east": east, "north": north,
+            "crs": "EPSG:3006",
+        }
+        # Reference grid = a single 10 m band; we want only B05/B06/B07
+        # (20 m, resampled to the 10 m reference internally) in the output.
+        raw, _, _ = _load_s2_cube(
+            conn,
+            projected_coords=projected_coords,
+            temporal=temporal,
+            collection_id="s2_msi_l2a",
+            bands_10m=[BANDS_10M[1]],  # b03 — arbitrary 10 m anchor
+            bands_20m=["b05", "b06", "b07"],
+            merge_reference_into_output=False,
+            empty_msg=f"DES openEO returned empty rededge cube for {date_str}",
+        )
+    except Exception:
+        return None
+
+    if raw is None or raw.shape[0] != 3:
+        return None
+    if raw.shape[1] != size_px or raw.shape[2] != size_px:
+        return None
+
+    bands = np.stack(
+        [dn_to_reflectance(raw[i], source="des") for i in range(3)],
+        axis=0,
+    )
+    return bands.astype(np.float32)
+
+
+def _fetch_rededge_frame(
+    west: float, south: float, east: float, north: float,
+    date_str: str, size_px: int,
+    *,
+    source: str = "des",
+) -> np.ndarray | None:
+    """Dispatch rededge fetch to the requested backend."""
+    if source == "des":
+        return _fetch_rededge_frame_des(west, south, east, north, date_str, size_px)
+    if source == "cdse":
+        return _fetch_rededge_frame_cdse(west, south, east, north, date_str, size_px)
+    raise ValueError(f"Unknown rededge source: {source!r} (expected 'des' or 'cdse')")
+
+
+def enrich_one_tile(
+    tile_path: str,
+    skip_existing: bool = True,
+    *,
+    source: str = "des",
+) -> dict:
     """Add red-edge (B05/B06/B07) to one tile .npz file."""
     from imint.training.tile_config import TileConfig
     from imint.training.tile_bbox import resolve_tile_bbox
@@ -124,6 +216,7 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
         frame = _fetch_rededge_frame(
             bbox["west"], bbox["south"], bbox["east"], bbox["north"],
             date_str, size_px,
+            source=source,
         )
         if frame is not None and frame.shape == (3, h, w):
             rededge_frames.append(frame)
@@ -147,14 +240,20 @@ def main():
     parser.add_argument("--skip-existing", action="store_true", default=True)
     parser.add_argument("--no-skip-existing", dest="skip_existing", action="store_false")
     parser.add_argument("--max-tiles", type=int, default=None)
+    parser.add_argument(
+        "--source", choices=["des", "cdse"], default="des",
+        help="Backend for the rededge fetch. 'des' is PU-free (default); "
+             "'cdse' uses the Process API and consumes Processing Units.",
+    )
     args = parser.parse_args()
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
     if args.max_tiles:
         tiles = tiles[:args.max_tiles]
     print(f"=== Red-Edge Enrichment (B05/B06/B07) ===")
-    print(f"  Tiles: {len(tiles)}")
+    print(f"  Tiles:   {len(tiles)}")
     print(f"  Workers: {args.workers}")
+    print(f"  Source:  {args.source}")
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     lock = threading.Lock()
@@ -163,7 +262,9 @@ def main():
 
     def _run(path):
         nonlocal completed
-        r = enrich_one_tile(path, skip_existing=args.skip_existing)
+        r = enrich_one_tile(
+            path, skip_existing=args.skip_existing, source=args.source,
+        )
         with lock:
             completed += 1
             stats[r.get("status", "failed")] = stats.get(r.get("status", "failed"), 0) + 1

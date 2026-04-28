@@ -1,0 +1,120 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-512-skg-dem-rerun
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: enrich-512-skg-dem-rerun-after-bbox-fix
+spec:
+  backoffLimit: 1
+  # 1901 tiles previously failed on bbox-parse. Now using prefetch_aux
+  # with the .npz-first bbox resolver (commit 8c8b0ad). Other 5183
+  # tiles already have all 5 channels — prefetch_aux skips them in
+  # _tile_missing_channels(). Budget 2 h cap.
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: e
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== enrich 512 with SKG + DEM (rerun) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              # Sanity-check the fix landed in the cloned commit
+              echo ""
+              echo "Verifying bbox resolver fix is in cloned source:"
+              grep -n "easting/northing keys inside the .npz" scripts/prefetch_aux.py \
+                | head -3 || { echo "FIX NOT PRESENT — abort"; exit 1; }
+
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
+
+              echo ""
+              echo "Tile inventory:"
+              echo "  /data/unified_v2_512: $(ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l) tiles"
+
+              # Pre-count tiles still missing aux channels (the 1901 expected)
+              python3 - <<'PY'
+              import glob, numpy as np
+              chans = ['height','volume','basal_area','diameter','dem']
+              missing = 0
+              for f in glob.glob('/data/unified_v2_512/*.npz'):
+                  try:
+                      with np.load(f, allow_pickle=True) as d:
+                          if not all(c in d.files for c in chans):
+                              missing += 1
+                  except Exception:
+                      missing += 1
+              print(f"Tiles still missing >=1 SKG/DEM channel: {missing}")
+              PY
+
+              echo ""
+              echo "Running prefetch_aux on /data/unified_v2_512 (idempotent skip) ..."
+              python scripts/prefetch_aux.py \
+                --data-dir /data/unified_v2_512 \
+                --channels height volume basal_area diameter dem \
+                --workers 8
+
+              echo ""
+              echo "=== Done: $(date) ==="
+              # Post-inventory: how many tiles still missing
+              python3 - <<'PY'
+              import glob, numpy as np
+              chans = ['height','volume','basal_area','diameter','dem']
+              missing = 0
+              for f in glob.glob('/data/unified_v2_512/*.npz'):
+                  try:
+                      with np.load(f, allow_pickle=True) as d:
+                          if not all(c in d.files for c in chans):
+                              missing += 1
+                  except Exception:
+                      missing += 1
+              print(f"Tiles still missing >=1 SKG/DEM channel: {missing}")
+              PY
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "32Gi"
+            limits:
+              cpu: "16"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: skg-endpoints
+              mountPath: /etc/skg
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints
