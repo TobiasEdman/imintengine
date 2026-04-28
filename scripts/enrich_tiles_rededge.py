@@ -141,12 +141,26 @@ def _fetch_rededge_frame_des(
             merge_reference_into_output=False,
             empty_msg=f"DES openEO returned empty rededge cube for {date_str}",
         )
-    except Exception:
+    except Exception as e:
+        # Surface the failure mode so we can distinguish auth / network /
+        # empty-cube — silent ``except: return None`` was masking real bugs
+        # (e.g. missing DES_USER env, openEO 401) on the first job run.
+        print(f"    [rededge-des] {date_str}: {type(e).__name__}: {e}", flush=True)
         return None
 
     if raw is None or raw.shape[0] != 3:
+        print(
+            f"    [rededge-des] {date_str}: unexpected cube shape "
+            f"{getattr(raw, 'shape', None)}",
+            flush=True,
+        )
         return None
     if raw.shape[1] != size_px or raw.shape[2] != size_px:
+        print(
+            f"    [rededge-des] {date_str}: cube grid {raw.shape[1:]} != "
+            f"({size_px},{size_px})",
+            flush=True,
+        )
         return None
 
     bands = np.stack(

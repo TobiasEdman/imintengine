@@ -36,7 +36,8 @@ spec:
                 git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
               pip install --quiet --no-cache-dir \
                 numpy scipy rasterio requests pyproj pyarrow Pillow \
-                pystac-client geopandas shapely
+                pystac-client geopandas shapely \
+                openeo planetary-computer
 
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 \
@@ -100,6 +101,20 @@ spec:
                 secretKeyRef:
                   name: cdse-credentials
                   key: client_secret
+            # DES openEO Basic-Auth — used by Step 1 rededge --source des.
+            # Without these env vars, imint.fetch._connect() raises
+            # "DES credentials not configured" and rededge fetches return
+            # None for every frame.
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
           resources:
             requests:
               cpu: "8"

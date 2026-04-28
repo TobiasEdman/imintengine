@@ -154,17 +154,12 @@ def fetch_s1_scene(
     dt_from = dt.strftime("%Y-%m-%dT00:00:00Z")
     dt_to = (dt + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
 
-    try:
-        client = Client.open(_STAC_ROOT)
-        search = client.search(
-            collections=[_STAC_COLLECTION],
-            bbox=list(bbox_4326),
-            datetime=f"{dt_from}/{dt_to}",
-            limit=50,
-        )
-        items = list(search.items())
-    except Exception as e:
-        print(f"    [STAC S1] {date}: search failed: {e}")
+    items = _stac_search_with_backoff(
+        Client, bbox_4326, dt_from, dt_to, date,
+    )
+    if items is None:
+        return None
+    if not items:
         return None
 
     items = s1_shared.filter_iw_grdh(items, orbit_direction)
@@ -211,6 +206,54 @@ def fetch_s1_scene(
 
     orbit = s1_shared.orbit_from_item(item) or (orbit_direction or "UNKNOWN")
     return sar, orbit
+
+
+def _stac_search_with_backoff(
+    Client: Any,
+    bbox_4326: tuple[float, float, float, float],
+    dt_from: str,
+    dt_to: str,
+    date: str,
+    *,
+    max_attempts: int = 5,
+    base_delay_s: float = 2.0,
+) -> list[Any] | None:
+    """Run a STAC search with WAF/429-aware exponential backoff.
+
+    The CDSE STAC frontend rate-limits aggressive callers via Cloudflare-
+    style WAF rules and returns ``HTTP 429`` (or a JSON body with
+    ``"status":429``). Returning ``None`` on the first 429 is what made
+    the cascade façade fall through to MPC immediately at scale —
+    instead, retry locally with backoff so CDSE remains the primary path
+    when it's just being throttled.
+
+    Returns:
+        List of STAC items (possibly empty) on success; ``None`` if
+        every attempt failed (the caller should then fall through to
+        the next backend).
+    """
+    import time
+    delay = base_delay_s
+    for attempt in range(max_attempts):
+        try:
+            client = Client.open(_STAC_ROOT)
+            search = client.search(
+                collections=[_STAC_COLLECTION],
+                bbox=list(bbox_4326),
+                datetime=f"{dt_from}/{dt_to}",
+                limit=50,
+            )
+            return list(search.items())
+        except Exception as e:
+            msg = str(e)
+            is_rate_limit = "429" in msg or "Rate limit" in msg or "WAF" in msg
+            if is_rate_limit and attempt < max_attempts - 1:
+                time.sleep(delay)
+                delay = min(delay * 2, 30.0)
+                continue
+            print(f"    [STAC S1] {date}: search failed: {e}")
+            return None
+    return None
 
 
 def clear_cache(product_id: str | None = None) -> int:
