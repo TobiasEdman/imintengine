@@ -80,25 +80,51 @@ _TILE_RE = re.compile(r"tile_(\d+)_(\d+)\.npz$")
 
 
 def _bbox_from_tile(tile_path: Path, half_m: int) -> tuple[int, int, int, int]:
-    """Extract EPSG:3006 bbox from tile filename.
+    """Extract EPSG:3006 bbox in (W, S, E, N) order, ±half_m around center.
 
-    Tile names are ``tile_{easting}_{northing}.npz`` where easting and
-    northing are the grid-cell center.  The bbox extends ±half_m around
-    that center.
+    Resolution order (mirrors imint.training.tile_bbox.resolve_tile_bbox):
+      1. easting/northing keys inside the .npz  (preferred — set by fetcher)
+      2. tile_{east}_{north}.npz  filename parse
+      3. crop_<name>_{east}_{north}.npz / urban_{east}_{north}.npz
+      4. bbox_3006 array inside the .npz — center extracted
 
-    Returns (west, south, east, north) in EPSG:3006 meters.
+    Required because the unified_v2/_512 directories contain a mix of
+    tile_*, crop_*, urban_*, and legacy numeric filenames; only tile_*
+    encodes coordinates in the name itself.
     """
+    # Method 1: easting/northing keys inside the .npz
+    try:
+        with np.load(tile_path, allow_pickle=True) as d:
+            east_val = d["easting"] if "easting" in d.files else None
+            north_val = d["northing"] if "northing" in d.files else None
+            if east_val is not None and north_val is not None:
+                e = int(np.asarray(east_val).item())
+                n = int(np.asarray(north_val).item())
+                return (e - half_m, n - half_m, e + half_m, n + half_m)
+            # Method 4 (npz fallback): bbox_3006 array — derive center
+            if "bbox_3006" in d.files:
+                b = np.asarray(d["bbox_3006"]).flatten()
+                if b.size >= 4:
+                    cx = (int(b[0]) + int(b[2])) // 2
+                    cy = (int(b[1]) + int(b[3])) // 2
+                    return (cx - half_m, cy - half_m, cx + half_m, cy + half_m)
+    except (OSError, KeyError, ValueError):
+        pass
+
+    # Method 2: tile_{east}_{north}.npz
     m = _TILE_RE.search(tile_path.name)
-    if not m:
-        raise ValueError(f"Cannot parse easting/northing from {tile_path.name}")
-    easting = int(m.group(1))
-    northing = int(m.group(2))
-    return (
-        easting - half_m,
-        northing - half_m,
-        easting + half_m,
-        northing + half_m,
-    )
+    if m:
+        e, n = int(m.group(1)), int(m.group(2))
+        return (e - half_m, n - half_m, e + half_m, n + half_m)
+
+    # Method 3: crop_<name>_{east}_{north}.npz / urban_{east}_{north}.npz —
+    # last two underscore-separated integer groups before the extension.
+    m = re.search(r"_(\d+)_(\d+)\.npz$", tile_path.name)
+    if m:
+        e, n = int(m.group(1)), int(m.group(2))
+        return (e - half_m, n - half_m, e + half_m, n + half_m)
+
+    raise ValueError(f"Cannot resolve bbox for {tile_path.name}")
 
 
 def _tile_missing_channels(
