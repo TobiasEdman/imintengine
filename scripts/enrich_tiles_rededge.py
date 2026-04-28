@@ -114,6 +114,7 @@ def _fetch_rededge_frame_des(
     from datetime import datetime, timedelta
     from imint.fetch import (
         _load_s2_cube,
+        _snap_to_target_grid,
         dn_to_reflectance,
         BANDS_10M,
     )
@@ -131,7 +132,7 @@ def _fetch_rededge_frame_des(
         }
         # Reference grid = a single 10 m band; we want only B05/B06/B07
         # (20 m, resampled to the 10 m reference internally) in the output.
-        raw, _, _ = _load_s2_cube(
+        raw, crs, transform = _load_s2_cube(
             conn,
             projected_coords=projected_coords,
             temporal=temporal,
@@ -155,9 +156,19 @@ def _fetch_rededge_frame_des(
             flush=True,
         )
         return None
+
+    # DES openEO routinely returns 257×257 / 256×257 grids whose origin
+    # is shifted by sub-pixel from the requested bbox. Snap to the canonical
+    # 10 m NMD grid — same call ``_fetch_s2_via_openeo`` makes after every
+    # cube download.
+    target_bounds = {"west": west, "south": south, "east": east, "north": north}
+    raw, _ = _snap_to_target_grid(
+        raw, transform, crs, target_bounds, pixel_size=10,
+    )
+
     if raw.shape[1] != size_px or raw.shape[2] != size_px:
         print(
-            f"    [rededge-des] {date_str}: cube grid {raw.shape[1:]} != "
+            f"    [rededge-des] {date_str}: post-snap grid {raw.shape[1:]} != "
             f"({size_px},{size_px})",
             flush=True,
         )
