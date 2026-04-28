@@ -255,7 +255,14 @@ def enrich_one_tile(tile_path: str, gt, skip_existing: bool = True) -> dict:
     data["tessera_year"] = np.int32(tessera_year)
     data["has_tessera"] = np.int32(1)
 
-    np.savez_compressed(tile_path, **data)
+    # Atomic write: tmp + os.replace. Same pattern + reason as
+    # build_labels.py:344 (BadZipFile-truncated tiles after kill mid-write).
+    # ``np.savez_compressed`` appends ``.npz`` unless the input already ends
+    # in ``.npz`` — write to ``tile.npz.tmp`` → produces ``tile.npz.tmp.npz``
+    # → atomic rename onto ``tile.npz``.
+    tmp_base = tile_path + ".tmp"
+    np.savez_compressed(tmp_base, **data)
+    os.replace(tmp_base + ".npz", tile_path)
     return {
         "name": name, "status": "ok",
         "n_blocks": n_used, "year": tessera_year,

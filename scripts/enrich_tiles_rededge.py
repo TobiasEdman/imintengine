@@ -254,7 +254,17 @@ def enrich_one_tile(
     data["rededge"] = np.concatenate(rededge_frames, axis=0)  # (T*3, H, W)
     data["has_rededge"] = np.int32(1 if valid > 0 else 0)
 
-    np.savez_compressed(tile_path, **data)
+    # Atomic write: tmp + os.replace. ``np.savez_compressed`` writing
+    # directly to ``tile_path`` was the same anti-pattern that produced
+    # 188 BadZipFile-truncated tiles when the previous S1 enrichment job
+    # was killed mid-write. Same pattern as build_labels.py:344 and
+    # enrich_tiles_s1.py. ``np.savez_compressed`` unconditionally appends
+    # ``.npz`` to its path argument unless the path already ends in
+    # ``.npz``; pass a path WITHOUT the suffix so the produced file
+    # lands at ``tile.npz.tmp.npz``, then rename onto ``tile.npz``.
+    tmp_base = tile_path + ".tmp"
+    np.savez_compressed(tmp_base, **data)
+    os.replace(tmp_base + ".npz", tile_path)
     return {"name": name, "status": "ok", "valid_frames": valid}
 
 
