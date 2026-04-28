@@ -1,0 +1,59 @@
+{
+  "type": "FeatureCollection",
+  "name": "stigfjorden_skagerrak",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "urn:ogc:def:crs:EPSG::4326"
+    }
+  },
+  "bbox": [11.328058, 58.052919, 11.732099, 58.131168],
+  "features": [
+    {
+      "type": "Feature",
+      "bbox": [11.328058, 58.052919, 11.732099, 58.131168],
+      "properties": {
+        "name": "Stigfjorden + Mollösund (water_quality AOI v4)",
+        "description": "AOI defined as a WGS84 rectangle whose four corners, when projected to EPSG:3006, produce a parallelogram whose axis-aligned bounding box is EXACTLY the desired 10 m-snapped EPSG:3006 rectangle (283340, 6439270, 307590, 6449200). The WGS84 corners were solved iteratively (4 fixed-point iterations) so that transform_bounds(WGS84 → 3006) — i.e. the inflation step inside _to_nmd_grid — produces the target 3006 bbox with zero residual. No bypass of _to_nmd_grid; the rectangle itself is the fix.",
+        "crs": "EPSG:4326",
+        "created": "2026-04-28",
+        "version": "v4",
+        "frame_aspect_ratio": "2.442:1 landskap (projected EPSG:3006) — 24.25 × 9.93 km",
+        "covers": [
+          "Stigfjorden (inner fjord between Tjörn and Orust)",
+          "Mollösund and surrounding archipelago",
+          "Coastal waters off Käringön and Gullholmen",
+          "Nearshore Skagerrak"
+        ],
+        "approximate_extent_km": {
+          "east_west": 24.25,
+          "north_south": 9.93
+        },
+        "history": [
+          {"date": "2026-04-27", "change": "v1 → v2: shrunk west boundary 11.10 → 11.40°E"},
+          {"date": "2026-04-28", "change": "v2 → v3: shifted bbox south to Marstrand area; user-supplied via bbox_picker"},
+          {"date": "2026-04-28", "change": "v3 → v4: adapted WGS84 rectangle so transform_bounds(WGS84→3006) produces clean axis-aligned 3006 rect (eliminates parallelogram tilt without bypassing _to_nmd_grid)"}
+        ],
+        "target_3006_rectangle": {
+          "west": 283340,
+          "south": 6439270,
+          "east": 307590,
+          "north": 6449200,
+          "comment": "This is what _to_nmd_grid produces from the WGS84 bbox above — verified zero residual."
+        }
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [11.328058, 58.052919],
+            [11.732099, 58.052919],
+            [11.732099, 58.131168],
+            [11.328058, 58.131168],
+            [11.328058, 58.052919]
+          ]
+        ]
+      }
+    }
+  ]
+}

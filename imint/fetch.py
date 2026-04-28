@@ -56,10 +56,12 @@ Usage:
 from __future__ import annotations
 
 import calendar
+import gzip
 import hashlib
 import io
 import math
 import os
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -735,6 +737,53 @@ def _connect_cdse():
 
 # ── Main fetch function ─────────────────────────────────────────────────────
 
+def _unpack_openeo_gtiff_bytes(data: bytes) -> bytes:
+    """Unwrap an openEO ``download(format="gtiff")`` response to a bare GeoTIFF.
+
+    Some openEO backends (DES as of 2026-04) wrap the result in a gzipped
+    tar archive even for single-date single-band-group requests — one
+    GeoTIFF per scene timestamp inside. This helper detects gzip / tar
+    framing and returns a single GeoTIFF byte string regardless. Bare
+    GeoTIFFs pass through untouched.
+
+    Multi-scene tarballs (e.g. S2A and S2B passes ten minutes apart) are
+    resolved by picking the **earliest** member by sorted name — which
+    is the earliest acquisition timestamp because DES names members
+    ``out_<YYYY>_<MM>_<DD>T<HH>_<MM>_<SS>.tif``. Single-sensor
+    consistency beats mosaicking by default; callers that genuinely
+    need multi-scene fusion can use ``return_bytes=True`` and parse the
+    archive themselves.
+
+    Returns:
+        Bytes parseable directly with ``rasterio.open(io.BytesIO(...))``.
+
+    Raises:
+        FetchError: If the payload appears to be a tar archive with no
+            ``.tif``/``.tiff`` members.
+    """
+    # Layer 1 — gzip
+    if data[:2] == b"\x1f\x8b":
+        data = gzip.decompress(data)
+
+    # Layer 2 — tar
+    is_tar = (
+        data[:14] == b"././@PaxHeader"
+        or (len(data) > 262 and data[257:262] == b"ustar")
+    )
+    if not is_tar:
+        return data
+
+    with tarfile.open(fileobj=io.BytesIO(data)) as tf:
+        members = sorted(
+            (m for m in tf
+             if m.isfile() and m.name.lower().endswith((".tif", ".tiff"))),
+            key=lambda m: m.name,
+        )
+        if not members:
+            raise FetchError("openEO tar payload contained no GeoTIFF members")
+        return tf.extractfile(members[0]).read()
+
+
 def _load_s2_cube(
     conn,
     *,
@@ -863,6 +912,10 @@ def _load_s2_cube(
 
     if return_bytes:
         return data, None, None
+
+    # DES (and possibly other backends) may wrap the response in gzip+tar
+    # even for a single-date single-band-group request. Unwrap transparently.
+    data = _unpack_openeo_gtiff_bytes(data)
 
     with rasterio.open(io.BytesIO(data)) as src:
         raw = src.read()  # (N, H, W)
@@ -1314,6 +1367,237 @@ def fetch_copernicus_data(
         cloud_threshold=cloud_threshold, token=None,
         include_scl=include_scl, date_window=date_window,
     )
+
+
+# ── L1C SAFE archive fetch from Google Cloud public bucket ─────────────────
+#
+# Fallback for when DES/CDSE openEO L1C paths are unavailable. The bucket
+# ``gs://gcp-public-data-sentinel-2`` mirrors ESA's L1C archive globally
+# with anonymous HTTPS access — no auth, no requester-pays charges. Used by
+# downstream tools (SNAP c2rcc, ACOLITE) that need full SAFE archives on
+# disk rather than a band cube.
+
+GCP_S2_BUCKET = "gcp-public-data-sentinel-2"
+GCP_S2_BASE = f"https://storage.googleapis.com/{GCP_S2_BUCKET}"
+GCP_S2_LIST_API = (
+    f"https://storage.googleapis.com/storage/v1/b/{GCP_S2_BUCKET}/o"
+)
+
+
+def _parse_safe_mgrs(safe_name: str) -> tuple[str, str, str]:
+    """Extract ``(utm_zone, lat_band, square)`` from a SAFE archive name.
+
+    Sentinel-2 SAFE naming convention (PSD ≥ 14.6):
+    ``S2{A,B}_MSIL1C_<DATE>T<TIME>_N<BASELINE>_R<ORBIT>_T<MGRS>_<DATE>T<TIME>.SAFE``
+
+    The MGRS token ``T<utm><lat_band><square>`` (e.g. ``T33VUE``) drives the
+    Google Cloud bucket layout: ``tiles/{utm}/{lat_band}/{square}/``.
+
+    Raises:
+        ValueError: If the name does not contain a recognisable MGRS token.
+    """
+    import re
+
+    m = re.search(r"_T(\d{2})([A-Z])([A-Z]{2})_", safe_name)
+    if not m:
+        raise ValueError(f"cannot parse MGRS tile from SAFE name: {safe_name}")
+    return m.group(1), m.group(2), m.group(3)
+
+
+def _stac_best_l1c_scene(
+    coords: dict,
+    date: str,
+    date_window: int = 0,
+    cloud_max: float = 100.0,
+) -> dict:
+    """Query the DES STAC catalogue for the best L1C scene around ``date``.
+
+    DES STAC indexing is reliable even when the openEO data plane fails
+    (the 2026-04 L1C nodata bug). The catalogue links list the canonical
+    SAFE archive name we need to construct the Google Cloud path.
+
+    Args:
+        coords: WGS84 bbox dict.
+        date: Target date ``YYYY-MM-DD``.
+        date_window: ± days around ``date`` to consider.
+        cloud_max: Reject scenes with ``eo:cloud_cover`` above this.
+
+    Returns:
+        Dict with at least ``id``, ``safe_name``, ``cloud_cover``,
+        ``datetime``, ``proj_code``, ``tile_id``.
+
+    Raises:
+        FetchError: If no L1C scene matches the request.
+    """
+    import requests
+    from datetime import datetime, timedelta
+
+    dt = datetime.strptime(date, "%Y-%m-%d")
+    start = (dt - timedelta(days=date_window)).strftime("%Y-%m-%d")
+    end = (dt + timedelta(days=date_window + 1)).strftime("%Y-%m-%d")
+
+    body = {
+        "collections": ["s2_msi_l1c"],
+        "bbox": [coords["west"], coords["south"], coords["east"], coords["north"]],
+        "datetime": f"{start}/{end}",
+        "limit": 25,
+    }
+    resp = requests.post(STAC_SEARCH_URL, json=body, timeout=30)
+    resp.raise_for_status()
+    features = resp.json().get("features") or []
+    candidates = []
+    for f in features:
+        props = f.get("properties") or {}
+        cloud = props.get("eo:cloud_cover")
+        if cloud is None or cloud > cloud_max:
+            continue
+        # Resolve SAFE name from any asset href containing ".SAFE/"
+        safe_name = None
+        for asset in (f.get("assets") or {}).values():
+            href = asset.get("href") or ""
+            if ".SAFE/" in href:
+                safe_name = href.split("/.SAFE/")[0].rsplit("/", 1)[-1]
+                if not safe_name.endswith(".SAFE"):
+                    safe_name = href.split(".SAFE/")[0].rsplit("/", 1)[-1] + ".SAFE"
+                break
+        if safe_name is None:
+            for link in f.get("links") or []:
+                href = link.get("href") or ""
+                if ".SAFE" in href:
+                    safe_name = href.rsplit("/", 1)[-1].split(".SAFE")[0] + ".SAFE"
+                    break
+        if safe_name is None:
+            continue
+        candidates.append({
+            "id": f.get("id"),
+            "safe_name": safe_name,
+            "cloud_cover": cloud,
+            "datetime": props.get("start_datetime") or props.get("datetime"),
+            "proj_code": props.get("proj:code"),
+            "tile_id": props.get("cubedash:region_code"),
+        })
+
+    if not candidates:
+        raise FetchError(
+            f"no L1C scenes for bbox {coords} around {date} (cloud<={cloud_max}%)"
+        )
+    candidates.sort(key=lambda c: c["cloud_cover"])
+    return candidates[0]
+
+
+def _gcp_list_safe_files(safe_name: str) -> list[dict]:
+    """Page through GCS object-list API to enumerate every file in a SAFE.
+
+    Returns a list of dicts with ``name`` (full GCS object key) and
+    ``size`` (int bytes).
+    """
+    import requests
+
+    utm, lat_band, square = _parse_safe_mgrs(safe_name)
+    prefix = f"tiles/{utm}/{lat_band}/{square}/{safe_name}/"
+    out: list[dict] = []
+    page_token: str | None = None
+    while True:
+        params = {"prefix": prefix, "maxResults": "1000"}
+        if page_token:
+            params["pageToken"] = page_token
+        r = requests.get(GCP_S2_LIST_API, params=params, timeout=30)
+        r.raise_for_status()
+        body = r.json()
+        for item in body.get("items", []):
+            out.append({"name": item["name"], "size": int(item.get("size", 0))})
+        page_token = body.get("nextPageToken")
+        if not page_token:
+            break
+    if not out:
+        raise FetchError(
+            f"GCP bucket {GCP_S2_BUCKET} returned no files under prefix {prefix}"
+        )
+    return out
+
+
+def fetch_l1c_safe_from_gcp(
+    date: str,
+    coords: dict,
+    dest_dir: str | Path | None = None,
+    *,
+    date_window: int = 0,
+    cloud_max: float = 100.0,
+    max_workers: int = 8,
+    overwrite: bool = False,
+) -> Path:
+    """Download a Sentinel-2 L1C SAFE archive from Google Cloud public bucket.
+
+    Resolves the best matching scene via DES STAC, derives the GCS path
+    from the SAFE name's MGRS token, and pulls every member file in
+    parallel. Existing files are reused unless ``overwrite=True``.
+
+    This is the recommended fallback when DES openEO L1C returns nodata
+    (the 2026-04 bug confirmed via L2A baseline diff) and CDSE is
+    blocked by credit limits. The bucket is anonymous-read with no
+    requester-pays charges.
+
+    Args:
+        date: Target acquisition date ``YYYY-MM-DD``.
+        coords: WGS84 bbox dict (``west``/``south``/``east``/``north``).
+        dest_dir: Local root for the downloaded SAFE. Defaults to
+            ``./outputs/safe_archives/``. The SAFE folder is created
+            beneath this root.
+        date_window: ± days around ``date`` to scan when looking for
+            the cleanest scene.
+        cloud_max: Reject scenes above this cloud-cover percentage.
+        max_workers: Parallel HTTPS workers.
+        overwrite: If False (default) and a file is already on disk
+            with the expected size, it is skipped.
+
+    Returns:
+        Path to the downloaded ``.SAFE`` directory root.
+
+    Raises:
+        FetchError: If STAC has no matching scene or GCS listing fails.
+    """
+    import os
+    import urllib.request
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    scene = _stac_best_l1c_scene(coords, date, date_window=date_window, cloud_max=cloud_max)
+    safe_name = scene["safe_name"]
+    files = _gcp_list_safe_files(safe_name)
+
+    if dest_dir is None:
+        dest_dir = Path("outputs") / "safe_archives"
+    dest_root = Path(dest_dir)
+    dest_root.mkdir(parents=True, exist_ok=True)
+    safe_root = dest_root / safe_name
+    safe_root.mkdir(parents=True, exist_ok=True)
+
+    utm, lat_band, square = _parse_safe_mgrs(safe_name)
+    gcs_prefix = f"tiles/{utm}/{lat_band}/{square}/{safe_name}/"
+
+    def _fetch_one(item: dict) -> int:
+        rel = item["name"][len(gcs_prefix):]
+        out = safe_root / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if (
+            not overwrite
+            and out.exists()
+            and out.stat().st_size == item["size"]
+        ):
+            return 0
+        url = f"{GCP_S2_BASE}/{item['name']}"
+        with urllib.request.urlopen(url, timeout=120) as resp, open(out, "wb") as f:
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+        return item["size"]
+
+    bytes_fetched = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for fut in as_completed(ex.submit(_fetch_one, f) for f in files):
+            bytes_fetched += fut.result()
+    return safe_root
 
 
 def fetch_sentinel2_data(

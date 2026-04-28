@@ -963,3 +963,229 @@ class TestSeasonalWindowToDateRange:
         from imint.fetch import _seasonal_window_to_date_range
         with pytest.raises(ValueError, match="Unknown mode"):
             _seasonal_window_to_date_range(2024, (1, 1), mode="bogus")
+
+
+# ── _unpack_openeo_gtiff_bytes ────────────────────────────────────────────
+class TestUnpackOpeneoGTiffBytes:
+    """Helper that unwraps gzip+tar-wrapped openEO GeoTIFF responses.
+
+    Added 2026-04-28 after DES openEO began returning .tar.gz envelopes
+    (one TIF per scene timestamp) for single-date single-band-group
+    requests, breaking the bare ``rasterio.open(io.BytesIO(...))`` parse.
+    """
+
+    @staticmethod
+    def _make_tif_bytes(value: int = 100, h: int = 8, w: int = 8) -> bytes:
+        """Synthesise a tiny single-band uint8 GeoTIFF in memory."""
+        import io
+        import numpy as np
+        import rasterio
+        from rasterio.transform import from_origin
+        arr = np.full((1, h, w), value, dtype=np.uint8)
+        with rasterio.io.MemoryFile() as mf:
+            with mf.open(
+                driver="GTiff", height=h, width=w, count=1, dtype="uint8",
+                crs="EPSG:3006", transform=from_origin(0, 0, 10, 10),
+            ) as dst:
+                dst.write(arr)
+            return mf.read()
+
+    def test_bare_geotiff_passes_through(self):
+        """A plain GeoTIFF must be returned unchanged."""
+        from imint.fetch import _unpack_openeo_gtiff_bytes
+        tif = self._make_tif_bytes(value=42)
+        out = _unpack_openeo_gtiff_bytes(tif)
+        assert out == tif
+
+    def test_gzip_wrapped_geotiff_is_decompressed(self):
+        """gzip-wrapped GeoTIFF must come back as the original TIF bytes."""
+        import gzip
+        from imint.fetch import _unpack_openeo_gtiff_bytes
+        tif = self._make_tif_bytes(value=99)
+        out = _unpack_openeo_gtiff_bytes(gzip.compress(tif))
+        # Round-trip via rasterio (size differs across gzip implementations)
+        import io
+        import rasterio
+        with rasterio.open(io.BytesIO(out)) as src:
+            assert src.read()[0, 0, 0] == 99
+
+    def test_single_member_targz_extracts_inner_tif(self):
+        """A tar.gz with one .tif member returns the member's bytes."""
+        import gzip
+        import io
+        import tarfile
+        import rasterio
+        from imint.fetch import _unpack_openeo_gtiff_bytes
+        tif = self._make_tif_bytes(value=7)
+        tar_buf = io.BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tf:
+            info = tarfile.TarInfo(name="scene_0.tif")
+            info.size = len(tif)
+            tf.addfile(info, io.BytesIO(tif))
+        out = _unpack_openeo_gtiff_bytes(gzip.compress(tar_buf.getvalue()))
+        with rasterio.open(io.BytesIO(out)) as src:
+            assert src.read()[0, 0, 0] == 7
+
+    def test_multi_member_targz_picks_earliest_by_name(self):
+        """Multi-scene tarballs return the alphabetically-first member.
+
+        DES names members ``out_2026_04_08T10_30_19.tif`` so sorted-by-name
+        is sorted-by-acquisition-timestamp. Single-pick policy preserves
+        single-sensor consistency for downstream analyzers — mosaicking is
+        explicitly NOT the default. Callers that genuinely need multi-scene
+        fusion should use ``return_bytes=True`` and parse the tar themselves.
+        """
+        import gzip
+        import io
+        import tarfile
+        import rasterio
+        from imint.fetch import _unpack_openeo_gtiff_bytes
+        tif_early = self._make_tif_bytes(value=11, h=8, w=8)
+        tif_late = self._make_tif_bytes(value=22, h=8, w=8)
+        tar_buf = io.BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tf:
+            # Add in REVERSE name order to verify the helper sorts members
+            for name, blob in (
+                ("out_2026_04_08T10_40_41.tif", tif_late),
+                ("out_2026_04_08T10_30_19.tif", tif_early),
+            ):
+                info = tarfile.TarInfo(name=name)
+                info.size = len(blob)
+                tf.addfile(info, io.BytesIO(blob))
+        out = _unpack_openeo_gtiff_bytes(gzip.compress(tar_buf.getvalue()))
+        with rasterio.open(io.BytesIO(out)) as src:
+            arr = src.read()
+            assert arr.shape == (1, 8, 8)
+            assert arr[0, 0, 0] == 11, "must pick earliest-timestamp member"
+
+    def test_tar_with_no_tifs_raises(self):
+        """A tar containing no .tif members must raise FetchError."""
+        import io
+        import tarfile
+        import pytest
+        from imint.fetch import _unpack_openeo_gtiff_bytes, FetchError
+        tar_buf = io.BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tf:
+            info = tarfile.TarInfo(name="readme.txt")
+            payload = b"not a tif"
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+        with pytest.raises(FetchError, match="no GeoTIFF"):
+            _unpack_openeo_gtiff_bytes(tar_buf.getvalue())
+
+
+# ── L1C SAFE fetch from Google Cloud public bucket ─────────────────────────
+class TestParseSafeMgrs:
+    """Parser that derives ``(utm_zone, lat_band, square)`` from a SAFE name.
+
+    The MGRS token drives the GCS bucket layout
+    ``tiles/{utm}/{lat_band}/{square}/{SAFE}/`` so a wrong parse breaks
+    every download URL.
+    """
+
+    def test_canonical_safe_name(self):
+        from imint.fetch import _parse_safe_mgrs
+        name = "S2A_MSIL1C_20260408T104041_N0512_R008_T33VUE_20260408T155548.SAFE"
+        assert _parse_safe_mgrs(name) == ("33", "V", "UE")
+
+    def test_southern_hemisphere_tile(self):
+        from imint.fetch import _parse_safe_mgrs
+        name = "S2B_MSIL1C_20240115T140749_N0509_R039_T18HUF_20240115T173255.SAFE"
+        assert _parse_safe_mgrs(name) == ("18", "H", "UF")
+
+    def test_invalid_name_raises(self):
+        import pytest
+        from imint.fetch import _parse_safe_mgrs
+        with pytest.raises(ValueError, match="cannot parse MGRS"):
+            _parse_safe_mgrs("not_a_safe.zip")
+
+
+class TestStacBestL1cScene:
+    """STAC-search wrapper that picks the cleanest matching L1C scene.
+
+    The function is the only piece of the GCP fallback that talks to a
+    network service. We mock requests.post so the test stays offline.
+    """
+
+    @staticmethod
+    def _fake_stac(features):
+        class _Resp:
+            def __init__(self, payload):
+                self.payload = payload
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return self.payload
+        return _Resp({"features": features})
+
+    def test_picks_lowest_cloud_cover(self, monkeypatch):
+        from unittest.mock import MagicMock
+        import imint.fetch as f
+        feats = [
+            {
+                "id": "noisy",
+                "properties": {"eo:cloud_cover": 92.0,
+                                "start_datetime": "2026-04-08T09:00:00Z",
+                                "proj:code": "EPSG:32633",
+                                "cubedash:region_code": "33VUE"},
+                "assets": {
+                    "b04": {"href": "s3://x/Y/SAFE_OLD.SAFE/GRANULE/.../B04.jp2"}
+                },
+            },
+            {
+                "id": "clean",
+                "properties": {"eo:cloud_cover": 0.07,
+                                "start_datetime": "2026-04-08T10:40:41Z",
+                                "proj:code": "EPSG:32633",
+                                "cubedash:region_code": "33VUE"},
+                "assets": {
+                    "b04": {"href": "s3://x/Y/S2A_MSIL1C_20260408T104041_N0512_R008_T33VUE_20260408T155548.SAFE/GRANULE/.../B04.jp2"}
+                },
+            },
+        ]
+        post = MagicMock(return_value=self._fake_stac(feats))
+        import requests as _requests_mod
+        monkeypatch.setattr(_requests_mod, "post", post)
+        scene = f._stac_best_l1c_scene(
+            {"west": 11.55, "south": 58.10, "east": 11.75, "north": 58.20},
+            "2026-04-08",
+        )
+        assert scene["id"] == "clean"
+        assert scene["cloud_cover"] == 0.07
+        assert scene["safe_name"].endswith("_T33VUE_20260408T155548.SAFE")
+        assert scene["tile_id"] == "33VUE"
+
+    def test_no_matches_raises_fetcherror(self, monkeypatch):
+        from unittest.mock import MagicMock
+        import pytest
+        import imint.fetch as f
+        post = MagicMock(return_value=self._fake_stac([]))
+        import requests as _requests_mod
+        monkeypatch.setattr(_requests_mod, "post", post)
+        with pytest.raises(f.FetchError, match="no L1C scenes"):
+            f._stac_best_l1c_scene(
+                {"west": 0, "south": 0, "east": 1, "north": 1},
+                "2026-04-08",
+            )
+
+    def test_cloud_cap_filters(self, monkeypatch):
+        from unittest.mock import MagicMock
+        import pytest
+        import imint.fetch as f
+        feats = [
+            {
+                "id": "cloudy",
+                "properties": {"eo:cloud_cover": 50.0,
+                                "start_datetime": "2026-04-08T10:00Z"},
+                "assets": {"b04": {"href": "s3://x/SAFE_OK.SAFE/GRANULE/B04.jp2"}},
+            },
+        ]
+        post = MagicMock(return_value=self._fake_stac(feats))
+        import requests as _requests_mod
+        monkeypatch.setattr(_requests_mod, "post", post)
+        with pytest.raises(f.FetchError):
+            f._stac_best_l1c_scene(
+                {"west": 0, "south": 0, "east": 1, "north": 1},
+                "2026-04-08",
+                cloud_max=10.0,
+            )

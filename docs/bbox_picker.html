@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<title>BBOX-väljare — ImintEngine</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      crossorigin="">
+<link rel="stylesheet"
+      href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"
+      crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js" crossorigin=""></script>
+<script src="https://unpkg.com/proj4@2.11.0/dist/proj4.js" crossorigin=""></script>
+
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background: #0d1117; color: #e6edf3; }
+header { padding: 12px 18px; background: #161b22; border-bottom: 1px solid #30363d; }
+header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+header p { margin: 4px 0 0; font-size: 12px; color: #8b949e; }
+main { display: grid; grid-template-columns: 1fr 360px; height: calc(100vh - 60px); }
+#map { height: 100%; }
+aside { padding: 18px; background: #0d1117; border-left: 1px solid #30363d; overflow-y: auto; }
+section { margin-bottom: 18px; }
+section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #8b949e; margin: 0 0 8px; font-weight: 600; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 4px; font-size: 13px; }
+.row label { color: #8b949e; }
+.row span.val { color: #e6edf3; font-variant-numeric: tabular-nums; }
+pre { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 12px; font-size: 12px; line-height: 1.5; color: #e6edf3; white-space: pre-wrap; word-break: break-all; }
+button { display: inline-block; background: #238636; color: #fff; border: 0; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; margin-right: 6px; margin-top: 4px; }
+button:hover { background: #2ea043; }
+button.secondary { background: #21262d; border: 1px solid #30363d; }
+button.secondary:hover { background: #30363d; }
+.tip { font-size: 12px; color: #8b949e; line-height: 1.5; }
+.copy-flash { background: #1f6feb !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>BBOX-väljare</h1>
+  <p>Rita en rektangel på kartan och kopiera koordinaterna in i analyzern.</p>
+</header>
+
+<main>
+  <div id="map"></div>
+  <aside>
+    <section>
+      <h2>Markerad area</h2>
+      <div class="row"><label>West (lon)</label><span id="v-west" class="val">—</span></div>
+      <div class="row"><label>South (lat)</label><span id="v-south" class="val">—</span></div>
+      <div class="row"><label>East (lon)</label><span id="v-east" class="val">—</span></div>
+      <div class="row"><label>North (lat)</label><span id="v-north" class="val">—</span></div>
+      <div class="row"><label>Center</label><span id="v-center" class="val">—</span></div>
+      <div class="row"><label>Storlek</label><span id="v-size" class="val">—</span></div>
+      <div class="row"><label>Aspekt (W:H)</label><span id="v-aspect" class="val">—</span></div>
+    </section>
+
+    <section>
+      <h2>Som Python-dict</h2>
+      <pre id="out-py">— rita en rektangel —</pre>
+      <button id="copy-py">Kopiera Python</button>
+    </section>
+
+    <section>
+      <h2>Som JSON</h2>
+      <pre id="out-json">—</pre>
+      <button id="copy-json">Kopiera JSON</button>
+    </section>
+
+    <section>
+      <h2>Som GeoJSON polygon</h2>
+      <pre id="out-geojson">—</pre>
+      <button id="copy-geojson">Kopiera GeoJSON</button>
+    </section>
+
+    <section>
+      <h2>SWEREF99 TM (EPSG:3006) — projicerad fyrhörning</h2>
+      <p class="tip" style="margin:0 0 8px;">
+        WGS84-rektangeln blir ett <strong>parallellogram</strong> i SWEREF99 (lat/lon-meridianer
+        är inte parallella med 3006-grid). De 4 hörnen nedan visar parallellogrammet.
+      </p>
+      <div class="row"><label>SW</label><span id="v-sw3006" class="val">—</span></div>
+      <div class="row"><label>SE</label><span id="v-se3006" class="val">—</span></div>
+      <div class="row"><label>NE</label><span id="v-ne3006" class="val">—</span></div>
+      <div class="row"><label>NW</label><span id="v-nw3006" class="val">—</span></div>
+    </section>
+
+    <section>
+      <h2>Minsta omslutande SWEREF99-rektangel</h2>
+      <p class="tip" style="margin:0 0 8px;">
+        Axis-aligned bbox runt parallellogrammet (= vad <code>_to_nmd_grid</code> returnerar
+        när den anropas med WGS84-rektangeln). Snäppt utåt till 10 m NMD-grid.
+      </p>
+      <div class="row"><label>West (m)</label><span id="v-w3006" class="val">—</span></div>
+      <div class="row"><label>South (m)</label><span id="v-s3006" class="val">—</span></div>
+      <div class="row"><label>East (m)</label><span id="v-e3006" class="val">—</span></div>
+      <div class="row"><label>North (m)</label><span id="v-n3006" class="val">—</span></div>
+      <div class="row"><label>Storlek</label><span id="v-3006-size" class="val">—</span></div>
+      <div class="row"><label>Utvidgning</label><span id="v-3006-overhead" class="val">—</span></div>
+      <pre id="out-3006-py">—</pre>
+      <button id="copy-3006">Kopiera EPSG:3006-dict</button>
+    </section>
+
+    <section>
+      <h2>Snabbval</h2>
+      <button class="secondary" data-bbox="11.55,58.10,11.75,58.20">Stigfjorden (nuvarande)</button>
+      <button class="secondary" data-bbox="11.10,58.02,11.81,58.27">Stigfjorden + Skagerrak (v1)</button>
+      <button class="secondary" data-bbox="11.00,57.30,12.50,58.50">Hela Kattegatt</button>
+    </section>
+
+    <section>
+      <h2>Tips</h2>
+      <p class="tip">
+        Verktyget i kartans övre vänstra hörn ritar en rektangel. Dra på kartan; värden uppdateras direkt.
+        Efter att en rektangel finns kan du dra dess hörn för att finjustera. Storleken visas i projicerade
+        meter vid bbox-centrum (ungefärligt) — användbart om du vill matcha en specifik dashboard-frame-aspekt.
+      </p>
+    </section>
+  </aside>
+</main>
+
+<script>
+// SWEREF99 TM (EPSG:3006) — used in NMD 10 m grid + by ImintEngine.
+// proj4js definition (from https://epsg.io/3006).
+proj4.defs(
+  'EPSG:3006',
+  '+proj=utm +lat_0=0 +lon_0=15 +k=0.9996 +x_0=500000 +y_0=0 ' +
+  '+ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs'
+);
+const TO_3006 = proj4('EPSG:4326', 'EPSG:3006');
+
+/**
+ * Project a WGS84 axis-aligned rectangle to its smallest fully-enclosing
+ * SWEREF99 TM (EPSG:3006) axis-aligned rectangle. The projected 4 corners
+ * form a parallelogram in 3006; the returned rectangle is the bbox of that
+ * parallelogram, snapped outward to the 10 m NMD grid (multiples of 10 m).
+ *
+ * Mirrors `imint.fetch._to_nmd_grid()` (which uses rasterio.warp.transform_bounds
+ * + 10 m grid snap) so the output here is byte-exact what the backend will
+ * request from DES openEO.
+ *
+ * Returns: { corners3006: [[x,y]×4], bbox3006: {west,south,east,north},
+ *            sizeMeters: {ew,ns}, overheadKmSq: number }
+ */
+function wgs84RectToSwerefEnclosing(west, south, east, north) {
+  // The 4 corners of the WGS84 axis-aligned rectangle.
+  const wgs = {
+    sw: [west, south], se: [east, south],
+    ne: [east, north], nw: [west, north],
+  };
+  const p = {};
+  for (const [k, v] of Object.entries(wgs)) p[k] = TO_3006.forward(v);
+
+  // Bbox of the 4 projected points = circumscribing rectangle of the parallelogram
+  const xs = Object.values(p).map(([x]) => x);
+  const ys = Object.values(p).map(([, y]) => y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+
+  // Snap OUTWARD to 10 m NMD grid so output is a clean grid-aligned bbox.
+  const W3 = Math.floor(minX / 10) * 10;
+  const E3 = Math.ceil(maxX  / 10) * 10;
+  const S3 = Math.floor(minY / 10) * 10;
+  const N3 = Math.ceil(maxY  / 10) * 10;
+
+  // How much extra area does the bbox contain vs the parallelogram?
+  // Shoelace formula on the 4 projected corners (ordered SW → SE → NE → NW).
+  const pts = [p.sw, p.se, p.ne, p.nw];
+  let shoelace = 0;
+  for (let i = 0; i < 4; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % 4];
+    shoelace += x1 * y2 - x2 * y1;
+  }
+  const shoelaceArea = Math.abs(shoelace) / 2;
+  const bboxArea = (E3 - W3) * (N3 - S3);
+  const overheadKmSq = (bboxArea - shoelaceArea) / 1e6;
+
+  return {
+    corners3006: { sw: p.sw, se: p.se, ne: p.ne, nw: p.nw },
+    bbox3006: { west: W3, south: S3, east: E3, north: N3 },
+    sizeMeters: { ew: E3 - W3, ns: N3 - S3 },
+    overheadKmSq,
+  };
+}
+
+const map = L.map('map').setView([58.15, 11.65], 9);
+
+const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap', maxZoom: 19,
+});
+const sat = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  { attribution: 'Esri World Imagery', maxZoom: 19 }
+);
+osm.addTo(map);
+L.control.layers({ 'OpenStreetMap': osm, 'Esri Satellit': sat }).addTo(map);
+
+const drawn = new L.FeatureGroup().addTo(map);
+
+const drawControl = new L.Control.Draw({
+  draw: {
+    rectangle: { shapeOptions: { color: '#1f6feb', weight: 2 } },
+    polygon: false, polyline: false, circle: false,
+    circlemarker: false, marker: false,
+  },
+  edit: { featureGroup: drawn, remove: true },
+});
+map.addControl(drawControl);
+
+function updateReadout(bounds) {
+  const west = bounds.getWest();
+  const south = bounds.getSouth();
+  const east = bounds.getEast();
+  const north = bounds.getNorth();
+  const cLat = (south + north) / 2;
+  const cLon = (west + east) / 2;
+  const wKm = (east - west) * 111.32 * Math.cos(cLat * Math.PI / 180);
+  const hKm = (north - south) * 111.32;
+
+  const f = n => n.toFixed(4);
+  document.getElementById('v-west').textContent = f(west);
+  document.getElementById('v-south').textContent = f(south);
+  document.getElementById('v-east').textContent = f(east);
+  document.getElementById('v-north').textContent = f(north);
+  document.getElementById('v-center').textContent = `${f(cLat)}, ${f(cLon)}`;
+  document.getElementById('v-size').textContent = `${wKm.toFixed(1)} km × ${hKm.toFixed(1)} km`;
+  document.getElementById('v-aspect').textContent = `${(wKm / hKm).toFixed(3)}:1`;
+
+  const py = `COORDS = {\n    "west":  ${f(west)},\n    "south": ${f(south)},\n    "east":  ${f(east)},\n    "north": ${f(north)},\n}`;
+  const json = JSON.stringify(
+    { west, south, east, north,
+      center: { lat: cLat, lon: cLon },
+      size_km: { east_west: +wKm.toFixed(2), north_south: +hKm.toFixed(2) } },
+    null, 2);
+  const geojson = JSON.stringify({
+    type: 'Feature',
+    properties: { name: 'bbox_picker', created: new Date().toISOString() },
+    geometry: {
+      type: 'Polygon',
+      coordinates: [[
+        [west, south], [east, south], [east, north], [west, north], [west, south]
+      ]]
+    }
+  }, null, 2);
+
+  document.getElementById('out-py').textContent = py;
+  document.getElementById('out-json').textContent = json;
+  document.getElementById('out-geojson').textContent = geojson;
+
+  // SWEREF99 TM (EPSG:3006) projection — show the parallelogram + enclosing rect
+  const sw3006 = wgs84RectToSwerefEnclosing(west, south, east, north);
+  const fmtCoord = ([x, y]) => `${x.toFixed(0)}, ${y.toFixed(0)}`;
+  document.getElementById('v-sw3006').textContent = fmtCoord(sw3006.corners3006.sw);
+  document.getElementById('v-se3006').textContent = fmtCoord(sw3006.corners3006.se);
+  document.getElementById('v-ne3006').textContent = fmtCoord(sw3006.corners3006.ne);
+  document.getElementById('v-nw3006').textContent = fmtCoord(sw3006.corners3006.nw);
+  document.getElementById('v-w3006').textContent = sw3006.bbox3006.west.toString();
+  document.getElementById('v-s3006').textContent = sw3006.bbox3006.south.toString();
+  document.getElementById('v-e3006').textContent = sw3006.bbox3006.east.toString();
+  document.getElementById('v-n3006').textContent = sw3006.bbox3006.north.toString();
+  document.getElementById('v-3006-size').textContent =
+    `${(sw3006.sizeMeters.ew/1000).toFixed(2)} km × ${(sw3006.sizeMeters.ns/1000).toFixed(2)} km`;
+  document.getElementById('v-3006-overhead').textContent =
+    `+${sw3006.overheadKmSq.toFixed(2)} km² (kil-area utanför parallellogrammet)`;
+
+  const py3006 =
+`# Direkt EPSG:3006 axis-aligned bbox (skickas till DES openEO som
+# spatial_extent med crs="EPSG:3006" — bypass _to_nmd_grid). Detta är
+# byte-exakt vad _to_nmd_grid producerar från WGS84-rektangeln ovan.
+COORDS_3006 = {
+    "west":  ${sw3006.bbox3006.west},
+    "south": ${sw3006.bbox3006.south},
+    "east":  ${sw3006.bbox3006.east},
+    "north": ${sw3006.bbox3006.north},
+    "crs":   "EPSG:3006",
+}`;
+  document.getElementById('out-3006-py').textContent = py3006;
+}
+
+function setBbox(west, south, east, north) {
+  drawn.clearLayers();
+  const rect = L.rectangle(
+    [[south, west], [north, east]],
+    { color: '#1f6feb', weight: 2 }
+  );
+  drawn.addLayer(rect);
+  map.fitBounds(rect.getBounds(), { padding: [40, 40] });
+  updateReadout(rect.getBounds());
+}
+
+map.on(L.Draw.Event.CREATED, (e) => {
+  drawn.clearLayers();
+  drawn.addLayer(e.layer);
+  updateReadout(e.layer.getBounds());
+});
+map.on(L.Draw.Event.EDITED, (e) => {
+  e.layers.eachLayer(l => updateReadout(l.getBounds()));
+});
+
+function copyText(id, btn) {
+  const text = document.getElementById(id).textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.classList.add('copy-flash');
+    const orig = btn.textContent;
+    btn.textContent = 'Kopierat ✓';
+    setTimeout(() => { btn.classList.remove('copy-flash'); btn.textContent = orig; }, 900);
+  });
+}
+document.getElementById('copy-py').addEventListener('click', e => copyText('out-py', e.target));
+document.getElementById('copy-json').addEventListener('click', e => copyText('out-json', e.target));
+document.getElementById('copy-geojson').addEventListener('click', e => copyText('out-geojson', e.target));
+document.getElementById('copy-3006').addEventListener('click', e => copyText('out-3006-py', e.target));
+
+document.querySelectorAll('button[data-bbox]').forEach(b => {
+  b.addEventListener('click', () => {
+    const [w, s, e, n] = b.dataset.bbox.split(',').map(Number);
+    setBbox(w, s, e, n);
+  });
+});
+
+// Pre-populate with the current Stigfjorden bbox so the user can see what's there now
+setBbox(11.55, 58.10, 11.75, 58.20);
+</script>
+
+</body>
+</html>

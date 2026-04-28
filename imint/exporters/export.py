@@ -1769,3 +1769,89 @@ def save_coastline_geojson(
     years = sorted(shorelines_per_year.keys())
     print(f"    saved: {path} ({n_lines} lines, years {years[0]}–{years[-1]})")
     return path
+
+
+# ---------------------------------------------------------------------- #
+#  Water quality (Sentinel-2) exporters
+# ---------------------------------------------------------------------- #
+
+def save_water_quality_png(
+    array: np.ndarray,
+    path: str,
+    cmap_name: str = "viridis",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    log_scale: bool = False,
+) -> str:
+    """Save a water-quality raster as an RGBA PNG with NaN→transparent.
+
+    Designed for the WaterQualityAnalyzer outputs (chlorophyll-a, TSS,
+    CDOM, NDCI, MCI, spread). NaN pixels — typically land, cloud,
+    or out-of-AOI — render as fully transparent so the layer can overlay
+    a true-color background in the showcase dashboard.
+
+    Args:
+        array: (H, W) float32 with NaN over invalid pixels.
+        path: Output PNG path.
+        cmap_name: Matplotlib colormap. Suggestions: ``viridis`` for
+            chlorophyll-a, ``cividis`` for TSS, ``copper`` for CDOM,
+            ``RdBu_r`` for NDCI, ``magma`` for the inter-method spread.
+        vmin, vmax: Stretch range. Defaults to the 2nd / 98th percentile
+            of finite values.
+        log_scale: Apply log10(1 + x) before normalisation. Useful for
+            chlorophyll-a in eutrophic regimes.
+
+    Returns:
+        The output file path.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+
+    arr = array.astype(np.float32)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        # Empty raster — write a fully transparent PNG so the dashboard layer is silent
+        rgba = np.zeros((arr.shape[0], arr.shape[1], 4), dtype=np.uint8)
+        Image.fromarray(rgba, mode="RGBA").save(path)
+        print(f"    saved: {path} (empty / all NaN)")
+        return path
+
+    if log_scale:
+        arr = np.log10(np.where(arr > 0, arr, np.nan) + 1.0)
+        finite = arr[np.isfinite(arr)]
+
+    if vmin is None:
+        vmin = float(np.percentile(finite, 2))
+    if vmax is None:
+        vmax = float(np.percentile(finite, 98))
+    if vmax <= vmin:
+        vmax = vmin + 1e-6
+
+    norm = (arr - vmin) / (vmax - vmin)
+    norm = np.where(np.isfinite(norm), norm.clip(0, 1), 0.0)
+
+    cmap = cm.get_cmap(cmap_name)
+    rgba = (cmap(norm) * 255).astype(np.uint8)
+    # Alpha: 0 over NaN, 255 over valid
+    valid = np.isfinite(arr)
+    rgba[..., 3] = np.where(valid, 255, 0).astype(np.uint8)
+
+    Image.fromarray(rgba, mode="RGBA").save(path)
+    print(f"    saved: {path}")
+    return path
+
+
+def save_water_mask_png(mask: np.ndarray, path: str) -> str:
+    """Save a binary water mask as an RGBA PNG (water=opaque blue, land=transparent)."""
+    import matplotlib
+    matplotlib.use("Agg")
+
+    H, W = mask.shape
+    rgba = np.zeros((H, W, 4), dtype=np.uint8)
+    is_water = (mask > 0)
+    # Soft cyan-blue water tint
+    rgba[is_water] = [0, 119, 190, 140]
+    Image.fromarray(rgba, mode="RGBA").save(path)
+    print(f"    saved: {path}")
+    return path

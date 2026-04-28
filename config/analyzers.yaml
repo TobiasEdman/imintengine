@@ -49,3 +49,26 @@ insar:
   temporal_coherence_threshold: 0.7
   # ifg_dir: /path/to/interferograms  # Required for velocity/timeseries modes
   # reference_point: [59.33, 18.07]   # Stable reference (lat, lon)
+
+water_quality:
+  # Sentinel-2 water quality retrieval (Stigfjorden + Skagerrak).
+  # Combines two AI methods (MDN, C2RCC) with two classical indices (NDCI, MCI).
+  # Outputs: chlorophyll-a / TSS / aCDOM / NDCI / MCI / chlorophyll spread + summary.json.
+  enabled: false            # Disabled by default — enable per-job via executor or showcase script
+  methods:
+    mdn:
+      enabled: true
+      # First-run download URL for the Pahlevan MDN weight bundle.
+      # Cache: ~/.cache/imint/mdn/. Repository: github.com/STREAM-RS/Mixture-Density-Networks
+      # Pin to a specific release tag once verified.
+      weights_url: null     # e.g. "https://github.com/STREAM-RS/Mixture-Density-Networks/releases/download/v1.0/mdn_pahlevan_2022_s2.pt"
+    c2rcc:
+      enabled: true         # Requires `pip install acolite` (skip-and-warn if absent)
+    ndci:
+      enabled: true
+    mci:
+      enabled: true
+  # Hand-drawn polygon (~1.5:1 landscape, projected EPSG:3006) covering Stigfjorden,
+  # waters off Mollösund/Käringön, and ~30 km offshore into Skagerrak.
+  aoi_geojson: imint/analyzers/water_quality/aoi/stigfjorden_skagerrak.geojson
+  bloom_threshold_chl: 5.0  # mg/m³, used for summary.json bloom-area statistics only

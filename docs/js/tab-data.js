@@ -122,6 +122,48 @@ var LEGENDS = {
     entropy: [
         {color:'#FFFFB2',label:'Låg (säker)'},{color:'#FD8D3C',label:'Medel'},
         {color:'#BD0026',label:'Hög (osäker)'}
+    ],
+    chl: [
+        {color:'#440154',label:'Låg (~0.5 mg/m³)'},
+        {color:'#3b528b',label:'Måttlig (~2 mg/m³)'},
+        {color:'#21918c',label:'Förhöjd (~5 mg/m³)'},
+        {color:'#5ec962',label:'Blomning (~15 mg/m³)'},
+        {color:'#fde725',label:'Hög blomning (>25 mg/m³)'}
+    ],
+    sigma: [
+        {color:'#ffffff',label:'Låg osäkerhet'},
+        {color:'#999999',label:'Medel'},
+        {color:'#000000',label:'Hög osäkerhet'}
+    ],
+    tss: [
+        {color:'#00224e',label:'Klart vatten (<2 g/m³)'},
+        {color:'#5d508a',label:'Lätt grumligt'},
+        {color:'#a36e85',label:'Grumligt'},
+        {color:'#ee7e58',label:'Sediment­plym (>20 g/m³)'},
+        {color:'#fff494',label:'Mycket högt'}
+    ],
+    cdom: [
+        {color:'#000000',label:'Lågt CDOM (<0.5 m⁻¹)'},
+        {color:'#73450f',label:'Måttligt'},
+        {color:'#c47e16',label:'Förhöjt'},
+        {color:'#ffe491',label:'Mycket högt (>2 m⁻¹)'}
+    ],
+    ndci: [
+        {color:'#67001f',label:'-0.2 (klart vatten)'},
+        {color:'#f7f7f7',label:'0.0'},
+        {color:'#053061',label:'+0.6 (klorofyll)'}
+    ],
+    mci: [
+        {color:'#000004',label:'-0.02 (klart)'},
+        {color:'#721f81',label:'0'},
+        {color:'#ed6925',label:'+0.04 (förhöjd)'},
+        {color:'#fcffa4',label:'+0.08 (blomning)'}
+    ],
+    spread: [
+        {color:'#000004',label:'Metoder överens'},
+        {color:'#721f81',label:'Liten skillnad'},
+        {color:'#ed6925',label:'Tydlig skillnad'},
+        {color:'#fcffa4',label:'Stor oenighet'}
     ]
 };
 
@@ -406,5 +448,52 @@ var TAB_CONFIG = {
         hasBgToggle: false,
         hasCharts: true,
         chartSectionTitle: 'Labelkvalitet per klass'
+    },
+
+    water_quality: {
+        title: 'Vattenkvalitet — Stigfjorden & Mollösund',
+        summary: [
+            {title:'AOI',                value:'Stigfjorden + Mollösund', detail:'+ nearshore Skagerrak, 24.25 × 9.93 km'},
+            {title:'Sensor &amp; passage',value:'Sentinel-2B',             detail:'2026-04-08 10:30:19 UTC, single pass'},
+            {title:'Metoder',            value:'4 parallella retrievals',  detail:'MDN + C2RCC (C2X-Nets) + NDCI + MCI'},
+            {title:'Frame­proportion',    value:'2.442:1 landskap',         detail:'EPSG:3006 axis-aligned, 10 m NMD-grid'}
+        ],
+        intro: 'Sentinel-2 vattenkvalitetsanalys för Bohuslän­kusten — Stigfjorden mellan Tjörn och Orust, vattnen utanför Mollösund och Käringön samt nära-Skagerrak. April-blomningens kiselalge­signal (<em>Skeletonema costatum</em>, <em>Chaetoceros</em>) syns som klorofyll­strimmor i kustvattnen. <strong>Fyra retrievals körs parallellt utan fusion</strong>: två neurala (Pahlevan MDN för klorofyll-a och ESA C2RCC C2X-Nets för chl/TSM/CDOM via SNAP 13) och två klassiska rödedge-index (NDCI, MCI). All data är från <strong>en enda S2B-passage 2026-04-08 10:30:19 UTC</strong> — ingen mosaik mellan dagar eller satelliter. Inom passet mosaikas dock T32VPK + T33VUE (UTM-zon 32 + 33) eftersom det är samma fysiska observation. L2A-data kommer från DES openEO (snäv temporal-extent för att blockera 10:40:41-passet); L1C SAFE-arkiv från <a href="https://console.cloud.google.com/storage/browser/gcp-public-data-sentinel-2" target="_blank">Google Clouds publika bucket</a>. Färgskalan på klorofyll-panelerna är <strong>fast pinnad till 0.5–25 mg/m³</strong> så legenden gäller över olika scener. Inspirations­bild: Sentinel-2 L2A True color 2026-04-08 (digitalearth.se).',
+        // Panels are the 9 retrievals we have real 2026-04-08 data for. Three
+        // additional MDN products (uncertainty, TSS, aCDOM) require the upstream
+        // benchmarks/tss/SOLID variants of MDN with different weights and are
+        // deferred to v2.
+        panels: [
+            {id:'wq-rgb',                 key:'rgb',                title:'Sentinel-2 RGB',                  legend:null},
+            {id:'wq-water-mask',          key:'water_mask',         title:'Vattenmask (SCL)',                legend:null},
+            {id:'wq-chl-mdn',             key:'chl_mdn',            title:'Klorofyll-a (MDN, mg/m³)',         legend:'chl'},
+            {id:'wq-chl-c2rcc',           key:'chl_c2rcc',          title:'Klorofyll-a (C2RCC, mg/m³)',       legend:'chl'},
+            {id:'wq-tsm-c2rcc',           key:'tsm_c2rcc',          title:'TSM (C2RCC, g/m³)',                legend:'tss'},
+            {id:'wq-cdom-c2rcc',          key:'cdom_c2rcc',         title:'CDOM (C2RCC, m⁻¹)',               legend:'cdom'},
+            {id:'wq-ndci',                key:'ndci',               title:'NDCI (klorofyllindex)',            legend:'ndci'},
+            {id:'wq-mci',                 key:'mci',                title:'MCI (klorofyllindex)',             legend:'mci'},
+            {id:'wq-spread',              key:'chl_spread',         title:'Metoders oenighet (log₁₀ Chl-a)',  legend:'spread'}
+        ],
+        // Relative paths from docs/index.html. Outputs live at
+        // outputs/showcase/water_quality/<year>/ (dev) and are mirrored to
+        // docs/showcase/water_quality/<year>/ (dashboard).
+        images: {
+            'wq-rgb':         'showcase/water_quality/2026/rgb.png',
+            'wq-water-mask':  'showcase/water_quality/2026/water_mask.png',
+            'wq-chl-mdn':     'showcase/water_quality/2026/chlorophyll_a_mdn.png',
+            'wq-chl-c2rcc':   'showcase/water_quality/2026/chlorophyll_a_c2rcc.png',
+            'wq-tsm-c2rcc':   'showcase/water_quality/2026/tsm_c2rcc.png',
+            'wq-cdom-c2rcc':  'showcase/water_quality/2026/cdom_c2rcc.png',
+            'wq-ndci':        'showcase/water_quality/2026/ndci.png',
+            'wq-mci':         'showcase/water_quality/2026/mci.png',
+            'wq-spread':      'showcase/water_quality/2026/chlorophyll_spread.png'
+        },
+        // 2.442:1 landscape ratio matches AOI v4 (24.25 × 9.93 km in EPSG:3006).
+        // v4 (2026-04-28): WGS84 rectangle solved iteratively so transform_bounds
+        // produces a clean axis-aligned 3006 rectangle — no parallelogram tilt,
+        // no wedge gaps, _to_nmd_grid retained throughout the pipeline.
+        imgH: 360, imgW: 880,
+        hasBgToggle: false,
+        years: [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
     }
 };

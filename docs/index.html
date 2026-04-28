@@ -28,6 +28,7 @@
             <a href="#" class="theme-tab" data-tab="marine">⚓ Marin</a>
             <a href="#" class="theme-tab" data-tab="grazing">🐄 Betesmark</a>
             <a href="#" class="theme-tab" data-tab="kust">🌊 Kust</a>
+            <a href="#" class="theme-tab" data-tab="water_quality">💧 Vattenkvalitet</a>
             <!-- LULC tab hidden — moved to training dashboard on M1 Max -->
             <!-- <a href="#" class="theme-tab" data-tab="lulc">🌲 LULC</a> -->
         </div>
@@ -386,6 +387,86 @@
         <div class="section-header"><h2>Labelkvalitet per klass</h2></div>
     </div>
     -->
+
+    <!-- ── Water Quality tab — Stigfjorden + Skagerrak ─────────────────── -->
+    <div class="tab-content" id="tab-water_quality">
+        <div class="tab-dynamic"></div>
+        <div class="tab-description">
+
+            <h3>Sentinel-2 RGB — Satellitbilden</h3>
+            <p>
+                Sentinel-2 RGB visar Bohuslän­kusten med Stigfjorden mellan Tjörn och Orust, vattnen utanför Mollösund och Käringön, samt en del av öppen Skagerrak. Vårblomningens klorofyll­strimmor syns tydligt som ljusare gröna virvlar i vattnet — april-bloomen domineras av kiselalger (diatoméer), främst <em>Skeletonema costatum</em> och <em>Chaetoceros</em>-arter. Bilden är komponerad från B04 (röd, 665 nm), B03 (grön, 560 nm), och B02 (blå, 490 nm) med 2:a/98:e-percentil-stretch för synlig kontrast.
+                <br><em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2" target="_blank">ESA Sentinel-2</a> · Inspirations­bild: <a href="https://digitalearth.se/" target="_blank">digitalearth.se</a> 2026-04-08 · Bloom-fenologi: <a href="https://www.smhi.se/en/research/research-departments/oceanography/marine-environmental-monitoring" target="_blank">SMHI BAWS</a></em>
+            </p>
+
+            <h3>Single-pass-disciplin: en passage, en sensor</h3>
+            <p>
+                Alla retrievals i denna analys kommer från <strong>en enda Sentinel-2-passage: S2B kl 10:30:19 UTC den 8 april 2026</strong>. Vi blandar inte data från olika dagar eller från S2A:s parallella passage 10 minuter senare (10:40:41 UTC). Anledningen är att klorofyllblom­nings­dynamik kan röra sig flera kilometer per timme i ytvatten — att mosaika över olika tidpunkter introducerar artefakter som ser ut som verkliga gradienter. Däremot mosaikar vi <em>inom samma passage</em> två angränsande MGRS-rutor (T32VPK + T33VUE, båda S2B 10:30:19) eftersom det är samma fysiska observation, bara delad mellan UTM-zon 32 och 33.
+                <br><em>Disciplin etablerad i denna analys 2026-04-28; detaljer i <a href="des_l1c_bug_report.md" target="_blank">DES L1C bug-rapport</a> och <a href="../SPEC.md" target="_blank">SPEC.md</a>.</em>
+            </p>
+
+            <h3>NDCI — Normalized Difference Chlorophyll Index</h3>
+            <p>
+                <code>NDCI = (B05 − B04) / (B05 + B04)</code>. Klassiskt rödedge/röd-kontrastindex som ökar med klorofyll-a-absorption vid 665 nm relativt rödedge-reflektansen vid 705 nm. B05 (705 nm) är det första rödedge-bandet på Sentinel-2 och fångar reflektans­toppen som blir högre vid förhöjt klorofyll. Robust för öppna kustvatten, tolerant mot atmosfäriska variationer. Värden nära noll i klart vatten, positiva värden upp mot ~0.6 indikerar förhöjt klorofyll. Beräknas på L2A yt­reflektans (Sen2Cor) och färgskalan i vår dashboard är fast: −0.2 (klart vatten) → +0.6 (kraftig blomning).
+                <br><em>Källa: Mishra, S. &amp; Mishra, D.R., 2012. "Normalized difference chlorophyll index: A novel model for remote estimation of chlorophyll-a concentration in turbid productive waters." Remote Sensing of Environment 117: 394–406.</em>
+            </p>
+
+            <h3>MCI — Maximum Chlorophyll Index</h3>
+            <p>
+                <code>MCI = B05 − B04 − 0.389·(B06 − B04)</code>. Mäter höjden på 705 nm-reflektans­toppen över en linjär baslinje dragen från B04 (665 nm) till B06 (740 nm). Originellt designad för MERIS:s 709 nm-band av Gower et al. (2005); porterad till Sentinel-2 av Binding et al. (2013) med koefficienten 0.389 anpassad för MSI-bandcentra. Kompletterar NDCI: MCI är mer känslig för måttligt höga klorofyll­halter (5–25 mg/m³) där NDCI börjar mätta. Färgskalan i dashboarden är fast: −0.02 (klart) → +0.08 (blomning).
+                <br><em>Källa: Gower, J., King, S., Borstad, G. &amp; Brown, L., 2005. "Detection of intense plankton blooms using the 709 nm band of the MERIS imaging spectrometer." Int. J. Remote Sensing 26: 2005–2012. Sentinel-2-anpassning: Binding et al., 2013.</em>
+            </p>
+
+            <h3>MDN — Mixture Density Network (Pahlevan et al.)</h3>
+            <p>
+                Förtränat neuralt nätverk från NASA/USGS Pahlevan-gruppen som returnerar klorofyll-a (mg/m³) direkt i fysikaliska enheter genom inversion av Rrs-spektrumet. Tränat globalt på SeaBASS in-situ-matchups och designat speciellt för Sentinel-2 i optiskt komplext (Case-2) kustvatten. MSI-modellen använder 7 band: B01 (443 nm, kustaerosol), B02 (490), B03 (560), B04 (665), B05 (705), B06 (740), B07 (783). I denna analys kör vi modellen via upstream-paketet <code>BrandonSmithJ/MDN</code> (TensorFlow 2.13/Keras 2.13) på de L2A yt­reflektans­värden som DES levererar (efter division med π för att gå från ρ till Rrs). Färgskalan är fast på <strong>0.5–25 mg/m³ (log10-skala)</strong> så att samma färg betyder samma koncentration över olika scener — legenden visar 5 fasta nivåer (Låg / Måttlig / Förhöjd / Blomning / Hög blomning).
+                <br><em>Källa: Pahlevan, N. et al., 2020. "Seamless retrievals of chlorophyll-a from Sentinel-2 (MSI) and Sentinel-3 (OLCI) in inland and coastal waters." Remote Sensing of Environment 240: 111604. Implementation: <a href="https://github.com/BrandonSmithJ/MDN" target="_blank">github.com/BrandonSmithJ/MDN</a></em>
+            </p>
+
+            <h3>C2RCC — Case 2 Regional Coast Colour</h3>
+            <p>
+                ESA:s neurala nätverk för optiskt komplexa vatten (Case-2). Inverserar inneboende optiska egenskaper (IOPs) ur water-leaving reflectance: <code>iop_apig</code> (klorofyllpigment­absorption vid 443 nm, m⁻¹), <code>iop_agelb</code> (gelbstoff/CDOM-absorption, m⁻¹), <code>iop_bpart</code> + <code>iop_bwit</code> (partikel- och vit-partikel­spridning). Klorofyll-a beräknas via Brockmanns standardrelation <code>chl = iop_apig<sup>1.04</sup> · 21.0</code>; TSM via <code>tsm = 1.72·iop_bpart + 3.1·iop_bwit</code>; CDOM rapporteras direkt som <code>iop_agelb</code>. Vi kör <code>c2rcc.msi</code>-operatorn via <strong>SNAP 13 i en custom-byggd Docker-image</strong> (FROM eclipse-temurin:11-jdk + ESA:s officiella Linux-installer + S2-toolbox + s3tbx.c2rcc-plugin) direkt på L1C TOA-data som hämtas som SAFE-arkiv från <a href="https://console.cloud.google.com/storage/browser/gcp-public-data-sentinel-2" target="_blank">Google Clouds publika Sentinel-2-bucket</a> (anonym, gratis, full SAFE-arkitektur). SNAP-grafen är <code>Read → Resample(referenceBand=B2) → Subset(2 km buffrad WGS84-polygon) → c2rcc.msi → Write(BEAM-DIMAP)</code>.
+            </p>
+            <p>
+                Vi använder <code>netSet=C2X-Nets</code> (Case-2 eXtreme) i stället för default <code>C2RCC-Nets</code> eftersom Bohusläns vatten har betydligt högre CDOM/gelbstoff­halter än vad default-NN är tränad för. Default-NN klampar då alla pixlar utanför sin tränings­range till en konstant "NN-floor"-output (apig = 0.000298 m⁻¹), vilket ger 65 % land + 19 % NN-floor + 16 % riktiga retrievals. Med C2X-Nets blir fördelningen 59 % land + <strong>1.8 % NN-floor + 38.8 % riktiga retrievals</strong> — 2.5× fler giltiga pixlar och 10× lägre falsk-positiv-andel. Vi filtrerar också manuellt bort pixlar med <code>iop_apig &lt; 0.001</code> (NN-floor-rest) som NaN.
+                <br><em>Källa: Brockmann, C. et al., 2016. "Evolution of the C2RCC Neural Network for Sentinel 2 and 3 for the Retrieval of Ocean Colour Products in Normal and Extreme Optically Complex Waters." ESA Living Planet Symposium. SNAP: <a href="https://step.esa.int/main/download/snap-download/" target="_blank">step.esa.int</a></em>
+            </p>
+
+            <h3>Metoders oenighet — log10-spread</h3>
+            <p>
+                Skillnads­kartan visar <code>std(log10(MDN_chl), log10(C2RCC_chl))</code> per pixel (begränsad till pixlar där båda metoder gett valid retrieval). Höga värden = metoderna är oense; låga värden = de pekar på samma koncentration. Spridning &gt; 0.7 (≈ 5× faktor­skillnad) indikerar att lokala vattentypsförhållanden ligger på kanten av minst en av metodernas tränings­range — typiskt vid fjord­mynningar (där MDN ser sediment som klorofyll) eller vid mycket klart vatten (där C2X-Nets är osäker). Färgskalan: 0 (perfekt enighet) → 2.0 (100× faktor­skillnad).
+            </p>
+
+            <h3>Bottnar &amp; grunda vatten — flagga, inte blomning</h3>
+            <p>
+                Optisk satellit­fjärranalys över grunt vatten (&lt; ~5 m djup) lider av <em>botten­reflektans­interferens</em>: ljus reflekterat från sandbottnar, sjögräs eller hällar når sensorn och blandas med vatten­leaving-signalen. Både MDN och NDCI/MCI tolkar då bright-bottom-pixlar som klorofyllrika när de i själva verket är optiskt grunda. I denna analys flaggar vi pixlar närmare än <strong>50 m till strand</strong> (via <code>scipy.ndimage.distance_transform_edt</code> på vattenmasken) <em>och</em> med klorofyll &gt; 5 mg/m³ som botten­påverkade — de NaN-maskeras i alla chl-paneler. Empiriskt: 96.7 % av pixlarna som skulle klassats "Hög blomning" innan filtret låg närmare än 100 m strand, vs 25 % förväntat om blomningar var rumsligt jämnt fördelade.
+                <br><em>För riktig 5 m-isobath skulle vi behöva sjökortsdata (S-57 DEPARE) eller EMODnet bathymetri — distance-to-shore är en pragmatisk approximation tills den infrastrukturen är på plats.</em>
+            </p>
+
+            <h3>Vattenmask — SCL band 6 + envelop-clip</h3>
+            <p>
+                Sentinel-2:s Scene Classification Layer (SCL, 20 m native, näst-grannresampling till 10 m) används som primär vattenmask: klass 6 = öppet vatten, klass 7 = oklassificerat (kan vara grunt vatten). Moln (klass 8/9), cirrus (10) och molnskuggor (3) exkluderas. Vid avsaknad av SCL faller masken tillbaka på <code>MNDWI = (B03 − B11) / (B03 + B11) &gt; 0</code> enligt Xu (2006). AOI-maskeringen i analyzern använder envelop (axis-aligned bbox) av den projicerade polygonen i data-CRS — INTE polygonen själv — för att matcha det <code>_to_nmd_grid</code> begär från DES openEO. Att använda polygonen direkt skulle NaN-clippa hörn­wedges som fetchen redan korrekt levererat, eftersom en WGS84-rektangel projiceras till ett parallellogram i SWEREF99 TM (3°-tilt p.g.a. att lat/lon-meridianer inte är parallella med projektionsgridden).
+            </p>
+
+            <h3>Pipeline-översikt — från RAW till PNG</h3>
+            <p>
+                <strong>L2A-sidan (NDCI / MCI / MDN / RGB / vattenmask):</strong>
+                DES openEO levererar L2A yt­reflektans (Sen2Cor) i EPSG:3006 NMD 10 m-grid med <code>temporal_extent</code> snävt satt så att bara S2B 10:30:19-passet ingår (annars mosaikar DES servern över bägge dagliga passar). Hämtas via <code>imint.fetch.fetch_des_data()</code> med vår patchade <code>_unpack_openeo_gtiff_bytes</code>-helper som hanterar DES gzip+tar-svar.
+            </p>
+            <p>
+                <strong>L1C-sidan (C2RCC):</strong>
+                SAFE-arkiven (T32VPK + T33VUE, båda S2B 10:30:19) hämtas från Google Clouds publika bucket via <code>imint.fetch.fetch_l1c_safe_from_gcp()</code> (DES openEO returnerar all-nodata för L1C på grund av en server-side bug, se separat rapport). SNAP c2rcc.msi körs på varje SAFE separat i Docker, output i UTM 32N respektive UTM 33N. Båda outputs reprojiceras till EPSG:3006-grid med första-valid-pixel-mosaik i Python.
+            </p>
+            <p>
+                <strong>Rendering:</strong>
+                Alla rasters klipps till AOI v4-rektangeln (24.25 × 9.93 km, EPSG:3006 axis-aligned), läggs över RGB-bakgrund, och renderas som RGBA-PNGs med fasta färgskalor (vmin/vmax pinnade så legend matchar koncentrationer över scener). Frame-aspekten 2.442:1 landskap matchar AOI:n.
+            </p>
+            <p class="tip" style="margin-top:8px;">
+                Total körtid för en hel scen: L2A-fetch ~105 s, MDN-inferens ~17 s, c2rcc per SAFE ~3–10 min (x86-emulering på Apple Silicon — 3× snabbare på native amd64), mosaik + render ~5 s. Total ≈ 7–22 min beroende på hardware.
+            </p>
+
+        </div>
+    </div>
 
     <div class="footer">
         IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB

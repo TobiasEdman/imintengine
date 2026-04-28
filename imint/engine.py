@@ -24,6 +24,7 @@ from .analyzers.marine_vessels import MarineVesselAnalyzer
 from .analyzers.vegetation_edge import VegetationEdgeAnalyzer
 from .analyzers.samgeo import SAMGeoAnalyzer
 from .analyzers.insar import InSARAnalyzer
+from .analyzers.water_quality import WaterQualityAnalyzer
 from .exporters.export import (
     save_rgb_png, save_change_overlay, save_ndvi_colormap,
     save_regions_geojson, save_geotiff, save_summary_report,
@@ -51,6 +52,7 @@ ANALYZER_REGISTRY = {
     "vegetation_edge": VegetationEdgeAnalyzer,
     "samgeo": SAMGeoAnalyzer,
     "insar": InSARAnalyzer,
+    "water_quality": WaterQualityAnalyzer,
 }
 
 
