@@ -69,7 +69,7 @@ spec:
               .venv/bin/python scripts/generate_sr_showcase.py \
                 --date "${SR_DATE:-2026-04-20}" \
                 --date-window 5 \
-                --models bicubic sen2sr \
+                --models bicubic sen2sr ldsr \
                 --device cuda
 
               # Persist outputs to the showcase PVC so they outlive the pod.

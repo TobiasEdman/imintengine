@@ -47,11 +47,9 @@ PRIMARY_DATE = "2025-07-15"
 
 # Default model set — order controls grid layout (left→right, top→bottom).
 # DiffFuSR and SR4RS dropped: no installable open weights as of 2026-04.
-# LDSR temporarily off-by-default: 1.13 GB checkpoint + diffusion latents
-# OOM on 11 GB 2080ti when run on the full 936×654 LR tile. Re-enable
-# with --models bicubic sen2sr ldsr once tiled inference is wired up
-# (see imint/analyzers/sr/ldsr.py TODO).
-DEFAULT_MODELS = ["bicubic", "sen2sr"]
+# LDSR uses chunked inference (128×128 LR patches with Hann blend) so it
+# fits comfortably on a 2080ti — see imint/analyzers/sr/ldsr.py.
+DEFAULT_MODELS = ["bicubic", "sen2sr", "ldsr"]
 
 
 def _build_grid(
