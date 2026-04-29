@@ -45,6 +45,12 @@ class SEN2SR(BaseSRModel):
         self._device = self.config.get("device", "cuda")
         self._hf_url = self.config.get("hf_url", self.DEFAULT_HF_URL)
         self._cache_dir = Path(self.config.get("cache_dir", self.DEFAULT_CACHE_DIR))
+        # Same chunked-inference pattern as LDSR. SEN2SRLite was trained
+        # on 128×128 input and crashes with CUDA "index out of bounds"
+        # when fed the full ~900×600 LR tile in one shot — internal
+        # shape assumptions get violated. Chunked + Hann-blended.
+        self._chunk_lr = int(self.config.get("chunk_lr", 128))
+        self._overlap_lr = int(self.config.get("overlap_lr", 16))
 
     def _load(self) -> None:
         import torch
@@ -59,21 +65,56 @@ class SEN2SR(BaseSRModel):
             device=self._device
         )
 
-    def _predict(self, rgb_lr: np.ndarray) -> np.ndarray:
+    def _hann2d(self, n: int) -> np.ndarray:
+        w = np.hanning(n).astype(np.float32)
+        w = np.clip(w, 1e-3, 1.0)
+        return np.outer(w, w)
+
+    def _forward_chunk(self, rgb_chunk: np.ndarray) -> np.ndarray:
+        """Run SEN2SRLite on a single 128×128 RGB chunk → 512×512 SR."""
         torch = self._torch
-        # SEN2SRLite expects 4 channels (R, G, B, NIR). For an RGB-only
-        # showcase we duplicate the green band as a NIR proxy — not
-        # physically correct but keeps the model's input signature happy
-        # without requiring a separate B08 fetch. The output's NIR
-        # channel is discarded; only RGB is returned.
-        h, w, _ = rgb_lr.shape
+        h, w, _ = rgb_chunk.shape
         x4 = np.empty((4, h, w), dtype=np.float32)
-        x4[0] = rgb_lr[..., 0]                 # R
-        x4[1] = rgb_lr[..., 1]                 # G
-        x4[2] = rgb_lr[..., 2]                 # B
-        x4[3] = rgb_lr[..., 1]                 # NIR proxy (G)
+        x4[0] = rgb_chunk[..., 0]                 # R
+        x4[1] = rgb_chunk[..., 1]                 # G
+        x4[2] = rgb_chunk[..., 2]                 # B
+        x4[3] = rgb_chunk[..., 1]                 # NIR proxy (G)
         x = torch.from_numpy(x4).to(self._device)
         with torch.no_grad():
-            y = self._model(x[None]).squeeze(0)  # (4, H*4, W*4)
-        rgb_sr = y[:3].permute(1, 2, 0).cpu().numpy()
-        return rgb_sr
+            y = self._model(x[None]).squeeze(0)
+        return y[:3].permute(1, 2, 0).cpu().numpy()
+
+    def _predict(self, rgb_lr: np.ndarray) -> np.ndarray:
+        H, W, _ = rgb_lr.shape
+        c = self._chunk_lr
+        ov = self._overlap_lr
+        stride = c - ov
+        s = self.scale
+
+        pad_h = (-H) % stride or 0
+        pad_w = (-W) % stride or 0
+        if pad_h or pad_w:
+            rgb = np.pad(rgb_lr, ((0, pad_h), (0, pad_w), (0, 0)), mode="reflect")
+        else:
+            rgb = rgb_lr
+        Hp, Wp, _ = rgb.shape
+
+        sr_canvas = np.zeros((Hp * s, Wp * s, 3), dtype=np.float32)
+        wt_canvas = np.zeros((Hp * s, Wp * s), dtype=np.float32)
+        win = self._hann2d(c * s)
+
+        ys = list(range(0, max(1, Hp - c) + 1, stride))
+        xs = list(range(0, max(1, Wp - c) + 1, stride))
+        if ys[-1] + c < Hp: ys.append(Hp - c)
+        if xs[-1] + c < Wp: xs.append(Wp - c)
+
+        for y0 in ys:
+            for x0 in xs:
+                chunk = rgb[y0:y0 + c, x0:x0 + c]
+                sr_chunk = self._forward_chunk(chunk)
+                sy0, sx0 = y0 * s, x0 * s
+                sr_canvas[sy0:sy0 + c * s, sx0:sx0 + c * s] += sr_chunk * win[..., None]
+                wt_canvas[sy0:sy0 + c * s, sx0:sx0 + c * s] += win
+
+        sr_canvas /= wt_canvas[..., None]
+        return sr_canvas[: H * s, : W * s]
