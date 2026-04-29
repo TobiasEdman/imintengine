@@ -193,7 +193,7 @@
 
             var map = L.map(panel.id, {
                 crs: L.CRS.Simple,
-                minZoom: -2,
+                minZoom: -5,
                 maxZoom: 5,
                 attributionControl: false,
                 zoomSnap: 0.25
@@ -330,12 +330,18 @@
                 document.querySelectorAll('.tab-content').forEach(function(tc) {
                     tc.classList.toggle('active', tc.id === 'tab-' + target);
                 });
-                setTimeout(function() {
-                    Object.values(allMaps).forEach(function(m) {
-                        m.invalidateSize();
-                        if (m._imgBounds) m.fitBounds(m._imgBounds);
-                    });
-                }, 50);
+                // Two-stage refit: 50ms catches the simple case, 350ms
+                // catches tabs whose maps were initialized while hidden
+                // (display:none → 0×0 container → fitBounds clamped). The
+                // late refit recomputes from the now-laid-out container.
+                [50, 350].forEach(function(delay) {
+                    setTimeout(function() {
+                        Object.values(allMaps).forEach(function(m) {
+                            m.invalidateSize();
+                            if (m._imgBounds) m.fitBounds(m._imgBounds);
+                        });
+                    }, delay);
+                });
             });
         });
     }

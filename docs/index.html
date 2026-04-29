@@ -29,6 +29,7 @@
             <a href="#" class="theme-tab" data-tab="grazing">🐄 Betesmark</a>
             <a href="#" class="theme-tab" data-tab="kust">🌊 Kust</a>
             <a href="#" class="theme-tab" data-tab="water_quality">💧 Vattenkvalitet</a>
+            <a href="#" class="theme-tab" data-tab="sr">🔬 Superresolution</a>
             <!-- LULC tab hidden — moved to training dashboard on M1 Max -->
             <!-- <a href="#" class="theme-tab" data-tab="lulc">🌲 LULC</a> -->
         </div>
@@ -468,6 +469,38 @@
         </div>
     </div>
 
+    <!-- ── Superresolution tab — open SR models side-by-side ─────────────── -->
+    <div class="tab-content" id="tab-sr">
+        <div class="tab-dynamic"></div>
+        <div class="tab-description">
+
+            <h3>Vad visas?</h3>
+            <p>
+                Fem öppna super­resolutions­modeller körda på <strong>samma Sentinel-2 RGB-tile över central Stockholm</strong> (B02/B03/B04, 10 m). Varje modell uppskalar 4× till 2,5 m. Bicubic är referens­golvet — allt en lärd modell måste slå för att vara värd compute.
+            </p>
+
+            <h3>Modeller</h3>
+            <ul>
+                <li><strong>Bicubic</strong> — interpolation, ingen prior, ingen detalj uppfunnen.</li>
+                <li><strong>SEN2SR</strong> (ESA OpenSR, 2025) — CNN med <em>radio­metrisk hard-constraint</em>: <code>bicubic(SR(x)) ≡ x</code>. Faithful detail.</li>
+                <li><strong>LDSR-S2</strong> (ESA OpenSR, 2025) — latent diffusion, vinner LPIPS men förlorar PSNR.</li>
+                <li><strong>DiffFuSR</strong> (arXiv 2506.11764, 2025) — bästa publicerade hallucination-score (0,1149 på opensr-test).</li>
+                <li><strong>SR4RS</strong> (Cresson, 2022) — GAN utan radio­metriska garantier; visar vad hallucination ser ut som.</li>
+            </ul>
+
+            <h3>Det fysikaliska taket</h3>
+            <p>
+                Forsknings­konvergens (SISR, MISR, RefSR, diffusion) landar på <strong>~2,5 m faithful GSD</strong> som taket från en S2-scen. Bortom det börjar modell­prior uppfinna textur som inte motsvarar marken. Sentinel-2:s MTF vid Nyquist är 0,15–0,30 för 10 m-band — 10 m-bandet är redan undersamplat mot optikens PSF, så återhämtningsbar detalj från en enskild L2A-scen ligger fundamentalt vid 3–5 m. "1 m S2-produkter" som S2DR3 levererar visuellt övertygande bilder där detaljerna är genererade av modellen, inte återhämtade från sensorn.
+            </p>
+
+            <h3>Hur visualiseringen byggs</h3>
+            <p>
+                <code>scripts/generate_sr_showcase.py</code> hämtar en L2A-tile via CDSE, kör varje modell i <code>imint.analyzers.sr</code>, sparar per-modell-PNG och en sammanställd jämförelse-grid. K8s-jobb <code>k8s/sr-showcase-job.yaml</code> kör hela pipen på cluster-default GPU (RTX 2080 Ti). Modeller som saknar dependencies eller checkpoints rapporteras tydligt i <code>summary.json</code> och hoppas över utan att haverera resten.
+            </p>
+
+        </div>
+    </div>
+
     <div class="footer">
         IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB
         &middot; CC0 1.0 Universal &middot; Genererad 2018-07-24 / 2025-07-10 / 2025-06-14 / 2025-06-14
@@ -585,8 +618,8 @@
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js"></script>
-    <script src="js/app.js"></script>
+    <script src="js/tab-data.js?v=3"></script>
+    <script src="js/app.js?v=3"></script>
     <script>
     // Auto-resize parent iframe (for digitalearth.se/case/ embedding)
     if (window.parent !== window) {

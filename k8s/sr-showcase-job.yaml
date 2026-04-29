@@ -1,0 +1,119 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sr-showcase
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600  # 1h hard kill; showcase runs in minutes
+  template:
+    metadata:
+      labels:
+        app: sr-showcase
+    spec:
+      initContainers:
+        - name: setup
+          image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -ex
+              apt-get update && apt-get install -y --no-install-recommends \
+                python3.11 python3.11-venv python3-pip \
+                libgdal30 git
+              update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+              git clone --depth 1 https://github.com/TobiasEdman/imintengine.git /app
+
+              cd /app
+              python3 -m venv .venv
+              .venv/bin/pip install --no-cache-dir \
+                torch --index-url https://download.pytorch.org/whl/cu124
+              .venv/bin/pip install --no-cache-dir -r requirements.txt
+              # SR-specific deps. Each is best-effort: if a wheel is
+              # missing the wrapper raises a clean error and the
+              # showcase skips that model rather than failing the job.
+              .venv/bin/pip install --no-cache-dir \
+                opensr-utils opensr-model opensr-test || true
+
+              echo "Setup complete."
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          volumeMounts:
+            - name: app
+              mountPath: /app
+      containers:
+        - name: showcase
+          image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -ex
+              apt-get update && apt-get install -y --no-install-recommends \
+                python3.11 libgdal30
+              update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+              cd /app
+
+              .venv/bin/python scripts/generate_sr_showcase.py \
+                --date "${SR_DATE:-2025-07-15}" \
+                --models bicubic sen2sr ldsr difffusr sr4rs \
+                --device cuda
+
+              # Persist outputs to the showcase PVC so they outlive the pod.
+              mkdir -p /showcase-out/sr
+              cp -r outputs/showcase/sr/. /showcase-out/sr/
+          env:
+            - name: SR_DATE
+              value: "2025-07-15"
+            - name: CDSE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: username
+                  optional: true
+            - name: CDSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: app
+              mountPath: /app
+            - name: showcase-out
+              mountPath: /showcase-out
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: app
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
+        - name: showcase-out
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+      restartPolicy: Never
+      # Project default cluster GPU is 2080ti — omit nodeSelector to use it.
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule

@@ -52,3 +52,14 @@ httpx>=0.27,<1   # used by /analyze callback hook + by tests
 # SLA telemetry (W4.5). Optional — telemetry module is fail-open when
 # this isn't installed; metrics endpoint still serves a placeholder.
 prometheus-client>=0.20,<1
+
+# Super-resolution showcase (imint/analyzers/sr/). Optional in dev —
+# each wrapper raises a clear error if its package is missing, so the
+# showcase still renders the models that are available. Pinned loose
+# until the ESA OpenSR stack stabilises on PyPI.
+# - opensr-utils:  production wrapper (sliding-window, edge-blend)
+# - opensr-model:  LDSR-S2 latent diffusion
+# - opensr-test:   benchmark (consistency / synthesis / hallucination)
+opensr-utils; extra == "sr"
+opensr-model; extra == "sr"
+opensr-test;  extra == "sr"

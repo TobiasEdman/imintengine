@@ -495,5 +495,45 @@ var TAB_CONFIG = {
         imgH: 360, imgW: 880,
         hasBgToggle: false,
         years: [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+    },
+
+    sr: {
+        title: 'Superresolution — Stockholm 4×',
+        summary: [
+            {title:'AOI',           value:'Central Stockholm', detail:'Söder · Gamla Stan · Norrmalm · Östermalm · Djurgården'},
+            {title:'Faktor',        value:'4×',                detail:'10 m → 2,5 m, alla modeller'},
+            {title:'Modeller',      value:'5 öppna',           detail:'Bicubic + SEN2SR + LDSR + DiffFuSR + SR4RS'},
+            {title:'Faithful tak',  value:'~2,5 m',            detail:'S2 MTF/PSF — bortom det är detalj genererad'}
+        ],
+        intro: 'Samma Sentinel-2 RGB-tile (B02/B03/B04) körs genom fem öppna super­resolutions­modeller. SEN2SR och LDSR-S2 är ESA OpenSR-stacken; DiffFuSR är 2025 års state-of-the-art på opensr-test hallucination-metric; SR4RS är en äldre GAN-baseline inkluderad för att visa hur hallucination ser ut. Bicubic är golvet. Forskningen pekar entydigt på <strong>~2,5 m som det fysikaliska taket</strong> för faithful detail från en enskild S2-scen — bortom det börjar modeller uppfinna textur. Showcasens syfte är att illustrera vad de olika metoderna faktiskt levererar på samma input, inte att rangordna en vinnare.',
+        // Panel ids prefixed `sr-` so app.js's prefix lookup (`sr-rgb`) resolves
+        // every model panel's background to the LR tile. The opacity slider
+        // (built into every panel header) then fades the SR overlay in/out
+        // against the LR baseline — exactly the comparison gesture this
+        // showcase exists for. The LR panel itself uses key='rgb' so the
+        // initMaps special-case loads its own image as the bg.
+        panels: [
+            {id:'sr-rgb',       key:'rgb',      title:'Sentinel-2 RGB (10 m, LR-original)',     legend:null},
+            {id:'sr-bicubic',   key:'bicubic',  title:'Bicubic (4× interpolation)',              legend:null},
+            {id:'sr-sen2sr',    key:'sen2sr',   title:'SEN2SR — CNN, radiometrisk constraint',   legend:null},
+            {id:'sr-ldsr',      key:'ldsr',     title:'LDSR-S2 — latent diffusion',              legend:null},
+            {id:'sr-difffusr',  key:'difffusr', title:'DiffFuSR — two-stage diffusion',          legend:null},
+            {id:'sr-sr4rs',     key:'sr4rs',    title:'SR4RS — GAN baseline',                    legend:null},
+            {id:'sr-grid',      key:'grid',     title:'Sammanställd jämförelse',                 legend:null}
+        ],
+        images: {
+            'sr-rgb':      'showcase/sr/rgb_lr.png',
+            'sr-bicubic':  'showcase/sr/bicubic.png',
+            'sr-sen2sr':   'showcase/sr/sen2sr.png',
+            'sr-ldsr':     'showcase/sr/ldsr.png',
+            'sr-difffusr': 'showcase/sr/difffusr.png',
+            'sr-sr4rs':    'showcase/sr/sr4rs.png',
+            'sr-grid':     'showcase/sr/grid.png'
+        },
+        // BBOX aspect 905:608 → 1.488 portrait. Use a small magnitude so
+        // fitBounds picks a reasonable zoom even if the container measured
+        // 0×0 during init (which clamps fitBounds via _getBoundsZoom).
+        imgH: 500, imgW: 336,
+        hasBgToggle: false
     }
 };
