@@ -75,18 +75,16 @@ spec:
           env:
             - name: SR_DATE
               value: "2026-04-20"
-            - name: CDSE_USERNAME
+            - name: DES_USER
               valueFrom:
                 secretKeyRef:
-                  name: cdse-credentials
-                  key: username
-                  optional: true
-            - name: CDSE_PASSWORD
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: cdse-credentials
+                  name: des-credentials
                   key: password
-                  optional: true
           resources:
             requests:
               cpu: "4"
