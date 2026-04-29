@@ -269,6 +269,129 @@ def enrich_one_tile(tile_path: str, gt, skip_existing: bool = True) -> dict:
     }
 
 
+class _LRUCacheGuard(threading.Thread):
+    """Background LRU eviction for the embeddings cache.
+
+    Why this exists
+    ---------------
+    geotessera caches downloaded embedding tiles persistently in
+    ``embeddings_dir``. Without bounding it, the cache grew to 146 GB
+    on /data/tessera_cache during the 2026-04-28 run and filled the
+    500 GB cephfs PVC, killing 2863 tile fetches mid-run with
+    ``Errno 122 Disk quota exceeded``.
+
+    The earlier ``--purge-cache-after-each`` solved the symptom in the
+    wrong place: every worker invoked a full os.walk after every tile,
+    racing other workers mid-download and triggering re-downloads when
+    adjacent tiles shared a block. A background sweep with mtime-based
+    recency protection is race-free and amortises the walk cost.
+
+    Algorithm
+    ---------
+    Every ``sweep_interval_s`` seconds:
+      1. Walk ``embeddings_dir`` once.
+      2. Skip files matching ``.*_tmp_*`` (in-flight downloads — see
+         registry.py download_file_to_temp atomic-rename pattern).
+      3. Skip files with mtime within ``recency_grace_s`` (a worker
+         may be reading them via np.load).
+      4. If total size > ``soft_gb``, sort eligible files by mtime
+         ascending and delete oldest until total <= ``soft_gb * 0.8``.
+
+    Race-freeness
+    -------------
+    geotessera's read pattern is: ``registry.fetch()`` returns path,
+    caller calls ``np.load(path)``. The np.load + dequantize cycle
+    completes in ≪ 30 s, so a 30 s recency grace is sufficient to
+    guarantee no in-progress reader has the file open when we delete.
+    The tmp-prefix skip protects active downloads (which can take
+    minutes for a 600 MB block on a slow CDN).
+
+    A deleted block on the next call falls through to the
+    ``not local_path.exists()`` branch in registry.fetch() and is
+    re-downloaded — no in-process state breaks. Verified by reading
+    geotessera/registry.py:1099-1103 (commit 2026-04 main).
+    """
+
+    _TMP_FRAGMENTS = ("_tmp_",)  # registry's atomic-rename prefix
+
+    def __init__(
+        self,
+        embeddings_dir: str,
+        soft_gb: float,
+        sweep_interval_s: float = 30.0,
+        recency_grace_s: float = 30.0,
+        log: bool = True,
+    ):
+        super().__init__(daemon=True, name="lru-cache-guard")
+        self.embeddings_dir = embeddings_dir
+        self.soft_bytes = int(soft_gb * 1e9)
+        self.target_bytes = int(soft_gb * 0.8 * 1e9)
+        self.sweep_interval_s = sweep_interval_s
+        self.recency_grace_s = recency_grace_s
+        self.log = log
+        self._stop = threading.Event()
+        self.evictions_total = 0
+        self.bytes_freed_total = 0
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def run(self) -> None:
+        while not self._stop.wait(self.sweep_interval_s):
+            try:
+                self._sweep_once()
+            except Exception as e:
+                # Never let the guard crash the job — log and retry next sweep.
+                if self.log:
+                    print(f"  [lru-guard] sweep error: {e}", flush=True)
+
+    def _sweep_once(self) -> None:
+        now = time.time()
+        candidates: list[tuple[float, int, str]] = []
+        total = 0
+        for root, _dirs, files in os.walk(self.embeddings_dir):
+            for fn in files:
+                if any(frag in fn for frag in self._TMP_FRAGMENTS):
+                    continue
+                fp = os.path.join(root, fn)
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                total += st.st_size
+                if now - st.st_mtime < self.recency_grace_s:
+                    continue
+                candidates.append((st.st_mtime, st.st_size, fp))
+
+        if total <= self.soft_bytes:
+            return
+
+        candidates.sort()  # oldest mtime first
+        to_free = total - self.target_bytes
+        freed = 0
+        evicted = 0
+        for _mtime, size, fp in candidates:
+            if freed >= to_free:
+                break
+            try:
+                os.remove(fp)
+                freed += size
+                evicted += 1
+            except OSError:
+                continue
+
+        self.evictions_total += evicted
+        self.bytes_freed_total += freed
+        if self.log and evicted:
+            print(
+                f"  [lru-guard] evicted {evicted} files, freed "
+                f"{freed/1e9:.1f} GB ({total/1e9:.1f} → "
+                f"{(total - freed)/1e9:.1f} GB; cap "
+                f"{self.soft_bytes/1e9:.0f} GB)",
+                flush=True,
+            )
+
+
 def main():
     p = argparse.ArgumentParser(description="Enrich tiles with TESSERA embeddings")
     p.add_argument("--data-dir", required=True)
@@ -283,10 +406,14 @@ def main():
                         "ephemeral pod disk within a few tiles.")
     p.add_argument("--registry-cache-dir", default="/data/tessera_cache/registry",
                    help="Where geotessera stores its parquet registry metadata.")
-    p.add_argument("--purge-cache-after-each", action="store_true",
-                   help="Delete downloaded embedding tiles after baking them "
-                        "into our .npz, to cap disk usage. Costs re-downloads "
-                        "if neighboring tiles share a TESSERA source tile.")
+    p.add_argument(
+        "--cache-soft-gb", type=float, default=20.0,
+        help="LRU cache soft cap in GB. A background thread evicts oldest "
+             "embedding-tile files (mtime > 30 s, no _tmp_ prefix) when "
+             "the cache exceeds this. Default 20 GB ≈ 2× expected working "
+             "set for 4 workers. Replaces the pre-2026-04-29 "
+             "--purge-cache-after-each which raced workers mid-download.",
+    )
     args = p.parse_args()
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
@@ -297,6 +424,7 @@ def main():
     print(f"  Workers: {args.workers}")
     print(f"  Embeddings cache: {args.embeddings_dir}")
     print(f"  Registry cache:   {args.registry_cache_dir}")
+    print(f"  Cache soft cap:   {args.cache_soft_gb:.0f} GB (LRU eviction)")
 
     # One-time GeoTessera init — heavy (registry parquet load) so we
     # do it once and share across workers. GeoTessera itself is
@@ -310,6 +438,27 @@ def main():
     )
     print(f"  GeoTessera initialized")
 
+    # Disk-preflight: bail early if the cache directory is on a volume
+    # without enough headroom for the soft cap. Saves a 30-min run that
+    # would crash mid-fetch with Errno 122 like the 2026-04-28 attempt.
+    import shutil as _shutil
+    free_gb = _shutil.disk_usage(args.embeddings_dir).free / 1e9
+    needed_gb = args.cache_soft_gb * 1.2
+    if free_gb < needed_gb:
+        print(
+            f"  [preflight] WARNING: only {free_gb:.1f} GB free on cache "
+            f"volume, soft cap is {args.cache_soft_gb:.0f} GB "
+            f"(need {needed_gb:.1f} GB headroom). Continuing — LRU guard "
+            f"will keep usage bounded, but a smaller --cache-soft-gb may "
+            f"be safer."
+        )
+
+    guard = _LRUCacheGuard(
+        args.embeddings_dir,
+        soft_gb=args.cache_soft_gb,
+    )
+    guard.start()
+
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     lock = threading.Lock()
     completed = 0
@@ -318,23 +467,6 @@ def main():
     def _run(path):
         nonlocal completed
         r = enrich_one_tile(path, gt, skip_existing=args.skip_existing)
-        if args.purge_cache_after_each and r.get("status") == "ok":
-            # Wipe the embeddings dir — keep registry cache intact.
-            # Conservative: only purge files older than 60s to avoid
-            # racing other workers mid-download.
-            try:
-                import shutil, time as _t
-                now = _t.time()
-                for root, dirs, files in os.walk(args.embeddings_dir):
-                    for fn in files:
-                        fp = os.path.join(root, fn)
-                        try:
-                            if now - os.path.getmtime(fp) > 60:
-                                os.remove(fp)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
         with lock:
             completed += 1
             stats[r.get("status", "failed")] = stats.get(r.get("status", "failed"), 0) + 1
@@ -351,17 +483,25 @@ def main():
             print(f"  [{completed}/{len(tiles)}] {r['name']}: {r['status']}"
                   f"{extra_s} | {rate:.0f}/h", flush=True)
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futs = {pool.submit(_run, t): t for t in tiles}
-        for f in as_completed(futs):
-            try:
-                f.result()
-            except Exception as e:
-                print(f"  Error: {e}")
+    try:
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futs = {pool.submit(_run, t): t for t in tiles}
+            for f in as_completed(futs):
+                try:
+                    f.result()
+                except Exception as e:
+                    print(f"  Error: {e}")
+    finally:
+        guard.stop()
+        guard.join(timeout=2 * guard.sweep_interval_s)
 
     elapsed = time.time() - t0
     print(f"\n=== Done in {elapsed/60:.1f} min ===")
     print(f"  OK={stats['ok']}  Skipped={stats['skipped']}  Failed={stats['failed']}")
+    print(
+        f"  LRU guard: {guard.evictions_total} files evicted, "
+        f"{guard.bytes_freed_total/1e9:.1f} GB freed total"
+    )
 
 
 if __name__ == "__main__":
