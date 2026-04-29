@@ -1,0 +1,100 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-labels-256-repair
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: build-missing-labels-step2
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: b
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Build labels for 256 tiles missing label (Step 2) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj pyarrow geopandas shapely
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # Extract tile IDs needing label rebuild from the post-repair
+              # audit. The audit was written to the cephfs PVC; reference
+              # data (NMD, LPIS, SKS) ALSO lives there. Both PVCs are
+              # mounted (training-data at /data, cephfs at /data-cephfs).
+              echo ""
+              echo "Extracting tile-ids missing 'label' from audit JSON..."
+              python3 - <<'PY'
+              import json
+              with open("/data-cephfs/debug/audit_2026-04-29.json") as f:
+                  audit = json.load(f)
+              ids = []
+              for sig, names in audit["unified_v2"]["missing_keys"].items():
+                  if "label" in sig.split(","):
+                      ids.extend(n.replace(".npz", "") for n in names)
+              print(f"Tiles missing label: {len(ids)}")
+              with open("/tmp/tile_ids.txt", "w") as f:
+                  f.write("\n".join(ids))
+              PY
+
+              ID_COUNT=$(wc -l < /tmp/tile_ids.txt)
+              echo "Will build labels for $ID_COUNT tiles"
+
+              # Convert newline list → space-separated args
+              # (limit-safe: 1435 ids × ~25 chars ≈ 36 KB, well under ARG_MAX)
+              python scripts/build_labels.py \
+                --data-dir /data/unified_v2 \
+                --nmd-raster /data-cephfs/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
+                --lpis-dir /data-cephfs/lpis \
+                --sks-dir /data-cephfs/sks \
+                --workers 8 \
+                --executor thread \
+                --tile-ids $(cat /tmp/tile_ids.txt | tr '\n' ' ')
+
+              echo ""
+              echo "=== Done: $(date) ==="
+              df -h /data | tail -1
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: training-data-cephfs
+              mountPath: /data-cephfs
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: training-data-cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
