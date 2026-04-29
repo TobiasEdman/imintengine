@@ -4,7 +4,15 @@ API verified against https://github.com/ESAOpenSR/SEN2SR README:
 
     pip install sen2sr mlstac
     import mlstac
-    model = mlstac.load("model/SEN2SRLite").compiled_model(device=device)
+
+    # Two-step load: download from HuggingFace into a local cache dir,
+    # then load via the local path. mlstac.load() does NOT accept URLs.
+    mlstac.download(
+        file="https://huggingface.co/tacofoundation/sen2sr/"
+             "resolve/main/SEN2SRLite/main/mlm.json",
+        output_dir=local_dir,
+    )
+    model = mlstac.load(local_dir).compiled_model(device=device)
     superX = model(X[None]).squeeze(0)   # X: (4, H, W) float32 [0,1]
 
 SEN2SRLite is the lightweight 4× variant; the full model has additional
@@ -15,6 +23,7 @@ Consistent Super-Resolution Framework for Sentinel-2", RSE.
 """
 from __future__ import annotations
 
+from pathlib import Path
 import numpy as np
 
 from .base import BaseSRModel
@@ -24,18 +33,29 @@ class SEN2SR(BaseSRModel):
     name = "sen2sr"
     scale = 4
 
+    DEFAULT_HF_URL = (
+        "https://huggingface.co/tacofoundation/sen2sr/"
+        "resolve/main/SEN2SRLite/main/mlm.json"
+    )
+    DEFAULT_CACHE_DIR = "outputs/sr_cache/SEN2SRLite"
+
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self._model = None
         self._device = self.config.get("device", "cuda")
-        self._mlstac_id = self.config.get("mlstac_id", "model/SEN2SRLite")
+        self._hf_url = self.config.get("hf_url", self.DEFAULT_HF_URL)
+        self._cache_dir = Path(self.config.get("cache_dir", self.DEFAULT_CACHE_DIR))
 
     def _load(self) -> None:
         import torch
         import mlstac  # type: ignore[import-not-found]
 
         self._torch = torch
-        self._model = mlstac.load(self._mlstac_id).compiled_model(
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+        # mlstac.download is idempotent — skips files already on disk.
+        if not (self._cache_dir / "mlm.json").exists():
+            mlstac.download(file=self._hf_url, output_dir=str(self._cache_dir))
+        self._model = mlstac.load(str(self._cache_dir)).compiled_model(
             device=self._device
         )
 
