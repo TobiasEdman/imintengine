@@ -46,27 +46,25 @@ class BaseSRModel(ABC):
             (H*scale, W*scale, 3) float32 in [0, 1].
         """
 
-    def predict(self, rgb_lr: np.ndarray) -> SRResult:
+    def predict(self, x: np.ndarray) -> SRResult:
         """Run SR with error capture — never raises.
 
-        Each wrapper handles its own dtype/range conversion in
-        ``_predict``. The public contract here is float32 [0,1] in,
-        float32 [0,1] out.
+        Input shape varies per model:
+          - 3-channel: (H, W, 3) RGB for bicubic / ldsr
+          - N-channel: (N, H, W) band stack for sen2sr (10 bands)
+        Wrappers validate their own input shape in ``_predict``. The
+        public output contract is always (H*scale, W*scale, 3) RGB
+        float32 in [0, 1].
         """
-        if rgb_lr.ndim != 3 or rgb_lr.shape[-1] != 3:
-            return SRResult(
-                model=self.name, success=False,
-                error=f"expected (H,W,3) got shape {rgb_lr.shape}",
-            )
         try:
             if not self._loaded:
                 self._load()
                 self._loaded = True
-            sr = self._predict(rgb_lr.astype(np.float32))
+            sr = self._predict(x.astype(np.float32))
             sr = np.clip(sr, 0.0, 1.0).astype(np.float32)
             return SRResult(
                 model=self.name, success=True, sr=sr, scale=self.scale,
-                metadata={"input_shape": rgb_lr.shape, "output_shape": sr.shape},
+                metadata={"input_shape": x.shape, "output_shape": sr.shape},
             )
         except Exception as e:
             return SRResult(

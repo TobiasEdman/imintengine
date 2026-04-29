@@ -1,22 +1,27 @@
 """SEN2SR wrapper — ESA OpenSR's radiometrically-consistent 4× SR.
 
-API verified against https://github.com/ESAOpenSR/SEN2SR README:
+API verified against https://github.com/ESAOpenSR/SEN2SR README and
+local CPU traceback debugging (see scripts/_sr_local_smoke.py):
 
     pip install sen2sr mlstac
     import mlstac
 
-    # Two-step load: download from HuggingFace into a local cache dir,
-    # then load via the local path. mlstac.load() does NOT accept URLs.
-    mlstac.download(
-        file="https://huggingface.co/tacofoundation/sen2sr/"
-             "resolve/main/SEN2SRLite/main/mlm.json",
-        output_dir=local_dir,
-    )
+    # Two-step load: download to a local cache, then load from path.
+    mlstac.download(file=HF_URL, output_dir=local_dir)
     model = mlstac.load(local_dir).compiled_model(device=device)
-    superX = model(X[None]).squeeze(0)   # X: (4, H, W) float32 [0,1]
 
-SEN2SRLite is the lightweight 4× variant; the full model has additional
-20m bands. We use Lite for the RGB-only showcase.
+    # Input: (10, H, W) float32 reflectance [0,1]
+    # Bands: [B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12]
+    # The model internally indexes [0, 1, 2, 6] → (B02, B03, B04, B08)
+    # for the RGBN reference branch.
+    superX = model(X[None]).squeeze(0)   # (10, H*4, W*4)
+
+The model returns all 10 bands super-resolved; we slice [B04, B03, B02]
+for the RGB display panel.
+
+Inference is chunked (128×128 LR patches with Hann blend) so a full
+~900×600 LR tile fits in 11 GB VRAM and avoids the size-dependent
+asserts in the model's reference branch.
 
 Reference: Aybar et al. 2025, "A Radiometrically and Spatially
 Consistent Super-Resolution Framework for Sentinel-2", RSE.
@@ -45,10 +50,6 @@ class SEN2SR(BaseSRModel):
         self._device = self.config.get("device", "cuda")
         self._hf_url = self.config.get("hf_url", self.DEFAULT_HF_URL)
         self._cache_dir = Path(self.config.get("cache_dir", self.DEFAULT_CACHE_DIR))
-        # Same chunked-inference pattern as LDSR. SEN2SRLite was trained
-        # on 128×128 input and crashes with CUDA "index out of bounds"
-        # when fed the full ~900×600 LR tile in one shot — internal
-        # shape assumptions get violated. Chunked + Hann-blended.
         self._chunk_lr = int(self.config.get("chunk_lr", 128))
         self._overlap_lr = int(self.config.get("overlap_lr", 16))
 
@@ -58,7 +59,6 @@ class SEN2SR(BaseSRModel):
 
         self._torch = torch
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        # mlstac.download is idempotent — skips files already on disk.
         if not (self._cache_dir / "mlm.json").exists():
             mlstac.download(file=self._hf_url, output_dir=str(self._cache_dir))
         self._model = mlstac.load(str(self._cache_dir)).compiled_model(
@@ -70,22 +70,26 @@ class SEN2SR(BaseSRModel):
         w = np.clip(w, 1e-3, 1.0)
         return np.outer(w, w)
 
-    def _forward_chunk(self, rgb_chunk: np.ndarray) -> np.ndarray:
-        """Run SEN2SRLite on a single 128×128 RGB chunk → 512×512 SR."""
+    def _forward_chunk(self, x10: np.ndarray) -> np.ndarray:
+        """Run SEN2SRLite on a single (10, 128, 128) chunk → (3, 512, 512)
+        RGB (B04, B03, B02 sliced from the 10-band model output)."""
         torch = self._torch
-        h, w, _ = rgb_chunk.shape
-        x4 = np.empty((4, h, w), dtype=np.float32)
-        x4[0] = rgb_chunk[..., 0]                 # R
-        x4[1] = rgb_chunk[..., 1]                 # G
-        x4[2] = rgb_chunk[..., 2]                 # B
-        x4[3] = rgb_chunk[..., 1]                 # NIR proxy (G)
-        x = torch.from_numpy(x4).to(self._device)
+        x = torch.from_numpy(x10).to(self._device)
         with torch.no_grad():
-            y = self._model(x[None]).squeeze(0)
-        return y[:3].permute(1, 2, 0).cpu().numpy()
+            y = self._model(x[None]).squeeze(0)  # (10, H*4, W*4)
+        # Slice [R=B04, G=B03, B=B02] → indices [2, 1, 0] in the band
+        # order [B02, B03, B04, ...]
+        rgb = y[[2, 1, 0]].permute(1, 2, 0).cpu().numpy()
+        return rgb
 
-    def _predict(self, rgb_lr: np.ndarray) -> np.ndarray:
-        H, W, _ = rgb_lr.shape
+    def _predict(self, x10: np.ndarray) -> np.ndarray:
+        """Input: (10, H, W). Output: (H*4, W*4, 3) RGB."""
+        if x10.ndim != 3 or x10.shape[0] != 10:
+            raise ValueError(
+                f"sen2sr expects (10, H, W) band stack; got {x10.shape}"
+            )
+
+        _, H, W = x10.shape
         c = self._chunk_lr
         ov = self._overlap_lr
         stride = c - ov
@@ -94,10 +98,12 @@ class SEN2SR(BaseSRModel):
         pad_h = (-H) % stride or 0
         pad_w = (-W) % stride or 0
         if pad_h or pad_w:
-            rgb = np.pad(rgb_lr, ((0, pad_h), (0, pad_w), (0, 0)), mode="reflect")
+            x10p = np.pad(
+                x10, ((0, 0), (0, pad_h), (0, pad_w)), mode="reflect"
+            )
         else:
-            rgb = rgb_lr
-        Hp, Wp, _ = rgb.shape
+            x10p = x10
+        _, Hp, Wp = x10p.shape
 
         sr_canvas = np.zeros((Hp * s, Wp * s, 3), dtype=np.float32)
         wt_canvas = np.zeros((Hp * s, Wp * s), dtype=np.float32)
@@ -110,10 +116,10 @@ class SEN2SR(BaseSRModel):
 
         for y0 in ys:
             for x0 in xs:
-                chunk = rgb[y0:y0 + c, x0:x0 + c]
-                sr_chunk = self._forward_chunk(chunk)
+                chunk = x10p[:, y0:y0 + c, x0:x0 + c]
+                rgb_chunk = self._forward_chunk(chunk)
                 sy0, sx0 = y0 * s, x0 * s
-                sr_canvas[sy0:sy0 + c * s, sx0:sx0 + c * s] += sr_chunk * win[..., None]
+                sr_canvas[sy0:sy0 + c * s, sx0:sx0 + c * s] += rgb_chunk * win[..., None]
                 wt_canvas[sy0:sy0 + c * s, sx0:sx0 + c * s] += win
 
         sr_canvas /= wt_canvas[..., None]

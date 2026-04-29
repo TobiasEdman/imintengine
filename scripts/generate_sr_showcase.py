@@ -162,22 +162,34 @@ def main() -> None:
         print(f"  Fetch failed: {e}")
         sys.exit(1)
 
-    # Two RGB tensors:
-    #   raw_rgb: actual L2A reflectance [0,1] for the SR models (mlstac /
-    #            opensr-model were trained on this distribution; passing
-    #            the percentile-stretched display version pushes values
-    #            out of the embedding lookup range and triggers CUDA
-    #            "index out of bounds" asserts).
-    #   rgb_lr:  percentile-stretched display version that the dashboard
-    #            shows to the user. Saved to disk + used by bicubic so
-    #            all panels share the same visual contrast envelope.
+    # Three input tensors:
+    #   raw_10b:  10-channel L2A reflectance (B02,B03,B04,B05,B06,B07,
+    #             B08,B8A,B11,B12) for SEN2SR which expects all 10
+    #             bands per its training spec.
+    #   raw_rgb:  3-channel RGB+G-as-NIR-proxy (4ch internally) for
+    #             LDSR which trained on RGBN at 10m.
+    #   rgb_lr:   percentile-stretched display version that the
+    #             dashboard shows to the user. Saved to disk + used by
+    #             bicubic so all panels share the same visual envelope.
+    #
+    # All three derive from the same DES fetch — no second network call.
     bands = fetched.bands
+    band_order = ["B02", "B03", "B04", "B05", "B06", "B07",
+                  "B08", "B8A", "B11", "B12"]
+    missing = [b for b in band_order if b not in bands]
+    if missing:
+        print(f"  WARNING: missing bands {missing} — SEN2SR will skip.")
+    raw_10b = np.stack(
+        [bands[b] for b in band_order if b in bands], axis=0
+    ).astype(np.float32) if not missing else None
     raw_rgb = np.stack(
         [bands["B04"], bands["B03"], bands["B02"]], axis=-1
     ).astype(np.float32)
     rgb_lr = fetched.rgb.astype(np.float32)
     print(f"  cloud_frac={fetched.cloud_fraction:.1%}")
     print(f"  raw refl range:    [{raw_rgb.min():.3f}, {raw_rgb.max():.3f}]")
+    if raw_10b is not None:
+        print(f"  10-band stack:     {raw_10b.shape}")
     print(f"  display rgb shape: {rgb_lr.shape}")
 
     save_rgb_png(rgb_lr, str(out_dir / "rgb_lr.png"))
@@ -206,10 +218,20 @@ def main() -> None:
 
         cls = MODEL_REGISTRY[model_id]
         model = cls(config={"device": args.device})
-        # Bicubic operates on display-stretched RGB so its output matches
-        # the LR panel's contrast exactly. Learned models need raw L2A
-        # reflectance — they were trained on that distribution.
-        model_input = rgb_lr if model_id == "bicubic" else raw_rgb
+        # Per-model input shape (verified via local CPU smoke-test):
+        #   bicubic:  display-stretched 3ch RGB (visual envelope match)
+        #   sen2sr:   raw 10-channel reflectance (B02..B12)
+        #   ldsr:     raw 3ch RGB; wrapper internally pads NIR proxy
+        if model_id == "bicubic":
+            model_input = rgb_lr
+        elif model_id == "sen2sr":
+            if raw_10b is None:
+                failures[model_id] = "missing required bands B05–B12"
+                print(f"  {model_id}: SKIP — {failures[model_id]}")
+                continue
+            model_input = raw_10b
+        else:
+            model_input = raw_rgb
         t0 = time.time()
         result = model.predict(model_input)
         dt = time.time() - t0
