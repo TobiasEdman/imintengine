@@ -191,13 +191,26 @@
             var isVector = panel.vector || false;
             if (!container || (!images[panel.id] && !isVector)) return;
 
-            var map = L.map(panel.id, {
+            // Native-zoom panels lock at zoom 0 and disable all zoom
+            // interactions (scroll, dblclick, pinch, +/- buttons). At zoom 0
+            // each bound-unit equals one screen pixel, so combined with
+            // image-rendering: pixelated the browser never bilinear- or
+            // bicubic-interpolates the image data. Pan is kept so the user
+            // can inspect different parts of the tile.
+            var mapOpts = {
                 crs: L.CRS.Simple,
-                minZoom: -5,
-                maxZoom: 5,
+                minZoom: nativeZoom ? 0 : -5,
+                maxZoom: nativeZoom ? 0 : 5,
                 attributionControl: false,
-                zoomSnap: 0.25
-            });
+                zoomSnap: 0.25,
+                zoomControl: !nativeZoom,
+                scrollWheelZoom: !nativeZoom,
+                doubleClickZoom: !nativeZoom,
+                touchZoom: !nativeZoom,
+                boxZoom: !nativeZoom,
+                keyboard: !nativeZoom,
+            };
+            var map = L.map(panel.id, mapOpts);
 
             var panelHasBg = hasBgToggle || !!panel.bgToggle;
             var prefix = panel.id.split('-')[0];
