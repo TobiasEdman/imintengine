@@ -1,0 +1,92 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-tessera-512-retry
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: tessera-512-retry-with-lru-guard
+spec:
+  backoffLimit: 1
+  # First run: 1250 OK / 2917 skipped / 2863 failed (Errno 122 disk-full).
+  # This run: skip-existing burns through 4167 in seconds, then handles
+  # the 2863 + 8 corrupt with the LRU guard keeping cache bounded.
+  # Budget: 2863 tiles × 1.5 min/tile ÷ 4 workers ≈ 18 h. 24 h cap.
+  activeDeadlineSeconds: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: e
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== TESSERA 512 retry (LRU-bounded cache) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj pyyaml geotessera
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              # Sanity-check the LRU guard fix landed
+              echo ""
+              echo "Verifying LRU guard is in cloned source:"
+              grep -n "_LRUCacheGuard" scripts/enrich_tiles_tessera.py | head -3 \
+                || { echo "LRU GUARD NOT PRESENT — abort"; exit 1; }
+
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              # Disk preflight
+              echo ""
+              echo "Disk before run:"
+              df -h /data | tail -1
+              du -sh /data/tessera_cache 2>/dev/null | tail -1
+
+              mkdir -p /data/tessera_cache/embeddings /data/tessera_cache/registry
+
+              # 4 workers — was 2 with unbounded cache; LRU guard makes
+              # higher concurrency safe. cache-soft-gb 20 ≈ 2× expected
+              # working set (4 workers × 4 blocks × 600 MB = ~10 GB peak).
+              python scripts/enrich_tiles_tessera.py \
+                --data-dir /data/unified_v2_512 \
+                --embeddings-dir /data/tessera_cache/embeddings \
+                --registry-cache-dir /data/tessera_cache/registry \
+                --workers 4 \
+                --cache-soft-gb 20 \
+                --skip-existing
+
+              echo ""
+              echo "Disk after run:"
+              df -h /data | tail -1
+              du -sh /data/tessera_cache 2>/dev/null | tail -1
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

@@ -1,0 +1,73 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: repair-256-keys
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: mechanical-key-repair-step1
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: r
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Repair 256 keys (mechanical, no fetch) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              # Sanity check: repair script is in cloned source
+              ls -la scripts/repair_tile_keys.py
+
+              # Disk before
+              echo ""
+              echo "Disk before:"
+              df -h /data | tail -1
+
+              python scripts/repair_tile_keys.py \
+                --data-dir /data/unified_v2 \
+                --workers 8 \
+                --report /data/debug/repair_256_report.json
+
+              # Disk after — repair only adds ~64 bytes per tile (a few new
+              # int64 keys), but verify nothing exploded.
+              echo ""
+              echo "Disk after:"
+              df -h /data | tail -1
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data

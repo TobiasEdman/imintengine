@@ -71,13 +71,22 @@ spec:
                 --workers 4 \
                 --skip-existing
 
-              # ── Step 3: TESSERA from local cache ─────────────────────────
+              # ── Step 3: TESSERA embeddings (LRU-bounded cache) ───────────
+              # The TESSERA cache lives on /tessera_cache → cephfs PVC, not
+              # /data → training-data PVC. The 256-tile dataset (unified_v2)
+              # is 26 GB on a 98 GiB rbd PVC — putting the 20 GB LRU cache
+              # there would risk re-running the disk-full incident.
+              # cephfs has 132+ GB free post-cleanup.
+              # --cache-soft-gb 20 + LRU guard (commit 4b75bd7) keeps usage
+              # bounded; the previous unbounded cache hit 146 GB and broke.
               echo ""
-              echo "=== Step 3: TESSERA embeddings ==="
+              echo "=== Step 3: TESSERA embeddings (LRU-bounded) ==="
               python scripts/enrich_tiles_tessera.py \
                 --data-dir /data/unified_v2 \
-                --tessera-cache /data/tessera_cache \
+                --embeddings-dir /tessera_cache/embeddings \
+                --registry-cache-dir /tessera_cache/registry \
                 --workers 4 \
+                --cache-soft-gb 20 \
                 --skip-existing
 
               echo ""
@@ -128,7 +137,15 @@ spec:
           volumeMounts:
             - name: training-data
               mountPath: /data
+            # cephfs PVC for the TESSERA embeddings cache only — kept off
+            # /data so it can't fill the 98 GiB rbd PVC that holds
+            # /data/unified_v2 (26 GB) + ~25 GB of new rededge bands.
+            - name: tessera-cache
+              mountPath: /tessera_cache
       volumes:
         - name: training-data
           persistentVolumeClaim:
             claimName: training-data
+        - name: tessera-cache
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

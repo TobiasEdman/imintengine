@@ -1,0 +1,141 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-256-provenance
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: trace-256-tile-provenance
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: a
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+
+              python3 - <<'PY'
+              import os, glob, json, re
+              from collections import defaultdict
+              import numpy as np
+
+              data_dir = "/data/unified_v2"
+              files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
+              print(f"Total tiles: {len(files)}")
+
+              # Bucket by missing-key signature, then by name prefix and mtime
+              by_sig = defaultdict(list)
+              prefix_re = re.compile(r"^(tile|crop|urban)_|^(\d+)\.npz$")
+
+              for f in files:
+                  name = os.path.basename(f)
+                  st = os.stat(f)
+                  try:
+                      with np.load(f, allow_pickle=True) as d:
+                          keys = set(d.files)
+                  except Exception as e:
+                      keys = {f"<load-error: {type(e).__name__}>"}
+                  baseline = ["spectral", "label", "easting", "northing"]
+                  missing = [k for k in baseline if k not in keys]
+                  sig = ",".join(sorted(missing)) or "complete"
+                  by_sig[sig].append({
+                      "name": name,
+                      "size_mb": st.st_size / 1e6,
+                      "mtime": st.st_mtime,
+                      "keys": sorted(keys),
+                  })
+
+              # Helpers
+              def name_kind(name):
+                  if name.startswith("tile_"): return "tile_"
+                  if name.startswith("crop_"): return "crop_"
+                  if name.startswith("urban_"): return "urban_"
+                  if re.match(r"^\d+\.npz$", name): return "numeric"
+                  return "other"
+
+              import time as _t
+              for sig in sorted(by_sig.keys(), key=lambda s: -len(by_sig[s])):
+                  bucket = by_sig[sig]
+                  print(f"\n=== signature: missing={sig!r} ({len(bucket)} tiles) ===")
+
+                  # Name kind histogram
+                  kind_counts = defaultdict(int)
+                  for t in bucket:
+                      kind_counts[name_kind(t["name"])] += 1
+                  print(f"  by name kind: {dict(kind_counts)}")
+
+                  # Size distribution
+                  sizes = [t["size_mb"] for t in bucket]
+                  sizes.sort()
+                  if sizes:
+                      print(
+                          f"  size_mb min/p25/p50/p75/max: "
+                          f"{sizes[0]:.2f} / {sizes[len(sizes)//4]:.2f} / "
+                          f"{sizes[len(sizes)//2]:.2f} / "
+                          f"{sizes[3*len(sizes)//4]:.2f} / {sizes[-1]:.2f}"
+                      )
+
+                  # Mtime distribution
+                  mtimes = sorted([t["mtime"] for t in bucket])
+                  if mtimes:
+                      print(
+                          f"  mtime oldest: {_t.strftime('%Y-%m-%d', _t.gmtime(mtimes[0]))}  "
+                          f"newest: {_t.strftime('%Y-%m-%d', _t.gmtime(mtimes[-1]))}"
+                      )
+
+                  # Show what keys ARE present in 3 samples
+                  for t in bucket[:3]:
+                      print(f"  example {t['name']} ({t['size_mb']:.2f} MB):")
+                      print(f"    keys present: {t['keys'][:15]}")
+                      if len(t['keys']) > 15:
+                          print(f"    ... ({len(t['keys']) - 15} more)")
+
+              # Cross-check: do any of these 256 names exist as 512 tiles?
+              # If yes, the 256 was a stub created during cookie-cut that
+              # never got the spectral baked in.
+              files_512 = set(
+                  os.path.basename(f)
+                  for f in glob.glob("/data512/unified_v2_512/*.npz")
+              )
+              print(f"\n=== cross-check 256 names vs 512 names ===")
+              for sig in sorted(by_sig.keys(), key=lambda s: -len(by_sig[s])):
+                  if sig == "complete":
+                      continue
+                  bucket = by_sig[sig]
+                  also_in_512 = sum(1 for t in bucket if t["name"] in files_512)
+                  print(f"  sig={sig!r}: {also_in_512}/{len(bucket)} also exist in 512")
+              PY
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: data256
+              mountPath: /data
+            - name: data512
+              mountPath: /data512
+      volumes:
+        - name: data256
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: data512
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
