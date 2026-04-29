@@ -1,0 +1,105 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-tiles-integrity
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: post-disk-fail-integrity-audit
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: a
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+
+              python3 - <<'PY'
+              import os, glob, json, zipfile
+              import numpy as np
+
+              def audit_dir(data_dir, expected_keys):
+                  print(f"\n=== {data_dir} ===")
+                  out = {"corrupt": [], "missing_keys": {}, "complete": 0, "total": 0}
+                  files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
+                  out["total"] = len(files)
+                  print(f"Files: {len(files)}")
+                  for i, f in enumerate(files):
+                      if i and i % 1000 == 0:
+                          print(f"  ... {i}/{len(files)}", flush=True)
+                      name = os.path.basename(f)
+                      try:
+                          with np.load(f, allow_pickle=True) as d:
+                              keys = set(d.files)
+                      except (zipfile.BadZipFile, EOFError, OSError, ValueError) as e:
+                          out["corrupt"].append({"name": name, "err": f"{type(e).__name__}: {str(e)[:120]}"})
+                          continue
+                      missing = [k for k in expected_keys if k not in keys]
+                      if missing:
+                          sig = ",".join(sorted(missing))
+                          out["missing_keys"].setdefault(sig, []).append(name)
+                      else:
+                          out["complete"] += 1
+                  return out
+
+              r256 = audit_dir(
+                  "/data256/unified_v2",
+                  ["spectral", "label", "easting", "northing"],
+              )
+              r512 = audit_dir(
+                  "/data512/unified_v2_512",
+                  ["spectral", "label", "easting", "northing"],
+              )
+
+              for tag, r in [("256", r256), ("512", r512)]:
+                  print(f"\n--- summary {tag} ---")
+                  print(f"  total:    {r['total']}")
+                  print(f"  complete: {r['complete']}")
+                  print(f"  corrupt:  {len(r['corrupt'])}")
+                  print(f"  missing-keys breakdown:")
+                  for sig, names in sorted(r["missing_keys"].items(), key=lambda kv: -len(kv[1])):
+                      print(f"    [{len(names)}] missing: {sig}")
+                  if r["corrupt"][:5]:
+                      print(f"  first corrupt:")
+                      for c in r["corrupt"][:5]:
+                          print(f"    {c['name']}: {c['err']}")
+
+              os.makedirs("/data512/debug", exist_ok=True)
+              with open("/data512/debug/audit_2026-04-29.json", "w") as fh:
+                  json.dump({"unified_v2": r256, "unified_v2_512": r512}, fh, indent=2, default=str)
+              print("\nWrote /data512/debug/audit_2026-04-29.json")
+              PY
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data256
+              mountPath: /data256
+            - name: data512
+              mountPath: /data512
+      volumes:
+        - name: data256
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: data512
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
