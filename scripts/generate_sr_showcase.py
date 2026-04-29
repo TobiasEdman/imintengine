@@ -162,10 +162,35 @@ def main() -> None:
         print(f"  Fetch failed: {e}")
         sys.exit(1)
 
+    # Two RGB tensors:
+    #   raw_rgb: actual L2A reflectance [0,1] for the SR models (mlstac /
+    #            opensr-model were trained on this distribution; passing
+    #            the percentile-stretched display version pushes values
+    #            out of the embedding lookup range and triggers CUDA
+    #            "index out of bounds" asserts).
+    #   rgb_lr:  percentile-stretched display version that the dashboard
+    #            shows to the user. Saved to disk + used by bicubic so
+    #            all panels share the same visual contrast envelope.
+    bands = fetched.bands
+    raw_rgb = np.stack(
+        [bands["B04"], bands["B03"], bands["B02"]], axis=-1
+    ).astype(np.float32)
     rgb_lr = fetched.rgb.astype(np.float32)
-    print(f"  cloud_frac={fetched.cloud_fraction:.1%}, rgb shape={rgb_lr.shape}")
+    print(f"  cloud_frac={fetched.cloud_fraction:.1%}")
+    print(f"  raw refl range:    [{raw_rgb.min():.3f}, {raw_rgb.max():.3f}]")
+    print(f"  display rgb shape: {rgb_lr.shape}")
 
     save_rgb_png(rgb_lr, str(out_dir / "rgb_lr.png"))
+
+
+    def _stretch_like_lr(sr: np.ndarray) -> np.ndarray:
+        """Apply the same percentile stretch to an SR result as is on the
+        LR display, so models share one contrast envelope. Falls back to
+        a clip when the SR output is already in [0,1] display range."""
+        p2, p98 = np.percentile(sr, [2, 98])
+        if p98 - p2 < 1e-3:
+            return np.clip(sr, 0.0, 1.0)
+        return np.clip((sr - p2) / (p98 - p2), 0.0, 1.0)
 
     # ── Run each model ───────────────────────────────────────────────
     print("\n[2/4] Running SR models...")
@@ -181,8 +206,12 @@ def main() -> None:
 
         cls = MODEL_REGISTRY[model_id]
         model = cls(config={"device": args.device})
+        # Bicubic operates on display-stretched RGB so its output matches
+        # the LR panel's contrast exactly. Learned models need raw L2A
+        # reflectance — they were trained on that distribution.
+        model_input = rgb_lr if model_id == "bicubic" else raw_rgb
         t0 = time.time()
-        result = model.predict(rgb_lr)
+        result = model.predict(model_input)
         dt = time.time() - t0
         timings[model_id] = dt
 
@@ -191,9 +220,12 @@ def main() -> None:
             print(f"  {model_id}: FAIL ({dt:.1f}s) — {failures[model_id]}")
             continue
 
+        # Stretch learned-model outputs to match the LR display envelope.
+        # Bicubic was already on stretched input so its output is too.
+        sr_display = result.sr if model_id == "bicubic" else _stretch_like_lr(result.sr)
         out_png = out_dir / f"{model_id}.png"
-        save_rgb_png(result.sr, str(out_png))
-        panels.append((model_id, result.sr))
+        save_rgb_png(sr_display, str(out_png))
+        panels.append((model_id, sr_display))
         print(f"  {model_id}: OK ({dt:.1f}s) → {result.sr.shape}")
 
     # ── Build comparison grid ────────────────────────────────────────
