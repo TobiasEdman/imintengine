@@ -491,6 +491,15 @@
             background: #1a4338 !important;
         }
 
+        /* SR-tabben jämför pixelnivå-skillnader mellan metoder. Browserns
+           default bilinear-smoothing suddar ut just det vi vill se, så
+           rendera image overlays utan smoothing — varje SR-pixel blir en
+           skärm-pixel, varje LR-pixel blir ett skarpt 4×4-block. */
+        #tab-sr .leaflet-image-layer {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;  /* Firefox fallback */
+        }
+
         @media (max-width: 900px) {
             .map-grid { grid-template-columns: 1fr; }
             .charts-grid { grid-template-columns: 1fr; }

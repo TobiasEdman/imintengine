@@ -182,7 +182,7 @@
 
     // ── Map initialization ───────────────────────────────────────────
 
-    function initMaps(panels, images, imgH, imgW, hasBgToggle, geojsonMap) {
+    function initMaps(panels, images, imgH, imgW, hasBgToggle, geojsonMap, nativeZoom) {
         var bounds = [[0, 0], [imgH, imgW]];
         var maps = [];
 
@@ -235,8 +235,17 @@
                 allOverlays[panel.id] = L.imageOverlay(images[panel.id], bounds, {zIndex:1}).addTo(map);
             }
 
-            map.fitBounds(bounds);
+            // Native-zoom mode: pin the map at zoom 0 (1 bound-unit = 1
+            // screen pixel) instead of fitting the whole tile to the cell.
+            // Used by the SR showcase so pixel-level differences between
+            // methods are not erased by browser bicubic downsampling.
+            if (nativeZoom) {
+                map.setView([imgH / 2, imgW / 2], 0);
+            } else {
+                map.fitBounds(bounds);
+            }
             map._imgBounds = bounds;
+            map._nativeZoom = !!nativeZoom;
             maps.push(map);
             allMaps[panel.id] = map;
         });
@@ -334,11 +343,22 @@
                 // catches tabs whose maps were initialized while hidden
                 // (display:none → 0×0 container → fitBounds clamped). The
                 // late refit recomputes from the now-laid-out container.
+                // Native-zoom maps preserve their fixed zoom 0 instead of
+                // refitting bounds.
                 [50, 350].forEach(function(delay) {
                     setTimeout(function() {
                         Object.values(allMaps).forEach(function(m) {
                             m.invalidateSize();
-                            if (m._imgBounds) m.fitBounds(m._imgBounds);
+                            if (m._nativeZoom) {
+                                // Re-center if the cell size changed but
+                                // keep zoom 0 so 1 bound-unit = 1 screen px.
+                                if (m._imgBounds) {
+                                    var b = m._imgBounds;
+                                    m.setView([b[1][0] / 2, b[1][1] / 2], 0);
+                                }
+                            } else if (m._imgBounds) {
+                                m.fitBounds(m._imgBounds);
+                            }
                         });
                     }, delay);
                 });
@@ -718,7 +738,7 @@
             if (results.length > 0 && results[0].data) {
                 geojsonMap._default = results[0].data;
             }
-            initMaps(config.panels, config.images, config.imgH, config.imgW, config.hasBgToggle, geojsonMap);
+            initMaps(config.panels, config.images, config.imgH, config.imgW, config.hasBgToggle, geojsonMap, config.nativeZoom);
         });
     }
 

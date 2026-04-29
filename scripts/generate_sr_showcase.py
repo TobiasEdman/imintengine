@@ -4,10 +4,8 @@ grid for the dashboard.
 
 Models compared (RGB only — see CLAUDE.md research notes for why):
   - bicubic    Floor every learned model must beat
-  - sen2sr     ESA OpenSR, 4× radiometrically-consistent CNN
-  - ldsr       ESA OpenSR, 4× latent diffusion
-  - difffusr   arXiv 2506.11764, 4× two-stage diffusion (RGB head only)
-  - sr4rs      Cresson 2022 GAN baseline — included to expose hallucination
+  - sen2sr     ESA OpenSR (sen2sr+mlstac), 4× radiometrically-consistent CNN
+  - ldsr       ESA OpenSR (opensr-model), 4× latent diffusion
 
 Pipeline:
   1. Fetch one Sentinel-2 L2A scene over ``COORDS_WGS84`` for ``--date``
@@ -48,7 +46,8 @@ COORDS_WGS84 = {
 PRIMARY_DATE = "2025-07-15"
 
 # Default model set — order controls grid layout (left→right, top→bottom).
-DEFAULT_MODELS = ["bicubic", "sen2sr", "ldsr", "difffusr", "sr4rs"]
+# DiffFuSR and SR4RS dropped: no installable open weights as of 2026-04.
+DEFAULT_MODELS = ["bicubic", "sen2sr", "ldsr"]
 
 
 def _build_grid(

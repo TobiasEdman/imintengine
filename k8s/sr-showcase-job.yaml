@@ -31,11 +31,14 @@ spec:
               .venv/bin/pip install --no-cache-dir \
                 torch --index-url https://download.pytorch.org/whl/cu124
               .venv/bin/pip install --no-cache-dir -r requirements.txt
-              # SR-specific deps. Each is best-effort: if a wheel is
-              # missing the wrapper raises a clean error and the
-              # showcase skips that model rather than failing the job.
+              # SR-specific deps. Pinned to the API surface verified in
+              # imint/analyzers/sr/{sen2sr,ldsr}.py. Each is best-effort:
+              # if a wheel is missing the wrapper raises a clean error and
+              # the showcase skips that model rather than failing the job.
               .venv/bin/pip install --no-cache-dir \
-                opensr-utils opensr-model opensr-test || true
+                sen2sr mlstac \
+                opensr-model opensr-utils opensr-test \
+                omegaconf || true
 
               echo "Setup complete."
           resources:
@@ -66,7 +69,7 @@ spec:
               .venv/bin/python scripts/generate_sr_showcase.py \
                 --date "${SR_DATE:-2026-04-20}" \
                 --date-window 5 \
-                --models bicubic sen2sr ldsr difffusr sr4rs \
+                --models bicubic sen2sr ldsr \
                 --device cuda
 
               # Persist outputs to the showcase PVC so they outlive the pod.

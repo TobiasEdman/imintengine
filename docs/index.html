@@ -474,28 +474,40 @@
         <div class="tab-dynamic"></div>
         <div class="tab-description">
 
-            <h3>Vad visas?</h3>
+            <h3>Hur skarpa är satellitbilder, egentligen?</h3>
             <p>
-                Fem öppna super­resolutions­modeller körda på <strong>samma Sentinel-2 RGB-tile över central Stockholm</strong> (B02/B03/B04, 10 m). Varje modell uppskalar 4× till 2,5 m. Bicubic är referens­golvet — allt en lärd modell måste slå för att vara värd compute.
+                ESA:s Sentinel-2-satelliter fotograferar hela Europa varannan vecka. <strong>Varje pixel motsvarar 10 × 10 meter på marken</strong> — utmärkt för att övervaka skog, vatten och jordbruk i stor skala, men för grovt för att se enskilda byggnader tydligt. Ett fotbollsmål blir mindre än en pixel. Stockholms Slott är ungefär 12 × 9 pixlar.
+            </p>
+            <p>
+                <strong>Superresolution</strong> är samlingsnamnet på tekniker som försöker räkna fram hur en skarpare version av samma bild <em>skulle kunna</em> se ut — ungefär som när mobilen använder AI för att förbättra ett zoomat foto. Här jämförs fem olika metoder på samma bild över centrala Stockholm.
             </p>
 
-            <h3>Modeller</h3>
+            <h3>Metoderna som jämförs</h3>
             <ul>
-                <li><strong>Bicubic</strong> — interpolation, ingen prior, ingen detalj uppfunnen.</li>
-                <li><strong>SEN2SR</strong> (ESA OpenSR, 2025) — CNN med <em>radio­metrisk hard-constraint</em>: <code>bicubic(SR(x)) ≡ x</code>. Faithful detail.</li>
-                <li><strong>LDSR-S2</strong> (ESA OpenSR, 2025) — latent diffusion, vinner LPIPS men förlorar PSNR.</li>
-                <li><strong>DiffFuSR</strong> (arXiv 2506.11764, 2025) — bästa publicerade hallucination-score (0,1149 på opensr-test).</li>
-                <li><strong>SR4RS</strong> (Cresson, 2022) — GAN utan radio­metriska garantier; visar vad hallucination ser ut som.</li>
+                <li><strong>Bicubic</strong> — Klassisk matematik, ingen AI. Bara en lugn utjämning av pixelkanter. Inga detaljer hittas på, men inga skarpas heller. Referensgolvet att jämföra mot.</li>
+                <li><strong>SEN2SR</strong> — En AI tränad av ESA. Designad för att vara <em>säker</em>: den får bara skarpa bilden, men inte hitta på saker som inte syns i originalet (radio­metrisk garanti).</li>
+                <li><strong>LDSR-S2</strong> — En annan ESA-AI som använder samma teknik som bildgeneratorer (DALL-E, Stable Diffusion). Visuellt övertygande resultat — men kan börja gissa.</li>
             </ul>
-
-            <h3>Det fysikaliska taket</h3>
             <p>
-                Forsknings­konvergens (SISR, MISR, RefSR, diffusion) landar på <strong>~2,5 m faithful GSD</strong> som taket från en S2-scen. Bortom det börjar modell­prior uppfinna textur som inte motsvarar marken. Sentinel-2:s MTF vid Nyquist är 0,15–0,30 för 10 m-band — 10 m-bandet är redan undersamplat mot optikens PSF, så återhämtningsbar detalj från en enskild L2A-scen ligger fundamentalt vid 3–5 m. "1 m S2-produkter" som S2DR3 levererar visuellt övertygande bilder där detaljerna är genererade av modellen, inte återhämtade från sensorn.
+                Två andra metoder vi också tittade på (<em>DiffFuSR</em> och <em>SR4RS</em>) saknar tillgängliga modellvikter — de finns bara som forskningskod, inte som installerbara paket. När och om vikter publiceras kan vi addera dem.
             </p>
 
-            <h3>Hur visualiseringen byggs</h3>
+            <h3>Hur paneler visar pixlar</h3>
             <p>
-                <code>scripts/generate_sr_showcase.py</code> hämtar en L2A-tile via CDSE, kör varje modell i <code>imint.analyzers.sr</code>, sparar per-modell-PNG och en sammanställd jämförelse-grid. K8s-jobb <code>k8s/sr-showcase-job.yaml</code> kör hela pipen på cluster-default GPU (RTX 2080 Ti). Modeller som saknar dependencies eller checkpoints rapporteras tydligt i <code>summary.json</code> och hoppas över utan att haverera resten.
+                För att skillnaderna mellan metoderna ska synas behöver bilderna visas vid <strong>verklig pixelupplösning</strong>. SR-panelerna är därför inställda så att <strong>en bildpunkt på skärmen motsvarar en bildpunkt i SR-resultatet</strong>. Du ser bara en del av bilden i taget — <strong>dra (panorera) i en panel så följer alla andra med automatiskt</strong>, så jämförelsen sker över exakt samma område. Original-bilden (10 m) blir då tydligt blockig: varje 10 m-pixel renderas som ett 4×4-block. Det är inte ett fel — det är hur grov satellit-upplösningen verkligen ser ut innan AI-skarpning.
+            </p>
+
+            <h3>Det viktiga: vad är fysikaliskt möjligt?</h3>
+            <p>
+                Oberoende forskning från fyra olika håll pekar entydigt på <strong>cirka 2,5 meter per pixel som gränsen</strong> för vad som verkligen kan återhämtas från en Sentinel-2-bild. Det handlar inte om att AI:n inte är tillräckligt smart — det är själva satellitens optik och sensorer som sätter taket. Bortom 2,5 m skapar AI:n inte längre information från bilden, utan gissar utifrån mönster den lärt sig på andra, skarpare bilder.
+            </p>
+            <p>
+                "1 meter per pixel"-produkter som finns på marknaden ser visuellt imponerande ut, men de detaljer du ser är till stor del <em>genererade av AI:n</em>, inte återhämtade från satelliten. Vägar och hustak kan se prickfria ut samtidigt som de hamnar på fel plats jämfört med verkligheten.
+            </p>
+
+            <h3>Hur du använder jämförelsen</h3>
+            <p>
+                Varje panel har en <strong>opacitets-reglage</strong> i toppen. Drar du den till 0 % ser du original-bilden (10 m per pixel, suddig). Drar du till 100 % ser du den AI-skarpade versionen. Genom att fade:a fram och tillbaka ser du tydligt vilka detaljer AI:n lägger till — och du kan kontrollera om de motsvarar något du känner igen från Stockholm. Saknas en byggnad i originalet men dyker upp efter förstoringen? Då har AI:n hittat på den.
             </p>
 
         </div>
@@ -618,8 +630,8 @@
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=3"></script>
-    <script src="js/app.js?v=3"></script>
+    <script src="js/tab-data.js?v=5"></script>
+    <script src="js/app.js?v=5"></script>
     <script>
     // Auto-resize parent iframe (for digitalearth.se/case/ embedding)
     if (window.parent !== window) {

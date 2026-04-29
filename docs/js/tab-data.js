@@ -498,14 +498,14 @@ var TAB_CONFIG = {
     },
 
     sr: {
-        title: 'Superresolution — Stockholm 4×',
+        title: 'Skarpare satellitbilder — Stockholm 4×',
         summary: [
-            {title:'AOI',           value:'Central Stockholm', detail:'Söder · Gamla Stan · Norrmalm · Östermalm · Djurgården'},
-            {title:'Faktor',        value:'4×',                detail:'10 m → 2,5 m, alla modeller'},
-            {title:'Modeller',      value:'5 öppna',           detail:'Bicubic + SEN2SR + LDSR + DiffFuSR + SR4RS'},
-            {title:'Faithful tak',  value:'~2,5 m',            detail:'S2 MTF/PSF — bortom det är detalj genererad'}
+            {title:'Område',           value:'Central Stockholm', detail:'Söder · Gamla Stan · Norrmalm · Östermalm · Djurgården'},
+            {title:'Förstoring',       value:'4×',                detail:'Från 10 m per pixel till 2,5 m per pixel'},
+            {title:'Antal metoder',    value:'3 jämförda',        detail:'Bicubic + SEN2SR + LDSR-S2 (DiffFuSR/SR4RS saknar publika vikter)'},
+            {title:'Säker gräns',      value:'~2,5 m',            detail:'Finare än så börjar AI:n hitta på detaljer'}
         ],
-        intro: 'Samma Sentinel-2 RGB-tile (B02/B03/B04) körs genom fem öppna super­resolutions­modeller. SEN2SR och LDSR-S2 är ESA OpenSR-stacken; DiffFuSR är 2025 års state-of-the-art på opensr-test hallucination-metric; SR4RS är en äldre GAN-baseline inkluderad för att visa hur hallucination ser ut. Bicubic är golvet. Forskningen pekar entydigt på <strong>~2,5 m som det fysikaliska taket</strong> för faithful detail från en enskild S2-scen — bortom det börjar modeller uppfinna textur. Showcasens syfte är att illustrera vad de olika metoderna faktiskt levererar på samma input, inte att rangordna en vinnare.',
+        intro: 'Hur skarp är en satellitbild egentligen? En bild från Sentinel-2 har en pixel per 10 × 10 meter på marken — varje hus blir bara några pixlar stort. <strong>Superresolution</strong> är samlingsnamnet på tekniker som försöker räkna fram en skarpare version av samma bild, ungefär som när mobilen "förbättrar" ett zoomat foto. Här jämförs fem olika metoder på samma bild över centrala Stockholm: en enkel matematisk interpolation som referens, plus fyra olika AI-modeller. <strong>Dra i opacitets-reglaget på varje panel</strong> för att jämföra original-bilden (10 m) mot den skarpade versionen — och titta efter detaljer som ser misstänkt skarpa ut. Vissa AI-modeller är försiktiga och håller sig till det som faktiskt syns; andra hittar på detaljer som <em>ser</em> snygga ut men inte motsvarar verkligheten.',
         // Panel ids prefixed `sr-` so app.js's prefix lookup (`sr-rgb`) resolves
         // every model panel's background to the LR tile. The opacity slider
         // (built into every panel header) then fades the SR overlay in/out
@@ -513,12 +513,10 @@ var TAB_CONFIG = {
         // showcase exists for. The LR panel itself uses key='rgb' so the
         // initMaps special-case loads its own image as the bg.
         panels: [
-            {id:'sr-rgb',       key:'rgb',      title:'Sentinel-2 RGB (10 m, LR-original)',     legend:null},
+            {id:'sr-rgb',       key:'rgb',      title:'Sentinel-2 RGB (10 m, original)',         legend:null},
             {id:'sr-bicubic',   key:'bicubic',  title:'Bicubic (4× interpolation)',              legend:null},
-            {id:'sr-sen2sr',    key:'sen2sr',   title:'SEN2SR — CNN, radiometrisk constraint',   legend:null},
+            {id:'sr-sen2sr',    key:'sen2sr',   title:'SEN2SR — CNN, radiometriskt skyddad',     legend:null},
             {id:'sr-ldsr',      key:'ldsr',     title:'LDSR-S2 — latent diffusion',              legend:null},
-            {id:'sr-difffusr',  key:'difffusr', title:'DiffFuSR — two-stage diffusion',          legend:null},
-            {id:'sr-sr4rs',     key:'sr4rs',    title:'SR4RS — GAN baseline',                    legend:null},
             {id:'sr-grid',      key:'grid',     title:'Sammanställd jämförelse',                 legend:null}
         ],
         images: {
@@ -526,14 +524,18 @@ var TAB_CONFIG = {
             'sr-bicubic':  'showcase/sr/bicubic.png',
             'sr-sen2sr':   'showcase/sr/sen2sr.png',
             'sr-ldsr':     'showcase/sr/ldsr.png',
-            'sr-difffusr': 'showcase/sr/difffusr.png',
-            'sr-sr4rs':    'showcase/sr/sr4rs.png',
             'sr-grid':     'showcase/sr/grid.png'
         },
-        // BBOX aspect 905:608 → 1.488 portrait. Use a small magnitude so
-        // fitBounds picks a reasonable zoom even if the container measured
-        // 0×0 during init (which clamps fitBounds via _getBoundsZoom).
-        imgH: 500, imgW: 336,
+        // Bounds set to SR-native pixel dimensions (3744 × 2616) so that at
+        // zoom 0, one bound-unit equals one screen pixel. With nativeZoom
+        // the maps skip fitBounds and pin to zoom 0 — the user sees actual
+        // pixel-level differences between methods rather than a browser-
+        // bicubic-downsampled blur where every method looks identical.
+        // LR (936 × 654 native) is stretched to match these bounds and
+        // rendered with image-rendering: pixelated so each LR pixel shows
+        // as a sharp 4×4 block, preserving its low-resolution character.
+        imgH: 3744, imgW: 2616,
+        nativeZoom: true,
         hasBgToggle: false
     }
 };
