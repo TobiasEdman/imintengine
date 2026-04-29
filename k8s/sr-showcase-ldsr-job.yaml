@@ -1,0 +1,128 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sr-showcase-ldsr
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600  # 1h hard kill; LDSR diffusion runs in minutes on H100
+  template:
+    metadata:
+      labels:
+        app: sr-showcase-ldsr
+    spec:
+      initContainers:
+        - name: setup
+          image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -ex
+              apt-get update && apt-get install -y --no-install-recommends \
+                python3.11 python3.11-venv python3-pip \
+                libgdal30 git
+              update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+              git clone --depth 1 https://github.com/TobiasEdman/imintengine.git /app
+
+              cd /app
+              python3 -m venv .venv
+              .venv/bin/pip install --no-cache-dir \
+                torch --index-url https://download.pytorch.org/whl/cu124
+              .venv/bin/pip install --no-cache-dir -r requirements.txt
+              .venv/bin/pip install --no-cache-dir \
+                opensr-model opensr-utils opensr-test \
+                omegaconf || true
+
+              echo "Setup complete."
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          volumeMounts:
+            - name: app
+              mountPath: /app
+      containers:
+        - name: showcase
+          image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -ex
+              apt-get update && apt-get install -y --no-install-recommends \
+                python3.11 libgdal30 \
+                libxcb1 libgl1 libglib2.0-0
+              update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+              cd /app
+
+              # LDSR-only run on H100. The 2080ti job (sr-showcase) handles
+              # bicubic + sen2sr. Output is written to the same PVC subdir
+              # so all model PNGs end up co-located in /showcase-out/sr/.
+              # We pass --skip-fetch=false so this job re-fetches the same
+              # tile and just writes ldsr.png; bicubic.png and rgb_lr.png
+              # from the 2080ti job will get overwritten with identical
+              # bytes (deterministic re-fetch + bicubic).
+              .venv/bin/python scripts/generate_sr_showcase.py \
+                --date "${SR_DATE:-2026-04-20}" \
+                --date-window 5 \
+                --models ldsr \
+                --device cuda
+
+              mkdir -p /showcase-out/sr
+              # Only copy ldsr-specific outputs to avoid stomping on the
+              # 2080ti job's bicubic/sen2sr if it runs later.
+              cp /app/outputs/showcase/sr/ldsr.png /showcase-out/sr/ || true
+              cp /app/outputs/showcase/sr/summary.json /showcase-out/sr/summary_ldsr.json || true
+          env:
+            - name: SR_DATE
+              value: "2026-04-20"
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+          resources:
+            requests:
+              cpu: "4"
+              memory: 24Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 24Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: app
+              mountPath: /app
+            - name: showcase-out
+              mountPath: /showcase-out
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: app
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+        - name: showcase-out
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+      restartPolicy: Never
+      # H100 needed for LDSR — diffusion latents OOM at 11 GB on 2080ti.
+      nodeSelector:
+        accelerator: nvidia-h100
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
