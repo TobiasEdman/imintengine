@@ -63,12 +63,16 @@ spec:
 
               # Convert newline list → space-separated args
               # (limit-safe: 1435 ids × ~25 chars ≈ 36 KB, well under ARG_MAX)
+              # workers=4 + 96Gi: previous run OOM-killed at 600/1435
+              # with 8 workers / 32Gi. build_labels needs ~10-15 GB per
+              # worker for rasterio handles + LPIS parquet + intermediate
+              # arrays. Tracked in pipeline_overview memory.
               python scripts/build_labels.py \
                 --data-dir /data/unified_v2 \
                 --nmd-raster /data-cephfs/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
                 --lpis-dir /data-cephfs/lpis \
                 --sks-dir /data-cephfs/sks \
-                --workers 8 \
+                --workers 4 \
                 --executor thread \
                 --tile-ids $(cat /tmp/tile_ids.txt | tr '\n' ' ')
 
@@ -82,10 +86,10 @@ spec:
           resources:
             requests:
               cpu: "8"
-              memory: "32Gi"
+              memory: "96Gi"
             limits:
               cpu: "8"
-              memory: "32Gi"
+              memory: "96Gi"
           volumeMounts:
             - name: training-data
               mountPath: /data
