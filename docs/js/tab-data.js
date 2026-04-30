@@ -62,6 +62,12 @@ var LEGENDS = {
     prithvi_fire: [
         {color:'#228B22',label:'Ej bränt'},{color:'#FF4500',label:'Bränt'}
     ],
+    sam: [
+        {color:'#0000FF',label:'0° (identisk spektral signatur)'},
+        {color:'#00FF00',label:'~5° (liten avvikelse)'},
+        {color:'#FFFF00',label:'~7° (märkbar drift)'},
+        {color:'#FF0000',label:'≥10° (misstänkt hallucination)'}
+    ],
     vessel: [
         {color:'#00E5FF',label:'Detekterad båt / anomali'}
     ],
@@ -513,18 +519,22 @@ var TAB_CONFIG = {
         // showcase exists for. The LR panel itself uses key='rgb' so the
         // initMaps special-case loads its own image as the bg.
         panels: [
-            {id:'sr-rgb',       key:'rgb',      title:'Sentinel-2 RGB (10 m, original)',         legend:null},
-            {id:'sr-bicubic',   key:'bicubic',  title:'Bicubic (4× interpolation)',              legend:null},
-            {id:'sr-sen2sr',    key:'sen2sr',   title:'SEN2SR — CNN, radiometriskt skyddad',     legend:null},
-            {id:'sr-ldsr',      key:'ldsr',     title:'LDSR-S2 — latent diffusion',              legend:null},
-            {id:'sr-grid',      key:'grid',     title:'Sammanställd jämförelse',                 legend:null}
+            {id:'sr-rgb',          key:'rgb',         title:'Sentinel-2 RGB (10 m, original)',           legend:null},
+            {id:'sr-bicubic',      key:'bicubic',     title:'Bicubic (4× interpolation)',                legend:null},
+            {id:'sr-sen2sr',       key:'sen2sr',      title:'SEN2SR — CNN, radiometriskt skyddad',       legend:null},
+            {id:'sr-ldsr',         key:'ldsr',        title:'LDSR-S2 — latent diffusion',                legend:null},
+            {id:'sr-sam-bicubic',  key:'sam_bicubic', title:'Spektral skillnad — Bicubic',               legend:'sam'},
+            {id:'sr-sam-sen2sr',   key:'sam_sen2sr',  title:'Spektral skillnad — SEN2SR',                legend:'sam'},
+            {id:'sr-sam-ldsr',     key:'sam_ldsr',    title:'Spektral skillnad — LDSR-S2',               legend:'sam'}
         ],
         images: {
-            'sr-rgb':      'showcase/sr/rgb_lr.png',
-            'sr-bicubic':  'showcase/sr/bicubic.png',
-            'sr-sen2sr':   'showcase/sr/sen2sr.png',
-            'sr-ldsr':     'showcase/sr/ldsr.png',
-            'sr-grid':     'showcase/sr/grid.png'
+            'sr-rgb':         'showcase/sr/rgb_lr.png',
+            'sr-bicubic':     'showcase/sr/bicubic.png',
+            'sr-sen2sr':      'showcase/sr/sen2sr.png',
+            'sr-ldsr':        'showcase/sr/ldsr.png',
+            'sr-sam-bicubic': 'showcase/sr/sam_bicubic.png',
+            'sr-sam-sen2sr':  'showcase/sr/sam_sen2sr.png',
+            'sr-sam-ldsr':    'showcase/sr/sam_ldsr.png'
         },
         // Bounds set to SR-native pixel dimensions (3744 × 2616) so that at
         // zoom 0, one bound-unit equals one screen pixel. With nativeZoom

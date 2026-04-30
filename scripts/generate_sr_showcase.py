@@ -196,19 +196,52 @@ def main() -> None:
 
 
     def _stretch_like_lr(sr: np.ndarray) -> np.ndarray:
-        """Apply the same percentile stretch to an SR result as is on the
-        LR display, so models share one contrast envelope. Falls back to
-        a clip when the SR output is already in [0,1] display range."""
+        """Apply a 2/98 percentile stretch so all model panels share the
+        same display envelope. Operates on raw reflectance output."""
         p2, p98 = np.percentile(sr, [2, 98])
         if p98 - p2 < 1e-3:
             return np.clip(sr, 0.0, 1.0)
         return np.clip((sr - p2) / (p98 - p2), 0.0, 1.0)
+
+    def _sam_degrees(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """Per-pixel Spectral Angle Mapper between two (H, W, C) tensors.
+
+        Returns angles in degrees ∈ [0, 180]. Zero degrees means identical
+        spectral signature (only magnitude differs); larger angles mean
+        the model invented or distorted spectral content. This is the
+        primary fidelity axis on the opensr-test benchmark.
+        """
+        eps = 1e-9
+        dot = (a * b).sum(axis=-1)
+        na = np.linalg.norm(a, axis=-1)
+        nb = np.linalg.norm(b, axis=-1)
+        cos = np.clip(dot / (na * nb + eps), -1.0, 1.0)
+        return np.degrees(np.arccos(cos)).astype(np.float32)
+
+    def _save_sam_png(sam_deg: np.ndarray, path: Path,
+                      vmax: float = 10.0) -> None:
+        """Render SAM array as a colour-mapped PNG using viridis-like
+        ramp: dark blue (0°, faithful) → green/yellow (5–10°) →
+        red (>vmax°, suspect hallucination)."""
+        from PIL import Image
+        # 0..vmax → 0..1
+        x = np.clip(sam_deg / vmax, 0.0, 1.0)
+        # Hand-rolled viridis-ish ramp without matplotlib dep:
+        # blue → green → yellow → red
+        r = np.clip(2.0 * x - 0.5, 0.0, 1.0)
+        g = np.clip(1.0 - np.abs(2.0 * x - 1.0), 0.0, 1.0)
+        b = np.clip(1.0 - 2.0 * x, 0.0, 1.0)
+        rgb = np.stack([r, g, b], axis=-1)
+        img = (rgb * 255).clip(0, 255).astype(np.uint8)
+        Image.fromarray(img).save(path)
+        print(f"    saved: {path}")
 
     # ── Run each model ───────────────────────────────────────────────
     print("\n[2/4] Running SR models...")
     panels: list[tuple[str, np.ndarray]] = []
     timings: dict[str, float] = {}
     failures: dict[str, str] = {}
+    raw_sr_outputs: dict[str, np.ndarray] = {}
 
     for model_id in args.models:
         if model_id not in MODEL_REGISTRY:
@@ -219,12 +252,10 @@ def main() -> None:
         cls = MODEL_REGISTRY[model_id]
         model = cls(config={"device": args.device})
         # Per-model input shape (verified via local CPU smoke-test):
-        #   bicubic:  display-stretched 3ch RGB (visual envelope match)
+        #   bicubic:  raw 3ch RGB (scipy.ndimage.zoom on float reflectance)
         #   sen2sr:   raw 10-channel reflectance (B02..B12)
         #   ldsr:     raw 3ch RGB; wrapper internally pads NIR proxy
-        if model_id == "bicubic":
-            model_input = rgb_lr
-        elif model_id == "sen2sr":
+        if model_id == "sen2sr":
             if raw_10b is None:
                 failures[model_id] = "missing required bands B05–B12"
                 print(f"  {model_id}: SKIP — {failures[model_id]}")
@@ -242,21 +273,39 @@ def main() -> None:
             print(f"  {model_id}: FAIL ({dt:.1f}s) — {failures[model_id]}")
             continue
 
-        # Stretch learned-model outputs to match the LR display envelope.
-        # Bicubic was already on stretched input so its output is too.
-        sr_display = result.sr if model_id == "bicubic" else _stretch_like_lr(result.sr)
+        # All wrappers now return raw reflectance at SR resolution.
+        # Apply a shared 2/98 stretch for the display PNG; keep raw for SAM.
+        sr_raw = result.sr
+        sr_display = _stretch_like_lr(sr_raw)
         out_png = out_dir / f"{model_id}.png"
         save_rgb_png(sr_display, str(out_png))
         panels.append((model_id, sr_display))
-        print(f"  {model_id}: OK ({dt:.1f}s) → {result.sr.shape}")
+        raw_sr_outputs[model_id] = sr_raw
+        print(f"  {model_id}: OK ({dt:.1f}s) → {sr_raw.shape}")
 
-    # ── Build comparison grid ────────────────────────────────────────
-    print("\n[3/4] Assembling comparison grid...")
-    if panels:
-        grid = _build_grid(panels, cols=3)
-        save_rgb_png(grid, str(out_dir / "grid.png"))
-    else:
-        print("  No successful models — skipping grid.")
+    # ── Spectral Angle Mapper analysis ────────────────────────────────
+    # For each successful model, compute per-pixel SAM between the
+    # nearest-neighbour-upsampled LR (preserves the LR's exact spectral
+    # signature at every block) and the model's raw SR output. SAM
+    # surfaces *where* a model has invented or distorted spectral
+    # content — the colourmap maps 0° (blue, faithful) → 10° (red,
+    # suspect hallucination).
+    print("\n[3/4] Computing Spectral Angle Mapper (LR ↔ SR)...")
+    s = 4
+    H, W, _ = raw_rgb.shape
+    lr_nn = np.repeat(np.repeat(raw_rgb, s, axis=0), s, axis=1)  # (H*4, W*4, 3)
+    sam_means: dict[str, float] = {}
+    for model_id, sr_raw in raw_sr_outputs.items():
+        if sr_raw.shape != lr_nn.shape:
+            print(f"  {model_id}: SAM skipped — shape mismatch "
+                  f"{sr_raw.shape} vs {lr_nn.shape}")
+            continue
+        sam_deg = _sam_degrees(lr_nn, sr_raw)
+        mean_sam = float(sam_deg.mean())
+        sam_means[model_id] = mean_sam
+        print(f"  {model_id}: mean SAM = {mean_sam:.2f}°  "
+              f"(p95 = {np.percentile(sam_deg, 95):.2f}°)")
+        _save_sam_png(sam_deg, out_dir / f"sam_{model_id}.png", vmax=10.0)
 
     # Write a small JSON summary the dashboard can load.
     import json
@@ -266,6 +315,7 @@ def main() -> None:
         "lr_shape": list(rgb_lr.shape),
         "scale": 4,
         "timings_s": timings,
+        "sam_mean_deg": sam_means,
         "failures": failures,
     }
     with open(out_dir / "summary.json", "w") as f:

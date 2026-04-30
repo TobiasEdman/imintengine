@@ -510,6 +510,14 @@
                 Varje panel har en <strong>opacitets-reglage</strong> i toppen. Drar du den till 0 % ser du original-bilden (10 m per pixel, suddig). Drar du till 100 % ser du den AI-skarpade versionen. Genom att fade:a fram och tillbaka ser du tydligt vilka detaljer AI:n lägger till — och du kan kontrollera om de motsvarar något du känner igen från Stockholm. Saknas en byggnad i originalet men dyker upp efter förstoringen? Då har AI:n hittat på den.
             </p>
 
+            <h3>Spektral skillnadsanalys — har AI:n hittat på något?</h3>
+            <p>
+                De tre nedre panelerna visar samma sorts förändrings­karta som <a href="#" class="theme-tab-link" data-tab="fire">brand­analysen</a> använder för dNBR. I brandfallet är det "skog före kontra efter brand" — här är det <strong>"originalpixel kontra AI-skarpad pixel"</strong>. Mätstickan heter <em>Spectral Angle Mapper</em> (SAM): för varje pixel räknas vinkeln mellan original-spektrumet (R, G, B) och AI:ns version. <strong>Noll grader</strong> betyder att modellen bara skarpat utan att ändra färgbalansen. <strong>Högre värden</strong> betyder att modellen tillfört spektral information som inte fanns i originalet — alltså <em>hallucination</em>.
+            </p>
+            <p>
+                Bicubic borde ge nästan helt blå paneler — den blandar bara grannpixlar utan att uppfinna något. SEN2SR är designad för att stanna nära originalet (radio­metrisk hard-constraint), så även den ska se mestadels blå/grön ut. LDSR-S2 (diffusion) är mer ambitiös och kan visa gulare/rödare områden längs kanter, fasader och vägar — där modellen försöker återskapa textur. Det är inte nödvändigtvis fel, men det är där du ska vara mest försiktig att lita på detaljerna.
+            </p>
+
         </div>
     </div>
 
@@ -630,8 +638,8 @@
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=6"></script>
-    <script src="js/app.js?v=6"></script>
+    <script src="js/tab-data.js?v=7"></script>
+    <script src="js/app.js?v=7"></script>
     <script>
     // Auto-resize parent iframe (for digitalearth.se/case/ embedding)
     if (window.parent !== window) {
