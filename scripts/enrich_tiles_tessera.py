@@ -329,15 +329,19 @@ class _LRUCacheGuard(threading.Thread):
         self.sweep_interval_s = sweep_interval_s
         self.recency_grace_s = recency_grace_s
         self.log = log
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self.evictions_total = 0
         self.bytes_freed_total = 0
 
-    def stop(self) -> None:
-        self._stop.set()
+    def request_stop(self) -> None:
+        # Renamed from `stop` to avoid clobbering ``threading.Thread._stop``,
+        # which is an internal Event used by Thread.join() — overriding it
+        # produced ``TypeError: 'Event' object is not callable`` on join
+        # timeout in the 2026-04-29 enrich-tessera-512-retry-x8dx7 run.
+        self._stop_event.set()
 
     def run(self) -> None:
-        while not self._stop.wait(self.sweep_interval_s):
+        while not self._stop_event.wait(self.sweep_interval_s):
             try:
                 self._sweep_once()
             except Exception as e:
@@ -492,7 +496,7 @@ def main():
                 except Exception as e:
                     print(f"  Error: {e}")
     finally:
-        guard.stop()
+        guard.request_stop()
         guard.join(timeout=2 * guard.sweep_interval_s)
 
     elapsed = time.time() - t0
