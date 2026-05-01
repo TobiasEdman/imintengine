@@ -9,11 +9,13 @@ metadata:
 spec:
   backoffLimit: 1
   # 8290 tiles × 3 enrichment passes (rededge, S1, tessera).
-  # rededge: ~2 h on free CDSE PU.
-  # S1:      ~3 h via STAC + COG (cdse_s1_stac, no PU).
-  # tessera: ~30 min from local /data/tessera_cache.
-  # Total ETA: ~6 h. 12h cap.
-  activeDeadlineSeconds: 43200
+  # Real-world ETA observed 2026-04-29 audit (post-bttpz deadline crash):
+  #   rededge: ~16 h remaining (3156 tiles 0/4 + 1654 with 2017-fails) at
+  #            ~250 tiles/h sustained on 4 workers DES openEO.
+  #   S1:      ~6-8 h for 8290 - 54 already-baked tiles via cascade.
+  #   tessera: ~25 h for 8290 tiles via geotessera + LRU guard.
+  # Total: ~48-50 h sequential. 72h cap (was 12h, which killed bttpz mid-Step 1).
+  activeDeadlineSeconds: 259200
   template:
     metadata:
       labels:
