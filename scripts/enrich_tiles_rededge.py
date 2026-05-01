@@ -200,6 +200,7 @@ def enrich_one_tile(
     skip_existing: bool = True,
     *,
     source: str = "des",
+    retry_empty_frames: bool = False,
 ) -> dict:
     """Add red-edge (B05/B06/B07) to one tile .npz file."""
     from imint.training.tile_config import TileConfig
@@ -211,8 +212,20 @@ def enrich_one_tile(
     except Exception as e:
         return {"name": name, "status": "failed", "reason": str(e)}
 
-    if skip_existing and int(data.get("has_rededge", 0)) == 1:
-        return {"name": name, "status": "skipped"}
+    # Per-frame validity gate. Default skip_existing checks the boolean
+    # has_rededge flag, but the 2026-04-29 bttpz deadline-killed pod left
+    # 3156 tiles with has_rededge=1 yet 0/4 valid frames (the pod managed
+    # to write rededge=zeros before being killed at 12h, but never fetched
+    # real data). With ``retry_empty_frames=True`` we ignore has_rededge
+    # and look at the per-frame data directly: if every frame is non-zero,
+    # skip; otherwise re-fetch ONLY the empty frames, preserving the
+    # already-good frames untouched.
+    has_rededge_flag = int(data.get("has_rededge", 0)) == 1
+    existing_rededge = data.get("rededge")
+
+    if not retry_empty_frames:
+        if skip_existing and has_rededge_flag:
+            return {"name": name, "status": "skipped"}
 
     dates = data.get("dates", [])
     spectral = data.get("spectral", data.get("image"))
@@ -221,6 +234,17 @@ def enrich_one_tile(
 
     h, w = spectral.shape[1], spectral.shape[2]
     n_frames = spectral.shape[0] // 6
+
+    # Per-frame nonzero map for retry_empty_frames mode
+    existing_valid = [False] * n_frames
+    if existing_rededge is not None and existing_rededge.shape[0] == n_frames * 3:
+        for fi in range(n_frames):
+            existing_valid[fi] = bool(
+                (existing_rededge[fi*3:(fi+1)*3] != 0).any()
+            )
+
+    if retry_empty_frames and skip_existing and all(existing_valid):
+        return {"name": name, "status": "skipped"}
 
     size_px = int(data.get("tile_size_px", h))
     tile_cfg = TileConfig(size_px=size_px)
@@ -233,6 +257,15 @@ def enrich_one_tile(
     rededge_frames = []  # each (3, H, W) float32
     valid = 0
     for fi in range(n_frames):
+        # If we're in retry-empty-frames mode and this frame is already
+        # non-zero, preserve it as-is — never re-fetch a frame that has
+        # data. This keeps 2017 NoData frames out of scope (they're 0
+        # anyway, and DES will refuse them again).
+        if retry_empty_frames and existing_valid[fi]:
+            rededge_frames.append(existing_rededge[fi*3:(fi+1)*3].astype(np.float32))
+            valid += 1
+            continue
+
         date_str = str(dates[fi])[:10] if fi < len(dates) and dates[fi] else ""
         if not date_str:
             rededge_frames.append(np.zeros((3, h, w), dtype=np.float32))
@@ -280,6 +313,15 @@ def main():
         help="Backend for the rededge fetch. 'des' is PU-free (default); "
              "'cdse' uses the Process API and consumes Processing Units.",
     )
+    parser.add_argument(
+        "--retry-empty-frames", action="store_true", default=False,
+        help="Look at per-frame data (not just has_rededge=1) when "
+             "deciding whether to skip. With this flag, tiles whose "
+             "rededge key exists but contains all-zero frames will be "
+             "re-processed, fetching only the empty frames and "
+             "preserving the non-empty ones. Required to recover from a "
+             "deadline-killed run that left has_rededge=1 with rededge=0.",
+    )
     args = parser.parse_args()
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
@@ -298,7 +340,10 @@ def main():
     def _run(path):
         nonlocal completed
         r = enrich_one_tile(
-            path, skip_existing=args.skip_existing, source=args.source,
+            path,
+            skip_existing=args.skip_existing,
+            source=args.source,
+            retry_empty_frames=args.retry_empty_frames,
         )
         with lock:
             completed += 1

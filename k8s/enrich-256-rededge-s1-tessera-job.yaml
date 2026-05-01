@@ -62,7 +62,8 @@ spec:
                 --data-dir /data/unified_v2 \
                 --source des \
                 --workers 4 \
-                --skip-existing
+                --skip-existing \
+                --retry-empty-frames
 
               # ── Step 2: S1 SAR via cascade fallback (CDSE → MPC → AWS) ───
               echo ""
