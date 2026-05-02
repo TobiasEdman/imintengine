@@ -1,0 +1,113 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: complete-rededge-2017-cdse-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: 2017-rededge-cdse-completion-512
+spec:
+  backoffLimit: 0
+  # 4052 tiles in /data/unified_v2_512 had 3/4 valid rededge frames
+  # (audit-enrichment-coverage-frx92 2026-05-01); the missing frame is
+  # the 2017 acquisition that DES openEO refuses (NoDataAvailable —
+  # DES STAC has no L2A indexed for 2017, verified via probe-2017-stac).
+  #
+  # CDSE Sentinel Hub Process API does have 2017 L2A — re-fetch the
+  # missing frames now that the May 1 PU quota reset has happened.
+  #
+  # Budget: ~4000 frame fetches × ~2 PU each ≈ 8000 PU; well within
+  # the 10k/month free tier. Walltime ~3-4 h on 4 workers.
+  activeDeadlineSeconds: 28800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: r
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Complete 2017 rededge frames via CDSE (512 dataset) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              # Verify the year_filter implementation is in cloned source
+              echo ""
+              echo "Verifying --year-filter is in cloned source:"
+              grep -n "year_filter" scripts/enrich_tiles_rededge.py | head -3 \
+                || { echo "year_filter NOT PRESENT — abort"; exit 1; }
+
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "Tile inventory:"
+              echo "  /data/unified_v2_512: $(ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l) tiles"
+
+              # --source cdse: the PU-billed Process API path that actually
+              #                 has 2017 data.
+              # --retry-empty-frames: only touch tiles with at least one
+              #                       empty rededge frame.
+              # --year-filter 2017: within those tiles, only attempt to
+              #                     fetch frames whose dates start with
+              #                     "2017"; non-2017 frames are preserved
+              #                     untouched (critical — h45t2 may still
+              #                     be running against /data/unified_v2,
+              #                     but this job targets /data/unified_v2_512
+              #                     so no race).
+              # workers=4: conservative; CDSE Process API throttles hard
+              #            on burst.
+              python scripts/enrich_tiles_rededge.py \
+                --data-dir /data/unified_v2_512 \
+                --source cdse \
+                --workers 4 \
+                --skip-existing \
+                --retry-empty-frames \
+                --year-filter 2017
+
+              echo ""
+              echo "=== Done: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

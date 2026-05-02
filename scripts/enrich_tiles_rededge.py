@@ -201,6 +201,7 @@ def enrich_one_tile(
     *,
     source: str = "des",
     retry_empty_frames: bool = False,
+    year_filter: str | None = None,
 ) -> dict:
     """Add red-edge (B05/B06/B07) to one tile .npz file."""
     from imint.training.tile_config import TileConfig
@@ -271,6 +272,22 @@ def enrich_one_tile(
             rededge_frames.append(np.zeros((3, h, w), dtype=np.float32))
             continue
 
+        # year_filter: only fetch frames whose date starts with the given
+        # prefix (e.g. "2017"). Frames outside the filter are preserved as
+        # they are on disk — important when running a CDSE 2017-completion
+        # pass alongside a DES rerun: we don't want this pass to re-fetch
+        # a non-2017 frame from CDSE if it already has good DES data.
+        if year_filter is not None and not date_str.startswith(year_filter):
+            preserved = (
+                existing_rededge[fi*3:(fi+1)*3].astype(np.float32)
+                if existing_rededge is not None and existing_rededge.shape[0] >= (fi+1) * 3
+                else np.zeros((3, h, w), dtype=np.float32)
+            )
+            rededge_frames.append(preserved)
+            if existing_valid[fi]:
+                valid += 1
+            continue
+
         frame = _fetch_rededge_frame(
             bbox["west"], bbox["south"], bbox["east"], bbox["north"],
             date_str, size_px,
@@ -322,6 +339,15 @@ def main():
              "preserving the non-empty ones. Required to recover from a "
              "deadline-killed run that left has_rededge=1 with rededge=0.",
     )
+    parser.add_argument(
+        "--year-filter", default=None,
+        help="Only fetch frames whose dates[i] string starts with this "
+             "prefix (e.g. '2017'). Frames outside the filter are "
+             "preserved as-is from the existing rededge array. Used by "
+             "the CDSE 2017-completion pass to fill in frames that DES "
+             "openEO refuses (no 2017 L2A indexed) without disturbing "
+             "non-2017 frames already populated by the DES rerun.",
+    )
     args = parser.parse_args()
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
@@ -344,6 +370,7 @@ def main():
             skip_existing=args.skip_existing,
             source=args.source,
             retry_empty_frames=args.retry_empty_frames,
+            year_filter=args.year_filter,
         )
         with lock:
             completed += 1
