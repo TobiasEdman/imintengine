@@ -66,7 +66,16 @@ from . import s1_shared
 # ── Module constants ─────────────────────────────────────────────────────
 
 _STAC_ROOT = "https://stac.dataspace.copernicus.eu/v1"
-_STAC_COLLECTION = "SENTINEL-1-GRD"
+# Collection ID is lowercase ``sentinel-1-grd`` per CDSE STAC v1
+# (verified 2026-05-02 via direct GET against
+# /v1/collections/sentinel-1-grd which returned the collection metadata).
+# The pre-2026-05-02 value "SENTINEL-1-GRD" returned 0 items on every
+# search — the v1 endpoint silently treats unknown collections as empty
+# rather than 404, which is why our cascade always returned None and
+# fell through to MPC. Probe-cdse-collections-pphd2 only listed CCM +
+# CLMS collections, suggesting Sentinel collections are paginated
+# beyond the default page size — but the per-collection GET works.
+_STAC_COLLECTION = "sentinel-1-grd"
 
 _PRODUCT_CACHE_DIR = Path(os.environ.get("S1_CACHE_DIR", "/data/s1_cache"))
 
