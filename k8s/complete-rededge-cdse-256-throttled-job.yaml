@@ -1,0 +1,101 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: complete-rededge-cdse-256-throttled
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: rededge-256-cdse-throttled-completion
+spec:
+  backoffLimit: 0
+  # /data/unified_v2 has:
+  #   • 2881 tiles with rededge 3/4 valid (missing 2017-frame)   = 2881 fetches
+  #   • 1025 tiles with rededge 0/4 valid (DES failed all)       = 1025 × 4 = 4100 fetches
+  #   = ~7000 frame fetches needed
+  # Capped at 100/h → ~70 h walltime. Run in 96 h cap with margin.
+  # PU consumption ~14k PU; user accepts overage / will spread cost.
+  activeDeadlineSeconds: 345600   # 4 days
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: r
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== rededge CDSE-completion 256 (throttled 100/h) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow openeo
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              echo ""
+              echo "Verifying --max-per-hour is in cloned source:"
+              grep -n "max-per-hour\|_set_rate_limit\|_wait_for_rate_limit" \
+                scripts/enrich_tiles_rededge.py | head -3 \
+                || { echo "rate limiter NOT PRESENT — abort"; exit 1; }
+
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "Tile inventory:"
+              echo "  /data/unified_v2: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l) tiles"
+
+              # --source cdse:           Process API (PU-billed) but has 2017 + everything else
+              # --retry-empty-frames:    re-process tiles with all-zero or partial rededge
+              # --max-per-hour 100:      sliding-window cap, spreads PU over time
+              # NO --year-filter:        we want ALL empty frames filled (incl. all-2018-failed)
+              # --workers 4:             cap is global; threads just absorb network latency
+              python scripts/enrich_tiles_rededge.py \
+                --data-dir /data/unified_v2 \
+                --source cdse \
+                --workers 4 \
+                --skip-existing \
+                --retry-empty-frames \
+                --max-per-hour 100
+
+              echo ""
+              echo "=== Done: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data

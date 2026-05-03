@@ -39,6 +39,50 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+# Global rate limiter — sliding-window cap on the number of CDSE
+# Process API fetches per hour. Used to spread PU consumption over time
+# so a multi-thousand-frame completion run doesn't burn the entire
+# monthly free tier in a single burst.
+#
+# Implementation: keep timestamps of the last N fetches (where N is the
+# requested cap). Before each new fetch, drop entries older than 1 hour;
+# if there are still N entries, sleep until the oldest one is > 1 hour
+# old, then proceed. Thread-safe via a single module-level lock.
+_RATE_LOCK = threading.Lock()
+_RATE_TIMES: list[float] = []
+_RATE_MAX_PER_HOUR = 0  # 0 = unlimited
+
+
+def _set_rate_limit(max_per_hour: int) -> None:
+    """Configure the global cap. 0 disables throttling."""
+    global _RATE_MAX_PER_HOUR
+    _RATE_MAX_PER_HOUR = int(max_per_hour)
+
+
+def _wait_for_rate_limit() -> None:
+    """Block until a fresh fetch is allowed under the configured cap."""
+    if _RATE_MAX_PER_HOUR <= 0:
+        return
+    while True:
+        with _RATE_LOCK:
+            now = time.time()
+            cutoff = now - 3600.0
+            # Drop entries outside the trailing-hour window
+            i = 0
+            while i < len(_RATE_TIMES) and _RATE_TIMES[i] <= cutoff:
+                i += 1
+            if i:
+                del _RATE_TIMES[:i]
+            if len(_RATE_TIMES) < _RATE_MAX_PER_HOUR:
+                _RATE_TIMES.append(now)
+                return
+            # Have to wait for the oldest in-window entry to age out
+            wait_s = _RATE_TIMES[0] + 3600.0 - now
+        # Cap the actual sleep to keep workers responsive on shutdown,
+        # but never sleep less than 1 s to avoid a tight retry loop.
+        time.sleep(max(1.0, min(wait_s + 0.5, 60.0)))
+
+
 _REDEDGE_EVALSCRIPT = """//VERSION=3
 function setup() {
   return {
@@ -59,10 +103,14 @@ def _fetch_rededge_frame_cdse(
     """Fetch B05/B06/B07 (3 bands) for one date via CDSE Process API.
 
     Returns (3, H, W) float32 or None on failure. PU-billed.
+    Honours the global ``--max-per-hour`` cap configured via
+    ``_set_rate_limit`` — blocks here before any network I/O if the
+    sliding-window quota would be exceeded.
     """
     from imint.training.cdse_s2 import _fetch_s2_tiff, _parse_multiband_tiff, _get_token
     from imint.training.tile_fetch import _CDSE_SEMAPHORE
 
+    _wait_for_rate_limit()
     _CDSE_SEMAPHORE.acquire()
     try:
         token = _get_token()
@@ -348,15 +396,27 @@ def main():
              "openEO refuses (no 2017 L2A indexed) without disturbing "
              "non-2017 frames already populated by the DES rerun.",
     )
+    parser.add_argument(
+        "--max-per-hour", type=int, default=0,
+        help="Global cap on CDSE Process API fetches per hour (sliding "
+             "window across all worker threads). 0 (default) = no cap. "
+             "Use to spread PU consumption across days when the total "
+             "fetch count exceeds the monthly free-tier budget. "
+             "Only applies to --source cdse; DES openEO is not throttled.",
+    )
     args = parser.parse_args()
+
+    _set_rate_limit(args.max_per_hour)
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
     if args.max_tiles:
         tiles = tiles[:args.max_tiles]
     print(f"=== Red-Edge Enrichment (B05/B06/B07) ===")
-    print(f"  Tiles:   {len(tiles)}")
-    print(f"  Workers: {args.workers}")
-    print(f"  Source:  {args.source}")
+    print(f"  Tiles:        {len(tiles)}")
+    print(f"  Workers:      {args.workers}")
+    print(f"  Source:       {args.source}")
+    if args.max_per_hour > 0:
+        print(f"  Rate limit:   {args.max_per_hour} fetches/hour (CDSE only)")
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     lock = threading.Lock()
