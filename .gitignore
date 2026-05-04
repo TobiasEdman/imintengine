@@ -2,7 +2,6 @@
 outputs/*
 # But keep the showcase (small, deliverable)
 !outputs/imint_showcase.html
-!outputs/era5_metafilter_showcase.html
 !outputs/showcase/
 !outputs/showcase/**
 data/
