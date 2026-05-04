@@ -7,6 +7,26 @@
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/leaflet.css">
     <link rel="stylesheet" href="css/styles.css">
+    <style>
+        /* ERA5 prefilter tab */
+        .section-byline { color: #6b7280; font-size: 13px; margin-top: 4px; }
+        .era5-set-tab {
+            display: inline-block;
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: #1f1f1f;
+            color: #cfcfcf;
+            text-decoration: none;
+            font-size: 13px;
+            border: 1px solid #2a2a2a;
+            transition: all 0.15s ease;
+        }
+        .era5-set-tab:hover { background: #2a2a2a; color: #fff; }
+        .era5-set-tab.active {
+            background: #27ae60; color: #fff; border-color: #27ae60;
+            font-weight: 600;
+        }
+    </style>
 </head>
 <body>
     <!-- ── Testimonial ─────────────────────────────────────────── -->
@@ -30,6 +50,7 @@
             <a href="#" class="theme-tab" data-tab="kust">🌊 Kust</a>
             <a href="#" class="theme-tab" data-tab="water_quality">💧 Vattenkvalitet</a>
             <a href="#" class="theme-tab" data-tab="sr">🔬 Superresolution</a>
+            <a href="#" class="theme-tab" data-tab="era5">☁️ Atmosfär</a>
             <!-- LULC tab hidden — moved to training dashboard on M1 Max -->
             <!-- <a href="#" class="theme-tab" data-tab="lulc">🌲 LULC</a> -->
         </div>
@@ -521,6 +542,140 @@
         </div>
     </div>
 
+    <!-- ── ERA5 prefilter tab (Nationellt Rymddatalabb / SDL 3.0) ──── -->
+    <div class="tab-content" id="tab-era5">
+        <div class="section-header">
+            <h2>Atmosfär — kandidatdags-filtrering med ERA5-reanalys före Sentinel-2-fetch</h2>
+            <p class="section-byline">Nationellt Rymddatalabb &middot; SDL 3.0 &middot; Skåne (Lund-omgivning) &middot; juni–augusti 2022</p>
+        </div>
+        <div class="summary-section">
+            <div class="summary-card"><h4>Mean COT (B atmosfär)</h4><div class="value">0.0743</div><div class="detail">57 % lägre än baseline</div></div>
+            <div class="summary-card"><h4>Mean COT (C nuvarande)</h4><div class="value">0.0917</div><div class="detail">STAC granul-cc</div></div>
+            <div class="summary-card"><h4>Mean COT (A baseline)</h4><div class="value">0.1734</div><div class="detail">Alla 36 scener</div></div>
+            <div class="summary-card"><h4>Cloud-free fångade</h4><div class="value">69 %</div><div class="detail">B vs C: 31 %</div></div>
+            <div class="summary-card"><h4>Tidsbesparing</h4><div class="value">−49 %</div><div class="detail">B mot A · 6 workers DES openEO</div></div>
+        </div>
+
+        <div class="tab-description">
+            <h3>Frågan</h3>
+            <p>
+                Imints fetch-pipeline använder VPP-fenologi för att välja säsongsfönster och rankar
+                sedan på STAC:s <code>eo:cloud_cover</code> — men det måttet är granul-snitt (~110×110 km),
+                inte AOI-snitt. För en typisk träningstile (~18×17 km i Skåne) är det en
+                osäker proxy. Den här studien mäter vad som händer om vi istället
+                <em>först</em> filtrerar dagar med ERA5-baserad reanalys-väderdata, innan vi ens
+                listar scener i STAC.
+            </p>
+
+            <h3>Tre delmängder hämtades live från DES openEO</h3>
+            <table class="license-table" style="margin-top:8px;">
+                <thead>
+                    <tr><th>Set</th><th>Definition</th><th>Scener</th><th>Wall-clock</th><th>Mean COT</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>A — baseline</strong></td>
+                        <td>Alla S2-L2A scener över AOI för perioden, ingen filter (ground truth).</td>
+                        <td>36</td><td>480 s</td><td>0.1734</td>
+                    </tr>
+                    <tr>
+                        <td><strong>B — Atmosfär-filter</strong></td>
+                        <td>A:s scener vars datum passerar väderregeln: nederbörd ≤ 0.5 mm idag, ≤ 3 mm föregående 2 dygn, T2m ≥ 10 °C.</td>
+                        <td>16</td><td>247 s</td><td><strong>0.0743</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>C — STAC-cc</strong></td>
+                        <td>A:s scener vars STAC <code>eo:cloud_cover</code> ≤ 30 % — speglar nuvarande pipelinens default.</td>
+                        <td>10</td><td>173 s</td><td>0.0917</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Pixelvis Cloud Optical Thickness per scen</h3>
+            <p>
+                För varje hämtad tile körs <code>imint.analyzers.cot</code> — en MLP5-ensemble (3 modeller)
+                som tagits fram inom Digital Earth Sweden, tränad på syntetiska S2-data
+                (Pirinen et al. 2024). Modellen tar 11 spektralband (B02–B12, exklusive
+                B01 och B10) och predikterar ett kontinuerligt COT-värde per pixel.
+                Tröskelvärden från artikeln: thick-cloud ≥ 0.025, thin-cloud 0.015–0.025.
+            </p>
+            <p>
+                Galleriet nedan visar varje scen som en frame: vänster panel är RGB
+                (B04/B03/B02), höger panel är COT-värmekartan över exakt samma yta.
+                Per-scen <em>mean COT</em> står ovanför höger panel — det är medelvärdet
+                av modellens output över alla AOI-pixlar i den tilen. Frames är sorterade
+                <strong>klarast först</strong> (lägst mean COT överst).
+            </p>
+
+            <div id="era5-set-tabs" style="margin-top: 16px; display:flex; gap:8px; flex-wrap:wrap;">
+                <a href="#" class="era5-set-tab active" data-set="B_metafilter">B — Atmosfär-filter (16)</a>
+                <a href="#" class="era5-set-tab" data-set="C_fetch_s2">C — STAC-cc (10)</a>
+                <a href="#" class="era5-set-tab" data-set="A_baseline">A — Baseline (36)</a>
+            </div>
+
+            <div id="era5-frame-gallery" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; margin-top: 14px;">
+                <!-- Filled by JS from showcase/era5_metafilter/frames/manifest.json -->
+            </div>
+
+            <h3 style="margin-top:32px;">Aggregerade resultat</h3>
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>Mean COT per set</h3>
+                    <img src="showcase/era5_metafilter/07_mean_cot_per_set.png" alt="Mean COT per set" style="width:100%; height:auto; border-radius:4px;">
+                </div>
+                <div class="chart-card">
+                    <h3>Per-scen COT-spridning</h3>
+                    <img src="showcase/era5_metafilter/08_cot_per_scene.png" alt="Per-scen COT" style="width:100%; height:auto; border-radius:4px;">
+                </div>
+                <div class="chart-card">
+                    <h3>Kandidatdagar (ERA5-styrt urval)</h3>
+                    <img src="showcase/era5_metafilter/01_candidate_days.png" alt="Kandidatdagar" style="width:100%; height:auto; border-radius:4px;">
+                </div>
+                <div class="chart-card">
+                    <h3>Cloud-free fångade — datakvarvarande</h3>
+                    <img src="showcase/era5_metafilter/05_benchmark_data_loss.png" alt="Cloud-free capture" style="width:100%; height:auto; border-radius:4px;">
+                </div>
+            </div>
+
+            <h3>Tolkning</h3>
+            <p>
+                <strong>B levererar lägst mean COT trots fler scener än C.</strong>
+                ERA5-prefiltret fångar fler genuint cloud-free dagar än STAC granul-cloud-cover,
+                eftersom granul-snittet inte speglar molnighet över en specifik AOI.
+                ERA5-reanalysens ~30 km grid samplar däremot den cell som faktiskt täcker AOI:n
+                — grovt men rätt skala.
+            </p>
+            <p>
+                Filtren är komplementära, inte konkurrerande. Kombinationen B ∩ C
+                — väderpassande dagar med låg granul-cc — ger den verkligt vassa pipelinen.
+                Per-datum-data finns i <a href="showcase/era5_metafilter/cot_metrics.json">cot_metrics.json</a>.
+            </p>
+
+            <h3>Datakällor &amp; modell</h3>
+            <p>
+                <strong>Sentinel-2 L2A</strong> via Digital Earth Sweden openEO (11 reflektansband per scen,
+                BOA, 6 parallella workers).
+                <strong>ERA5-baserad daglig reanalys</strong> via Open-Meteo Historical Archive
+                (öppen, ECMWF ERA5-Land härlett).
+                <strong>STAC-katalog</strong> via Element84 earth-search (anonym).
+                <strong>COT-modell</strong>: Pirinen et al. 2024,
+                <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">DigitalEarthSweden/ml-cloud-opt-thick</a>
+                — samma ensemble som körs i de andra Imint-fallen
+                (<a href="#" class="theme-tab-link" data-tab="fire">brandanalysen</a>,
+                <a href="#" class="theme-tab-link" data-tab="grazing">betesmarken</a>).
+            </p>
+
+            <h3>Nationellt Rymddatalabb (SDL 3.0)</h3>
+            <p>
+                Studien är genomförd inom Nationellt Rymddatalabb och visar hur
+                meteorologisk reanalysdata kan användas operativt för att minska antal
+                STAC-anrop och samtidigt förbättra medelkvalitet på det som faktiskt
+                hämtas. Den är reproducerbar end-to-end via koden i
+                <code>demos/era5_metafilter/</code> i ImintEngine-repot.
+            </p>
+        </div>
+    </div>
+
     <div class="footer">
         IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB
         &middot; CC0 1.0 Universal &middot; Genererad 2018-07-24 / 2025-07-10 / 2025-06-14 / 2025-06-14
@@ -640,6 +795,7 @@
     <script src="js/vendor/chart.min.js"></script>
     <script src="js/tab-data.js?v=7"></script>
     <script src="js/app.js?v=7"></script>
+    <script src="js/era5-gallery.js?v=1"></script>
     <script>
     // Auto-resize parent iframe (for digitalearth.se/case/ embedding)
     if (window.parent !== window) {

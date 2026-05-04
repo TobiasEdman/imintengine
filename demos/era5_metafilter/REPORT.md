@@ -1,13 +1,11 @@
 # ERA5-driven kandidatdags-filtrering för Sentinel-2-fetch
 
-**Showcase — internt, space-ecosystem · ImintEngine · 2026-05-04**
+**Nationellt Rymddatalabb · SDL 3.0 · ImintEngine · 2026-05-04**
 
-Inspirerat av [erikkallman/metafilter](https://github.com/erikkallman/metafilter):
-*"meteorological metadata can be used to narrow down when it is worth looking
-for Sentinel-2 L2A imagery."*
-
-Denna rapport visar vad mönstret skulle ge **vår** fetch-pipeline om vi använde
-ERA5-väderdata som ett första urvalssteg innan STAC-search och asset-nedladdning.
+Denna rapport visar vad meteorologisk reanalysdata ger **vår** fetch-pipeline
+om vi använder ERA5 som ett första urvalssteg innan STAC-search och
+asset-nedladdning — istället för att enbart förlita oss på STAC-katalogens
+granul-cloud-cover som idag.
 
 ---
 
