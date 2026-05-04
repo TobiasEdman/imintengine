@@ -1709,6 +1709,16 @@ def fetch_seasonal_dates(
     return results
 
 
+#: Canonical S2-L2A spectral band order returned by default by
+#: :func:`fetch_seasonal_image`. Eleven bands — every reflectance band the
+#: DES / CDSE openEO collection delivers (B01 60-m coastal aerosol and L1C-
+#: only B10 are not part of the standard L2A spectral set we fetch).
+S2L2A_SPECTRAL_BANDS = [
+    "B02", "B03", "B04", "B05", "B06", "B07",
+    "B08", "B8A", "B09", "B11", "B12",
+]
+
+
 def fetch_seasonal_image(
     date: str,
     coords: dict,
@@ -1726,16 +1736,21 @@ def fetch_seasonal_image(
         date: ISO date string (already cloud-screened).
         coords: WGS84 bounding box dict.
         prithvi_bands: Band names for stacking, e.g. ["B02", ..., "B12"].
-                       Defaults to the Prithvi 6-band set.
+                       Defaults to :data:`S2L2A_SPECTRAL_BANDS` — the full
+                       11-band L2A spectral set. Callers that want a smaller
+                       subset (e.g. the Prithvi 6-band set
+                       ``["B02", "B03", "B04", "B8A", "B11", "B12"]``) must
+                       pass it explicitly.
         source: ``"des"`` or ``"copernicus"`` — backend to fetch from.
 
     Returns:
-        Tuple of ``(image_array, date_str)`` where image_array is
-        ``(6, H, W)`` float32 reflectance [0,1], or ``None`` if fetch
-        fails (caller handles missing seasons).
+        Tuple of ``(image_array, date_str)`` where ``image_array`` is
+        ``(N, H, W)`` float32 reflectance [0, 1] with ``N == len(prithvi_bands)``
+        (11 by default), or ``None`` if fetch fails (caller handles missing
+        seasons).
     """
     if prithvi_bands is None:
-        prithvi_bands = ["B02", "B03", "B04", "B8A", "B11", "B12"]
+        prithvi_bands = S2L2A_SPECTRAL_BANDS
 
     try:
         result = fetch_sentinel2_data(
