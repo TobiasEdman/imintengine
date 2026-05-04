@@ -44,14 +44,15 @@
     },
     "C_fetch_s2": {
       "name": "C_fetch_s2",
-      "n_scenes": 10,
-      "mean_cot": 0.09174,
-      "median_cot": 0.03225,
-      "std_cot": 0.10148,
+      "n_scenes": 4,
+      "mean_cot": 0.00954,
+      "median_cot": 0.00697,
+      "std_cot": 0.00659,
       "min_cot": 0.00394,
-      "max_cot": 0.2758,
-      "mean_clear_frac": 0.639,
-      "mean_thick_cloud_frac": 0.2409
+      "max_cot": 0.0203,
+      "mean_clear_frac": 0.9007,
+      "mean_thick_cloud_frac": 0.0177,
+      "definition": "STAC eo:cloud_cover <= 30% AND AOI-SCL cloud_fraction <= 10% (full production pipeline)"
     }
   },
   "per_scene": {
@@ -581,36 +582,6 @@
     ],
     "C_fetch_s2": [
       {
-        "date": "2022-06-10",
-        "mean_cot": 0.26,
-        "median_cot": 0.06319,
-        "p90_cot": 0.75502,
-        "max_cot": 1.08248,
-        "thick_cloud_frac": 0.7087,
-        "thin_cloud_frac": 0.1431,
-        "clear_frac": 0.1482
-      },
-      {
-        "date": "2022-06-28",
-        "mean_cot": 0.2758,
-        "median_cot": 0.03046,
-        "p90_cot": 0.98884,
-        "max_cot": 1.15043,
-        "thick_cloud_frac": 0.538,
-        "thin_cloud_frac": 0.1252,
-        "clear_frac": 0.3368
-      },
-      {
-        "date": "2022-07-10",
-        "mean_cot": 0.14034,
-        "median_cot": 0.01407,
-        "p90_cot": 0.69815,
-        "max_cot": 1.18458,
-        "thick_cloud_frac": 0.3539,
-        "thin_cloud_frac": 0.1209,
-        "clear_frac": 0.5252
-      },
-      {
         "date": "2022-07-13",
         "mean_cot": 0.0203,
         "median_cot": 0.01068,
@@ -619,16 +590,6 @@
         "thick_cloud_frac": 0.0686,
         "thin_cloud_frac": 0.1769,
         "clear_frac": 0.7546
-      },
-      {
-        "date": "2022-07-15",
-        "mean_cot": 0.14526,
-        "median_cot": 0.02065,
-        "p90_cot": 0.67274,
-        "max_cot": 1.13966,
-        "thick_cloud_frac": 0.4182,
-        "thin_cloud_frac": 0.2334,
-        "clear_frac": 0.3485
       },
       {
         "date": "2022-07-20",
@@ -641,16 +602,6 @@
         "clear_frac": 0.8643
       },
       {
-        "date": "2022-07-28",
-        "mean_cot": 0.0442,
-        "median_cot": 0.00629,
-        "p90_cot": 0.0644,
-        "max_cot": 1.08984,
-        "thick_cloud_frac": 0.1342,
-        "thin_cloud_frac": 0.0673,
-        "clear_frac": 0.7984
-      },
-      {
         "date": "2022-08-12",
         "mean_cot": 0.00394,
         "median_cot": 0.00184,
@@ -659,16 +610,6 @@
         "thick_cloud_frac": 0.0005,
         "thin_cloud_frac": 0.0066,
         "clear_frac": 0.9929
-      },
-      {
-        "date": "2022-08-14",
-        "mean_cot": 0.0136,
-        "median_cot": 0.01102,
-        "p90_cot": 0.03125,
-        "max_cot": 0.44269,
-        "thick_cloud_frac": 0.185,
-        "thin_cloud_frac": 0.1845,
-        "clear_frac": 0.6305
       },
       {
         "date": "2022-08-24",
@@ -681,5 +622,6 @@
         "clear_frac": 0.9909
       }
     ]
-  }
+  },
+  "c_set_method_note": "C_fetch_s2 represents the full production pipeline: STAC granule filter (eo:cloud_cover <= 30%) AND AOI-SCL post-filter (cloud_fraction <= 10%). Six of ten STAC-passing dates were rejected by the AOI-SCL filter. See c_full_scl_results.json for per-date verdicts. Original STAC-only n=10 mean_cot=0.0917 is preserved in benchmark_metrics.json."
 }

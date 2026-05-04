@@ -1,0 +1,295 @@
+{
+  "scl_cloud_threshold": 0.1,
+  "stac_cc_max": 30.0,
+  "n_workers": 6,
+  "per_scene": [
+    {
+      "date": "2022-06-03",
+      "scl_pass": false,
+      "scl_cloud_fraction": 1.0,
+      "elapsed_s": 117.04,
+      "error": "scl_rejected",
+      "stac_cc": 99.938691
+    },
+    {
+      "date": "2022-06-05",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.19,
+      "elapsed_s": 114.1,
+      "error": "scl_rejected",
+      "stac_cc": 32.774574
+    },
+    {
+      "date": "2022-06-08",
+      "scl_pass": false,
+      "scl_cloud_fraction": 1.0,
+      "elapsed_s": 119.55,
+      "error": "scl_rejected",
+      "stac_cc": 83.436543
+    },
+    {
+      "date": "2022-06-10",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.822,
+      "elapsed_s": 118.92,
+      "error": "scl_rejected",
+      "stac_cc": 26.643947
+    },
+    {
+      "date": "2022-06-13",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.559,
+      "elapsed_s": 107.83,
+      "error": "scl_rejected",
+      "stac_cc": 30.796531
+    },
+    {
+      "date": "2022-06-15",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.81,
+      "elapsed_s": 98.52,
+      "error": "scl_rejected",
+      "stac_cc": 51.259381
+    },
+    {
+      "date": "2022-06-18",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.243,
+      "elapsed_s": 95.29,
+      "error": "scl_rejected",
+      "stac_cc": 32.543239
+    },
+    {
+      "date": "2022-06-20",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.984,
+      "elapsed_s": 73.46,
+      "error": "scl_rejected",
+      "stac_cc": 79.648834
+    },
+    {
+      "date": "2022-06-23",
+      "scl_pass": false,
+      "scl_cloud_fraction": 1.0,
+      "elapsed_s": 85.7,
+      "error": "scl_rejected",
+      "stac_cc": 35.691911
+    },
+    {
+      "date": "2022-06-25",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.853,
+      "elapsed_s": 89.37,
+      "error": "scl_rejected",
+      "stac_cc": 91.038901
+    },
+    {
+      "date": "2022-06-28",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.689,
+      "elapsed_s": 70.22,
+      "error": "scl_rejected",
+      "stac_cc": 22.796883
+    },
+    {
+      "date": "2022-06-30",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.41,
+      "elapsed_s": 94.01,
+      "error": "scl_rejected",
+      "stac_cc": 54.035878
+    },
+    {
+      "date": "2022-07-03",
+      "scl_pass": true,
+      "scl_cloud_fraction": 0.0455,
+      "elapsed_s": 66.82,
+      "error": null,
+      "stac_cc": 43.155152
+    },
+    {
+      "date": "2022-07-05",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.215,
+      "elapsed_s": 119.67,
+      "error": "scl_rejected",
+      "stac_cc": 55.387092
+    },
+    {
+      "date": "2022-07-08",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.916,
+      "elapsed_s": 85.28,
+      "error": "scl_rejected",
+      "stac_cc": 90.530968
+    },
+    {
+      "date": "2022-07-10",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.547,
+      "elapsed_s": 104.04,
+      "error": "scl_rejected",
+      "stac_cc": 22.469121
+    },
+    {
+      "date": "2022-07-13",
+      "scl_pass": true,
+      "scl_cloud_fraction": 0.0824,
+      "elapsed_s": 102.21,
+      "error": null,
+      "stac_cc": 21.226297
+    },
+    {
+      "date": "2022-07-15",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.576,
+      "elapsed_s": 100.4,
+      "error": "scl_rejected",
+      "stac_cc": 26.231208
+    },
+    {
+      "date": "2022-07-18",
+      "scl_pass": false,
+      "scl_cloud_fraction": 1.0,
+      "elapsed_s": 72.26,
+      "error": "scl_rejected",
+      "stac_cc": 99.827951
+    },
+    {
+      "date": "2022-07-20",
+      "scl_pass": true,
+      "scl_cloud_fraction": 0.0,
+      "elapsed_s": 52.09,
+      "error": null,
+      "stac_cc": 2.483804
+    },
+    {
+      "date": "2022-07-23",
+      "scl_pass": false,
+      "scl_cloud_fraction": 1.0,
+      "elapsed_s": 44.71,
+      "error": "scl_rejected",
+      "stac_cc": 99.707669
+    },
+    {
+      "date": "2022-07-25",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.258,
+      "elapsed_s": 100.35,
+      "error": "scl_rejected",
+      "stac_cc": 56.805599
+    },
+    {
+      "date": "2022-07-28",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.35,
+      "elapsed_s": 95.1,
+      "error": "scl_rejected",
+      "stac_cc": 14.191897
+    },
+    {
+      "date": "2022-07-30",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.24,
+      "elapsed_s": 86.82,
+      "error": "scl_rejected",
+      "stac_cc": 44.792679
+    },
+    {
+      "date": "2022-08-02",
+      "scl_pass": false,
+      "scl_cloud_fraction": 1.0,
+      "elapsed_s": 70.76,
+      "error": "scl_rejected",
+      "stac_cc": 75.892901
+    },
+    {
+      "date": "2022-08-04",
+      "scl_pass": true,
+      "scl_cloud_fraction": 0.095,
+      "elapsed_s": 80.49,
+      "error": null,
+      "stac_cc": 44.102573
+    },
+    {
+      "date": "2022-08-07",
+      "scl_pass": false,
+      "scl_cloud_fraction": 1.0,
+      "elapsed_s": 69.2,
+      "error": "scl_rejected",
+      "stac_cc": 96.138114
+    },
+    {
+      "date": "2022-08-09",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.79,
+      "elapsed_s": 44.48,
+      "error": "scl_rejected",
+      "stac_cc": 64.056075
+    },
+    {
+      "date": "2022-08-12",
+      "scl_pass": true,
+      "scl_cloud_fraction": 0.0,
+      "elapsed_s": 85.17,
+      "error": null,
+      "stac_cc": 0.086857
+    },
+    {
+      "date": "2022-08-14",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.579,
+      "elapsed_s": 50.88,
+      "error": "scl_rejected",
+      "stac_cc": 28.825727
+    },
+    {
+      "date": "2022-08-17",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.915,
+      "elapsed_s": 91.6,
+      "error": "scl_rejected",
+      "stac_cc": 69.59514
+    },
+    {
+      "date": "2022-08-19",
+      "scl_pass": false,
+      "scl_cloud_fraction": 1.0,
+      "elapsed_s": 91.9,
+      "error": "scl_rejected",
+      "stac_cc": 99.840516
+    },
+    {
+      "date": "2022-08-22",
+      "scl_pass": false,
+      "scl_cloud_fraction": 0.946,
+      "elapsed_s": 76.17,
+      "error": "scl_rejected",
+      "stac_cc": 65.847391
+    },
+    {
+      "date": "2022-08-24",
+      "scl_pass": true,
+      "scl_cloud_fraction": 0.0001,
+      "elapsed_s": 79.01,
+      "error": null,
+      "stac_cc": 0.988332
+    },
+    {
+      "date": "2022-08-27",
+      "scl_pass": false,
+      "scl_cloud_fraction": 1.0,
+      "elapsed_s": 62.36,
+      "error": "scl_rejected",
+      "stac_cc": 99.931419
+    },
+    {
+      "date": "2022-08-29",
+      "scl_pass": false,
+      "scl_cloud_fraction": 1.0,
+      "elapsed_s": 44.23,
+      "error": "scl_rejected",
+      "stac_cc": 98.256093
+    }
+  ]
+}

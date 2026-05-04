@@ -556,10 +556,10 @@
             <p class="section-byline">Nationellt Rymddatalabb &middot; SDL 3.0 &middot; Skåne (Lund-omgivning) &middot; juni–augusti 2022</p>
         </div>
         <div class="summary-section">
-            <div class="summary-card"><h4>Mean COT (B atmosfär)</h4><div class="value">0.0743</div><div class="detail">57 % lägre än baseline</div></div>
-            <div class="summary-card"><h4>Mean COT (C nuvarande)</h4><div class="value">0.0917</div><div class="detail">STAC granul-cc</div></div>
+            <div class="summary-card"><h4>Mean COT (B atmosfär)</h4><div class="value">0.0743</div><div class="detail">16 scener · 57 % lägre än A</div></div>
+            <div class="summary-card"><h4>Mean COT (C full pipeline)</h4><div class="value">0.0095</div><div class="detail">STAC + AOI-SCL · 4 scener</div></div>
             <div class="summary-card"><h4>Mean COT (A baseline)</h4><div class="value">0.1734</div><div class="detail">Alla 36 scener</div></div>
-            <div class="summary-card"><h4>Cloud-free fångade</h4><div class="value">69 %</div><div class="detail">B vs C: 31 %</div></div>
+            <div class="summary-card"><h4>SCL-recall (B)</h4><div class="value">5 / 6</div><div class="detail">SCL-godkända dagar fångade av B</div></div>
             <div class="summary-card"><h4>Tidsbesparing</h4><div class="value">−49 %</div><div class="detail">B mot A · 6 workers DES openEO</div></div>
         </div>
 
@@ -591,9 +591,11 @@
                         <td>16</td><td>247 s</td><td><strong>0.0743</strong></td>
                     </tr>
                     <tr>
-                        <td><strong>C — STAC-cc</strong></td>
-                        <td>A:s scener vars STAC <code>eo:cloud_cover</code> ≤ 30 % — speglar nuvarande pipelinens default.</td>
-                        <td>10</td><td>173 s</td><td>0.0917</td>
+                        <td><strong>C — Full pipeline</strong></td>
+                        <td>Speglar fetch_seasonal-pipelinens båda filter:
+                            STAC <code>eo:cloud_cover</code> ≤ 30 % + AOI-SCL <code>cloud_fraction</code> ≤ 10 %
+                            (Sen2Cor scen-klassificering över AOI). Av 10 STAC-passande scener avvisas 6 av AOI-SCL.</td>
+                        <td>4</td><td>173 s</td><td><strong>0.0095</strong></td>
                     </tr>
                 </tbody>
             </table>
@@ -616,7 +618,7 @@
 
             <div id="era5-set-tabs" style="margin-top: 16px; display:flex; gap:8px; flex-wrap:wrap;">
                 <a href="#" class="era5-set-tab active" data-set="B_metafilter">B — Atmosfär-filter (16)</a>
-                <a href="#" class="era5-set-tab" data-set="C_fetch_s2">C — STAC-cc (10)</a>
+                <a href="#" class="era5-set-tab" data-set="C_fetch_s2">C — Full pipeline (4)</a>
                 <a href="#" class="era5-set-tab" data-set="A_baseline">A — Baseline (36)</a>
             </div>
 
@@ -646,16 +648,24 @@
 
             <h3>Tolkning</h3>
             <p>
-                <strong>B levererar lägst mean COT trots fler scener än C.</strong>
-                ERA5-prefiltret fångar fler genuint cloud-free dagar än STAC granul-cloud-cover,
-                eftersom granul-snittet inte speglar molnighet över en specifik AOI.
-                ERA5-reanalysens ~30 km grid samplar däremot den cell som faktiskt täcker AOI:n
-                — grovt men rätt skala.
+                <strong>Atmosfärfiltret är ett effektivt prefilter mot AOI-SCL.</strong>
+                Av de 6 dagar i hela perioden som passerar produktionspipelinens AOI-SCL-filter
+                (≤ 10 % moln över AOI) fångas 5 också av atmosfärfiltret — en
+                <strong>SCL-recall på 83 %</strong>, mätt som prefilter mot postfilter.
+                Den enda missade dagen (2022-07-03) hade STAC granul-cc 43 % och avvisas alltså
+                ändå av STAC-filtret.
             </p>
             <p>
-                Filtren är komplementära, inte konkurrerande. Kombinationen B ∩ C
-                — väderpassande dagar med låg granul-cc — ger den verkligt vassa pipelinen.
-                Per-datum-data finns i <a href="showcase/era5_metafilter/cot_metrics.json">cot_metrics.json</a>.
+                Den fullständiga pipelinen (C: STAC granul-cc + AOI-SCL) ger 4 användbara
+                tiles av 36 möjliga med mycket låg mean COT (0.0095). Atmosfärfiltret (B)
+                ger 16 tiles med hög datakvalitet (mean COT 0.0743) — användbart när
+                träningsmodellen tål viss molnpåverkan men behöver fler exempel.
+                Kombinationen B + AOI-SCL post-filter ger 5 ultra-rena tiles med
+                <strong>56 % färre fetches</strong> än att probba alla 36 dagar.
+            </p>
+            <p>
+                Per-datum-data + SCL-pass/reject finns i
+                <a href="showcase/era5_metafilter/cot_metrics.json">cot_metrics.json</a>.
             </p>
 
             <h3>Datakällor &amp; modell</h3>
