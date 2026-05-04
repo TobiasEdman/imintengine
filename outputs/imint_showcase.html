@@ -1120,6 +1120,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
             <a href="#" class="theme-tab" data-tab="marine">⚓ Marin</a>
             <a href="#" class="theme-tab" data-tab="grazing">🐄 Betesmark</a>
             <a href="#" class="theme-tab" data-tab="coastline">🌊 Kustlinje</a>
+            <a href="#" class="theme-tab" data-tab="era5">☁️ ERA5-metafilter</a>
         </div>
     </div>
 
@@ -2184,6 +2185,148 @@ svg.leaflet-image-layer.leaflet-interactive path {
                 och kräver attribution vid publicering.
             </p>
         </div>
+    </div>
+
+    <!-- ── ERA5 metafilter tab ─────────────────────────────────────── -->
+    <div class="tab-content" id="tab-era5">
+        <div class="section-header">
+            <h2>ERA5-metafilter — kandidatdags-filtrering före Sentinel-2-fetch</h2>
+        </div>
+        <div class="summary-section">
+            <div class="summary-card"><h4>Mean COT (B_metafilter)</h4><div class="value">0.0743</div><div class="detail">57 % lägre än baseline</div></div>
+            <div class="summary-card"><h4>Mean COT (C_fetch_s2)</h4><div class="value">0.0917</div><div class="detail">Nuvarande pipeline</div></div>
+            <div class="summary-card"><h4>Mean COT (A_baseline)</h4><div class="value">0.1734</div><div class="detail">Hämta-allt referens</div></div>
+            <div class="summary-card"><h4>Cloud-free fångade (B)</h4><div class="value">69 %</div><div class="detail">vs C: 31 %</div></div>
+            <div class="summary-card"><h4>Tidsbesparing (B vs A)</h4><div class="value">−49 %</div><div class="detail">247 s mot 480 s</div></div>
+        </div>
+        <div class="tab-intro">
+            <p>
+                Inspirerat av <a href="https://github.com/erikkallman/metafilter" target="_blank">erikkallman/metafilter</a>:
+                meteorologisk metadata används för att begränsa när det är värt att leta efter Sentinel-2 L2A-bilder.
+                Vi mäter vad mönstret faktiskt ger Imints fetch-pipeline genom att hämta tre delmängder live från
+                DES openEO (Skåne, juni–augusti 2022, 6 parallella workers) och köra
+                <code>imint.analyzers.cot</code> (Pirinen et al. 2024 MLP5-ensemble) på samtliga 62 cachade tiles.
+            </p>
+            <p>
+                <strong>Kärnresultat:</strong> ERA5-metafiltret levererar <strong>57 % lägre mean COT</strong> än
+                hämta-allt-baseline och fångar <strong>mer än dubbelt</strong> så många cloud-free dagar som
+                nuvarande STAC-cloud-cover-baserade fetch-S2-logik.
+            </p>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px;">
+            <div style="background:white; border:1px solid #ececec; border-radius:8px; padding:14px;">
+                <h3 style="margin-top:0;">Mean COT per set</h3>
+                <img src="showcase/era5_metafilter/07_mean_cot_per_set.png" alt="Mean COT" style="width:100%; height:auto; border-radius:4px;">
+                <p style="font-size:13px; color:#666; margin-top:10px;">
+                    DES MLP5-ensemble. Lägre = klarare. Tröskelvärden från modellpapper:
+                    thick-cloud ≥ 0.025, thin-cloud 0.015–0.025.
+                </p>
+            </div>
+            <div style="background:white; border:1px solid #ececec; border-radius:8px; padding:14px;">
+                <h3 style="margin-top:0;">Per-scen COT-spridning</h3>
+                <img src="showcase/era5_metafilter/08_cot_per_scene.png" alt="Per-scen COT" style="width:100%; height:auto; border-radius:4px;">
+                <p style="font-size:13px; color:#666; margin-top:10px;">
+                    B och C är delmängder av A. B fångar fler scener under tröskeln än C
+                    trots fler totala fetches.
+                </p>
+            </div>
+        </div>
+
+        <h3>De tre delmängderna</h3>
+        <table style="width:100%; border-collapse:collapse; background:white; border:1px solid #ececec; border-radius:8px; overflow:hidden;">
+            <thead><tr style="background:#f5f5f5;">
+                <th style="padding:10px 14px; text-align:left;">Set</th>
+                <th style="padding:10px 14px; text-align:left;">Definition</th>
+                <th style="padding:10px 14px; text-align:right;">Scener</th>
+                <th style="padding:10px 14px; text-align:right;">Wall-clock</th>
+                <th style="padding:10px 14px; text-align:right;">Mean COT</th>
+            </tr></thead>
+            <tbody>
+                <tr style="border-top:1px solid #ececec;">
+                    <td style="padding:10px 14px;"><span style="display:inline-block; width:10px; height:10px; background:#7f8c8d; border-radius:2px; margin-right:6px;"></span><strong>A_baseline</strong></td>
+                    <td style="padding:10px 14px;">Alla S2-L2A scener över AOI — STAC, ingen filter (ground truth).</td>
+                    <td style="padding:10px 14px; text-align:right;">36</td>
+                    <td style="padding:10px 14px; text-align:right;">480 s</td>
+                    <td style="padding:10px 14px; text-align:right;">0.1734</td>
+                </tr>
+                <tr style="border-top:1px solid #ececec;">
+                    <td style="padding:10px 14px;"><span style="display:inline-block; width:10px; height:10px; background:#27ae60; border-radius:2px; margin-right:6px;"></span><strong>B_metafilter</strong></td>
+                    <td style="padding:10px 14px;">A:s scener vars datum passerar ERA5-väderregeln (precip ≤ 0.5 mm idag, ≤ 3 mm föregående 2 dygn, T2m ≥ 10 °C).</td>
+                    <td style="padding:10px 14px; text-align:right;">16</td>
+                    <td style="padding:10px 14px; text-align:right;">247 s</td>
+                    <td style="padding:10px 14px; text-align:right;"><strong>0.0743</strong></td>
+                </tr>
+                <tr style="border-top:1px solid #ececec;">
+                    <td style="padding:10px 14px;"><span style="display:inline-block; width:10px; height:10px; background:#2980b9; border-radius:2px; margin-right:6px;"></span><strong>C_fetch_s2</strong></td>
+                    <td style="padding:10px 14px;">A:s scener vars STAC <code>eo:cloud_cover</code> ≤ 30 % — speglar nuvarande pipelinens default.</td>
+                    <td style="padding:10px 14px; text-align:right;">10</td>
+                    <td style="padding:10px 14px; text-align:right;">173 s</td>
+                    <td style="padding:10px 14px; text-align:right;">0.0917</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px;">
+            <div style="background:white; border:1px solid #ececec; border-radius:8px; padding:14px;">
+                <h3 style="margin-top:0;">Kandidatdagar (ERA5-styrt urval)</h3>
+                <img src="showcase/era5_metafilter/01_candidate_days.png" alt="Kandidatdagar" style="width:100%; height:auto; border-radius:4px;">
+                <p style="font-size:13px; color:#666; margin-top:10px;">
+                    Övre: T2m + nederbörd. Undre: alla S2-scener (grå) + ERA5-passerade (gröna).
+                </p>
+            </div>
+            <div style="background:white; border:1px solid #ececec; border-radius:8px; padding:14px;">
+                <h3 style="margin-top:0;">Cloud-free fångade (data-förlust)</h3>
+                <img src="showcase/era5_metafilter/05_benchmark_data_loss.png" alt="Cloud-free capture" style="width:100%; height:auto; border-radius:4px;">
+                <p style="font-size:13px; color:#666; margin-top:10px;">
+                    B (ERA5) bevarar 69 % av A:s cloud-free scener.
+                    C (granul-cc) bevarar bara 31 %.
+                </p>
+            </div>
+        </div>
+
+        <h3>Tolkning</h3>
+        <p>
+            <strong>Granul-cloud-cover är en svag AOI-proxy.</strong> STAC <code>eo:cloud_cover</code>
+            är ett snitt över hela 110×110 km granulen — inte över vår 18×17 km AOI. ERA5
+            (~30×30 km reanalys-grid) samplar däremot den cell som faktiskt täcker AOI:n.
+            Det är därför B fångar fler verkligt cloud-free dagar än C trots att den
+            "bara" filtrerar på väder, inte på molnighet.
+        </p>
+        <p>
+            Filtren är komplementära, inte konkurrerande. Kombinationen B ∩ C ger den verkligt
+            vassa pipelinen — per-datum-data finns i <code>cot_metrics.json</code>.
+        </p>
+
+        <h3>Tekniska ändringar</h3>
+        <p>
+            För att kunna köra COT-modellen krävs alla 11 L2A-spektralband.
+            <code>imint/fetch.py:fetch_seasonal_image()</code> defaultade tidigare till
+            Prithvi-6; nu är defaulten <code>S2L2A_SPECTRAL_BANDS</code> (samtliga 11 band).
+            Inga produktions-callers påverkade — alla anger explicit <code>prithvi_bands=PRITHVI_BANDS</code>.
+        </p>
+
+        <div style="background:#f0fafa; border-left:4px solid #27ae60; padding:14px 18px; border-radius:4px; margin:16px 0; font-size:14px;">
+            <strong style="color:#1a6b40;">Reproducera:</strong>
+            kör <code>python demos/era5_metafilter/replicate_metafilter.py</code>,
+            sedan <code>benchmark_three_sets.py --live</code> och
+            <code>compute_cot.py</code>. Detaljerad rapport i
+            <a href="../demos/era5_metafilter/BENCHMARK.md">BENCHMARK.md</a> +
+            <a href="../demos/era5_metafilter/integration_proposal.md">integration_proposal.md</a>.
+        </div>
+
+        <h3>Referenser</h3>
+        <p style="font-size:13px;">
+            <em>Pirinen et al. 2024.</em> Creating and Leveraging a Synthetic Dataset of Cloud
+            Optical Thickness Measures for Cloud Detection in MSI. Remote Sensing.
+            <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">DigitalEarthSweden/ml-cloud-opt-thick</a>
+            ·
+            <em>Källman 2025.</em> <a href="https://github.com/erikkallman/metafilter" target="_blank">github.com/erikkallman/metafilter</a>
+            ·
+            ERA5 via <a href="https://archive-api.open-meteo.com/v1/archive" target="_blank">Open-Meteo Archive</a>
+            ·
+            S2-L2A via <a href="https://openeo.digitalearth.se/" target="_blank">DES openEO</a>
+        </p>
     </div>
 
     <script>/* @preserve

@@ -1,0 +1,52 @@
+{
+  "aoi": "Skåne (Lund-omgivning)",
+  "bbox_ll": [
+    13.05,
+    55.65,
+    13.35,
+    55.8
+  ],
+  "period": [
+    "2022-06-01",
+    "2022-08-31"
+  ],
+  "n_workers": 6,
+  "cloud_blue_threshold": 0.18,
+  "aoi_bright_frac_limit": 0.1,
+  "scene_cloud_max_pct": 30.0,
+  "sets": {
+    "A_baseline": {
+      "name": "A_baseline",
+      "n_dates": 36,
+      "n_success": 36,
+      "n_cloud_free_aoi": 13,
+      "n_from_cache": 0,
+      "n_live": 36,
+      "wall_s": 480.3,
+      "wall_per_live_fetch_s": 13.3,
+      "cloud_free_capture_pct_vs_A": 100.0
+    },
+    "B_metafilter": {
+      "name": "B_metafilter",
+      "n_dates": 16,
+      "n_success": 16,
+      "n_cloud_free_aoi": 9,
+      "n_from_cache": 0,
+      "n_live": 16,
+      "wall_s": 246.7,
+      "wall_per_live_fetch_s": 15.4,
+      "cloud_free_capture_pct_vs_A": 69.2
+    },
+    "C_fetch_s2": {
+      "name": "C_fetch_s2",
+      "n_dates": 10,
+      "n_success": 10,
+      "n_cloud_free_aoi": 4,
+      "n_from_cache": 0,
+      "n_live": 10,
+      "wall_s": 172.7,
+      "wall_per_live_fetch_s": 17.3,
+      "cloud_free_capture_pct_vs_A": 30.8
+    }
+  }
+}

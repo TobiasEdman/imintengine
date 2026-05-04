@@ -1,0 +1,27 @@
+{
+  "aoi": "Skåne (Lund-omgivning)",
+  "bbox_ll": [
+    13.05,
+    55.65,
+    13.35,
+    55.8
+  ],
+  "period": [
+    "2022-04-01",
+    "2022-09-30"
+  ],
+  "rule": {
+    "precip_today_max_mm": 0.5,
+    "precip_prev2d_max_mm": 3.0,
+    "t2m_mean_min_c": 10.0
+  },
+  "days_total": 183,
+  "days_pass_filter": 61,
+  "queries_before": 74,
+  "queries_after": 26,
+  "reduction_pct": 64.9,
+  "cloud_cover_median_before": 64.754403,
+  "cloud_cover_median_after": 44.447626,
+  "cloud_cover_mean_before": 60.85238012162161,
+  "cloud_cover_mean_after": 50.05094115384615
+}
