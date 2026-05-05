@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloud-modell-jämförelse — Kiruna 2024 (Atmosfär)</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Space Grotesk', system-ui, sans-serif; color: #171717; background: #fafafa; line-height: 1.55; }
+header { background: #171717; color: white; padding: 36px 48px 30px; border-bottom: 4px solid #27ae60; }
+header .crumbs { color: #aaa; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 10px; }
+header h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; }
+header .subtitle { color: #aaa; margin-top: 8px; font-size: 14px; }
+header a { color: #27ae60; text-decoration: none; }
+main { max-width: 1300px; margin: 0 auto; padding: 36px 48px; }
+section { margin-bottom: 40px; }
+h2 { font-size: 22px; font-weight: 600; margin: 0 0 14px; padding-bottom: 8px; border-bottom: 2px solid #ececec; }
+h3 { font-size: 16px; font-weight: 600; margin: 22px 0 10px; }
+p { max-width: 980px; margin-bottom: 12px; }
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 14px 0 24px; }
+.card { background: white; border: 1px solid #ececec; border-radius: 8px; padding: 14px 16px; }
+.card .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.06em; }
+.card .value { font-size: 22px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.card .detail { font-size: 12px; color: #666; margin-top: 4px; }
+.frame-card { background: #0f0f0f; border: 1px solid #1f1f1f; border-radius: 8px; overflow: hidden; margin-bottom: 14px; }
+.frame-card img { width: 100%; height: auto; display: block; }
+.frame-meta { padding: 12px 16px; font-size: 13px; color: #e6e6e6; display: flex; flex-wrap: wrap; gap: 14px; }
+.frame-meta b { color: #fff; }
+.frame-meta .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600; }
+.legend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.legend-card { background: white; border: 1px solid #ececec; border-radius: 8px; padding: 16px; }
+.legend-card h3 { margin: 0 0 8px; font-size: 14px; }
+.legend-card p { font-size: 13px; color: #555; margin: 0; }
+.legend-card a { color: #27ae60; }
+table { width: 100%; border-collapse: collapse; background: white; border: 1px solid #ececec; border-radius: 8px; overflow: hidden; }
+th, td { padding: 10px 14px; text-align: left; font-size: 13px; }
+th { background: #f5f5f5; font-weight: 600; }
+tr + tr td { border-top: 1px solid #ececec; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+code { background: #f0f0f0; padding: 1px 6px; border-radius: 3px; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+pre { background: #1e1e1e; color: #e6e6e6; padding: 14px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+.callout { background: #f0fafa; border-left: 4px solid #27ae60; padding: 14px 18px; border-radius: 4px; margin: 16px 0; font-size: 14px; }
+footer { border-top: 1px solid #ececec; padding: 22px 48px; text-align: center; color: #888; font-size: 12px; margin-top: 50px; }
+</style>
+</head>
+<body>
+<header>
+    <div class="crumbs">Imint Engine · Atmosfär · Modell-jämförelse</div>
+    <h1>Cloud-detection-modeller — Kiruna 2024</h1>
+    <div class="subtitle">
+        Fyra Sentinel-2-scener över Kirunavaara &amp; tundran, valda att täcka
+        hela molnskalan från klart till täckande &middot; samma pixlar genom
+        fyra modellfamiljer
+    </div>
+</header>
+
+<main>
+
+<section>
+    <h2>Modeller som jämförs</h2>
+    <div class="legend-grid">
+        <div class="legend-card">
+            <h3>Sen2Cor SCL</h3>
+            <p><strong>ESA officiell</strong> · regelbaserad scen-klassificering · 12 klasser
+            (klart, vegetation, vatten, snö, moln-låg/medium/hög, cirrus, skugga, …) ·
+            inbakad i alla L2A-produkter.</p>
+        </div>
+        <div class="legend-card">
+            <h3>s2cloudless</h3>
+            <p><strong>Sinergise / Sentinel-Hub</strong> · LightGBM pixel-klassificerare ·
+            10 TOA-band · returnerar [0, 1] cloud probability ·
+            <a href="https://github.com/sentinel-hub/sentinel2-cloud-detector" target="_blank">github</a> · MIT.</p>
+        </div>
+        <div class="legend-card">
+            <h3>OmniCloudMask</h3>
+            <p><strong>DPIRD 2024</strong> · transformer-segmenterare ·
+            4 klasser: klart / tjockt / tunt / skugga · använder bara R/G/NIR/SWIR ·
+            <a href="https://github.com/DPIRD-DMA/OmniCloudMask" target="_blank">github</a>.</p>
+        </div>
+        <div class="legend-card">
+            <h3>DES MLP5 (Pirinen 2024)</h3>
+            <p><strong>Digital Earth Sweden</strong> · 5-lagers MLP-ensemble (×3) ·
+            kontinuerlig <em>Cloud Optical Thickness</em>-regression · 11 band ·
+            <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">github</a>.</p>
+        </div>
+    </div>
+</section>
+
+<section>
+    <h2>AOI &amp; scen-urval</h2>
+    <p>
+        AOI: ~12×8 km centrerat på Kirunavaara (<code>20.10–20.36°E, 67.81–67.89°N</code>)
+        — Kirunamalmen, samhället och tundran runtomkring. Period:
+        <strong>2024-04-01 → 2024-09-30</strong>. Scenerna valdes via
+        SCL-stack-screening: fyra datum från olika kvartiler av AOI-cloud-fraction
+        för att stresstesta modellerna mot både klart, snö-på-mark, partiellt
+        moln och täckande.
+    </p>
+    <div class="summary-grid" id="summary-cards"></div>
+</section>
+
+<section>
+    <h2>Scen för scen</h2>
+    <p>
+        Varje scen visas med fem paneler i ordning:
+        <strong>RGB</strong> &middot; <strong>Sen2Cor SCL</strong> &middot;
+        <strong>s2cloudless</strong> (sannolikhet 0–1) &middot;
+        <strong>OmniCloudMask</strong> (4-klass) &middot;
+        <strong>DES MLP5</strong> (kontinuerlig COT 0–0.3).
+        Heatmaps använder samma färgskala där det är meningsfullt
+        (grönt = klart, rött/vitt = moln).
+    </p>
+    <div id="frames"></div>
+</section>
+
+<section>
+    <h2>Aggregerade tider &amp; molnighet</h2>
+    <table>
+        <thead>
+            <tr><th>Modell</th><th>Familj</th><th class="num">Avg cloud-frac (4 scener)</th><th class="num">Avg tid/scen</th></tr>
+        </thead>
+        <tbody id="model-summary-rows"></tbody>
+    </table>
+    <p style="font-size:13px; color:#666; margin-top:6px;">
+        s2cloudless och OmniCloudMask kör i en separat container (Python 3.11 +
+        torch CPU). DES MLP5 och Sen2Cor-parsing körs på host. Tiderna inkluderar
+        bara modell-inferens — inte spektral-fetch.
+    </p>
+</section>
+
+<section>
+    <h2>Reproducera</h2>
+    <pre>docker build -t imint/cloud-models:latest docker/cloud-models
+python demos/cloud_models/fetch_kiruna.py
+python demos/cloud_models/run_comparison.py</pre>
+    <p style="font-size:13px; color:#666;">
+        Containern hostar omnicloudmask + s2cloudless (kräver Python 3.10+).
+        Host-koden hanterar DES MLP5 och Sen2Cor SCL-parsing.
+    </p>
+</section>
+
+<section>
+    <h2>Källor &amp; licenser</h2>
+    <ul style="margin-left:24px; line-height:1.7; font-size:14px;">
+        <li><a href="https://github.com/sentinel-hub/sentinel2-cloud-detector" target="_blank">sentinel-hub/sentinel2-cloud-detector</a> (s2cloudless) — MIT</li>
+        <li><a href="https://github.com/DPIRD-DMA/OmniCloudMask" target="_blank">DPIRD-DMA/OmniCloudMask</a> — open source</li>
+        <li><a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">DigitalEarthSweden/ml-cloud-opt-thick</a> (Pirinen et al. 2024) — open source</li>
+        <li>Sen2Cor: ESA proprietary, men SCL-bandet är fritt tillgängligt i alla L2A-produkter</li>
+        <li>Sentinel-2 L2A: ESA Copernicus, fritt</li>
+    </ul>
+</section>
+
+</main>
+
+<footer>
+    Imint Engine · Cloud-modell-jämförelse · genererad 2026-05-05 ·
+    <a href="index.html" style="color:#171717;">tillbaka till showcase</a>
+</footer>
+
+<script>
+fetch('showcase/cloud_models/manifest.json')
+  .then(r => r.json())
+  .then(m => {
+    // Summary cards
+    const cards = document.getElementById('summary-cards');
+    const sclEntries = Object.entries(m.scl_fracs || {}).sort();
+    cards.innerHTML = sclEntries.map(([d, f]) => `
+      <div class="card">
+        <div class="label">${d}</div>
+        <div class="value">${(f * 100).toFixed(0)}%</div>
+        <div class="detail">SCL AOI-cloud-fraction</div>
+      </div>
+    `).join('');
+
+    // Frames
+    const fc = document.getElementById('frames');
+    fc.innerHTML = (m.frames || []).map(fr => {
+      const s = fr.stats;
+      return `
+        <div class="frame-card">
+          <img src="${fr.frame_path.replace(/^showcase\//, 'showcase/')}" alt="${fr.date}" loading="lazy">
+          <div class="frame-meta">
+            <span><b>${fr.date}</b></span>
+            <span>SCL clouds <b>${(s.scl_cloud_frac * 100).toFixed(0)}%</b></span>
+            <span>s2cloudless <b>${s.s2cloudless_frac != null ? (s.s2cloudless_frac * 100).toFixed(0) + '%' : '—'}</b></span>
+            <span>OmniCloudMask thick+thin <b>${s.omnicloudmask_thick_frac != null ? (s.omnicloudmask_thick_frac * 100).toFixed(0) + '%' : '—'}</b></span>
+            <span>MLP5 thick <b>${(s.mlp5_thick_frac * 100).toFixed(0)}%</b> (mean COT ${s.mlp5_mean_cot.toFixed(4)})</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Model summary table — average across all frames
+    const frames = m.frames || [];
+    const avgs = {
+      'Sen2Cor SCL':    { col: 'scl_cloud_frac',           family: 'ESA regelbaserad', t: '—' },
+      's2cloudless':    { col: 's2cloudless_frac',          family: 'LightGBM pixel-klassificerare', t: '~10 s' },
+      'OmniCloudMask':  { col: 'omnicloudmask_thick_frac',  family: 'Transformer 4-klass segmenterare', t: '~30 s' },
+      'DES MLP5':       { col: 'mlp5_thick_frac',           family: '5-lagers MLP-ensemble', t: '~5 s' },
+    };
+    const rows = Object.entries(avgs).map(([name, def]) => {
+      const vals = frames.map(f => f.stats[def.col]).filter(v => v != null);
+      const avg = vals.length ? vals.reduce((a,b) => a+b, 0) / vals.length : null;
+      return `<tr><td>${name}</td><td>${def.family}</td>` +
+             `<td class="num">${avg != null ? (avg * 100).toFixed(1) + '%' : '—'}</td>` +
+             `<td class="num">${def.t}</td></tr>`;
+    });
+    document.getElementById('model-summary-rows').innerHTML = rows.join('');
+  })
+  .catch(e => {
+    document.getElementById('frames').innerHTML =
+      `<p style="color:#888; padding:24px;">Manifestet är inte genererat ännu — kör <code>python demos/cloud_models/run_comparison.py</code>.</p>`;
+  });
+</script>
+
+</body>
+</html>
