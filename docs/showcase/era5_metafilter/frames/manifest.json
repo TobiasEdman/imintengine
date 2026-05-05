@@ -506,6 +506,347 @@
         "thick_cloud_frac": 0.538,
         "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-06-28.jpg"
       }
+    ],
+    "M0_stac_only": [
+      {
+        "date": "2022-08-12",
+        "mean_cot": 0.00394,
+        "median_cot": 0.00184,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-12.jpg"
+      },
+      {
+        "date": "2022-08-24",
+        "mean_cot": 0.0044,
+        "median_cot": 0.00244,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-24.jpg"
+      },
+      {
+        "date": "2022-07-20",
+        "mean_cot": 0.00953,
+        "median_cot": 0.0103,
+        "thick_cloud_frac": 0.0012,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-20.jpg"
+      },
+      {
+        "date": "2022-08-14",
+        "mean_cot": 0.0136,
+        "median_cot": 0.01102,
+        "thick_cloud_frac": 0.185,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-14.jpg"
+      },
+      {
+        "date": "2022-07-13",
+        "mean_cot": 0.0203,
+        "median_cot": 0.01068,
+        "thick_cloud_frac": 0.0686,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-13.jpg"
+      },
+      {
+        "date": "2022-07-28",
+        "mean_cot": 0.0442,
+        "median_cot": 0.00629,
+        "thick_cloud_frac": 0.1342,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-28.jpg"
+      },
+      {
+        "date": "2022-07-10",
+        "mean_cot": 0.14034,
+        "median_cot": 0.01407,
+        "thick_cloud_frac": 0.3539,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-10.jpg"
+      },
+      {
+        "date": "2022-07-15",
+        "mean_cot": 0.14526,
+        "median_cot": 0.02065,
+        "thick_cloud_frac": 0.4182,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-15.jpg"
+      },
+      {
+        "date": "2022-06-10",
+        "mean_cot": 0.26,
+        "median_cot": 0.06319,
+        "thick_cloud_frac": 0.7087,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-06-10.jpg"
+      },
+      {
+        "date": "2022-06-28",
+        "mean_cot": 0.2758,
+        "median_cot": 0.03046,
+        "thick_cloud_frac": 0.538,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-06-28.jpg"
+      }
+    ],
+    "M1_atmosphere": [
+      {
+        "date": "2022-08-12",
+        "mean_cot": 0.00394,
+        "median_cot": 0.00184,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-12.jpg"
+      },
+      {
+        "date": "2022-08-24",
+        "mean_cot": 0.0044,
+        "median_cot": 0.00244,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-24.jpg"
+      },
+      {
+        "date": "2022-08-04",
+        "mean_cot": 0.00504,
+        "median_cot": 0.00361,
+        "thick_cloud_frac": 0.0007,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-04.jpg"
+      },
+      {
+        "date": "2022-08-17",
+        "mean_cot": 0.00732,
+        "median_cot": 0.00531,
+        "thick_cloud_frac": 0.0011,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-17.jpg"
+      },
+      {
+        "date": "2022-07-30",
+        "mean_cot": 0.009,
+        "median_cot": 0.00558,
+        "thick_cloud_frac": 0.0505,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-30.jpg"
+      },
+      {
+        "date": "2022-07-20",
+        "mean_cot": 0.00953,
+        "median_cot": 0.0103,
+        "thick_cloud_frac": 0.0012,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-20.jpg"
+      },
+      {
+        "date": "2022-08-02",
+        "mean_cot": 0.0114,
+        "median_cot": 0.01232,
+        "thick_cloud_frac": 0.0009,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-02.jpg"
+      },
+      {
+        "date": "2022-08-14",
+        "mean_cot": 0.0136,
+        "median_cot": 0.01102,
+        "thick_cloud_frac": 0.185,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-14.jpg"
+      },
+      {
+        "date": "2022-06-05",
+        "mean_cot": 0.01807,
+        "median_cot": 0.00943,
+        "thick_cloud_frac": 0.0755,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-06-05.jpg"
+      },
+      {
+        "date": "2022-07-13",
+        "mean_cot": 0.0203,
+        "median_cot": 0.01068,
+        "thick_cloud_frac": 0.0686,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-13.jpg"
+      },
+      {
+        "date": "2022-06-25",
+        "mean_cot": 0.02961,
+        "median_cot": 0.02834,
+        "thick_cloud_frac": 0.6283,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-06-25.jpg"
+      },
+      {
+        "date": "2022-08-22",
+        "mean_cot": 0.03699,
+        "median_cot": 0.01498,
+        "thick_cloud_frac": 0.2875,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-22.jpg"
+      },
+      {
+        "date": "2022-06-23",
+        "mean_cot": 0.08416,
+        "median_cot": 0.07505,
+        "thick_cloud_frac": 0.8611,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-06-23.jpg"
+      },
+      {
+        "date": "2022-08-09",
+        "mean_cot": 0.11191,
+        "median_cot": 0.0114,
+        "thick_cloud_frac": 0.252,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-09.jpg"
+      },
+      {
+        "date": "2022-07-10",
+        "mean_cot": 0.14034,
+        "median_cot": 0.01407,
+        "thick_cloud_frac": 0.3539,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-10.jpg"
+      },
+      {
+        "date": "2022-06-03",
+        "mean_cot": 0.68275,
+        "median_cot": 0.7856,
+        "thick_cloud_frac": 0.9997,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-06-03.jpg"
+      }
+    ],
+    "M2_stac_then_scl": [
+      {
+        "date": "2022-08-12",
+        "mean_cot": 0.00394,
+        "median_cot": 0.00184,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-12.jpg"
+      },
+      {
+        "date": "2022-08-24",
+        "mean_cot": 0.0044,
+        "median_cot": 0.00244,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-24.jpg"
+      },
+      {
+        "date": "2022-07-20",
+        "mean_cot": 0.00953,
+        "median_cot": 0.0103,
+        "thick_cloud_frac": 0.0012,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-20.jpg"
+      },
+      {
+        "date": "2022-07-13",
+        "mean_cot": 0.0203,
+        "median_cot": 0.01068,
+        "thick_cloud_frac": 0.0686,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-13.jpg"
+      }
+    ],
+    "M3_scl_only": [
+      {
+        "date": "2022-08-12",
+        "mean_cot": 0.00394,
+        "median_cot": 0.00184,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-12.jpg"
+      },
+      {
+        "date": "2022-08-24",
+        "mean_cot": 0.0044,
+        "median_cot": 0.00244,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-24.jpg"
+      },
+      {
+        "date": "2022-08-04",
+        "mean_cot": 0.00504,
+        "median_cot": 0.00361,
+        "thick_cloud_frac": 0.0007,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-04.jpg"
+      },
+      {
+        "date": "2022-07-20",
+        "mean_cot": 0.00953,
+        "median_cot": 0.0103,
+        "thick_cloud_frac": 0.0012,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-20.jpg"
+      },
+      {
+        "date": "2022-07-03",
+        "mean_cot": 0.0113,
+        "median_cot": 0.00948,
+        "thick_cloud_frac": 0.0878,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-03.jpg"
+      },
+      {
+        "date": "2022-07-13",
+        "mean_cot": 0.0203,
+        "median_cot": 0.01068,
+        "thick_cloud_frac": 0.0686,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-13.jpg"
+      }
+    ],
+    "M4_era5_then_scl": [
+      {
+        "date": "2022-08-12",
+        "mean_cot": 0.00394,
+        "median_cot": 0.00184,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-12.jpg"
+      },
+      {
+        "date": "2022-08-24",
+        "mean_cot": 0.0044,
+        "median_cot": 0.00244,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-24.jpg"
+      },
+      {
+        "date": "2022-08-04",
+        "mean_cot": 0.00504,
+        "median_cot": 0.00361,
+        "thick_cloud_frac": 0.0007,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-04.jpg"
+      },
+      {
+        "date": "2022-07-20",
+        "mean_cot": 0.00953,
+        "median_cot": 0.0103,
+        "thick_cloud_frac": 0.0012,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-20.jpg"
+      },
+      {
+        "date": "2022-07-13",
+        "mean_cot": 0.0203,
+        "median_cot": 0.01068,
+        "thick_cloud_frac": 0.0686,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-13.jpg"
+      }
+    ],
+    "M5_era5_then_stac": [
+      {
+        "date": "2022-08-12",
+        "mean_cot": 0.00394,
+        "median_cot": 0.00184,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-12.jpg"
+      },
+      {
+        "date": "2022-08-24",
+        "mean_cot": 0.0044,
+        "median_cot": 0.00244,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-24.jpg"
+      },
+      {
+        "date": "2022-07-20",
+        "mean_cot": 0.00953,
+        "median_cot": 0.0103,
+        "thick_cloud_frac": 0.0012,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-20.jpg"
+      },
+      {
+        "date": "2022-08-14",
+        "mean_cot": 0.0136,
+        "median_cot": 0.01102,
+        "thick_cloud_frac": 0.185,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-14.jpg"
+      },
+      {
+        "date": "2022-07-13",
+        "mean_cot": 0.0203,
+        "median_cot": 0.01068,
+        "thick_cloud_frac": 0.0686,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-13.jpg"
+      },
+      {
+        "date": "2022-07-10",
+        "mean_cot": 0.14034,
+        "median_cot": 0.01407,
+        "thick_cloud_frac": 0.3539,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-10.jpg"
+      }
     ]
   }
 }

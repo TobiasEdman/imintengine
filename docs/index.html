@@ -685,11 +685,13 @@
                 klarast-först.
             </p>
             <div id="era5-set-tabs" style="margin-top: 16px; display:flex; gap:8px; flex-wrap:wrap;">
-                <a href="#" class="era5-set-tab active" data-set="B_metafilter">Atmosfär (16)</a>
-                <a href="#" class="era5-set-tab" data-set="C0_stac_only">STAC (10)</a>
-                <a href="#" class="era5-set-tab" data-set="C_fetch_s2">Full pipeline (4)</a>
-                <a href="#" class="era5-set-tab" data-set="D_scl_stack">SCL-stack (4)</a>
-                <a href="#" class="era5-set-tab" data-set="A_baseline">Baseline (36)</a>
+                <a href="#" class="era5-set-tab active" data-set="M4_era5_then_scl">M4 ERA5 → SCL ★ (5)</a>
+                <a href="#" class="era5-set-tab" data-set="M5_era5_then_stac">M5 ERA5 → STAC ★ (6)</a>
+                <a href="#" class="era5-set-tab" data-set="M2_stac_then_scl">M2 Nuvarande pipeline (4)</a>
+                <a href="#" class="era5-set-tab" data-set="M3_scl_only">M3 SCL-stack (6)</a>
+                <a href="#" class="era5-set-tab" data-set="M1_atmosphere">M1 Atmosfär (16)</a>
+                <a href="#" class="era5-set-tab" data-set="M0_stac_only">M0 Naiv STAC (10)</a>
+                <a href="#" class="era5-set-tab" data-set="A_baseline">A baseline (36)</a>
             </div>
             <div id="era5-frame-gallery" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; margin-top: 14px;"></div>
 
@@ -857,7 +859,7 @@ python demos/era5_metafilter/render_strategy_figures.py
     <script src="js/vendor/chart.min.js"></script>
     <script src="js/tab-data.js?v=7"></script>
     <script src="js/app.js?v=7"></script>
-    <script src="js/era5-gallery.js?v=1"></script>
+    <script src="js/era5-gallery.js?v=2"></script>
     <script>
     // Auto-resize parent iframe (for digitalearth.se/case/ embedding)
     if (window.parent !== window) {

@@ -89,7 +89,11 @@
         if (!era5Tab) return;
         fetchManifest()
             .then(function (manifest) {
-                renderGallery('B_metafilter', manifest);
+                // Default to whichever set has the active class on its tab
+                var activeTab = document.querySelector('.era5-set-tab.active');
+                var defaultSet = (activeTab && activeTab.dataset.set) ||
+                                 'M4_era5_then_scl';
+                renderGallery(defaultSet, manifest);
                 bindTabs(manifest);
             })
             .catch(function (e) {
