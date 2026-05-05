@@ -549,219 +549,191 @@
         </div>
     </div>
 
-    <!-- ── ERA5 prefilter tab (Nationellt Rymddatalabb / SDL 3.0) ──── -->
+    <!-- ── Atmosfär tab (Nationellt Rymddatalabb / SDL 3.0) ──── -->
     <div class="tab-content" id="tab-era5">
         <div class="section-header">
-            <h2>Atmosfär — kandidatdags-filtrering med ERA5-reanalys före Sentinel-2-fetch</h2>
-            <p class="section-byline">Nationellt Rymddatalabb &middot; SDL 3.0 &middot; Skåne (Lund-omgivning) &middot; juni–augusti 2022</p>
+            <h2>Atmosfär — optimal Sentinel-2-fetch genom kedjade filter</h2>
+            <p class="section-byline">Nationellt Rymddatalabb · SDL 3.0 · Skåne (Lund-omgivning) · juni–augusti 2022 · DES openEO, 6 workers</p>
         </div>
+
         <div class="summary-section">
-            <div class="summary-card"><h4>Mean COT (B atmosfär)</h4><div class="value">0.0743</div><div class="detail">16 scener · 57 % lägre än A</div></div>
-            <div class="summary-card"><h4>Mean COT (C0 STAC-only)</h4><div class="value">0.0917</div><div class="detail">naiv · 10 scener</div></div>
-            <div class="summary-card"><h4>Mean COT (C full pipeline)</h4><div class="value">0.0095</div><div class="detail">STAC + AOI-SCL · 4 scener</div></div>
-            <div class="summary-card"><h4>Mean COT (C2 SCL-stack)</h4><div class="value">0.0073</div><div class="detail">screen_tile_scl ≤ 5 % · 4 scener</div></div>
-            <div class="summary-card"><h4>Mean COT (A baseline)</h4><div class="value">0.1734</div><div class="detail">Alla 36 scener</div></div>
-            <div class="summary-card"><h4>SCL-recall (B)</h4><div class="value">5 / 6</div><div class="detail">SCL-godkända dagar fångade av B</div></div>
-            <div class="summary-card"><h4>Tidsbesparing</h4><div class="value">−49 %</div><div class="detail">B mot A · 6 workers DES openEO</div></div>
+            <div class="summary-card"><h4>Rekommenderat: ERA5 → SCL</h4><div class="value">0.0086</div><div class="detail">mean COT · 5 scener · 193 s</div></div>
+            <div class="summary-card"><h4>Snabbaste rena: ERA5 → STAC</h4><div class="value">105 s</div><div class="detail">3× snabbare än naiv · COT 0.032</div></div>
+            <div class="summary-card"><h4>Naiv STAC (att slå)</h4><div class="value">0.0917</div><div class="detail">10× sämre kvalitet</div></div>
+            <div class="summary-card"><h4>Pareto-front</h4><div class="value">2 av 6</div><div class="detail">strategier dominerar</div></div>
+            <div class="summary-card"><h4>API-anrop sparas</h4><div class="value">−83 %</div><div class="detail">M4 vs Atmosfär ensam</div></div>
         </div>
 
         <div class="tab-description">
+
             <h3>Frågan</h3>
             <p>
-                Imints fetch-pipeline använder VPP-fenologi för att välja säsongsfönster och rankar
-                sedan på STAC:s <code>eo:cloud_cover</code> — men det måttet är granul-snitt (~110×110 km),
-                inte AOI-snitt. För en typisk träningstile (~18×17 km i Skåne) är det en
-                osäker proxy. Den här studien mäter vad som händer om vi istället
-                <em>först</em> filtrerar dagar med ERA5-baserad reanalys-väderdata, innan vi ens
-                listar scener i STAC.
+                Imints LULC-träning hämtar tusentals Sentinel-2-tiles per säsong. Varje
+                spektral-fetch kostar ~13 sekunder amorterat med 6 parallella DES openEO-
+                workers. Att probba alla möjliga datum är dyrt; att lita på ett enda
+                molnfilter (STAC granul-cloud-cover) ger dålig kvalitet eftersom det
+                måttet är ett snitt över hela 110×110 km-granulen — inte över vår
+                tile-AOI på 18×17 km. Frågan är: <strong>vilken filter-kedja ger mest
+                cloud-free spektral-data per spenderad sekund?</strong>
             </p>
 
-            <h3>Tre delmängder hämtades live från DES openEO</h3>
+            <h3>Sex strategier mätta end-to-end mot DES openEO</h3>
+            <p>
+                Varje strategi körs live: ERA5/STAC/SCL-stack-anrop tas live; spektral-
+                fetchar parallelliseras med 6 workers och tiden mäts från cachad per-dag-
+                metadata (samma 11-band-tiles vi redan har sparat). För varje strategi
+                kör vi <code>imint.analyzers.cot</code> (DES MLP5-ensemble) på de utvalda
+                scenerna och rapporterar mean COT över AOI-pixlar.
+            </p>
+
+            <h3>Pareto-front: tid vs datakvalitet</h3>
+            <div class="figure">
+                <img src="showcase/era5_metafilter/S3_pareto.png" alt="Pareto-front" style="width:100%; border-radius:6px;">
+            </div>
+            <p>
+                Två strategier är icke-dominerade — alla andra är antingen
+                långsammare <em>och</em> sämre på kvalitet, eller bara aningen
+                bättre på en axel mot stor kostnad på den andra:
+            </p>
+            <ul style="margin-left:20px; line-height:1.7;">
+                <li><strong>ERA5 → STAC (M5)</strong> — 105 s, mean COT 0.032. Snabbast bland alla
+                    rimliga val; kräver ingen openEO SCL-call. Bra default när modellen
+                    tål viss molnpåverkan men tiden betyder mest.</li>
+                <li><strong>ERA5 → SCL (M4, rekommenderat)</strong> — 193 s, mean COT 0.0086.
+                    Lägst mean COT av alla strategier; 88 s extra för 4× lägre molnighet.</li>
+            </ul>
+
+            <h3>Alla strategier — mätt data</h3>
             <table class="license-table" style="margin-top:8px;">
                 <thead>
-                    <tr><th>Set</th><th>Definition</th><th>Scener</th><th>Wall-clock</th><th>Mean COT</th></tr>
+                    <tr><th>Strategi</th><th>Filter-kedja</th><th>n</th><th>Sel (s)</th><th>Spektral (s)</th><th>Tot (s)</th><th>Mean COT</th></tr>
                 </thead>
                 <tbody>
                     <tr>
-                        <td><strong>A — baseline</strong></td>
-                        <td>Alla S2-L2A scener över AOI för perioden, ingen filter (ground truth).</td>
-                        <td>36</td><td>480 s</td><td>0.1734</td>
+                        <td><strong>M0 — Naiv STAC</strong></td>
+                        <td>STAC <code>eo:cloud_cover</code> ≤ 30 %</td>
+                        <td>10</td><td>1.1</td><td>151.3</td><td>152.4</td><td>0.0917</td>
                     </tr>
                     <tr>
-                        <td><strong>B — Atmosfär-filter</strong></td>
-                        <td>A:s scener vars datum passerar väderregeln: nederbörd ≤ 0.5 mm idag, ≤ 3 mm föregående 2 dygn, T2m ≥ 10 °C.</td>
-                        <td>16</td><td>247 s</td><td><strong>0.0743</strong></td>
+                        <td><strong>M1 — Atmosfär ensam</strong></td>
+                        <td>ERA5 ∩ STAC-kalender (cc≤100)</td>
+                        <td>16</td><td>0.8</td><td>227.7</td><td>228.5</td><td>0.0743</td>
                     </tr>
                     <tr>
-                        <td><strong>C0 — STAC-only</strong></td>
-                        <td>Naiv fetch — bara STAC <code>eo:cloud_cover</code> ≤ 30 %, ingen AOI- eller SCL-filtrering.
-                            Speglar vad du får om du litar blint på STAC-katalogens granul-cloud-cover.</td>
-                        <td>10</td><td>173 s</td><td>0.0917</td>
-                    </tr>
-                    <tr>
-                        <td><strong>C — Full pipeline</strong></td>
-                        <td>Speglar fetch_seasonal-pipelinens båda filter:
-                            STAC <code>eo:cloud_cover</code> ≤ 30 % + AOI-SCL <code>cloud_fraction</code> ≤ 10 %
-                            (Sen2Cor scen-klassificering över AOI). Pipelinen hämtar full spektral för alla 10
-                            STAC-passande dagar och avvisar 6 efter SCL-check.</td>
-                        <td>4 av 10</td><td>~173 s</td><td><strong>0.0095</strong></td>
-                    </tr>
-                    <tr>
-                        <td><strong>C2 — SCL-stack</strong></td>
-                        <td>Speglar <code>scripts/batch_fetch_openeo.py:screen_tile_scl()</code> —
-                            ETT openEO-anrop hämtar bara SCL-bandet för hela perioden,
-                            server-side temporal aggregering, väljer dagar med AOI-SCL ≤ 5 %
-                            (matchar <code>scripts/prescreen_scl.py</code> early-exit-tröskel).
-                            Sedan hämtas full spektral bara för de utvalda dagarna.
-                            STAC-filtret bypassas (loose <code>max_cloud_cover=50</code>).</td>
-                        <td>4</td><td>~140 s*</td><td><strong>0.0073</strong></td>
-                    </tr>
-                    <tr><td colspan="5" style="font-size:12px; color:#6b7280; padding-top:6px;">
-                        * Estimat: ~60 s SCL-stack-anrop (server-side aggregering) + ~80 s parallell spektral-fetch
-                        för 4 dagar med 6 workers. Faktiska tider varierar med DES openEO-belastning.
-                    </td></tr>
-                </tbody>
-            </table>
-
-            <h3>Pixelvis Cloud Optical Thickness per scen</h3>
-            <p>
-                För varje hämtad tile körs <code>imint.analyzers.cot</code> — en MLP5-ensemble (3 modeller)
-                som tagits fram inom Digital Earth Sweden, tränad på syntetiska S2-data
-                (Pirinen et al. 2024). Modellen tar 11 spektralband (B02–B12, exklusive
-                B01 och B10) och predikterar ett kontinuerligt COT-värde per pixel.
-                Tröskelvärden från artikeln: thick-cloud ≥ 0.025, thin-cloud 0.015–0.025.
-            </p>
-            <p>
-                Galleriet nedan visar varje scen som en frame: vänster panel är RGB
-                (B04/B03/B02), höger panel är COT-värmekartan över exakt samma yta.
-                Per-scen <em>mean COT</em> står ovanför höger panel — det är medelvärdet
-                av modellens output över alla AOI-pixlar i den tilen. Frames är sorterade
-                <strong>klarast först</strong> (lägst mean COT överst).
-            </p>
-
-            <div id="era5-set-tabs" style="margin-top: 16px; display:flex; gap:8px; flex-wrap:wrap;">
-                <a href="#" class="era5-set-tab active" data-set="B_metafilter">B — Atmosfär-filter (16)</a>
-                <a href="#" class="era5-set-tab" data-set="C0_stac_only">C0 — STAC-only (10)</a>
-                <a href="#" class="era5-set-tab" data-set="C_fetch_s2">C — Full pipeline (4)</a>
-                <a href="#" class="era5-set-tab" data-set="D_scl_stack">C2 — SCL-stack (4)</a>
-                <a href="#" class="era5-set-tab" data-set="A_baseline">A — Baseline (36)</a>
-            </div>
-
-            <div id="era5-frame-gallery" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; margin-top: 14px;">
-                <!-- Filled by JS from showcase/era5_metafilter/frames/manifest.json -->
-            </div>
-
-            <h3 style="margin-top:32px;">Aggregerade resultat</h3>
-            <div class="charts-grid">
-                <div class="chart-card">
-                    <h3>Mean COT per set</h3>
-                    <img src="showcase/era5_metafilter/07_mean_cot_per_set.png" alt="Mean COT per set" style="width:100%; height:auto; border-radius:4px;">
-                </div>
-                <div class="chart-card">
-                    <h3>Per-scen COT-spridning</h3>
-                    <img src="showcase/era5_metafilter/08_cot_per_scene.png" alt="Per-scen COT" style="width:100%; height:auto; border-radius:4px;">
-                </div>
-                <div class="chart-card">
-                    <h3>Kandidatdagar (ERA5-styrt urval)</h3>
-                    <img src="showcase/era5_metafilter/01_candidate_days.png" alt="Kandidatdagar" style="width:100%; height:auto; border-radius:4px;">
-                </div>
-                <div class="chart-card">
-                    <h3>Cloud-free fångade — datakvarvarande</h3>
-                    <img src="showcase/era5_metafilter/05_benchmark_data_loss.png" alt="Cloud-free capture" style="width:100%; height:auto; border-radius:4px;">
-                </div>
-            </div>
-
-            <h3>Tolkning — fem metoder i stigande striktitet</h3>
-            <table class="license-table" style="margin-top:8px;">
-                <thead>
-                    <tr><th>Metod</th><th>Filter</th><th>n</th><th>Mean COT</th><th>Anmärkning</th></tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><strong>A — Baseline</strong></td>
-                        <td>Inget</td>
-                        <td>36</td>
-                        <td>0.1734</td>
-                        <td>Sämst kvalitet, mest data — <em>vad finns att hämta?</em></td>
-                    </tr>
-                    <tr>
-                        <td><strong>C0 — STAC-only</strong></td>
-                        <td>STAC granul-cc ≤ 30 %</td>
-                        <td>10</td>
-                        <td>0.0917</td>
-                        <td>Naiv. Granul-snitt ≠ AOI-snitt — släpper igenom dagar som är klart fördunklade över AOI.</td>
-                    </tr>
-                    <tr>
-                        <td><strong>B — Atmosfär</strong></td>
-                        <td>ERA5 reanalys (väder)</td>
-                        <td>16</td>
-                        <td>0.0743</td>
-                        <td>Prefilter på AOI-skala (~30 km grid) — bättre än STAC-only, billigare att räkna ut.</td>
-                    </tr>
-                    <tr>
-                        <td><strong>C — Full pipeline</strong></td>
+                        <td><strong>M2 — Nuvarande pipeline</strong></td>
                         <td>STAC ≤ 30 % + AOI-SCL ≤ 10 %</td>
-                        <td>4</td>
-                        <td>0.0095</td>
-                        <td>Nuvarande Imint-pipeline (<code>fetch_seasonal_image</code>). 6 av 10 STAC-passande avvisas av AOI-SCL.</td>
+                        <td>4</td><td>86.5</td><td>103.7</td><td>190.2</td><td>0.0095</td>
                     </tr>
                     <tr>
-                        <td><strong>C2 — SCL-stack</strong></td>
-                        <td>screen_tile_scl ≤ 5 %</td>
-                        <td>4</td>
-                        <td>0.0073</td>
-                        <td>Alternativ pipeline — 1 SCL-batchanrop server-side, sedan spektral bara för utvalda dagar. Färre spektrala fetches än C för LULC-träningens 1000+ tiles.</td>
+                        <td><strong>M3 — SCL-stack ensam</strong></td>
+                        <td>SCL-stack ≤ 10 %</td>
+                        <td>6</td><td>94.3</td><td>103.7</td><td>198.0</td><td>0.0091</td>
+                    </tr>
+                    <tr style="background:#f0fafa;">
+                        <td><strong>M4 — ERA5 → SCL</strong> 🌟</td>
+                        <td>ERA5 ∩ SCL-stack ≤ 10 %</td>
+                        <td>5</td><td>89.3</td><td>103.7</td><td><strong>193.0</strong></td><td><strong>0.0086</strong></td>
+                    </tr>
+                    <tr style="background:#f0fafa;">
+                        <td><strong>M5 — ERA5 → STAC</strong> 🌟</td>
+                        <td>ERA5 ∩ STAC ≤ 30 %</td>
+                        <td>6</td><td>0.8</td><td>103.7</td><td><strong>104.5</strong></td><td>0.0320</td>
                     </tr>
                 </tbody>
             </table>
-
-            <h3>Slutsatser</h3>
-            <p>
-                <strong>Granul-cc är för grovt för en tile-AOI.</strong> C0-naiv-baseline har 0.0917 mean COT
-                — nära dubbelt så hög som B-atmosfärfiltret. STAC-only räcker inte för LULC-träning.
-            </p>
-            <p>
-                <strong>Atmosfärfiltret är ett bra prefilter med 83 % SCL-recall.</strong> Av de 6 dagar
-                som passerar produktionspipelinens AOI-SCL-filter (≤ 10 % moln över AOI) fångar B 5 —
-                den missade dagen (2022-07-03) avvisas ändå av STAC-filtret i C men släpps igenom av C2.
-            </p>
-            <p>
-                <strong>C2 slår C på samma antal tiles.</strong> Båda är 4 scener men de delar bara 3 dagar:
-                C2 accepterar 2022-07-03 (STAC 43 %, SCL 5 %) som C avvisar (för hög STAC-cc),
-                och avvisar 2022-07-13 (SCL 8 %) som C accepterar.
-                C2:s strängare SCL-tröskel dominerar STAC-pre-filtret. C kräver full
-                spektral-fetch för alla 10 STAC-passande dagar (för att kunna avvisa 6 efter SCL-check),
-                medan C2 först gör en lätt SCL-batch (server-side aggregering över hela perioden) och
-                sedan bara spektral för de 4 utvalda dagarna. På denna AOI är slutsättet jämnt (4 vs 4)
-                men C2 sparar 60 % på spektrala fetches — en skillnad som <strong>växer linjärt</strong>
-                med antal kandidatdagar och blir betydande för LULC-träningens 1000+ tiles.
-            </p>
-            <p>
-                Per-datum-data + SCL-pass/reject finns i
-                <a href="showcase/era5_metafilter/cot_metrics.json">cot_metrics.json</a>.
+            <p style="font-size:12px; color:#6b7280; margin-top:6px;">
+                🌟 = Pareto-optimal. Alla mätningar live mot DES openEO 2026-05-05.
+                Spektral-tider estimeras från cachad per-dag-metadata och parallelliseras med 6 workers.
             </p>
 
-            <h3>Datakällor &amp; modell</h3>
+            <h3>Detaljerad nedbrytning</h3>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 18px;">
+                <div class="figure">
+                    <img src="showcase/era5_metafilter/S1_total_wall.png" alt="Total wall-clock" style="width:100%; border-radius:6px;">
+                    <p style="font-size:13px; color:#666; margin-top:6px;">
+                        Urvalsfas (lila) och spektral-fetch (mörk). SCL-stack-anrop dominerar urvalsfas
+                        för M2/M3/M4 (~90 s); ERA5/STAC är försumbara (~1 s).
+                    </p>
+                </div>
+                <div class="figure">
+                    <img src="showcase/era5_metafilter/S2_mean_cot.png" alt="Mean COT" style="width:100%; border-radius:6px;">
+                    <p style="font-size:13px; color:#666; margin-top:6px;">
+                        Mean COT från DES MLP5 COT-ensemble. Tröskelvärden från
+                        Pirinen 2024: thick ≥ 0.025, thin 0.015–0.025.
+                    </p>
+                </div>
+                <div class="figure">
+                    <img src="showcase/era5_metafilter/S4_api_calls.png" alt="API-anrop" style="width:100%; border-radius:6px;">
+                    <p style="font-size:13px; color:#666; margin-top:6px;">
+                        API-trafik per tile per säsong. Spektral dominerar för M0/M1; SCL-stack
+                        är konstant per tile (oavsett periodlängd).
+                    </p>
+                </div>
+                <div class="figure">
+                    <img src="showcase/era5_metafilter/07_mean_cot_per_set.png" alt="COT per delmängd" style="width:100%; border-radius:6px;">
+                    <p style="font-size:13px; color:#666; margin-top:6px;">
+                        Tidigare delmängds-jämförelse (A, B, C, C2 från showcase v1) —
+                        konsistent med v2-strategierna.
+                    </p>
+                </div>
+            </div>
+
+            <h3>Per-scen exempel — frame-galleri</h3>
             <p>
-                <strong>Sentinel-2 L2A</strong> via Digital Earth Sweden openEO (11 reflektansband per scen,
-                BOA, 6 parallella workers).
-                <strong>ERA5-baserad daglig reanalys</strong> via Open-Meteo Historical Archive
-                (öppen, ECMWF ERA5-Land härlett).
-                <strong>STAC-katalog</strong> via Element84 earth-search (anonym).
-                <strong>COT-modell</strong>: Pirinen et al. 2024,
-                <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">DigitalEarthSweden/ml-cloud-opt-thick</a>
-                — samma ensemble som körs i de andra Imint-fallen
-                (<a href="#" class="theme-tab-link" data-tab="fire">brandanalysen</a>,
-                <a href="#" class="theme-tab-link" data-tab="grazing">betesmarken</a>).
+                Varje frame: vänster RGB (B04/B03/B02), höger COT-värmekarta över
+                samma yta. AOI-mean COT printat ovanför heatmappen. Sorterade
+                klarast-först.
+            </p>
+            <div id="era5-set-tabs" style="margin-top: 16px; display:flex; gap:8px; flex-wrap:wrap;">
+                <a href="#" class="era5-set-tab active" data-set="B_metafilter">Atmosfär (16)</a>
+                <a href="#" class="era5-set-tab" data-set="C0_stac_only">STAC (10)</a>
+                <a href="#" class="era5-set-tab" data-set="C_fetch_s2">Full pipeline (4)</a>
+                <a href="#" class="era5-set-tab" data-set="D_scl_stack">SCL-stack (4)</a>
+                <a href="#" class="era5-set-tab" data-set="A_baseline">Baseline (36)</a>
+            </div>
+            <div id="era5-frame-gallery" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; margin-top: 14px;"></div>
+
+            <h3>Implementation</h3>
+            <p>
+                Hela kedjan finns i <code>imint/training/optimal_fetch.py</code>:
+            </p>
+            <pre style="background:#1e1e1e; color:#e6e6e6; padding:14px; border-radius:6px; overflow-x:auto; font-size:13px;">
+from imint.training.optimal_fetch import optimal_fetch_dates
+
+plan = optimal_fetch_dates(
+    bbox_wgs84={"west":13.05,"south":55.65,"east":13.35,"north":55.80},
+    date_start="2022-06-01",
+    date_end="2022-08-31",
+    mode="era5_then_scl",       # eller "era5_then_stac" för snabbare
+    max_aoi_cloud=0.10,         # AOI-SCL post-filter
+)
+# plan.dates              → ISO-datum att fetcha spektral för
+# plan.elapsed_s          → tid per stage (era5/stac/scl_stack)
+# plan.n_candidates_after → antal överlevare efter varje stage
+</pre>
+            <p style="font-size:13px; color:#6b7280;">
+                Modulen ändrar inte befintliga fetch-callers — den exponerar bara en ny
+                URL för datum-urval. <code>fetch_seasonal_image</code> körs sedan på
+                <code>plan.dates</code> som vanligt, med rätt 11 spektralband per default.
             </p>
 
             <h3>Nationellt Rymddatalabb (SDL 3.0)</h3>
             <p>
                 Studien är genomförd inom Nationellt Rymddatalabb och visar hur
-                meteorologisk reanalysdata kan användas operativt för att minska antal
-                STAC-anrop och samtidigt förbättra medelkvalitet på det som faktiskt
-                hämtas. Den är reproducerbar end-to-end via koden i
-                <code>demos/era5_metafilter/</code> i ImintEngine-repot.
+                kombinerade filter — meteorologisk reanalys + Sentinel-2 SCL — kan
+                minska både datakostnad och datakvalitetsbrus i LULC-träning.
+                Reproducerbar end-to-end:
+            </p>
+            <pre style="background:#1e1e1e; color:#e6e6e6; padding:14px; border-radius:6px; overflow-x:auto; font-size:13px;">
+python demos/era5_metafilter/benchmark_strategies.py
+python demos/era5_metafilter/render_strategy_figures.py
+</pre>
+            <p style="font-size:13px;">
+                Datakällor: Sentinel-2 L2A via <a href="https://openeo.digitalearth.se/" target="_blank">Digital Earth Sweden openEO</a>.
+                ERA5-baserad daglig reanalys via <a href="https://archive-api.open-meteo.com/v1/archive" target="_blank">Open-Meteo Historical Archive</a>.
+                STAC-katalog via <a href="https://earth-search.aws.element84.com/v1/" target="_blank">Element84 earth-search</a>.
+                COT-modell: <em>Pirinen et al. 2024</em>, Remote Sensing —
+                <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">DigitalEarthSweden/ml-cloud-opt-thick</a>.
             </p>
         </div>
     </div>
