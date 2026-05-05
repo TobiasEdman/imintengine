@@ -33,8 +33,6 @@
             border-color: #27ae60;
             font-weight: 600;
         }
-        .atmos-nav-card:hover { border-color: #27ae60 !important; }
-        .atmos-nav-card[style*="background:white"]:hover { box-shadow: 0 4px 12px rgba(39,174,96,0.15); }
     </style>
 </head>
 <body>
@@ -560,24 +558,12 @@
             </p>
         </div>
 
-        <!-- Sub-page navigation cards -->
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 28px;">
-            <a href="#tab-era5" class="atmos-nav-card" style="text-decoration:none; display:flex; flex-direction:column; background:#27ae60; color:#fff; border-radius:10px; padding:16px 20px; border:2px solid #1e8449;">
-                <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; opacity:0.85;">Du är här</div>
-                <div style="font-size:18px; font-weight:700; margin-top:4px;">📊 Strategi-jämförelse</div>
-                <div style="font-size:13px; opacity:0.92; margin-top:6px;">Sex fetch-strategier mätta end-to-end. Pareto-front: M4 ERA5→SCL renast, M5 ERA5→STAC snabbast.</div>
-            </a>
-            <a href="lilla-karlso.html" class="atmos-nav-card" style="text-decoration:none; display:flex; flex-direction:column; background:white; color:#171717 !important; border-radius:10px; padding:16px 20px; border:2px solid #ececec; transition:border-color 0.15s ease;">
-                <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:#888;">Tillämpning</div>
-                <div style="font-size:18px; font-weight:700; margin-top:4px; color:#171717;">🏝️ Lilla Karlsö 2025 →</div>
-                <div style="font-size:13px; color:#666; margin-top:6px;">ERA5→SCL kör live på en svensk Östersjö-AOI: 9 cloud-free scener av 47 kandidater, mean COT 0.0028.</div>
-            </a>
-            <a href="cloud-models.html" class="atmos-nav-card" style="text-decoration:none; display:flex; flex-direction:column; background:white; color:#171717 !important; border-radius:10px; padding:16px 20px; border:2px solid #ececec; transition:border-color 0.15s ease;">
-                <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:#888;">Modell-jämförelse</div>
-                <div style="font-size:18px; font-weight:700; margin-top:4px; color:#171717;">☁️ Cloud-detection-modeller →</div>
-                <div style="font-size:13px; color:#666; margin-top:6px;">Sen2Cor SCL, s2cloudless, OmniCloudMask och DES MLP5 körs på samma Kiruna-scener — modellerna är inte överens.</div>
-            </a>
+        <div class="sub-tab-nav">
+            <a href="#" class="sub-tab active" data-subtab="era5_strategies">📊 Strategi-jämförelse — Skåne</a>
+            <a href="#" class="sub-tab" data-subtab="era5_cloud_models">☁️ Cloud-detection-modeller — Kiruna</a>
         </div>
+
+        <div class="sub-tab-content active" id="tab-era5_strategies">
 
         <div class="summary-section">
             <div class="summary-card"><h4>Rekommenderat: ERA5 → SCL</h4><div class="value">0.0086</div><div class="detail">mean COT · 5 scener · 193 s</div></div>
@@ -761,6 +747,82 @@ python demos/era5_metafilter/render_strategy_figures.py
                 <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">DigitalEarthSweden/ml-cloud-opt-thick</a>.
             </p>
         </div>
+        </div><!-- /sub-tab-content era5_strategies -->
+
+        <div class="sub-tab-content" id="tab-era5_cloud_models">
+            <div class="section-header">
+                <h2>Cloud-detection-modeller — Kiruna 2024</h2>
+                <p class="section-byline">
+                    Fyra modellfamiljer på samma fyra Sentinel-2-scener över Kirunavaara · DES openEO + Docker-container
+                </p>
+            </div>
+
+            <div class="summary-section">
+                <div class="summary-card"><h4>Sen2Cor SCL</h4><div class="value">42.2 %</div><div class="detail">avg cloud-frac · ESA officiell</div></div>
+                <div class="summary-card"><h4>s2cloudless</h4><div class="value">11.4 %</div><div class="detail">Sinergise · LightGBM</div></div>
+                <div class="summary-card"><h4>OmniCloudMask</h4><div class="value">39.3 %</div><div class="detail">DPIRD 2024 · transformer</div></div>
+                <div class="summary-card"><h4>DES MLP5 (thick)</h4><div class="value">56.2 %</div><div class="detail">Pirinen 2024 · MLP-ensemble</div></div>
+            </div>
+
+            <div class="tab-description">
+                <h3>Modellerna är inte överens</h3>
+                <p>
+                    Fyra cloud-detection-modeller körs på exakt samma 12×8 km AOI över Kirunavaara
+                    (snöfält, gruva, tundra, samhälle). Sceneurvalet täcker hela molnskalan: 0 %, 1 %,
+                    68 % och 100 % AOI-cloud-fraction enligt SCL-stack-screen. Resultaten visar att
+                    valet av cloud-detection-modell är ett konkret arkitekturbeslut för LULC-pipelinen
+                    — inte bara "kör vilken som helst".
+                </p>
+
+                <h3>Modeller som jämförs</h3>
+                <table class="license-table" style="margin-top:8px;">
+                    <thead><tr><th>Modell</th><th>Familj</th><th>Träningsdata</th><th>Indata</th><th>Output</th><th>Licens</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Sen2Cor SCL</strong></td><td>ESA regelbaserad</td><td>Heuristik + threshold-cascade</td><td>BOA + atmosfäriska band</td><td>12 klasser</td><td>ESA proprietary</td></tr>
+                        <tr><td><strong>s2cloudless</strong></td><td>Sinergise / Sentinel-Hub</td><td>Manuellt labellade scener</td><td>10 TOA-band</td><td>Cloud probability [0,1]</td><td>MIT</td></tr>
+                        <tr><td><strong>OmniCloudMask</strong></td><td>DPIRD-DMA 2024</td><td>CloudSEN12 + PixBox</td><td>R/G/NIR (10 m)</td><td>4 klasser (klart/tjockt/tunt/skugga)</td><td>open source</td></tr>
+                        <tr><td><strong>DES MLP5 ensemble</strong></td><td>Digital Earth Sweden</td><td>SMHI syntetiska data</td><td>11 BOA-band (Pirinen 2024)</td><td>Kontinuerlig COT</td><td>open source</td></tr>
+                    </tbody>
+                </table>
+
+                <h3>Per-scen jämförelse</h3>
+                <p>
+                    Varje scen visas som fem paneler: <strong>RGB · Sen2Cor SCL · s2cloudless ·
+                    OmniCloudMask · DES MLP5</strong>. AOI-summor i caption.
+                </p>
+                <div id="cloud-models-frames" style="display:flex; flex-direction:column; gap:14px; margin-top:14px;">
+                    <p style="color:#888;">Laddar manifest…</p>
+                </div>
+
+                <h3>Insikter</h3>
+                <ul style="margin-left:24px; line-height:1.7;">
+                    <li><strong>s2cloudless är konservativ</strong> — flaggar bara 11 % i snitt, missar molnskuggor och tunna kanter. Bra recall för rena scener, dålig för partiellt molnig.</li>
+                    <li><strong>OmniCloudMask är generös på snö-på-mark</strong> — i Kiruna kan tundran med snörester flaggas som tunt moln (klass 2). Behöver post-process om AOI:t har permanent snötäcke.</li>
+                    <li><strong>DES MLP5 ger kontinuerlig COT</strong> — inte en binär classifier. Bra när modellen behöver veta <em>hur mycket</em> moln, inte bara <em>om</em> moln.</li>
+                    <li><strong>Sen2Cor SCL är gratis i L2A</strong> — ingen extra inferens-kostnad, men 12 klasser kan vara overkill om du bara vill ha cloud_fraction.</li>
+                </ul>
+
+                <h3>Implementation</h3>
+                <p>
+                    s2cloudless och OmniCloudMask kräver Python ≥ 3.10 (PEP 604-syntax) och torch.
+                    De körs i en separat Docker-container (<code>imint/cloud-models:latest</code>,
+                    2.3 GB) som bind-mountar tile-cache och skriver predictions till disk. Sen2Cor
+                    SCL och DES MLP5 körs direkt på host (Python 3.9). Reproducera:
+                </p>
+                <pre style="background:#1e1e1e; color:#e6e6e6; padding:14px; border-radius:6px; overflow-x:auto; font-size:13px;">
+docker build -t imint/cloud-models:latest docker/cloud-models
+python demos/cloud_models/fetch_kiruna.py
+python demos/cloud_models/run_comparison.py</pre>
+
+                <h3>Källor</h3>
+                <p style="font-size:13px;">
+                    <a href="https://github.com/sentinel-hub/sentinel2-cloud-detector" target="_blank">sentinel-hub/sentinel2-cloud-detector</a>
+                    · <a href="https://github.com/DPIRD-DMA/OmniCloudMask" target="_blank">DPIRD-DMA/OmniCloudMask</a>
+                    · <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">DigitalEarthSweden/ml-cloud-opt-thick</a>
+                    · Sen2Cor SCL (ESA Copernicus, fritt i alla L2A-produkter).
+                </p>
+            </div>
+        </div><!-- /sub-tab-content era5_cloud_models -->
     </div>
 
     <div class="footer">
@@ -883,6 +945,7 @@ python demos/era5_metafilter/render_strategy_figures.py
     <script src="js/tab-data.js?v=7"></script>
     <script src="js/app.js?v=7"></script>
     <script src="js/era5-gallery.js?v=2"></script>
+    <script src="js/cloud-models-gallery.js?v=1"></script>
     <script>
     // Auto-resize parent iframe (for digitalearth.se/case/ embedding)
     if (window.parent !== window) {
