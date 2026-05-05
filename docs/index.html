@@ -602,18 +602,24 @@
                         <td><strong>C — Full pipeline</strong></td>
                         <td>Speglar fetch_seasonal-pipelinens båda filter:
                             STAC <code>eo:cloud_cover</code> ≤ 30 % + AOI-SCL <code>cloud_fraction</code> ≤ 10 %
-                            (Sen2Cor scen-klassificering över AOI). Av 10 STAC-passande scener avvisas 6 av AOI-SCL.</td>
-                        <td>4</td><td>173 s</td><td><strong>0.0095</strong></td>
+                            (Sen2Cor scen-klassificering över AOI). Pipelinen hämtar full spektral för alla 10
+                            STAC-passande dagar och avvisar 6 efter SCL-check.</td>
+                        <td>4 av 10</td><td>~173 s</td><td><strong>0.0095</strong></td>
                     </tr>
                     <tr>
                         <td><strong>C2 — SCL-stack</strong></td>
                         <td>Speglar <code>scripts/batch_fetch_openeo.py:screen_tile_scl()</code> —
-                            ETT openEO-anrop hämtar SCL-bandet för hela perioden,
-                            server-side temporal aggregering, AOI-SCL ≤ 5 %
+                            ETT openEO-anrop hämtar bara SCL-bandet för hela perioden,
+                            server-side temporal aggregering, väljer dagar med AOI-SCL ≤ 5 %
                             (matchar <code>scripts/prescreen_scl.py</code> early-exit-tröskel).
+                            Sedan hämtas full spektral bara för de utvalda dagarna.
                             STAC-filtret bypassas (loose <code>max_cloud_cover=50</code>).</td>
-                        <td>4</td><td>1 anrop*</td><td><strong>0.0073</strong></td>
+                        <td>4</td><td>~140 s*</td><td><strong>0.0073</strong></td>
                     </tr>
+                    <tr><td colspan="5" style="font-size:12px; color:#6b7280; padding-top:6px;">
+                        * Estimat: ~60 s SCL-stack-anrop (server-side aggregering) + ~80 s parallell spektral-fetch
+                        för 4 dagar med 6 workers. Faktiska tider varierar med DES openEO-belastning.
+                    </td></tr>
                 </tbody>
             </table>
 
@@ -704,7 +710,7 @@
                         <td>screen_tile_scl ≤ 5 %</td>
                         <td>4</td>
                         <td>0.0073</td>
-                        <td>Alternativ pipeline — 1 openEO-anrop, server-side aggregering, ~36× billigare för stora tile-set.</td>
+                        <td>Alternativ pipeline — 1 SCL-batchanrop server-side, sedan spektral bara för utvalda dagar. Färre spektrala fetches än C för LULC-träningens 1000+ tiles.</td>
                     </tr>
                 </tbody>
             </table>
@@ -723,9 +729,12 @@
                 <strong>C2 slår C på samma antal tiles.</strong> Båda är 4 scener men de delar bara 3 dagar:
                 C2 accepterar 2022-07-03 (STAC 43 %, SCL 5 %) som C avvisar (för hög STAC-cc),
                 och avvisar 2022-07-13 (SCL 8 %) som C accepterar.
-                C2:s strängare SCL-tröskel dominerar STAC-pre-filtret — och eftersom temporal-aggregeringen
-                sker server-side i ett enda openEO-anrop är pipelinen <strong>~36× billigare</strong>
-                i API-trafik för LULC-träningens 1000+ tiles.
+                C2:s strängare SCL-tröskel dominerar STAC-pre-filtret. C kräver full
+                spektral-fetch för alla 10 STAC-passande dagar (för att kunna avvisa 6 efter SCL-check),
+                medan C2 först gör en lätt SCL-batch (server-side aggregering över hela perioden) och
+                sedan bara spektral för de 4 utvalda dagarna. På denna AOI är slutsättet jämnt (4 vs 4)
+                men C2 sparar 60 % på spektrala fetches — en skillnad som <strong>växer linjärt</strong>
+                med antal kandidatdagar och blir betydande för LULC-träningens 1000+ tiles.
             </p>
             <p>
                 Per-datum-data + SCL-pass/reject finns i
