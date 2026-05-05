@@ -65,6 +65,18 @@
       "mean_clear_frac": 0.9106,
       "mean_thick_cloud_frac": 0.0225,
       "definition": "SCL-stack-prescreen (script: scripts/batch_fetch_openeo.py:screen_tile_scl). ETT openEO-anrop hämtar SCL-band för hela perioden, server-side aggregation, AOI-SCL cloud_fraction ≤ 5% (matchar prescreen_scl.py:121 early-exit). STAC-filtret bypassas (max_cloud_cover=50 är loose pre-filter)."
+    },
+    "C0_stac_only": {
+      "name": "C0_stac_only",
+      "n_scenes": 10,
+      "mean_cot": 0.09174,
+      "median_cot": 0.03225,
+      "std_cot": 0.10148,
+      "min_cot": 0.00394,
+      "max_cot": 0.2758,
+      "mean_clear_frac": 0.639,
+      "mean_thick_cloud_frac": 0.2409,
+      "definition": "STAC eo:cloud_cover <= 30% only — no AOI/SCL post-filter. Mirrors a naive fetch that trusts STAC granule cloud_cover."
     }
   },
   "per_scene": {
@@ -664,6 +676,108 @@
         "thick_cloud_frac": 0.0005,
         "thin_cloud_frac": 0.0066,
         "clear_frac": 0.9929
+      },
+      {
+        "date": "2022-08-24",
+        "mean_cot": 0.0044,
+        "median_cot": 0.00244,
+        "p90_cot": 0.01135,
+        "max_cot": 0.51883,
+        "thick_cloud_frac": 0.0005,
+        "thin_cloud_frac": 0.0086,
+        "clear_frac": 0.9909
+      }
+    ],
+    "C0_stac_only": [
+      {
+        "date": "2022-06-10",
+        "mean_cot": 0.26,
+        "median_cot": 0.06319,
+        "p90_cot": 0.75502,
+        "max_cot": 1.08248,
+        "thick_cloud_frac": 0.7087,
+        "thin_cloud_frac": 0.1431,
+        "clear_frac": 0.1482
+      },
+      {
+        "date": "2022-06-28",
+        "mean_cot": 0.2758,
+        "median_cot": 0.03046,
+        "p90_cot": 0.98884,
+        "max_cot": 1.15043,
+        "thick_cloud_frac": 0.538,
+        "thin_cloud_frac": 0.1252,
+        "clear_frac": 0.3368
+      },
+      {
+        "date": "2022-07-10",
+        "mean_cot": 0.14034,
+        "median_cot": 0.01407,
+        "p90_cot": 0.69815,
+        "max_cot": 1.18458,
+        "thick_cloud_frac": 0.3539,
+        "thin_cloud_frac": 0.1209,
+        "clear_frac": 0.5252
+      },
+      {
+        "date": "2022-07-13",
+        "mean_cot": 0.0203,
+        "median_cot": 0.01068,
+        "p90_cot": 0.02172,
+        "max_cot": 1.13057,
+        "thick_cloud_frac": 0.0686,
+        "thin_cloud_frac": 0.1769,
+        "clear_frac": 0.7546
+      },
+      {
+        "date": "2022-07-15",
+        "mean_cot": 0.14526,
+        "median_cot": 0.02065,
+        "p90_cot": 0.67274,
+        "max_cot": 1.13966,
+        "thick_cloud_frac": 0.4182,
+        "thin_cloud_frac": 0.2334,
+        "clear_frac": 0.3485
+      },
+      {
+        "date": "2022-07-20",
+        "mean_cot": 0.00953,
+        "median_cot": 0.0103,
+        "p90_cot": 0.01567,
+        "max_cot": 0.50553,
+        "thick_cloud_frac": 0.0012,
+        "thin_cloud_frac": 0.1345,
+        "clear_frac": 0.8643
+      },
+      {
+        "date": "2022-07-28",
+        "mean_cot": 0.0442,
+        "median_cot": 0.00629,
+        "p90_cot": 0.0644,
+        "max_cot": 1.08984,
+        "thick_cloud_frac": 0.1342,
+        "thin_cloud_frac": 0.0673,
+        "clear_frac": 0.7984
+      },
+      {
+        "date": "2022-08-12",
+        "mean_cot": 0.00394,
+        "median_cot": 0.00184,
+        "p90_cot": 0.01098,
+        "max_cot": 0.38129,
+        "thick_cloud_frac": 0.0005,
+        "thin_cloud_frac": 0.0066,
+        "clear_frac": 0.9929
+      },
+      {
+        "date": "2022-08-14",
+        "mean_cot": 0.0136,
+        "median_cot": 0.01102,
+        "p90_cot": 0.03125,
+        "max_cot": 0.44269,
+        "thick_cloud_frac": 0.185,
+        "thin_cloud_frac": 0.1845,
+        "clear_frac": 0.6305
       },
       {
         "date": "2022-08-24",

@@ -434,6 +434,78 @@
         "thick_cloud_frac": 0.0878,
         "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-03.jpg"
       }
+    ],
+    "C0_stac_only": [
+      {
+        "date": "2022-08-12",
+        "mean_cot": 0.00394,
+        "median_cot": 0.00184,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-08-12.jpg"
+      },
+      {
+        "date": "2022-08-24",
+        "mean_cot": 0.0044,
+        "median_cot": 0.00244,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-08-24.jpg"
+      },
+      {
+        "date": "2022-07-20",
+        "mean_cot": 0.00953,
+        "median_cot": 0.0103,
+        "thick_cloud_frac": 0.0012,
+        "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-07-20.jpg"
+      },
+      {
+        "date": "2022-08-14",
+        "mean_cot": 0.0136,
+        "median_cot": 0.01102,
+        "thick_cloud_frac": 0.185,
+        "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-08-14.jpg"
+      },
+      {
+        "date": "2022-07-13",
+        "mean_cot": 0.0203,
+        "median_cot": 0.01068,
+        "thick_cloud_frac": 0.0686,
+        "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-07-13.jpg"
+      },
+      {
+        "date": "2022-07-28",
+        "mean_cot": 0.0442,
+        "median_cot": 0.00629,
+        "thick_cloud_frac": 0.1342,
+        "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-07-28.jpg"
+      },
+      {
+        "date": "2022-07-10",
+        "mean_cot": 0.14034,
+        "median_cot": 0.01407,
+        "thick_cloud_frac": 0.3539,
+        "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-07-10.jpg"
+      },
+      {
+        "date": "2022-07-15",
+        "mean_cot": 0.14526,
+        "median_cot": 0.02065,
+        "thick_cloud_frac": 0.4182,
+        "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-07-15.jpg"
+      },
+      {
+        "date": "2022-06-10",
+        "mean_cot": 0.26,
+        "median_cot": 0.06319,
+        "thick_cloud_frac": 0.7087,
+        "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-06-10.jpg"
+      },
+      {
+        "date": "2022-06-28",
+        "mean_cot": 0.2758,
+        "median_cot": 0.03046,
+        "thick_cloud_frac": 0.538,
+        "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-06-28.jpg"
+      }
     ]
   }
 }

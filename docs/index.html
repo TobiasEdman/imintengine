@@ -557,6 +557,7 @@
         </div>
         <div class="summary-section">
             <div class="summary-card"><h4>Mean COT (B atmosfär)</h4><div class="value">0.0743</div><div class="detail">16 scener · 57 % lägre än A</div></div>
+            <div class="summary-card"><h4>Mean COT (C0 STAC-only)</h4><div class="value">0.0917</div><div class="detail">naiv · 10 scener</div></div>
             <div class="summary-card"><h4>Mean COT (C full pipeline)</h4><div class="value">0.0095</div><div class="detail">STAC + AOI-SCL · 4 scener</div></div>
             <div class="summary-card"><h4>Mean COT (C2 SCL-stack)</h4><div class="value">0.0073</div><div class="detail">screen_tile_scl ≤ 5 % · 4 scener</div></div>
             <div class="summary-card"><h4>Mean COT (A baseline)</h4><div class="value">0.1734</div><div class="detail">Alla 36 scener</div></div>
@@ -590,6 +591,12 @@
                         <td><strong>B — Atmosfär-filter</strong></td>
                         <td>A:s scener vars datum passerar väderregeln: nederbörd ≤ 0.5 mm idag, ≤ 3 mm föregående 2 dygn, T2m ≥ 10 °C.</td>
                         <td>16</td><td>247 s</td><td><strong>0.0743</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>C0 — STAC-only</strong></td>
+                        <td>Naiv fetch — bara STAC <code>eo:cloud_cover</code> ≤ 30 %, ingen AOI- eller SCL-filtrering.
+                            Speglar vad du får om du litar blint på STAC-katalogens granul-cloud-cover.</td>
+                        <td>10</td><td>173 s</td><td>0.0917</td>
                     </tr>
                     <tr>
                         <td><strong>C — Full pipeline</strong></td>
@@ -628,6 +635,7 @@
 
             <div id="era5-set-tabs" style="margin-top: 16px; display:flex; gap:8px; flex-wrap:wrap;">
                 <a href="#" class="era5-set-tab active" data-set="B_metafilter">B — Atmosfär-filter (16)</a>
+                <a href="#" class="era5-set-tab" data-set="C0_stac_only">C0 — STAC-only (10)</a>
                 <a href="#" class="era5-set-tab" data-set="C_fetch_s2">C — Full pipeline (4)</a>
                 <a href="#" class="era5-set-tab" data-set="D_scl_stack">C2 — SCL-stack (4)</a>
                 <a href="#" class="era5-set-tab" data-set="A_baseline">A — Baseline (36)</a>
@@ -657,32 +665,67 @@
                 </div>
             </div>
 
-            <h3>Tolkning</h3>
+            <h3>Tolkning — fem metoder i stigande striktitet</h3>
+            <table class="license-table" style="margin-top:8px;">
+                <thead>
+                    <tr><th>Metod</th><th>Filter</th><th>n</th><th>Mean COT</th><th>Anmärkning</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>A — Baseline</strong></td>
+                        <td>Inget</td>
+                        <td>36</td>
+                        <td>0.1734</td>
+                        <td>Sämst kvalitet, mest data — <em>vad finns att hämta?</em></td>
+                    </tr>
+                    <tr>
+                        <td><strong>C0 — STAC-only</strong></td>
+                        <td>STAC granul-cc ≤ 30 %</td>
+                        <td>10</td>
+                        <td>0.0917</td>
+                        <td>Naiv. Granul-snitt ≠ AOI-snitt — släpper igenom dagar som är klart fördunklade över AOI.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>B — Atmosfär</strong></td>
+                        <td>ERA5 reanalys (väder)</td>
+                        <td>16</td>
+                        <td>0.0743</td>
+                        <td>Prefilter på AOI-skala (~30 km grid) — bättre än STAC-only, billigare att räkna ut.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>C — Full pipeline</strong></td>
+                        <td>STAC ≤ 30 % + AOI-SCL ≤ 10 %</td>
+                        <td>4</td>
+                        <td>0.0095</td>
+                        <td>Nuvarande Imint-pipeline (<code>fetch_seasonal_image</code>). 6 av 10 STAC-passande avvisas av AOI-SCL.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>C2 — SCL-stack</strong></td>
+                        <td>screen_tile_scl ≤ 5 %</td>
+                        <td>4</td>
+                        <td>0.0073</td>
+                        <td>Alternativ pipeline — 1 openEO-anrop, server-side aggregering, ~36× billigare för stora tile-set.</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Slutsatser</h3>
             <p>
-                <strong>Atmosfärfiltret är ett effektivt prefilter mot AOI-SCL.</strong>
-                Av de 6 dagar i hela perioden som passerar produktionspipelinens AOI-SCL-filter
-                (≤ 10 % moln över AOI) fångas 5 också av atmosfärfiltret — en
-                <strong>SCL-recall på 83 %</strong>, mätt som prefilter mot postfilter.
-                Den missade dagen (2022-07-03) hade STAC granul-cc 43 % och avvisas
-                ändå av STAC-filtret i C — men släpps igenom av C2 nedan.
+                <strong>Granul-cc är för grovt för en tile-AOI.</strong> C0-naiv-baseline har 0.0917 mean COT
+                — nära dubbelt så hög som B-atmosfärfiltret. STAC-only räcker inte för LULC-träning.
             </p>
             <p>
-                <strong>C vs C2 — två SCL-pipelines i samma repo:</strong>
-                Imint har redan en alternativ SCL-stack-pipeline
-                (<code>scripts/batch_fetch_openeo.py:screen_tile_scl</code>) som hämtar
-                SCL-bandet i ett enda openEO-anrop över hela tidsperioden, aggregerar
-                server-side, och plockar dagar med ≤ 5 % AOI-cloud. Den ger
-                4 scener (samma antal som C) men <strong>inte samma 4 dagar</strong>:
-                C2 accepterar 2022-07-03 (STAC-cc 43 % men SCL 5 %) som C avvisar,
-                och avvisar 2022-07-13 (SCL 8 %) som C accepterar. C2 har därför
-                lägre mean COT (0.0073 vs 0.0095) trots samma antal tiles —
-                den strängare SCL-tröskeln dominerar STAC-pre-filtret.
+                <strong>Atmosfärfiltret är ett bra prefilter med 83 % SCL-recall.</strong> Av de 6 dagar
+                som passerar produktionspipelinens AOI-SCL-filter (≤ 10 % moln över AOI) fångar B 5 —
+                den missade dagen (2022-07-03) avvisas ändå av STAC-filtret i C men släpps igenom av C2.
             </p>
             <p>
-                Praktiskt: C2:s pipeline är dessutom <strong>~36× billigare</strong> än C
-                räknat i API-anrop (1 openEO-anrop vs 36 spridda HTTP-fetches),
-                eftersom temporal-aggregeringen sker server-side. För LULC-träningens
-                stora tile-set (~1000+ tiles) är skillnaden mätbar i kreditförbrukning.
+                <strong>C2 slår C på samma antal tiles.</strong> Båda är 4 scener men de delar bara 3 dagar:
+                C2 accepterar 2022-07-03 (STAC 43 %, SCL 5 %) som C avvisar (för hög STAC-cc),
+                och avvisar 2022-07-13 (SCL 8 %) som C accepterar.
+                C2:s strängare SCL-tröskel dominerar STAC-pre-filtret — och eftersom temporal-aggregeringen
+                sker server-side i ett enda openEO-anrop är pipelinen <strong>~36× billigare</strong>
+                i API-trafik för LULC-träningens 1000+ tiles.
             </p>
             <p>
                 Per-datum-data + SCL-pass/reject finns i
