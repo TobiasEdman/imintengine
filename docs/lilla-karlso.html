@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lilla Karlsö — Sentinel-2 vår+sommar 2025 (Atmosfär-pipeline)</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    color: #171717;
+    background: #fafafa;
+    line-height: 1.55;
+}
+header {
+    background: #171717;
+    color: white;
+    padding: 36px 48px 30px;
+    border-bottom: 4px solid #27ae60;
+}
+header .crumbs { color: #aaa; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 10px; }
+header h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; }
+header .subtitle { color: #aaa; margin-top: 8px; font-size: 14px; }
+header a { color: #27ae60; text-decoration: none; }
+main { max-width: 1180px; margin: 0 auto; padding: 36px 48px; }
+section { margin-bottom: 40px; }
+h2 { font-size: 22px; font-weight: 600; margin: 0 0 14px; padding-bottom: 8px; border-bottom: 2px solid #ececec; }
+h3 { font-size: 16px; font-weight: 600; margin: 22px 0 10px; }
+p { max-width: 920px; margin-bottom: 12px; }
+.summary-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px; margin: 14px 0 24px;
+}
+.card { background: white; border: 1px solid #ececec; border-radius: 8px; padding: 14px 16px; }
+.card .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.06em; }
+.card .value { font-size: 26px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.card .detail { font-size: 12px; color: #666; margin-top: 4px; }
+.card.highlight { border-left: 4px solid #27ae60; }
+.card.warn { border-left: 4px solid #d35400; }
+.frame-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 14px;
+}
+.frame-card { background: #0f0f0f; border: 1px solid #1f1f1f; border-radius: 8px; overflow: hidden; }
+.frame-card img { width: 100%; height: auto; display: block; }
+.frame-meta {
+    padding: 10px 12px; display: flex; justify-content: space-between;
+    align-items: center; gap: 10px; font-size: 13px; color: #e6e6e6;
+}
+.pill { display: inline-block; padding: 2px 9px; border-radius: 999px;
+        font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase;
+        font-weight: 600; }
+.pill.green { background: #d6f0e3; color: #1a6b40; }
+.pill.amber { background: #fdebd0; color: #a04000; }
+.pill.red   { background: #fadbd8; color: #922b21; }
+table { width: 100%; border-collapse: collapse; background: white; border: 1px solid #ececec; border-radius: 8px; overflow: hidden; }
+th, td { padding: 10px 14px; text-align: left; font-size: 14px; }
+th { background: #f5f5f5; font-weight: 600; }
+tr + tr td { border-top: 1px solid #ececec; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+code { background: #f0f0f0; padding: 1px 6px; border-radius: 3px; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+pre { background: #1e1e1e; color: #e6e6e6; padding: 14px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+.callout {
+    background: #f0fafa; border-left: 4px solid #27ae60;
+    padding: 14px 18px; border-radius: 4px; margin: 16px 0; font-size: 14px;
+}
+footer {
+    border-top: 1px solid #ececec; padding: 22px 48px; text-align: center;
+    color: #888; font-size: 12px; margin-top: 50px;
+}
+</style>
+</head>
+<body>
+<header>
+    <div class="crumbs">Imint Engine · Atmosfär-pipeline · Tillämpning</div>
+    <h1>Lilla Karlsö — vår + sommar 2025</h1>
+    <div class="subtitle">
+        Sentinel-2-bilder valda av <code>imint.training.optimal_fetch.optimal_fetch_dates(mode="era5_then_scl")</code>
+        · DES openEO · 11 spektralband · COT-inferens via DES MLP5-ensemble (Pirinen 2024)
+    </div>
+</header>
+
+<main>
+
+<section>
+    <h2>Sammanfattning</h2>
+    <div class="summary-grid" id="summary-cards">
+        <!-- filled in by JS -->
+    </div>
+    <div class="callout" id="recommendation"><strong>Laddar…</strong></div>
+</section>
+
+<section>
+    <h2>AOI &amp; period</h2>
+    <p>
+        AOI: ungefär 6 km × 6 km runt Lilla Karlsö i Östersjön
+        (<code>WGS84 bbox 17.92,57.30,18.02,57.36</code>) — ön plus omkringliggande hav.
+        Period: <strong>2025-04-01 → 2025-09-30</strong> (vår + sommar).
+        Lilla Karlsö är ett naturreservat med stor sjöfågel- och sälpopulation,
+        kalkstensplatåer och åkermark — en god testbed för ett blandat AOI.
+    </p>
+</section>
+
+<section>
+    <h2>Filter-kedja</h2>
+    <p>
+        Datumen valdes med <strong>ERA5 → SCL</strong>-strategin (M4 från
+        <a href="index.html#tab-era5">Atmosfär-tabben</a>):
+    </p>
+    <ol style="margin-left:24px; line-height:1.8;">
+        <li><strong>ERA5 atmosfär-prefilter</strong> — gratis, AOI-aware (~30 km grid):
+            nederbörd ≤ 0.5 mm idag, ≤ 3 mm föregående 2 dygn, T2m ≥ 10 °C.</li>
+        <li><strong>SCL-stack screen</strong> — chunkade openEO-anrop (≤ 19 timesteps/anrop),
+            AOI-cloud-fraction ≤ 10 %.</li>
+        <li><strong>Spektral-fetch</strong> — full 11-band L2A bara för de utvalda dagarna,
+            6 parallella DES openEO-workers.</li>
+    </ol>
+    <table id="plan-table" style="margin-top:14px;">
+        <thead><tr><th>Stage</th><th class="num">Wall-clock</th><th class="num">Kandidater kvar</th></tr></thead>
+        <tbody><tr><td colspan="3">Laddar…</td></tr></tbody>
+    </table>
+</section>
+
+<section>
+    <h2>Frames — sorterade klarast först</h2>
+    <p>
+        Vänster panel: RGB (B04/B03/B02). Höger panel: COT-värmekarta över exakt
+        samma yta. AOI-mean COT printat på heatmappen; tröskelvärden enligt
+        Pirinen 2024 (thick ≥ 0.025, thin 0.015–0.025, klart &lt; 0.015).
+    </p>
+    <div class="frame-grid" id="frame-grid">
+        <p style="color:#888; padding:24px;">Laddar manifest…</p>
+    </div>
+</section>
+
+<section>
+    <h2>Reproducera</h2>
+    <pre>python demos/lilla_karlso/fetch_and_render.py</pre>
+    <p style="font-size:13px; color:#666;">
+        Hämtar live från DES openEO; cachar tiles i
+        <code>demos/lilla_karlso/cache_11band/</code> (gitignorerad).
+        Skriver frames + manifest till <code>docs/showcase/lilla_karlso/</code>.
+    </p>
+</section>
+
+</main>
+
+<footer>
+    Imint Engine · Lilla Karlsö-tillämpning · genererad 2026-05-05 ·
+    <a href="index.html" style="color:#171717;">tillbaka till showcase</a>
+</footer>
+
+<script>
+fetch('showcase/lilla_karlso/manifest.json')
+  .then(r => r.json())
+  .then(m => {
+    const summary = m.summary || {};
+    const plan = m.plan || {};
+
+    // Summary cards
+    const cards = document.getElementById('summary-cards');
+    const fmt = (v, d=4) => (v == null ? '—' : v.toFixed(d));
+    const cardData = [
+      { label: 'Mean COT', value: fmt(summary.mean_cot, 4),
+        detail: `${summary.n_scenes || 0} scener`,
+        cls: summary.mean_cot != null && summary.mean_cot < 0.025 ? 'highlight' : '' },
+      { label: 'Median COT', value: fmt(summary.median_cot, 4), detail: '50:e percentilen' },
+      { label: 'Lägst COT', value: fmt(summary.min_cot, 4), detail: 'klaraste scenen' },
+      { label: 'Total tid', value: `${(summary.total_wall_s || 0).toFixed(0)} s`,
+        detail: `urval ${(summary.selection_total_s || 0).toFixed(0)} s + spektral ${(summary.spec_wall_s || 0).toFixed(0)} s` },
+      { label: 'Antal scener', value: `${summary.n_scenes || 0}`,
+        detail: `av ${(plan.candidates_after_stage || {}).era5 || '?'} ERA5-kandidater` },
+    ];
+    cards.innerHTML = cardData.map(c => `
+      <div class="card ${c.cls || ''}">
+        <div class="label">${c.label}</div>
+        <div class="value">${c.value}</div>
+        <div class="detail">${c.detail}</div>
+      </div>
+    `).join('');
+
+    // Recommendation callout
+    const cot = summary.mean_cot;
+    let cls, msg;
+    if (cot == null) { cls = 'amber'; msg = 'Ingen mean COT — inga scener?'; }
+    else if (cot < 0.025) {
+      msg = `<strong>${m.aoi}: ${summary.n_scenes} användbara scener</strong> identifierade. ` +
+            `Mean COT <strong>${cot.toFixed(4)}</strong> — under thick-cloud-tröskeln, ` +
+            `lämpliga för LULC-träning eller annan kvalitetskritisk analys.`;
+    } else if (cot < 0.05) {
+      msg = `<strong>${m.aoi}: ${summary.n_scenes} scener</strong> med mean COT ${cot.toFixed(4)}. ` +
+            `Acceptabelt för bredare träning men inspektera enskilda scener före högkvalitativ analys.`;
+    } else {
+      msg = `<strong>${m.aoi}: ${summary.n_scenes} scener</strong> med mean COT ${cot.toFixed(4)} — ` +
+            `relativt molniga. Överväg att skärpa AOI-SCL-tröskeln eller utöka perioden.`;
+    }
+    document.getElementById('recommendation').innerHTML = msg;
+
+    // Plan table
+    const planRows = [];
+    if (plan.selection_elapsed_s) {
+      const stages = [
+        ['ERA5 prefilter (Open-Meteo)', plan.selection_elapsed_s.era5,
+         (plan.candidates_after_stage || {}).era5],
+        ['SCL-stack screen (DES openEO)', plan.selection_elapsed_s.scl_stack,
+         (plan.candidates_after_stage || {}).scl_pre_threshold],
+        ['Spektral-fetch (DES openEO, 6 workers)', summary.spec_wall_s,
+         summary.n_scenes],
+      ];
+      planRows.push(...stages.filter(s => s[1] != null).map(
+        ([name, t, n]) => `<tr><td>${name}</td>` +
+          `<td class="num">${t.toFixed(1)} s</td>` +
+          `<td class="num">${n != null ? n : '—'}</td></tr>`
+      ));
+    }
+    document.getElementById('plan-table').querySelector('tbody').innerHTML =
+      planRows.join('') || '<tr><td colspan="3">Saknas plan-data</td></tr>';
+
+    // Frame grid
+    const grid = document.getElementById('frame-grid');
+    const thinThr = 0.015, thickThr = 0.025;
+    grid.innerHTML = (m.frames || []).map(f => {
+      let cls = 'green', label = 'Klart';
+      if (f.mean_cot >= thickThr) { cls = 'red'; label = 'Tjockt moln'; }
+      else if (f.mean_cot >= thinThr) { cls = 'amber'; label = 'Tunt moln'; }
+      const path = f.frame_path.replace(/^showcase\//, 'showcase/');
+      return `
+        <div class="frame-card">
+          <img src="${path}" alt="${f.date}" loading="lazy">
+          <div class="frame-meta">
+            <span>${f.date} · mean COT <strong>${f.mean_cot.toFixed(4)}</strong></span>
+            <span class="pill ${cls}">${label}</span>
+          </div>
+        </div>
+      `;
+    }).join('') || '<p style="color:#888; padding:24px;">Inga frames i manifest.</p>';
+  })
+  .catch(e => {
+    document.getElementById('recommendation').innerHTML =
+      `<strong>Fel:</strong> kunde inte ladda manifest: ${e.message}`;
+  });
+</script>
+
+</body>
+</html>

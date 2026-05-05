@@ -1,0 +1,36 @@
+{
+  "aoi": "Lilla Karlsö",
+  "bbox_wgs84": {
+    "west": 18.02,
+    "south": 57.28,
+    "east": 18.1,
+    "north": 57.34
+  },
+  "period": [
+    "2025-04-01",
+    "2025-09-30"
+  ],
+  "mode": "era5_then_scl",
+  "max_aoi_cloud": 0.1,
+  "scene_cloud_max": 30.0,
+  "selection_elapsed_s": {
+    "era5": 1.21,
+    "scl_stack": 178.32
+  },
+  "candidates_after_stage": {
+    "era5": 43,
+    "scl_pre_threshold": 85,
+    "final": 9
+  },
+  "selected_dates": [
+    "2025-04-29",
+    "2025-06-13",
+    "2025-07-03",
+    "2025-07-10",
+    "2025-07-20",
+    "2025-08-09",
+    "2025-08-19",
+    "2025-08-20",
+    "2025-09-04"
+  ]
+}

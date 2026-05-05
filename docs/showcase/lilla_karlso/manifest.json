@@ -1,0 +1,118 @@
+{
+  "aoi": "Lilla Karlsö",
+  "period": [
+    "2025-04-01",
+    "2025-09-30"
+  ],
+  "summary": {
+    "n_scenes": 9,
+    "mean_cot": 0.00282,
+    "median_cot": 0.00056,
+    "min_cot": 0.00034,
+    "max_cot": 0.01881,
+    "spec_wall_s": 62.77,
+    "selection_total_s": 179.53,
+    "total_wall_s": 242.3
+  },
+  "plan": {
+    "aoi": "Lilla Karlsö",
+    "bbox_wgs84": {
+      "west": 18.02,
+      "south": 57.28,
+      "east": 18.1,
+      "north": 57.34
+    },
+    "period": [
+      "2025-04-01",
+      "2025-09-30"
+    ],
+    "mode": "era5_then_scl",
+    "max_aoi_cloud": 0.1,
+    "scene_cloud_max": 30.0,
+    "selection_elapsed_s": {
+      "era5": 1.21,
+      "scl_stack": 178.32
+    },
+    "candidates_after_stage": {
+      "era5": 43,
+      "scl_pre_threshold": 85,
+      "final": 9
+    },
+    "selected_dates": [
+      "2025-04-29",
+      "2025-06-13",
+      "2025-07-03",
+      "2025-07-10",
+      "2025-07-20",
+      "2025-08-09",
+      "2025-08-19",
+      "2025-08-20",
+      "2025-09-04"
+    ]
+  },
+  "frames": [
+    {
+      "date": "2025-07-10",
+      "mean_cot": 0.00034,
+      "median_cot": 0.0,
+      "thick_cloud_frac": 0.0,
+      "frame_path": "showcase/lilla_karlso/frames/2025-07-10.jpg"
+    },
+    {
+      "date": "2025-04-29",
+      "mean_cot": 0.00044,
+      "median_cot": 0.0,
+      "thick_cloud_frac": 0.0001,
+      "frame_path": "showcase/lilla_karlso/frames/2025-04-29.jpg"
+    },
+    {
+      "date": "2025-09-04",
+      "mean_cot": 0.00048,
+      "median_cot": 0.0,
+      "thick_cloud_frac": 0.0,
+      "frame_path": "showcase/lilla_karlso/frames/2025-09-04.jpg"
+    },
+    {
+      "date": "2025-08-19",
+      "mean_cot": 0.00053,
+      "median_cot": 4e-05,
+      "thick_cloud_frac": 0.0,
+      "frame_path": "showcase/lilla_karlso/frames/2025-08-19.jpg"
+    },
+    {
+      "date": "2025-06-13",
+      "mean_cot": 0.00056,
+      "median_cot": 4e-05,
+      "thick_cloud_frac": 0.0,
+      "frame_path": "showcase/lilla_karlso/frames/2025-06-13.jpg"
+    },
+    {
+      "date": "2025-08-20",
+      "mean_cot": 0.00057,
+      "median_cot": 0.0,
+      "thick_cloud_frac": 0.0009,
+      "frame_path": "showcase/lilla_karlso/frames/2025-08-20.jpg"
+    },
+    {
+      "date": "2025-08-09",
+      "mean_cot": 0.0007,
+      "median_cot": 0.00025,
+      "thick_cloud_frac": 0.0,
+      "frame_path": "showcase/lilla_karlso/frames/2025-08-09.jpg"
+    },
+    {
+      "date": "2025-07-20",
+      "mean_cot": 0.00294,
+      "median_cot": 0.0,
+      "thick_cloud_frac": 0.0177,
+      "frame_path": "showcase/lilla_karlso/frames/2025-07-20.jpg"
+    },
+    {
+      "date": "2025-07-03",
+      "mean_cot": 0.01881,
+      "median_cot": 0.01778,
+      "thick_cloud_frac": 0.3354,
+      "frame_path": "showcase/lilla_karlso/frames/2025-07-03.jpg"
+    }
+  ]
+}
