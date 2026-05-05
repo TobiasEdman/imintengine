@@ -11,7 +11,7 @@
     function statusBadge(status) {
         switch (status) {
             case 'ok':
-                return { label: 'OK', color: '#27ae60' };
+                return { label: 'OK', color: '#cff8e4' };
             case 'missing-data':
                 return { label: 'Saknas', color: '#e67e22' };
             default:
@@ -21,11 +21,11 @@
 
     function renderStats(layer) {
         if (layer.status !== 'ok') {
-            return '<span style="color:#e67e22;font-size:12px;">' +
+            return '<span style="color:rgba(207,248,228,0.55);font-size:12px;">' +
                    'väntar på k8s/prefetch-nvv-aux-job</span>';
         }
         var s = layer.stats || {};
-        return '<span style="font-variant-numeric:tabular-nums;">' +
+        return '<span style="font-variant-numeric:tabular-nums; color:rgba(207,248,228,0.7);">' +
                'mean ' + (s.mean !== undefined ? s.mean : '?') +
                ' ' + (layer.units || '') +
                ' &middot; land ' + (s.land_pct !== undefined ? s.land_pct : '?') + '%' +
@@ -40,9 +40,18 @@
         manifest.layers.forEach(function (layer) {
             var card = document.createElement('div');
             card.className = 'wetland-frame-card';
+            // Match .summary-card palette (styles.css:135) so kort matchar
+            // övriga tabbar — mörkgrön bg + ljus mint ribba till vänster.
             card.style.cssText =
-                'background:#0f0f0f; border:1px solid #1f1f1f; border-radius:8px; ' +
-                'overflow:hidden; display:flex; flex-direction:column;';
+                'background:#1a4338; border:1px solid #245045; border-radius:10px; ' +
+                'overflow:hidden; display:flex; flex-direction:column; position:relative;';
+
+            // 3-px mint accent ribbon på vänsterkanten (matchar .summary-card::before)
+            var ribbon = document.createElement('span');
+            ribbon.style.cssText =
+                'position:absolute; left:0; top:0; bottom:0; width:3px; ' +
+                'background:#cff8e4; z-index:1;';
+            card.appendChild(ribbon);
 
             var img = document.createElement('img');
             img.src = layer.frame_path;
@@ -52,8 +61,8 @@
 
             var meta = document.createElement('div');
             meta.style.cssText =
-                'padding:10px 12px; display:flex; flex-direction:column; gap:6px; ' +
-                'font-size:13px; color:#e6e6e6;';
+                'padding:12px 16px; display:flex; flex-direction:column; gap:6px; ' +
+                'font-size:13px; color:#cff8e4;';
 
             var head = document.createElement('div');
             head.style.cssText =
@@ -63,16 +72,16 @@
                 '<span><strong>#' + layer.pirinen_idx + '</strong> ' +
                 layer.title + '</span>' +
                 '<span style="background:' + b.color + '20; color:' + b.color +
-                '; padding:2px 9px; border-radius:999px; font-size:11px; ' +
-                'text-transform:uppercase; letter-spacing:0.05em; ' +
+                '; padding:2px 9px; border-radius:999px; font-size:10px; ' +
+                'text-transform:uppercase; letter-spacing:1.2px; ' +
                 'font-weight:600;">' + b.label + '</span>';
 
             var statsLine = document.createElement('div');
-            statsLine.style.cssText = 'font-size:12px; color:#bbb;';
+            statsLine.style.cssText = 'font-size:12px;';
             statsLine.innerHTML = renderStats(layer);
 
             var src = document.createElement('div');
-            src.style.cssText = 'font-size:11px; color:#888;';
+            src.style.cssText = 'font-size:11px; color:rgba(207,248,228,0.4);';
             src.textContent = layer.source;
 
             meta.appendChild(head);
