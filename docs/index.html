@@ -558,6 +558,7 @@
         <div class="summary-section">
             <div class="summary-card"><h4>Mean COT (B atmosfär)</h4><div class="value">0.0743</div><div class="detail">16 scener · 57 % lägre än A</div></div>
             <div class="summary-card"><h4>Mean COT (C full pipeline)</h4><div class="value">0.0095</div><div class="detail">STAC + AOI-SCL · 4 scener</div></div>
+            <div class="summary-card"><h4>Mean COT (C2 SCL-stack)</h4><div class="value">0.0073</div><div class="detail">screen_tile_scl ≤ 5 % · 4 scener</div></div>
             <div class="summary-card"><h4>Mean COT (A baseline)</h4><div class="value">0.1734</div><div class="detail">Alla 36 scener</div></div>
             <div class="summary-card"><h4>SCL-recall (B)</h4><div class="value">5 / 6</div><div class="detail">SCL-godkända dagar fångade av B</div></div>
             <div class="summary-card"><h4>Tidsbesparing</h4><div class="value">−49 %</div><div class="detail">B mot A · 6 workers DES openEO</div></div>
@@ -597,6 +598,15 @@
                             (Sen2Cor scen-klassificering över AOI). Av 10 STAC-passande scener avvisas 6 av AOI-SCL.</td>
                         <td>4</td><td>173 s</td><td><strong>0.0095</strong></td>
                     </tr>
+                    <tr>
+                        <td><strong>C2 — SCL-stack</strong></td>
+                        <td>Speglar <code>scripts/batch_fetch_openeo.py:screen_tile_scl()</code> —
+                            ETT openEO-anrop hämtar SCL-bandet för hela perioden,
+                            server-side temporal aggregering, AOI-SCL ≤ 5 %
+                            (matchar <code>scripts/prescreen_scl.py</code> early-exit-tröskel).
+                            STAC-filtret bypassas (loose <code>max_cloud_cover=50</code>).</td>
+                        <td>4</td><td>1 anrop*</td><td><strong>0.0073</strong></td>
+                    </tr>
                 </tbody>
             </table>
 
@@ -619,6 +629,7 @@
             <div id="era5-set-tabs" style="margin-top: 16px; display:flex; gap:8px; flex-wrap:wrap;">
                 <a href="#" class="era5-set-tab active" data-set="B_metafilter">B — Atmosfär-filter (16)</a>
                 <a href="#" class="era5-set-tab" data-set="C_fetch_s2">C — Full pipeline (4)</a>
+                <a href="#" class="era5-set-tab" data-set="D_scl_stack">C2 — SCL-stack (4)</a>
                 <a href="#" class="era5-set-tab" data-set="A_baseline">A — Baseline (36)</a>
             </div>
 
@@ -652,16 +663,26 @@
                 Av de 6 dagar i hela perioden som passerar produktionspipelinens AOI-SCL-filter
                 (≤ 10 % moln över AOI) fångas 5 också av atmosfärfiltret — en
                 <strong>SCL-recall på 83 %</strong>, mätt som prefilter mot postfilter.
-                Den enda missade dagen (2022-07-03) hade STAC granul-cc 43 % och avvisas alltså
-                ändå av STAC-filtret.
+                Den missade dagen (2022-07-03) hade STAC granul-cc 43 % och avvisas
+                ändå av STAC-filtret i C — men släpps igenom av C2 nedan.
             </p>
             <p>
-                Den fullständiga pipelinen (C: STAC granul-cc + AOI-SCL) ger 4 användbara
-                tiles av 36 möjliga med mycket låg mean COT (0.0095). Atmosfärfiltret (B)
-                ger 16 tiles med hög datakvalitet (mean COT 0.0743) — användbart när
-                träningsmodellen tål viss molnpåverkan men behöver fler exempel.
-                Kombinationen B + AOI-SCL post-filter ger 5 ultra-rena tiles med
-                <strong>56 % färre fetches</strong> än att probba alla 36 dagar.
+                <strong>C vs C2 — två SCL-pipelines i samma repo:</strong>
+                Imint har redan en alternativ SCL-stack-pipeline
+                (<code>scripts/batch_fetch_openeo.py:screen_tile_scl</code>) som hämtar
+                SCL-bandet i ett enda openEO-anrop över hela tidsperioden, aggregerar
+                server-side, och plockar dagar med ≤ 5 % AOI-cloud. Den ger
+                4 scener (samma antal som C) men <strong>inte samma 4 dagar</strong>:
+                C2 accepterar 2022-07-03 (STAC-cc 43 % men SCL 5 %) som C avvisar,
+                och avvisar 2022-07-13 (SCL 8 %) som C accepterar. C2 har därför
+                lägre mean COT (0.0073 vs 0.0095) trots samma antal tiles —
+                den strängare SCL-tröskeln dominerar STAC-pre-filtret.
+            </p>
+            <p>
+                Praktiskt: C2:s pipeline är dessutom <strong>~36× billigare</strong> än C
+                räknat i API-anrop (1 openEO-anrop vs 36 spridda HTTP-fetches),
+                eftersom temporal-aggregeringen sker server-side. För LULC-träningens
+                stora tile-set (~1000+ tiles) är skillnaden mätbar i kreditförbrukning.
             </p>
             <p>
                 Per-datum-data + SCL-pass/reject finns i

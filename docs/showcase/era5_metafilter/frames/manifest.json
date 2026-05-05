@@ -404,6 +404,36 @@
         "thick_cloud_frac": 0.0686,
         "frame_path": "showcase/era5_metafilter/frames/C_fetch_s2/2022-07-13.jpg"
       }
+    ],
+    "D_scl_stack": [
+      {
+        "date": "2022-08-12",
+        "mean_cot": 0.00394,
+        "median_cot": 0.00184,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-12.jpg"
+      },
+      {
+        "date": "2022-08-24",
+        "mean_cot": 0.0044,
+        "median_cot": 0.00244,
+        "thick_cloud_frac": 0.0005,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-08-24.jpg"
+      },
+      {
+        "date": "2022-07-20",
+        "mean_cot": 0.00953,
+        "median_cot": 0.0103,
+        "thick_cloud_frac": 0.0012,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-20.jpg"
+      },
+      {
+        "date": "2022-07-03",
+        "mean_cot": 0.0113,
+        "median_cot": 0.00948,
+        "thick_cloud_frac": 0.0878,
+        "frame_path": "showcase/era5_metafilter/frames/A_baseline/2022-07-03.jpg"
+      }
     ]
   }
 }
