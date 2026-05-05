@@ -33,6 +33,8 @@
             border-color: #27ae60;
             font-weight: 600;
         }
+        .atmos-nav-card:hover { border-color: #27ae60 !important; }
+        .atmos-nav-card[style*="background:white"]:hover { box-shadow: 0 4px 12px rgba(39,174,96,0.15); }
     </style>
 </head>
 <body>
@@ -555,9 +557,26 @@
             <h2>Atmosfär — optimal Sentinel-2-fetch genom kedjade filter</h2>
             <p class="section-byline">
                 Nationellt Rymddatalabb · SDL 3.0 · Skåne (Lund-omgivning) · juni–augusti 2022 · DES openEO, 6 workers
-                &nbsp;·&nbsp; <a href="lilla-karlso.html">Lilla Karlsö-tillämpning →</a>
-                &nbsp;·&nbsp; <a href="cloud-models.html">Cloud-modell-jämförelse →</a>
             </p>
+        </div>
+
+        <!-- Sub-page navigation cards -->
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 28px;">
+            <a href="#tab-era5" class="atmos-nav-card" style="text-decoration:none; display:flex; flex-direction:column; background:#27ae60; color:#fff; border-radius:10px; padding:16px 20px; border:2px solid #1e8449;">
+                <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; opacity:0.85;">Du är här</div>
+                <div style="font-size:18px; font-weight:700; margin-top:4px;">📊 Strategi-jämförelse</div>
+                <div style="font-size:13px; opacity:0.92; margin-top:6px;">Sex fetch-strategier mätta end-to-end. Pareto-front: M4 ERA5→SCL renast, M5 ERA5→STAC snabbast.</div>
+            </a>
+            <a href="lilla-karlso.html" class="atmos-nav-card" style="text-decoration:none; display:flex; flex-direction:column; background:white; color:#171717 !important; border-radius:10px; padding:16px 20px; border:2px solid #ececec; transition:border-color 0.15s ease;">
+                <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:#888;">Tillämpning</div>
+                <div style="font-size:18px; font-weight:700; margin-top:4px; color:#171717;">🏝️ Lilla Karlsö 2025 →</div>
+                <div style="font-size:13px; color:#666; margin-top:6px;">ERA5→SCL kör live på en svensk Östersjö-AOI: 9 cloud-free scener av 47 kandidater, mean COT 0.0028.</div>
+            </a>
+            <a href="cloud-models.html" class="atmos-nav-card" style="text-decoration:none; display:flex; flex-direction:column; background:white; color:#171717 !important; border-radius:10px; padding:16px 20px; border:2px solid #ececec; transition:border-color 0.15s ease;">
+                <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:#888;">Modell-jämförelse</div>
+                <div style="font-size:18px; font-weight:700; margin-top:4px; color:#171717;">☁️ Cloud-detection-modeller →</div>
+                <div style="font-size:13px; color:#666; margin-top:6px;">Sen2Cor SCL, s2cloudless, OmniCloudMask och DES MLP5 körs på samma Kiruna-scener — modellerna är inte överens.</div>
+            </a>
         </div>
 
         <div class="summary-section">
