@@ -111,17 +111,17 @@ def f2_cot(metrics: dict, out_path: Path) -> None:
 
 
 def f3_pareto(metrics: dict, out_path: Path) -> None:
+    """Pareto-front: time vs data quality. Uses a numbered legend instead of
+    inline labels to avoid the M2/M3/M4 cluster collision."""
     fig, ax = plt.subplots(figsize=(11, 6.5))
     keys = STRATEGY_ORDER
-
-    # Per-strategy label offset to avoid collisions on the M2/M3/M4 cluster
-    offsets = {
-        "M0_stac_only":      ( 8,   8),
-        "M1_atmosphere":     ( 8,   8),
-        "M2_stac_then_scl":  (-12,  18),
-        "M3_scl_only":       ( 8,  -22),
-        "M4_era5_then_scl":  ( 8,  18),
-        "M5_era5_then_stac": ( 8,   8),
+    short_labels = {
+        "M0_stac_only":      "M0  Naiv STAC",
+        "M1_atmosphere":     "M1  Atmosfär ensam",
+        "M2_stac_then_scl":  "M2  Nuvarande pipeline",
+        "M3_scl_only":       "M3  SCL-stack ensam",
+        "M4_era5_then_scl":  "M4  ERA5 → SCL  ★",
+        "M5_era5_then_stac": "M5  ERA5 → STAC  ★",
     }
 
     pts = []
@@ -132,44 +132,50 @@ def f3_pareto(metrics: dict, out_path: Path) -> None:
         if y is None:
             continue
         pts.append((x, y, k, s))
-        ax.scatter(x, y, s=240, color=STRATEGY_COLORS[k],
-                   edgecolor="white", linewidth=2, zorder=3)
-        dx, dy = offsets.get(k, (8, 8))
-        ha = "left" if dx >= 0 else "right"
-        va = "bottom" if dy >= 0 else "top"
+        marker_label = short_labels[k] + (
+            f"  (n={s['n_dates']}, {x:.0f}s, COT {y:.4f})"
+        )
+        ax.scatter(x, y, s=260, color=STRATEGY_COLORS[k],
+                   edgecolor="white", linewidth=2, zorder=3,
+                   label=marker_label)
         ax.annotate(
-            f"{s['label']}\nn={s['n_dates']}, COT={y:.4f}",
-            xy=(x, y), xytext=(dx, dy), textcoords="offset points",
-            fontsize=10, fontweight="bold", ha=ha, va=va,
-            arrowprops={"arrowstyle": "-", "color": "#aaa", "lw": 0.7,
-                        "alpha": 0.7},
+            k.split("_")[0],   # "M0", "M1", …
+            xy=(x, y), xytext=(0, 0), textcoords="offset points",
+            ha="center", va="center", fontsize=9, fontweight="bold",
+            color="white", zorder=4,
         )
 
-    # Trace the Pareto frontier (non-dominated points)
+    # Pareto frontier
     pts_sorted = sorted(pts, key=lambda p: p[0])
     frontier = []
     best_y = float("inf")
-    for x, y, k, s in pts_sorted:
+    for x, y, _, _ in pts_sorted:
         if y < best_y:
             frontier.append((x, y))
             best_y = y
     if len(frontier) >= 2:
         fx = [p[0] for p in frontier]
         fy = [p[1] for p in frontier]
-        ax.plot(fx, fy, ls="--", color="#27ae60", lw=2, alpha=0.5,
-                label="Pareto-front (icke-dominerade)")
-        ax.legend(loc="lower right")
+        ax.plot(fx, fy, ls="--", color="#27ae60", lw=2, alpha=0.6,
+                zorder=2, label="— — — Pareto-front (icke-dominerade)")
 
     ax.set_xlabel("Total wall-clock (s) — lägre = snabbare", fontsize=11)
     ax.set_ylabel("Mean COT — lägre = renare data", fontsize=11)
     ax.set_title(
-        "Tid vs datakvalitet — Pareto-front\n"
-        "Strategier på den gröna linjen är icke-dominerade. "
-        "Dominanta val: ERA5 → STAC (snabbast) eller ERA5 → SCL (renast).",
-        fontsize=12,
+        "Tid vs datakvalitet — Pareto-front",
+        fontsize=13, pad=10, fontweight="bold",
     )
-    ax.grid(alpha=0.3)
+    # Some breathing room around the cluster
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    x_pad = (max(xs) - min(xs)) * 0.12
+    y_pad = (max(ys) - min(ys)) * 0.12
+    ax.set_xlim(min(xs) - x_pad, max(xs) + x_pad)
+    ax.set_ylim(min(ys) - y_pad, max(ys) + y_pad)
     ax.invert_yaxis()
+    ax.grid(alpha=0.3)
+    ax.legend(loc="lower left", fontsize=9, framealpha=0.92,
+              title="Strategier (★ = Pareto-optimal)", title_fontsize=10)
     fig.tight_layout()
     fig.savefig(out_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
