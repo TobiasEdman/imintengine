@@ -58,8 +58,7 @@
             <a href="#" class="theme-tab" data-tab="water_quality">💧 Vattenkvalitet</a>
             <a href="#" class="theme-tab" data-tab="sr">🔬 Superresolution</a>
             <a href="#" class="theme-tab" data-tab="era5">☁️ Atmosfär</a>
-            <!-- LULC tab hidden — moved to training dashboard on M1 Max -->
-            <!-- <a href="#" class="theme-tab" data-tab="lulc">🌲 LULC</a> -->
+            <a href="#" class="theme-tab" data-tab="lulc">🪻 LULC</a>
         </div>
     </div>
 
@@ -408,14 +407,6 @@
             </div>
         </div>
     </div>
-
-    <!-- ── LULC tab — hidden, moved to training dashboard on M1 Max ── -->
-    <!--
-    <div class="tab-content" id="tab-lulc">
-        <div class="tab-dynamic"></div>
-        <div class="section-header"><h2>Labelkvalitet per klass</h2></div>
-    </div>
-    -->
 
     <!-- ── Water Quality tab — Stigfjorden + Skagerrak ─────────────────── -->
     <div class="tab-content" id="tab-water_quality">
@@ -825,6 +816,132 @@ python demos/cloud_models/run_comparison.py</pre>
         </div><!-- /sub-tab-content era5_cloud_models -->
     </div>
 
+    <!-- ── LULC tab (parent with sub-tabs) ──────────────────────── -->
+    <div class="tab-content" id="tab-lulc">
+        <div class="sub-tab-nav">
+            <a href="#" class="sub-tab active" data-subtab="wetland_pirinen">🪻 Våtmark — Pirinen-stack</a>
+        </div>
+
+        <div class="sub-tab-content active" id="tab-wetland_pirinen">
+            <div class="section-header">
+                <h2>Pirinen 2023 — input-stack för svensk våtmarkssegmentering</h2>
+                <p class="section-byline">
+                    Reproduktion av 8-kanals input från Aleksis Pirinens RISE/Naturvårdsverket-rapport
+                    · AOI Stormyran (Jämtland aapamyr, 64.30°N 15.94°E) · 10×10 km @ 10 m
+                </p>
+            </div>
+
+            <div class="tab-description">
+                <h3>Bakgrund</h3>
+                <p>
+                    Aleksis Pirinen (RISE) genomförde 2022 en förstudie för Naturvårdsverket om semantisk
+                    segmentering av fem svenska våtmarkstyper enligt EU:s habitatdirektiv (högmosse, rikkärr,
+                    öppna mosse, aapamyr, källor). Modellen är en fully convolutional network (FCN) som tar
+                    10 input-lager på 10 m upplösning och output:ar en pixelvis våtmarksklass. Pirinen
+                    släppte aldrig pre-tränade vikter — modellen tränas from scratch i 250 000 batches
+                    (~48 h på V100). Den här demon visar att ImintEngine kan reproducera hans fullständiga
+                    input-stack från svenska öppna geodatakällor — grunden för en framtida våtmarks-head.
+                    <br><em>
+                        Källa: Pirinen, A., 2023. <em>A pre-study about using artificial intelligence for
+                        semantic segmentation of Swedish wetland types</em>. RISE Research Institutes of
+                        Sweden &amp; Naturvårdsverket. <a href="https://github.com/aleksispi/ai-swetlands"
+                        target="_blank">github.com/aleksispi/ai-swetlands</a>
+                    </em>
+                </p>
+
+                <h3>Status</h3>
+                <p id="wetland-summary" style="font-variant-numeric:tabular-nums; color:#bbb;">
+                    Laddar manifest&hellip;
+                </p>
+                <p>
+                    Demon hämtar och visualiserar 7 av Pirinens 10 lager (lager #1 base vegetation och
+                    #2 VMI utelämnade — Tabell 1 i rapporten visar att de bidrar &lt;1 % mIoU). Lager
+                    som markeras "väntar på prefetch" kräver att <code>k8s/prefetch-nvv-aux-job.yaml</code>
+                    har kört och fyllt PVC med Naturvårdsverkets NMD-tilläggsskikt (~16 GB). De övriga
+                    fyra lagren hämtas live från SKS ImageServer + Copernicus DEM + DES openEO.
+                </p>
+
+                <h3>8-lager input-stack</h3>
+                <div id="wetland-frame-gallery"
+                     style="display:grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px; margin-top: 14px;">
+                </div>
+
+                <h3 style="margin-top:24px;">Lager — beskrivning per kanal</h3>
+
+                <h4>#3 NMD Markfuktighetsindex</h4>
+                <p>
+                    Topografiskt härlett markfuktighetsindex producerat som biprodukt av NMD-basskiktet
+                    (Naturvårdsverket 2018). Kombinerar Depth-To-Water med Soil-Topographic Wetness Index
+                    på 10 m upplösning, kalibrerat mot fältdata från SLU. Värdesintervall 0–100 (torr →
+                    våt). Fetcher: <code>imint.training.nvv_smi.fetch_smi_tile</code>. Källa:
+                    <a href="https://geodata.naturvardsverket.se/nedladdning/marktacke/NMD2018/"
+                       target="_blank">geodata.naturvardsverket.se/nedladdning/marktacke/NMD2018/</a>.
+                </p>
+
+                <h4>#4 SLU Markfuktighetskarta (Lidberg &amp; Ågren)</h4>
+                <p>
+                    Maskininlärnings-prediktion av markfuktighet från SLU Umeå (William Lidberg och
+                    Anneli Ågren). Använder Depth-To-Water + Soil-Topographic Index från Lantmäteriets
+                    nationella höjdmodell (~2 m native). Värden 0–101: 1–100 är fuktighetssannolikhet i
+                    %, 101 = mättad vatten. Hämtas live från Skogsstyrelsens ImageServer-proxy. Fetcher:
+                    <code>imint.training.slu_markfukt.fetch_markfukt_tile</code>. Licens: öppen
+                    (Skogsstyrelsen + SLU).
+                </p>
+
+                <h4>#6 Objekthöjd 0.5–5 m (busk-höjd)</h4>
+                <p>
+                    NMD2018 tilläggsskikt med höjd för objekt i intervallet 0.5–5 m, härledd från
+                    flygburna laserdata. Fångar upp buskar, ungskog och låga objekt som inte täcks av
+                    träd-höjd-lagret. Värden i decimeter (5–50). Fetcher:
+                    <code>imint.training.nvv_objektdata.fetch_bush_height_tile</code>.
+                </p>
+
+                <h4>#7 Objekttäckning 0.5–5 m (busk-täckning)</h4>
+                <p>
+                    Täckningsgrad i procent (0–100) för objekt i intervallet 0.5–5 m. Tillsammans med
+                    busk-höjd ger den underlag att skilja täta busksnår från glesa över- eller
+                    underväxter. Fetcher: <code>imint.training.nvv_objektdata.fetch_bush_cover_tile</code>.
+                </p>
+
+                <h4>#8 Trädhöjd (laser, Skogsstyrelsen)</h4>
+                <p>
+                    Trädhöjd från Skogsstyrelsens ALS-baserade produkt Trädhöjd 3.1, ~2 m native
+                    upplösning, resamplad till 10 m. Värden i meter (~0–35 i Stormyran-omgivningen).
+                    Hämtas live från SKS ImageServer-proxy. Fetcher:
+                    <code>imint.training.skg_height.fetch_height_tile</code>. Licens: CC0.
+                </p>
+
+                <h4>#9 Objekttäckning 5–45 m (träd-täckning)</h4>
+                <p>
+                    NMD2018 täckningsgrad för objekt i intervallet 5–45 m, dvs trädtäckning. Värden i
+                    procent (0–100). Komplement till SKG trädhöjd: var står det träd och hur tätt?
+                    Fetcher: <code>imint.training.nvv_objektdata.fetch_tree_cover_tile</code>.
+                </p>
+
+                <h4>#10 Höjdmodell (Copernicus DEM GLO-30)</h4>
+                <p>
+                    Topografi från ESA:s Copernicus DEM GLO-30, 30 m native, resamplad bilinärt till
+                    10 m. Hämtas direkt från publik AWS S3-bucket via Cloud-Optimized GeoTIFF.
+                    Värden i meter över EGM2008. Fetcher:
+                    <code>imint.training.copernicus_dem.fetch_dem_tile</code>. Licens: öppen
+                    (Copernicus License).
+                </p>
+
+                <h3 style="margin-top:24px;">Hopp-överade lager</h3>
+                <p>
+                    Pirinen-rapportens lager #1 (base vegetation från NVV satellitkartering öppen
+                    våtmark) och #2 (VMI våtmarksinventeringen) är inte med. Tabell 1 i rapporten visar
+                    att &quot;No wetland inventory&quot; ger mIoU 0.50 mot Main 0.51 och &quot;No base
+                    vegetation&quot; ger 0.50. Med båda utelämnade ändras den genomsnittliga
+                    valideringsprestandan med under 1 procentenhet — en värdig kompromiss för att
+                    minska fetcher-komplexiteten. Lager #5 (NMD basskikt) hämtas redan via
+                    <code>imint.fetch.fetch_nmd_data</code> i ImintEngines befintliga pipeline och
+                    kan läggas till i en framtida iteration.
+                </p>
+            </div>
+        </div><!-- /sub-tab-content wetland_pirinen -->
+    </div>
+
     <div class="footer">
         IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB
         &middot; CC0 1.0 Universal &middot; Genererad 2018-07-24 / 2025-07-10 / 2025-06-14 / 2025-06-14
@@ -946,6 +1063,7 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/app.js?v=7"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>
+    <script src="js/wetland-gallery.js?v=1"></script>
     <script>
     // Auto-resize parent iframe (for digitalearth.se/case/ embedding)
     if (window.parent !== window) {

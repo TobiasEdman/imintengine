@@ -1,0 +1,147 @@
+{
+  "aoi": {
+    "name": "Stormyran (Jämtland)",
+    "lat": 64.29581,
+    "lon": 15.9377,
+    "half_km": 5.0,
+    "wgs84": {
+      "west": 15.833843760972602,
+      "east": 16.041556239027397,
+      "south": 64.25076495495496,
+      "north": 64.34085504504505
+    },
+    "epsg3006": {
+      "west": 540280,
+      "south": 7125220,
+      "east": 550490,
+      "north": 7135410
+    },
+    "size_px": 1000
+  },
+  "elapsed_s": 3.04,
+  "n_layers_ok": 3,
+  "n_layers_missing": 4,
+  "n_layers_error": 0,
+  "overview_path": "showcase/wetland_pirinen/frames/overview.jpg",
+  "layers": [
+    {
+      "key": "smi",
+      "pirinen_idx": 3,
+      "title": "NMD Markfuktighetsindex",
+      "source": "Naturvårdsverket NMD2018 (lokal extraherad zip)",
+      "units": "0–100",
+      "description": "Topografisk fuktindex härlett från NMD-produktionen.",
+      "status": "missing-data",
+      "elapsed_s": 0.0,
+      "error": "No Markfuktighetsindex GeoTIFF found under /Users/tobiasedman/imint_data/nvv_aux/markfuktighet. Extract Markfuktighetsindex_NMD_Sverige.zip (or del1-9) from https://geodata.naturvardsverket.se/nedladdning/marktacke/NMD2018/ into that directory first.",
+      "frame_path": "showcase/wetland_pirinen/frames/smi.jpg"
+    },
+    {
+      "key": "slu_markfukt",
+      "pirinen_idx": 4,
+      "title": "SLU Markfuktighetskarta",
+      "source": "SLU (Lidberg & Ågren) via Skogsstyrelsen ImageServer",
+      "units": "%",
+      "description": "Markfuktighet predicerad från höjdmodell (DTW + STI).",
+      "status": "ok",
+      "elapsed_s": 0.0,
+      "shape": [
+        1000,
+        1000
+      ],
+      "dtype": "uint8",
+      "stats": {
+        "min": 1.0,
+        "max": 101.0,
+        "mean": 50.53,
+        "land_pct": 99.4
+      },
+      "frame_path": "showcase/wetland_pirinen/frames/slu_markfukt.jpg"
+    },
+    {
+      "key": "bush_height",
+      "pirinen_idx": 6,
+      "title": "Objekthöjd 0.5–5 m (busk-höjd)",
+      "source": "Naturvårdsverket NMD2018 tilläggsskikt (lokal)",
+      "units": "dm",
+      "description": "Höjd för objekt i intervallet 0.5–5 m.",
+      "status": "missing-data",
+      "elapsed_s": 0.0,
+      "error": "NVV objektdata GeoTIFF not found: /Users/tobiasedman/imint_data/nvv_aux/objektdata/Objekt_hojd_intervall_0_5_till_5_v1_3.tif",
+      "frame_path": "showcase/wetland_pirinen/frames/bush_height.jpg"
+    },
+    {
+      "key": "bush_cover",
+      "pirinen_idx": 7,
+      "title": "Objekttäckning 0.5–5 m (busk-täckning)",
+      "source": "Naturvårdsverket NMD2018 tilläggsskikt (lokal)",
+      "units": "%",
+      "description": "Täckningsgrad för objekt i intervallet 0.5–5 m.",
+      "status": "missing-data",
+      "elapsed_s": 0.0,
+      "error": "NVV objektdata GeoTIFF not found: /Users/tobiasedman/imint_data/nvv_aux/objektdata/Objekt_tackning_hojdintervall_0_5_till_5_v1_3.tif",
+      "frame_path": "showcase/wetland_pirinen/frames/bush_cover.jpg"
+    },
+    {
+      "key": "tree_height",
+      "pirinen_idx": 8,
+      "title": "Trädhöjd (laser)",
+      "source": "Skogsstyrelsen Trädhöjd 3.1 (ImageServer proxy)",
+      "units": "m",
+      "description": "Trädhöjd från ALS, ~2 m native, resamplad till 10 m.",
+      "status": "ok",
+      "elapsed_s": 1.34,
+      "shape": [
+        1000,
+        1000
+      ],
+      "dtype": "float32",
+      "stats": {
+        "min": 0.10000000149011612,
+        "max": 34.20000076293945,
+        "mean": 7.23,
+        "land_pct": 85.5
+      },
+      "frame_path": "showcase/wetland_pirinen/frames/tree_height.jpg"
+    },
+    {
+      "key": "tree_cover",
+      "pirinen_idx": 9,
+      "title": "Objekttäckning 5–45 m (träd-täckning)",
+      "source": "Naturvårdsverket NMD2018 tilläggsskikt (lokal)",
+      "units": "%",
+      "description": "Täckningsgrad för objekt i intervallet 5–45 m.",
+      "status": "missing-data",
+      "elapsed_s": 0.0,
+      "error": "NVV objektdata GeoTIFF not found: /Users/tobiasedman/imint_data/nvv_aux/objektdata/Objekt_tackning_hojdintervall_5_till_45_v1_3.tif",
+      "frame_path": "showcase/wetland_pirinen/frames/tree_cover.jpg"
+    },
+    {
+      "key": "dem",
+      "pirinen_idx": 10,
+      "title": "Höjdmodell (Copernicus DEM GLO-30)",
+      "source": "ESA Copernicus DEM GLO-30 (S3 COG)",
+      "units": "m",
+      "description": "Topografi, ~30 m native, resamplad till 10 m.",
+      "status": "ok",
+      "elapsed_s": 0.0,
+      "shape": [
+        1000,
+        1000
+      ],
+      "dtype": "float32",
+      "stats": {
+        "min": 0.9851685166358948,
+        "max": 606.8389282226562,
+        "mean": 465.86,
+        "land_pct": 100.0
+      },
+      "frame_path": "showcase/wetland_pirinen/frames/dem.jpg"
+    }
+  ],
+  "reference": {
+    "paper": "Pirinen, A. (2023). A pre-study about using AI for semantic segmentation of Swedish wetland types.",
+    "code": "https://github.com/aleksispi/ai-swetlands",
+    "funder": "Naturvårdsverket"
+  }
+}

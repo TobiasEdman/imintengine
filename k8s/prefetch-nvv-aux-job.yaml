@@ -1,0 +1,134 @@
+---
+# Job: prefetch-nvv-aux — download NVV NMD tilläggsskikt to PVC for the
+#                         Pirinen 2023 wetland-stack demo.
+#
+# Downloads (skips if extracted .tif already exists):
+#   1. Markfuktighetsindex_NMD_Sverige.zip                  (~12 GB)
+#       → /data/nvv_aux/markfuktighet/Markfuktighetsindex_NMD_Sverige.tif
+#   2. Objekt_hojd_intervall_0_5_till_5_v1_3.zip            (~1.1 GB)
+#       → /data/nvv_aux/objektdata/Objekt_hojd_intervall_0_5_till_5_v1_3.tif
+#   3. Objekt_hojd_intervall_5_till_45_v1_3.zip             (~1.0 GB)
+#       → /data/nvv_aux/objektdata/Objekt_hojd_intervall_5_till_45_v1_3.tif
+#   4. Objekt_tackning_hojdintervall_0_5_till_5_v1_3.zip    (~1.0 GB)
+#       → /data/nvv_aux/objektdata/Objekt_tackning_hojdintervall_0_5_till_5_v1_3.tif
+#   5. Objekt_tackning_hojdintervall_5_till_45_v1_3.zip     (~1.0 GB)
+#       → /data/nvv_aux/objektdata/Objekt_tackning_hojdintervall_5_till_45_v1_3.tif
+#
+# Total ≈ 16 GB downloaded, ~50 GB extracted (assume ~3× expansion).
+#
+# Skip-existing logic: if the .tif extraction target exists, that asset
+# is skipped entirely (no download, no unzip). Safe to re-run.
+#
+# Source: https://geodata.naturvardsverket.se/nedladdning/marktacke/NMD2018/
+# License: CC0 (Naturvårdsverket open data)
+#
+# After this job completes, the demo can be run from a Mac/dev machine:
+#   IMINT_NVV_AUX_DIR=/path/to/local/copy python -m demos.wetland_pirinen.fetch_and_render
+# or from a pod with /data mounted, IMINT_NVV_AUX_DIR=/data/nvv_aux.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prefetch-nvv-aux
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 21600    # 6h — generous for 16 GB download + unzip
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fetcher
+          image: debian:12-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "=== Prefetch NVV NMD Tilläggsskikt ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq
+              apt-get install -y -qq curl unzip ca-certificates > /dev/null
+
+              BASE="https://geodata.naturvardsverket.se/nedladdning/marktacke/NMD2018"
+              ROOT="/data/nvv_aux"
+              mkdir -p "$ROOT/markfuktighet" "$ROOT/objektdata"
+
+              # Function: fetch + unzip if target .tif missing.
+              # Args: $1=target_dir  $2=remote_zip_filename  $3=expected_tif_basename
+              prefetch() {
+                local tgt="$1" zipname="$2" tifname="$3"
+                local target_tif="$tgt/$tifname"
+                if [ -f "$target_tif" ]; then
+                  echo "  [skip] $tifname already extracted ($(du -h "$target_tif" | cut -f1))"
+                  return 0
+                fi
+                local tmpzip="$tgt/$zipname.partial"
+                echo "  [fetch] $zipname"
+                curl -fsSL --retry 3 --retry-delay 5 \
+                  -o "$tmpzip" "$BASE/$zipname"
+                echo "    downloaded $(du -h "$tmpzip" | cut -f1)"
+                echo "  [unzip] $zipname"
+                unzip -o -j -q "$tmpzip" "*$tifname" -d "$tgt"
+                rm -f "$tmpzip"
+                if [ ! -f "$target_tif" ]; then
+                  echo "ERROR: expected $target_tif after unzip" >&2
+                  return 1
+                fi
+                echo "    extracted $(du -h "$target_tif" | cut -f1)"
+              }
+
+              echo ""
+              echo "=== Layer 1/5: Markfuktighetsindex (Sweden) ==="
+              prefetch "$ROOT/markfuktighet" \
+                "Markfuktighetsindex_NMD_Sverige.zip" \
+                "Markfuktighetsindex_NMD_Sverige.tif"
+
+              echo ""
+              echo "=== Layer 2/5: Objekt_hojd 0.5–5 m (bushes) ==="
+              prefetch "$ROOT/objektdata" \
+                "Objekt_hojd_intervall_0_5_till_5_v1_3.zip" \
+                "Objekt_hojd_intervall_0_5_till_5_v1_3.tif"
+
+              echo ""
+              echo "=== Layer 3/5: Objekt_hojd 5–45 m (trees) ==="
+              prefetch "$ROOT/objektdata" \
+                "Objekt_hojd_intervall_5_till_45_v1_3.zip" \
+                "Objekt_hojd_intervall_5_till_45_v1_3.tif"
+
+              echo ""
+              echo "=== Layer 4/5: Objekt_tackning 0.5–5 m (bush cover) ==="
+              prefetch "$ROOT/objektdata" \
+                "Objekt_tackning_hojdintervall_0_5_till_5_v1_3.zip" \
+                "Objekt_tackning_hojdintervall_0_5_till_5_v1_3.tif"
+
+              echo ""
+              echo "=== Layer 5/5: Objekt_tackning 5–45 m (tree cover) ==="
+              prefetch "$ROOT/objektdata" \
+                "Objekt_tackning_hojdintervall_5_till_45_v1_3.zip" \
+                "Objekt_tackning_hojdintervall_5_till_45_v1_3.tif"
+
+              echo ""
+              echo "=== Done — inventory ==="
+              du -h "$ROOT"/*/* 2>/dev/null | sort -k2
+              echo ""
+              echo "Total used: $(du -sh "$ROOT" | cut -f1)"
+              echo "Finished: $(date)"
+
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+              ephemeral-storage: "60Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+              ephemeral-storage: "60Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
