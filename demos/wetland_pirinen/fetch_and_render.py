@@ -281,22 +281,21 @@ def _render_layer(spec: LayerSpec, arr: np.ndarray, status: str) -> Path:
         im = ax.imshow(arr, cmap=spec.cmap, vmin=vmin, vmax=vmax,
                        interpolation="nearest")
         cbar = fig.colorbar(im, ax=ax, fraction=0.045, pad=0.02)
-        cbar.set_label(spec.units, color="white", fontsize=8)
-        cbar.ax.tick_params(colors="white", labelsize=7)
-        cbar.outline.set_edgecolor("#444")
+        cbar.set_label(spec.units, color="#cff8e4", fontsize=8)
+        cbar.ax.tick_params(colors="#cff8e4", labelsize=7)
+        cbar.outline.set_edgecolor("#245045")
         st = _stats(arr)
         subtitle = f"{spec.units}  ·  mean {st['mean']}  ·  land {st['land_pct']}%"
-        title_color = "#27ae60"
+        title_color = "#cff8e4"
     else:
         ax.text(
-            0.5, 0.5,
-            f"saknad data\n\n{status}\n\nKör k8s/prefetch-nvv-aux-job.yaml\nför att fylla PVC.",
-            ha="center", va="center", color="#e67e22", fontsize=10,
-            transform=ax.transAxes,
+            0.5, 0.5, "ej hämtad ännu",
+            ha="center", va="center", color="#cff8e4", fontsize=14,
+            fontweight="bold", transform=ax.transAxes, alpha=0.6,
         )
-        ax.set_facecolor("#1a1a1a")
-        subtitle = "ej tillgänglig — väntar på prefetch"
-        title_color = "#e67e22"
+        ax.set_facecolor("#1a4338")
+        subtitle = ""
+        title_color = "#cff8e4"
 
     ax.set_xticks([]); ax.set_yticks([])
     fig.suptitle(

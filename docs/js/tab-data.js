@@ -170,6 +170,28 @@ var LEGENDS = {
         {color:'#721f81',label:'Liten skillnad'},
         {color:'#ed6925',label:'Tydlig skillnad'},
         {color:'#fcffa4',label:'Stor oenighet'}
+    ],
+    moisture: [
+        {color:'#ffffd9',label:'Torrt (0)'},
+        {color:'#41b6c4',label:'Måttligt (50)'},
+        {color:'#225ea8',label:'Vått (100)'}
+    ],
+    height_m: [
+        {color:'#440154',label:'Mark (0 m)'},
+        {color:'#3b528b',label:'Buske/ungskog (5 m)'},
+        {color:'#21918c',label:'Medel (15 m)'},
+        {color:'#5ec962',label:'Hög (25 m)'},
+        {color:'#fde725',label:'Mogen (35+ m)'}
+    ],
+    cover_pct: [
+        {color:'#f7fcf5',label:'Glest (0%)'},
+        {color:'#a1d99b',label:'Måttligt'},
+        {color:'#238b45',label:'Tätt (100%)'}
+    ],
+    elevation: [
+        {color:'#1f4d2e',label:'Lågt'},
+        {color:'#a89060',label:'Medel'},
+        {color:'#f0f0f0',label:'Högt'}
     ]
 };
 
@@ -426,36 +448,6 @@ var TAB_CONFIG = {
         hasBgToggle: false
     },
 
-    lulc: {
-        title: 'LULC-klassificering — Labelkvalitet',
-        summary: [
-            {title:'mIoU (val)',value:'43.3%',detail:'10-klass modell + 5 aux'},
-            {title:'Hög konfidens fel',value:'—',detail:'Modell >80% säker, NMD avviker'},
-            {title:'Låg konfidens rätt',value:'—',detail:'Modell <50% säker, NMD stämmer'},
-            {title:'Analyserade tiles',value:'—',detail:'Val-split'},
-            {title:'Modell',value:'Prithvi-EO 2.0',detail:'UPerNet + AuxEncoder'}
-        ],
-        intro: 'Prithvi-EO 2.0 foundation model med UPerNet-dekoder och 5 auxiliära kanaler (medelhöjd, volym, grundyta, diameter, DEM) har tränats för pixelvis LULC-klassificering med NMD som grundsanning. Denna analys visar var modellen avviker från NMD — särskilt pixlar där modellen är >80% säker men NMD anger en annan klass. Dessa "high-confidence wrong"-pixlar indikerar sannolika NMD-labeleringsfel och är kandidater för labelrensning. NMD har känt lägst noggrannhet för lövskog och blandskog, vilket direkt förklarar modellens låga IoU för dessa klasser.',
-        panels: [
-            {id:'l-nmd',        key:'nmd_label',   title:'NMD Grundsanning',           legend:'lulc_grouped'},
-            {id:'l-pred',       key:'prediction',  title:'Modellprediktion',            legend:'lulc_grouped'},
-            {id:'l-disagree',   key:'disagree',    title:'Avvikelser (NMD vs modell)',  legend:'disagree'},
-            {id:'l-confidence', key:'confidence',  title:'Konfidens (softmax)',         legend:'confidence'},
-            {id:'l-entropy',    key:'entropy',     title:'Entropi (osäkerhet)',         legend:'entropy'}
-        ],
-        images: {
-            'l-nmd':        'showcase/lulc/nmd_label.png',
-            'l-pred':       'showcase/lulc/prediction.png',
-            'l-disagree':   'showcase/lulc/disagree.png',
-            'l-confidence': 'showcase/lulc/confidence.png',
-            'l-entropy':    'showcase/lulc/entropy.png'
-        },
-        imgH: 224, imgW: 224,
-        hasBgToggle: false,
-        hasCharts: true,
-        chartSectionTitle: 'Labelkvalitet per klass'
-    },
-
     water_quality: {
         title: 'Vattenkvalitet — Stigfjorden & Mollösund',
         summary: [
@@ -547,5 +539,45 @@ var TAB_CONFIG = {
         imgH: 3744, imgW: 2616,
         nativeZoom: true,
         hasBgToggle: false
+    },
+
+    wetland_pirinen: {
+        title: 'Pirinen 2023 — input-stack för svensk våtmarkssegmentering',
+        summary: [
+            {title:'Modell',value:'FCN 5-klass',detail:'Pirinen 2023 / RISE'},
+            {title:'Beställare',value:'Naturvårdsverket',detail:'Habitatdirektiv 7110–7310'},
+            {title:'AOI',value:'Stormyran',detail:'10×10 km @ 10 m · Jämtland aapamyr'},
+            {title:'Lager',value:'7 av 10',detail:'#1+#2 utelämnade (<1% mIoU)'}
+        ],
+        intro: 'Aleksis Pirinen (RISE) genomförde 2022 en förstudie för Naturvårdsverket om semantisk segmentering av fem svenska våtmarkstyper enligt EU:s habitatdirektiv (högmosse, rikkärr, öppna mosse, aapamyr, källor). Modellen är en fully convolutional network (FCN) som tar 10 input-lager på 10 m upplösning. Pirinen släppte aldrig pre-tränade vikter — den här demon visar att ImintEngine kan reproducera hans fullständiga input-stack från svenska öppna geodatakällor över en aapamyr-AOI (Stormyran, Jämtland). Lager #1 (base vegetation) och #2 (VMI) är utelämnade — Tabell 1 i rapporten visar att de bidrar <1 % mIoU.',
+        panels: [
+            {id:'wp-rgb',          key:'rgb',          title:'Sentinel-2 RGB',                       legend:null},
+            {id:'wp-smi',          key:'smi',          title:'#3 NMD Markfuktighetsindex',           legend:'moisture',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'DEM',key:'dem'}]},
+            {id:'wp-slu',          key:'slu_markfukt', title:'#4 SLU Markfuktighetskarta (Lidberg)', legend:'moisture',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'DEM',key:'dem'}]},
+            {id:'wp-bush-h',       key:'bush_height',  title:'#6 Objekthöjd 0.5–5 m (busk-höjd)',    legend:'height_m',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'DEM',key:'dem'}]},
+            {id:'wp-bush-c',       key:'bush_cover',   title:'#7 Objekttäckning 0.5–5 m (busk-täckning)', legend:'cover_pct',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'DEM',key:'dem'}]},
+            {id:'wp-tree-h',       key:'tree_height',  title:'#8 Trädhöjd (laser, Skogsstyrelsen)',  legend:'height_m',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'DEM',key:'dem'}]},
+            {id:'wp-tree-c',       key:'tree_cover',   title:'#9 Objekttäckning 5–45 m (träd-täckning)',  legend:'cover_pct',
+                bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'DEM',key:'dem'}]},
+            {id:'wp-dem',          key:'dem',          title:'#10 Höjdmodell (Copernicus DEM GLO-30)',    legend:'elevation'}
+        ],
+        images: {
+            'wp-rgb':         'showcase/wetland_pirinen/rgb.png',
+            'wp-smi':         'showcase/wetland_pirinen/smi.png',
+            'wp-slu':         'showcase/wetland_pirinen/slu_markfukt.png',
+            'wp-bush-h':      'showcase/wetland_pirinen/bush_height.png',
+            'wp-bush-c':      'showcase/wetland_pirinen/bush_cover.png',
+            'wp-tree-h':      'showcase/wetland_pirinen/tree_height.png',
+            'wp-tree-c':      'showcase/wetland_pirinen/tree_cover.png',
+            'wp-dem':         'showcase/wetland_pirinen/dem.png',
+            'wp-baseline':    'showcase/wetland_pirinen/dem.png'  // 'DEM' bg-toggle reuses #10
+        },
+        imgH: 1000, imgW: 1000,
+        hasBgToggle: true
     }
 };
