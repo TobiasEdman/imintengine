@@ -1,0 +1,86 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-256-markfukt
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: enrich-256-markfukt
+spec:
+  backoffLimit: 0
+  # 8290 tiles × 1 ImageServer call each. Estimated ~30 min on 8 workers
+  # against Skogsstyrelsen's free public proxy. 2h cap with margin.
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: e
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== enrich 256 with SLU markfukt ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              # Sanity-check markfukt registration is in cloned source
+              echo ""
+              echo "Verifying markfukt is registered in prefetch_aux:"
+              grep -n "_fetch_markfukt_float" scripts/prefetch_aux.py | head -3 \
+                || { echo "markfukt NOT REGISTERED — abort"; exit 1; }
+
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "Tile inventory:"
+              echo "  /data/unified_v2: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l) tiles"
+              echo "Disk before:"
+              df -h /data | tail -1
+
+              # markfukt — single float32 channel from SLU/Skogsstyrelsen
+              # (free public ImageServer, no PU billing).
+              # NaN=nodata, 0-1=moisture probability, 1.01=water sentinel.
+              python scripts/prefetch_aux.py \
+                --data-dir /data/unified_v2 \
+                --channels markfukt \
+                --workers 8
+
+              echo ""
+              echo "Disk after:"
+              df -h /data | tail -1
+              echo "=== Done: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data

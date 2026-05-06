@@ -56,9 +56,42 @@ from imint.training.skg_grunddata import (
 )
 from imint.training.copernicus_dem import fetch_dem_tile
 from imint.training.cdse_vpp import fetch_vpp_tiles
+from imint.training.slu_markfukt import fetch_markfukt_tile
 
 # ── Channel registry ──────────────────────────────────────────────────────
 # Standard channels: each fetcher returns a single (H, W) float32 array.
+
+def _fetch_markfukt_float(
+    west: float, south: float, east: float, north: float,
+    *,
+    size_px,
+    cache_dir=None,
+) -> np.ndarray:
+    """Wrap ``fetch_markfukt_tile`` so the .npz stores float32 like every
+    other aux channel (height, dem, basal_area, …).
+
+    Encoding in the resulting float32 array:
+        NaN   — nodata / outside Sweden       (raw 0)
+        0–1   — soil moisture probability     (raw 1–100, divided by 100)
+        1.01  — saturated water / lake fill   (raw 101, sentinel above 1.0)
+
+    Keeping water as a >1 sentinel rather than another NaN preserves the
+    "this pixel is water" signal for the model — it's not missing data,
+    it's a definite class. The dataset loader can split the channel into
+    a moisture float plus a water bit if needed.
+    """
+    raw = fetch_markfukt_tile(
+        west, south, east, north,
+        size_px=size_px,
+        cache_dir=cache_dir,
+    )
+    arr = raw.astype(np.float32)
+    arr[raw == 0] = np.nan          # nodata → NaN
+    valid = (raw >= 1) & (raw <= 100)
+    arr[valid] = arr[valid] / 100.0   # 1–100 → 0.01–1.00
+    arr[raw == 101] = 1.01           # water → sentinel above moisture range
+    return arr
+
 
 _CHANNEL_FETCHERS = {
     "height": fetch_height_tile,
@@ -66,6 +99,10 @@ _CHANNEL_FETCHERS = {
     "basal_area": fetch_basal_area_tile,
     "diameter": fetch_diameter_tile,
     "dem": fetch_dem_tile,
+    # SLU Markfuktighetskarta (Pirinen 2023) — wrapped to float32 for
+    # consistency with the other aux channels. NaN=nodata, 0-1=moisture,
+    # 1.01=water. See _fetch_markfukt_float docstring.
+    "markfukt": _fetch_markfukt_float,
 }
 
 # VPP is a multi-band channel: one fetch returns 5 bands stored as
@@ -203,9 +240,12 @@ def _add_channels_to_tile(
                 cache_dir=cache_dirs.get(ch_name),
             )
             existing[ch_name] = data
+            # nan-aware stats — markfukt encodes nodata as NaN, which
+            # would poison plain mean()/max(). Other channels are
+            # NaN-free so this is a safe drop-in.
             fetched[ch_name] = {
-                "mean": float(data.mean()),
-                "max": float(data.max()),
+                "mean": float(np.nanmean(data)) if data.size else 0.0,
+                "max": float(np.nanmax(data)) if data.size else 0.0,
                 "nonzero_pct": float((data > 0).mean() * 100),
             }
 
