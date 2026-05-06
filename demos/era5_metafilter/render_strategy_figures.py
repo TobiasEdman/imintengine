@@ -99,9 +99,9 @@ def f2_cot(metrics: dict, out_path: Path) -> None:
     ax.set_ylabel("Mean Cloud Optical Thickness")
     ax.set_title("Datakvalitet per strategi — DES MLP5 COT-ensemble (Pirinen 2024)\n"
                  "Lägre = klarare. Felstaplar = ±1σ.")
-    ax.axhline(0.025, color="#c0392b", ls=":", lw=1.0, alpha=0.6,
+    ax.axhline(0.025, color="#ff826c", ls=":", lw=1.0, alpha=0.7,
                label="Thick-cloud thresh (0.025)")
-    ax.axhline(0.015, color="#e67e22", ls=":", lw=1.0, alpha=0.6,
+    ax.axhline(0.015, color="#fdd5c2", ls=":", lw=1.5, alpha=0.9,
                label="Thin-cloud thresh (0.015)")
     ax.legend(loc="upper right")
     ax.grid(axis="y", alpha=0.3)
@@ -156,7 +156,7 @@ def f3_pareto(metrics: dict, out_path: Path) -> None:
     if len(frontier) >= 2:
         fx = [p[0] for p in frontier]
         fy = [p[1] for p in frontier]
-        ax.plot(fx, fy, ls="--", color="#27ae60", lw=2, alpha=0.6,
+        ax.plot(fx, fy, ls="--", color="#1a4338", lw=2, alpha=0.7,
                 zorder=2, label="— — — Pareto-front (icke-dominerade)")
 
     ax.set_xlabel("Total wall-clock (s) — lägre = snabbare", fontsize=11)

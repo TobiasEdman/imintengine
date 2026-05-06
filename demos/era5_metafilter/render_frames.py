@@ -40,15 +40,16 @@ DOCS_OUT = REPO_ROOT / "docs" / "showcase" / "era5_metafilter" / "frames"
 # Reflectance stretch for RGB (BOA values typically 0-0.3 for land)
 RGB_LO, RGB_HI = 0.0, 0.30
 
-# COT heatmap
+# COT heatmap — DES brand palette
+# (#1a4338 dark green / #cff8e4 mint / #fdd5c2 peach / #ff826c red / white)
 COT_VMAX = 0.5
 COT_CMAP = LinearSegmentedColormap.from_list(
     "cot", [
-        (0.00, "#0d4d2a"),  # very clear (dark green)
-        (0.05, "#27ae60"),  # clear veg
-        (0.10, "#f1c40f"),  # thin haze
-        (0.30, "#e67e22"),  # cloud edge
-        (1.00, "#ecf0f1"),  # thick cloud (white)
+        (0.00, "#1a4338"),  # very clear (DES dark green)
+        (0.05, "#cff8e4"),  # clear (DES mint)
+        (0.10, "#fdd5c2"),  # thin haze (DES peach)
+        (0.30, "#ff826c"),  # cloud edge (DES red)
+        (1.00, "#ffffff"),  # thick cloud (white)
     ],
 )
 

@@ -22,13 +22,15 @@
     }
 
     function thresholdLabel(meanCot, manifest) {
+        // DES brand palette: green = clear, peach = thin cloud, red = thick.
+        // Avoids the bright #27ae60/#f1c40f scheme that looked off-brand.
         if (meanCot < manifest.thin_cloud_threshold) {
-            return { label: 'Klart', color: '#27ae60' };
+            return { label: 'Klart', color: '#1a4338' };
         }
         if (meanCot < manifest.thick_cloud_threshold) {
-            return { label: 'Tunt moln', color: '#f1c40f' };
+            return { label: 'Tunt moln', color: '#fdd5c2' };
         }
-        return { label: 'Tjockt moln', color: '#c0392b' };
+        return { label: 'Tjockt moln', color: '#ff826c' };
     }
 
     function renderGallery(setName, manifest) {

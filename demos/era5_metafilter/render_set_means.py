@@ -36,13 +36,14 @@ DOCS_OUT = REPO_ROOT / "docs" / "showcase" / "era5_metafilter"
 
 RGB_LO, RGB_HI = 0.0, 0.30
 COT_VMAX = 0.5
+# DES brand palette for COT (matches render_frames.py)
 COT_CMAP = LinearSegmentedColormap.from_list(
     "cot", [
-        (0.00, "#0d4d2a"),
-        (0.05, "#27ae60"),
-        (0.10, "#f1c40f"),
-        (0.30, "#e67e22"),
-        (1.00, "#ecf0f1"),
+        (0.00, "#1a4338"),  # very clear (DES dark green)
+        (0.05, "#cff8e4"),  # clear (DES mint)
+        (0.10, "#fdd5c2"),  # thin haze (DES peach)
+        (0.30, "#ff826c"),  # cloud edge (DES red)
+        (1.00, "#ffffff"),  # thick cloud (white)
     ],
 )
 SET_COLORS = {
