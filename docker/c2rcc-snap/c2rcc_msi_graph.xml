@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SNAP graph: Sentinel-2 L1C SAFE → C2RCC retrievals (BEAM-DIMAP).
+
+Rekonstruerad från commit 52d19ae beskrivning ("Read → Resample(B2) →
+Subset(2 km buffrad WGS84-polygon) → c2rcc.msi(netSet=C2X-Nets) →
+Write(BEAM-DIMAP)") och bekräftad mot output-strukturen i
+outputs/c2rcc_runs/c2rcc_2026_04_08.dim (band: iop_apig, iop_agelb,
+iop_bpart, iop_bwit, kd489, kdmin, rhow_B*, c2rcc_flags).
+
+Användning (via docker/c2rcc-snap/run.sh):
+  gpt c2rcc_msi_graph.xml \
+      -PinputSafe=<path_to_S2_L1C_SAFE> \
+      -PgeoRegion=<WKT_polygon_WGS84> \
+      -PoutputDim=<output.dim>
+
+netSet=C2X-Nets är "Case-2 eXtreme" — designed för hög-CDOM Östersjö
+& Nordsjö-vatten där default C2RCC-Nets klampar till en NN-floor.
+Per commit 52d19ae: 38.8% real retrievals med C2X vs 15.7% med default.
+-->
+<graph id="c2rcc_msi_graph">
+    <version>1.0</version>
+
+    <node id="Read">
+        <operator>Read</operator>
+        <sources/>
+        <parameters>
+            <file>${inputSafe}</file>
+        </parameters>
+    </node>
+
+    <node id="Resample">
+        <operator>Resample</operator>
+        <sources>
+            <sourceProduct refid="Read"/>
+        </sources>
+        <parameters>
+            <referenceBand>B2</referenceBand>
+            <upsampling>Nearest</upsampling>
+            <downsampling>Mean</downsampling>
+            <flagDownsampling>FlagAnd</flagDownsampling>
+            <resampleOnPyramidLevels>true</resampleOnPyramidLevels>
+        </parameters>
+    </node>
+
+    <node id="Subset">
+        <operator>Subset</operator>
+        <sources>
+            <sourceProduct refid="Resample"/>
+        </sources>
+        <parameters>
+            <geoRegion>${geoRegion}</geoRegion>
+            <subSamplingX>1</subSamplingX>
+            <subSamplingY>1</subSamplingY>
+            <fullSwath>false</fullSwath>
+            <copyMetadata>true</copyMetadata>
+        </parameters>
+    </node>
+
+    <node id="C2RCC">
+        <operator>c2rcc.msi</operator>
+        <sources>
+            <sourceProduct refid="Subset"/>
+        </sources>
+        <parameters>
+            <!-- C2X-Nets för optiskt komplext kustvatten (Östersjö, Bohuslän).
+                 Default C2RCC-Nets klampar pixlar utanför sin tränings-range
+                 till en konstant NN-floor (apig=0.000298). C2X expanderar
+                 ranges och ger 2-3x fler giltiga retrievals. -->
+            <netSet>C2X-Nets</netSet>
+
+            <!-- Behåll bara de IOPs och kd-band vi använder downstream.
+                 Sätter outputRtosa=false för att slippa mellan-produkter. -->
+            <outputRtosa>false</outputRtosa>
+            <outputAsRrs>false</outputAsRrs>
+            <deriveRwFromPathAndTransmittance>false</deriveRwFromPathAndTransmittance>
+
+            <!-- Atmosfärs-default; SAFE har TOA-reflektans, inte ytreflektans.
+                 C2RCC har egen atmosfärisk korrigering inbyggd. -->
+            <useEcmwfAuxData>false</useEcmwfAuxData>
+        </parameters>
+    </node>
+
+    <node id="Write">
+        <operator>Write</operator>
+        <sources>
+            <sourceProduct refid="C2RCC"/>
+        </sources>
+        <parameters>
+            <file>${outputDim}</file>
+            <formatName>BEAM-DIMAP</formatName>
+        </parameters>
+    </node>
+</graph>
