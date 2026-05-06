@@ -119,6 +119,17 @@ De är helt oberoende och körs i sekvens.
 - Executors bygger `IMINTJob` och anropar `run_job()` — engine är executor-agnostisk
 - Modifiera ALDRIG andra repos direkt härifrån
 
+### Återanvänd repo-egna pipelines — bygg inte om hjulet
+
+Innan du skriver en ny lösning, sök i repot. Det här är en genomtänkt arkitektur, inte en samling lösa skript. Konkreta regler:
+
+- **Sentinel-2-hämtning** → använd alltid `imint.training.optimal_fetch.optimal_fetch_dates(mode="era5_then_scl")` för att välja rena scener. Hardkodade datumlistor är förbjudna — Atmosfär-pipelinen är designad för att eliminera molniga scener före spektral-fetch.
+- **Showcase-tabbar** → alltid `TAB_CONFIG[<key>]` i `docs/js/tab-data.js` + tom `<div class="tab-dynamic"></div>` i HTML. Mallen `renderTabDynamic` (`docs/js/app.js:88`) renderar paneler, opacity-sliders, bgToggle, legends och summary-cards konsekvent med övriga tabbar.
+- **Aux-channel-fetcher** → följ mönstret från `imint/training/skg_height.py`: `(west, south, east, north, *, size_px, cache_dir)`-signatur, EPSG:3006-bbox snappad till 10 m grid via `_to_nmd_grid_bounds`, `.npy`-cache med deterministisk nyckel.
+- **Spektral-fetch** → `imint.fetch.fetch_seasonal_image` eller `fetch_des_data` — aldrig egna openEO-anrop.
+
+När du undrar om en abstraktion finns: kör `Glob`/`Grep` först. Använd `Agent`-Explore om scope är osäkert. Duplicering kostar tid (för dig) och städning (för användaren).
+
 ## Kodgranskningsstandard — obligatorisk vid alla kodändringar
 
 **Agenten ska alltid följa detta arbetsflöde vid granskning och korrigering av kod:**

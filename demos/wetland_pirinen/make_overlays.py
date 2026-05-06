@@ -33,6 +33,7 @@ from imint.config.env import load_env
 load_env()
 
 from imint.fetch import S2L2A_SPECTRAL_BANDS, fetch_seasonal_image  # noqa: E402
+from imint.training.optimal_fetch import optimal_fetch_dates  # noqa: E402
 
 # Reuse layer specs + AOI from fetch_and_render
 from demos.wetland_pirinen.fetch_and_render import (  # noqa: E402
@@ -44,38 +45,65 @@ DOCS_OUT.mkdir(parents=True, exist_ok=True)
 RGB_CACHE = Path(__file__).parent / "cache_rgb"
 RGB_CACHE.mkdir(exist_ok=True)
 
+# Search window for clear-sky scene over Stormyran. Aapamyr-AOI; peak
+# greenness Jul–Aug. Wider window = more candidates for ERA5 prefilter.
+PERIOD_START = "2024-06-01"
+PERIOD_END = "2024-09-15"
+MAX_AOI_CLOUD = 0.05   # SCL-stack: max 5% AOI cloud-pixels
+
 
 # ── Sentinel-2 RGB ───────────────────────────────────────────────────────
 
 
-def fetch_s2_rgb() -> np.ndarray:
-    """Fetch a clean Sentinel-2 scene over Stormyran (summer 2024 peak veg).
+def fetch_s2_rgb() -> tuple[np.ndarray, str]:
+    """Pick a clear-sky Sentinel-2 scene via the ERA5→SCL pipeline.
 
-    Returns RGB array (SIZE_PX, SIZE_PX, 3) uint8.
+    Stage 1: ERA5 atmosphere prefilter (free, AOI-aware ~30 km grid)
+    Stage 2: SCL-stack screen via DES openEO (1 server-side call)
+    Stage 3: Spectral fetch only on the cleanest surviving date
+
+    Returns (RGB array (SIZE_PX, SIZE_PX, 3) uint8, ISO date string).
     """
-    candidates = ["2024-07-15", "2024-07-25", "2024-08-05", "2024-07-05",
-                  "2024-08-15", "2024-06-25"]
-    for date in candidates:
+    print(f"  [optimal_fetch] mode=era5_then_scl  "
+          f"period={PERIOD_START}..{PERIOD_END}")
+    plan = optimal_fetch_dates(
+        bbox_wgs84=WGS84_BBOX,
+        date_start=PERIOD_START,
+        date_end=PERIOD_END,
+        mode="era5_then_scl",
+        max_aoi_cloud=MAX_AOI_CLOUD,
+    )
+    print(f"  [optimal_fetch] candidates_per_stage={plan.n_candidates_after}")
+    print(f"  [optimal_fetch] elapsed={plan.elapsed_s}")
+    if not plan.dates:
+        raise RuntimeError(
+            f"optimal_fetch_dates returned 0 dates for {PERIOD_START}..{PERIOD_END}"
+        )
+
+    # plan.dates is already sorted by cleanliness (best first per Atmosfär demo)
+    for date in plan.dates:
         cache = RGB_CACHE / f"{date}.npz"
         if cache.exists():
-            print(f"  [cache] {date}")
+            print(f"  [cache hit] {date}")
             arr = np.load(cache)["arr"]
-            return _to_rgb(arr)
-        print(f"  [fetch] {date} ...", end=" ", flush=True)
+            return _to_rgb(arr), date
+        print(f"  [fetch spectral] {date} ...", end=" ", flush=True)
         try:
             result = fetch_seasonal_image(date=date, coords=WGS84_BBOX,
                                           source="des")
             if result is None:
-                print("None")
+                print("None — skipping")
                 continue
             arr, _ = result
             np.savez_compressed(cache, arr=arr.astype(np.float32))
             print(f"ok shape={arr.shape}")
-            return _to_rgb(arr)
+            return _to_rgb(arr), date
         except Exception as e:
             print(f"ERR {type(e).__name__}: {str(e)[:120]}")
             continue
-    raise RuntimeError("No clean Sentinel-2 scene fetched after 6 attempts")
+    raise RuntimeError(
+        f"All {len(plan.dates)} optimal-fetch dates failed to fetch"
+    )
 
 
 def _to_rgb(arr: np.ndarray) -> np.ndarray:
@@ -144,10 +172,11 @@ def main() -> int:
     print(f"Output: {DOCS_OUT}")
     print()
 
-    print("[1/8] Sentinel-2 RGB ...")
-    rgb = fetch_s2_rgb()
+    print("[1/8] Sentinel-2 RGB (ERA5→SCL pipeline) ...")
+    rgb, rgb_date = fetch_s2_rgb()
     save_rgb_png(rgb, DOCS_OUT / "rgb.png")
-    print(f"   rgb.png written ({(DOCS_OUT/'rgb.png').stat().st_size:,} bytes)")
+    print(f"   rgb.png written ({(DOCS_OUT/'rgb.png').stat().st_size:,} bytes) "
+          f"— scen: {rgb_date}")
 
     for i, spec in enumerate(LAYERS, start=2):
         print(f"[{i}/8] {spec.key} ({spec.title}) ...")
