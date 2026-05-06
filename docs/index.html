@@ -8,30 +8,61 @@
     <link rel="stylesheet" href="css/leaflet.css">
     <link rel="stylesheet" href="css/styles.css">
     <style>
-        /* ERA5 prefilter tab */
+        /* Section byline (used by section-header on multiple tabs) */
         .section-byline { color: #6b7280; font-size: 13px; margin-top: 4px; }
+
+        /* ERA5 strategy-set tabs — match .sub-tab styling for consistency */
         .era5-set-tab {
             display: inline-block;
-            padding: 8px 14px;
-            border-radius: 999px;
-            background: #f5f5f5;
-            color: #1f1f1f !important;
+            padding: 8px 20px;
+            border-radius: 9999px;
+            background: #f3f4f6;
+            color: #6b7280 !important;
             text-decoration: none !important;
-            font-size: 13px;
-            font-weight: 500;
-            border: 1px solid #e0e0e0;
-            transition: all 0.15s ease;
+            font-size: 14px;
+            font-weight: 600;
+            border: 1px solid #d1d5db;
+            cursor: pointer;
+            transition: all 0.15s;
         }
         .era5-set-tab:hover {
-            background: #ececec;
-            color: #000 !important;
-            border-color: #cfcfcf;
+            color: #171717 !important;
+            border-color: #9ca3af;
+            background: #e5e7eb;
         }
         .era5-set-tab.active {
-            background: #27ae60;
-            color: #fff !important;
-            border-color: #27ae60;
-            font-weight: 600;
+            color: #ffffff !important;
+            background: #245045;
+            border-color: #245045;
+        }
+
+        /* Figure grid — used by atmosfär & andra showcases */
+        .figure-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 18px;
+        }
+        .figure-grid p {
+            font-size: 13px;
+            color: #666;
+            margin-top: 6px;
+        }
+
+        /* Code block — used by atmosfär */
+        pre.code-block {
+            background: #1e1e1e;
+            color: #e6e6e6;
+            padding: 14px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 13px;
+        }
+
+        /* Tab note — small grey caption */
+        .tab-note {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 6px;
         }
     </style>
 </head>
@@ -556,6 +587,13 @@
 
         <div class="sub-tab-content active" id="tab-era5_strategies">
 
+        <div class="section-header">
+            <h2>Atmosfär — strategi-jämförelse · Skåne 2022</h2>
+            <p class="section-byline">
+                Sex fetch-strategier mätta end-to-end mot DES openEO · ERA5 + STAC + SCL-stack-filter
+            </p>
+        </div>
+
         <div class="summary-section">
             <div class="summary-card"><h4>Rekommenderat: ERA5 → SCL</h4><div class="value">0.0086</div><div class="detail">mean COT · 5 scener · 193 s</div></div>
             <div class="summary-card"><h4>Snabbaste rena: ERA5 → STAC</h4><div class="value">105 s</div><div class="detail">3× snabbare än naiv · COT 0.032</div></div>
@@ -641,37 +679,37 @@
                     </tr>
                 </tbody>
             </table>
-            <p style="font-size:12px; color:#6b7280; margin-top:6px;">
+            <p class="tab-note">
                 🌟 = Pareto-optimal. Alla mätningar live mot DES openEO 2026-05-05.
                 Spektral-tider estimeras från cachad per-dag-metadata och parallelliseras med 6 workers.
             </p>
 
             <h3>Detaljerad nedbrytning</h3>
-            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 18px;">
+            <div class="figure-grid">
                 <div class="figure">
                     <img src="showcase/era5_metafilter/S1_total_wall.png" alt="Total wall-clock" style="width:100%; border-radius:6px;">
-                    <p style="font-size:13px; color:#666; margin-top:6px;">
+                    <p>
                         Urvalsfas (lila) och spektral-fetch (mörk). SCL-stack-anrop dominerar urvalsfas
                         för M2/M3/M4 (~90 s); ERA5/STAC är försumbara (~1 s).
                     </p>
                 </div>
                 <div class="figure">
                     <img src="showcase/era5_metafilter/S2_mean_cot.png" alt="Mean COT" style="width:100%; border-radius:6px;">
-                    <p style="font-size:13px; color:#666; margin-top:6px;">
+                    <p>
                         Mean COT från DES MLP5 COT-ensemble. Tröskelvärden från
                         Pirinen 2024: thick ≥ 0.025, thin 0.015–0.025.
                     </p>
                 </div>
                 <div class="figure">
                     <img src="showcase/era5_metafilter/S4_api_calls.png" alt="API-anrop" style="width:100%; border-radius:6px;">
-                    <p style="font-size:13px; color:#666; margin-top:6px;">
+                    <p>
                         API-trafik per tile per säsong. Spektral dominerar för M0/M1; SCL-stack
                         är konstant per tile (oavsett periodlängd).
                     </p>
                 </div>
                 <div class="figure">
                     <img src="showcase/era5_metafilter/07_mean_cot_per_set.png" alt="COT per delmängd" style="width:100%; border-radius:6px;">
-                    <p style="font-size:13px; color:#666; margin-top:6px;">
+                    <p>
                         Tidigare delmängds-jämförelse (A, B, C, C2 från showcase v1) —
                         konsistent med v2-strategierna.
                     </p>
@@ -684,7 +722,7 @@
                 samma yta. AOI-mean COT printat ovanför heatmappen. Sorterade
                 klarast-först.
             </p>
-            <div id="era5-set-tabs" style="margin-top: 16px; display:flex; gap:8px; flex-wrap:wrap;">
+            <div id="era5-set-tabs" class="sub-tab-nav">
                 <a href="#" class="era5-set-tab active" data-set="M4_era5_then_scl">M4 ERA5 → SCL ★ (5)</a>
                 <a href="#" class="era5-set-tab" data-set="M5_era5_then_stac">M5 ERA5 → STAC ★ (6)</a>
                 <a href="#" class="era5-set-tab" data-set="M2_stac_then_scl">M2 Nuvarande pipeline (4)</a>
@@ -699,7 +737,7 @@
             <p>
                 Hela kedjan finns i <code>imint/training/optimal_fetch.py</code>:
             </p>
-            <pre style="background:#1e1e1e; color:#e6e6e6; padding:14px; border-radius:6px; overflow-x:auto; font-size:13px;">
+            <pre class="code-block">
 from imint.training.optimal_fetch import optimal_fetch_dates
 
 plan = optimal_fetch_dates(
@@ -713,7 +751,7 @@ plan = optimal_fetch_dates(
 # plan.elapsed_s          → tid per stage (era5/stac/scl_stack)
 # plan.n_candidates_after → antal överlevare efter varje stage
 </pre>
-            <p style="font-size:13px; color:#6b7280;">
+            <p class="tab-note">
                 Modulen ändrar inte befintliga fetch-callers — den exponerar bara en ny
                 URL för datum-urval. <code>fetch_seasonal_image</code> körs sedan på
                 <code>plan.dates</code> som vanligt, med rätt 11 spektralband per default.
@@ -726,11 +764,11 @@ plan = optimal_fetch_dates(
                 minska både datakostnad och datakvalitetsbrus i LULC-träning.
                 Reproducerbar end-to-end:
             </p>
-            <pre style="background:#1e1e1e; color:#e6e6e6; padding:14px; border-radius:6px; overflow-x:auto; font-size:13px;">
+            <pre class="code-block">
 python demos/era5_metafilter/benchmark_strategies.py
 python demos/era5_metafilter/render_strategy_figures.py
 </pre>
-            <p style="font-size:13px;">
+            <p>
                 Datakällor: Sentinel-2 L2A via <a href="https://openeo.digitalearth.se/" target="_blank">Digital Earth Sweden openEO</a>.
                 ERA5-baserad daglig reanalys via <a href="https://archive-api.open-meteo.com/v1/archive" target="_blank">Open-Meteo Historical Archive</a>.
                 STAC-katalog via <a href="https://earth-search.aws.element84.com/v1/" target="_blank">Element84 earth-search</a>.
@@ -800,13 +838,13 @@ python demos/era5_metafilter/render_strategy_figures.py
                     2.3 GB) som bind-mountar tile-cache och skriver predictions till disk. Sen2Cor
                     SCL och DES MLP5 körs direkt på host (Python 3.9). Reproducera:
                 </p>
-                <pre style="background:#1e1e1e; color:#e6e6e6; padding:14px; border-radius:6px; overflow-x:auto; font-size:13px;">
+                <pre class="code-block">
 docker build -t imint/cloud-models:latest docker/cloud-models
 python demos/cloud_models/fetch_kiruna.py
 python demos/cloud_models/run_comparison.py</pre>
 
                 <h3>Källor</h3>
-                <p style="font-size:13px;">
+                <p>
                     <a href="https://github.com/sentinel-hub/sentinel2-cloud-detector" target="_blank">sentinel-hub/sentinel2-cloud-detector</a>
                     · <a href="https://github.com/DPIRD-DMA/OmniCloudMask" target="_blank">DPIRD-DMA/OmniCloudMask</a>
                     · <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" target="_blank">DigitalEarthSweden/ml-cloud-opt-thick</a>
@@ -1014,8 +1052,8 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=8"></script>
-    <script src="js/app.js?v=8"></script>
+    <script src="js/tab-data.js?v=9"></script>
+    <script src="js/app.js?v=9"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>
     <script>
