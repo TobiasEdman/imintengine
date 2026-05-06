@@ -49,11 +49,19 @@ spec:
               echo "Started: $(date)"
 
               apt-get update -qq
-              apt-get install -y -qq curl unzip ca-certificates > /dev/null
+              apt-get install -y -qq curl unzip ca-certificates gdal-bin > /dev/null
 
               BASE="https://geodata.naturvardsverket.se/nedladdning/marktacke/NMD2018"
               ROOT="/data/nvv_aux"
               mkdir -p "$ROOT/markfuktighet" "$ROOT/objektdata"
+
+              # Stormyran AOI in EPSG:3006 (snapped 10m grid).
+              # Used to identify which Markfuktighetsindex_NMD_del{1..9}.zip
+              # covers the AOI; only that one is kept extracted.
+              AOI_W=540280
+              AOI_S=7125220
+              AOI_E=550490
+              AOI_N=7135410
 
               # Function: fetch + unzip if target .tif missing.
               # Args: $1=target_dir  $2=remote_zip_filename  $3=expected_tif_basename
@@ -79,34 +87,136 @@ spec:
                 echo "    extracted $(du -h "$target_tif" | cut -f1)"
               }
 
+              # Function: probe a TIF — does it cover the AOI bbox?
+              # Returns 0 if AOI is fully inside, 1 otherwise.
+              tif_covers_aoi() {
+                local tif="$1"
+                local bounds=$(gdalinfo "$tif" 2>/dev/null | \
+                  grep -E "^(Lower Left|Upper Right)" | \
+                  sed -E 's/.*\(\s*([0-9.\-]+)\s*,\s*([0-9.\-]+)\).*/\1 \2/')
+                if [ -z "$bounds" ]; then return 1; fi
+                local w=$(echo "$bounds" | sed -n '1p' | awk '{print $1}')
+                local s=$(echo "$bounds" | sed -n '1p' | awk '{print $2}')
+                local e=$(echo "$bounds" | sed -n '2p' | awk '{print $1}')
+                local n=$(echo "$bounds" | sed -n '2p' | awk '{print $2}')
+                # Compare with awk for floating-point safety
+                awk -v w="$w" -v s="$s" -v e="$e" -v n="$n" \
+                    -v aw="$AOI_W" -v as="$AOI_S" -v ae="$AOI_E" -v an="$AOI_N" \
+                    'BEGIN { exit !(w <= aw && s <= as && e >= ae && n >= an) }'
+              }
+
               echo ""
-              echo "=== Layer 1/5: Markfuktighetsindex (Sweden) ==="
-              prefetch "$ROOT/markfuktighet" \
-                "Markfuktighetsindex_NMD_Sverige.zip" \
-                "Markfuktighetsindex_NMD_Sverige.tif"
+              echo "=== Layer 1/5: Markfuktighetsindex (probing del1..9 for AOI) ==="
+              # AOI is Stormyran (Jämtland, ~64.3°N 15.94°E). Iterate del-zips
+              # until one covers the AOI; keep that, skip the rest.
+              MARKFUKT_FOUND=""
+              for n in 1 2 3 4 5 6 7 8 9; do
+                # If we already extracted a Sverige-wide tif, skip altogether
+                if [ -f "$ROOT/markfuktighet/Markfuktighetsindex_NMD_Sverige.tif" ]; then
+                  echo "  [skip] full-Sweden tif already present"
+                  MARKFUKT_FOUND="Sverige"
+                  break
+                fi
+                # If a previously-kept del-tif exists and covers AOI, skip
+                existing=$(ls "$ROOT/markfuktighet"/Markfuktighetsindex_NMD_del*.tif 2>/dev/null | head -1)
+                if [ -n "$existing" ] && tif_covers_aoi "$existing"; then
+                  echo "  [skip] $(basename "$existing") already covers AOI"
+                  MARKFUKT_FOUND="$(basename "$existing")"
+                  break
+                fi
+
+                zipname="Markfuktighetsindex_NMD_del${n}.zip"
+                tifname="Markfuktighetsindex_NMD_del${n}.tif"
+                tgt="$ROOT/markfuktighet"
+
+                echo ""
+                echo "  --- probing $zipname (del${n}/9) ---"
+                tmpzip="$tgt/$zipname.partial"
+                curl -fsSL --retry 3 --retry-delay 5 \
+                  -o "$tmpzip" "$BASE/$zipname" 2>&1 | tail -1
+                echo "    downloaded $(du -h "$tmpzip" | cut -f1)"
+                unzip -o -j -q "$tmpzip" "*$tifname" -d "$tgt"
+                rm -f "$tmpzip"
+
+                if [ -f "$tgt/$tifname" ] && tif_covers_aoi "$tgt/$tifname"; then
+                  echo "  ✓ del${n} covers Stormyran AOI — keeping"
+                  MARKFUKT_FOUND="$tifname"
+                  break
+                else
+                  echo "  ✗ del${n} does not cover AOI — discarding"
+                  rm -f "$tgt/$tifname"
+                fi
+              done
+              if [ -z "$MARKFUKT_FOUND" ]; then
+                echo "ERROR: no markfuktighet del-zip covers AOI" >&2
+                exit 1
+              fi
+              echo ""
+              echo "  → markfuktighet source: $MARKFUKT_FOUND"
+
+              # Function: fetch ERDAS Imagine .img (lowercase basename!),
+              # then convert to GeoTIFF for downstream rasterio compatibility.
+              # The objektdata zips contain HFA .img + .ige + .rrd; we extract
+              # the full set, gdal_translate to .tif, then drop the .img bundle.
+              prefetch_img_to_tif() {
+                local tgt="$1" zipname="$2" basename_lower="$3" tifname="$4"
+                local target_tif="$tgt/$tifname"
+                if [ -f "$target_tif" ]; then
+                  echo "  [skip] $tifname already extracted ($(du -h "$target_tif" | cut -f1))"
+                  return 0
+                fi
+                local tmpzip="$tgt/$zipname.partial"
+                echo "  [fetch] $zipname"
+                curl -fsSL --retry 3 --retry-delay 5 \
+                  -o "$tmpzip" "$BASE/$zipname"
+                echo "    downloaded $(du -h "$tmpzip" | cut -f1)"
+                echo "  [unzip] $basename_lower.{img,ige} → HFA bundle"
+                unzip -o -j -q "$tmpzip" \
+                  "${basename_lower}.img" "${basename_lower}.ige" \
+                  -d "$tgt" 2>/dev/null || true
+                rm -f "$tmpzip"
+                if [ ! -f "$tgt/${basename_lower}.img" ]; then
+                  echo "ERROR: ${basename_lower}.img not found after unzip" >&2
+                  return 1
+                fi
+                echo "  [convert] HFA → GeoTIFF (LZW compressed, GDAL_CACHEMAX=2048)"
+                gdal_translate -q --config GDAL_CACHEMAX 2048 \
+                  -of GTiff -co COMPRESS=LZW -co TILED=YES -co BIGTIFF=IF_NEEDED \
+                  "$tgt/${basename_lower}.img" "$target_tif"
+                rm -f "$tgt/${basename_lower}.img" "$tgt/${basename_lower}.ige"
+                if [ ! -f "$target_tif" ]; then
+                  echo "ERROR: gdal_translate did not produce $target_tif" >&2
+                  return 1
+                fi
+                echo "    extracted $(du -h "$target_tif" | cut -f1)"
+              }
 
               echo ""
               echo "=== Layer 2/5: Objekt_hojd 0.5–5 m (bushes) ==="
-              prefetch "$ROOT/objektdata" \
+              prefetch_img_to_tif "$ROOT/objektdata" \
                 "Objekt_hojd_intervall_0_5_till_5_v1_3.zip" \
+                "objekt_hojd_intervall_0_5_till_5_v1_3" \
                 "Objekt_hojd_intervall_0_5_till_5_v1_3.tif"
 
               echo ""
               echo "=== Layer 3/5: Objekt_hojd 5–45 m (trees) ==="
-              prefetch "$ROOT/objektdata" \
+              prefetch_img_to_tif "$ROOT/objektdata" \
                 "Objekt_hojd_intervall_5_till_45_v1_3.zip" \
+                "objekt_hojd_intervall_5_till_45_v1_3" \
                 "Objekt_hojd_intervall_5_till_45_v1_3.tif"
 
               echo ""
               echo "=== Layer 4/5: Objekt_tackning 0.5–5 m (bush cover) ==="
-              prefetch "$ROOT/objektdata" \
+              prefetch_img_to_tif "$ROOT/objektdata" \
                 "Objekt_tackning_hojdintervall_0_5_till_5_v1_3.zip" \
+                "objekt_tackning_hojdintervall_0_5_till_5_v1_3" \
                 "Objekt_tackning_hojdintervall_0_5_till_5_v1_3.tif"
 
               echo ""
               echo "=== Layer 5/5: Objekt_tackning 5–45 m (tree cover) ==="
-              prefetch "$ROOT/objektdata" \
+              prefetch_img_to_tif "$ROOT/objektdata" \
                 "Objekt_tackning_hojdintervall_5_till_45_v1_3.zip" \
+                "objekt_tackning_hojdintervall_5_till_45_v1_3" \
                 "Objekt_tackning_hojdintervall_5_till_45_v1_3.tif"
 
               echo ""
@@ -119,16 +229,19 @@ spec:
           resources:
             requests:
               cpu: "2"
-              memory: "4Gi"
-              ephemeral-storage: "60Gi"
+              memory: "16Gi"
+              ephemeral-storage: "80Gi"
             limits:
-              cpu: "4"
-              memory: "8Gi"
-              ephemeral-storage: "60Gi"
+              cpu: "2"
+              memory: "16Gi"
+              ephemeral-storage: "80Gi"
           volumeMounts:
             - name: training-data
               mountPath: /data
       volumes:
         - name: training-data
           persistentVolumeClaim:
-            claimName: training-data
+            # CephFS RWX (Read-Write-Many) so we can mount alongside other
+            # active fetch/training jobs. The previous `training-data` PVC
+            # is RWO and was held by complete-rededge-cdse-256-throttled.
+            claimName: training-data-cephfs

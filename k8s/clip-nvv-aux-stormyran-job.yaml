@@ -1,0 +1,93 @@
+---
+# Job: clip-nvv-aux-stormyran — clip the 5 NVV aux rasters to Stormyran AOI.
+#
+# Reads the 5 large .tif files from /data/nvv_aux/, runs gdal_translate
+# -projwin with the Stormyran bbox in EPSG:3006 (snapped to 10 m grid),
+# writes ~20 MB total to /data/nvv_aux_clip/stormyran/. Caller then
+# kubectl-cp's that directory down to the Mac.
+#
+# Stormyran AOI in EPSG:3006:
+#   west  540280
+#   south 7125220
+#   east  550490
+#   north 7135410
+# = 10.21 km × 10.19 km = ~1000×1000 px @ 10 m
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: clip-nvv-aux-stormyran
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: clipper
+          image: debian:12-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "=== Clip NVV aux rasters to Stormyran AOI ==="
+              apt-get update -qq
+              apt-get install -y -qq gdal-bin > /dev/null
+
+              SRC="/data/nvv_aux"
+              DST="/data/nvv_aux_clip/stormyran"
+              mkdir -p "$DST/markfuktighet" "$DST/objektdata"
+
+              # Stormyran AOI in EPSG:3006 (snapped to 10m grid)
+              # gdal_translate -projwin uses ulx uly lrx lry order
+              ULX=540280
+              ULY=7135410
+              LRX=550490
+              LRY=7125220
+
+              clip() {
+                local src="$1" dst="$2"
+                if [ -f "$dst" ]; then
+                  echo "  [skip] $(basename "$dst") exists"
+                  return 0
+                fi
+                echo "  [clip] $(basename "$src")"
+                gdal_translate -q \
+                  -projwin $ULX $ULY $LRX $LRY \
+                  -projwin_srs EPSG:3006 \
+                  -of GTiff -co COMPRESS=LZW -co TILED=YES \
+                  "$src" "$dst"
+                echo "    → $(basename "$dst") $(du -h "$dst" | cut -f1)"
+              }
+
+              clip "$SRC/markfuktighet/Markfuktighetsindex_NMD_del2.tif" \
+                   "$DST/markfuktighet/Markfuktighetsindex_NMD_Sverige.tif"
+
+              for src in $SRC/objektdata/Objekt_*.tif; do
+                base=$(basename "$src")
+                clip "$src" "$DST/objektdata/$base"
+              done
+
+              echo ""
+              echo "=== Inventory ==="
+              du -h "$DST"/*/* 2>/dev/null
+              echo "Total: $(du -sh "$DST" | cut -f1)"
+
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+              ephemeral-storage: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+              ephemeral-storage: "1Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
