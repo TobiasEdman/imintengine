@@ -2,7 +2,22 @@
 
 **Created:** 2026-05-06
 **Target repo:** `/Users/tobiasedman/Developer/ImintEngine`
-**Status:** draft, klar för fresh-session execution
+**Status:** PAUSED 2026-05-07 — SNAP-image på GHCR är trasig (No product reader for S2 L1C). Den lokala `imint-snap-c2rcc:latest` (sha256:80a519fe8023, byggd 2026-04-28 från okänd Dockerfile) FUNGERAR. CI-byggda `ghcr.io/tobiasedman/imint-c2rcc-snap:latest` (byggd från min rekonstruerade Dockerfile via `mundialis/esa-snap` base) saknar Sentinel-2 product reader trots att c2rcc.msi-operatorn registreras. Behöver omarbetad Dockerfile innan pipelinen kan köra.
+
+**Vad som finns klart:**
+- Pipeline-kod: demos/lilla_karlso_birds/{config,fetch_safes,run_c2rcc,render}.py — fungerar
+- 3 k8s job-yamls: lilla-karlso-{fetch,c2rcc,render}-job.yaml — fetch ✓, c2rcc trasig
+- Showcase-tab: Vattenkvalitet → 2 sub-tabs (Bohuslän + Lilla Karlsö) — sub-tab live, väntar på data
+- 3 SAFEs på CephFS `/data/lilla_karlso_birds/l1c_safes/` (1.5 GB):
+  - 2025-04-29: S2C_MSIL1C_..._T34VCJ (FEL UTM-zon, behöver omfetcha med tile-prefer T33)
+  - 2025-06-13: S2A_MSIL1C_..._T33VXD ✓
+  - 2025-07-10: S2A_MSIL1C_..._T33VXD ✓
+
+**Två separata problem att lösa:**
+1. **SNAP-image rebuild** — Dockerfile som producerar fungerande Sentinel-2 reader. Antingen ny base (senbox/snap?), eller hitta vad lokala imagen 80a519fe gjorde annorlunda.
+2. **Tile-zon inkonsistens** — STAC valde T34VCJ för 2025-04-29 men T33VXD för andra datum. AOI 17.91–18.21°E spänner över UTM 33/34-gränsen. Behöver ändra fetch_l1c_safe_from_gcp att preferra T33VXD-tile, eller ändra AOI så det helt ligger i T33.
+
+
 
 ## Mål
 
