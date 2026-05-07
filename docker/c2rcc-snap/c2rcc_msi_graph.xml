@@ -70,8 +70,11 @@ Per commit 52d19ae: 38.8% real retrievals med C2X vs 15.7% med default.
             <netSet>C2X-Nets</netSet>
 
             <!-- Behåll bara de IOPs och kd-band vi använder downstream.
-                 Sätter outputRtosa=false för att slippa mellan-produkter. -->
-            <outputRtosa>false</outputRtosa>
+                 SNAP 13 splittade `outputRtosa` (SNAP 9) till `outputRtosaGc`
+                 + `outputRtosaGcAann`. Båda false → inga gas-corrected TOA-
+                 mellanprodukter committeras till output. -->
+            <outputRtosaGc>false</outputRtosaGc>
+            <outputRtosaGcAann>false</outputRtosaGcAann>
             <outputAsRrs>false</outputAsRrs>
             <deriveRwFromPathAndTransmittance>false</deriveRwFromPathAndTransmittance>
 
