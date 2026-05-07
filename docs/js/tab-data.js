@@ -579,5 +579,48 @@ var TAB_CONFIG = {
         },
         imgH: 1000, imgW: 1000,
         hasBgToggle: true
+    },
+
+    water_quality_lilla_karlso: {
+        title: 'Lilla Karlsö — sillgrissle-säsong 2025 · klorofyll-tidsserie',
+        summary: [
+            {title:'AOI', value:'22×22 km', detail:'Lilla Karlsö + foderhabitat'},
+            {title:'Period', value:'15 apr – 31 jul 2025', detail:'häckningssäsong'},
+            {title:'Scener', value:'3', detail:'ägg / kläck / unge'},
+            {title:'C2RCC', value:'C2X-Nets', detail:'Östersjö hög-CDOM'}
+        ],
+        intro: 'Tre Sentinel-2-scener fångar säsongens fenologiska faser: 2025-04-29 (äggläggning + vårblom), 2025-06-13 (kläckning), 2025-07-10 (ungar lämnar kolonin). C2RCC-pipeline körd via signerad GHCR-image på ICE k8s, native amd64 ger ~3 min per scen istället för 10+ på Mac qemu-emulering. Brockmann 2016-formler beräknar chl-a, TSM, CDOM från IOPs.',
+        panels: [
+            {id:'lk-rgb-1',  key:'rgb_2025-04-29', title:'2025-04-29 RGB · äggläggning',
+                bgToggle:[{label:'RGB',key:'rgb_2025-04-29',active:true},{label:'Chl',key:'chl_2025-04-29'}]},
+            {id:'lk-chl-1',  key:'chl_2025-04-29', title:'2025-04-29 Chl-a',  legend:'chl',
+                bgToggle:[{label:'RGB',key:'rgb_2025-04-29',active:true},{label:'Chl',key:'chl_2025-04-29'}]},
+            {id:'lk-rgb-2',  key:'rgb_2025-06-13', title:'2025-06-13 RGB · kläckning',
+                bgToggle:[{label:'RGB',key:'rgb_2025-06-13',active:true},{label:'Chl',key:'chl_2025-06-13'}]},
+            {id:'lk-chl-2',  key:'chl_2025-06-13', title:'2025-06-13 Chl-a',  legend:'chl',
+                bgToggle:[{label:'RGB',key:'rgb_2025-06-13',active:true},{label:'Chl',key:'chl_2025-06-13'}]},
+            {id:'lk-rgb-3',  key:'rgb_2025-07-10', title:'2025-07-10 RGB · ungar lämnar',
+                bgToggle:[{label:'RGB',key:'rgb_2025-07-10',active:true},{label:'Chl',key:'chl_2025-07-10'}]},
+            {id:'lk-chl-3',  key:'chl_2025-07-10', title:'2025-07-10 Chl-a',  legend:'chl',
+                bgToggle:[{label:'RGB',key:'rgb_2025-07-10',active:true},{label:'Chl',key:'chl_2025-07-10'}]}
+        ],
+        images: {
+            'lk-rgb-1':            'showcase/lilla_karlso_birds/frames/2025-04-29/rgb.png',
+            'lk-chl-1':            'showcase/lilla_karlso_birds/frames/2025-04-29/chl.png',
+            'lk-rgb-2':            'showcase/lilla_karlso_birds/frames/2025-06-13/rgb.png',
+            'lk-chl-2':            'showcase/lilla_karlso_birds/frames/2025-06-13/chl.png',
+            'lk-rgb-3':            'showcase/lilla_karlso_birds/frames/2025-07-10/rgb.png',
+            'lk-chl-3':            'showcase/lilla_karlso_birds/frames/2025-07-10/chl.png',
+            'lk-rgb_2025-04-29':   'showcase/lilla_karlso_birds/frames/2025-04-29/rgb.png',
+            'lk-chl_2025-04-29':   'showcase/lilla_karlso_birds/frames/2025-04-29/chl.png',
+            'lk-rgb_2025-06-13':   'showcase/lilla_karlso_birds/frames/2025-06-13/rgb.png',
+            'lk-chl_2025-06-13':   'showcase/lilla_karlso_birds/frames/2025-06-13/chl.png',
+            'lk-rgb_2025-07-10':   'showcase/lilla_karlso_birds/frames/2025-07-10/rgb.png',
+            'lk-chl_2025-07-10':   'showcase/lilla_karlso_birds/frames/2025-07-10/chl.png'
+        },
+        imgH: 1000, imgW: 1000,
+        hasBgToggle: true,
+        hasCharts: true,
+        chartSectionTitle: ''  // Chart hanteras inline i HTML, inte via mall
     }
 };

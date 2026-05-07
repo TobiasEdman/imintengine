@@ -285,10 +285,16 @@
         </div>
     </div>
 
-    <!-- ── Water Quality tab — Stigfjorden + Skagerrak ─────────────────── -->
+    <!-- ── Water Quality tab (parent with sub-tabs) ──────────────────── -->
     <div class="tab-content" id="tab-water_quality">
-        <div class="tab-dynamic"></div>
-        <div class="tab-description">
+        <div class="sub-tab-nav">
+            <a href="#" class="sub-tab active" data-subtab="water_quality_bohuslan">🌊 Bohuslän — Stigfjorden 2026</a>
+            <a href="#" class="sub-tab" data-subtab="water_quality_lilla_karlso">🐦 Lilla Karlsö — Sillgrissle 2025</a>
+        </div>
+
+        <div class="sub-tab-content active" id="tab-water_quality_bohuslan">
+            <div class="tab-dynamic"></div>
+            <div class="tab-description">
 
             <h3>Sentinel-2 RGB — Satellitbilden</h3>
             <p>
@@ -362,7 +368,91 @@
                 Total körtid för en hel scen: L2A-fetch ~105 s, MDN-inferens ~17 s, c2rcc per SAFE ~3–10 min (x86-emulering på Apple Silicon — 3× snabbare på native amd64), mosaik + render ~5 s. Total ≈ 7–22 min beroende på hardware.
             </p>
 
-        </div>
+            </div>
+        </div><!-- /sub-tab-content water_quality_bohuslan -->
+
+        <div class="sub-tab-content" id="tab-water_quality_lilla_karlso">
+            <div class="tab-dynamic"></div>
+            <div class="tab-description">
+
+                <h3>Lilla Karlsö — sillgrisslornas häckningssäsong 2025</h3>
+                <p>
+                    Lilla Karlsö (Gotland, fågelreservat) har 2 000–3 000 häckande sillgrissle-par.
+                    Häckningssäsongen sträcker sig från äggläggning i mitten av april via kläckning
+                    i mitten av juni till att ungar lämnar kolonin i slutet av juli. Sillgrisslornas
+                    foderbas är pelagisk småfisk (skarpsill, sill) som följer klorofylldynamiken
+                    i Östersjön — de jagar 5–15 km från kolonin och dyker till 100 m djup.
+                    <br><em>Källa: WWF Sverige · Naturskyddsföreningen Gotland.</em>
+                </p>
+
+                <h3>C2RCC tidsserie över säsongen</h3>
+                <p>
+                    Tre Sentinel-2-scener fångar säsongens tre fenologiska faser:
+                </p>
+                <ul style="margin-left:20px; line-height:1.7;">
+                    <li><strong>2025-04-29</strong> — äggläggning, vårblomningen pågår i Östersjön</li>
+                    <li><strong>2025-06-13</strong> — kläckning, peak häckning i kolonin</li>
+                    <li><strong>2025-07-10</strong> — ungar lämnar kolonin, postblom-period</li>
+                </ul>
+                <p>
+                    Datumvalet kommer från <code>optimal_fetch_dates(mode="era5_then_scl")</code>
+                    över hela häckningssäsongen 2025-04-15..07-31. Östersjön sommar är notoriskt
+                    molnig — av 19 ERA5-passande dagar och 50 SCL-stack-kandidater var bara 3
+                    under tröskeln 15% AOI-cloud. De 3 som överlever filtret träffar dock
+                    perfekt en gång varje fenologisk fas.
+                </p>
+
+                <h3>AOI och tile</h3>
+                <p>
+                    22×22 km bbox runt 57.311°N 18.061°E (utvidgad från 7×5 km i den befintliga
+                    Lilla Karlsö-demos under Atmosfär-fliken). Större AOI behövs för att fånga
+                    foderhabitatet — kolonin är bara 2.5×1 km, men sillgrisslorna jagar i hela
+                    omkringliggande havsområdet. AOI ligger helt inom UTM 33N (T33VWE) →
+                    single-pass utan zon-mosaik.
+                </p>
+
+                <h3>Pipeline</h3>
+                <p>
+                    Trestegs k8s-pipeline mot ICE CephFS-PVC:
+                </p>
+                <ul style="margin-left:20px; line-height:1.7;">
+                    <li><strong>Steg 1:</strong> <code>optimal_fetch_dates(era5_then_scl)</code> +
+                        <code>fetch_l1c_safe_from_gcp</code> — Sentinel-2 L1C SAFE-arkiv från Google Clouds publika bucket</li>
+                    <li><strong>Steg 2:</strong> ESA SNAP <code>c2rcc.msi</code> via signerad GHCR-image
+                        <code>ghcr.io/tobiasedman/imint-c2rcc-snap</code> → BEAM-DIMAP. Native amd64 ger
+                        ~3 min per scen istället för 10+ min på qemu-emulerad Mac.</li>
+                    <li><strong>Steg 3:</strong> Brockmann 2016-formler beräknar chl-a, TSM och CDOM
+                        från IOPs (chl = (apig^1.04)·21, tsm = 1.72·bpart + 3.1·bwit, cdom = agelb).
+                        Filtrerar bort NN-floor-rester (apig &lt; 0.001).</li>
+                </ul>
+                <p>
+                    Reproducerbar: hela bygg-receptet finns versionerat i
+                    <code>docker/c2rcc-snap/</code> (Dockerfile, SNAP graph-XML, run.sh) och CI auto-bygger
+                    + signerar imagen vid varje commit som rör katalogen. Se
+                    <code>docs/governance/avoiding_docker_repo_skew.md</code> för bakgrund.
+                </p>
+
+                <h3>Klorofyll-tidsserie</h3>
+                <div class="figure" style="background:#fff; padding:14px; border-radius:6px;">
+                    <canvas id="chart-lilla-karlso-chl" style="max-height:340px;"></canvas>
+                    <p style="font-size:13px; color:#666; margin-top:10px;">
+                        Median (p50) och 90-percentil (p90) AOI-klorofyll-a per scen i log-skala.
+                        Vårblom-toppen syns vanligen i april–maj, sedan minskar koncentrationen
+                        över sommaren när ytvattnet stratifieras och näringen är förbrukad.
+                    </p>
+                </div>
+
+                <h3>Källor</h3>
+                <p style="font-size:13px;">
+                    Sentinel-2 L1C via <a href="https://console.cloud.google.com/storage/browser/gcp-public-data-sentinel-2" target="_blank">Google Cloud public bucket</a>.
+                    SNAP c2rcc.msi: <em>Brockmann et al. 2016</em>, ESA Living Planet Symposium.
+                    netSet=C2X-Nets för optiskt komplext kustvatten.
+                    Sillgrissle-fenologi: <a href="https://www.wwf.se/sillgrissla/" target="_blank">WWF Sverige</a>,
+                    <a href="https://lillakarlso.org/" target="_blank">Lilla Karlsö</a>.
+                </p>
+
+            </div>
+        </div><!-- /sub-tab-content water_quality_lilla_karlso -->
     </div>
 
     <!-- ── Superresolution tab — open SR models side-by-side ─────────────── -->
@@ -1048,10 +1138,11 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=10"></script>
-    <script src="js/app.js?v=10"></script>
+    <script src="js/tab-data.js?v=11"></script>
+    <script src="js/app.js?v=11"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>
+    <script src="js/lilla-karlso-chart.js?v=1"></script>
     <script>
     // Auto-resize parent iframe (for digitalearth.se/case/ embedding)
     if (window.parent !== window) {
