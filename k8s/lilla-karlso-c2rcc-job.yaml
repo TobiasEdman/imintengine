@@ -45,7 +45,10 @@ spec:
             limits:   {cpu: "100m", memory: "256Mi"}
       containers:
         - name: c2rcc
-          image: ghcr.io/tobiasedman/imint-c2rcc-snap:latest
+          # Pin till digest — :latest är inte trovärdig (SNAP 9-rebuild 2026-05-07,
+          # plus feature-branches tag:as inte som :latest). Pinnat till CI-byggd
+          # image från commit f5337a9, verifierad i k8s mot Lilla Karlsö-SAFE.
+          image: ghcr.io/tobiasedman/imint-c2rcc-snap@sha256:4a2c3217d156a69adddf371eee5511747551911f1cb40fbddf2764a13c0e1aef
           command:
             - /bin/sh
             - -c
@@ -72,7 +75,7 @@ spec:
 
                 echo ""
                 echo "=== $(date '+%H:%M:%S')  c2rcc.msi → $date ==="
-                /usr/local/snap/bin/gpt "$GRAPH" \
+                /opt/snap/bin/gpt "$GRAPH" \
                     -PinputSafe="$safe" \
                     -PgeoRegion="$GEO_REGION" \
                     -PoutputDim="$out" \

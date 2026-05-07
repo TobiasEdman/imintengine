@@ -13,27 +13,38 @@ vattenkvalitets-retrievals (chlorofyll-a, TSM, CDOM via IOPs).
 
 ## Bakgrund
 
-Den ursprungliga imagen `imint-snap-c2rcc:latest` (commit 52d19ae,
-`feat(water_quality): real ESA C2RCC + Pahlevan MDN`) saknade Dockerfile
-och kör-skript i versionkontroll. Detta är en rekonstruktion baserad på
-`docker history`, befintlig output-struktur i `outputs/c2rcc_runs/` och
-commit-beskrivningen.
+Mollösundscaset (commit 52d19ae, `feat(water_quality): real ESA C2RCC +
+Pahlevan MDN`) använde lokala `imint-snap13:latest` (sha256:832b51265ba8,
+2.9 GB). Dockerfile + kör-skript saknades i versionkontroll. Den här
+filen är rekonstruktion av det verifierat fungerande receptet, baserad
+på `docker history` av lokala imagen + k8s-diag-test mot Lilla Karlsö-SAFE
+2025-06-13 (T33VXD) som bekräftade att SNAP 13 har S2OrthoProductReaderPlugIn
+för EPSG:32633.
 
-Originalet kopierade `/usr/local/snap` från en host-installation; den här
-versionen bygger från `mundialis/esa-snap`-base som har SNAP installerat
-via ESA:s officiella installer. Det ger reproducerbarhet utan behov av
-en host-installerad SNAP.
+Tidigare rekonstruktion (commit d7eaa40) byggde mot `mundialis/esa-snap`-base
+som råkar ha **SNAP 9.0.0**, inte 13.0.0 som Dockerfile-kommentaren hävdade.
+SNAP 9 saknar reader för 2025 S2 SAFE-format; pause-incident 2026-05-07.
+
+**SNAP installeras i `/opt/snap`** — INTE `/usr/local/snap` som mundialis-
+baserade images använder. All pipeline-kod måste referera `/opt/snap/bin/gpt`.
 
 ## Build
 
 ```bash
-docker build -t imint-snap-c2rcc:latest -f docker/c2rcc-snap/Dockerfile docker/c2rcc-snap
+docker build --platform=linux/amd64 \
+    -t imint-snap-c2rcc:latest -f docker/c2rcc-snap/Dockerfile docker/c2rcc-snap
 ```
 
-Verifiera att `c2rcc.msi`-operatorn registrerades:
+Build laddar ESA SNAP 13 installer (~1 GB) från `download.esa.int` och kör
+headless install — total build-tid ~5–10 min på native amd64, 30–60 min
+under qemu på Apple Silicon. CI använder ubuntu-latest amd64-runner.
+
+Verifiera SNAP 13 + c2rcc.msi:
 
 ```bash
-docker run --rm imint-snap-c2rcc:latest /usr/local/snap/bin/gpt -h | grep c2rcc.msi
+docker run --rm imint-snap-c2rcc:latest /bin/sh -c \
+    'cat /opt/snap/VERSION.txt && /opt/snap/bin/gpt -h | grep c2rcc.msi'
+# Förväntat: 13.0.0 + "c2rcc.msi"
 ```
 
 ## Användning

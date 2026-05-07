@@ -140,7 +140,16 @@ jobs:
               docker run --rm smoke-${{ matrix.image }}:test python -c "import torch, s2cloudless; print('torch', torch.__version__)"
               ;;
             c2rcc-snap)
-              docker run --rm smoke-${{ matrix.image }}:test /usr/local/snap/bin/gpt -h 2>&1 | grep -E "c2rcc.msi|GPT 13" | head -3
+              # Verifiera SNAP 13 + c2rcc.msi-operator. Smoke-test ENBART av
+              # operator-listan räcker inte — pause-incident 2026-05-07 visade
+              # att SNAP 9-image kunde ha c2rcc.msi registrerad men sakna
+              # S2 product reader för 2025 SAFE-format. Detta test verifierar
+              # också SNAP-versionen via VERSION.txt + att Read-operatorn finns.
+              docker run --rm smoke-${{ matrix.image }}:test /bin/sh -c \
+                'echo "SNAP version: $(cat /opt/snap/VERSION.txt)" && \
+                 grep -q "^13" /opt/snap/VERSION.txt && \
+                 /opt/snap/bin/gpt -h 2>&1 | grep -E "c2rcc.msi" && \
+                 /opt/snap/bin/gpt -h Read 2>&1 | grep -q "Reads a data product"'
               ;;
           esac
 

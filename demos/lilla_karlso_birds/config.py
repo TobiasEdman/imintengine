@@ -14,12 +14,17 @@ AOI_NAME = "Lilla Karlsö"
 AOI_LAT = 57.311
 AOI_LON = 18.061
 
-# 22×22 km runt kolonin (utvidgad från lilla_karlso/-demos 7×5 km).
-# Helt inom UTM 33N (T33VWE) — ingen MGRS-zon-gräns.
+# 10×22 km — Lilla Karlsö som östgräns, havsremsan väster om kolonin.
+# Sillgrisslornas foderhabitat ligger 5–15 km väster om ön (pelagisk skarpsill/
+# sill); Gotlands fastland (>18.13°E) är inte intressant för C2RCC-analysen.
+# Boxen är shiftad västerut jämfört med tidigare 22×22 km kring ön — hela
+# AOI är nu väster om/på Lilla Karlsö, inget Gotland-fastland inkluderat.
+# 18.075 = östra spetsen av Lilla Karlsö; 17.775 = ~10 km västerut.
+# OBS: AOI korsar fortfarande 18.0°E (UTM 33/34-gränsen) — separat tile-zon-issue.
 BBOX_WGS84 = {
-    "west":  17.91,
+    "west":  17.775,
     "south": 57.21,
-    "east":  18.21,
+    "east":  18.075,
     "north": 57.41,
 }
 
@@ -42,11 +47,24 @@ DATE_WINDOW = 0            # Exakt-datum-match — optimal_fetch redan bestämt
 
 
 # ── C2RCC ────────────────────────────────────────────────────────────────
+# Pin till digest, INTE :latest — pause-incident 2026-05-07 visade att
+# CI byggde en :latest från en mundialis-baserad Dockerfile som råkar ge
+# SNAP 9 (tot 2025 SAFE-format saknar reader). Plus: feature-branches
+# tag:as inte som :latest överhuvudtaget (workflow enable on main only).
+#
+# Pinnad till CI-byggd image från commit f5337a9 (claude/blissful-leakey),
+# verifierad 2026-05-07 i k8s-diag mot Lilla Karlsö-SAFE 2025-06-13
+# (T33VXD): Ubuntu 24.04 base, SNAP 13 i /opt/snap, S2OrthoProductReaderPlugIn
+# registrerad för EPSG:32633, Read exekverar (OOM på 4 GiB testpod, 16 GiB
+# i produktionsjobb räcker enligt Mollösundscaset).
+#
+# När branchen mergas till main: CI bygger ny image med ny digest. Uppdatera
+# denna pin till nya digesten (CI tag:ar ny som :latest på main, sha-tag på
+# alla branches).
 DOCKER_IMAGE = os.environ.get(
     "C2RCC_IMAGE",
-    # Default: GHCR signerad image (CI-byggd). Kan överridas via env för
-    # att använda lokalt-byggd imint-snap-c2rcc:latest.
-    "ghcr.io/tobiasedman/imint-c2rcc-snap:latest",
+    "ghcr.io/tobiasedman/imint-c2rcc-snap"
+    "@sha256:4a2c3217d156a69adddf371eee5511747551911f1cb40fbddf2764a13c0e1aef",
 )
 
 

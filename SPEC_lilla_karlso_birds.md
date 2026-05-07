@@ -2,20 +2,30 @@
 
 **Created:** 2026-05-06
 **Target repo:** `/Users/tobiasedman/Developer/ImintEngine`
-**Status:** PAUSED 2026-05-07 — SNAP-image på GHCR är trasig (No product reader for S2 L1C). Den lokala `imint-snap-c2rcc:latest` (sha256:80a519fe8023, byggd 2026-04-28 från okänd Dockerfile) FUNGERAR. CI-byggda `ghcr.io/tobiasedman/imint-c2rcc-snap:latest` (byggd från min rekonstruerade Dockerfile via `mundialis/esa-snap` base) saknar Sentinel-2 product reader trots att c2rcc.msi-operatorn registreras. Behöver omarbetad Dockerfile innan pipelinen kan köra.
+**Status:** UNBLOCKED 2026-05-07 (kväll) — SNAP-image rebuild färdig och verifierad.
+
+**Rotsorsak (uppdaterad efter k8s-diag):** Den tidigare Dockerfilen byggde mot `mundialis/esa-snap` som råkar ha **SNAP 9.0.0** (taggen `:13.0.0` finns inte). SNAP 9 saknar reader för 2025 S2 SAFE-format. Mollösundscaset (commit 52d19ae) hade i själva verket använt en separat lokal image `imint-snap13:latest` (sha256:832b51265ba8) som var byggd från ESA officiella installer i `/opt/snap/`. Den var osynlig i versionkontroll.
+
+**Vad som är fixat:**
+- Ny `docker/c2rcc-snap/Dockerfile` baserat på `eclipse-temurin:11.0.30_7-jdk-noble` + ESA SNAP 13 Sentinel-installer (`download.esa.int/step/snap/13.0/...`). Headless install till `/opt/snap`.
+- Verifierad i k8s-diag mot Lilla Karlsö-SAFE 2025-06-13 (T33VXD): `S2OrthoProductReaderPlugIn` registrerad, Read exekverar.
+- Pinnad till CI-byggd digest `sha256:4a2c3217...` (commit f5337a9, verifierad i k8s) i `config.py` + `k8s/lilla-karlso-c2rcc-job.yaml`.
+- Pipeline-paths uppdaterade: `/usr/local/snap/bin/gpt` → `/opt/snap/bin/gpt`.
+- CI smoke-test utökad: SNAP-version + Read-operator + c2rcc.msi.
+- AOI shiftad västerut: Lilla Karlsö som östgräns (`east=18.075`, `west=17.775`), shifta västerut för att fokusera på sillgrisslornas foderhabitat (havet väster om kolonin), exkludera Gotlands fastland.
 
 **Vad som finns klart:**
 - Pipeline-kod: demos/lilla_karlso_birds/{config,fetch_safes,run_c2rcc,render}.py — fungerar
-- 3 k8s job-yamls: lilla-karlso-{fetch,c2rcc,render}-job.yaml — fetch ✓, c2rcc trasig
-- Showcase-tab: Vattenkvalitet → 2 sub-tabs (Bohuslän + Lilla Karlsö) — sub-tab live, väntar på data
+- 3 k8s job-yamls: lilla-karlso-{fetch,c2rcc,render}-job.yaml — fetch ✓, c2rcc redo (digest-pinnad)
+- Showcase-tab: Vattenkvalitet → 2 sub-tabs (Bohuslän + Lilla Karlsö) — sub-tab live, av-pausad
 - 3 SAFEs på CephFS `/data/lilla_karlso_birds/l1c_safes/` (1.5 GB):
   - 2025-04-29: S2C_MSIL1C_..._T34VCJ (FEL UTM-zon, behöver omfetcha med tile-prefer T33)
   - 2025-06-13: S2A_MSIL1C_..._T33VXD ✓
   - 2025-07-10: S2A_MSIL1C_..._T33VXD ✓
 
-**Två separata problem att lösa:**
-1. **SNAP-image rebuild** — Dockerfile som producerar fungerande Sentinel-2 reader. Antingen ny base (senbox/snap?), eller hitta vad lokala imagen 80a519fe gjorde annorlunda.
-2. **Tile-zon inkonsistens** — STAC valde T34VCJ för 2025-04-29 men T33VXD för andra datum. AOI 17.91–18.21°E spänner över UTM 33/34-gränsen. Behöver ändra fetch_l1c_safe_from_gcp att preferra T33VXD-tile, eller ändra AOI så det helt ligger i T33.
+**Återstående problem:**
+1. **Tile-zon inkonsistens** (kvarstår) — STAC valde T34VCJ för 2025-04-29. Med ny västligare AOI är T34VCJ ännu mer värdelös. Behöver tile-prefer T33VXD i `fetch_l1c_safe_from_gcp`, eller köra optimal_fetch igen för det datumet.
+2. **CI-build verifiering** — workflow run 25496453838 triggat på `claude/blissful-leakey`; vänta + verifiera nya `:latest`-digest matchar `:snap13-rebuild`.
 
 
 

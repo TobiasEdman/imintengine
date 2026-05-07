@@ -75,7 +75,7 @@ docker run --rm \
     -v "$OUT_DIR:/out" \
     -v "$GRAPH_XML:/graph.xml:ro" \
     imint-snap-c2rcc:latest \
-    /usr/local/snap/bin/gpt /graph.xml \
+    /opt/snap/bin/gpt /graph.xml \
         -PinputSafe="/in/$SAFE_NAME" \
         -PgeoRegion="$GEO_REGION" \
         -PoutputDim="/out/$OUT_NAME" \
