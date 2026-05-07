@@ -1,0 +1,195 @@
+name: Build pipeline images
+
+# Auto-bygger Docker-images i docker/<namn>/ när Dockerfile (eller
+# config-filer i samma katalog) ändras. Pushar till GitHub Container
+# Registry med signing via cosign keyless OIDC.
+#
+# Varför:
+#   CLAUDE.md "Docker- och processversionering" + governance-rapporten
+#   docs/governance/avoiding_docker_repo_skew.md kräver att varje
+#   pipeline-image kan rekonstrueras från repot. Den här workflowen
+#   bygger automatiskt vid varje commit som rör docker/, så ingen kan
+#   smyga in en lokal-bara image som inte byggs på CI.
+#
+# Vad workflowen producerar:
+#   - ghcr.io/<owner>/imint-<image>:sha-<7-char-sha>      # alltid
+#   - ghcr.io/<owner>/imint-<image>:<branch-slug>         # på feature
+#   - ghcr.io/<owner>/imint-<image>:latest                # bara på main
+#   - cosign-signaturer för alla pushade tags (keyless via GH OIDC)
+#
+# Multi-arch:
+#   - cloud-models: linux/amd64 + linux/arm64 (python-base, portable)
+#   - c2rcc-snap:   linux/amd64 only (mundialis/esa-snap är amd64-only;
+#                   ESA SNAP har Java+JNI native libs som inte byggs för arm64)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/**'
+      - '.github/workflows/build-pipeline-images.yml'
+  pull_request:
+    paths:
+      - 'docker/**'
+      - '.github/workflows/build-pipeline-images.yml'
+  workflow_dispatch:
+
+# Tillåt en run per ref åt gången — om en push triggas medan föregående
+# fortfarande bygger så avbryts den föregående.
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.image }} (${{ matrix.platforms }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read       # checkout
+      packages: write      # GHCR push
+      id-token: write      # cosign keyless OIDC
+      attestations: write  # SLSA build provenance
+
+    strategy:
+      fail-fast: false  # En image som failar ska inte stoppa de andra
+      matrix:
+        include:
+          - image: cloud-models
+            context: docker/cloud-models
+            platforms: linux/amd64,linux/arm64
+          - image: c2rcc-snap
+            context: docker/c2rcc-snap
+            platforms: linux/amd64
+            # arm64 ej möjligt: mundialis/esa-snap är amd64-only.
+            # ESA SNAP har Java + JNI native libs (GDAL etc.) som ESA
+            # inte distribuerar för arm64. Dokumenterat i Dockerfile.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # QEMU behövs för att bygga arm64 på en amd64-runner. Ingen kostnad
+      # för amd64-bara images (skip om bara linux/amd64 i platforms).
+      - name: Set up QEMU
+        if: contains(matrix.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Härlett tag-namn: ghcr.io/<owner>/imint-<image>
+      # Lowercase eftersom Docker tags måste vara lowercase.
+      - name: Compute image name
+        id: meta
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${OWNER}/imint-${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate tags
+        id: tags
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.meta.outputs.image }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=ImintEngine pipeline image: ${{ matrix.image }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: ${{ matrix.platforms }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+          # GH cache mellan body — sparar ~70% bygg-tid mellan commits
+          # som inte rör Dockerfile-layers
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: true     # SLSA build provenance
+          sbom: true           # SPDX SBOM för supply-chain
+
+      # Smoke-test: bygg amd64-variant lokalt och kör en sanity-check.
+      # Multi-arch buildx pushar direkt utan att ladda lokalt, så vi
+      # bygger en separat lokal-load-bara amd64-tag för testet.
+      - name: Smoke-test (amd64)
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag smoke-${{ matrix.image }}:test \
+            --load \
+            --cache-from type=gha,scope=${{ matrix.image }} \
+            ${{ matrix.context }}
+          case "${{ matrix.image }}" in
+            cloud-models)
+              docker run --rm smoke-${{ matrix.image }}:test python -c "import torch, s2cloudless; print('torch', torch.__version__)"
+              ;;
+            c2rcc-snap)
+              docker run --rm smoke-${{ matrix.image }}:test /usr/local/snap/bin/gpt -h 2>&1 | grep -E "c2rcc.msi|GPT 13" | head -3
+              ;;
+          esac
+
+      # Cosign keyless signering via GitHub OIDC. Ingen privat nyckel
+      # behöver hanteras — Sigstore Fulcio utfärdar ett kortlivat
+      # certifikat som binder signaturen till GitHub-workflow-runen.
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image manifest digests
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.tags.outputs.tags }}
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          # Signera content-hashen, inte taggen — taggar kan ändras,
+          # men digest är immutable. Verifiera med:
+          #   cosign verify ghcr.io/<owner>/imint-<image>@<digest> \
+          #     --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \
+          #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          for tag in ${TAGS}; do
+            cosign sign --yes "${tag}@${DIGEST}"
+          done
+
+      - name: Verify signature
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: |
+          cosign verify "${IMAGE}@${DIGEST}" \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            | jq '.[] | {Subject: .optional.Subject, Issuer: .optional.Issuer}'
+
+  # Sammanfattnings-job — failar om någon image inte byggdes,
+  # ger en enda statusrad i PR-kommentaren.
+  summary:
+    name: Build summary
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check build matrix
+        run: |
+          if [ "${{ needs.build.result }}" != "success" ]; then
+            echo "::error::En eller flera pipeline-images failade att bygga"
+            exit 1
+          fi
+          echo "Alla pipeline-images byggde och signerades OK"
