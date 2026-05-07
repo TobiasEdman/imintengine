@@ -1,0 +1,78 @@
+---
+# Job: lilla-karlso-fetch — Steg 1+2 av Lilla Karlsö C2RCC-pipelinen.
+#
+# Stage 1: optimal_fetch_dates(era5_then_scl) över 2025-04-15..07-31
+# Stage 2: fetch_l1c_safe_from_gcp för varje utvalt datum (~700 MB/scen)
+#
+# Output på training-data-cephfs:
+#   /data/lilla_karlso_birds/plan.json
+#   /data/lilla_karlso_birds/l1c_safes/<SAFE_NAME>/
+#
+# Estimerad runtime: 5–15 min (3 SAFEs × ~700 MB över ICE-uplink)
+# Estimerad PVC-disk: ~3 GB
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lilla-karlso-fetch
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 3600    # 1h hård takbegränsning
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fetcher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Lilla Karlsö Fetch — $(date) ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio shapely requests pyproj openeo pyyaml httpx
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/imintengine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              # Override paths till CephFS
+              export C2RCC_DATA_ROOT=/data/lilla_karlso_birds
+
+              python -m demos.lilla_karlso_birds.fetch_safes
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: false
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: false
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+              ephemeral-storage: "10Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+              ephemeral-storage: "10Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

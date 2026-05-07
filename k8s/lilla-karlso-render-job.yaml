@@ -1,0 +1,127 @@
+---
+# Job: lilla-karlso-render — Steg 4–6 av pipelinen.
+#
+# Läser BEAM-DIMAP från CephFS, beräknar chl/TSM/CDOM via Brockmann-
+# formler, renderar 4 PNG per scen + tidsserie, skriver MANIFEST.json.
+#
+# Output på training-data-cephfs (rsync:as ned till Mac efteråt):
+#   /data/lilla_karlso_birds/showcase/frames/<date>/{rgb,chl,tsm,cdom}.png
+#   /data/lilla_karlso_birds/showcase/timeseries.json
+#   /data/lilla_karlso_birds/showcase/MANIFEST.json
+#
+# Estimerad runtime: ~2 min (3 scener × ~30 s matplotlib + DIMAP-IO)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lilla-karlso-render
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 1800    # 30 min
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: render
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Lilla Karlsö Render — $(date) ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null
+              pip install --quiet --no-cache-dir \
+                numpy rasterio matplotlib
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/imintengine.git imintengine
+              cd /workspace/imintengine
+
+              # Override paths till CephFS — render skriver till
+              # /data/lilla_karlso_birds/showcase/ istället för
+              # docs/showcase/lilla_karlso_birds/. rsync på host hämtar
+              # sedan ner allt till rätt plats i repot.
+              export C2RCC_DATA_ROOT=/data/lilla_karlso_birds
+              # Patcha config.DOCS_OUT till en CephFS-path så vi inte
+              # behöver rätta config.py för k8s-läget.
+              python -c "
+              import demos.lilla_karlso_birds.config as c
+              from pathlib import Path
+              c.DOCS_OUT = Path('/data/lilla_karlso_birds/showcase')
+              c.FRAMES_DIR = c.DOCS_OUT / 'frames'
+              c.DOCS_OUT.mkdir(parents=True, exist_ok=True)
+              c.FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+              # Manuell run av main()-stegen
+              import json
+              from demos.lilla_karlso_birds.render import render_scene
+              from imint.exporters.manifest import write_manifest
+
+              plan = json.loads((c.SAFE_CACHE.parent / 'plan.json').read_text())
+              records = []
+              for date in plan['dates']:
+                  dimap = c.DIMAP_OUT / f'{date}.dim'
+                  if not dimap.is_file():
+                      print(f'[skip] {date}'); continue
+                  print(f'[render] {date}')
+                  rec = render_scene(date, dimap)
+                  records.append(rec)
+                  print(f\"   chl_p50={rec['chl_p50']}, n_water={rec['n_water_pixels']}\")
+
+              (c.DOCS_OUT / 'timeseries.json').write_text(json.dumps({
+                  'aoi': c.BBOX_WGS84,
+                  'period': [c.PERIOD_START, c.PERIOD_END],
+                  'records': records,
+              }, indent=2, ensure_ascii=False))
+
+              write_manifest(
+                  c.DOCS_OUT,
+                  image=c.DOCKER_IMAGE,
+                  process_files=[
+                      'docker/c2rcc-snap/Dockerfile',
+                      'docker/c2rcc-snap/c2rcc_msi_graph.xml',
+                      'docker/c2rcc-snap/run.sh',
+                      'demos/lilla_karlso_birds/render.py',
+                      'demos/lilla_karlso_birds/run_c2rcc.py',
+                      'demos/lilla_karlso_birds/fetch_safes.py',
+                      'demos/lilla_karlso_birds/config.py',
+                  ],
+                  run_args={
+                      'aoi': c.BBOX_WGS84,
+                      'period': [c.PERIOD_START, c.PERIOD_END],
+                      'max_aoi_cloud': c.MAX_AOI_CLOUD,
+                      'netset': 'C2X-Nets',
+                  },
+                  outputs=[f\"frames/{r['date']}/{k}.png\" for r in records
+                           for k in ('rgb', 'chl', 'tsm', 'cdom')] +
+                          ['timeseries.json'],
+                  extra={'n_scenes': len(records),
+                         'fenology_window': 'ägg → kläckning → ungar lämnar'},
+              )
+              print(f'manifest: {c.DOCS_OUT}/MANIFEST.json')
+              "
+
+              echo ""
+              echo "=== Output ==="
+              ls -R /data/lilla_karlso_birds/showcase/ 2>&1 | head -30
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+              ephemeral-storage: "5Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+              ephemeral-storage: "5Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

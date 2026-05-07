@@ -1,0 +1,109 @@
+---
+# Job: lilla-karlso-c2rcc — Steg 3 av pipelinen.
+#
+# Kör ESA SNAP c2rcc.msi på varje SAFE-arkiv och producerar BEAM-DIMAP.
+# Använder den signerade GHCR-imagen ghcr.io/tobiasedman/imint-c2rcc-snap.
+#
+# Strategi: en init-container klonar repot för att få graph-XML +
+# wrapper-skriptet i container-filsystemet, sedan kör main containern
+# SNAP-graphen direkt utan docker-i-docker.
+#
+# Output på training-data-cephfs:
+#   /data/lilla_karlso_birds/c2rcc_runs/<date>.dim
+#   /data/lilla_karlso_birds/c2rcc_runs/<date>.data/<band>.{img,hdr}
+#
+# Estimerad runtime: 3 scener × ~5 min på native amd64 = ~15 min
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lilla-karlso-c2rcc
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 7200    # 2h
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        # Klona repot till en delad volym så SNAP-imagen får tag i
+        # graph-XML utan att behöva git-klient i SNAP-imagen.
+        - name: fetch-repo
+          image: alpine/git:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/imintengine.git imintengine
+              ls imintengine/docker/c2rcc-snap/
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          resources:
+            requests: {cpu: "100m", memory: "256Mi"}
+            limits:   {cpu: "100m", memory: "256Mi"}
+      containers:
+        - name: c2rcc
+          image: ghcr.io/tobiasedman/imint-c2rcc-snap:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              GRAPH=/workspace/imintengine/docker/c2rcc-snap/c2rcc_msi_graph.xml
+              SAFE_DIR=/data/lilla_karlso_birds/l1c_safes
+              OUT_DIR=/data/lilla_karlso_birds/c2rcc_runs
+              mkdir -p "$OUT_DIR"
+
+              # AOI-WKT från config (Stormyran-bbox WGS84)
+              GEO_REGION="POLYGON((17.91 57.21, 18.21 57.21, 18.21 57.41, 17.91 57.41, 17.91 57.21))"
+
+              for safe in "$SAFE_DIR"/*.SAFE; do
+                if [ ! -d "$safe" ]; then continue; fi
+                # Extrahera datum från SAFE-namn: S2A_MSIL1C_20250429T100031_*
+                date=$(basename "$safe" | sed -E 's/^S2._MSIL1C_([0-9]{4})([0-9]{2})([0-9]{2}).*$/\1-\2-\3/')
+                out="$OUT_DIR/${date}.dim"
+
+                if [ -f "$out" ]; then
+                  echo "[skip] $date — $out finns redan"
+                  continue
+                fi
+
+                echo ""
+                echo "=== $(date '+%H:%M:%S')  c2rcc.msi → $date ==="
+                /usr/local/snap/bin/gpt "$GRAPH" \
+                    -PinputSafe="$safe" \
+                    -PgeoRegion="$GEO_REGION" \
+                    -PoutputDim="$out" \
+                    -e || {
+                  echo "ERR vid $date — fortsätter med nästa"
+                  continue
+                }
+
+                echo "[ok] $date — $(du -sh "$OUT_DIR/${date}.data" 2>/dev/null | cut -f1)"
+              done
+
+              echo ""
+              echo "=== Inventory ==="
+              ls -lh "$OUT_DIR"/*.dim 2>/dev/null
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              ephemeral-storage: "5Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+              ephemeral-storage: "5Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: workspace
+          emptyDir: {}

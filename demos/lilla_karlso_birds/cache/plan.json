@@ -1,0 +1,31 @@
+{
+  "mode": "era5_then_scl",
+  "dates": [
+    "2025-04-29",
+    "2025-06-13",
+    "2025-07-10"
+  ],
+  "n_candidates_after": {
+    "era5": 19,
+    "scl_pre_threshold": 50,
+    "final": 3
+  },
+  "elapsed_s": {
+    "era5": 2.83,
+    "scl_stack": 171.2
+  },
+  "notes": {
+    "max_aoi_cloud": "0.15",
+    "scene_cloud_max": "30.0"
+  },
+  "aoi": {
+    "west": 17.91,
+    "south": 57.21,
+    "east": 18.21,
+    "north": 57.41
+  },
+  "period": [
+    "2025-04-15",
+    "2025-07-31"
+  ]
+}
