@@ -134,17 +134,22 @@ När du undrar om en abstraktion finns: kör `Glob`/`Grep` först. Använd `Agen
 
 Bakgrund: i commit `52d19ae` (`feat(water_quality): real ESA C2RCC + Pahlevan MDN`) committades 9 PNG-resultat utan att Dockerfile, SNAP graph-XML eller run-skript var versionerade. Sex månader senare gick det inte att replikera pipelinen för en ny AOI/period utan reverse-engineering. Se [governance-rapporten](docs/governance/avoiding_docker_repo_skew.md) för full analys.
 
-### Per pipeline-image — sju-punkts-checklista
+### Per pipeline-image — tolv-punkts-checklista
 
 För varje Docker-image som körs i en pipeline ska repot innehålla:
 
 1. **`docker/<namn>/Dockerfile`** — bygger imagen från scratch utan host-beroenden.
-2. **Pinnade FROM-tags.** Aldrig `:latest`. Använd `mundialis/esa-snap:13.0.0`, `python:3.11.9-slim-bookworm`, etc.
+2. **Pinnade FROM via digest, INTE bara tag.** `FROM mundialis/esa-snap@sha256:056f971...`, inte `:13.0.0` eller `:latest`. Tag-pinning räcker inte — tagen kan ompekas av registry-ägaren, eller existera bara i din fantasi (pause-incident 2026-05-07: `:13.0.0` fanns aldrig).
 3. **Build-skript** (`build.sh` eller `Makefile`-target) som producerar samma tag-namn som körnings-skript förväntar sig.
 4. **Run-skript** (`run.sh` eller Python-driver) — wrapper som tar input/output-paths och AOI-parametrar.
 5. **Eventuella config-filer** (SNAP graph-XML, JSON-config, etc.) i samma katalog.
 6. **README.md** i `docker/<namn>/` som beskriver bakgrund, build, kör-exempel, output-format.
 7. **MANIFEST.json sidecar** i output-katalogen med `{image, image_digest, git_sha, run_args, input_data_hash, produced_at}` — så det går att binda PNG-filerna till exakt build + commit som producerade dem.
+8. **Smoke-test som verifierar runtime, INTE bara att operatorer existerar.** Pause-incident 2026-05-07: `gpt -h | grep c2rcc.msi` lyckades på SNAP 9, men SNAP 9 saknade S2 product reader för 2025 SAFE-format. Smoke-tester ska minst verifiera: runtime-version (`cat /opt/snap/VERSION.txt`), att kärn-operatorerna i pipelinen finns (Read + c2rcc.msi), helst end-to-end mot en versionerad fixture-SAFE.
+9. **k8s-yamls och `docker run`-anrop ska pinna till digest, INTE tag.** `image: ghcr.io/foo/bar@sha256:abc...`, inte `:latest` eller `:v1`. Mutable tags i pipeline = body-skifte.
+10. **Lokal-image-vs-Dockerfile-reconciliation.** Om `docker images` visar en image som körs i pipeline (t.ex. `imint-snap13:latest`) men ingen Dockerfile i repot producerar den: STOPP. Bygg inte om från `docker history`-antaganden — det kan ge en helt annan image (mundialis SNAP 9 istället för ESA SNAP 13). Använd `docker save` + lager-inspektion eller bygg om från scratch + bevisa bit-ekvivalens.
+11. **MANIFEST.json är obligatorisk för committade artefakter under `outputs/showcase/` och `docs/showcase/`.** Föreslagen lint: `tests/test_committed_outputs_have_manifest`.
+12. **Governance-dokument ska ha motsvarande tester.** Varje regel i `docs/governance/*.md` ska ha en motsvarande `test_*` i `tests/test_repo_hygiene.py`. Otestbar regel = drift:ande regel (pause-incident 2026-05-07: `/usr/local/snap` och `:13.0.0` stod genomgående i docs men matchade aldrig den faktiska fungerande imagen).
 
 Referens-implementation: [`docker/cloud-models/`](docker/cloud-models/) (cloud-detection-jämförelsen) + [`docker/c2rcc-snap/`](docker/c2rcc-snap/) (ESA SNAP C2RCC).
 
