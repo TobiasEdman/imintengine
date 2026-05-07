@@ -9,7 +9,7 @@
 **Vad som är fixat:**
 - Ny `docker/c2rcc-snap/Dockerfile` baserat på `eclipse-temurin:11.0.30_7-jdk-noble` + ESA SNAP 13 Sentinel-installer (`download.esa.int/step/snap/13.0/...`). Headless install till `/opt/snap`.
 - Verifierad i k8s-diag mot Lilla Karlsö-SAFE 2025-06-13 (T33VXD): `S2OrthoProductReaderPlugIn` registrerad, Read exekverar.
-- Pinnad till digest `sha256:a9328af2ecbb...` i `config.py` + `k8s/lilla-karlso-c2rcc-job.yaml`.
+- Pinnad till CI-byggd digest `sha256:4a2c3217...` (commit f5337a9, verifierad i k8s) i `config.py` + `k8s/lilla-karlso-c2rcc-job.yaml`.
 - Pipeline-paths uppdaterade: `/usr/local/snap/bin/gpt` → `/opt/snap/bin/gpt`.
 - CI smoke-test utökad: SNAP-version + Read-operator + c2rcc.msi.
 - AOI shiftad västerut: Lilla Karlsö som östgräns (`east=18.075`, `west=17.775`), shifta västerut för att fokusera på sillgrisslornas foderhabitat (havet väster om kolonin), exkludera Gotlands fastland.

@@ -49,16 +49,22 @@ DATE_WINDOW = 0            # Exakt-datum-match — optimal_fetch redan bestämt
 # ── C2RCC ────────────────────────────────────────────────────────────────
 # Pin till digest, INTE :latest — pause-incident 2026-05-07 visade att
 # CI byggde en :latest från en mundialis-baserad Dockerfile som råkar ge
-# SNAP 9 (tot 2025 SAFE-format saknar reader). Den verifierat fungerande
-# imagen är imint-snap13:latest (sha256:832b51265ba8) lokalt, pushad till
-# GHCR som :snap13-rebuild med digest sha256:a9328af2ecbb...
+# SNAP 9 (tot 2025 SAFE-format saknar reader). Plus: feature-branches
+# tag:as inte som :latest överhuvudtaget (workflow enable on main only).
 #
-# Verifiering 2026-05-07 i k8s-diag mot Lilla Karlsö-SAFE 2025-06-13
-# (T33VXD): S2OrthoProductReaderPlugIn registrerad, Read exekverar.
+# Pinnad till CI-byggd image från commit f5337a9 (claude/blissful-leakey),
+# verifierad 2026-05-07 i k8s-diag mot Lilla Karlsö-SAFE 2025-06-13
+# (T33VXD): Ubuntu 24.04 base, SNAP 13 i /opt/snap, S2OrthoProductReaderPlugIn
+# registrerad för EPSG:32633, Read exekverar (OOM på 4 GiB testpod, 16 GiB
+# i produktionsjobb räcker enligt Mollösundscaset).
+#
+# När branchen mergas till main: CI bygger ny image med ny digest. Uppdatera
+# denna pin till nya digesten (CI tag:ar ny som :latest på main, sha-tag på
+# alla branches).
 DOCKER_IMAGE = os.environ.get(
     "C2RCC_IMAGE",
     "ghcr.io/tobiasedman/imint-c2rcc-snap"
-    "@sha256:a9328af2ecbb8286a019b1c13b1693897348a0cae11a4aac892cc9ba8e40bc8d",
+    "@sha256:4a2c3217d156a69adddf371eee5511747551911f1cb40fbddf2764a13c0e1aef",
 )
 
 

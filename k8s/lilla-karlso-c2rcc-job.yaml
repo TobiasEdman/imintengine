@@ -45,9 +45,10 @@ spec:
             limits:   {cpu: "100m", memory: "256Mi"}
       containers:
         - name: c2rcc
-          # Pin till digest — :latest är inte trovärdig (SNAP 9-rebuild 2026-05-07).
-          # :snap13-rebuild är verifierat fungerande SNAP 13 + S2 reader.
-          image: ghcr.io/tobiasedman/imint-c2rcc-snap@sha256:a9328af2ecbb8286a019b1c13b1693897348a0cae11a4aac892cc9ba8e40bc8d
+          # Pin till digest — :latest är inte trovärdig (SNAP 9-rebuild 2026-05-07,
+          # plus feature-branches tag:as inte som :latest). Pinnat till CI-byggd
+          # image från commit f5337a9, verifierad i k8s mot Lilla Karlsö-SAFE.
+          image: ghcr.io/tobiasedman/imint-c2rcc-snap@sha256:4a2c3217d156a69adddf371eee5511747551911f1cb40fbddf2764a13c0e1aef
           command:
             - /bin/sh
             - -c

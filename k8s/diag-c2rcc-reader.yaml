@@ -18,13 +18,13 @@ metadata:
   namespace: prithvi-training-default
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 600  # 10 min
+  activeDeadlineSeconds: 1800  # 30 min — första-pull av 3 GB image kan ta 10+ min
   template:
     spec:
       restartPolicy: Never
       containers:
         - name: diag
-          image: ghcr.io/tobiasedman/imint-c2rcc-snap:snap13-rebuild
+          image: ghcr.io/tobiasedman/imint-c2rcc-snap@sha256:4a2c3217d156a69adddf371eee5511747551911f1cb40fbddf2764a13c0e1aef
           command:
             - /bin/sh
             - -c
