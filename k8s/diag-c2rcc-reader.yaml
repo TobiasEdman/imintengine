@@ -1,0 +1,77 @@
+---
+# Diagnostic job: verifiera om ghcr.io/tobiasedman/imint-c2rcc-snap:latest
+# kan läsa Sentinel-2 L1C SAFE via SNAP Read-operatorn.
+#
+# Kör mot en av Lilla Karlsö-SAFEs som redan ligger på CephFS från
+# fetch-jobbet 2026-05-07 (commit 8a1e353). Loggar Read-output direkt
+# så vi får exakt felmeddelande om reader saknas, eller success-output
+# om den faktiskt fungerar.
+#
+# Bakgrund: pause-commit 5e9606f hävdar att CI-imagen failar med
+# "No product reader found", men docker history visar att samma image
+# har identiskt innehåll som lokalt fungerande imint-snap-c2rcc:latest.
+# Detta jobb avgör frågan.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: diag-c2rcc-reader
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600  # 10 min
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: diag
+          image: ghcr.io/tobiasedman/imint-c2rcc-snap:snap13-rebuild
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set +e
+              echo "=== Pod arch + image info ==="
+              uname -a
+              echo "Image: $(cat /etc/os-release 2>/dev/null | head -3)"
+              echo ""
+              echo "=== SAFE inventory på CephFS ==="
+              ls -d /data/lilla_karlso_birds/l1c_safes/*.SAFE 2>&1 | head -5
+              SAFE=$(ls -d /data/lilla_karlso_birds/l1c_safes/*T33VXD*.SAFE 2>/dev/null | head -1)
+              if [ -z "$SAFE" ]; then
+                echo "No T33VXD SAFE found, falling back to first available"
+                SAFE=$(ls -d /data/lilla_karlso_birds/l1c_safes/*.SAFE 2>/dev/null | head -1)
+              fi
+              echo ""
+              echo "=== Test SAFE: $SAFE ==="
+              ls "$SAFE/MTD_MSIL1C.xml" 2>&1
+              echo ""
+              echo "=== gpt -h Read (verify Read operator) ==="
+              /opt/snap/bin/gpt -h Read 2>&1 | head -8
+              echo ""
+              echo "=== LIVE Read test: gpt Read -Pfile=\$SAFE -t /tmp/out.dim ==="
+              /opt/snap/bin/gpt Read -Pfile="$SAFE" -t /tmp/out.dim 2>&1 | tail -40
+              READ_RC=$?
+              echo "Read exit code: $READ_RC"
+              echo ""
+              echo "=== Output check ==="
+              ls -la /tmp/out.dim 2>&1
+              ls /tmp/out.data/ 2>&1 | head -10
+              echo ""
+              echo "=== Done ==="
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+              ephemeral-storage: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+              ephemeral-storage: "2Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

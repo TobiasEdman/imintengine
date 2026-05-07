@@ -72,7 +72,7 @@ spec:
 
                 echo ""
                 echo "=== $(date '+%H:%M:%S')  c2rcc.msi → $date ==="
-                /usr/local/snap/bin/gpt "$GRAPH" \
+                /opt/snap/bin/gpt "$GRAPH" \
                     -PinputSafe="$safe" \
                     -PgeoRegion="$GEO_REGION" \
                     -PoutputDim="$out" \
