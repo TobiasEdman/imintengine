@@ -43,6 +43,32 @@ spec:
           resources:
             requests: {cpu: "100m", memory: "256Mi"}
             limits:   {cpu: "100m", memory: "256Mi"}
+
+        # Extrahera AOI-WKT från config.py (single source of truth).
+        # Skriver POLYGON-strängen till /workspace/aoi.wkt som main container
+        # läser. Undviker AOI-hardcoding i k8s-yaml som dirfter från Python-config.
+        - name: extract-aoi
+          image: python:3.11.9-slim-bookworm
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              cd /workspace/imintengine
+              python -c "
+              from demos.lilla_karlso_birds.config import BBOX_WGS84 as b
+              w, s, e, n = b['west'], b['south'], b['east'], b['north']
+              wkt = f'POLYGON(({w} {s}, {e} {s}, {e} {n}, {w} {n}, {w} {s}))'
+              print(wkt)
+              open('/workspace/aoi.wkt', 'w').write(wkt + chr(10))
+              "
+              echo "AOI WKT: $(cat /workspace/aoi.wkt)"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          resources:
+            requests: {cpu: "100m", memory: "128Mi"}
+            limits:   {cpu: "100m", memory: "128Mi"}
       containers:
         - name: c2rcc
           # Pin till digest — :latest är inte trovärdig (SNAP 9-rebuild 2026-05-07,
@@ -59,8 +85,10 @@ spec:
               OUT_DIR=/data/lilla_karlso_birds/c2rcc_runs
               mkdir -p "$OUT_DIR"
 
-              # AOI-WKT från config (Stormyran-bbox WGS84)
-              GEO_REGION="POLYGON((17.91 57.21, 18.21 57.21, 18.21 57.41, 17.91 57.41, 17.91 57.21))"
+              # AOI-WKT extraherad från demos/lilla_karlso_birds/config.py av
+              # extract-aoi-initcontainer. Single source of truth, ingen drift.
+              GEO_REGION=$(cat /workspace/aoi.wkt)
+              echo "[c2rcc] AOI: $GEO_REGION"
 
               for safe in "$SAFE_DIR"/*.SAFE; do
                 if [ ! -d "$safe" ]; then continue; fi
