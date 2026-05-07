@@ -1,0 +1,146 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fas1-fillgaps-256
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: fas1-fillgaps-256
+spec:
+  backoffLimit: 0
+  # Three sequential phases against /data/unified_v2:
+  #   1. SKG (height/volume/basal_area/diameter) + DEM   ~6300 tiles, ~25 min
+  #   2. tessera fill-gaps                               ~47 tiles, ~5 min
+  #   3. build_labels for tiles missing nmd_label_raw    ~1398 tiles, ~15 min
+  # Total ~45 min. 3h cap.
+  # Sequential because all three steps read+modify+write the same .npz —
+  # parallel pods would race on the atomic-write rename.
+  activeDeadlineSeconds: 10800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: f
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Fas 1 fillgaps 256 ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj pyarrow Pillow \
+                geopandas shapely geotessera pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # Wire SKG endpoints if the secret exists (optional — fetcher
+              # has a hardcoded fallback URL).
+              if [ -f /etc/skg/skg_endpoints ]; then
+                  cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
+              fi
+
+              echo ""
+              echo "Disk before:"
+              df -h /data | tail -1
+
+              # ── Phase 1: SKG + DEM ─────────────────────────────────────
+              echo ""
+              echo "=== Phase 1: SKG (height/volume/basal_area/diameter) + DEM ==="
+              python scripts/prefetch_aux.py \
+                --data-dir /data/unified_v2 \
+                --channels height volume basal_area diameter dem \
+                --workers 8
+
+              # ── Phase 2: tessera fill-gaps ─────────────────────────────
+              # skip-existing handles the 8243 tiles that already have it;
+              # only the ~47 missing get fetched.
+              echo ""
+              echo "=== Phase 2: tessera fill-gaps ==="
+              mkdir -p /tessera_cache/embeddings /tessera_cache/registry
+              python scripts/enrich_tiles_tessera.py \
+                --data-dir /data/unified_v2 \
+                --embeddings-dir /tessera_cache/embeddings \
+                --registry-cache-dir /tessera_cache/registry \
+                --workers 4 \
+                --cache-soft-gb 20 \
+                --skip-existing
+
+              # ── Phase 3: build_labels for tiles missing nmd_label_raw ──
+              echo ""
+              echo "=== Phase 3: build_labels for missing nmd_label_raw ==="
+              python3 - <<'PY' > /tmp/missing_nmd_ids.txt
+              import glob, numpy as np
+              ids = []
+              for f in sorted(glob.glob("/data/unified_v2/*.npz")):
+                  try:
+                      with np.load(f, allow_pickle=True) as d:
+                          if "nmd_label_raw" not in d.files:
+                              ids.append(f.split("/")[-1].replace(".npz", ""))
+                  except Exception:
+                      pass
+              print("\n".join(ids))
+              PY
+              N=$(wc -l < /tmp/missing_nmd_ids.txt)
+              echo "Tiles missing nmd_label_raw: $N"
+              if [ "$N" -gt 0 ]; then
+                  python scripts/build_labels.py \
+                    --data-dir /data/unified_v2 \
+                    --nmd-raster /data-cephfs/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
+                    --lpis-dir /data-cephfs/lpis \
+                    --sks-dir /data-cephfs/sks \
+                    --workers 4 \
+                    --executor thread \
+                    --tile-ids $(cat /tmp/missing_nmd_ids.txt | tr '\n' ' ')
+              else
+                  echo "  Nothing to do."
+              fi
+
+              echo ""
+              echo "Disk after:"
+              df -h /data | tail -1
+              echo "=== Fas 1 fillgaps 256 DONE: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "96Gi"
+            limits:
+              cpu: "8"
+              memory: "96Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            # cephfs needed for build_labels reference data (NMD/LPIS/SKS)
+            # and for the tessera cache. Mounted as separate path so we
+            # can keep /data == 256 dataset.
+            - name: training-data-cephfs
+              mountPath: /data-cephfs
+            - name: training-data-cephfs
+              mountPath: /tessera_cache
+              subPath: tessera_cache
+          # SKG endpoints secret is optional; if it doesn't exist the
+          # fetchers fall back to the hardcoded public URL.
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: training-data-cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

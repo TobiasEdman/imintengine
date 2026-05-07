@@ -1,0 +1,98 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fas1-fillgaps-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: fas1-fillgaps-512
+spec:
+  backoffLimit: 0
+  # Two sequential phases against /data/unified_v2_512:
+  #   1. SKG + DEM fill-gaps                ~89 tiles, ~2 min
+  #   2. tessera + markfukt fill-gaps       ~92 tiles each, ~10 min
+  # Both atomic-rewrite the same .npz, so sequential to avoid races.
+  # Total ~15 min. 1h cap.
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: f
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Fas 1 fillgaps 512 ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj pyarrow Pillow \
+                geopandas shapely geotessera pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "Disk before:"
+              df -h /data | tail -1
+
+              # ── Phase 1: SKG + DEM + markfukt fill-gaps ────────────────
+              # skip-existing handles the 7025 tiles that already have all
+              # five channels; only ~89 missing get fetched.
+              echo ""
+              echo "=== Phase 1: SKG + DEM + markfukt fill-gaps ==="
+              python scripts/prefetch_aux.py \
+                --data-dir /data/unified_v2_512 \
+                --channels height volume basal_area diameter dem markfukt \
+                --workers 8
+
+              # ── Phase 2: tessera fill-gaps ─────────────────────────────
+              echo ""
+              echo "=== Phase 2: tessera fill-gaps ==="
+              mkdir -p /tessera_cache/embeddings /tessera_cache/registry
+              python scripts/enrich_tiles_tessera.py \
+                --data-dir /data/unified_v2_512 \
+                --embeddings-dir /tessera_cache/embeddings \
+                --registry-cache-dir /tessera_cache/registry \
+                --workers 4 \
+                --cache-soft-gb 20 \
+                --skip-existing
+
+              echo ""
+              echo "Disk after:"
+              df -h /data | tail -1
+              echo "=== Fas 1 fillgaps 512 DONE: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: training-data
+              mountPath: /tessera_cache
+              subPath: tessera_cache
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
