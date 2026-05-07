@@ -43,7 +43,7 @@ spec:
                 git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
               pip install --quiet --no-cache-dir \
                 numpy scipy rasterio requests pyproj pyarrow Pillow \
-                openeo geopandas shapely
+                openeo geopandas shapely geotessera pyyaml
 
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 \
