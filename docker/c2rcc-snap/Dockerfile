@@ -20,7 +20,11 @@
 #   - imint.fetch.fetch_l1c_safe_from_gcp                (SAFE-arkiv)
 #   - imint.analyzers.water_quality.analyzer             (chl/TSM/CDOM-formler)
 
-FROM mundialis/esa-snap:latest
+# Pinned via digest istället för :latest för reproducerbara builds.
+# Image: mundialis/esa-snap (taggad latest 2026-03-26, linux/amd64).
+# För att uppdatera: `docker pull mundialis/esa-snap:latest && docker
+# inspect <id> --format '{{index .RepoDigests 0}}'`.
+FROM mundialis/esa-snap@sha256:056f971a993907cee0d24e8d94c1342fa86d4017ca1a757ffcbea437365deb35
 
 # SNAP-pluginer för Sentinel-2 + C2RCC-retrieval.
 # `--update-all` säkerställer att modulindex är fresh innan install.

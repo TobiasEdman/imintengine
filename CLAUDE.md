@@ -130,6 +130,32 @@ Innan du skriver en ny lösning, sök i repot. Det här är en genomtänkt arkit
 
 När du undrar om en abstraktion finns: kör `Glob`/`Grep` först. Använd `Agent`-Explore om scope är osäkert. Duplicering kostar tid (för dig) och städning (för användaren).
 
+## Docker- och processversionering — undvik repo-skew
+
+Bakgrund: i commit `52d19ae` (`feat(water_quality): real ESA C2RCC + Pahlevan MDN`) committades 9 PNG-resultat utan att Dockerfile, SNAP graph-XML eller run-skript var versionerade. Sex månader senare gick det inte att replikera pipelinen för en ny AOI/period utan reverse-engineering. Se [governance-rapporten](docs/governance/avoiding_docker_repo_skew.md) för full analys.
+
+### Per pipeline-image — sju-punkts-checklista
+
+För varje Docker-image som körs i en pipeline ska repot innehålla:
+
+1. **`docker/<namn>/Dockerfile`** — bygger imagen från scratch utan host-beroenden.
+2. **Pinnade FROM-tags.** Aldrig `:latest`. Använd `mundialis/esa-snap:13.0.0`, `python:3.11.9-slim-bookworm`, etc.
+3. **Build-skript** (`build.sh` eller `Makefile`-target) som producerar samma tag-namn som körnings-skript förväntar sig.
+4. **Run-skript** (`run.sh` eller Python-driver) — wrapper som tar input/output-paths och AOI-parametrar.
+5. **Eventuella config-filer** (SNAP graph-XML, JSON-config, etc.) i samma katalog.
+6. **README.md** i `docker/<namn>/` som beskriver bakgrund, build, kör-exempel, output-format.
+7. **MANIFEST.json sidecar** i output-katalogen med `{image, image_digest, git_sha, run_args, input_data_hash, produced_at}` — så det går att binda PNG-filerna till exakt build + commit som producerade dem.
+
+Referens-implementation: [`docker/cloud-models/`](docker/cloud-models/) (cloud-detection-jämförelsen) + [`docker/c2rcc-snap/`](docker/c2rcc-snap/) (ESA SNAP C2RCC).
+
+### Nolltolerans
+
+- **Aldrig `:latest` i FROM eller `docker run`.** Använd explicita versioner.
+- **`docker run X` i Python/shell kräver Dockerfile för X i repot.** Lint-test i `tests/test_repo_hygiene.py` blockerar PR där detta inte stämmer.
+- **Output-artefakter får inte committas innan processen som producerade dem är committad.** Order: process → output, aldrig tvärtom.
+- **Image-tag → git-SHA-mappning.** Ingår i MANIFEST.json eller commit-meddelandet som committar artefakter.
+- **Lokalt-bara image får ALDRIG användas i en pipeline.** Om `docker images` har en image som inte har Dockerfile i repot — bygg om den från Dockerfile innan du använder den.
+
 ## Kodgranskningsstandard — obligatorisk vid alla kodändringar
 
 **Agenten ska alltid följa detta arbetsflöde vid granskning och korrigering av kod:**
