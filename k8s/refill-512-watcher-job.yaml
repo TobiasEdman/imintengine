@@ -1,0 +1,273 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: refill-512-watcher
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: refill-512-after-markfukt
+spec:
+  backoffLimit: 0
+  # Phases (sequential, all atomic-skip-existing safe to re-run):
+  #   0. Wait for enrich-512-markfukt to finish (poll every 60 s)
+  #   1. Inventory: classify missing tiles into Klass A / Klass B
+  #      → writes /data/debug/missing_512_inventory.json
+  #   2. Klass A refetch: 188 corrupted-name tiles via fetch_unified_tiles
+  #      from-json (DES openEO, PU-free)
+  #   3. build_labels for the new tiles only (--tile-ids)
+  #   4. enrichment: SKG+DEM+rededge(DES)+tessera+markfukt for new tiles
+  #   STOP. Klass B (~1003 fully missing) requires user decision.
+  #
+  # Total ETA: 0.5 h fetch + 0.1 h labels + ~2 h enrichment = ~3 h.
+  # 6h cap with margin.
+  activeDeadlineSeconds: 21600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: w
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== refill-512 watcher ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj pyarrow Pillow \
+                openeo geopandas shapely
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # ── Phase 0: wait for markfukt-512 ─────────────────────────
+              # Poll the dataset directly: count tiles WITHOUT a markfukt
+              # key and wait until that count is stable for 3 consecutive
+              # minutes (= markfukt job has stopped writing). This avoids
+              # needing kubectl RBAC inside the pod.
+              echo ""
+              echo "=== Phase 0: Wait for markfukt-512 (poll tiles without key) ==="
+              prev_missing=-1
+              stable_count=0
+              while true; do
+                  missing=$(python3 -c "
+              import glob, numpy as np
+              n = 0
+              for f in glob.glob('/data/unified_v2_512/*.npz'):
+                  try:
+                      with np.load(f, allow_pickle=True) as d:
+                          if 'markfukt' not in d.files:
+                              n += 1
+                  except Exception:
+                      pass
+              print(n)
+              ")
+                  echo "  $(date -u +%H:%M:%SZ) tiles without markfukt: $missing"
+                  if [ "$missing" = "$prev_missing" ]; then
+                      stable_count=$((stable_count + 1))
+                      if [ $stable_count -ge 3 ]; then
+                          echo "  Stable for 3 polls — assuming markfukt-512 is done."
+                          break
+                      fi
+                  else
+                      stable_count=0
+                  fi
+                  prev_missing=$missing
+                  sleep 60
+              done
+
+              # ── Phase 1: inventory ─────────────────────────────────────
+              echo ""
+              echo "=== Phase 1: Inventory missing 512 tiles ==="
+              mkdir -p /data/debug
+              python3 - <<'PY'
+              import os, json, glob, re
+              from collections import Counter
+
+              live_dir = "/data/unified_v2_512"
+              corr_dir = "/data/unified_v2_512_corrupted"
+              ref_dir  = "/data/unified_v2"
+
+              live = {os.path.basename(f).replace(".npz","")
+                      for f in glob.glob(os.path.join(live_dir, "*.npz"))}
+              corr = {os.path.basename(f).replace(".npz","")
+                      for f in glob.glob(os.path.join(corr_dir, "*.npz"))}
+              ref  = {os.path.basename(f).replace(".npz","")
+                      for f in glob.glob(os.path.join(ref_dir, "*.npz"))}
+
+              # Klass A = quarantined-corrupted (have name → can derive bbox)
+              klass_a = sorted(corr - live)
+              # Klass B = present in 256 ref but neither in live nor in corrupted
+              klass_b = sorted((ref - live) - corr)
+
+              print(f"  256 ref:        {len(ref)}")
+              print(f"  512 live:       {len(live)}")
+              print(f"  512 corrupted:  {len(corr)}")
+              print(f"  Klass A (corrupted, refetchable): {len(klass_a)}")
+              print(f"  Klass B (truly missing from 512): {len(klass_b)}")
+
+              # Klass A name kinds
+              re_tile = re.compile(r"^tile_(\d+)_(\d+)$")
+              re_pref = re.compile(r"^(?:crop|urban)_.*_(\d+)_(\d+)$")
+              kinds_a = Counter()
+              klass_a_jsons = []
+              unparseable = []
+              for n in klass_a:
+                  m = re_tile.match(n) or re_pref.match(n)
+                  if m:
+                      e, north = int(m.group(1)), int(m.group(2))
+                      half = 512 * 10 // 2  # 2560 m
+                      bbox = [e - half, north - half, e + half, north + half]
+                      klass_a_jsons.append({
+                          "name": n,
+                          "source": "urban" if n.startswith("urban_") else
+                                    "crop" if n.startswith("crop_") else "lulc",
+                          "bbox_3006": bbox,
+                      })
+                      kinds_a[n.split("_")[0] if "_" in n else "numeric"] += 1
+                  else:
+                      unparseable.append(n)
+              print(f"  Klass A kinds: {dict(kinds_a)}, unparseable: {len(unparseable)}")
+
+              with open("/data/debug/klass_a_locs.json", "w") as f:
+                  json.dump(klass_a_jsons, f, indent=2)
+              with open("/data/debug/missing_512_inventory.json", "w") as f:
+                  json.dump({
+                      "ref_256": len(ref),
+                      "live_512": len(live),
+                      "corrupted_512": len(corr),
+                      "klass_a_count": len(klass_a),
+                      "klass_a_kinds": dict(kinds_a),
+                      "klass_a_unparseable": unparseable[:20],
+                      "klass_b_count": len(klass_b),
+                      "klass_b_sample": klass_b[:20],
+                  }, f, indent=2)
+              print(f"  Wrote /data/debug/klass_a_locs.json ({len(klass_a_jsons)} tiles)")
+              print(f"  Wrote /data/debug/missing_512_inventory.json (summary)")
+              PY
+
+              KLASS_A_COUNT=$(python3 -c "import json; print(len(json.load(open('/data/debug/klass_a_locs.json'))))")
+              echo ""
+              echo "Klass A tiles to refetch: $KLASS_A_COUNT"
+              if [ "$KLASS_A_COUNT" = "0" ]; then
+                  echo "Nothing to do for Klass A — skipping to Klass B decision gate."
+                  exit 0
+              fi
+
+              # ── Phase 2: Klass A refetch (DES openEO, PU-free) ────────
+              echo ""
+              echo "=== Phase 2: Refetch Klass A spectral via DES openEO ==="
+              python scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json /data/debug/klass_a_locs.json \
+                --output-dir /data/unified_v2_512 \
+                --tile-size-px 512 \
+                --workers 4 \
+                --fetch-sources des,cdse \
+                --years 2018 2019 2022 2023
+
+              # ── Phase 3: build labels for newly-fetched tiles ──────────
+              echo ""
+              echo "=== Phase 3: Build labels for new tiles ==="
+              # Only target the Klass A names (skip-on-name handled by --tile-ids)
+              IDS=$(python3 -c "import json; ids = [t['name'] for t in json.load(open('/data/debug/klass_a_locs.json'))]; print(' '.join(ids))")
+              python scripts/build_labels.py \
+                --data-dir /data/unified_v2_512 \
+                --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
+                --lpis-dir /data/lpis \
+                --sks-dir /data/sks \
+                --workers 4 \
+                --executor thread \
+                --tile-ids $IDS
+
+              # ── Phase 4: enrichment for new tiles ──────────────────────
+              # prefetch_aux is idempotent (skips tiles where the channel
+              # already exists), so running it against the full directory
+              # will only touch the new tiles. SKG/DEM/markfukt are free,
+              # rededge via DES is free, tessera via geotessera is free.
+              echo ""
+              echo "=== Phase 4a: SKG + DEM + markfukt ==="
+              python scripts/prefetch_aux.py \
+                --data-dir /data/unified_v2_512 \
+                --channels height volume basal_area diameter dem markfukt \
+                --workers 8
+
+              echo ""
+              echo "=== Phase 4b: rededge (DES openEO) ==="
+              python scripts/enrich_tiles_rededge.py \
+                --data-dir /data/unified_v2_512 \
+                --source des \
+                --workers 4 \
+                --skip-existing
+
+              echo ""
+              echo "=== Phase 4c: tessera (LRU cache) ==="
+              mkdir -p /tessera_cache/embeddings /tessera_cache/registry
+              python scripts/enrich_tiles_tessera.py \
+                --data-dir /data/unified_v2_512 \
+                --embeddings-dir /tessera_cache/embeddings \
+                --registry-cache-dir /tessera_cache/registry \
+                --workers 4 \
+                --cache-soft-gb 20 \
+                --skip-existing
+
+              echo ""
+              echo "=== refill-512 (Klass A) DONE: $(date) ==="
+              echo "Klass B (~1003 truly-missing tiles) deferred — see"
+              echo "/data/debug/missing_512_inventory.json for klass_b_sample."
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            # Tessera cache shares the cephfs PVC as /data but mounted at
+            # a sibling path so geotessera writes don't collide with our
+            # tile-rewriter (which only touches /data/unified_v2_512/*.npz).
+            - name: training-data
+              mountPath: /tessera_cache
+              subPath: tessera_cache
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
