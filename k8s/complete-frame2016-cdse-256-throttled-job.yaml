@@ -1,0 +1,96 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: complete-frame2016-cdse-256-throttled
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: frame2016-256-cdse-throttled
+spec:
+  backoffLimit: 0
+  # /data/unified_v2 has 2823 tiles missing frame_2016 (audit 2026-05-08).
+  # ~5 PU/fetch via CDSE Process API → ~14k PU total. Capped at 100/h
+  # so the run takes ~28 h walltime — fits well within the 25k PU left
+  # for May (per user 2026-05-08).
+  # 5 days cap for safety margin.
+  activeDeadlineSeconds: 432000
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: f
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== frame_2016 CDSE-completion 256 (throttled 100/h) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              # Verify the rate-limit shim is in cloned source
+              echo ""
+              echo "Verifying --max-per-hour is in cloned source:"
+              grep -n "_wait_for_rate_limit\|--max-per-hour" \
+                scripts/add_background_frame.py | head -3 \
+                || { echo "rate limiter NOT PRESENT — abort"; exit 1; }
+
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "Tile inventory:"
+              echo "  /data/unified_v2: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l) tiles"
+
+              # default skip-existing is true (has_frame_2016 == 1 → skip).
+              # 4 workers + global 100/h cap. Workers absorb network
+              # latency; the cap is the real throttle.
+              python scripts/add_background_frame.py \
+                --data-dir /data/unified_v2 \
+                --workers 4 \
+                --max-per-hour 100
+
+              echo ""
+              echo "=== Done: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data

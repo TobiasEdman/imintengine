@@ -52,6 +52,40 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+# Global rate limiter — sliding-window cap on the number of CDSE Process
+# API fetches per hour (same pattern as enrich_tiles_rededge.py). Used to
+# spread PU consumption over time so a multi-thousand-frame backfill
+# doesn't burn the entire monthly free tier in a single burst.
+_RATE_LOCK = threading.Lock()
+_RATE_TIMES: list = []
+_RATE_MAX_PER_HOUR = 0  # 0 = unlimited
+
+
+def _set_rate_limit(max_per_hour: int) -> None:
+    """Configure the global cap. 0 disables throttling."""
+    global _RATE_MAX_PER_HOUR
+    _RATE_MAX_PER_HOUR = int(max_per_hour)
+
+
+def _wait_for_rate_limit() -> None:
+    """Block until a fresh fetch is allowed under the configured cap."""
+    if _RATE_MAX_PER_HOUR <= 0:
+        return
+    while True:
+        with _RATE_LOCK:
+            now = time.time()
+            cutoff = now - 3600.0
+            i = 0
+            while i < len(_RATE_TIMES) and _RATE_TIMES[i] <= cutoff:
+                i += 1
+            if i:
+                del _RATE_TIMES[:i]
+            if len(_RATE_TIMES) < _RATE_MAX_PER_HOUR:
+                _RATE_TIMES.append(now)
+                return
+            wait_s = _RATE_TIMES[0] + 3600.0 - now
+        time.sleep(max(1.0, min(wait_s + 0.5, 60.0)))
+
 from imint.training.tile_fetch import (
     N_BANDS,
     fetch_background_frame,
@@ -109,7 +143,9 @@ def _process_tile(path: Path, skip_existing: bool) -> str:
         _inc(done=1, fail=1)
         return f"NO_BBOX {name}"
 
-    # Fetch background frame
+    # Fetch background frame — gate on the global rate-limiter so the
+    # PU budget is spread across the configured time window.
+    _wait_for_rate_limit()
     result = fetch_background_frame(bbox_3006, tile_cfg)
 
     if result is not None:
@@ -167,7 +203,16 @@ def main() -> None:
                    help="Re-fetch even if has_frame_2016 == 1 already")
     p.add_argument("--primary-year", type=int, default=2016)
     p.add_argument("--fallback-year", type=int, default=2015)
+    p.add_argument(
+        "--max-per-hour", type=int, default=0,
+        help="Global cap on CDSE Process API fetches per hour "
+             "(sliding window across all worker threads). 0 (default) "
+             "= no cap. Used to spread PU consumption across days when "
+             "the total fetch count exceeds the monthly free-tier budget.",
+    )
     args = p.parse_args()
+
+    _set_rate_limit(args.max_per_hour)
 
     data_dir = Path(args.data_dir)
     if not data_dir.is_dir():
