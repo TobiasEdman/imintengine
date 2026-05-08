@@ -135,8 +135,14 @@ spec:
             - name: training-data-cephfs
               mountPath: /tessera_cache
               subPath: tessera_cache
-          # SKG endpoints secret is optional; if it doesn't exist the
-          # fetchers fall back to the hardcoded public URL.
+            # SKG height/volume/basal_area/diameter URLs come from this
+            # secret. Without it the fetchers raise
+            # "Skogsstyrelsen height URL not configured" (no public-URL
+            # fallback like markfukt has). Markfukt also reads from here
+            # but falls back to a hardcoded URL if the secret is absent.
+            - name: skg-endpoints
+              mountPath: /etc/skg
+              readOnly: true
       volumes:
         - name: training-data
           persistentVolumeClaim:
@@ -144,3 +150,6 @@ spec:
         - name: training-data-cephfs
           persistentVolumeClaim:
             claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints

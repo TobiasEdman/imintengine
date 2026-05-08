@@ -92,7 +92,16 @@ spec:
             - name: training-data
               mountPath: /tessera_cache
               subPath: tessera_cache
+            # SKG endpoints (height/volume/basal_area/diameter URLs).
+            # Without this the SKG fetchers raise "URL not configured"
+            # — they have no public-URL fallback like markfukt.
+            - name: skg-endpoints
+              mountPath: /etc/skg
+              readOnly: true
       volumes:
         - name: training-data
           persistentVolumeClaim:
             claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints
