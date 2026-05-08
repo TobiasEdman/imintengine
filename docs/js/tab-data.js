@@ -582,44 +582,52 @@ var TAB_CONFIG = {
     },
 
     water_quality_lilla_karlso: {
-        title: 'Lilla Karlsö — sillgrissle-säsong 2025 · klorofyll-tidsserie',
+        title: 'Vattenkvalitet — Lilla Karlsö · sillgrissle-säsong 2025',
         summary: [
-            {title:'AOI', value:'10×22 km', detail:'Lilla Karlsö + havshorisont väst'},
-            {title:'Period', value:'15 apr – 31 jul 2025', detail:'häckningssäsong'},
-            {title:'Scener', value:'3', detail:'ägg / kläck / unge'},
-            {title:'C2RCC', value:'C2X-Nets', detail:'Östersjö hög-CDOM'}
+            {title:'AOI',                  value:'Lilla Karlsö + havshorisont väst', detail:'10 × 22 km, helt inom UTM 33N (T33VXD)'},
+            {title:'Sensor &amp; passager',  value:'Sentinel-2A/2C',                   detail:'3 single-pass-scener över häckningssäsongen'},
+            {title:'Metoder',              value:'4 retrievals × 3 datum',           detail:'RGB + C2RCC (C2X-Nets) chl/TSM/CDOM via SNAP 13'},
+            {title:'Färgskala chl-a',      value:'log₁₀ 0.5–25 mg/m³',               detail:'pinnad → cross-scen-jämförbar'}
         ],
-        intro: 'Tre Sentinel-2-scener fångar säsongens fenologiska faser: 2025-04-29 (äggläggning + vårblom), 2025-06-13 (kläckning), 2025-07-10 (ungar lämnar kolonin). C2RCC-pipeline körd via signerad GHCR-image på ICE k8s, native amd64 ger ~3 min per scen istället för 10+ på Mac qemu-emulering. Brockmann 2016-formler beräknar chl-a, TSM, CDOM från IOPs.',
+        intro: 'Sentinel-2 vattenkvalitetsanalys för Lilla Karlsö (Gotland) över sillgrissle-säsongen 2025 — samma C2RCC-pipeline som Stigfjorden/Mollösund-tabben, men över en tidsserie istället för en enda passage. Sillgrissle-kolonin (~2 500 par) jagar pelagisk skarpsill och sill 5–15 km västerut, och fodersäkerheten följer klorofyll-dynamiken i Östersjön. <strong>Tre molnfria scener</strong> valda av <code>optimal_fetch_dates(era5_then_scl)</code> över hela 2025-04-15..07-31 träffar perfekt en gång varje fenologisk fas: 2026-04-29 (äggläggning + vårblom-pre), 2025-06-13 (kläckning + sommarblom-peak), 2025-07-10 (ungar lämnar + post-peak). Per scen körs <strong>fyra retrievals utan fusion</strong>: Sentinel-2 RGB samt ESA C2RCC C2X-Nets för chl-a, TSM och CDOM via SNAP 13 (signerad GHCR-image, native amd64 på ICE k8s). Brockmann 2016-formler från IOPs. Färgskalan på klorofyll är <strong>fast pinnad till log₁₀ 0.5–25 mg/m³</strong> så samma färg betyder samma värde över alla tre scener. UTM-zon-prefer ligger i fetch-laget — AOI korsar 18°E (UTM 33/34-gränsen) men eftersom centrum ligger i UTM 33 plockas T33VXD-tile för alla tre datum, ingen cross-zone-reprojektion.',
+        // 12 panels: 4 retrievals (RGB + chl + TSM + CDOM) × 3 datum, samma flat-grid-
+        // mönster som Bohuslän-tabben. Panel-id format `lk<MMDD>-<prod>` — app.js
+        // gör prefix = panel.id.split('-')[0], så `lk0429`/`lk0613`/`lk0710`
+        // ger varje datum sin egen RGB-bakgrund via `<prefix>-rgb`-lookup.
         panels: [
-            {id:'lk-rgb-1',  key:'rgb_2025-04-29', title:'2025-04-29 RGB · äggläggning',
-                bgToggle:[{label:'RGB',key:'rgb_2025-04-29',active:true},{label:'Chl',key:'chl_2025-04-29'}]},
-            {id:'lk-chl-1',  key:'chl_2025-04-29', title:'2025-04-29 Chl-a',  legend:'chl',
-                bgToggle:[{label:'RGB',key:'rgb_2025-04-29',active:true},{label:'Chl',key:'chl_2025-04-29'}]},
-            {id:'lk-rgb-2',  key:'rgb_2025-06-13', title:'2025-06-13 RGB · kläckning',
-                bgToggle:[{label:'RGB',key:'rgb_2025-06-13',active:true},{label:'Chl',key:'chl_2025-06-13'}]},
-            {id:'lk-chl-2',  key:'chl_2025-06-13', title:'2025-06-13 Chl-a',  legend:'chl',
-                bgToggle:[{label:'RGB',key:'rgb_2025-06-13',active:true},{label:'Chl',key:'chl_2025-06-13'}]},
-            {id:'lk-rgb-3',  key:'rgb_2025-07-10', title:'2025-07-10 RGB · ungar lämnar',
-                bgToggle:[{label:'RGB',key:'rgb_2025-07-10',active:true},{label:'Chl',key:'chl_2025-07-10'}]},
-            {id:'lk-chl-3',  key:'chl_2025-07-10', title:'2025-07-10 Chl-a',  legend:'chl',
-                bgToggle:[{label:'RGB',key:'rgb_2025-07-10',active:true},{label:'Chl',key:'chl_2025-07-10'}]}
+            {id:'lk0429-rgb',  key:'rgb',  title:'2025-04-29 RGB · äggläggning',     legend:null},
+            {id:'lk0429-chl',  key:'chl',  title:'2025-04-29 Chl-a (mg/m³)',         legend:'chl'},
+            {id:'lk0429-tsm',  key:'tsm',  title:'2025-04-29 TSM (g/m³)',            legend:'tss'},
+            {id:'lk0429-cdom', key:'cdom', title:'2025-04-29 CDOM (m⁻¹)',           legend:'cdom'},
+            {id:'lk0613-rgb',  key:'rgb',  title:'2025-06-13 RGB · kläckning',       legend:null},
+            {id:'lk0613-chl',  key:'chl',  title:'2025-06-13 Chl-a (mg/m³)',         legend:'chl'},
+            {id:'lk0613-tsm',  key:'tsm',  title:'2025-06-13 TSM (g/m³)',            legend:'tss'},
+            {id:'lk0613-cdom', key:'cdom', title:'2025-06-13 CDOM (m⁻¹)',           legend:'cdom'},
+            {id:'lk0710-rgb',  key:'rgb',  title:'2025-07-10 RGB · ungar lämnar',    legend:null},
+            {id:'lk0710-chl',  key:'chl',  title:'2025-07-10 Chl-a (mg/m³)',         legend:'chl'},
+            {id:'lk0710-tsm',  key:'tsm',  title:'2025-07-10 TSM (g/m³)',            legend:'tss'},
+            {id:'lk0710-cdom', key:'cdom', title:'2025-07-10 CDOM (m⁻¹)',           legend:'cdom'}
         ],
         images: {
-            'lk-rgb-1':            'showcase/lilla_karlso_birds/frames/2025-04-29/rgb.png',
-            'lk-chl-1':            'showcase/lilla_karlso_birds/frames/2025-04-29/chl.png',
-            'lk-rgb-2':            'showcase/lilla_karlso_birds/frames/2025-06-13/rgb.png',
-            'lk-chl-2':            'showcase/lilla_karlso_birds/frames/2025-06-13/chl.png',
-            'lk-rgb-3':            'showcase/lilla_karlso_birds/frames/2025-07-10/rgb.png',
-            'lk-chl-3':            'showcase/lilla_karlso_birds/frames/2025-07-10/chl.png',
-            'lk-rgb_2025-04-29':   'showcase/lilla_karlso_birds/frames/2025-04-29/rgb.png',
-            'lk-chl_2025-04-29':   'showcase/lilla_karlso_birds/frames/2025-04-29/chl.png',
-            'lk-rgb_2025-06-13':   'showcase/lilla_karlso_birds/frames/2025-06-13/rgb.png',
-            'lk-chl_2025-06-13':   'showcase/lilla_karlso_birds/frames/2025-06-13/chl.png',
-            'lk-rgb_2025-07-10':   'showcase/lilla_karlso_birds/frames/2025-07-10/rgb.png',
-            'lk-chl_2025-07-10':   'showcase/lilla_karlso_birds/frames/2025-07-10/chl.png'
+            'lk0429-rgb':   'showcase/lilla_karlso_birds/frames/2025-04-29/rgb.png',
+            'lk0429-chl':   'showcase/lilla_karlso_birds/frames/2025-04-29/chl.png',
+            'lk0429-tsm':   'showcase/lilla_karlso_birds/frames/2025-04-29/tsm.png',
+            'lk0429-cdom':  'showcase/lilla_karlso_birds/frames/2025-04-29/cdom.png',
+            'lk0613-rgb':   'showcase/lilla_karlso_birds/frames/2025-06-13/rgb.png',
+            'lk0613-chl':   'showcase/lilla_karlso_birds/frames/2025-06-13/chl.png',
+            'lk0613-tsm':   'showcase/lilla_karlso_birds/frames/2025-06-13/tsm.png',
+            'lk0613-cdom':  'showcase/lilla_karlso_birds/frames/2025-06-13/cdom.png',
+            'lk0710-rgb':   'showcase/lilla_karlso_birds/frames/2025-07-10/rgb.png',
+            'lk0710-chl':   'showcase/lilla_karlso_birds/frames/2025-07-10/chl.png',
+            'lk0710-tsm':   'showcase/lilla_karlso_birds/frames/2025-07-10/tsm.png',
+            'lk0710-cdom':  'showcase/lilla_karlso_birds/frames/2025-07-10/cdom.png'
         },
-        imgH: 1000, imgW: 1000,
-        hasBgToggle: true,
+        // Frame-proportion följer faktisk PNG-output från render.py (1903 × 2304 px,
+        // 0.826:1 ≈ portrait). AOI 10×22 km i WGS84 projicerar till ungefär samma
+        // form i UTM 33N. Bohuslän har 2.442:1 landscape; Lilla Karlsö är portrait
+        // eftersom kolonin + foderhabitatet sträcker sig nord-syd.
+        imgH: 880, imgW: 730,
+        hasBgToggle: false,
         hasCharts: true,
         chartSectionTitle: ''  // Chart hanteras inline i HTML, inte via mall
     }
