@@ -1,0 +1,27 @@
+---
+# Long-running pod för att kunna kubectl-cp:a showcase-filer från CephFS
+# till lokal worktree. Sleep 20 min så vi hinner kopiera + verifiera.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lilla-karlso-export
+  namespace: prithvi-training-default
+  labels:
+    app: lilla-karlso-export
+spec:
+  restartPolicy: Never
+  containers:
+    - name: export
+      image: busybox:1.37
+      command: ["sleep", "1200"]
+      resources:
+        requests: {cpu: "100m", memory: "128Mi"}
+        limits:   {cpu: "100m", memory: "128Mi"}
+      volumeMounts:
+        - name: training-data
+          mountPath: /data
+          readOnly: true
+  volumes:
+    - name: training-data
+      persistentVolumeClaim:
+        claimName: training-data-cephfs

@@ -584,7 +584,7 @@ var TAB_CONFIG = {
     water_quality_lilla_karlso: {
         title: 'Lilla Karlsö — sillgrissle-säsong 2025 · klorofyll-tidsserie',
         summary: [
-            {title:'AOI', value:'22×22 km', detail:'Lilla Karlsö + foderhabitat'},
+            {title:'AOI', value:'10×22 km', detail:'Lilla Karlsö + havshorisont väst'},
             {title:'Period', value:'15 apr – 31 jul 2025', detail:'häckningssäsong'},
             {title:'Scener', value:'3', detail:'ägg / kläck / unge'},
             {title:'C2RCC', value:'C2X-Nets', detail:'Östersjö hög-CDOM'}

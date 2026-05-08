@@ -1,0 +1,81 @@
+---
+# Engångsjobb: re-fetcha 2025-04-29 i UTM 33N efter UTM-zon-prefer-fixet
+# (PR #5). Den befintliga T34VCJ-SAFEn raderas och ersätts av T33VXD.
+# Också re-run c2rcc + render för det datumet (skriver över tidigare DIMAP).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lilla-karlso-refetch-20250429
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: refetch
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null
+              pip install --quiet --no-cache-dir numpy scipy rasterio shapely requests pyproj pyyaml httpx
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/imintengine.git imintengine
+              cd imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              export C2RCC_DATA_ROOT=/data/lilla_karlso_birds
+
+              echo "=== 1. Radera gammal T34VCJ-SAFE för 2025-04-29 ==="
+              ls -d /data/lilla_karlso_birds/l1c_safes/*20250429*T34VCJ* 2>/dev/null || echo "(ingen T34VCJ kvar)"
+              rm -rf /data/lilla_karlso_birds/l1c_safes/*20250429*T34VCJ* || true
+              # Radera gammal C2RCC-output också (tvingar re-run)
+              rm -f /data/lilla_karlso_birds/c2rcc_runs/2025-04-29.dim
+              rm -rf /data/lilla_karlso_birds/c2rcc_runs/2025-04-29.data
+
+              echo ""
+              echo "=== 2. Re-fetcha 2025-04-29 med UTM-prefer (auto från AOI-centrum) ==="
+              python -c "
+              import sys
+              sys.path.insert(0, '/workspace/imintengine')
+              from imint.config.env import load_env; load_env()
+              from imint.fetch import fetch_l1c_safe_from_gcp
+              from demos.lilla_karlso_birds import config
+              p = fetch_l1c_safe_from_gcp(
+                  date='2025-04-29',
+                  coords=config.BBOX_WGS84,
+                  dest_dir=config.SAFE_CACHE,
+                  cloud_max=100.0,
+                  max_workers=6,
+              )
+              print(f'fetched: {p.name}')
+              "
+
+              echo ""
+              echo "=== 3. Inventory ==="
+              ls -d /data/lilla_karlso_birds/l1c_safes/*20250429* 2>/dev/null
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: user, optional: false}
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: password, optional: false}
+          resources:
+            requests: {cpu: "2", memory: "4Gi", ephemeral-storage: "5Gi"}
+            limits:   {cpu: "2", memory: "4Gi", ephemeral-storage: "5Gi"}
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

@@ -1,0 +1,62 @@
+{
+  "aoi": {
+    "west": 17.775,
+    "south": 57.21,
+    "east": 18.075,
+    "north": 57.41
+  },
+  "period": [
+    "2025-04-15",
+    "2025-07-31"
+  ],
+  "records": [
+    {
+      "date": "2025-04-29",
+      "n_water_pixels": 4343639,
+      "n_valid_chl": 4151357,
+      "chl_p50": 0.5148800611495972,
+      "chl_p90": 1.4647703170776367,
+      "chl_mean": 0.8045452833175659,
+      "tsm_p50": 0.24624210596084595,
+      "cdom_p50": 0.06919856369495392,
+      "frames": {
+        "rgb": "frames/2025-04-29/rgb.png",
+        "chl": "frames/2025-04-29/chl.png",
+        "tsm": "frames/2025-04-29/tsm.png",
+        "cdom": "frames/2025-04-29/cdom.png"
+      }
+    },
+    {
+      "date": "2025-06-13",
+      "n_water_pixels": 4344342,
+      "n_valid_chl": 3997211,
+      "chl_p50": 3.369126796722412,
+      "chl_p90": 12.929007530212402,
+      "chl_mean": 5.375926971435547,
+      "tsm_p50": 3.2825961112976074,
+      "cdom_p50": 0.5758556723594666,
+      "frames": {
+        "rgb": "frames/2025-06-13/rgb.png",
+        "chl": "frames/2025-06-13/chl.png",
+        "tsm": "frames/2025-06-13/tsm.png",
+        "cdom": "frames/2025-06-13/cdom.png"
+      }
+    },
+    {
+      "date": "2025-07-10",
+      "n_water_pixels": 4344434,
+      "n_valid_chl": 3469995,
+      "chl_p50": 2.41550350189209,
+      "chl_p90": 7.426153182983398,
+      "chl_mean": 3.4490537643432617,
+      "tsm_p50": 5.994587421417236,
+      "cdom_p50": 0.19131280481815338,
+      "frames": {
+        "rgb": "frames/2025-07-10/rgb.png",
+        "chl": "frames/2025-07-10/chl.png",
+        "tsm": "frames/2025-07-10/tsm.png",
+        "cdom": "frames/2025-07-10/cdom.png"
+      }
+    }
+  ]
+}
