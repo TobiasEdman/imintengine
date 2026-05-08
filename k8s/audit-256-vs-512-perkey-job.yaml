@@ -1,0 +1,159 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-256-vs-512-perkey
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: audit-256-vs-512-perkey
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: a
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+              python3 - <<'PY'
+              import os, glob, json, zipfile
+              from collections import Counter
+              import numpy as np
+
+              # Keys we care about for v7e training. Includes baseline,
+              # SKG/DEM, rededge, s1, tessera, markfukt, vpp, label.
+              KEYS = [
+                  # baseline
+                  "spectral", "image", "label", "easting", "northing",
+                  "tile_size_px", "dates", "temporal_mask",
+                  # forestry aux
+                  "height", "volume", "basal_area", "diameter",
+                  # geo aux
+                  "dem",
+                  # vegetation phenology
+                  "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
+                  # spectral aux
+                  "rededge", "has_rededge",
+                  # SAR
+                  "s1_vv_vh", "has_s1",
+                  # foundation embeddings
+                  "tessera", "has_tessera",
+                  # soil
+                  "markfukt",
+                  # hygges-pipeline
+                  "frame_2016", "harvest_mask", "harvest_probability",
+                  # nmd
+                  "nmd_label_raw",
+              ]
+
+              def per_frame_valid(arr, n_per_frame):
+                  """Count how many frames have any non-zero data."""
+                  if arr is None: return None
+                  n = arr.shape[0] // n_per_frame
+                  return sum(1 for fi in range(n)
+                             if (arr[fi*n_per_frame:(fi+1)*n_per_frame] != 0).any())
+
+              def audit(label, data_dir):
+                  print(f"\n=== {label}: {data_dir} ===")
+                  files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
+                  total = len(files)
+                  print(f"  total tiles: {total}")
+
+                  counts = {k: 0 for k in KEYS}
+                  rededge_frames = Counter()
+                  s1_frames = Counter()
+                  markfukt_nan_pct = []
+                  corrupt = 0
+
+                  for f in files:
+                      try:
+                          with np.load(f, allow_pickle=True) as d:
+                              keys = set(d.files)
+                              for k in KEYS:
+                                  if k in keys:
+                                      counts[k] += 1
+                              # rededge per-frame
+                              if "rededge" in keys:
+                                  v = per_frame_valid(d["rededge"], 3)
+                                  rededge_frames[f"{v}/4" if v is not None else "?"] += 1
+                              # s1 per-frame
+                              if "s1_vv_vh" in keys:
+                                  v = per_frame_valid(d["s1_vv_vh"], 2)
+                                  s1_frames[f"{v}/4" if v is not None else "?"] += 1
+                              # markfukt nan-pct
+                              if "markfukt" in keys:
+                                  arr = d["markfukt"]
+                                  markfukt_nan_pct.append(float(np.isnan(arr).mean()))
+                      except (zipfile.BadZipFile, EOFError, OSError, ValueError):
+                          corrupt += 1
+
+                  return {
+                      "total": total,
+                      "corrupt": corrupt,
+                      "counts": counts,
+                      "rededge_frames": dict(rededge_frames),
+                      "s1_frames": dict(s1_frames),
+                      "markfukt_n": len(markfukt_nan_pct),
+                      "markfukt_avg_nan_pct": float(np.mean(markfukt_nan_pct)) if markfukt_nan_pct else 0.0,
+                  }
+
+              r256 = audit("256", "/data256/unified_v2")
+              r512 = audit("512", "/data512/unified_v2_512")
+
+              # Side-by-side report
+              print("\n" + "=" * 70)
+              print(f"{'KEY':<25} {'256':>10} {'/total':>10} {'512':>10} {'/total':>10} {'gap':>8}")
+              print("-" * 70)
+              t256, t512 = r256["total"], r512["total"]
+              for k in KEYS:
+                  c256, c512 = r256["counts"][k], r512["counts"][k]
+                  p256 = f"{c256/t256*100:.1f}%" if t256 else "-"
+                  p512 = f"{c512/t512*100:.1f}%" if t512 else "-"
+                  gap = (c256/t256 - c512/t512) * 100 if t256 and t512 else 0
+                  print(f"{k:<25} {c256:>10} {p256:>10} {c512:>10} {p512:>10} {gap:>+7.1f}%")
+
+              print(f"\ncorrupt: 256={r256['corrupt']}, 512={r512['corrupt']}")
+              print(f"\nrededge per-frame breakdown:")
+              print(f"  256: {sorted(r256['rededge_frames'].items())}")
+              print(f"  512: {sorted(r512['rededge_frames'].items())}")
+              print(f"\ns1 per-frame breakdown:")
+              print(f"  256: {sorted(r256['s1_frames'].items())}")
+              print(f"  512: {sorted(r512['s1_frames'].items())}")
+              print(f"\nmarkfukt avg NaN-pct: 256={r256['markfukt_avg_nan_pct']:.1%}, "
+                    f"512={r512['markfukt_avg_nan_pct']:.1%}")
+
+              os.makedirs("/data512/debug", exist_ok=True)
+              with open("/data512/debug/audit_256_vs_512_2026-05-07.json", "w") as fh:
+                  json.dump({"unified_v2": r256, "unified_v2_512": r512},
+                            fh, indent=2, default=str)
+              print("\nWrote /data512/debug/audit_256_vs_512_2026-05-07.json")
+              PY
+
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data256
+              mountPath: /data256
+            - name: data512
+              mountPath: /data512
+      volumes:
+        - name: data256
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: data512
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
