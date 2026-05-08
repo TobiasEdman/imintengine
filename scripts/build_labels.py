@@ -213,18 +213,38 @@ def build_tile_label(
         if bbox_3006 is None:
             return {"name": name, "status": "failed", "reason": "no_bbox"}
 
-        # Determine tile year
+        # Determine tile year — use the most common year in the
+        # date stack, NOT dates[0]. Per CLAUDE.md, frame 0 is the
+        # autumn background from *year-1* (Sep-Oct, used by the
+        # hygges-pipeline). Frames 1-3 are the primary year. The
+        # naive `dates[0][:4]` picks the year-1 background, which
+        # makes _lpis_handle look up the wrong year — e.g. dates
+        # = [2021-09, 2022-04, 2022-06, 2022-07] triggered a search
+        # for LPIS-2021 (which doesn't exist on disk) instead of
+        # LPIS-2022 where the parcels actually live. That dropped
+        # 1000 crop_*-tiles in the 2026-05-07 run.
         tile_year = None
         if "year" in data:
             tile_year = int(data["year"])
         elif "lpis_year" in data:
             tile_year = int(data["lpis_year"])
         elif "dates" in data:
+            from collections import Counter
+            years = []
             for d in data["dates"]:
                 s = str(d)
                 if s and len(s) >= 4:
-                    tile_year = int(s[:4])
-                    break
+                    try:
+                        years.append(int(s[:4]))
+                    except ValueError:
+                        pass
+            if years:
+                # Pick the modal year. Ties broken by most recent year
+                # (a sane default — 2022 over 2021 if equal counts).
+                counts = Counter(years)
+                top_count = counts.most_common(1)[0][1]
+                tied = [y for y, c in counts.items() if c == top_count]
+                tile_year = max(tied)
         if tile_year is None:
             tile_year = 2022  # default
 
