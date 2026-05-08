@@ -44,11 +44,33 @@ spec:
               from imint.config.env import load_env
               load_env()
               from imint.fetch import fetch_des_data
-              from imint.utils import bands_to_rgb
               from demos.lilla_karlso_birds import config
 
               FRAMES = Path('/data/lilla_karlso_birds/showcase/frames')
               DATES = ['2025-04-29', '2025-06-13', '2025-07-10']
+
+              # SCL-klasser (Sentinel-2 L2A):
+              #   4 = Vegetation   5 = Bare soil   6 = Water
+              #   7 = Cloud shadow 8/9/10 = Cloud  11 = Snow
+              # Land = {4, 5}. Stretcha på land-pixlar så havet blir ljusare
+              # än om vi tar p2/p98 över hela bbox (vilket pressar ihop kontrasten
+              # eftersom havet dominerar arealmässigt).
+              LAND_CLASSES = (4, 5)
+
+              def stretch_to_land(bands, scl):
+                  rgb = np.stack([bands['B04'], bands['B03'], bands['B02']], axis=-1).astype(np.float32)
+                  land_mask = np.isin(scl, LAND_CLASSES)
+                  if land_mask.sum() > 100:
+                      land_pixels = rgb[land_mask]
+                      p2, p98 = np.percentile(land_pixels, [2, 98])
+                      print(f'    stretch from land ({land_mask.sum()} px): p2={p2:.4f} p98={p98:.4f}')
+                  else:
+                      # Fallback: hela scenen exkl. moln
+                      cloud_mask = np.isin(scl, [8, 9, 10])
+                      sample = rgb[~cloud_mask] if (~cloud_mask).any() else rgb
+                      p2, p98 = np.percentile(sample, [2, 98])
+                      print(f'    fallback stretch (no land): p2={p2:.4f} p98={p98:.4f}')
+                  return np.clip((rgb - p2) / (p98 - p2 + 1e-6), 0.0, 1.0)
 
               def save_rgb_png(rgb, out_path):
                   h, w = rgb.shape[:2]
@@ -62,15 +84,13 @@ spec:
               for d in DATES:
                   print(f'\n=== {d} ===')
                   try:
-                      # include_scl=True så bands_to_rgb kan exkludera moln vid
-                      # p2/p98-stretch (default land-RGB-flödet i imint.utils).
                       result = fetch_des_data(
                           date=d,
                           coords=config.BBOX_WGS84,
                           cloud_threshold=1.0,
                           include_scl=True,
                       )
-                      rgb = bands_to_rgb(result.bands, percentile_stretch=True, scl=result.scl)
+                      rgb = stretch_to_land(result.bands, result.scl)
                       out_dir = FRAMES / d
                       out_dir.mkdir(parents=True, exist_ok=True)
                       save_rgb_png(rgb, out_dir / 'rgb.png')
