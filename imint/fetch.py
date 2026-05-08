@@ -1404,11 +1404,26 @@ def _parse_safe_mgrs(safe_name: str) -> tuple[str, str, str]:
     return m.group(1), m.group(2), m.group(3)
 
 
+def _utm_zone_from_lon(lon: float) -> int:
+    """Return the UTM zone number that covers a given WGS84 longitude.
+
+    Standard 6° UTM zones, 1–60. Lilla Karlsö centrum 17.925°E → zone 33.
+    Used by :func:`_stac_best_l1c_scene` to prefer SAFE archives whose
+    MGRS-tile is in the same UTM zone as the AOI centroid — avoids
+    cross-zone reprojection seams when the AOI happens to straddle a
+    zone boundary (Lilla Karlsö 17.91–18.075°E spans the 18°E gränsen,
+    STAC otherwise picks the cleanest tile regardless of zone).
+    """
+    return int((lon + 180) // 6) + 1
+
+
 def _stac_best_l1c_scene(
     coords: dict,
     date: str,
     date_window: int = 0,
     cloud_max: float = 100.0,
+    *,
+    preferred_utm_zone: int | None = None,
 ) -> dict:
     """Query the DES STAC catalogue for the best L1C scene around ``date``.
 
@@ -1421,6 +1436,11 @@ def _stac_best_l1c_scene(
         date: Target date ``YYYY-MM-DD``.
         date_window: ± days around ``date`` to consider.
         cloud_max: Reject scenes with ``eo:cloud_cover`` above this.
+        preferred_utm_zone: If set, SAFE archives with this UTM zone
+            (parsed from MGRS-tile in safe_name) are ranked above other
+            zones regardless of cloud cover. If ``None``, the zone is
+            auto-derived from the AOI longitude centre — set explicitly
+            to override (e.g. 0 to disable the prefer entirely).
 
     Returns:
         Dict with at least ``id``, ``safe_name``, ``cloud_cover``,
@@ -1445,11 +1465,21 @@ def _stac_best_l1c_scene(
     resp = requests.post(STAC_SEARCH_URL, json=body, timeout=30)
     resp.raise_for_status()
     features = resp.json().get("features") or []
+
+    # Auto-derive UTM-zon från AOI longitud-centrum om inte explicit satt.
+    # Sätt 0 (eller annan otrolig zon) i caller för att avaktivera prefer:n.
+    if preferred_utm_zone is None:
+        lon_center = (coords["west"] + coords["east"]) / 2.0
+        preferred_utm_zone = _utm_zone_from_lon(lon_center)
+
     candidates = []
     for f in features:
         props = f.get("properties") or {}
         cloud = props.get("eo:cloud_cover")
-        if cloud is None or cloud > cloud_max:
+        # eo:cloud_cover är granul-snitt (~110×110 km) — meningslös för
+        # en liten AOI. Filtret är default disabled (cloud_max=100).
+        # Pre-filtering ska göras upstream (optimal_fetch_dates ERA5+SCL).
+        if cloud is not None and cloud > cloud_max:
             continue
         # Resolve SAFE name from any asset href containing ".SAFE/"
         safe_name = None
@@ -1468,20 +1498,34 @@ def _stac_best_l1c_scene(
                     break
         if safe_name is None:
             continue
+        # Parse UTM-zon från MGRS-tile-token i SAFE-namnet (T33VXD → 33).
+        try:
+            scene_utm, _, _ = _parse_safe_mgrs(safe_name)
+            scene_utm = int(scene_utm)
+        except (ValueError, FetchError):
+            scene_utm = -1
         candidates.append({
             "id": f.get("id"),
             "safe_name": safe_name,
-            "cloud_cover": cloud,
+            "cloud_cover": cloud if cloud is not None else 100.0,
             "datetime": props.get("start_datetime") or props.get("datetime"),
             "proj_code": props.get("proj:code"),
             "tile_id": props.get("cubedash:region_code"),
+            "utm_zone": scene_utm,
         })
 
     if not candidates:
         raise FetchError(
             f"no L1C scenes for bbox {coords} around {date} (cloud<={cloud_max}%)"
         )
-    candidates.sort(key=lambda c: c["cloud_cover"])
+
+    # Sortering: UTM-zon-match är primär, cloud_cover sekundär (tiebreak).
+    # AOI som korsar UTM-zon-gräns (Lilla Karlsö 17.91–18.075°E vid 18°E-gränsen)
+    # får annars cross-zone-reprojektion → seam-artefakter, kvalitetsförlust.
+    candidates.sort(key=lambda c: (
+        0 if c["utm_zone"] == preferred_utm_zone else 1,
+        c["cloud_cover"],
+    ))
     return candidates[0]
 
 
@@ -1525,6 +1569,7 @@ def fetch_l1c_safe_from_gcp(
     cloud_max: float = 100.0,
     max_workers: int = 8,
     overwrite: bool = False,
+    preferred_utm_zone: int | None = None,
 ) -> Path:
     """Download a Sentinel-2 L1C SAFE archive from Google Cloud public bucket.
 
@@ -1560,7 +1605,12 @@ def fetch_l1c_safe_from_gcp(
     import urllib.request
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    scene = _stac_best_l1c_scene(coords, date, date_window=date_window, cloud_max=cloud_max)
+    scene = _stac_best_l1c_scene(
+        coords, date,
+        date_window=date_window,
+        cloud_max=cloud_max,
+        preferred_utm_zone=preferred_utm_zone,
+    )
     safe_name = scene["safe_name"]
     files = _gcp_list_safe_files(safe_name)
 

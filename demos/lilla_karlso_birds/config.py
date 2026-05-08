@@ -41,9 +41,12 @@ PERIOD_END = "2025-07-31"
 # ── Fetch-strategi ──────────────────────────────────────────────────────
 MAX_AOI_CLOUD = 0.15       # SCL-stack-tröskel (15%) — Östersjön sommar är notoriskt molnig
                            # 3 datum träffar äggläggning/kläckning/ungar-lämnar perfekt
-SCENE_CLOUD_MAX = 30.0     # STAC-cc backup
 N_WORKERS_FETCH = 6        # Parallella GCP HTTPS-workers
 DATE_WINDOW = 0            # Exakt-datum-match — optimal_fetch redan bestämt
+# OBS: ingen STAC eo:cloud_cover-tröskel här — optimal_fetch_dates(era5_then_scl)
+# pre-filtrerar redan på AOI-skala. STAC-cc är granul-snitt (~110×110 km),
+# fel skala för en 22 km AOI. fetch_l1c_safe_from_gcp passar cloud_max=100
+# (disabled) och prefer:ar UTM-zon från AOI-centrum (Lilla Karlsö 17.925°E → 33).
 
 
 # ── C2RCC ────────────────────────────────────────────────────────────────

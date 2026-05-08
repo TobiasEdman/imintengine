@@ -65,14 +65,20 @@ def run_optimal_fetch() -> dict:
 
 
 def fetch_l1c_for_date(date: str) -> dict:
-    """Hämta L1C SAFE-arkiv för ett datum från GCP public bucket."""
+    """Hämta L1C SAFE-arkiv för ett datum från GCP public bucket.
+
+    `cloud_max=100` (disable filter) eftersom optimal_fetch_dates redan har
+    pre-filtrerat datumen med ERA5+SCL-stack på AOI-skala. STAC `eo:cloud_cover`
+    är en granul-snitt-metrik (~110×110 km), meningslös för en 22 km AOI.
+    UTM-zon-prefer auto-deriveras från AOI-centrum (Lilla Karlsö 17.925°E → 33).
+    """
     t0 = time.time()
     try:
         safe_path = fetch_l1c_safe_from_gcp(
             date=date,
             coords=config.BBOX_WGS84,
             dest_dir=config.SAFE_CACHE,
-            cloud_max=config.SCENE_CLOUD_MAX,
+            cloud_max=100.0,  # disable: pre-filtrerat upstream
             max_workers=config.N_WORKERS_FETCH,
         )
         n_files = sum(1 for _ in safe_path.rglob("*"))
