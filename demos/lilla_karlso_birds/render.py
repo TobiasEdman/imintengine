@@ -72,25 +72,19 @@ def compute_retrievals(dimap_path: Path) -> dict[str, np.ndarray]:
     return {"chl": chl, "tsm": tsm, "cdom": cdom, "water": water}
 
 
-def build_rgb_from_dimap(dimap_path: Path) -> np.ndarray:
-    """Bygg RGB från rhow-band i DIMAP (water-leaving reflectance)."""
-    try:
-        b04 = read_dimap_band(dimap_path, "rhow_B4")
-        b03 = read_dimap_band(dimap_path, "rhow_B3")
-        b02 = read_dimap_band(dimap_path, "rhow_B2")
-    except FileNotFoundError:
-        # Vissa SNAP-versioner kallar dem rhow_B04 etc — testa båda
-        b04 = read_dimap_band(dimap_path, "rhow_B04")
-        b03 = read_dimap_band(dimap_path, "rhow_B03")
-        b02 = read_dimap_band(dimap_path, "rhow_B02")
-    rgb = np.stack([b04, b03, b02], axis=-1)
-    valid = np.isfinite(rgb).all(axis=-1) & (rgb.sum(axis=-1) > 0)
-    if not valid.any():
-        return np.zeros((*rgb.shape[:2], 3), dtype=np.uint8)
-    lo = np.percentile(rgb[valid], 2)
-    hi = np.percentile(rgb[valid], 98)
-    rgb = np.clip((rgb - lo) / max(hi - lo, 1e-3), 0.0, 1.0)
-    return (rgb * 255).astype(np.uint8)
+# RGB-bakgrund hämtas från DES openEO L2A True-color via separat
+# k8s-jobb (k8s/lilla-karlso-rgb-l2a-job.yaml). Den rhow-baserade
+# RGB-vägen som tidigare bodde här (build_rgb_from_dimap) tog C2RCC:s
+# water-leaving reflectance och stretchade p2/p98 — gav extremt mörk
+# bild eftersom rhow har snäv dynamisk range över öppet vatten, plus
+# att Karlsöarna helt försvann (NaN över land).
+#
+# L2A TCI ger samma typ av RGB som Mollösund-tabben (pcell 2/98 stretch
+# på B04/B03/B02), och Karlsöarna syns tydligt mot havet.
+#
+# render_scene() använder inte längre build_rgb_from_dimap — rgb.png
+# kommer från l2a-jobbets output direkt. Behåll funktionen kommentar­erad
+# som dokumentation för varför vi övergav rhow.
 
 
 # ── PNG-rendering ────────────────────────────────────────────────────────
@@ -134,9 +128,10 @@ def render_scene(date: str, dimap_path: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     retrievals = compute_retrievals(dimap_path)
-    rgb = build_rgb_from_dimap(dimap_path)
 
-    save_rgb(rgb, out_dir / "rgb.png")
+    # OBS: rgb.png skrivs INTE här — kommer från k8s/lilla-karlso-rgb-l2a-job.yaml
+    # (L2A True-color via DES openEO). Render-jobbet rör inte befintlig
+    # rgb.png om den finns; bara chl/tsm/cdom regenereras.
     save_overlay(retrievals["chl"], out_dir / "chl.png",
                  vmin=config.CHL_VMIN, vmax=config.CHL_VMAX, log=True)
     save_overlay(retrievals["tsm"], out_dir / "tsm.png",

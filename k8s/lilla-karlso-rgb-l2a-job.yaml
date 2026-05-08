@@ -1,0 +1,97 @@
+---
+# Engångsjobb: hämta L2A True-color RGB för Lilla Karlsö 3 datum från DES
+# openEO. Producerar samma typ av p2/p98-stretchad RGB som Mollösund-tabben
+# (scripts/generate_water_quality_showcase.py:_build_rgb), inte rhow-baserad
+# "superstretched" som C2RCC-pipelinen gav.
+#
+# Output: /data/lilla_karlso_birds/showcase/frames/<date>/rgb.png (skriver
+# över rhow-versionen).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lilla-karlso-rgb-l2a
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: rgb
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null
+              pip install --quiet --no-cache-dir \
+                numpy rasterio matplotlib shapely requests openeo httpx pyyaml pyproj
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/imintengine.git imintengine
+              cd imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              python <<'PYEOF'
+              import sys
+              sys.path.insert(0, '/workspace/imintengine')
+              import numpy as np
+              import matplotlib.pyplot as plt
+              from pathlib import Path
+              from imint.config.env import load_env
+              load_env()
+              from imint.fetch import fetch_des_data
+              from demos.lilla_karlso_birds import config
+
+              FRAMES = Path('/data/lilla_karlso_birds/showcase/frames')
+              DATES = ['2025-04-29', '2025-06-13', '2025-07-10']
+
+              def save_rgb_png(rgb, out_path):
+                  # rgb är redan p2/p98-stretchad i FetchResult (samma stil som Mollösund)
+                  h, w = rgb.shape[:2]
+                  fig = plt.figure(figsize=(w/100, h/100), dpi=100)
+                  ax = fig.add_axes([0, 0, 1, 1])
+                  ax.imshow(rgb)
+                  ax.axis('off')
+                  fig.savefig(out_path, dpi=100, pad_inches=0)
+                  plt.close(fig)
+
+              for d in DATES:
+                  print(f'\n=== {d} ===')
+                  try:
+                      result = fetch_des_data(
+                          date=d,
+                          coords=config.BBOX_WGS84,
+                          cloud_threshold=0.5,  # toler — pre-validerat av optimal_fetch
+                          include_scl=False,
+                      )
+                      out_dir = FRAMES / d
+                      out_dir.mkdir(parents=True, exist_ok=True)
+                      save_rgb_png(result.rgb, out_dir / 'rgb.png')
+                      print(f'  saved {out_dir/"rgb.png"} shape={result.rgb.shape}')
+                  except Exception as e:
+                      print(f'  ERR {d}: {type(e).__name__}: {e}')
+                      import traceback; traceback.print_exc()
+              PYEOF
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: user, optional: false}
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: password, optional: false}
+          resources:
+            requests: {cpu: "2", memory: "4Gi", ephemeral-storage: "5Gi"}
+            limits:   {cpu: "2", memory: "4Gi", ephemeral-storage: "5Gi"}
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
