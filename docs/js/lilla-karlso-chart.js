@@ -16,6 +16,15 @@
         var canvas = document.getElementById('chart-lilla-karlso-chl');
         if (!canvas) return;
         if (typeof Chart === 'undefined') return;
+        // Chart.js kräver synlig canvas (offsetWidth > 0) för att kunna acquire
+        // context. Om sub-tabben inte är synlig än, vänta — annars misslyckas
+        // chart-skapandet tyst med "can't acquire context from the given item"
+        // och initialized=true blockerar all framtida retry.
+        if (canvas.offsetWidth === 0) return;
+        // Reuse: om en (failad) chart fortfarande är registrerad, släng den
+        // så vi kan skapa en ny mot samma canvas.
+        var existing = Chart.getChart(canvas);
+        if (existing) existing.destroy();
         initialized = true;
 
         fetch(MANIFEST_URL)
