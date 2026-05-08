@@ -1,0 +1,67 @@
+{
+  "produced_at": "2026-05-08T06:11:56.873957+00:00",
+  "git_sha": "9c30cae",
+  "git_dirty": false,
+  "image": "ghcr.io/tobiasedman/imint-c2rcc-snap@sha256:4a2c3217d156a69adddf371eee5511747551911f1cb40fbddf2764a13c0e1aef",
+  "process_files": [
+    {
+      "path": "docker/c2rcc-snap/Dockerfile",
+      "sha256": "sha256:440e1990341dff1ae3657fd1c853fd88d09732cb89bc48aa30ca280da401ec4d"
+    },
+    {
+      "path": "docker/c2rcc-snap/c2rcc_msi_graph.xml",
+      "sha256": "sha256:97af7c680dfba1d8b3505e60556325396f897c8d1e4938f6cb872e11bcceb5f0"
+    },
+    {
+      "path": "docker/c2rcc-snap/run.sh",
+      "sha256": "sha256:c7174ed39a320db0893b9a4935eacdcf6fe7fbc3af357c3de8022c62bed7be26"
+    },
+    {
+      "path": "demos/lilla_karlso_birds/render.py",
+      "sha256": "sha256:42c37b9069a70aae99ec1e7671597a22ea2746501c962143b3dac049cf84646b"
+    },
+    {
+      "path": "demos/lilla_karlso_birds/run_c2rcc.py",
+      "sha256": "sha256:9955fde38298556dacc88e325bdbd1b3219df83fde9910d2f62dc426eaf500d6"
+    },
+    {
+      "path": "demos/lilla_karlso_birds/fetch_safes.py",
+      "sha256": "sha256:513676d03b69668398a0cee2492feebb769ac9913c790b02a4911c4f8dbf5890"
+    },
+    {
+      "path": "demos/lilla_karlso_birds/config.py",
+      "sha256": "sha256:1f5153035e188f381cde896b024466eca8299c7753ba57a1fb0a2ce435c43cd3"
+    }
+  ],
+  "run_args": {
+    "aoi": {
+      "west": 17.775,
+      "south": 57.21,
+      "east": 18.075,
+      "north": 57.41
+    },
+    "period": [
+      "2025-04-15",
+      "2025-07-31"
+    ],
+    "max_aoi_cloud": 0.15,
+    "netset": "C2X-Nets"
+  },
+  "outputs": [
+    "frames/2025-04-29/rgb.png",
+    "frames/2025-04-29/chl.png",
+    "frames/2025-04-29/tsm.png",
+    "frames/2025-04-29/cdom.png",
+    "frames/2025-06-13/rgb.png",
+    "frames/2025-06-13/chl.png",
+    "frames/2025-06-13/tsm.png",
+    "frames/2025-06-13/cdom.png",
+    "frames/2025-07-10/rgb.png",
+    "frames/2025-07-10/chl.png",
+    "frames/2025-07-10/tsm.png",
+    "frames/2025-07-10/cdom.png",
+    "timeseries.json"
+  ],
+  "n_scenes": 3,
+  "fenology_window": "ägg → kläckning → ungar lämnar"
+}
