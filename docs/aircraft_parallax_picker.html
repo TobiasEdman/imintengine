@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<title>Apex-picker — push-broom band-parallax 2026-01-11</title>
+<style>
+    body { font-family: 'Space Grotesk', system-ui, sans-serif; background: #0d1117; color: #e6e6e6;
+           margin: 0; padding: 24px; }
+    h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px 0; }
+    h1 span { color: #4fc3a1; }
+    .subtitle { color: #8b949e; font-size: 13px; margin-bottom: 20px; }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 2100px; margin: 0 auto; }
+    @media (max-width: 1200px) { .grid { grid-template-columns: 1fr; } }
+    .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; }
+    .panel h3 { margin: 0 0 8px 0; font-size: 14px; }
+    .panel canvas { display: block; width: 100%; max-width: 960px; height: auto; cursor: crosshair;
+                    border: 1px solid #30363d; }
+    .panel .hint { font-size: 12px; color: #8b949e; margin-top: 6px; }
+    .panel .pick { font-size: 13px; color: #4fc3a1; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .panel .pick.empty { color: #6e7681; }
+
+    .controls { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+                padding: 14px 18px; margin-top: 16px; max-width: 2100px; margin-left: auto; margin-right: auto;}
+    .controls button { background: #238636; border: none; color: #fff; padding: 8px 16px;
+                       font-size: 14px; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+    .controls button:hover { background: #2ea043; }
+    .controls button.secondary { background: #30363d; }
+    .controls button.secondary:hover { background: #484f58; }
+    .results { margin-top: 14px; font-size: 14px; line-height: 1.6; }
+    .results .row { display: flex; gap: 18px; padding: 4px 0; border-bottom: 1px solid #30363d; }
+    .results .row.header { font-weight: 600; color: #8b949e; font-size: 12px; text-transform: uppercase; }
+    .results .col { width: 110px; font-variant-numeric: tabular-nums; }
+    .results .col.wide { flex: 1; }
+    .verdict { margin-top: 14px; padding: 12px; background: #1f2933; border-left: 3px solid #4fc3a1;
+               border-radius: 4px; font-size: 14px; line-height: 1.55; }
+    .verdict.warn { border-left-color: #d29922; background: #2d2611; }
+    code { background: #21262d; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1><span>Apex-picker</span> — push-broom band-parallax</h1>
+<p class="subtitle">
+    Klicka på <strong>flygplanets position</strong> (apex/spetsen av kondensstrimman) i varje band.
+    Bild visar 120×120 px @ 10 m/px = 1.2×1.2 km, 8× nearest-neighbor upscale.
+    Centrerad på 57.71809°N, 11.66456°E. Δt(B02→B08) = 1.005 s från MTD_TL.xml.
+</p>
+
+<div class="grid">
+    <div class="panel">
+        <h3 style="color:#4fc3ff">B02 · 490 nm (blå) · t₀</h3>
+        <canvas id="cv-B02" width="960" height="960"></canvas>
+        <div class="hint">Klicka på apex (flygplanet vid t₀)</div>
+        <div class="pick empty" id="pick-B02">Inte vald</div>
+    </div>
+    <div class="panel">
+        <h3 style="color:#4cdc64">B03 · 560 nm (grön) · t₀ + 0.527 s</h3>
+        <canvas id="cv-B03" width="960" height="960"></canvas>
+        <div class="hint">Klicka på apex</div>
+        <div class="pick empty" id="pick-B03">Inte vald</div>
+    </div>
+    <div class="panel">
+        <h3 style="color:#fc4c4c">B04 · 665 nm (röd) · t₀ + 0.585 s</h3>
+        <canvas id="cv-B04" width="960" height="960"></canvas>
+        <div class="hint">Klicka på apex</div>
+        <div class="pick empty" id="pick-B04">Inte vald</div>
+    </div>
+    <div class="panel">
+        <h3 style="color:#ec407a">B08 · 842 nm (NIR) · t₀ + 1.005 s</h3>
+        <canvas id="cv-B08" width="960" height="960"></canvas>
+        <div class="hint">Klicka på apex (störst offset från B02)</div>
+        <div class="pick empty" id="pick-B08">Inte vald</div>
+    </div>
+</div>
+
+<div class="controls">
+    <button id="btn-compute">Räkna ut hastighet</button>
+    <button id="btn-clear" class="secondary">Rensa picks</button>
+    <button id="btn-zoom-2x" class="secondary">Zoom 2× (16× pixels)</button>
+    <div class="results" id="results"></div>
+</div>
+
+<script>
+'use strict';
+
+const NATIVE_SIZE = 120;     // pixels per side in source crop
+const UPSCALE = 8;           // image is rendered at 8x
+const DT = { B02: 0.0, B03: 0.527, B04: 0.585, B08: 1.005 };
+const PIXEL_M = 10.0;        // ground sample distance per native pixel
+const SPEED_OF_SOUND = 343;
+const PASSAGE_KMH = 60;       // approximate normalisation
+
+const picks = { B02: null, B03: null, B04: null, B08: null };
+
+// Load images
+const bands = ['B02','B03','B04','B08'];
+let imageCache = {};
+let zoomFactor = 1;
+
+bands.forEach(bid => {
+    const img = new Image();
+    img.src = 'showcase/aircraft_parallax/picker_' + bid + '.png';
+    imageCache[bid] = img;
+    img.onload = () => drawPanel(bid);
+});
+
+function drawPanel(bid) {
+    const cv = document.getElementById('cv-' + bid);
+    const ctx = cv.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+
+    if (zoomFactor === 1) {
+        ctx.drawImage(imageCache[bid], 0, 0, cv.width, cv.height);
+    } else {
+        // Zoom into the centre of the image
+        const srcSize = imageCache[bid].naturalWidth;  // 960
+        const cropSize = srcSize / zoomFactor;
+        const srcX = (srcSize - cropSize) / 2;
+        const srcY = (srcSize - cropSize) / 2;
+        ctx.drawImage(imageCache[bid], srcX, srcY, cropSize, cropSize, 0, 0, cv.width, cv.height);
+    }
+
+    // Draw all band picks on every panel, current band larger
+    bands.forEach(other => {
+        const p = picks[other];
+        if (!p) return;
+        const native = p.native;
+        // Convert native (0..120) to canvas coordinates given current zoom
+        const cropOrigin = (NATIVE_SIZE * (1 - 1 / zoomFactor)) / 2;
+        const cropSize = NATIVE_SIZE / zoomFactor;
+        const cx = ((native.x - cropOrigin) / cropSize) * cv.width;
+        const cy = ((native.y - cropOrigin) / cropSize) * cv.height;
+        const r = (other === bid) ? 14 : 9;
+        const lineWidth = (other === bid) ? 3 : 2;
+        ctx.strokeStyle = bandColor(other);
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        // Label
+        ctx.fillStyle = bandColor(other);
+        ctx.font = '12px monospace';
+        ctx.fillText(other, cx + r + 2, cy - r);
+    });
+}
+
+function bandColor(bid) {
+    return { B02: '#4fc3ff', B03: '#4cdc64', B04: '#fc4c4c', B08: '#ec407a' }[bid];
+}
+
+bands.forEach(bid => {
+    const cv = document.getElementById('cv-' + bid);
+    cv.addEventListener('click', evt => {
+        const rect = cv.getBoundingClientRect();
+        const cx = (evt.clientX - rect.left) * (cv.width / rect.width);
+        const cy = (evt.clientY - rect.top) * (cv.height / rect.height);
+        // Convert canvas → native pixel (0..120)
+        const cropOrigin = (NATIVE_SIZE * (1 - 1 / zoomFactor)) / 2;
+        const cropSize = NATIVE_SIZE / zoomFactor;
+        const native = {
+            x: cropOrigin + (cx / cv.width) * cropSize,
+            y: cropOrigin + (cy / cv.height) * cropSize,
+        };
+        picks[bid] = { canvas: { x: cx, y: cy }, native };
+        document.getElementById('pick-' + bid).textContent =
+            `Picked: native (${native.x.toFixed(2)}, ${native.y.toFixed(2)}) px`;
+        document.getElementById('pick-' + bid).classList.remove('empty');
+        bands.forEach(b => drawPanel(b));
+    });
+});
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+    bands.forEach(bid => {
+        picks[bid] = null;
+        const el = document.getElementById('pick-' + bid);
+        el.textContent = 'Inte vald';
+        el.classList.add('empty');
+        drawPanel(bid);
+    });
+    document.getElementById('results').innerHTML = '';
+});
+
+document.getElementById('btn-zoom-2x').addEventListener('click', evt => {
+    zoomFactor = (zoomFactor === 1) ? 2 : 1;
+    evt.target.textContent = (zoomFactor === 1) ? 'Zoom 2× (16× pixels)' : 'Zoom 1× (8× pixels)';
+    bands.forEach(b => drawPanel(b));
+});
+
+document.getElementById('btn-compute').addEventListener('click', () => {
+    const out = document.getElementById('results');
+    if (!picks.B02 || !picks.B08) {
+        out.innerHTML = '<div class="verdict warn">Behöver minst B02 och B08 för att räkna ut hastigheten.</div>';
+        return;
+    }
+    let html = `
+        <div class="row header">
+            <div class="col">Band</div>
+            <div class="col">Δt (s)</div>
+            <div class="col">Δy (px)</div>
+            <div class="col">Δx (px)</div>
+            <div class="col">|Δ| (px)</div>
+            <div class="col">|Δ| (m)</div>
+            <div class="col wide">Hastighet</div>
+        </div>`;
+
+    const b02 = picks.B02.native;
+    let speed_b02_b08 = null;
+    bands.forEach(bid => {
+        if (bid === 'B02' || !picks[bid]) return;
+        const p = picks[bid].native;
+        const dy = p.y - b02.y;
+        const dx = p.x - b02.x;
+        const dist_px = Math.hypot(dy, dx);
+        const dist_m = dist_px * PIXEL_M;
+        const dt = DT[bid];
+        const v = dist_m / dt;
+        const mach = v / SPEED_OF_SOUND;
+        const kmh = v * 3.6;
+        if (bid === 'B08') speed_b02_b08 = v;
+        html += `
+            <div class="row">
+                <div class="col" style="color:${bandColor(bid)}">${bid}</div>
+                <div class="col">${dt.toFixed(3)}</div>
+                <div class="col">${dy.toFixed(2)}</div>
+                <div class="col">${dx.toFixed(2)}</div>
+                <div class="col">${dist_px.toFixed(2)}</div>
+                <div class="col">${dist_m.toFixed(0)}</div>
+                <div class="col wide">${v.toFixed(0)} m/s · ${kmh.toFixed(0)} km/h · Mach ${mach.toFixed(2)}</div>
+            </div>`;
+    });
+
+    // Reasonability check (ground speed; civilt jet i cruise = 210-280 m/s = 750-1000 km/h)
+    if (speed_b02_b08 !== null) {
+        const v = speed_b02_b08;
+        const kmh = v * 3.6;
+        let verdict, cls;
+        if (v < 70) {
+            verdict = `Ground speed ${v.toFixed(0)} m/s (${kmh.toFixed(0)} km/h) — för låg för jet, tyder på för nära ihop-pickade apex-punkter. Försök 2× zoom + plocka igen.`;
+            cls = 'warn';
+        } else if (v >= 210 && v <= 280) {
+            verdict = `Ground speed ${v.toFixed(0)} m/s (${kmh.toFixed(0)} km/h). Matchar typisk cruise-fart för civilt linjeflyg (~750–1000 km/h ground speed på 30-35 000 ft). Trovärdigt.`;
+            cls = 'ok';
+        } else if (v >= 150 && v < 210) {
+            verdict = `Ground speed ${v.toFixed(0)} m/s (${kmh.toFixed(0)} km/h). Möjligt på descent eller med motvind. Civilt linjeflyg ligger normalt 210–280 m/s i cruise.`;
+            cls = 'ok';
+        } else if (v > 280 && v <= 350) {
+            verdict = `Ground speed ${v.toFixed(0)} m/s (${kmh.toFixed(0)} km/h). Något snabbare än standard-cruise — möjligt med medvind eller högfartsplan.`;
+            cls = 'ok';
+        } else if (v > 350) {
+            verdict = `Ground speed ${v.toFixed(0)} m/s (${kmh.toFixed(0)} km/h) — supersonic. Osannolikt civilt; kontrollera att apex är samma fysiska punkt i båda banden.`;
+            cls = 'warn';
+        } else {
+            verdict = `Ground speed ${v.toFixed(0)} m/s (${kmh.toFixed(0)} km/h). Lite låg för cruise-jet (förv. 750–1000 km/h ground speed), men möjligt på descent.`;
+            cls = 'warn';
+        }
+        html += `<div class="verdict ${cls === 'warn' ? 'warn' : ''}">${verdict}</div>`;
+    }
+    out.innerHTML = html;
+});
+
+</script>
+</body>
+</html>

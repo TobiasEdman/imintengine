@@ -1,0 +1,83 @@
+{
+  "safe_archive": "S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK_20260111T125307.SAFE",
+  "user_point": {
+    "lat": 57.71809,
+    "lon": 11.66456
+  },
+  "method": "Apex via wedge edge intersection, water-masked, principal axis from union of B02/B04/B08 bright residual",
+  "apexes": {
+    "B02": {
+      "apex_yx": [
+        -1673.0395901850773,
+        469.6091003667618
+      ],
+      "s_apex": 1352.887124248145,
+      "w_apex": -1150.5709308641349,
+      "s_range": [
+        1.3243995005376312,
+        15.976878228486687
+      ],
+      "head_end": "high_s",
+      "intensity_low_s": 282.15789794921875,
+      "intensity_high_s": 391.5,
+      "n_streak_pixels": 129,
+      "n_valid_bins": 8
+    },
+    "B03": {
+      "apex_yx": [
+        -1.570295071835936,
+        45.719400079592944
+      ],
+      "s_apex": 66.26101179300602,
+      "w_apex": -2.4919574200268,
+      "s_range": [
+        51.74907225349747,
+        65.20062762265076
+      ],
+      "head_end": "high_s",
+      "intensity_low_s": 17.5,
+      "intensity_high_s": 19.846153259277344,
+      "n_streak_pixels": 82,
+      "n_valid_bins": 8
+    },
+    "B04": {
+      "apex_yx": [
+        126.3725471752075,
+        96.97459446367873
+      ],
+      "s_apex": -70.88966540950092,
+      "w_apex": 11.152000088555724,
+      "s_range": [
+        -66.24739237535417,
+        -60.888959793557405
+      ],
+      "head_end": "high_s",
+      "intensity_low_s": 13.5,
+      "intensity_high_s": 19.899999618530273,
+      "n_streak_pixels": 35,
+      "n_valid_bins": 8
+    },
+    "B08": {
+      "apex_yx": [
+        -2.3527258086904936,
+        76.12700470771844
+      ],
+      "s_apex": 52.90830094226341,
+      "w_apex": -29.822155553498764,
+      "s_range": [
+        0.4374911718672112,
+        15.514932759264353
+      ],
+      "head_end": "low_s",
+      "intensity_low_s": 90.84210205078125,
+      "intensity_high_s": 31.947368621826172,
+      "n_streak_pixels": 107,
+      "n_valid_bins": 8
+    }
+  },
+  "b02_b08_offset_px": 1716.3981934283302,
+  "b02_b08_offset_m": 17163.9819342833,
+  "speed_m_s": 17078.58898933662,
+  "speed_km_h": 61482.920361611825,
+  "speed_mach": 49.791804633634456
+}
