@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" font-family="Space Grotesk, system-ui, sans-serif">
+  <rect width="800" height="420" fill="#fafafa"/>
+
+  <text x="400" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#171717">Inter-band-tidsdelta · Sentinel-2 MSI</text>
+  <text x="400" y="50" text-anchor="middle" font-size="12" fill="#6b7280">Nominella värden från ESA S2 MSI Product Definition Document</text>
+
+  <!-- Timeline -->
+  <line x1="80" y1="160" x2="720" y2="160" stroke="#171717" stroke-width="2"/>
+  <text x="80" y="180" text-anchor="middle" font-size="10" fill="#6b7280">0.0 s</text>
+  <text x="240" y="180" text-anchor="middle" font-size="10" fill="#6b7280">0.5 s</text>
+  <text x="400" y="180" text-anchor="middle" font-size="10" fill="#6b7280">1.0 s</text>
+  <text x="560" y="180" text-anchor="middle" font-size="10" fill="#6b7280">2.0 s</text>
+  <text x="720" y="180" text-anchor="middle" font-size="10" fill="#6b7280">3.6 s</text>
+
+  <!-- Band marks on timeline -->
+  <g>
+    <!-- B02 @ t=0 -->
+    <line x1="80" y1="150" x2="80" y2="170" stroke="#003366" stroke-width="3"/>
+    <text x="80" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#003366">B02</text>
+    <text x="80" y="120" text-anchor="middle" font-size="9" fill="#6b7280">490 nm</text>
+
+    <!-- B03 @ t≈0.5 -->
+    <line x1="240" y1="150" x2="240" y2="170" stroke="#1a9850" stroke-width="3"/>
+    <text x="240" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#1a9850">B03</text>
+    <text x="240" y="120" text-anchor="middle" font-size="9" fill="#6b7280">560 nm</text>
+
+    <!-- B04 @ t≈0.5-0.6 -->
+    <line x1="270" y1="150" x2="270" y2="170" stroke="#d73027" stroke-width="3"/>
+    <text x="290" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#d73027">B04</text>
+    <text x="290" y="120" text-anchor="middle" font-size="9" fill="#6b7280">665 nm</text>
+
+    <!-- B08 @ t≈1.0 -->
+    <line x1="400" y1="150" x2="400" y2="170" stroke="#4a148c" stroke-width="3"/>
+    <text x="400" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#4a148c">B08</text>
+    <text x="400" y="120" text-anchor="middle" font-size="9" fill="#6b7280">842 nm</text>
+
+    <!-- B11 @ t≈2.4 -->
+    <line x1="612" y1="150" x2="612" y2="170" stroke="#7b1fa2" stroke-width="3"/>
+    <text x="612" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#7b1fa2">B11</text>
+    <text x="612" y="120" text-anchor="middle" font-size="9" fill="#6b7280">1610 nm</text>
+
+    <!-- B12 @ t≈3.6 -->
+    <line x1="720" y1="150" x2="720" y2="170" stroke="#3e2723" stroke-width="3"/>
+    <text x="720" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#3e2723">B12</text>
+    <text x="720" y="120" text-anchor="middle" font-size="9" fill="#6b7280">2190 nm</text>
+  </g>
+
+  <!-- Aircraft displacement table -->
+  <text x="80" y="230" font-size="14" font-weight="600" fill="#171717">Hur långt hinner ett stridsflygplan i 290 m/s flyga mellan band-exponeringarna?</text>
+
+  <g transform="translate(80, 250)">
+    <rect x="0" y="0" width="640" height="32" fill="#245045"/>
+    <text x="100" y="20" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">Bandpar</text>
+    <text x="280" y="20" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">Δt (s)</text>
+    <text x="430" y="20" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">Markförflyttning (m)</text>
+    <text x="570" y="20" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">Pixlar @ 10 m</text>
+
+    <rect x="0" y="32" width="640" height="28" fill="#fff"/>
+    <text x="100" y="51" text-anchor="middle" font-size="12" fill="#171717">B02 ↔ B03</text>
+    <text x="280" y="51" text-anchor="middle" font-size="12" fill="#171717">~0.5</text>
+    <text x="430" y="51" text-anchor="middle" font-size="12" fill="#171717">~145</text>
+    <text x="570" y="51" text-anchor="middle" font-size="12" font-weight="600" fill="#171717">~14 px</text>
+
+    <rect x="0" y="60" width="640" height="28" fill="#f3f4f6"/>
+    <text x="100" y="79" text-anchor="middle" font-size="12" fill="#171717">B02 ↔ B04</text>
+    <text x="280" y="79" text-anchor="middle" font-size="12" fill="#171717">~0.6</text>
+    <text x="430" y="79" text-anchor="middle" font-size="12" fill="#171717">~174</text>
+    <text x="570" y="79" text-anchor="middle" font-size="12" font-weight="600" fill="#171717">~17 px</text>
+
+    <rect x="0" y="88" width="640" height="28" fill="#fff"/>
+    <text x="100" y="107" text-anchor="middle" font-size="12" fill="#171717">B02 ↔ B08</text>
+    <text x="280" y="107" text-anchor="middle" font-size="12" fill="#171717">~1.0</text>
+    <text x="430" y="107" text-anchor="middle" font-size="12" fill="#171717">~290</text>
+    <text x="570" y="107" text-anchor="middle" font-size="12" font-weight="600" fill="#171717">~29 px</text>
+
+    <rect x="0" y="116" width="640" height="28" fill="#f3f4f6"/>
+    <text x="100" y="135" text-anchor="middle" font-size="12" fill="#171717">B02 ↔ B12 (full spread)</text>
+    <text x="280" y="135" text-anchor="middle" font-size="12" fill="#171717">~3.6</text>
+    <text x="430" y="135" text-anchor="middle" font-size="12" fill="#171717">~1044</text>
+    <text x="570" y="135" text-anchor="middle" font-size="12" font-weight="600" fill="#171717">~104 px</text>
+  </g>
+
+  <text x="400" y="410" text-anchor="middle" font-size="11" fill="#6b7280">Förutsättning: 290 m/s ground speed (Mach 0.85 vid sjönivå). Faktisk fart läses från MTD_TL.xml + pixel-mätning.</text>
+</svg>

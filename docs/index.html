@@ -87,6 +87,7 @@
             <a href="#" class="theme-tab" data-tab="kust">🌊 Kust</a>
             <a href="#" class="theme-tab" data-tab="water_quality">💧 Vattenkvalitet</a>
             <a href="#" class="theme-tab" data-tab="sr">🔬 Superresolution</a>
+            <a href="#" class="theme-tab" data-tab="aircraft_parallax">✈️ Sensor-parallax</a>
             <a href="#" class="theme-tab" data-tab="era5">☁️ Atmosfär</a>
         </div>
     </div>
@@ -509,6 +510,112 @@
             </p>
             <p>
                 Bicubic borde ge nästan helt blå paneler — den blandar bara grannpixlar utan att uppfinna något. SEN2SR är designad för att stanna nära originalet (radio­metrisk hard-constraint), så även den ska se mestadels blå/grön ut. LDSR-S2 (diffusion) är mer ambitiös och kan visa gulare/rödare områden längs kanter, fasader och vägar — där modellen försöker återskapa textur. Det är inte nödvändigtvis fel, men det är där du ska vara mest försiktig att lita på detaljerna.
+            </p>
+
+        </div>
+    </div>
+
+    <!-- ── Aircraft parallax tab — push-broom band-tidsförskjutning ─── -->
+    <div class="tab-content" id="tab-aircraft_parallax">
+        <div class="tab-dynamic"></div>
+        <div class="tab-description">
+
+            <h3>Push-broom-sensorer — varför banden tas vid olika tidpunkter</h3>
+            <p>
+                Sentinel-2 MSI är en <strong>push-broom</strong>-sensor: i fokalplanet finns separata detektorrader för varje spektralband, och raderna sitter fysiskt åtskilda along-track (i satellitens rörelseriktning). När satelliten sveper över ett område registrerar varje band-detektor samma markpunkt vid något olika tidpunkter. Med en orbit-hastighet motsvarande ~6.7 km/s ground-track ger den fysiska band-separationen på fokalplanet en tidsdelta på 0.5–3.6 sekunder mellan första (B02, blå) och sista bandet (B12, SWIR). De fyra band som ingår i RGB+NIR-analyser (B02, B03, B04, B08) har en spread på ~1.0 sekund.
+                <br><em>Källa: ESA Sentinel-2 MSI Product Definition Document, kapitel 3 (focal plane geometry).</em>
+            </p>
+
+            <h3>För markobjekt: ingen synlig effekt</h3>
+            <p>
+                En stationär markpunkt — ett hus, en väg, en vattenyta — befinner sig på samma plats vid t&#8320;, t&#8320;+0.5s och t&#8320;+1.0s. Alla band registrerar samma pixel. I L2A-produkten co-registreras dessutom banden till ett gemensamt rutnät så att slutanvändaren ser en sömlös bild. Det är bara när objektet rör sig <em>under</em> exponeringsintervallet som tidsförskjutningen blir synlig.
+            </p>
+
+            <h3>För snabbt rörliga objekt: parallax-streck</h3>
+            <p>
+                Ett stridsflygplan i 290 m/s (Mach 0.85, typvärde för JAS 39 Gripen i normal cruise) hinner förflytta sig v &middot; &Delta;t = (290 m/s)(1.0 s) = <strong>290 m mellan B02 och B08</strong>. Vid 10 m pixelstorlek motsvarar det 29 pixlar — fullt synligt i kompositbilden. I RGB-kompositen syns flygplanet som <strong>tre separerade färgade kopior</strong> (blå, grön, röd) längs flygriktningen. Eftersom flygplan dessutom är starka NIR-reflektorer mot vinterns dämpade NIR-bakgrund är B08-kopian ofta den tydligaste signalen, ytterligare ~29 px från blå-kopian.
+            </p>
+
+            <h3>Förväntade pixel-offsets vid 290 m/s</h3>
+            <table class="license-table" style="margin-top:8px;">
+                <thead>
+                    <tr><th>Bandpar</th><th>&Delta;t (s)</th><th>Förflyttning (m)</th><th>Pixlar @ 10 m</th><th>Färg i RGB</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>B02 &harr; B03</td><td>~0.5</td><td>~145</td><td>~14 px</td><td>Blå &harr; Grön</td></tr>
+                    <tr><td>B02 &harr; B04</td><td>~0.6</td><td>~174</td><td>~17 px</td><td>Blå &harr; Röd</td></tr>
+                    <tr><td>B02 &harr; B08</td><td>~1.0</td><td>~290</td><td>~29 px</td><td>Blå &harr; NIR (osynlig i RGB)</td></tr>
+                    <tr><td>B02 &harr; B12 (full spread)</td><td>~3.6</td><td>~1044</td><td>~104 px</td><td>—</td></tr>
+                </tbody>
+            </table>
+
+            <h3>Hastighetsmätning från pixel-offset</h3>
+            <p>
+                Eftersom relationen är <code>v = offset_meter / &Delta;t</code> kan flygplanets markhastighet uppskattas direkt från bilden: identifiera samma objekt i två band (typiskt B02 och B08 för max separation), mät centroidoffset i pixlar, konvertera till meter (×10 m), hämta exakta sensing-tider per band från SAFE-arkivets <code>MTD_TL.xml</code>, och beräkna <code>v_ground = offset_m / &Delta;t</code>. Med &Delta;t-precision på 0.01 s och pixel-precision på 1 px ger metoden hastighetsosäkerhet på ~10–20 m/s — fullt tillräckligt för att skilja propellerflyg (50–100 m/s), trafikflyg (200–250 m/s) och stridsflyg (200–600 m/s).
+                <br><em>Källa: Heiselberg, H., 2019. "A Direct and Fast Methodology for Ship Recognition in Sentinel-2 Multispectral Imagery." Remote Sensing 11(18).</em>
+            </p>
+
+            <h3>Varför L1C, inte L2A</h3>
+            <p>
+                Den här analysen kräver Sentinel-2 <strong>L1C SAFE-arkivet</strong> (per-band JP2-filer i native detektor-geometri) — inte L2A. L1C TOA-data bevarar bandens ursprungliga detektor-geometri och därmed parallaxen. L2A BOA-data har gått genom Sen2Cor som co-registrerar och resamplar banden till ett gemensamt rutnät — co-registreringen kan smeta ut eller eliminera parallaxen helt. Repots befintliga <code>fetch_des_data</code> (L2A via DES openEO) bör <em>inte</em> användas här. Pipeline-anropet är <code>fetch_l1c_safe_from_gcp(date, coords, dest_dir)</code> — samma fetch-funktion som C2RCC-pipelinen i Vattenkvalitet-tabben använder.
+            </p>
+
+            <h3>Verifierad passage 2026-01-11 10:43:19 UTC</h3>
+            <p>
+                L1C SAFE-arkivet hämtat från Google Clouds publika Sentinel-2-bucket: <code>S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK_20260111T125307.SAFE</code>. Faktisk inter-band-fördröjning från <code>MTD_TL.xml</code>: <strong>Δt(B02→B08) = 1.005 s</strong>. Solhöjd vid passet ~10° (vinterskymning) — låg kontrast generellt, men NIR (B08) lyser tydligt på metalliska ytor.
+            </p>
+
+            <h3>Plan-punkt 57.71809°N, 11.66456°E — direkt observation</h3>
+            <p>
+                Vi cropade en 120×120 pixel-fönster (1.2×1.2 km) runt den exakta punkten i varje 10 m-band, hard-stretchade 1–99 percentilvärden inom cropet, och uppskalade 8× med nearest neighbor. <strong>Resultatet visar entydigt push-broom-parallax</strong>: en tunn diagonal linje genom AOI:n med olika position i varje band.
+            </p>
+
+            <h3>Vad ser vi: kondensstrimma, inte flygplanskropp</h3>
+            <p>
+                Strecket är cirka <strong>1 pixel brett</strong> (~10 m i markprojektion) och <strong>30–50 pixlar långt</strong> (300–500 m). Bredden matchar fysiskt en flygplanskropp eller motorernas avgasplym, men längden är för stor — ingen flygplanskropp är 500 m. Det är en <strong>kondensstrimma (contrail)</strong> från ett jetplan på hög höjd. <em>Det är också anledningen till att vi inte ser strecket i den fulla 5×5 km RGB-vyn med default 2–98 stretch — kontrasten är för svag mot vinter-mark.</em> Hard-stretch och pixel-zoom är nödvändiga för att signalen ska bli synlig.
+            </p>
+
+            <h3>Push-broom parallax: bekräftad i pixeldata</h3>
+            <p>
+                I varje av de fyra banden (B02 blå · B03 grön · B04 röd · B08 NIR) ses strecket på <strong>olika position</strong>. Bandens inbördes tidsförskjutning från MTD_TL.xml: B02 t₀ · B03 +0.527 s · B04 +0.585 s · B08 +1.005 s. Streckets position skiftar i samma ordning — det är push-broom-band-parallax, direkt synlig i pixeldata. <strong>Fenomenet är reellt och fångat i Sentinel-2-bilden.</strong>
+            </p>
+
+            <h3>Wedge-form & apex-spårning</h3>
+            <p>
+                En kondensstrimma är wedge-formad: bredast längst bort från planet (gammal contrail har spridits ut av luftturbulens) och smalnar av till en punkt vid planet (nyligen bildad, kompakt). Att hitta apex (= planet) borde idealt ske genom att fitta linjer till strecks <em>ytterkanter</em> och ta deras skärningspunkt. Vi försökte den metoden i två varianter (PCA-axis + edge-bin-fitting i 120×120 och 400×400 crops). Resultaten var inte stabila — när contrailen är så smal som här (~1 px bred) är ytterkanterna nästan parallella, vilket gör skärningspunkten extrapolerad långt utanför streckets faktiska längd. Mätningen är teoretiskt rätt men numeriskt instabil utan en mer sofistikerad detektion (Steger-linjefilter eller matched-template fitting med taper-modell). Apex-overlay-panelen ovan visar var algoritmen <em>landade</em>, vilket avslöjar problemet visuellt.
+            </p>
+
+            <h3>Bästa skattning vi kunde göra</h3>
+            <p>
+                Centroid-baserad mätning gav <strong>B02→B08 offset = 13.55 px (136 m)</strong>, vilket via Δt = 1.005 s ger <strong>135 m/s</strong>. Den siffran blandar dock två effekter:
+            </p>
+            <ul>
+                <li><strong>Aircraft head extension:</strong> under Δt flyger planet v×Δt och förlänger contrailen.</li>
+                <li><strong>Contrail vinddrift:</strong> hela strecket advekterar med vinden på flyghöjd (typiskt 30–80 m/s i jetströmsregioner runt 30–35 000 ft).</li>
+            </ul>
+            <p>
+                För ett klassiskt civilt jet i cruise är typisk ground speed 200–260 m/s. Vår 135 m/s-skattning från streckets centroid antyder att vinden och head-extension delvis kancellerar varandra — alternativt att vinddriften går i samma riktning som flygriktningen och drar upp centroid-rörelsen. Utan ADS-B + vindfält är det inte möjligt att isolera flygplanets faktiska v_ground.
+            </p>
+
+            <h3>Vad vi entydigt kan säga</h3>
+            <ul>
+                <li><strong>Push-broom-band-parallax är reell och fångad</strong> i Sentinel-2 L1C-scenen 2026-01-11 10:43:19 UTC vid 57.71809°N, 11.66456°E.</li>
+                <li>Det finns en <strong>kondensstrimma från ett jetplan</strong> (turbopropar bildar inte synliga contrails) som syns i alla fyra 10 m-band.</li>
+                <li>Streckets position skiftar mellan B02/B03/B04/B08 i samma ordning som bandens timing-offset (B02 t₀ → B08 +1.005 s).</li>
+                <li>Mätt B02→B08 streak-centroid-offset: 13.55 px = 136 m, motsvarande en ström-effektiv hastighet på ~135 m/s vid den valda metoden. Den siffran är inte direkt flygplanets ground speed.</li>
+            </ul>
+
+            <h3>Vad som krävs för exakt aircraft v_ground</h3>
+            <ul>
+                <li><strong>ADS-B ground truth</strong> för 2026-01-11 10:43:19 UTC i området → ICAO-kod, faktisk hastighet och kurs.</li>
+                <li><strong>Robust apex-detektion</strong> via Steger-linjefilter + taper-template fitting istället för enkel edge-bin-regression.</li>
+                <li><strong>Vindfält på flyghöjd</strong> från ECMWF ERA5 → korrigera streck-drift för aktuell vindkomponent.</li>
+            </ul>
+
+            <h3>OSINT-relevans</h3>
+            <p>
+                Push-broom-parallax används rutinmässigt i öppen källanalys för att mäta hastigheter på flygplan och fartyg från offentligt tillgänglig Sentinel-2-data, identifiera flygplanstyp via storlek + hastighet, och spåra missiltest och experimentell flygtrafik. Att ImintEngine kan reproducera analysen visar att verktyget hanterar både civila användningsfall (vegetation, vatten, kustförändring) och säkerhets-/övervakningsrelevanta frågor som faller under samma sensorfysik.
+                <br><em>Bakgrund: Cermak &amp; Knutti (2009); Heiselberg (2019).</em>
             </p>
 
         </div>

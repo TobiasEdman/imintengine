@@ -1,0 +1,25 @@
+{
+  "produced_at": "2026-05-08T12:11:14.789353Z",
+  "safe_archive": "S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK_20260111T125307.SAFE",
+  "date": "2026-01-11",
+  "center_lat": 57.71818,
+  "center_lon": 11.66559,
+  "aoi_half_km": 2.5,
+  "bbox_wgs84": {
+    "west": 11.623540857316671,
+    "south": 57.69572222062522,
+    "east": 11.707639142683329,
+    "north": 57.74063777937477
+  },
+  "image_size_px": [
+    520,
+    520
+  ],
+  "bands_used": [
+    "B04 (red, 665 nm)",
+    "B03 (green, 560 nm)",
+    "B02 (blue, 490 nm)"
+  ],
+  "stretch": "per-channel 2-98 percentile",
+  "purpose": "aircraft_parallax showcase tab \u2014 RGB for visual inspection of push-broom band offsets"
+}

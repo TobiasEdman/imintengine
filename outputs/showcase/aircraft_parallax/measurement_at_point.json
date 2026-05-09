@@ -1,0 +1,89 @@
+{
+  "safe_archive": "S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK_20260111T125307.SAFE",
+  "aircraft_point_wgs84": {
+    "lat": 57.71809,
+    "lon": 11.66456
+  },
+  "band_offsets_seconds": {
+    "B02": 0.0,
+    "B03": 0.527,
+    "B04": 0.585,
+    "B08": 1.005
+  },
+  "centroids": {
+    "B02": {
+      "centroid_yx_local": [
+        42.756525517459316,
+        81.70699162584927
+      ],
+      "confidence_residual": 4219.33349609375,
+      "crop_origin_yx": [
+        9899,
+        5811
+      ]
+    },
+    "B03": {
+      "centroid_yx_local": [
+        37.64175846788121,
+        82.52383647013001
+      ],
+      "confidence_residual": 4535.7666015625,
+      "crop_origin_yx": [
+        9899,
+        5811
+      ]
+    },
+    "B04": {
+      "centroid_yx_local": [
+        33.81598504443136,
+        82.8018592025404
+      ],
+      "confidence_residual": 6508.16650390625,
+      "crop_origin_yx": [
+        9899,
+        5811
+      ]
+    },
+    "B08": {
+      "centroid_yx_local": [
+        32.60959592160056,
+        90.69381026768922
+      ],
+      "confidence_residual": 7532.36669921875,
+      "crop_origin_yx": [
+        9899,
+        5811
+      ]
+    }
+  },
+  "offsets_from_B02": {
+    "B03": {
+      "delta_t_s": 0.527,
+      "dy_px": -5.114767049578106,
+      "dx_px": 0.8168448442807374,
+      "distance_px": 5.179582750673835,
+      "distance_m": 51.79582750673835,
+      "speed_m_s": 98.28430266933272,
+      "speed_mach": 0.2865431564703578
+    },
+    "B04": {
+      "delta_t_s": 0.585,
+      "dy_px": -8.940540473027959,
+      "dx_px": 1.0948675766911293,
+      "distance_px": 9.007330290399064,
+      "distance_m": 90.07330290399065,
+      "speed_m_s": 153.9714579555396,
+      "speed_mach": 0.44889637887912415
+    },
+    "B08": {
+      "delta_t_s": 1.005,
+      "dy_px": -10.146929595858758,
+      "dx_px": 8.986818641839946,
+      "distance_px": 13.554449067543702,
+      "distance_m": 135.54449067543703,
+      "speed_m_s": 134.87013997555925,
+      "speed_mach": 0.3932074051765576
+    }
+  },
+  "interpretation": "Streak centroid is the intensity-weighted mean of the top 30 residual pixels per band crop (residual = arr - 15px median filter). The B02->B08 offset divided by \u0394t = 1.005 s yields the aircraft ground speed."
+}

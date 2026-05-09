@@ -541,6 +541,42 @@ var TAB_CONFIG = {
         hasBgToggle: false
     },
 
+    aircraft_parallax: {
+        title: 'Push-broom band-parallax — Hisingen 2026-01-11',
+        summary: [
+            {title:'Plats (kondensstrimma)', value:'57.71809°N, 11.66456°E', detail:'Hisingen / Säve · L1C tile T32VPK'},
+            {title:'Verifierad passage',     value:'S2B 10:43:19 UTC',       detail:'2026-01-11 · Δt(B02→B08)=1.005 s'},
+            {title:'Streckbredd',            value:'~1 px (~10 m)',          detail:'Tunn linje, typiskt för kondensstrimma'},
+            {title:'Strecklängd',            value:'30–50 px (300–500 m)',   detail:'För långt för kropp = contrail'},
+            {title:'Parallax-bevis',         value:'Ja, mellan band',        detail:'Streckposition skiftar B02→B08'}
+        ],
+        intro: 'Sentinel-2 MSI är en <strong>push-broom</strong>-sensor: bandens detektorrader sitter fysiskt åtskilda på fokalplanet, så samma markpunkt registreras vid något olika tidpunkter när satelliten rör sig framåt med ~6.7 km/s. Vid din punkt 57.71809°N, 11.66456°E ser vi en <strong>tunn diagonal linje</strong> i alla fyra band (B02/B03/B04/B08) — bredd ~1 pixel (10 m), längd 30–50 pixlar (300–500 m). Bredden matchar en flygplanskropp men längden är för stor för en kropp; det är en <strong>kondensstrimma (contrail)</strong> från ett jetplan på hög höjd. Och vi ser tydlig <strong>parallax</strong>: streckets position skiftar mellan banden enligt deras inbördes tidsförskjutning (Δt(B02→B08) = 1.005 s, mätt från MTD_TL.xml). Det är push-broom-fysiken direkt visualiserad. Att räkna ut planets faktiska ground speed från enbart en contrail är dock <em>svårt</em>: contrailen advekterar med vinden och växer från flygplanet samtidigt — utan ADS-B ground truth blandas de två effekterna. Det vi kan säga med säkerhet: parallax-fenomenet är reellt och Sentinel-2 fångar det.',
+        panels: [
+            {id:'ap-zoom-rgb',   key:'zoom_rgb',   title:'RGB-närbild vid kondensstrimman (8× pixel-zoom, hard 1-99% stretch)',  legend:null},
+            {id:'ap-zoom-bands', key:'zoom_bands', title:'Per-band zoom — B02/B03/B04/B08 vid samma punkt',                       legend:null},
+            {id:'ap-apex',       key:'apex',       title:'Apex-tracking — alla band-apexes överlagrade per panel',                legend:null},
+            {id:'ap-rgb',        key:'rgb',        title:'Sentinel-2 RGB — full 5×5 km AOI',                                      legend:null},
+            {id:'ap-bands',      key:'bands',      title:'Per-band-paneler (full AOI)',                                           legend:null},
+            {id:'ap-aoi',        key:'aoi',        title:'AOI & verifierad passagedata',                                          legend:null},
+            {id:'ap-geom',       key:'geom',       title:'Sensorgeometri — push-broom fokalplan',                                 legend:null},
+            {id:'ap-timing',     key:'timing',     title:'Inter-band tidsdelta + förväntade pixel-offsets',                       legend:null},
+            {id:'ap-streak',     key:'streak',     title:'Förväntad signatur (referens vid 290 m/s)',                             legend:null}
+        ],
+        images: {
+            'ap-zoom-rgb':   'showcase/aircraft_parallax/zoom_rgb.png',
+            'ap-zoom-bands': 'showcase/aircraft_parallax/zoom_per_band.png',
+            'ap-apex':       'showcase/aircraft_parallax/apex_v2.png',
+            'ap-rgb':        'showcase/aircraft_parallax/rgb.png',
+            'ap-bands':      'showcase/aircraft_parallax/per_band_panels.png',
+            'ap-aoi':        'showcase/aircraft_parallax/aoi_overview.svg',
+            'ap-geom':       'showcase/aircraft_parallax/sensor_geometry.svg',
+            'ap-timing':     'showcase/aircraft_parallax/band_timing.svg',
+            'ap-streak':     'showcase/aircraft_parallax/predicted_streak.svg'
+        },
+        imgH: 960, imgW: 960,
+        hasBgToggle: false
+    },
+
     wetland_pirinen: {
         title: 'Pirinen 2023 — input-stack för svensk våtmarkssegmentering',
         summary: [

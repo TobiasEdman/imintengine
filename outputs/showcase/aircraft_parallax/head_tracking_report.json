@@ -1,0 +1,115 @@
+{
+  "safe_archive": "S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK_20260111T125307.SAFE",
+  "aircraft_point": {
+    "lat": 57.71809,
+    "lon": 11.66456
+  },
+  "delta_t_b02_b08_s": 1.005,
+  "method": "track contrail HEAD (brightest extreme of streak axis) per band",
+  "head_offsets_from_B02": [
+    {
+      "band": "B03",
+      "delta_t_s": 0.527,
+      "dy_px": "-108",
+      "dx_px": "-66",
+      "distance_px": 126.57013865837392,
+      "distance_m": 1265.7013865837391,
+      "speed_m_s": 2401.710410974837,
+      "speed_mach": 7.002071169022848
+    },
+    {
+      "band": "B04",
+      "delta_t_s": 0.585,
+      "dy_px": "-64",
+      "dx_px": "-74",
+      "distance_px": 97.83659846908007,
+      "distance_m": 978.3659846908007,
+      "speed_m_s": 1672.4204866509415,
+      "speed_mach": 4.875861477116447
+    },
+    {
+      "band": "B08",
+      "delta_t_s": 1.005,
+      "dy_px": "102",
+      "dx_px": "-158",
+      "distance_px": 188.06381895516216,
+      "distance_m": 1880.6381895516215,
+      "speed_m_s": 1871.2817806483797,
+      "speed_mach": 5.455632013552127
+    }
+  ],
+  "band_results": {
+    "B02": {
+      "head_yx": [
+        "108",
+        "235"
+      ],
+      "tail_yx": [
+        "3",
+        "144"
+      ],
+      "head_brightness": 861.25,
+      "tail_brightness": 22.727272033691406,
+      "streak_length_px": 138.76666337958673,
+      "n_pixels": 3084,
+      "axis_unit": [
+        -0.7879811085678428,
+        -0.6156994173622333
+      ]
+    },
+    "B03": {
+      "head_yx": [
+        "0",
+        "169"
+      ],
+      "tail_yx": [
+        "104",
+        "135"
+      ],
+      "head_brightness": 1237.6666259765625,
+      "tail_brightness": 19.799999237060547,
+      "streak_length_px": 109.412236647885,
+      "n_pixels": 2067,
+      "axis_unit": [
+        -0.947670956645641,
+        0.3192487399040683
+      ]
+    },
+    "B04": {
+      "head_yx": [
+        "44",
+        "161"
+      ],
+      "tail_yx": [
+        "105",
+        "239"
+      ],
+      "head_brightness": 2270.588134765625,
+      "tail_brightness": 829.8461303710938,
+      "streak_length_px": 98.98131272582467,
+      "n_pixels": 1836,
+      "axis_unit": [
+        0.637868180785853,
+        0.7701455602293286
+      ]
+    },
+    "B08": {
+      "head_yx": [
+        "210",
+        "77"
+      ],
+      "tail_yx": [
+        "39",
+        "151"
+      ],
+      "head_brightness": 1062.9000244140625,
+      "tail_brightness": 17.33333396911621,
+      "streak_length_px": 183.5606466039635,
+      "n_pixels": 2189,
+      "axis_unit": [
+        -0.83597713762091,
+        0.5487642712268632
+      ]
+    }
+  }
+}
