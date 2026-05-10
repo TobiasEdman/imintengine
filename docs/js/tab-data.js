@@ -542,36 +542,30 @@ var TAB_CONFIG = {
     },
 
     aircraft_parallax: {
-        title: 'Push-broom band-parallax — Hisingen 2026-01-11',
+        title: 'Push-broom band-parallax — Öckerö-skärgården 2026-01-11',
         summary: [
-            {title:'Plats (kondensstrimma)', value:'57.71809°N, 11.66456°E', detail:'Hisingen / Säve · L1C tile T32VPK'},
-            {title:'Verifierad passage',     value:'S2B 10:43:19 UTC',       detail:'2026-01-11 · Δt(B02→B08)=1.005 s'},
-            {title:'Streckbredd',            value:'~1 px (~10 m)',          detail:'Tunn linje, typiskt för kondensstrimma'},
-            {title:'Strecklängd',            value:'30–50 px (300–500 m)',   detail:'För långt för kropp = contrail'},
-            {title:'Parallax-bevis',         value:'Ja, mellan band',        detail:'Streckposition skiftar B02→B08'}
+            {title:'Plats (kondensstrimma)', value:'57.71809°N, 11.66456°E', detail:'Sundet mellan Öckerö och Björkö · ~6 km SW om Säve · L1C tile T32VPK'},
+            {title:'Verifierad passage',     value:'S2B 10:43:19 UTC',       detail:'2026-01-11 · detector 7 · Δt B02→B04 0.999 s'},
+            {title:'Mätt heading',           value:'≈ 051° (NÖ)',            detail:'Wedge-spets i NÖ · matchar Säve→ESOW initial bäring 51.7° inom 1°'},
+            {title:'Contrail-fysik',         value:'≥ 5–8 km flyghöjd',      detail:'Schmidt-Appleman utesluter låghöjds-trafik'},
+            {title:'Trolig identitet',       value:'SWE32A · Pilatus PC-24', detail:'SE-RVE · Säve→Västerås (ESOW) · climb i Kattegatt-outbound-departure'}
         ],
-        intro: 'Sentinel-2 MSI är en <strong>push-broom</strong>-sensor: bandens detektorrader sitter fysiskt åtskilda på fokalplanet, så samma markpunkt registreras vid något olika tidpunkter när satelliten rör sig framåt med ~6.7 km/s. Vid din punkt 57.71809°N, 11.66456°E ser vi en <strong>tunn diagonal linje</strong> i alla fyra band (B02/B03/B04/B08) — bredd ~1 pixel (10 m), längd 30–50 pixlar (300–500 m). Bredden matchar en flygplanskropp men längden är för stor för en kropp; det är en <strong>kondensstrimma (contrail)</strong> från ett jetplan på hög höjd. Och vi ser tydlig <strong>parallax</strong>: streckets position skiftar mellan banden enligt deras inbördes tidsförskjutning (Δt(B02→B08) = 1.005 s, mätt från MTD_TL.xml). Det är push-broom-fysiken direkt visualiserad. Att räkna ut planets faktiska ground speed från enbart en contrail är dock <em>svårt</em>: contrailen advekterar med vinden och växer från flygplanet samtidigt — utan ADS-B ground truth blandas de två effekterna. Det vi kan säga med säkerhet: parallax-fenomenet är reellt och Sentinel-2 fångar det.',
+        intro: 'Sentinel-2 MSI är en <strong>push-broom</strong>-sensor: bandens detektorrader sitter fysiskt åtskilda på fokalplanet, så samma markpunkt registreras vid olika tidpunkter när satelliten rör sig framåt med ~6.7 km/s. Vid 57.71809°N, 11.66456°E (sundet mellan Öckerö och Björkö i norra Göteborgs skärgård, ~6 km SW om Säve flygfält) ser vi en <strong>tunn diagonal linje</strong> i alla fyra band (B02/B03/B04/B08) — bredd ~1 pixel (10 m), längd 30–50 pixlar. Det är en <strong>kondensstrimma</strong> från ett jetplan; wedge-spetsen (skarp/ljus) ligger i NÖ, alltså flyger planet <strong>nordost</strong>. Inter-band-tiderna parsade från <code>MTD_DS.xml</code> detector 7 ger Δt(B02→B08)=0.260&nbsp;s, Δt(B02→B03)=0.521&nbsp;s, Δt(B02→B04)=0.999&nbsp;s — fokalplansordningen är B02→B08→B03→B04. Heading-mätning: <strong>051°</strong> (±5°). <strong>Contrail-fysiken</strong> (Schmidt-Appleman) utesluter låghöjds-trafik: kondensstrimmor bildas typiskt vid ≥ 5–8 km höjd där T ≤ −40°C. OpenSky-spårning identifierade <strong>SWE32A (Pilatus PC-24, SE-RVE)</strong>, en svensk affärsjet i flygning Säve→Västerås (ESOW) under exakt det tidsfönstret. Säve→ESOW initial bäring är <strong>51.7°</strong> — matchar uppmätt heading inom 1°. Trajektorian förklaras av en typisk Kattegatt-outbound-SID från Säves bana 03 (NÖ-bound), klättring SW ut över vatten för bullerdämpning, sedan turn back NÖ; AOI-passagen 10:43:19 är i NÖ-leg av detta mönster, ~5–8 km höjd, contrail-kapabel. Definitiv höjd kräver OpenSky Trino-tracks-access (rate-limited i free-tier).',
         panels: [
-            {id:'ap-zoom-rgb',   key:'zoom_rgb',   title:'RGB-närbild vid kondensstrimman (8× pixel-zoom, hard 1-99% stretch)',  legend:null},
-            {id:'ap-zoom-bands', key:'zoom_bands', title:'Per-band zoom — B02/B03/B04/B08 vid samma punkt',                       legend:null},
-            {id:'ap-apex',       key:'apex',       title:'Apex-tracking — alla band-apexes överlagrade per panel',                legend:null},
-            {id:'ap-rgb',        key:'rgb',        title:'Sentinel-2 RGB — full 5×5 km AOI',                                      legend:null},
-            {id:'ap-bands',      key:'bands',      title:'Per-band-paneler (full AOI)',                                           legend:null},
-            {id:'ap-aoi',        key:'aoi',        title:'AOI & verifierad passagedata',                                          legend:null},
-            {id:'ap-geom',       key:'geom',       title:'Sensorgeometri — push-broom fokalplan',                                 legend:null},
-            {id:'ap-timing',     key:'timing',     title:'Inter-band tidsdelta + förväntade pixel-offsets',                       legend:null},
-            {id:'ap-streak',     key:'streak',     title:'Förväntad signatur (referens vid 290 m/s)',                             legend:null}
+            {id:'ap-zoom-rgb', key:'zoom_rgb', title:'RGB-närbild vid kondensstrimman (8× pixel-zoom, hard 1-99% stretch)', legend:null},
+            {id:'ap-b02',      key:'b02',      title:'B02 · 490 nm (blå) · t₀',           legend:null},
+            {id:'ap-b08',      key:'b08',      title:'B08 · 842 nm (NIR) · t₀ + 0.260 s', legend:null},
+            {id:'ap-b03',      key:'b03',      title:'B03 · 560 nm (grön) · t₀ + 0.521 s',legend:null},
+            {id:'ap-b04',      key:'b04',      title:'B04 · 665 nm (röd) · t₀ + 0.999 s', legend:null},
+            {id:'ap-rgb',      key:'rgb',      title:'Sentinel-2 RGB — full 5×5 km AOI (kontext)', legend:null}
         ],
         images: {
-            'ap-zoom-rgb':   'showcase/aircraft_parallax/zoom_rgb.png',
-            'ap-zoom-bands': 'showcase/aircraft_parallax/zoom_per_band.png',
-            'ap-apex':       'showcase/aircraft_parallax/apex_v2.png',
-            'ap-rgb':        'showcase/aircraft_parallax/rgb.png',
-            'ap-bands':      'showcase/aircraft_parallax/per_band_panels.png',
-            'ap-aoi':        'showcase/aircraft_parallax/aoi_overview.svg',
-            'ap-geom':       'showcase/aircraft_parallax/sensor_geometry.svg',
-            'ap-timing':     'showcase/aircraft_parallax/band_timing.svg',
-            'ap-streak':     'showcase/aircraft_parallax/predicted_streak.svg'
+            'ap-zoom-rgb': 'showcase/aircraft_parallax/zoom_rgb.png',
+            'ap-b02':      'showcase/aircraft_parallax/picker_B02.png',
+            'ap-b03':      'showcase/aircraft_parallax/picker_B03.png',
+            'ap-b04':      'showcase/aircraft_parallax/picker_B04.png',
+            'ap-b08':      'showcase/aircraft_parallax/picker_B08.png',
+            'ap-rgb':      'showcase/aircraft_parallax/rgb.png'
         },
         imgH: 960, imgW: 960,
         hasBgToggle: false

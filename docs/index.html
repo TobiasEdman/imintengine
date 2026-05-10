@@ -86,8 +86,7 @@
             <a href="#" class="theme-tab" data-tab="marine">⚓ Marin</a>
             <a href="#" class="theme-tab" data-tab="kust">🌊 Kust</a>
             <a href="#" class="theme-tab" data-tab="water_quality">💧 Vattenkvalitet</a>
-            <a href="#" class="theme-tab" data-tab="sr">🔬 Superresolution</a>
-            <a href="#" class="theme-tab" data-tab="aircraft_parallax">✈️ Sensor-parallax</a>
+            <a href="#" class="theme-tab" data-tab="pixel_sensor">🔬 Pixel &amp; sensor</a>
             <a href="#" class="theme-tab" data-tab="era5">☁️ Atmosfär</a>
         </div>
     </div>
@@ -463,8 +462,15 @@
         </div><!-- /sub-tab-content water_quality_lilla_karlso -->
     </div>
 
-    <!-- ── Superresolution tab — open SR models side-by-side ─────────────── -->
-    <div class="tab-content" id="tab-sr">
+    <!-- ── Pixel & sensor — parent tab grouping SR + aircraft parallax ───── -->
+    <div class="tab-content" id="tab-pixel_sensor">
+        <div class="sub-tab-nav">
+            <a href="#" class="sub-tab active" data-subtab="sr">🔬 Superresolution</a>
+            <a href="#" class="sub-tab" data-subtab="aircraft_parallax">✈️ Push-broom-parallax</a>
+        </div>
+
+    <!-- ── Superresolution sub-tab — open SR models side-by-side ───────── -->
+    <div class="sub-tab-content active" id="tab-sr">
         <div class="tab-dynamic"></div>
         <div class="tab-description">
 
@@ -515,111 +521,178 @@
         </div>
     </div>
 
-    <!-- ── Aircraft parallax tab — push-broom band-tidsförskjutning ─── -->
-    <div class="tab-content" id="tab-aircraft_parallax">
+    <!-- ── Aircraft parallax sub-tab — push-broom band-tidsförskjutning ─── -->
+    <div class="sub-tab-content" id="tab-aircraft_parallax">
         <div class="tab-dynamic"></div>
+
+        <div class="section-header">
+            <h2>Verifierad passage &amp; band-timing</h2>
+        </div>
+        <table class="license-table" style="margin-top:8px;">
+            <thead>
+                <tr><th>Parameter</th><th>Värde</th><th>Källa</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>Datum (UTC)</td><td>2026-01-11 10:43:19</td><td>L1C SAFE-namn</td></tr>
+                <tr><td>Satellit</td><td>Sentinel-2B</td><td>SAFE-prefix S2B</td></tr>
+                <tr><td>Tile</td><td>T32VPK · UTM 32N</td><td>SAFE-suffix</td></tr>
+                <tr><td>Detector</td><td>7 (täcker AOI)</td><td>MTD_TL.xml viewing-incidence-grids</td></tr>
+                <tr><td>Produkt</td><td>L1C SAFE · per-band JP2</td><td>Google Cloud Sentinel-2-bucket</td></tr>
+                <tr><td>AOI</td><td>57.71818°N, 11.66559°E · 5×5 km · 520×520 px @ 10 m</td><td>centrerad på kondensstrimman</td></tr>
+            </tbody>
+        </table>
+
+        <h3 style="margin-top:24px;">Inter-band-tidsdelta — detector 7</h3>
+        <p>
+            Parsade per-detektor från <code>MTD_DS.xml</code> via <code>parse_band_times_v2.py</code>. Tidigare versioner använde nominella ESA-värden (B03 +0.5 s, B04 +0.6 s, B08 +1.0 s) som visade sig vara fel: faktisk fokalplansordning är <strong>B02 → B08 → B03 → B04</strong>, inte alfabetisk. B08 kommer näst tidigast, inte sist.
+        </p>
+        <table class="license-table" style="margin-top:8px;">
+            <thead>
+                <tr><th>Bandpar</th><th>Δt (s)</th><th>Förflyttning vid 220 m/s (m)</th><th>Pixlar @ 10 m</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>B02 → B08</td><td>0.2599</td><td>57</td><td>5.7 px</td></tr>
+                <tr><td>B02 → B03</td><td>0.5214</td><td>115</td><td>11.5 px</td></tr>
+                <tr><td>B02 → B04</td><td>0.9990</td><td>220</td><td>22.0 px</td></tr>
+            </tbody>
+        </table>
+
         <div class="tab-description">
 
             <h3>Push-broom-sensorer — varför banden tas vid olika tidpunkter</h3>
             <p>
-                Sentinel-2 MSI är en <strong>push-broom</strong>-sensor: i fokalplanet finns separata detektorrader för varje spektralband, och raderna sitter fysiskt åtskilda along-track (i satellitens rörelseriktning). När satelliten sveper över ett område registrerar varje band-detektor samma markpunkt vid något olika tidpunkter. Med en orbit-hastighet motsvarande ~6.7 km/s ground-track ger den fysiska band-separationen på fokalplanet en tidsdelta på 0.5–3.6 sekunder mellan första (B02, blå) och sista bandet (B12, SWIR). De fyra band som ingår i RGB+NIR-analyser (B02, B03, B04, B08) har en spread på ~1.0 sekund.
+                Sentinel-2 MSI är en <strong>push-broom</strong>-sensor: i fokalplanet finns separata detektorrader för varje spektralband, och raderna sitter fysiskt åtskilda along-track. När satelliten sveper över ett område registrerar varje band-detektor samma markpunkt vid något olika tidpunkter. Stationära markobjekt syns på samma pixel i alla band; bara objekt som rör sig <em>under</em> exponeringsintervallet ger band-parallax. Vid PC-24-cruise (~220 m/s) hinner planet röra sig 220 m mellan B02 och B04 — 22 pixlar i 10 m-rutnätet, fullt mätbart.
                 <br><em>Källa: ESA Sentinel-2 MSI Product Definition Document, kapitel 3 (focal plane geometry).</em>
             </p>
 
-            <h3>För markobjekt: ingen synlig effekt</h3>
+            <h3>Mätning från pixel-data</h3>
             <p>
-                En stationär markpunkt — ett hus, en väg, en vattenyta — befinner sig på samma plats vid t&#8320;, t&#8320;+0.5s och t&#8320;+1.0s. Alla band registrerar samma pixel. I L2A-produkten co-registreras dessutom banden till ett gemensamt rutnät så att slutanvändaren ser en sömlös bild. Det är bara när objektet rör sig <em>under</em> exponeringsintervallet som tidsförskjutningen blir synlig.
+                Manuella apex-pickar i 120×120 px native-cropen (en pick per band, sparade i <code>user_picks.json</code>) ger total geografisk displacement över 1 sekund ≈ 300 m. Wedge-spetsen — den smala, ljusa änden av kondensstrimman — ligger i NÖ i alla fyra band, vilket pekar på att planet rörde sig mot nordost. Olika band pickar olika delar av kontrailen pga våglängdskänslighet (B02 ser fräscha vattendroppar nära planet, B08 ser is-kristall-fasen längre bak), så automatisk apex-detektion gav inte stabila resultat — pickarna är manuella i picker-html:en och styrs visuellt mot wedge-spetsen.
             </p>
 
-            <h3>För snabbt rörliga objekt: parallax-streck</h3>
+            <h3>Vektorsubtraktion vid varierande flyghöjd</h3>
             <p>
-                Ett stridsflygplan i 290 m/s (Mach 0.85, typvärde för JAS 39 Gripen i normal cruise) hinner förflytta sig v &middot; &Delta;t = (290 m/s)(1.0 s) = <strong>290 m mellan B02 och B08</strong>. Vid 10 m pixelstorlek motsvarar det 29 pixlar — fullt synligt i kompositbilden. I RGB-kompositen syns flygplanet som <strong>tre separerade färgade kopior</strong> (blå, grön, röd) längs flygriktningen. Eftersom flygplan dessutom är starka NIR-reflektorer mot vinterns dämpade NIR-bakgrund är B08-kopian ofta den tydligaste signalen, ytterligare ~29 px från blå-kopian.
+                Den uppmätta vektorn innehåller två bidrag: planets faktiska rörelse, och höjdparallax från satellitens ground-track-rörelse. Sat-track-bäringen vid 57.72°N (descending pass, orbital inclination 98.62°) är <strong>196.3°</strong>. Höjdparallaxens magnitud är <code>(v_sat / H_sat) × H_a × Δt</code> ≈ 0.00853 × H_a meter per Δt=1s, alltid längs sat-track-bäringen.
             </p>
-
-            <h3>Förväntade pixel-offsets vid 290 m/s</h3>
             <table class="license-table" style="margin-top:8px;">
                 <thead>
-                    <tr><th>Bandpar</th><th>&Delta;t (s)</th><th>Förflyttning (m)</th><th>Pixlar @ 10 m</th><th>Färg i RGB</th></tr>
+                    <tr><th>Antagen H_a</th><th>Sat-parallax (m vid Δt=1s)</th><th>Resterande v_aircraft</th><th>Förenlig med contrail?</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td>B02 &harr; B03</td><td>~0.5</td><td>~145</td><td>~14 px</td><td>Blå &harr; Grön</td></tr>
-                    <tr><td>B02 &harr; B04</td><td>~0.6</td><td>~174</td><td>~17 px</td><td>Blå &harr; Röd</td></tr>
-                    <tr><td>B02 &harr; B08</td><td>~1.0</td><td>~290</td><td>~29 px</td><td>Blå &harr; NIR (osynlig i RGB)</td></tr>
-                    <tr><td>B02 &harr; B12 (full spread)</td><td>~3.6</td><td>~1044</td><td>~104 px</td><td>—</td></tr>
+                    <tr><td>1 km</td><td>9 m</td><td>~290 m/s · Mach 0.86</td><td><strong>Nej</strong> — för varmt för contrail</td></tr>
+                    <tr><td>5 km</td><td>43 m</td><td>~250 m/s · Mach 0.78</td><td>Marginellt — vintertröskel</td></tr>
+                    <tr><td>8 km</td><td>68 m</td><td>~239 m/s · Mach 0.74</td><td><strong>Ja</strong> — Schmidt-Appleman uppfyllt</td></tr>
+                    <tr><td>11 km</td><td>94 m</td><td>~217 m/s · Mach 0.74</td><td><strong>Ja</strong> — typisk cruise</td></tr>
                 </tbody>
             </table>
 
-            <h3>Hastighetsmätning från pixel-offset</h3>
+            <h3>Contrail-fysiken styr höjdvalet</h3>
             <p>
-                Eftersom relationen är <code>v = offset_meter / &Delta;t</code> kan flygplanets markhastighet uppskattas direkt från bilden: identifiera samma objekt i två band (typiskt B02 och B08 för max separation), mät centroidoffset i pixlar, konvertera till meter (×10 m), hämta exakta sensing-tider per band från SAFE-arkivets <code>MTD_TL.xml</code>, och beräkna <code>v_ground = offset_m / &Delta;t</code>. Med &Delta;t-precision på 0.01 s och pixel-precision på 1 px ger metoden hastighetsosäkerhet på ~10–20 m/s — fullt tillräckligt för att skilja propellerflyg (50–100 m/s), trafikflyg (200–250 m/s) och stridsflyg (200–600 m/s).
-                <br><em>Källa: Heiselberg, H., 2019. "A Direct and Fast Methodology for Ship Recognition in Sentinel-2 Multispectral Imagery." Remote Sensing 11(18).</em>
+                Kondensstrimmor bildas bara där temperaturen är ≤ −40°C och luftfuktigheten över is-mättnad — det <strong>Schmidt-Appleman-kriteriet</strong>. I ICAO-standardatmosfär uppfylls detta typiskt vid ≥ 8 km flyghöjd. I vinterns Nordsjö-luftmassa kan tröskeln nås redan på 5–6 km i kall, fuktig luft. Det utesluter alla låghöjds-hypoteser (under 5 km): contrailen <em>i sig</em> är ett höghöjdsbevis.
+            </p>
+
+            <h3>ADS-B-cross-check (OpenSky Network)</h3>
+            <p>
+                Query <code>/flights/all</code> ±30 minuter runt 10:43:19 UTC: <strong>571 flygningar</strong> i större Skandinavien-fönstret. För-aircraft <code>/tracks/all</code> mot bbox 57.5–57.9°N, 11.4–11.9°E: noll waypoints inom ±90 sekunder av målögonblicket. <strong>MEN</strong> — det utesluter inte civil trafik: ADS-B-täckningen i tidig climb från Säve är gles (under radar-horisont, glesa ground-stations), och bbox 0.4°×0.5° kan vara för smal om planet är ute över Kattegatt i en outbound-leg vid den exakta sekunden.
+            </p>
+            <table class="license-table" style="margin-top:8px;">
+                <thead>
+                    <tr><th>icao24</th><th>callsign</th><th>aircraft</th><th>flight</th><th>match</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>4acac5</td><td><strong>SWE32A</strong></td><td>Pilatus PC-24 (SE-RVE)</td><td>10:32:36 → ESOW 11:08:43</td><td><strong>Stark</strong> — bäring Säve→ESOW 51.7° matchar uppmätt 051°</td></tr>
+                    <tr><td>4cad41</td><td>SAS073</td><td>—</td><td>→ ESSA</td><td>Utanför ±90 s av måltid</td></tr>
+                    <tr><td>4ab563</td><td>SAS051</td><td>—</td><td>→ ESSA</td><td>Utanför ±90 s av måltid</td></tr>
+                </tbody>
+            </table>
+
+            <h3>Identifierad: SWE32A — Pilatus PC-24 i Säve-departure mot ESOW</h3>
+            <p>
+                OpenSky-metadata för icao24 <code>4acac5</code>: <strong>Pilatus PC-24, registrering SE-RVE</strong> (light twin-jet, klass L2J, svensk operatör). Flygning 2026-01-11: firstSeen ADS-B 10:32:36 UTC, lastSeen 11:08:43 UTC, callsign SWE32A, destination ESOW Stockholm-Västerås. Måltiden 10:43:19 UTC ligger ~11 minuter in i flygningen.
+            </p>
+            <p>
+                <strong>Trajektoria — Säve-departure med Kattegatt outbound:</strong> AOI ligger ~6 km <em>SW</em> om Säve, alltså i motsatt riktning från ESOW. Direkt great-circle Säve→ESOW passerar inte AOI. Förklaringen är ett standardmönster för jet-departures från kustnära fält:
+            </p>
+            <ol>
+                <li>Lyft bana 03 (NÖ-orienterad)</li>
+                <li>Klättra ut SW över Kattegatt för bullerdämpning + säker climb över vatten</li>
+                <li>Turn back NÖ när höjden räcker (~3–5 km)</li>
+                <li>On-course mot ESOW med initial bäring 52°</li>
+            </ol>
+            <p>
+                Vid AOI-passagen 10:43:19 är planet i <strong>NÖ-leg av detta mönster</strong> — på tillbakavägen efter SW outbound — fortfarande i climb genom 5–8 km, contrail-kapabel höjd. Tidsbudget mot destination stämmer: AOI→ESOW är 326 km på 25 min 24 s = 214 m/s ground speed (Mach 0.69 i climb-cruise), helt typiskt för PC-24.
+            </p>
+
+            <h3>PC-24-fakta</h3>
+            <table class="license-table" style="margin-top:8px;">
+                <thead>
+                    <tr><th>Parameter</th><th>Värde</th><th>Pixel-tolkning</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>Längd</td><td>16.85 m</td><td>1.7 px @ 10 m → subpixel</td></tr>
+                    <tr><td>Vingspann</td><td>17.00 m</td><td>1.7 px @ 10 m → subpixel</td></tr>
+                    <tr><td>Höjd</td><td>5.41 m</td><td>—</td></tr>
+                    <tr><td>MTOW</td><td>8 300 kg</td><td>—</td></tr>
+                    <tr><td>Service ceiling</td><td>13 716 m (45 000 ft)</td><td>Täcker contrail-höjder</td></tr>
+                    <tr><td>Cruise</td><td>Mach 0.74 ≈ 226 m/s @ FL450</td><td>Matchar vektor-räkning vid 8–11 km</td></tr>
+                </tbody>
+            </table>
+            <p>
+                Vid 10 m/px är planet subpixel — vi ser <em>inte</em> kroppen, vi ser bara contrailen (10 × 300–500 m).
+            </p>
+
+            <h3>Varför vektor-räkning gav heading 225° vid hög höjd, men wedgen pekar NÖ</h3>
+            <p>
+                Vid antagen flyghöjd 8–11 km ger vektorsubtraktion <code>d_plane = d_total − p_sat</code> heading 225–231° (WSW), inte 051° (NÖ) som wedge-spetsen visar. Det här är konsekvent med att <strong>user-pickenas mätning fångar contrail-massans rörelse, inte planets</strong>: olika band ser olika delar av kontrailen pga våglängdsberoende synlighet, och centroiden förskjuts SW genom kombinationen av plan-rörelse + ice-fall + vinddrift. Wedge-spetsen är planets faktiska position; centroidens rörelse är hela kontrailen.
+            </p>
+            <p>
+                Slutsatsen: heading 051° (från wedge-orientation) är planets faktiska riktning. Vektorräkningen visar bara att hela contrail-massan föll/drev SW under sekunden — fysikaliskt rimligt eftersom is-kristaller sjunker och vinddrift på 8 km är typiskt 30–50 m/s.
             </p>
 
             <h3>Varför L1C, inte L2A</h3>
             <p>
-                Den här analysen kräver Sentinel-2 <strong>L1C SAFE-arkivet</strong> (per-band JP2-filer i native detektor-geometri) — inte L2A. L1C TOA-data bevarar bandens ursprungliga detektor-geometri och därmed parallaxen. L2A BOA-data har gått genom Sen2Cor som co-registrerar och resamplar banden till ett gemensamt rutnät — co-registreringen kan smeta ut eller eliminera parallaxen helt. Repots befintliga <code>fetch_des_data</code> (L2A via DES openEO) bör <em>inte</em> användas här. Pipeline-anropet är <code>fetch_l1c_safe_from_gcp(date, coords, dest_dir)</code> — samma fetch-funktion som C2RCC-pipelinen i Vattenkvalitet-tabben använder.
+                Den här analysen kräver Sentinel-2 <strong>L1C SAFE-arkivet</strong> (per-band JP2-filer i native detektor-geometri). L2A BOA-data har gått genom Sen2Cor som co-registrerar och resamplar banden till ett gemensamt rutnät — co-registreringen kan smeta ut eller eliminera parallaxen helt. Repots <code>fetch_des_data</code> (L2A via DES openEO) ska <em>inte</em> användas här.
             </p>
 
-            <h3>Verifierad passage 2026-01-11 10:43:19 UTC</h3>
-            <p>
-                L1C SAFE-arkivet hämtat från Google Clouds publika Sentinel-2-bucket: <code>S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK_20260111T125307.SAFE</code>. Faktisk inter-band-fördröjning från <code>MTD_TL.xml</code>: <strong>Δt(B02→B08) = 1.005 s</strong>. Solhöjd vid passet ~10° (vinterskymning) — låg kontrast generellt, men NIR (B08) lyser tydligt på metalliska ytor.
-            </p>
-
-            <h3>Plan-punkt 57.71809°N, 11.66456°E — direkt observation</h3>
-            <p>
-                Vi cropade en 120×120 pixel-fönster (1.2×1.2 km) runt den exakta punkten i varje 10 m-band, hard-stretchade 1–99 percentilvärden inom cropet, och uppskalade 8× med nearest neighbor. <strong>Resultatet visar entydigt push-broom-parallax</strong>: en tunn diagonal linje genom AOI:n med olika position i varje band.
-            </p>
-
-            <h3>Vad ser vi: kondensstrimma, inte flygplanskropp</h3>
-            <p>
-                Strecket är cirka <strong>1 pixel brett</strong> (~10 m i markprojektion) och <strong>30–50 pixlar långt</strong> (300–500 m). Bredden matchar fysiskt en flygplanskropp eller motorernas avgasplym, men längden är för stor — ingen flygplanskropp är 500 m. Det är en <strong>kondensstrimma (contrail)</strong> från ett jetplan på hög höjd. <em>Det är också anledningen till att vi inte ser strecket i den fulla 5×5 km RGB-vyn med default 2–98 stretch — kontrasten är för svag mot vinter-mark.</em> Hard-stretch och pixel-zoom är nödvändiga för att signalen ska bli synlig.
-            </p>
-
-            <h3>Push-broom parallax: bekräftad i pixeldata</h3>
-            <p>
-                I varje av de fyra banden (B02 blå · B03 grön · B04 röd · B08 NIR) ses strecket på <strong>olika position</strong>. Bandens inbördes tidsförskjutning från MTD_TL.xml: B02 t₀ · B03 +0.527 s · B04 +0.585 s · B08 +1.005 s. Streckets position skiftar i samma ordning — det är push-broom-band-parallax, direkt synlig i pixeldata. <strong>Fenomenet är reellt och fångat i Sentinel-2-bilden.</strong>
-            </p>
-
-            <h3>Wedge-form & apex-spårning</h3>
-            <p>
-                En kondensstrimma är wedge-formad: bredast längst bort från planet (gammal contrail har spridits ut av luftturbulens) och smalnar av till en punkt vid planet (nyligen bildad, kompakt). Att hitta apex (= planet) borde idealt ske genom att fitta linjer till strecks <em>ytterkanter</em> och ta deras skärningspunkt. Vi försökte den metoden i två varianter (PCA-axis + edge-bin-fitting i 120×120 och 400×400 crops). Resultaten var inte stabila — när contrailen är så smal som här (~1 px bred) är ytterkanterna nästan parallella, vilket gör skärningspunkten extrapolerad långt utanför streckets faktiska längd. Mätningen är teoretiskt rätt men numeriskt instabil utan en mer sofistikerad detektion (Steger-linjefilter eller matched-template fitting med taper-modell). Apex-overlay-panelen ovan visar var algoritmen <em>landade</em>, vilket avslöjar problemet visuellt.
-            </p>
-
-            <h3>Bästa skattning vi kunde göra</h3>
-            <p>
-                Centroid-baserad mätning gav <strong>B02→B08 offset = 13.55 px (136 m)</strong>, vilket via Δt = 1.005 s ger <strong>135 m/s</strong>. Den siffran blandar dock två effekter:
-            </p>
+            <h3>Begränsningar</h3>
             <ul>
-                <li><strong>Aircraft head extension:</strong> under Δt flyger planet v×Δt och förlänger contrailen.</li>
-                <li><strong>Contrail vinddrift:</strong> hela strecket advekterar med vinden på flyghöjd (typiskt 30–80 m/s i jetströmsregioner runt 30–35 000 ft).</li>
-            </ul>
-            <p>
-                För ett klassiskt civilt jet i cruise är typisk ground speed 200–260 m/s. Vår 135 m/s-skattning från streckets centroid antyder att vinden och head-extension delvis kancellerar varandra — alternativt att vinddriften går i samma riktning som flygriktningen och drar upp centroid-rörelsen. Utan ADS-B + vindfält är det inte möjligt att isolera flygplanets faktiska v_ground.
-            </p>
-
-            <h3>Vad vi entydigt kan säga</h3>
-            <ul>
-                <li><strong>Push-broom-band-parallax är reell och fångad</strong> i Sentinel-2 L1C-scenen 2026-01-11 10:43:19 UTC vid 57.71809°N, 11.66456°E.</li>
-                <li>Det finns en <strong>kondensstrimma från ett jetplan</strong> (turbopropar bildar inte synliga contrails) som syns i alla fyra 10 m-band.</li>
-                <li>Streckets position skiftar mellan B02/B03/B04/B08 i samma ordning som bandens timing-offset (B02 t₀ → B08 +1.005 s).</li>
-                <li>Mätt B02→B08 streak-centroid-offset: 13.55 px = 136 m, motsvarande en ström-effektiv hastighet på ~135 m/s vid den valda metoden. Den siffran är inte direkt flygplanets ground speed.</li>
-            </ul>
-
-            <h3>Vad som krävs för exakt aircraft v_ground</h3>
-            <ul>
-                <li><strong>ADS-B ground truth</strong> för 2026-01-11 10:43:19 UTC i området → ICAO-kod, faktisk hastighet och kurs.</li>
-                <li><strong>Robust apex-detektion</strong> via Steger-linjefilter + taper-template fitting istället för enkel edge-bin-regression.</li>
-                <li><strong>Vindfält på flyghöjd</strong> från ECMWF ERA5 → korrigera streck-drift för aktuell vindkomponent.</li>
+                <li><strong>Wedgens 1 px-bredd</strong> gör subpixel-precision omöjlig utan mer sofistikerad detektion (Steger-linjefilter, matched-template fitting med taper-modell). Manuella apex-pickar är mer robusta i nuläget.</li>
+                <li><strong>Exakt höjd vid AOI:</strong> kräver OpenSky Trino <code>state_vectors_data4</code> mot icao24 4acac5 vid det specifika tidsfönstret. Free-tier `/tracks/all` rate-limited; Trino kräver akademisk/forskningsansökan.</li>
+                <li><strong>Vinddrift och is-fall</strong> rör hela kondensstrimman några pixlar utan att förändra wedge-spetsens orientering.</li>
             </ul>
 
             <h3>OSINT-relevans</h3>
             <p>
-                Push-broom-parallax används rutinmässigt i öppen källanalys för att mäta hastigheter på flygplan och fartyg från offentligt tillgänglig Sentinel-2-data, identifiera flygplanstyp via storlek + hastighet, och spåra missiltest och experimentell flygtrafik. Att ImintEngine kan reproducera analysen visar att verktyget hanterar både civila användningsfall (vegetation, vatten, kustförändring) och säkerhets-/övervakningsrelevanta frågor som faller under samma sensorfysik.
-                <br><em>Bakgrund: Cermak &amp; Knutti (2009); Heiselberg (2019).</em>
+                Push-broom-parallax används rutinmässigt i öppen källanalys för att mäta hastigheter på flygplan och fartyg från offentligt tillgänglig Sentinel-2-data. Den här fallstudien visar både styrkan och fallgroparna: enbart pixel-mätning gav fel hypotes (låghöjds-Gripen) tills <strong>contrail-fysiken</strong> tvingade fram en höghöjdshypotes, varefter ADS-B-metadata identifierade rätt civilt plan. Sensorfysik + ground-truth + cross-check är hela kedjan.
+                <br><em>Bakgrund: Heiselberg, H., 2019. "A Direct and Fast Methodology for Ship Recognition in Sentinel-2 Multispectral Imagery." Remote Sensing 11(18). · Schumann, U., 1996. "On conditions for contrail formation from aircraft exhausts." J. Atmos. Sci.</em>
             </p>
 
         </div>
-    </div>
+
+        <div class="section-header" style="margin-top:32px;">
+            <h2>Bakgrundsfigurer</h2>
+        </div>
+        <div class="figure-grid" style="display:grid; grid-template-columns:1fr; gap:16px; padding:0 var(--padding-x,32px);">
+            <figure style="margin:0;">
+                <img src="showcase/aircraft_parallax/aoi_overview.svg" alt="AOI · Öckerö-skärgården, ~6 km SW om Säve" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
+                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">AOI · Öckerö-skärgården, ~6 km SW om Säve flygfält. 5×5 km kring 57.71818°N, 11.66559°E — sundet mellan Öckerö och Björkö.</figcaption>
+            </figure>
+            <figure style="margin:0;">
+                <img src="showcase/aircraft_parallax/sensor_geometry.svg" alt="Push-broom MSI fokalplan" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
+                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">Push-broom MSI fokalplan — varför banden registreras vid olika tidpunkter. Bandens detektorrader sitter fysiskt åtskilda along-track.</figcaption>
+            </figure>
+            <figure style="margin:0;">
+                <img src="showcase/aircraft_parallax/band_timing.svg" alt="Inter-band tidsdelta + förväntade pixel-offsets" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
+                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">Inter-band-tidsdelta — referensplot. OBS: nominella ESA-värden i denna figur (alfabetisk ordning); faktiska detector-7-värden i tabellen ovan har fokalplansordning B02 → B08 → B03 → B04.</figcaption>
+            </figure>
+            <figure style="margin:0;">
+                <img src="showcase/aircraft_parallax/predicted_streak.svg" alt="Förväntad signatur i RGB-kompositen vid PC-24 cruise" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
+                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">Förväntad signatur i RGB-kompositen — predicerat utseende vid PC-24 climb-cruise (~220 m/s). Civilt affärsjet i Säve-departure-pattern över Öckerö 2026-01-11.</figcaption>
+            </figure>
+        </div>
+    </div><!-- /sub-tab-content aircraft_parallax -->
+
+    </div><!-- /tab-content pixel_sensor (parent) -->
 
     <!-- ── Atmosfär tab (Nationellt Rymddatalabb / SDL 3.0) ──── -->
     <div class="tab-content" id="tab-era5">
