@@ -641,14 +641,6 @@
                 Vid 10 m/px är planet subpixel — vi ser <em>inte</em> kroppen, vi ser bara kondensstrimman (10 × 300–500 m).
             </p>
 
-            <h3>Varför vektor-räkning gav heading 225° vid hög höjd, men wedgen pekar NÖ</h3>
-            <p>
-                Vid antagen flyghöjd 8–11 km ger vektorsubtraktion <code>d_plane = d_total − p_sat</code> heading 225–231° (WSW), inte 051° (NÖ) som wedge-spetsen visar. Det här är konsekvent med att <strong>user-pickenas mätning fångar kondensstrimmans rörelse, inte planets</strong>: olika band ser olika delar av kondensstrimman pga våglängdsberoende synlighet, och centroiden förskjuts SW genom kombinationen av plan-rörelse + ice-fall + vinddrift. Wedge-spetsen är planets faktiska position; centroidens rörelse är hela kondensstrimman.
-            </p>
-            <p>
-                Slutsatsen: heading 051° (från wedge-orientation) är planets faktiska riktning. Vektorräkningen visar bara att hela kondensstrimmans massa föll/drev SW under sekunden — fysikaliskt rimligt eftersom is-kristaller sjunker och vinddrift på 8 km är typiskt 30–50 m/s.
-            </p>
-
             <h3>Varför L1C, inte L2A</h3>
             <p>
                 Den här analysen kräver Sentinel-2 <strong>L1C SAFE-arkivet</strong> (per-band JP2-filer i native detektor-geometri). L2A BOA-data har gått genom Sen2Cor som co-registrerar och resamplar banden till ett gemensamt rutnät — co-registreringen kan smeta ut eller eliminera parallaxen helt. Repots <code>fetch_des_data</code> (L2A via DES openEO) ska <em>inte</em> användas här.

@@ -112,29 +112,6 @@ fortfarande i climb. Wedge-spetsen i NÖ matchar denna riktning.
 = 25 min 24 s, distans 326 km → ground speed 214 m/s (770 km/h, Mach 0.69
 i climb-cruise). Helt rimligt för PC-24.
 
-## Reviderad vektorsubtraktion vid trolig flyghöjd
-
-Sat-track-bäring 196.3°. Sat-parallax-rate `0.00853 × H_a` m/s per Δt=1s.
-
-| H_a | parallax (m vid Δt=1s) | v_aircraft | heading |
-|-----|------------------------|-----------|---------|
-| 5 km | 43 m | ~250 m/s | ~225° |
-| 8 km | 68 m | 239 m/s | 227.6° |
-| 11 km | 94 m | 217 m/s | 231.0° |
-
-OBS: dessa heading-värden (225–231°) motsäger user-picks NÖ-tolkning. Det
-beror på att user-pickenas tracking sannolikt fångar trailing-änden av
-kondensstrimman (där den är **bredast och äldst**, sätter sig nedåt med tyngdkraft
-och driftar med vinden) snarare än leading-edge (planets faktiska position).
-Wedge-spetsen i NÖ är **planet**; vector-subtraktionen från picks ger
-kondensstrimmans förflyttning, vilket går SW genom kombinationen av plan-rörelse
-och vinddrift.
-
-För att få entydigt v + heading skulle apex-pickarna behöva:
-- Ligga på samma fysiska punkt på kondensstrimman i alla band (svårt — våglängd-
-  beroende synlighet, B02 ser fräscha vattendroppar, B08 ser is-fas längre bak)
-- Eller ground-truth från ADS-B Mode-S-broadcasts (kräver Trino)
-
 ## OpenSky-cross-check (bbox-resultat reviderat)
 
 Initial query `/flights/all` ±30 min: 571 flygningar, varav SWE32A var en
@@ -177,8 +154,6 @@ direktförfrågan till svenska AFIS för Säve-trafiken den dagen.
 
 - Robust apex-detektion: wedge-tippen är 1 px bred → edge-fitting instabil,
   våglängdsberoende synlighet flippar wedge-orientation per band
-- Vector-subtraktion gav heading 225° vid hög höjd, motsäger visuell wedge-
-  NÖ-tolkning. Picks fångar troligen kondensstrimma-centroid, inte planet
 - ADS-B Trino-access — kräver formell forskningsansökan, dagar–veckor
 
 ## Källor
