@@ -34,13 +34,13 @@ L1C-scen: `S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK`. Detector 7
 | B03  | 0.5214 s  |
 | B04  | 0.9990 s  |
 
-User-picks i 120×120 px native crop ger total displacement ≈ 300 m över 1 s.
+User-picks i 120×120 px native crop ger total förskjutning ≈ 300 m över 1 s.
 Wedge-spets i NÖ → planet flyger NÖ. Heading uppmätt: **051°** (±5°).
 Vid hög höjd (H_a = 8–11 km efter sat-parallax-korrektion): **v ≈ 217–239 m/s**
 — typisk PC-24 climb-cruise. Låghöjds-tolkning (~290 m/s vid H_a = 1 km)
-är **förkastad** av contrail-fysiken (se nästa sektion).
+är **förkastad** av kondensstrimma-fysiken (se nästa sektion).
 
-## Contrail-fysik utesluter låg höjd
+## Kondensstrimma-fysik utesluter låg höjd
 
 Kondensationsstrimmor bildas bara där:
 - Temperatur ≤ −40°C (Schmidt-Appleman-kriteriet)
@@ -48,7 +48,7 @@ Kondensationsstrimmor bildas bara där:
 
 Det betyder typiskt **flyghöjd ≥ 8 km** (FL250+). I vinterns
 Nordsjö-luftmassa kan tröskeln nås redan på 5–6 km. Detta **utesluter
-alla låghöjds-hypoteser** (under 5 km) — contrailen i sig är ett
+alla låghöjds-hypoteser** (under 5 km) — kondensstrimman i sig är ett
 höghöjdsbevis.
 
 ## SWE32A — flight-metadata från OpenSky
@@ -85,7 +85,7 @@ Pilatus PC-24-spec (relevant för pixel-tolkning):
 | Cruise | Mach 0.74 ≈ 226 m/s vid FL450 |
 
 Planet är **subpixel** vid 10 m/px — vi ser **inte** kroppen, vi ser bara
-contrailen (10 × 300–500 m).
+kondensstrimman (10 × 300–500 m).
 
 ## Trajektorianalys: Säve-departure med Kattegatt-outbound
 
@@ -124,14 +124,14 @@ Sat-track-bäring 196.3°. Sat-parallax-rate `0.00853 × H_a` m/s per Δt=1s.
 
 OBS: dessa heading-värden (225–231°) motsäger user-picks NÖ-tolkning. Det
 beror på att user-pickenas tracking sannolikt fångar trailing-änden av
-contrailen (där den är **bredast och äldst**, sätter sig nedåt med tyngdkraft
+kondensstrimman (där den är **bredast och äldst**, sätter sig nedåt med tyngdkraft
 och driftar med vinden) snarare än leading-edge (planets faktiska position).
 Wedge-spetsen i NÖ är **planet**; vector-subtraktionen från picks ger
-contrail-massans förflyttning, vilket går SW genom kombinationen av plan-rörelse
+kondensstrimmans förflyttning, vilket går SW genom kombinationen av plan-rörelse
 och vinddrift.
 
 För att få entydigt v + heading skulle apex-pickarna behöva:
-- Ligga på samma fysiska punkt på contrailen i alla band (svårt — våglängd-
+- Ligga på samma fysiska punkt på kondensstrimman i alla band (svårt — våglängd-
   beroende synlighet, B02 ser fräscha vattendroppar, B08 ser is-fas längre bak)
 - Eller ground-truth från ADS-B Mode-S-broadcasts (kräver Trino)
 
@@ -162,9 +162,9 @@ Bevis-kedjan:
    matchar uppmätt heading 051° inom 1°
 2. Tidsfönstret (firstSeen 10:32:36 → AOI 10:43:19 → lastSeen 11:08:43)
    är konsistent med Säve-departure → Kattegatt outbound → NÖ-turn → ESOW
-3. PC-24 service ceiling 13.7 km täcker contrail-kapabelt höjd
+3. PC-24 service ceiling 13.7 km täcker kondensstrimma-kapabel höjd
 4. PC-24 cruise (~226 m/s) matchar bättre än 290 m/s-värden
-5. Contrail-fysik utesluter alla låghöjds-alternativ
+5. Kondensstrimma-fysik utesluter alla låghöjds-alternativ
 
 Inte verifierat:
 - Exakt position vid 10:43:19 (`/tracks/all` rate-limited på free-tier)
@@ -178,7 +178,7 @@ direktförfrågan till svenska AFIS för Säve-trafiken den dagen.
 - Robust apex-detektion: wedge-tippen är 1 px bred → edge-fitting instabil,
   våglängdsberoende synlighet flippar wedge-orientation per band
 - Vector-subtraktion gav heading 225° vid hög höjd, motsäger visuell wedge-
-  NÖ-tolkning. Picks fångar troligen contrail-centroid, inte planet
+  NÖ-tolkning. Picks fångar troligen kondensstrimma-centroid, inte planet
 - ADS-B Trino-access — kräver formell forskningsansökan, dagar–veckor
 
 ## Källor
@@ -186,7 +186,7 @@ direktförfrågan till svenska AFIS för Säve-trafiken den dagen.
 - OpenSky `/metadata/aircraft/icao/4acac5` → PC24, SE-RVE, klass L2J
 - OpenSky `/flights/aircraft?icao24=4acac5` → SWE32A → ESOW
 - OpenSky `/flights/all` ±30 min → 571 ADS-B-flygningar i regionen
-- Schmidt & Appleman (1953); Schumann (1996, J. Atmos. Sci.) — contrail-fysik
+- Schmidt & Appleman (1953); Schumann (1996, J. Atmos. Sci.) — kondensstrimma-fysik
 - Pilatus PC-24 spec sheet
 - Säve flygfält AIP — bana 03/21, kustnära jet-departure-pattern
 
@@ -195,5 +195,5 @@ direktförfrågan till svenska AFIS för Säve-trafiken den dagen.
 Plats-rättningen från "Hisingen / Säve" till "sundet mellan Öckerö och
 Björkö, ~6 km SW om Säve" var **avgörande**. Den första hypotesen
 (låghöjds-militärtrafik mot Skaraborg) byggde på fel geografi och fel
-contrail-fysik. Med korrekt geografi + Schmidt-Appleman-tröskeln blev
+kondensstrimma-fysik. Med korrekt geografi + Schmidt-Appleman-tröskeln blev
 SWE32A omedelbart den uppenbara kandidaten.

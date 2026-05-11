@@ -567,7 +567,7 @@
 
             <h3>Mätning från pixel-data</h3>
             <p>
-                Manuella apex-pickar i 120×120 px native-cropen (en pick per band, sparade i <code>user_picks.json</code>) ger total geografisk displacement över 1 sekund ≈ 300 m. Wedge-spetsen — den smala, ljusa änden av kondensstrimman — ligger i NÖ i alla fyra band, vilket pekar på att planet rörde sig mot nordost. Olika band pickar olika delar av kontrailen pga våglängdskänslighet (B02 ser fräscha vattendroppar nära planet, B08 ser is-kristall-fasen längre bak), så automatisk apex-detektion gav inte stabila resultat — pickarna är manuella i picker-html:en och styrs visuellt mot wedge-spetsen.
+                Manuella apex-pickar i 120×120 px native-cropen (en pick per band, sparade i <code>user_picks.json</code>) ger total geografisk förskjutning över 1 sekund ≈ 300 m. Wedge-spetsen — den smala, ljusa änden av kondensstrimman — ligger i NÖ i alla fyra band, vilket pekar på att planet rörde sig mot nordost. Olika band pickar olika delar av kondensstrimman pga våglängdskänslighet (B02 ser fräscha vattendroppar nära planet, B08 ser is-kristall-fasen längre bak), så automatisk apex-detektion gav inte stabila resultat — pickarna är manuella i picker-html:en och styrs visuellt mot wedge-spetsen.
             </p>
 
             <h3>Vektorsubtraktion vid varierande flyghöjd</h3>
@@ -576,19 +576,19 @@
             </p>
             <table class="license-table" style="margin-top:8px;">
                 <thead>
-                    <tr><th>Antagen H_a</th><th>Sat-parallax (m vid Δt=1s)</th><th>Resterande v_aircraft</th><th>Förenlig med contrail?</th></tr>
+                    <tr><th>Antagen H_a</th><th>Sat-parallax (m vid Δt=1s)</th><th>Resterande v_aircraft</th><th>Förenlig med kondensstrimma?</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td>1 km</td><td>9 m</td><td>~290 m/s · Mach 0.86</td><td><strong>Nej</strong> — för varmt för contrail</td></tr>
+                    <tr><td>1 km</td><td>9 m</td><td>~290 m/s · Mach 0.86</td><td><strong>Nej</strong> — för varmt för kondensstrimma</td></tr>
                     <tr><td>5 km</td><td>43 m</td><td>~250 m/s · Mach 0.78</td><td>Marginellt — vintertröskel</td></tr>
                     <tr><td>8 km</td><td>68 m</td><td>~239 m/s · Mach 0.74</td><td><strong>Ja</strong> — Schmidt-Appleman uppfyllt</td></tr>
                     <tr><td>11 km</td><td>94 m</td><td>~217 m/s · Mach 0.74</td><td><strong>Ja</strong> — typisk cruise</td></tr>
                 </tbody>
             </table>
 
-            <h3>Contrail-fysiken styr höjdvalet</h3>
+            <h3>Kondensstrimma-fysiken styr höjdvalet</h3>
             <p>
-                Kondensstrimmor bildas bara där temperaturen är ≤ −40°C och luftfuktigheten över is-mättnad — det <strong>Schmidt-Appleman-kriteriet</strong>. I ICAO-standardatmosfär uppfylls detta typiskt vid ≥ 8 km flyghöjd. I vinterns Nordsjö-luftmassa kan tröskeln nås redan på 5–6 km i kall, fuktig luft. Det utesluter alla låghöjds-hypoteser (under 5 km): contrailen <em>i sig</em> är ett höghöjdsbevis.
+                Kondensstrimmor bildas bara där temperaturen är ≤ −40°C och luftfuktigheten över is-mättnad — det <strong>Schmidt-Appleman-kriteriet</strong>. I ICAO-standardatmosfär uppfylls detta typiskt vid ≥ 8 km flyghöjd. I vinterns Nordsjö-luftmassa kan tröskeln nås redan på 5–6 km i kall, fuktig luft. Det utesluter alla låghöjds-hypoteser (under 5 km): kondensstrimman <em>i sig</em> är ett höghöjdsbevis.
             </p>
 
             <h3>ADS-B-cross-check (OpenSky Network)</h3>
@@ -620,7 +620,7 @@
                 <li>On-course mot ESOW med initial bäring 52°</li>
             </ol>
             <p>
-                Vid AOI-passagen 10:43:19 är planet i <strong>NÖ-leg av detta mönster</strong> — på tillbakavägen efter SW outbound — fortfarande i climb genom 5–8 km, contrail-kapabel höjd. Tidsbudget mot destination stämmer: AOI→ESOW är 326 km på 25 min 24 s = 214 m/s ground speed (Mach 0.69 i climb-cruise), helt typiskt för PC-24.
+                Vid AOI-passagen 10:43:19 är planet i <strong>NÖ-leg av detta mönster</strong> — på tillbakavägen efter SW outbound — fortfarande i climb genom 5–8 km, kondensstrimma-kapabel höjd. Tidsbudget mot destination stämmer: AOI→ESOW är 326 km på 25 min 24 s = 214 m/s ground speed (Mach 0.69 i climb-cruise), helt typiskt för PC-24.
             </p>
 
             <h3>PC-24-fakta</h3>
@@ -633,20 +633,20 @@
                     <tr><td>Vingspann</td><td>17.00 m</td><td>1.7 px @ 10 m → subpixel</td></tr>
                     <tr><td>Höjd</td><td>5.41 m</td><td>—</td></tr>
                     <tr><td>MTOW</td><td>8 300 kg</td><td>—</td></tr>
-                    <tr><td>Service ceiling</td><td>13 716 m (45 000 ft)</td><td>Täcker contrail-höjder</td></tr>
+                    <tr><td>Service ceiling</td><td>13 716 m (45 000 ft)</td><td>Täcker kondensstrimma-höjder</td></tr>
                     <tr><td>Cruise</td><td>Mach 0.74 ≈ 226 m/s @ FL450</td><td>Matchar vektor-räkning vid 8–11 km</td></tr>
                 </tbody>
             </table>
             <p>
-                Vid 10 m/px är planet subpixel — vi ser <em>inte</em> kroppen, vi ser bara contrailen (10 × 300–500 m).
+                Vid 10 m/px är planet subpixel — vi ser <em>inte</em> kroppen, vi ser bara kondensstrimman (10 × 300–500 m).
             </p>
 
             <h3>Varför vektor-räkning gav heading 225° vid hög höjd, men wedgen pekar NÖ</h3>
             <p>
-                Vid antagen flyghöjd 8–11 km ger vektorsubtraktion <code>d_plane = d_total − p_sat</code> heading 225–231° (WSW), inte 051° (NÖ) som wedge-spetsen visar. Det här är konsekvent med att <strong>user-pickenas mätning fångar contrail-massans rörelse, inte planets</strong>: olika band ser olika delar av kontrailen pga våglängdsberoende synlighet, och centroiden förskjuts SW genom kombinationen av plan-rörelse + ice-fall + vinddrift. Wedge-spetsen är planets faktiska position; centroidens rörelse är hela kontrailen.
+                Vid antagen flyghöjd 8–11 km ger vektorsubtraktion <code>d_plane = d_total − p_sat</code> heading 225–231° (WSW), inte 051° (NÖ) som wedge-spetsen visar. Det här är konsekvent med att <strong>user-pickenas mätning fångar kondensstrimmans rörelse, inte planets</strong>: olika band ser olika delar av kondensstrimman pga våglängdsberoende synlighet, och centroiden förskjuts SW genom kombinationen av plan-rörelse + ice-fall + vinddrift. Wedge-spetsen är planets faktiska position; centroidens rörelse är hela kondensstrimman.
             </p>
             <p>
-                Slutsatsen: heading 051° (från wedge-orientation) är planets faktiska riktning. Vektorräkningen visar bara att hela contrail-massan föll/drev SW under sekunden — fysikaliskt rimligt eftersom is-kristaller sjunker och vinddrift på 8 km är typiskt 30–50 m/s.
+                Slutsatsen: heading 051° (från wedge-orientation) är planets faktiska riktning. Vektorräkningen visar bara att hela kondensstrimmans massa föll/drev SW under sekunden — fysikaliskt rimligt eftersom is-kristaller sjunker och vinddrift på 8 km är typiskt 30–50 m/s.
             </p>
 
             <h3>Varför L1C, inte L2A</h3>
@@ -663,7 +663,7 @@
 
             <h3>OSINT-relevans</h3>
             <p>
-                Push-broom-parallax används rutinmässigt i öppen källanalys för att mäta hastigheter på flygplan och fartyg från offentligt tillgänglig Sentinel-2-data. Den här fallstudien visar både styrkan och fallgroparna: enbart pixel-mätning är inte tillräckligt — <strong>contrail-fysiken</strong> sätter en oberoende höjdgräns (Schmidt-Appleman ≥ 5–8 km), och ADS-B-metadata identifierar rätt plan. Sensorfysik + ground-truth + cross-check är hela kedjan.
+                Push-broom-parallax används rutinmässigt i öppen källanalys för att mäta hastigheter på flygplan och fartyg från offentligt tillgänglig Sentinel-2-data. Den här fallstudien visar både styrkan och fallgroparna: enbart pixel-mätning är inte tillräckligt — <strong>kondensstrimma-fysiken</strong> sätter en oberoende höjdgräns (Schmidt-Appleman ≥ 5–8 km), och ADS-B-metadata identifierar rätt plan. Sensorfysik + ground-truth + cross-check är hela kedjan.
                 <br><em>Bakgrund: Heiselberg, H., 2019. "A Direct and Fast Methodology for Ship Recognition in Sentinel-2 Multispectral Imagery." Remote Sensing 11(18). · Schumann, U., 1996. "On conditions for contrail formation from aircraft exhausts." J. Atmos. Sci.</em>
             </p>
 
@@ -675,7 +675,7 @@
         <div class="figure-grid" style="display:grid; grid-template-columns:1fr; gap:16px; padding:0 var(--padding-x,32px);">
             <figure style="margin:0;">
                 <img src="showcase/aircraft_parallax/aoi_overview.svg" alt="AOI · Göteborgs norra skärgård" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
-                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">AOI · Göteborgs norra skärgård. Contrail-position exakt på 57.71809°N, 11.66456°E (WGS84) från user_picks.json. 10×10 km isotrop equirectangular-projektion kring punkten.</figcaption>
+                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">AOI · Göteborgs norra skärgård. Kondensstrimma-position exakt på 57.71809°N, 11.66456°E (WGS84) från user_picks.json. 10×10 km isotrop equirectangular-projektion kring punkten.</figcaption>
             </figure>
             <figure style="margin:0;">
                 <img src="showcase/aircraft_parallax/sensor_geometry.svg" alt="Push-broom MSI fokalplan" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
