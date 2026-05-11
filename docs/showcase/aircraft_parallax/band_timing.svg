@@ -3,10 +3,9 @@
   <rect width="800" height="420" fill="#fafafa"/>
 
   <text x="400" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#171717">Inter-band-tidsdelta · Sentinel-2 MSI</text>
-  <text x="400" y="50" text-anchor="middle" font-size="12" fill="#6b7280">Faktiska detector-7-värden parsade ur MTD_DS.xml (parse_band_times_v2.py)</text>
+  <text x="400" y="50" text-anchor="middle" font-size="12" fill="#6b7280">Faktiska detector-10-värden parsade ur MTD_DS.xml (jämn detector — push-pull omvänd ordning)</text>
 
-  <!-- Timeline 0 → ~1.0 s (de fyra banden vi använder ligger inom denna spann).
-       Skala: x = 80 + (t / 1.0) * 640, så t=1.0s → x=720. -->
+  <!-- Timeline 0 → ~1.0 s. Skala: x = 80 + (t / 1.0) * 640 -->
   <line x1="80" y1="160" x2="720" y2="160" stroke="#171717" stroke-width="2"/>
   <text x="80" y="180" text-anchor="middle" font-size="10" fill="#6b7280">0.00 s</text>
   <text x="240" y="180" text-anchor="middle" font-size="10" fill="#6b7280">0.25 s</text>
@@ -14,35 +13,35 @@
   <text x="560" y="180" text-anchor="middle" font-size="10" fill="#6b7280">0.75 s</text>
   <text x="720" y="180" text-anchor="middle" font-size="10" fill="#6b7280">1.00 s</text>
 
-  <!-- Band marks: x = 80 + t * 640 -->
+  <!-- Band marks: x = 80 + t * 640 (detector 10 order: B04 → B03 → B08 → B02) -->
   <g>
-    <!-- B02 @ t=0.0000 → x=80 -->
-    <line x1="80" y1="150" x2="80" y2="170" stroke="#003366" stroke-width="3"/>
-    <text x="80" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#003366">B02</text>
-    <text x="80" y="120" text-anchor="middle" font-size="9" fill="#6b7280">490 nm</text>
-    <text x="80" y="200" text-anchor="middle" font-size="9" fill="#003366">t₀</text>
+    <!-- B04 @ t=0.0000 → x=80 -->
+    <line x1="80" y1="150" x2="80" y2="170" stroke="#d73027" stroke-width="3"/>
+    <text x="80" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#d73027">B04</text>
+    <text x="80" y="120" text-anchor="middle" font-size="9" fill="#6b7280">665 nm</text>
+    <text x="80" y="200" text-anchor="middle" font-size="9" fill="#d73027">t₀</text>
 
-    <!-- B08 @ t=0.2599 → x=80+166=246 -->
-    <line x1="246" y1="150" x2="246" y2="170" stroke="#7b1fa2" stroke-width="3"/>
-    <text x="246" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#7b1fa2">B08</text>
-    <text x="246" y="120" text-anchor="middle" font-size="9" fill="#6b7280">842 nm (NIR)</text>
-    <text x="246" y="200" text-anchor="middle" font-size="9" fill="#7b1fa2">+0.260 s</text>
+    <!-- B03 @ t=0.4839 → x=80+310=390 -->
+    <line x1="390" y1="150" x2="390" y2="170" stroke="#1a9850" stroke-width="3"/>
+    <text x="390" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#1a9850">B03</text>
+    <text x="390" y="120" text-anchor="middle" font-size="9" fill="#6b7280">560 nm</text>
+    <text x="390" y="200" text-anchor="middle" font-size="9" fill="#1a9850">+0.484 s</text>
 
-    <!-- B03 @ t=0.5214 → x=80+334=414 -->
-    <line x1="414" y1="150" x2="414" y2="170" stroke="#1a9850" stroke-width="3"/>
-    <text x="414" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#1a9850">B03</text>
-    <text x="414" y="120" text-anchor="middle" font-size="9" fill="#6b7280">560 nm</text>
-    <text x="414" y="200" text-anchor="middle" font-size="9" fill="#1a9850">+0.521 s</text>
+    <!-- B08 @ t=0.7438 → x=80+476=556 -->
+    <line x1="556" y1="150" x2="556" y2="170" stroke="#7b1fa2" stroke-width="3"/>
+    <text x="556" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#7b1fa2">B08</text>
+    <text x="556" y="120" text-anchor="middle" font-size="9" fill="#6b7280">842 nm (NIR)</text>
+    <text x="556" y="200" text-anchor="middle" font-size="9" fill="#7b1fa2">+0.744 s</text>
 
-    <!-- B04 @ t=0.9990 → x=80+639=719 -->
-    <line x1="719" y1="150" x2="719" y2="170" stroke="#d73027" stroke-width="3"/>
-    <text x="719" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#d73027">B04</text>
-    <text x="719" y="120" text-anchor="middle" font-size="9" fill="#6b7280">665 nm</text>
-    <text x="719" y="200" text-anchor="middle" font-size="9" fill="#d73027">+0.999 s</text>
+    <!-- B02 @ t=1.0037 → x=80+642=722 (clipped slightly past 720) -->
+    <line x1="720" y1="150" x2="720" y2="170" stroke="#003366" stroke-width="3"/>
+    <text x="720" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#003366">B02</text>
+    <text x="720" y="120" text-anchor="middle" font-size="9" fill="#6b7280">490 nm</text>
+    <text x="720" y="200" text-anchor="middle" font-size="9" fill="#003366">+1.004 s</text>
   </g>
 
   <!-- Note: fokalplansordning -->
-  <text x="80" y="225" font-size="11" font-style="italic" fill="#6b7280">Fokalplansordning är B02 → B08 → B03 → B04 — inte alfabetisk. B08 (NIR) ligger näst tidigast, inte sist.</text>
+  <text x="80" y="225" font-size="11" font-style="italic" fill="#6b7280">Fokalplansordning detector 10: B04 → B03 → B08 → B02. Jämna detektorer har omvänd ordning mot udda (push-pull-mönster).</text>
 
   <!-- Aircraft displacement table -->
   <text x="80" y="255" font-size="14" font-weight="600" fill="#171717">Markförflyttning per bandpar vid PC-24 climb-cruise (~220 m/s)</text>
@@ -55,23 +54,23 @@
     <text x="570" y="20" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">Pixlar @ 10 m</text>
 
     <rect x="0" y="32" width="640" height="28" fill="#fff"/>
-    <text x="100" y="51" text-anchor="middle" font-size="12" fill="#171717">B02 → B08</text>
-    <text x="280" y="51" text-anchor="middle" font-size="12" fill="#171717">0.2599</text>
-    <text x="430" y="51" text-anchor="middle" font-size="12" fill="#171717">57</text>
-    <text x="570" y="51" text-anchor="middle" font-size="12" font-weight="600" fill="#171717">5.7 px</text>
+    <text x="100" y="51" text-anchor="middle" font-size="12" fill="#171717">B04 → B03</text>
+    <text x="280" y="51" text-anchor="middle" font-size="12" fill="#171717">0.4839</text>
+    <text x="430" y="51" text-anchor="middle" font-size="12" fill="#171717">106</text>
+    <text x="570" y="51" text-anchor="middle" font-size="12" font-weight="600" fill="#171717">10.6 px</text>
 
     <rect x="0" y="60" width="640" height="28" fill="#f3f4f6"/>
-    <text x="100" y="79" text-anchor="middle" font-size="12" fill="#171717">B02 → B03</text>
-    <text x="280" y="79" text-anchor="middle" font-size="12" fill="#171717">0.5214</text>
-    <text x="430" y="79" text-anchor="middle" font-size="12" fill="#171717">115</text>
-    <text x="570" y="79" text-anchor="middle" font-size="12" font-weight="600" fill="#171717">11.5 px</text>
+    <text x="100" y="79" text-anchor="middle" font-size="12" fill="#171717">B04 → B08</text>
+    <text x="280" y="79" text-anchor="middle" font-size="12" fill="#171717">0.7438</text>
+    <text x="430" y="79" text-anchor="middle" font-size="12" fill="#171717">164</text>
+    <text x="570" y="79" text-anchor="middle" font-size="12" font-weight="600" fill="#171717">16.4 px</text>
 
     <rect x="0" y="88" width="640" height="28" fill="#fff"/>
-    <text x="100" y="107" text-anchor="middle" font-size="12" fill="#171717">B02 → B04</text>
-    <text x="280" y="107" text-anchor="middle" font-size="12" fill="#171717">0.9990</text>
-    <text x="430" y="107" text-anchor="middle" font-size="12" fill="#171717">220</text>
-    <text x="570" y="107" text-anchor="middle" font-size="12" font-weight="600" fill="#171717">22.0 px</text>
+    <text x="100" y="107" text-anchor="middle" font-size="12" fill="#171717">B04 → B02</text>
+    <text x="280" y="107" text-anchor="middle" font-size="12" fill="#171717">1.0037</text>
+    <text x="430" y="107" text-anchor="middle" font-size="12" fill="#171717">221</text>
+    <text x="570" y="107" text-anchor="middle" font-size="12" font-weight="600" fill="#171717">22.1 px</text>
   </g>
 
-  <text x="400" y="410" text-anchor="middle" font-size="11" fill="#6b7280">Δt-värden detector 7, parsade ur MTD_DS.xml. Förflyttning vid 220 m/s ground speed (PC-24 climb-cruise).</text>
+  <text x="400" y="410" text-anchor="middle" font-size="11" fill="#6b7280">Δt-värden detector 10, parsade ur MTD_DS.xml. Förflyttning vid 220 m/s ground speed (PC-24 climb-cruise).</text>
 </svg>

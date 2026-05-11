@@ -542,18 +542,18 @@
             </tbody>
         </table>
 
-        <h3 style="margin-top:24px;">Inter-band-tidsdelta — detector 7</h3>
+        <h3 style="margin-top:24px;">Inter-band-tidsdelta — detector 10</h3>
         <p>
-            Parsade per-detektor från <code>MTD_DS.xml</code> via <code>parse_band_times_v2.py</code>. Tidigare versioner använde nominella ESA-värden (B03 +0.5 s, B04 +0.6 s, B08 +1.0 s) som visade sig vara fel: faktisk fokalplansordning är <strong>B02 → B08 → B03 → B04</strong>, inte alfabetisk. B08 kommer näst tidigast, inte sist.
+            Parsade per-detektor från <code>MTD_DS.xml</code> via <code>parse_band_times_v2.py</code>. Tidigare versioner använde nominella ESA-värden (B03 +0.5 s, B04 +0.6 s, B08 +1.0 s) som visade sig vara fel: faktisk fokalplansordning är <strong>B04 → B03 → B08 → B02</strong>, inte alfabetisk. B08 ligger näst sist (+0.744 s efter B04), inte alfabetisk ordning.
         </p>
         <table class="license-table" style="margin-top:8px;">
             <thead>
                 <tr><th>Bandpar</th><th>Δt (s)</th><th>Förflyttning vid 220 m/s (m)</th><th>Pixlar @ 10 m</th></tr>
             </thead>
             <tbody>
-                <tr><td>B02 → B08</td><td>0.2599</td><td>57</td><td>5.7 px</td></tr>
-                <tr><td>B02 → B03</td><td>0.5214</td><td>115</td><td>11.5 px</td></tr>
-                <tr><td>B02 → B04</td><td>0.9990</td><td>220</td><td>22.0 px</td></tr>
+                <tr><td>B04 → B03</td><td>0.4839</td><td>106</td><td>10.6 px</td></tr>
+                <tr><td>B04 → B08</td><td>0.7438</td><td>164</td><td>16.4 px</td></tr>
+                <tr><td>B04 → B02</td><td>1.0037</td><td>221</td><td>22.1 px</td></tr>
             </tbody>
         </table>
 
@@ -675,7 +675,7 @@
             </figure>
             <figure style="margin:0;">
                 <img src="showcase/aircraft_parallax/band_timing.svg" alt="Inter-band tidsdelta + förväntade pixel-offsets" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
-                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">Inter-band-tidsdelta — faktiska detector-7-värden (parsade ur MTD_DS.xml). B08 ligger näst tidigast (+0.260 s), inte sist; fokalplansordningen är B02 → B08 → B03 → B04.</figcaption>
+                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">Inter-band-tidsdelta — faktiska detector-7-värden (parsade ur MTD_DS.xml). B08 ligger näst sist (+0.744 s efter B04), inte alfabetisk ordning; fokalplansordningen är B04 → B03 → B08 → B02.</figcaption>
             </figure>
             <figure style="margin:0;">
                 <img src="showcase/aircraft_parallax/predicted_streak.svg" alt="Förväntad signatur i RGB-kompositen vid PC-24 cruise" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
@@ -1317,7 +1317,7 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=12"></script>
+    <script src="js/tab-data.js?v=13"></script>
     <script src="js/app.js?v=11"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>

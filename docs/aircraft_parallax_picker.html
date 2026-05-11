@@ -44,7 +44,7 @@
 <p class="subtitle">
     Klicka på <strong>flygplanets position</strong> (apex/spetsen av kondensstrimman) i varje band.
     Bild visar 120×120 px @ 10 m/px = 1.2×1.2 km, 8× nearest-neighbor upscale.
-    Centrerad på 57.71809°N, 11.66456°E. Δt(B02→B04) = 0.999 s från MTD_DS.xml detector 7. Fokalplansordning: B02 → B08 → B03 → B04.
+    Centrerad på 57.71809°N, 11.66456°E. Δt(B04→B02) = 1.004 s från MTD_DS.xml detector 10. Fokalplansordning: B04 → B03 → B08 → B02.
 </p>
 
 <div class="grid">
@@ -55,21 +55,21 @@
         <div class="pick empty" id="pick-B02">Inte vald</div>
     </div>
     <div class="panel">
-        <h3 style="color:#4cdc64">B03 · 560 nm (grön) · t₀ + 0.521 s</h3>
+        <h3 style="color:#4cdc64">B03 · 560 nm (grön) · t₀ + 0.484 s</h3>
         <canvas id="cv-B03" width="960" height="960"></canvas>
         <div class="hint">Klicka på apex</div>
         <div class="pick empty" id="pick-B03">Inte vald</div>
     </div>
     <div class="panel">
-        <h3 style="color:#fc4c4c">B04 · 665 nm (röd) · t₀ + 0.999 s</h3>
+        <h3 style="color:#fc4c4c">B04 · 665 nm (röd) · t₀ (exponeras först)</h3>
         <canvas id="cv-B04" width="960" height="960"></canvas>
         <div class="hint">Klicka på apex</div>
         <div class="pick empty" id="pick-B04">Inte vald</div>
     </div>
     <div class="panel">
-        <h3 style="color:#ec407a">B08 · 842 nm (NIR) · t₀ + 0.260 s</h3>
+        <h3 style="color:#ec407a">B08 · 842 nm (NIR) · t₀ + 0.744 s</h3>
         <canvas id="cv-B08" width="960" height="960"></canvas>
-        <div class="hint">Klicka på apex (NIR, näst tidigast i fokalplan)</div>
+        <div class="hint">Klicka på apex (NIR, näst sist i fokalplan)</div>
         <div class="pick empty" id="pick-B08">Inte vald</div>
     </div>
 </div>
@@ -92,9 +92,9 @@
 
 const NATIVE_SIZE = 120;     // pixels per side in source crop
 const UPSCALE = 8;           // image is rendered at 8x
-// Δt values from MTD_DS.xml detector 7 (parse_band_times_v2.py).
-// NOTE: B08 is NOT last — band-on-focal-plane order is B02 → B08 → B03 → B04.
-const DT = { B02: 0.0, B03: 0.5214, B04: 0.9990, B08: 0.2599 };
+// Δt values from MTD_DS.xml detector 10 (parse_band_times_v2.py).
+// NOTE: B08 is NOT last — band-on-focal-plane order is B04 → B03 → B08 → B02.
+const DT = { B04: 0.0, B03: 0.4839, B08: 0.7438, B02: 1.0037 };
 const PIXEL_M = 10.0;        // ground sample distance per native pixel
 const SPEED_OF_SOUND = 343;
 

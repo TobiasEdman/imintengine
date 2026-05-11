@@ -24,15 +24,15 @@ Bäringar och avstånd från AOI:
 
 ## Mätdata (från Sentinel-2 push-broom-parallax)
 
-L1C-scen: `S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK`. Detector 7
+L1C-scen: `S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK`. Detector 10
 (parsad ur `MTD_DS.xml` via `parse_band_times_v2.py`):
 
-| Band | Δt vs B02 |
+| Band | Δt vs B04 (exponeringsordning, detector 10) |
 |------|-----------|
-| B02  | 0.0000 s  |
-| B08  | 0.2599 s  |
-| B03  | 0.5214 s  |
-| B04  | 0.9990 s  |
+| B04  | 0.0000 s  |
+| B03  | 0.4839 s  |
+| B08  | 0.7438 s  |
+| B02  | 1.0037 s  |
 
 User-picks i 120×120 px native crop ger total förskjutning ≈ 300 m över 1 s.
 Wedge-spets i NÖ → planet flyger NÖ. Heading uppmätt: **051°** (±5°).

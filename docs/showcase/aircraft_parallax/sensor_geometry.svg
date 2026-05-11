@@ -22,27 +22,27 @@
 
   <!-- Focal plane detail box -->
   <rect x="100" y="170" width="600" height="100" fill="#ffffff" stroke="#d1d5db" stroke-width="1" rx="3"/>
-  <text x="120" y="195" font-size="12" fill="#6b7280">Fokalplan (detector 7) — band i tidsordning along-track</text>
+  <text x="120" y="195" font-size="12" fill="#6b7280">Fokalplan (detector 10, jämn) — band i tidsordning along-track</text>
 
-  <!-- Detector rows in correct focal-plane order: B02 → B08 → B03 → B04 -->
-  <rect x="120" y="210" width="125" height="22" fill="#003366" rx="2"/>
-  <text x="182" y="226" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">B02 · 490 nm</text>
+  <!-- Detector rows in correct focal-plane order for detector 10: B04 → B03 → B08 → B02 -->
+  <rect x="120" y="210" width="125" height="22" fill="#d73027" rx="2"/>
+  <text x="182" y="226" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">B04 · 665 nm</text>
 
-  <rect x="265" y="210" width="135" height="22" fill="#7b1fa2" rx="2"/>
-  <text x="332" y="226" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">B08 · 842 nm (NIR)</text>
+  <rect x="265" y="210" width="125" height="22" fill="#1a9850" rx="2"/>
+  <text x="327" y="226" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">B03 · 560 nm</text>
 
-  <rect x="420" y="210" width="125" height="22" fill="#1a9850" rx="2"/>
-  <text x="482" y="226" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">B03 · 560 nm</text>
+  <rect x="410" y="210" width="135" height="22" fill="#7b1fa2" rx="2"/>
+  <text x="477" y="226" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">B08 · 842 nm (NIR)</text>
 
-  <rect x="565" y="210" width="125" height="22" fill="#d73027" rx="2"/>
-  <text x="627" y="226" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">B04 · 665 nm</text>
+  <rect x="565" y="210" width="125" height="22" fill="#003366" rx="2"/>
+  <text x="627" y="226" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">B02 · 490 nm</text>
 
-  <!-- Time arrow with actual detector-7 Δt values -->
+  <!-- Time arrow with actual detector-10 Δt values -->
   <line x1="120" y1="250" x2="690" y2="250" stroke="#171717" stroke-width="1.5" marker-end="url(#arrow)"/>
   <text x="120" y="263" text-anchor="start" font-size="10" fill="#6b7280">t₀</text>
-  <text x="332" y="263" text-anchor="middle" font-size="10" fill="#6b7280">+0.260 s</text>
-  <text x="482" y="263" text-anchor="middle" font-size="10" fill="#6b7280">+0.521 s</text>
-  <text x="627" y="263" text-anchor="middle" font-size="10" fill="#6b7280">+0.999 s</text>
+  <text x="327" y="263" text-anchor="middle" font-size="10" fill="#6b7280">+0.484 s</text>
+  <text x="477" y="263" text-anchor="middle" font-size="10" fill="#6b7280">+0.744 s</text>
+  <text x="627" y="263" text-anchor="middle" font-size="10" fill="#6b7280">+1.004 s</text>
   <text x="690" y="263" text-anchor="end" font-size="10" fill="#6b7280">tid →</text>
 
   <!-- Ground track diagram -->
@@ -57,25 +57,23 @@
   <text x="400" y="395" text-anchor="middle" font-size="11" fill="#171717">stationär punkt</text>
   <text x="400" y="445" text-anchor="middle" font-size="10" fill="#6b7280">samma position i alla band → ingen artefakt</text>
 
-  <!-- Aircraft track — 220 m/s ground speed → ~57 m, ~115 m, ~220 m between bands -->
+  <!-- Aircraft track — 220 m/s ground speed. Map: B04 at x=200 (t=0), B02 at x=635 (t=1.004s).
+       B03 at x=200+(635-200)*0.4839/1.0037 = 200+210 = 410
+       B08 at x=200+(635-200)*0.7438/1.0037 = 200+322 = 522 -->
   <line x1="180" y1="380" x2="650" y2="380" stroke="#1565c0" stroke-width="2" stroke-dasharray="4,4" marker-end="url(#arrow)"/>
   <text x="160" y="383" text-anchor="end" font-size="11" fill="#1565c0">flygplan @ 220 m/s</text>
 
-  <!-- Aircraft positions per band — scaled so B04 at +220m is the rightmost, B08 at +57m, B03 at +115m -->
-  <!-- Map: B02 at x=200 (t=0), B04 at x=635 (t=0.999s, +220m). Linear.
-       B08 at x=200+(635-200)*0.2599/0.999 = 200+113 = 313
-       B03 at x=200+(635-200)*0.5214/0.999 = 200+227 = 427 -->
-  <circle cx="200" cy="380" r="5" fill="#003366"/>
-  <text x="200" y="370" text-anchor="middle" font-size="9" fill="#003366">t₀ B02</text>
+  <circle cx="200" cy="380" r="5" fill="#d73027"/>
+  <text x="200" y="370" text-anchor="middle" font-size="9" fill="#d73027">t₀ B04</text>
 
-  <circle cx="313" cy="380" r="5" fill="#7b1fa2"/>
-  <text x="313" y="370" text-anchor="middle" font-size="9" fill="#7b1fa2">+57 m B08</text>
+  <circle cx="410" cy="380" r="5" fill="#1a9850"/>
+  <text x="410" y="370" text-anchor="middle" font-size="9" fill="#1a9850">+106 m B03</text>
 
-  <circle cx="427" cy="380" r="5" fill="#1a9850"/>
-  <text x="427" y="370" text-anchor="middle" font-size="9" fill="#1a9850">+115 m B03</text>
+  <circle cx="522" cy="380" r="5" fill="#7b1fa2"/>
+  <text x="522" y="370" text-anchor="middle" font-size="9" fill="#7b1fa2">+164 m B08</text>
 
-  <circle cx="635" cy="380" r="5" fill="#d73027"/>
-  <text x="635" y="370" text-anchor="middle" font-size="9" fill="#d73027">+220 m B04</text>
+  <circle cx="635" cy="380" r="5" fill="#003366"/>
+  <text x="635" y="370" text-anchor="middle" font-size="9" fill="#003366">+221 m B02</text>
 
   <text x="400" y="465" text-anchor="middle" font-size="11" fill="#6b7280">→ planet syns på olika position i varje band → diagonalt streck i RGB-kompositen</text>
 </svg>
