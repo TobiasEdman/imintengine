@@ -6,8 +6,9 @@ slot positions and gave Δt~0. The CORRECT computation is:
   for a given detector (= specific across-track slot), Δt(B02 → B08)
   = GPS_TIME[bandId=7, detector=N] - GPS_TIME[bandId=1, detector=N]
 
-We report Δt per detector, plus Δt for detector 7 (which covers our
-Hisingen AOI per MTD_TL.xml viewing-incidence-angle grids).
+We report Δt per detector, plus Δt for detector 10 (which covers our
+Öckerö-skärgården AOI 57.71809°N, 11.66456°E per MTD_TL.xml
+viewing-incidence-angle grids).
 """
 from __future__ import annotations
 
@@ -83,15 +84,15 @@ def main():
             line += f"  {dt:+10.4f}"
         print(line)
 
-    # Hisingen tile T32VPK is covered by detector 7 (per MTD_TL.xml)
-    # Show the timeline for detector 7 specifically
-    print(f"\n=== Detector 7 (covers Hisingen / T32VPK) ===\n")
-    det7 = {bid: times[bid].get(7) for bid in times}
+    # AOI 57.71809°N, 11.66456°E (T32VPK) is covered by detector 10 (per MTD_TL.xml)
+    # Show the timeline for detector 10 specifically (even detector → push-pull reverse order)
+    print(f"\n=== Detector 10 (covers Öckerö-skärgården AOI in T32VPK) ===\n")
+    det7 = {bid: times[bid].get(10) for bid in times}
     print(f"{'Band':<6} {'GPS_TIME (UTC)':<30} {'Δt vs B02 (s)':>16}")
     print("-" * 56)
     ref = det7.get(1)
     if ref is None:
-        sys.exit("No B02 detector 7 time")
+        sys.exit("No B02 detector 10 time")
     for bid in sorted(det7):
         if det7[bid] is None:
             continue
@@ -99,13 +100,13 @@ def main():
         print(f"{BAND_ID_TO_NAME[bid]:<6} {det7[bid].isoformat():<30} {dt:+16.4f}")
 
     # Highlight the four bands of interest with detector-7 Δt
-    print(f"\n=== Δt for parallax measurement (detector 7) ===")
+    print(f"\n=== Δt for parallax measurement (detector 10) ===")
     for name, bid in bands_of_interest:
         if det7.get(bid):
             dt = (det7[bid] - ref).total_seconds()
             print(f"  {name}: Δt = {dt:+.4f} s")
 
-    print(f"\n=== Inter-band steps (detector 7) ===")
+    print(f"\n=== Inter-band steps (detector 10) ===")
     pairs = [("B02→B03", 1, 2), ("B03→B04", 2, 3), ("B04→B08", 3, 7), ("B02→B08", 1, 7)]
     for label, a, b in pairs:
         if det7.get(a) and det7.get(b):

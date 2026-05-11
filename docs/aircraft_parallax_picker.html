@@ -44,7 +44,7 @@
 <p class="subtitle">
     Klicka på <strong>flygplanets position</strong> (apex/spetsen av kondensstrimman) i varje band.
     Bild visar 120×120 px @ 10 m/px = 1.2×1.2 km, 8× nearest-neighbor upscale.
-    Centrerad på 57.71809°N, 11.66456°E. Δt(B02→B08) = 1.005 s från MTD_TL.xml.
+    Centrerad på 57.71809°N, 11.66456°E. Δt(B04→B02) = 1.004 s från MTD_DS.xml detector 10. Fokalplansordning: B04 → B03 → B08 → B02.
 </p>
 
 <div class="grid">
@@ -55,21 +55,21 @@
         <div class="pick empty" id="pick-B02">Inte vald</div>
     </div>
     <div class="panel">
-        <h3 style="color:#4cdc64">B03 · 560 nm (grön) · t₀ + 0.527 s</h3>
+        <h3 style="color:#4cdc64">B03 · 560 nm (grön) · t₀ + 0.484 s</h3>
         <canvas id="cv-B03" width="960" height="960"></canvas>
         <div class="hint">Klicka på apex</div>
         <div class="pick empty" id="pick-B03">Inte vald</div>
     </div>
     <div class="panel">
-        <h3 style="color:#fc4c4c">B04 · 665 nm (röd) · t₀ + 0.585 s</h3>
+        <h3 style="color:#fc4c4c">B04 · 665 nm (röd) · t₀ (exponeras först)</h3>
         <canvas id="cv-B04" width="960" height="960"></canvas>
         <div class="hint">Klicka på apex</div>
         <div class="pick empty" id="pick-B04">Inte vald</div>
     </div>
     <div class="panel">
-        <h3 style="color:#ec407a">B08 · 842 nm (NIR) · t₀ + 1.005 s</h3>
+        <h3 style="color:#ec407a">B08 · 842 nm (NIR) · t₀ + 0.744 s</h3>
         <canvas id="cv-B08" width="960" height="960"></canvas>
-        <div class="hint">Klicka på apex (störst offset från B02)</div>
+        <div class="hint">Klicka på apex (NIR, näst sist i fokalplan)</div>
         <div class="pick empty" id="pick-B08">Inte vald</div>
     </div>
 </div>
@@ -78,6 +78,12 @@
     <button id="btn-compute">Räkna ut hastighet</button>
     <button id="btn-clear" class="secondary">Rensa picks</button>
     <button id="btn-zoom-2x" class="secondary">Zoom 2× (16× pixels)</button>
+    <label style="margin-left:18px; color:#8b949e; font-size:13px;">
+        Antagen flyghöjd:
+        <input id="alt-km" type="number" value="11" min="0" max="50" step="0.5"
+               style="width:70px; background:#0d1117; color:#e6e6e6; border:1px solid #30363d; border-radius:3px; padding:3px 6px; margin-left:6px;"> km
+    </label>
+    <span id="save-status" style="margin-left:18px; color:#8b949e; font-size:12px;">Spara: använd picker_server.py för persistens</span>
     <div class="results" id="results"></div>
 </div>
 
@@ -86,12 +92,75 @@
 
 const NATIVE_SIZE = 120;     // pixels per side in source crop
 const UPSCALE = 8;           // image is rendered at 8x
-const DT = { B02: 0.0, B03: 0.527, B04: 0.585, B08: 1.005 };
+// Δt values from MTD_DS.xml detector 10 (parse_band_times_v2.py).
+// NOTE: B08 is NOT last — band-on-focal-plane order is B04 → B03 → B08 → B02.
+const DT = { B04: 0.0, B03: 0.4839, B08: 0.7438, B02: 1.0037 };
 const PIXEL_M = 10.0;        // ground sample distance per native pixel
 const SPEED_OF_SOUND = 343;
-const PASSAGE_KMH = 60;       // approximate normalisation
+
+// Height-parallax: a stationary object at altitude H_aircraft appears displaced by
+//   (v_sat / H_sat) * H * Δt   between two band exposures.
+// v_sat ≈ 6700 m/s ground-track, H_sat ≈ 786 km → 0.00853 m of parallax
+// per metre of altitude per second of Δt.
+const V_SAT_OVER_H_SAT = 6700 / 786000;
 
 const picks = { B02: null, B03: null, B04: null, B08: null };
+
+// Optional persistence — if served via picker_server.py, picks survive sessions.
+async function loadPicks() {
+    try {
+        const r = await fetch('/api/picks', {cache: 'no-store'});
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!data || !data.picks) return;
+        Object.entries(data.picks).forEach(([bid, p]) => {
+            if (!p || !p.native) return;
+            picks[bid] = p;
+            const el = document.getElementById('pick-' + bid);
+            if (el) {
+                el.textContent = `Loaded: native (${p.native.x.toFixed(2)}, ${p.native.y.toFixed(2)}) px`;
+                el.classList.remove('empty');
+            }
+        });
+        const status = document.getElementById('save-status');
+        if (status && data.updated_at) {
+            status.textContent = `Senast sparat: ${data.updated_at}`;
+        }
+        bands.forEach(b => drawPanel(b));
+    } catch (e) {
+        // Server doesn't support /api/picks (e.g. plain http.server) — fine, fall back to in-memory.
+    }
+}
+
+let saveTimer = null;
+function savePicks() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+        try {
+            const r = await fetch('/api/picks', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({picks}),
+            });
+            const status = document.getElementById('save-status');
+            if (!status) return;
+            if (r.ok) {
+                const d = await r.json();
+                status.textContent = `Sparad till ${d.saved_to}`;
+                status.style.color = '#4fc3a1';
+            } else {
+                status.textContent = 'Kunde inte spara — POST ' + r.status;
+                status.style.color = '#d29922';
+            }
+        } catch (e) {
+            const status = document.getElementById('save-status');
+            if (status) {
+                status.textContent = 'Ej sparat (server saknar /api/picks — använd picker_server.py)';
+                status.style.color = '#d29922';
+            }
+        }
+    }, 200);
+}
 
 // Load images
 const bands = ['B02','B03','B04','B08'];
@@ -169,8 +238,12 @@ bands.forEach(bid => {
             `Picked: native (${native.x.toFixed(2)}, ${native.y.toFixed(2)}) px`;
         document.getElementById('pick-' + bid).classList.remove('empty');
         bands.forEach(b => drawPanel(b));
+        savePicks();
     });
 });
+
+// Auto-load any prior picks
+loadPicks();
 
 document.getElementById('btn-clear').addEventListener('click', () => {
     bands.forEach(bid => {
@@ -181,6 +254,7 @@ document.getElementById('btn-clear').addEventListener('click', () => {
         drawPanel(bid);
     });
     document.getElementById('results').innerHTML = '';
+    savePicks();
 });
 
 document.getElementById('btn-zoom-2x').addEventListener('click', evt => {
@@ -195,19 +269,28 @@ document.getElementById('btn-compute').addEventListener('click', () => {
         out.innerHTML = '<div class="verdict warn">Behöver minst B02 och B08 för att räkna ut hastigheten.</div>';
         return;
     }
+    const altKm = Math.max(0, parseFloat(document.getElementById('alt-km').value) || 11);
+    const altM = altKm * 1000;
+    // Parallax magnitude per second of Δt (m/s of apparent displacement of a stationary object at altitude H):
+    const parallaxRate = V_SAT_OVER_H_SAT * altM;   // m per second of Δt
+
     let html = `
+        <div style="font-size:12px; color:#8b949e; margin-bottom:8px;">
+            Höjd ${altKm} km · höjdparallax = ${parallaxRate.toFixed(1)} m per Δt-sekund.
+            v_aircraft = (offset_m − parallax_m) / Δt.
+        </div>
         <div class="row header">
             <div class="col">Band</div>
             <div class="col">Δt (s)</div>
-            <div class="col">Δy (px)</div>
-            <div class="col">Δx (px)</div>
             <div class="col">|Δ| (px)</div>
             <div class="col">|Δ| (m)</div>
-            <div class="col wide">Hastighet</div>
+            <div class="col">Parallax (m)</div>
+            <div class="col">Plan (m)</div>
+            <div class="col wide">v_aircraft</div>
         </div>`;
 
     const b02 = picks.B02.native;
-    let speed_b02_b08 = null;
+    const speeds = [];
     bands.forEach(bid => {
         if (bid === 'B02' || !picks[bid]) return;
         const p = picks[bid].native;
@@ -215,22 +298,43 @@ document.getElementById('btn-compute').addEventListener('click', () => {
         const dx = p.x - b02.x;
         const dist_px = Math.hypot(dy, dx);
         const dist_m = dist_px * PIXEL_M;
-        const dt = DT[bid];
-        const v = dist_m / dt;
+        const dt = Math.abs(DT[bid]);
+        const parallax_m = parallaxRate * dt;
+        const plane_m = dist_m - parallax_m;
+        const v = plane_m / dt;
         const mach = v / SPEED_OF_SOUND;
         const kmh = v * 3.6;
-        if (bid === 'B08') speed_b02_b08 = v;
+        speeds.push({bid, v, dist_px, dt});
         html += `
             <div class="row">
                 <div class="col" style="color:${bandColor(bid)}">${bid}</div>
-                <div class="col">${dt.toFixed(3)}</div>
-                <div class="col">${dy.toFixed(2)}</div>
-                <div class="col">${dx.toFixed(2)}</div>
+                <div class="col">${DT[bid].toFixed(4)}</div>
                 <div class="col">${dist_px.toFixed(2)}</div>
                 <div class="col">${dist_m.toFixed(0)}</div>
+                <div class="col">${parallax_m.toFixed(0)}</div>
+                <div class="col">${plane_m.toFixed(0)}</div>
                 <div class="col wide">${v.toFixed(0)} m/s · ${kmh.toFixed(0)} km/h · Mach ${mach.toFixed(2)}</div>
             </div>`;
     });
+
+    // Cross-check: do the three Δt-pairs agree on v_aircraft?
+    if (speeds.length >= 2) {
+        const vs = speeds.map(s => s.v);
+        const vmin = Math.min(...vs);
+        const vmax = Math.max(...vs);
+        const vmean = vs.reduce((a,b) => a+b, 0) / vs.length;
+        const spread = vmax - vmin;
+        let crossCheck;
+        if (spread < 30) {
+            crossCheck = `Cross-check: alla bandpar ger samma v_aircraft inom ${spread.toFixed(0)} m/s — picks är konsistenta. Medel = ${vmean.toFixed(0)} m/s.`;
+        } else if (spread < 80) {
+            crossCheck = `Cross-check: bandpar spridda inom ${spread.toFixed(0)} m/s (${vmin.toFixed(0)}–${vmax.toFixed(0)}). Acceptabelt men kontrollera apex-pickar.`;
+        } else {
+            crossCheck = `Cross-check: bandpar spridda inom ${spread.toFixed(0)} m/s (${vmin.toFixed(0)}–${vmax.toFixed(0)}). För stort spread — apex-pickarna är inte på samma fysiska punkt på planet.`;
+        }
+        html += `<div style="margin-top:10px; font-size:13px; color:#8b949e;">${crossCheck}</div>`;
+    }
+    const speed_b02_b08 = speeds.find(s => s.bid === 'B08')?.v ?? null;
 
     // Reasonability check (ground speed; civilt jet i cruise = 210-280 m/s = 750-1000 km/h)
     if (speed_b02_b08 !== null) {
