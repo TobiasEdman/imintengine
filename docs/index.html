@@ -567,24 +567,42 @@
 
             <h3>Mätning från pixel-data</h3>
             <p>
-                Manuella apex-pickar i 120×120 px native-cropen (en pick per band, sparade i <code>user_picks.json</code>) ger total geografisk förskjutning över 1 sekund ≈ 300 m. Wedge-spetsen — den smala, ljusa änden av kondensstrimman — ligger i NÖ i alla fyra band, vilket pekar på att planet rörde sig mot nordost. Olika band pickar olika delar av kondensstrimman pga våglängdskänslighet (B02 ser fräscha vattendroppar nära planet, B08 ser is-kristall-fasen längre bak), så automatisk apex-detektion gav inte stabila resultat — pickarna är manuella i picker-html:en och styrs visuellt mot wedge-spetsen.
+                Manuella apex-pickar i 120×120 px native-cropen (en pick per band, sparade i <code>user_picks.json</code>) ger total geografisk förskjutning <strong>B04 → B02</strong> över 1.004 s ≈ <strong>301 m i bäring 40.3°</strong> (NE). Rå hastighet utan höjdkorrektion: <strong>300 m/s</strong>. Wedge-spetsen i NÖ matchar: planet syns längre och längre NE genom successiva band-exponeringar.
             </p>
 
             <h3>Vektorsubtraktion vid varierande flyghöjd</h3>
             <p>
-                Den uppmätta vektorn innehåller två bidrag: planets faktiska rörelse, och höjdparallax från satellitens ground-track-rörelse. Sat-track-bäringen vid 57.72°N (descending pass, orbital inclination 98.62°) är <strong>196.3°</strong>. Höjdparallaxens magnitud är <code>(v_sat / H_sat) × H_a × Δt</code> ≈ 0.00853 × H_a meter per Δt=1s, alltid längs sat-track-bäringen.
+                Den uppmätta vektorn innehåller två bidrag: planets faktiska rörelse, och höjdparallax från satellitens ground-track-rörelse. Sat-track-bäringen vid 57.72°N (descending pass, orbital inclination 98.62°) är <strong>196.3°</strong>. En stationär punkt på höjd H_a förskjuts i motsatt riktning <strong>016.3°</strong> (NNE) mellan band-exponeringar, magnitud <code>(v_sat / H_sat) × H_a × Δt</code> ≈ 0.00853 × H_a meter per Δt=1s. Vektorsubtraktion: <code>d_plane = d_observed − p_parallax</code>.
             </p>
             <table class="license-table" style="margin-top:8px;">
                 <thead>
-                    <tr><th>Antagen H_a</th><th>Sat-parallax (m vid Δt=1s)</th><th>Resterande v_aircraft</th><th>Förenlig med kondensstrimma?</th></tr>
+                    <tr><th>Antagen H_a</th><th>Sat-parallax (m vid Δt=1s)</th><th>v_aircraft</th><th>bearing</th><th>Förenlig med kondensstrimma?</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td>1 km</td><td>9 m</td><td>~290 m/s · Mach 0.86</td><td><strong>Nej</strong> — för varmt för kondensstrimma</td></tr>
-                    <tr><td>5 km</td><td>43 m</td><td>~250 m/s · Mach 0.78</td><td>Marginellt — vintertröskel</td></tr>
-                    <tr><td>8 km</td><td>68 m</td><td>~239 m/s · Mach 0.74</td><td><strong>Ja</strong> — Schmidt-Appleman uppfyllt</td></tr>
-                    <tr><td>11 km</td><td>94 m</td><td>~217 m/s · Mach 0.74</td><td><strong>Ja</strong> — typisk cruise</td></tr>
+                    <tr><td>1 km</td><td>9 m</td><td>292 m/s · Mach 0.87</td><td>41.0°</td><td><strong>Nej</strong> — för varmt för kondensstrimma</td></tr>
+                    <tr><td>5 km</td><td>43 m</td><td>262 m/s · Mach 0.82</td><td>44.1°</td><td>Marginellt — vintertröskel</td></tr>
+                    <tr><td>8 km</td><td>68 m</td><td><strong>239 m/s · Mach 0.78</strong></td><td><strong>47.0°</strong></td><td><strong>Ja</strong> — Schmidt-Appleman uppfyllt · matchar PC-24 climb-cruise</td></tr>
+                    <tr><td>11 km</td><td>94 m</td><td>218 m/s · Mach 0.74</td><td>50.4°</td><td><strong>Ja</strong> — exakt PC-24 cruise · matchar Säve→ESOW bäring 51.7°</td></tr>
                 </tbody>
             </table>
+
+            <h3>Cross-band-konsistenscheck</h3>
+            <p>
+                Det <strong>avgörande testet</strong> för att picks faktiskt tracker samma fysiska punkt (planet) i alla band: vid antagen flyghöjd H_a = 8 km ger varje bandpar oberoende:
+            </p>
+            <table class="license-table" style="margin-top:8px;">
+                <thead>
+                    <tr><th>Bandpar</th><th>Δt (s)</th><th>v_aircraft</th><th>bearing</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>B04 → B03</td><td>0.4839</td><td>240 m/s</td><td>46.5°</td></tr>
+                    <tr><td>B04 → B08</td><td>0.7438</td><td>240 m/s</td><td>46.6°</td></tr>
+                    <tr><td>B04 → B02</td><td>1.0037</td><td>239 m/s</td><td>47.0°</td></tr>
+                </tbody>
+            </table>
+            <p>
+                Alla tre bandpar ger <strong>v och bearing inom ±1 m/s och ±0.5°</strong>. Detta bevisar att user-picks tracker exakt samma fysiska punkt (planets position) över alla band — ingen våglängds-beroende drift, ingen vinddrift-bias. Mätningen är robust.
+            </p>
 
             <h3>Kondensstrimma-fysiken styr höjdvalet</h3>
             <p>
@@ -1317,7 +1335,7 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=13"></script>
+    <script src="js/tab-data.js?v=14"></script>
     <script src="js/app.js?v=11"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>

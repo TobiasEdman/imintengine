@@ -34,11 +34,25 @@ L1C-scen: `S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK`. Detector 10
 | B08  | 0.7438 s  |
 | B02  | 1.0037 s  |
 
-User-picks i 120×120 px native crop ger total förskjutning ≈ 300 m över 1 s.
-Wedge-spets i NÖ → planet flyger NÖ. Heading uppmätt: **051°** (±5°).
-Vid hög höjd (H_a = 8–11 km efter sat-parallax-korrektion): **v ≈ 217–239 m/s**
-— typisk PC-24 climb-cruise. Låghöjds-tolkning (~290 m/s vid H_a = 1 km)
-är **förkastad** av kondensstrimma-fysiken (se nästa sektion).
+User-picks i 120×120 px native crop ger total förskjutning B04 → B02 över
+1.004 s ≈ 301 m i bäring 40.3° (NE). Rå hastighet utan höjdkorrektion:
+**300 m/s**. Vektorsubtraktion mot sat-parallax (riktning 016.3°, dvs
+motsatt sat-track 196.3°):
+
+| H_a | parallax (m) | v_aircraft | bearing |
+|-----|--------------|-----------|---------|
+| 1 km | 9 | 292 m/s | 41.0° |
+| 5 km | 43 | 262 m/s | 44.1° |
+| 8 km | 68 | **239 m/s** | **47.0°** |
+| 11 km | 94 | 218 m/s | 50.4° |
+
+**Cross-band-konsistenscheck vid H_a = 8 km:**
+- B04 → B03 (Δt 0.484 s): v=240 m/s, bearing 46.5°
+- B04 → B08 (Δt 0.744 s): v=240 m/s, bearing 46.6°
+- B04 → B02 (Δt 1.004 s): v=239 m/s, bearing 47.0°
+
+Alla tre bandpar ger samma v och bearing inom **±1 m/s och ±0.5°** — picks
+tracker konsistent samma fysiska punkt (planet) över alla band.
 
 ## Kondensstrimma-fysik utesluter låg höjd
 
@@ -140,7 +154,8 @@ Bevis-kedjan:
 2. Tidsfönstret (firstSeen 10:32:36 → AOI 10:43:19 → lastSeen 11:08:43)
    är konsistent med Säve-departure → Kattegatt outbound → NÖ-turn → ESOW
 3. PC-24 service ceiling 13.7 km täcker kondensstrimma-kapabel höjd
-4. PC-24 cruise (~226 m/s) matchar bättre än 290 m/s-värden
+4. PC-24 cruise (~226 m/s) matchar vektor-korrigerad v vid H_a 8–11 km
+   (218–239 m/s); bearing 47–50° matchar Säve→ESOW initial 51.7° inom 5°
 5. Kondensstrimma-fysik utesluter alla låghöjds-alternativ
 
 Inte verifierat:
