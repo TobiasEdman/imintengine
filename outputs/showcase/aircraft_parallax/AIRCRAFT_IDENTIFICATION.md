@@ -87,7 +87,7 @@ Pilatus PC-24-spec (relevant för pixel-tolkning):
 Planet är **subpixel** vid 10 m/px — vi ser **inte** kroppen, vi ser bara
 kondensstrimman (10 × 300–500 m).
 
-## Trajektorianalys: Säve-departure med Kattegatt-outbound
+## Flygbananalys: Säve-departure med Kattegatt-outbound
 
 Säve flygfält har bana **03/21** (orienterad NÖ/SV). Måltiden 10:43:19 är
 ~11 min efter ADS-B firstSeen. Säve→ESOW direkt-bäring är **51.7°**, vilket
