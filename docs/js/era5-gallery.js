@@ -40,6 +40,20 @@
         var records = (manifest.sets && manifest.sets[setName]) || [];
         gallery.innerHTML = '';
 
+        if (!manifest.sets || !(setName in manifest.sets)) {
+            gallery.innerHTML =
+                '<p style="color:#ff826c; grid-column:1/-1;">Set <code>' +
+                setName + '</code> saknas i manifest — kör <code>python ' +
+                'demos/era5_metafilter/render_frames.py</code> för att bygga om.</p>';
+            return;
+        }
+        if (records.length === 0) {
+            gallery.innerHTML =
+                '<p style="color:#fdd5c2; grid-column:1/-1;">Set <code>' +
+                setName + '</code> är tomt (0 scener efter filter).</p>';
+            return;
+        }
+
         records.forEach(function (rec) {
             var card = document.createElement('div');
             card.className = 'era5-frame-card';

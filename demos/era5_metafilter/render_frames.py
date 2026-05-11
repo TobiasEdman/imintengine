@@ -97,11 +97,7 @@ def render_frame(
     cbar.ax.tick_params(colors="white", labelsize=7)
     cbar.outline.set_edgecolor("#444")
 
-    set_color = {
-        "A_baseline": "#7f8c8d",
-        "B_metafilter": "#27ae60",
-        "C_fetch_s2": "#2980b9",
-    }.get(set_name, "#888")
+    set_color = {"A_baseline": "#7f8c8d"}.get(set_name, "#888")
     fig.suptitle(
         f"{set_name}  ·  {date}  ·  thick-cloud-pixels {thick_frac*100:.0f}%",
         color=set_color, fontsize=11, fontweight="bold", y=0.97,
@@ -120,33 +116,61 @@ def render_frame(
     }
 
 
+STRATEGIES_METRICS = HERE / "strategies_metrics.json"
+
+
+def render_baseline_pool(models) -> list[dict]:
+    """Render every cached scene once into frames/A_baseline/. Returns
+    list of manifest records sorted by mean COT ascending."""
+    cache_dir = CACHE_ROOT / "A_baseline"
+    npz_files = sorted(cache_dir.glob("*.npz"))
+    print(f"\n--- A_baseline ({len(npz_files)} scener) ---")
+    records: list[dict] = []
+    for i, npz in enumerate(npz_files, 1):
+        arr = np.load(npz)["arr"]
+        bands = {b: arr[j] for j, b in enumerate(S2L2A_SPECTRAL_BANDS)}
+        cot = cot_inference(bands, models)
+        out_path = DOCS_OUT / "A_baseline" / f"{npz.stem}.jpg"
+        rec = render_frame(arr, cot, npz.stem, "A_baseline", out_path)
+        records.append(rec)
+        print(f"  [{i:>3}/{len(npz_files)}] {npz.stem}  mean_cot={rec['mean_cot']:.4f}")
+    records.sort(key=lambda r: r["mean_cot"])
+    return records
+
+
+def m_sets_from_metrics(baseline_records: list[dict]) -> dict[str, list[dict]]:
+    """Build M0–M5 manifest entries by selecting the subset of baseline
+    records whose date is in each strategy's date list. Frames are reused
+    from A_baseline/ — no re-render needed."""
+    if not STRATEGIES_METRICS.exists():
+        print(f"\n  (skipping M-sets: {STRATEGIES_METRICS.name} not found — "
+              f"run benchmark_strategies.py first)")
+        return {}
+    with open(STRATEGIES_METRICS) as f:
+        metrics = json.load(f)
+    by_date = {r["date"]: r for r in baseline_records}
+    out: dict[str, list[dict]] = {}
+    for key, strat in metrics["strategies"].items():
+        picks = [by_date[d] for d in strat["dates"] if d in by_date]
+        picks.sort(key=lambda r: r["mean_cot"])
+        out[key] = picks
+        missing = set(strat["dates"]) - set(by_date)
+        tag = f" (missing {len(missing)})" if missing else ""
+        print(f"  {key:<22} n={len(picks)}{tag}")
+    return out
+
+
 def main() -> int:
     if not DEFAULT_MODEL_PATHS:
         sys.exit("No COT ensemble weights in imint/fm/cot_models/")
     print(f"Loading {len(DEFAULT_MODEL_PATHS)} MLP5 ensemble members…")
     models = _load_ensemble(DEFAULT_MODEL_PATHS, device="cpu")
 
-    set_names = ["A_baseline", "B_metafilter", "C_fetch_s2"]
-    manifest: dict[str, list[dict]] = {}
+    baseline = render_baseline_pool(models)
+    print("\n--- M-strategier (återanvänder A_baseline-jpgs) ---")
+    m_sets = m_sets_from_metrics(baseline)
 
-    for name in set_names:
-        cache_dir = CACHE_ROOT / name
-        npz_files = sorted(cache_dir.glob("*.npz"))
-        print(f"\n--- {name} ({len(npz_files)} scener) ---")
-        records: list[dict] = []
-        for i, npz in enumerate(npz_files, 1):
-            data = np.load(npz)
-            arr = data["arr"]
-            bands = {b: arr[j] for j, b in enumerate(S2L2A_SPECTRAL_BANDS)}
-            cot = cot_inference(bands, models)
-            out_path = DOCS_OUT / name / f"{npz.stem}.jpg"
-            rec = render_frame(arr, cot, npz.stem, name, out_path)
-            records.append(rec)
-            print(f"  [{i:>3}/{len(npz_files)}] {npz.stem}  mean_cot={rec['mean_cot']:.4f}")
-        # Sort by mean COT ascending → klarast först (det vi vill visa upp)
-        records.sort(key=lambda r: r["mean_cot"])
-        manifest[name] = records
-
+    manifest = {"A_baseline": baseline, **m_sets}
     manifest_path = DOCS_OUT / "manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with open(manifest_path, "w") as f:
@@ -159,7 +183,7 @@ def main() -> int:
         }, f, indent=2, ensure_ascii=False)
 
     total = sum(len(v) for v in manifest.values())
-    print(f"\nKlart. {total} frames i {DOCS_OUT.relative_to(REPO_ROOT)}")
+    print(f"\nKlart. {total} entries i {manifest_path.relative_to(REPO_ROOT)}")
     return 0
 
 
