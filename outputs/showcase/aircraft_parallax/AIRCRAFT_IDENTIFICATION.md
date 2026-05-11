@@ -25,7 +25,7 @@ Bäringar och avstånd från AOI:
 ## Mätdata (från Sentinel-2 push-broom-parallax)
 
 L1C-scen: `S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK`. Detector 7
-(Hisingen-tile, parsad ur `MTD_DS.xml` via `parse_band_times_v2.py`):
+(parsad ur `MTD_DS.xml` via `parse_band_times_v2.py`):
 
 | Band | Δt vs B02 |
 |------|-----------|
@@ -36,8 +36,9 @@ L1C-scen: `S2B_MSIL1C_20260111T104319_N0511_R008_T32VPK`. Detector 7
 
 User-picks i 120×120 px native crop ger total displacement ≈ 300 m över 1 s.
 Wedge-spets i NÖ → planet flyger NÖ. Heading uppmätt: **051°** (±5°).
-Ground speed (vid låg höjd): ~290 m/s. Vid hög höjd (H_a = 11 km efter
-sat-parallax-korrektion): ~217 m/s.
+Vid hög höjd (H_a = 8–11 km efter sat-parallax-korrektion): **v ≈ 217–239 m/s**
+— typisk PC-24 climb-cruise. Låghöjds-tolkning (~290 m/s vid H_a = 1 km)
+är **förkastad** av contrail-fysiken (se nästa sektion).
 
 ## Contrail-fysik utesluter låg höjd
 
@@ -46,9 +47,9 @@ Kondensationsstrimmor bildas bara där:
 - Luftfuktigheten över is-mättnad
 
 Det betyder typiskt **flyghöjd ≥ 8 km** (FL250+). I vinterns
-Nordsjö-luftmassa kan tröskeln nås redan på 5–6 km. Detta utesluter en
-låghöjds-Gripen som tidigare hypotes — den skulle inte producera synlig
-contrail på 1–3 km.
+Nordsjö-luftmassa kan tröskeln nås redan på 5–6 km. Detta **utesluter
+alla låghöjds-hypoteser** (under 5 km) — contrailen i sig är ett
+höghöjdsbevis.
 
 ## SWE32A — flight-metadata från OpenSky
 
@@ -193,6 +194,6 @@ direktförfrågan till svenska AFIS för Säve-trafiken den dagen.
 
 Plats-rättningen från "Hisingen / Säve" till "sundet mellan Öckerö och
 Björkö, ~6 km SW om Säve" var **avgörande**. Den första hypotesen
-(låghöjds-Gripen mot Såtenäs) byggde på fel geografi och fel contrail-
-fysik. Med korrekt geografi + Schmidt-Appleman-tröskeln blev SWE32A
-omedelbart den uppenbara kandidaten.
+(låghöjds-militärtrafik mot Skaraborg) byggde på fel geografi och fel
+contrail-fysik. Med korrekt geografi + Schmidt-Appleman-tröskeln blev
+SWE32A omedelbart den uppenbara kandidaten.

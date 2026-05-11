@@ -44,7 +44,7 @@
 <p class="subtitle">
     Klicka på <strong>flygplanets position</strong> (apex/spetsen av kondensstrimman) i varje band.
     Bild visar 120×120 px @ 10 m/px = 1.2×1.2 km, 8× nearest-neighbor upscale.
-    Centrerad på 57.71809°N, 11.66456°E. Δt(B02→B08) = 1.005 s från MTD_TL.xml.
+    Centrerad på 57.71809°N, 11.66456°E. Δt(B02→B04) = 0.999 s från MTD_DS.xml detector 7. Fokalplansordning: B02 → B08 → B03 → B04.
 </p>
 
 <div class="grid">
@@ -55,21 +55,21 @@
         <div class="pick empty" id="pick-B02">Inte vald</div>
     </div>
     <div class="panel">
-        <h3 style="color:#4cdc64">B03 · 560 nm (grön) · t₀ + 0.527 s</h3>
+        <h3 style="color:#4cdc64">B03 · 560 nm (grön) · t₀ + 0.521 s</h3>
         <canvas id="cv-B03" width="960" height="960"></canvas>
         <div class="hint">Klicka på apex</div>
         <div class="pick empty" id="pick-B03">Inte vald</div>
     </div>
     <div class="panel">
-        <h3 style="color:#fc4c4c">B04 · 665 nm (röd) · t₀ + 0.585 s</h3>
+        <h3 style="color:#fc4c4c">B04 · 665 nm (röd) · t₀ + 0.999 s</h3>
         <canvas id="cv-B04" width="960" height="960"></canvas>
         <div class="hint">Klicka på apex</div>
         <div class="pick empty" id="pick-B04">Inte vald</div>
     </div>
     <div class="panel">
-        <h3 style="color:#ec407a">B08 · 842 nm (NIR) · t₀ + 1.005 s</h3>
+        <h3 style="color:#ec407a">B08 · 842 nm (NIR) · t₀ + 0.260 s</h3>
         <canvas id="cv-B08" width="960" height="960"></canvas>
-        <div class="hint">Klicka på apex (störst offset från B02)</div>
+        <div class="hint">Klicka på apex (NIR, näst tidigast i fokalplan)</div>
         <div class="pick empty" id="pick-B08">Inte vald</div>
     </div>
 </div>
