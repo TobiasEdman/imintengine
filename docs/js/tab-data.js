@@ -298,7 +298,20 @@ var TAB_CONFIG = {
             {title:'NMD Marktäcke',value:'82.4% Skog',detail:'6 klasser'},
             {title:'Molnanalys (COT)',value:'99.9% klart',detail:'COT medel: 0.0017'}
         ],
-        intro: 'Analysområdet är beläget i Ljusdals kommun, Gävleborgs län, och visar Kårbölebranden — en av de största skogsbränderna i Sveriges moderna historia sommaren 2018. Den 14 juli 2018 startade en skogsbrand som till slut bredde ut sig över cirka 9 500 hektar skog, vilket gjorde den till den största skogsbranden i Sverige på över 50 år. Här har Sentinel-2-data från 2018-07-24 analyserats med flera kompletterande metoder för att kartlägga brandens utbredning och intensitet.',
+        copy: {
+            lede: 'Bilden visar Kårbölebranden i Ljusdals kommun den 24 juli 2018 — en av de största skogsbränderna i Sverige på över 50 år. Branden startade 14 juli och bredde ut sig över cirka 9 500 hektar. Vi har analyserat samma område före och efter med flera kompletterande metoder för att kartlägga brandens utbredning och intensitet.',
+            hint: 'Klicka i panelraden ovan för att hoppa till en specifik analys. Dra opacitetsreglaget i panelens topp för att fade:a brandresultaten över satellitbilden.',
+            methods: [
+                { heading: 'dNBR — brandsvårighetsgrad',
+                  body: '<p>Skillnaden i Normalized Burn Ratio mellan bilden före och efter branden. Höga positiva värden = svår brandskada; nära noll = obränt. Tröskelvärden från Key & Benson är ursprungligen kalibrerade för västliga USA-barrskogar, så absolutgränserna för svensk borealskog ska tolkas som indikativa, inte definitiva.</p>' },
+                { heading: 'NDVI / NDWI / EVI / NMD',
+                  body: '<p>NDVI och EVI mäter vegetationens tillstånd; NDWI mäter fukt. NMD-marktäcket före branden visar att området var till 82,4% skog, vilket gör korsreferensen mot brandkartan informativ — vi vet exakt vilka skogstyper som drabbades hårdast.</p>' },
+                { heading: 'Förändring (gradient)',
+                  body: '<p>Multispektral förändringsdetektering över alla 10 m-band, inte bara index. Fångar förändringar som ett enskilt index missar (t.ex. förändringar i markstruktur efter sotning).</p>' },
+                { heading: 'Molnanalys (COT)',
+                  body: '<p>DES MLP5-ensemble — fem djupa nätverk tränade på syntetiska molndata från SMHI. Båda scenerna är 99,9% klara, så brandresultaten är inte påverkade av molnskuggor.</p>' }
+            ]
+        },
         panels: [
             {id:'f-rgb',    key:'rgb',     title:'Sentinel-2 RGB',                    legend:null,
                 bgToggle:[{label:'Efter',key:'rgb',active:true},{label:'Före',key:'baseline'}]},
@@ -338,7 +351,18 @@ var TAB_CONFIG = {
             {title:'Molnanalys (COT)',value:'99.7% klart',detail:'COT medel: 0.0019'},
             {title:'Analysområde',value:'18.6 km²',detail:'Bohuslän kustzon'}
         ],
-        intro: 'Analysområdet visar skärgården utanför Hunnebostrand — ett område längs den norra bohuslänska kusten med intensiv maritim aktivitet från både kommersiell sjöfart, fiske och fritidsbåtar. Sentinel-2-data från 2025-07-10 har analyserats med flera kompletterande metoder för att kartlägga båtförekomst, vattenförhållanden och marktäcke i kust- och havsområdet.',
+        copy: {
+            lede: 'Bilden visar skärgården utanför Hunnebostrand i Bohuslän, ett kustområde med livlig maritim trafik från fiske, kommersiell sjöfart och fritidsbåtar. En AI-modell har letat efter båtar i Sentinel-2-bilden och markerat varje träff med en cyanfärgad ruta — aktivitetskartan summerar var båtarna har rört sig under sommarsäsongen 2025.',
+            hint: 'Klicka i panelraden ovan för att hoppa till en specifik analys. Dra opacitetsreglaget i panelens topp för att fade:a överlägget mot satellitbilden eller sjökortet.',
+            methods: [
+                { heading: 'Datakällor',
+                  body: '<p>Sentinel-2 L2A-data från 2025-07-10 över ett 18,6 km² stort havsområde. NMD-marktäckedata används som landmask för att filtrera bort detektioner på land.</p>' },
+                { heading: 'Båtdetektering',
+                  body: '<p>YOLO11s — en CNN-baserad objektdetektor — körs på RGB-utsnittet och föreslår bounding-boxar för varje sannolik båt. Överlappande detektioner filtreras bort med NMS, och pixlar utanför vattenmasken förkastas.</p>' },
+                { heading: 'Heatmap över säsongen',
+                  body: '<p>Heatmappen ackumulerar båtdetektioner från 5 molnfria datum. Datum med för hög molntäckning enligt COT-analysen exkluderas — annars skulle moln feltolkas som båtar.</p>' }
+            ]
+        },
         panels: [
             {id:'m-rgb',           key:'rgb',           title:'Sentinel-2 RGB',           legend:null,
                 bgToggle:[{label:'RGB',key:'rgb',active:true},{label:'Sjökort',key:'sjokort'}]},
@@ -424,7 +448,20 @@ var TAB_CONFIG = {
             {title:'NDVI i betesmark',value:'0.81',detail:'± 0.06 standardavvikelse'},
             {title:'NMD inom betesblock',value:'7% Våtmark',detail:'2 markklasser'}
         ],
-        intro: 'Analysområdet är beläget nordost om Lund i Skåne — ett av Sveriges mest intensivt brukade jordbrukslandskap med en blandning av åkermark, beteshagar och småskaliga skogspartier. LPIS-polygoner från Jordbruksverkets blockdatabas visar registrerade betesblock i området. Sentinel-2-data från 2025-06-14 har analyserats med spektrala index (NDVI, NDWI, EVI), molnanalys (COT) och korsrefererats mot NMD marktäckedata för att kartera vegetationens tillstånd inom betesmarkerna.',
+        copy: {
+            lede: 'Bilden visar jordbrukslandskapet nordost om Lund i Skåne den 14 juni 2025 — åkermark, beteshagar och skogsdungar i blandning. Vi har överlagt LPIS-betesblocken från Jordbruksverket på Sentinel-2-bilden och låtit en AI-modell bedöma om varje block är aktivt betat eller ej, baserat på vegetations- och fuktindex över säsongen.',
+            hint: 'Klicka i panelraden ovan för att hoppa till en specifik analys. Klicka på ett LPIS-block i kartan för att se klassificering och konfidens.',
+            methods: [
+                { heading: 'Datakällor',
+                  body: '<p>LPIS-polygoner (80 betesblock, totalt 124 ha) från Jordbruksverkets blockdatabas. Sentinel-2 L2A från 2025-06-14, kompletterat med 19 molnfria datum för säsongsanalysen. NMD-marktäcke som referens för markklasser inom blocken.</p>' },
+                { heading: 'Vegetations- och vattenindex',
+                  body: '<p>NDVI, EVI och NDWI beräknas per pixel inom varje betesblock och aggregeras till blockmedel. Hög NDVI över hela säsongen utan slåttertopp = tecken på aktivt bete. Låg NDVI över sommaren = potentiellt övergivet block.</p>' },
+                { heading: 'AI-klassificering',
+                  body: '<p>En CNN-biLSTM-modell tränad på multitemporala blockstatistiker klassificerar varje block som "aktivt betat" eller "ingen aktivitet". 68 av 80 block bedömdes aktiva, 8 utan aktivitet, övriga 4 osäkra (konfidens under tröskelvärde). Konfidensvärdena är klassificerarens softmax-output, medel över alla blockets pixlar.</p>' },
+                { heading: 'Molnanalys (COT)',
+                  body: '<p>DES MLP5-ensemble. Datum med för hög molntäckning över AOI exkluderas innan säsongsstatistiken aggregeras.</p>' }
+            ]
+        },
         panels: [
             {id:'g-rgb',  key:'rgb',  title:'Sentinel-2<br>RGB',           legend:null},
             {id:'g-nmd',  key:'nmd',  title:'NMD<br>Marktäcke',            legend:'nmd_grazing'},
@@ -582,7 +619,20 @@ var TAB_CONFIG = {
             {title:'Antal metoder',    value:'3 jämförda',        detail:'Bicubic + SEN2SR + LDSR-S2 (DiffFuSR/SR4RS saknar publika vikter)'},
             {title:'Säker gräns',      value:'~2,5 m',            detail:'Finare än så börjar AI:n hitta på detaljer'}
         ],
-        intro: 'Hur skarp är en satellitbild egentligen? En bild från Sentinel-2 har en pixel per 10 × 10 meter på marken — varje hus blir bara några pixlar stort. <strong>Superresolution</strong> är samlingsnamnet på tekniker som försöker räkna fram en skarpare version av samma bild, ungefär som när mobilen "förbättrar" ett zoomat foto. Här jämförs fem olika metoder på samma bild över centrala Stockholm: en enkel matematisk interpolation som referens, plus fyra olika AI-modeller. <strong>Dra i opacitets-reglaget på varje panel</strong> för att jämföra original-bilden (10 m) mot den skarpade versionen — och titta efter detaljer som ser misstänkt skarpa ut. Vissa AI-modeller är försiktiga och håller sig till det som faktiskt syns; andra hittar på detaljer som <em>ser</em> snygga ut men inte motsvarar verkligheten.',
+        copy: {
+            lede: 'En vanlig Sentinel-2-bild har en pixel per 10×10 meter — Stockholms slott blir cirka 12×9 pixlar. <strong>Superresolution</strong> är samlingsnamnet på tekniker som räknar fram en skarpare version av samma bild, ungefär som när mobilen "förbättrar" ett zoomat foto. Här jämförs tre metoder över centrala Stockholm: en enkel matematisk interpolation plus två AI-modeller.',
+            hint: 'Dra opacitetsreglaget på varje panel för att fade:a den skarpade bilden över originalet (10 m). Vissa AI-modeller hittar på detaljer som <em>ser</em> snygga ut men inte motsvarar verkligheten — titta efter byggnader som dyker upp där originalet bara visar suddiga pixlar.',
+            methods: [
+                { heading: 'Metoderna som jämförs',
+                  body: '<p><strong>Bicubic</strong> är klassisk matematisk interpolation utan AI — referensgolvet att jämföra mot. <strong>SEN2SR</strong> är en CNN tränad av ESA med radiometrisk hard-constraint: den får skarpa men inte hitta på spektral information. <strong>LDSR-S2</strong> är en latent diffusion-modell (samma teknik som DALL·E och Stable Diffusion) — visuellt övertygande men kan börja gissa.</p>' },
+                { heading: 'Vad är fysikaliskt möjligt?',
+                  body: '<p>Oberoende forskning från fyra håll pekar på <strong>cirka 2,5 m per pixel</strong> som gränsen för vad som verkligen kan återvinnas från en Sentinel-2-bild. Optik och sensorer sätter taket — bortom 2,5 m gissar AI:n från mönster den lärt sig på andra bilder. "1 m per pixel"-produkter på marknaden är till stor del AI-genererade detaljer.</p>' },
+                { heading: 'Spektral skillnadskarta — har AI:n hittat på något?',
+                  body: '<p>De tre nedre panelerna mäter <em>Spectral Angle Mapper</em> (SAM): vinkeln mellan original-spektrumet och AI:ns version per pixel. Noll grader = bara skarpning, ingen färgförändring. Höga värden = modellen tillförde spektral information som inte fanns i originalet, alltså hallucination. Bicubic ska vara nästan helt blå; SEN2SR mestadels blå/grön; LDSR-S2 kan ha gulare områden längs kanter.</p>' },
+                { heading: 'Hur paneler visar pixlar',
+                  body: '<p>SR-panelerna är inställda så att en bildpunkt på skärmen motsvarar en bildpunkt i SR-resultatet. Originalet (10 m) renderas som blockigt — det är inte ett fel, det är hur grov satellit-upplösningen ser ut före AI-skarpning.</p>' }
+            ]
+        },
         // Panel ids prefixed `sr-` so app.js's prefix lookup (`sr-rgb`) resolves
         // every model panel's background to the LR tile. The opacity slider
         // (built into every panel header) then fades the SR overlay in/out
