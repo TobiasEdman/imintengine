@@ -1,0 +1,96 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: complete-frame2016-cdse-256-burst
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: frame2016-256-cdse-burst
+spec:
+  backoffLimit: 0
+  # All-in burst mode: no --max-per-hour cap. CDSE Copernicus General
+  # Users tier allows 300 req/min sustained, so ~2823 fetches × 5 PU
+  # complete in ~10-15 min walltime. PU budget will run out around
+  # ~5000-6000 PU into the run (free tier 10k/month, user said 25k
+  # remaining) — but VPP will also drain in parallel, so expect partial
+  # completion. Remaining tiles re-tried in June after quota reset.
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04"]
+      containers:
+        - name: f
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== frame_2016 CDSE-completion 256 (BURST, no throttle) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "Tile inventory:"
+              echo "  /data/unified_v2: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l) tiles"
+
+              # workers=8 to push request rate close to 300 req/min cap.
+              # No --max-per-hour: burn through the PU budget as fast as
+              # the API will accept. Skip-existing handles the bulk.
+              python scripts/add_background_frame.py \
+                --data-dir /data/unified_v2 \
+                --workers 8
+
+              echo ""
+              echo "=== Done: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
