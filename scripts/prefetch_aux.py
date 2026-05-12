@@ -48,6 +48,8 @@ import numpy as np
 # Allow running from repo root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import threading as _threading
+
 from imint.training.skg_height import fetch_height_tile
 from imint.training.skg_grunddata import (
     fetch_volume_tile,
@@ -57,6 +59,41 @@ from imint.training.skg_grunddata import (
 from imint.training.copernicus_dem import fetch_dem_tile
 from imint.training.cdse_vpp import fetch_vpp_tiles
 from imint.training.slu_markfukt import fetch_markfukt_tile
+
+
+# ── Global CDSE rate limiter ─────────────────────────────────────────────
+# Sliding-window cap on the number of CDSE Process API fetches per hour.
+# Same pattern as enrich_tiles_rededge.py / add_background_frame.py. Used
+# to spread VPP PU consumption over time when the total fetch count
+# exceeds the monthly free-tier budget. ONLY VPP fetches go through this
+# gate — SKG/DEM/markfukt are free and not throttled.
+_RATE_LOCK = _threading.Lock()
+_RATE_TIMES: list = []
+_RATE_MAX_PER_HOUR = 0  # 0 = unlimited
+
+
+def _set_rate_limit(max_per_hour: int) -> None:
+    global _RATE_MAX_PER_HOUR
+    _RATE_MAX_PER_HOUR = int(max_per_hour)
+
+
+def _wait_for_rate_limit() -> None:
+    if _RATE_MAX_PER_HOUR <= 0:
+        return
+    while True:
+        with _RATE_LOCK:
+            now = time.time()
+            cutoff = now - 3600.0
+            i = 0
+            while i < len(_RATE_TIMES) and _RATE_TIMES[i] <= cutoff:
+                i += 1
+            if i:
+                del _RATE_TIMES[:i]
+            if len(_RATE_TIMES) < _RATE_MAX_PER_HOUR:
+                _RATE_TIMES.append(now)
+                return
+            wait_s = _RATE_TIMES[0] + 3600.0 - now
+        time.sleep(max(1.0, min(wait_s + 0.5, 60.0)))
 
 # ── Channel registry ──────────────────────────────────────────────────────
 # Standard channels: each fetcher returns a single (H, W) float32 array.
@@ -217,7 +254,11 @@ def _add_channels_to_tile(
     fetched = {}
     for ch_name in missing:
         if ch_name == "vpp":
-            # VPP: multi-band fetch → 5 sub-bands
+            # VPP: multi-band fetch → 5 sub-bands. CDSE-billed, gate
+            # through the global rate limiter so total PU spending
+            # stays under --max-per-hour. SKG/DEM/markfukt are free
+            # and bypass this gate.
+            _wait_for_rate_limit()
             vpp_data = fetch_vpp_tiles(
                 west, south, east, north,
                 size_px=(h_px, w_px),
@@ -292,7 +333,15 @@ def main():
         "--dry-run", action="store_true",
         help="Only count tiles needing channels, don't fetch",
     )
+    parser.add_argument(
+        "--max-per-hour", type=int, default=0,
+        help="Global cap on CDSE Process API fetches per hour (sliding "
+             "window across all workers). 0 (default) = no cap. Only "
+             "affects VPP — SKG/DEM/markfukt are free and bypass.",
+    )
     args = parser.parse_args()
+
+    _set_rate_limit(args.max_per_hour)
 
     channels = args.channels
     data_dir = Path(args.data_dir)
