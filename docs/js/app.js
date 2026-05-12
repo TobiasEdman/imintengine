@@ -85,13 +85,136 @@
         return html;
     }
 
+    // ── Copy block (lede + hint + collapsible methods) ──────────────
+    // New schema introduced 2026-05-11. Tabs that have migrated set
+    // config.copy = { lede, hint?, methods? }. Untouched tabs still set
+    // config.intro and fall through to the legacy <p> render below.
+    function renderCopy(copy) {
+        var html = '<div class="tab-intro">';
+        html += '<p class="lede">' + copy.lede + '</p>';
+        if (copy.hint) {
+            html += '<p class="hint">' + copy.hint + '</p>';
+        }
+        if (copy.methods && copy.methods.length) {
+            html += '<details class="methods"><summary>Visa metod och datakällor</summary>';
+            copy.methods.forEach(function(s) {
+                html += '<h4>' + s.heading + '</h4>' + s.body;
+            });
+            html += '</details>';
+        }
+        html += '</div>';
+        return html;
+    }
+
     function renderTabDynamic(config) {
         var html = '<div class="section-header"><h2>' + config.title + '</h2></div>';
         html += renderSummaryCards(config.summary);
-        html += '<div class="tab-intro"><p>' + config.intro + '</p></div>';
+        if (config.copy) {
+            html += renderCopy(config.copy);
+        } else {
+            html += '<div class="tab-intro"><p>' + config.intro + '</p></div>';
+        }
         html += renderPanelToolbar(config.panels);
         html += renderMapGrid(config.panels);
         return html;
+    }
+
+    // ── Glossary tooltip decorator ──────────────────────────────────
+    // For each tab, walk the rendered DOM and wrap the first occurrence of
+    // every GLOSSARY term in a <span class="gloss"> with a dotted underline.
+    // A single shared #gloss-card in <body> handles hover display — avoids
+    // creating N DOM nodes per acronym and survives the hover gap.
+    var GLOSS_SKIP_SELECTOR = 'A, CODE, .gloss, .legend-item, .summary-card, ' +
+        '.panel-chip, .bg-btn, .opacity-control, H2, H3, H4, SUMMARY';
+
+    function ensureGlossCard() {
+        if (document.getElementById('gloss-card')) return;
+        var card = document.createElement('div');
+        card.id = 'gloss-card';
+        document.body.appendChild(card);
+    }
+
+    function decorateGlossary(rootEl) {
+        if (!rootEl || typeof GLOSSARY === 'undefined') return;
+        var terms = Object.keys(GLOSSARY);
+        if (!terms.length) return;
+        // Sort longest-first so 'NDCI' wins over a hypothetical shorter prefix.
+        terms.sort(function(a, b) { return b.length - a.length; });
+        // Escape regex special chars defensively (none today, but cheap).
+        var escaped = terms.map(function(t) {
+            return t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        });
+        var re = new RegExp('\\b(' + escaped.join('|') + ')\\b');
+        var seen = {};
+
+        // Snapshot text nodes first; mutating during traversal corrupts the walker.
+        var walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null, false);
+        var nodes = [];
+        var n;
+        while ((n = walker.nextNode())) {
+            if (!n.nodeValue || !n.nodeValue.trim()) continue;
+            if (n.parentNode && n.parentNode.closest && n.parentNode.closest(GLOSS_SKIP_SELECTOR)) continue;
+            nodes.push(n);
+        }
+
+        nodes.forEach(function(node) {
+            var text = node.nodeValue;
+            var pieces = [];
+            var idx = 0;
+            while (idx < text.length) {
+                re.lastIndex = 0;
+                var sub = text.substring(idx);
+                var m = sub.match(re);
+                if (!m || seen[m[1]]) {
+                    pieces.push(document.createTextNode(text.substring(idx)));
+                    break;
+                }
+                var matchPos = idx + m.index;
+                if (matchPos > idx) {
+                    pieces.push(document.createTextNode(text.substring(idx, matchPos)));
+                }
+                var span = document.createElement('span');
+                span.className = 'gloss';
+                span.setAttribute('data-term', m[1]);
+                span.textContent = m[1];
+                pieces.push(span);
+                seen[m[1]] = true;
+                idx = matchPos + m[1].length;
+            }
+            if (pieces.length === 1 && pieces[0].nodeType === 3) return; // no-op
+            var parent = node.parentNode;
+            pieces.forEach(function(p) { parent.insertBefore(p, node); });
+            parent.removeChild(node);
+        });
+    }
+
+    function bindGlossHover() {
+        var card = document.getElementById('gloss-card');
+        if (!card) return;
+        document.addEventListener('mouseover', function(e) {
+            var t = e.target;
+            if (!t || !t.classList || !t.classList.contains('gloss')) return;
+            var term = t.getAttribute('data-term');
+            var entry = GLOSSARY[term];
+            if (!entry) return;
+            card.innerHTML = '<strong>' + term + '</strong> — ' + entry.full +
+                '<br><span class="gloss-card-sv">' + entry.sv + '</span>';
+            var r = t.getBoundingClientRect();
+            var top = r.bottom + window.scrollY + 6;
+            var left = r.left + window.scrollX;
+            // Keep card on-screen horizontally
+            var maxLeft = window.scrollX + window.innerWidth - 300;
+            if (left > maxLeft) left = maxLeft;
+            if (left < window.scrollX + 8) left = window.scrollX + 8;
+            card.style.top = top + 'px';
+            card.style.left = left + 'px';
+            card.classList.add('visible');
+        });
+        document.addEventListener('mouseout', function(e) {
+            var t = e.target;
+            if (!t || !t.classList || !t.classList.contains('gloss')) return;
+            card.classList.remove('visible');
+        });
     }
 
     // ── GeoJSON loading ──────────────────────────────────────────────
@@ -373,6 +496,11 @@
                                 m.fitBounds(m._imgBounds);
                             }
                         });
+                        // Now that the new tab is laid out, build any chart
+                        // whose canvas finally has non-zero width.
+                        if (typeof buildChartsFromState === 'function') {
+                            buildChartsFromState();
+                        }
                     }, delay);
                 });
             });
@@ -396,6 +524,11 @@
                         m.invalidateSize();
                         if (m._imgBounds) m.fitBounds(m._imgBounds);
                     });
+                    // Charts inside sub-tabs (e.g. tab-fire, tab-grazing) only
+                    // get a non-zero offsetWidth after the sub-tab is shown.
+                    if (typeof buildChartsFromState === 'function') {
+                        buildChartsFromState();
+                    }
                 }, 50);
             });
         });
@@ -504,6 +637,24 @@
 
     // ── Chart initialization ─────────────────────────────────────────
 
+    // Chart.js needs a canvas with non-zero width to acquire its 2D context.
+    // initCharts() runs at boot, but the lulc/fire/grazing tabs may be hidden
+    // (display:none) — calling new Chart on a 0-width canvas logs "Failed to
+    // create chart: can't acquire context from the given item" and silently
+    // does nothing. Same pattern as lilla-karlso-chart.js. Returns the new
+    // chart instance or null when the canvas is missing/hidden.
+    function safeChart(canvasId, configFactory) {
+        var canvas = document.getElementById(canvasId);
+        if (!canvas || canvas.offsetWidth === 0) return null;
+        if (typeof Chart !== 'undefined' && Chart.getChart) {
+            var existing = Chart.getChart(canvas);
+            if (existing) existing.destroy();
+        }
+        return new Chart(canvas, configFactory());
+    }
+
+    var chartsState = { built: {} };  // canvasId → true once successfully built
+
     function initCharts() {
         fetch('data/chart-data.json')
             .then(function(r) { return r.json(); })
@@ -523,200 +674,234 @@
                     }
                 };
 
-                // Change detection chart
-                if (CHART_DATA.change && CHART_DATA.change.labels.length > 0) {
-                    new Chart(document.getElementById('chart-change'), {
-                        type: 'bar',
-                        data: {
-                            labels: CHART_DATA.change.labels,
-                            datasets: [{
-                                label: 'Förändringsandel (%)',
-                                data: CHART_DATA.change.fractions,
-                                backgroundColor: CHART_DATA.change.colors,
-                                borderColor: CHART_DATA.change.borders,
-                                borderWidth: 1
-                            }]
-                        },
-                        options: chartOpts
-                    });
-
-                    // dNBR chart
-                    if (CHART_DATA.change.dnbr) {
-                        var dnbrColors = CHART_DATA.change.dnbr.map(function(v) {
-                            if (v < -0.1) return 'rgba(26,152,80,0.85)';
-                            if (v < 0.1) return 'rgba(217,239,139,0.85)';
-                            if (v < 0.27) return 'rgba(254,224,139,0.85)';
-                            if (v < 0.44) return 'rgba(253,174,97,0.85)';
-                            if (v < 0.66) return 'rgba(244,109,67,0.85)';
-                            return 'rgba(215,48,39,0.85)';
-                        });
-                        new Chart(document.getElementById('chart-dnbr'), {
-                            type: 'bar',
-                            data: {
-                                labels: CHART_DATA.change.labels,
-                                datasets: [{
-                                    label: 'Medel-dNBR',
-                                    data: CHART_DATA.change.dnbr,
-                                    backgroundColor: dnbrColors,
-                                    borderColor: dnbrColors.map(function(c) { return c.replace('0.85','1'); }),
-                                    borderWidth: 1
-                                }]
-                            },
-                            options: {
-                                indexAxis: 'y', responsive: true,
-                                plugins: {legend:{display:false}},
-                                scales: {
-                                    x: {title:{display:true, text:'Medel-dNBR'},
-                                        grid:{color:'rgba(255,255,255,0.04)'}},
-                                    y: {grid:{display:false}}
-                                }
-                            }
-                        });
-                    }
-                }
-
-                // Prithvi chart
-                if (CHART_DATA.prithvi && CHART_DATA.prithvi.labels.length > 0) {
-                    new Chart(document.getElementById('chart-prithvi'), {
-                        type: 'bar',
-                        data: {
-                            labels: CHART_DATA.prithvi.labels,
-                            datasets: CHART_DATA.prithvi.classes.map(function(cls) {
-                                return {
-                                    label: cls.label, data: cls.data,
-                                    backgroundColor: cls.color, borderColor: cls.border, borderWidth: 1
-                                };
-                            })
-                        },
-                        options: {
-                            indexAxis: 'y', responsive: true,
-                            plugins: {legend:{position:'top'}},
-                            scales: {
-                                x: {stacked:true, beginAtZero:true, max:100,
-                                    title:{display:true, text:'Andel (%)'},
-                                    grid:{color:'rgba(255,255,255,0.04)'}},
-                                y: {stacked:true, grid:{display:false}}
-                            }
-                        }
-                    });
-                }
-
-                // Grazing charts
-                if (CHART_DATA.grazing) {
-                    var g = CHART_DATA.grazing;
-                    var gBarOpts = {
-                        indexAxis: 'y', responsive: true,
-                        plugins: {legend:{display:false}},
-                        scales: {
-                            x: {beginAtZero:true, grid:{color:'rgba(255,255,255,0.04)'}},
-                            y: {grid:{display:false}}
-                        }
-                    };
-
-                    // Classification counts
-                    new Chart(document.getElementById('chart-grazing-class'), {
-                        type: 'bar',
-                        data: {
-                            labels: g.classification.labels,
-                            datasets: [{
-                                label: 'Antal block',
-                                data: g.classification.counts,
-                                backgroundColor: g.classification.colors,
-                                borderColor: g.classification.borders,
-                                borderWidth: 1
-                            }]
-                        },
-                        options: Object.assign({}, gBarOpts, {
-                            scales: Object.assign({}, gBarOpts.scales, {
-                                x: {beginAtZero:true, title:{display:true, text:'Antal block'},
-                                    grid:{color:'rgba(255,255,255,0.04)'}}
-                            })
-                        })
-                    });
-
-                    // Classification area
-                    new Chart(document.getElementById('chart-grazing-area'), {
-                        type: 'bar',
-                        data: {
-                            labels: g.classification.labels,
-                            datasets: [{
-                                label: 'Areal (ha)',
-                                data: g.classification.areas,
-                                backgroundColor: g.classification.colors,
-                                borderColor: g.classification.borders,
-                                borderWidth: 1
-                            }]
-                        },
-                        options: Object.assign({}, gBarOpts, {
-                            scales: Object.assign({}, gBarOpts.scales, {
-                                x: {beginAtZero:true, title:{display:true, text:'Areal (ha)'},
-                                    grid:{color:'rgba(255,255,255,0.04)'}}
-                            })
-                        })
-                    });
-
-                    // Confidence distribution
-                    new Chart(document.getElementById('chart-grazing-conf'), {
-                        type: 'bar',
-                        data: {
-                            labels: g.confidence.labels,
-                            datasets: [{
-                                label: 'Antal block',
-                                data: g.confidence.counts,
-                                backgroundColor: g.confidence.colors,
-                                borderWidth: 1
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            plugins: {legend:{display:false}},
-                            scales: {
-                                x: {title:{display:true, text:'Konfidens'},
-                                    grid:{color:'rgba(255,255,255,0.04)'}},
-                                y: {beginAtZero:true, title:{display:true, text:'Antal block'},
-                                    grid:{color:'rgba(255,255,255,0.04)'}}
-                            }
-                        }
-                    });
-
-                    // NMD within LPIS
-                    new Chart(document.getElementById('chart-grazing-nmd'), {
-                        type: 'bar',
-                        data: {
-                            labels: g.nmd_within_lpis.labels,
-                            datasets: [{
-                                label: 'Andel (%)',
-                                data: g.nmd_within_lpis.fractions,
-                                backgroundColor: g.nmd_within_lpis.colors,
-                                borderColor: g.nmd_within_lpis.borders,
-                                borderWidth: 1
-                            }]
-                        },
-                        options: Object.assign({}, gBarOpts, {
-                            scales: Object.assign({}, gBarOpts.scales, {
-                                x: {beginAtZero:true, max:100, title:{display:true, text:'Andel (%)'},
-                                    grid:{color:'rgba(255,255,255,0.04)'}}
-                            })
-                        })
-                    });
-                }
-
-                // L2 chart
-                if (CHART_DATA.l2) {
-                    new Chart(document.getElementById('chart-l2'), {
-                        type: 'bar',
-                        data: {
-                            labels: CHART_DATA.l2.labels,
-                            datasets: [{
-                                label: 'Andel (%)', data: CHART_DATA.l2.fractions,
-                                backgroundColor: CHART_DATA.l2.colors, borderWidth: 1
-                            }]
-                        },
-                        options: chartOpts
-                    });
-                }
+                // Stash the loaded data so re-tries on tab-switch can build
+                // charts whose canvases were 0-width at boot time.
+                chartsState.data = CHART_DATA;
+                chartsState.chartOpts = chartOpts;
+                buildChartsFromState();
             })
             .catch(function(e) { console.warn('Could not load chart data:', e); });
+    }
+
+    // Build any chart whose canvas is now visible. safeChart() returns null
+    // for missing or 0-width canvases, so we mark `built[id]=true` only on
+    // success — re-running this on tab-switch finishes the unbuilt ones.
+    function buildChartsFromState() {
+        var CHART_DATA = chartsState.data;
+        if (!CHART_DATA) return;
+        var chartOpts = chartsState.chartOpts;
+        var built = chartsState.built;
+
+        // Change detection
+        if (!built['chart-change'] && CHART_DATA.change && CHART_DATA.change.labels.length > 0) {
+            var c = safeChart('chart-change', function() { return {
+                type: 'bar',
+                data: {
+                    labels: CHART_DATA.change.labels,
+                    datasets: [{
+                        label: 'Förändringsandel (%)',
+                        data: CHART_DATA.change.fractions,
+                        backgroundColor: CHART_DATA.change.colors,
+                        borderColor: CHART_DATA.change.borders,
+                        borderWidth: 1
+                    }]
+                },
+                options: chartOpts
+            }; });
+            if (c) built['chart-change'] = true;
+        }
+
+        // dNBR
+        if (!built['chart-dnbr'] && CHART_DATA.change && CHART_DATA.change.dnbr) {
+            var dnbrColors = CHART_DATA.change.dnbr.map(function(v) {
+                if (v < -0.1) return 'rgba(26,152,80,0.85)';
+                if (v < 0.1) return 'rgba(217,239,139,0.85)';
+                if (v < 0.27) return 'rgba(254,224,139,0.85)';
+                if (v < 0.44) return 'rgba(253,174,97,0.85)';
+                if (v < 0.66) return 'rgba(244,109,67,0.85)';
+                return 'rgba(215,48,39,0.85)';
+            });
+            var d = safeChart('chart-dnbr', function() { return {
+                type: 'bar',
+                data: {
+                    labels: CHART_DATA.change.labels,
+                    datasets: [{
+                        label: 'Medel-dNBR',
+                        data: CHART_DATA.change.dnbr,
+                        backgroundColor: dnbrColors,
+                        borderColor: dnbrColors.map(function(c) { return c.replace('0.85','1'); }),
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    indexAxis: 'y', responsive: true,
+                    plugins: {legend:{display:false}},
+                    scales: {
+                        x: {title:{display:true, text:'Medel-dNBR'},
+                            grid:{color:'rgba(255,255,255,0.04)'}},
+                        y: {grid:{display:false}}
+                    }
+                }
+            }; });
+            if (d) built['chart-dnbr'] = true;
+        }
+
+        // Prithvi (canvas may not exist in current HTML — safeChart returns
+        // null and we mark built so we don't keep retrying on every tab switch)
+        if (!built['chart-prithvi'] && CHART_DATA.prithvi && CHART_DATA.prithvi.labels.length > 0) {
+            var canvas = document.getElementById('chart-prithvi');
+            if (!canvas) {
+                built['chart-prithvi'] = true;  // canvas removed from HTML; stop trying
+            } else {
+                var p = safeChart('chart-prithvi', function() { return {
+                    type: 'bar',
+                    data: {
+                        labels: CHART_DATA.prithvi.labels,
+                        datasets: CHART_DATA.prithvi.classes.map(function(cls) {
+                            return {
+                                label: cls.label, data: cls.data,
+                                backgroundColor: cls.color, borderColor: cls.border, borderWidth: 1
+                            };
+                        })
+                    },
+                    options: {
+                        indexAxis: 'y', responsive: true,
+                        plugins: {legend:{position:'top'}},
+                        scales: {
+                            x: {stacked:true, beginAtZero:true, max:100,
+                                title:{display:true, text:'Andel (%)'},
+                                grid:{color:'rgba(255,255,255,0.04)'}},
+                            y: {stacked:true, grid:{display:false}}
+                        }
+                    }
+                }; });
+                if (p) built['chart-prithvi'] = true;
+            }
+        }
+
+        // Grazing
+        if (CHART_DATA.grazing) {
+            var g = CHART_DATA.grazing;
+            var gBarOpts = {
+                indexAxis: 'y', responsive: true,
+                plugins: {legend:{display:false}},
+                scales: {
+                    x: {beginAtZero:true, grid:{color:'rgba(255,255,255,0.04)'}},
+                    y: {grid:{display:false}}
+                }
+            };
+
+            if (!built['chart-grazing-class']) {
+                var gc = safeChart('chart-grazing-class', function() { return {
+                    type: 'bar',
+                    data: {
+                        labels: g.classification.labels,
+                        datasets: [{
+                            label: 'Antal block',
+                            data: g.classification.counts,
+                            backgroundColor: g.classification.colors,
+                            borderColor: g.classification.borders,
+                            borderWidth: 1
+                        }]
+                    },
+                    options: Object.assign({}, gBarOpts, {
+                        scales: Object.assign({}, gBarOpts.scales, {
+                            x: {beginAtZero:true, title:{display:true, text:'Antal block'},
+                                grid:{color:'rgba(255,255,255,0.04)'}}
+                        })
+                    })
+                }; });
+                if (gc) built['chart-grazing-class'] = true;
+            }
+
+            if (!built['chart-grazing-area']) {
+                var ga = safeChart('chart-grazing-area', function() { return {
+                    type: 'bar',
+                    data: {
+                        labels: g.classification.labels,
+                        datasets: [{
+                            label: 'Areal (ha)',
+                            data: g.classification.areas,
+                            backgroundColor: g.classification.colors,
+                            borderColor: g.classification.borders,
+                            borderWidth: 1
+                        }]
+                    },
+                    options: Object.assign({}, gBarOpts, {
+                        scales: Object.assign({}, gBarOpts.scales, {
+                            x: {beginAtZero:true, title:{display:true, text:'Areal (ha)'},
+                                grid:{color:'rgba(255,255,255,0.04)'}}
+                        })
+                    })
+                }; });
+                if (ga) built['chart-grazing-area'] = true;
+            }
+
+            if (!built['chart-grazing-conf']) {
+                var gconf = safeChart('chart-grazing-conf', function() { return {
+                    type: 'bar',
+                    data: {
+                        labels: g.confidence.labels,
+                        datasets: [{
+                            label: 'Antal block',
+                            data: g.confidence.counts,
+                            backgroundColor: g.confidence.colors,
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {legend:{display:false}},
+                        scales: {
+                            x: {title:{display:true, text:'Konfidens'},
+                                grid:{color:'rgba(255,255,255,0.04)'}},
+                            y: {beginAtZero:true, title:{display:true, text:'Antal block'},
+                                grid:{color:'rgba(255,255,255,0.04)'}}
+                        }
+                    }
+                }; });
+                if (gconf) built['chart-grazing-conf'] = true;
+            }
+
+            if (!built['chart-grazing-nmd']) {
+                var gnmd = safeChart('chart-grazing-nmd', function() { return {
+                    type: 'bar',
+                    data: {
+                        labels: g.nmd_within_lpis.labels,
+                        datasets: [{
+                            label: 'Andel (%)',
+                            data: g.nmd_within_lpis.fractions,
+                            backgroundColor: g.nmd_within_lpis.colors,
+                            borderColor: g.nmd_within_lpis.borders,
+                            borderWidth: 1
+                        }]
+                    },
+                    options: Object.assign({}, gBarOpts, {
+                        scales: Object.assign({}, gBarOpts.scales, {
+                            x: {beginAtZero:true, max:100, title:{display:true, text:'Andel (%)'},
+                                grid:{color:'rgba(255,255,255,0.04)'}}
+                        })
+                    })
+                }; });
+                if (gnmd) built['chart-grazing-nmd'] = true;
+            }
+        }
+
+        // L2
+        if (!built['chart-l2'] && CHART_DATA.l2) {
+            var l2 = safeChart('chart-l2', function() { return {
+                type: 'bar',
+                data: {
+                    labels: CHART_DATA.l2.labels,
+                    datasets: [{
+                        label: 'Andel (%)', data: CHART_DATA.l2.fractions,
+                        backgroundColor: CHART_DATA.l2.colors, borderWidth: 1
+                    }]
+                },
+                options: chartOpts
+            }; });
+            if (l2) built['chart-l2'] = true;
+        }
     }
 
     // ── Initialize a single tab ──────────────────────────────────────
@@ -727,6 +912,14 @@
 
         // Render dynamic HTML
         container.innerHTML = renderTabDynamic(config);
+
+        // Decorate first occurrence of every glossary term in this tab.
+        // Walks both the dynamic block AND the sibling .tab-description
+        // (handwritten prose in index.html) so acronyms first introduced
+        // there also get the tooltip. Per-tab seen-set keeps it to one
+        // decoration per term per tab.
+        var subTabRoot = container.parentElement;
+        if (subTabRoot) decorateGlossary(subTabRoot);
 
         // Collect GeoJSON files to load
         var geojsonFiles = {};
@@ -758,6 +951,8 @@
     // ── Boot ─────────────────────────────────────────────────────────
 
     handleEmbedMode();
+    ensureGlossCard();
+    bindGlossHover();
     bindTabSwitching();
     bindSubTabSwitching();
 

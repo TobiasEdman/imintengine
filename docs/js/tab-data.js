@@ -195,6 +195,86 @@ var LEGENDS = {
     ]
 };
 
+// ── Glossary (acronym tooltip, decorated on first occurrence per tab) ──
+// Added 2026-05-11 as part of the showcase-copy rewrite. Same dict serves
+// every tab — acronyms mean the same thing across the dashboard. The JS
+// decorator in app.js walks tab content after render and wraps the first
+// matching word per tab in <span class="gloss" data-term="...">. Hover
+// shows full + sv lines from this dict.
+var GLOSSARY = {
+    // Spectral indices
+    'NDVI':  { full: 'Normalized Difference Vegetation Index',
+               sv: 'Mått på grönska. Räknas ur röd och nära-infraröd reflektans; höga värden = frisk vegetation.' },
+    'NDWI':  { full: 'Normalized Difference Water Index',
+               sv: 'Mått på öppet vatten och fukt. Positiva värden = vatten.' },
+    'EVI':   { full: 'Enhanced Vegetation Index',
+               sv: 'Vegetationsindex som är mindre känsligt för atmosfär och tät biomassa än NDVI.' },
+    'MNDWI': { full: 'Modified Normalized Difference Water Index',
+               sv: 'Vattenindex som använder kortvågs-IR istället för nära-IR — bättre i bebyggelse.' },
+    'NDCI':  { full: 'Normalized Difference Chlorophyll Index',
+               sv: 'Klorofyllindex för vatten — använder rödedge-bandet (705 nm).' },
+    'MCI':   { full: 'Maximum Chlorophyll Index',
+               sv: 'Klorofyllindex som mäter höjden på 705 nm-toppen över en linjär baslinje.' },
+    'dNBR':  { full: 'Differenced Normalized Burn Ratio',
+               sv: 'Brandsvårighetsgrad — skillnaden i NBR före och efter brand. Positiva värden = bränt.' },
+    'SAM':   { full: 'Spectral Angle Mapper',
+               sv: 'Vinkel mellan två spektrum, i grader. Mäter färgavvikelse oberoende av ljusstyrka.' },
+
+    // Sentinel-2 / Copernicus
+    'SCL':   { full: 'Scene Classification Layer',
+               sv: 'ESA:s pixel-vis klassning av Sentinel-2-scener (moln, skugga, vatten, vegetation, …).' },
+    'COT':   { full: 'Cloud Optical Thickness',
+               sv: 'Mått på molntäckets tjocklek. Värden nära 0 = klart; höga = ogenomskinligt moln.' },
+    'L1C':   { full: 'Level-1C (Top-of-Atmosphere)',
+               sv: 'Sentinel-2-produkt med reflektans uppmätt vid satelliten, före atmosfär-korrigering.' },
+    'L2A':   { full: 'Level-2A (Bottom-of-Atmosphere)',
+               sv: 'Sentinel-2-produkt med atmosfär-korrigerad ytreflektans (Sen2Cor).' },
+    'BOA':   { full: 'Bottom-of-Atmosphere',
+               sv: 'Reflektans nära markytan, efter atmosfär-korrigering.' },
+    'TOA':   { full: 'Top-of-Atmosphere',
+               sv: 'Reflektans uppmätt vid satelliten, före atmosfär-korrigering.' },
+    'SAFE':  { full: 'Standard Archive Format for Europe',
+               sv: 'ESA:s arkivformat för Sentinel-produkter (en katalog med metadata + per-band-filer).' },
+    'AOI':   { full: 'Area of Interest',
+               sv: 'Det geografiska område som analysen är avgränsad till.' },
+
+    // Svenska geodata-källor
+    'NMD':   { full: 'Nationella marktäckedata',
+               sv: 'Naturvårdsverkets rikstäckande karta över marktäcke, 10 m upplösning, 25+ klasser.' },
+    'LPIS':  { full: 'Land Parcel Identification System',
+               sv: 'Jordbruksverkets blockdatabas — registrerade jordbruksskiften och betesblock.' },
+    'SKS':   { full: 'Skogsstyrelsen',
+               sv: 'Svensk myndighet; data om avverkningsanmälningar och skogstillstånd.' },
+    'DEM':   { full: 'Digital Elevation Model',
+               sv: 'Höjddata över marken (rasterkarta i meter över havet).' },
+    'SMI':   { full: 'Soil Moisture Index',
+               sv: 'NMD:s markfuktighetsindex (0–100, där 100 = vått).' },
+
+    // Vattenkvalitet
+    'C2RCC': { full: 'Case-2 Regional CoastColour',
+               sv: 'ESA:s neurala nätverk för optiskt komplexa kustvatten — räknar fram klorofyll, sediment, CDOM.' },
+    'MDN':   { full: 'Mixture Density Network',
+               sv: 'Neuralt nätverk (Pahlevan et al.) som returnerar klorofyll-a för Sentinel-2-vatten.' },
+    'CDOM':  { full: 'Coloured Dissolved Organic Matter',
+               sv: 'Färgat löst organiskt material i vatten (humus, gelbstoff). Mäts i absorbans m⁻¹.' },
+    'TSM':   { full: 'Total Suspended Matter',
+               sv: 'Totalt suspenderat material i vatten (sediment, partiklar). Mäts i g/m³.' },
+    'TSS':   { full: 'Total Suspended Solids',
+               sv: 'Synonym med TSM — totalt suspenderat material i vatten, g/m³.' },
+    'IOPs':  { full: 'Inherent Optical Properties',
+               sv: 'Vattnets inneboende optiska egenskaper (absorption, spridning) — input till färg-modeller.' },
+
+    // ML / detection
+    'YOLO':  { full: 'You Only Look Once',
+               sv: 'AI-modell för objektdetektering i ett enda steg (här: båtar i satellitbilder).' },
+    'NMS':   { full: 'Non-Maximum Suppression',
+               sv: 'Steg som filtrerar bort överlappande detektioner och behåller den med högst poäng.' },
+    'CNN':   { full: 'Convolutional Neural Network',
+               sv: 'Djupt neuralt nätverk för bildanalys.' },
+    'FCN':   { full: 'Fully Convolutional Network',
+               sv: 'CNN-variant designad för pixel-vis segmentering.' }
+};
+
 // ── GeoJSON file paths (loaded async) ────────────────────────────────
 var GEOJSON_FILES = {
     vessels:              'data/vessels.geojson',

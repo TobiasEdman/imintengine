@@ -505,4 +505,105 @@
             .charts-grid { grid-template-columns: 1fr; }
             .header { padding: 16px; }
         }
+
+        /* ── Lede / hint / methods disclosure (showcase-copy rewrite) ──
+           Specificity bumped with .tab-intro prefix so these win over the
+           legacy `.tab-intro p { text-align: center }` rule. */
+        .tab-intro .lede {
+            font-size: 19px;
+            line-height: 1.55;
+            color: #171717;
+            max-width: 70ch;
+            margin: 0 auto;
+            text-align: left;
+        }
+        .tab-intro .hint {
+            font-size: 14px;
+            line-height: 1.45;
+            color: #4b5563;
+            font-style: italic;
+            max-width: 70ch;
+            margin: 14px auto 0;
+            padding: 8px 12px;
+            border-left: 3px solid #cff8e4;
+            background: #f8faf9;
+            text-align: left;
+        }
+        .tab-intro details.methods {
+            max-width: 70ch;
+            margin: 18px auto 0;
+            padding-top: 14px;
+            border-top: 1px solid #e5e7eb;
+            text-align: left;
+        }
+        details.methods > summary {
+            cursor: pointer;
+            list-style: none;
+            font-size: 12px;
+            font-weight: 600;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            padding: 4px 0;
+            user-select: none;
+        }
+        details.methods > summary::-webkit-details-marker { display: none; }
+        details.methods > summary::before {
+            content: '▸ ';
+            display: inline-block;
+            transition: transform 0.15s;
+            color: #9ca3af;
+        }
+        details.methods[open] > summary::before { transform: rotate(90deg); }
+        details.methods > summary:hover { color: #171717; }
+        details.methods h4 {
+            font-size: 13px;
+            font-weight: 600;
+            color: #171717;
+            margin: 16px 0 6px;
+            text-transform: none;
+            letter-spacing: 0;
+        }
+        details.methods p {
+            font-size: 15px;
+            line-height: 1.55;
+            color: #374151;
+            margin: 6px 0;
+        }
+        details.methods a { color: #1a4338; text-decoration: underline; }
+        details.methods code {
+            background: #f3f4f6;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+
+        /* ── Glossary tooltip (acronym hover) ────────────────────────── */
+        .gloss {
+            border-bottom: 1px dotted #6b7280;
+            cursor: help;
+        }
+        #gloss-card {
+            position: absolute;
+            z-index: 1000;
+            max-width: 300px;
+            padding: 10px 13px;
+            background: #1a4338;
+            color: #cff8e4;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+            font-size: 13px;
+            line-height: 1.45;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.12s;
+        }
+        #gloss-card.visible { opacity: 1; }
+        #gloss-card strong { color: #ffffff; font-weight: 700; }
+        #gloss-card .gloss-card-sv {
+            display: block;
+            margin-top: 4px;
+            color: rgba(207, 248, 228, 0.78);
+            font-size: 12px;
+        }
     </style>
