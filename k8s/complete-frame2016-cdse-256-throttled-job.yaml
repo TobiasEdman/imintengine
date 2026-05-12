@@ -20,6 +20,18 @@ spec:
         app: ensemble-prep
     spec:
       restartPolicy: Never
+      # Avoid p02r09srv04 — 2026-05-12 it could not create pod sandbox
+      # for our cpu=4/mem=8Gi pods: "load program: operation not
+      # supported" cgroup/runc error. All our previous pods used
+      # different nodes successfully.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04"]
       containers:
         - name: f
           image: python:3.11-slim

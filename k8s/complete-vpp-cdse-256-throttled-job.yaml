@@ -20,6 +20,15 @@ spec:
         app: ensemble-prep
     spec:
       restartPolicy: Never
+      # Avoid p02r09srv04 — broken cgroup/runc as of 2026-05-12.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04"]
       containers:
         - name: v
           image: python:3.11-slim
