@@ -571,8 +571,7 @@ var TAB_CONFIG = {
         // produces a clean axis-aligned 3006 rectangle — no parallelogram tilt,
         // no wedge gaps, _to_nmd_grid retained throughout the pipeline.
         imgH: 360, imgW: 880,
-        hasBgToggle: false,
-        years: [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+        hasBgToggle: false
     },
 
     sr: {
@@ -699,7 +698,7 @@ var TAB_CONFIG = {
             {title:'Metoder',              value:'4 retrievals × 3 datum',           detail:'RGB + C2RCC (C2X-Nets) chl/TSM/CDOM via SNAP 13'},
             {title:'Färgskala chl-a',      value:'log₁₀ 0.5–25 mg/m³',               detail:'pinnad → cross-scen-jämförbar'}
         ],
-        intro: 'Sentinel-2 vattenkvalitetsanalys för Lilla Karlsö (Gotland) över sillgrissle-säsongen 2025 — samma C2RCC-pipeline som Stigfjorden/Mollösund-tabben, men över en tidsserie istället för en enda passage. Sillgrissle-kolonin (~2 500 par) jagar pelagisk skarpsill och sill 5–15 km västerut, och fodersäkerheten följer klorofyll-dynamiken i Östersjön. <strong>Tre molnfria scener</strong> valda av <code>optimal_fetch_dates(era5_then_scl)</code> över hela 2025-04-15..07-31 träffar perfekt en gång varje fenologisk fas: 2026-04-29 (äggläggning + vårblom-pre), 2025-06-13 (kläckning + sommarblom-peak), 2025-07-10 (ungar lämnar + post-peak). Per scen körs <strong>fyra retrievals utan fusion</strong>: Sentinel-2 RGB samt ESA C2RCC C2X-Nets för chl-a, TSM och CDOM via SNAP 13 (signerad GHCR-image, native amd64 på ICE k8s). Brockmann 2016-formler från IOPs. Färgskalan på klorofyll är <strong>fast pinnad till log₁₀ 0.5–25 mg/m³</strong> så samma färg betyder samma värde över alla tre scener. UTM-zon-prefer ligger i fetch-laget — AOI korsar 18°E (UTM 33/34-gränsen) men eftersom centrum ligger i UTM 33 plockas T33VXD-tile för alla tre datum, ingen cross-zone-reprojektion.',
+        intro: 'Sentinel-2 vattenkvalitetsanalys för Lilla Karlsö (Gotland) över sillgrissle-säsongen 2025 — samma C2RCC-pipeline som Stigfjorden/Mollösund-tabben, men över en tidsserie istället för en enda passage. Sillgrissle-kolonin (~2 500 par) jagar pelagisk skarpsill och sill 5–15 km västerut, och fodersäkerheten följer klorofyll-dynamiken i Östersjön. <strong>Tre molnfria scener</strong> valda av <code>optimal_fetch_dates(era5_then_scl)</code> över hela 2025-04-15..07-31 träffar perfekt en gång varje fenologisk fas: 2025-04-29 (äggläggning + vårblom-pre), 2025-06-13 (kläckning + sommarblom-peak), 2025-07-10 (ungar lämnar + post-peak). Per scen körs <strong>fyra retrievals utan fusion</strong>: Sentinel-2 RGB samt ESA C2RCC C2X-Nets för chl-a, TSM och CDOM via SNAP 13 (signerad GHCR-image, native amd64 på ICE k8s). Brockmann 2016-formler från IOPs. Färgskalan på klorofyll är <strong>fast pinnad till log₁₀ 0.5–25 mg/m³</strong> så samma färg betyder samma värde över alla tre scener. UTM-zon-prefer ligger i fetch-laget — AOI korsar 18°E (UTM 33/34-gränsen) men eftersom centrum ligger i UTM 33 plockas T33VXD-tile för alla tre datum, ingen cross-zone-reprojektion.',
         // 12 panels: 4 retrievals (RGB + chl + TSM + CDOM) × 3 datum, samma flat-grid-
         // mönster som Bohuslän-tabben. Panel-id format `lk<MMDD>-<prod>` — app.js
         // gör prefix = panel.id.split('-')[0], så `lk0429`/`lk0613`/`lk0710`
