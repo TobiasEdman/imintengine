@@ -1,0 +1,25 @@
+{
+  "image_name": "imintengine/sen2cor",
+  "image_tag": "2.12.04",
+  "image_digest": "TBD-after-first-build",
+  "sen2cor_version": "2.12.04",
+  "sen2cor_installer_url": "https://step.esa.int/thirdparties/sen2cor/2.12.0/Sen2Cor-02.12.04-Linux64.run",
+  "sen2cor_installer_size_bytes": 264206010,
+  "sen2cor_installer_last_modified_observed": "2026-02-10T08:57:51Z",
+  "base_image": "ubuntu:22.04",
+  "base_image_digest": "sha256:0e5e4a57c2499249aafb3742acbaae07a4eebd1b81df01ba6c2cc7a90fcdb1ce",
+  "purpose": "Sentinel-2 L1C → L2A atmospheric correction for back-filling frame_2016 / frame_2015 tiles where DES openEO has no L2A indexed",
+  "smoke_test": "L2A_Process --help must contain 'Sentinel-2 Level 2A Prototype Processor'",
+  "build_args": {
+    "SEN2COR_INSTALLER_URL": "https://step.esa.int/thirdparties/sen2cor/2.12.0/Sen2Cor-02.12.04-Linux64.run",
+    "SEN2COR_INSTALLER_SIZE": 264206010
+  },
+  "first_build_at": "TBD",
+  "git_sha": "TBD",
+  "notes": [
+    "Pin the FROM digest above is the public Ubuntu 22.04 LTS image digest as of 2026-02-08.",
+    "Re-capture image_digest after first push to registry.",
+    "Sen2cor 02.12.04 accepts L1C SAFE from baseline PSD 02.03+ (i.e. 2016+).",
+    "Older 2015 scenes may use the legacy SAFE format — verify per-scene with smoke test before bulk run."
+  ]
+}
