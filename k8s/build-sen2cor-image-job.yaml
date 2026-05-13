@@ -33,12 +33,14 @@ spec:
           # using the docker-registry secret (ghcr-push) just created.
           args:
             - --dockerfile=docker/sen2cor/Dockerfile
-            - --context=git://github.com/TobiasEdman/ImintEngine.git
+            # ``#refs/heads/main`` pins to the main branch HEAD — the
+            # default kaniko-context behaviour reads HEAD which on
+            # github.com/TobiasEdman/ImintEngine.git resolves to
+            # 'master' (an old branch), missing the actual Dockerfile
+            # fixes on main.
+            - --context=https://github.com/TobiasEdman/ImintEngine.git#refs/heads/main
             - --destination=ghcr.io/tobiasedman/imint-sen2cor:2.12.04
             - --cleanup
-            # Image is ~1 GB after sen2cor install; tell kaniko to
-            # extract layers progressively rather than holding everything
-            # in memory.
             - --snapshot-mode=redo
             - --use-new-run
           volumeMounts:
