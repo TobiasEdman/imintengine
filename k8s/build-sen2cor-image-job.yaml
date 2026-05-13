@@ -38,7 +38,11 @@ spec:
             # github.com/TobiasEdman/ImintEngine.git resolves to
             # 'master' (an old branch), missing the actual Dockerfile
             # fixes on main.
-            - --context=https://github.com/TobiasEdman/ImintEngine.git#refs/heads/main
+            # Kaniko ``git://…#refs/heads/main`` per official docs.
+            # The previous 928kj build picked up an older revision
+            # via an unspecified default; pinning to refs/heads/main
+            # is needed.
+            - --context=git://github.com/TobiasEdman/ImintEngine.git#refs/heads/main
             - --destination=ghcr.io/tobiasedman/imint-sen2cor:2.12.04
             - --cleanup
             - --snapshot-mode=redo
