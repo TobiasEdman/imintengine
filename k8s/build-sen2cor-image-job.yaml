@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-sen2cor-image
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: build-sen2cor-image
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04"]
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2-debug
+          # Native amd64 — no Rosetta emulation issues from the
+          # 2026-05-13 local-build attempt.
+          # Build the Dockerfile from a sub-path of the imint repo,
+          # push the resulting image to ghcr.io/tobiasedman/imint-sen2cor:2.12.04
+          # using the docker-registry secret (ghcr-push) just created.
+          args:
+            - --dockerfile=docker/sen2cor/Dockerfile
+            - --context=git://github.com/TobiasEdman/ImintEngine.git
+            - --destination=ghcr.io/tobiasedman/imint-sen2cor:2.12.04
+            - --cleanup
+            # Image is ~1 GB after sen2cor install; tell kaniko to
+            # extract layers progressively rather than holding everything
+            # in memory.
+            - --snapshot-mode=redo
+            - --use-new-run
+          volumeMounts:
+            - name: ghcr-config
+              mountPath: /kaniko/.docker
+              readOnly: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+      volumes:
+        - name: ghcr-config
+          secret:
+            secretName: ghcr-push
+            items:
+              - key: .dockerconfigjson
+                path: config.json
