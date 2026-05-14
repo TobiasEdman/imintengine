@@ -7,7 +7,7 @@
   "sen2cor_installer_size_bytes": 264206010,
   "sen2cor_installer_last_modified_observed": "2026-02-10T08:57:51Z",
   "base_image": "ubuntu:22.04",
-  "base_image_digest": "sha256:0e5e4a57c2499249aafb3742acbaae07a4eebd1b81df01ba6c2cc7a90fcdb1ce",
+  "base_image_digest": "sha256:962f6cadeae0ea6284001009daa4cc9a8c37e75d1f5191cf0eb83fe565b63dd7",
   "purpose": "Sentinel-2 L1C → L2A atmospheric correction for back-filling frame_2016 / frame_2015 tiles where DES openEO has no L2A indexed",
   "smoke_test": "L2A_Process --help must contain 'Sentinel-2 Level 2A Prototype Processor'",
   "build_args": {

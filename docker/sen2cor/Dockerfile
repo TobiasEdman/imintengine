@@ -11,8 +11,11 @@
 # Manifest: see docker/sen2cor/MANIFEST.json.
 
 # Ubuntu 22.04 LTS — long support, glibc 2.35 compatible with sen2cor
-# 02.12.04. Pinned by digest after first build (TODO: capture).
-FROM ubuntu:22.04@sha256:0e5e4a57c2499249aafb3742acbaae07a4eebd1b81df01ba6c2cc7a90fcdb1ce
+# 02.12.04. amd64-only — sen2cor is shipped as a Linux64 .run installer
+# with bundled x86_64 binaries; there is no ARM64 build. The
+# ``--platform=linux/amd64`` is needed when building on Apple Silicon;
+# k8s nodes are already amd64 and ignore the directive.
+FROM --platform=linux/amd64 ubuntu:22.04@sha256:962f6cadeae0ea6284001009daa4cc9a8c37e75d1f5191cf0eb83fe565b63dd7
 
 LABEL maintainer="ImintEngine pipeline"
 LABEL sen2cor_version="2.12.04"
