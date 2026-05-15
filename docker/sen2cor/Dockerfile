@@ -25,34 +25,38 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# Sen2cor needs: bash, wget for installer, libxext6 for the GDAL
-# X11 stub, libglib2.0-0 for GTK (sen2cor's PyQt remnants), libsm6/
-# libxrender1 for the GDAL+rasterio path. NO graphical display.
+# Sen2cor 2.12.04 IS fully self-contained: bin/python2.7 is a
+# musl-libc-linked PIE binary with its own bundled libpython2.7.so
+# under lib/. It does NOT depend on system python2.
 #
-# IMPORTANT: sen2cor 2.12.04 advertises a self-contained python
-# runtime, but its bin/python2.7 is a symlink that resolves against
-# /usr/bin/python2.7 via the system loader. Ubuntu 22.04 has no
-# python2 by default. The 'python2' package lives in the 'universe'
-# component — we enable that, then install python2 + python2.7-dev
-# so the symlink resolves and L2A_Process can start.
+# The makeself installer runs a post-extract relocation step that
+# uses ``patchelf`` to rewrite each bundled binary's ELF interpreter
+# path (the musl loader ld-musl-x86_64.so.1) to the chosen --target
+# directory. That relocation script invokes the ``file`` command to
+# discover which extracted files are ELF binaries. If ``file`` is
+# absent, patchelf silently never runs, the interpreter path stays
+# at the packaging-time default, and exec'ing bin/python2.7 fails
+# with ENOENT → the shell reports "python2.7: not found" (exit 127).
 #
-# Verified 2026-05-15 against build-sen2cor-image-fjhx6 which failed
-# with "bin/python2.7: not found" until python2 was added.
-RUN sed -i 's|^# deb http|deb http|g; s|^# deb-src http|deb-src http|g' /etc/apt/sources.list \
- && apt-get update -qq \
- && apt-get install -y -qq --no-install-recommends software-properties-common \
- && add-apt-repository -y universe \
- && apt-get update -qq \
+# Verified 2026-05-15: build-sen2cor-image-{fjhx6,t8v82} failed with
+# "bin/python2.7: not found" because ``file`` was missing; the
+# probe-sen2cor-ldd job had ``file`` installed and there the same
+# binary ran cleanly. The earlier python2/universe "fix" was a
+# misdiagnosis and is removed.
+#
+# Runtime deps: wget+bzip2+ca-certificates for the installer,
+# libxext6/libglib2.0-0/libsm6/libxrender1 for the GDAL+rasterio
+# path, file for the installer's patchelf relocation.
+RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends \
         wget \
         bzip2 \
         ca-certificates \
+        file \
         libxext6 \
         libglib2.0-0 \
         libsm6 \
         libxrender1 \
-        python2 \
-        python2.7-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt
@@ -71,18 +75,10 @@ RUN wget --no-verbose -O /tmp/sen2cor.run "${SEN2COR_INSTALLER_URL}" \
     fi \
  && chmod +x /tmp/sen2cor.run
 
-# Install + smoke-test in a single RUN to avoid kaniko's snapshot
-# layer between them losing the bundled musl-libc Python binary
-# (verified 2026-05-15 via probe-sen2cor-ldd: the bundled
-# bin/python2.7 is a musl-linked PIE that resolves correctly when
-# L2A_Bashrc is sourced, but kaniko's redo snapshot mode appears
-# to drop the binary on the next layer boundary so a subsequent
-# RUN sees it as missing).
-#
-# Sen2cor's makeself extracts to /opt/Sen2Cor-02.12.04-Linux64/.
-# L2A_Bashrc inside that dir sets PATH + GDAL_DATA + locale; it
-# must be sourced before invoking python2.7, otherwise the bundled
-# musl loader cannot find libpython2.7.so.1.0 / libc.musl-x86_64.
+# Install + smoke-test in a single RUN. ``file`` (installed above)
+# lets the installer's patchelf step rewrite the musl ELF
+# interpreter path to this --target. L2A_Bashrc sets PATH +
+# GDAL_DATA + locale and must be sourced before L2A_Process.
 RUN /tmp/sen2cor.run --target /opt/Sen2Cor-02.12.04-Linux64 \
  && rm -f /tmp/sen2cor.run \
  && . /opt/Sen2Cor-02.12.04-Linux64/L2A_Bashrc \
