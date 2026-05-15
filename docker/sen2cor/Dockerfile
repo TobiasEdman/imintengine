@@ -25,10 +25,25 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# Sen2cor needs: bash, curl/wget for installer, libxext6 for the GDAL
-# X11 stub, libglib2.0-0 for GTK (sen2cor's PyQt remnants), and a few
-# more for the GDAL+rasterio path. No graphical display needed.
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+# Sen2cor needs: bash, wget for installer, libxext6 for the GDAL
+# X11 stub, libglib2.0-0 for GTK (sen2cor's PyQt remnants), libsm6/
+# libxrender1 for the GDAL+rasterio path. NO graphical display.
+#
+# IMPORTANT: sen2cor 2.12.04 advertises a self-contained python
+# runtime, but its bin/python2.7 is a symlink that resolves against
+# /usr/bin/python2.7 via the system loader. Ubuntu 22.04 has no
+# python2 by default. The 'python2' package lives in the 'universe'
+# component — we enable that, then install python2 + python2.7-dev
+# so the symlink resolves and L2A_Process can start.
+#
+# Verified 2026-05-15 against build-sen2cor-image-fjhx6 which failed
+# with "bin/python2.7: not found" until python2 was added.
+RUN sed -i 's|^# deb http|deb http|g; s|^# deb-src http|deb-src http|g' /etc/apt/sources.list \
+ && apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends software-properties-common \
+ && add-apt-repository -y universe \
+ && apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends \
         wget \
         bzip2 \
         ca-certificates \
@@ -36,6 +51,8 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         libglib2.0-0 \
         libsm6 \
         libxrender1 \
+        python2 \
+        python2.7-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt
