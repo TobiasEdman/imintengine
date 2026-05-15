@@ -71,22 +71,32 @@ RUN wget --no-verbose -O /tmp/sen2cor.run "${SEN2COR_INSTALLER_URL}" \
     fi \
  && chmod +x /tmp/sen2cor.run
 
-# Run the .makeself installer. Sen2cor extracts to /opt/Sen2Cor-02.12.04-Linux64/
-# by default; we accept that.
+# Install + smoke-test in a single RUN to avoid kaniko's snapshot
+# layer between them losing the bundled musl-libc Python binary
+# (verified 2026-05-15 via probe-sen2cor-ldd: the bundled
+# bin/python2.7 is a musl-linked PIE that resolves correctly when
+# L2A_Bashrc is sourced, but kaniko's redo snapshot mode appears
+# to drop the binary on the next layer boundary so a subsequent
+# RUN sees it as missing).
+#
+# Sen2cor's makeself extracts to /opt/Sen2Cor-02.12.04-Linux64/.
+# L2A_Bashrc inside that dir sets PATH + GDAL_DATA + locale; it
+# must be sourced before invoking python2.7, otherwise the bundled
+# musl loader cannot find libpython2.7.so.1.0 / libc.musl-x86_64.
 RUN /tmp/sen2cor.run --target /opt/Sen2Cor-02.12.04-Linux64 \
- && rm -f /tmp/sen2cor.run
-
-# Put L2A_Process on PATH. The bin/ dir holds the wrapper script that
-# sets up sen2cor's bundled Python + libraries before invoking the
-# L2A_Process binary.
-ENV PATH=/opt/Sen2Cor-02.12.04-Linux64/bin:${PATH}
-
-# Smoke test runs at build time so a broken installer is caught here,
-# not at first job submit. ``L2A_Process --help`` exits 0 if the
-# bundled python + sen2cor module loads cleanly.
-RUN L2A_Process --help > /tmp/help.txt \
+ && rm -f /tmp/sen2cor.run \
+ && . /opt/Sen2Cor-02.12.04-Linux64/L2A_Bashrc \
+ && L2A_Process --help > /tmp/help.txt \
  && grep -q "Sentinel-2 Level 2A Prototype Processor" /tmp/help.txt \
  && rm /tmp/help.txt
+
+# Put L2A_Process on PATH for downstream consumers — Bashrc also
+# does this when sourced, but adding it to ENV makes ``docker run``
+# work without an explicit source step.
+ENV PATH=/opt/Sen2Cor-02.12.04-Linux64/bin:${PATH}
+ENV GDAL_DATA=/opt/Sen2Cor-02.12.04-Linux64/share/gdal
+ENV GDAL_DRIVER_PATH=disable
+ENV LC_NUMERIC=C
 
 WORKDIR /work
 ENTRYPOINT ["L2A_Process"]
