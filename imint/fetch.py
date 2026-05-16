@@ -1611,7 +1611,43 @@ def fetch_l1c_safe_from_gcp(
         cloud_max=cloud_max,
         preferred_utm_zone=preferred_utm_zone,
     )
-    safe_name = scene["safe_name"]
+    return fetch_l1c_safe_by_name(
+        scene["safe_name"], dest_dir,
+        max_workers=max_workers, overwrite=overwrite,
+    )
+
+
+def fetch_l1c_safe_by_name(
+    safe_name: str,
+    dest_dir: str | Path | None = None,
+    *,
+    max_workers: int = 8,
+    overwrite: bool = False,
+) -> Path:
+    """Download a specific L1C SAFE archive from the GCS public bucket.
+
+    Unlike :func:`fetch_l1c_safe_from_gcp`, this takes the exact SAFE
+    name (== a CDSE STAC L1C item id) and downloads precisely that
+    archive — no STAC re-resolution. Use it when an upstream selector
+    has already picked the scene and the caller must not get a
+    different one.
+
+    Args:
+        safe_name: SAFE archive name, with or without the ``.SAFE``
+            suffix (e.g. a CDSE STAC item id like
+            ``S2A_MSIL1C_20160821T103022_N0500_R108_T33VUD_...``).
+        dest_dir: Local root. Defaults to ``./outputs/safe_archives/``.
+        max_workers: Parallel HTTPS download workers.
+        overwrite: Re-download files already present at the right size.
+
+    Returns:
+        Path to the downloaded ``.SAFE`` directory.
+    """
+    import urllib.request
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if not safe_name.endswith(".SAFE"):
+        safe_name = safe_name + ".SAFE"
     files = _gcp_list_safe_files(safe_name)
 
     if dest_dir is None:
@@ -1643,10 +1679,9 @@ def fetch_l1c_safe_from_gcp(
                 f.write(chunk)
         return item["size"]
 
-    bytes_fetched = 0
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         for fut in as_completed(ex.submit(_fetch_one, f) for f in files):
-            bytes_fetched += fut.result()
+            fut.result()
     return safe_root
 
 
