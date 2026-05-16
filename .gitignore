@@ -19,6 +19,12 @@ data/
 # Exception: track small pre-trained model weights needed for
 # out-of-the-box notebook execution. pib-ml-grazing is 540 KB, MIT.
 !imint/fm/pib_grazing/**/*.pth
+# Exception: 12-band Pirinen COT ensemble for L1C scene ranking.
+# 10 × 56 KB = 560 KB total. Source: aleksispi/ml-cloud-opt-thick
+# (CC-licensed). Needed by imint/analyzers/cot_l1c.py and the
+# sen2cor scene-selector — must ship with the repo so k8s jobs
+# that git-clone the repo get the weights without a Drive download.
+!imint/fm/cot_models_l1c/*.pt
 
 # Baselines (large numpy files)
 **/baselines/
