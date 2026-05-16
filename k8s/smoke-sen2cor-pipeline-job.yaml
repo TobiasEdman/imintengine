@@ -1,0 +1,138 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-sen2cor-pipeline
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: smoke-sen2cor-pipeline
+spec:
+  backoffLimit: 0
+  # End-to-end smoke: selector (8 tiles) → runner (1 scene). One SAFE
+  # download + one sen2cor run. Budget 1h.
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04"]
+      containers:
+        - name: smoke
+          # imint-sen2cor carries L2A_Process; we add python3 + the
+          # pipeline deps at pod start.
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== sen2cor pipeline smoke ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo \
+                torch --index-url https://download.pytorch.org/whl/cpu \
+                2>&1 | tail -3
+              pip3 install --quiet --no-cache-dir numpy scipy rasterio \
+                pyproj requests Pillow pystac-client openeo 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "Verifying pipeline scripts + COT weights present:"
+              ls -la scripts/sen2cor_pipeline/
+              ls imint/fm/cot_models_l1c/ | wc -l
+              echo "  (expect 10 COT weight files)"
+
+              # ── Step 1: selector on 8 tiles ──────────────────────────
+              echo ""
+              echo "=== Step 1: select_scenes.py (8 tiles) ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir /data/unified_v2_512 \
+                --year 2016 --fallback-year 2015 \
+                --max-tiles 8 \
+                --out /data/debug/sen2cor_smoke_plan.json
+
+              echo ""
+              echo "Plan summary:"
+              python3 -c "
+              import json
+              p = json.load(open('/data/debug/sen2cor_smoke_plan.json'))
+              print(f\"  scenes={p['n_scenes']} covered={p['n_tiles_covered']} \"
+                    f\"unassigned={len(p['unassigned'])}\")
+              for s in p['scenes'][:3]:
+                  print(f\"    {s['scene_id']}: {len(s['tile_names'])} tiles\")
+              "
+
+              # ── Step 2: runner on 1 scene ────────────────────────────
+              echo ""
+              echo "=== Step 2: run_sen2cor_per_scene.py (1 scene) ==="
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/sen2cor_smoke_plan.json \
+                --data-dir /data/unified_v2_512 \
+                --safe-cache /data/sen2cor_cache \
+                --cot-max 8.0 \
+                --workers 1 \
+                --max-scenes 1
+
+              # ── Step 3: verify a tile got frame_2016 ─────────────────
+              echo ""
+              echo "=== Step 3: verify frame_2016 written ==="
+              python3 -c "
+              import json, glob
+              import numpy as np
+              p = json.load(open('/data/debug/sen2cor_smoke_plan.json'))
+              if not p['scenes']:
+                  print('  no scenes in plan — nothing to verify'); raise SystemExit(0)
+              names = p['scenes'][0]['tile_names']
+              hits = 0
+              for n in names:
+                  fp = f'/data/unified_v2_512/{n}.npz'
+                  with np.load(fp, allow_pickle=True) as d:
+                      if 'frame_2016' in d.files and int(d.get('has_frame_2016',0))==1:
+                          fr = d['frame_2016']
+                          nz = float((fr!=0).mean())
+                          print(f'  {n}: frame_2016 shape={fr.shape} nonzero={nz:.3f}')
+                          hits += 1
+              print(f'  {hits}/{len(names)} tiles in scene-0 got frame_2016')
+              "
+
+              echo ""
+              echo "=== smoke complete: $(date) ==="
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
