@@ -114,9 +114,16 @@ def _era5_dates(bbox_wgs84: dict, year: int) -> set[str]:
 # ── Tile inventory ───────────────────────────────────────────────────────
 
 def _missing_frame_2016_tiles(data_dir: str) -> list[tuple[str, dict]]:
-    """(tile_name, wgs84_bbox) for tiles lacking has_frame_2016==1."""
+    """(tile_name, wgs84_bbox) for tiles needing a frame_2016 (re-)fetch.
+
+    A tile counts as missing unless it has ``has_frame_2016==1`` *and* a
+    ``frame_2016_bands`` matching the canonical ``PRITHVI_BANDS`` order.
+    Tiles written before the band field existed, or with a stale/wrong
+    order (e.g. B08 in slot 3), are re-fetched — self-healing.
+    """
     from imint.training.tile_bbox import resolve_tile_bbox
     from imint.training.tile_config import TileConfig
+    from imint.training.tile_fetch import PRITHVI_BANDS
     from pyproj import Transformer
 
     tx = Transformer.from_crs("EPSG:3006", "EPSG:4326", always_xy=True)
@@ -125,7 +132,15 @@ def _missing_frame_2016_tiles(data_dir: str) -> list[tuple[str, dict]]:
         name = Path(npz_path).stem
         try:
             with np.load(npz_path, allow_pickle=True) as d:
-                if "frame_2016" in d.files and int(d.get("has_frame_2016", 0)) == 1:
+                has = (
+                    "frame_2016" in d.files
+                    and int(d.get("has_frame_2016", 0)) == 1
+                )
+                bands_ok = (
+                    "frame_2016_bands" in d.files
+                    and [str(b) for b in d["frame_2016_bands"]] == PRITHVI_BANDS
+                )
+                if has and bands_ok:
                     continue
                 cfg = TileConfig(size_px=int(d.get("tile_size_px", 512)))
                 bbox3006 = resolve_tile_bbox(name=name, tile=cfg, npz_data=d)

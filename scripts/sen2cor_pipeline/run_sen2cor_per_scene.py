@@ -49,8 +49,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-# Prithvi 6-band spectral order — what frame_2016 must contain.
-_FRAME_BANDS = ["B02", "B03", "B04", "B08", "B11", "B12"]
+# frame_2016 must carry the exact 6-band order every other temporal frame
+# uses — B8A (narrow NIR) in slot 3, not B08. See
+# docs/training/ensemble_band_contract.md. Import the canonical constant
+# rather than a local literal so the two can never drift apart.
+from imint.training.tile_fetch import PRITHVI_BANDS
 
 # L1C band → JP2 resolution group (for window reads from the SAFE).
 _BAND_RES = {
@@ -165,6 +168,9 @@ def _write_frame_2016(
         data = {k: d[k] for k in d.files}
     data["frame_2016"] = frame.astype(np.float32)
     data["has_frame_2016"] = np.int32(1)
+    # Record the band order so a tile written with a stale/wrong order
+    # (e.g. B08 in slot 3) is detected as missing and re-fetched.
+    data["frame_2016_bands"] = np.array(PRITHVI_BANDS)
     data["frame_2016_scene"] = np.str_(scene_id)
     data["frame_2016_date"] = np.str_((scene_datetime or "")[:10])
     data["frame_2016_year"] = np.int32(
@@ -258,7 +264,10 @@ def _process_scene(
         return
 
     # 4. Crop L2A 6-band → frame_2016 per passing tile
-    band_paths = {b: _l2a_band_path(l2a_dir, b) for b in _FRAME_BANDS}
+    band_paths = {b: _l2a_band_path(l2a_dir, b) for b in PRITHVI_BANDS}
+    _log(f"    L2A band JP2s: "
+         + ", ".join(f"{b}={p.name if p else 'MISSING'}"
+                     for b, p in band_paths.items()))
     if any(p is None for p in band_paths.values()):
         _log(f"    L2A missing bands: "
              f"{[b for b, p in band_paths.items() if p is None]}")
@@ -270,7 +279,7 @@ def _process_scene(
             try:
                 chans = []
                 ok = True
-                for b in _FRAME_BANDS:
+                for b in PRITHVI_BANDS:
                     arr = _read_window(band_paths[b], bbox, size_px)
                     if arr is None:
                         ok = False
