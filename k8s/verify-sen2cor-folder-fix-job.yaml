@@ -1,0 +1,118 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verify-sen2cor-folder-fix
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: verify-sen2cor-folder-fix
+spec:
+  backoffLimit: 0
+  # Targeted verification of the GCS `_$folder$`→mkdir fix (commit
+  # d2f522c). Runs the sen2cor runner against ONE previously-failed
+  # scene — T33WXR, which crashed L2A_ProcessDataStrip on 2026-05-18
+  # because its DATASTRIP/QI_DATA dirs existed only as `_$folder$`
+  # placeholders. Expect sen2cor_fail=0. One SAFE download + one
+  # sen2cor run — budget 1h.
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation
+                  # (cgroup/runc bug, 2026-05-{12,17}). Exclude both.
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: verify
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== verify _\$folder\$ fix: targeted sen2cor on T33WXR ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow \
+                pystac-client openeo 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # The cloned code must carry the fix.
+              grep -q "_gcs_marker_dir" imint/fetch.py \
+                && echo "OK: _gcs_marker_dir present in cloned fetch.py" \
+                || { echo "FAIL: fix not in clone"; exit 1; }
+
+              # ── Build a one-scene targeted plan ──────────────────────
+              echo ""
+              echo "=== Build targeted plan for T33WXR ==="
+              python3 -c "
+              import json
+              plan = json.load(open('/data/debug/sen2cor_frame2016_512_plan.json'))
+              hits = [s for s in plan['scenes'] if '_T33WXR_' in s['scene_id']]
+              if not hits:
+                  raise SystemExit('T33WXR not in plan — pick another failed scene')
+              scene = hits[0]
+              out = dict(plan, scenes=[scene], n_scenes=1)
+              json.dump(out, open('/data/debug/sen2cor_folderfix_verify_plan.json', 'w'))
+              print(f\"  scene {scene['scene_id']}  tiles={len(scene['tile_names'])}\")
+              "
+
+              # Clear any stale SAFE cache → deterministic fresh download.
+              rm -rf /data/sen2cor_cache/*T33WXR* 2>/dev/null || true
+
+              # ── Runner: 1 scene, 1 worker ────────────────────────────
+              echo ""
+              echo "=== run_sen2cor_per_scene.py (1 scene) ==="
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/sen2cor_folderfix_verify_plan.json \
+                --data-dir /data/unified_v2_512 \
+                --safe-cache /data/sen2cor_cache \
+                --cot-max 8.0 \
+                --workers 1 \
+                --max-scenes 1
+
+              # ── Verify _$folder$ dirs are real directories ───────────
+              echo ""
+              echo "=== QI_DATA dirs in the downloaded SAFE ==="
+              find /data/sen2cor_cache -maxdepth 5 -name QI_DATA -type d \
+                2>/dev/null | head
+
+              echo ""
+              echo "=== verify complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
