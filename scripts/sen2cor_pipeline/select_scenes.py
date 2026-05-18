@@ -50,8 +50,10 @@ import glob
 import json
 import os
 import sys
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -154,6 +156,22 @@ def _missing_frame_2016_tiles(data_dir: str) -> list[tuple[str, dict]]:
     return missing
 
 
+def _resolve_tile(name: str, bbox: dict, year: int) -> tuple[str, list[dict] | None]:
+    """ERA5 prefilter + STAC lookup for one tile.
+
+    Returns ``(name, hit_scenes)`` — ``hit_scenes`` is the L1C scenes
+    covering the tile on an ERA5-clear date, or ``None`` if the weather
+    prefilter rejects every date or no scene matches. Pure per-tile work
+    with no shared state, so it parallelises cleanly.
+    """
+    ok = _era5_dates(bbox, year)
+    if not ok:
+        return name, None
+    scenes = _stac_l1c_scenes(bbox, f"{year}-06-01", f"{year}-08-31")
+    hit = [s for s in scenes if (s["datetime"] or "")[:10] in ok]
+    return name, (hit or None)
+
+
 # ── Greedy set-cover ─────────────────────────────────────────────────────
 
 def _set_cover(
@@ -217,6 +235,9 @@ def main() -> None:
     p.add_argument("--fallback-year", type=int, default=2015)
     p.add_argument("--out", required=True)
     p.add_argument("--max-tiles", type=int, default=None)
+    p.add_argument("--workers", type=int, default=16,
+                   help="Parallel ERA5+STAC lookups. Each tile is one "
+                        "Open-Meteo call + one CDSE STAC query.")
     args = p.parse_args()
 
     t0 = time.time()
@@ -237,19 +258,24 @@ def main() -> None:
             break
         print(f"\n--- Pass {pass_idx + 1}: year={year}, remaining={len(tiles)} ---")
         tile_to_scenes: dict[str, list[dict]] = {}
-        for i, (name, bbox) in enumerate(tiles):
-            if i and i % 100 == 0:
-                print(f"  era5+stac {i}/{len(tiles)}  ({time.time() - t0:.0f}s)")
-            try:
-                ok = _era5_dates(bbox, year)
-                if not ok:
-                    continue
-                scenes = _stac_l1c_scenes(bbox, f"{year}-06-01", f"{year}-08-31")
-                hit = [s for s in scenes if (s["datetime"] or "")[:10] in ok]
-                if hit:
-                    tile_to_scenes[name] = hit
-            except Exception as ex:
-                print(f"  WARN {name}: {type(ex).__name__}: {ex}")
+        done = 0
+        done_lock = threading.Lock()
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futs = {pool.submit(_resolve_tile, name, bbox, year): name
+                    for name, bbox in tiles}
+            for fut in as_completed(futs):
+                name = futs[fut]
+                try:
+                    _, hit = fut.result()
+                    if hit:
+                        tile_to_scenes[name] = hit
+                except Exception as ex:
+                    print(f"  WARN {name}: {type(ex).__name__}: {ex}")
+                with done_lock:
+                    done += 1
+                    if done % 200 == 0:
+                        print(f"  era5+stac {done}/{len(tiles)}  "
+                              f"({time.time() - t0:.0f}s)", flush=True)
 
         selected, fallbacks, unassigned = _set_cover(tile_to_scenes)
         n_cov = sum(len(s["tile_names"]) for s in selected)
