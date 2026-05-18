@@ -140,7 +140,18 @@ def _run_sen2cor(safe_dir: Path, work_dir: Path) -> Path | None:
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        _log(f"    sen2cor failed: {type(e).__name__}")
+        # Surface why L2A_Process died — otherwise a scene-flaky sen2cor
+        # crash is indistinguishable from a transient one.
+        tail = ""
+        for stream in (getattr(e, "stderr", None), getattr(e, "stdout", None)):
+            if stream:
+                text = stream.decode("utf-8", "replace") if isinstance(stream, bytes) else str(stream)
+                lines = [ln for ln in text.splitlines() if ln.strip()]
+                if lines:
+                    tail = "\n      ".join(lines[-15:])
+                    break
+        _log(f"    sen2cor failed: {type(e).__name__}"
+             + (f"\n      {tail}" if tail else " (no output captured)"))
         return None
     l2a = sorted(work_dir.glob("*MSIL2A*.SAFE"))
     return l2a[0] if l2a else None

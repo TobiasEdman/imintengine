@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backfill-frame2016-bands
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: backfill-frame2016-bands
+spec:
+  backoffLimit: 0
+  # Metadata-only in-place rewrite of ~15k tiles (256 + 512). No
+  # network, no sen2cor. Idempotent — re-runs skip stamped tiles.
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation
+                  # (cgroup/runc bug, 2026-05-{12,17}). Exclude both.
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: backfill
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir numpy 2>&1 | tail -1
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "### 256 ###"
+              python3 scripts/sen2cor_pipeline/backfill_frame_2016_bands.py \
+                --data-dir /data256/unified_v2 --workers 8
+
+              echo ""
+              echo "### 512 ###"
+              python3 scripts/sen2cor_pipeline/backfill_frame_2016_bands.py \
+                --data-dir /data512/unified_v2_512 --workers 8
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data256
+              mountPath: /data256
+            - name: data512
+              mountPath: /data512
+      volumes:
+        - name: data256
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: data512
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

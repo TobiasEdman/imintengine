@@ -41,15 +41,29 @@ spec:
                   tessera_ok = 0
                   tessera_2017fail = 0
                   corrupt = 0
+                  PRITHVI_BANDS = ["B02", "B03", "B04", "B8A", "B11", "B12"]
+                  f2016_b8a = 0       # frame_2016 with canonical B8A order
+                  f2016_badbands = 0  # frame_2016 present but wrong/absent band order
                   for f in files:
                       try:
                           with np.load(f, allow_pickle=True) as d:
                               keys = set(d.files)
                               for k in ("rededge", "has_rededge",
                                         "s1_vv_vh", "has_s1",
-                                        "tessera", "has_tessera"):
+                                        "tessera", "has_tessera",
+                                        "b08", "has_b08",
+                                        "frame_2016", "has_frame_2016"):
                                   if k in keys:
                                       has[k] += 1
+
+                              # frame_2016 band-order audit (Prithvi temporal frame 0)
+                              if "frame_2016" in keys and int(d.get("has_frame_2016", 0)) == 1:
+                                  bands = ([str(b) for b in d["frame_2016_bands"]]
+                                           if "frame_2016_bands" in keys else None)
+                                  if bands == PRITHVI_BANDS:
+                                      f2016_b8a += 1
+                                  else:
+                                      f2016_badbands += 1
 
                               # rededge: (T*3, H, W) — count frames with ANY non-zero
                               if "rededge" in keys:
@@ -85,6 +99,8 @@ spec:
                       print(f"  s1 per-tile valid frames: " +
                             ", ".join(f"{k}/4: {v}" for k, v in sorted(s1_frames.items())))
                   print(f"  tessera complete: {tessera_ok}")
+                  print(f"  frame_2016 band order: B8A-canonical={f2016_b8a}  "
+                        f"wrong-or-missing-bands={f2016_badbands}")
 
               audit("256", "/data256/unified_v2")
               audit("512", "/data512/unified_v2_512")
