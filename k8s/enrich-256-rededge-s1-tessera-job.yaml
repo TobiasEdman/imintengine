@@ -22,6 +22,17 @@ spec:
         app: ensemble-prep
     spec:
       restartPolicy: Never
+      # Avoid p02r09srv04 + srv06 — both fail pod-sandbox creation
+      # with the cgroup/runc eBPF "operation not supported" error
+      # (2026-05). Cluster-admin fix pending.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
       containers:
         - name: e
           image: python:3.11-slim

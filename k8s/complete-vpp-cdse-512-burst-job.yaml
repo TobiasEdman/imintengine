@@ -24,7 +24,7 @@ spec:
               - matchExpressions:
                   - key: kubernetes.io/hostname
                     operator: NotIn
-                    values: ["p02r09srv04"]
+                    values: ["p02r09srv04", "p02r09srv06"]
       containers:
         - name: v
           image: python:3.11-slim
