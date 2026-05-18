@@ -1529,6 +1529,64 @@ def _stac_best_l1c_scene(
     return candidates[0]
 
 
+def _gcp_resolve_safe_name(safe_name: str) -> str:
+    """Resolve a CDSE/DES SAFE name to the name that actually exists in GCS.
+
+    CDSE STAC serves the Collection-1 reprocessed products (baseline
+    ``N0500``, 2022–2023 processing dates). The
+    ``gcp-public-data-sentinel-2`` public bucket carries the
+    *original-baseline* archives instead (e.g. ``N0202`` for 2016). The
+    two names share the mission, level and acquisition timestamp but
+    differ in the baseline and processing-timestamp tokens — so a path
+    built straight from the STAC name lists zero files.
+
+    This lists the bucket by the stable acquisition prefix and returns
+    the real ``.SAFE`` folder name. If several baselines are present,
+    the orbit token disambiguates and the lowest baseline (original)
+    wins.
+
+    Raises:
+        FetchError: If no SAFE for this acquisition exists in the bucket.
+    """
+    import re
+    import requests
+
+    name = safe_name[:-5] if safe_name.endswith(".SAFE") else safe_name
+    utm, lat_band, square = _parse_safe_mgrs(name)
+
+    m = re.match(r"(S2[AB]_MSIL1C_\d{8}T\d{6})", name)
+    if not m:
+        raise FetchError(f"cannot parse acquisition token from SAFE name: {safe_name}")
+    stable = m.group(1)
+
+    orbit_m = re.search(r"_R(\d{3})_", name)
+    want_orbit = orbit_m.group(1) if orbit_m else None
+
+    prefix = f"tiles/{utm}/{lat_band}/{square}/{stable}"
+    r = requests.get(
+        GCP_S2_LIST_API,
+        params={"prefix": prefix, "delimiter": "/"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    folders = [
+        p.rstrip("/").rsplit("/", 1)[-1]
+        for p in r.json().get("prefixes", [])
+        if p.endswith(".SAFE/")
+    ]
+    if want_orbit:
+        orbit_matched = [f for f in folders if f"_R{want_orbit}_" in f]
+        if orbit_matched:
+            folders = orbit_matched
+    if not folders:
+        raise FetchError(
+            f"GCP bucket {GCP_S2_BUCKET} has no SAFE for acquisition "
+            f"{stable} tile T{utm}{lat_band}{square}"
+        )
+    folders.sort()  # lowest baseline (original) first
+    return folders[0]
+
+
 def _gcp_list_safe_files(safe_name: str) -> list[dict]:
     """Page through GCS object-list API to enumerate every file in a SAFE.
 
@@ -1626,11 +1684,15 @@ def fetch_l1c_safe_by_name(
 ) -> Path:
     """Download a specific L1C SAFE archive from the GCS public bucket.
 
-    Unlike :func:`fetch_l1c_safe_from_gcp`, this takes the exact SAFE
-    name (== a CDSE STAC L1C item id) and downloads precisely that
-    archive — no STAC re-resolution. Use it when an upstream selector
-    has already picked the scene and the caller must not get a
-    different one.
+    Unlike :func:`fetch_l1c_safe_from_gcp`, this takes a specific SAFE
+    name (== a CDSE STAC L1C item id) and downloads exactly that
+    acquisition — no STAC re-resolution that could pick a different
+    scene. The bucket carries the original processing baseline rather
+    than the STAC-served Collection-1 reprocessing, so the baseline and
+    processing-timestamp tokens are resolved against GCS via
+    :func:`_gcp_resolve_safe_name`; mission, level, acquisition time,
+    orbit and tile are preserved. Use it when an upstream selector has
+    already picked the scene and the caller must not get a different one.
 
     Args:
         safe_name: SAFE archive name, with or without the ``.SAFE``
@@ -1648,6 +1710,9 @@ def fetch_l1c_safe_by_name(
 
     if not safe_name.endswith(".SAFE"):
         safe_name = safe_name + ".SAFE"
+    # CDSE/DES STAC serves N0500-reprocessed names; the GCS bucket
+    # carries the original baseline. Resolve to the real bucket name.
+    safe_name = _gcp_resolve_safe_name(safe_name)
     files = _gcp_list_safe_files(safe_name)
 
     if dest_dir is None:

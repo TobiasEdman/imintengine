@@ -200,6 +200,11 @@ def _process_scene(
     #    no STAC re-resolution that could pick a different scene).
     try:
         safe_dir = fetch_l1c_safe_by_name(scene_id, str(safe_cache))
+        # The GCS bucket carries the original baseline, not the N0500
+        # name the selector got from STAC — record what was processed.
+        safe_id = safe_dir.name
+        if safe_id.endswith(".SAFE"):
+            safe_id = safe_id[:-5]
     except Exception as e:
         _log(f"    SAFE download failed: {e}")
         with stats_lock:
@@ -278,7 +283,7 @@ def _process_scene(
                 frame = np.stack(chans, axis=0)  # (6, H, W)
                 _write_frame_2016(
                     data_dir / f"{name}.npz", frame,
-                    scene_id, scene.get("datetime", ""),
+                    safe_id, scene.get("datetime", ""),
                 )
                 with stats_lock:
                     stats["ok"] += 1
