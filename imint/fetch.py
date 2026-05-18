@@ -1618,6 +1618,19 @@ def _gcp_list_safe_files(safe_name: str) -> list[dict]:
     return out
 
 
+def _gcs_marker_dir(rel: str) -> str | None:
+    """Directory path a GCS ``_$folder$`` placeholder stands for, else None.
+
+    The Sentinel-2 public bucket marks a (possibly empty) directory with a
+    sibling ``<dir>_$folder$`` zero-byte object. Downloading that object as
+    a *file* leaves the directory itself non-existent — and sen2cor's
+    ``L2A_ProcessDataStrip`` does ``os.listdir()`` on such dirs (notably
+    ``DATASTRIP/.../QI_DATA``) and crashes when they are missing.
+    """
+    marker = "_$folder$"
+    return rel[: -len(marker)] if rel.endswith(marker) else None
+
+
 def fetch_l1c_safe_from_gcp(
     date: str,
     coords: dict,
@@ -1727,6 +1740,10 @@ def fetch_l1c_safe_by_name(
 
     def _fetch_one(item: dict) -> int:
         rel = item["name"][len(gcs_prefix):]
+        marker_dir = _gcs_marker_dir(rel)
+        if marker_dir is not None:
+            (safe_root / marker_dir).mkdir(parents=True, exist_ok=True)
+            return 0
         out = safe_root / rel
         out.parent.mkdir(parents=True, exist_ok=True)
         if (
