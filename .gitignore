@@ -44,6 +44,7 @@ __pycache__/
 dist/
 build/
 .venv/
+.venv-sr/
 venv/
 env/
 
