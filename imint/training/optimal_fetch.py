@@ -42,7 +42,7 @@ Usage
 The module returns *dates*, not arrays. The cost model that justifies the
 recommendation:
 
-    * ERA5 prefilter            ~free, cached forever per (bbox, year)
+    * ERA5 prefilter            ~free, disk-cached per (~0.25° cell, window)
     * STAC search               ~0.5 s
     * SCL-stack screen          ~60 s, one openEO call covering the whole period
     * Spectral fetch            ~13 s/scene amortised at 6 workers (DES openEO)
@@ -52,8 +52,14 @@ Spectral dominates total wall-clock at scale, so eliminating candidates
 """
 from __future__ import annotations
 
+import json
+import os
+import random
+import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -69,24 +75,83 @@ DEFAULT_SCL_CLOUD_THRESHOLD = 0.10   # production AOI-SCL default
 DEFAULT_STAC_CLOUD_MAX      = 30.0
 
 
+# ── Rate-limit-resilient HTTP ──────────────────────────────────────────────
+
+def _is_rate_limited(exc: Exception) -> bool:
+    """True if *exc* is an HTTP 429 / WAF rate-limit rejection.
+
+    Covers both ``requests.HTTPError`` (carries ``.response.status_code``)
+    and ``pystac_client.APIError`` (carries the WAF body as its message),
+    so one predicate guards the Open-Meteo and CDSE-STAC calls alike.
+    """
+    resp = getattr(exc, "response", None)
+    if resp is not None and getattr(resp, "status_code", None) == 429:
+        return True
+    msg = str(exc)
+    return "429" in msg or "Rate limit exceeded" in msg
+
+
+def retry_on_rate_limit(fn, *, attempts: int = 5, base_delay: float = 2.0):
+    """Run *fn*, retrying on HTTP 429 with exponential backoff + jitter.
+
+    Open-Meteo and the CDSE STAC are both fronted by WAF burst limiters
+    that reject the cold-start thundering herd when many worker threads
+    fire at once. Without backoff a throttled call raises and its tile is
+    silently dropped from scene selection; a few retries absorb the burst.
+    Non-rate-limit errors propagate immediately.
+    """
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt == attempts - 1 or not _is_rate_limited(exc):
+                raise
+            time.sleep(base_delay * 2 ** attempt + random.uniform(0.0, 1.0))
+
+
 # ── Stage 1: ERA5 atmosphere prefilter ─────────────────────────────────────
 
-def _era5_daily_open_meteo(
-    bbox_wgs84: dict,
-    date_start: str,
-    date_end: str,
-) -> list[dict]:
-    """Daily ERA5 reanalysis via Open-Meteo Historical Archive (no auth)."""
-    import requests
+_ERA5_GRID_DEG = 0.25   # Open-Meteo ERA5 archive native grid spacing
+_ERA5_CACHE_DIR = Path(
+    os.environ.get("IMINT_ERA5_CACHE")
+    or Path.home() / ".cache" / "imint" / "era5"
+)
 
-    cx = (bbox_wgs84["west"] + bbox_wgs84["east"]) / 2
-    cy = (bbox_wgs84["south"] + bbox_wgs84["north"]) / 2
+
+def _read_json_cache(path: Path) -> Any | None:
+    """Cached JSON payload, or None if absent / unreadable."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def _write_json_cache(path: Path, payload: Any) -> None:
+    """Atomically write *payload* as JSON — safe under concurrent workers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def _request_era5_daily(
+    lat: float, lon: float, date_start: str, date_end: str,
+) -> list[dict]:
+    """One Open-Meteo archive request → list of daily weather dicts."""
+    import requests
 
     r = requests.get(
         "https://archive-api.open-meteo.com/v1/archive",
         params={
-            "latitude":   f"{cy:.4f}",
-            "longitude":  f"{cx:.4f}",
+            "latitude":   f"{lat:.4f}",
+            "longitude":  f"{lon:.4f}",
             "start_date": date_start,
             "end_date":   date_end,
             "daily":      "temperature_2m_mean,precipitation_sum",
@@ -104,6 +169,38 @@ def _era5_daily_open_meteo(
             continue
         out.append({"date": d, "t2m_mean": float(t), "precip_mm": float(p)})
     return out
+
+
+def _era5_daily_open_meteo(
+    bbox_wgs84: dict,
+    date_start: str,
+    date_end: str,
+) -> list[dict]:
+    """Daily ERA5 reanalysis via Open-Meteo Historical Archive (no auth).
+
+    The bbox centroid is snapped to the ~0.25° ERA5 grid, so tiles sharing
+    a grid cell resolve to one disk-cached response — the network is hit at
+    most once per (cell, date-window). On HTTP 429 the call retries with
+    exponential backoff. Cache dir: ``IMINT_ERA5_CACHE`` or
+    ``~/.cache/imint/era5``.
+    """
+    cx = (bbox_wgs84["west"] + bbox_wgs84["east"]) / 2
+    cy = (bbox_wgs84["south"] + bbox_wgs84["north"]) / 2
+    lat = round(cy / _ERA5_GRID_DEG) * _ERA5_GRID_DEG
+    lon = round(cx / _ERA5_GRID_DEG) * _ERA5_GRID_DEG
+
+    cache_path = _ERA5_CACHE_DIR / (
+        f"era5_{lat:+07.2f}_{lon:+07.2f}_{date_start}_{date_end}.json"
+    )
+    cached = _read_json_cache(cache_path)
+    if cached is not None:
+        return cached
+
+    daily = retry_on_rate_limit(
+        lambda: _request_era5_daily(lat, lon, date_start, date_end)
+    )
+    _write_json_cache(cache_path, daily)
+    return daily
 
 
 def era5_prefilter_dates(

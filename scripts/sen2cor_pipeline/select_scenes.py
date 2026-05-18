@@ -79,16 +79,21 @@ def _stac_l1c_scenes(
     """
     from pystac_client import Client
 
-    client = Client.open(_CDSE_STAC_ROOT)
-    search = client.search(
-        collections=[_L1C_COLLECTION],
-        bbox=[bbox_wgs84["west"], bbox_wgs84["south"],
-              bbox_wgs84["east"], bbox_wgs84["north"]],
-        datetime=f"{date_start}T00:00:00Z/{date_end}T23:59:59Z",
-        limit=300,
-    )
+    from imint.training.optimal_fetch import retry_on_rate_limit
+
+    def _query() -> list:
+        client = Client.open(_CDSE_STAC_ROOT)
+        search = client.search(
+            collections=[_L1C_COLLECTION],
+            bbox=[bbox_wgs84["west"], bbox_wgs84["south"],
+                  bbox_wgs84["east"], bbox_wgs84["north"]],
+            datetime=f"{date_start}T00:00:00Z/{date_end}T23:59:59Z",
+            limit=300,
+        )
+        return list(search.items())
+
     out: list[dict] = []
-    for item in search.items():
+    for item in retry_on_rate_limit(_query):
         props = item.properties or {}
         mgrs = props.get("s2:mgrs_tile") or props.get("mgrs_tile") or ""
         if not mgrs:
