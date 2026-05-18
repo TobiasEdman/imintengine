@@ -1,0 +1,148 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: probe-rededge-fetch-modes
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: probe-rededge-fetch-modes
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: p
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy rasterio pyproj openeo requests
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              python3 - <<'PY'
+              import sys, traceback
+              sys.path.insert(0, "/workspace/imintengine")
+
+              # tile_385060_6345060 — confirmed in audit to have spectral
+              # data for 2017-08-15 (per-frame-nonzero = 1.0) but rededge
+              # request fails with NoDataAvailable.
+              east, north, size_px, gsd = 385060, 6345060, 256, 10
+              half = size_px * gsd // 2
+              w, s, e, n = east - half, north - half, east + half, north + half
+              date = "2017-08-15"
+              print(f"=== probe ===")
+              print(f"  bbox EPSG:3006: ({w}, {s}, {e}, {n})  date={date}")
+
+              from imint.fetch import (
+                  _connect, _load_s2_cube, _to_nmd_grid, _snap_to_target_grid,
+                  BANDS_10M, BANDS_20M_SPECTRAL, BANDS_60M, OPENEO_URL,
+              )
+              from datetime import datetime, timedelta
+              import rasterio
+
+              # WGS84 bbox for _to_nmd_grid (it expects lat/lon)
+              from pyproj import Transformer
+              tx = Transformer.from_crs("EPSG:3006", "EPSG:4326", always_xy=True)
+              ww, ss = tx.transform(w, s)
+              ee, nn = tx.transform(e, n)
+              wgs = {"west": ww, "south": ss, "east": ee, "north": nn}
+              proj = _to_nmd_grid(wgs)
+              dt = datetime.strptime(date, "%Y-%m-%d")
+              temporal = [
+                  dt.strftime("%Y-%m-%d"),
+                  (dt + timedelta(days=1)).strftime("%Y-%m-%d"),
+              ]
+
+              try:
+                  conn = _connect()
+                  print(f"\n  DES connection: OK")
+              except Exception as ex:
+                  print(f"\n  DES connection FAILED: {ex}")
+                  raise
+
+              def try_fetch(label, **cube_kwargs):
+                  print(f"\n--- Test: {label} ---")
+                  try:
+                      raw, crs, transform = _load_s2_cube(
+                          conn,
+                          projected_coords=proj,
+                          temporal=temporal,
+                          collection_id="s2_msi_l2a",
+                          empty_msg="empty",
+                          **cube_kwargs,
+                      )
+                      print(f"  OK: shape={raw.shape}, crs={crs}, "
+                            f"nonzero_frac={float((raw != 0).mean()):.3f}")
+                      return True
+                  except Exception as ex:
+                      msg = str(ex)
+                      short = msg[:180].replace("\n", " ")
+                      print(f"  FAIL ({type(ex).__name__}): {short}")
+                      return False
+
+              # Test 1: full 10 bands (10m + 20m spectral + 60m)
+              try_fetch("ALL bands (10m + 20m + 60m)",
+                        bands_10m=BANDS_10M,
+                        bands_20m=BANDS_20M_SPECTRAL,
+                        bands_60m=BANDS_60M)
+
+              # Test 2: just 10m
+              try_fetch("10m bands ONLY (B02/B03/B04/B08)",
+                        bands_10m=BANDS_10M)
+
+              # Test 3: 20m spectral ONLY (this is what we currently do for rededge,
+              # plus a 10m anchor)
+              try_fetch("20m spectral ONLY (b05/b06/b07/b8a/b11/b12 + b03 anchor)",
+                        bands_10m=[BANDS_10M[1]],
+                        bands_20m=BANDS_20M_SPECTRAL,
+                        merge_reference_into_output=False)
+
+              # Test 4: rededge subset only — current rededge-fetch path
+              try_fetch("REDEDGE only (b05/b06/b07 + b03 anchor)",
+                        bands_10m=[BANDS_10M[1]],
+                        bands_20m=["b05", "b06", "b07"],
+                        merge_reference_into_output=False)
+
+              # Test 5: B08 only (hygges-pipeline path — frame_2016)
+              try_fetch("B08 ONLY (single 10m band)",
+                        bands_10m=["b08"])
+
+              print("\n=== done ===")
+              PY
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"

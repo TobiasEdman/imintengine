@@ -1,0 +1,72 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: probe-rededge-nodata
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: probe-nodata-tiles
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: p
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+              python3 - <<'PY'
+              import numpy as np
+              # Tiles that hit NoDataAvailable for 2017-08-15 in the running pod
+              names = [
+                  "tile_385060_6340060", "tile_385060_6345060",
+                  "tile_385060_6365060", "tile_385060_6355060",
+              ]
+              for name in names:
+                  p = f"/data/unified_v2/{name}.npz"
+                  d = np.load(p, allow_pickle=True)
+                  files = list(d.files)
+                  print(f"\n=== {name} ===")
+                  print(f"  files: {files[:20]}{'...' if len(files)>20 else ''}")
+
+                  if "dates" in files:
+                      print(f"  dates: {list(d['dates'])}")
+                  if "temporal_mask" in files:
+                      print(f"  temporal_mask: {list(d['temporal_mask'])}")
+                  if "rededge" in files:
+                      re = d["rededge"]
+                      n_frames = re.shape[0] // 3
+                      pf = [float((re[i*3:(i+1)*3] != 0).mean()) for i in range(n_frames)]
+                      print(f"  rededge shape={re.shape} per-frame-nonzero={pf}")
+                  if "has_rededge" in files:
+                      print(f"  has_rededge: {int(d['has_rededge'])}")
+                  if "spectral" in files:
+                      sp = d["spectral"]
+                      n_frames = sp.shape[0] // 6
+                      pf = [float((sp[i*6:(i+1)*6] != 0).mean()) for i in range(n_frames)]
+                      print(f"  spectral shape={sp.shape} per-frame-nonzero={pf}")
+              PY
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data

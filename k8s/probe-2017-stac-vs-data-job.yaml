@@ -1,0 +1,103 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: probe-2017-stac-vs-data
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: probe-stac-vs-data
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: p
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              pip install --quiet --no-cache-dir requests pyproj
+
+              python3 - <<'PY'
+              import requests, json
+              from pyproj import Transformer
+
+              # Same tile as the failing rededge probe (tile_385060_6345060)
+              east, north, size_px, gsd = 385060, 6345060, 256, 10
+              half = size_px * gsd // 2
+              w, s, e, n = east - half, north - half, east + half, north + half
+              tx = Transformer.from_crs("EPSG:3006", "EPSG:4326", always_xy=True)
+              ww, ss = tx.transform(w, s)
+              ee, nn = tx.transform(e, n)
+              print(f"WGS84 bbox: W={ww:.4f} S={ss:.4f} E={ee:.4f} N={nn:.4f}")
+
+              STAC = "https://catalogue.dataspace.copernicus.eu/stac/search"
+              # CDSE STAC catalogue search — independent of DES openEO
+              # Note: this is the CATALOGUE only, not the data plane.
+              for date_range, label in [
+                  ("2017-08-14/2017-08-16", "DES rededge fail target (2017-08-15)"),
+                  ("2017-08-01/2017-08-31", "August 2017 (broader)"),
+                  ("2018-08-01/2018-08-31", "August 2018 (control)"),
+              ]:
+                  body = {
+                      "collections": ["SENTINEL-2"],
+                      "bbox": [ww, ss, ee, nn],
+                      "datetime": date_range.replace("/", "/"),
+                      "limit": 20,
+                      "filter-lang": "cql2-text",
+                      "filter": "productType = 'S2MSI2A'",
+                  }
+                  print(f"\n=== CDSE STAC: {label} ({date_range}) ===")
+                  try:
+                      r = requests.post(STAC, json=body, timeout=30)
+                      r.raise_for_status()
+                      feats = r.json().get("features", [])
+                      print(f"  {len(feats)} L2A scenes found")
+                      for f in feats[:5]:
+                          props = f.get("properties", {})
+                          print(f"    - {f['id']}")
+                          print(f"      datetime={props.get('datetime')} "
+                                f"cloud={props.get('eo:cloud_cover')}")
+                  except Exception as ex:
+                      print(f"  ERROR: {ex}")
+
+              # And the L1C version — Google Cloud bucket has 2017 data
+              # archive-style; STAC search can confirm if it indexes it.
+              print(f"\n=== CDSE STAC: 2017-08-15 L1C ===")
+              body = {
+                  "collections": ["SENTINEL-2"],
+                  "bbox": [ww, ss, ee, nn],
+                  "datetime": "2017-08-14/2017-08-16",
+                  "limit": 20,
+                  "filter-lang": "cql2-text",
+                  "filter": "productType = 'S2MSI1C'",
+              }
+              try:
+                  r = requests.post(STAC, json=body, timeout=30)
+                  r.raise_for_status()
+                  feats = r.json().get("features", [])
+                  print(f"  {len(feats)} L1C scenes found")
+                  for f in feats[:5]:
+                      props = f.get("properties", {})
+                      print(f"    - {f['id']}")
+                      print(f"      datetime={props.get('datetime')} "
+                            f"cloud={props.get('eo:cloud_cover')}")
+              except Exception as ex:
+                  print(f"  ERROR: {ex}")
+              PY
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"

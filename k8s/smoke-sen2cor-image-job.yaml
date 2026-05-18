@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-sen2cor-image
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: smoke-sen2cor-image
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      # ghcr-push doubles as a pull secret — GHCR honours the
+      # write-scoped token for pulls too, so imint-sen2cor can stay
+      # a private package (no public-visibility flip needed).
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04"]
+      containers:
+        - name: smoke
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              echo "=== sen2cor image smoke test ==="
+              echo ""
+              echo "1) bundled python2.7 execs:"
+              . /opt/Sen2Cor-02.12.04-Linux64/L2A_Bashrc
+              /opt/Sen2Cor-02.12.04-Linux64/bin/python2.7 \
+                -c "import sys; print('   python', sys.version.split()[0], 'OK')"
+              echo ""
+              echo "2) L2A_Process.py present:"
+              ls -la /opt/Sen2Cor-02.12.04-Linux64/lib/python2.7/site-packages/sen2cor/L2A_Process.py
+              echo ""
+              echo "3) L2A_Process on PATH:"
+              which L2A_Process
+              echo ""
+              echo "4) L2A_Process version banner (exit code ignored):"
+              L2A_Process --help 2>&1 | head -8 || true
+              echo ""
+              echo "=== smoke complete ==="
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"

@@ -1,0 +1,111 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-enrichment-coverage
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: post-deadline-enrichment-audit
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: a
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+              python3 - <<'PY'
+              import os, glob, json, zipfile
+              from collections import defaultdict
+              import numpy as np
+
+              def audit(label, data_dir):
+                  print(f"\n=== {label}: {data_dir} ===")
+                  files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
+                  print(f"  total: {len(files)}")
+
+                  # Per-key presence + per-frame validity for the enrichment fields
+                  has = defaultdict(int)
+                  rededge_frames = defaultdict(int)  # n_valid_frames out of 4 → count
+                  s1_frames = defaultdict(int)
+                  tessera_ok = 0
+                  tessera_2017fail = 0
+                  corrupt = 0
+                  for f in files:
+                      try:
+                          with np.load(f, allow_pickle=True) as d:
+                              keys = set(d.files)
+                              for k in ("rededge", "has_rededge",
+                                        "s1_vv_vh", "has_s1",
+                                        "tessera", "has_tessera"):
+                                  if k in keys:
+                                      has[k] += 1
+
+                              # rededge: (T*3, H, W) — count frames with ANY non-zero
+                              if "rededge" in keys:
+                                  arr = d["rededge"]
+                                  n_frames = arr.shape[0] // 3
+                                  valid = sum(
+                                      1 for fi in range(n_frames)
+                                      if (arr[fi*3:(fi+1)*3] != 0).any()
+                                  )
+                                  rededge_frames[valid] += 1
+
+                              # s1_vv_vh: (T*2, H, W) — same logic
+                              if "s1_vv_vh" in keys:
+                                  arr = d["s1_vv_vh"]
+                                  n_frames = arr.shape[0] // 2
+                                  valid = sum(
+                                      1 for fi in range(n_frames)
+                                      if (arr[fi*2:(fi+1)*2] != 0).any()
+                                  )
+                                  s1_frames[valid] += 1
+
+                              if "has_tessera" in keys and int(d["has_tessera"]) == 1:
+                                  tessera_ok += 1
+                      except (zipfile.BadZipFile, EOFError, OSError, ValueError):
+                          corrupt += 1
+
+                  print(f"  corrupt: {corrupt}")
+                  print(f"  has key: " + " ".join(f"{k}={has[k]}" for k in sorted(has)))
+                  if rededge_frames:
+                      print(f"  rededge per-tile valid frames: " +
+                            ", ".join(f"{k}/4: {v}" for k, v in sorted(rededge_frames.items())))
+                  if s1_frames:
+                      print(f"  s1 per-tile valid frames: " +
+                            ", ".join(f"{k}/4: {v}" for k, v in sorted(s1_frames.items())))
+                  print(f"  tessera complete: {tessera_ok}")
+
+              audit("256", "/data256/unified_v2")
+              audit("512", "/data512/unified_v2_512")
+              PY
+
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data256
+              mountPath: /data256
+            - name: data512
+              mountPath: /data512
+      volumes:
+        - name: data256
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: data512
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

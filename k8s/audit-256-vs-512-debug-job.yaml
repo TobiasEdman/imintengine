@@ -1,0 +1,105 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-256-vs-512-debug
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: audit-256-vs-512-debug
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: a
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+              python3 - <<'PY'
+              import os, glob, traceback
+              from collections import Counter
+              import numpy as np
+
+              KEYS = ['spectral','height','dem','vpp_sosd','frame_2016','tessera','markfukt']
+
+              def audit_robust(label, data_dir):
+                  print(f"\n=== {label}: {data_dir} ===")
+                  files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
+                  print(f"  total: {len(files)}")
+
+                  counts = {k: 0 for k in KEYS}
+                  exc_types = Counter()
+                  load_ok = 0
+                  open_failed = 0
+                  iter_failed = 0
+                  per_key_excs = {k: Counter() for k in KEYS}
+
+                  for f in files:
+                      try:
+                          d = np.load(f, allow_pickle=True)
+                      except Exception as e:
+                          open_failed += 1
+                          exc_types[f"open:{type(e).__name__}"] += 1
+                          continue
+                      load_ok += 1
+
+                      try:
+                          # Use d.files list (NOT set conversion) and direct membership check
+                          file_list = list(d.files)
+                      except Exception as e:
+                          iter_failed += 1
+                          exc_types[f"iter:{type(e).__name__}"] += 1
+                          d.close()
+                          continue
+
+                      for k in KEYS:
+                          try:
+                              if k in file_list:
+                                  counts[k] += 1
+                          except Exception as e:
+                              per_key_excs[k][type(e).__name__] += 1
+
+                      try: d.close()
+                      except: pass
+
+                  print(f"  load_ok: {load_ok}")
+                  print(f"  open_failed: {open_failed}")
+                  print(f"  iter_failed: {iter_failed}")
+                  print(f"  exception types: {dict(exc_types)}")
+                  print(f"\n  per-key counts (out of {load_ok} loadable):")
+                  for k in KEYS:
+                      pct = (counts[k] / load_ok * 100) if load_ok else 0
+                      print(f"    {k:15s} {counts[k]:5d} ({pct:.1f}%)  excs: {dict(per_key_excs[k]) or '-'}")
+
+              audit_robust("256", "/data256/unified_v2")
+              audit_robust("512", "/data512/unified_v2_512")
+              PY
+
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data256
+              mountPath: /data256
+            - name: data512
+              mountPath: /data512
+      volumes:
+        - name: data256
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: data512
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
