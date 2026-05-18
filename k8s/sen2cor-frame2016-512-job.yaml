@@ -1,0 +1,101 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sen2cor-frame2016-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: sen2cor-frame2016-512-full
+spec:
+  backoffLimit: 0
+  # Full 512 frame_2016 back-fill. Selector (~5219 missing tiles,
+  # parallel ERA5+STAC) → runner (all scenes, 6 parallel sen2cor).
+  # Selector single-digit hours + runner ~50-150 scenes / 6 → budget 24h.
+  activeDeadlineSeconds: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation
+                  # (cgroup/runc bug, 2026-05-{12,17}). Exclude both.
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: pipeline
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== sen2cor frame_2016 512 full run ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow \
+                pystac-client openeo 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # ── Step 1: selector — all genuinely-missing tiles ───────
+              echo ""
+              echo "=== Step 1: select_scenes.py (full) ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir /data/unified_v2_512 \
+                --year 2016 --fallback-year 2015 \
+                --workers 16 \
+                --out /data/debug/sen2cor_frame2016_512_plan.json
+
+              python3 -c "
+              import json
+              p = json.load(open('/data/debug/sen2cor_frame2016_512_plan.json'))
+              print(f\"  plan: scenes={p['n_scenes']} covered={p['n_tiles_covered']} \"
+                    f\"unassigned={len(p['unassigned'])}\")
+              "
+
+              # ── Step 2: runner — all scenes, 6 parallel sen2cor ──────
+              echo ""
+              echo "=== Step 2: run_sen2cor_per_scene.py (all scenes) ==="
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/sen2cor_frame2016_512_plan.json \
+                --data-dir /data/unified_v2_512 \
+                --safe-cache /data/sen2cor_cache \
+                --cot-max 8.0 \
+                --workers 6
+
+              echo ""
+              echo "=== full run complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "24"
+              memory: "64Gi"
+            limits:
+              cpu: "24"
+              memory: "64Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
