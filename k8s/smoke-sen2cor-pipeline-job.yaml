@@ -24,9 +24,12 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
+                  # p02r09srv04 + srv06 both fail pod-sandbox creation
+                  # with the cgroup/runc "load program: operation not
+                  # supported" error (2026-05-{12,17}). Exclude both.
                   - key: kubernetes.io/hostname
                     operator: NotIn
-                    values: ["p02r09srv04"]
+                    values: ["p02r09srv04", "p02r09srv06"]
       containers:
         - name: smoke
           # imint-sen2cor carries L2A_Process; we add python3 + the
