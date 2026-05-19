@@ -138,7 +138,10 @@ def _run_sen2cor(safe_dir: Path, work_dir: Path) -> Path | None:
         str(safe_dir),
     ]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
+        # 1 h: sen2cor shares the pod's cores with the other --workers
+        # sen2cor processes, so a single L2A_Process is far slower than
+        # standalone. 30 min timed out under 6-way contention.
+        subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         # Surface why L2A_Process died — otherwise a scene-flaky sen2cor
         # crash is indistinguishable from a transient one.
@@ -200,6 +203,7 @@ def _process_scene(
     safe_cache: Path,
     cot_max: float,
     cot_models,
+    device: str,
     stats: dict,
     stats_lock: threading.Lock,
 ) -> None:
@@ -247,7 +251,7 @@ def _process_scene(
                 with stats_lock:
                     stats["deferred"] += 1
                 continue
-            score = cloud_score_l1c(toa, cot_models)
+            score = cloud_score_l1c(toa, cot_models, device=device)
             if score["mean_cot"] > cot_max:
                 with stats_lock:
                     stats["cot_rejected"] += 1
@@ -326,6 +330,9 @@ def main() -> None:
                    help="Max mean COT (physical units) for a tile to pass the gate")
     p.add_argument("--workers", type=int, default=2,
                    help="Parallel scenes. Each holds ~1.5 GB of SAFE+L2A.")
+    p.add_argument("--device", default="cpu", choices=["cpu", "cuda"],
+                   help="COT-ensemble inference device. 'cuda' needs a "
+                        "GPU pod with torch installed.")
     p.add_argument("--max-scenes", type=int, default=None)
     args = p.parse_args()
 
@@ -344,9 +351,10 @@ def main() -> None:
     print(f"  scenes:     {len(scenes)}")
     print(f"  cot-max:    {args.cot_max}")
     print(f"  workers:    {args.workers}")
+    print(f"  device:     {args.device}")
 
     from imint.analyzers.cot_l1c import load_ensemble_l1c
-    cot_models = load_ensemble_l1c()
+    cot_models = load_ensemble_l1c(device=args.device)
     print(f"  COT ensemble: {len(cot_models)} models")
 
     stats = {"ok": 0, "deferred": 0, "cot_rejected": 0,
@@ -357,7 +365,8 @@ def main() -> None:
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futs = [
             pool.submit(_process_scene, sc, data_dir, safe_cache,
-                        args.cot_max, cot_models, stats, stats_lock)
+                        args.cot_max, cot_models, args.device,
+                        stats, stats_lock)
             for sc in scenes
         ]
         for i, fut in enumerate(as_completed(futs)):

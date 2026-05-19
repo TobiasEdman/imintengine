@@ -1,0 +1,123 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verify-cot-gpu
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: verify-cot-gpu
+spec:
+  backoffLimit: 0
+  # Verifies the cot_l1c.py GPU path: load_ensemble_l1c(device="cuda")
+  # + cot_inference_l1c(device="cuda") must match the numpy CPU path
+  # within 1e-2 COT units on identical input. Also checks the runner
+  # exposes --device {cpu,cuda}. Clones the repo from main, so the GPU
+  # changes must be pushed before this runs. Queues for an RTX 2080 Ti.
+  activeDeadlineSeconds: 21600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values: ["NVIDIA-GeForce-RTX-2080-Ti"]
+      containers:
+        - name: verify
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== verify cot_l1c GPU path ==="
+              echo "Started: $(date)"
+              nvidia-smi --query-gpu=name --format=csv,noheader 2>&1 || true
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir numpy torch 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # Runner must expose --device {cpu,cuda}.
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --help 2>&1 | grep -q -- '--device' \
+                && echo "OK: runner exposes --device" \
+                || { echo "FAIL: runner missing --device"; exit 1; }
+
+              cat > /workspace/verify.py <<'PYEOF'
+              import importlib.util, sys
+              import numpy as np
+
+              spec = importlib.util.spec_from_file_location(
+                  "cot_l1c", "imint/analyzers/cot_l1c.py")
+              cot_l1c = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(cot_l1c)
+
+              rng = np.random.default_rng(42)
+              bands = {b: rng.random((512, 512), dtype=np.float32)
+                       for b in cot_l1c.COT_L1C_BAND_ORDER}
+
+              cpu_models = cot_l1c.load_ensemble_l1c(device="cpu")
+              cuda_models = cot_l1c.load_ensemble_l1c(device="cuda")
+              print(f"cpu weights : "
+                    f"{type(cpu_models[0]['lin1_weight']).__name__}")
+              print(f"cuda weights: "
+                    f"{type(cuda_models[0]['lin1_weight']).__name__} "
+                    f"on {cuda_models[0]['lin1_weight'].device}")
+
+              cot_cpu = cot_l1c.cot_inference_l1c(
+                  bands, cpu_models, device="cpu")
+              cot_gpu = cot_l1c.cot_inference_l1c(
+                  bands, cuda_models, device="cuda")
+
+              assert cot_gpu.shape == cot_cpu.shape == (512, 512)
+              assert cot_gpu.dtype == np.float32
+              maxdiff = float(np.abs(cot_cpu - cot_gpu).max())
+              print(f"COT range cpu [{cot_cpu.min():.3f}, "
+                    f"{cot_cpu.max():.3f}]  gpu [{cot_gpu.min():.3f}, "
+                    f"{cot_gpu.max():.3f}]")
+              print(f"max |CPU-GPU| COT diff: {maxdiff:.3e}")
+
+              s_cpu = cot_l1c.cloud_score_l1c(
+                  bands, cpu_models, device="cpu")
+              s_gpu = cot_l1c.cloud_score_l1c(
+                  bands, cuda_models, device="cuda")
+              print(f"cloud_score cpu={s_cpu}  gpu={s_gpu}")
+
+              if maxdiff < 1e-2:
+                  print("VERIFY PASSED: GPU path matches CPU within 1e-2")
+              else:
+                  print("VERIFY FAILED: COT diff exceeds 1e-2")
+                  sys.exit(1)
+              PYEOF
+
+              echo ""
+              python3 /workspace/verify.py
+              echo ""
+              echo "=== verify complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"

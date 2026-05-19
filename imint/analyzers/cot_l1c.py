@@ -11,11 +11,16 @@ Sentinel-2 bands EXCEPT B01. It keeps B10 (cirrus), so it operates on
 **L1C top-of-atmosphere reflectance** directly. That makes it usable for
 scene-quality ranking BEFORE sen2cor.
 
-torch-free
-----------
-The MLP5 is five Linear layers — trivial to evaluate in numpy. This
-module deliberately does NOT import torch: the sen2cor runner pods
-would otherwise carry a ~200 MB CPU-torch wheel just for 10 tiny MLPs.
+torch-optional
+--------------
+The MLP5 is five Linear layers — trivial to evaluate in numpy, so the
+default ``device="cpu"`` path is pure numpy and never imports torch
+(a CPU-only sen2cor runner pod stays free of the ~200 MB torch wheel).
+A ``device="cuda"`` path is available for GPU runner pods: torch is
+imported lazily, only when a CUDA device is requested. On an RTX
+2080 Ti the COT inference is ~113x faster per tile than one CPU core
+(measured 2026-05-19), which collapses the COT-gate wall-time of the
+sen2cor back-fill from hours to minutes.
 The .pt ensemble was converted once (2026-05-17) to a single numpy
 archive ``cot_mlp5_12band_ensemble.npz`` (548 KB) via:
 
@@ -76,12 +81,21 @@ _FM_DIR = Path(__file__).resolve().parent.parent / "fm" / "cot_models_l1c"
 _ENSEMBLE_NPZ = _FM_DIR / "cot_mlp5_12band_ensemble.npz"
 
 
-def load_ensemble_l1c(npz_path: Path | None = None) -> list[dict]:
-    """Load the 10-MLP 12-band ensemble as plain numpy weight dicts.
+def load_ensemble_l1c(
+    npz_path: Path | None = None,
+    *,
+    device: str = "cpu",
+) -> list[dict]:
+    """Load the 10-MLP 12-band ensemble as per-model weight dicts.
 
     Each returned dict has keys ``lin1_weight``/``lin1_bias`` …
-    ``lin5_weight``/``lin5_bias`` — float32 numpy arrays ready for the
-    forward pass in :func:`cot_inference_l1c`.
+    ``lin5_weight``/``lin5_bias`` — ready for the forward pass in
+    :func:`cot_inference_l1c`.
+
+    With ``device="cpu"`` (default) the weights are float32 numpy arrays
+    and torch is never imported. With a CUDA device string ("cuda",
+    "cuda:0") the weights are returned as torch tensors resident on that
+    device, for the GPU path of :func:`cot_inference_l1c`.
     """
     path = npz_path if npz_path is not None else _ENSEMBLE_NPZ
     if not path.exists():
@@ -104,7 +118,15 @@ def load_ensemble_l1c(npz_path: Path | None = None) -> list[dict]:
                 "lin5_weight", "lin5_bias",
             )
         })
-    return models
+    if device == "cpu":
+        return models
+
+    import torch
+    return [
+        {k: torch.from_numpy(np.ascontiguousarray(v)).to(device)
+         for k, v in m.items()}
+        for m in models
+    ]
 
 
 def _mlp5_forward(x: np.ndarray, m: dict) -> np.ndarray:
@@ -123,10 +145,45 @@ def _mlp5_forward(x: np.ndarray, m: dict) -> np.ndarray:
     return np.maximum(out, 0.0)                      # apply_relu on output
 
 
+def _cot_inference_torch(
+    bands: dict[str, np.ndarray],
+    models: list,
+    device: str,
+) -> np.ndarray:
+    """GPU forward — bit-for-bit mirror of the numpy path's arithmetic.
+
+    ``models`` must hold torch tensors already on ``device`` (load via
+    ``load_ensemble_l1c(device=...)``). Returns a numpy COT map so the
+    caller stays device-agnostic.
+    """
+    import torch
+
+    h, w = bands[COT_L1C_BAND_ORDER[0]].shape
+    img = np.stack([bands[b] for b in COT_L1C_BAND_ORDER], axis=-1)
+    x = torch.from_numpy(img.reshape(-1, 12).astype(np.float32)).to(device)
+    means = torch.from_numpy(COT_MEANS_12).to(device)
+    stds = torch.from_numpy(COT_STDS_12).to(device)
+    x = (x - means) / stds
+
+    pred = torch.zeros(x.shape[0], device=device)
+    inv_models = 1.0 / len(models)
+    for m in models:
+        hidden = x
+        for i in (1, 2, 3, 4):
+            hidden = torch.relu(
+                hidden @ m[f"lin{i}_weight"].T + m[f"lin{i}_bias"])
+        out = (hidden @ m["lin5_weight"].T + m["lin5_bias"])[:, 0]
+        pred = pred + torch.relu(out) * inv_models
+
+    cot = (pred * COT_GT_MAX).reshape(h, w)
+    return cot.cpu().numpy().astype(np.float32)
+
+
 def cot_inference_l1c(
     bands: dict[str, np.ndarray],
-    models: list[dict],
+    models: list,
     *,
+    device: str = "cpu",
     batch_size: int = 262144,
 ) -> np.ndarray:
     """Run 12-band COT inference on an L1C TOA-reflectance image.
@@ -134,8 +191,12 @@ def cot_inference_l1c(
     Args:
         bands: Dict keyed by COT_L1C_BAND_ORDER, each (H, W) float32 in
             TOA reflectance [0, 1] (raw L1C DN / 10000).
-        models: Ensemble from ``load_ensemble_l1c``.
-        batch_size: Pixels per batch (numpy matmul; large is fine).
+        models: Ensemble from ``load_ensemble_l1c`` — numpy weights for
+            ``device="cpu"``, torch tensors for a CUDA device.
+        device: "cpu" for the numpy path, or a torch device string
+            ("cuda", "cuda:0") for the GPU path. Must match the device
+            ``models`` was loaded with.
+        batch_size: Pixels per batch (numpy CPU path only).
 
     Returns:
         COT map (H, W) float32 in physical units (denormalized by
@@ -144,6 +205,9 @@ def cot_inference_l1c(
     missing = [b for b in COT_L1C_BAND_ORDER if b not in bands]
     if missing:
         raise KeyError(f"cot_inference_l1c: missing bands {missing}")
+
+    if device != "cpu":
+        return _cot_inference_torch(bands, models, device)
 
     h, w = bands[COT_L1C_BAND_ORDER[0]].shape
     img = np.stack([bands[b] for b in COT_L1C_BAND_ORDER], axis=-1)  # (H,W,12)
@@ -164,8 +228,9 @@ def cot_inference_l1c(
 
 def cloud_score_l1c(
     bands: dict[str, np.ndarray],
-    models: list[dict],
+    models: list,
     *,
+    device: str = "cpu",
     thresh: float = DEFAULT_THIN_CLOUD_THRESH,
 ) -> dict[str, float]:
     """Per-tile cloud score for ranking / gating candidate L1C scenes.
@@ -178,7 +243,7 @@ def cloud_score_l1c(
                      diagnostic; the absolute threshold is only roughly
                      calibrated, so prefer mean_cot for decisions.
     """
-    cot = cot_inference_l1c(bands, models)
+    cot = cot_inference_l1c(bands, models, device=device)
     return {
         "mean_cot": float(cot.mean()),
         "cloud_frac": float((cot > thresh).mean()),

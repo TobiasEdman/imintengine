@@ -9,8 +9,12 @@ metadata:
 spec:
   backoffLimit: 0
   # Full 512 frame_2016 back-fill. Selector (~5219 missing tiles,
-  # parallel ERA5+STAC) → runner (all scenes, 6 parallel sen2cor).
-  # Selector single-digit hours + runner ~50-150 scenes / 6 → budget 24h.
+  # parallel ERA5+STAC) → runner (all scenes, 4 parallel sen2cor).
+  # COT-gate inference runs on the pod's GPU (--device cuda): ~113x
+  # faster per tile than CPU, so all 24 cores serve sen2cor. 4 workers
+  # (not 6) gives each L2A_Process ~6 cores — 6-way contention timed
+  # sen2cor out at 30 min. Wall-time is sen2cor-bound (~5h). Budget
+  # 24h keeps headroom while the pod queues for a free RTX 2080 Ti.
   activeDeadlineSeconds: 86400
   template:
     metadata:
@@ -25,11 +29,12 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  # p02r09srv04 + srv06 fail pod-sandbox creation
-                  # (cgroup/runc bug, 2026-05-{12,17}). Exclude both.
-                  - key: kubernetes.io/hostname
-                    operator: NotIn
-                    values: ["p02r09srv04", "p02r09srv06"]
+                  # RTX 2080 Ti only — excludes H100 (reserved for
+                  # training) and the GTX 1080 Ti nodes (srv04/srv06
+                  # also carry the cgroup/runc pod-sandbox bug).
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values: ["NVIDIA-GeForce-RTX-2080-Ti"]
       containers:
         - name: pipeline
           image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
@@ -46,7 +51,7 @@ spec:
                 git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
               pip3 install --quiet --no-cache-dir \
                 numpy rasterio pyproj requests Pillow \
-                pystac-client openeo 2>&1 | tail -3
+                pystac-client openeo torch 2>&1 | tail -3
 
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 \
@@ -78,7 +83,8 @@ spec:
                 --data-dir /data/unified_v2_512 \
                 --safe-cache /data/sen2cor_cache \
                 --cot-max 8.0 \
-                --workers 6
+                --workers 4 \
+                --device cuda
 
               echo ""
               echo "=== full run complete: $(date) ==="
@@ -92,6 +98,7 @@ spec:
             limits:
               cpu: "24"
               memory: "64Gi"
+              nvidia.com/gpu: "1"
           volumeMounts:
             - name: training-data
               mountPath: /data
