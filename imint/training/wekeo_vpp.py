@@ -86,48 +86,36 @@ def prefetch_vpp_cogs(
         The ``index.json`` content — ``{filename: {metric, tileId, year,
         season, bounds_4326}}`` — covering every COG now in ``dest_dir``.
 
-    Idempotent: COGs already present are not re-downloaded.
+    Idempotent: COGs already present are not re-downloaded. The index is
+    written after every tile, so a crash mid-run loses no recorded work.
     """
-    from hda import Client, Configuration
+    import requests
 
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     types = product_types or list(_VPP_PRODUCT_TYPES)
     years_set = {int(y) for y in years}
-
-    user = os.environ.get("WEKEO_USERNAME")
-    password = os.environ.get("WEKEO_PASSWORD")
-    config = (
-        Configuration(user=user, password=password)
-        if user and password
-        else Configuration()  # falls back to ~/.hdarc
-    )
-    client = Client(config=config)
-
     index = _load_index(dest)
-    for tile in tile_ids:
-        for ptype in types:
-            matches = client.search({
-                "dataset_id": _HDA_DATASET_ID,
-                "productType": ptype,
-                "tileId": tile,
-                "itemsPerPage": 200,
-                "startIndex": 0,
-            })
-            for result in matches:
-                fname = _result_filename(result)
-                meta = _parse_vpp_filename(fname)
-                if meta is None:
-                    continue
-                if meta["year"] not in years_set or meta["season"] != season:
-                    continue
-                target = dest / fname
-                if not target.exists():
-                    result.download(str(dest))
-                if fname not in index:
-                    index[fname] = {**meta, "bounds_4326": _cog_bounds_4326(target)}
 
-    _save_index(dest, index)
+    for tile in tile_ids:
+        # Fresh hda client per tile — WEkEO access tokens are short-lived;
+        # a long multi-tile run outlives one token, and hda's per-search
+        # accept_tac() PUT does not refresh it (401). A tile finishes well
+        # within a token's life; the retry covers expiry mid-tile.
+        for attempt in range(2):
+            try:
+                _prefetch_one_tile(
+                    _hda_client(), tile, types, years_set,
+                    season, dest, index,
+                )
+                break
+            except requests.exceptions.HTTPError as exc:
+                status = getattr(exc.response, "status_code", None)
+                if status == 401 and attempt == 0:
+                    continue  # token expired — fresh client, redo tile
+                raise
+        _save_index(dest, index)
+
     return index
 
 
@@ -197,6 +185,62 @@ def fetch_vpp_tiles_local(
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────
+
+def _hda_client():
+    """Build an authenticated hda client with a fresh access token.
+
+    Credentials: WEKEO_USERNAME / WEKEO_PASSWORD env vars, else the hda
+    client's own ~/.hdarc.
+    """
+    from hda import Client, Configuration
+
+    user = os.environ.get("WEKEO_USERNAME")
+    password = os.environ.get("WEKEO_PASSWORD")
+    config = (
+        Configuration(user=user, password=password)
+        if user and password
+        else Configuration()
+    )
+    return Client(config=config)
+
+
+def _prefetch_one_tile(
+    client,
+    tile: str,
+    types: list[str],
+    years_set: set[int],
+    season: int,
+    dest: Path,
+    index: dict[str, dict],
+) -> None:
+    """Search + download every wanted VPP COG for one MGRS tile.
+
+    Mutates ``index`` in place. Idempotent — COGs already on disk are
+    not re-downloaded.
+    """
+    for ptype in types:
+        matches = client.search({
+            "dataset_id": _HDA_DATASET_ID,
+            "productType": ptype,
+            "tileId": tile,
+            "itemsPerPage": 200,
+            "startIndex": 0,
+        })
+        for result in matches:
+            fname = _result_filename(result)
+            meta = _parse_vpp_filename(fname)
+            if meta is None:
+                continue
+            if meta["year"] not in years_set or meta["season"] != season:
+                continue
+            target = dest / fname
+            if not target.exists():
+                result.download(str(dest))
+            if fname not in index:
+                index[fname] = {
+                    **meta, "bounds_4326": _cog_bounds_4326(target),
+                }
+
 
 def _bbox_3006_to_4326(
     west: float, south: float, east: float, north: float,
