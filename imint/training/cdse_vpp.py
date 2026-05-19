@@ -27,6 +27,8 @@ Fallback:
     When the CDSE processing quota is exhausted, fetch_vpp_tiles falls
     back to the prefetched WEkEO VPP cache (imint.training.wekeo_vpp),
     if one is present at $VPP_WEKEO_DIR (default /data/vpp_wekeo).
+    Set $VPP_SOURCE=wekeo to skip CDSE entirely and read straight from
+    that cache — for bulk runs when the quota is known to be exhausted.
 
 License: Copernicus Open Access
 
@@ -128,39 +130,51 @@ def fetch_vpp_tiles(
             except Exception:
                 pass  # Re-fetch on cache corruption
 
-    # Convert bbox from EPSG:3006 to WGS84
-    lon_min, lat_min, lon_max, lat_max = _bbox_3006_to_4326(
-        west, south, east, north
-    )
-
-    # Fetch from CDSE; on a CDSE failure (quota exhaustion, outage) fall
-    # back to the prefetched WEkEO VPP cache if one is present.
-    try:
-        token = _get_token()
-        tiff_bytes = _fetch_vpp_tiff(
-            lon_min, lat_min, lon_max, lat_max,
-            w_px, h_px,
-            token=token,
-            year=year,
-        )
-        bands = _parse_multiband_tiff(tiff_bytes, h_px, w_px, len(_VPP_BANDS))
-
-        result: dict[str, np.ndarray] = {}
-        for i, band_name in enumerate(_VPP_BANDS):
-            arr = bands[i].astype(np.float32)
-            # Scale PPI bands: INT16 with factor 0.0001
-            if band_name in _PPI_BANDS:
-                arr = arr * 0.0001
-                arr = np.clip(arr, 0.0, None)  # Clamp negatives (nodata)
-            # Day bands: keep as float, clamp nodata to 0
-            if band_name in _DOY_BANDS:
-                arr = np.clip(arr, 0.0, None)
-            result[band_name.lower()] = arr
-    except RuntimeError as cdse_err:
+    # Source selection. VPP_SOURCE=wekeo forces the WEkEO cache and skips
+    # CDSE entirely — for bulk runs when the CDSE quota is known to be
+    # exhausted, where a doomed per-tile CDSE request + retries before
+    # every fallback is pure waste. Default (unset / "auto"): try CDSE,
+    # fall back to WEkEO on failure.
+    if os.environ.get("VPP_SOURCE", "").strip().lower() == "wekeo":
         result = _fallback_to_wekeo(
             west, south, east, north,
-            size_px=(h_px, w_px), year=year, cdse_error=cdse_err,
+            size_px=(h_px, w_px), year=year,
+            cdse_error=RuntimeError("VPP_SOURCE=wekeo — CDSE skipped"),
         )
+    else:
+        # Convert bbox from EPSG:3006 to WGS84 for the CDSE Process API.
+        lon_min, lat_min, lon_max, lat_max = _bbox_3006_to_4326(
+            west, south, east, north
+        )
+        # On a CDSE failure (quota exhaustion, outage) fall back to the
+        # prefetched WEkEO VPP cache if one is present.
+        try:
+            token = _get_token()
+            tiff_bytes = _fetch_vpp_tiff(
+                lon_min, lat_min, lon_max, lat_max,
+                w_px, h_px,
+                token=token,
+                year=year,
+            )
+            bands = _parse_multiband_tiff(
+                tiff_bytes, h_px, w_px, len(_VPP_BANDS))
+
+            result: dict[str, np.ndarray] = {}
+            for i, band_name in enumerate(_VPP_BANDS):
+                arr = bands[i].astype(np.float32)
+                # Scale PPI bands: INT16 with factor 0.0001
+                if band_name in _PPI_BANDS:
+                    arr = arr * 0.0001
+                    arr = np.clip(arr, 0.0, None)  # Clamp negatives (nodata)
+                # Day bands: keep as float, clamp nodata to 0
+                if band_name in _DOY_BANDS:
+                    arr = np.clip(arr, 0.0, None)
+                result[band_name.lower()] = arr
+        except RuntimeError as cdse_err:
+            result = _fallback_to_wekeo(
+                west, south, east, north,
+                size_px=(h_px, w_px), year=year, cdse_error=cdse_err,
+            )
 
     # Cache
     if cache_dir is not None:

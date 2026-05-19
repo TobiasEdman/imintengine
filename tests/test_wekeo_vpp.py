@@ -200,3 +200,18 @@ class TestFallbackWiring:
                     0, 0, 1, 1, size_px=(32, 32), year=2021,
                     cdse_error=original,
                 )
+
+    def test_vpp_source_wekeo_skips_cdse(self, monkeypatch):
+        """VPP_SOURCE=wekeo routes fetch_vpp_tiles straight to WEkEO.
+
+        With no cache present the WEkEO path re-raises its own marker
+        error — reaching it proves CDSE was skipped entirely (no CDSE
+        credentials are set, so a CDSE attempt would fail differently).
+        """
+        from imint.training import cdse_vpp
+
+        with tempfile.TemporaryDirectory() as d:
+            monkeypatch.setenv("VPP_SOURCE", "wekeo")
+            monkeypatch.setenv("VPP_WEKEO_DIR", d)  # empty — no index.json
+            with pytest.raises(RuntimeError, match="CDSE skipped"):
+                cdse_vpp.fetch_vpp_tiles(0.0, 0.0, 1.0, 1.0, size_px=32)
