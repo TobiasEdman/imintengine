@@ -46,11 +46,10 @@ spec:
               echo "Tile inventory:"
               echo "  /data/unified_v2_512: $(ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l) tiles"
 
-              # VPP only — uses CDSE Sentinel Hub Process API (PU-fakturerat).
-              # Run only after the monthly PU quota has reset (1st of each month).
-              # frame_2016 is similarly PU-bound but deferred to a later pass
-              # since prithvi-eo-v2 already encodes a learned baseline frame
-              # — it's nice-to-have, not critical.
+              # VPP only. VPP_SOURCE=wekeo (env below) reads straight from
+              # the prefetched WEkEO COG cache at /data/vpp_wekeo — the
+              # CDSE Sentinel Hub PU quota is exhausted, so CDSE is skipped
+              # entirely (no doomed per-tile request + retries).
               echo ""
               echo "Running prefetch_aux --channels vpp on /data/unified_v2_512 ..."
               python scripts/prefetch_aux.py \
@@ -72,16 +71,11 @@ spec:
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
-            - name: CDSE_CLIENT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: cdse-credentials
-                  key: client_id
-            - name: CDSE_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: cdse-credentials
-                  key: client_secret
+            # Read straight from the prefetched WEkEO cache — CDSE quota
+            # is exhausted. VPP_WEKEO_DIR defaults to /data/vpp_wekeo,
+            # which is on this same (training-data-cephfs) PVC.
+            - name: VPP_SOURCE
+              value: "wekeo"
           resources:
             requests:
               cpu: "8"
