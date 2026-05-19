@@ -1,0 +1,100 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-256-vpp
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: enrich-256-with-vpp-phenology
+spec:
+  backoffLimit: 1
+  # 256 dataset (/data/unified_v2 on the training-data PVC, ~8290 tiles)
+  # enriched with HR-VPP Season-1 phenology. VPP_SOURCE=wekeo reads the
+  # prefetched WEkEO COG cache — the CDSE PU quota is exhausted.
+  # The cache lives on the OTHER PVC (training-data-cephfs), so this job
+  # mounts both: 256 data at /data, the cephfs cache at /cephfs, with
+  # VPP_WEKEO_DIR pointing into it. Local COG reads (no CDSE) → ~1 h.
+  activeDeadlineSeconds: 14400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: e
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== enrich 256 with VPP phenology (Season 1, WEkEO) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "Tile inventory:"
+              echo "  /data/unified_v2: $(ls /data/unified_v2/*.npz 2>/dev/null | wc -l) tiles"
+              echo "  WEkEO cache /cephfs/vpp_wekeo: $(ls /cephfs/vpp_wekeo/*.tif 2>/dev/null | wc -l) COGs"
+
+              echo ""
+              echo "Running prefetch_aux --channels vpp on /data/unified_v2 ..."
+              python scripts/prefetch_aux.py \
+                --data-dir /data/unified_v2 \
+                --channels vpp \
+                --workers 4
+
+              echo ""
+              echo "=== Done: $(date) ==="
+              python3 -c "
+              import numpy as np, glob
+              files = sorted(glob.glob('/data/unified_v2/*.npz'))[:5]
+              for f in files:
+                  d = np.load(f, allow_pickle=True)
+                  found = [k for k in ['vpp_sosd','vpp_eosd','vpp_length','vpp_maxv','vpp_minv'] if k in d]
+                  print(f'  {f.split(\"/\")[-1]}: {found}')
+              "
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # Read straight from the prefetched WEkEO cache — CDSE quota
+            # is exhausted. The cache is on the training-data-cephfs PVC,
+            # mounted here at /cephfs.
+            - name: VPP_SOURCE
+              value: "wekeo"
+            - name: VPP_WEKEO_DIR
+              value: "/cephfs/vpp_wekeo"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: vpp-cache
+              mountPath: /cephfs
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: vpp-cache
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
