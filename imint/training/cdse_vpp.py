@@ -23,6 +23,11 @@ Access:
     Endpoint: https://sh.dataspace.copernicus.eu/api/v1/process
     Auth: CDSE OAuth2 client_credentials grant
 
+Fallback:
+    When the CDSE processing quota is exhausted, fetch_vpp_tiles falls
+    back to the prefetched WEkEO VPP cache (imint.training.wekeo_vpp),
+    if one is present at $VPP_WEKEO_DIR (default /data/vpp_wekeo).
+
 License: Copernicus Open Access
 
 Typical usage::
@@ -128,35 +133,34 @@ def fetch_vpp_tiles(
         west, south, east, north
     )
 
-    # Get auth token
-    token = _get_token()
+    # Fetch from CDSE; on a CDSE failure (quota exhaustion, outage) fall
+    # back to the prefetched WEkEO VPP cache if one is present.
+    try:
+        token = _get_token()
+        tiff_bytes = _fetch_vpp_tiff(
+            lon_min, lat_min, lon_max, lat_max,
+            w_px, h_px,
+            token=token,
+            year=year,
+        )
+        bands = _parse_multiband_tiff(tiff_bytes, h_px, w_px, len(_VPP_BANDS))
 
-    # Fetch all VPP bands in a single request
-    tiff_bytes = _fetch_vpp_tiff(
-        lon_min, lat_min, lon_max, lat_max,
-        w_px, h_px,
-        token=token,
-        year=year,
-    )
-
-    # Parse multi-band TIFF → per-band arrays
-    bands = _parse_multiband_tiff(tiff_bytes, h_px, w_px, len(_VPP_BANDS))
-
-    # Build result dict with proper scaling
-    result: dict[str, np.ndarray] = {}
-    for i, band_name in enumerate(_VPP_BANDS):
-        arr = bands[i].astype(np.float32)
-
-        # Scale PPI bands: INT16 with factor 0.0001
-        if band_name in _PPI_BANDS:
-            arr = arr * 0.0001
-            arr = np.clip(arr, 0.0, None)  # Clamp negatives (nodata)
-
-        # Day bands: keep as float, clamp nodata to 0
-        if band_name in _DOY_BANDS:
-            arr = np.clip(arr, 0.0, None)
-
-        result[band_name.lower()] = arr
+        result: dict[str, np.ndarray] = {}
+        for i, band_name in enumerate(_VPP_BANDS):
+            arr = bands[i].astype(np.float32)
+            # Scale PPI bands: INT16 with factor 0.0001
+            if band_name in _PPI_BANDS:
+                arr = arr * 0.0001
+                arr = np.clip(arr, 0.0, None)  # Clamp negatives (nodata)
+            # Day bands: keep as float, clamp nodata to 0
+            if band_name in _DOY_BANDS:
+                arr = np.clip(arr, 0.0, None)
+            result[band_name.lower()] = arr
+    except RuntimeError as cdse_err:
+        result = _fallback_to_wekeo(
+            west, south, east, north,
+            size_px=(h_px, w_px), year=year, cdse_error=cdse_err,
+        )
 
     # Cache
     if cache_dir is not None:
@@ -199,6 +203,34 @@ def fetch_vpp_band(
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────
+
+def _fallback_to_wekeo(
+    west: float, south: float, east: float, north: float,
+    *,
+    size_px: tuple[int, int],
+    year: int,
+    cdse_error: Exception,
+) -> dict[str, np.ndarray]:
+    """Fall back to the prefetched WEkEO VPP cache after a CDSE failure.
+
+    The WEkEO cache is populated out-of-band by
+    ``scripts/prefetch_vpp_wekeo.py``. If no cache is present the original
+    CDSE error is re-raised — the fallback is only meaningful once the
+    COGs have been bulk-downloaded.
+    """
+    cog_dir = Path(os.environ.get("VPP_WEKEO_DIR", "/data/vpp_wekeo"))
+    if not (cog_dir / "index.json").exists():
+        raise cdse_error
+    print(
+        f"[cdse_vpp] CDSE VPP fetch failed ({cdse_error}); "
+        f"falling back to WEkEO cache at {cog_dir}"
+    )
+    from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+    return fetch_vpp_tiles_local(
+        west, south, east, north,
+        size_px=size_px, vpp_cog_dir=cog_dir, year=year,
+    )
+
 
 def _bbox_3006_to_4326(
     west: float, south: float, east: float, north: float,
