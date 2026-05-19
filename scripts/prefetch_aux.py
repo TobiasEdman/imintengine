@@ -152,6 +152,35 @@ ALL_CHANNELS = list(_CHANNEL_FETCHERS.keys()) + ["vpp"]
 
 _TILE_RE = re.compile(r"tile_(\d+)_(\d+)\.npz$")
 
+# Straggler years lumped to the nearest enriched year (decided 2026-05-19)
+# — too few tiles (≈8 across both datasets) to warrant their own WEkEO
+# prefetch pass.
+_LUMP_YEAR = {2019: 2018, 2023: 2022}
+
+
+def _tile_year(tile_path: Path) -> int | None:
+    """Return the tile's VPP year — the latest year in its ``dates``,
+    with straggler years lumped to the nearest enriched year.
+
+    ``dates`` holds the multitemporal frame dates; the latest is the
+    growing-season (label) year. Returns None if no date is parseable.
+    """
+    try:
+        with np.load(tile_path, allow_pickle=True) as d:
+            if "dates" not in d.files:
+                return None
+            years = [
+                int(str(s)[:4])
+                for s in np.asarray(d["dates"]).ravel()
+                if len(str(s)) >= 4 and str(s)[:4].isdigit()
+            ]
+    except Exception:
+        return None
+    if not years:
+        return None
+    y = max(years)
+    return _LUMP_YEAR.get(y, y)
+
 
 def _bbox_from_tile(tile_path: Path, half_m: int) -> tuple[int, int, int, int]:
     """Extract EPSG:3006 bbox in (W, S, E, N) order, ±half_m around center.
@@ -202,11 +231,13 @@ def _bbox_from_tile(tile_path: Path, half_m: int) -> tuple[int, int, int, int]:
 
 
 def _tile_missing_channels(
-    tile_path: Path, channels: list[str],
+    tile_path: Path, channels: list[str], *, force_vpp: bool = False,
 ) -> list[str]:
     """Return list of requested channels missing from the tile.
 
-    For "vpp", checks whether all 5 VPP sub-bands are present.
+    For "vpp", checks whether all 5 VPP sub-bands are present. With
+    ``force_vpp`` "vpp" is always reported missing — for year-matched
+    re-enrichment that must overwrite an existing (wrong-year) VPP.
     """
     try:
         with np.load(tile_path, allow_pickle=True) as d:
@@ -214,7 +245,8 @@ def _tile_missing_channels(
             for ch in channels:
                 if ch == "vpp":
                     # VPP is present only if all 5 sub-bands exist
-                    if not all(b in d for b in _VPP_BAND_NAMES):
+                    if force_vpp or not all(
+                            b in d for b in _VPP_BAND_NAMES):
                         missing.append("vpp")
                 elif ch not in d:
                     missing.append(ch)
@@ -228,6 +260,8 @@ def _add_channels_to_tile(
     channels: list[str],
     half_m: int,
     cache_dirs: dict[str, Path | None],
+    *,
+    year: int | None = None,
 ) -> dict:
     """Fetch missing channels and write them into an existing .npz tile.
 
@@ -259,10 +293,14 @@ def _add_channels_to_tile(
             # stays under --max-per-hour. SKG/DEM/markfukt are free
             # and bypass this gate.
             _wait_for_rate_limit()
+            vpp_kwargs: dict = {
+                "size_px": (h_px, w_px),
+                "cache_dir": cache_dirs.get("vpp"),
+            }
+            if year is not None:
+                vpp_kwargs["year"] = year
             vpp_data = fetch_vpp_tiles(
-                west, south, east, north,
-                size_px=(h_px, w_px),
-                cache_dir=cache_dirs.get("vpp"),
+                west, south, east, north, **vpp_kwargs,
             )
             for raw_name, arr in vpp_data.items():
                 key = f"vpp_{raw_name}"
@@ -339,6 +377,12 @@ def main():
              "window across all workers). 0 (default) = no cap. Only "
              "affects VPP — SKG/DEM/markfukt are free and bypass.",
     )
+    parser.add_argument(
+        "--year", type=int, default=None,
+        help="Year-matched VPP mode: process only tiles whose `dates` "
+             "year equals this (stragglers lumped), fetch VPP for this "
+             "year, and overwrite any existing (wrong-year) VPP.",
+    )
     args = parser.parse_args()
 
     _set_rate_limit(args.max_per_hour)
@@ -376,12 +420,20 @@ def main():
     print(f"Found {len(all_tiles)} tiles in {tiles_dir}")
     print(f"Channels: {', '.join(channels)}")
 
+    # Year-matched mode: keep only tiles of the requested year.
+    if args.year is not None:
+        all_tiles = [
+            tp for tp in all_tiles if _tile_year(tp) == args.year
+        ]
+        print(f"  --year {args.year}: {len(all_tiles)} matching tiles")
+
     # Filter to tiles missing at least one requested channel
     print("Scanning for tiles with missing channels...")
     todo: list[tuple[Path, list[str]]] = []
     already = 0
     for tp in all_tiles:
-        missing = _tile_missing_channels(tp, channels)
+        missing = _tile_missing_channels(
+            tp, channels, force_vpp=(args.year is not None))
         if missing:
             todo.append((tp, missing))
         else:
@@ -438,7 +490,7 @@ def main():
         tile_path, missing = item
         try:
             return _add_channels_to_tile(
-                tile_path, missing, half_m, cache_dirs)
+                tile_path, missing, half_m, cache_dirs, year=args.year)
         except Exception as e:
             return {
                 "status": "fail",
