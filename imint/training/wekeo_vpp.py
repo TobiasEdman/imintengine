@@ -52,9 +52,11 @@ _VPP_PRODUCT_TYPES: dict[str, str] = {
 _PPI_BANDS = {"maxv", "minv"}
 
 # HR-VPP VPP filename: VPP_<year>_S2_<tile>-010m_V<ver>_s<season>_<METRIC>.tif
+# The .tif is optional — the hda result `id` carries the same stem
+# without an extension.
 _VPP_FILENAME_RE = re.compile(
     r"VPP_(?P<year>\d{4})_S2_(?P<tile>[0-9A-Z]+)-0?\d+m_"
-    r"V\d+_s(?P<season>\d)_(?P<metric>[A-Z]+)\.tif$"
+    r"V\d+_s(?P<season>\d)_(?P<metric>[A-Z]+)(?:\.tif)?$"
 )
 
 _INDEX_NAME = "index.json"
@@ -271,23 +273,24 @@ def _parse_vpp_filename(fname: str) -> dict | None:
 
 
 def _result_filename(result) -> str:
-    """Extract the product filename from an hda search result.
+    """Extract the COG filename from an hda search result.
 
-    The hda client's result objects expose the filename under different
-    attributes across versions; check the known ones, then fall back to
-    the string form.
+    An iterated hda result is a single-item ``SearchResults`` whose
+    ``.results`` is a list of GeoJSON-feature dicts. The COG filename is
+    the basename of ``properties.location`` (an ``s3://`` URL); ``id`` is
+    the same stem without the ``.tif`` extension.
     """
-    for attr in ("results", "properties"):
-        props = getattr(result, attr, None)
-        if isinstance(props, dict):
-            for key in ("title", "id", "filename"):
-                val = props.get(key)
-                if isinstance(val, str) and val.endswith(".tif"):
-                    return os.path.basename(val)
-    for key in ("title", "id", "filename"):
-        val = getattr(result, key, None)
-        if isinstance(val, str) and val.endswith(".tif"):
-            return os.path.basename(val)
+    feats = getattr(result, "results", None)
+    if isinstance(feats, list):
+        for feat in feats:
+            if not isinstance(feat, dict):
+                continue
+            loc = feat.get("properties", {}).get("location", "")
+            if loc:
+                return os.path.basename(loc)
+            fid = feat.get("id", "")
+            if fid:
+                return os.path.basename(fid)
     return os.path.basename(str(result))
 
 

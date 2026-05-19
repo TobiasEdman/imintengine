@@ -35,9 +35,50 @@ class TestParseVppFilename:
         assert meta["season"] == 2
         assert meta["year"] == 2019
 
+    def test_parses_id_form_without_extension(self):
+        # hda result `id` carries the stem without the .tif extension.
+        meta = wekeo_vpp._parse_vpp_filename(
+            "VPP_2021_S2_T33VWJ-010m_V101_s1_SOSD"
+        )
+        assert meta is not None
+        assert meta["metric"] == "SOSD"
+        assert meta["year"] == 2021
+
     def test_rejects_garbage(self):
         assert wekeo_vpp._parse_vpp_filename("not_a_vpp_file.tif") is None
         assert wekeo_vpp._parse_vpp_filename("VPP_2021_S2_33VWJ.txt") is None
+
+
+class _StubResult:
+    """Stand-in for an iterated hda SearchResults item."""
+
+    def __init__(self, results):
+        self.results = results
+
+
+class TestResultFilename:
+
+    def test_extracts_basename_from_location(self):
+        r = _StubResult([{
+            "id": "VPP_2021_S2_T33VWJ-010m_V101_s1_SOSD",
+            "properties": {
+                "location": "s3://hr-vpp-products-vpp-v01-2021/CLMS/"
+                            "Pan-European/Biophysical/VPP/v01/2021/s1/"
+                            "VPP_2021_S2_T33VWJ-010m_V101_s1_SOSD.tif",
+            },
+        }])
+        assert wekeo_vpp._result_filename(r) == (
+            "VPP_2021_S2_T33VWJ-010m_V101_s1_SOSD.tif"
+        )
+
+    def test_falls_back_to_id_when_no_location(self):
+        r = _StubResult([{
+            "id": "VPP_2021_S2_T33VWJ-010m_V101_s1_SOSD",
+            "properties": {},
+        }])
+        assert wekeo_vpp._result_filename(r) == (
+            "VPP_2021_S2_T33VWJ-010m_V101_s1_SOSD"
+        )
 
 
 # ── bounds overlap ───────────────────────────────────────────────────────
