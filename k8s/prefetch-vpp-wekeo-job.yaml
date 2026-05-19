@@ -1,0 +1,113 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prefetch-vpp-wekeo
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: prefetch-vpp-wekeo
+spec:
+  backoffLimit: 0
+  # Bulk-prefetch HR-VPP VPP COGs from WEkEO HDA into /data/vpp_wekeo —
+  # the CDSE-quota fallback cache read by imint.training.cdse_vpp. The
+  # 44 MGRS tiles are the European (UTM zone 32/33/34) tiles from the
+  # sen2cor frame_2016 plan; 13 antimeridian zone-01/60 tiles are
+  # excluded — HR-VPP only covers the EEA39 region. WEkEO credentials
+  # come from the `wekeo-creds` Secret (envFrom) — never in this manifest.
+  activeDeadlineSeconds: 14400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation
+                  # (cgroup/runc bug, 2026-05-{12,17}). Exclude both.
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: prefetch
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== WEkEO VPP prefetch ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj hda 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles 32VPK,32VPR,33UUB,33UVB,33VUC,33VUD,33VUE,33VUF,33VUG,33VUH,33VUJ,33VUK,33VVE,33VVF,33VVG,33VVJ,33VVK,33VVL,33VWF,33VWK,33VWL,33VXG,33VXH,33VXK,33VXL,33WVM,33WWM,33WWN,33WWQ,33WWR,33WXM,33WXN,33WXP,33WXQ,33WXR,34VCQ,34VDR,34WDA,34WDB,34WDS,34WDT,34WDV,34WEB,34WET \
+                --years 2021 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "=== cache contents ==="
+              ls -la /data/vpp_wekeo/ 2>&1 | tail -10
+
+              echo ""
+              echo "=== read-back check: fetch_vpp_tiles_local ==="
+              python3 -c "
+              import glob, rasterio
+              from rasterio.warp import transform_bounds
+              from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+              cog = sorted(glob.glob('/data/vpp_wekeo/VPP_*_SOSD.tif'))[0]
+              with rasterio.open(cog) as src:
+                  w, s, e, n = transform_bounds(src.crs, 'EPSG:3006', *src.bounds)
+              # Centre 10% box — guaranteed inside the tile footprint.
+              cx, cy = (w + e) / 2, (s + n) / 2
+              dx, dy = (e - w) * 0.05, (n - s) * 0.05
+              bbox = (cx - dx, cy - dy, cx + dx, cy + dy)
+              print('derived EPSG:3006 bbox:', [round(b) for b in bbox])
+              out = fetch_vpp_tiles_local(
+                  *bbox, size_px=64, vpp_cog_dir='/data/vpp_wekeo', year=2021)
+              nonzero = 0
+              for k, v in out.items():
+                  print(f'  {k}: shape={v.shape} dtype={v.dtype} '
+                        f'range=[{v.min():.3f}, {v.max():.3f}]')
+                  if v.max() > 0:
+                      nonzero += 1
+              assert nonzero >= 3, f'expected most bands non-zero, got {nonzero}/5'
+              print('READBACK OK')
+              "
+              echo "=== prefetch complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
