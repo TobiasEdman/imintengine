@@ -8,9 +8,11 @@ metadata:
     purpose: enrich-512-with-vpp-phenology
 spec:
   backoffLimit: 1
-  # 7084 tiles × 5 VPP bands per tile (one fetch returns all 5).
-  # ~2 s/fetch on CDSE SH Process. 4 workers → ~3500 fetches/h.
-  # 7084 / 3500 ≈ 2 h. 4 h cap.
+  # Year-matched VPP enrichment of the 512 dataset, ONE year per run.
+  # Set VPP_YEAR (env below) to the year being processed; prefetch_aux
+  # --year keeps only that year's tiles and overwrites their VPP. Reads
+  # the WEkEO COG cache (VPP_SOURCE=wekeo); --no-cache because the vpp
+  # disk cache is bbox-keyed, not year-keyed. Run years one at a time.
   activeDeadlineSeconds: 14400
   template:
     metadata:
@@ -51,10 +53,12 @@ spec:
               # CDSE Sentinel Hub PU quota is exhausted, so CDSE is skipped
               # entirely (no doomed per-tile request + retries).
               echo ""
-              echo "Running prefetch_aux --channels vpp on /data/unified_v2_512 ..."
+              echo "Running prefetch_aux --channels vpp --year ${VPP_YEAR} ..."
               python scripts/prefetch_aux.py \
                 --data-dir /data/unified_v2_512 \
                 --channels vpp \
+                --year "${VPP_YEAR}" \
+                --no-cache \
                 --workers 4
 
               echo ""
@@ -76,6 +80,10 @@ spec:
             # which is on this same (training-data-cephfs) PVC.
             - name: VPP_SOURCE
               value: "wekeo"
+            # The year being processed — edit per run (one year at a
+            # time). The WEkEO cache must hold this year's COGs.
+            - name: VPP_YEAR
+              value: "2021"
           resources:
             requests:
               cpu: "8"
