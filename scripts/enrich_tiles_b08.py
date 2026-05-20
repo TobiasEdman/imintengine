@@ -41,37 +41,83 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+_DES_LOCAL = threading.local()
+
+
+def _get_des_conn():
+    """Thread-local authenticated DES openEO connection.
+
+    Auth happens once per worker thread; subsequent calls reuse the
+    connection. On any error, the next call rebuilds — covers session
+    expiry over long runs.
+    """
+    conn = getattr(_DES_LOCAL, "conn", None)
+    if conn is None:
+        from imint.fetch import _connect
+        conn = _connect()
+        _DES_LOCAL.conn = conn
+    return conn
+
+
+def _drop_des_conn() -> None:
+    """Drop the thread's cached connection — call after an error."""
+    if hasattr(_DES_LOCAL, "conn"):
+        del _DES_LOCAL.conn
+
+
 def _fetch_b08_frame(
     west: float, south: float, east: float, north: float,
     date_str: str, size_px: int,
 ) -> np.ndarray | None:
-    """Fetch B08 for one date via DES openEO.
+    """Fetch B08 for one date via DES openEO — band-specific.
 
-    cloud_threshold=1.0 — the frame's date already passed cloud
-    filtering when the tile's `spectral` was built; don't reject it
-    again here. fetch_des_data returns all spectral bands; we keep B08
-    and resample to (size_px, size_px) if openEO returns a different
-    grid.
+    Asks DES for ONLY band B08 over the exact known date (the tile
+    already knows which date was used for that frame), via
+    ``load_collection(collection_id='s2_msi_l2a', bands=['B08'],
+    temporal_extent=[d, d+1])``. Returns reflectance [0, 1] on the
+    requested ``(size_px, size_px)`` grid in EPSG:3006.
     """
-    from imint.fetch import fetch_des_data
+    from datetime import datetime, timedelta
+    import os
+    import tempfile
 
-    coords = {
-        "west": west, "south": south, "east": east, "north": north,
-    }
     try:
-        r = fetch_des_data(
-            date=date_str, coords=coords,
-            cloud_threshold=1.0, include_scl=False,
-        )
+        d0 = datetime.fromisoformat(date_str)
     except Exception:
         return None
+    d1 = (d0 + timedelta(days=1)).strftime("%Y-%m-%d")
+    spatial = {
+        "west": west, "south": south, "east": east, "north": north,
+        "crs": "EPSG:3006",
+    }
 
-    arr = r.bands.get("B08") if r and r.bands else None
-    if arr is None:
+    try:
+        conn = _get_des_conn()
+        cube = conn.load_collection(
+            collection_id="s2_msi_l2a",
+            spatial_extent=spatial,
+            temporal_extent=[date_str, d1],
+            bands=["B08"],
+        )
+        tmp_path = tempfile.mktemp(suffix=".tif")
+        cube.download(tmp_path, format="GTiff")
+    except Exception:
+        _drop_des_conn()
         return None
-    arr = np.asarray(arr, dtype=np.float32)
-    if arr.ndim == 3 and arr.shape[0] == 1:
-        arr = arr[0]
+
+    try:
+        import rasterio
+        with rasterio.open(tmp_path) as ds:
+            arr = ds.read(1).astype(np.float32)
+    except Exception:
+        return None
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    # Resample to the tile grid if openEO returned a different shape.
     if arr.shape != (size_px, size_px):
         try:
             from scipy.ndimage import zoom
@@ -80,7 +126,10 @@ def _fetch_b08_frame(
             arr = zoom(arr, (zy, zx), order=1).astype(np.float32)
         except Exception:
             return None
-    return arr
+
+    # DN -> reflectance [0, 1] — matches the convention `spectral` is
+    # stored in (the original 6-band fetch divides by 10000 too).
+    return arr / 10000.0
 
 
 def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
