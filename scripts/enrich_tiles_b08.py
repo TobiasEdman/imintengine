@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """Add Sentinel-2 B08 (broad NIR, 842nm, 10m) to existing tiles.
 
-Required by Clay v1.5 which expects 7 S2 bands (B02,B03,B04,B08,B8A,B11,B12).
-Fetches only B08 via a minimal evalscript — 1 band per frame, ~170 KB each.
+Required by Clay v1.5 and Croma which expect B08 alongside the 6-band
+``spectral`` tensor. Fetches B08 from Digital Earth Sweden (DES) via
+openEO — DES has no equivalent of CDSE's Process API + evalscript, so
+``imint.fetch.fetch_des_data`` is used (returns all spectral bands; we
+keep only B08). The CDSE PU quota is exhausted, so this path is what
+we use; DES openEO is free for RISE.
 
-Idempotent: skips tiles with has_b08=1.
-
-Uses CDSE S2 Process API — goes through _CDSE_SEMAPHORE for rate control.
+Idempotent: skips tiles with ``has_b08 == 1``.
 
 Keys written:
-    b08       (T, H, W) float32 — B08 reflectance [0,1] per temporal frame
+    b08       (T, H, W) float32 — B08 reflectance [0, 1] per temporal frame
     has_b08   int32 — 1 if any frame has B08 data
 
 Usage:
-    python scripts/enrich_tiles_b08.py \
-        --data-dir /data/unified_v2_512 \
-        --workers 4 \
+    python scripts/enrich_tiles_b08.py \\
+        --data-dir /data/unified_v2_512 \\
+        --workers 6 \\
         --skip-existing
+
+Credentials: DES_USER + DES_PASSWORD env vars (basic auth), DES_TOKEN,
+or the .des_token file — see ``imint.fetch._get_des_token``.
 """
 from __future__ import annotations
 
@@ -36,45 +41,46 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-_B08_EVALSCRIPT = """//VERSION=3
-function setup() {
-  return {
-    input: [{ bands: ["B08"], units: "DN" }],
-    output: { bands: 1, sampleType: "FLOAT32" }
-  };
-}
-function evaluatePixel(sample) {
-  return [sample.B08 / 10000];
-}
-"""
-
-
 def _fetch_b08_frame(
     west: float, south: float, east: float, north: float,
     date_str: str, size_px: int,
 ) -> np.ndarray | None:
-    """Fetch single B08 band for one date via CDSE Process API."""
-    from imint.training.cdse_s2 import _fetch_s2_tiff, _parse_multiband_tiff, _get_token
-    from imint.training.tile_fetch import _CDSE_SEMAPHORE
+    """Fetch B08 for one date via DES openEO.
 
-    _CDSE_SEMAPHORE.acquire()
+    cloud_threshold=1.0 — the frame's date already passed cloud
+    filtering when the tile's `spectral` was built; don't reject it
+    again here. fetch_des_data returns all spectral bands; we keep B08
+    and resample to (size_px, size_px) if openEO returns a different
+    grid.
+    """
+    from imint.fetch import fetch_des_data
+
+    coords = {
+        "west": west, "south": south, "east": east, "north": north,
+    }
     try:
-        token = _get_token()
-        tiff_bytes = _fetch_s2_tiff(
-            west, south, east, north, size_px, size_px,
-            date=date_str, token=token,
-            evalscript=_B08_EVALSCRIPT,
+        r = fetch_des_data(
+            date=date_str, coords=coords,
+            cloud_threshold=1.0, include_scl=False,
         )
-        bands = _parse_multiband_tiff(tiff_bytes, size_px, size_px, 1)
-        if bands and len(bands) >= 1:
-            _CDSE_SEMAPHORE.report_success()
-            return bands[0].astype(np.float32)  # (H, W)
-        _CDSE_SEMAPHORE.report_success()  # API worked, just no data
     except Exception:
-        _CDSE_SEMAPHORE.report_failure()
-    finally:
-        _CDSE_SEMAPHORE.release()
-    return None
+        return None
+
+    arr = r.bands.get("B08") if r and r.bands else None
+    if arr is None:
+        return None
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.ndim == 3 and arr.shape[0] == 1:
+        arr = arr[0]
+    if arr.shape != (size_px, size_px):
+        try:
+            from scipy.ndimage import zoom
+            zy = size_px / arr.shape[0]
+            zx = size_px / arr.shape[1]
+            arr = zoom(arr, (zy, zx), order=1).astype(np.float32)
+        except Exception:
+            return None
+    return arr
 
 
 def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
