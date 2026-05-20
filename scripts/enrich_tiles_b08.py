@@ -98,7 +98,7 @@ def _fetch_b08_frame(
             collection_id="s2_msi_l2a",
             spatial_extent=spatial,
             temporal_extent=[date_str, d1],
-            bands=["B08"],
+            bands=["b08"],  # DES uses lowercase band names (CDSE: "B08")
         )
         cube.download(tmp_path, format="GTiff")
     except Exception as e:
