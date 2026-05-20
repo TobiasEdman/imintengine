@@ -156,6 +156,15 @@ class UnifiedDataset(Dataset):
         FileNotFoundError: If both tile directories are empty or missing.
     """
 
+    # Model registry keys for which this dataset can build per-model
+    # input tensors (Clay / CROMA stacks). Other ensemble members are
+    # routed through different keys (Prithvi → `spectral`; TerraMind →
+    # `spectral`+`s1_vv_vh`; Tessera → `tessera`) which require their
+    # own wiring landed separately.
+    _SUPPORTED_MODEL_KEYS: frozenset[str] = frozenset({
+        "clay_v1_5", "croma_base",
+    })
+
     def __init__(
         self,
         lulc_dir: str | Path | None = None,
@@ -166,6 +175,7 @@ class UnifiedDataset(Dataset):
         augment_override: bool | None = None,
         multitemporal: bool = False,
         num_temporal_frames: int = 4,
+        model_keys: tuple[str, ...] = (),
     ):
         super().__init__()
         self.patch_size = patch_size
@@ -173,6 +183,17 @@ class UnifiedDataset(Dataset):
         self.augment = (split == "train") if augment_override is None else augment_override
         self.multitemporal = multitemporal
         self.num_temporal_frames = num_temporal_frames
+
+        # Opt-in per-model tensor emission. Empty tuple preserves the
+        # historical Prithvi-only behaviour byte-for-byte (no extra keys,
+        # no extra I/O, no extra cost per __getitem__).
+        bad = set(model_keys) - self._SUPPORTED_MODEL_KEYS
+        if bad:
+            raise ValueError(
+                f"Unsupported model_keys: {sorted(bad)}. "
+                f"Supported: {sorted(self._SUPPORTED_MODEL_KEYS)}"
+            )
+        self.model_keys = tuple(model_keys)
 
         # Prithvi normalization reshaped for broadcasting over (6, H, W)
         self._mean = PRITHVI_MEAN.reshape(N_BANDS, 1, 1)
@@ -343,12 +364,25 @@ class UnifiedDataset(Dataset):
 
         aux_stack = self._load_aux_channels(data, h, w) if self.enable_aux else None
 
-        # Fold area_map into aux_stack as channel 0 for spatial consistency
+        # Fold area_map into aug_stack as channel 0 for spatial consistency
         area_as_channel = area_map[np.newaxis]  # (1, H, W)
         if aux_stack is not None:
             aug_stack = np.concatenate([area_as_channel, aux_stack], axis=0)
         else:
             aug_stack = area_as_channel
+
+        # --- Per-model extras (Clay / CROMA): build at native resolution
+        # in raw reflectance [0,1] and fold into aug_stack so the same
+        # crop+flip transform is applied. Channel-counts tracked so we
+        # can slice them back out post-crop.
+        n_area = 1
+        n_aux = len(AUX_CHANNEL_NAMES) if self.enable_aux else 0
+        extras_specs: list[tuple[str, int]] = []  # [(name, n_channels)]
+        if self.model_keys:
+            extras_tensors = self._build_model_specific_tensors(data, source)
+            for name, arr in extras_tensors.items():
+                aug_stack = np.concatenate([aug_stack, arr], axis=0)
+                extras_specs.append((name, arr.shape[0]))
 
         # --- Prithvi normalization: reflectance [0,1] -> DN -> z-score -
         # Normalize all T frames identically (mean/std tile across frames)
@@ -363,9 +397,17 @@ class UnifiedDataset(Dataset):
         else:
             image, label, aug_stack = self._center_crop(image, label, aug_stack)
 
-        # Extract area_map back out (was channel 0); restore aux_stack
-        area_map_cropped = aug_stack[0]                          # (H', W')
-        aux_stack = aug_stack[1:] if self.enable_aux else None   # (N, H', W')
+        # Extract area_map (chan 0), aux_stack (next n_aux), and any
+        # per-model extras (whatever follows) using explicit offsets so
+        # adding new tail channels never silently breaks the aux unpack.
+        area_map_cropped = aug_stack[0]                                  # (H', W')
+        aux_stack = (aug_stack[n_area:n_area + n_aux]
+                     if self.enable_aux else None)                       # (N, H', W')
+        extras_cropped: dict[str, np.ndarray] = {}
+        offset = n_area + n_aux
+        for name, n_ch in extras_specs:
+            extras_cropped[name] = aug_stack[offset:offset + n_ch]
+            offset += n_ch
 
         # Compute per-pixel loss weights from cropped area map
         area_t = torch.from_numpy(np.ascontiguousarray(area_map_cropped))
@@ -408,6 +450,12 @@ class UnifiedDataset(Dataset):
                 result[ch_name] = torch.from_numpy(
                     np.ascontiguousarray(aux_stack[i:i + 1])
                 )  # (1, H', W')
+
+        # Attach per-model extras (Clay / CROMA stacks) as full (C, H', W')
+        # tensors. Raw reflectance [0,1] — the model's normalizer (e.g.
+        # ClayNormalizer, CromaNormalizer) applies at forward time.
+        for name, arr in extras_cropped.items():
+            result[name] = torch.from_numpy(np.ascontiguousarray(arr))
 
         return result
 
@@ -536,6 +584,102 @@ class UnifiedDataset(Dataset):
 
         start = frame_idx * N_BANDS
         return spectral[start:start + N_BANDS]  # (6, H, W)
+
+    # ------------------------------------------------------------------
+    # Per-model input tensors (Clay / CROMA)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _select_best_frame_idx(
+        data: np.lib.npyio.NpzFile, source: str, n_frames: int,
+    ) -> int:
+        """Pick the single best frame index for single-frame models.
+
+        Mirrors the logic in ``_extract_lulc_frame`` (DOY closest to
+        peak-summer) and ``_extract_crop_frame`` (index 1, falling back
+        to first valid via ``seasons_valid``). Returned index is in
+        ``[0, n_frames)``.
+        """
+        if source == "lulc":
+            doy = data.get("doy", None)
+            if doy is not None:
+                doy = np.asarray(doy).ravel()
+                if doy.shape[0] >= n_frames and np.any(doy > 0):
+                    valid_mask = doy[:n_frames] > 0
+                    if np.any(valid_mask):
+                        distances = np.abs(
+                            doy[:n_frames].astype(np.float64) - PEAK_SUMMER_DOY
+                        )
+                        distances[~valid_mask] = 9999
+                        return int(np.argmin(distances))
+            return min(1, n_frames - 1)
+        # crop branch
+        frame_idx = min(1, n_frames - 1)
+        seasons_valid = data.get("seasons_valid", None)
+        if seasons_valid is not None:
+            sv = np.asarray(seasons_valid).ravel()
+            if sv.shape[0] >= n_frames and not sv[frame_idx]:
+                valid = np.where(sv[:n_frames])[0]
+                if len(valid) > 0:
+                    return int(valid[0])
+        return frame_idx
+
+    def _build_model_specific_tensors(
+        self, data: np.lib.npyio.NpzFile, source: str,
+    ) -> dict[str, np.ndarray]:
+        """Build per-model input stacks at native tile resolution.
+
+        Returns a dict of ``{model_key: (C, H, W) float32 array}`` in
+        raw reflectance [0, 1]. Caller is responsible for stacking
+        these into the augment pipeline so the same crop/flip is
+        applied; model-side normalizers handle scaling at forward time.
+
+        Raises:
+            KeyError: if a required enrichment key (``b08``, ``rededge``)
+                is missing for a tile that the caller asked Clay/CROMA
+                tensors for. Lets the dataset's retry-on-error loop
+                pick a different tile instead of silently emitting zeros.
+        """
+        # Defer the build_*_tensor imports — they pull in torch as a
+        # transitive dep through their type guards, but unified_dataset
+        # is imported during dataset discovery before torch is needed.
+        from imint.fm.loaders.clay import build_s2_clay_tensor
+        from imint.fm.loaders.croma import build_s2_croma_tensor
+
+        raw_spectral = data.get("spectral", data.get("image"))
+        if raw_spectral is None:
+            raise KeyError("tile missing 'spectral'/'image'")
+        spectral = np.asarray(raw_spectral, dtype=np.float32)  # (T*6, H, W)
+        n_frames = spectral.shape[0] // N_BANDS
+
+        idx = self._select_best_frame_idx(data, source, n_frames)
+        spectral_6band = spectral[idx * N_BANDS:(idx + 1) * N_BANDS]  # (6, H, W)
+
+        # b08 layout: (T, H, W) per scripts/enrich_tiles_b08.py
+        b08_all = data.get("b08", None)
+        if b08_all is None:
+            raise KeyError("tile missing 'b08' (run enrich_tiles_b08.py)")
+        b08_all = np.asarray(b08_all, dtype=np.float32)
+        b08_frame = b08_all[idx]  # (H, W)
+
+        # rededge layout: (T*3, H, W) per scripts/enrich_tiles_rededge.py
+        rededge_all = data.get("rededge", None)
+        if rededge_all is None:
+            raise KeyError("tile missing 'rededge' (run enrich_tiles_rededge.py)")
+        rededge_all = np.asarray(rededge_all, dtype=np.float32)
+        rededge_frame = rededge_all[idx * 3:(idx + 1) * 3]  # (3, H, W)
+
+        out: dict[str, np.ndarray] = {}
+        if "clay_v1_5" in self.model_keys:
+            out["s2_clay"] = build_s2_clay_tensor(
+                spectral_6band, b08_frame, rededge=rededge_frame,
+            ).astype(np.float32)  # (10, H, W)
+        if "croma_base" in self.model_keys:
+            # B01/B09 left as None → zero-padded per CROMA's MAE-robust design
+            out["s2_croma"] = build_s2_croma_tensor(
+                spectral_6band, b08_frame, rededge=rededge_frame,
+            ).astype(np.float32)  # (12, H, W)
+        return out
 
     # ------------------------------------------------------------------
     # Label construction
