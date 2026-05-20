@@ -30,9 +30,8 @@ spec:
 
               python scripts/enrich_tiles_b08.py \
                 --data-dir /data/unified_v2_512 \
-                --workers 1 \
-                --max-tiles 3 \
-                --no-skip-existing
+                --workers 6 \
+                --skip-existing
 
           env:
             - name: PYTHONUNBUFFERED

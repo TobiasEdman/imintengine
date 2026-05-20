@@ -94,11 +94,14 @@ def _fetch_b08_frame(
     tmp_path = tempfile.mktemp(suffix=".tif")
     try:
         conn = _get_des_conn()
+        # DES uses lowercase band names; imint.utils.IMINT_TO_DES is the
+        # canonical conversion (CDSE/IMINT "B08" → DES "b08" etc.).
+        from imint.utils import IMINT_TO_DES
         cube = conn.load_collection(
             collection_id="s2_msi_l2a",
             spatial_extent=spatial,
             temporal_extent=[date_str, d1],
-            bands=["b08"],  # DES uses lowercase band names (CDSE: "B08")
+            bands=[IMINT_TO_DES["B08"]],
         )
         cube.download(tmp_path, format="GTiff")
     except Exception as e:
