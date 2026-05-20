@@ -1,0 +1,89 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-b08-vito
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 1
+  # Parallel B08 enrichment via VITO (openEO Platform — federated,
+  # includes VITO as backend). Runs alongside enrich-b08 (DES) with
+  # --skip-existing so the two jobs coordinate via the filesystem:
+  # whichever finishes a tile first writes b08+has_b08; the other
+  # skips it on its next poll. Halves the wallclock vs DES alone.
+  #
+  # Auth (openeo-python-client built-in env-var path):
+  #   OPENEO_AUTH_CLIENT_ID / OPENEO_AUTH_CLIENT_SECRET /
+  #   OPENEO_AUTH_PROVIDER_ID  — from the openeo-platform-credentials
+  # Secret. Create with:
+  #   kubectl create secret generic openeo-platform-credentials \
+  #     -n prithvi-training-default \
+  #     --from-literal=client_id=... \
+  #     --from-literal=client_secret=... \
+  #     --from-literal=provider_id=...
+  activeDeadlineSeconds: 172800  # 48h
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: enricher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== B08 Enrichment (VITO / openEO Platform) ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx openeo
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              python scripts/enrich_tiles_b08.py \
+                --data-dir /data/unified_v2_512 \
+                --source vito \
+                --workers 6 \
+                --skip-existing
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # openeo-python-client reads these env vars natively for
+            # authenticate_oidc_client_credentials() (v0.18+).
+            - name: OPENEO_AUTH_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: openeo-platform-credentials
+                  key: client_id
+            - name: OPENEO_AUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: openeo-platform-credentials
+                  key: client_secret
+            - name: OPENEO_AUTH_PROVIDER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: openeo-platform-credentials
+                  key: provider_id
+            # Optional override of the openEO endpoint. Defaults to
+            # 'openeo.cloud' (openEO Platform).
+            - name: OPENEO_URL
+              value: "openeo.cloud"
+          resources:
+            requests:
+              cpu: "6"
+              memory: "12Gi"
+            limits:
+              cpu: "6"
+              memory: "12Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

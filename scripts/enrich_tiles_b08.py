@@ -41,46 +41,70 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-_DES_LOCAL = threading.local()
+# Per-source openEO config — collection id + band name case differ
+# across backends. Keep the script source-agnostic by dispatching here.
+# "des" = Digital Earth Sweden (lowercase bands, free for RISE).
+# "vito" = openEO Platform (openeo.cloud) — federated, includes VITO;
+#          supports client_credentials for unattended runs. The native
+#          Terrascope endpoint (openeo.vito.be) only supports
+#          interactive OIDC, which doesn't fit a k8s job.
+_SOURCE_CONFIG = {
+    "des": {"collection_id": "s2_msi_l2a", "band_b08": "b08"},
+    "vito": {"collection_id": "SENTINEL2_L2A", "band_b08": "B08"},
+}
+
+_CONN_LOCAL = threading.local()
 
 
-def _get_des_conn():
-    """Thread-local authenticated DES openEO connection.
+def _get_conn(source: str):
+    """Thread-local authenticated openEO connection for ``source``.
 
     Auth happens once per worker thread; subsequent calls reuse the
     connection. On any error, the next call rebuilds — covers session
     expiry over long runs.
     """
-    conn = getattr(_DES_LOCAL, "conn", None)
+    conn = getattr(_CONN_LOCAL, "conn", None)
     if conn is None:
-        from imint.fetch import _connect
-        conn = _connect()
-        _DES_LOCAL.conn = conn
+        if source == "des":
+            from imint.fetch import _connect
+            conn = _connect()
+        elif source == "vito":
+            import openeo
+            url = os.environ.get("OPENEO_URL", "openeo.cloud")
+            conn = openeo.connect(url)
+            # Uses OPENEO_AUTH_CLIENT_ID / OPENEO_AUTH_CLIENT_SECRET /
+            # OPENEO_AUTH_PROVIDER_ID env vars (openeo-python-client 0.18+).
+            conn.authenticate_oidc_client_credentials()
+        else:
+            raise ValueError(f"Unknown source '{source}' — use 'des' or 'vito'")
+        _CONN_LOCAL.conn = conn
     return conn
 
 
-def _drop_des_conn() -> None:
+def _drop_conn() -> None:
     """Drop the thread's cached connection — call after an error."""
-    if hasattr(_DES_LOCAL, "conn"):
-        del _DES_LOCAL.conn
+    if hasattr(_CONN_LOCAL, "conn"):
+        del _CONN_LOCAL.conn
 
 
 def _fetch_b08_frame(
     west: float, south: float, east: float, north: float,
     date_str: str, size_px: int,
+    source: str = "des",
 ) -> np.ndarray | None:
-    """Fetch B08 for one date via DES openEO — band-specific.
+    """Fetch B08 for one date via ``source``'s openEO — band-specific.
 
-    Asks DES for ONLY band B08 over the exact known date (the tile
-    already knows which date was used for that frame), via
-    ``load_collection(collection_id='s2_msi_l2a', bands=['B08'],
-    temporal_extent=[d, d+1])``. Returns reflectance [0, 1] on the
-    requested ``(size_px, size_px)`` grid in EPSG:3006.
+    Asks the backend for ONLY band B08 over the exact known date (the
+    tile already knows which date was used for that frame), via
+    ``load_collection(collection_id=..., bands=[B08], temporal_extent=
+    [d, d+1])``. Returns reflectance [0, 1] on the requested
+    ``(size_px, size_px)`` grid in EPSG:3006.
     """
     from datetime import datetime, timedelta
     import os
     import tempfile
 
+    cfg = _SOURCE_CONFIG[source]
     try:
         d0 = datetime.fromisoformat(date_str)
     except Exception:
@@ -93,22 +117,19 @@ def _fetch_b08_frame(
 
     tmp_path = tempfile.mktemp(suffix=".tif")
     try:
-        conn = _get_des_conn()
-        # DES uses lowercase band names; imint.utils.IMINT_TO_DES is the
-        # canonical conversion (CDSE/IMINT "B08" → DES "b08" etc.).
-        from imint.utils import IMINT_TO_DES
+        conn = _get_conn(source)
         cube = conn.load_collection(
-            collection_id="s2_msi_l2a",
+            collection_id=cfg["collection_id"],
             spatial_extent=spatial,
             temporal_extent=[date_str, d1],
-            bands=[IMINT_TO_DES["B08"]],
+            bands=[cfg["band_b08"]],
         )
         cube.download(tmp_path, format="GTiff")
     except Exception as e:
-        print(f"    [b08-fetch] DES openEO failed for "
+        print(f"    [b08-fetch:{source}] failed for "
               f"{date_str} bbox={spatial}: {type(e).__name__}: {e}",
               flush=True)
-        _drop_des_conn()
+        _drop_conn()
         return None
 
     try:
@@ -140,7 +161,8 @@ def _fetch_b08_frame(
     return arr / 10000.0
 
 
-def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
+def enrich_one_tile(tile_path: str, skip_existing: bool = True,
+                    source: str = "des") -> dict:
     """Add B08 to one tile .npz file."""
     name = Path(tile_path).stem
     try:
@@ -180,7 +202,7 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True) -> dict:
 
         frame = _fetch_b08_frame(
             bbox["west"], bbox["south"], bbox["east"], bbox["north"],
-            date_str, size_px,
+            date_str, size_px, source=source,
         )
         if frame is not None and frame.shape == (h, w):
             b08_frames.append(frame)
@@ -202,14 +224,21 @@ def main():
     parser.add_argument("--skip-existing", action="store_true", default=True)
     parser.add_argument("--no-skip-existing", dest="skip_existing", action="store_false")
     parser.add_argument("--max-tiles", type=int, default=None)
+    parser.add_argument(
+        "--source", default="des", choices=list(_SOURCE_CONFIG),
+        help="openEO backend: 'des' (Digital Earth Sweden, default) or "
+             "'vito' (openEO Platform, federated, includes VITO). vito "
+             "requires OPENEO_AUTH_CLIENT_ID/SECRET/PROVIDER_ID env vars.",
+    )
     args = parser.parse_args()
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
     if args.max_tiles:
         tiles = tiles[:args.max_tiles]
-    print(f"=== B08 Enrichment ===")
-    print(f"  Tiles: {len(tiles)}")
-    print(f"  Workers: {args.workers}")
+    print(f"=== B08 Enrichment ({args.source}) ===")
+    print(f"  Tiles:  {len(tiles)}")
+    print(f"  Workers:{args.workers}")
+    print(f"  Source: {args.source}")
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     lock = threading.Lock()
@@ -218,7 +247,8 @@ def main():
 
     def _run(path):
         nonlocal completed
-        r = enrich_one_tile(path, skip_existing=args.skip_existing)
+        r = enrich_one_tile(
+            path, skip_existing=args.skip_existing, source=args.source)
         with lock:
             completed += 1
             stats[r.get("status", "failed")] = stats.get(r.get("status", "failed"), 0) + 1
