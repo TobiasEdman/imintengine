@@ -91,6 +91,7 @@ def _fetch_b08_frame(
         "crs": "EPSG:3006",
     }
 
+    tmp_path = tempfile.mktemp(suffix=".tif")
     try:
         conn = _get_des_conn()
         cube = conn.load_collection(
@@ -99,9 +100,11 @@ def _fetch_b08_frame(
             temporal_extent=[date_str, d1],
             bands=["B08"],
         )
-        tmp_path = tempfile.mktemp(suffix=".tif")
         cube.download(tmp_path, format="GTiff")
-    except Exception:
+    except Exception as e:
+        print(f"    [b08-fetch] DES openEO failed for "
+              f"{date_str} bbox={spatial}: {type(e).__name__}: {e}",
+              flush=True)
         _drop_des_conn()
         return None
 
@@ -109,7 +112,9 @@ def _fetch_b08_frame(
         import rasterio
         with rasterio.open(tmp_path) as ds:
             arr = ds.read(1).astype(np.float32)
-    except Exception:
+    except Exception as e:
+        print(f"    [b08-fetch] rasterio read failed: "
+              f"{type(e).__name__}: {e}", flush=True)
         return None
     finally:
         try:
