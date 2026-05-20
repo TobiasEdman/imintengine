@@ -1,0 +1,96 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-vpp-coverage
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: audit-vpp-coverage
+spec:
+  backoffLimit: 0
+  # Post-year-sweep audit + cleanup. Mounts both training PVCs.
+  # Cleanup: removes the unused 2017 WEkEO COGs (the 2017 max-year
+  # bucket was empty after _tile_year shifted the count off first-year).
+  # Audit: per-dataset VPP coverage + per-band non-zero %.
+  activeDeadlineSeconds: 1200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+              echo "=== cleanup: 2017 COGs (unused) ==="
+              python3 -c "
+              import glob, os
+              fs = glob.glob('/cephfs/vpp_wekeo/VPP_2017_*')
+              size = sum(os.path.getsize(f) for f in fs) / (1024**3)
+              for f in fs:
+                  os.remove(f)
+              print(f'  removed {len(fs)} files, freed {size:.1f} GB')
+              "
+              echo ""
+              echo "=== audit: VPP coverage per dataset ==="
+              python3 -c "
+              import numpy as np, glob
+              V = ['vpp_sosd','vpp_eosd','vpp_length','vpp_maxv','vpp_minv']
+              for label, d in [('512','/cephfs/unified_v2_512'),
+                               ('256','/td/unified_v2')]:
+                  fs = sorted(glob.glob(d + '/*.npz'))
+                  have = 0
+                  legacy = 0
+                  nz = {b: [] for b in V}
+                  rng = {b: [] for b in V}
+                  for f in fs:
+                      try:
+                          z = np.load(f, allow_pickle=True)
+                      except Exception:
+                          legacy += 1; continue
+                      if not all(b in z.files for b in V):
+                          continue
+                      have += 1
+                      for b in V:
+                          a = np.asarray(z[b])
+                          nz[b].append(float((a > 0).mean() * 100))
+                          rng[b].append((float(a.min()), float(a.max())))
+                  print(f'=== {label} ({d}) ===')
+                  print(f'  total tiles : {len(fs)}')
+                  print(f'  with vpp_*  : {have} ({have/len(fs)*100:.1f}%)')
+                  print(f'  unreadable  : {legacy}')
+                  for b in V:
+                      if nz[b]:
+                          mnz = sum(nz[b]) / len(nz[b])
+                          mins = [r[0] for r in rng[b]]
+                          maxs = [r[1] for r in rng[b]]
+                          print(f'    {b:14s} non-zero {mnz:5.1f}%   '
+                                f'range [{min(mins):.2f}, {max(maxs):.2f}]')
+              "
+              echo "=== done ==="
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /cephfs
+            - name: td
+              mountPath: /td
+              readOnly: true
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: td
+          persistentVolumeClaim:
+            claimName: training-data
