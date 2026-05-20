@@ -1,0 +1,116 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: year-sweep-vpp
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: year-sweep-vpp
+spec:
+  backoffLimit: 0
+  # Sequential year-matched VPP sweep for the remaining years
+  # [2017, 2018, 2022]. Year 2021 was done by enrich-512-vpp and
+  # enrich-256-vpp earlier. For each year Y this pod runs, in order:
+  #   1. prefetch_vpp_wekeo.py for the 44 European MGRS tiles, year Y.
+  #   2. prefetch_aux.py --year Y on /cephfs/unified_v2_512 (512 first).
+  #   3. prefetch_aux.py --year Y on /td/unified_v2 (then 256).
+  # Mounts both training PVCs; reads WEkEO creds from `wekeo-creds`.
+  # Rough budget: prefetch ~40 min/year + enrich 4-5 h/year x 3 ≈ 14 h.
+  activeDeadlineSeconds: 64800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: sweep
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== year-sweep VPP: 2017, 2018, 2022 ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj Pillow hda
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              MGRS="32VPK,32VPR,33UUB,33UVB,33VUC,33VUD,33VUE,33VUF,33VUG,33VUH,33VUJ,33VUK,33VVE,33VVF,33VVG,33VVJ,33VVK,33VVL,33VWF,33VWK,33VWL,33VXG,33VXH,33VXK,33VXL,33WVM,33WWM,33WWN,33WWQ,33WWR,33WXM,33WXN,33WXP,33WXQ,33WXR,34VCQ,34VDR,34WDA,34WDB,34WDS,34WDT,34WDV,34WEB,34WET"
+
+              for Y in 2017 2018 2022; do
+                echo ""
+                echo "######################################################"
+                echo "### YEAR $Y — start $(date) ###"
+                echo "######################################################"
+
+                echo ""
+                echo "--- [$Y] WEkEO prefetch ---"
+                python scripts/prefetch_vpp_wekeo.py \
+                  --mgrs-tiles "$MGRS" \
+                  --years "$Y" \
+                  --dest-dir /cephfs/vpp_wekeo
+
+                echo ""
+                echo "--- [$Y] enrich 512 (/cephfs/unified_v2_512) ---"
+                python scripts/prefetch_aux.py \
+                  --data-dir /cephfs/unified_v2_512 \
+                  --channels vpp \
+                  --year "$Y" \
+                  --no-cache \
+                  --workers 4
+
+                echo ""
+                echo "--- [$Y] enrich 256 (/td/unified_v2) ---"
+                python scripts/prefetch_aux.py \
+                  --data-dir /td/unified_v2 \
+                  --channels vpp \
+                  --year "$Y" \
+                  --no-cache \
+                  --workers 4
+
+                echo ""
+                echo "### YEAR $Y — done $(date) ###"
+              done
+
+              echo ""
+              echo "=== ALL YEARS DONE: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: VPP_SOURCE
+              value: "wekeo"
+            - name: VPP_WEKEO_DIR
+              value: "/cephfs/vpp_wekeo"
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /cephfs
+            - name: td
+              mountPath: /td
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: td
+          persistentVolumeClaim:
+            claimName: training-data
