@@ -607,6 +607,7 @@ def refetch_tile(
     output_dir: str,
     tile: TileConfig,
     cloud_max: float = 30.0,
+    max_aoi_cloud: float = 0.10,
     vpp_cache: dict | None = None,
     best_dates: dict | None = None,
     sources: tuple[str, ...] = ("cdse", "des"),
@@ -669,6 +670,7 @@ def refetch_tile(
         scene_results = fetch_4frame_scenes(
             bbox, coords, fetch_years, tile,
             scene_cloud_max=cloud_max,
+            max_aoi_cloud=max_aoi_cloud,
             vpp_windows=vpp_windows,
             sources=sources,
         )

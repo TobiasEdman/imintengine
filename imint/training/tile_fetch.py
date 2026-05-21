@@ -143,6 +143,7 @@ def _fetch_single_scene(
     tile: "TileConfig",
     *,
     scene_cloud_max: float = 30.0,
+    max_aoi_cloud: float = 0.10,
     max_candidates: int = 3,
     cloud_threshold: float = 0.15,
     haze_threshold: float = 0.08,
@@ -153,29 +154,38 @@ def _fetch_single_scene(
     Returns:
         (scene, date_str). scene is (6, H, W) float32 or None.
     """
-    from imint.fetch import _stac_available_dates
     from imint.training.cdse_s2 import fetch_s2_scene
 
+    # ERA5-first candidate selection (replaces the older STAC scene_cloud_max
+    # filter). ERA5 reanalysis predicts AOI cloud cover across the window,
+    # then SCL at tile-cutout level (max_aoi_cloud) makes the final cut.
+    # The STAC catalog scene_cloud_max filter (kept as fallback below for
+    # pre-2018 ranges) was both redundant and too coarse — it filtered
+    # against scene-wide cloud cover for the 100×100km S2 tile, not the
+    # 5×5km AOI we actually fetch, and caused us to miss good scenes that
+    # happened to have heavy clouds OUTSIDE the AOI but clear over it.
     candidates = []
-    # DES STAC only indexes S2 from 2018 onwards — skip for pre-2018 ranges
     if date_end >= "2018-01-01":
         try:
-            dates = _stac_available_dates(
+            from imint.training.optimal_fetch import optimal_fetch_dates
+            plan = optimal_fetch_dates(
                 coords_wgs84, date_start, date_end,
-                scene_cloud_max=scene_cloud_max,
+                mode="era5_then_scl",
+                max_aoi_cloud=max_aoi_cloud,
             )
-            candidates.extend(dates)
+            # plan.dates is already ERA5 ∩ SCL-filtered; use as candidates
+            # with sentinel cloud_pct=0.0 since the threshold is already met.
+            candidates = [(d, 0.0) for d in plan.dates]
         except Exception:
             pass
 
-    # If STAC found nothing (pre-2018, or simply no clear scenes indexed),
-    # generate synthetic date candidates and try CDSE directly
+    # Pre-2018 fallback (DES STAC + ERA5 may both be unavailable): synthetic
+    # candidate dates every 3 days. The per-tile SCL check at cutout time
+    # still gates acceptance.
     if not candidates:
         from datetime import datetime as _dt, timedelta as _td
         d0 = _dt.strptime(date_start, "%Y-%m-%d")
         d1 = _dt.strptime(date_end, "%Y-%m-%d")
-        # Pre-2018: probe every 3 days (S2 revisit ~5 days with single satellite)
-        # Post-2018: every 5 days is fine (STAC already found candidates above)
         step = 3 if date_end < "2018-01-01" else max(1, (d1 - d0).days // 6)
         for i in range(0, (d1 - d0).days + 1, step):
             candidates.append(((d0 + _td(days=i)).strftime("%Y-%m-%d"), 50.0))
@@ -326,6 +336,7 @@ def fetch_4frame_scenes(
     tile: "TileConfig",
     *,
     scene_cloud_max: float = 30.0,
+    max_aoi_cloud: float = 0.10,
     max_candidates: int = 3,
     vpp_windows: list[tuple[int, int]] | None = ...,  # sentinel: fetch on demand
     sources: tuple[str, ...] = ("cdse", "des"),
@@ -368,6 +379,7 @@ def fetch_4frame_scenes(
             f"{prev_year}-08-15", f"{prev_year}-10-31",
             tile,
             scene_cloud_max=autumn_scene_cloud_max,
+            max_aoi_cloud=min(max_aoi_cloud * 2, 0.30),  # autumn permissivt
             max_candidates=max(max_candidates, 16),
             cloud_threshold=0.30,
             haze_threshold=0.12,
@@ -388,6 +400,7 @@ def fetch_4frame_scenes(
                     bbox_3006, coords_wgs84, ds, de,
                     tile,
                     scene_cloud_max=scene_cloud_max,
+                    max_aoi_cloud=max_aoi_cloud,
                     max_candidates=max_candidates,
                     sources=sources,
                 )

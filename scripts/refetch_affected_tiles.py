@@ -90,7 +90,11 @@ def main():
                    help="256 or 512 — must match output-dir")
     p.add_argument("--workers", type=int, default=6,
                    help="Concurrent fetches (default 6)")
-    p.add_argument("--cloud-max", type=float, default=30.0)
+    p.add_argument("--cloud-max", type=float, default=30.0,
+                   help="STAC scene_cloud_max (legacy, ERA5 prefilter replaces it)")
+    p.add_argument("--max-aoi-cloud", type=float, default=0.10,
+                   help="SCL AOI cloud threshold (0.10 = 10%%, per Lund-benchmark M4 "
+                        "ERA5->SCL — lowest mean COT 0.0086)")
     p.add_argument("--sources", default="des,cdse",
                    help="Comma-separated fetch backends in priority order")
     p.add_argument("--max-tiles", type=int, default=None,
@@ -107,6 +111,7 @@ def main():
     print(f"  workers:       {args.workers}", flush=True)
     print(f"  sources:       {sources}", flush=True)
     print(f"  cloud-max:     {args.cloud_max}", flush=True)
+    print(f"  max-aoi-cloud: {args.max_aoi_cloud}", flush=True)
 
     with open(args.audit_json) as f:
         audit = json.load(f)
@@ -143,7 +148,9 @@ def main():
         try:
             return refetch_tile(
                 loc, args.years, args.output_dir, tile,
-                cloud_max=args.cloud_max, sources=sources, force=True,
+                cloud_max=args.cloud_max,
+                max_aoi_cloud=args.max_aoi_cloud,
+                sources=sources, force=True,
             )
         except Exception as e:
             return {"name": loc["name"], "status": "error", "reason": str(e)[:200]}
