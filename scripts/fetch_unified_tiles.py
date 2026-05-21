@@ -602,6 +602,253 @@ def gen_from_existing(
     return locs
 
 
+def repair_to_canonical_layout(
+    loc: dict,
+    output_dir: str,
+    tile: TileConfig,
+    *,
+    cloud_max: float = 30.0,
+    max_aoi_cloud: float = 0.10,
+    sources: tuple[str, ...] = ("cdse", "des"),
+    cap_doy: int = 244,
+) -> dict:
+    """Repair a tile to canonical 4-frame layout via per-slot classify + fill-gap.
+
+    Canonical layout (calendar-monotonic across all 4 slots):
+        slot 0: autumn year-1            (DOY 228-300, hardcoded Aug 15..Oct 31)
+        slot 1: spring year              (VPP window 0, capped at cap_doy)
+        slot 2: early-summer year        (VPP window 1, capped at cap_doy)
+        slot 3: late-summer year         (VPP window 2, capped at cap_doy)
+
+    Algorithm:
+      1. Read existing dates/doy/tmask + VPP arrays from .npz
+      2. Compute capped VPP windows locally (no API call)
+      3. Classify each valid existing frame into a slot. Drop frames
+         with DOY > cap_doy in tile_year (the bug) or that match no slot.
+      4. Fetch only the missing slots.
+      5. Build new spectral cube in canonical slot order.
+      6. Verify calendar-date monotonicity. Strict-fail otherwise.
+      7. Atomic save (preserving all aux/label fields).
+
+    Per-tile cost: 1-3 _fetch_single_scene calls depending on which
+    slots survived classification. Returns status=skipped if all
+    4 slots were already filled correctly.
+
+    Year derivation hierarchy (loc agnostic — read straight from .npz):
+        tessera_year → lpis_year → year → first valid date.year
+    `tessera_year` is the verified primary (cross-checked against
+    LPIS-parcel counts for all 20 audit-flagged tiles in this batch).
+    """
+    from imint.training.tile_fetch import (
+        _fetch_single_scene, doy_to_date_range, N_BANDS,
+    )
+    from imint.training.vpp_windows import compute_growing_season_windows
+
+    name = loc["name"]
+    existing_path = loc.get("_existing_path")
+    out_path = os.path.join(output_dir, f"{name}.npz")
+
+    if not existing_path or not os.path.exists(existing_path):
+        return {"name": name, "status": "error", "reason": "no_existing_tile"}
+
+    try:
+        old = dict(np.load(existing_path, allow_pickle=True))
+    except Exception as e:
+        return {"name": name, "status": "error", "reason": f"npz_load: {e!s}"[:200]}
+
+    # Year derivation: tessera_year (LPIS-cross-checked) → lpis_year → year → dates
+    tile_year: int | None = None
+    for key in ("tessera_year", "lpis_year", "year"):
+        if key in old:
+            try:
+                tile_year = int(old[key])
+                break
+            except Exception:
+                pass
+    if tile_year is None:
+        # Last-resort: parse year from first valid date
+        for d in old.get("dates", []):
+            s = str(d)
+            if s and len(s) >= 4:
+                try:
+                    tile_year = int(s[:4])
+                    break
+                except ValueError:
+                    pass
+    if tile_year is None:
+        return {"name": name, "status": "error", "reason": "no_year_field"}
+
+    # Normalise bbox
+    raw_bbox = loc["bbox_3006"]
+    cx = (raw_bbox["west"] + raw_bbox["east"]) // 2
+    cy = (raw_bbox["south"] + raw_bbox["north"]) // 2
+    bbox = tile.bbox_from_center(cx, cy)
+    coords = bbox_3006_to_wgs84(bbox)
+    tile.assert_bbox_matches(bbox)
+
+    # Validate required fields
+    for req in ("spectral", "doy", "dates", "temporal_mask", "vpp_sosd", "vpp_eosd"):
+        if req not in old:
+            return {"name": name, "status": "error", "reason": f"missing_{req}"}
+
+    old_image = old["spectral"]                   # (NUM_FRAMES*N_BANDS, H, W)
+    old_doys = [int(x) for x in old["doy"]]
+    old_dates = [str(x) for x in old["dates"]]
+    old_tmask = [int(x) for x in old["temporal_mask"]]
+
+    # Compute VPP windows locally (no CDSE API call)
+    vpp_windows = compute_growing_season_windows(
+        old["vpp_sosd"], old["vpp_eosd"], num_frames=3,
+    )
+    # Cap against cap_doy (defends against fallback windows which aren't capped)
+    capped = [(s, min(e, cap_doy)) for s, e in vpp_windows]
+    capped = [(s, e) for s, e in capped if s <= e]
+    if len(capped) < 3:
+        return {"name": name, "status": "error",
+                "reason": f"vpp_windows_collapsed: orig={vpp_windows}"}
+
+    # Define 4 canonical slots
+    # Autumn (slot 0): hardcoded Aug 15..Oct 31 of year-1 per fetch_4frame_scenes
+    AUTUMN_DOY_MIN, AUTUMN_DOY_MAX = 228, 304
+    slot_defs = [
+        ("autumn_y_minus_1", tile_year - 1, AUTUMN_DOY_MIN, AUTUMN_DOY_MAX),
+        ("spring",           tile_year,     capped[0][0], capped[0][1]),
+        ("early_summer",     tile_year,     capped[1][0], capped[1][1]),
+        ("late_summer",      tile_year,     capped[2][0], capped[2][1]),
+    ]
+
+    # Classify existing frames into slots. slot_idx -> (src_idx_in_old, year, doy)
+    slot_assignments: dict[int, tuple[int, int, int]] = {}
+    dropped: list[tuple[int, int, str]] = []  # (src_idx, doy, reason)
+    for src_idx in range(4):
+        if old_tmask[src_idx] == 0:
+            continue
+        doy = old_doys[src_idx]
+        date_s = old_dates[src_idx]
+        try:
+            existing_year = int(date_s[:4])
+        except Exception:
+            dropped.append((src_idx, doy, "bad_date"))
+            continue
+        # Bug detection: late-autumn DOY in tile_year
+        if existing_year == tile_year and doy > cap_doy:
+            dropped.append((src_idx, doy, f"doy_gt_{cap_doy}"))
+            continue
+        # First-fit slot assignment
+        assigned = False
+        for slot_idx, (_, slot_year, slot_min, slot_max) in enumerate(slot_defs):
+            if (existing_year == slot_year
+                    and slot_min <= doy <= slot_max
+                    and slot_idx not in slot_assignments):
+                slot_assignments[slot_idx] = (src_idx, existing_year, doy)
+                assigned = True
+                break
+        if not assigned:
+            dropped.append((src_idx, doy, "no_slot_match"))
+
+    missing_slots = [i for i in range(4) if i not in slot_assignments]
+
+    if not missing_slots and not dropped:
+        return {"name": name, "status": "skipped", "reason": "all_slots_filled"}
+
+    # Fetch each missing slot
+    fetched: dict[int, tuple[np.ndarray, str]] = {}
+    failed_slots: list[int] = []
+    for slot_idx in missing_slots:
+        slot_name, slot_year, slot_min, slot_max = slot_defs[slot_idx]
+        ds, de = doy_to_date_range(slot_year, slot_min, slot_max)
+        is_autumn = (slot_idx == 0)
+        scene, date_str = _fetch_single_scene(
+            bbox, coords, ds, de, tile,
+            scene_cloud_max=min(cloud_max * 2, 60.0) if is_autumn else cloud_max,
+            max_aoi_cloud=min(max_aoi_cloud * 2, 0.30) if is_autumn else max_aoi_cloud,
+            max_candidates=16 if is_autumn else 3,
+            cloud_threshold=0.30 if is_autumn else 0.15,
+            haze_threshold=0.12 if is_autumn else 0.08,
+            sources=sources,
+        )
+        if scene is None:
+            failed_slots.append(slot_idx)
+            continue
+        # Defensive resize
+        if scene.shape[1] != tile.size_px or scene.shape[2] != tile.size_px:
+            padded = np.zeros((N_BANDS, tile.size_px, tile.size_px), dtype=np.float32)
+            h = min(scene.shape[1], tile.size_px)
+            w = min(scene.shape[2], tile.size_px)
+            padded[:, :h, :w] = scene[:, :h, :w]
+            scene = padded
+        fetched[slot_idx] = (scene, date_str)
+
+    if failed_slots:
+        return {
+            "name": name, "status": "failed",
+            "reason": f"fetch_failed_for_slots: {failed_slots}",
+            "kept_slots": sorted(slot_assignments.keys()),
+            "fetched_slots": sorted(fetched.keys()),
+            "dropped_count": len(dropped),
+        }
+
+    # Build canonical (4*N_BANDS, H, W) cube
+    H = W = tile.size_px
+    new_image = np.zeros((4 * N_BANDS, H, W), dtype=np.float32)
+    new_dates = ["", "", "", ""]
+    new_doys = [0, 0, 0, 0]
+    new_tmask = [0, 0, 0, 0]
+
+    for slot_idx in range(4):
+        dst = slot_idx * N_BANDS
+        if slot_idx in slot_assignments:
+            src_idx, _, _ = slot_assignments[slot_idx]
+            src = src_idx * N_BANDS
+            new_image[dst:dst + N_BANDS] = old_image[src:src + N_BANDS]
+            new_dates[slot_idx] = old_dates[src_idx]
+            new_doys[slot_idx] = old_doys[src_idx]
+            new_tmask[slot_idx] = 1
+        elif slot_idx in fetched:
+            scene, date_str = fetched[slot_idx]
+            new_image[dst:dst + N_BANDS] = scene
+            new_dates[slot_idx] = date_str
+            new_doys[slot_idx] = datetime.strptime(date_str, "%Y-%m-%d").timetuple().tm_yday
+            new_tmask[slot_idx] = 1
+
+    # Calendar-date monotonicity (autumn-y-1 < spring < early-summer < late-summer)
+    cal_dates = []
+    for slot_idx in range(4):
+        if not new_dates[slot_idx]:
+            return {"name": name, "status": "failed",
+                    "reason": f"slot_{slot_idx}_empty_after_build"}
+        cal_dates.append(datetime.strptime(new_dates[slot_idx], "%Y-%m-%d"))
+    if not (cal_dates[0] < cal_dates[1] < cal_dates[2] < cal_dates[3]):
+        return {
+            "name": name, "status": "failed",
+            "reason": f"non_monotonic_calendar",
+            "dates_after": new_dates,
+        }
+
+    # Save: preserve all aux/label fields, replace only the 4 mutated keys
+    save = {k: v for k, v in old.items() if k not in (
+        "spectral", "dates", "doy", "temporal_mask",
+    )}
+    save["spectral"] = new_image
+    save["dates"] = np.array(new_dates)
+    save["doy"] = np.array(new_doys, dtype=np.int32)
+    save["temporal_mask"] = np.array(new_tmask, dtype=np.uint8)
+
+    # Atomic write
+    tmp_path = out_path + ".tmp"
+    np.savez_compressed(tmp_path, **save)
+    os.replace(tmp_path, out_path)
+
+    return {
+        "name": name, "status": "ok",
+        "kept_slots": sorted(slot_assignments.keys()),
+        "fetched_slots": sorted(fetched.keys()),
+        "dropped_count": len(dropped),
+        "doys_after": new_doys,
+        "dates_after": new_dates,
+    }
+
+
 def refetch_late_autumn_frames(
     loc: dict,
     output_dir: str,

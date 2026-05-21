@@ -38,7 +38,7 @@ load_env()
 from imint.training.tile_bbox import resolve_tile_bbox
 from imint.training.tile_fetch import bbox_3006_to_wgs84
 from imint.training.tile_config import TileConfig
-from scripts.fetch_unified_tiles import refetch_late_autumn_frames
+from scripts.fetch_unified_tiles import repair_to_canonical_layout
 
 
 def loc_from_existing(name: str, tile: TileConfig, tiles_dir: str) -> dict | None:
@@ -147,7 +147,7 @@ def main():
 
     def task(loc):
         try:
-            return refetch_late_autumn_frames(
+            return repair_to_canonical_layout(
                 loc, args.output_dir, tile,
                 cloud_max=args.cloud_max,
                 max_aoi_cloud=args.max_aoi_cloud,
