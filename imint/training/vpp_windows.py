@@ -39,6 +39,19 @@ _MIN_GROWING_SEASON_DOY = 60     # No earlier than March 1
 _MAX_GROWING_SEASON_DOY = 330    # No later than November 26
 _MIN_GROWING_SEASON_LENGTH = 60  # At least 60 days
 
+# Cap for the growing-season END used in window division. VPP-derived
+# EOSD for Swedish vegetation routinely extends into Oct-Nov (forest
+# leaf-fall, late-grass dormancy), which made the LAST of N divided
+# windows fall in late autumn — useless for crop discrimination, where
+# the most spectrally distinctive signal is the May-September period
+# (peak vegetation through cereal maturation/harvest). Cap at DOY 244
+# (Sep 1) so the last window captures late-summer / early-autumn
+# maturity rather than full senescence.
+# See conversation_log entry 2026-05-21 for the bug analysis: tiles
+# 43983958 + 43983968 (lat 58.7-58.8) ended up with no June-July frame,
+# falling back to Oct 19 / Sep 1 for the third growing-season frame.
+_GROWING_SEASON_END_CAP_DOY = 244  # September 1 (non-leap; leap = Aug 31)
+
 
 def cnes_to_doy(cnes_val: float) -> int:
     """Convert CNES Julian Day to day-of-year (1-365/366).
@@ -141,6 +154,18 @@ def compute_growing_season_windows(
         return _FALLBACK_DOY_WINDOWS[:num_frames]
 
     gs_start, gs_end = gs
+    # Cap the effective growing-season end so the last window doesn't
+    # extend into senescence/leaf-fall (see _GROWING_SEASON_END_CAP_DOY
+    # rationale at module top).
+    gs_end = min(gs_end, _GROWING_SEASON_END_CAP_DOY)
+
+    # After capping, ensure the remaining window is still meaningful.
+    # If gs_start is already very late (extreme north / weird tile),
+    # the capped range may be too short to divide. Fall back in that
+    # case rather than producing degenerate single-pixel windows.
+    if gs_end - gs_start < _MIN_GROWING_SEASON_LENGTH:
+        return _FALLBACK_DOY_WINDOWS[:num_frames]
+
     gs_length = gs_end - gs_start
     window_length = gs_length / num_frames
 
@@ -149,7 +174,7 @@ def compute_growing_season_windows(
         w_start = int(gs_start + i * window_length)
         w_end = int(gs_start + (i + 1) * window_length) - 1
         if i == num_frames - 1:
-            w_end = gs_end  # ensure last window reaches the end
+            w_end = gs_end  # ensure last window reaches the (capped) end
         windows.append((w_start, w_end))
 
     return windows
