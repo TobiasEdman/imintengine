@@ -834,8 +834,10 @@ def repair_to_canonical_layout(
     save["doy"] = np.array(new_doys, dtype=np.int32)
     save["temporal_mask"] = np.array(new_tmask, dtype=np.uint8)
 
-    # Atomic write
-    tmp_path = out_path + ".tmp"
+    # Atomic write — tmp must end in .npz, else np.savez_compressed auto-
+    # appends ".npz" to the path, producing FOO.npz.tmp.npz and breaking
+    # the subsequent os.replace("FOO.npz.tmp", "FOO.npz") rename.
+    tmp_path = out_path[:-4] + ".tmp.npz"  # FOO.npz → FOO.tmp.npz
     np.savez_compressed(tmp_path, **save)
     os.replace(tmp_path, out_path)
 
@@ -1028,8 +1030,9 @@ def refetch_late_autumn_frames(
     save["doy"] = doy_arr
     save["temporal_mask"] = tmask
 
-    # Atomic write to avoid half-written .npz under crash.
-    tmp_path = out_path + ".tmp"
+    # Atomic write — tmp must end in .npz, else np.savez_compressed auto-
+    # appends ".npz" and the subsequent rename fails.
+    tmp_path = out_path[:-4] + ".tmp.npz"
     np.savez_compressed(tmp_path, **save)
     os.replace(tmp_path, out_path)
 
