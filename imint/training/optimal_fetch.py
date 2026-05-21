@@ -36,13 +36,8 @@ Usage
     "atmosphere"           — ERA5 prefilter only
     "scl_only"             — SCL-stack screen only
     "stac_then_scl"        — current Imint default (STAC → AOI-SCL post-filter)
-    "era5_then_scl"        — Cheapest filter first, AOI-aware end-to-end.
+    "era5_then_scl"        — RECOMMENDED. Cheapest filter first, AOI-aware end-to-end.
     "era5_then_stac"       — light variant, no openEO SCL call
-    "era5_ranked_then_scl" — RECOMMENDED for per-tile refetch. ERA5 ranks
-                              candidates by atmospheric quality, then SCL
-                              verifies them one at a time, stopping after
-                              N (default 3) clear scenes. Best case is
-                              one openEO call total instead of 4-5.
 
 The module returns *dates*, not arrays. The cost model that justifies the
 recommendation:
@@ -208,43 +203,6 @@ def _era5_daily_open_meteo(
     return daily
 
 
-def _era5_collect_passing(
-    bbox_wgs84: dict,
-    date_start: str,
-    date_end: str,
-    rules: dict,
-) -> list[tuple[str, float]]:
-    """Shared helper: walk ERA5 daily payload, emit (date, score) for rule-passing days.
-
-    Score is the same `precip_today + 0.5*precip_prev2 - 0.05*max(t2m-5,0)`
-    used by `era5_ranked_dates` — lower = drier and warmer. Returned in
-    chronological order; callers sort by score if they need ranking.
-    """
-    daily = _era5_daily_open_meteo(bbox_wgs84, date_start, date_end)
-    by_date = {w["date"]: w for w in daily}
-
-    out: list[tuple[str, float]] = []
-    for w in daily:
-        d = date.fromisoformat(w["date"])
-        prev_sum = 0.0
-        for off in (1, 2):
-            p = by_date.get((d - timedelta(days=off)).isoformat())
-            if p is not None:
-                prev_sum += p["precip_mm"]
-        if (
-            w["precip_mm"] <= rules["precip_today_max_mm"]
-            and prev_sum     <= rules["precip_prev2d_max_mm"]
-            and w["t2m_mean"] >= rules["t2m_mean_min_c"]
-        ):
-            score = (
-                w["precip_mm"]
-                + 0.5 * prev_sum
-                - 0.05 * max(w["t2m_mean"] - 5.0, 0.0)
-            )
-            out.append((w["date"], score))
-    return out
-
-
 def era5_prefilter_dates(
     bbox_wgs84: dict,
     date_start: str,
@@ -258,38 +216,24 @@ def era5_prefilter_dates(
     before any satellite API call.
     """
     rules = rules or DEFAULT_ATMOSPHERE_RULES
-    return [d for d, _ in _era5_collect_passing(bbox_wgs84, date_start, date_end, rules)]
+    daily = _era5_daily_open_meteo(bbox_wgs84, date_start, date_end)
+    by_date = {w["date"]: w for w in daily}
 
-
-def era5_ranked_dates(
-    bbox_wgs84: dict,
-    date_start: str,
-    date_end: str,
-    *,
-    rules: dict | None = None,
-) -> list[tuple[str, float]]:
-    """Stage 1 (ranked): Return rule-passing ISO dates sorted by ERA5 quality.
-
-    Score formula (lower = better):
-
-        score = precip_today_mm
-              + 0.5 * sum(precip_mm over previous 2 days)
-              - 0.05 * max(t2m_mean - 5°C, 0)
-
-    The first two terms reward dry conditions (recent rain leaves wet
-    surfaces that perturb both atmospheric scattering and surface
-    reflectance). The temperature term gives a small bonus for warm
-    days — these correlate with high-pressure synoptic patterns over
-    Sweden and therefore with stable, sunny weather.
-
-    Used by the ``era5_ranked_then_scl`` mode, which iterates this list
-    top-down with one SCL call per candidate, stopping as soon as enough
-    AOI-clear scenes are confirmed.
-    """
-    rules = rules or DEFAULT_ATMOSPHERE_RULES
-    scored = _era5_collect_passing(bbox_wgs84, date_start, date_end, rules)
-    scored.sort(key=lambda t: t[1])
-    return scored
+    keep: list[str] = []
+    for w in daily:
+        d = date.fromisoformat(w["date"])
+        prev_sum = 0.0
+        for off in (1, 2):
+            p = by_date.get((d - timedelta(days=off)).isoformat())
+            if p is not None:
+                prev_sum += p["precip_mm"]
+        if (
+            w["precip_mm"] <= rules["precip_today_max_mm"]
+            and prev_sum     <= rules["precip_prev2d_max_mm"]
+            and w["t2m_mean"] >= rules["t2m_mean_min_c"]
+        ):
+            keep.append(w["date"])
+    return keep
 
 
 # ── Stage 2: SCL-stack screen via DES openEO ───────────────────────────────
@@ -420,42 +364,6 @@ def _scl_chunk(
     return out
 
 
-def scl_single_day_screen(
-    bbox_wgs84: dict,
-    date_str: str,
-    *,
-    conn: Any | None = None,
-) -> float | None:
-    """Fetch SCL cloud fraction for a single calendar day, or None if no overpass.
-
-    Tight wrapper around `_scl_chunk` with a 1-day window. Used by the
-    ``era5_ranked_then_scl`` mode to verify ranked candidates one at a
-    time — most calls return either ``None`` (S2 doesn't pass that day,
-    ~80% of Swedish dates) or a single ``float`` to compare against
-    ``max_aoi_cloud``.
-
-    ``NoDataAvailable`` is treated as "no overpass" → returns None
-    silently. Other errors propagate so caller can decide whether to
-    retry or skip the candidate.
-    """
-    if conn is None:
-        conn = _connect_des_openeo()
-    try:
-        result = _scl_chunk(conn, bbox_wgs84, date_str, date_str)
-    except Exception as e:
-        if "NoDataAvailable" in str(e):
-            return None
-        raise
-    # The chunk may contain entries for the requested day or, if DES
-    # snaps to the nearest overpass, an adjacent day. Prefer the exact
-    # date; otherwise fall back to whichever clearest date came back.
-    if date_str in result:
-        return result[date_str]
-    if not result:
-        return None
-    return min(result.values())
-
-
 def scl_stack_screen(
     bbox_wgs84: dict,
     date_start: str,
@@ -576,64 +484,15 @@ def optimal_fetch_dates(
     max_aoi_cloud: float = DEFAULT_SCL_CLOUD_THRESHOLD,
     scene_cloud_max: float = DEFAULT_STAC_CLOUD_MAX,
     atmosphere_rules: dict | None = None,
-    max_accepted: int = 3,
-    max_scl_attempts: int = 20,
 ) -> FetchPlan:
     """Select Sentinel-2 dates worth fetching, given the requested strategy.
 
     See module docstring for `mode` options. The plan returned reports
     elapsed time per stage so cost-models stay honest.
-
-    Mode-specific parameters:
-      max_accepted     — only used by ``era5_ranked_then_scl``. Stop SCL
-                         iteration once this many clear scenes are confirmed
-                         (default 3, matching the caller-side max_candidates).
-      max_scl_attempts — only used by ``era5_ranked_then_scl``. Hard ceiling
-                         on per-tile SCL calls so a fully overcast window
-                         doesn't burn unbounded API quota.
     """
     import time as _t
 
     plan = FetchPlan(mode=mode, dates=[])
-
-    # --- Ranked iterative path (early-return — does NOT batch SCL)
-    if mode == "era5_ranked_then_scl":
-        t0 = _t.time()
-        ranked = era5_ranked_dates(
-            bbox_wgs84, date_start, date_end,
-            rules=atmosphere_rules,
-        )
-        plan.elapsed_s["era5"] = round(_t.time() - t0, 2)
-        plan.n_candidates_after["era5"] = len(ranked)
-
-        accepted: list[str] = []
-        n_calls = 0
-        n_no_overpass = 0
-        n_too_cloudy = 0
-        conn = _connect_des_openeo()
-        t0 = _t.time()
-        for d, _score in ranked[:max_scl_attempts]:
-            n_calls += 1
-            frac = scl_single_day_screen(bbox_wgs84, d, conn=conn)
-            if frac is None:
-                n_no_overpass += 1
-                continue
-            if frac > max_aoi_cloud:
-                n_too_cloudy += 1
-                continue
-            accepted.append(d)
-            if len(accepted) >= max_accepted:
-                break
-        plan.elapsed_s["scl_ranked"] = round(_t.time() - t0, 2)
-        plan.n_candidates_after["scl_calls"] = n_calls
-        plan.n_candidates_after["scl_no_overpass"] = n_no_overpass
-        plan.n_candidates_after["scl_too_cloudy"] = n_too_cloudy
-        plan.dates = accepted  # already in best-first order
-        plan.n_candidates_after["final"] = len(accepted)
-        plan.notes["max_aoi_cloud"] = str(max_aoi_cloud)
-        plan.notes["max_accepted"] = str(max_accepted)
-        plan.notes["max_scl_attempts"] = str(max_scl_attempts)
-        return plan
 
     # --- ERA5 (Stage 1) — only run if the mode needs it
     era5_dates: list[str] | None = None
