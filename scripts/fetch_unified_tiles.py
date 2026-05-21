@@ -679,10 +679,26 @@ def refetch_late_autumn_frames(
     if not vpp_windows or len(vpp_windows) < 3:
         return {"name": name, "status": "error", "reason": "vpp_unavailable"}
 
+    # Clamp each VPP window's end against cap_doy. Necessary because the
+    # _FALLBACK_DOY_WINDOWS constant in vpp_windows.py is NOT cap-aware
+    # — fallback frame 3 is (213, 273), which would re-introduce post-244
+    # dates on a refetch. Same risk applies when a real VPP gs_length
+    # falls below MIN_GROWING_SEASON_LENGTH after capping (PR #15) and
+    # triggers the fallback path.
+    capped_windows = [
+        (start, min(end, cap_doy)) for (start, end) in vpp_windows
+    ]
+    # Drop windows that have collapsed to nothing after clamping
+    # (start > end) — would cause an empty fetch range otherwise.
+    capped_windows = [(s, e) for (s, e) in capped_windows if s <= e]
+    if len(capped_windows) < 3:
+        return {"name": name, "status": "error",
+                "reason": f"vpp_windows_collapsed_after_cap: {vpp_windows}"}
+
     # Identify bad growing-season frames (1-3). Frame 0 (autumn y-1) is sacred.
     bad: list[tuple[int, int, int]] = []  # (frame_idx, target_doy_start, target_doy_end)
     for i in range(1, NUM_FRAMES):
-        target_start, target_end = vpp_windows[i - 1]
+        target_start, target_end = capped_windows[i - 1]
         existing_doy = int(doy_arr[i])
         # Refetch if existing DOY is outside the new target window OR if
         # the frame is invalid (no scene was found at original fetch time).
@@ -730,10 +746,30 @@ def refetch_late_autumn_frames(
         tmask[frame_idx] = 1
         refetched.append(frame_idx)
 
-    if not refetched:
+    # Strict-fail (user choice C): if ANY bad frame failed to refetch,
+    # leave the .npz untouched. The old data on disk is at least
+    # internally consistent (even if temporally wrong); a half-patched
+    # tile would mix new + old DOYs and could break monotonicity. The
+    # caller can re-queue failed tiles later with relaxed parameters
+    # (e.g. higher max_aoi_cloud).
+    if failed:
         return {
             "name": name, "status": "failed",
-            "reason": f"all_refetch_failed: bad={[b[0] for b in bad]}",
+            "reason": f"refetch_failed_for_frames: {failed}",
+            "successful_frames": refetched,
+        }
+
+    # Final invariant: growing-season frames must be strictly ascending
+    # in DOY (model training relies on temporal positional embeddings;
+    # non-monotonic temporal order corrupts the input). Frame 0 is
+    # autumn y-1, excluded from this check by design.
+    doys_growing = [int(doy_arr[i]) for i in (1, 2, 3)]
+    if not (doys_growing[0] < doys_growing[1] < doys_growing[2]):
+        return {
+            "name": name, "status": "failed",
+            "reason": f"non_monotonic_doy_after_refetch: frames_1-3={doys_growing}",
+            "successful_frames": refetched,
+            "doys_growing": doys_growing,
         }
 
     # Save merged result — preserve all fields except spectral/dates/doy/tmask.
@@ -750,10 +786,15 @@ def refetch_late_autumn_frames(
     np.savez_compressed(tmp_path, **save)
     os.replace(tmp_path, out_path)
 
+    # Existing growing-season frames that passed the check (not in bad
+    # set) → "kept" for caller-side reporting.
+    kept = [i for i in range(1, NUM_FRAMES) if i not in [b[0] for b in bad]]
+
     return {
         "name": name, "status": "ok",
         "refetched_frames": refetched,
-        "failed_frames": failed,
+        "kept_frames": kept,
+        "doys_after": [int(doy_arr[i]) for i in range(NUM_FRAMES)],
     }
 
 
