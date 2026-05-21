@@ -168,14 +168,23 @@ def _fetch_single_scene(
     if date_end >= "2018-01-01":
         try:
             from imint.training.optimal_fetch import optimal_fetch_dates
+            # Ranked-iterative mode: ERA5 ranks the window by atmospheric
+            # quality, then SCL verifies candidates one at a time, stopping
+            # once `max_candidates` clear scenes are confirmed. Best case
+            # is a single openEO call per frame instead of 4-5 chunked
+            # batch calls — and the dates come back already sorted by
+            # ERA5 score, so the caller's race naturally prefers the
+            # cleanest atmospheric conditions.
             plan = optimal_fetch_dates(
                 coords_wgs84, date_start, date_end,
-                mode="era5_then_scl",
+                mode="era5_ranked_then_scl",
                 max_aoi_cloud=max_aoi_cloud,
+                max_accepted=max_candidates,
             )
-            # plan.dates is already ERA5 ∩ SCL-filtered; use as candidates
-            # with sentinel cloud_pct=0.0 since the threshold is already met.
-            candidates = [(d, 0.0) for d in plan.dates]
+            # plan.dates is ERA5-ranked + SCL-verified, already in
+            # best-first order; sentinel cloud_pct = enumerate index so
+            # the downstream sort preserves ERA5 ranking.
+            candidates = [(d, float(i)) for i, d in enumerate(plan.dates)]
         except Exception:
             pass
 
