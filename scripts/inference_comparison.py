@@ -99,18 +99,43 @@ def load_model(ckpt_path: str, device):
     num_frames = ck_cfg.get("num_temporal_frames", cfg.num_temporal_frames)
     n_aux = ck_cfg.get("n_aux_channels", 11)
 
+    # State-dict first so we can inspect shapes for backbone detection
+    sd = {k.replace("model.", "", 1): v for k, v in
+          ck.get("model_state_dict", ck.get("state_dict", {})).items()}
+    pos_embed = sd.get("encoder.pos_embed")
+
+    # Resolve backbone_name. Fallback chain:
+    #  (1) ck_cfg["backbone_name"] — set by trainer since registry refactor
+    #  (2) ck_cfg["backbone"]      — legacy field
+    #  (3) infer from pos_embed embed_dim:
+    #        1024 → prithvi_300m  (depth 24)
+    #        1280 → prithvi_600m  (depth 32)
+    #      Trainer's best_model.pt config is minimal and omits backbone_name
+    #      (trainer.py:1000-1009), so (1)+(2) are None for any checkpoint
+    #      saved before that gets fixed. Embed-dim inference is robust as
+    #      long as the checkpoint actually loaded a registered backbone.
     backbone_name = resolve_backbone_name(
         ck_cfg.get("backbone_name"), ck_cfg.get("backbone"),
     )
+    if backbone_name == "prithvi_300m" and pos_embed is not None:
+        # only trust the default if we can't infer otherwise
+        embed_dim = pos_embed.shape[-1]
+        inferred = None
+        for name, spec in MODEL_CONFIGS.items():
+            if spec.family == "prithvi" and spec.embed_dim == embed_dim:
+                inferred = name
+                break
+        if inferred and inferred != backbone_name:
+            print(f"  [load_model] backbone_name absent in ck.config; "
+                  f"inferred from pos_embed embed_dim={embed_dim} → {inferred}")
+            backbone_name = inferred
+
     spec = MODEL_CONFIGS[backbone_name]
     patch_size = spec.patch_size  # 16 for 300M, 14 for 600M, etc.
 
     # Infer img_size from pos_embed grid using the CORRECT patch_size
     # for this backbone — the previous hardcoded `* 16` silently produced
     # img_size=576 for Prithvi-600M (grid 36) instead of the true 504.
-    sd = {k.replace("model.", "", 1): v for k, v in
-          ck.get("model_state_dict", ck.get("state_dict", {})).items()}
-    pos_embed = sd.get("encoder.pos_embed")
     if pos_embed is not None:
         n_tokens = pos_embed.shape[1] - 1  # subtract CLS token
         n_spatial = n_tokens // max(num_frames, 1)
