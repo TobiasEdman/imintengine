@@ -43,13 +43,14 @@ _MIN_GROWING_SEASON_LENGTH = 60  # At least 60 days
 # EOSD for Swedish vegetation routinely extends into Oct-Nov (forest
 # leaf-fall, late-grass dormancy), which made the LAST of N divided
 # windows fall in late autumn — useless for crop discrimination, where
-# the most spectrally distinctive signal is the May–July peak-vegetation
-# period. Cap at DOY 213 (Aug 1) so the last window always captures
-# late peak-summer rather than senescence.
+# the most spectrally distinctive signal is the May-September period
+# (peak vegetation through cereal maturation/harvest). Cap at DOY 244
+# (Sep 1) so the last window captures late-summer / early-autumn
+# maturity rather than full senescence.
 # See conversation_log entry 2026-05-21 for the bug analysis: tiles
 # 43983958 + 43983968 (lat 58.7-58.8) ended up with no June-July frame,
 # falling back to Oct 19 / Sep 1 for the third growing-season frame.
-_GROWING_SEASON_END_CAP_DOY = 213  # August 1 (non-leap; leap = Jul 31)
+_GROWING_SEASON_END_CAP_DOY = 244  # September 1 (non-leap; leap = Aug 31)
 
 
 def cnes_to_doy(cnes_val: float) -> int:
