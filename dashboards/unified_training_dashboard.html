@@ -229,17 +229,30 @@ body {
 </div>
 
 <script>
-// From unified_schema.py — 20 classes
+// From unified_schema.py — v5 23-class unified schema
+// Indices 0-14 unchanged from v4. v5 expansion adds:
+//   15 slåttervall (was 'vall'), 16 bete (new), 17 potatis (shifted from 16),
+//   18 sockerbetor (new), 19 trindsäd (shifted from 17), 20 råg (new),
+//   21 majs (new), 22 hygge (shifted from 19).
+// Old 20-class list was the source of two visible bugs: (a) confused-pair
+// labels mis-named everything from index 15+ (e.g. "hygge → korn" was
+// actually `trindsäd → korn`); (b) classes 20-22 rendered as raw integers
+// because they were past the end of the array.
 const CLASS_NAMES = ['bakgrund','tallskog','granskog','lövskog','blandskog','sumpskog',
   'tillfälligt ej skog','våtmark','öppen mark','bebyggelse','vatten',
-  'vete','korn','havre','oljeväxter','vall','potatis','trindsäd','övrig åker','hygge'];
+  'vete','korn','havre','oljeväxter','slåttervall','bete','potatis',
+  'sockerbetor','trindsäd','råg','majs','hygge'];
 
-// RGB from unified_schema.py UNIFIED_COLORS
+// RGB per class — extended to 23 with new entries for bete (16),
+// sockerbetor (18), råg (20), majs (21). Indices 15 (slåttervall) and
+// 22 (hygge) keep their v4 colors. Indices 17 (potatis), 19 (trindsäd)
+// were shifted in v5; colors reassigned to the class now at that index.
 const CLASS_COLORS = [
   'rgb(0,0,0)','rgb(0,100,0)','rgb(34,139,34)','rgb(50,205,50)','rgb(60,179,113)','rgb(46,79,46)',
   'rgb(160,200,120)','rgb(139,90,43)','rgb(210,180,140)','rgb(255,0,0)','rgb(0,0,255)',
   'rgb(230,180,34)','rgb(212,130,23)','rgb(255,255,100)','rgb(45,180,90)','rgb(100,200,100)',
-  'rgb(180,80,40)','rgb(140,180,50)','rgb(170,170,170)','rgb(180,120,60)'];
+  'rgb(140,200,80)','rgb(180,140,100)','rgb(200,200,180)','rgb(140,180,50)','rgb(220,160,30)',
+  'rgb(255,140,0)','rgb(180,120,60)'];
 
 // Map from log class names to display names
 const CLASS_MAP = {
@@ -519,12 +532,17 @@ function renderTopConfusedPairs(cm) {
   const n = cm.length;
   const names = CLASS_NAMES.slice(0, n);
 
-  // Row-normalize
+  // Row-normalize. Skip the bakgrund class (index 0) on BOTH axes —
+  // it's ignore_index in the unified schema (loss weight 0.0), so
+  // confusions involving bakgrund don't represent real classification
+  // errors. Including them would dominate the top-12 panel with
+  // meaningless entries like "bakgrund → majs 41.5%" and bury the
+  // actual class-vs-class problems (e.g. råg → vete 24.3%).
   const pairs = [];
-  for (let i = 0; i < n; i++) {
+  for (let i = 1; i < n; i++) {
     const rowSum = cm[i].reduce((a, b) => a + b, 0);
     if (rowSum === 0) continue;
-    for (let j = 0; j < n; j++) {
+    for (let j = 1; j < n; j++) {
       if (i === j) continue;
       const pct = cm[i][j] / rowSum * 100;
       if (pct >= 1) {
