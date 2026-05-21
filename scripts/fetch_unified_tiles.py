@@ -610,14 +610,24 @@ def refetch_tile(
     vpp_cache: dict | None = None,
     best_dates: dict | None = None,
     sources: tuple[str, ...] = ("cdse", "des"),
+    force: bool = False,
 ) -> dict:
-    """Re-fetch spectral data for an existing tile, keep all other fields."""
+    """Re-fetch spectral data for an existing tile, keep all other fields.
+
+    Args:
+        force: When True, re-fetch even if the tile already has
+            multitemporal=1 and num_frames=4. Required for upgrading
+            tiles fetched with a buggy VPP-window logic (see PR #15
+            and IM-017: ~58% of tiles ended up with a growing-season
+            frame in late-autumn DOY > 244 before that fix landed).
+    """
     name = loc["name"]
     existing_path = loc.get("_existing_path")
     out_path = os.path.join(output_dir, f"{name}.npz")
 
-    # Skip if already re-fetched (check for multitemporal flag)
-    if os.path.exists(out_path):
+    # Skip if already re-fetched (check for multitemporal flag) —
+    # unless force=True, in which case re-fetch regardless.
+    if not force and os.path.exists(out_path):
         try:
             d = np.load(out_path, allow_pickle=True)
             if d.get("multitemporal", 0) == 1 and d.get("num_frames", 0) == 4:
