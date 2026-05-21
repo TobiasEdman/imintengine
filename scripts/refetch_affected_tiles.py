@@ -38,7 +38,7 @@ load_env()
 from imint.training.tile_bbox import resolve_tile_bbox
 from imint.training.tile_fetch import bbox_3006_to_wgs84
 from imint.training.tile_config import TileConfig
-from scripts.fetch_unified_tiles import refetch_tile
+from scripts.fetch_unified_tiles import refetch_late_autumn_frames
 
 
 def loc_from_existing(name: str, tile: TileConfig, tiles_dir: str) -> dict | None:
@@ -99,7 +99,8 @@ def main():
                    help="Comma-separated fetch backends in priority order")
     p.add_argument("--max-tiles", type=int, default=None,
                    help="For smoke-testing; limits to first N tiles")
-    p.add_argument("--years", nargs="+", default=["2018", "2019", "2022", "2023"])
+    p.add_argument("--cap-doy", type=int, default=244,
+                   help="Refetch any growing-season frame with DOY > cap (default 244=Sep 1, matches PR #15 VPP cap)")
     args = p.parse_args()
 
     sources = tuple(s.strip() for s in args.sources.split(",") if s.strip())
@@ -146,11 +147,12 @@ def main():
 
     def task(loc):
         try:
-            return refetch_tile(
-                loc, args.years, args.output_dir, tile,
+            return refetch_late_autumn_frames(
+                loc, args.output_dir, tile,
                 cloud_max=args.cloud_max,
                 max_aoi_cloud=args.max_aoi_cloud,
-                sources=sources, force=True,
+                sources=sources,
+                cap_doy=args.cap_doy,
             )
         except Exception as e:
             return {"name": loc["name"], "status": "error", "reason": str(e)[:200]}

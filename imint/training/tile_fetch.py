@@ -148,43 +148,45 @@ def _fetch_single_scene(
     cloud_threshold: float = 0.15,
     haze_threshold: float = 0.08,
     sources: tuple[str, ...] = ("cdse", "des"),
+    prefetched_dates: list[str] | None = None,
 ) -> tuple[np.ndarray | None, str]:
     """Fetch best S2 scene within a date range. STAC → CDSE → DES fallback.
+
+    Args:
+        prefetched_dates: Pre-filtered ERA5 ∩ SCL candidate dates from the
+            caller (e.g. tile-level batch SCL fetch in fetch_4frame_scenes).
+            If provided, dates within [date_start, date_end] are used
+            directly — skipping the per-frame optimal_fetch_dates call.
+            This halves openEO setup overhead for the 4-frame case where
+            three frames can share one growing-season SCL fetch.
 
     Returns:
         (scene, date_str). scene is (6, H, W) float32 or None.
     """
     from imint.training.cdse_s2 import fetch_s2_scene
 
-    # ERA5-first candidate selection (replaces the older STAC scene_cloud_max
-    # filter). ERA5 reanalysis predicts AOI cloud cover across the window,
-    # then SCL at tile-cutout level (max_aoi_cloud) makes the final cut.
-    # The STAC catalog scene_cloud_max filter (kept as fallback below for
-    # pre-2018 ranges) was both redundant and too coarse — it filtered
-    # against scene-wide cloud cover for the 100×100km S2 tile, not the
-    # 5×5km AOI we actually fetch, and caused us to miss good scenes that
-    # happened to have heavy clouds OUTSIDE the AOI but clear over it.
+    # ERA5-first candidate selection. ERA5 reanalysis predicts AOI cloud
+    # cover across the window; SCL at tile-cutout level (max_aoi_cloud)
+    # makes the final cut. The legacy STAC scene_cloud_max filter (kept
+    # as fallback below for pre-2018 ranges) was both redundant and too
+    # coarse — it filtered against scene-wide cloud cover for the
+    # 100×100km S2 tile, not the 5×5km AOI we actually fetch.
     candidates = []
-    if date_end >= "2018-01-01":
+    if prefetched_dates is not None:
+        # Caller did the ERA5 ∩ SCL work tile-wide; pick dates in window.
+        candidates = [
+            (d, 0.0) for d in prefetched_dates
+            if date_start <= d <= date_end
+        ]
+    elif date_end >= "2018-01-01":
         try:
             from imint.training.optimal_fetch import optimal_fetch_dates
-            # Ranked-iterative mode: ERA5 ranks the window by atmospheric
-            # quality, then SCL verifies candidates one at a time, stopping
-            # once `max_candidates` clear scenes are confirmed. Best case
-            # is a single openEO call per frame instead of 4-5 chunked
-            # batch calls — and the dates come back already sorted by
-            # ERA5 score, so the caller's race naturally prefers the
-            # cleanest atmospheric conditions.
             plan = optimal_fetch_dates(
                 coords_wgs84, date_start, date_end,
-                mode="era5_ranked_then_scl",
+                mode="era5_then_scl",
                 max_aoi_cloud=max_aoi_cloud,
-                max_accepted=max_candidates,
             )
-            # plan.dates is ERA5-ranked + SCL-verified, already in
-            # best-first order; sentinel cloud_pct = enumerate index so
-            # the downstream sort preserves ERA5 ranking.
-            candidates = [(d, float(i)) for i, d in enumerate(plan.dates)]
+            candidates = [(d, 0.0) for d in plan.dates]
         except Exception:
             pass
 

@@ -27,6 +27,7 @@ import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -599,6 +600,161 @@ def gen_from_existing(
 
     print(f"  Using {len(locs)} tile locations")
     return locs
+
+
+def refetch_late_autumn_frames(
+    loc: dict,
+    output_dir: str,
+    tile: TileConfig,
+    *,
+    cloud_max: float = 30.0,
+    max_aoi_cloud: float = 0.10,
+    sources: tuple[str, ...] = ("cdse", "des"),
+    cap_doy: int = 244,
+) -> dict:
+    """Surgical refetch: replace only growing-season frames (1-3) whose
+    existing DOY falls outside the corrected VPP window (i.e. > cap_doy).
+
+    The pre-PR#15 VPP bug split the full SOSD→EOSD season into N equal
+    windows, often pushing frame 3 into October/November. Frame 0
+    (autumn year-1) is computed from a hardcoded Aug 15–Oct 31 range
+    independent of VPP and is therefore unaffected — we preserve it
+    verbatim. For each affected growing-season frame we recompute the
+    target window, fetch a single replacement scene, and patch the
+    spectral cube in place.
+
+    Per-tile cost (typical):
+      - 1 VPP cache call (already cached on cephfs for most tiles)
+      - 1-3 _fetch_single_scene calls (one per bad frame)
+      - Each _fetch_single_scene = 1 ERA5+SCL prefetch + 1-3 spectral
+        race attempts
+
+    Compared to refetch_tile(force=True), this typically saves:
+      - 1 spectral fetch (frame 0 not re-fetched)
+      - 1-3 SCL stack calls (only bad frames go through the pipeline)
+      - All work for the 0-bad-frame case (returns skipped immediately)
+
+    Args:
+        loc:           must contain `_existing_path`, `year`, bbox info.
+                       Built by `loc_from_existing` in refetch_affected_tiles.
+        cap_doy:       Refetch any growing-season frame with DOY > this
+                       (default 244 matches the post-PR#15 vpp_windows cap).
+    """
+    from imint.training.tile_fetch import (
+        _fetch_single_scene, _get_vpp_doy_windows, doy_to_date_range, N_BANDS,
+    )
+
+    name = loc["name"]
+    existing_path = loc.get("_existing_path")
+    out_path = os.path.join(output_dir, f"{name}.npz")
+    tile_year = loc.get("year")
+
+    if not existing_path or not os.path.exists(existing_path):
+        return {"name": name, "status": "error", "reason": "no_existing_tile"}
+    if tile_year is None:
+        return {"name": name, "status": "error", "reason": "no_year"}
+
+    try:
+        old = dict(np.load(existing_path, allow_pickle=True))
+    except Exception as e:
+        return {"name": name, "status": "error", "reason": f"npz_load: {e!s}"[:200]}
+
+    if "spectral" not in old or "doy" not in old or "dates" not in old:
+        return {"name": name, "status": "error", "reason": "missing_spectral_or_meta"}
+
+    image = old["spectral"].copy()            # (NUM_FRAMES*N_BANDS, H, W)
+    doy_arr = old["doy"].astype(np.int32).copy()
+    dates = [str(d) for d in old["dates"]]
+    tmask = old["temporal_mask"].astype(np.uint8).copy()
+
+    # Normalise bbox to TileConfig extent (never trust loc bbox blindly).
+    raw_bbox = loc["bbox_3006"]
+    cx = (raw_bbox["west"] + raw_bbox["east"]) // 2
+    cy = (raw_bbox["south"] + raw_bbox["north"]) // 2
+    bbox = tile.bbox_from_center(cx, cy)
+    coords = bbox_3006_to_wgs84(bbox)
+    tile.assert_bbox_matches(bbox)
+
+    vpp_windows = _get_vpp_doy_windows(bbox, num_growing_frames=3)
+    if not vpp_windows or len(vpp_windows) < 3:
+        return {"name": name, "status": "error", "reason": "vpp_unavailable"}
+
+    # Identify bad growing-season frames (1-3). Frame 0 (autumn y-1) is sacred.
+    bad: list[tuple[int, int, int]] = []  # (frame_idx, target_doy_start, target_doy_end)
+    for i in range(1, NUM_FRAMES):
+        target_start, target_end = vpp_windows[i - 1]
+        existing_doy = int(doy_arr[i])
+        # Refetch if existing DOY is outside the new target window OR if
+        # the frame is invalid (no scene was found at original fetch time).
+        if (
+            tmask[i] == 0
+            or existing_doy > cap_doy
+            or existing_doy < target_start
+            or existing_doy > target_end
+        ):
+            bad.append((i, target_start, target_end))
+
+    if not bad:
+        return {"name": name, "status": "skipped", "reason": "no_bad_frames"}
+
+    # Refetch each bad frame. Pass max_candidates large enough that the
+    # caller's race in _fetch_single_scene has alternatives if the first
+    # date fails spectrally.
+    refetched: list[int] = []
+    failed: list[int] = []
+    for frame_idx, doy_start, doy_end in bad:
+        ds, de = doy_to_date_range(int(tile_year), doy_start, doy_end)
+        scene, date_str = _fetch_single_scene(
+            bbox, coords, ds, de, tile,
+            scene_cloud_max=cloud_max,
+            max_aoi_cloud=max_aoi_cloud,
+            max_candidates=3,
+            sources=sources,
+        )
+        if scene is None:
+            failed.append(frame_idx)
+            continue
+
+        # Resize defensive — _fetch_single_scene should already match tile size
+        if scene.shape[1] != tile.size_px or scene.shape[2] != tile.size_px:
+            padded = np.zeros((N_BANDS, tile.size_px, tile.size_px), dtype=np.float32)
+            h = min(scene.shape[1], tile.size_px)
+            w = min(scene.shape[2], tile.size_px)
+            padded[:, :h, :w] = scene[:, :h, :w]
+            scene = padded
+
+        band_start = frame_idx * N_BANDS
+        image[band_start:band_start + N_BANDS] = scene
+        dates[frame_idx] = date_str
+        doy_arr[frame_idx] = datetime.strptime(date_str, "%Y-%m-%d").timetuple().tm_yday
+        tmask[frame_idx] = 1
+        refetched.append(frame_idx)
+
+    if not refetched:
+        return {
+            "name": name, "status": "failed",
+            "reason": f"all_refetch_failed: bad={[b[0] for b in bad]}",
+        }
+
+    # Save merged result — preserve all fields except spectral/dates/doy/tmask.
+    save = {k: v for k, v in old.items() if k not in (
+        "spectral", "dates", "doy", "temporal_mask",
+    )}
+    save["spectral"] = image
+    save["dates"] = np.array(dates)
+    save["doy"] = doy_arr
+    save["temporal_mask"] = tmask
+
+    # Atomic write to avoid half-written .npz under crash.
+    tmp_path = out_path + ".tmp"
+    np.savez_compressed(tmp_path, **save)
+    os.replace(tmp_path, out_path)
+
+    return {
+        "name": name, "status": "ok",
+        "refetched_frames": refetched,
+        "failed_frames": failed,
+    }
 
 
 def refetch_tile(
