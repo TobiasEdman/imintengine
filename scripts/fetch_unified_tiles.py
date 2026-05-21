@@ -751,6 +751,47 @@ def repair_to_canonical_layout(
     if not missing_slots and not dropped:
         return {"name": name, "status": "skipped", "reason": "all_slots_filled"}
 
+    # Pre-fetch ERA5 ∩ SCL candidate dates ONCE per tile-season instead of
+    # once per slot. Reduces DES SCL-chunk calls by ~50% (one stack covers
+    # all 3 growing-season slots; autumn gets its own stack).
+    #
+    # Per-tile cost before:  3-5 SCL chunks × 4 slots = 12-20 chunks
+    # Per-tile cost after:   ~8 chunks (growing) + ~5 chunks (autumn) = 13 chunks
+    # — but importantly, in 3-slot-missing case (12 of 20 smoke tiles), the
+    # growing stack is amortised across 2 slots → ~8 + 5 = 13 vs 9-15 = win.
+    from imint.training.optimal_fetch import optimal_fetch_dates
+    growing_dates: list[str] | None = None
+    autumn_dates: list[str] | None = None
+    needs_growing = any(i in missing_slots for i in (1, 2, 3))
+    needs_autumn = (0 in missing_slots)
+    if needs_growing:
+        # Cover the union of all 3 growing-season slot windows in ONE call
+        gs_min = min(slot_defs[1][2], slot_defs[2][2], slot_defs[3][2])
+        gs_max = max(slot_defs[1][3], slot_defs[2][3], slot_defs[3][3])
+        gs_ds, gs_de = doy_to_date_range(tile_year, gs_min, gs_max)
+        try:
+            plan = optimal_fetch_dates(
+                coords, gs_ds, gs_de,
+                mode="era5_then_scl", max_aoi_cloud=max_aoi_cloud,
+            )
+            growing_dates = plan.dates
+        except Exception:
+            growing_dates = []  # signal: prefetch failed, fall back per-slot
+    if needs_autumn:
+        # Slot 0 uses more permissive cloud threshold (autumn)
+        autumn_max_cloud = min(max_aoi_cloud * 2, 0.30)
+        au_ds, au_de = doy_to_date_range(
+            tile_year - 1, slot_defs[0][2], slot_defs[0][3],
+        )
+        try:
+            plan = optimal_fetch_dates(
+                coords, au_ds, au_de,
+                mode="era5_then_scl", max_aoi_cloud=autumn_max_cloud,
+            )
+            autumn_dates = plan.dates
+        except Exception:
+            autumn_dates = []
+
     # Fetch each missing slot
     fetched: dict[int, tuple[np.ndarray, str]] = {}
     failed_slots: list[int] = []
@@ -758,6 +799,15 @@ def repair_to_canonical_layout(
         slot_name, slot_year, slot_min, slot_max = slot_defs[slot_idx]
         ds, de = doy_to_date_range(slot_year, slot_min, slot_max)
         is_autumn = (slot_idx == 0)
+        # Filter pre-fetched dates to this slot's specific window
+        if is_autumn and autumn_dates is not None:
+            slot_dates: list[str] | None = [
+                d for d in autumn_dates if ds <= d <= de
+            ]
+        elif (not is_autumn) and growing_dates is not None:
+            slot_dates = [d for d in growing_dates if ds <= d <= de]
+        else:
+            slot_dates = None  # fall back to per-slot ERA5+SCL inside _fetch_single_scene
         scene, date_str = _fetch_single_scene(
             bbox, coords, ds, de, tile,
             scene_cloud_max=min(cloud_max * 2, 60.0) if is_autumn else cloud_max,
@@ -766,6 +816,7 @@ def repair_to_canonical_layout(
             cloud_threshold=0.30 if is_autumn else 0.15,
             haze_threshold=0.12 if is_autumn else 0.08,
             sources=sources,
+            prefetched_dates=slot_dates,
         )
         if scene is None:
             failed_slots.append(slot_idx)
