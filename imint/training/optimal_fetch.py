@@ -394,10 +394,22 @@ def scl_stack_screen(
 
     d0 = _date.fromisoformat(date_start)
     d1 = _date.fromisoformat(date_end)
+    total_days = (d1 - d0).days + 1
+    # Re-balance chunks so the trailing chunk isn't a sliver (e.g. 78d / 19d
+    # leaves a 2-day tail that always returns NoDataAvailable). Pick the
+    # smallest chunk size in [10, chunk_days] that yields an even-ish split
+    # — minimises noisy per-tile log lines without changing the ≤19 cap.
+    if total_days > chunk_days:
+        n_chunks = (total_days + chunk_days - 1) // chunk_days
+        effective_chunk = (total_days + n_chunks - 1) // n_chunks
+    else:
+        effective_chunk = chunk_days
     out: dict[str, float] = {}
     cur = d0
     while cur <= d1:
-        cend = min(cur + timedelta(days=chunk_days - 1), d1)
+        cend = min(cur + timedelta(days=effective_chunk - 1), d1)
+        # NoDataAvailable on a chunk with no S2 overpass is benign — DES has
+        # nothing to return. Suppress the log line in that specific case.
         try:
             chunk = _scl_chunk(conn, bbox_wgs84, cur.isoformat(), cend.isoformat())
             for k, v in chunk.items():
@@ -405,8 +417,10 @@ def scl_stack_screen(
                 if prev is None or v < prev:
                     out[k] = v
         except Exception as e:
-            # Don't lose the whole stack to one bad chunk.
-            print(f"  scl_stack chunk {cur}..{cend} failed: {e}")
+            msg = str(e)
+            if "NoDataAvailable" not in msg:
+                # Don't lose the whole stack to one bad chunk.
+                print(f"  scl_stack chunk {cur}..{cend} failed: {e}")
         cur = cend + timedelta(days=1)
     return out
 
