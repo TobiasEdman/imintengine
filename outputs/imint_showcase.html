@@ -1120,6 +1120,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
             <a href="#" class="theme-tab" data-tab="marine">⚓ Marin</a>
             <a href="#" class="theme-tab" data-tab="grazing">🐄 Betesmark</a>
             <a href="#" class="theme-tab" data-tab="coastline">🌊 Kustlinje</a>
+            <a href="#" class="theme-tab" data-tab="aircraft_parallax">✈️ Sensor-parallax</a>
         </div>
     </div>
 
@@ -2072,6 +2073,62 @@ svg.leaflet-image-layer.leaflet-interactive path {
             </p>
         </div>
     </div>
+
+    <!-- ── Aircraft parallax tab — push-broom band-tidsförskjutning ──── -->
+    <div class="tab-content" id="tab-aircraft_parallax">
+        <div class="section-header">
+            <h2>Push-broom band-parallax — Göteborgs norra skärgård 2026-01-11</h2>
+        </div>
+        <div class="summary-section">
+            <div class="summary-card"><h4>Plats (kondensstrimma)</h4><div class="value">57.71809°N, 11.66456°E</div><div class="detail">Sundet mellan Öckerö och Björkö · ~6 km SW om Säve</div></div>
+            <div class="summary-card"><h4>Verifierad passage</h4><div class="value">S2B 10:43:19 UTC</div><div class="detail">2026-01-11 · detector 10 · Δt B04→B02 1.004 s</div></div>
+            <div class="summary-card"><h4>Mätt heading</h4><div class="value">≈ 051° (NÖ)</div><div class="detail">Wedge-spets i NÖ · matchar Säve→ESOW initial bäring 51.7°</div></div>
+            <div class="summary-card"><h4>Kondensstrimma-fysik</h4><div class="value">≥ 5–8 km flyghöjd</div><div class="detail">Schmidt-Appleman utesluter låghöjds-trafik</div></div>
+            <div class="summary-card"><h4>Trolig identitet</h4><div class="value">SWE32A · Pilatus PC-24</div><div class="detail">SE-RVE · Säve→Västerås (ESOW)</div></div>
+        </div>
+        <div class="tab-intro">
+            <p>
+                Sentinel-2 MSI är en <strong>push-broom</strong>-sensor: spektralbandens detektorrader sitter fysiskt åtskilda på fokalplanet, så samma markpunkt registreras vid något olika tidpunkter när satelliten rör sig framåt med ~6.7 km/s. Vid AOI ser vi en kondensstrimma från ett jetplan — synlig som en tunn diagonal linje i alla fyra band (B02/B03/B04/B08) men på något olika position i varje band. Det är push-broom-fysiken direkt visualiserad: planet hinner förflytta sig under den ~1 sekund som tar mellan första och sista band-exponeringen.
+            </p>
+            <p>
+                <strong>Animationen nedan</strong> visar samma kondensstrimma i de fyra spektralbanden i deras fysiska exponeringsordning (detector 10: B04 → B03 → B08 → B02), med strecket färgat i respektive bands egen färg. Notera hur strecket bara är delvis utbildat i B04 (t₀) och fullt synligt i B02 (t₀+1.004 s) — det är planets väg över 1 sekund.
+            </p>
+        </div>
+        <div style="display:flex; justify-content:center; padding:24px;">
+            <figure style="margin:0; max-width:520px;">
+                <img src="showcase/aircraft_parallax/band_animation_rgb.gif"
+                     alt="Animerad kondensstrimma färgad per band: B04 röd, B03 grön, B08 magenta, B02 blå"
+                     style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:6px; background:#181820; display:block;"/>
+                <figcaption style="font-size:13px; color:#6b7280; margin-top:12px; text-align:center;">
+                    Kondensstrimman färgad i respektive bands egen färg: <span style="color:#d73027;font-weight:600;">B04 röd (665 nm)</span>, <span style="color:#1a9850;font-weight:600;">B03 grön (560 nm)</span>, <span style="color:#7b1fa2;font-weight:600;">B08 magenta (842 nm NIR)</span>, <span style="color:#1565c0;font-weight:600;">B02 blå (490 nm)</span>. Tidslinjen längst ner markerar var i 1.004 s-fönstret varje band exponeras. Gult hårkors visar planets uppmätta position i varje band.
+                </figcaption>
+            </figure>
+        </div>
+        <div class="tab-description">
+            <h3>Vad animationen visar</h3>
+            <p>
+                De fyra Sentinel-2-banden vi använder (B02/B03/B04/B08) avläses i en specifik fysisk ordning på fokalplanet. För <strong>detector 10</strong> (den detektor som täcker vår AOI) är ordningen <strong>B04 → B03 → B08 → B02</strong> — inte alfabetisk, och B08 (NIR) ligger näst sist, inte sist. När satelliten passerar över ett område hinner ett snabbt flygobjekt förflytta sig flera tiotals meter mellan första och sista bandets exponering. För en kondensstrimma som hela tiden växer ut bakom planet betyder det att strecket är *kortast* i det första bandet (B04, t₀) och *längst* i det sista (B02, t₀+1.004 s).
+                <br><em>Källa: ESA Sentinel-2 MSI Product Definition Document · `MTD_DS.xml` parse via parse_band_times_v2.py</em>
+            </p>
+
+            <h3>Mätningen</h3>
+            <p>
+                Manuella apex-pickar i 120×120 px native-cropen (en pick per band) ger total geografisk förskjutning <strong>B04 → B02</strong> över 1.004 s ≈ <strong>301 m i bäring 40.3°</strong>. Med vektorsubtraktion mot satellitens parallax-bidrag (riktning 016.3°, motsatt sat-track-bäring 196.3°) får man v_aircraft = 218–239 m/s och bearing 47–50° vid realistisk flyghöjd 8–11 km — matchar PC-24:s climb-cruise och initial bäring Säve→ESOW (51.7°) inom 5°.
+            </p>
+
+            <h3>Cross-band-konsistens bekräftar mätningen</h3>
+            <p>
+                Det avgörande testet: vid H_a = 8 km ger varje bandpar oberoende <strong>v = 239–240 m/s</strong> och <strong>bearing = 46.5–47.0°</strong> — alla tre Δt:n inom ±1 m/s och ±0.5°. Det bevisar att picks tracker konsistent samma fysiska punkt (planet) i alla band, inte våglängds-beroende kondensstrimma-features.
+            </p>
+
+            <h3>Identifierat: SWE32A — Pilatus PC-24 (SE-RVE)</h3>
+            <p>
+                OpenSky-cross-check identifierade SWE32A som en svensk Pilatus PC-24 affärsjet (registrering SE-RVE) i flygning Säve→Västerås (ESOW) under exakt målögonblicket. Trajektorian förklaras av en typisk Kattegatt-outbound-SID från Säves bana 03: lyft NÖ-bound, klättra ut SW över vatten för bullerdämpning, turn back NÖ on-course mot ESOW. AOI-passagen 10:43:19 är i NÖ-leg av detta mönster, ~5–8 km höjd, kondensstrimma-kapabel enligt Schmidt-Appleman.
+                <br><em>Bakgrund: Heiselberg 2019; Schumann 1996 (kondensstrimma-fysik)</em>
+            </p>
+        </div>
+    </div>
+
     <div class="footer">
         IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB
         &middot; CC0 1.0 Universal &middot; Genererad 2018-07-24 / 2025-07-10 / 2025-06-14 / 2025-06-14
