@@ -1,0 +1,93 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: refetch-late-autumn-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: refetch-vpp-bug-affected-tiles
+spec:
+  backoffLimit: 1
+  # Re-fetches the 4136 tiles in 512-set that have a growing-season
+  # frame with DOY > 244 (pre-PR#15 VPP-window bug). Uses the now-
+  # capped compute_growing_season_windows so the new fetches stay
+  # within DOY 88-244 per tile.
+  #
+  # IMPORTANT: must run AFTER enrich-b08 completes — both modify the
+  # same /cephfs/unified_v2_512 tiles via atomic-replace, race
+  # condition possible if concurrent.
+  # activeDeadlineSeconds intentionally omitted — let job run to completion.
+  # Empirical rate ~64 ok/h via 6 workers projects ~60h for 4136 tiles.
+  # Backstop is backoffLimit=1; if pod crashes, Job won't keep retrying forever.
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      # Pin to dashboard's node — training-checkpoints is RWO and held there.
+      # Without this, scheduler can pick any node and Multi-Attach blocks the
+      # pod from ever starting (25-min wedge observed first attempt).
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: refetch
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Re-fetch late-autumn-affected 512-tiles ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj pyyaml Pillow httpx openeo \
+                xarray netCDF4
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              ls -lh /checkpoints/audits/late_autumn_frames_512.json
+              echo ""
+
+              python3 scripts/refetch_affected_tiles.py \
+                --audit-json /checkpoints/audits/late_autumn_frames_512.json \
+                --output-dir /cephfs/unified_v2_512 \
+                --tile-size-px 512 \
+                --workers 6 \
+                --sources des,cdse \
+                --cloud-max 30.0
+
+              echo ""
+              echo "=== done ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}
+            # DES creds needed by optimal_fetch_dates -> SCL stack fetch
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: user, optional: true}
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: password, optional: true}
+          resources:
+            requests: {cpu: "6", memory: "12Gi"}
+            limits:   {cpu: "6", memory: "12Gi"}
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs}
+            - {name: checkpoints, mountPath: /checkpoints, readOnly: true}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}

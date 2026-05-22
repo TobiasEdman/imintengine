@@ -1,0 +1,83 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-refetch-20-tiles
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: smoke-test-refetch-pipeline
+spec:
+  backoffLimit: 0
+  # Pre-flight smoke test: re-fetch ONLY the first 20 affected tiles
+  # from the 512-set. Verifies (a) clone + pip works, (b) audit JSON
+  # is accessible, (c) refetch_tile + force=True writes successfully,
+  # (d) cephfs-write is functional. Should run in ~5-10 min total.
+  # Run BEFORE the full 4136-tile job.
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      # Pin to dashboard's node — training-checkpoints is RWO and held there.
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: smoke
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== smoke: re-fetch 20 affected 512-tiles ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj pyyaml Pillow httpx openeo \
+                xarray netCDF4
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              python3 scripts/refetch_affected_tiles.py \
+                --audit-json /checkpoints/audits/late_autumn_frames_512.json \
+                --output-dir /cephfs/unified_v2_512 \
+                --tile-size-px 512 \
+                --workers 6 \
+                --sources des,cdse \
+                --cloud-max 30.0 \
+                --max-tiles 20
+
+              echo "=== smoke done ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}
+            # DES creds needed by optimal_fetch_dates → SCL stack fetch
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: user, optional: true}
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: password, optional: true}
+          resources:
+            requests: {cpu: "4", memory: "8Gi"}
+            limits:   {cpu: "4", memory: "8Gi"}
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs}
+            - {name: checkpoints, mountPath: /checkpoints, readOnly: true}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}

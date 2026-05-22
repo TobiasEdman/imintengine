@@ -292,23 +292,24 @@ def _scl_chunk(
 ) -> dict[str, float]:
     """Fetch SCL stack for a small period (≤ 19 timesteps) and aggregate locally.
 
-    Uses GeoTIFF output (rasterio is already a hard dep of imint); each
-    timestep arrives as a separate band. The openEO server returns a
-    multi-file zip where each file is a single timestep — we read all
-    GeoTIFFs in the resulting payload and pair them with the timestamps
-    extracted from the file names.
+    Two payload formats are handled, picked by backend:
+
+    - **DES** (``backend="des"``): GeoTIFF output. The openEO server
+      returns a multi-file zip where each file is a single timestep;
+      we read each .tif via rasterio and extract the date from the
+      filename / tags. (Historical path.)
+
+    - **CDSE** (``backend="cdse"``): NetCDF output. CDSE's GeoTIFF
+      output collapses the time dimension (single composite raster
+      with no timestamps), so we use NetCDF instead — its native
+      time-dim is preserved and dates come back as np.datetime64 in
+      the ``t`` coordinate.
 
     Args:
-        backend: "des" (default) or "cdse". Picks collection + SCL band
-            name to match the chosen openEO server.
+        backend: "des" (GeoTIFF + zip-of-tifs) or "cdse" (NetCDF).
     """
     import os as _os
-    import re
-    import tarfile
     import tempfile
-    import gzip
-    import zipfile
-    import rasterio
 
     cfg = _SCL_BACKEND_DEFAULTS.get(backend)
     if cfg is None:
@@ -324,6 +325,70 @@ def _scl_chunk(
         temporal_extent=[chunk_start, chunk_end],
         bands=[cfg["band"]],
     )
+
+    if backend == "cdse":
+        return _read_scl_netcdf(scl_cube, cfg["band"])
+    return _read_scl_geotiff(scl_cube)
+
+
+def _read_scl_netcdf(scl_cube: Any, band_name: str) -> dict[str, float]:
+    """Download as NetCDF and aggregate per timestep. Used for CDSE backend.
+
+    NetCDF preserves the time dimension (CDSE GTiff doesn't), so we get
+    one cloud-fraction per actual S2 overpass date in the requested window.
+    """
+    import tempfile
+    import xarray as xr
+
+    out: dict[str, float] = {}
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = f"{tmpdir}/payload.nc"
+        scl_cube.save_result(format="netCDF").download(tmp_path)
+        ds = xr.open_dataset(tmp_path)
+        if band_name not in ds.data_vars:
+            # CDSE sometimes returns the variable under "SCL" regardless of
+            # case in the request. Fall back to a case-insensitive lookup.
+            candidates = [v for v in ds.data_vars if v.upper() == band_name.upper()]
+            if not candidates:
+                raise RuntimeError(
+                    f"NetCDF payload missing band {band_name!r}; "
+                    f"present vars={list(ds.data_vars)}"
+                )
+            band_name = candidates[0]
+        scl_var = ds[band_name]
+        if "t" not in scl_var.dims:
+            # Single-timestep payload — extract the temporal_extent start
+            # as fallback date.
+            raise RuntimeError(
+                f"NetCDF SCL variable missing 't' dimension: dims={scl_var.dims}"
+            )
+        t_values = ds.coords["t"].values
+        for ti in range(int(ds.sizes["t"])):
+            ts = t_values[ti]
+            d_str = str(ts)[:10]  # 'YYYY-MM-DD' from numpy.datetime64
+            scl_slice = scl_var.isel(t=ti).values
+            cloud_frac = float(np.isin(scl_slice, _SCL_CLOUD_CLASSES).mean())
+            prev = out.get(d_str)
+            if prev is None or cloud_frac < prev:
+                out[d_str] = cloud_frac
+    return out
+
+
+def _read_scl_geotiff(scl_cube: Any) -> dict[str, float]:
+    """Download as GeoTIFF (zip-of-tifs / single tif / tar.gz) and aggregate.
+
+    Used for DES backend. DES returns one file per timestep in a zip,
+    where the date appears in the filename and / or band tags. This is
+    the path that's been in production since the original ERA5→SCL
+    benchmark.
+    """
+    import os as _os
+    import re
+    import tarfile
+    import tempfile
+    import gzip
+    import zipfile
+    import rasterio
 
     out: dict[str, float] = {}
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -342,7 +407,6 @@ def _scl_chunk(
                 if n.endswith(".tif") or n.endswith(".tiff")
             ]
         elif magic[:3] == b"\x1f\x8b\x08":
-            # gzipped — could be plain .tif.gz or .tar.gz. Try tar.gz first.
             try:
                 with tarfile.open(tmp_path, mode="r:gz") as tf:
                     tf.extractall(tmpdir)
@@ -352,7 +416,6 @@ def _scl_chunk(
                         if fn.endswith(".tif") or fn.endswith(".tiff"):
                             tif_paths.append(_os.path.join(root, fn))
             except tarfile.ReadError:
-                # Plain .gz of a single TIFF
                 ungz = f"{tmpdir}/scl.tif"
                 with gzip.open(tmp_path, "rb") as gf, open(ungz, "wb") as wf:
                     wf.write(gf.read())
@@ -369,7 +432,6 @@ def _scl_chunk(
                 bands = src.read()
                 if bands.ndim == 2:
                     bands = bands[np.newaxis]
-                # Try to find a date for this file/band
                 tags = src.tags()
                 file_date = None
                 m = re.search(r"(\d{4}-\d{2}-\d{2})",
