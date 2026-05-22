@@ -914,6 +914,36 @@ def repair_to_canonical_layout(
     save["doy"] = np.array(new_doys, dtype=np.int32)
     save["temporal_mask"] = np.array(new_tmask, dtype=np.uint8)
 
+    # Clay/CROMA temporal alignment: b08 (T,H,W) and rededge (T*3,H,W) are
+    # per-frame aux fields keyed to the spectral cube's dates. When we
+    # refetch a slot, the existing b08/rededge for that slot still hold
+    # data from the OLD date — they'd produce a Clay/CROMA single-snapshot
+    # that mixes spectral from date X with red-edge / NIR from date Y.
+    #
+    # Zero out the b08/rededge slices for fetched slots and clear the
+    # has_b08 / has_rededge flags. The post-refetch enrich-b08 +
+    # enrich-rededge jobs will detect the zero slices (rededge already has
+    # --retry-empty-frames support; enrich-b08 we'll need to add the same
+    # mode) and re-fetch only the affected slots, keeping the kept-slot
+    # data intact.
+    if fetched:
+        if "b08" in save:
+            b08 = save["b08"].copy()
+            # b08 layout: (T, H, W) per scripts/enrich_tiles_b08.py
+            if b08.ndim == 3 and b08.shape[0] >= 4:
+                for slot_idx in fetched:
+                    b08[slot_idx] = 0
+                save["b08"] = b08
+                save["has_b08"] = np.int32(0)
+        if "rededge" in save:
+            re3 = save["rededge"].copy()
+            # rededge layout: (T*3, H, W) per scripts/enrich_tiles_rededge.py
+            if re3.ndim == 3 and re3.shape[0] >= 4 * 3:
+                for slot_idx in fetched:
+                    re3[slot_idx * 3:(slot_idx + 1) * 3] = 0
+                save["rededge"] = re3
+                save["has_rededge"] = np.int32(0)
+
     # Atomic write — tmp must end in .npz, else np.savez_compressed auto-
     # appends ".npz" to the path, producing FOO.npz.tmp.npz and breaking
     # the subsequent os.replace("FOO.npz.tmp", "FOO.npz") rename.
@@ -928,6 +958,8 @@ def repair_to_canonical_layout(
         "dropped_count": len(dropped),
         "doys_after": new_doys,
         "dates_after": new_dates,
+        "b08_invalidated": bool(fetched) and "b08" in save,
+        "rededge_invalidated": bool(fetched) and "rededge" in save,
     }
 
 
