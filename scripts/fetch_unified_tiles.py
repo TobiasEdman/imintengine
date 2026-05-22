@@ -813,15 +813,22 @@ def repair_to_canonical_layout(
         slot_name, slot_year, slot_min, slot_max = slot_defs[slot_idx]
         ds, de = doy_to_date_range(slot_year, slot_min, slot_max)
         is_autumn = (slot_idx == 0)
-        # Filter pre-fetched dates to this slot's specific window
-        if is_autumn and autumn_dates is not None:
-            slot_dates: list[str] | None = [
-                d for d in autumn_dates if ds <= d <= de
-            ]
-        elif (not is_autumn) and growing_dates is not None:
-            slot_dates = [d for d in growing_dates if ds <= d <= de]
+        # Filter pre-fetched dates to this slot's specific window.
+        # Critical: distinguish between "prefetch returned nothing" and
+        # "prefetch succeeded but filter yields empty". In BOTH empty
+        # cases we want to fall back to _fetch_single_scene's own per-slot
+        # ERA5+SCL (DES) — passing `slot_dates=[]` would otherwise route
+        # us through the synthetic every-N-days candidates without cloud
+        # filtering, which fails for almost all S2 non-overpass days.
+        slot_dates: list[str] | None
+        if is_autumn and autumn_dates:
+            filtered = [d for d in autumn_dates if ds <= d <= de]
+            slot_dates = filtered if filtered else None
+        elif (not is_autumn) and growing_dates:
+            filtered = [d for d in growing_dates if ds <= d <= de]
+            slot_dates = filtered if filtered else None
         else:
-            slot_dates = None  # fall back to per-slot ERA5+SCL inside _fetch_single_scene
+            slot_dates = None  # CDSE prefetch returned nothing — let DES retry
         scene, date_str = _fetch_single_scene(
             bbox, coords, ds, de, tile,
             scene_cloud_max=min(cloud_max * 2, 60.0) if is_autumn else cloud_max,
