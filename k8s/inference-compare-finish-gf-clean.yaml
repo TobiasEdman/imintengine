@@ -1,0 +1,292 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inference-compare-finish-gf-clean
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: finish-missing-variants
+spec:
+  backoffLimit: 0
+  # Picks up where the previous postproc-variants pod failed: completes
+  # the two missing passes (gf, sp3000_clean) and rebuilds the full
+  # 5-variant HTML. The 3 already-completed passes (raw, sp500, sp3000)
+  # are reused as-is from disk.
+  #
+  # opencv-python-headless added to pip — guided_filter_refine in
+  # imint/inference/superpixel_refine.py imports cv2 at call-time.
+  activeDeadlineSeconds: 1200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: infer
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Finish gf + sp3000_clean + full HTML rebuild ==="
+              apt-get update -qq && apt-get install -y -qq git libgl1 > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm numpy Pillow scipy scikit-learn scikit-image \
+                huggingface_hub einops opencv-python-headless
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/inference-comparison-patch-size \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              ROOT=/checkpoints/compare
+              mkdir -p "$ROOT/gf" "$ROOT/sp3000_clean"
+
+              run_pass() {
+                local subdir="$1"; shift
+                echo ""
+                echo "=== Pass: $subdir ==="
+                python3 scripts/inference_comparison.py \
+                  --viz-dir data/viz_tiles \
+                  --checkpoints \
+                      /checkpoints/prithvi_300m_256/best_model.pt \
+                      /checkpoints/prithvi_600m_512/best_model.pt \
+                  --labels prithvi_300m prithvi_600m \
+                  --output-dir "$ROOT/$subdir" \
+                  --device cuda \
+                  "$@"
+              }
+
+              run_pass gf             --guided-filter
+              run_pass sp3000_clean   --superpixel --superpixel-segments 3000 --cleanup
+
+              echo ""
+              echo "=== Build 15-col HTML (Tile+RGB+CIR+GT+NMD + 5x2) ==="
+              python3 - <<'PY'
+              import base64, io, json, pathlib, zlib
+              import numpy as np
+              from PIL import Image
+
+              REPO  = pathlib.Path("/workspace/imintengine")
+              VIZ5  = json.loads((REPO / "data/viz_tiles/viz_data5.json").read_text())
+              ROOT  = pathlib.Path("/checkpoints/compare")
+
+              def viz_to_png_b64(viz_str, shape):
+                  if not viz_str: return ""
+                  raw = base64.b64decode(viz_str)
+                  pixels = zlib.decompress(raw)
+                  arr = np.frombuffer(pixels, dtype=np.uint8).reshape(shape[0], shape[1], 3)
+                  buf = io.BytesIO()
+                  Image.fromarray(arr).save(buf, format='PNG', optimize=True)
+                  return base64.b64encode(buf.getvalue()).decode()
+
+              PEAK_SUMMER_DOY = 195
+              def rgb_from_npz(tile_path, target_shape):
+                  data = np.load(tile_path, allow_pickle=True)
+                  spectral = data.get("spectral", data.get("image"))
+                  if spectral is None: return ""
+                  spectral = spectral.astype(np.float32)
+                  n_bands = 6
+                  n_frames = spectral.shape[0] // n_bands
+                  doy = data.get("doy")
+                  frame_idx = min(1, n_frames - 1)
+                  if doy is not None:
+                      doy = np.asarray(doy).ravel()
+                      if doy.shape[0] >= n_frames and np.any(doy > 0):
+                          valid = doy[:n_frames] > 0
+                          if np.any(valid):
+                              d = np.abs(doy[:n_frames].astype(np.float64) - PEAK_SUMMER_DOY)
+                              d[~valid] = 9999
+                              frame_idx = int(np.argmin(d))
+                  start = frame_idx * n_bands
+                  bands_bgr = spectral[start:start + 3]
+                  rgb = bands_bgr[::-1]
+                  _, h, w = rgb.shape
+                  th, tw = target_shape[0], target_shape[1]
+                  y0 = max(0, (h - th) // 2); x0 = max(0, (w - tw) // 2)
+                  rgb = rgb[:, y0:y0+th, x0:x0+tw]
+                  out = np.empty(rgb.shape, dtype=np.uint8)
+                  for c in range(3):
+                      lo, hi = np.percentile(rgb[c], [2, 98])
+                      if hi - lo < 1e-6: out[c] = 0
+                      else: out[c] = (np.clip((rgb[c]-lo)/(hi-lo),0,1)*255).astype(np.uint8)
+                  buf = io.BytesIO()
+                  Image.fromarray(np.transpose(out, (1, 2, 0))).save(buf, format='PNG', optimize=True)
+                  return base64.b64encode(buf.getvalue()).decode()
+
+              VARIANTS = [
+                  ("raw",          "raw",                  "prithvi_300m"),
+                  ("sp500",        "+SLIC 500",            "prithvi_300m"),
+                  ("sp3000",       "+SLIC 3000",           "prithvi_300m"),
+                  ("gf",           "+guided-filter",       "prithvi_300m"),
+                  ("sp3000_clean", "+SLIC 3000 +cleanup",  "prithvi_300m"),
+                  ("raw",          "raw",                  "prithvi_600m"),
+                  ("sp500",        "+SLIC 500",            "prithvi_600m"),
+                  ("sp3000",       "+SLIC 3000",           "prithvi_600m"),
+                  ("gf",           "+guided-filter",       "prithvi_600m"),
+                  ("sp3000_clean", "+SLIC 3000 +cleanup",  "prithvi_600m"),
+              ]
+              preds = {}
+              for sub, _, slug in VARIANTS:
+                  f = ROOT / sub / f"{slug}_predictions.json"
+                  if not f.exists():
+                      raise SystemExit(f"missing: {f}")
+                  preds[(sub, slug)] = json.loads(f.read_text())
+                  print(f"  loaded {f}: {len(preds[(sub, slug)])} keys")
+
+              tiles = sorted(k[:-6] for k in VIZ5 if k.endswith("_shape"))
+
+              CLASS_NAMES = ['bakgrund','tallskog','granskog','lövskog','blandskog',
+                  'sumpskog','tillfälligt ej skog','våtmark','öppen mark','bebyggelse',
+                  'vatten','vete','korn','havre','oljeväxter','slåttervall','bete',
+                  'potatis','sockerbetor','trindsäd','råg','majs','hygge']
+              CLASS_COLORS = [
+                  'rgb(0,0,0)','rgb(26,92,53)','rgb(45,138,91)','rgb(123,198,126)',
+                  'rgb(77,179,128)','rgb(107,142,90)','rgb(201,223,110)','rgb(155,119,34)',
+                  'rgb(212,180,74)','rgb(192,57,43)','rgb(36,113,163)','rgb(232,184,0)',
+                  'rgb(212,120,10)','rgb(240,208,96)','rgb(212,198,0)','rgb(145,200,76)',
+                  'rgb(184,222,134)','rgb(155,89,182)','rgb(214,51,129)','rgb(224,112,32)',
+                  'rgb(139,32,32)','rgb(220,200,0)','rgb(0,168,198)',
+              ]
+
+              def img_tag(b64, alt=""):
+                  return f'<img src="data:image/png;base64,{b64}" alt="{alt}" />'
+              def cell(b64, klass="cell", label=""):
+                  return f'<td><div class="{klass}">{img_tag(b64, label)}</div></td>'
+
+              header_cols = ['<th class="ref">Tile</th>',
+                             '<th class="ref">RGB</th>',
+                             '<th class="ref">NIR-CIR</th>',
+                             '<th class="ref">GT</th>',
+                             '<th class="ref">NMD</th>']
+              for sub, label, slug in VARIANTS:
+                  block = "m300" if slug == "prithvi_300m" else "m600"
+                  header_cols.append(f'<th class="{block}">{label}</th>')
+              group_hdr = ('<tr class="group-hdr">'
+                  '<th colspan="5">Reference</th>'
+                  '<th colspan="5" class="m300">Prithvi-300M · 256</th>'
+                  '<th colspan="5" class="m600">Prithvi-600M · 512</th></tr>')
+
+              rows = []
+              for t in tiles:
+                  shape = VIZ5.get(f"{t}_shape", [224, 224])
+                  cells = [f'<td class="lbl"><b>{t}</b><br/><small>{shape[0]}×{shape[1]}</small></td>']
+                  tile_npz = REPO / "data/viz_tiles" / f"{t}.npz"
+                  cells.append(cell(rgb_from_npz(tile_npz, shape), "cell", "RGB"))
+                  cells.append(cell(viz_to_png_b64(VIZ5.get(f"{t}_cir", ""), shape), "cell", "NIR-CIR"))
+                  cells.append(cell(viz_to_png_b64(VIZ5.get(f"{t}_gt", ""), shape), "cell", "GT"))
+                  cells.append(cell(viz_to_png_b64(VIZ5.get(f"{t}_nmd_new", ""), shape), "cell", "NMD"))
+                  for sub, _, slug in VARIANTS:
+                      block = "m300" if slug == "prithvi_300m" else "m600"
+                      b64 = preds[(sub, slug)].get(f"{t}_pred", "")
+                      cells.append(cell(b64, f"cell {block}"))
+                  rows.append(f'<tr>{"".join(cells)}</tr>')
+
+              legend = "".join(
+                  f'<span class="lg-item"><span class="sw" style="background:{c}"></span>{n}</span>'
+                  for n, c in zip(CLASS_NAMES, CLASS_COLORS)
+              )
+
+              meta = [
+                  '<li><b>raw</b> — modellen rakt av</li>',
+                  '<li><b>+SLIC 500</b> — superpixel ~10×10 px (plot-skala)</li>',
+                  '<li><b>+SLIC 3000</b> — superpixel ~4×4 px (sub-plot-detalj)</li>',
+                  '<li><b>+guided-filter</b> — edge-preserving smoothing, behåller all detalj</li>',
+                  '<li><b>+SLIC 3000 +cleanup</b> — kombo: superpixel + morfologisk MMU-filtrering</li>',
+              ]
+
+              html = f"""<!doctype html>
+              <html lang="sv"><head><meta charset="utf-8">
+              <title>Compare — 5 postproc varianter · 300M vs 600M</title>
+              <style>
+                *{{box-sizing:border-box;margin:0;padding:0}}
+                body{{font-family:-apple-system,Segoe UI,Arial,sans-serif;
+                     background:#0b0e17;color:#d8dae5;padding:20px;min-height:100vh}}
+                h1{{font-size:16px;font-weight:600;color:#f1f5f9;margin-bottom:6px}}
+                .meta{{font-size:12px;color:#94a3b8;margin-bottom:14px;line-height:1.7}}
+                .meta ul{{margin:6px 0 0 18px}}
+                .wrap{{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px;overflow-x:auto;margin-bottom:18px}}
+                table{{border-collapse:separate;border-spacing:4px}}
+                th{{font-size:10px;color:#94a3b8;font-weight:600;padding:5px;text-align:center;letter-spacing:.03em;min-width:140px;border-radius:3px}}
+                th.ref{{background:#1e293b;color:#cbd5e1}}
+                th.m300{{background:#1e3a8a22;color:#93c5fd}}
+                th.m600{{background:#9a3a6322;color:#f9a8d4}}
+                .group-hdr th{{font-size:11px;padding:6px;letter-spacing:.05em}}
+                td.lbl{{font-size:11px;color:#cbd5e1;padding:4px 8px;white-space:nowrap}}
+                td.lbl b{{font-family:monospace;color:#f1f5f9}}
+                td.lbl small{{color:#64748b}}
+                .cell{{width:140px;height:140px;background:#0b0e17;border:1px solid #1e293b;border-radius:3px;overflow:hidden;cursor:zoom-in}}
+                .cell.m300{{border-color:#1e3a8a}}
+                .cell.m600{{border-color:#9a3a63}}
+                .cell img{{width:100%;height:100%;image-rendering:pixelated;display:block}}
+                .leg{{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px}}
+                .leg h2{{font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:.04em;margin-bottom:8px}}
+                .lg{{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:5px 10px}}
+                .lg-item{{display:flex;align-items:center;gap:6px;font-size:11px;color:#d8dae5}}
+                .sw{{width:13px;height:13px;border-radius:3px;border:1px solid rgba(255,255,255,.1);flex-shrink:0}}
+                #lb{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:99;align-items:center;justify-content:center;cursor:zoom-out}}
+                #lb.on{{display:flex}}
+                #lb img{{max-width:92vw;max-height:92vh;image-rendering:pixelated;border-radius:6px}}
+              </style></head><body>
+                <h1>Compare — 5 post-processing-varianter · Prithvi 300M vs 600M</h1>
+                <div class="meta">
+                  5 viz-tiles, 224×224 (10m S2-upplösning).
+                  Färgkodning på celler: <span style="color:#93c5fd">blå border = 300M</span>,
+                  <span style="color:#f9a8d4">rosa border = 600M</span>. Klick = zoom.
+                  <ul>{"".join(meta)}</ul>
+                </div>
+                <div class="wrap">
+                  <table>
+                    <thead>{group_hdr}<tr>{"".join(header_cols)}</tr></thead>
+                    <tbody>{"".join(rows)}</tbody>
+                  </table>
+                </div>
+                <div class="leg"><h2>23-class palette</h2><div class="lg">{legend}</div></div>
+                <div id="lb"><img id="lb-img" src=""/></div>
+                <script>
+                  const lb=document.getElementById('lb'),lbImg=document.getElementById('lb-img');
+                  for(const im of document.querySelectorAll('.cell img'))
+                    im.addEventListener('click',e=>{{lbImg.src=im.src;lb.classList.add('on');e.stopPropagation()}});
+                  lb.addEventListener('click',()=>lb.classList.remove('on'));
+                </script>
+              </body></html>"""
+
+              out = ROOT / "index.html"
+              out.write_text(html, encoding="utf-8")
+              print(f"\nWrote {out} ({out.stat().st_size / 1024:.1f} KB)")
+              PY
+              echo "=== done ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints

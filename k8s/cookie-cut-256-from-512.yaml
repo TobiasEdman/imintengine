@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cookie-cut-256-from-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: derive-256-from-refetched-512
+spec:
+  backoffLimit: 0
+  # Derives 3943 256-tiles from their freshly-refetched 512 parents
+  # via center crop. Avoids re-fetching Sentinel-2 scenes twice.
+  # MUST run AFTER refetch-late-autumn-512 completes.
+  #
+  # Pinned to p02r08srv01 so the RWO 256-PVC (training-data) can be
+  # co-mounted alongside the dashboard pod's hold on it.
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: cookie-cut
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Cookie-cut 256-tiles from 512 ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              # Compute the overlap set on the fly from the two audit JSONs
+              python3 - <<'PY'
+              import json, pathlib
+              d512 = json.load(open('/checkpoints/audits/late_autumn_frames_512.json'))
+              d256 = json.load(open('/checkpoints/audits/late_autumn_frames_256.json'))
+              a512 = set(d512['unique_affected_tiles'])
+              a256 = set(d256['unique_affected_tiles'])
+              overlap = sorted(a512 & a256)
+              out = pathlib.Path('/checkpoints/audits/overlap_512_in_256.json')
+              out.write_text(json.dumps({'tiles': overlap, 'count': len(overlap)}))
+              print(f"  overlap: {len(overlap)} tiles, written to {out}")
+              PY
+
+              python3 scripts/cookie_cut_256_from_512.py \
+                --tiles-json /checkpoints/audits/overlap_512_in_256.json \
+                --src-dir /cephfs/unified_v2_512 \
+                --dst-dir /data/unified_v2 \
+                --workers 4
+
+              echo "=== done ==="
+          resources:
+            requests: {cpu: "4", memory: "8Gi"}
+            limits:   {cpu: "4", memory: "8Gi"}
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs, readOnly: true}
+            - {name: td,     mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: td
+          persistentVolumeClaim: {claimName: training-data}
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}

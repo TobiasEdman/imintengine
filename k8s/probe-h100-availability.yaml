@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: probe-h100-availability
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: probe-h100
+spec:
+  backoffLimit: 0
+  # Minimal H100 availability probe. Asks the scheduler for 1 GPU with the
+  # repo's standard H100 selector (accelerator=nvidia-h100), runs nvidia-smi,
+  # exits. If pod stays Pending, the H100 pool is full and we're queued.
+  # If it Runs → we have capacity for a Prithvi training job slot.
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: probe
+          image: nvidia/cuda:12.2.0-base-ubuntu22.04
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              echo "=== H100 probe ==="
+              echo "Node:      $(hostname)"
+              echo "Pod:       $(cat /etc/hostname)"
+              echo ""
+              echo "--- nvidia-smi ---"
+              nvidia-smi --query-gpu=name,driver_version,memory.total,memory.free,compute_cap --format=csv
+              echo ""
+              echo "--- CUDA_VISIBLE_DEVICES ---"
+              echo "${CUDA_VISIBLE_DEVICES:-(unset)}"
+              echo ""
+              echo "=== probe ok ==="
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+              nvidia.com/gpu: "1"

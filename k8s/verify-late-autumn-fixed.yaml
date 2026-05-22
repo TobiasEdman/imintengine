@@ -1,0 +1,116 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verify-late-autumn-fixed
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: post-refetch-verification
+spec:
+  backoffLimit: 0
+  # Re-runs the same audit logic as audit-late-autumn-frames but
+  # AFTER refetch + cookie-cut. Expected output: ~0 affected tiles
+  # in both datasets. Quick (<10 min).
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: verify
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              pip install --quiet --no-cache-dir numpy
+              python3 - <<'PY'
+              import json, glob, pathlib
+              import numpy as np
+
+              CAP_DOY = 244
+              OUT = pathlib.Path("/checkpoints/audits")
+              OUT.mkdir(parents=True, exist_ok=True)
+
+              def audit(label, data_dir, out_file):
+                  files = sorted(glob.glob(data_dir + "/*.npz"))
+                  total = len(files)
+                  unreadable = 0
+                  no_doy = 0
+                  affected = []
+                  per_frame = {1: 0, 2: 0, 3: 0}
+                  for f in files:
+                      try:
+                          z = np.load(f, allow_pickle=True)
+                      except Exception:
+                          unreadable += 1; continue
+                      doy = z["doy"] if "doy" in z.files else None
+                      dates = z["dates"] if "dates" in z.files else None
+                      if doy is None:
+                          no_doy += 1; continue
+                      doy = list(doy)
+                      dates = [str(d) for d in dates] if dates is not None else [""]*len(doy)
+                      for fi in (1, 2, 3):
+                          if fi < len(doy):
+                              d = int(doy[fi])
+                              if d > CAP_DOY:
+                                  affected.append({
+                                      "name": pathlib.Path(f).name,
+                                      "frame_idx": fi, "doy": d, "date": dates[fi],
+                                  })
+                                  per_frame[fi] += 1
+                  unique = sorted({a["name"] for a in affected})
+                  print(f"\n=== {label} ({data_dir}) ===")
+                  print(f"  total tiles      : {total}")
+                  print(f"  unreadable       : {unreadable}")
+                  print(f"  no doy field     : {no_doy}")
+                  print(f"  affected entries : {len(affected)}")
+                  print(f"  unique tiles     : {len(unique)} ({100*len(unique)/max(total,1):.2f}%)")
+                  print(f"  per-frame: {per_frame}")
+                  if affected:
+                      worst = sorted(affected, key=lambda a: -a["doy"])[:5]
+                      print(f"  worst-DOY top 5:")
+                      for a in worst:
+                          print(f"    {a['name']:30s} frame {a['frame_idx']} DOY {a['doy']} {a['date']}")
+                  out_file.write_text(json.dumps({
+                      "dataset": label, "data_dir": data_dir, "cap_doy": CAP_DOY,
+                      "total_tiles": total, "unreadable": unreadable,
+                      "no_doy_field": no_doy,
+                      "unique_affected_tiles": unique,
+                      "affected_entries": affected,
+                      "per_frame_count": per_frame,
+                  }, indent=1))
+                  return total, len(unique)
+
+              t512, a512 = audit("512-POST", "/cephfs/unified_v2_512",
+                                  OUT / "verify_late_autumn_512_post.json")
+              t256, a256 = audit("256-POST", "/data/unified_v2",
+                                  OUT / "verify_late_autumn_256_post.json")
+              print(f"\n=== POST-REFETCH SUMMARY ===")
+              print(f"  512-set: {a512}/{t512} affected ({100*a512/max(t512,1):.2f}%)")
+              print(f"  256-set: {a256}/{t256} affected ({100*a256/max(t256,1):.2f}%)")
+              if a512 == 0 and a256 == 0:
+                  print(f"  ✓ ALL CLEAN — refetch successful")
+              else:
+                  print(f"  ⚠ residual affected tiles remain — investigate")
+              PY
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs, readOnly: true}
+            - {name: td, mountPath: /data, readOnly: true}
+            - {name: checkpoints, mountPath: /checkpoints}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: td
+          persistentVolumeClaim: {claimName: training-data}
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}

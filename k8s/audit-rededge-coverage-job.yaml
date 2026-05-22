@@ -1,0 +1,136 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-rededge-coverage
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: audit-rededge-coverage
+spec:
+  backoffLimit: 0
+  # Per-tile rededge (B05/B06/B07) coverage audit. Mounts both training PVCs
+  # read-only. No writes, no cleanup — pure diagnostics.
+  #
+  # Background: scripts/enrich_tiles_rededge.py sets has_rededge=1 if at
+  # least one frame fetched successfully, but failed frames are silently
+  # written as zeros (enrich_tiles_rededge.py:344-353). The 2026-04-29
+  # deadline-killed pod produced ~3156 tiles with has_rededge=1 but 0/4
+  # valid frames. The sentinel cannot be trusted alone — must inspect data.
+  #
+  # Audit reports, per dataset:
+  #   - total tiles
+  #   - tiles with rededge key present
+  #   - histogram of valid-frame counts (0/4 ... 4/4); a "valid" frame is
+  #     one where the 3-band slice has any non-zero pixel
+  #   - ghost tiles: has_rededge=1 AND valid_frames=0  (the failure mode
+  #     the 2026-04-29 incident left behind; should be 0 after re-fetch)
+  #   - sentinel-clean tiles: has_rededge=1 AND valid_frames=4 (healthy)
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+              echo "=== audit: rededge (B05/B06/B07) coverage per dataset ==="
+              python3 -c "
+              import numpy as np, glob
+              N_BANDS_REDEDGE = 3   # B05, B06, B07 per frame
+              N_FRAMES = 4          # multitemporal stack convention
+
+              for label, d in [('512', '/cephfs/unified_v2_512'),
+                               ('256', '/td/unified_v2')]:
+                  fs = sorted(glob.glob(d + '/*.npz'))
+                  total = len(fs)
+                  unreadable = 0
+                  has_key = 0
+                  sentinel_on = 0
+                  wrong_shape = 0
+                  valid_frame_hist = [0] * (N_FRAMES + 1)   # 0..4 valid
+                  ghost = 0           # sentinel=1 AND valid_frames=0
+                  partial = 0         # 0 < valid_frames < 4
+                  clean = 0           # sentinel=1 AND valid_frames=4
+
+                  for f in fs:
+                      try:
+                          z = np.load(f, allow_pickle=True)
+                      except Exception:
+                          unreadable += 1
+                          continue
+
+                      sentinel = int(z['has_rededge']) if 'has_rededge' in z.files else 0
+                      if sentinel == 1:
+                          sentinel_on += 1
+                      if 'rededge' not in z.files:
+                          # absent — counts as 0 valid frames
+                          valid_frame_hist[0] += 1
+                          if sentinel == 1:
+                              ghost += 1
+                          continue
+                      has_key += 1
+                      r = z['rededge']
+                      # expected shape (N_FRAMES*N_BANDS_REDEDGE, H, W)
+                      if r.ndim != 3 or r.shape[0] != N_FRAMES * N_BANDS_REDEDGE:
+                          wrong_shape += 1
+                          continue
+                      valid = 0
+                      for i in range(N_FRAMES):
+                          frame = r[i*N_BANDS_REDEDGE:(i+1)*N_BANDS_REDEDGE]
+                          if np.any(frame != 0):
+                              valid += 1
+                      valid_frame_hist[valid] += 1
+                      if sentinel == 1 and valid == 0:
+                          ghost += 1
+                      elif sentinel == 1 and valid == N_FRAMES:
+                          clean += 1
+                      if 0 < valid < N_FRAMES:
+                          partial += 1
+
+                  print(f'=== {label} ({d}) ===')
+                  print(f'  total tiles       : {total}')
+                  print(f'  unreadable        : {unreadable}')
+                  print(f'  rededge key set   : {has_key} ({100*has_key/max(total,1):.1f}%)')
+                  print(f'  has_rededge=1     : {sentinel_on} ({100*sentinel_on/max(total,1):.1f}%)')
+                  print(f'  wrong-shape       : {wrong_shape}')
+                  print(f'  valid-frame hist  : 0/4={valid_frame_hist[0]}  '
+                        f'1/4={valid_frame_hist[1]}  '
+                        f'2/4={valid_frame_hist[2]}  '
+                        f'3/4={valid_frame_hist[3]}  '
+                        f'4/4={valid_frame_hist[4]}')
+                  print(f'  ghost tiles       : {ghost}   (sentinel=1, 0 valid frames — '
+                        f'the 2026-04-29 failure mode; should be 0 after re-fetch)')
+                  print(f'  clean tiles       : {clean}   (sentinel=1, 4/4 valid frames)')
+                  print(f'  partial tiles     : {partial}   (1-3 valid frames; candidates for retry-empty-frames)')
+                  print()
+              "
+              echo "=== done ==="
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /cephfs
+              readOnly: true
+            - name: td
+              mountPath: /td
+              readOnly: true
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: td
+          persistentVolumeClaim:
+            claimName: training-data

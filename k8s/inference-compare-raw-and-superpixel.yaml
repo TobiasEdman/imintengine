@@ -1,0 +1,257 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inference-compare-raw-and-superpixel
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: inference-comparison-with-postproc
+spec:
+  backoffLimit: 0
+  # Single job runs inference TWICE on the 5 viz tiles for each model:
+  #   pass 1: raw (no post-processing)
+  #   pass 2: --superpixel (SLIC refinement on 6-band spectral)
+  # → 4 prediction JSONs total at /checkpoints/compare/{raw,sp}/
+  # Then builds a combined comparison HTML showing all 4 variants
+  # side by side per tile, served at /checkpoints/compare/index.html.
+  #
+  # einops added to pip install — prithvi_mae.py imports it; the previous
+  # job failed with ModuleNotFoundError after correctly loading the
+  # patch_size fix from fix/inference-comparison-patch-size.
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: infer
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Inference compare: raw vs --superpixel · 300M + 600M ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm numpy Pillow scipy scikit-learn scikit-image \
+                huggingface_hub einops
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/inference-comparison-patch-size \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              # Two output dirs side by side
+              RAW=/checkpoints/compare/raw
+              SP=/checkpoints/compare/sp
+              mkdir -p "$RAW" "$SP"
+
+              echo ""
+              echo "=== Pass 1: raw inference ==="
+              python3 scripts/inference_comparison.py \
+                --viz-dir data/viz_tiles \
+                --checkpoints \
+                    /checkpoints/prithvi_300m_256/best_model.pt \
+                    /checkpoints/prithvi_600m_512/best_model.pt \
+                --labels prithvi_300m prithvi_600m \
+                --output-dir "$RAW" \
+                --device cuda
+
+              echo ""
+              echo "=== Pass 2: --superpixel refinement (500 segments) ==="
+              python3 scripts/inference_comparison.py \
+                --viz-dir data/viz_tiles \
+                --checkpoints \
+                    /checkpoints/prithvi_300m_256/best_model.pt \
+                    /checkpoints/prithvi_600m_512/best_model.pt \
+                --labels prithvi_300m prithvi_600m \
+                --output-dir "$SP" \
+                --superpixel \
+                --superpixel-segments 500 \
+                --device cuda
+
+              echo ""
+              echo "=== Build combined comparison HTML ==="
+              python3 - <<'PY'
+              import base64, json, pathlib
+
+              REPO  = pathlib.Path("/workspace/imintengine")
+              VIZ5  = json.loads((REPO / "data/viz_tiles/viz_data5.json").read_text())
+              ROOT  = pathlib.Path("/checkpoints/compare")
+              VARIANTS = [
+                  # (slug,         pred_dir,    col_header)
+                  ("300m_raw", ROOT / "raw", "300M · raw"),
+                  ("300m_sp",  ROOT / "sp",  "300M · +SLIC"),
+                  ("600m_raw", ROOT / "raw", "600M · raw"),
+                  ("600m_sp",  ROOT / "sp",  "600M · +SLIC"),
+              ]
+              MODEL_FILE = {
+                  "300m_raw": "prithvi_300m_predictions.json",
+                  "300m_sp":  "prithvi_300m_sp_predictions.json",
+                  "600m_raw": "prithvi_600m_predictions.json",
+                  "600m_sp":  "prithvi_600m_sp_predictions.json",
+              }
+              preds = {}
+              for slug, d, _ in VARIANTS:
+                  f = d / MODEL_FILE[slug]
+                  if not f.exists():
+                      # the --superpixel suffix may vary; try both
+                      alt = d / MODEL_FILE[slug].replace("_sp_", "_")
+                      if alt.exists():
+                          f = alt
+                      else:
+                          raise SystemExit(f"missing: {f} (also tried {alt})")
+                  preds[slug] = json.loads(f.read_text())
+                  print(f"  loaded {f.name}: {len(preds[slug])} keys")
+
+              tiles = sorted(k[:-6] for k in VIZ5 if k.endswith("_shape"))
+              print(f"  tiles: {tiles}")
+
+              CLASS_NAMES = ['bakgrund','tallskog','granskog','lövskog','blandskog',
+                  'sumpskog','tillfälligt ej skog','våtmark','öppen mark','bebyggelse',
+                  'vatten','vete','korn','havre','oljeväxter','slåttervall','bete',
+                  'potatis','sockerbetor','trindsäd','råg','majs','hygge']
+              CLASS_COLORS = [
+                  'rgb(0,0,0)','rgb(26,92,53)','rgb(45,138,91)','rgb(123,198,126)',
+                  'rgb(77,179,128)','rgb(107,142,90)','rgb(201,223,110)','rgb(155,119,34)',
+                  'rgb(212,180,74)','rgb(192,57,43)','rgb(36,113,163)','rgb(232,184,0)',
+                  'rgb(212,120,10)','rgb(240,208,96)','rgb(212,198,0)','rgb(145,200,76)',
+                  'rgb(184,222,134)','rgb(155,89,182)','rgb(214,51,129)','rgb(224,112,32)',
+                  'rgb(139,32,32)','rgb(220,200,0)','rgb(0,168,198)',
+              ]
+
+              def img_tag(b64, alt=""):
+                  return f'<img src="data:image/png;base64,{b64}" alt="{alt}" />'
+              def cell(b64, label=""):
+                  return f'<td><div class="cell">{img_tag(b64, label)}</div></td>'
+
+              header_cols = ["Tile", "NIR-CIR", "GT", "NMD"]
+              for _, _, label in VARIANTS:
+                  header_cols.append(label)
+
+              rows = []
+              for t in tiles:
+                  shape = VIZ5.get(f"{t}_shape", [0, 0])
+                  cells = [f'<td class="lbl"><b>{t}</b><br/><small>{shape[0]}×{shape[1]}</small></td>']
+                  cells.append(cell(VIZ5.get(f"{t}_cir", ""), "NIR CIR"))
+                  cells.append(cell(VIZ5.get(f"{t}_gt", ""), "GT"))
+                  cells.append(cell(VIZ5.get(f"{t}_nmd_new", ""), "NMD"))
+                  for slug, _, _ in VARIANTS:
+                      b64 = preds[slug].get(f"{t}_pred", "")
+                      cells.append(cell(b64, slug))
+                  rows.append(f'<tr>{"".join(cells)}</tr>')
+
+              meta_lines = []
+              for slug, _, label in VARIANTS:
+                  ep = preds[slug].get("_epoch", "?")
+                  mi = preds[slug].get("_metric", "?")
+                  meta_lines.append(f'<li><b>{label}</b> — epoch {ep}, mIoU {mi}</li>')
+
+              legend = "".join(
+                  f'<span class="lg-item"><span class="sw" style="background:{c}"></span>{n}</span>'
+                  for n, c in zip(CLASS_NAMES, CLASS_COLORS)
+              )
+
+              html = f"""<!doctype html>
+              <html lang="sv"><head><meta charset="utf-8">
+              <title>Compare — raw vs +SLIC · 300M vs 600M</title>
+              <style>
+                *{{box-sizing:border-box;margin:0;padding:0}}
+                body{{font-family:-apple-system,Segoe UI,Arial,sans-serif;
+                     background:#0b0e17;color:#d8dae5;padding:20px;min-height:100vh}}
+                h1{{font-size:16px;font-weight:600;color:#f1f5f9;margin-bottom:6px}}
+                .meta{{font-size:12px;color:#94a3b8;margin-bottom:14px;line-height:1.7}}
+                .meta ul{{margin:6px 0 0 18px}}
+                .wrap{{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px;overflow-x:auto;margin-bottom:18px}}
+                table{{border-collapse:separate;border-spacing:6px}}
+                th{{font-size:11px;color:#94a3b8;font-weight:600;padding:6px;text-align:center;letter-spacing:.03em;min-width:160px}}
+                td.lbl{{font-size:11px;color:#cbd5e1;padding:4px 8px;white-space:nowrap}}
+                td.lbl b{{font-family:monospace;color:#f1f5f9}}
+                td.lbl small{{color:#64748b}}
+                .cell{{width:160px;height:160px;background:#0b0e17;border:1px solid #1e293b;border-radius:4px;overflow:hidden;cursor:zoom-in}}
+                .cell img{{width:100%;height:100%;image-rendering:pixelated;display:block}}
+                .leg{{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px}}
+                .leg h2{{font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:.04em;margin-bottom:8px}}
+                .lg{{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:5px 10px}}
+                .lg-item{{display:flex;align-items:center;gap:6px;font-size:11px;color:#d8dae5}}
+                .sw{{width:13px;height:13px;border-radius:3px;border:1px solid rgba(255,255,255,.1);flex-shrink:0}}
+                #lb{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:99;align-items:center;justify-content:center;cursor:zoom-out}}
+                #lb.on{{display:flex}}
+                #lb img{{max-width:92vw;max-height:92vh;image-rendering:pixelated;border-radius:6px}}
+              </style></head><body>
+                <h1>Compare — raw vs SLIC superpixel refinement · 300M vs 600M</h1>
+                <div class="meta">
+                  5 viz-tiles · raw model prediction vs SLIC-refined (500 segments,
+                  on 6-band spectral). Click any cell to enlarge.
+                  Boundaries should snap to spectral edges in the +SLIC columns.
+                  <ul>{"".join(meta_lines)}</ul>
+                </div>
+                <div class="wrap">
+                  <table>
+                    <thead><tr>{"".join(f"<th>{c}</th>" for c in header_cols)}</tr></thead>
+                    <tbody>{"".join(rows)}</tbody>
+                  </table>
+                </div>
+                <div class="leg">
+                  <h2>23-class palette</h2>
+                  <div class="lg">{legend}</div>
+                </div>
+                <div id="lb"><img id="lb-img" src=""/></div>
+                <script>
+                  const lb = document.getElementById('lb');
+                  const lbImg = document.getElementById('lb-img');
+                  for (const im of document.querySelectorAll('.cell img')) {{
+                    im.addEventListener('click', e => {{
+                      lbImg.src = im.src;
+                      lb.classList.add('on');
+                      e.stopPropagation();
+                    }});
+                  }}
+                  lb.addEventListener('click', () => lb.classList.remove('on'));
+                </script>
+              </body></html>"""
+
+              out = ROOT / "index.html"
+              out.write_text(html, encoding="utf-8")
+              print(f"\nWrote {out} ({out.stat().st_size / 1024:.1f} KB)")
+              PY
+
+              echo ""
+              echo "=== output tree ==="
+              find /checkpoints/compare -maxdepth 2 -type f | sort
+              echo "=== done ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints

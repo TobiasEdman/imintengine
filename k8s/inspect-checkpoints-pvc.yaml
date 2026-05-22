@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inspect-checkpoints-pvc
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: diagnose-600m-checkpoint-failure
+spec:
+  restartPolicy: Never
+  # Pin to the same H100 node the failed 600M pods landed on so the
+  # RWO PVC re-attaches cleanly (terminated Error pods on this node
+  # release the attachment immediately on kubelet's next sweep).
+  nodeName: p02r08srv01
+  containers:
+    - name: inspector
+      image: alpine:3.19
+      command:
+        - sh
+        - -c
+        - |
+          echo "=== /checkpoints disk usage ==="
+          df -h /checkpoints
+          echo ""
+          echo "=== /checkpoints inode usage ==="
+          df -i /checkpoints
+          echo ""
+          echo "=== top-level layout ==="
+          ls -lah /checkpoints/ 2>/dev/null | head -40
+          echo ""
+          echo "=== prithvi_300m_256/ ==="
+          du -sh /checkpoints/prithvi_300m_256/* 2>/dev/null | sort -h
+          ls -lah /checkpoints/prithvi_300m_256/ 2>/dev/null
+          echo ""
+          echo "=== prithvi_600m_512/ ==="
+          du -sh /checkpoints/prithvi_600m_512/* 2>/dev/null | sort -h
+          ls -lah /checkpoints/prithvi_600m_512/ 2>/dev/null
+          echo ""
+          echo "=== ANY .pt.tmp / partial files ==="
+          find /checkpoints -name "*.tmp" -o -name "*.tmp.pt" -o -name "*.partial" 2>/dev/null | head -40
+          echo ""
+          echo "=== old checkpoint dirs from earlier runs ==="
+          ls -lah /checkpoints/ 2>/dev/null
+          echo ""
+          echo "=== sleep 120 so kubectl exec is possible if needed ==="
+          sleep 120
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "256Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      volumeMounts:
+        - name: checkpoints
+          mountPath: /checkpoints
+  volumes:
+    - name: checkpoints
+      persistentVolumeClaim:
+        claimName: training-checkpoints

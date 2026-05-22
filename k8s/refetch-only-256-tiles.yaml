@@ -1,0 +1,99 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: refetch-only-256-tiles
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: refetch-256-set-without-512-parent
+spec:
+  backoffLimit: 0
+  # Re-fetch the 833 affected 256-tiles that have no 512-parent
+  # (i.e. cookie-cut not applicable). Uses the same refetch_tile +
+  # force=True pipeline as the 512-set job, just pointed at the
+  # 256-PVC and a filtered audit JSON.
+  # Pinned to p02r08srv01 for the RWO 256-PVC.
+  activeDeadlineSeconds: 14400   # 4h ceiling; expected ~30-60 min
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: refetch
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Re-fetch only-256 affected tiles ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj pyyaml Pillow httpx openeo
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              # Derive only-256 list from the two audit JSONs
+              python3 - <<'PY'
+              import json, pathlib
+              d512 = json.load(open('/checkpoints/audits/late_autumn_frames_512.json'))
+              d256 = json.load(open('/checkpoints/audits/late_autumn_frames_256.json'))
+              a512 = set(d512['unique_affected_tiles'])
+              a256 = set(d256['unique_affected_tiles'])
+              only256 = sorted(a256 - a512)
+              out_path = pathlib.Path('/checkpoints/audits/only_256_affected.json')
+              # Match audit-job's JSON shape so refetch_affected_tiles.py reads it
+              payload = {
+                  'dataset': '256-only',
+                  'data_dir': '/data/unified_v2',
+                  'unique_affected_tiles': only256,
+              }
+              out_path.write_text(json.dumps(payload))
+              print(f"  only-256 affected: {len(only256)} → {out_path}")
+              PY
+
+              python3 scripts/refetch_affected_tiles.py \
+                --audit-json /checkpoints/audits/only_256_affected.json \
+                --output-dir /data/unified_v2 \
+                --tile-size-px 256 \
+                --workers 6 \
+                --sources des,cdse \
+                --cloud-max 30.0
+
+              echo "=== done ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}
+            # DES creds needed by optimal_fetch_dates -> SCL stack fetch
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: user, optional: true}
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: password, optional: true}
+          resources:
+            requests: {cpu: "6", memory: "12Gi"}
+            limits:   {cpu: "6", memory: "12Gi"}
+          volumeMounts:
+            - {name: td, mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+      volumes:
+        - name: td
+          persistentVolumeClaim: {claimName: training-data}
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}

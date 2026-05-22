@@ -1,0 +1,344 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rebuild-compare-html-final
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: html-final-with-nmd-raw-palette
+spec:
+  backoffLimit: 0
+  # Final HTML rebuild after all 5 variant predictions are on disk:
+  #   - NMD column rendered with Naturvårdsverkets canonical raw palette
+  #     (read nmd_label from .npz, look up _RAW_NMD_COLORS) instead of
+  #     forcing through unified-23 schema where unmapped/cropland NMD
+  #     classes show as black.
+  #   - GT column relabeled "Träningsdata" — what the model was actually
+  #     trained against (unified-23 with bakgrund/ignore=0), not
+  #     absolute ground truth.
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: rebuild
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Final HTML rebuild (NMD-raw palette + Träningsdata label) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/inference-comparison-patch-size \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              echo "=== inputs ==="
+              ls /checkpoints/compare/*/ 2>&1 || true
+
+              python3 - <<'PY'
+              import base64, io, json, pathlib, zlib
+              import numpy as np
+              from PIL import Image
+
+              REPO = pathlib.Path("/workspace/imintengine")
+              VIZ5 = json.loads((REPO / "data/viz_tiles/viz_data5.json").read_text())
+              ROOT = pathlib.Path("/checkpoints/compare")
+
+              # Naturvårdsverkets canonical raw-NMD palette, copied verbatim
+              # from imint/exporters/export.py:283. Unmapped codes → gray.
+              RAW_NMD_COLORS = {
+                  # Skog utanför våtmark
+                  111: (0, 100, 0),       # Tallskog
+                  112: (34, 139, 34),     # Granskog
+                  113: (20, 120, 20),     # Tall/gran-blandskog
+                  114: (60, 179, 113),    # Barrblandskog
+                  115: (50, 205, 50),     # Triviallövskog
+                  116: (80, 180, 60),     # Ädellövskog
+                  117: (100, 200, 80),    # Trivial/ädellövblandskog
+                  118: (70, 160, 100),    # Barr/lövblandskog
+                  # Skog på våtmark
+                  121: (46, 79, 46), 122: (58, 95, 58), 123: (50, 85, 50),
+                  124: (90, 143, 90), 125: (74, 127, 74), 126: (85, 140, 80),
+                  127: (95, 155, 90), 128: (80, 130, 80),
+                  # Öppen mark
+                  2:   (139, 90, 43),     # Öppen våtmark
+                  3:   (255, 215, 0),     # Åkermark  ← was BLACK in unified, now gold
+                  41:  (200, 173, 127),
+                  42:  (210, 180, 140),
+                  # Bebyggelse
+                  51:  (255, 0, 0), 52:  (255, 69, 0), 53:  (255, 99, 71),
+                  # Vatten
+                  61:  (0, 0, 255),       # Sjö och vattendrag
+                  62:  (30, 144, 255),    # Hav
+              }
+              # Compact display labels (för legend)
+              NMD_LEGEND = [
+                  ("Skog (tall/gran/blandning)", (34, 139, 34)),
+                  ("Skog på våtmark",            (74, 127, 74)),
+                  ("Öppen våtmark",              (139, 90, 43)),
+                  ("Åkermark",                   (255, 215, 0)),
+                  ("Öppen mark (bar/vegeterad)", (210, 180, 140)),
+                  ("Bebyggelse",                 (255, 0, 0)),
+                  ("Sjö och vattendrag",         (0, 0, 255)),
+                  ("Hav",                        (30, 144, 255)),
+                  ("Okänd kod",                  (128, 128, 128)),
+              ]
+
+              def nmd_raw_from_npz(tile_path, target_shape):
+                  data = np.load(tile_path, allow_pickle=True)
+                  raw = data.get("nmd_label")
+                  if raw is None:
+                      return ""
+                  raw = np.asarray(raw)
+                  h_full, w_full = raw.shape
+                  th, tw = target_shape[0], target_shape[1]
+                  y0 = max(0, (h_full - th) // 2); x0 = max(0, (w_full - tw) // 2)
+                  raw = raw[y0:y0+th, x0:x0+tw]
+                  rgb = np.full((th, tw, 3), 128, dtype=np.uint8)  # gray default
+                  for code, color in RAW_NMD_COLORS.items():
+                      mask = raw == code
+                      if mask.any():
+                          rgb[mask] = color
+                  buf = io.BytesIO()
+                  Image.fromarray(rgb).save(buf, format='PNG', optimize=True)
+                  return base64.b64encode(buf.getvalue()).decode()
+
+              def viz_to_png_b64(viz_str, shape):
+                  if not viz_str: return ""
+                  raw = base64.b64decode(viz_str)
+                  pixels = zlib.decompress(raw)
+                  arr = np.frombuffer(pixels, dtype=np.uint8).reshape(shape[0], shape[1], 3)
+                  buf = io.BytesIO()
+                  Image.fromarray(arr).save(buf, format='PNG', optimize=True)
+                  return base64.b64encode(buf.getvalue()).decode()
+
+              PEAK_SUMMER_DOY = 195
+              def rgb_from_npz(tile_path, target_shape):
+                  data = np.load(tile_path, allow_pickle=True)
+                  spectral = data.get("spectral", data.get("image"))
+                  if spectral is None: return ""
+                  spectral = spectral.astype(np.float32)
+                  n_bands = 6
+                  n_frames = spectral.shape[0] // n_bands
+                  doy = data.get("doy")
+                  frame_idx = min(1, n_frames - 1)
+                  if doy is not None:
+                      doy = np.asarray(doy).ravel()
+                      if doy.shape[0] >= n_frames and np.any(doy > 0):
+                          valid = doy[:n_frames] > 0
+                          if np.any(valid):
+                              d = np.abs(doy[:n_frames].astype(np.float64) - PEAK_SUMMER_DOY)
+                              d[~valid] = 9999
+                              frame_idx = int(np.argmin(d))
+                  start = frame_idx * n_bands
+                  bands_bgr = spectral[start:start + 3]
+                  rgb = bands_bgr[::-1]
+                  _, h, w = rgb.shape
+                  th, tw = target_shape[0], target_shape[1]
+                  y0 = max(0, (h - th) // 2); x0 = max(0, (w - tw) // 2)
+                  rgb = rgb[:, y0:y0+th, x0:x0+tw]
+                  out = np.empty(rgb.shape, dtype=np.uint8)
+                  for c in range(3):
+                      lo, hi = np.percentile(rgb[c], [2, 98])
+                      if hi - lo < 1e-6: out[c] = 0
+                      else: out[c] = (np.clip((rgb[c]-lo)/(hi-lo),0,1)*255).astype(np.uint8)
+                  buf = io.BytesIO()
+                  Image.fromarray(np.transpose(out, (1, 2, 0))).save(buf, format='PNG', optimize=True)
+                  return base64.b64encode(buf.getvalue()).decode()
+
+              # Discover which variants are on disk; some may be missing
+              # (e.g. gf/sp3000_clean if a previous job failed mid-way).
+              ALL_VARIANTS = [
+                  ("raw",           "raw"),
+                  ("sp500",         "+SLIC 500"),
+                  ("sp3000",        "+SLIC 3000"),
+                  ("gf",            "+guided-filter"),
+                  ("sp3000_clean",  "+SLIC 3000 +cleanup"),
+              ]
+              available = []
+              for sub, label in ALL_VARIANTS:
+                  has_300 = (ROOT / sub / "prithvi_300m_predictions.json").exists()
+                  has_600 = (ROOT / sub / "prithvi_600m_predictions.json").exists()
+                  if has_300 and has_600:
+                      available.append((sub, label))
+                  else:
+                      print(f"  skip {sub}: 300m={has_300} 600m={has_600}")
+              print(f"  {len(available)} variants available")
+
+              VARIANTS = []
+              for sub, label in available:
+                  VARIANTS.append((sub, label, "prithvi_300m"))
+              for sub, label in available:
+                  VARIANTS.append((sub, label, "prithvi_600m"))
+
+              preds = {}
+              for sub, _, slug in VARIANTS:
+                  f = ROOT / sub / f"{slug}_predictions.json"
+                  preds[(sub, slug)] = json.loads(f.read_text())
+
+              tiles = sorted(k[:-6] for k in VIZ5 if k.endswith("_shape"))
+
+              # Unified-23 palette (for prediktioner och Träningsdata)
+              CLASS_NAMES = ['bakgrund','tallskog','granskog','lövskog','blandskog',
+                  'sumpskog','tillfälligt ej skog','våtmark','öppen mark','bebyggelse',
+                  'vatten','vete','korn','havre','oljeväxter','slåttervall','bete',
+                  'potatis','sockerbetor','trindsäd','råg','majs','hygge']
+              CLASS_COLORS = [
+                  'rgb(0,0,0)','rgb(26,92,53)','rgb(45,138,91)','rgb(123,198,126)',
+                  'rgb(77,179,128)','rgb(107,142,90)','rgb(201,223,110)','rgb(155,119,34)',
+                  'rgb(212,180,74)','rgb(192,57,43)','rgb(36,113,163)','rgb(232,184,0)',
+                  'rgb(212,120,10)','rgb(240,208,96)','rgb(212,198,0)','rgb(145,200,76)',
+                  'rgb(184,222,134)','rgb(155,89,182)','rgb(214,51,129)','rgb(224,112,32)',
+                  'rgb(139,32,32)','rgb(220,200,0)','rgb(0,168,198)',
+              ]
+
+              def img_tag(b64, alt=""):
+                  return f'<img src="data:image/png;base64,{b64}" alt="{alt}" />'
+              def cell(b64, klass="cell"):
+                  return f'<td><div class="{klass}">{img_tag(b64)}</div></td>'
+
+              N_VARIANTS = len(available)
+              header_cols = ['<th class="ref">Tile</th>',
+                             '<th class="ref">RGB</th>',
+                             '<th class="ref">NIR-CIR</th>',
+                             '<th class="ref ttip" title="Unified-23-schema label, vad modellen tränades mot. Svart = bakgrund/ignore_index (åker utan LPIS, omappade NMD)">Träningsdata</th>',
+                             '<th class="ref ttip" title="Naturvårdsverkets NMD2018 — råa klasser med deras egna färger (åkermark = gul)">NMD (raw)</th>']
+              for sub, label, slug in VARIANTS:
+                  block = "m300" if slug == "prithvi_300m" else "m600"
+                  header_cols.append(f'<th class="{block}">{label}</th>')
+              group_hdr = ('<tr class="group-hdr">'
+                  '<th colspan="5">Reference</th>'
+                  f'<th colspan="{N_VARIANTS}" class="m300">Prithvi-300M · 256</th>'
+                  f'<th colspan="{N_VARIANTS}" class="m600">Prithvi-600M · 512</th></tr>')
+
+              rows = []
+              for t in tiles:
+                  shape = VIZ5.get(f"{t}_shape", [224, 224])
+                  cells = [f'<td class="lbl"><b>{t}</b><br/><small>{shape[0]}×{shape[1]}</small></td>']
+                  tile_npz = REPO / "data/viz_tiles" / f"{t}.npz"
+                  cells.append(cell(rgb_from_npz(tile_npz, shape)))
+                  cells.append(cell(viz_to_png_b64(VIZ5.get(f"{t}_cir", ""), shape)))
+                  # Träningsdata = old GT (unified-23 mapped)
+                  cells.append(cell(viz_to_png_b64(VIZ5.get(f"{t}_gt", ""), shape)))
+                  # NMD raw with Naturvårdsverkets palette
+                  cells.append(cell(nmd_raw_from_npz(tile_npz, shape)))
+                  for sub, _, slug in VARIANTS:
+                      block = "m300" if slug == "prithvi_300m" else "m600"
+                      b64 = preds[(sub, slug)].get(f"{t}_pred", "")
+                      cells.append(cell(b64, f"cell {block}"))
+                  rows.append(f'<tr>{"".join(cells)}</tr>')
+
+              unified_legend = "".join(
+                  f'<span class="lg-item"><span class="sw" style="background:{c}"></span>{n}</span>'
+                  for n, c in zip(CLASS_NAMES, CLASS_COLORS)
+              )
+              nmd_legend = "".join(
+                  f'<span class="lg-item"><span class="sw" style="background:rgb{c}"></span>{n}</span>'
+                  for n, c in NMD_LEGEND
+              )
+
+              variant_meta = {
+                  "raw":          "modellen rakt av",
+                  "sp500":        "superpixel-refinement ~10×10 px (plot-skala)",
+                  "sp3000":       "superpixel-refinement ~4×4 px (sub-plot-detalj)",
+                  "gf":           "guided-filter — edge-preserving smoothing",
+                  "sp3000_clean": "superpixel 3000 + morfologisk MMU-filtrering",
+              }
+              variant_meta_lines = "".join(
+                  f'<li><b>{label}</b> — {variant_meta.get(sub, "")}</li>'
+                  for sub, label in available
+              )
+
+              html = f"""<!doctype html>
+              <html lang="sv"><head><meta charset="utf-8">
+              <title>Compare — Prithvi 300M vs 600M · {N_VARIANTS} post-processing-varianter</title>
+              <style>
+                *{{box-sizing:border-box;margin:0;padding:0}}
+                body{{font-family:-apple-system,Segoe UI,Arial,sans-serif;
+                     background:#0b0e17;color:#d8dae5;padding:20px;min-height:100vh}}
+                h1{{font-size:16px;font-weight:600;color:#f1f5f9;margin-bottom:6px}}
+                .meta{{font-size:12px;color:#94a3b8;margin-bottom:14px;line-height:1.7}}
+                .meta ul{{margin:6px 0 0 18px}}
+                .wrap{{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px;overflow-x:auto;margin-bottom:18px}}
+                table{{border-collapse:separate;border-spacing:4px}}
+                th{{font-size:10px;color:#94a3b8;font-weight:600;padding:5px;text-align:center;letter-spacing:.03em;min-width:140px;border-radius:3px}}
+                th.ref{{background:#1e293b;color:#cbd5e1}}
+                th.ttip{{cursor:help;text-decoration:underline dotted}}
+                th.m300{{background:#1e3a8a22;color:#93c5fd}}
+                th.m600{{background:#9a3a6322;color:#f9a8d4}}
+                .group-hdr th{{font-size:11px;padding:6px;letter-spacing:.05em}}
+                td.lbl{{font-size:11px;color:#cbd5e1;padding:4px 8px;white-space:nowrap}}
+                td.lbl b{{font-family:monospace;color:#f1f5f9}}
+                td.lbl small{{color:#64748b}}
+                .cell{{width:140px;height:140px;background:#0b0e17;border:1px solid #1e293b;border-radius:3px;overflow:hidden;cursor:zoom-in}}
+                .cell.m300{{border-color:#1e3a8a}}
+                .cell.m600{{border-color:#9a3a63}}
+                .cell img{{width:100%;height:100%;image-rendering:pixelated;display:block}}
+                .leg{{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px;margin-bottom:12px}}
+                .leg h2{{font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:.04em;margin-bottom:8px}}
+                .lg{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:5px 10px}}
+                .lg-item{{display:flex;align-items:center;gap:6px;font-size:11px;color:#d8dae5}}
+                .sw{{width:13px;height:13px;border-radius:3px;border:1px solid rgba(255,255,255,.1);flex-shrink:0}}
+                #lb{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:99;align-items:center;justify-content:center;cursor:zoom-out}}
+                #lb.on{{display:flex}}
+                #lb img{{max-width:92vw;max-height:92vh;image-rendering:pixelated;border-radius:6px}}
+              </style></head><body>
+                <h1>Compare — Prithvi 300M vs 600M · {N_VARIANTS} post-processing-varianter</h1>
+                <div class="meta">
+                  5 viz-tiles, 224×224 (10m S2-upplösning). Klick = zoom.
+                  Färgkodning på celler: <span style="color:#93c5fd">blå border = 300M</span>,
+                  <span style="color:#f9a8d4">rosa border = 600M</span>.
+                  <ul>{variant_meta_lines}</ul>
+                  <p style="margin-top:8px"><b>Träningsdata</b> = unified-23 schema (vad modellen tränades mot). Svart =
+                  <code>bakgrund</code> (ignore_index, åker utan LPIS-parcel + omappade NMD-koder).
+                  <b>NMD (raw)</b> = Naturvårdsverkets canonical 25-klass schema med deras egna färger —
+                  åkermark visas som <span style="color:#ffd700">gul</span>.</p>
+                </div>
+                <div class="wrap">
+                  <table>
+                    <thead>{group_hdr}<tr>{"".join(header_cols)}</tr></thead>
+                    <tbody>{"".join(rows)}</tbody>
+                  </table>
+                </div>
+                <div class="leg"><h2>Unified-23 palette (Träningsdata + Modell-prediktioner)</h2><div class="lg">{unified_legend}</div></div>
+                <div class="leg"><h2>NMD-raw palette (Naturvårdsverket)</h2><div class="lg">{nmd_legend}</div></div>
+                <div id="lb"><img id="lb-img" src=""/></div>
+                <script>
+                  const lb=document.getElementById('lb'),lbImg=document.getElementById('lb-img');
+                  for(const im of document.querySelectorAll('.cell img'))
+                    im.addEventListener('click',e=>{{lbImg.src=im.src;lb.classList.add('on');e.stopPropagation()}});
+                  lb.addEventListener('click',()=>lb.classList.remove('on'));
+                </script>
+              </body></html>"""
+
+              out = ROOT / "index.html"
+              out.write_text(html, encoding="utf-8")
+              print(f"\nWrote {out} ({out.stat().st_size / 1024:.1f} KB, {N_VARIANTS} variants per model)")
+              PY
+
+              echo "=== done ==="
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints

@@ -1,0 +1,170 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-late-autumn-frames
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: audit-vpp-window-bug-impact
+spec:
+  backoffLimit: 0
+  # Identifies which tiles in the 512-set (and 256-set) were fetched
+  # with frames that landed AFTER DOY 244 (Sep 1) in a growing-season
+  # slot — i.e. those affected by the pre-PR#15 compute_growing_season_
+  # windows bug that allowed Window 2 to extend into Oct-Nov.
+  #
+  # Frame index convention (per CLAUDE.md):
+  #   0: Höst år-1 (Sep-Oct prior year) — separat; INTE granskat
+  #   1, 2, 3: VPP-styrda växtsäsongsramar — DOY > 244 = bug-symptom
+  #
+  # Writes:
+  #   /checkpoints/audits/late_autumn_frames_512.json
+  #   /checkpoints/audits/late_autumn_frames_256.json
+  # + summary printed to log.
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      # Co-locate with the training-dashboard pod on p02r08srv01 so the
+      # RWO PVCs (training-data + training-checkpoints) can be co-mounted.
+      # Otherwise Multi-Attach error blocks scheduling.
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+              python3 - <<'PY'
+              import json, glob, pathlib
+              import numpy as np
+
+              OUT = pathlib.Path("/checkpoints/audits")
+              OUT.mkdir(parents=True, exist_ok=True)
+              CAP_DOY = 244  # Sep 1 — same constant as PR #15
+
+              def audit(label, data_dir, out_file):
+                  files = sorted(glob.glob(data_dir + "/*.npz"))
+                  total = len(files)
+                  unreadable = 0
+                  no_doy = 0
+                  affected = []  # list of (name, frame_idx, doy, date)
+                  doy_histogram_per_slot = {1: {}, 2: {}, 3: {}}
+
+                  for i, f in enumerate(files):
+                      try:
+                          z = np.load(f, allow_pickle=True)
+                      except Exception:
+                          unreadable += 1
+                          continue
+                      doy = z["doy"] if "doy" in z.files else None
+                      dates = z["dates"] if "dates" in z.files else None
+                      if doy is None:
+                          no_doy += 1
+                          continue
+                      doy = list(doy)
+                      dates = [str(d) for d in dates] if dates is not None else [""]*len(doy)
+
+                      # Check growing-season frames (indices 1, 2, 3)
+                      for fi in (1, 2, 3):
+                          if fi < len(doy):
+                              d = int(doy[fi])
+                              # Bin to 10-day buckets for histogram
+                              bucket = (d // 10) * 10
+                              doy_histogram_per_slot[fi][bucket] = doy_histogram_per_slot[fi].get(bucket, 0) + 1
+                              if d > CAP_DOY:
+                                  affected.append({
+                                      "name": pathlib.Path(f).name,
+                                      "frame_idx": fi,
+                                      "doy": d,
+                                      "date": dates[fi],
+                                  })
+
+                      if i and i % 1000 == 0:
+                          print(f"  {label}: {i}/{total} processed, {len(affected)} affected so far")
+
+                  # Summary
+                  print(f"\n=== {label} ({data_dir}) ===")
+                  print(f"  total tiles      : {total}")
+                  print(f"  unreadable       : {unreadable}")
+                  print(f"  no doy field     : {no_doy}")
+                  print(f"  affected entries : {len(affected)}  (some tiles have multiple bad frames)")
+
+                  # Per-frame breakdown
+                  per_frame = {1: 0, 2: 0, 3: 0}
+                  for a in affected:
+                      per_frame[a["frame_idx"]] += 1
+                  print(f"  per-frame bad-count:")
+                  for fi in (1, 2, 3):
+                      print(f"    frame {fi}: {per_frame[fi]} tiles with DOY > {CAP_DOY}")
+
+                  # Unique tiles affected
+                  unique_tiles = sorted({a["name"] for a in affected})
+                  print(f"  unique tiles affected: {len(unique_tiles)} ({100*len(unique_tiles)/max(total,1):.1f}%)")
+
+                  # Worst offenders (latest DOY)
+                  affected_sorted = sorted(affected, key=lambda a: -a["doy"])
+                  print(f"  worst-DOY top 10:")
+                  for a in affected_sorted[:10]:
+                      print(f"    {a['name']:30s}  frame {a['frame_idx']}  DOY {a['doy']:>3}  {a['date']}")
+
+                  # Histogram (10-day buckets)
+                  print(f"  DOY histograms per growing-season frame (10-day buckets, >0 only):")
+                  for fi in (1, 2, 3):
+                      buckets = sorted(doy_histogram_per_slot[fi].items())
+                      bucket_str = " ".join(f"{b}:{c}" for b, c in buckets)
+                      print(f"    frame {fi}: {bucket_str}")
+
+                  # Write JSON output
+                  payload = {
+                      "dataset": label,
+                      "data_dir": data_dir,
+                      "cap_doy": CAP_DOY,
+                      "total_tiles": total,
+                      "unreadable": unreadable,
+                      "no_doy_field": no_doy,
+                      "unique_affected_tiles": unique_tiles,
+                      "affected_entries": affected,
+                      "per_frame_count": per_frame,
+                  }
+                  out_file.write_text(json.dumps(payload, indent=1))
+                  print(f"  wrote {out_file} ({out_file.stat().st_size//1024} KB)")
+                  return total, len(unique_tiles)
+
+              t512, a512 = audit("512", "/cephfs/unified_v2_512",
+                                  OUT / "late_autumn_frames_512.json")
+              t256, a256 = audit("256", "/td/unified_v2",
+                                  OUT / "late_autumn_frames_256.json")
+              print(f"\n=== SUMMARY ===")
+              print(f"  512-set: {a512}/{t512} affected ({100*a512/max(t512,1):.1f}%)")
+              print(f"  256-set: {a256}/{t256} affected ({100*a256/max(t256,1):.1f}%)")
+              PY
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: cephfs
+              mountPath: /cephfs
+              readOnly: true
+            - name: td
+              mountPath: /td
+              readOnly: true
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: td
+          persistentVolumeClaim:
+            claimName: training-data

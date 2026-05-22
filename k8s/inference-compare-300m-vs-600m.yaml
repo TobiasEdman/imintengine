@@ -1,0 +1,241 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inference-compare-300m-vs-600m
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: inference-comparison
+spec:
+  backoffLimit: 0
+  # Run inference_comparison.py with both Prithvi checkpoints against
+  # the 5 viz tiles in the repo, then build a tile-by-tile comparison
+  # HTML and drop it on the checkpoints PVC so the training-dashboard
+  # pod can serve it. Uses the fix/inference-comparison-patch-size
+  # branch where load_model() correctly reads patch_size from the
+  # registry (16 for 300M, 14 for 600M).
+  activeDeadlineSeconds: 1200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      # Pin to the H100 node where the 600M training pod lives — it
+      # already has the checkpoints PVC attached (RWO), and we get GPU
+      # for fast inference (5 tiles × 2 models ≈ 10s).
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: infer
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Inference comparison: Prithvi-300M vs Prithvi-600M ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir timm numpy Pillow scipy scikit-learn huggingface_hub
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/inference-comparison-patch-size \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              # Output dir on checkpoints PVC so the dashboard pod can serve it
+              OUTDIR=/checkpoints/compare
+              mkdir -p "$OUTDIR"
+
+              # Symlink cached Prithvi weights from training-data PVC if present
+              # (the inference loader still calls HuggingFace if cache missing).
+              # We don't mount training-data here to keep RWO contention down
+              # — HF download is a few minutes one-time and fine.
+
+              echo ""
+              echo "=== Run inference (300M + 600M on 5 viz tiles) ==="
+              python3 scripts/inference_comparison.py \
+                --viz-dir data/viz_tiles \
+                --checkpoints \
+                    /checkpoints/prithvi_300m_256/best_model.pt \
+                    /checkpoints/prithvi_600m_512/best_model.pt \
+                --labels prithvi_300m prithvi_600m \
+                --output-dir "$OUTDIR" \
+                --device cuda
+
+              echo ""
+              echo "=== Build comparison HTML ==="
+              python3 - <<'PY'
+              import base64, json, pathlib
+
+              REPO = pathlib.Path("/workspace/imintengine")
+              VIZ5 = json.loads((REPO / "data/viz_tiles/viz_data5.json").read_text())
+              OUT  = pathlib.Path("/checkpoints/compare")
+              MODELS = [
+                  ("prithvi_300m", "Prithvi-300M · 256", "300M trained on /td/unified_v2"),
+                  ("prithvi_600m", "Prithvi-600M · 512", "600M trained on /cephfs/unified_v2_512"),
+              ]
+
+              # Load each model's prediction JSON. Schema (per inference_comparison.py):
+              #   { "_epoch": ..., "_metric": ..., "<tile>_pred": "<base64-png>", ... }
+              preds = {}
+              for slug, _, _ in MODELS:
+                  p = OUT / f"{slug}_predictions.json"
+                  if not p.exists():
+                      raise SystemExit(f"missing predictions: {p}")
+                  preds[slug] = json.loads(p.read_text())
+                  print(f"  loaded {p.name}: {len(preds[slug])} keys")
+
+              # Discover tile names from viz5 (keys end with _shape — pick those)
+              tiles = sorted(k[:-6] for k in VIZ5 if k.endswith("_shape"))
+              print(f"  tiles: {tiles}")
+
+              # Column spec: (header label, source_key in viz5 or model, kind)
+              CLASS_NAMES = ['bakgrund','tallskog','granskog','lövskog','blandskog',
+                  'sumpskog','tillfälligt ej skog','våtmark','öppen mark','bebyggelse',
+                  'vatten','vete','korn','havre','oljeväxter','slåttervall','bete',
+                  'potatis','sockerbetor','trindsäd','råg','majs','hygge']
+              CLASS_COLORS = [
+                  'rgb(0,0,0)','rgb(26,92,53)','rgb(45,138,91)','rgb(123,198,126)',
+                  'rgb(77,179,128)','rgb(107,142,90)','rgb(201,223,110)','rgb(155,119,34)',
+                  'rgb(212,180,74)','rgb(192,57,43)','rgb(36,113,163)','rgb(232,184,0)',
+                  'rgb(212,120,10)','rgb(240,208,96)','rgb(212,198,0)','rgb(145,200,76)',
+                  'rgb(184,222,134)','rgb(155,89,182)','rgb(214,51,129)','rgb(224,112,32)',
+                  'rgb(139,32,32)','rgb(220,200,0)','rgb(0,168,198)',
+              ]
+
+              def img_tag(b64, alt=""):
+                  return f'<img src="data:image/png;base64,{b64}" alt="{alt}" />'
+
+              def cell(b64, label=""):
+                  return f'<td><div class="cell">{img_tag(b64, label)}</div></td>'
+
+              # Header
+              header_cols = ["Tile", "NIR-CIR", "Ground truth", "NMD baseline"]
+              for _, label, _ in MODELS:
+                  header_cols.append(label)
+
+              # Build rows
+              rows = []
+              for t in tiles:
+                  shape = VIZ5.get(f"{t}_shape", [0, 0])
+                  row_cells = [f'<td class="lbl"><b>{t}</b><br/><small>{shape[0]}×{shape[1]}</small></td>']
+                  row_cells.append(cell(VIZ5.get(f"{t}_cir", ""), "NIR CIR"))
+                  row_cells.append(cell(VIZ5.get(f"{t}_gt", ""), "GT"))
+                  row_cells.append(cell(VIZ5.get(f"{t}_nmd_new", ""), "NMD"))
+                  for slug, label, _ in MODELS:
+                      b64 = preds[slug].get(f"{t}_pred", "")
+                      row_cells.append(cell(b64, label))
+                  rows.append(f'<tr>{"".join(row_cells)}</tr>')
+
+              # Per-model summary (epoch, mIoU)
+              model_meta_rows = []
+              for slug, label, desc in MODELS:
+                  epoch = preds[slug].get("_epoch", "?")
+                  miou  = preds[slug].get("_metric", "?")
+                  model_meta_rows.append(f'<li><b>{label}</b> — epoch {epoch}, mIoU {miou} — <span style="color:#94a3b8">{desc}</span></li>')
+
+              legend = "".join(
+                  f'<span class="lg-item"><span class="sw" style="background:{c}"></span>{n}</span>'
+                  for n, c in zip(CLASS_NAMES, CLASS_COLORS)
+              )
+              header_html = "".join(f'<th>{c}</th>' for c in header_cols)
+
+              html = f"""<!doctype html>
+              <html lang="sv"><head><meta charset="utf-8">
+              <title>Inference comparison — Prithvi 300M vs 600M</title>
+              <style>
+                *{{box-sizing:border-box;margin:0;padding:0}}
+                body{{font-family:-apple-system,Segoe UI,Arial,sans-serif;
+                     background:#0b0e17;color:#d8dae5;padding:20px;min-height:100vh}}
+                h1{{font-size:16px;font-weight:600;color:#f1f5f9;margin-bottom:6px}}
+                .meta{{font-size:12px;color:#94a3b8;margin-bottom:14px;line-height:1.7}}
+                .meta ul{{margin:6px 0 0 18px}}
+                .wrap{{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px;overflow-x:auto;margin-bottom:18px}}
+                table{{border-collapse:separate;border-spacing:6px}}
+                th{{font-size:11px;color:#94a3b8;font-weight:600;padding:6px;text-align:center;letter-spacing:.03em}}
+                td.lbl{{font-size:11px;color:#cbd5e1;padding:4px 8px;white-space:nowrap}}
+                td.lbl b{{font-family:monospace;color:#f1f5f9}}
+                td.lbl small{{color:#64748b}}
+                .cell{{width:220px;height:220px;background:#0b0e17;border:1px solid #1e293b;border-radius:4px;overflow:hidden;cursor:zoom-in}}
+                .cell img{{width:100%;height:100%;image-rendering:pixelated;display:block}}
+                .leg{{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px}}
+                .leg h2{{font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:.04em;margin-bottom:8px}}
+                .lg{{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:5px 10px}}
+                .lg-item{{display:flex;align-items:center;gap:6px;font-size:11px;color:#d8dae5}}
+                .sw{{width:13px;height:13px;border-radius:3px;border:1px solid rgba(255,255,255,.1);flex-shrink:0}}
+                #lb{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:99;align-items:center;justify-content:center;cursor:zoom-out}}
+                #lb.on{{display:flex}}
+                #lb img{{max-width:92vw;max-height:92vh;image-rendering:pixelated;border-radius:6px}}
+              </style></head><body>
+                <h1>Inference comparison — Prithvi 300M vs Prithvi 600M</h1>
+                <div class="meta">
+                  5 visualization tiles from <code>data/viz_tiles/</code>, ground truth +
+                  NMD baseline + per-model predictions (single-frame inference, peak-summer).
+                  Click any cell to enlarge.
+                  <ul>{"".join(model_meta_rows)}</ul>
+                </div>
+                <div class="wrap">
+                  <table>
+                    <thead><tr>{header_html}</tr></thead>
+                    <tbody>{"".join(rows)}</tbody>
+                  </table>
+                </div>
+                <div class="leg">
+                  <h2>23-class palette</h2>
+                  <div class="lg">{legend}</div>
+                </div>
+                <div id="lb"><img id="lb-img" src=""/></div>
+                <script>
+                  const lb = document.getElementById('lb');
+                  const lbImg = document.getElementById('lb-img');
+                  for (const im of document.querySelectorAll('.cell img')) {{
+                    im.addEventListener('click', e => {{
+                      lbImg.src = im.src;
+                      lb.classList.add('on');
+                      e.stopPropagation();
+                    }});
+                  }}
+                  lb.addEventListener('click', () => lb.classList.remove('on'));
+                </script>
+              </body></html>"""
+
+              out_html = OUT / "index.html"
+              out_html.write_text(html, encoding="utf-8")
+              print(f"\nWrote {out_html} ({out_html.stat().st_size / 1024:.1f} KB)")
+              PY
+
+              echo ""
+              echo "=== output ==="
+              ls -lh /checkpoints/compare/
+              echo "=== done ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints

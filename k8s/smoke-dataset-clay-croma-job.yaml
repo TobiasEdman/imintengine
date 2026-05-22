@@ -1,0 +1,176 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-dataset-clay-croma
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: smoke-clay-croma-wiring
+spec:
+  backoffLimit: 0
+  # Smoke-test the feat/dataset-clay-croma-emission branch:
+  #   1. Clone the branch
+  #   2. Instantiate UnifiedDataset(model_keys=("clay_v1_5","croma_base"))
+  #   3. Find a tile with `b08` + `rededge` enriched (B08 is mid-flight,
+  #      not every tile has it yet)
+  #   4. Pull one item, assert s2_clay shape (10, H, W) + s2_croma (12, H, W)
+  # No GPU needed. Reads PVCs read-only. ~3 min wallclock.
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: smoke
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== smoke: dataset Clay/CROMA wiring ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy scipy
+              pip install --quiet --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch feat/dataset-clay-croma-emission \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              echo ""
+              echo "--- find a tile with b08 + rededge enriched ---"
+              python3 <<'PY'
+              import sys, glob, numpy as np
+              # B08 enrichment is targeting /cephfs/unified_v2_512 first;
+              # also try /td/unified_v2 in case the 256 set has any tiles
+              # that happened to land first.
+              # Only scan cephfs — the training-data (256-set) PVC is
+              # ReadWriteOnce and currently attached to the H100 node by
+              # the Prithvi pods, so we can't mount it here.
+              CANDIDATES = sorted(glob.glob('/cephfs/unified_v2_512/*.npz'))
+              print(f'scanning {len(CANDIDATES)} tiles for b08+rededge ...')
+
+              picked = None
+              for p in CANDIDATES[:500]:                # cap scan cost
+                  try:
+                      z = np.load(p, allow_pickle=True)
+                  except Exception:
+                      continue
+                  if 'b08' in z.files and 'rededge' in z.files:
+                      b08 = z['b08']
+                      red = z['rededge']
+                      # also require that frame 1 (peak-summer pick for
+                      # crop tiles, plausibly best for LULC too) has
+                      # non-zero rededge — otherwise the smoke would
+                      # build a tensor of mostly zeros and pass for the
+                      # wrong reason.
+                      if b08.ndim == 3 and red.ndim == 3 and red.shape[0] >= 6:
+                          if (red[3:6] != 0).any():
+                              picked = p
+                              break
+              if picked is None:
+                  print('FAIL: no tile with b08+rededge+nonzero-frame1 in first 500 scanned')
+                  sys.exit(2)
+              print(f'using tile: {picked}')
+
+              # Only the 512 dir is mounted in this smoke pod.
+              data_dir = '/cephfs/unified_v2_512'
+              tile_name = picked.rsplit('/', 1)[-1]
+
+              # Force the dataset to pick THIS tile by writing a split file
+              import os
+              split_path = os.path.join(data_dir, 'split_train.txt')
+              if not os.access(data_dir, os.W_OK):
+                  # PVC is read-only mounted; use lulc_dir override path
+                  # — UnifiedDataset will glob the dir directly via its
+                  # 90/10 hash split. We just pull __getitem__ across
+                  # the whole listing until we hit our tile.
+                  print('(data dir read-only — will iterate dataset)')
+                  use_iter = True
+              else:
+                  use_iter = False
+                  with open(split_path, 'w') as f:
+                      f.write(tile_name + '\n')
+
+              print('')
+              print('--- instantiate UnifiedDataset with Clay+CROMA keys ---')
+              from imint.training.unified_dataset import UnifiedDataset
+              # Use the dataset as a crop-source (flat layout, no /tiles
+              # subdir) since both unified_v2 paths are flat.
+              ds = UnifiedDataset(
+                  lulc_dir=None,
+                  crop_dir=data_dir,
+                  split='train',
+                  patch_size=224,
+                  enable_aux=False,            # keep smoke focused on s2_*
+                  augment_override=False,      # deterministic center crop
+                  multitemporal=False,
+                  model_keys=('clay_v1_5', 'croma_base'),
+              )
+              print(f'dataset size: {len(ds)}')
+
+              # Find the entry index for our picked tile
+              target_idx = None
+              for i, entry in enumerate(ds._entries):
+                  if entry['name'] == tile_name:
+                      target_idx = i
+                      break
+              if target_idx is None:
+                  print(f'FAIL: tile {tile_name} not in dataset entries')
+                  sys.exit(3)
+
+              print(f'pulling __getitem__({target_idx}) ...')
+              item = ds[target_idx]
+              print(f'keys: {sorted(item.keys())}')
+
+              # Assertions
+              ok = True
+              if 's2_clay' not in item:
+                  print('FAIL: s2_clay missing from result'); ok = False
+              else:
+                  shp = tuple(item['s2_clay'].shape)
+                  print(f's2_clay shape: {shp}')
+                  if shp != (10, 224, 224):
+                      print(f'FAIL: s2_clay expected (10, 224, 224)'); ok = False
+              if 's2_croma' not in item:
+                  print('FAIL: s2_croma missing from result'); ok = False
+              else:
+                  shp = tuple(item['s2_croma'].shape)
+                  print(f's2_croma shape: {shp}')
+                  if shp != (12, 224, 224):
+                      print(f'FAIL: s2_croma expected (12, 224, 224)'); ok = False
+
+              # Value sanity: raw reflectance should be ~[0, 1].
+              # Allow some slack for negative-from-sub-zero scenes.
+              for k in ('s2_clay', 's2_croma'):
+                  if k in item:
+                      t = item[k]
+                      lo, hi = float(t.min()), float(t.max())
+                      print(f'{k} value range: [{lo:.4f}, {hi:.4f}]')
+                      if hi > 5.0 or lo < -1.0:
+                          print(f'WARN: {k} value range unusually wide')
+
+              print('')
+              print('=== smoke %s ===' % ('PASS' if ok else 'FAIL'))
+              sys.exit(0 if ok else 1)
+              PY
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /cephfs
+              readOnly: true
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

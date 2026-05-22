@@ -1,0 +1,324 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tile-detail-43983958
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: per-tile-deep-dive
+spec:
+  backoffLimit: 0
+  # Per-tile deep-dive view: show every temporal frame (RGB + NIR-CIR),
+  # all aux channels (height/DEM/VPP/harvest), and the existing model
+  # predictions for ONE tile. Served at /compare/tile_43983958.html.
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: build
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy Pillow matplotlib
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/inference-comparison-patch-size \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+
+              python3 - <<'PY'
+              import base64, io, json, pathlib
+              import numpy as np
+              from PIL import Image
+
+              REPO = pathlib.Path("/workspace/imintengine")
+              ROOT = pathlib.Path("/checkpoints/compare")
+              TILE = "43983958"
+              tile_npz = REPO / "data/viz_tiles" / f"{TILE}.npz"
+              data = np.load(tile_npz, allow_pickle=True)
+
+              # === Metadata ===
+              dates = [str(d) for d in data["dates"]]
+              doy = [int(d) for d in data["doy"]]
+              tmask = [int(m) for m in data["temporal_mask"]]
+              lat, lon = float(data["lat"]), float(data["lon"])
+              bbox = data["bbox_3006"].tolist()
+              lpis_year = int(data["lpis_year"])
+              label_name = str(data["label_name"])
+              n_parcels = int(data["n_parcels"])
+              n_harvest = int(data["n_harvest_polygons"])
+              n_mature = int(data["n_mature_polygons"])
+              print(f"  tile {TILE}: lat={lat:.4f} lon={lon:.4f}  label={label_name}  parcels={n_parcels}")
+
+              # === Spectral frames (4 × 6 bands at 256×256) ===
+              img = data["image"].astype(np.float32)  # (24, 256, 256)
+              N_BANDS = 6
+              N_FRAMES = img.shape[0] // N_BANDS
+
+              def stretch_channel(arr, lo_p=2, hi_p=98):
+                  lo, hi = np.percentile(arr, [lo_p, hi_p])
+                  if hi - lo < 1e-6:
+                      return np.zeros_like(arr, dtype=np.uint8)
+                  s = np.clip((arr - lo) / (hi - lo), 0, 1)
+                  return (s * 255).astype(np.uint8)
+
+              def arr_to_png_b64(arr_uint8):
+                  buf = io.BytesIO()
+                  Image.fromarray(arr_uint8).save(buf, format='PNG', optimize=True)
+                  return base64.b64encode(buf.getvalue()).decode()
+
+              def cell_img(b64, alt=""):
+                  return f'<img src="data:image/png;base64,{b64}" alt="{alt}"/>'
+
+              # Per frame: build RGB (B04 B03 B02 = bands 2,1,0) and NIR-CIR (B8A B04 B03 = bands 3,2,1)
+              # Center-crop to 224×224 to match other refs
+              CROP = 224
+              y0 = (256 - CROP) // 2; x0 = (256 - CROP) // 2
+
+              frame_views = []  # list of dicts per frame
+              for fi in range(N_FRAMES):
+                  frame = img[fi*N_BANDS:(fi+1)*N_BANDS]  # (6, 256, 256)
+                  frame = frame[:, y0:y0+CROP, x0:x0+CROP]
+                  # RGB
+                  rgb = np.stack([stretch_channel(frame[2]),
+                                  stretch_channel(frame[1]),
+                                  stretch_channel(frame[0])], axis=-1)
+                  # NIR-CIR (false color: NIR→R, R→G, G→B)
+                  cir = np.stack([stretch_channel(frame[3]),
+                                  stretch_channel(frame[2]),
+                                  stretch_channel(frame[1])], axis=-1)
+                  frame_views.append({
+                      "rgb": arr_to_png_b64(rgb),
+                      "cir": arr_to_png_b64(cir),
+                      "date": dates[fi],
+                      "doy": doy[fi],
+                      "valid": tmask[fi],
+                  })
+
+              # === Aux channels (256×256 → center-cropped to 224) ===
+              def aux_to_png(arr, cmap_name="viridis"):
+                  import matplotlib
+                  matplotlib.use("Agg")
+                  import matplotlib.cm as cm
+                  arr = np.asarray(arr).astype(np.float32)
+                  arr = arr[y0:y0+CROP, x0:x0+CROP]
+                  if arr.max() - arr.min() < 1e-6:
+                      arr_norm = np.zeros_like(arr)
+                  else:
+                      arr_norm = (arr - arr.min()) / (arr.max() - arr.min())
+                  cmap = cm.get_cmap(cmap_name)
+                  rgba = (cmap(arr_norm) * 255).astype(np.uint8)
+                  rgb = rgba[..., :3]
+                  return arr_to_png_b64(rgb), float(arr.min()), float(arr.max())
+
+              AUX_SPECS = [
+                  ("height",      "viridis", "Trädhöjd (m, SLU)"),
+                  ("volume",      "viridis", "Volym (m³/ha)"),
+                  ("basal_area",  "viridis", "Grundyta (m²/ha)"),
+                  ("diameter",    "viridis", "Diameter (cm)"),
+                  ("dem",         "terrain", "Höjd över hav (m, Lantmäteriet)"),
+                  ("vpp_sosd",    "plasma",  "Vegetations-start DOY (HR-VPP)"),
+                  ("vpp_eosd",    "plasma",  "Vegetations-slut DOY (HR-VPP)"),
+                  ("vpp_length",  "plasma",  "Säsongs-längd dagar"),
+                  ("vpp_maxv",    "plasma",  "Maximal PPI"),
+                  ("vpp_minv",    "plasma",  "Minimal PPI"),
+                  ("harvest_probability", "Reds", "Avverkningsmogen-sannolikhet (SKS)"),
+              ]
+              aux_views = []
+              for key, cmap, label in AUX_SPECS:
+                  if key not in data.files:
+                      continue
+                  b64, vmin, vmax = aux_to_png(data[key], cmap)
+                  aux_views.append({"key": key, "label": label, "b64": b64,
+                                     "vmin": vmin, "vmax": vmax})
+
+              # === NMD raw + Träningsdata + S1 ===
+              RAW_NMD_COLORS = {
+                  111:(0,100,0),112:(34,139,34),113:(20,120,20),114:(60,179,113),
+                  115:(50,205,50),116:(80,180,60),117:(100,200,80),118:(70,160,100),
+                  121:(46,79,46),122:(58,95,58),123:(50,85,50),124:(90,143,90),
+                  125:(74,127,74),126:(85,140,80),127:(95,155,90),128:(80,130,80),
+                  2:(139,90,43),3:(255,215,0),41:(200,173,127),42:(210,180,140),
+                  51:(255,0,0),52:(255,69,0),53:(255,99,71),61:(0,0,255),62:(30,144,255),
+              }
+              nmd_raw = data["nmd_label"][y0:y0+CROP, x0:x0+CROP]
+              nmd_rgb = np.full((CROP, CROP, 3), 128, dtype=np.uint8)
+              for code, color in RAW_NMD_COLORS.items():
+                  m = nmd_raw == code
+                  if m.any(): nmd_rgb[m] = color
+              nmd_b64 = arr_to_png_b64(nmd_rgb)
+
+              # Unified label (Träningsdata)
+              CLASS_COLORS_RGB = [
+                  (0,0,0),(26,92,53),(45,138,91),(123,198,126),(77,179,128),
+                  (107,142,90),(201,223,110),(155,119,34),(212,180,74),(192,57,43),
+                  (36,113,163),(232,184,0),(212,120,10),(240,208,96),(212,198,0),
+                  (145,200,76),(184,222,134),(155,89,182),(214,51,129),(224,112,32),
+                  (139,32,32),(220,200,0),(0,168,198),
+              ]
+              CLASS_NAMES = ['bakgrund','tallskog','granskog','lövskog','blandskog',
+                  'sumpskog','tillfälligt ej skog','våtmark','öppen mark','bebyggelse',
+                  'vatten','vete','korn','havre','oljeväxter','slåttervall','bete',
+                  'potatis','sockerbetor','trindsäd','råg','majs','hygge']
+              label = data["label"][y0:y0+CROP, x0:x0+CROP]
+              label_rgb = np.zeros((CROP, CROP, 3), dtype=np.uint8)
+              for i, c in enumerate(CLASS_COLORS_RGB):
+                  m = label == i
+                  if m.any(): label_rgb[m] = c
+              label_b64 = arr_to_png_b64(label_rgb)
+
+              # S1 VV/VH (first frame, two channels stacked)
+              s1_b64 = ""
+              if "s1_vv_vh" in data.files:
+                  s1 = data["s1_vv_vh"].astype(np.float32)
+                  # (T*2, H, W). Take first frame VV.
+                  if s1.ndim == 3 and s1.shape[0] >= 2:
+                      vv = s1[0, y0:y0+CROP, x0:x0+CROP]
+                      vh = s1[1, y0:y0+CROP, x0:x0+CROP]
+                      # Show as VV-VH-VV/VH false color
+                      ratio = np.divide(vv, vh+1e-6, where=(vh+1e-6)>0)
+                      rgb = np.stack([stretch_channel(vv),
+                                       stretch_channel(vh),
+                                       stretch_channel(ratio)], axis=-1)
+                      s1_b64 = arr_to_png_b64(rgb)
+
+              # === Existing predictions ===
+              PREDS = {}
+              for v in ("raw", "sp500", "sp3000"):
+                  for slug in ("prithvi_300m", "prithvi_600m"):
+                      p = ROOT / v / f"{slug}_predictions.json"
+                      if p.exists():
+                          j = json.loads(p.read_text())
+                          PREDS[(v, slug)] = j.get(f"{TILE}_pred", "")
+
+              # === HTML ===
+              def panel(title, body, sub=""):
+                  return f'<section class="panel"><h2>{title}{sub}</h2>{body}</section>'
+
+              frame_html = '<div class="frames-grid">'
+              for fi, fv in enumerate(frame_views):
+                  season = ["Höst år-1", "Vår", "Sensommar", "Sen-höst"][fi] if fi < 4 else f"Ram {fi}"
+                  v_badge = "" if fv["valid"] else '<span class="invalid">INVALID</span>'
+                  frame_html += f'''<div class="frame">
+                    <h3>Ram {fi} · {season}{v_badge}</h3>
+                    <div class="row-2">
+                      <figure><img src="data:image/png;base64,{fv["rgb"]}"/><figcaption>RGB (B04 B03 B02)</figcaption></figure>
+                      <figure><img src="data:image/png;base64,{fv["cir"]}"/><figcaption>NIR-CIR (B8A B04 B03)</figcaption></figure>
+                    </div>
+                    <div class="meta"><b>{fv["date"]}</b> · DOY {fv["doy"]}</div>
+                  </div>'''
+              frame_html += '</div>'
+
+              aux_html = '<div class="aux-grid">'
+              for av in aux_views:
+                  aux_html += f'''<figure class="aux">
+                    <img src="data:image/png;base64,{av["b64"]}"/>
+                    <figcaption><b>{av["key"]}</b><br/>{av["label"]}<br/>
+                    <small>min={av["vmin"]:.2f}, max={av["vmax"]:.2f}</small>
+                    </figcaption>
+                  </figure>'''
+              aux_html += '</div>'
+
+              pred_html = '<div class="aux-grid">'
+              pred_html += f'<figure class="aux"><img src="data:image/png;base64,{nmd_b64}"/><figcaption><b>NMD (raw)</b><br/>Naturvårdsverkets palette</figcaption></figure>'
+              pred_html += f'<figure class="aux"><img src="data:image/png;base64,{label_b64}"/><figcaption><b>Träningsdata</b><br/>Unified-23 mapping</figcaption></figure>'
+              if s1_b64:
+                  pred_html += f'<figure class="aux"><img src="data:image/png;base64,{s1_b64}"/><figcaption><b>S1 VV/VH</b><br/>Radar (R=VV, G=VH, B=ratio)</figcaption></figure>'
+              for v in ("raw", "sp500", "sp3000"):
+                  for slug, mn in (("prithvi_300m", "300M"), ("prithvi_600m", "600M")):
+                      if (v, slug) in PREDS and PREDS[(v, slug)]:
+                          pred_html += f'<figure class="aux"><img src="data:image/png;base64,{PREDS[(v, slug)]}"/><figcaption><b>{mn} {v}</b></figcaption></figure>'
+              pred_html += '</div>'
+
+              meta_html = f'''
+                <table class="meta-tab">
+                  <tr><td>Tile-ID</td><td><code>{TILE}</code></td></tr>
+                  <tr><td>Lat / Lon</td><td>{lat:.4f}°N, {lon:.4f}°E (Bohuslän, SV-Sverige)</td></tr>
+                  <tr><td>BBox EPSG:3006</td><td>W {bbox[0]} · S {bbox[1]} · E {bbox[2]} · N {bbox[3]}</td></tr>
+                  <tr><td>Label (primär)</td><td>{label_name}</td></tr>
+                  <tr><td>LPIS-år</td><td>{lpis_year}</td></tr>
+                  <tr><td>Antal parcels</td><td>{n_parcels}</td></tr>
+                  <tr><td>SKS avverknings-polygoner</td><td>{n_harvest} total · {n_mature} mature</td></tr>
+                  <tr><td>Multitemporal-ramar</td><td>{N_FRAMES} valid={sum(tmask)}/{N_FRAMES}</td></tr>
+                </table>'''
+
+              html = f"""<!doctype html>
+              <html lang="sv"><head><meta charset="utf-8">
+              <title>Tile {TILE} — deep-dive</title>
+              <style>
+                *{{box-sizing:border-box;margin:0;padding:0}}
+                body{{font-family:-apple-system,Segoe UI,Arial,sans-serif;
+                     background:#0b0e17;color:#d8dae5;padding:20px;line-height:1.5}}
+                h1{{font-size:18px;font-weight:600;color:#f1f5f9;margin-bottom:8px}}
+                .panel{{background:#111827;border:1px solid #1e293b;border-radius:10px;
+                       padding:18px;margin-bottom:18px}}
+                .panel h2{{font-size:13px;font-weight:600;color:#cbd5e1;
+                          margin-bottom:14px;letter-spacing:.04em;text-transform:uppercase}}
+                .meta-tab{{font-size:13px;border-collapse:collapse}}
+                .meta-tab td{{padding:4px 12px;border-bottom:1px solid #1e293b}}
+                .meta-tab td:first-child{{color:#94a3b8;font-weight:500;white-space:nowrap}}
+                .meta-tab td:last-child{{color:#f1f5f9}}
+                .frames-grid{{display:grid;grid-template-columns:repeat(2, 1fr);gap:18px}}
+                .frame{{background:#0b0e17;border:1px solid #1e293b;border-radius:6px;padding:14px}}
+                .frame h3{{font-size:12px;color:#94a3b8;margin-bottom:10px;font-weight:600}}
+                .frame .row-2{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}}
+                .frame figure img{{width:100%;border-radius:3px;image-rendering:pixelated;display:block}}
+                .frame figcaption{{font-size:10px;color:#64748b;text-align:center;margin-top:4px}}
+                .frame .meta{{font-size:11px;color:#cbd5e1;text-align:center}}
+                .frame .meta b{{font-family:monospace;color:#f1f5f9}}
+                .invalid{{background:#dc2626;color:#fff;padding:1px 6px;border-radius:8px;
+                         font-size:9px;margin-left:6px}}
+                .aux-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}}
+                .aux img{{width:100%;border-radius:3px;image-rendering:pixelated;display:block;
+                         background:#0b0e17;border:1px solid #1e293b}}
+                .aux figcaption{{font-size:10px;color:#94a3b8;text-align:center;margin-top:6px;line-height:1.4}}
+                .aux figcaption b{{color:#f1f5f9;font-family:monospace}}
+                .aux figcaption small{{color:#64748b;font-size:9px}}
+                code{{font-family:monospace;background:#1e293b;padding:1px 5px;border-radius:3px;font-size:11px}}
+                .back{{display:inline-block;margin-bottom:12px;color:#93c5fd;text-decoration:none;font-size:12px}}
+                .back:hover{{text-decoration:underline}}
+              </style></head><body>
+                <a href="../" class="back">← tillbaka till Compare</a>
+                <h1>Tile {TILE} — deep-dive</h1>
+                <p style="font-size:13px;color:#94a3b8;margin-bottom:14px">
+                  Allt som ligger bakom klassifikationen för denna tile: 4 temporala
+                  S2-ramar (RGB + NIR-CIR), 11 aux-kanaler (SLU/Lantmäteriet/HR-VPP/SKS),
+                  S1 SAR, NMD-raw referens, träningsetikett, alla modell-prediktioner.
+                </p>
+                {panel("Metadata", meta_html)}
+                {panel("Multitemporal Sentinel-2 (4 ramar)", frame_html, ' <span style="color:#94a3b8;font-weight:400;font-size:11px">— 6-band reflectance per ram, normaliserad 2:98 stretch för visning</span>')}
+                {panel("Aux-kanaler (träddata SLU + DEM Lantmäteriet + HR-VPP fenologi + SKS avverkning)", aux_html)}
+                {panel("Klassifikation & referens", pred_html)}
+              </body></html>"""
+
+              out = ROOT / f"tile_{TILE}.html"
+              out.write_text(html, encoding="utf-8")
+              print(f"\nWrote {out} ({out.stat().st_size / 1024:.1f} KB)")
+              PY
+
+              echo "=== done ==="
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
