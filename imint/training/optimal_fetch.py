@@ -261,7 +261,25 @@ def _connect_des_openeo():
     return conn
 
 
+def _connect_cdse_openeo():
+    """Authenticated CDSE openEO connection.
+
+    Uses the same CDSE_CLIENT_ID / CDSE_CLIENT_SECRET pair already in the
+    cdse-credentials k8s secret. CDSE openEO draws from the monthly
+    credit pool — separate from the DES per-session concurrency cap and
+    from the SH Process API PU quota — so SCL screening here doesn't
+    contend with spectral fetches on either of the other two backends.
+    """
+    from imint.fetch import _connect_cdse
+    return _connect_cdse()
+
+
 _DES_MAX_TIMESTEPS_PER_CALL = 19  # DES openEO save_result caps at 20 → use 19
+
+_SCL_BACKEND_DEFAULTS = {
+    "des":  {"collection": "s2_msi_l2a",   "band": "scl"},
+    "cdse": {"collection": "SENTINEL2_L2A", "band": "SCL"},
+}
 
 
 def _scl_chunk(
@@ -269,6 +287,8 @@ def _scl_chunk(
     bbox_wgs84: dict,
     chunk_start: str,
     chunk_end: str,
+    *,
+    backend: str = "des",
 ) -> dict[str, float]:
     """Fetch SCL stack for a small period (≤ 19 timesteps) and aggregate locally.
 
@@ -277,6 +297,10 @@ def _scl_chunk(
     multi-file zip where each file is a single timestep — we read all
     GeoTIFFs in the resulting payload and pair them with the timestamps
     extracted from the file names.
+
+    Args:
+        backend: "des" (default) or "cdse". Picks collection + SCL band
+            name to match the chosen openEO server.
     """
     import os as _os
     import re
@@ -286,15 +310,19 @@ def _scl_chunk(
     import zipfile
     import rasterio
 
+    cfg = _SCL_BACKEND_DEFAULTS.get(backend)
+    if cfg is None:
+        raise ValueError(f"Unknown SCL backend: {backend!r}")
+
     scl_cube = conn.load_collection(
-        "s2_msi_l2a",
+        cfg["collection"],
         spatial_extent={
             "west":  bbox_wgs84["west"],  "south": bbox_wgs84["south"],
             "east":  bbox_wgs84["east"],  "north": bbox_wgs84["north"],
             "crs":   "EPSG:4326",
         },
         temporal_extent=[chunk_start, chunk_end],
-        bands=["scl"],
+        bands=[cfg["band"]],
     )
 
     out: dict[str, float] = {}
@@ -371,6 +399,7 @@ def scl_stack_screen(
     *,
     conn: Any | None = None,
     chunk_days: int = 19,
+    backend: str = "des",
 ) -> dict[str, float]:
     """Stage 2: openEO-driven AOI cloud-fraction per scene date.
 
@@ -386,11 +415,18 @@ def scl_stack_screen(
     < 1 MB; the whole season is a handful of openEO calls (3–6), still
     far cheaper than per-scene SH HTTP screening for hundreds of scenes
     spread across 1000+ tiles.
+
+    Args:
+        backend: "des" (default, the long-standing path) or "cdse" to
+            route SCL chunks through the Copernicus Data Space Ecosystem
+            openEO endpoint. Useful when DES is throttled and CDSE
+            monthly credits are available — keeps the DES per-session
+            cap free for spectral fetches downstream.
     """
     from datetime import date as _date, timedelta
 
     if conn is None:
-        conn = _connect_des_openeo()
+        conn = _connect_cdse_openeo() if backend == "cdse" else _connect_des_openeo()
 
     d0 = _date.fromisoformat(date_start)
     d1 = _date.fromisoformat(date_end)
@@ -408,10 +444,13 @@ def scl_stack_screen(
     cur = d0
     while cur <= d1:
         cend = min(cur + timedelta(days=effective_chunk - 1), d1)
-        # NoDataAvailable on a chunk with no S2 overpass is benign — DES has
-        # nothing to return. Suppress the log line in that specific case.
+        # NoDataAvailable on a chunk with no S2 overpass is benign — the
+        # backend has nothing to return. Suppress the log line for that.
         try:
-            chunk = _scl_chunk(conn, bbox_wgs84, cur.isoformat(), cend.isoformat())
+            chunk = _scl_chunk(
+                conn, bbox_wgs84, cur.isoformat(), cend.isoformat(),
+                backend=backend,
+            )
             for k, v in chunk.items():
                 prev = out.get(k)
                 if prev is None or v < prev:
@@ -484,11 +523,19 @@ def optimal_fetch_dates(
     max_aoi_cloud: float = DEFAULT_SCL_CLOUD_THRESHOLD,
     scene_cloud_max: float = DEFAULT_STAC_CLOUD_MAX,
     atmosphere_rules: dict | None = None,
+    scl_backend: str = "des",
 ) -> FetchPlan:
     """Select Sentinel-2 dates worth fetching, given the requested strategy.
 
     See module docstring for `mode` options. The plan returned reports
     elapsed time per stage so cost-models stay honest.
+
+    Args:
+        scl_backend: "des" (default) or "cdse" — which openEO endpoint
+            runs the SCL stack. Defaults to DES to preserve historical
+            behaviour. Set to "cdse" when DES is throttled and CDSE
+            monthly credits are available; this keeps DES capacity free
+            for downstream spectral fetches.
     """
     import time as _t
 
@@ -524,9 +571,12 @@ def optimal_fetch_dates(
     scl_fracs: dict[str, float] | None = None
     if mode in ("scl_only", "era5_then_scl", "stac_then_scl"):
         t0 = _t.time()
-        scl_fracs = scl_stack_screen(bbox_wgs84, date_start, date_end)
+        scl_fracs = scl_stack_screen(
+            bbox_wgs84, date_start, date_end, backend=scl_backend,
+        )
         plan.elapsed_s["scl_stack"] = round(_t.time() - t0, 2)
         plan.n_candidates_after["scl_pre_threshold"] = len(scl_fracs)
+        plan.notes["scl_backend"] = scl_backend
 
     # --- Combine
     if mode == "stac_only":

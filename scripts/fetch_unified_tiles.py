@@ -772,6 +772,10 @@ def repair_to_canonical_layout(
     autumn_dates: list[str] | None = None
     needs_growing = any(i in missing_slots for i in (1, 2, 3))
     needs_autumn = (0 in missing_slots)
+    # SCL prefetch via CDSE openEO — keeps DES per-session cap free for
+    # the downstream spectral fetches. CDSE monthly credits are a
+    # separate pool from DES throttle and from SH Process PU. Confirmed
+    # working with same CDSE_CLIENT_ID/SECRET creds already in the YAML.
     if needs_growing:
         # Cover the union of all 3 growing-season slot windows in ONE call
         gs_min = min(slot_defs[1][2], slot_defs[2][2], slot_defs[3][2])
@@ -781,6 +785,7 @@ def repair_to_canonical_layout(
             plan = optimal_fetch_dates(
                 coords, gs_ds, gs_de,
                 mode="era5_then_scl", max_aoi_cloud=max_aoi_cloud,
+                scl_backend="cdse",
             )
             growing_dates = plan.dates
         except Exception:
@@ -795,6 +800,7 @@ def repair_to_canonical_layout(
             plan = optimal_fetch_dates(
                 coords, au_ds, au_de,
                 mode="era5_then_scl", max_aoi_cloud=autumn_max_cloud,
+                scl_backend="cdse",
             )
             autumn_dates = plan.dates
         except Exception:
