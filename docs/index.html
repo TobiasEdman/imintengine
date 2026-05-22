@@ -677,6 +677,10 @@
         </div>
         <div class="figure-grid" style="display:grid; grid-template-columns:1fr; gap:16px; padding:0 var(--padding-x,32px);">
             <figure style="margin:0;">
+                <img src="showcase/aircraft_parallax/band_animation.gif" alt="Animerad förflyttning genom de fyra spektralbanden i tidsordning" style="width:100%; max-width:480px; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#181820; display:block; margin:0 auto;"/>
+                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">Förflyttning genom de fyra spektralbanden i tidsordning (B04 → B03 → B08 → B02, detector 10). Gult hårkors visar user-pick:en av planets position i varje band. Tidslinjen längst ner markerar var i 1.004 s-fönstret varje band exponeras. Notera hur kondensstrimman bara är delvis utbildad i B04 (t₀) och fullt synlig i B02 (t₀+1.004 s) — det är planets väg över 1 sekund.</figcaption>
+            </figure>
+            <figure style="margin:0;">
                 <img src="showcase/aircraft_parallax/aoi_overview.svg" alt="AOI · Göteborgs norra skärgård" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
                 <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">AOI · Göteborgs norra skärgård. Kondensstrimma-position exakt på 57.71809°N, 11.66456°E (WGS84) från user_picks.json. 10×10 km isotrop equirectangular-projektion kring punkten.</figcaption>
             </figure>
@@ -686,7 +690,7 @@
             </figure>
             <figure style="margin:0;">
                 <img src="showcase/aircraft_parallax/band_timing.svg" alt="Inter-band tidsdelta + förväntade pixel-offsets" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
-                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">Inter-band-tidsdelta — faktiska detector-7-värden (parsade ur MTD_DS.xml). B08 ligger näst sist (+0.744 s efter B04), inte alfabetisk ordning; fokalplansordningen är B04 → B03 → B08 → B02.</figcaption>
+                <figcaption style="font-size:13px; color:#6b7280; margin-top:8px;">Inter-band-tidsdelta — faktiska detector-10-värden (parsade ur MTD_DS.xml). B08 ligger näst sist (+0.744 s efter B04), inte alfabetisk ordning; fokalplansordningen är B04 → B03 → B08 → B02.</figcaption>
             </figure>
             <figure style="margin:0;">
                 <img src="showcase/aircraft_parallax/predicted_streak.svg" alt="Förväntad signatur i RGB-kompositen vid PC-24 cruise" style="width:100%; height:auto; border:1px solid #e5e7eb; border-radius:4px; background:#fff;"/>
