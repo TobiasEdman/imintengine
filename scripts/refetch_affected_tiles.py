@@ -116,7 +116,14 @@ def main():
 
     with open(args.audit_json) as f:
         audit = json.load(f)
-    names = audit.get("unique_affected_tiles", [])
+    # Accept both audit formats:
+    # - audit-late-autumn-frames: "unique_affected_tiles"
+    # - audit-frame-problems:     "unique_problem_tiles"
+    names = (audit.get("unique_affected_tiles")
+             or audit.get("unique_problem_tiles")
+             or [])
+    # audit-frame-problems entries include ".npz"; strip for consistency.
+    names = [n[:-4] if n.endswith(".npz") else n for n in names]
     if args.max_tiles:
         names = names[: args.max_tiles]
     print(f"  affected tiles to re-fetch: {len(names)}", flush=True)

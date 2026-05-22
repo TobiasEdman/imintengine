@@ -51,11 +51,18 @@ spec:
               cd /workspace/imintengine
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
 
-              ls -lh /checkpoints/audits/late_autumn_frames_512.json
+              # Pick most-recent frame_audit_512_*.json (produced by
+              # audit-frame-problems-512). Falls back to the older
+              # late_autumn_frames_512.json if no frame audit exists yet.
+              AUDIT=$(ls -t /checkpoints/audits/frame_audit_512_*.json 2>/dev/null | head -1)
+              if [ -z "$AUDIT" ]; then
+                AUDIT=/checkpoints/audits/late_autumn_frames_512.json
+              fi
+              ls -lh "$AUDIT"
               echo ""
 
               python3 scripts/refetch_affected_tiles.py \
-                --audit-json /checkpoints/audits/late_autumn_frames_512.json \
+                --audit-json "$AUDIT" \
                 --output-dir /cephfs/unified_v2_512 \
                 --tile-size-px 512 \
                 --workers 6 \
