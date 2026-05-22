@@ -723,6 +723,14 @@ def repair_to_canonical_layout(
     for src_idx in range(4):
         if old_tmask[src_idx] == 0:
             continue
+        # Silent-corruption guard: a previous repair_to_canonical_layout run
+        # may have accepted an all-zeros scene from _fetch_single_scene as if
+        # valid (tmask=1 but spectral cube slice is empty). Detect and drop
+        # so we refetch this slot on re-runs.
+        frame_slice = old_image[src_idx * N_BANDS:(src_idx + 1) * N_BANDS]
+        if not np.any(frame_slice):
+            dropped.append((src_idx, old_doys[src_idx], "all_zeros_spectral"))
+            continue
         doy = old_doys[src_idx]
         date_s = old_dates[src_idx]
         try:
@@ -819,6 +827,14 @@ def repair_to_canonical_layout(
             prefetched_dates=slot_dates,
         )
         if scene is None:
+            failed_slots.append(slot_idx)
+            continue
+        # Zero-scene guard: _fetch_single_scene's downstream
+        # fetch_seasonal_image / fetch_s2_scene can return a numpy array
+        # populated with zeros (degenerate openEO response — empty band
+        # data after a partial read). Treat as a fetch failure rather
+        # than silently writing a tile with empty frames + tmask=1.
+        if not np.any(scene):
             failed_slots.append(slot_idx)
             continue
         # Defensive resize
