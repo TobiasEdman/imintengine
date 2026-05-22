@@ -162,29 +162,32 @@ def _fetch_b08_frame(
 
 
 def enrich_one_tile(tile_path: str, skip_existing: bool = True,
-                    source: str = "des",
-                    retry_empty_frames: bool = False) -> dict:
+                    source: str = "des") -> dict:
     """Add B08 to one tile .npz file.
 
-    Args:
-        retry_empty_frames: If True, ignore has_b08 and inspect per-frame
-            data instead. Frames that are all-zeros (e.g. invalidated by
-            repair_to_canonical_layout because the spectral date changed)
-            get re-fetched; non-zero frames are preserved untouched.
-            Mirrors the same option in enrich_tiles_rededge.py.
+    D3 design (date-aware mismatch detection):
+    - Per-frame `b08_dates[i]` is compared against the spectral cube's
+      `dates[i]`. Any slot where they disagree (or where existing b08
+      slice is all-zeros) gets re-fetched.
+    - Slots whose b08_dates match dates AND have non-zero spectral data
+      are preserved untouched.
+    - `skip_existing=True` (default) takes a fast path when ALL slots are
+      already date-aligned + non-zero — skips the tile entirely.
+    - `skip_existing=False` forces the per-slot inspection even when the
+      fast-path would skip.
+
+    This makes b08-enrichment idempotent and self-healing: any operation
+    that changes the spectral `dates` field (e.g. repair_to_canonical_layout)
+    automatically becomes a no-op for already-aligned slots and a re-fetch
+    trigger for slots whose date changed. The refetch path doesn't need
+    to know about b08 — it just writes new dates and the next enrich pass
+    converges.
     """
     name = Path(tile_path).stem
     try:
         data = dict(np.load(tile_path, allow_pickle=True))
     except Exception as e:
         return {"name": name, "status": "failed", "reason": str(e)}
-
-    has_b08_flag = int(data.get("has_b08", 0)) == 1
-    existing_b08 = data.get("b08")
-
-    if not retry_empty_frames:
-        if skip_existing and has_b08_flag:
-            return {"name": name, "status": "skipped"}
 
     dates = data.get("dates", [])
     spectral = data.get("spectral", data.get("image"))
@@ -193,22 +196,34 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True,
 
     h, w = spectral.shape[1], spectral.shape[2]
     n_frames = spectral.shape[0] // 6
+    new_dates = [
+        str(dates[fi])[:10] if fi < len(dates) and dates[fi] else ""
+        for fi in range(n_frames)
+    ]
 
-    # Per-frame validity gate for retry_empty_frames mode.
-    if retry_empty_frames and existing_b08 is not None:
-        try:
-            arr = np.asarray(existing_b08)
-            if (arr.ndim == 3 and arr.shape[0] >= n_frames
-                    and arr.shape[1] == h and arr.shape[2] == w):
-                # Already populated for every frame → nothing to do
-                all_nonzero = all(
-                    bool(np.any(arr[fi])) for fi in range(n_frames)
-                )
-                if all_nonzero:
-                    return {"name": name, "status": "skipped",
-                            "reason": "all_frames_already_populated"}
-        except Exception:
-            pass  # fall through to full refetch
+    existing_b08 = data.get("b08")
+    existing_b08_dates = data.get("b08_dates")
+    if existing_b08_dates is not None:
+        existing_b08_dates = [str(x)[:10] for x in existing_b08_dates]
+
+    # Per-slot decision: keep (date-aligned + non-zero) or fetch.
+    frames_to_fetch: list[int] = []
+    for fi in range(n_frames):
+        already_aligned = (
+            existing_b08 is not None
+            and existing_b08_dates is not None
+            and fi < len(existing_b08_dates)
+            and existing_b08_dates[fi] == new_dates[fi]
+            and getattr(existing_b08, "ndim", 0) == 3
+            and existing_b08.shape[0] > fi
+            and bool(np.any(existing_b08[fi]))
+        )
+        if not already_aligned:
+            frames_to_fetch.append(fi)
+
+    if skip_existing and not frames_to_fetch:
+        return {"name": name, "status": "skipped",
+                "reason": "all_slots_date_aligned"}
 
     # Derive TileConfig from persisted tile_size_px or fall back to raster dim
     from imint.training.tile_config import TileConfig
@@ -221,54 +236,38 @@ def enrich_one_tile(tile_path: str, skip_existing: bool = True,
         return {"name": name, "status": "failed", "reason": "no_bbox"}
     tile_cfg.assert_bbox_matches(bbox)
 
-    # Decide which frames to fetch: with retry_empty_frames, only the ones
-    # whose existing slice is all zeros (preserves already-good data).
-    frames_to_fetch: set[int] = set()
-    if retry_empty_frames and existing_b08 is not None:
-        try:
-            arr = np.asarray(existing_b08)
-            for fi in range(n_frames):
-                if (arr.ndim == 3 and arr.shape[0] > fi
-                        and bool(np.any(arr[fi]))):
-                    continue  # already populated — keep
-                frames_to_fetch.add(fi)
-        except Exception:
-            frames_to_fetch = set(range(n_frames))
-    else:
-        frames_to_fetch = set(range(n_frames))
-
-    # Seed b08_frames with existing data (or zeros) — overwrite only the
-    # to-fetch ones below. Preserves dtype/shape exactly.
+    # Seed b08_frames + b08_dates_out with existing data where alignment
+    # held; we'll overwrite to-fetch slots below.
     b08_frames: list[np.ndarray] = []
+    b08_dates_out: list[str] = []
     for fi in range(n_frames):
-        if (existing_b08 is not None
-                and getattr(existing_b08, "ndim", 0) == 3
-                and existing_b08.shape[0] > fi
-                and fi not in frames_to_fetch):
-            b08_frames.append(np.asarray(existing_b08[fi], dtype=np.float32))
-        else:
+        if fi in frames_to_fetch:
             b08_frames.append(np.zeros((h, w), dtype=np.float32))
+            b08_dates_out.append("")
+        else:
+            b08_frames.append(np.asarray(existing_b08[fi], dtype=np.float32))
+            b08_dates_out.append(existing_b08_dates[fi])
 
-    valid = sum(1 for f in b08_frames if bool(np.any(f)))
-    for fi in sorted(frames_to_fetch):
-        date_str = str(dates[fi])[:10] if fi < len(dates) and dates[fi] else ""
+    for fi in frames_to_fetch:
+        date_str = new_dates[fi]
         if not date_str:
             continue
-
         frame = _fetch_b08_frame(
             bbox["west"], bbox["south"], bbox["east"], bbox["north"],
             date_str, size_px, source=source,
         )
         if frame is not None and frame.shape == (h, w):
             b08_frames[fi] = frame
-            valid += 1
+            b08_dates_out[fi] = date_str
 
-    data["b08"] = np.stack(b08_frames, axis=0)  # (T, H, W)
+    data["b08"] = np.stack(b08_frames, axis=0)               # (T, H, W)
+    data["b08_dates"] = np.array(b08_dates_out)              # (T,) ISO strings
+    valid = sum(1 for f in b08_frames if bool(np.any(f)))
     data["has_b08"] = np.int32(1 if valid > 0 else 0)
 
     np.savez_compressed(tile_path, **data)
     return {"name": name, "status": "ok", "valid_frames": valid,
-            "refetched_frames": sorted(frames_to_fetch)}
+            "refetched_frames": frames_to_fetch}
 
 
 def main():
@@ -283,13 +282,6 @@ def main():
         help="openEO backend: 'des' (Digital Earth Sweden, default) or "
              "'vito' (openEO Platform, federated, includes VITO). vito "
              "requires OPENEO_AUTH_CLIENT_ID/SECRET/PROVIDER_ID env vars.",
-    )
-    parser.add_argument(
-        "--retry-empty-frames", action="store_true", default=False,
-        help="Ignore has_b08 flag; inspect per-frame data and re-fetch "
-             "only the frames whose b08 slice is all-zeros (e.g. invalidated "
-             "by repair_to_canonical_layout when the spectral date changed). "
-             "Preserves non-zero frames untouched.",
     )
     args = parser.parse_args()
 
@@ -309,8 +301,7 @@ def main():
     def _run(path):
         nonlocal completed
         r = enrich_one_tile(
-            path, skip_existing=args.skip_existing, source=args.source,
-            retry_empty_frames=args.retry_empty_frames)
+            path, skip_existing=args.skip_existing, source=args.source)
         with lock:
             completed += 1
             stats[r.get("status", "failed")] = stats.get(r.get("status", "failed"), 0) + 1

@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backfill-aux-dates-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: d3-backfill-aux-dates
+spec:
+  backoffLimit: 1
+  # One-time D3 migration: populate b08_dates / rededge_dates on existing
+  # tiles so the next enrich-* run can detect spectral-date drift and
+  # re-fetch just the affected slots (instead of treating has_b08 as the
+  # only signal). No new openEO calls — just copies the spectral `dates`
+  # field into the missing markers, since aux WAS aligned at enrich-time.
+  activeDeadlineSeconds: 3600   # ~10 min expected for 7000 tiles at 8 workers
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01   # cephfs writer
+      containers:
+        - name: backfill
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq > /dev/null
+              apt-get install -y -qq git > /dev/null
+              pip install --quiet numpy > /dev/null
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              python3 scripts/backfill_aux_dates.py \
+                --data-dir /cephfs/unified_v2_512 \
+                --workers 8
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}

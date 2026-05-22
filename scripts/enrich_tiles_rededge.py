@@ -248,10 +248,25 @@ def enrich_one_tile(
     skip_existing: bool = True,
     *,
     source: str = "des",
-    retry_empty_frames: bool = False,
     year_filter: str | None = None,
 ) -> dict:
-    """Add red-edge (B05/B06/B07) to one tile .npz file."""
+    """Add red-edge (B05/B06/B07) to one tile .npz file.
+
+    D3 design (date-aware mismatch detection):
+    - Per-frame `rededge_dates[i]` is compared against `dates[i]`.
+      Any slot where they disagree (or where rededge slice is all-zeros)
+      gets re-fetched.
+    - Slots whose rededge_dates match dates AND have non-zero data are
+      preserved untouched.
+    - `skip_existing=True` (default) fast-paths when all slots are aligned.
+    - `year_filter`: when set (e.g. ``"2017"``), only re-fetch frames
+      whose date starts with that year — others preserved.
+
+    Self-healing: when refetch_to_canonical_layout changes the spectral
+    `dates` for a slot, the next enrich-rededge pass detects the
+    rededge_dates[i] != dates[i] mismatch and re-fetches that slot. The
+    refetch path doesn't need to know about rededge.
+    """
     from imint.training.tile_config import TileConfig
     from imint.training.tile_bbox import resolve_tile_bbox
 
@@ -261,21 +276,6 @@ def enrich_one_tile(
     except Exception as e:
         return {"name": name, "status": "failed", "reason": str(e)}
 
-    # Per-frame validity gate. Default skip_existing checks the boolean
-    # has_rededge flag, but the 2026-04-29 bttpz deadline-killed pod left
-    # 3156 tiles with has_rededge=1 yet 0/4 valid frames (the pod managed
-    # to write rededge=zeros before being killed at 12h, but never fetched
-    # real data). With ``retry_empty_frames=True`` we ignore has_rededge
-    # and look at the per-frame data directly: if every frame is non-zero,
-    # skip; otherwise re-fetch ONLY the empty frames, preserving the
-    # already-good frames untouched.
-    has_rededge_flag = int(data.get("has_rededge", 0)) == 1
-    existing_rededge = data.get("rededge")
-
-    if not retry_empty_frames:
-        if skip_existing and has_rededge_flag:
-            return {"name": name, "status": "skipped"}
-
     dates = data.get("dates", [])
     spectral = data.get("spectral", data.get("image"))
     if spectral is None:
@@ -283,17 +283,36 @@ def enrich_one_tile(
 
     h, w = spectral.shape[1], spectral.shape[2]
     n_frames = spectral.shape[0] // 6
+    new_dates = [
+        str(dates[fi])[:10] if fi < len(dates) and dates[fi] else ""
+        for fi in range(n_frames)
+    ]
 
-    # Per-frame nonzero map for retry_empty_frames mode
-    existing_valid = [False] * n_frames
-    if existing_rededge is not None and existing_rededge.shape[0] == n_frames * 3:
-        for fi in range(n_frames):
-            existing_valid[fi] = bool(
-                (existing_rededge[fi*3:(fi+1)*3] != 0).any()
-            )
+    existing_rededge = data.get("rededge")
+    existing_re_dates = data.get("rededge_dates")
+    if existing_re_dates is not None:
+        existing_re_dates = [str(x)[:10] for x in existing_re_dates]
 
-    if retry_empty_frames and skip_existing and all(existing_valid):
-        return {"name": name, "status": "skipped"}
+    # Per-slot decision: keep (date-aligned + non-zero) or fetch.
+    frames_to_fetch: list[int] = []
+    for fi in range(n_frames):
+        already_aligned = (
+            existing_rededge is not None
+            and existing_re_dates is not None
+            and fi < len(existing_re_dates)
+            and existing_re_dates[fi] == new_dates[fi]
+            and existing_rededge.shape[0] >= (fi + 1) * 3
+            and bool(np.any(existing_rededge[fi*3:(fi+1)*3]))
+        )
+        if not already_aligned:
+            # year_filter: only re-fetch frames in this year-window
+            if year_filter is not None and not new_dates[fi].startswith(year_filter):
+                continue
+            frames_to_fetch.append(fi)
+
+    if skip_existing and not frames_to_fetch:
+        return {"name": name, "status": "skipped",
+                "reason": "all_slots_date_aligned"}
 
     size_px = int(data.get("tile_size_px", h))
     tile_cfg = TileConfig(size_px=size_px)
@@ -304,36 +323,27 @@ def enrich_one_tile(
     tile_cfg.assert_bbox_matches(bbox)
 
     rededge_frames = []  # each (3, H, W) float32
-    valid = 0
+    re_dates_out: list[str] = []
     for fi in range(n_frames):
-        # If we're in retry-empty-frames mode and this frame is already
-        # non-zero, preserve it as-is — never re-fetch a frame that has
-        # data. This keeps 2017 NoData frames out of scope (they're 0
-        # anyway, and DES will refuse them again).
-        if retry_empty_frames and existing_valid[fi]:
-            rededge_frames.append(existing_rededge[fi*3:(fi+1)*3].astype(np.float32))
-            valid += 1
+        if fi not in frames_to_fetch:
+            if (existing_rededge is not None
+                    and existing_rededge.shape[0] >= (fi + 1) * 3):
+                rededge_frames.append(
+                    existing_rededge[fi*3:(fi+1)*3].astype(np.float32)
+                )
+                re_dates_out.append(
+                    existing_re_dates[fi] if existing_re_dates is not None
+                    else ""
+                )
+            else:
+                rededge_frames.append(np.zeros((3, h, w), dtype=np.float32))
+                re_dates_out.append("")
             continue
 
-        date_str = str(dates[fi])[:10] if fi < len(dates) and dates[fi] else ""
+        date_str = new_dates[fi]
         if not date_str:
             rededge_frames.append(np.zeros((3, h, w), dtype=np.float32))
-            continue
-
-        # year_filter: only fetch frames whose date starts with the given
-        # prefix (e.g. "2017"). Frames outside the filter are preserved as
-        # they are on disk — important when running a CDSE 2017-completion
-        # pass alongside a DES rerun: we don't want this pass to re-fetch
-        # a non-2017 frame from CDSE if it already has good DES data.
-        if year_filter is not None and not date_str.startswith(year_filter):
-            preserved = (
-                existing_rededge[fi*3:(fi+1)*3].astype(np.float32)
-                if existing_rededge is not None and existing_rededge.shape[0] >= (fi+1) * 3
-                else np.zeros((3, h, w), dtype=np.float32)
-            )
-            rededge_frames.append(preserved)
-            if existing_valid[fi]:
-                valid += 1
+            re_dates_out.append("")
             continue
 
         frame = _fetch_rededge_frame(
@@ -343,13 +353,16 @@ def enrich_one_tile(
         )
         if frame is not None and frame.shape == (3, h, w):
             rededge_frames.append(frame)
-            valid += 1
+            re_dates_out.append(date_str)
         else:
             rededge_frames.append(np.zeros((3, h, w), dtype=np.float32))
+            re_dates_out.append("")
 
     # Stack along band × frame axis → (T*3, H, W) matching spectral convention
     # Frame 0: B05, B06, B07; Frame 1: B05, B06, B07; ...
-    data["rededge"] = np.concatenate(rededge_frames, axis=0)  # (T*3, H, W)
+    data["rededge"] = np.concatenate(rededge_frames, axis=0)   # (T*3, H, W)
+    data["rededge_dates"] = np.array(re_dates_out)             # (T,)
+    valid = sum(1 for f in rededge_frames if bool(np.any(f)))
     data["has_rededge"] = np.int32(1 if valid > 0 else 0)
 
     # Atomic write: tmp + os.replace. ``np.savez_compressed`` writing
@@ -377,15 +390,6 @@ def main():
         "--source", choices=["des", "cdse"], default="des",
         help="Backend for the rededge fetch. 'des' is PU-free (default); "
              "'cdse' uses the Process API and consumes Processing Units.",
-    )
-    parser.add_argument(
-        "--retry-empty-frames", action="store_true", default=False,
-        help="Look at per-frame data (not just has_rededge=1) when "
-             "deciding whether to skip. With this flag, tiles whose "
-             "rededge key exists but contains all-zero frames will be "
-             "re-processed, fetching only the empty frames and "
-             "preserving the non-empty ones. Required to recover from a "
-             "deadline-killed run that left has_rededge=1 with rededge=0.",
     )
     parser.add_argument(
         "--year-filter", default=None,
@@ -429,7 +433,6 @@ def main():
             path,
             skip_existing=args.skip_existing,
             source=args.source,
-            retry_empty_frames=args.retry_empty_frames,
             year_filter=args.year_filter,
         )
         with lock:
