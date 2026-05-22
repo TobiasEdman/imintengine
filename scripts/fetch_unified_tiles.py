@@ -785,7 +785,7 @@ def repair_to_canonical_layout(
             plan = optimal_fetch_dates(
                 coords, gs_ds, gs_de,
                 mode="era5_then_scl", max_aoi_cloud=max_aoi_cloud,
-                scl_backend="cdse",
+                scl_backend="des",  # CDSE openEO has max=1 connection per user → 429 storm at 6 workers
             )
             growing_dates = plan.dates
         except Exception:
@@ -800,7 +800,7 @@ def repair_to_canonical_layout(
             plan = optimal_fetch_dates(
                 coords, au_ds, au_de,
                 mode="era5_then_scl", max_aoi_cloud=autumn_max_cloud,
-                scl_backend="cdse",
+                scl_backend="des",  # CDSE openEO has max=1 connection per user → 429 storm at 6 workers
             )
             autumn_dates = plan.dates
         except Exception:
