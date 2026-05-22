@@ -70,44 +70,98 @@ def rgb_to_b64png(rgb: np.ndarray) -> str:
 
 
 def load_model(ckpt_path: str, device):
-    """Load a PrithviSegmentationModel from checkpoint."""
+    """Load a Prithvi-family segmentation model from checkpoint.
+
+    Routes through the model registry (``imint.fm.registry.MODEL_CONFIGS``)
+    so the correct backbone variant — including its ``patch_size`` —
+    is read from the checkpoint's saved config rather than hardcoded.
+    This is what makes Prithvi-600M (patch_size=14) work alongside
+    Prithvi-300M (patch_size=16) without a code edit per run.
+
+    Fallback chain for ``backbone_name``:
+      1. ``ck_cfg["backbone_name"]`` — preferred (set by trainer since
+         the registry refactor)
+      2. ``LEGACY_BACKBONE_ALIAS`` mapping on ``ck_cfg["backbone"]`` —
+         old TrainingConfig field
+      3. Default ``"prithvi_300m"`` — pre-registry runs were 300M-only
+    """
     import torch
-    from imint.fm.terratorch_loader import _load_prithvi_from_hf
-    from imint.fm.upernet import PrithviSegmentationModel, get_default_pool_sizes
+    from imint.fm.registry import (
+        MODEL_CONFIGS, build_backbone, resolve_backbone_name,
+    )
+    from imint.fm.upernet import build_segmentation_from_spec
     from imint.training.config import TrainingConfig
 
     cfg = TrainingConfig()
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
-    # Read model config from checkpoint (img_size, num_frames may differ per run)
     ck_cfg = ck.get("config", {})
     num_frames = ck_cfg.get("num_temporal_frames", cfg.num_temporal_frames)
     n_aux = ck_cfg.get("n_aux_channels", 11)
 
-    # Infer img_size from pos_embed shape in checkpoint
+    # State-dict first so we can inspect shapes for backbone detection
     sd = {k.replace("model.", "", 1): v for k, v in
           ck.get("model_state_dict", ck.get("state_dict", {})).items()}
     pos_embed = sd.get("encoder.pos_embed")
+
+    # Resolve backbone_name. Fallback chain:
+    #  (1) ck_cfg["backbone_name"] — set by trainer since registry refactor
+    #  (2) ck_cfg["backbone"]      — legacy field
+    #  (3) infer from pos_embed embed_dim:
+    #        1024 → prithvi_300m  (depth 24)
+    #        1280 → prithvi_600m  (depth 32)
+    #      Trainer's best_model.pt config is minimal and omits backbone_name
+    #      (trainer.py:1000-1009), so (1)+(2) are None for any checkpoint
+    #      saved before that gets fixed. Embed-dim inference is robust as
+    #      long as the checkpoint actually loaded a registered backbone.
+    backbone_name = resolve_backbone_name(
+        ck_cfg.get("backbone_name"), ck_cfg.get("backbone"),
+    )
+    if backbone_name == "prithvi_300m" and pos_embed is not None:
+        # only trust the default if we can't infer otherwise
+        embed_dim = pos_embed.shape[-1]
+        inferred = None
+        for name, spec in MODEL_CONFIGS.items():
+            if spec.family == "prithvi" and spec.embed_dim == embed_dim:
+                inferred = name
+                break
+        if inferred and inferred != backbone_name:
+            print(f"  [load_model] backbone_name absent in ck.config; "
+                  f"inferred from pos_embed embed_dim={embed_dim} → {inferred}")
+            backbone_name = inferred
+
+    spec = MODEL_CONFIGS[backbone_name]
+    patch_size = spec.patch_size  # 16 for 300M, 14 for 600M, etc.
+
+    # Infer img_size from pos_embed grid using the CORRECT patch_size
+    # for this backbone — the previous hardcoded `* 16` silently produced
+    # img_size=576 for Prithvi-600M (grid 36) instead of the true 504.
     if pos_embed is not None:
         n_tokens = pos_embed.shape[1] - 1  # subtract CLS token
         n_spatial = n_tokens // max(num_frames, 1)
         grid_size = int(n_spatial ** 0.5)
-        img_size = grid_size * 16  # patch_size = 16
+        img_size = grid_size * patch_size
     else:
-        img_size = cfg.img_size
+        img_size = ck_cfg.get("img_size", cfg.img_size)
 
-    backbone = _load_prithvi_from_hf(
-        pretrained=False, num_frames=num_frames, img_size=img_size,
+    # build_backbone returns (encoder, spec) — use the spec we already
+    # resolved so feature_indices / embed_dim / etc. are consistent.
+    backbone, _ = build_backbone(
+        backbone_name, num_frames=num_frames, img_size=img_size,
+        pretrained=False,
     )
-    model = PrithviSegmentationModel(
+
+    model = build_segmentation_from_spec(
+        spec,
         encoder=backbone,
-        feature_indices=cfg.feature_indices,
-        decoder_channels=cfg.decoder_channels,
         num_classes=cfg.num_classes,
+        img_size=img_size,
+        decoder_channels=cfg.decoder_channels,
+        dropout=getattr(cfg, "dropout", 0.1),
+        n_aux_channels=n_aux,
         enable_temporal_pooling=cfg.enable_temporal_pooling,
         enable_multilevel_aux=cfg.enable_multilevel_aux,
-        n_aux_channels=n_aux,
-        pool_sizes=get_default_pool_sizes(device, img_size=img_size),
+        device=device,
     )
     model.load_state_dict(sd, strict=False)
     model = model.to(device).eval()
