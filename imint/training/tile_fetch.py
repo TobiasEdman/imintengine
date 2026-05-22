@@ -201,7 +201,23 @@ def _fetch_single_scene(
         for i in range(0, (d1 - d0).days + 1, step):
             candidates.append(((d0 + _td(days=i)).strftime("%Y-%m-%d"), 50.0))
 
-    candidates.sort(key=lambda x: x[1])
+    # Closest-to-center selection bias (B2). Without this, candidates
+    # sorted only by cloud_pct → first-clear-date wins → slot 3 fetch
+    # for window (201, 244) returns DOY 201 (Jul 20) instead of a
+    # representative late-summer DOY 220 (Aug 8). For Clay/CROMA
+    # single-snapshot training the centre date is more informative.
+    from datetime import datetime as _dt2
+    _ds = _dt2.strptime(date_start, "%Y-%m-%d")
+    _de = _dt2.strptime(date_end, "%Y-%m-%d")
+    _center = _ds + (_de - _ds) / 2
+    def _dist_to_center(item):
+        d_str, cloud = item
+        try:
+            d = _dt2.strptime(d_str, "%Y-%m-%d")
+            return (cloud, abs((d - _center).days))
+        except Exception:
+            return (cloud, 9999)
+    candidates.sort(key=_dist_to_center)
 
     # DES-primary with 3 workers, CDSE as single-worker fallback.
     # DES has more capacity and doesn't rate-limit as aggressively.

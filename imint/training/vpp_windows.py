@@ -25,14 +25,27 @@ import numpy as np
 # CNES Julian Day epoch
 _CNES_EPOCH = datetime(1960, 1, 1)
 
-# Fallback growing-season windows (DOY) if VPP data unavailable
-# Covers April through September in 4 roughly equal windows
-_FALLBACK_DOY_WINDOWS: list[tuple[int, int]] = [
-    (91, 120),    # April:          leaf-out, conifer vs deciduous
-    (121, 166),   # May–mid June:   vegetation green-up
-    (167, 212),   # mid June–July:  peak NDVI, forest type separation
-    (213, 273),   # August–Sept:    senescence, colour change
-]
+# Fallback growing-season windows (DOY) when VPP data is unavailable.
+# Per num_frames: each list spans the full Apr–Aug growing season so the
+# last window always reaches the late-summer / harvest signal that
+# Clay/CROMA single-snapshot training needs. PR-#15 cap_doy=244 is the
+# effective right edge for the last window (Sep 1).
+_FALLBACK_BY_NUM_FRAMES: dict[int, list[tuple[int, int]]] = {
+    3: [
+        (91,  150),   # spring        (Apr–end May, 60d)
+        (151, 200),   # early-summer  (Jun–mid Jul, 50d)
+        (201, 244),   # late-summer   (mid-Jul–Aug, 44d, capped Sep 1)
+    ],
+    4: [
+        (91,  120),   # April:          leaf-out, conifer vs deciduous
+        (121, 166),   # May–mid June:   vegetation green-up
+        (167, 212),   # mid June–July:  peak NDVI, forest type separation
+        (213, 244),   # August:         senescence, harvest (was 273, capped)
+    ],
+}
+# Backward-compat alias — callers that historically used the 4-frame list
+# directly still see the same shape, but the last window is now capped.
+_FALLBACK_DOY_WINDOWS: list[tuple[int, int]] = _FALLBACK_BY_NUM_FRAMES[4]
 
 # Sanity bounds for growing season detection
 _MIN_GROWING_SEASON_DOY = 60     # No earlier than March 1
@@ -150,8 +163,16 @@ def compute_growing_season_windows(
     """
     gs = compute_growing_season_doy(sosd_arr, eosd_arr)
 
+    # Pick a fallback that's appropriate for the requested num_frames —
+    # 3-frame is NOT just _FALLBACK_DOY_WINDOWS[:3] (which caps at DOY 212
+    # = Jul 31, losing the late-summer/harvest signal needed for Clay/
+    # CROMA single-snapshot input). Use _FALLBACK_BY_NUM_FRAMES for a
+    # full Apr–Aug span tailored per num_frames count.
+    fallback = _FALLBACK_BY_NUM_FRAMES.get(num_frames, _FALLBACK_DOY_WINDOWS)
+    fallback = fallback[:num_frames]
+
     if gs is None:
-        return _FALLBACK_DOY_WINDOWS[:num_frames]
+        return fallback
 
     gs_start, gs_end = gs
     # Cap the effective growing-season end so the last window doesn't
@@ -164,7 +185,7 @@ def compute_growing_season_windows(
     # the capped range may be too short to divide. Fall back in that
     # case rather than producing degenerate single-pixel windows.
     if gs_end - gs_start < _MIN_GROWING_SEASON_LENGTH:
-        return _FALLBACK_DOY_WINDOWS[:num_frames]
+        return fallback
 
     gs_length = gs_end - gs_start
     window_length = gs_length / num_frames

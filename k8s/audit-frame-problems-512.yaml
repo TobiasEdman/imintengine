@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-frame-problems-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: comprehensive-frame-audit
+spec:
+  backoffLimit: 1
+  # Read-only frame-quality audit. Goes beyond audit-late-autumn-frames'
+  # single DOY>244 check and inventories every kind of frame problem
+  # accumulated across fetch / refetch / enrich passes. Output JSON
+  # drives the next refetch.
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01   # cephfs + checkpoints both here
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq > /dev/null
+              apt-get install -y -qq git > /dev/null
+              pip install --quiet numpy > /dev/null
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              python3 scripts/audit_frame_problems.py \
+                --data-dir /cephfs/unified_v2_512 \
+                --tile-size-px 512 \
+                --output-json /checkpoints/audits/frame_audit_512_$(date +%Y-%m-%d_%H%M).json \
+                --workers 8
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs, readOnly: true}
+            - {name: checkpoints, mountPath: /checkpoints}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}
