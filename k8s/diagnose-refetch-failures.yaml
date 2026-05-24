@@ -1,0 +1,69 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: diagnose-refetch-failures-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: diagnose-refetch-failure-pattern
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200   # 2h ceiling; 30 tiles × <5min each
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: diag
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq > /dev/null
+              apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj pyyaml Pillow httpx openeo \
+                xarray netCDF4 > /dev/null
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              AUDIT=$(ls -t /checkpoints/audits/frame_audit_512_*.json 2>/dev/null | head -1)
+              echo "Using audit: $AUDIT"
+
+              python3 scripts/diagnose_refetch_failures.py \
+                --audit-json "$AUDIT" \
+                --output-dir /cephfs/unified_v2_512 \
+                --tile-size-px 512 \
+                --sample-size 30 \
+                --output-json /checkpoints/audits/refetch_diagnosis_512_$(date +%Y-%m-%d_%H%M).json
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom: {secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}}
+            - name: CDSE_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}}
+            - name: DES_USER
+              valueFrom: {secretKeyRef: {name: des-credentials, key: user, optional: true}}
+            - name: DES_PASSWORD
+              valueFrom: {secretKeyRef: {name: des-credentials, key: password, optional: true}}
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs}
+            - {name: checkpoints, mountPath: /checkpoints}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}
