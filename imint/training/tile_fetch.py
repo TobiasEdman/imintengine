@@ -221,7 +221,11 @@ def _fetch_single_scene(
 
     # DES-primary with 3 workers, CDSE as single-worker fallback.
     # DES has more capacity and doesn't rate-limit as aggressively.
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import (
+        ThreadPoolExecutor,
+        TimeoutError as _FuturesTimeout,
+        as_completed,
+    )
     from imint.fetch import fetch_seasonal_image
 
     def _cdse_try(date_str: str) -> tuple[np.ndarray | None, str]:
@@ -302,25 +306,34 @@ def _fetch_single_scene(
     if max_workers == 0:
         return None, ""
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = []
-        if use_des:
-            for d in top_dates[:3]:
-                futures.append(pool.submit(_des_try, d))
-        if use_cdse_openeo:
-            for d in top_dates[:3]:
-                futures.append(pool.submit(_cdse_openeo_try, d))
-        if use_cdse and top_dates:
-            futures.append(pool.submit(_cdse_try, top_dates[0]))
+    # Race configured providers — first success wins. Hard 180 s
+    # timeout and explicit shutdown(wait=False) so one stalled provider
+    # (DES openEO process-graph hang etc.) cannot block the function
+    # from returning. Threads still running on shutdown are leaked
+    # but bounded by socket-level timeouts in the underlying clients.
+    pool = ThreadPoolExecutor(max_workers=max_workers)
+    futures = []
+    if use_des:
+        for d in top_dates[:3]:
+            futures.append(pool.submit(_des_try, d))
+    if use_cdse_openeo:
+        for d in top_dates[:3]:
+            futures.append(pool.submit(_cdse_openeo_try, d))
+    if use_cdse and top_dates:
+        futures.append(pool.submit(_cdse_try, top_dates[0]))
 
-        for f in as_completed(futures):
+    winner: tuple[np.ndarray | None, str] = (None, "")
+    try:
+        for f in as_completed(futures, timeout=180):
             scene, date_str = f.result()
             if scene is not None:
-                for pending in futures:
-                    pending.cancel()
-                return scene, date_str
-
-    return None, ""
+                winner = (scene, date_str)
+                break
+    except _FuturesTimeout:
+        pass  # 3-min hard cap — return no-result
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    return winner
 
 
 def _get_vpp_doy_windows(bbox_3006: dict, num_growing_frames: int = 3) -> list[tuple[int, int]] | None:

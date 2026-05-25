@@ -26,7 +26,11 @@ import os
 import random
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    TimeoutError as _FuturesTimeout,
+    as_completed,
+)
 from datetime import datetime
 from pathlib import Path
 
@@ -338,7 +342,11 @@ def _fetch_frames_from_best_dates(
     Returns:
         List of (spectral, date_str) tuples matching stack_frames input.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import (
+    ThreadPoolExecutor,
+    TimeoutError as _FuturesTimeout,
+    as_completed,
+)
     from imint.training.cdse_s2 import fetch_s2_scene
     from imint.training.tile_fetch import (
         _CDSE_SEMAPHORE, _DES_SEMAPHORE, _CDSE_OPENEO_SEMAPHORE,
@@ -425,18 +433,29 @@ def _fetch_frames_from_best_dates(
             results.append((None, date_str))
             continue
 
-        with ThreadPoolExecutor(max_workers=max(len(submit_map), 1)) as pool:
-            futs = [pool.submit(fn, date_str) for fn in submit_map.values()]
-            got_result = False
-            for f in as_completed(futs):
+        # Race selected providers — first success wins. Hard 180 s
+        # timeout per frame and break on first success so one stalled
+        # provider (e.g. DES openEO process-graph hang) cannot block
+        # tile completion. shutdown(wait=False) skips waiting for the
+        # remaining (possibly hung) threads; they die naturally when
+        # the socket layer eventually times out. cancel_futures=True
+        # cancels queued-but-not-started futures.
+        pool = ThreadPoolExecutor(max_workers=max(len(submit_map), 1))
+        futs = [pool.submit(fn, date_str) for fn in submit_map.values()]
+        got_result = False
+        try:
+            for f in as_completed(futs, timeout=180):
                 spectral, d = f.result()
-                if spectral is not None and not got_result:
+                if spectral is not None:
                     results.append((spectral, d))
                     got_result = True
-                    for pending in futs:
-                        pending.cancel()
-            if not got_result:
-                results.append((None, date_str))
+                    break
+        except _FuturesTimeout:
+            pass  # 3-min hard cap reached — treat as no-result for this frame
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        if not got_result:
+            results.append((None, date_str))
 
     return results
 
