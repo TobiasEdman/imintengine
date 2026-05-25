@@ -8,7 +8,9 @@ metadata:
     purpose: diagnose-refetch-failure-pattern
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 7200   # 2h ceiling; 30 tiles × <5min each
+  # activeDeadlineSeconds intentionally omitted per "kör utan deadline" rule.
+  # First attempt hit 2h ceiling — DES SCL per tile is slower than projected
+  # (each tile = ~3-5 openEO calls, throttled by DES per-session cap).
   template:
     metadata:
       labels:
