@@ -7,7 +7,13 @@ metadata:
     app: ensemble-prep
     purpose: refetch-vpp-bug-affected-tiles
 spec:
-  backoffLimit: 1
+  # 2026-05-26: bumped 1 → 10 after h2hz9 evicted by TaintManager when
+  # training-dashboard re-scheduled to same node (srv01). With nodeSelector
+  # pinning us to srv01 (training-checkpoints RWO) and no priorityClass,
+  # any RWO-bound workload that lands on srv01 can evict us. backoffLimit
+  # of 10 means the Job survives ~10 such evictions before declaring
+  # FAILED. See also: priorityClass + RWX audit migration (next iteration).
+  backoffLimit: 10
   # Re-fetches the 4136 tiles in 512-set that have a growing-season
   # frame with DOY > 244 (pre-PR#15 VPP-window bug). Uses the now-
   # capped compute_growing_season_windows so the new fetches stay
@@ -25,11 +31,21 @@ spec:
         app: ensemble-prep
     spec:
       restartPolicy: Never
-      # Pin to dashboard's node — training-checkpoints is RWO and held there.
-      # Without this, scheduler can pick any node and Multi-Attach blocks the
-      # pod from ever starting (25-min wedge observed first attempt).
-      nodeSelector:
-        kubernetes.io/hostname: p02r08srv01
+      # 2026-05-26: nodeSelector removed. Was pinned to srv01 because
+      # training-checkpoints (RWO, rook-ceph-rbd) is mounted there, which
+      # made us subject to TaintManager eviction whenever training-dashboard
+      # re-scheduled to same node. Audit JSON is now read from /cephfs
+      # (RWX, rook-ceph-fs) so we can land on any node with the cephfs
+      # CSI driver. Avoids the Multi-Attach issue noted in the old
+      # comment — checkpoints is no longer mounted at all.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
       containers:
         - name: refetch
           image: python:3.11-slim
@@ -51,12 +67,17 @@ spec:
               cd /workspace/imintengine
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
 
-              # Pick most-recent frame_audit_512_*.json (produced by
-              # audit-frame-problems-512). Falls back to the older
-              # late_autumn_frames_512.json if no frame audit exists yet.
-              AUDIT=$(ls -t /checkpoints/audits/frame_audit_512_*.json 2>/dev/null | head -1)
+              # Audit JSON: read from /cephfs/audits/ (RWX) so this pod
+              # can run on any node. The canonical /checkpoints/audits/
+              # location (RWO, srv01-bound) is no longer mounted here —
+              # see init-container in /scripts/copy-audit-to-cephfs.sh
+              # for the one-shot copy, or just exec the copy manually
+              # before submitting.
+              AUDIT=$(ls -t /cephfs/audits/frame_audit_512_*.json 2>/dev/null | head -1)
               if [ -z "$AUDIT" ]; then
-                AUDIT=/checkpoints/audits/late_autumn_frames_512.json
+                echo "FATAL: no audit JSON found under /cephfs/audits/"
+                echo "Run: kubectl exec <pod with both mounts> -- cp /checkpoints/audits/frame_audit_512_*.json /cephfs/audits/"
+                exit 1
               fi
               ls -lh "$AUDIT"
               echo ""
@@ -110,9 +131,6 @@ spec:
             limits:   {cpu: "6", memory: "12Gi"}
           volumeMounts:
             - {name: cephfs, mountPath: /cephfs}
-            - {name: checkpoints, mountPath: /checkpoints, readOnly: true}
       volumes:
         - name: cephfs
           persistentVolumeClaim: {claimName: training-data-cephfs}
-        - name: checkpoints
-          persistentVolumeClaim: {claimName: training-checkpoints}
