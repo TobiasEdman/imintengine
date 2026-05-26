@@ -92,8 +92,13 @@ class AdaptiveSemaphore:
                 print(f"    [{self._name}] ↓ concurrency → {self._permits}")
 
 
+# DES openEO: raised 2026-05-26 to 6 concurrent slots after CDSE openEO
+# became the primary source (single-flight) and DES needed to absorb the
+# parallel-worker load. Race-bug fix (commit bbea8af) means a DES hang
+# no longer blocks tile completion — workers time out at 180 s and
+# threads are abandoned via shutdown(wait=False, cancel_futures=True).
 _DES_SEMAPHORE = AdaptiveSemaphore(
-    initial=2, min_permits=1, max_permits=3,
+    initial=6, min_permits=2, max_permits=6,
     ramp_up_after=10, name="DES",
 )
 # CDSE SH Process API allows 300 req/min but each 512px request takes
