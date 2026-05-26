@@ -658,6 +658,24 @@ def optimal_fetch_dates(
             set(era5_dates or [])
             & {d for d, f in (scl_fracs or {}).items() if f <= max_aoi_cloud}
         )
+    elif mode == "era5_then_scl_ranked":
+        # Like "era5_then_scl" but ranks survivors by AOI cloud fraction
+        # ascending instead of dropping anything above max_aoi_cloud.
+        # max_aoi_cloud is interpreted as a soft "preferred ceiling": all
+        # candidates are returned, but the caller picking ``dates[0]``
+        # always gets the lowest-cloud option in the window.
+        #
+        # Use when the caller wants the BEST available date even if no
+        # date is fully clear (autumn windows in Sweden routinely have
+        # zero <10%-cloud dates) — picking dates[0] from this ranked list
+        # always yields the cleanest available, rather than returning
+        # empty as ``era5_then_scl`` would.
+        candidates = set(era5_dates or []) & set((scl_fracs or {}).keys())
+        keep = sorted(
+            candidates,
+            key=lambda d: (scl_fracs or {}).get(d, 1.0),
+        )
+        plan.notes["mode_variant"] = "ranked_no_threshold"
     elif mode == "era5_then_stac":
         keep = sorted(set(era5_dates or []) & (stac_dates or set()))
     else:
@@ -667,4 +685,8 @@ def optimal_fetch_dates(
     plan.n_candidates_after["final"] = len(keep)
     plan.notes["max_aoi_cloud"] = str(max_aoi_cloud)
     plan.notes["scene_cloud_max"] = str(scene_cloud_max)
+    # Stash per-date cloud fractions when SCL ran, so callers using the
+    # ranked variant can audit the ranking.
+    if scl_fracs is not None:
+        plan.notes["scl_fracs_count"] = str(len(scl_fracs))
     return plan

@@ -795,6 +795,20 @@ def repair_to_canonical_layout(
     # the downstream spectral fetches. CDSE monthly credits are a
     # separate pool from DES throttle and from SH Process PU. Confirmed
     # working with same CDSE_CLIENT_ID/SECRET creds already in the YAML.
+    #
+    # When IMINT_USE_TILE_GRAPH=1, use the ranked variant: returns ALL
+    # ERA5+SCL-intersected dates sorted by AOI cloud fraction ascending,
+    # without dropping anything above max_aoi_cloud. The tile-graph
+    # downstream picks dates[0] per slot — the lowest-cloud option,
+    # always non-empty. The classic "era5_then_scl" mode drops dates
+    # above the threshold and sorts the survivors chronologically, which
+    # both throws away the cloud-frac ranking AND returns empty for
+    # cloudy autumn windows (slot 0 saw this in the e2e test).
+    _prefilter_mode = (
+        "era5_then_scl_ranked"
+        if os.environ.get("IMINT_USE_TILE_GRAPH") == "1"
+        else "era5_then_scl"
+    )
     if needs_growing:
         # Cover the union of all 3 growing-season slot windows in ONE call
         gs_min = min(slot_defs[1][2], slot_defs[2][2], slot_defs[3][2])
@@ -803,7 +817,7 @@ def repair_to_canonical_layout(
         try:
             plan = optimal_fetch_dates(
                 coords, gs_ds, gs_de,
-                mode="era5_then_scl", max_aoi_cloud=max_aoi_cloud,
+                mode=_prefilter_mode, max_aoi_cloud=max_aoi_cloud,
                 scl_backend="des",  # CDSE openEO has max=1 connection per user → 429 storm at 6 workers
             )
             growing_dates = plan.dates
@@ -818,7 +832,7 @@ def repair_to_canonical_layout(
         try:
             plan = optimal_fetch_dates(
                 coords, au_ds, au_de,
-                mode="era5_then_scl", max_aoi_cloud=autumn_max_cloud,
+                mode=_prefilter_mode, max_aoi_cloud=autumn_max_cloud,
                 scl_backend="des",  # CDSE openEO has max=1 connection per user → 429 storm at 6 workers
             )
             autumn_dates = plan.dates
