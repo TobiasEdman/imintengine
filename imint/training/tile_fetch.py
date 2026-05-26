@@ -102,11 +102,16 @@ _CDSE_SEMAPHORE = AdaptiveSemaphore(
     initial=10, min_permits=3, max_permits=20,
     ramp_up_after=20, name="CDSE",
 )
-# CDSE openEO is rate-limited at 12 requests/min (synchronous). Keep
-# concurrency low — its credit pool is separate from the SH PU pool, so
-# it's a useful fallback when PUs are exhausted.
+# CDSE openEO enforces a HARD per-account ceiling of 1 concurrent
+# connection (verified 2026-05-26: synchronous fetches over that limit
+# return `[429] max connections reached: 1` at preflight, before any
+# process graph runs). Adaptive ramp-up would just bounce us repeatedly
+# into 429-spam, so we lock the semaphore at single-flight. Throughput
+# tradeoff: ~60-120 frames/h via this source alone — acceptable because
+# (a) the SH PU pool is exhausted and (b) DES openEO can race in
+# parallel as opportunistic secondary.
 _CDSE_OPENEO_SEMAPHORE = AdaptiveSemaphore(
-    initial=2, min_permits=1, max_permits=3,
+    initial=1, min_permits=1, max_permits=1,
     ramp_up_after=10, name="CDSE-OPENEO",
 )
 

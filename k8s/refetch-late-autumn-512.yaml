@@ -61,12 +61,25 @@ spec:
               ls -lh "$AUDIT"
               echo ""
 
+              # 2026-05-25: switched primary source DES → CDSE openEO
+              # after DES openEO backend degraded for hours (HTTP-frontend
+              # green, process-graph stalled). CDSE openEO uses a separate
+              # monthly credit pool from the SH Process PU pool and is on
+              # an independent backend. DES kept in race as opportunistic
+              # secondary; race-bug fix (commit bbea8af) prevents DES hangs
+              # from blocking tile completion.
+              # 2026-05-26: workers reduced 6 → 2 to match CDSE openEO's
+              # hard single-flight ceiling. Higher worker counts produced
+              # [429] max connections reached storm because 5 of 6 workers
+              # are always over the connection cap. 2 workers = 1 actively
+              # fetching + 1 IO-bound (cephfs write / numpy compress) —
+              # matches the throughput envelope without 429-spam.
               python3 scripts/refetch_affected_tiles.py \
                 --audit-json "$AUDIT" \
                 --output-dir /cephfs/unified_v2_512 \
                 --tile-size-px 512 \
-                --workers 6 \
-                --sources des,cdse \
+                --workers 2 \
+                --sources cdse-openeo,des \
                 --cloud-max 30.0
 
               echo ""
@@ -88,8 +101,12 @@ spec:
               valueFrom:
                 secretKeyRef: {name: des-credentials, key: password, optional: true}
           resources:
-            requests: {cpu: "6", memory: "12Gi"}
-            limits:   {cpu: "6", memory: "12Gi"}
+            # 2 workers → 2 CPU + 6Gi mem (was 6/12). Extra mem-headroom
+            # accommodates leaked threads from the race-bug fix's
+            # shutdown(wait=False) — each hung DES/CDSE thread holds
+            # ~MB until socket-level timeout.
+            requests: {cpu: "2", memory: "6Gi"}
+            limits:   {cpu: "2", memory: "6Gi"}
           volumeMounts:
             - {name: cephfs, mountPath: /cephfs}
             - {name: checkpoints, mountPath: /checkpoints, readOnly: true}
