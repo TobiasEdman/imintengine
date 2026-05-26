@@ -283,6 +283,17 @@ def _fetch_single_scene(
         # CDSE openEO (https://openeo.dataspace.copernicus.eu/) uses a
         # separate monthly-credit pool from the SH Process PU pool.
         # Usable as a parallel fallback while PUs are drained.
+        #
+        # Session-scoped 402-guard: once CDSE returns PaymentRequired in
+        # this process we stop submitting graphs to it for the rest of
+        # the pod lifetime. Cleared by next pod restart, which is when
+        # we'd want to retry CDSE anyway (e.g. after monthly credit
+        # reset or a fresh package purchase).
+        from imint.training.openeo_tile_graph import (
+            is_source_dead, mark_source_dead, _is_payment_required_error,
+        )
+        if is_source_dead("cdse-openeo"):
+            return None, date_str
         _CDSE_OPENEO_SEMAPHORE.acquire()
         try:
             result = fetch_seasonal_image(
@@ -294,7 +305,12 @@ def _fetch_single_scene(
             _CDSE_OPENEO_SEMAPHORE.report_success()
             if result is not None:
                 return result[0], date_str
-        except Exception:
+        except Exception as exc:
+            if _is_payment_required_error(exc):
+                mark_source_dead(
+                    "cdse-openeo",
+                    f"402 in _cdse_openeo_try: {str(exc)[:160]}",
+                )
             _CDSE_OPENEO_SEMAPHORE.report_failure()
         finally:
             _CDSE_OPENEO_SEMAPHORE.release()

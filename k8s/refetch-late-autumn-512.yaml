@@ -101,12 +101,16 @@ spec:
                 --output-dir /cephfs/unified_v2_512 \
                 --tile-size-px 512 \
                 --workers 6 \
-                --sources des \
+                --sources cdse-openeo,des \
                 --cloud-max 30.0
-              # 2026-05-26c: dropped cdse-openeo from --sources after CDSE
-              # returned [402] PaymentRequired (credit pool exhausted, see
-              # https://marketplace-portal.dataspace.copernicus.eu/pages/
-              # pricing). Add it back when credits are topped up.
+              # 2026-05-26d: cdse-openeo back in --sources with new
+              # session-scoped 402-guard (credit_guard module). First
+              # PaymentRequired in this pod marks CDSE dead for the rest
+              # of the pod lifetime; all subsequent dispatch falls
+              # straight through to DES with no HTTP roundtrip wasted.
+              # On next pod restart (eviction, fresh deploy, monthly
+              # credit reset window) we retry CDSE and stay on it as
+              # long as it works — no scheduled cron-swap needed.
 
               echo ""
               echo "=== done ==="

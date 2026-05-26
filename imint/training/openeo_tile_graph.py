@@ -54,11 +54,73 @@ Cloud handling:
 from __future__ import annotations
 
 import io
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
+
+
+# ── Session-scoped credit guard ─────────────────────────────────────────────
+#
+# A source (currently only ``cdse-openeo``) gets marked DEAD for the rest
+# of the Python process whenever the backend returns 402 PaymentRequired
+# / "insufficient credits". The mark prevents subsequent fetch attempts
+# from spending HTTP roundtrips just to get the same 402 back, and lets
+# the per-tile dispatch fall straight through to the next source in
+# ``--sources``.
+#
+# Why session-scoped, not durable: a pod restart (eviction, redeploy,
+# new pod after backoff) clears the mark, so when CDSE credits refill
+# (monthly reset, new package purchased) we automatically retry. No
+# scheduled cron-job needed — first new pod after reset succeeds and
+# stays on CDSE for the rest of its lifetime.
+#
+# Why per-source, not per-call-type: the credit pool is shared between
+# all openEO calls on the account (synchronous fetches, batch jobs,
+# aggregate_spatial). Once 402 surfaces, the whole source is unusable.
+_CREDIT_LOCK = threading.Lock()
+_DEAD_SOURCES: set[str] = set()
+
+
+def is_source_dead(source: str) -> bool:
+    """True if ``source`` has been marked dead this process."""
+    with _CREDIT_LOCK:
+        return source in _DEAD_SOURCES
+
+
+def mark_source_dead(source: str, reason: str) -> None:
+    """Idempotent: log once on first mark, ignore re-marks.
+
+    Workers across threads may race to mark the same source dead in
+    rapid succession; the lock + set membership check ensures we only
+    print the warning once.
+    """
+    with _CREDIT_LOCK:
+        if source in _DEAD_SOURCES:
+            return
+        _DEAD_SOURCES.add(source)
+    # Print outside the lock to avoid serialising on stdout flushes.
+    print(f"    [credit-guard] {source} marked DEAD for this session: {reason}",
+          flush=True)
+
+
+def _is_payment_required_error(exc: BaseException) -> bool:
+    """Detect 402 PaymentRequired / insufficient-credits from openEO.
+
+    The openeo-python-client surfaces backend errors as ``OpenEoApiError``
+    with the HTTP status code embedded in the message. We match by string
+    rather than a direct exception type to stay loose against client
+    library version churn.
+    """
+    msg = f"{type(exc).__name__}: {exc}"
+    return (
+        "[402]" in msg
+        or "PaymentRequired" in msg
+        or "insufficient credit" in msg.lower()
+        or "insufficient credits" in msg.lower()
+    )
 
 
 # Band layout matches PRITHVI_BANDS in tile_fetch.py and CDSE_BANDS_*
@@ -218,6 +280,12 @@ def fetch_tile_all_slots_cdse_openeo(
     if not slot_windows:
         return {}
 
+    if is_source_dead("cdse-openeo"):
+        raise FetchError(
+            "CDSE openEO marked dead this session (prior 402). "
+            "Use a different source or restart the pod after credit reset."
+        )
+
     conn = _connect_cdse()
 
     # Build one sub-cube per slot, then merge into a single download.
@@ -243,7 +311,12 @@ def fetch_tile_all_slots_cdse_openeo(
     print(f"    [CDSE-tile-graph] downloading {len(slot_windows)} slots × "
           f"{len(prithvi_bands)} bands = {len(slot_windows)*len(prithvi_bands)} bands",
           flush=True)
-    raw_bytes = merged.download(format="gtiff")
+    try:
+        raw_bytes = merged.download(format="gtiff")
+    except Exception as exc:
+        if _is_payment_required_error(exc):
+            mark_source_dead("cdse-openeo", f"402 during tile-graph: {str(exc)[:160]}")
+        raise
     if not raw_bytes:
         raise FetchError("CDSE openEO returned empty bytes from tile-graph download")
     raw_bytes = _unpack_openeo_gtiff_bytes(raw_bytes)
@@ -457,6 +530,12 @@ def score_dates_aoi_cloud(
         from imint.fetch import _connect as _connect_backend, COLLECTION as collection_id
         scl_band_name = "scl"
     elif source == "cdse-openeo":
+        if is_source_dead("cdse-openeo"):
+            # Fast-exit so the caller's exception handler routes
+            # immediately to the fallback path.
+            raise RuntimeError(
+                "CDSE openEO marked dead this session (prior 402)"
+            )
         from imint.fetch import _connect_cdse as _connect_backend, CDSE_COLLECTION as collection_id
         scl_band_name = "SCL"
     else:
@@ -495,7 +574,13 @@ def score_dates_aoi_cloud(
 
     print(f"    [{source}:aoi-cloud-aggregate] window={date_start}→{date_end}",
           flush=True)
-    ts_json = cloud_frac_ts.execute()
+    try:
+        ts_json = cloud_frac_ts.execute()
+    except Exception as exc:
+        if source == "cdse-openeo" and _is_payment_required_error(exc):
+            mark_source_dead("cdse-openeo",
+                             f"402 during aoi-cloud-aggregate: {str(exc)[:160]}")
+        raise
 
     # Parse: same schema as scripts/batch_fetch_openeo.py:screen_tile_scl.
     # openEO returns {date_str: [[value]]} where the outer list is per

@@ -395,6 +395,17 @@ def _fetch_frames_from_best_dates(
     def _cdse_openeo_fetch(date_str):
         # CDSE openEO (openeo.dataspace.copernicus.eu) uses a separate
         # monthly-credit pool from SH Process PUs.
+        #
+        # Session-scoped 402-guard (same pattern as
+        # tile_fetch.py:_cdse_openeo_try): on first PaymentRequired we
+        # mark the source dead for this process; subsequent attempts
+        # short-circuit without any HTTP roundtrip. Cleared by next
+        # pod restart, so credit-reset / package-purchase auto-recovers.
+        from imint.training.openeo_tile_graph import (
+            is_source_dead, mark_source_dead, _is_payment_required_error,
+        )
+        if is_source_dead("cdse-openeo"):
+            return None, date_str
         _CDSE_OPENEO_SEMAPHORE.acquire()
         try:
             result = fetch_seasonal_image(
@@ -406,7 +417,12 @@ def _fetch_frames_from_best_dates(
             _CDSE_OPENEO_SEMAPHORE.report_success()
             if result is not None:
                 return result[0], date_str
-        except Exception:
+        except Exception as exc:
+            if _is_payment_required_error(exc):
+                mark_source_dead(
+                    "cdse-openeo",
+                    f"402 in _cdse_openeo_fetch: {str(exc)[:160]}",
+                )
             _CDSE_OPENEO_SEMAPHORE.report_failure()
         finally:
             _CDSE_OPENEO_SEMAPHORE.release()
@@ -812,11 +828,18 @@ def repair_to_canonical_layout(
     # sub-window; the per-slot fallback uses them via the existing
     # `prefetched_dates=` parameter on _fetch_single_scene.
     if os.environ.get("IMINT_USE_TILE_GRAPH") == "1":
-        from imint.training.openeo_tile_graph import score_dates_aoi_cloud
+        from imint.training.openeo_tile_graph import (
+            score_dates_aoi_cloud, is_source_dead,
+        )
         # Pick SCL backend matching the configured spectral source so
-        # we don't open both connections per tile.
+        # we don't open both connections per tile. Skip CDSE openEO if
+        # it's been marked dead this session (402 PaymentRequired) —
+        # falling straight through to DES.
         _scl_source = (
-            "cdse-openeo" if "cdse-openeo" in sources else
+            "cdse-openeo" if (
+                "cdse-openeo" in sources
+                and not is_source_dead("cdse-openeo")
+            ) else
             "des"
         )
 
@@ -909,11 +932,16 @@ def repair_to_canonical_layout(
         os.environ.get("IMINT_USE_TILE_GRAPH") == "1"
         and missing_slots
     ):
-        # Pick source: CDSE openEO if listed and we believe credits are
-        # available (heuristic: just trust the --sources order; the
-        # caller is responsible for not listing exhausted sources).
+        # Pick source: CDSE openEO if listed AND not marked dead this
+        # session (402 PaymentRequired). When dead, fall straight
+        # through to DES. Session-scoped: pod restart clears the mark
+        # so credit reset / package purchase auto-recovers.
+        from imint.training.openeo_tile_graph import is_source_dead
         graph_source = (
-            "cdse-openeo" if "cdse-openeo" in sources else
+            "cdse-openeo" if (
+                "cdse-openeo" in sources
+                and not is_source_dead("cdse-openeo")
+            ) else
             "des" if "des" in sources else None
         )
         if graph_source is not None:
