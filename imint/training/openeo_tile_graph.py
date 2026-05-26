@@ -72,6 +72,25 @@ PRITHVI_BANDS = ("B02", "B03", "B04", "B8A", "B11", "B12")
 _CDSE_BANDS_10M = ("B02", "B03", "B04", "B08")
 _CDSE_BANDS_20M = ("B05", "B06", "B07", "B8A", "B11", "B12")
 
+# DES band groups (mirrors imint.fetch.BANDS_*). DES uses lowercase band
+# names with a different collection id (``s2_msi_l2a`` vs CDSE's
+# ``SENTINEL2_L2A``). Same 10m / 20m grouping; same Prithvi output
+# subset, just lowercase in the load_collection call.
+_DES_BANDS_10M = ("b02", "b03", "b04", "b08")
+_DES_BANDS_20M = ("b05", "b06", "b07", "b8a", "b11", "b12")
+
+
+def _prithvi_bands_for_source(source: str, prithvi_bands: tuple[str, ...]) -> tuple[str, ...]:
+    """Map canonical (uppercase) PRITHVI_BANDS to the backend's casing.
+
+    DES uses lowercase band ids; CDSE openEO uses uppercase. Filter_bands
+    requires the exact label as advertised by ``load_collection`` —
+    case-sensitive.
+    """
+    if source == "des":
+        return tuple(b.lower() for b in prithvi_bands)
+    return tuple(prithvi_bands)
+
 
 def _window_midpoint(start: str, end: str) -> str:
     """Return ``YYYY-MM-DD`` halfway between ``start`` and ``end``.
@@ -94,7 +113,7 @@ def _build_slot_cube(
     date_end: str,
     *,
     collection_id: str,
-    cloud_max_pct: float,
+    cloud_max_pct: float | None,
     bands_10m: Sequence[str],
     bands_20m: Sequence[str],
     output_bands: Sequence[str],
@@ -107,29 +126,29 @@ def _build_slot_cube(
     with the per-slot ``"s{slot_idx}_"`` prefix so the eventual
     multi-slot merge does not collide on identical band names.
 
-    Cloud handling: scene-level filter via ``properties=...``. Pixel-
-    level SCL masking is intentionally NOT applied here — keeps the
-    process graph portable between CDSE 1.2 and (future) DES 1.1.
+    Cloud handling: scene-level filter via ``properties=...`` when
+    ``cloud_max_pct`` is supplied. DES openEO 1.1 may not honour the
+    ``eo:cloud_cover`` lambda filter (silently no-op or 400); pass
+    ``cloud_max_pct=None`` to skip the filter and rely on ``reduce(t,
+    "first")`` selecting the chronologically first scene. Pixel-level
+    SCL masking is intentionally NOT applied here — keeps the process
+    graph portable between CDSE 1.2 and DES 1.1.
     """
     # Scene-level cloud filter — drops acquisitions over threshold before
     # the temporal reduce. Documented as `properties` in the openEO
     # spec; the lambda body becomes a server-side comparison expression.
-    properties = {"eo:cloud_cover": lambda v: v < cloud_max_pct}
+    load_kwargs: dict = dict(
+        collection_id=collection_id,
+        spatial_extent=bbox_3006,
+        temporal_extent=[date_start, date_end],
+    )
+    if cloud_max_pct is not None:
+        load_kwargs["properties"] = {
+            "eo:cloud_cover": lambda v: v < cloud_max_pct,
+        }
 
-    cube_10m = conn.load_collection(
-        collection_id=collection_id,
-        spatial_extent=bbox_3006,
-        temporal_extent=[date_start, date_end],
-        bands=list(bands_10m),
-        properties=properties,
-    )
-    cube_20m = conn.load_collection(
-        collection_id=collection_id,
-        spatial_extent=bbox_3006,
-        temporal_extent=[date_start, date_end],
-        bands=list(bands_20m),
-        properties=properties,
-    )
+    cube_10m = conn.load_collection(bands=list(bands_10m), **load_kwargs)
+    cube_20m = conn.load_collection(bands=list(bands_20m), **load_kwargs)
     cube_20m = cube_20m.resample_cube_spatial(target=cube_10m, method="bilinear")
 
     # Merge 10m + 20m groups into one cube (still temporal).
@@ -256,3 +275,123 @@ def fetch_tile_all_slots_cdse_openeo(
         result[slot_idx] = (slot_arr, _window_midpoint(date_start, date_end))
 
     return result
+
+
+def fetch_tile_all_slots_des_openeo(
+    bbox_3006: dict,
+    slot_windows: Sequence[tuple[int, str, str]],
+    *,
+    prithvi_bands: Sequence[str] = PRITHVI_BANDS,
+    cloud_max_pct: float | None = None,
+) -> dict[int, tuple[np.ndarray, str]]:
+    """DES openEO 1.1 variant of :func:`fetch_tile_all_slots_cdse_openeo`.
+
+    Same merge_cubes + rename_labels + single download pattern, but
+    against DES (``openeo.digitalearth.se``, API 1.1) using the
+    lowercase band convention and ``s2_msi_l2a`` collection id.
+
+    Args:
+        cloud_max_pct: Scene-level cloud cover ceiling. Default ``None``
+            skips the ``properties={"eo:cloud_cover"}`` filter — DES 1.1
+            handling of property-lambda filters is not documented as
+            reliable as CDSE 1.2's. With ``None`` the temporal reduce
+            picks chronologically first; pair with caller-side ERA5+SCL
+            pre-filtered date windows for cloud-clear selection.
+
+    Returns:
+        ``{slot_idx: (array, date_str)}`` — same shape as the CDSE
+        variant. ``date_str`` is the window midpoint.
+    """
+    # Local imports to avoid forcing openeo on the rest of the package.
+    from imint.fetch import (
+        COLLECTION as DES_COLLECTION,
+        FetchError,
+        _connect as _connect_des,
+        _unpack_openeo_gtiff_bytes,
+    )
+    import rasterio
+
+    if not slot_windows:
+        return {}
+
+    conn = _connect_des()
+    des_bands = _prithvi_bands_for_source("des", tuple(prithvi_bands))
+
+    sub_cubes = []
+    for slot_idx, date_start, date_end in slot_windows:
+        sub_cubes.append(_build_slot_cube(
+            conn,
+            bbox_3006,
+            slot_idx,
+            date_start,
+            date_end,
+            collection_id=DES_COLLECTION,
+            cloud_max_pct=cloud_max_pct,
+            bands_10m=_DES_BANDS_10M,
+            bands_20m=_DES_BANDS_20M,
+            output_bands=des_bands,
+        ))
+
+    merged = sub_cubes[0]
+    for c in sub_cubes[1:]:
+        merged = merged.merge_cubes(c)
+
+    print(f"    [DES-tile-graph] downloading {len(slot_windows)} slots × "
+          f"{len(des_bands)} bands = {len(slot_windows)*len(des_bands)} bands",
+          flush=True)
+    raw_bytes = merged.download(format="gtiff")
+    if not raw_bytes:
+        raise FetchError("DES openEO returned empty bytes from tile-graph download")
+    raw_bytes = _unpack_openeo_gtiff_bytes(raw_bytes)
+
+    with rasterio.open(io.BytesIO(raw_bytes)) as src:
+        full = src.read()  # (n_slots * n_bands, H, W)
+
+    n_bands = len(des_bands)
+    expected_bands = len(slot_windows) * n_bands
+    if full.shape[0] != expected_bands:
+        raise FetchError(
+            f"DES tile-graph: expected {expected_bands} bands "
+            f"({len(slot_windows)} slots × {n_bands} bands), got {full.shape[0]}."
+        )
+
+    result: dict[int, tuple[np.ndarray, str]] = {}
+    for i, (slot_idx, date_start, date_end) in enumerate(slot_windows):
+        slot_arr = full[i * n_bands:(i + 1) * n_bands].astype(np.float32) / 10000.0
+        if not np.any(slot_arr):
+            continue
+        result[slot_idx] = (slot_arr, _window_midpoint(date_start, date_end))
+
+    return result
+
+
+def fetch_tile_all_slots(
+    bbox_3006: dict,
+    slot_windows: Sequence[tuple[int, str, str]],
+    *,
+    source: str = "cdse-openeo",
+    prithvi_bands: Sequence[str] = PRITHVI_BANDS,
+    cloud_max_pct: float | None = 30.0,
+) -> dict[int, tuple[np.ndarray, str]]:
+    """Dispatch :func:`fetch_tile_all_slots_*` by source.
+
+    Args:
+        source: ``"cdse-openeo"`` or ``"des"``. Other values raise
+            ``ValueError``.
+        cloud_max_pct: Forwarded to the backend-specific function.
+            CDSE 1.2 supports the property-lambda filter; DES 1.1 may
+            not, so callers using DES should pass ``None``.
+    """
+    if source == "cdse-openeo":
+        return fetch_tile_all_slots_cdse_openeo(
+            bbox_3006, slot_windows,
+            prithvi_bands=prithvi_bands,
+            cloud_max_pct=cloud_max_pct or 30.0,
+        )
+    if source == "des":
+        return fetch_tile_all_slots_des_openeo(
+            bbox_3006, slot_windows,
+            prithvi_bands=prithvi_bands,
+            cloud_max_pct=cloud_max_pct,
+        )
+    raise ValueError(f"fetch_tile_all_slots: unknown source {source!r}")
