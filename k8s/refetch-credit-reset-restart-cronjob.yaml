@@ -1,0 +1,121 @@
+# CronJob: kicks the refetch-late-autumn-512 pod every monthly CDSE
+# credit-reset window so the in-process credit-guard (cleared by pod
+# restart) gets a chance to retry CDSE openEO.
+#
+# Why: the credit-guard in imint/training/openeo_tile_graph.py marks
+# cdse-openeo dead for the rest of the Python process on the first 402.
+# When the monthly CDSE credit pool refills, the dead-mark prevents the
+# running pod from noticing. Restarting the pod clears the in-process
+# set, the new pod retries CDSE, and if credits are back it stays there
+# for the rest of its lifetime (~150 s/tile DES → ~60 s/tile CDSE).
+#
+# Schedule: 00:01 UTC on the 1st of every month — best guess for when
+# CDSE's monthly free-tier resets. Refine after observing one cycle.
+# If the pod is already restarting from another cause around that time,
+# concurrencyPolicy: Forbid keeps us from racing two restart attempts.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: refetch-pod-restarter
+  namespace: prithvi-training-default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: refetch-pod-restarter
+  namespace: prithvi-training-default
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: refetch-pod-restarter
+  namespace: prithvi-training-default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: refetch-pod-restarter
+subjects:
+  - kind: ServiceAccount
+    name: refetch-pod-restarter
+    namespace: prithvi-training-default
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: refetch-credit-reset-restart
+  namespace: prithvi-training-default
+  labels:
+    purpose: cdse-credit-reset-pod-kicker
+spec:
+  # 00:01 UTC on the 1st of every month. The minute-1 offset (vs :00)
+  # gives the monthly billing event a moment to land in CDSE's system
+  # before we try a fresh fetch.
+  schedule: "1 0 1 * *"
+  timeZone: "UTC"
+  # Don't overlap if a previous restart-job is still finalising.
+  concurrencyPolicy: Forbid
+  # Survive a couple of transient failures (API server hiccup, etc.)
+  # without spamming alerts.
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: refetch-pod-restarter
+        spec:
+          serviceAccountName: refetch-pod-restarter
+          restartPolicy: OnFailure
+          # Avoid the broken nodes we excluded from the refetch job.
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values: ["p02r09srv04", "p02r09srv06"]
+          containers:
+            - name: kubectl
+              # bitnami/kubectl 1.29 — major-version stable. The Job
+              # only runs kubectl-get + kubectl-delete; minor-version
+              # drift doesn't affect those APIs.
+              image: bitnami/kubectl:1.29
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  echo "=== refetch-credit-reset-restart $(date -u) ==="
+                  echo "Looking for refetch-late-autumn-512 pods..."
+                  PODS=$(kubectl get pods -l job-name=refetch-late-autumn-512 \
+                           -n prithvi-training-default \
+                           -o name 2>/dev/null || true)
+                  if [ -z "$PODS" ]; then
+                    echo "No refetch-late-autumn-512 pods found; nothing to restart."
+                    echo "(The Job may be suspended or have already finished —"
+                    echo " in which case the next manual re-apply picks up CDSE"
+                    echo " credits naturally.)"
+                    exit 0
+                  fi
+                  echo "Found pods:"
+                  echo "$PODS"
+                  echo
+                  echo "Deleting (Job controller will recreate, fresh process =>"
+                  echo "credit-guard dead-set empty => CDSE openEO retried)..."
+                  echo "$PODS" | xargs -r kubectl delete \
+                    -n prithvi-training-default --wait=false
+                  echo
+                  echo "=== done $(date -u) ==="
+              resources:
+                requests: {cpu: "100m", memory: "128Mi"}
+                limits:   {cpu: "100m", memory: "128Mi"}
