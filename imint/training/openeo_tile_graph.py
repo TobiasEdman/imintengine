@@ -395,3 +395,81 @@ def fetch_tile_all_slots(
             cloud_max_pct=cloud_max_pct,
         )
     raise ValueError(f"fetch_tile_all_slots: unknown source {source!r}")
+
+
+def fetch_tile_at_specific_dates(
+    bbox_3006: dict,
+    slot_dates: dict[int, str],
+    *,
+    source: str = "des",
+    prithvi_bands: Sequence[str] = PRITHVI_BANDS,
+) -> dict[int, tuple[np.ndarray, str]]:
+    """Tile-graph variant where the caller has already chosen one date per slot.
+
+    This is the **architecturally correct** entry point for the refetch
+    pipeline. The caller is expected to have run an SCL-based cloud
+    scorer (e.g. :func:`imint.training.optimal_fetch.optimal_fetch_dates`
+    with ``mode="era5_then_scl"``) and picked the lowest-AOI-cloud-count
+    date per slot.
+
+    Compared to :func:`fetch_tile_all_slots` with broad windows + server-
+    side reducer:
+
+      * **Spatially coherent scenes.** Each slot's pixels come from
+        exactly one acquisition date — same sun-angle, same atmosphere,
+        same BRDF. The window-+-reduce(``first``) approach would compose
+        pixels from different dates, which is wrong for training data.
+      * **No reliance on server-side cloud-cover metadata.** Scene-level
+        ``eo:cloud_cover`` is too coarse — a 25 % cloud scene can have
+        the whole 5×5 km AOI under that cloud. Our client-side AOI
+        scoring is finer.
+      * **No DES ``NoDataAvailable`` failures.** Single-date windows on
+        pre-vetted dates always have a scene; the failure mode where
+        DES strict-fails an empty load_collection inside a multi-cube
+        graph cannot trigger.
+
+    Per-tile cost: 1 openEO call for all (≤ 4) slots — the multi-band
+    geotiff is parsed back to ``{slot_idx: (array, date_str)}``.
+
+    Args:
+        bbox_3006: EPSG:3006 bbox dict.
+        slot_dates: ``{slot_idx: "YYYY-MM-DD"}``. May cover any subset
+            of slots (1-4). Slots not in the dict are not fetched.
+        source: ``"cdse-openeo"`` or ``"des"``.
+        prithvi_bands: Bands to fetch per slot.
+
+    Returns:
+        ``{slot_idx: (array, date_str)}`` — one entry per input slot.
+        ``date_str`` is the input date verbatim (no midpoint approx).
+    """
+    if not slot_dates:
+        return {}
+
+    from datetime import datetime, timedelta
+
+    # Build narrow [date, date+1] windows so reduce_dimension(t, "first")
+    # picks exactly the requested scene. Some backends interpret the
+    # temporal_extent as a half-open interval [start, end); padding with
+    # one day is safe across both DES 1.1 and CDSE 1.2.
+    slot_windows: list[tuple[int, str, str]] = []
+    for slot_idx, date_str in slot_dates.items():
+        d = datetime.fromisoformat(date_str)
+        end = (d + timedelta(days=1)).strftime("%Y-%m-%d")
+        slot_windows.append((slot_idx, date_str, end))
+
+    # cloud_max_pct=None — caller already filtered dates by AOI cloud
+    # count, so the server-side ``eo:cloud_cover`` lambda would only
+    # confuse the picture (it could exclude a date the caller deemed
+    # acceptable).
+    result = fetch_tile_all_slots(
+        bbox_3006, slot_windows,
+        source=source,
+        prithvi_bands=prithvi_bands,
+        cloud_max_pct=None,
+    )
+    # Replace the per-slot date approximation with the caller's exact
+    # date — we trust the input over the window midpoint.
+    return {
+        slot_idx: (arr, slot_dates[slot_idx])
+        for slot_idx, (arr, _) in result.items()
+    }

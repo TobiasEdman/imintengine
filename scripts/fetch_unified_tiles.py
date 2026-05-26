@@ -830,55 +830,70 @@ def repair_to_canonical_layout(
     failed_slots: list[int] = []
 
     # ── Optional Nivå-3 fast path: one openEO call per tile ──
-    # Opt-in via env var IMINT_USE_TILE_GRAPH=1. Submits ONE graph that
-    # covers all missing slots, server-side reduces each window with
-    # `first` after a scene-level cloud filter. ~7-28× fewer openEO
-    # calls per tile in the CDSE openEO single-flight regime — that's
-    # the dominant throughput bottleneck right now.
+    # Opt-in via env var IMINT_USE_TILE_GRAPH=1. Uses the upstream
+    # SCL-prefiltered date list (computed above for autumn + growing
+    # windows) to pick ONE date per missing slot — the lowest-AOI-cloud-
+    # count candidate — and fetches all those slots' spectral in a
+    # single merge_cubes openEO call.
     #
-    # Only attempted when sources includes "cdse-openeo" (the path is
-    # CDSE-only; DES 1.1 variant is a Nivå-2 follow-up). On any error,
-    # we fall through to the per-slot path below so this is strictly
-    # additive — no slot can fail because the tile-graph misbehaved.
+    # Per tile: 2 SCL prefilter calls (already amortised above) + 1
+    # tile-graph spectral call = 3 openEO calls.
+    # Old per-slot path: 2 SCL + up to ~28 race-pool spectral calls.
+    #
+    # Strictly additive: any tile-graph failure (or slot for which the
+    # prefilter returned no candidate) falls through to the per-slot
+    # path below. graph_source picked from --sources: prefers CDSE
+    # openEO (1.2 — better cloud-filter support) but falls back to DES
+    # (1.1) when CDSE is unavailable or credits are exhausted.
     if (
         os.environ.get("IMINT_USE_TILE_GRAPH") == "1"
-        and "cdse-openeo" in sources
         and missing_slots
     ):
-        try:
-            from imint.training.openeo_tile_graph import (
-                fetch_tile_all_slots_cdse_openeo,
-            )
-            slot_windows_for_graph = []
+        # Pick source: CDSE openEO if listed and we believe credits are
+        # available (heuristic: just trust the --sources order; the
+        # caller is responsible for not listing exhausted sources).
+        graph_source = (
+            "cdse-openeo" if "cdse-openeo" in sources else
+            "des" if "des" in sources else None
+        )
+        if graph_source is not None:
+            # Build {slot_idx: best_date} from the SCL-prefiltered lists.
+            slot_dates_for_graph: dict[int, str] = {}
             for sidx in missing_slots:
                 _, syear, smin, smax = slot_defs[sidx]
                 _ds, _de = doy_to_date_range(syear, smin, smax)
-                slot_windows_for_graph.append((sidx, _ds, _de))
-            graph_result = fetch_tile_all_slots_cdse_openeo(
-                bbox, slot_windows_for_graph,
-                cloud_max_pct=cloud_max,
-            )
-            # Apply per-slot results from the tile-graph. Slots NOT in
-            # graph_result are left for the per-slot fallback below
-            # (they're still in missing_slots).
-            for sidx, (scene, date_str) in graph_result.items():
-                # Same defensive resize as the per-slot path below.
-                if scene.shape[1] != tile.size_px or scene.shape[2] != tile.size_px:
-                    padded = np.zeros((N_BANDS, tile.size_px, tile.size_px),
-                                      dtype=np.float32)
-                    h = min(scene.shape[1], tile.size_px)
-                    w = min(scene.shape[2], tile.size_px)
-                    padded[:, :h, :w] = scene[:, :h, :w]
-                    scene = padded
-                fetched[sidx] = (scene, date_str)
-            # Strip already-fetched slots from missing_slots; per-slot
-            # path runs only for the remainder.
-            missing_slots = [s for s in missing_slots if s not in fetched]
-        except Exception as e:
-            # Log to stderr but keep going — per-slot path below covers
-            # everything.
-            print(f"    [tile-graph] failed for {name}: {type(e).__name__}: "
-                  f"{str(e)[:200]} — falling back to per-slot", flush=True)
+                is_autumn = (sidx == 0)
+                prefetched = autumn_dates if is_autumn else growing_dates
+                if not prefetched:
+                    continue  # no prefilter result for this slot — fallback
+                filtered = [d for d in prefetched if _ds <= d <= _de]
+                if filtered:
+                    # dates already sorted by AOI cloud count (optimal_fetch_dates).
+                    slot_dates_for_graph[sidx] = filtered[0]
+            if slot_dates_for_graph:
+                try:
+                    from imint.training.openeo_tile_graph import (
+                        fetch_tile_at_specific_dates,
+                    )
+                    graph_result = fetch_tile_at_specific_dates(
+                        bbox, slot_dates_for_graph,
+                        source=graph_source,
+                    )
+                    for sidx, (scene, date_str) in graph_result.items():
+                        if scene.shape[1] != tile.size_px or scene.shape[2] != tile.size_px:
+                            padded = np.zeros(
+                                (N_BANDS, tile.size_px, tile.size_px),
+                                dtype=np.float32)
+                            h = min(scene.shape[1], tile.size_px)
+                            w = min(scene.shape[2], tile.size_px)
+                            padded[:, :h, :w] = scene[:, :h, :w]
+                            scene = padded
+                        fetched[sidx] = (scene, date_str)
+                    missing_slots = [s for s in missing_slots if s not in fetched]
+                except Exception as e:
+                    print(f"    [tile-graph:{graph_source}] failed for {name}: "
+                          f"{type(e).__name__}: {str(e)[:200]} — fallback to per-slot",
+                          flush=True)
 
     for slot_idx in missing_slots:
         slot_name, slot_year, slot_min, slot_max = slot_defs[slot_idx]
