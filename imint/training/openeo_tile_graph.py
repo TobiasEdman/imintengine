@@ -397,6 +397,123 @@ def fetch_tile_all_slots(
     raise ValueError(f"fetch_tile_all_slots: unknown source {source!r}")
 
 
+def score_dates_aoi_cloud(
+    bbox_3006: dict,
+    date_start: str,
+    date_end: str,
+    *,
+    source: str = "des",
+    cloud_classes: tuple[int, ...] = (3, 8, 9, 10),
+) -> dict[str, float]:
+    """Per-AOI cloud fraction per date, computed server-side via openEO.
+
+    Single openEO call that:
+
+      1. ``load_collection`` SCL band for the full window (one timestep
+         per S2 acquisition; SCL is part of L2A so this implicitly
+         filters to actual pass dates — no ERA5 prefilter needed).
+      2. ``cloud_flag = SCL ∈ cloud_classes`` (boolean per pixel per t).
+      3. ``aggregate_spatial(geometries=bbox_polygon, reducer="mean")``
+         — server computes the AOI cloud fraction per timestep.
+      4. ``execute()`` returns a small JSON ``{date: cloud_frac}``;
+         **no pixel-level data crosses the wire.**
+
+    Compared to :func:`imint.training.optimal_fetch.scl_stack_screen`
+    (which downloads the SCL stack and computes the mean client-side):
+
+      * No 19-day chunking needed (DES NetCDF cap doesn't apply to
+        aggregate_spatial output — the response is tiny).
+      * One openEO call instead of 3-6 chunks.
+      * Network payload is ~N×8 bytes instead of ``N × W × H bytes``.
+
+    The pattern mirrors :func:`scripts.batch_fetch_openeo.screen_tile_scl`
+    which has been used in production for CDSE for a year. DES openEO
+    historically had ``aggregate_spatial`` issues (geopandas dtype
+    error noted in ``scl_stack_screen``); this function exercises the
+    same path on DES so we can verify whether the bug is still present.
+
+    Args:
+        bbox_3006: EPSG:3006 bbox dict. Converted internally to WGS84
+            for the aggregate_spatial geometry.
+        date_start, date_end: ISO ``YYYY-MM-DD``. Inclusive of both.
+        source: ``"des"`` or ``"cdse-openeo"``. CDSE uses uppercase
+            ``"SCL"`` band; DES uses lowercase ``"scl"``.
+        cloud_classes: SCL class codes that count as "cloud":
+            3 = shadow, 8 = cloud_medium, 9 = cloud_high, 10 = cirrus.
+            Caller may extend (e.g. include 11 for snow) per use case.
+
+    Returns:
+        ``{date_str: aoi_cloud_fraction}``. Empty dict if no S2 passes
+        in the window or the server errored.
+
+    Raises:
+        Whatever the openeo client raises — caller decides whether to
+        fall back to ``optimal_fetch_dates``.
+    """
+    from shapely.geometry import box, mapping
+    from pyproj import Transformer
+
+    if source == "des":
+        from imint.fetch import _connect as _connect_backend, COLLECTION as collection_id
+        scl_band_name = "scl"
+    elif source == "cdse-openeo":
+        from imint.fetch import _connect_cdse as _connect_backend, CDSE_COLLECTION as collection_id
+        scl_band_name = "SCL"
+    else:
+        raise ValueError(f"score_dates_aoi_cloud: unknown source {source!r}")
+
+    # Convert EPSG:3006 bbox to WGS84 — aggregate_spatial geometries are
+    # safest in 4326 (CDSE expects it; DES tolerates it).
+    transformer = Transformer.from_crs("EPSG:3006", "EPSG:4326", always_xy=True)
+    west, south = transformer.transform(bbox_3006["west"], bbox_3006["south"])
+    east, north = transformer.transform(bbox_3006["east"], bbox_3006["north"])
+
+    conn = _connect_backend()
+    scl = conn.load_collection(
+        collection_id=collection_id,
+        spatial_extent={
+            "west":  west, "south": south,
+            "east":  east, "north": north,
+            "crs":   "EPSG:4326",
+        },
+        temporal_extent=[date_start, date_end],
+        bands=[scl_band_name],
+    )
+
+    # Build cloud_flag = OR over (SCL == c) for c in cloud_classes.
+    # ``cube.band(name)`` returns a band-extracted single-band cube where
+    # comparison operators work pixel-wise.
+    scl_b = scl.band(scl_band_name)
+    cloud_flag = (scl_b == cloud_classes[0])
+    for c in cloud_classes[1:]:
+        cloud_flag = cloud_flag | (scl_b == c)
+
+    poly = box(west, south, east, north)
+    cloud_frac_ts = cloud_flag.aggregate_spatial(
+        geometries=mapping(poly), reducer="mean",
+    )
+
+    print(f"    [{source}:aoi-cloud-aggregate] window={date_start}→{date_end}",
+          flush=True)
+    ts_json = cloud_frac_ts.execute()
+
+    # Parse: same schema as scripts/batch_fetch_openeo.py:screen_tile_scl.
+    # openEO returns {date_str: [[value]]} where the outer list is per
+    # geometry (we have 1) and the inner is per band (also 1).
+    result: dict[str, float] = {}
+    if isinstance(ts_json, dict):
+        for date_key, val in ts_json.items():
+            if date_key == "data":
+                continue
+            date_str = str(date_key)[:10]
+            frac = val
+            while isinstance(frac, list) and frac:
+                frac = frac[0]
+            if isinstance(frac, (int, float)):
+                result[date_str] = float(frac)
+    return result
+
+
 def fetch_tile_at_specific_dates(
     bbox_3006: dict,
     slot_dates: dict[int, str],

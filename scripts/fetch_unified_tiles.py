@@ -791,53 +791,99 @@ def repair_to_canonical_layout(
     autumn_dates: list[str] | None = None
     needs_growing = any(i in missing_slots for i in (1, 2, 3))
     needs_autumn = (0 in missing_slots)
-    # SCL prefetch via CDSE openEO — keeps DES per-session cap free for
-    # the downstream spectral fetches. CDSE monthly credits are a
-    # separate pool from DES throttle and from SH Process PU. Confirmed
-    # working with same CDSE_CLIENT_ID/SECRET creds already in the YAML.
+
+    # SCL prefetch. Two paths:
     #
-    # When IMINT_USE_TILE_GRAPH=1, use the ranked variant: returns ALL
-    # ERA5+SCL-intersected dates sorted by AOI cloud fraction ascending,
-    # without dropping anything above max_aoi_cloud. The tile-graph
-    # downstream picks dates[0] per slot — the lowest-cloud option,
-    # always non-empty. The classic "era5_then_scl" mode drops dates
-    # above the threshold and sorts the survivors chronologically, which
-    # both throws away the cloud-frac ranking AND returns empty for
-    # cloudy autumn windows (slot 0 saw this in the e2e test).
-    _prefilter_mode = (
-        "era5_then_scl_ranked"
-        if os.environ.get("IMINT_USE_TILE_GRAPH") == "1"
-        else "era5_then_scl"
-    )
-    if needs_growing:
-        # Cover the union of all 3 growing-season slot windows in ONE call
-        gs_min = min(slot_defs[1][2], slot_defs[2][2], slot_defs[3][2])
-        gs_max = max(slot_defs[1][3], slot_defs[2][3], slot_defs[3][3])
-        gs_ds, gs_de = doy_to_date_range(tile_year, gs_min, gs_max)
-        try:
-            plan = optimal_fetch_dates(
-                coords, gs_ds, gs_de,
-                mode=_prefilter_mode, max_aoi_cloud=max_aoi_cloud,
-                scl_backend="des",  # CDSE openEO has max=1 connection per user → 429 storm at 6 workers
-            )
-            growing_dates = plan.dates
-        except Exception:
-            growing_dates = []  # signal: prefetch failed, fall back per-slot
-    if needs_autumn:
-        # Slot 0 uses more permissive cloud threshold (autumn)
-        autumn_max_cloud = min(max_aoi_cloud * 2, 0.30)
-        au_ds, au_de = doy_to_date_range(
-            tile_year - 1, slot_defs[0][2], slot_defs[0][3],
+    # 1. IMINT_USE_TILE_GRAPH=1  → server-side aggregate_spatial path:
+    #    ONE openEO call per window returning a small JSON
+    #    {date: aoi_cloud_frac}. No pixel-level SCL data crosses the
+    #    wire. We rank client-side by cloud_frac ascending; the caller
+    #    picks dates[0] per slot. No thresholding — returns every S2
+    #    pass in the window so even fully-cloudy autumns get a
+    #    "best available" date.
+    #
+    # 2. Default → optimal_fetch_dates(mode="era5_then_scl"):
+    #    ERA5 forecast prefilter + pixel-level SCL stack download +
+    #    threshold-drop. Chronologically sorted survivors. The legacy
+    #    path used by the per-slot race-pool fetcher below.
+    #
+    # In both paths, `growing_dates` / `autumn_dates` are sorted lists.
+    # The tile-graph wiring further down picks dates[0] in slot's
+    # sub-window; the per-slot fallback uses them via the existing
+    # `prefetched_dates=` parameter on _fetch_single_scene.
+    if os.environ.get("IMINT_USE_TILE_GRAPH") == "1":
+        from imint.training.openeo_tile_graph import score_dates_aoi_cloud
+        # Pick SCL backend matching the configured spectral source so
+        # we don't open both connections per tile.
+        _scl_source = (
+            "cdse-openeo" if "cdse-openeo" in sources else
+            "des"
         )
-        try:
-            plan = optimal_fetch_dates(
-                coords, au_ds, au_de,
-                mode=_prefilter_mode, max_aoi_cloud=autumn_max_cloud,
-                scl_backend="des",  # CDSE openEO has max=1 connection per user → 429 storm at 6 workers
+
+        def _ranked_dates_in_window(ds: str, de: str) -> list[str]:
+            try:
+                fracs = score_dates_aoi_cloud(
+                    bbox, ds, de, source=_scl_source,
+                )
+            except Exception as exc:
+                # aggregate_spatial historically had a geopandas bug on
+                # DES; fall back to legacy pixel-level path so this run
+                # makes progress even if the server bug recurs.
+                print(f"    [aoi-cloud-aggregate] failed for {name} "
+                      f"({ds}→{de}): {type(exc).__name__}: {str(exc)[:160]} "
+                      f"— falling back to optimal_fetch_dates", flush=True)
+                try:
+                    plan = optimal_fetch_dates(
+                        coords, ds, de,
+                        mode="era5_then_scl_ranked",
+                        max_aoi_cloud=max_aoi_cloud,
+                        scl_backend="des",
+                    )
+                    return list(plan.dates)
+                except Exception:
+                    return []
+            # fracs = {date: cloud_frac}. Sort ascending by frac.
+            return sorted(fracs.keys(), key=lambda d: fracs[d])
+
+        if needs_growing:
+            gs_min = min(slot_defs[1][2], slot_defs[2][2], slot_defs[3][2])
+            gs_max = max(slot_defs[1][3], slot_defs[2][3], slot_defs[3][3])
+            gs_ds, gs_de = doy_to_date_range(tile_year, gs_min, gs_max)
+            growing_dates = _ranked_dates_in_window(gs_ds, gs_de)
+        if needs_autumn:
+            au_ds, au_de = doy_to_date_range(
+                tile_year - 1, slot_defs[0][2], slot_defs[0][3],
             )
-            autumn_dates = plan.dates
-        except Exception:
-            autumn_dates = []
+            autumn_dates = _ranked_dates_in_window(au_ds, au_de)
+    else:
+        # Legacy path: ERA5 + pixel-level SCL stack + threshold-drop.
+        if needs_growing:
+            gs_min = min(slot_defs[1][2], slot_defs[2][2], slot_defs[3][2])
+            gs_max = max(slot_defs[1][3], slot_defs[2][3], slot_defs[3][3])
+            gs_ds, gs_de = doy_to_date_range(tile_year, gs_min, gs_max)
+            try:
+                plan = optimal_fetch_dates(
+                    coords, gs_ds, gs_de,
+                    mode="era5_then_scl", max_aoi_cloud=max_aoi_cloud,
+                    scl_backend="des",
+                )
+                growing_dates = plan.dates
+            except Exception:
+                growing_dates = []
+        if needs_autumn:
+            autumn_max_cloud = min(max_aoi_cloud * 2, 0.30)
+            au_ds, au_de = doy_to_date_range(
+                tile_year - 1, slot_defs[0][2], slot_defs[0][3],
+            )
+            try:
+                plan = optimal_fetch_dates(
+                    coords, au_ds, au_de,
+                    mode="era5_then_scl", max_aoi_cloud=autumn_max_cloud,
+                    scl_backend="des",
+                )
+                autumn_dates = plan.dates
+            except Exception:
+                autumn_dates = []
 
     # Fetch each missing slot
     fetched: dict[int, tuple[np.ndarray, str]] = {}
