@@ -29,6 +29,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "delete"]
+  # Need to unsuspend a suspended Job before the new pod can start.
+  # Patch is the minimum verb needed for spec.suspend mutation.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -96,24 +101,42 @@ spec:
                 - |
                   set -e
                   echo "=== refetch-credit-reset-restart $(date -u) ==="
-                  echo "Looking for refetch-late-autumn-512 pods..."
-                  PODS=$(kubectl get pods -l job-name=refetch-late-autumn-512 \
-                           -n prithvi-training-default \
-                           -o name 2>/dev/null || true)
-                  if [ -z "$PODS" ]; then
-                    echo "No refetch-late-autumn-512 pods found; nothing to restart."
-                    echo "(The Job may be suspended or have already finished —"
-                    echo " in which case the next manual re-apply picks up CDSE"
-                    echo " credits naturally.)"
+                  NS=prithvi-training-default
+                  JOB=refetch-late-autumn-512
+
+                  # Step 1: unsuspend the Job if it's suspended. The
+                  # operator may have suspended it manually (e.g. during
+                  # DES backend degradation between credit cycles); we
+                  # want CDSE-reset day to kick everything back to life.
+                  SUSPENDED=$(kubectl get job/$JOB -n $NS \
+                                -o jsonpath='{.spec.suspend}' 2>/dev/null \
+                                || echo "missing")
+                  echo "Job suspend status: $SUSPENDED"
+                  if [ "$SUSPENDED" = "true" ]; then
+                    echo "Unsuspending Job..."
+                    kubectl patch job/$JOB -n $NS \
+                      -p '{"spec":{"suspend":false}}' || true
+                  elif [ "$SUSPENDED" = "missing" ]; then
+                    echo "Job $JOB not found in namespace $NS; nothing to do."
                     exit 0
                   fi
-                  echo "Found pods:"
-                  echo "$PODS"
-                  echo
-                  echo "Deleting (Job controller will recreate, fresh process =>"
-                  echo "credit-guard dead-set empty => CDSE openEO retried)..."
-                  echo "$PODS" | xargs -r kubectl delete \
-                    -n prithvi-training-default --wait=false
+
+                  # Step 2: delete any existing pods so the Job
+                  # controller spawns a fresh one. Each pod-restart
+                  # clears the in-process credit-guard dead-set; the
+                  # new Python process retries CDSE openEO and stays
+                  # there if credits have refilled.
+                  echo "Looking for existing $JOB pods..."
+                  PODS=$(kubectl get pods -l job-name=$JOB -n $NS \
+                           -o name 2>/dev/null || true)
+                  if [ -n "$PODS" ]; then
+                    echo "Deleting:"
+                    echo "$PODS"
+                    echo "$PODS" | xargs -r kubectl delete -n $NS --wait=false
+                  else
+                    echo "No existing pods — Job controller will create"
+                    echo "one automatically now that suspend=false."
+                  fi
                   echo
                   echo "=== done $(date -u) ==="
               resources:
