@@ -1,0 +1,129 @@
+# Full evaluation suite — runs all 5 phases of the eval plan post-
+# ensemble-training. Expected runtime ~6-12h on a single H100,
+# dominated by phase 2 (each shift variant retrains/evaluates).
+#
+# Inputs:
+#   - Ensemble checkpoint at /checkpoints/ensemble/<run>/ensemble.pt
+#   - Pre-computed splits at /checkpoints/eval_splits/  (run
+#     prepare_eval_splits-job.yaml first, ONCE per dataset version)
+#   - Tiles at /cephfs/unified_v2_512
+#
+# Outputs:
+#   - /outputs/eval/<run-id>/REPORT.md
+#   - /outputs/eval/<run-id>/results.json
+#   - /outputs/eval/<run-id>/plots/*.png
+#   - /outputs/eval/<run-id>/confusion_*.npy
+#
+# IMPORTANT: parameterise --ensemble-checkpoint and --run-id per
+# invocation. The template below leaves them as placeholders; expand
+# via `envsubst` or `kubectl create job --from=cronjob` with overrides.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eval-full-suite
+  namespace: prithvi-training-default
+  labels:
+    app: imint-eval
+    purpose: post-ensemble-robust-eval
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: imint-eval
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values: ["NVIDIA-H100-80GB-HBM3", "NVIDIA-H100-PCIe"]
+      containers:
+        - name: eval
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== ImintEngine full eval suite — $(date -u) ==="
+
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj pyyaml Pillow \
+                xarray netCDF4 matplotlib scikit-learn \
+                torch --index-url https://download.pytorch.org/whl/cu121 \
+                > /dev/null
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch ${BRANCH:-main} \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              # Required from CronJob/Job override:
+              #   $ENSEMBLE_CKPT   — full path to ensemble checkpoint
+              #   $RUN_ID          — e.g. ensemble_v3_2026-06-15
+              : "${ENSEMBLE_CKPT:?ENSEMBLE_CKPT env var required}"
+              : "${RUN_ID:?RUN_ID env var required}"
+
+              OUTPUT_DIR=/outputs/eval/${RUN_ID}
+              mkdir -p ${OUTPUT_DIR}
+
+              python3 scripts/run_full_eval.py \
+                --ensemble-checkpoint "${ENSEMBLE_CKPT}" \
+                --tiles-dir /cephfs/unified_v2_512 \
+                --splits-root /checkpoints/eval_splits \
+                --output-dir "${OUTPUT_DIR}" \
+                --phases ${PHASES:-1,2a,2b,2c,2d,3,4} \
+                --baselines ${BASELINES:-trivial_majority,random_forest,single_frame} \
+                --device cuda \
+                --run-id "${RUN_ID}"
+
+              echo ""
+              echo "=== eval complete; report at ${OUTPUT_DIR}/REPORT.md ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # Required overrides — set per invocation:
+            # - name: ENSEMBLE_CKPT
+            #   value: /checkpoints/ensemble/<run>/ensemble.pt
+            # - name: RUN_ID
+            #   value: ensemble_v3_2026-06-15
+            # Optional:
+            # - name: PHASES
+            #   value: "1,2a,2b"
+            # - name: BASELINES
+            #   value: "trivial_majority,random_forest"
+            # - name: BRANCH
+            #   value: main
+          resources:
+            requests:
+              cpu: "8"
+              memory: "48Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "48Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs}
+            - {name: checkpoints, mountPath: /checkpoints, readOnly: true}
+            - {name: outputs, mountPath: /outputs}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}
+        - name: outputs
+          persistentVolumeClaim: {claimName: training-data-cephfs}
