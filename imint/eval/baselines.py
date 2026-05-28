@@ -50,23 +50,73 @@ class Baseline(ABC):
 
 
 class TrivialMajority(Baseline):
-    """Predicts the per-tile majority class for every pixel.
+    """Predicts the GLOBAL majority class for every pixel of every tile.
 
     Useless as a model but valuable as a floor: any segmentation model
-    that doesn't beat this is just shifting class probabilities.
+    that doesn't beat this is just shifting class probabilities. We
+    compute the mode across the entire training-split label population
+    excluding ``ignore_index=0`` (background) so the baseline picks
+    the most-common *foreground* class — typically a forest class on
+    Swedish data.
     """
 
     name = "trivial_majority"
 
-    def __init__(self):
+    def __init__(self, ignore_index: int = 0):
+        self.ignore_index = ignore_index
         self.global_majority: int | None = None
 
     def train(self, train_tiles, tiles_dir):
-        # TODO: scan train labels, pick the modal class.
-        raise NotImplementedError
+        """Streaming bincount over training labels — never holds more
+        than one tile's labels in memory at a time."""
+        import os
+        import numpy as np
+
+        accumulator: np.ndarray | None = None
+        scanned = 0
+        for tile_name in train_tiles:
+            path = os.path.join(tiles_dir, f"{tile_name}.npz")
+            if not os.path.exists(path):
+                continue
+            try:
+                with np.load(path, allow_pickle=True) as data:
+                    if "label" not in data.files:
+                        continue
+                    label = np.asarray(data["label"]).astype(np.int64)
+            except Exception:
+                continue
+            valid = label != self.ignore_index
+            if not valid.any():
+                continue
+            counts = np.bincount(label[valid].ravel())
+            if accumulator is None:
+                accumulator = counts.astype(np.int64)
+            elif counts.size > accumulator.size:
+                counts[:accumulator.size] += accumulator
+                accumulator = counts.astype(np.int64)
+            else:
+                accumulator[:counts.size] += counts
+            scanned += 1
+
+        if accumulator is None or accumulator.sum() == 0:
+            raise RuntimeError(
+                "TrivialMajority.train: no labelled pixels found in "
+                f"{len(train_tiles)} train tiles (scanned {scanned})"
+            )
+        self.global_majority = int(accumulator.argmax())
 
     def predict(self, tile_name, tiles_dir):
-        raise NotImplementedError
+        if self.global_majority is None:
+            raise RuntimeError("TrivialMajority: call .train() first")
+        import os
+        import numpy as np
+        path = os.path.join(tiles_dir, f"{tile_name}.npz")
+        # Read label only to learn the output shape — labels were the
+        # ground-truth ground-truth in training, but at prediction
+        # time we only need ``label.shape``.
+        with np.load(path, allow_pickle=True) as data:
+            shape = data["label"].shape
+        return np.full(shape, self.global_majority, dtype=np.int64)
 
 
 class RandomForestBands(Baseline):

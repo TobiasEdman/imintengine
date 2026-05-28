@@ -53,21 +53,108 @@ class SplitManifest:
 
 
 def load_tile_metadata(tiles_dir: str) -> list[dict]:
-    """Read minimal metadata (year, bbox, name) for every tile in ``tiles_dir``.
+    """Read minimal metadata (year, bbox-centre, type) for every .npz tile.
 
-    Caches result in ``<tiles_dir>/.eval_metadata.json`` so re-runs are
-    instant; metadata is invalidated by mtime on the source .npz files.
+    Caches the result at ``<tiles_dir>/.eval_metadata.json`` so re-runs
+    are instant. Cache is invalidated when ANY source .npz has a more
+    recent ``mtime`` than the cache itself — same heuristic the rest of
+    the project uses for derived artefacts.
 
     Returns:
-        List of ``{"name", "year", "centre_x_3006", "centre_y_3006",
-        "tile_type", "has_aux", ...}``. ``tile_type`` parsed from the
-        tile name prefix (``crop_*`` / ``urban_*`` / ``tile_*``).
-
-    TODO: implement the mtime-keyed cache; today the dataset loader
-    already reads every .npz on every epoch — we don't want to do
-    that for split-building.
+        List of dicts with keys ``name``, ``year``, ``centre_x_3006``,
+        ``centre_y_3006``, ``tile_type``. Unreadable .npz files are
+        skipped; year stays ``None`` if no year-bearing field is
+        present.
     """
-    raise NotImplementedError
+    import json
+    import numpy as np
+
+    if not os.path.isdir(tiles_dir):
+        raise FileNotFoundError(f"tiles_dir does not exist: {tiles_dir}")
+
+    npz_files = [
+        f for f in os.listdir(tiles_dir)
+        if f.endswith(".npz") and not f.startswith(".")
+    ]
+    if not npz_files:
+        return []
+
+    cache_path = os.path.join(tiles_dir, ".eval_metadata.json")
+    newest_npz_mtime = max(
+        os.path.getmtime(os.path.join(tiles_dir, f)) for f in npz_files
+    )
+    if (
+        os.path.exists(cache_path)
+        and os.path.getmtime(cache_path) > newest_npz_mtime
+    ):
+        try:
+            with open(cache_path) as f:
+                cached = json.load(f)
+            if isinstance(cached, list) and cached and "name" in cached[0]:
+                return cached
+        except Exception:
+            pass  # treat as cache miss
+
+    # Cache miss — rebuild. ``allow_pickle=True`` to read object arrays
+    # (some legacy tiles store date strings as objects).
+    entries: list[dict] = []
+    for fname in sorted(npz_files):
+        path = os.path.join(tiles_dir, fname)
+        name = fname[:-4]
+        try:
+            data = np.load(path, allow_pickle=True)
+        except Exception:
+            continue
+
+        year: int | None = None
+        for key in ("tessera_year", "lpis_year", "year"):
+            if key in data.files:
+                try:
+                    year = int(data[key])
+                    break
+                except Exception:
+                    pass
+        if year is None and "dates" in data.files:
+            for d in data["dates"]:
+                s = str(d)
+                if len(s) >= 4 and s[:4].isdigit():
+                    year = int(s[:4])
+                    break
+
+        cx: int | None = None
+        cy: int | None = None
+        if "bbox_3006" in data.files:
+            try:
+                bbox = data["bbox_3006"]
+                cx = int((float(bbox[0]) + float(bbox[2])) / 2)
+                cy = int((float(bbox[1]) + float(bbox[3])) / 2)
+            except Exception:
+                pass
+
+        if name.startswith("crop_"):
+            tile_type = "crop"
+        elif name.startswith("urban_"):
+            tile_type = "urban"
+        elif name.startswith("tile_"):
+            tile_type = "lulc"
+        else:
+            tile_type = "other"
+
+        entries.append({
+            "name":           name,
+            "year":           year,
+            "centre_x_3006":  cx,
+            "centre_y_3006":  cy,
+            "tile_type":      tile_type,
+        })
+
+    # Best-effort cache write — non-fatal if the dir is read-only.
+    try:
+        with open(cache_path, "w") as f:
+            json.dump(entries, f)
+    except Exception:
+        pass
+    return entries
 
 
 # ── Standard in-distribution split ──────────────────────────────────────────
@@ -79,19 +166,48 @@ def make_in_distribution_split(
     seed: int = 42,
     train_frac: float = 0.80,
     val_frac: float = 0.10,
-    # test_frac is the remainder
     stratify_by: tuple[str, ...] = ("tile_type", "year"),
 ) -> dict[str, list[str]]:
     """Stratified random 80/10/10 split.
 
-    Stratification keys default to (tile_type, year) so each test bucket
-    has the same class-mix as train. ``seed`` is the only knob that
-    changes which tiles land where.
+    For each unique tuple of ``stratify_by`` values, tiles are shuffled
+    with ``seed`` and partitioned in proportion to ``train_frac`` /
+    ``val_frac`` / (1 - train_frac - val_frac). Floor rounding on
+    train+val means the remainder always lands in test, never the
+    other way around — keeps held-out evaluation honest.
 
-    TODO: pull metadata via load_tile_metadata, group by stratify_by
-    tuple, sample within each group.
+    Returns:
+        ``{"train": [...], "val": [...], "test": [...]}`` with tile
+        names (no ``.npz`` extension).
     """
-    raise NotImplementedError
+    if train_frac + val_frac >= 1.0:
+        raise ValueError(
+            f"train_frac + val_frac must leave room for test "
+            f"(got {train_frac} + {val_frac})"
+        )
+
+    entries = load_tile_metadata(tiles_dir)
+    if not entries:
+        return {"train": [], "val": [], "test": []}
+
+    buckets: dict[tuple, list[str]] = {}
+    for e in entries:
+        key = tuple(e.get(k) for k in stratify_by)
+        buckets.setdefault(key, []).append(e["name"])
+
+    rng = random.Random(seed)
+    splits: dict[str, list[str]] = {"train": [], "val": [], "test": []}
+    for key in sorted(buckets, key=lambda k: tuple(str(x) for x in k)):
+        names = list(buckets[key])
+        rng.shuffle(names)
+        n = len(names)
+        n_train = int(n * train_frac)
+        n_val = int(n * val_frac)
+        # Floor rounding on train+val → remainder to test.
+        splits["train"].extend(names[:n_train])
+        splits["val"].extend(names[n_train:n_train + n_val])
+        splits["test"].extend(names[n_train + n_val:])
+    return splits
 
 
 # ── Temporal shift splits ───────────────────────────────────────────────────
