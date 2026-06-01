@@ -196,12 +196,26 @@ def _build_slot_cube(
     SCL masking is intentionally NOT applied here — keeps the process
     graph portable between CDSE 1.2 and DES 1.1.
     """
+    # Build spatial_extent explicitly with an EPSG:3006 crs. The caller's
+    # bbox dict (from tile.bbox_from_center) often lacks a `crs` key;
+    # without it openEO assumes EPSG:4326 and rejects our SWEREF metre
+    # coordinates as out-of-lat/lon-range ([400] ProcessParameterInvalid,
+    # observed 2026-06-01 in production). Setting crs here makes the
+    # spectral fetch robust regardless of what the caller passed.
+    spatial_extent = {
+        "west":  float(bbox_3006["west"]),
+        "south": float(bbox_3006["south"]),
+        "east":  float(bbox_3006["east"]),
+        "north": float(bbox_3006["north"]),
+        "crs":   3006,
+    }
+
     # Scene-level cloud filter — drops acquisitions over threshold before
     # the temporal reduce. Documented as `properties` in the openEO
     # spec; the lambda body becomes a server-side comparison expression.
     load_kwargs: dict = dict(
         collection_id=collection_id,
-        spatial_extent=bbox_3006,
+        spatial_extent=spatial_extent,
         temporal_extent=[date_start, date_end],
     )
     if cloud_max_pct is not None:
