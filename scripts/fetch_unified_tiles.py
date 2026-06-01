@@ -885,56 +885,113 @@ def repair_to_canonical_layout(
             ) else
             "des" if "des" in sources else None
         )
-        if graph_source is not None:
+        def _resize_scene(scene):
+            """Defensive centre-place into the tile grid (no resample)."""
+            if scene.shape[1] == tile.size_px and scene.shape[2] == tile.size_px:
+                return scene
+            padded = np.zeros((N_BANDS, tile.size_px, tile.size_px),
+                              dtype=np.float32)
+            h = min(scene.shape[1], tile.size_px)
+            w = min(scene.shape[2], tile.size_px)
+            padded[:, :h, :w] = scene[:, :h, :w]
+            return padded
+
+        # Per-slot ranked candidate lists + AOI cloud ceilings.
+        slot_cands: dict[int, list] = {}
+        slot_ptr: dict[int, int] = {}
+        slot_ceiling: dict[int, float] = {}
+        for sidx in missing_slots:
+            _, syear, smin, smax = slot_defs[sidx]
+            _ds, _de = doy_to_date_range(syear, smin, smax)
+            is_autumn = (sidx == 0)
+            ranked = ranked_by_window["autumn" if is_autumn else "growing"]
+            slot_cands[sidx] = [d for d, _cc, _oc in ranked if _ds <= d <= _de]
+            slot_ptr[sidx] = 0
+            slot_ceiling[sidx] = (
+                min(max_aoi_cloud * 2, 0.30) if is_autumn else max_aoi_cloud
+            )
+
+        if graph_source == "cdse-openeo":
+            # COMBINED lazy fetch: each round downloads spectral + SCL for the
+            # current candidate of every unresolved slot in ONE tile-graph
+            # call, AOI-gates on the SCL band that rode along (no separate SCL
+            # call), and advances any cloudy/empty slot to its next candidate.
+            # Usually round 0 resolves all — the top STAC+ERA5 candidate is
+            # AOI-clean too. Bounded rounds, then per-slot fallback.
+            from imint.training.openeo_tile_graph import fetch_tile_at_specific_dates
+            unresolved = [s for s in missing_slots if slot_cands[s]]
+            MAX_ROUNDS = 3
+            for _round in range(MAX_ROUNDS):
+                try_dates = {
+                    s: slot_cands[s][slot_ptr[s]]
+                    for s in unresolved
+                    if slot_ptr[s] < len(slot_cands[s])
+                }
+                if not try_dates:
+                    break
+                try:
+                    res = fetch_tile_at_specific_dates(
+                        bbox, try_dates, source="cdse-openeo", with_scl=True,
+                    )
+                except Exception as e:
+                    print(f"    [tile-graph:cdse-openeo] round {_round} failed "
+                          f"for {name}: {type(e).__name__}: {str(e)[:160]} — "
+                          f"per-slot fallback", flush=True)
+                    break
+                still: list[int] = []
+                for s in unresolved:
+                    if s not in try_dates:
+                        continue
+                    entry = res.get(s)
+                    if (entry is not None
+                            and entry[1] is not None
+                            and entry[1] <= slot_ceiling[s]
+                            and np.any(entry[0])):
+                        fetched[s] = (_resize_scene(entry[0]), entry[2])
+                    else:
+                        # cloudy / empty / no-data → next candidate
+                        cf = entry[1] if entry else None
+                        print(f"    [cloud-gate] {name} slot {s} "
+                              f"{try_dates[s]}: AOI-moln="
+                              f"{'n/a' if cf is None else f'{cf:.2f}'} "
+                              f"> {slot_ceiling[s]:.2f} → nästa kandidat",
+                              flush=True)
+                        slot_ptr[s] += 1
+                        if slot_ptr[s] < len(slot_cands[s]):
+                            still.append(s)
+                unresolved = still
+                if not unresolved:
+                    break
+            missing_slots = [s for s in missing_slots if s not in fetched]
+
+        elif graph_source == "des":
+            # DES tile-graph can't ride SCL along (include_scl unsupported on
+            # the 1.1 backend). Keep the verify-then-fetch: SCL-verify the top
+            # candidate per slot on DES, then one DES tile-graph spectral call.
             from imint.training.optimal_fetch import verify_aoi_scl
-            # Build {slot_idx: best_date} via LAZY SCL verification: walk the
-            # STAC+ERA5-ranked candidates best-first and SCL-check one date at
-            # a time, stopping at the first AOI-clean one. Pays for SCL only
-            # on the most-promising date(s) per slot — the minimal number of
-            # expensive openEO calls. SCL runs on DES (free pixel path),
-            # keeping CDSE's single connection for the spectral fetch.
+            from imint.training.openeo_tile_graph import fetch_tile_at_specific_dates
             slot_dates_for_graph: dict[int, str] = {}
             for sidx in missing_slots:
-                _, syear, smin, smax = slot_defs[sidx]
-                _ds, _de = doy_to_date_range(syear, smin, smax)
-                is_autumn = (sidx == 0)
-                ranked = ranked_by_window["autumn" if is_autumn else "growing"]
-                # Slot's own sub-window, candidates already best-first.
-                cands = [(d, cc, oc) for d, cc, oc in ranked if _ds <= d <= _de]
-                slot_max_cloud = (
-                    min(max_aoi_cloud * 2, 0.30) if is_autumn else max_aoi_cloud
-                )
-                for d, _cc, _oc in cands:
+                for d in slot_cands[sidx]:
                     try:
                         aoi = verify_aoi_scl(coords, d, backend="des")
                     except Exception:
                         aoi = None
-                    if aoi is not None and aoi <= slot_max_cloud:
+                    if aoi is not None and aoi <= slot_ceiling[sidx]:
                         slot_dates_for_graph[sidx] = d
-                        break  # first AOI-clean candidate — stop (minimal SCL)
+                        break
             if slot_dates_for_graph:
                 try:
-                    from imint.training.openeo_tile_graph import (
-                        fetch_tile_at_specific_dates,
-                    )
                     graph_result = fetch_tile_at_specific_dates(
-                        bbox, slot_dates_for_graph,
-                        source=graph_source,
+                        bbox, slot_dates_for_graph, source="des",
                     )
                     for sidx, (scene, date_str) in graph_result.items():
-                        if scene.shape[1] != tile.size_px or scene.shape[2] != tile.size_px:
-                            padded = np.zeros(
-                                (N_BANDS, tile.size_px, tile.size_px),
-                                dtype=np.float32)
-                            h = min(scene.shape[1], tile.size_px)
-                            w = min(scene.shape[2], tile.size_px)
-                            padded[:, :h, :w] = scene[:, :h, :w]
-                            scene = padded
-                        fetched[sidx] = (scene, date_str)
+                        if np.any(scene):
+                            fetched[sidx] = (_resize_scene(scene), date_str)
                     missing_slots = [s for s in missing_slots if s not in fetched]
                 except Exception as e:
-                    print(f"    [tile-graph:{graph_source}] failed for {name}: "
-                          f"{type(e).__name__}: {str(e)[:200]} — fallback to per-slot",
+                    print(f"    [tile-graph:des] failed for {name}: "
+                          f"{type(e).__name__}: {str(e)[:160]} — per-slot fallback",
                           flush=True)
 
     for slot_idx in missing_slots:

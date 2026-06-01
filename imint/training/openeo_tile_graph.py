@@ -209,6 +209,7 @@ def _build_slot_cube(
     bands_10m: Sequence[str],
     bands_20m: Sequence[str],
     output_bands: Sequence[str],
+    scl_band: str | None = None,
 ):
     """Build ONE slot's sub-cube ready to be merged into the tile graph.
 
@@ -265,21 +266,36 @@ def _build_slot_cube(
     # Merge 10m + 20m groups into one cube (still temporal).
     cube = cube_10m.merge_cubes(cube_20m)
 
+    # Final output band order. When scl_band is set, the SCL band rides
+    # along in the SAME download so the caller can AOI-cloud-gate the
+    # chosen scene without a separate SCL call. SCL is categorical, so it
+    # is resampled NEAREST (not bilinear) and must NOT be divided by 10000
+    # at parse time — the caller handles that split.
+    out_bands = list(output_bands)
+    if scl_band is not None:
+        cube_scl = conn.load_collection(bands=[scl_band], **load_kwargs)
+        cube_scl = cube_scl.resample_cube_spatial(target=cube_10m, method="near")
+        cube = cube.merge_cubes(cube_scl)
+        out_bands = out_bands + [scl_band]
+
     # Reduce time → first available below-cloud-threshold scene in window.
     cube = cube.reduce_dimension(dimension="t", reducer="first")
 
     # Filter down to the output bands we actually want (drops B05/B06/B07
-    # if they're not in PRITHVI_BANDS, etc.).
-    cube = cube.filter_bands(bands=list(output_bands))
+    # if they're not in PRITHVI_BANDS, etc.; keeps SCL when requested).
+    cube = cube.filter_bands(bands=out_bands)
 
     # Tag with per-slot prefix so the multi-slot merge below has unique
-    # band labels. Order matches `output_bands` (filter_bands preserves
-    # the order given).
+    # band labels. Order matches `out_bands` (filter_bands preserves the
+    # order given).
     cube = cube.rename_labels(
         dimension="bands",
-        target=[f"s{slot_idx}_{b}" for b in output_bands],
+        target=[f"s{slot_idx}_{b}" for b in out_bands],
     )
     return cube
+
+
+_SCL_CLOUD_CLASSES = (3, 8, 9, 10)   # shadow, cloud_medium, cloud_high, cirrus
 
 
 def fetch_tile_all_slots_cdse_openeo(
@@ -288,7 +304,8 @@ def fetch_tile_all_slots_cdse_openeo(
     *,
     prithvi_bands: Sequence[str] = PRITHVI_BANDS,
     cloud_max_pct: float = 30.0,
-) -> dict[int, tuple[np.ndarray, str]]:
+    include_scl: bool = False,
+) -> dict:
     """Fetch all requested slots for a tile in ONE openEO call.
 
     Args:
@@ -304,16 +321,19 @@ def fetch_tile_all_slots_cdse_openeo(
             reduce.
 
     Returns:
-        ``{slot_idx: (array, date_str)}`` — one entry per input slot.
-        ``array`` is ``(len(prithvi_bands), H, W)`` ``float32`` in
-        reflectance units (DN / 10000). ``date_str`` is the window
-        midpoint (see module docstring; the true scene date is consumed
-        by the temporal reduce).
+        When ``include_scl=False`` (default): ``{slot_idx: (array,
+        date_str)}`` — ``array`` is ``(len(prithvi_bands), H, W)``
+        ``float32`` reflectance (DN / 10000).
+
+        When ``include_scl=True``: ``{slot_idx: (array, aoi_cloud_frac,
+        date_str)}`` — the SCL band rides along in the SAME download and
+        ``aoi_cloud_frac`` is the fraction of AOI pixels in cloud/shadow
+        classes (3/8/9/10). Lets the caller AOI-gate the chosen scene
+        without a separate SCL call.
 
     Raises:
         FetchError: If the openEO download returns empty bytes or the
-            parsed band count does not match the expected
-            ``n_slots × len(prithvi_bands)``.
+            parsed band count does not match the expected per-slot total.
     """
     # Local import — keep openeo dependency optional for the rest of the
     # repo and avoid importing it during ``imint.training`` package
@@ -336,6 +356,7 @@ def fetch_tile_all_slots_cdse_openeo(
         )
 
     conn = _connect_cdse()
+    scl_band = "SCL" if include_scl else None
 
     # Build one sub-cube per slot, then merge into a single download.
     sub_cubes = []
@@ -351,6 +372,7 @@ def fetch_tile_all_slots_cdse_openeo(
             bands_10m=_CDSE_BANDS_10M,
             bands_20m=_CDSE_BANDS_20M,
             output_bands=prithvi_bands,
+            scl_band=scl_band,
         ))
 
     merged = sub_cubes[0]
@@ -378,24 +400,39 @@ def fetch_tile_all_slots_cdse_openeo(
     with rasterio.open(io.BytesIO(raw_bytes)) as src:
         full = src.read()  # (n_slots * n_bands, H, W)
 
-    n_bands = len(prithvi_bands)
-    expected_bands = len(slot_windows) * n_bands
+    n_spec = len(prithvi_bands)
+    per_slot = n_spec + (1 if include_scl else 0)   # +1 for the SCL band
+    expected_bands = len(slot_windows) * per_slot
     if full.shape[0] != expected_bands:
         raise FetchError(
             f"CDSE tile-graph: expected {expected_bands} bands "
-            f"({len(slot_windows)} slots × {n_bands} bands), got {full.shape[0]}. "
+            f"({len(slot_windows)} slots × {per_slot} bands"
+            f"{' incl SCL' if include_scl else ''}), got {full.shape[0]}. "
             f"Likely a band-ordering mismatch in merge_cubes; investigate."
         )
 
-    result: dict[int, tuple[np.ndarray, str]] = {}
+    result: dict = {}
     for i, (slot_idx, date_start, date_end) in enumerate(slot_windows):
-        slot_arr = full[i * n_bands:(i + 1) * n_bands].astype(np.float32) / 10000.0
-        # All-zeros guard — degenerate server response. Caller already
-        # has the same guard in repair_to_canonical_layout but flagging
-        # here lets us skip writing the slot at all.
+        base = i * per_slot
+        # Spectral bands → reflectance (DN / 10000). SCL (if present) is
+        # the LAST band of the slot and is categorical — NOT scaled.
+        slot_arr = full[base:base + n_spec].astype(np.float32) / 10000.0
         if not np.any(slot_arr):
             continue
-        result[slot_idx] = (slot_arr, _window_midpoint(date_start, date_end))
+        date_str = _window_midpoint(date_start, date_end)
+        if include_scl:
+            scl = full[base + n_spec]            # raw SCL class codes
+            scl_int = np.rint(scl).astype(np.int16)
+            valid = scl_int > 0                  # 0 = no_data, exclude from frac
+            n_valid = int(valid.sum())
+            if n_valid == 0:
+                aoi_cloud_frac = 1.0             # all nodata → treat as unusable
+            else:
+                cloud = np.isin(scl_int, _SCL_CLOUD_CLASSES) & valid
+                aoi_cloud_frac = float(cloud.sum()) / float(n_valid)
+            result[slot_idx] = (slot_arr, aoi_cloud_frac, date_str)
+        else:
+            result[slot_idx] = (slot_arr, date_str)
 
     return result
 
@@ -495,7 +532,8 @@ def fetch_tile_all_slots(
     source: str = "cdse-openeo",
     prithvi_bands: Sequence[str] = PRITHVI_BANDS,
     cloud_max_pct: float | None = 30.0,
-) -> dict[int, tuple[np.ndarray, str]]:
+    include_scl: bool = False,
+) -> dict:
     """Dispatch :func:`fetch_tile_all_slots_*` by source.
 
     Args:
@@ -514,8 +552,13 @@ def fetch_tile_all_slots(
             bbox_3006, slot_windows,
             prithvi_bands=prithvi_bands,
             cloud_max_pct=cloud_max_pct,
+            include_scl=include_scl,
         )
     if source == "des":
+        if include_scl:
+            raise ValueError(
+                "include_scl is only supported for source='cdse-openeo'"
+            )
         return fetch_tile_all_slots_des_openeo(
             bbox_3006, slot_windows,
             prithvi_bands=prithvi_bands,
@@ -530,7 +573,8 @@ def fetch_tile_at_specific_dates(
     *,
     source: str = "des",
     prithvi_bands: Sequence[str] = PRITHVI_BANDS,
-) -> dict[int, tuple[np.ndarray, str]]:
+    with_scl: bool = False,
+) -> dict:
     """Tile-graph variant where the caller has already chosen one date per slot.
 
     This is the **architecturally correct** entry point for the refetch
@@ -588,14 +632,24 @@ def fetch_tile_at_specific_dates(
     # count, so the server-side ``eo:cloud_cover`` lambda would only
     # confuse the picture (it could exclude a date the caller deemed
     # acceptable).
+    #
+    # with_scl=True (cdse-openeo only): the SCL band rides along in the
+    # same download so the caller can AOI-gate the fetched scene without
+    # a separate SCL call. Returns {slot: (spectral, aoi_cloud_frac, date)}.
     result = fetch_tile_all_slots(
         bbox_3006, slot_windows,
         source=source,
         prithvi_bands=prithvi_bands,
         cloud_max_pct=None,
+        include_scl=with_scl,
     )
     # Replace the per-slot date approximation with the caller's exact
     # date — we trust the input over the window midpoint.
+    if with_scl:
+        return {
+            slot_idx: (arr, frac, slot_dates[slot_idx])
+            for slot_idx, (arr, frac, _) in result.items()
+        }
     return {
         slot_idx: (arr, slot_dates[slot_idx])
         for slot_idx, (arr, _) in result.items()
