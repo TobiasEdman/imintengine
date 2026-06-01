@@ -590,6 +590,84 @@ def scl_stack_screen(
     return out
 
 
+# ── Lazy STAC(DES) → ERA5 → SCL date selection ─────────────────────────────
+
+
+def rank_stac_era5_candidates(
+    coords_wgs84: dict,
+    date_start: str,
+    date_end: str,
+    *,
+    scene_cloud_max: float = 80.0,
+    overpass_cloud_max: float | None = 50.0,
+    atmosphere_rules: dict | None = None,
+) -> list[tuple[str, float, float]]:
+    """Cheap pre-rank of real S2 passes — no openEO SCL call.
+
+    Combines the two FREE signals to rank candidate dates before spending
+    any expensive openEO SCL verification:
+
+      * DES STAC (`imint.fetch._stac_available_dates`, ``s2_msi_l2a``) —
+        the real Sentinel-2 acquisition dates over the AOI + their granule
+        ``eo:cloud_cover``. Grounds us in actual passes (no synthetic
+        cadence) and is a single anonymous HTTP call.
+      * ERA5 overpass-time cloud (Open-Meteo, `_era5_daily_open_meteo`) —
+        AOI-area ~30 km cloud at the 10-11 h S2 pass. Another free call.
+
+    Dates whose ERA5 overpass cloud exceeds ``overpass_cloud_max`` are
+    dropped (obviously overcast). Survivors are ranked ascending by
+    (overpass cloud, granule cloud) so the caller can lazily SCL-verify
+    best-first and stop at the first AOI-clean date — the minimum number
+    of expensive SCL calls.
+
+    Returns:
+        ``[(date, granule_cc, overpass_cloud)]`` best-first. ``overpass``
+        is ``-1.0`` when Open-Meteo had no value (kept, ranked last).
+    """
+    from imint.fetch import _stac_available_dates
+
+    stac = _stac_available_dates(
+        coords_wgs84, date_start, date_end, scene_cloud_max=scene_cloud_max,
+    )  # [(date, granule_cc)] sorted by cc
+
+    daily = _era5_daily_open_meteo(coords_wgs84, date_start, date_end)
+    overpass = {w["date"]: w.get("overpass_cloud_pct") for w in daily}
+
+    out: list[tuple[str, float, float]] = []
+    for d, cc in stac:
+        oc = overpass.get(d)
+        if (overpass_cloud_max is not None and oc is not None
+                and oc > overpass_cloud_max):
+            continue  # ERA5 says overcast at overpass time → skip
+        out.append((d, float(cc), float(oc) if oc is not None else -1.0))
+
+    # Rank: overpass cloud first (our pipeline's gate signal), then granule.
+    # Unknown overpass (-1.0) sinks to the bottom via the 999 sentinel.
+    out.sort(key=lambda t: (t[2] if t[2] >= 0 else 999.0, t[1]))
+    return out
+
+
+def verify_aoi_scl(
+    coords_wgs84: dict,
+    date_str: str,
+    *,
+    backend: str = "des",
+) -> float | None:
+    """AOI cloud fraction for ONE date via the openEO SCL pixel path.
+
+    The expensive-but-precise step, called lazily by the caller on the
+    best STAC+ERA5 candidate. Reuses :func:`scl_stack_screen` with a
+    single-day window (its pixel `_scl_chunk` path — NOT the buggy
+    DES `aggregate_spatial`). ``backend="des"`` keeps CDSE's single
+    connection free for the downstream spectral fetch.
+
+    Returns the AOI cloud fraction (0-1) or ``None`` when the backend
+    has no scene for that date (``NoDataAvailable``).
+    """
+    fr = scl_stack_screen(coords_wgs84, date_str, date_str, backend=backend)
+    return fr.get(date_str)
+
+
 # ── STAC granule pre-filter (used by stac_* modes) ─────────────────────────
 
 def stac_filter_dates(
