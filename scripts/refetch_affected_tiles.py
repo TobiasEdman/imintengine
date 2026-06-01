@@ -95,6 +95,11 @@ def main():
     p.add_argument("--max-aoi-cloud", type=float, default=0.10,
                    help="SCL AOI cloud threshold (0.10 = 10%%, per Lund-benchmark M4 "
                         "ERA5->SCL — lowest mean COT 0.0086)")
+    p.add_argument("--reject-above-cloud-frac", type=float, default=0.50,
+                   help="Hard cloud gate (season-first tile-graph path): a slot "
+                        "whose best available date exceeds this AOI cloud fraction "
+                        "is left unfilled rather than written with cloud. 0.50 = "
+                        "reject scenes >50%% cloudy over the tile.")
     p.add_argument("--sources", default="des,cdse",
                    help="Comma-separated fetch backends in priority order")
     p.add_argument("--max-tiles", type=int, default=None,
@@ -158,6 +163,7 @@ def main():
                 loc, args.output_dir, tile,
                 cloud_max=args.cloud_max,
                 max_aoi_cloud=args.max_aoi_cloud,
+                reject_above_cloud_frac=args.reject_above_cloud_frac,
                 sources=sources,
                 cap_doy=args.cap_doy,
             )
