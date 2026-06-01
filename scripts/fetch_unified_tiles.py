@@ -810,122 +810,45 @@ def repair_to_canonical_layout(
         tile_year - 1, slot_defs[0][2], slot_defs[0][3],
     )
 
-    # SCL prefetch. Two paths:
+    # SCL prefetch — SHARED by both spectral paths (CDSE tile-graph and
+    # per-slot DES race). ERA5 forecast trims the candidate dates first
+    # (cheap, no openEO), then a pixel-level SCL stack screens only those
+    # few dates and DROPS anything above the AOI cloud threshold.
     #
-    # 1. IMINT_USE_TILE_GRAPH=1 → SEASON-FIRST aggregate_spatial.
-    #    ONE openEO call over the FULL span [autumn-y-1 start, growing-y
-    #    end] returns a small JSON {date: aoi_cloud_frac} for every S2
-    #    pass in the season. Winter dates (Nov y-1 .. Mar y) fall in no
-    #    slot window and are simply ignored at assignment time. From the
-    #    complete cloud timeline we then (a) sort each slot's candidates
-    #    by cloud-frac and (b) apply a hard quality gate: dates above
-    #    `reject_above_cloud_frac` are dropped, so a slot with no clean
-    #    scene is left for the per-slot fallback rather than filled with
-    #    cloud. Pattern proven on CDSE in batch_fetch_openeo.screen_tile_scl.
+    # This replaces the season-wide aggregate_spatial experiment (git
+    # history): that screened all ~150 season dates in one call and timed
+    # out >300 s on CDSE even contention-free — too slow as a per-tile
+    # primitive. ERA5-then-SCL screens only the ~10-20 ERA5-clear dates,
+    # so it's fast, and the threshold-drop means every returned date is
+    # already cloud-clean (dates[0] per slot is a safe pick for the
+    # tile-graph — no separate quality gate needed; `reject_above_cloud_
+    # frac` is retained on the signature but unused by this path).
     #
-    # 2. Default → optimal_fetch_dates(mode="era5_then_scl"):
-    #    ERA5 forecast prefilter + pixel-level SCL stack + threshold-drop.
-    #    The legacy path used by the per-slot race-pool fetcher below.
-    if os.environ.get("IMINT_USE_TILE_GRAPH") == "1":
-        from imint.training.openeo_tile_graph import (
-            score_dates_aoi_cloud, is_source_dead,
-        )
-        # Pick SCL backend matching the configured spectral source so
-        # we don't open both connections per tile. Skip CDSE openEO if
-        # it's been marked dead this session (402 PaymentRequired).
-        _scl_source = (
-            "cdse-openeo" if (
-                "cdse-openeo" in sources
-                and not is_source_dead("cdse-openeo")
-            ) else
-            "des"
-        )
-
-        # ONE season-wide SCL screen. season_fracs maps date → AOI cloud
-        # fraction; None means the aggregate failed and we fell back to
-        # per-window ranked dates (no measured frac → gate not applied).
-        season_fracs: dict[str, float] | None = None
-        season_start = au_ds if needs_autumn else gs_ds
-        season_end = gs_de  # growing-y end is always the latest bound
+    # Tile-graph mode (IMINT_USE_TILE_GRAPH=1) and legacy mode use the
+    # SAME screening here — they differ only in the spectral fetch below
+    # (CDSE tile-graph vs per-slot DES race). scl_backend="des" keeps
+    # CDSE's single connection free for the spectral tile-graph.
+    if needs_growing:
         try:
-            season_fracs = score_dates_aoi_cloud(
-                bbox, season_start, season_end, source=_scl_source,
-            )
-        except Exception as exc:
-            print(f"    [season-scl] aggregate failed for {name} "
-                  f"({season_start}→{season_end}): {type(exc).__name__}: "
-                  f"{str(exc)[:160]} — per-window optimal_fetch_dates fallback",
-                  flush=True)
-            # Fallback: per-window ranked dates, NO gate (frac unmeasured).
-            if needs_growing:
-                try:
-                    growing_dates = list(optimal_fetch_dates(
-                        coords, gs_ds, gs_de, mode="era5_then_scl_ranked",
-                        max_aoi_cloud=max_aoi_cloud, scl_backend="des",
-                    ).dates)
-                except Exception:
-                    growing_dates = []
-            if needs_autumn:
-                try:
-                    autumn_dates = list(optimal_fetch_dates(
-                        coords, au_ds, au_de, mode="era5_then_scl_ranked",
-                        max_aoi_cloud=max_aoi_cloud, scl_backend="des",
-                    ).dates)
-                except Exception:
-                    autumn_dates = []
-
-        if season_fracs is not None:
-            # Derive per-window date lists, sorted by cloud-frac ascending,
-            # WITH the hard gate applied — only dates at-or-under the
-            # reject threshold survive. Both the tile-graph assignment and
-            # the per-slot fallback read these lists, so the gate protects
-            # both paths uniformly. A slot whose window has no sub-threshold
-            # date ends up with an empty list → no clean scene → fails
-            # rather than writing cloud.
-            autumn_dates = sorted(
-                (d for d in season_fracs
-                 if au_ds <= d <= au_de
-                 and season_fracs[d] <= reject_above_cloud_frac),
-                key=lambda d: season_fracs[d],
-            )
-            growing_dates = sorted(
-                (d for d in season_fracs
-                 if gs_ds <= d <= gs_de
-                 and season_fracs[d] <= reject_above_cloud_frac),
-                key=lambda d: season_fracs[d],
-            )
-            n_gated = sum(
-                1 for d in season_fracs
-                if season_fracs[d] > reject_above_cloud_frac
-            )
-            print(f"    [season-scl:{_scl_source}] {name}: "
-                  f"{len(season_fracs)} dates, "
-                  f"{len(autumn_dates)} autumn + {len(growing_dates)} growing "
-                  f"under gate {reject_above_cloud_frac:.2f} "
-                  f"({n_gated} too cloudy)", flush=True)
-    else:
-        # Legacy path: ERA5 + pixel-level SCL stack + threshold-drop.
-        if needs_growing:
-            try:
-                plan = optimal_fetch_dates(
-                    coords, gs_ds, gs_de,
-                    mode="era5_then_scl", max_aoi_cloud=max_aoi_cloud,
-                    scl_backend="des",
-                )
-                growing_dates = plan.dates
-            except Exception:
-                growing_dates = []
-        if needs_autumn:
-            autumn_max_cloud = min(max_aoi_cloud * 2, 0.30)
-            try:
-                plan = optimal_fetch_dates(
-                    coords, au_ds, au_de,
-                    mode="era5_then_scl", max_aoi_cloud=autumn_max_cloud,
-                    scl_backend="des",
-                )
-                autumn_dates = plan.dates
-            except Exception:
-                autumn_dates = []
+            growing_dates = list(optimal_fetch_dates(
+                coords, gs_ds, gs_de,
+                mode="era5_then_scl", max_aoi_cloud=max_aoi_cloud,
+                scl_backend="des",
+            ).dates)
+        except Exception:
+            growing_dates = []
+    if needs_autumn:
+        # Autumn (slot 0) is inherently cloudier at high latitude — use a
+        # looser ceiling so the slot isn't perpetually empty.
+        autumn_max_cloud = min(max_aoi_cloud * 2, 0.30)
+        try:
+            autumn_dates = list(optimal_fetch_dates(
+                coords, au_ds, au_de,
+                mode="era5_then_scl", max_aoi_cloud=autumn_max_cloud,
+                scl_backend="des",
+            ).dates)
+        except Exception:
+            autumn_dates = []
 
     # Fetch each missing slot
     fetched: dict[int, tuple[np.ndarray, str]] = {}
