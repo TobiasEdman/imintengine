@@ -69,6 +69,12 @@ DEFAULT_ATMOSPHERE_RULES = {
     "precip_today_max_mm":  0.5,
     "precip_prev2d_max_mm": 3.0,
     "t2m_mean_min_c":       10.0,
+    # Overpass-time (10-11 local) ERA5 cloud ceiling, percent. Permissive
+    # by design — this is a CHEAP prefilter to drop the obviously-overcast
+    # dates; the precise cut is the downstream AOI-SCL screen
+    # (max_aoi_cloud). Dates where Open-Meteo returns no cloud value are
+    # NOT rejected on this rule (fall back to the precip proxy).
+    "overpass_cloud_max_pct": 50.0,
 }
 
 DEFAULT_SCL_CLOUD_THRESHOLD = 0.10   # production AOI-SCL default
@@ -141,11 +147,27 @@ def _write_json_cache(path: Path, payload: Any) -> None:
         raise
 
 
+# Sentinel-2 descending-node overpass over Sweden is ~10:30 mean local
+# solar time. We average ERA5 cloud cover at the 10:00 + 11:00 local hours
+# as the overpass-time cloud signal — far more relevant for satellite
+# screening than a daily mean (a date can be clear in the afternoon,
+# dragging the daily mean down, yet overcast at 10:30 when S2 passes).
+_S2_OVERPASS_HOURS = (10, 11)
+
+
 def _request_era5_daily(
     lat: float, lon: float, date_start: str, date_end: str,
 ) -> list[dict]:
-    """One Open-Meteo archive request → list of daily weather dicts."""
+    """One Open-Meteo archive request → list of daily weather dicts.
+
+    Pulls daily temperature + precipitation AND hourly cloud_cover; the
+    hourly cloud is collapsed to a per-date overpass-time mean (10:00 +
+    11:00 local, ~S2 descending-node pass). ``overpass_cloud_pct`` is
+    ``None`` for dates where Open-Meteo returns no cloud data (gaps /
+    very old archive) so callers can fall back to the precip proxy.
+    """
     import requests
+    from collections import defaultdict
 
     r = requests.get(
         "https://archive-api.open-meteo.com/v1/archive",
@@ -155,19 +177,47 @@ def _request_era5_daily(
             "start_date": date_start,
             "end_date":   date_end,
             "daily":      "temperature_2m_mean,precipitation_sum",
+            "hourly":     "cloud_cover",
             "timezone":   "Europe/Stockholm",
         },
         timeout=60,
     )
     r.raise_for_status()
-    daily = r.json()["daily"]
+    payload = r.json()
+
+    # Collapse hourly cloud_cover → per-date overpass-time mean.
+    overpass_cloud: dict[str, float] = {}
+    hourly = payload.get("hourly") or {}
+    times = hourly.get("time") or []
+    clouds = hourly.get("cloud_cover") or []
+    buckets: dict[str, list[float]] = defaultdict(list)
+    for ts, c in zip(times, clouds):
+        if c is None:
+            continue
+        # ts is "YYYY-MM-DDTHH:MM" in the requested timezone.
+        try:
+            hour = int(ts[11:13])
+        except (ValueError, IndexError):
+            continue
+        if hour in _S2_OVERPASS_HOURS:
+            buckets[ts[:10]].append(float(c))
+    for d, vals in buckets.items():
+        if vals:
+            overpass_cloud[d] = sum(vals) / len(vals)
+
+    daily = payload["daily"]
     out: list[dict] = []
     for d, t, p in zip(
         daily["time"], daily["temperature_2m_mean"], daily["precipitation_sum"]
     ):
         if t is None or p is None:
             continue
-        out.append({"date": d, "t2m_mean": float(t), "precip_mm": float(p)})
+        out.append({
+            "date": d,
+            "t2m_mean": float(t),
+            "precip_mm": float(p),
+            "overpass_cloud_pct": overpass_cloud.get(d),
+        })
     return out
 
 
@@ -189,8 +239,10 @@ def _era5_daily_open_meteo(
     lat = round(cy / _ERA5_GRID_DEG) * _ERA5_GRID_DEG
     lon = round(cx / _ERA5_GRID_DEG) * _ERA5_GRID_DEG
 
+    # Cache key carries a schema version (v2 = adds overpass_cloud_pct).
+    # Old v1 caches (precip+temp only) are simply ignored, not migrated.
     cache_path = _ERA5_CACHE_DIR / (
-        f"era5_{lat:+07.2f}_{lon:+07.2f}_{date_start}_{date_end}.json"
+        f"era5v2_{lat:+07.2f}_{lon:+07.2f}_{date_start}_{date_end}.json"
     )
     cached = _read_json_cache(cache_path)
     if cached is not None:
@@ -219,6 +271,7 @@ def era5_prefilter_dates(
     daily = _era5_daily_open_meteo(bbox_wgs84, date_start, date_end)
     by_date = {w["date"]: w for w in daily}
 
+    cloud_ceiling = rules.get("overpass_cloud_max_pct")
     keep: list[str] = []
     for w in daily:
         d = date.fromisoformat(w["date"])
@@ -227,10 +280,21 @@ def era5_prefilter_dates(
             p = by_date.get((d - timedelta(days=off)).isoformat())
             if p is not None:
                 prev_sum += p["precip_mm"]
+        # Overpass-time cloud gate — only when both a ceiling is configured
+        # AND Open-Meteo returned a cloud value for this date. Missing
+        # cloud → don't reject here; the precip proxy + downstream SCL
+        # screen still apply.
+        cloud = w.get("overpass_cloud_pct")
+        cloud_ok = (
+            cloud_ceiling is None
+            or cloud is None
+            or cloud <= cloud_ceiling
+        )
         if (
             w["precip_mm"] <= rules["precip_today_max_mm"]
             and prev_sum     <= rules["precip_prev2d_max_mm"]
             and w["t2m_mean"] >= rules["t2m_mean_min_c"]
+            and cloud_ok
         ):
             keep.append(w["date"])
     return keep
