@@ -664,7 +664,12 @@ def verify_aoi_scl(
     Returns the AOI cloud fraction (0-1) or ``None`` when the backend
     has no scene for that date (``NoDataAvailable``).
     """
-    fr = scl_stack_screen(coords_wgs84, date_str, date_str, backend=backend)
+    # openEO temporal_extent is half-open [start, end): a [date, date]
+    # window is zero-width and returns no scene. Query [date, date+1) so
+    # the single acquisition on `date` is captured.
+    from datetime import date as _date, timedelta
+    end = (_date.fromisoformat(date_str) + timedelta(days=1)).isoformat()
+    fr = scl_stack_screen(coords_wgs84, date_str, end, backend=backend)
     return fr.get(date_str)
 
 
@@ -800,24 +805,6 @@ def optimal_fetch_dates(
             set(era5_dates or [])
             & {d for d, f in (scl_fracs or {}).items() if f <= max_aoi_cloud}
         )
-    elif mode == "era5_then_scl_ranked":
-        # Like "era5_then_scl" but ranks survivors by AOI cloud fraction
-        # ascending instead of dropping anything above max_aoi_cloud.
-        # max_aoi_cloud is interpreted as a soft "preferred ceiling": all
-        # candidates are returned, but the caller picking ``dates[0]``
-        # always gets the lowest-cloud option in the window.
-        #
-        # Use when the caller wants the BEST available date even if no
-        # date is fully clear (autumn windows in Sweden routinely have
-        # zero <10%-cloud dates) — picking dates[0] from this ranked list
-        # always yields the cleanest available, rather than returning
-        # empty as ``era5_then_scl`` would.
-        candidates = set(era5_dates or []) & set((scl_fracs or {}).keys())
-        keep = sorted(
-            candidates,
-            key=lambda d: (scl_fracs or {}).get(d, 1.0),
-        )
-        plan.notes["mode_variant"] = "ranked_no_threshold"
     elif mode == "era5_then_stac":
         keep = sorted(set(era5_dates or []) & (stac_dates or set()))
     else:

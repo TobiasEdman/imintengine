@@ -644,7 +644,6 @@ def repair_to_canonical_layout(
     *,
     cloud_max: float = 30.0,
     max_aoi_cloud: float = 0.10,
-    reject_above_cloud_frac: float = 0.50,
     sources: tuple[str, ...] = ("cdse", "des"),
     cap_doy: int = 244,
 ) -> dict:
