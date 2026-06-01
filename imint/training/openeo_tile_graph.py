@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import io
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
@@ -121,6 +122,35 @@ def _is_payment_required_error(exc: BaseException) -> bool:
         or "insufficient credit" in msg.lower()
         or "insufficient credits" in msg.lower()
     )
+
+
+@contextmanager
+def _cdse_single_flight(source: str):
+    """Serialise CDSE openEO calls through the shared single-flight semaphore.
+
+    CDSE openEO enforces a 1-concurrent-connection-per-account limit. With
+    multiple refetch workers each firing a season-SCL aggregate AND a
+    tile-graph spectral download, concurrent calls collide and the backend
+    returns ``[429] Too Many Requests`` (observed 2026-06-01). Routing every
+    CDSE call through ``_CDSE_OPENEO_SEMAPHORE`` (max_permits=1) turns that
+    contention into an orderly queue — one CDSE call at a time, no 429 — so
+    the CDSE arm of the source race contributes clean tiles steadily while
+    DES handles the other workers in parallel.
+
+    No-op for non-CDSE sources (DES has its own semaphore in the per-slot
+    fetcher). The semaphore is imported lazily because
+    ``imint.training.tile_fetch`` imports the credit-guard helpers from
+    THIS module — a top-level import here would be circular.
+    """
+    if source != "cdse-openeo":
+        yield
+        return
+    from imint.training.tile_fetch import _CDSE_OPENEO_SEMAPHORE
+    _CDSE_OPENEO_SEMAPHORE.acquire()
+    try:
+        yield
+    finally:
+        _CDSE_OPENEO_SEMAPHORE.release()
 
 
 # Band layout matches PRITHVI_BANDS in tile_fetch.py and CDSE_BANDS_*
@@ -331,7 +361,8 @@ def fetch_tile_all_slots_cdse_openeo(
           f"{len(prithvi_bands)} bands = {len(slot_windows)*len(prithvi_bands)} bands",
           flush=True)
     try:
-        raw_bytes = merged.download(format="gtiff")
+        with _cdse_single_flight("cdse-openeo"):
+            raw_bytes = merged.download(format="gtiff")
     except Exception as exc:
         if _is_payment_required_error(exc):
             mark_source_dead("cdse-openeo", f"402 during tile-graph: {str(exc)[:160]}")
@@ -598,7 +629,8 @@ def score_dates_aoi_cloud(
     print(f"    [{source}:aoi-cloud-aggregate] window={date_start}→{date_end}",
           flush=True)
     try:
-        ts_json = cloud_frac_ts.execute()
+        with _cdse_single_flight(source):
+            ts_json = cloud_frac_ts.execute()
     except Exception as exc:
         if source == "cdse-openeo" and _is_payment_required_error(exc):
             mark_source_dead("cdse-openeo",
