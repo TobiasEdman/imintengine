@@ -850,6 +850,38 @@
                 </div>
             </div>
 
+            <h3>Uppdatering (juni 2026): ERA5-steget använder nu overpass-tids molntäcke</h3>
+            <p>
+                Mätningarna ovan kördes med ERA5-steget som <strong>nederbörds-proxy</strong>:
+                en dag passerade om <code>precip ≤ 0,5 mm idag</code>, <code>precip ≤ 3 mm
+                föregående 2 dygn</code> och <code>T2m ≥ 10 °C</code>. Problemet: en
+                <em>torr mulen</em> dag (0 mm regn, 100 % molntäcke) släpps igenom — regn
+                är en dålig moln-proxy. Vi upptäckte det skarpt: SCL-screenen valde
+                2018-07-22 för en tile, men Open-Meteo visar den dagen på
+                <strong>89–100 % molntäcke under Sentinel-2:s passage (10–11 lokal tid)</strong>
+                medan den genuint klara 2018-07-24 (23,5 %) låg oanvänd.
+            </p>
+            <p>
+                ERA5-prefiltret frågar nu Open-Meteo-arkivet efter <code>cloud_cover</code>
+                och kollapsar timdatat till ett <strong>overpass-tids-medel (10:00 + 11:00
+                lokal tid)</strong> — rätt signal för satellit-screening, eftersom Sentinel-2
+                passerar Sverige ~10:30 och en dag kan vara klar på eftermiddagen men mulen
+                vid passage. En dag förkastas om overpass-molnet överstiger
+                <code>overpass_cloud_max_pct = 50 %</code> (medvetet tillåtande — ett billigt
+                prefilter som tar bort de uppenbart mulna dagarna; den exakta AOI-skärningen
+                är fortfarande den nedströms SCL-screenen). Saknar Open-Meteo molnvärde för
+                ett datum faller filtret tillbaka på nederbörds-proxyn — aldrig
+                över-förkastning på frånvarande data.
+            </p>
+            <p class="tab-note">
+                <strong>M4-siffrorna i tabellen ovan föregår denna ändring.</strong> Eftersom
+                overpass-molnfiltret tar bort molniga datum som nederbörds-proxyn missade
+                förväntas verklig M4 nu ge <em>lägre</em> mean COT till samma API-budget. En
+                kontrollerad A/B-ombenchmark (nederbörds-proxy vs overpass-moln) är köad och
+                kör efter den pågående refetch-körningen — figurerna uppdateras då med den
+                nya datapunkten på Pareto-fronten.
+            </p>
+
             <h3>Per-scen exempel — frame-galleri</h3>
             <p>
                 Varje frame: vänster RGB (B04/B03/B02), höger COT-värmekarta över

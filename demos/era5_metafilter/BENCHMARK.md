@@ -2,6 +2,21 @@
 
 **Imint Showcase · DES openEO · 6 workers · 2026-05-04**
 
+> **Uppdatering 2026-06-01 — ERA5-steget använder nu overpass-tids molntäcke.**
+> Mätningarna nedan kördes med ERA5-väderregeln som ren nederbörds-proxy
+> (`precip ≤ 0.5 mm idag`, `precip ≤ 3 mm föregående 2 dygn`, `T2m ≥ 10 °C`).
+> En torr mulen dag (0 mm regn, 100 % moln) släpptes igenom. ERA5-prefiltret
+> frågar nu även Open-Meteo efter `cloud_cover` och kollapsar timdatat till ett
+> overpass-tids-medel (10:00 + 11:00 lokal tid, ~S2-passage 10:30); dagar över
+> `overpass_cloud_max_pct = 50 %` förkastas (saknat molnvärde → fall tillbaka
+> på nederbörds-proxyn). Live-bevis: `era5_prefilter_dates` över 2018-07-20..26
+> behåller nu bara 2018-07-24 (23.5 % overpass-moln) och förkastar
+> 07-21/22/23/25/26 (79–99 %). Den gamla regeln hade behållit 07-22 (89.5 %).
+> Implementation: `imint/training/optimal_fetch.py` (commit e338188). En
+> kontrollerad A/B-ombenchmark (nederbörds-proxy vs overpass-moln) är köad och
+> kör efter den pågående refetch-körningen — `strategies_metrics.json` +
+> figurerna uppdateras då.
+
 Detta är showcase-mätningen som visar vad metafilter-mönstret gör för Imints
 fetch-pipeline. Tre delmängder hämtas live från DES openEO och utvärderas med
 **riktig Cloud Optical Thickness** från `imint/analyzers/cot.py`
