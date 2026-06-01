@@ -219,8 +219,13 @@ def _build_slot_cube(
         temporal_extent=[date_start, date_end],
     )
     if cloud_max_pct is not None:
+        # CDSE openEO 1.2 property filtering only supports
+        # eq / lte / gte / array_contains — NOT 'lt' ([400]
+        # PropertyConditionInvalid observed 2026-06-01). Use <= so the
+        # generated condition is 'lte'. The 1-percentage-point inclusivity
+        # difference vs '<' is immaterial for a cloud-cover ceiling.
         load_kwargs["properties"] = {
-            "eo:cloud_cover": lambda v: v < cloud_max_pct,
+            "eo:cloud_cover": lambda v: v <= cloud_max_pct,
         }
 
     cube_10m = conn.load_collection(bands=list(bands_10m), **load_kwargs)
@@ -470,10 +475,14 @@ def fetch_tile_all_slots(
             not, so callers using DES should pass ``None``.
     """
     if source == "cdse-openeo":
+        # Preserve None — the specific-dates path passes cloud_max_pct=None
+        # because the date was already vetted by the season-SCL gate, so
+        # the per-scene properties filter is redundant. `or 30.0` would
+        # wrongly coerce None → 30.0 and re-apply the (now lte) filter.
         return fetch_tile_all_slots_cdse_openeo(
             bbox_3006, slot_windows,
             prithvi_bands=prithvi_bands,
-            cloud_max_pct=cloud_max_pct or 30.0,
+            cloud_max_pct=cloud_max_pct,
         )
     if source == "des":
         return fetch_tile_all_slots_des_openeo(
