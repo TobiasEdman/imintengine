@@ -72,7 +72,13 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 300
+      # 2026-06-01: bumped 300 → 1200. The first fire (29671201) died
+      # DeadlineExceeded at 5 min — bitnami/kubectl image-pull on a cold
+      # node + pending-scheduling ate the deadline before kubectl ran.
+      # DeadlineExceeded is terminal (ignores backoffLimit), so a tight
+      # deadline silently no-ops the whole monthly restart. 20 min gives
+      # ample room for image pull + schedule + the trivial kubectl work.
+      activeDeadlineSeconds: 1200
       template:
         metadata:
           labels:
@@ -95,6 +101,7 @@ spec:
               # only runs kubectl-get + kubectl-delete; minor-version
               # drift doesn't affect those APIs.
               image: bitnami/kubectl:1.29
+              imagePullPolicy: IfNotPresent
               command:
                 - sh
                 - -c
