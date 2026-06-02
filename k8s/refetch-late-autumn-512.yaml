@@ -124,12 +124,26 @@ spec:
             #   known geopandas-dtype bug in DES openEO worker.
             - name: IMINT_USE_TILE_GRAPH
               value: "1"
+            # 2026-06-02: service account sh-e…920e is dead (token endpoint
+            # returns 401 invalid_client — secret rotated/revoked on CDSE
+            # side). _connect_cdse() now tries client_credentials first and
+            # falls through to the account password flow (cdse-public) on
+            # failure. client_id/secret kept so fix #1 (regenerate the
+            # service account) is a pure value-update of these two keys.
             - name: CDSE_CLIENT_ID
               valueFrom:
                 secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}
             - name: CDSE_CLIENT_SECRET
               valueFrom:
                 secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}
+            # CDSE account login (resource-owner password) — active auth path
+            # until the service account is restored.
+            - name: CDSE_USER
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: user, optional: true}
+            - name: CDSE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: password, optional: true}
             # DES creds needed by optimal_fetch_dates -> SCL stack fetch
             - name: DES_USER
               valueFrom:

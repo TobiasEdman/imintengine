@@ -630,19 +630,29 @@ def _connect(token: str | None = None, token_path: str | None = None):
 
 # ── CDSE connection ──────────────────────────────────────────────────────────
 
+_CDSE_CC_FALLBACK_WARNED = False  # warn once per process when client_creds 401s
+
+
 def _connect_cdse():
     """Connect and authenticate to CDSE (Copernicus Data Space Ecosystem).
 
-    Authentication priority:
-        1. CDSE_CLIENT_ID + CDSE_CLIENT_SECRET env vars → client_credentials
-        2. .cdse_credentials file (email + password, one per line)
-        3. Fallback: authenticate_oidc() (interactive browser login)
+    Methods are attempted in priority order, falling through on failure so
+    a broken service-account secret degrades gracefully to the account
+    password flow instead of hard-failing:
+
+        1. client_credentials — service account
+           (CDSE_CLIENT_ID/SECRET env, else .cdse_credentials lines 3+4).
+        2. resource-owner password — account login via the public client
+           (CDSE_USER/CDSE_PASSWORD env, else .cdse_credentials lines 1+2).
+           Always uses client_id="cdse-public"; the confidential service
+           client is never reused for the password grant.
+        3. interactive OIDC (browser) — local-dev last resort.
 
     Returns:
         Authenticated openeo.Connection.
 
     Raises:
-        FetchError: If authentication fails.
+        FetchError: If every configured method fails.
     """
     try:
         import openeo
@@ -657,31 +667,20 @@ def _connect_cdse():
     except Exception as e:
         raise FetchError(f"Failed to connect to {CDSE_OPENEO_URL}: {e}")
 
-    # 1. Client credentials (service account)
+    # Gather credentials: env first (pod), then .cdse_credentials file as
+    # local-dev fallback (line1 email, line2 password, line3 client_id,
+    # line4 client_secret). env values always take priority.
     client_id = os.environ.get("CDSE_CLIENT_ID")
     client_secret = os.environ.get("CDSE_CLIENT_SECRET")
-    if not client_id or not client_secret:
+    username = os.environ.get("CDSE_USER")
+    password = os.environ.get("CDSE_PASSWORD")
+    if not (client_id and client_secret and username and password):
         _try_load_root_dotenv()
-        client_id = os.environ.get("CDSE_CLIENT_ID")
-        client_secret = os.environ.get("CDSE_CLIENT_SECRET")
+        client_id = client_id or os.environ.get("CDSE_CLIENT_ID")
+        client_secret = client_secret or os.environ.get("CDSE_CLIENT_SECRET")
+        username = username or os.environ.get("CDSE_USER")
+        password = password or os.environ.get("CDSE_PASSWORD")
 
-    if client_id and client_secret:
-        try:
-            conn.authenticate_oidc_client_credentials(
-                client_id=client_id,
-                client_secret=client_secret,
-            )
-            return conn
-        except Exception as e:
-            raise FetchError(
-                f"CDSE client_credentials auth failed: {e}\n"
-                "Check CDSE_CLIENT_ID and CDSE_CLIENT_SECRET env vars."
-            )
-
-    # 2. Credentials file (.cdse_credentials):
-    #    Line 1: email, Line 2: password, Line 3: client_id, Line 4: client_secret
-    #    If client_id + client_secret present → client_credentials flow.
-    #    If only email + password → resource owner password flow.
     cred_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         ".cdse_credentials",
@@ -692,47 +691,58 @@ def _connect_cdse():
                 lines = [l.strip() for l in f.readlines()]
         except Exception as e:
             raise FetchError(f"Failed to read {cred_path}: {e}")
+        username = username or (lines[0] if len(lines) >= 1 else None)
+        password = password or (lines[1] if len(lines) >= 2 else None)
+        client_id = client_id or (lines[2] if len(lines) >= 3 else None)
+        client_secret = client_secret or (lines[3] if len(lines) >= 4 else None)
 
-        # 2a. Client credentials (lines 3+4: client_id, client_secret)
-        if len(lines) >= 4 and lines[2] and lines[3]:
-            try:
-                conn.authenticate_oidc_client_credentials(
-                    client_id=lines[2],
-                    client_secret=lines[3],
-                )
-                return conn
-            except Exception as e:
-                raise FetchError(
-                    f"CDSE client_credentials auth failed: {e}\n"
-                    f"Check client_id/secret in {cred_path}"
-                )
+    errors = []
 
-        # 2b. Resource owner password (lines 1+2: email, password)
-        if len(lines) >= 2 and lines[0] and lines[1]:
-            file_client_id = lines[2] if len(lines) >= 3 and lines[2] else "cdse-public"
-            try:
-                conn.authenticate_oidc_resource_owner_password_credentials(
-                    username=lines[0],
-                    password=lines[1],
-                    client_id=file_client_id,
-                )
-                return conn
-            except Exception as e:
-                raise FetchError(
-                    f"CDSE password auth failed: {e}\n"
-                    f"Check credentials in {cred_path}"
+    # 1. Service account (client_credentials). On failure, fall through —
+    #    a rotated/revoked service secret must not block the password flow.
+    if client_id and client_secret:
+        try:
+            conn.authenticate_oidc_client_credentials(
+                client_id=client_id, client_secret=client_secret,
+            )
+            return conn
+        except Exception as e:
+            errors.append(f"client_credentials: {e}")
+            global _CDSE_CC_FALLBACK_WARNED
+            if not _CDSE_CC_FALLBACK_WARNED:
+                _CDSE_CC_FALLBACK_WARNED = True
+                print(
+                    f"    [CDSE] client_credentials auth failed ({type(e).__name__}); "
+                    "falling through to account password flow (warned once)",
+                    flush=True,
                 )
 
-    # 3. Fallback: interactive OIDC (opens browser)
+    # 2. Resource-owner password via the PUBLIC client. The confidential
+    #    service client_id is intentionally not reused here — the password
+    #    grant runs against "cdse-public".
+    if username and password:
+        try:
+            conn.authenticate_oidc_resource_owner_password_credentials(
+                username=username, password=password, client_id="cdse-public",
+            )
+            return conn
+        except Exception as e:
+            errors.append(f"password: {e}")
+
+    # 3. Interactive OIDC (opens browser) — local-dev last resort.
     try:
         conn.authenticate_oidc()
         return conn
     except Exception as e:
-        raise FetchError(
-            f"CDSE OIDC auth failed: {e}\n"
-            "Set CDSE_CLIENT_ID + CDSE_CLIENT_SECRET env vars, or create "
-            f"{cred_path} with email on line 1 and password on line 2."
-        )
+        errors.append(f"oidc: {e}")
+
+    raise FetchError(
+        "CDSE authentication failed for every configured method:\n  "
+        + "\n  ".join(errors)
+        + "\nSet CDSE_CLIENT_ID+CDSE_CLIENT_SECRET (service account) or "
+        "CDSE_USER+CDSE_PASSWORD (account login), or create "
+        f"{cred_path} (line1 email, line2 password, line3 client_id, line4 secret)."
+    )
 
 
 # ── Main fetch function ─────────────────────────────────────────────────────
