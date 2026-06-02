@@ -160,30 +160,53 @@ def _fetch_single_scene(
     sources: tuple[str, ...] = ("cdse", "des"),
     prefetched_dates: list[str] | None = None,
 ) -> tuple[np.ndarray | None, str]:
-    """Fetch best S2 scene within a date range. STAC → CDSE → DES fallback.
+    """Fetch the best S2 scene within ``[date_start, date_end]`` via the
+    unified per-slot fetch path.
+
+    Routes the chosen date through
+    :func:`imint.training.fetch_spectral.fetch_spectral` on a SINGLE
+    backend — the first token in ``sources`` that is supported and not
+    marked dead this session. No backend race, no cross-backend
+    fallback: if every ranked candidate fails on the chosen backend,
+    the function returns ``(None, "")``. The race-pool that used to
+    live in this body, with its silent ``except Exception: pass``
+    failure mode, has been retired — see the unified dispatcher for
+    the visible-error semantics that replace it.
+
+    Candidate dates come from (in priority order):
+
+      1. ``prefetched_dates`` filtered to the window — used directly
+         when the caller has already run a tile-wide ERA5 ∩ SCL ranker
+         (e.g. ``fetch_4frame_scenes``).
+      2. ``optimal_fetch_dates(mode="era5_then_scl")`` for ≥ 2018.
+      3. Synthetic every-N-days fallback for pre-2018 (no ERA5/STAC).
+
+    Candidates are sorted by ``(cloud, distance-to-window-center)`` so
+    a tie on cloud picks the more representative mid-window snapshot
+    — avoids the edge-of-window bias for fixed-snapshot training
+    (e.g. DOY 201 instead of representative DOY 220 for a 201–244
+    window).
 
     Args:
-        prefetched_dates: Pre-filtered ERA5 ∩ SCL candidate dates from the
-            caller (e.g. tile-level batch SCL fetch in fetch_4frame_scenes).
-            If provided, dates within [date_start, date_end] are used
-            directly — skipping the per-frame optimal_fetch_dates call.
-            This halves openEO setup overhead for the 4-frame case where
-            three frames can share one growing-season SCL fetch.
+        prefetched_dates: Pre-ranked candidate dates from the caller.
+        cloud_threshold: AOI cloud-fraction ceiling (0–1) forwarded to
+            ``fetch_spectral`` as the per-candidate acceptance gate.
+        max_aoi_cloud: Ceiling for the per-window ERA5+SCL ranker
+            when ``prefetched_dates`` is not supplied.
+        scene_cloud_max, haze_threshold: Retained for signature
+            stability; not consumed by the unified flow. Slated for
+            removal once all call sites stop passing them.
 
     Returns:
-        (scene, date_str). scene is (6, H, W) float32 or None.
+        ``(scene, date_str)`` — ``(None, "")`` on failure or when no
+        ``sources`` token resolves to a healthy backend.
     """
-    from imint.training.cdse_s2 import fetch_s2_scene
+    from imint.training.fetch_spectral import fetch_spectral, SUPPORTED_BACKENDS
+    from imint.training.openeo_tile_graph import is_source_dead
 
-    # ERA5-first candidate selection. ERA5 reanalysis predicts AOI cloud
-    # cover across the window; SCL at tile-cutout level (max_aoi_cloud)
-    # makes the final cut. The legacy STAC scene_cloud_max filter (kept
-    # as fallback below for pre-2018 ranges) was both redundant and too
-    # coarse — it filtered against scene-wide cloud cover for the
-    # 100×100km S2 tile, not the 5×5km AOI we actually fetch.
-    candidates = []
+    # 1) Build candidate list.
+    candidates: list[tuple[str, float]] = []
     if prefetched_dates is not None:
-        # Caller did the ERA5 ∩ SCL work tile-wide; pick dates in window.
         candidates = [
             (d, 0.0) for d in prefetched_dates
             if date_start <= d <= date_end
@@ -200,9 +223,9 @@ def _fetch_single_scene(
         except Exception:
             pass
 
-    # Pre-2018 fallback (DES STAC + ERA5 may both be unavailable): synthetic
-    # candidate dates every 3 days. The per-tile SCL check at cutout time
-    # still gates acceptance.
+    # Pre-2018 fallback: ERA5/STAC may both be unavailable. Synthesize
+    # candidate dates every N days; the per-tile SCL gate inside
+    # ``fetch_spectral`` still rejects cloudy acquisitions.
     if not candidates:
         from datetime import datetime as _dt, timedelta as _td
         d0 = _dt.strptime(date_start, "%Y-%m-%d")
@@ -211,15 +234,15 @@ def _fetch_single_scene(
         for i in range(0, (d1 - d0).days + 1, step):
             candidates.append(((d0 + _td(days=i)).strftime("%Y-%m-%d"), 50.0))
 
-    # Closest-to-center selection bias (B2). Without this, candidates
-    # sorted only by cloud_pct → first-clear-date wins → slot 3 fetch
-    # for window (201, 244) returns DOY 201 (Jul 20) instead of a
-    # representative late-summer DOY 220 (Aug 8). For Clay/CROMA
-    # single-snapshot training the centre date is more informative.
+    if not candidates:
+        return None, ""
+
+    # 2) Sort by (cloud, distance-to-center).
     from datetime import datetime as _dt2
     _ds = _dt2.strptime(date_start, "%Y-%m-%d")
     _de = _dt2.strptime(date_end, "%Y-%m-%d")
     _center = _ds + (_de - _ds) / 2
+
     def _dist_to_center(item):
         d_str, cloud = item
         try:
@@ -227,139 +250,35 @@ def _fetch_single_scene(
             return (cloud, abs((d - _center).days))
         except Exception:
             return (cloud, 9999)
+
     candidates.sort(key=_dist_to_center)
-
-    # DES-primary with 3 workers, CDSE as single-worker fallback.
-    # DES has more capacity and doesn't rate-limit as aggressively.
-    from concurrent.futures import (
-        ThreadPoolExecutor,
-        TimeoutError as _FuturesTimeout,
-        as_completed,
-    )
-    from imint.fetch import fetch_seasonal_image
-
-    def _cdse_try(date_str: str) -> tuple[np.ndarray | None, str]:
-        _CDSE_SEMAPHORE.acquire()
-        try:
-            result = fetch_s2_scene(
-                bbox_3006["west"], bbox_3006["south"],
-                bbox_3006["east"], bbox_3006["north"],
-                date=date_str,
-                size_px=tile.size_px,
-                cloud_threshold=cloud_threshold,
-                haze_threshold=haze_threshold,
-            )
-            # Always report success — the API responded.
-            # result=None means cloud/haze rejection, not rate-limiting.
-            _CDSE_SEMAPHORE.report_success()
-            if result is not None:
-                return result[0], date_str
-        except Exception:
-            # Network error, timeout, 5xx → real failure
-            _CDSE_SEMAPHORE.report_failure()
-        finally:
-            _CDSE_SEMAPHORE.release()
-        return None, date_str
-
-    def _des_try(date_str: str) -> tuple[np.ndarray | None, str]:
-        _DES_SEMAPHORE.acquire()
-        try:
-            result = fetch_seasonal_image(
-                date=date_str,
-                coords=coords_wgs84,
-                prithvi_bands=PRITHVI_BANDS,
-                source="des",
-            )
-            _DES_SEMAPHORE.report_success()
-            if result is not None:
-                return result[0], date_str
-        except Exception:
-            _DES_SEMAPHORE.report_failure()
-        finally:
-            _DES_SEMAPHORE.release()
-        return None, date_str
-
-    def _cdse_openeo_try(date_str: str) -> tuple[np.ndarray | None, str]:
-        # CDSE openEO (https://openeo.dataspace.copernicus.eu/) uses a
-        # separate monthly-credit pool from the SH Process PU pool.
-        # Usable as a parallel fallback while PUs are drained.
-        #
-        # Session-scoped 402-guard: once CDSE returns PaymentRequired in
-        # this process we stop submitting graphs to it for the rest of
-        # the pod lifetime. Cleared by next pod restart, which is when
-        # we'd want to retry CDSE anyway (e.g. after monthly credit
-        # reset or a fresh package purchase).
-        from imint.training.openeo_tile_graph import (
-            is_source_dead, mark_source_dead, _is_payment_required_error,
-        )
-        if is_source_dead("cdse-openeo"):
-            return None, date_str
-        _CDSE_OPENEO_SEMAPHORE.acquire()
-        try:
-            result = fetch_seasonal_image(
-                date=date_str,
-                coords=coords_wgs84,
-                prithvi_bands=PRITHVI_BANDS,
-                source="copernicus",
-            )
-            _CDSE_OPENEO_SEMAPHORE.report_success()
-            if result is not None:
-                return result[0], date_str
-        except Exception as exc:
-            if _is_payment_required_error(exc):
-                mark_source_dead(
-                    "cdse-openeo",
-                    f"402 in _cdse_openeo_try: {str(exc)[:160]}",
-                )
-            _CDSE_OPENEO_SEMAPHORE.report_failure()
-        finally:
-            _CDSE_OPENEO_SEMAPHORE.release()
-        return None, date_str
-
     top_dates = [d for d, _ in candidates[:max_candidates]]
-    use_des = "des" in sources
-    use_cdse = "cdse" in sources
-    use_cdse_openeo = "cdse-openeo" in sources
 
-    # Race configured providers. Each can contribute up to 3 candidates
-    # except plain CDSE (SH Process), which is PU-expensive and rate-
-    # tolerant, so we only throw 1 at it. Zero enabled → no-op.
-    max_workers = (
-        (3 if use_des else 0)
-        + (1 if use_cdse else 0)
-        + (3 if use_cdse_openeo else 0)
-    )
-    if max_workers == 0:
+    # 3) Backend selection: first sources token that is supported and
+    #    not marked dead this session. Fixed for the call.
+    primary_backend: str | None = None
+    for src in sources:
+        if src in SUPPORTED_BACKENDS and not is_source_dead(src):
+            primary_backend = src
+            break
+    if primary_backend is None:
         return None, ""
 
-    # Race configured providers — first success wins. Hard 180 s
-    # timeout and explicit shutdown(wait=False) so one stalled provider
-    # (DES openEO process-graph hang etc.) cannot block the function
-    # from returning. Threads still running on shutdown are leaked
-    # but bounded by socket-level timeouts in the underlying clients.
-    pool = ThreadPoolExecutor(max_workers=max_workers)
-    futures = []
-    if use_des:
-        for d in top_dates[:3]:
-            futures.append(pool.submit(_des_try, d))
-    if use_cdse_openeo:
-        for d in top_dates[:3]:
-            futures.append(pool.submit(_cdse_openeo_try, d))
-    if use_cdse and top_dates:
-        futures.append(pool.submit(_cdse_try, top_dates[0]))
-
-    winner: tuple[np.ndarray | None, str] = (None, "")
-    try:
-        for f in as_completed(futures, timeout=180):
-            scene, date_str = f.result()
-            if scene is not None:
-                winner = (scene, date_str)
-                break
-    except _FuturesTimeout:
-        pass  # 3-min hard cap — return no-result
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
-    return winner
+    # 4) Per-candidate retry on the chosen backend — first scene wins.
+    #    Mid-call health re-check covers cdse-openeo's 402 PaymentRequired
+    #    flipping ``is_source_dead`` between candidates.
+    for d in top_dates:
+        if is_source_dead(primary_backend):
+            return None, ""
+        scene = fetch_spectral(
+            bbox_3006, coords_wgs84, d,
+            backend=primary_backend,
+            size_px=tile.size_px,
+            cloud_threshold=cloud_threshold,
+        )
+        if scene is not None:
+            return scene, d
+    return None, ""
 
 
 def _get_vpp_doy_windows(bbox_3006: dict, num_growing_frames: int = 3) -> list[tuple[int, int]] | None:

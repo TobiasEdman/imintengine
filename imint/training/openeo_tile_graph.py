@@ -1,55 +1,55 @@
-"""One openEO process graph per tile — fetch all 4 slots in a single call.
+"""openEO process-graph implementations for per-tile S2 spectral fetch.
 
-This is the Nivå-3 throughput optimisation. The classical per-slot path
-(``_fetch_single_scene`` in ``tile_fetch.py``) submits up to ~28 separate
-openEO process-graph evaluations per tile (3 candidate dates × 3 sources
-× 4 slots, with race-pool fanout). Each one is a full HTTP round-trip
-through the backend's process-graph queue.
+This module is the **openEO backend adapter** sitting behind the unified
+:func:`imint.training.fetch_spectral.fetch_spectral` dispatcher. It is
+how ``backend="cdse-openeo"`` and ``backend="des"`` calls reach the
+respective openEO servers. The dispatcher passes a single-slot mapping
+``{0: date_str}`` for per-candidate fetches; the multi-slot form of
+:func:`fetch_tile_at_specific_dates` (one process graph covering up to
+four slots at once) is kept available for callers that want the batched
+form but is *not* used by the unified flow today.
 
-The tile-graph path collapses all 4 slots into ONE process graph::
+Mechanics
+---------
+``fetch_tile_at_specific_dates(bbox_3006, {sidx: date_str, ...}, source)``
+builds one process graph::
 
-    slot_0_cube = load_collection(window_0).filter_cloud(<30%).reduce(t,"first")
-                  .rename_labels(bands → ["s0_B02", "s0_B03", ...])
-    slot_1_cube = same with window_1, prefix s1_
-    slot_2_cube = same with window_2, prefix s2_
-    slot_3_cube = same with window_3, prefix s3_
+    sub_cube_i = load_collection(date_i .. date_i+1d, bbox, bands=...)
+                 .reduce_dimension("t", "first")
+                 .rename_labels(bands → ["s{i}_B02", ...])
+    merged     = sub_cube_0.merge_cubes(sub_cube_1)...
+    download(format="gtiff")
 
-    merged = slot_0_cube.merge_cubes(slot_1).merge_cubes(s2).merge_cubes(s3)
-    download(format="gtiff")      # 24-band geotiff, 6 bands × 4 slots
+For N=1 slot it reduces to a single ``load_collection → download``.
+For N=4 it produces a (4×6, H, W) cube parsed back per slot.
 
-Throughput impact (per tile, with CDSE openEO single-flight):
+Compatibility
+-------------
+* CDSE openEO 1.2 (``openeo.dataspace.copernicus.eu``) — primary; HARD
+  1-concurrent-connection-per-account limit, serialised by
+  ``_CDSE_OPENEO_SEMAPHORE``.
+* DES openEO 1.1 (``openeo.digitalearth.se``) — same graph shape;
+  ``aggregate_spatial`` has a known geopandas-dtype server bug so
+  AOI cloud verification uses the pixel ``scl_stack_screen`` path
+  (handled upstream in :func:`imint.training.optimal_fetch.verify_aoi_scl`).
 
-    Old: ~7-28 openEO calls per tile (race-pool, candidate ×source ×slot)
-    New: 1 openEO call per tile
+Date metadata caveat
+--------------------
+``reduce_dimension(t, "first")`` does not return which timestamp was
+selected — the date dimension is consumed. The returned ``date_str``
+approximates with the window mid-point (see :func:`_window_midpoint`);
+downstream training only uses dates for slot ordering, so this is fine.
+Pixel-level fidelity is unaffected.
 
-Combined with the existing tile-level worker fanout (6 workers), this
-gives us:
-
-    Old throughput ≈ 1 tile / N×60 s   (serial through CDSE 1-conn cap)
-    New throughput ≈ 6 tiles / 60 s    (6 workers × 1 call each)
-
-— so ~6× speedup in the CDSE openEO single-flight regime.
-
-Compatibility:
-    * CDSE openEO 1.2 (``openeo.dataspace.copernicus.eu``): primary.
-    * DES openEO 1.1 (``openeo.digitalearth.se``): supported in principle
-      (``merge_cubes`` / ``reduce_dimension`` / ``rename_labels`` all in
-      openEO 1.1). Not yet exercised end-to-end — leave as Nivå-2 follow-up.
-
-Date metadata caveat:
-    ``reduce_dimension(t, "first")`` does NOT return which timestamp was
-    selected; the date is consumed by the reducer. We approximate per-slot
-    ``date_str`` with the window mid-point (see :func:`_window_midpoint`).
-    Downstream training only uses the date for slot ordering, so this is
-    acceptable; pixel-level fidelity is unaffected.
-
-Cloud handling:
-    Scene-level cloud filter via ``properties={"eo:cloud_cover": lambda
-    v: v < cloud_max_pct}`` — drops whole acquisitions over the threshold.
-    Combined with ``reduce(t, "first")`` the result is the first below-
-    threshold scene in the window. No pixel-level SCL mask is applied;
-    the upstream ERA5+SCL pre-filter on date selection is therefore
-    *skipped* in this path (the server does its own filtering).
+Cloud handling
+--------------
+Scene-level filter via ``properties={"eo:cloud_cover": lambda v: v <=
+cloud_max_pct}`` drops whole acquisitions over the threshold; combined
+with ``reduce(t, "first")`` the result is the first below-threshold
+scene in the window. Pixel-level SCL gating is the unified dispatcher's
+responsibility (``verify_aoi_scl`` for openEO backends, or
+``fetch_s2_scene``'s two-stage SCL prescreen for the SH Process backend).
+This module relies on that upstream gate and does not re-apply one.
 """
 from __future__ import annotations
 

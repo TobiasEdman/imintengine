@@ -396,8 +396,8 @@ def _fetch_frames_from_best_dates(
         # CDSE openEO (openeo.dataspace.copernicus.eu) uses a separate
         # monthly-credit pool from SH Process PUs.
         #
-        # Session-scoped 402-guard (same pattern as
-        # tile_fetch.py:_cdse_openeo_try): on first PaymentRequired we
+        # Session-scoped 402-guard (same pattern as the unified flow
+        # in fetch_spectral._fetch_via_openeo): on first PaymentRequired we
         # mark the source dead for this process; subsequent attempts
         # short-circuit without any HTTP roundtrip. Cleared by next
         # pod restart, so credit-reset / package-purchase auto-recovers.
@@ -665,9 +665,10 @@ def repair_to_canonical_layout(
       6. Verify calendar-date monotonicity. Strict-fail otherwise.
       7. Atomic save (preserving all aux/label fields).
 
-    Per-tile cost: 1-3 _fetch_single_scene calls depending on which
-    slots survived classification. Returns status=skipped if all
-    4 slots were already filled correctly.
+    Per-tile cost: 1 ``fetch_spectral`` call per missing slot, retrying
+    through the slot's ranked candidate list until one passes the AOI
+    cloud gate. Returns ``status=skipped`` if all 4 slots were already
+    filled correctly.
 
     Year derivation hierarchy (loc agnostic — read straight from .npz):
         tessera_year → lpis_year → year → first valid date.year
@@ -675,7 +676,7 @@ def repair_to_canonical_layout(
     LPIS-parcel counts for all 20 audit-flagged tiles in this batch).
     """
     from imint.training.tile_fetch import (
-        _fetch_single_scene, doy_to_date_range, N_BANDS,
+        doy_to_date_range, N_BANDS,
     )
     from imint.training.vpp_windows import compute_growing_season_windows
 
@@ -758,10 +759,12 @@ def repair_to_canonical_layout(
     for src_idx in range(4):
         if old_tmask[src_idx] == 0:
             continue
-        # Silent-corruption guard: a previous repair_to_canonical_layout run
-        # may have accepted an all-zeros scene from _fetch_single_scene as if
-        # valid (tmask=1 but spectral cube slice is empty). Detect and drop
-        # so we refetch this slot on re-runs.
+        # Silent-corruption guard: a previous repair_to_canonical_layout
+        # run on the pre-refactor race-pool may have accepted an all-zeros
+        # scene as if valid (tmask=1 but spectral cube slice is empty).
+        # The unified ``fetch_spectral`` flow returns ``None`` for empty
+        # scenes, so new runs cannot regress; this guard cleans up legacy
+        # tiles touched by the old code path.
         frame_slice = old_image[src_idx * N_BANDS:(src_idx + 1) * N_BANDS]
         if not np.any(frame_slice):
             dropped.append((src_idx, old_doys[src_idx], "all_zeros_spectral"))
@@ -854,195 +857,85 @@ def repair_to_canonical_layout(
     fetched: dict[int, tuple[np.ndarray, str]] = {}
     failed_slots: list[int] = []
 
-    # ── Optional Nivå-3 fast path: one openEO call per tile ──
-    # Opt-in via env var IMINT_USE_TILE_GRAPH=1. Uses the season-first
-    # gated date lists (computed above) to pick ONE date per missing
-    # slot — the lowest-AOI-cloud-fraction candidate under the gate —
-    # and fetches all those slots' spectral in a single merge_cubes
-    # openEO call.
+    # ── Unified per-slot spectral fetch ──
+    # ONE flow, ONE backend per tile. The lazy STAC+ERA5 chain (computed
+    # above as ``ranked_by_window``) ranks candidate dates per slot; we
+    # iterate best-first, hand each to :func:`fetch_spectral` (which
+    # encapsulates the backend's verify+fetch), and stop at the first
+    # AOI-clean scene. No backend race. No cross-backend fallback within
+    # a slot. No separate "tile-graph vs race-pool" path. If the chosen
+    # backend exhausts the slot's ranked candidates, the slot fails —
+    # surfaced cleanly rather than masked by a silent fall-through to a
+    # second code path with different semantics (which was the previous
+    # design's failure mode — see commit history before this refactor).
     #
-    # Per tile: 1 season SCL aggregate + 1 tile-graph spectral = 2
-    # openEO calls. Old per-slot path: 2 SCL + up to ~28 race-pool
-    # spectral calls.
-    #
-    # Strictly additive: any tile-graph failure (or slot for which the
-    # gated list had no candidate) falls through to the per-slot path
-    # below. graph_source prefers CDSE openEO (1.2) but falls back to
-    # DES (1.1) when CDSE is unavailable or credits are exhausted.
-    if (
-        os.environ.get("IMINT_USE_TILE_GRAPH") == "1"
-        and missing_slots
-    ):
-        # Pick source: CDSE openEO if listed AND not marked dead this
-        # session (402 PaymentRequired). When dead, fall straight
-        # through to DES. Session-scoped: pod restart clears the mark
-        # so credit reset / package purchase auto-recovers.
-        from imint.training.openeo_tile_graph import is_source_dead
-        graph_source = (
-            "cdse-openeo" if (
-                "cdse-openeo" in sources
-                and not is_source_dead("cdse-openeo")
-            ) else
-            "des" if "des" in sources else None
-        )
-        def _resize_scene(scene):
-            """Defensive centre-place into the tile grid (no resample)."""
-            if scene.shape[1] == tile.size_px and scene.shape[2] == tile.size_px:
-                return scene
-            padded = np.zeros((N_BANDS, tile.size_px, tile.size_px),
-                              dtype=np.float32)
-            h = min(scene.shape[1], tile.size_px)
-            w = min(scene.shape[2], tile.size_px)
-            padded[:, :h, :w] = scene[:, :h, :w]
-            return padded
+    # Backend selection happens once per tile: first ``--sources`` token
+    # that's both supported and not marked dead this session. Mid-tile
+    # health re-check skips slots cleanly if the backend dies (e.g.
+    # cdse-openeo 402 PaymentRequired) without spamming doomed calls.
+    from imint.training.fetch_spectral import fetch_spectral, SUPPORTED_BACKENDS
+    from imint.training.openeo_tile_graph import is_source_dead
 
-        # Per-slot ranked candidate lists + AOI cloud ceilings.
-        slot_cands: dict[int, list] = {}
-        slot_ptr: dict[int, int] = {}
-        slot_ceiling: dict[int, float] = {}
-        for sidx in missing_slots:
-            _, syear, smin, smax = slot_defs[sidx]
-            _ds, _de = doy_to_date_range(syear, smin, smax)
-            is_autumn = (sidx == 0)
-            ranked = ranked_by_window["autumn" if is_autumn else "growing"]
-            slot_cands[sidx] = [d for d, _cc, _oc in ranked if _ds <= d <= _de]
-            slot_ptr[sidx] = 0
-            slot_ceiling[sidx] = (
-                min(max_aoi_cloud * 2, 0.30) if is_autumn else max_aoi_cloud
+    unknown_sources = [s for s in sources if s not in SUPPORTED_BACKENDS]
+    primary_backend: str | None = None
+    for src in sources:
+        if src in SUPPORTED_BACKENDS and not is_source_dead(src):
+            primary_backend = src
+            break
+
+    if primary_backend is None:
+        dead = [s for s in sources
+                if s in SUPPORTED_BACKENDS and is_source_dead(s)]
+        return {
+            "name": name, "status": "failed",
+            "reason": (f"no_healthy_backend (sources={list(sources)}, "
+                       f"dead={dead}, unknown={unknown_sources})"),
+            "kept_slots": sorted(slot_assignments.keys()),
+            "fetched_slots": [],
+            "dropped_count": len(dropped),
+        }
+
+    for sidx in missing_slots:
+        _slot_name, syear, smin, smax = slot_defs[sidx]
+        _ds, _de = doy_to_date_range(syear, smin, smax)
+        is_autumn = (sidx == 0)
+        # AOI cloud ceiling per slot: autumn looser to find a usable
+        # scene at all; the 0.30 cap prevents unboundedly cloudy fills.
+        ceiling = min(max_aoi_cloud * 2, 0.30) if is_autumn else max_aoi_cloud
+        ranked = ranked_by_window["autumn" if is_autumn else "growing"]
+        candidates = [d for d, _cc, _oc in ranked if _ds <= d <= _de]
+
+        # Mid-tile health re-check: if the chosen backend was marked
+        # dead while a previous slot was processing (e.g. cdse-openeo
+        # hit 402 PaymentRequired), bail this slot cleanly instead of
+        # firing doomed calls.
+        if is_source_dead(primary_backend):
+            failed_slots.append(sidx)
+            continue
+
+        for cand in candidates:
+            scene = fetch_spectral(
+                bbox, coords, cand,
+                backend=primary_backend,
+                size_px=tile.size_px,
+                cloud_threshold=ceiling,
             )
-
-        if graph_source == "cdse-openeo":
-            # COMBINED lazy fetch: each round downloads spectral + SCL for the
-            # current candidate of every unresolved slot in ONE tile-graph
-            # call, AOI-gates on the SCL band that rode along (no separate SCL
-            # call), and advances any cloudy/empty slot to its next candidate.
-            # Usually round 0 resolves all — the top STAC+ERA5 candidate is
-            # AOI-clean too. Bounded rounds, then per-slot fallback.
-            from imint.training.openeo_tile_graph import fetch_tile_at_specific_dates
-            unresolved = [s for s in missing_slots if slot_cands[s]]
-            MAX_ROUNDS = 3
-            for _round in range(MAX_ROUNDS):
-                try_dates = {
-                    s: slot_cands[s][slot_ptr[s]]
-                    for s in unresolved
-                    if slot_ptr[s] < len(slot_cands[s])
-                }
-                if not try_dates:
-                    break
-                try:
-                    res = fetch_tile_at_specific_dates(
-                        bbox, try_dates, source="cdse-openeo", with_scl=True,
-                    )
-                except Exception as e:
-                    print(f"    [tile-graph:cdse-openeo] round {_round} failed "
-                          f"for {name}: {type(e).__name__}: {str(e)[:160]} — "
-                          f"per-slot fallback", flush=True)
-                    break
-                still: list[int] = []
-                for s in unresolved:
-                    if s not in try_dates:
-                        continue
-                    entry = res.get(s)
-                    if (entry is not None
-                            and entry[1] is not None
-                            and entry[1] <= slot_ceiling[s]
-                            and np.any(entry[0])):
-                        fetched[s] = (_resize_scene(entry[0]), entry[2])
-                    else:
-                        # cloudy / empty / no-data → next candidate
-                        cf = entry[1] if entry else None
-                        print(f"    [cloud-gate] {name} slot {s} "
-                              f"{try_dates[s]}: AOI-moln="
-                              f"{'n/a' if cf is None else f'{cf:.2f}'} "
-                              f"> {slot_ceiling[s]:.2f} → nästa kandidat",
-                              flush=True)
-                        slot_ptr[s] += 1
-                        if slot_ptr[s] < len(slot_cands[s]):
-                            still.append(s)
-                unresolved = still
-                if not unresolved:
-                    break
-            missing_slots = [s for s in missing_slots if s not in fetched]
-
-        elif graph_source == "des":
-            # DES tile-graph can't ride SCL along (include_scl unsupported on
-            # the 1.1 backend). Keep the verify-then-fetch: SCL-verify the top
-            # candidate per slot on DES, then one DES tile-graph spectral call.
-            from imint.training.optimal_fetch import verify_aoi_scl
-            from imint.training.openeo_tile_graph import fetch_tile_at_specific_dates
-            slot_dates_for_graph: dict[int, str] = {}
-            for sidx in missing_slots:
-                for d in slot_cands[sidx]:
-                    try:
-                        aoi = verify_aoi_scl(coords, d, backend="des")
-                    except Exception:
-                        aoi = None
-                    if aoi is not None and aoi <= slot_ceiling[sidx]:
-                        slot_dates_for_graph[sidx] = d
-                        break
-            if slot_dates_for_graph:
-                try:
-                    graph_result = fetch_tile_at_specific_dates(
-                        bbox, slot_dates_for_graph, source="des",
-                    )
-                    for sidx, (scene, date_str) in graph_result.items():
-                        if np.any(scene):
-                            fetched[sidx] = (_resize_scene(scene), date_str)
-                    missing_slots = [s for s in missing_slots if s not in fetched]
-                except Exception as e:
-                    print(f"    [tile-graph:des] failed for {name}: "
-                          f"{type(e).__name__}: {str(e)[:160]} — per-slot fallback",
-                          flush=True)
-
-    for slot_idx in missing_slots:
-        slot_name, slot_year, slot_min, slot_max = slot_defs[slot_idx]
-        ds, de = doy_to_date_range(slot_year, slot_min, slot_max)
-        is_autumn = (slot_idx == 0)
-        # Filter pre-fetched dates to this slot's specific window.
-        # Critical: distinguish between "prefetch returned nothing" and
-        # "prefetch succeeded but filter yields empty". In BOTH empty
-        # cases we want to fall back to _fetch_single_scene's own per-slot
-        # ERA5+SCL (DES) — passing `slot_dates=[]` would otherwise route
-        # us through the synthetic every-N-days candidates without cloud
-        # filtering, which fails for almost all S2 non-overpass days.
-        slot_dates: list[str] | None
-        if is_autumn and autumn_dates:
-            filtered = [d for d in autumn_dates if ds <= d <= de]
-            slot_dates = filtered if filtered else None
-        elif (not is_autumn) and growing_dates:
-            filtered = [d for d in growing_dates if ds <= d <= de]
-            slot_dates = filtered if filtered else None
+            if scene is None:
+                continue
+            # Defensive resize (centre-place, no resample). The dispatcher
+            # already returns ``None`` for zero/empty scenes, so we only
+            # land here with a real array.
+            if scene.shape[1] != tile.size_px or scene.shape[2] != tile.size_px:
+                padded = np.zeros((N_BANDS, tile.size_px, tile.size_px),
+                                  dtype=np.float32)
+                h = min(scene.shape[1], tile.size_px)
+                w = min(scene.shape[2], tile.size_px)
+                padded[:, :h, :w] = scene[:, :h, :w]
+                scene = padded
+            fetched[sidx] = (scene, cand)
+            break
         else:
-            slot_dates = None  # CDSE prefetch returned nothing — let DES retry
-        scene, date_str = _fetch_single_scene(
-            bbox, coords, ds, de, tile,
-            scene_cloud_max=min(cloud_max * 2, 60.0) if is_autumn else cloud_max,
-            max_aoi_cloud=min(max_aoi_cloud * 2, 0.30) if is_autumn else max_aoi_cloud,
-            max_candidates=16 if is_autumn else 3,
-            cloud_threshold=0.30 if is_autumn else 0.15,
-            haze_threshold=0.12 if is_autumn else 0.08,
-            sources=sources,
-            prefetched_dates=slot_dates,
-        )
-        if scene is None:
-            failed_slots.append(slot_idx)
-            continue
-        # Zero-scene guard: _fetch_single_scene's downstream
-        # fetch_seasonal_image / fetch_s2_scene can return a numpy array
-        # populated with zeros (degenerate openEO response — empty band
-        # data after a partial read). Treat as a fetch failure rather
-        # than silently writing a tile with empty frames + tmask=1.
-        if not np.any(scene):
-            failed_slots.append(slot_idx)
-            continue
-        # Defensive resize
-        if scene.shape[1] != tile.size_px or scene.shape[2] != tile.size_px:
-            padded = np.zeros((N_BANDS, tile.size_px, tile.size_px), dtype=np.float32)
-            h = min(scene.shape[1], tile.size_px)
-            w = min(scene.shape[2], tile.size_px)
-            padded[:, :h, :w] = scene[:, :h, :w]
-            scene = padded
-        fetched[slot_idx] = (scene, date_str)
+            failed_slots.append(sidx)
 
     if failed_slots:
         return {
@@ -1119,203 +1012,6 @@ def repair_to_canonical_layout(
         "dropped_count": len(dropped),
         "doys_after": new_doys,
         "dates_after": new_dates,
-    }
-
-
-def refetch_late_autumn_frames(
-    loc: dict,
-    output_dir: str,
-    tile: TileConfig,
-    *,
-    cloud_max: float = 30.0,
-    max_aoi_cloud: float = 0.10,
-    sources: tuple[str, ...] = ("cdse", "des"),
-    cap_doy: int = 244,
-) -> dict:
-    """Surgical refetch: replace only growing-season frames (1-3) whose
-    existing DOY falls outside the corrected VPP window (i.e. > cap_doy).
-
-    The pre-PR#15 VPP bug split the full SOSD→EOSD season into N equal
-    windows, often pushing frame 3 into October/November. Frame 0
-    (autumn year-1) is computed from a hardcoded Aug 15–Oct 31 range
-    independent of VPP and is therefore unaffected — we preserve it
-    verbatim. For each affected growing-season frame we recompute the
-    target window, fetch a single replacement scene, and patch the
-    spectral cube in place.
-
-    Per-tile cost (typical):
-      - 1 VPP cache call (already cached on cephfs for most tiles)
-      - 1-3 _fetch_single_scene calls (one per bad frame)
-      - Each _fetch_single_scene = 1 ERA5+SCL prefetch + 1-3 spectral
-        race attempts
-
-    Compared to refetch_tile(force=True), this typically saves:
-      - 1 spectral fetch (frame 0 not re-fetched)
-      - 1-3 SCL stack calls (only bad frames go through the pipeline)
-      - All work for the 0-bad-frame case (returns skipped immediately)
-
-    Args:
-        loc:           must contain `_existing_path`, `year`, bbox info.
-                       Built by `loc_from_existing` in refetch_affected_tiles.
-        cap_doy:       Refetch any growing-season frame with DOY > this
-                       (default 244 matches the post-PR#15 vpp_windows cap).
-    """
-    from imint.training.tile_fetch import (
-        _fetch_single_scene, _get_vpp_doy_windows, doy_to_date_range, N_BANDS,
-    )
-
-    name = loc["name"]
-    existing_path = loc.get("_existing_path")
-    out_path = os.path.join(output_dir, f"{name}.npz")
-    tile_year = loc.get("year")
-
-    if not existing_path or not os.path.exists(existing_path):
-        return {"name": name, "status": "error", "reason": "no_existing_tile"}
-    if tile_year is None:
-        return {"name": name, "status": "error", "reason": "no_year"}
-
-    try:
-        old = dict(np.load(existing_path, allow_pickle=True))
-    except Exception as e:
-        return {"name": name, "status": "error", "reason": f"npz_load: {e!s}"[:200]}
-
-    if "spectral" not in old or "doy" not in old or "dates" not in old:
-        return {"name": name, "status": "error", "reason": "missing_spectral_or_meta"}
-
-    image = old["spectral"].copy()            # (NUM_FRAMES*N_BANDS, H, W)
-    doy_arr = old["doy"].astype(np.int32).copy()
-    dates = [str(d) for d in old["dates"]]
-    tmask = old["temporal_mask"].astype(np.uint8).copy()
-
-    # Normalise bbox to TileConfig extent (never trust loc bbox blindly).
-    raw_bbox = loc["bbox_3006"]
-    cx = (raw_bbox["west"] + raw_bbox["east"]) // 2
-    cy = (raw_bbox["south"] + raw_bbox["north"]) // 2
-    bbox = tile.bbox_from_center(cx, cy)
-    coords = bbox_3006_to_wgs84(bbox)
-    tile.assert_bbox_matches(bbox)
-
-    vpp_windows = _get_vpp_doy_windows(bbox, num_growing_frames=3)
-    if not vpp_windows or len(vpp_windows) < 3:
-        return {"name": name, "status": "error", "reason": "vpp_unavailable"}
-
-    # Clamp each VPP window's end against cap_doy. Necessary because the
-    # _FALLBACK_DOY_WINDOWS constant in vpp_windows.py is NOT cap-aware
-    # — fallback frame 3 is (213, 273), which would re-introduce post-244
-    # dates on a refetch. Same risk applies when a real VPP gs_length
-    # falls below MIN_GROWING_SEASON_LENGTH after capping (PR #15) and
-    # triggers the fallback path.
-    capped_windows = [
-        (start, min(end, cap_doy)) for (start, end) in vpp_windows
-    ]
-    # Drop windows that have collapsed to nothing after clamping
-    # (start > end) — would cause an empty fetch range otherwise.
-    capped_windows = [(s, e) for (s, e) in capped_windows if s <= e]
-    if len(capped_windows) < 3:
-        return {"name": name, "status": "error",
-                "reason": f"vpp_windows_collapsed_after_cap: {vpp_windows}"}
-
-    # Identify bad growing-season frames (1-3). Frame 0 (autumn y-1) is sacred.
-    bad: list[tuple[int, int, int]] = []  # (frame_idx, target_doy_start, target_doy_end)
-    for i in range(1, NUM_FRAMES):
-        target_start, target_end = capped_windows[i - 1]
-        existing_doy = int(doy_arr[i])
-        # Refetch if existing DOY is outside the new target window OR if
-        # the frame is invalid (no scene was found at original fetch time).
-        if (
-            tmask[i] == 0
-            or existing_doy > cap_doy
-            or existing_doy < target_start
-            or existing_doy > target_end
-        ):
-            bad.append((i, target_start, target_end))
-
-    if not bad:
-        return {"name": name, "status": "skipped", "reason": "no_bad_frames"}
-
-    # Refetch each bad frame. Pass max_candidates large enough that the
-    # caller's race in _fetch_single_scene has alternatives if the first
-    # date fails spectrally.
-    refetched: list[int] = []
-    failed: list[int] = []
-    for frame_idx, doy_start, doy_end in bad:
-        ds, de = doy_to_date_range(int(tile_year), doy_start, doy_end)
-        scene, date_str = _fetch_single_scene(
-            bbox, coords, ds, de, tile,
-            scene_cloud_max=cloud_max,
-            max_aoi_cloud=max_aoi_cloud,
-            max_candidates=3,
-            sources=sources,
-        )
-        if scene is None:
-            failed.append(frame_idx)
-            continue
-
-        # Resize defensive — _fetch_single_scene should already match tile size
-        if scene.shape[1] != tile.size_px or scene.shape[2] != tile.size_px:
-            padded = np.zeros((N_BANDS, tile.size_px, tile.size_px), dtype=np.float32)
-            h = min(scene.shape[1], tile.size_px)
-            w = min(scene.shape[2], tile.size_px)
-            padded[:, :h, :w] = scene[:, :h, :w]
-            scene = padded
-
-        band_start = frame_idx * N_BANDS
-        image[band_start:band_start + N_BANDS] = scene
-        dates[frame_idx] = date_str
-        doy_arr[frame_idx] = datetime.strptime(date_str, "%Y-%m-%d").timetuple().tm_yday
-        tmask[frame_idx] = 1
-        refetched.append(frame_idx)
-
-    # Strict-fail (user choice C): if ANY bad frame failed to refetch,
-    # leave the .npz untouched. The old data on disk is at least
-    # internally consistent (even if temporally wrong); a half-patched
-    # tile would mix new + old DOYs and could break monotonicity. The
-    # caller can re-queue failed tiles later with relaxed parameters
-    # (e.g. higher max_aoi_cloud).
-    if failed:
-        return {
-            "name": name, "status": "failed",
-            "reason": f"refetch_failed_for_frames: {failed}",
-            "successful_frames": refetched,
-        }
-
-    # Final invariant: growing-season frames must be strictly ascending
-    # in DOY (model training relies on temporal positional embeddings;
-    # non-monotonic temporal order corrupts the input). Frame 0 is
-    # autumn y-1, excluded from this check by design.
-    doys_growing = [int(doy_arr[i]) for i in (1, 2, 3)]
-    if not (doys_growing[0] < doys_growing[1] < doys_growing[2]):
-        return {
-            "name": name, "status": "failed",
-            "reason": f"non_monotonic_doy_after_refetch: frames_1-3={doys_growing}",
-            "successful_frames": refetched,
-            "doys_growing": doys_growing,
-        }
-
-    # Save merged result — preserve all fields except spectral/dates/doy/tmask.
-    save = {k: v for k, v in old.items() if k not in (
-        "spectral", "dates", "doy", "temporal_mask",
-    )}
-    save["spectral"] = image
-    save["dates"] = np.array(dates)
-    save["doy"] = doy_arr
-    save["temporal_mask"] = tmask
-
-    # Atomic write — tmp must end in .npz, else np.savez_compressed auto-
-    # appends ".npz" and the subsequent rename fails.
-    tmp_path = out_path[:-4] + ".tmp.npz"
-    np.savez_compressed(tmp_path, **save)
-    os.replace(tmp_path, out_path)
-
-    # Existing growing-season frames that passed the check (not in bad
-    # set) → "kept" for caller-side reporting.
-    kept = [i for i in range(1, NUM_FRAMES) if i not in [b[0] for b in bad]]
-
-    return {
-        "name": name, "status": "ok",
-        "refetched_frames": refetched,
-        "kept_frames": kept,
-        "doys_after": [int(doy_arr[i]) for i in range(NUM_FRAMES)],
     }
 
 

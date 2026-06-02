@@ -101,7 +101,7 @@ spec:
                 --output-dir /cephfs/unified_v2_512 \
                 --tile-size-px 512 \
                 --workers 6 \
-                --sources cdse-openeo,des \
+                --sources cdse,des \
                 --cloud-max 30.0
               # 2026-05-26d: cdse-openeo back in --sources with new
               # session-scoped 402-guard (credit_guard module). First
@@ -116,13 +116,6 @@ spec:
               echo "=== done ==="
           env:
             - name: PYTHONUNBUFFERED
-              value: "1"
-            # Nivå-3 tile-graph fast path (commit 05b47d3 + f0fa9f5):
-            # - one openEO call per tile for spectral (4 slots merged)
-            # - server-side aggregate_spatial for AOI cloud-frac on CDSE;
-            #   falls back to pixel-level scl_stack_screen on DES due to
-            #   known geopandas-dtype bug in DES openEO worker.
-            - name: IMINT_USE_TILE_GRAPH
               value: "1"
             # 2026-06-02: service account sh-e…920e is dead (token endpoint
             # returns 401 invalid_client — secret rotated/revoked on CDSE
