@@ -899,9 +899,18 @@ def repair_to_canonical_layout(
         _slot_name, syear, smin, smax = slot_defs[sidx]
         _ds, _de = doy_to_date_range(syear, smin, smax)
         is_autumn = (sidx == 0)
-        # AOI cloud ceiling per slot: autumn looser to find a usable
-        # scene at all; the 0.30 cap prevents unboundedly cloudy fills.
-        ceiling = min(max_aoi_cloud * 2, 0.30) if is_autumn else max_aoi_cloud
+        # Fetch-time SCL gate (cloud_threshold passed to fetch_spectral).
+        # Loose safety net, NOT a re-filter — the lazy STAC+ERA5 chain has
+        # already ranked dates by AOI cloud cover. This gate exists for:
+        #   (a) the ERA5(overpass-time, 5×5 km reanalysis) ↔ SCL(actual-
+        #       pixel) variance, which can differ by ~5-10 percentage
+        #       points and reject otherwise-clean dates if set too tight;
+        #   (b) catastrophic cloud cover that slipped past ERA5 ranking
+        #       (rare).
+        # 1.5× growing / 3× autumn matches the pre-refactor race-pool
+        # defaults (0.15 / 0.30 at max_aoi_cloud=0.10) — calibrated to
+        # actually let the lazy chain's ranked dates through.
+        ceiling = max_aoi_cloud * (3.0 if is_autumn else 1.5)
         ranked = ranked_by_window["autumn" if is_autumn else "growing"]
         candidates = [d for d, _cc, _oc in ranked if _ds <= d <= _de]
 
