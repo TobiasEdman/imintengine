@@ -875,6 +875,7 @@ def repair_to_canonical_layout(
     # cdse-openeo 402 PaymentRequired) without spamming doomed calls.
     from imint.training.fetch_spectral import fetch_spectral, SUPPORTED_BACKENDS
     from imint.training.openeo_tile_graph import is_source_dead
+    from imint.training.optimal_fetch import era5_to_scl_gate
 
     unknown_sources = [s for s in sources if s not in SUPPORTED_BACKENDS]
     primary_backend: str | None = None
@@ -899,20 +900,11 @@ def repair_to_canonical_layout(
         _slot_name, syear, smin, smax = slot_defs[sidx]
         _ds, _de = doy_to_date_range(syear, smin, smax)
         is_autumn = (sidx == 0)
-        # Fetch-time SCL gate (cloud_threshold passed to fetch_spectral).
-        # Loose safety net, NOT a re-filter — the lazy STAC+ERA5 chain has
-        # already ranked dates by AOI cloud cover. This gate exists for:
-        #   (a) the ERA5(overpass-time, 5×5 km reanalysis) ↔ SCL(actual-
-        #       pixel) variance, which can differ by ~5-10 percentage
-        #       points and reject otherwise-clean dates if set too tight;
-        #   (b) catastrophic cloud cover that slipped past ERA5 ranking
-        #       (rare).
-        # 1.5× growing / 3× autumn matches the pre-refactor race-pool
-        # defaults (0.15 / 0.30 at max_aoi_cloud=0.10) — calibrated to
-        # actually let the lazy chain's ranked dates through.
-        ceiling = max_aoi_cloud * (3.0 if is_autumn else 1.5)
         ranked = ranked_by_window["autumn" if is_autumn else "growing"]
-        candidates = [d for d, _cc, _oc in ranked if _ds <= d <= _de]
+        # Capture ERA5 overpass cloud per candidate for ERA5-adaptive
+        # SCL gating (see era5_to_scl_gate). Tuple shape from the ranker:
+        # (date_str, stac_granule_cc_pct, era5_overpass_pct).
+        candidates = [(d, oc) for d, _cc, oc in ranked if _ds <= d <= _de]
 
         # Mid-tile health re-check: if the chosen backend was marked
         # dead while a previous slot was processing (e.g. cdse-openeo
@@ -922,9 +914,15 @@ def repair_to_canonical_layout(
             failed_slots.append(sidx)
             continue
 
-        for cand in candidates:
+        for cand_date, era5_oc in candidates:
+            # ERA5-adaptive SCL gate: tighter when ERA5 says clear,
+            # looser when ERA5 says cloudy. Replaces the previous
+            # static max_aoi_cloud * (3 / 1.5) ceiling — that constant
+            # was a poor approximation of "trust ERA5 in proportion
+            # to how confident it is in cleanliness".
+            ceiling = era5_to_scl_gate(era5_oc, is_autumn=is_autumn)
             scene = fetch_spectral(
-                bbox, coords, cand,
+                bbox, coords, cand_date,
                 backend=primary_backend,
                 size_px=tile.size_px,
                 cloud_threshold=ceiling,
@@ -941,7 +939,7 @@ def repair_to_canonical_layout(
                 w = min(scene.shape[2], tile.size_px)
                 padded[:, :h, :w] = scene[:, :h, :w]
                 scene = padded
-            fetched[sidx] = (scene, cand)
+            fetched[sidx] = (scene, cand_date)
             break
         else:
             failed_slots.append(sidx)
