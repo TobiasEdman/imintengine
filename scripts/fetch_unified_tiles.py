@@ -906,6 +906,22 @@ def repair_to_canonical_layout(
         # (date_str, stac_granule_cc_pct, era5_overpass_pct).
         candidates = [(d, oc) for d, _cc, oc in ranked if _ds <= d <= _de]
 
+        # Pre-2018 synthetic fallback: DES STAC catalogue starts in 2018
+        # — so for 2018-tile autumn frames (which sit in 2017), the
+        # ranker returns zero candidates even though CDSE has the data.
+        # Generate every-3-days synthetic dates with ERA5=50 (the high-
+        # uncertainty marker → loose adaptive gate, since we have no
+        # real ERA5 telling us this date is clear). SH Process queries
+        # CDSE directly and can fetch 2017 scenes when they exist.
+        if not candidates and _de < "2018-01-01":
+            from datetime import datetime as _dt, timedelta as _td
+            d0 = _dt.strptime(_ds, "%Y-%m-%d")
+            d1 = _dt.strptime(_de, "%Y-%m-%d")
+            candidates = [
+                ((d0 + _td(days=i)).strftime("%Y-%m-%d"), 50.0)
+                for i in range(0, (d1 - d0).days + 1, 3)
+            ]
+
         # Mid-tile health re-check: if the chosen backend was marked
         # dead while a previous slot was processing (e.g. cdse-openeo
         # hit 402 PaymentRequired), bail this slot cleanly instead of

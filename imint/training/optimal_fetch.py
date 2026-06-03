@@ -679,29 +679,34 @@ def era5_to_scl_gate(era5_overpass_pct: float, *, is_autumn: bool) -> float:
     The lazy STAC+ERA5 chain ranks candidates by ERA5 overpass cloud
     cover; the chosen date is then handed to ``fetch_spectral``, which
     applies an SCL-based AOI cloud gate as a safety net. This function
-    sets that gate adaptively per candidate:
+    sets that gate adaptively per candidate.
 
-      * ERA5 reports clear skies → strict gate (we expect actual SCL
-        to confirm cleanliness; reject anything materially worse).
-      * ERA5 reports cloudy conditions → loose gate (the ERA5↔SCL
-        variance is dominated by partial-cloud patchiness at the
-        5×5 km reanalysis grid, so a strict gate would over-reject
-        scenes whose actual AOI happens to be in a clear pocket).
+    Calibration rationale (revised after empirical funnel diagnostic):
 
-    Replaces the previous static ``max_aoi_cloud * (3 / 1.5)`` ceiling
-    with a calibration derived from per-candidate data confidence.
+      * The FLOOR (ERA5 = 0 %) is the pre-adaptive static value
+        (0.15 growing / 0.30 autumn) — those numbers worked across the
+        pre-refactor race-pool because ERA5 at the 5×5 km reanalysis
+        grid systematically under-reports pixel-level SCL cloud
+        fraction (sub-cell patchiness). A 0.05 / 0.10 floor — the
+        intuitive "trust ERA5 when it says clear" — rejected ~96 %
+        of candidates the lazy chain ranked. Empirical fix: anchor
+        the floor at the static defaults.
+      * The SLOPE opens the gate further when ERA5 reports cloud
+        (where the ERA5↔SCL variance is largest), reaching 0.30
+        (growing) / 0.55 (autumn) at ERA5 = 50 %. So the adaptive
+        behaviour is "as permissive as static when ERA5 says clear;
+        more permissive than static when ERA5 says cloudy".
 
-    Linear scaling for simplicity; can be tuned to parabolic if the
-    variance shape turns out to peak in the middle of the range (the
-    theoretically expected pattern). Inputs ≥ 50 % are capped — the
-    ranker's ``overpass_cloud_max_pct`` gate already drops candidates
-    above that, so values above 50 % only occur via direct override.
+    Inputs ≥ 50 % are capped — the ranker's ``overpass_cloud_max_pct``
+    gate already drops candidates above that, so values above 50 %
+    only occur via direct override or the synthetic-pre-2018
+    fallback (which sets ERA5 = 50 to force the loose end of the
+    curve).
 
     Args:
         era5_overpass_pct: ERA5 cloud cover at S2 overpass time, 0–100.
-        is_autumn: Autumn (slot 0) uses a wider range (0.10–0.50) to
-            maximise usable coverage when scenes are scarce. Growing
-            season uses (0.05–0.25).
+        is_autumn: Autumn (slot 0) uses a wider range to maximise
+            usable coverage when scenes are scarce.
 
     Returns:
         SCL acceptance ceiling in [0, 1]. Pass directly to
@@ -710,8 +715,8 @@ def era5_to_scl_gate(era5_overpass_pct: float, *, is_autumn: bool) -> float:
     capped = min(max(era5_overpass_pct, 0.0), 50.0)
     fraction = capped / 50.0
     if is_autumn:
-        return 0.10 + 0.40 * fraction   # 0.10 .. 0.50
-    return 0.05 + 0.20 * fraction       # 0.05 .. 0.25
+        return 0.30 + 0.25 * fraction   # 0.30 .. 0.55
+    return 0.15 + 0.15 * fraction       # 0.15 .. 0.30
 
 
 # ── STAC granule pre-filter (used by stac_* modes) ─────────────────────────
