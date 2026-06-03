@@ -598,52 +598,65 @@ def rank_stac_era5_candidates(
     date_start: str,
     date_end: str,
     *,
-    scene_cloud_max: float = 80.0,
     overpass_cloud_max: float | None = 50.0,
     atmosphere_rules: dict | None = None,
-) -> list[tuple[str, float, float]]:
-    """Cheap pre-rank of real S2 passes — no openEO SCL call.
+    stac_backend: str = "des",
+) -> list[tuple[str, float]]:
+    """Cheap pre-rank of real S2 passes — no openEO SCL call, no STAC
+    cloud filtering.
 
-    Combines the two FREE signals to rank candidate dates before spending
-    any expensive openEO SCL verification:
+    Combines two FREE signals — real S2 acquisition dates from a STAC
+    catalogue + ERA5 overpass-time cloud cover — to rank candidate dates
+    before any expensive SCL verification:
 
-      * DES STAC (`imint.fetch._stac_available_dates`, ``s2_msi_l2a``) —
-        the real Sentinel-2 acquisition dates over the AOI + their granule
-        ``eo:cloud_cover``. Grounds us in actual passes (no synthetic
-        cadence) and is a single anonymous HTTP call.
-      * ERA5 overpass-time cloud (Open-Meteo, `_era5_daily_open_meteo`) —
-        AOI-area ~30 km cloud at the 10-11 h S2 pass. Another free call.
+      * STAC (``imint.fetch._stac_available_dates``) — real Sentinel-2
+        acquisition dates over the AOI. We do NOT use STAC's
+        ``eo:cloud_cover`` — granule-wide cloud cover for a ~100×100 km
+        tile is too coarse to predict our 5×5 km AOI's pixel-level
+        cloud cover. ERA5 + SCL handle cloud filtering downstream.
+      * ERA5 overpass-time cloud (Open-Meteo,
+        ``_era5_daily_open_meteo``) — AOI-area ~30 km cloud at the
+        10-11 h S2 pass.
 
     Dates whose ERA5 overpass cloud exceeds ``overpass_cloud_max`` are
     dropped (obviously overcast). Survivors are ranked ascending by
-    (overpass cloud, granule cloud) so the caller can lazily SCL-verify
-    best-first and stop at the first AOI-clean date — the minimum number
-    of expensive SCL calls.
+    overpass cloud so the caller iterates best-first and the adaptive
+    SCL gate (:func:`era5_to_scl_gate`) sees ERA5 reach its tightest
+    setting at the top of the list.
+
+    Args:
+        stac_backend: ``"des"`` (default; catalogue starts in 2018) or
+            ``"earth-search"`` (AWS, covers all S2 history; use for
+            pre-2018 windows).
 
     Returns:
-        ``[(date, granule_cc, overpass_cloud)]`` best-first. ``overpass``
-        is ``-1.0`` when Open-Meteo had no value (kept, ranked last).
+        ``[(date, overpass_cloud)]`` best-first. ``overpass_cloud`` is
+        ``-1.0`` when Open-Meteo had no value (kept, ranked last).
     """
     from imint.fetch import _stac_available_dates
 
+    # scene_cloud_max=100 disables STAC's granule-level cloud filter —
+    # we want the full set of real S2 dates; downstream ERA5 + SCL do
+    # the per-AOI cloud assessment.
     stac = _stac_available_dates(
-        coords_wgs84, date_start, date_end, scene_cloud_max=scene_cloud_max,
-    )  # [(date, granule_cc)] sorted by cc
+        coords_wgs84, date_start, date_end,
+        scene_cloud_max=100.0, backend=stac_backend,
+    )
 
     daily = _era5_daily_open_meteo(coords_wgs84, date_start, date_end)
     overpass = {w["date"]: w.get("overpass_cloud_pct") for w in daily}
 
-    out: list[tuple[str, float, float]] = []
-    for d, cc in stac:
+    out: list[tuple[str, float]] = []
+    for d, _cc in stac:
         oc = overpass.get(d)
         if (overpass_cloud_max is not None and oc is not None
                 and oc > overpass_cloud_max):
             continue  # ERA5 says overcast at overpass time → skip
-        out.append((d, float(cc), float(oc) if oc is not None else -1.0))
+        out.append((d, float(oc) if oc is not None else -1.0))
 
-    # Rank: overpass cloud first (our pipeline's gate signal), then granule.
-    # Unknown overpass (-1.0) sinks to the bottom via the 999 sentinel.
-    out.sort(key=lambda t: (t[2] if t[2] >= 0 else 999.0, t[1]))
+    # Rank ascending by overpass cloud. Unknown overpass (-1.0) sinks
+    # to the bottom via the 999 sentinel.
+    out.sort(key=lambda t: t[1] if t[1] >= 0 else 999.0)
     return out
 
 

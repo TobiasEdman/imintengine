@@ -833,25 +833,23 @@ def repair_to_canonical_layout(
     if needs_growing:
         try:
             ranked_by_window["growing"] = rank_stac_era5_candidates(
-                coords, gs_ds, gs_de, scene_cloud_max=80.0,
-                overpass_cloud_max=50.0,
+                coords, gs_ds, gs_de, overpass_cloud_max=50.0,
             )
         except Exception as exc:
             print(f"    [rank] growing candidates failed for {name}: "
                   f"{type(exc).__name__}: {str(exc)[:140]}", flush=True)
     if needs_autumn:
         try:
-            # Autumn cloudier — looser granule + overpass ceilings.
+            # Autumn cloudier — looser overpass ceiling.
             ranked_by_window["autumn"] = rank_stac_era5_candidates(
-                coords, au_ds, au_de, scene_cloud_max=90.0,
-                overpass_cloud_max=65.0,
+                coords, au_ds, au_de, overpass_cloud_max=65.0,
             )
         except Exception as exc:
             print(f"    [rank] autumn candidates failed for {name}: "
                   f"{type(exc).__name__}: {str(exc)[:140]}", flush=True)
     # Date-only lists for the per-slot fallback's prefetched_dates= param.
-    autumn_dates = [d for d, _, _ in ranked_by_window["autumn"]]
-    growing_dates = [d for d, _, _ in ranked_by_window["growing"]]
+    autumn_dates = [d for d, _ in ranked_by_window["autumn"]]
+    growing_dates = [d for d, _ in ranked_by_window["growing"]]
 
     # Fetch each missing slot
     fetched: dict[int, tuple[np.ndarray, str]] = {}
@@ -901,26 +899,30 @@ def repair_to_canonical_layout(
         _ds, _de = doy_to_date_range(syear, smin, smax)
         is_autumn = (sidx == 0)
         ranked = ranked_by_window["autumn" if is_autumn else "growing"]
-        # Capture ERA5 overpass cloud per candidate for ERA5-adaptive
-        # SCL gating (see era5_to_scl_gate). Tuple shape from the ranker:
-        # (date_str, stac_granule_cc_pct, era5_overpass_pct).
-        candidates = [(d, oc) for d, _cc, oc in ranked if _ds <= d <= _de]
+        # Per-candidate ERA5 overpass cloud drives the adaptive SCL gate
+        # (see era5_to_scl_gate). Tuple shape from the ranker:
+        # (date_str, era5_overpass_pct).
+        candidates = [(d, oc) for d, oc in ranked if _ds <= d <= _de]
 
-        # Pre-2018 synthetic fallback: DES STAC catalogue starts in 2018
-        # — so for 2018-tile autumn frames (which sit in 2017), the
-        # ranker returns zero candidates even though CDSE has the data.
-        # Generate every-3-days synthetic dates with ERA5=50 (the high-
-        # uncertainty marker → loose adaptive gate, since we have no
-        # real ERA5 telling us this date is clear). SH Process queries
-        # CDSE directly and can fetch 2017 scenes when they exist.
+        # Pre-2018 catalogue gap: explorer.digitalearth.se's STAC starts
+        # in 2018, so DES rank returns no candidates for year=2018 tiles'
+        # slot 0 (autumn 2017) even though the data exists. Fall back to
+        # earth-search (AWS, full S2 history) and re-rank with real ERA5
+        # values — same ranker logic, different STAC source. No synthetic
+        # date generation, no ERA5=50 placeholder.
         if not candidates and _de < "2018-01-01":
-            from datetime import datetime as _dt, timedelta as _td
-            d0 = _dt.strptime(_ds, "%Y-%m-%d")
-            d1 = _dt.strptime(_de, "%Y-%m-%d")
-            candidates = [
-                ((d0 + _td(days=i)).strftime("%Y-%m-%d"), 50.0)
-                for i in range(0, (d1 - d0).days + 1, 3)
-            ]
+            try:
+                era5_ceiling = 65.0 if is_autumn else 50.0
+                aws_ranked = rank_stac_era5_candidates(
+                    coords, _ds, _de,
+                    overpass_cloud_max=era5_ceiling,
+                    stac_backend="earth-search",
+                )
+                candidates = [(d, oc) for d, oc in aws_ranked]
+            except Exception as exc:
+                print(f"    [rank:earth-search] {name} slot {sidx} "
+                      f"({_ds}..{_de}): {type(exc).__name__}: "
+                      f"{str(exc)[:140]}", flush=True)
 
         # Mid-tile health re-check: if the chosen backend was marked
         # dead while a previous slot was processing (e.g. cdse-openeo

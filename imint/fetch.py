@@ -3593,37 +3593,75 @@ class BaselineCandidate:
     cot_stats: dict | None = None  # COT analysis: clear_fraction, cot_mean, etc.
 
 
+_STAC_BACKENDS = {
+    "des": {
+        "url": STAC_SEARCH_URL,
+        "collection": "s2_msi_l2a",
+        # explorer.digitalearth.se catalogue starts in 2018.
+    },
+    "earth-search": {
+        "url": "https://earth-search.aws.element84.com/v1/search",
+        "collection": "sentinel-2-l2a",
+        # AWS-hosted, anonymous; covers all S2 history (S2A from 2015).
+        # Use when the DES catalogue gap matters (e.g. pre-2018 windows).
+    },
+}
+
+
 def _stac_available_dates(
     coords: dict,
     date_start: str,
     date_end: str,
     scene_cloud_max: float = 80.0,
+    *,
+    backend: str = "des",
 ) -> list[tuple[str, float]]:
-    """Query STAC API for available Sentinel-2 L2A dates within bbox and time range.
+    """Query a STAC catalogue for available Sentinel-2 L2A dates.
 
     Returns deduplicated dates sorted by scene cloud cover ascending.
     Multiple tiles/orbits on the same date are merged (lowest cloud kept).
+    The granule-level ``eo:cloud_cover`` is coarse (~100×100 km tile-wide
+    average) and most callers should ignore it — the rank+SCL pipeline
+    relies on ERA5 overpass + SCL for accurate per-AOI filtering. The
+    tuple shape is retained for backward compatibility with existing
+    callers that still consume the value.
 
     Args:
-        coords: WGS84 bounding box dict.
+        coords: WGS84 bounding box dict ``{west, south, east, north}``.
         date_start: ISO start date (inclusive).
         date_end: ISO end date (inclusive).
         scene_cloud_max: Discard dates with scene cloud > this %.
+        backend: STAC catalogue to query. ``"des"`` (default;
+            ``explorer.digitalearth.se``, S2 from 2018 onward) or
+            ``"earth-search"`` (``earth-search.aws.element84.com``,
+            full S2 history). For pre-2018 windows use ``"earth-search"``.
 
     Returns:
-        List of (date_str, scene_cloud_pct) sorted by cloud ascending.
-    """
-    import urllib.request
-    import urllib.parse
-    import json
+        List of ``(date_str, scene_cloud_pct)`` sorted by cloud ascending.
 
+    Raises:
+        ValueError: If ``backend`` is not in :data:`_STAC_BACKENDS`.
+    """
+    import json
+    import urllib.parse
+    import urllib.request
+
+    if backend not in _STAC_BACKENDS:
+        raise ValueError(
+            f"Unknown STAC backend {backend!r}. "
+            f"Supported: {sorted(_STAC_BACKENDS)}."
+        )
+    cfg = _STAC_BACKENDS[backend]
+    # earth-search enforces RFC3339 timestamps; DES STAC accepts date-only.
+    # Send full RFC3339 in both cases — DES treats it identically.
+    dt_range = f"{date_start}T00:00:00Z/{date_end}T23:59:59Z"
     params = urllib.parse.urlencode({
-        "collections": "s2_msi_l2a",
+        "collections": cfg["collection"],
         "bbox": f"{coords['west']},{coords['south']},{coords['east']},{coords['north']}",
-        "datetime": f"{date_start}/{date_end}",
+        "datetime": dt_range,
         "limit": 200,
     })
-    url = f"{STAC_SEARCH_URL}?{params}"
+    url = f"{cfg['url']}?{params}"
 
     req = urllib.request.Request(url)
     with urllib.request.urlopen(req, timeout=30) as resp:
