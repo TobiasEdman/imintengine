@@ -83,6 +83,8 @@ def fetch_spectral(
         / an error occurred (errors are logged but not raised).
     """
     if backend == "cdse":
+        if is_source_dead("cdse"):
+            return None  # SH Process PUs exhausted this session — fail fast.
         return _fetch_via_cdse_sh_process(
             bbox_3006, date_str,
             size_px=size_px, cloud_threshold=cloud_threshold,

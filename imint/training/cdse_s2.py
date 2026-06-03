@@ -87,6 +87,26 @@ _CRS_3006 = "http://www.opengis.net/def/crs/EPSG/0/3006"
 _CRS_4326 = "http://www.opengis.net/def/crs/EPSG/0/4326"
 
 
+def _is_pu_exhausted_error(exc: BaseException) -> bool:
+    """Detect SH Process PU exhaustion: HTTP 403 + ACCESS_INSUFFICIENT_PROCESSING_UNITS.
+
+    ``_fetch_s2_tiff`` wraps the upstream HTTPError into a RuntimeError
+    whose message includes the status code and response body. We match by
+    string rather than exception type to stay loose against client and
+    server format changes; the unique error-code token from Sentinel Hub
+    is the reliable signal.
+
+    Counterpart to :func:`imint.training.openeo_tile_graph._is_payment_required_error`,
+    which catches the equivalent (different) signal on the CDSE openEO
+    backend (HTTP 402 / "PaymentRequired").
+    """
+    msg = f"{type(exc).__name__}: {exc}"
+    return (
+        "ACCESS_INSUFFICIENT_PROCESSING_UNITS" in msg
+        or ("HTTP 403" in msg and "processing units" in msg.lower())
+    )
+
+
 def _prescreen_scl(
     west: float, south: float, east: float, north: float,
     date: str, h_px: int, w_px: int,
@@ -103,11 +123,36 @@ def _prescreen_scl(
             date=date, token=token, crs=crs,
             evalscript=_build_scl_only_evalscript(),
         )
-    except Exception:
+    except Exception as e:
+        # Visible log (was silent: ``except Exception: return None, 1.0``).
+        # That swallow once hid 24 h of PU-exhaustion behind a sentinel that
+        # looked identical to 100 % AOI cloud rejection — don't repeat it.
+        msg = str(e)[:200]
+        if _is_pu_exhausted_error(e):
+            from imint.training.openeo_tile_graph import (
+                is_source_dead, mark_source_dead,
+            )
+            if not is_source_dead("cdse"):
+                mark_source_dead(
+                    "cdse",
+                    f"403 ACCESS_INSUFFICIENT_PROCESSING_UNITS in _prescreen_scl: {msg}",
+                )
+            # Once marked dead, future calls short-circuit via
+            # fetch_spectral._fetch_via_cdse_sh_process.
+        else:
+            print(
+                f"    [SH SCL] {date}: prescreen failed "
+                f"({type(e).__name__}: {msg})",
+                flush=True,
+            )
         return None, 1.0
 
     bands = _parse_multiband_tiff(tiff_bytes, h_px, w_px, 1)
     if bands is None or len(bands) < 1:
+        print(
+            f"    [SH SCL] {date}: prescreen TIFF parse returned no bands",
+            flush=True,
+        )
         return None, 1.0
 
     scl = bands[0].astype(np.uint8)
@@ -177,7 +222,18 @@ def fetch_s2_scene(
             date=date, token=token, crs=crs,
         )
     except Exception as e:
-        print(f"    [SH HTTP] {date}: {e}")
+        msg = str(e)[:200]
+        if _is_pu_exhausted_error(e):
+            from imint.training.openeo_tile_graph import (
+                is_source_dead, mark_source_dead,
+            )
+            if not is_source_dead("cdse"):
+                mark_source_dead(
+                    "cdse",
+                    f"403 ACCESS_INSUFFICIENT_PROCESSING_UNITS in fetch_s2_scene: {msg}",
+                )
+        else:
+            print(f"    [SH HTTP] {date}: {e}", flush=True)
         return None
 
     bands = _parse_multiband_tiff(tiff_bytes, h_px, w_px, len(_ALL_BANDS))

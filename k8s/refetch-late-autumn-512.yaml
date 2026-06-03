@@ -101,7 +101,7 @@ spec:
                 --output-dir /cephfs/unified_v2_512 \
                 --tile-size-px 512 \
                 --workers 6 \
-                --sources cdse,des \
+                --sources cdse-openeo,des \
                 --cloud-max 30.0
               # 2026-05-26d: cdse-openeo back in --sources with new
               # session-scoped 402-guard (credit_guard module). First
