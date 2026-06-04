@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ImintEngine — refetch progress</title>
+  <meta http-equiv="cache-control" content="no-cache" />
+  <style>
+    :root {
+      --bg: #0d1117;
+      --fg: #d0d7de;
+      --dim: #6e7681;
+      --accent: #58a6ff;
+      --ok:   #2ea043;
+      --fail: #f85149;
+      --skip: #6e7681;
+      --warn: #d29922;
+      --card: #161b22;
+      --border: #30363d;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg); color: var(--fg);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 14px; line-height: 1.5;
+    }
+    body { padding: 28px; max-width: 1200px; margin: 0 auto; }
+
+    h1 { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
+         color: var(--dim); font-weight: 500; margin: 0 0 12px; }
+    .row { display: grid; gap: 16px; margin-bottom: 16px; }
+    .row.cols-2 { grid-template-columns: 1fr 1fr; }
+    .row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+    .row.cols-4 { grid-template-columns: repeat(4, 1fr); }
+
+    .card { background: var(--card); border: 1px solid var(--border);
+            border-radius: 8px; padding: 18px 20px; }
+    .card .label { font-size: 11px; text-transform: uppercase;
+                   color: var(--dim); letter-spacing: 1px; margin-bottom: 6px; }
+    .card .value { font-size: 28px; font-weight: 600; line-height: 1.2; }
+    .card .value.small { font-size: 20px; }
+    .card .sub { font-size: 12px; color: var(--dim); margin-top: 4px; }
+
+    .countdown {
+      background: linear-gradient(135deg, #1a2535, #0d1117);
+      border: 1px solid var(--accent);
+      border-radius: 12px;
+      padding: 28px 32px;
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    .countdown .timer {
+      font-size: 56px; font-weight: 700;
+      letter-spacing: 2px; color: var(--accent);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.1;
+    }
+    .countdown .timer.idle { color: var(--dim); }
+    .countdown .timer-label {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 2px;
+      color: var(--dim); margin-bottom: 12px;
+    }
+    .countdown .eta-extra {
+      font-size: 12px; color: var(--dim); margin-top: 10px;
+    }
+
+    .progress-bar {
+      height: 10px; background: var(--border); border-radius: 5px;
+      overflow: hidden; margin: 12px 0 4px;
+    }
+    .progress-bar > div {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), #2ea043);
+      transition: width 0.6s ease-out;
+    }
+    .progress-text { font-size: 12px; color: var(--dim); }
+
+    .stat-row { display: flex; justify-content: space-between;
+                padding: 6px 0; border-bottom: 1px solid var(--border); }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-row .k { color: var(--dim); }
+    .stat-row .v { font-weight: 600; }
+
+    .ok-val   { color: var(--ok); }
+    .fail-val { color: var(--fail); }
+    .skip-val { color: var(--skip); }
+    .warn-val { color: var(--warn); }
+
+    .status-bar { display: flex; gap: 16px; align-items: center;
+                  padding: 12px 16px; background: var(--card);
+                  border-radius: 8px; border: 1px solid var(--border);
+                  margin-bottom: 16px; font-size: 13px; }
+    .status-bar .dot { width: 8px; height: 8px; border-radius: 50%;
+                       background: var(--ok); animation: pulse 2s infinite; }
+    .status-bar .dot.stale { background: var(--warn); animation: none; }
+    .status-bar .dot.dead  { background: var(--fail); animation: none; }
+    @keyframes pulse { 0%,100% {opacity:1;} 50% {opacity:0.4;} }
+
+    .slot-bar { display: grid; grid-template-columns: 140px 60px 1fr 60px;
+                gap: 8px; align-items: center; padding: 6px 0; font-size: 13px; }
+    .slot-bar .name  { color: var(--dim); }
+    .slot-bar .count { text-align: right; font-weight: 600; }
+    .slot-bar .pct   { text-align: right; color: var(--dim); }
+    .slot-bar .bar   { background: var(--border); height: 8px; border-radius: 4px;
+                       overflow: hidden; }
+    .slot-bar .bar > div {
+      height: 100%; background: var(--fail);
+    }
+
+    .footer { color: var(--dim); font-size: 11px; text-align: right;
+              margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <h1>ImintEngine · refetch-late-autumn-512</h1>
+  <div id="subtitle" style="color: var(--dim); font-size:12px; margin-bottom:18px;">
+    DES-only · 6786 audit-flagged tiles · ~15 571 slot-fetches needed
+  </div>
+
+  <div class="status-bar">
+    <span class="dot" id="liveDot"></span>
+    <span id="podLine">connecting…</span>
+    <span style="margin-left:auto; color: var(--dim);"
+          id="lastUpdate">never updated</span>
+  </div>
+
+  <div class="countdown">
+    <div class="timer-label">ESTIMATED TIME REMAINING (live)</div>
+    <div class="timer" id="countdown">—:—:—</div>
+    <div class="eta-extra" id="etaExtra">awaiting first counter from pod…</div>
+  </div>
+
+  <div class="row cols-4">
+    <div class="card"><div class="label">scanned</div>
+      <div class="value" id="scanned">0</div>
+      <div class="sub"><span id="scannedPct">0 %</span> of 6 786</div>
+      <div class="progress-bar"><div id="progressFill" style="width:0%"></div></div>
+    </div>
+    <div class="card"><div class="label">ok</div>
+      <div class="value ok-val" id="okN">0</div>
+      <div class="sub" id="okRatio">0 % of attempts</div>
+    </div>
+    <div class="card"><div class="label">failed</div>
+      <div class="value fail-val" id="failN">0</div>
+      <div class="sub" id="failReason">silent rejects = bug; visible = config</div>
+    </div>
+    <div class="card"><div class="label">skipped (already OK)</div>
+      <div class="value skip-val" id="skipN">0</div>
+      <div class="sub">352 expected from strategy</div>
+    </div>
+  </div>
+
+  <div class="row cols-2">
+    <div class="card">
+      <h2>throughput</h2>
+      <div class="stat-row"><span class="k">current rate</span>
+        <span class="v" id="rate">—</span></div>
+      <div class="stat-row"><span class="k">rate trend (last 5 polls)</span>
+        <span class="v" id="rateTrend">—</span></div>
+      <div class="stat-row"><span class="k">remaining tiles to scan</span>
+        <span class="v" id="remaining">—</span></div>
+      <div class="stat-row"><span class="k">pod-reported ETA</span>
+        <span class="v" id="podEta">—</span></div>
+    </div>
+    <div class="card">
+      <h2>strategy (audit_strategy.py findings)</h2>
+      <div class="stat-row"><span class="k">tiles to skip (all 4 OK)</span>
+        <span class="v skip-val">352  (5.2 %)</span></div>
+      <div class="stat-row"><span class="k">tiles needing ≥1 slot refetch</span>
+        <span class="v">6 434</span></div>
+      <div class="stat-row"><span class="k">total slot-fetches needed</span>
+        <span class="v">15 571</span></div>
+      <div class="stat-row"><span class="k">DES throughput estimate</span>
+        <span class="v">22 – 43 h</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>per-slot brokenness (which slot fails most across audit tiles)</h2>
+    <div class="slot-bar">
+      <span class="name">slot 0 — autumn</span>
+      <span class="count">6 109</span>
+      <span class="bar"><div style="width:90%"></div></span>
+      <span class="pct">90.0 %</span>
+    </div>
+    <div class="slot-bar">
+      <span class="name">slot 1 — spring</span>
+      <span class="count">2 322</span>
+      <span class="bar"><div style="width:34.2%"></div></span>
+      <span class="pct">34.2 %</span>
+    </div>
+    <div class="slot-bar">
+      <span class="name">slot 2 — summer</span>
+      <span class="count">1 620</span>
+      <span class="bar"><div style="width:23.9%"></div></span>
+      <span class="pct">23.9 %</span>
+    </div>
+    <div class="slot-bar">
+      <span class="name">slot 3 — late-summer</span>
+      <span class="count">5 520</span>
+      <span class="bar"><div style="width:81.3%"></div></span>
+      <span class="pct">81.3 %</span>
+    </div>
+    <div style="font-size:11px; color: var(--dim); margin-top: 8px;">
+      slots 0 + 3 dominate → consistent with the PR #15 ``cap_doy=244`` bug
+      that originally caused the audit list.
+    </div>
+  </div>
+
+  <div class="footer" id="footer">
+    Polls <code>kubectl logs</code> every 30 s · countdown ticks every 1 s.
+    Recomputed against live rate on each poll.
+  </div>
+
+  <script>
+    // Countdown state
+    let baselineRemainingSec = null;   // seconds remaining at last data fetch
+    let baselineAt = null;             // Date when baselineRemainingSec was set
+    let dataIsStale = false;           // grow stale if no poll for 90s
+
+    function fmtHMS(totalSec) {
+      if (totalSec == null || isNaN(totalSec) || totalSec < 0) return "—:—:—";
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = Math.floor(totalSec % 60);
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+
+    function tickCountdown() {
+      const el = document.getElementById("countdown");
+      if (baselineRemainingSec == null) {
+        el.textContent = "—:—:—";
+        el.classList.add("idle");
+        return;
+      }
+      const elapsed = (Date.now() - baselineAt) / 1000;
+      const remaining = baselineRemainingSec - elapsed;
+      el.textContent = fmtHMS(remaining);
+      el.classList.toggle("idle", remaining <= 0);
+      // Compute clock time at which countdown hits zero
+      if (remaining > 0) {
+        const eta = new Date(Date.now() + remaining * 1000);
+        const day = eta.toLocaleDateString(undefined,
+                      {weekday:"short", month:"short", day:"numeric"});
+        const t = eta.toLocaleTimeString();
+        document.getElementById("etaExtra").textContent =
+          `done by ${day} ${t}`;
+      }
+    }
+    setInterval(tickCountdown, 1000);
+
+    let rateHistory = [];
+
+    async function fetchData() {
+      try {
+        const r = await fetch("data.json?t=" + Date.now(),
+                              {cache:"no-store"});
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const d = await r.json();
+        applyData(d);
+        document.getElementById("liveDot").classList.remove("stale","dead");
+        dataIsStale = false;
+      } catch (e) {
+        document.getElementById("liveDot").classList.add("dead");
+        document.getElementById("podLine").textContent =
+          "data fetch failed: " + e.message;
+      }
+    }
+
+    function applyData(d) {
+      // Pod info
+      const pod = d.pod || {};
+      document.getElementById("podLine").textContent =
+        `pod: ${pod.name || "—"} · status: ${pod.status || "—"} · age: ${pod.age || "—"}`;
+      const ts = new Date(d.timestamp);
+      document.getElementById("lastUpdate").textContent =
+        "updated " + ts.toLocaleTimeString();
+
+      const p = d.progress || {};
+      const scanned = p.scanned || 0;
+      const total   = p.total   || 6786;
+      const ok      = p.ok      || 0;
+      const failed  = p.failed  || 0;
+      const skipped = p.skipped || 0;
+      const ratePh  = p.rate_per_hour;
+
+      document.getElementById("scanned").textContent = scanned.toLocaleString();
+      document.getElementById("scannedPct").textContent =
+        (100*scanned/total).toFixed(1) + " %";
+      document.getElementById("progressFill").style.width =
+        (100*scanned/total).toFixed(2) + "%";
+
+      document.getElementById("okN").textContent   = ok.toLocaleString();
+      document.getElementById("failN").textContent = failed.toLocaleString();
+      document.getElementById("skipN").textContent = skipped.toLocaleString();
+
+      const attempts = ok + failed;
+      document.getElementById("okRatio").textContent =
+        attempts ? `${(100*ok/attempts).toFixed(1)} % of attempts` :
+                   "no attempts yet (skip-burst)";
+
+      document.getElementById("rate").textContent =
+        ratePh ? Math.round(ratePh).toLocaleString() + " / h" : "—";
+      document.getElementById("remaining").textContent =
+        (total - scanned).toLocaleString();
+      document.getElementById("podEta").textContent =
+        p.eta_min ? `${p.eta_min.toFixed(1)} min` : "—";
+
+      // Track recent rates for trend
+      if (ratePh) {
+        rateHistory.push(ratePh);
+        if (rateHistory.length > 5) rateHistory.shift();
+        const avg = rateHistory.reduce((a,b)=>a+b,0) / rateHistory.length;
+        const trend = rateHistory.length >= 2 ?
+          ((rateHistory[rateHistory.length-1] - rateHistory[0]) /
+              rateHistory[0] * 100) : null;
+        const arrow = trend == null ? "" :
+          trend > 5 ? " ↗" : trend < -5 ? " ↘" : " →";
+        document.getElementById("rateTrend").textContent =
+          `${Math.round(avg).toLocaleString()} / h${arrow}`;
+      }
+
+      // Set the countdown baseline using current rate + remaining tiles.
+      if (ratePh && ratePh > 0) {
+        const remTiles = total - scanned;
+        baselineRemainingSec = remTiles * 3600 / ratePh;
+        baselineAt = Date.now();
+      } else if (p.eta_min) {
+        baselineRemainingSec = p.eta_min * 60;
+        baselineAt = Date.now();
+      }
+    }
+
+    // Stale detection — flag if no successful fetch in 90s
+    setInterval(() => {
+      const lu = document.getElementById("lastUpdate").textContent;
+      if (lu === "never updated") return;
+      // best-effort age check
+      const dot = document.getElementById("liveDot");
+      if (!dot.classList.contains("dead")) {
+        const sinceLast = Date.now() -
+          (rateHistory.length ? Date.now() - 30000 : 0);
+        // (simplified — actual staleness handled by fetch failure / poll cadence)
+      }
+    }, 5000);
+
+    fetchData();
+    setInterval(fetchData, 30 * 1000);
+  </script>
+</body>
+</html>
