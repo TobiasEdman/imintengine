@@ -61,10 +61,10 @@
     ]
   },
   "model_input": {
-    "description": "Canonical Prithvi-EO-2.0 input is (4 frames × 6 bands + 11 aux, H, W) = 35 channels.",
-    "channels": 35,
+    "description": "Prithvi-EO-2.0 input is (4 frames × 6 bands + 10 aux, H, W) = 34 channels. (The synthetic harvest_probability channel was dropped — it leaked the harvest target into the input.)",
+    "channels": 34,
     "spectral_channels": 24,
-    "aux_channels_11": ["height", "volume", "basal_area", "diameter", "dem", "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv", "harvest_probability"],
+    "aux_channels_10": ["height", "volume", "basal_area", "diameter", "dem", "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv"],
     "heads": {
       "lulc": "23-class softmax segmentation (focal loss)",
       "harvest_ready": "binary sigmoid harvest-readiness map (BCE loss), trained where n_mature_polygons > 0"
@@ -88,8 +88,7 @@
     "vpp_length":          {"shape": ["H", "W"], "dtype": "float32", "desc": "season length (days)", "source": "Copernicus HR-VPP", "required": false},
     "vpp_maxv":            {"shape": ["H", "W"], "dtype": "float32", "desc": "seasonal max vegetation index", "source": "Copernicus HR-VPP", "required": false},
     "vpp_minv":            {"shape": ["H", "W"], "dtype": "float32", "desc": "seasonal min vegetation index", "source": "Copernicus HR-VPP", "required": false},
-    "harvest_mask":        {"shape": ["H", "W"], "dtype": "uint8", "desc": "binary mask of SKS harvested polygons", "source": "SKS", "required": false},
-    "harvest_probability": {"shape": ["H", "W"], "dtype": "float64", "desc": "harvest-readiness probability (head-2 target signal)", "source": "SKS", "required": false},
+    "harvest_mask":        {"shape": ["H", "W"], "dtype": "uint8", "desc": "binary mask of SKS executed-harvest (utförd avverkning) polygons", "source": "SKS", "required": false},
     "markfukt":            {"shape": ["H", "W"], "dtype": "float32", "desc": "soil moisture index (markfuktighet)", "source": "SLU", "required": false},
     "nmd_area_ha":         {"shape": ["H", "W"], "dtype": "float32", "desc": "NMD object area (ha)", "source": "NMD", "required": false},
     "parcel_area_ha":      {"shape": ["H", "W"], "dtype": "float32", "desc": "LPIS parcel area (ha)", "source": "LPIS", "required": false},
@@ -139,6 +138,7 @@
     "lr": 0.0001,
     "val_miou": 0.4716,
     "status": "baseline (fine-tuning seed; not production)",
+    "note": "Trained with 35 input channels (incl. the harvest_probability aux). That synthetic channel has since been dropped from the dataset (now 34ch); retrain or adapt the input stem accordingly.",
     "files": {
       "checkpoint": "model/prithvi_300m_256_best.pt",
       "training_log": "model/training_log.json",

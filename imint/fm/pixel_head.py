@@ -12,7 +12,7 @@ Architecture:
 
     AUX path (when n_aux > 0):
         Input  : (B, N_AUX) float32 center-pixel auxiliary scalars
-                 (height, volume, DEM, VPP, harvest_probability — z-scored)
+                 (height, volume, basal_area, diameter, DEM, VPP — z-scored)
         Project: Linear(N_AUX → aux_proj_dim) → GELU          → (B, 64)
 
     Fusion + Head:
@@ -51,9 +51,8 @@ import torch.nn as nn
 from imint.training.unified_schema import NUM_UNIFIED_CLASSES
 
 # Default AUX dimensionality — matches len(AUX_CHANNEL_NAMES) in unified_dataset
-N_AUX_DEFAULT = 11   # height, volume, basal_area, diameter, dem,
-                     # vpp_sosd, vpp_eosd, vpp_length, vpp_maxv, vpp_minv,
-                     # harvest_probability
+N_AUX_DEFAULT = 10   # height, volume, basal_area, diameter, dem,
+                     # vpp_sosd, vpp_eosd, vpp_length, vpp_maxv, vpp_minv
 AUX_PROJ_DIM = 64    # hidden dim of the lightweight AUX projector
 
 

@@ -40,10 +40,10 @@ HTML version.
 | ![DEM](img/dem.png) | ![Height](img/height.png) |
 | Copernicus DEM (terrain) | SLU Skogliga grunddata (viridis) |
 
-| VPP start-of-season | Harvest-readiness probability |
-|:---:|:---:|
-| ![VPP](img/vpp.png) | ![Harvest](img/harvest.png) |
-| Copernicus HR-VPP (viridis) | Skogsstyrelsen SKS (magma) |
+| VPP start-of-season |
+|:---:|
+| ![VPP](img/vpp.png) |
+| Copernicus HR-VPP (viridis) |
 
 **Multitemporal — 4 frames** (autumn yr-1 + 3 VPP-guided growing-season):
 

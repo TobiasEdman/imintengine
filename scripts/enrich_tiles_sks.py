@@ -123,55 +123,6 @@ def rasterize_sks(
     return mask, n
 
 
-def compute_harvest_probability(
-    utforda_mask: np.ndarray,
-    anmalda_mask: np.ndarray,
-    decay_distance_m: float = 500.0,
-    pixel_size_m: float = 10.0,
-) -> np.ndarray:
-    """Compute per-pixel harvest probability as a continuous float32 channel.
-
-    Logic:
-      - Within anmäld avverkning polygon: p = 1.0
-      - Within utförd avverkning polygon: p = 0.9
-      - Near either (within decay_distance): p decays with distance
-      - Elsewhere: p = 0.0
-
-    This creates a smooth gradient around harvest areas, giving the model
-    context about proximity to planned/executed harvests.
-
-    Args:
-        utforda_mask: (H, W) uint8, 1=utförd avverkning
-        anmalda_mask: (H, W) uint8, 1=anmäld avverkning
-        decay_distance_m: Distance in meters over which probability decays to 0
-        pixel_size_m: Pixel resolution in meters (10m for S2)
-
-    Returns:
-        (H, W) float32, harvest probability [0.0, 1.0]
-    """
-    from scipy.ndimage import distance_transform_edt
-
-    h, w = utforda_mask.shape
-    prob = np.zeros((h, w), dtype=np.float32)
-
-    # Start with anmälda (highest: p=1.0 inside polygon)
-    if anmalda_mask.any():
-        # Distance from nearest anmäld pixel (in pixels)
-        dist_anm = distance_transform_edt(anmalda_mask == 0) * pixel_size_m
-        decay_pixels = decay_distance_m
-        # Inside polygon: 1.0, decaying to 0 at decay_distance
-        anm_prob = np.clip(1.0 - dist_anm / decay_pixels, 0.0, 1.0)
-        prob = np.maximum(prob, anm_prob)
-
-    # Add utförda (p=0.9 inside, decaying)
-    if utforda_mask.any():
-        dist_utf = distance_transform_edt(utforda_mask == 0) * pixel_size_m
-        utf_prob = np.clip(0.9 * (1.0 - dist_utf / decay_distance_m), 0.0, 0.9)
-        prob = np.maximum(prob, utf_prob)
-
-    return prob
-
-
 def process_tile(
     tile_path: str,
     utforda_gdf,
@@ -196,13 +147,9 @@ def process_tile(
         # Rasterize avverkningsanmälningar → anmalda_mask (binary)
         anmalda_mask, n_mature = rasterize_sks(anmalda_gdf, bbox)
 
-        # Compute continuous harvest probability (float32, 0-1)
-        # Combines both sources with distance decay
-        harvest_prob = compute_harvest_probability(harvest_mask, anmalda_mask)
-
-        # Save
+        # Save the real SKS layers only (the synthetic harvest_probability
+        # channel was dropped — it leaked the harvest target into the input).
         data["harvest_mask"] = harvest_mask           # Binary: utförd avverkning
-        data["harvest_probability"] = harvest_prob    # Float32 [0,1]: aux channel
         data["n_harvest_polygons"] = np.int32(n_harvest)
         data["n_mature_polygons"] = np.int32(n_mature)
 
@@ -210,11 +157,9 @@ def process_tile(
 
         h_pct = float((harvest_mask > 0).mean() * 100)
         m_pct = float((anmalda_mask > 0).mean() * 100)
-        prob_mean = float(harvest_prob[harvest_prob > 0].mean()) if (harvest_prob > 0).any() else 0.0
         return {
             "name": name, "status": "ok",
             "harvest_pct": h_pct, "mature_pct": m_pct,
-            "prob_mean": prob_mean,
             "n_harvest": n_harvest, "n_mature": n_mature,
         }
 

@@ -25,7 +25,6 @@ Output dict (matches LULCDataset format for trainer.py compatibility):
     dem:                 (1, 224, 224) float32
     vpp_sosd:            (1, 224, 224) float32
     vpp_eosd:            (1, 224, 224) float32
-    harvest_probability: (1, 224, 224) float32
     metadata:            {"tile": str, "source": "lulc" | "crop"}
 
 Unified 19-class schema (from unified_schema.py + harvest):
@@ -108,7 +107,6 @@ AUX_NORM = {
     "vpp_length": (141.61, 41.39),
     "vpp_maxv": (0.88, 0.57),
     "vpp_minv": (0.04, 0.05),
-    "harvest_probability": (0.1, 0.2),
 }
 
 # Channels that need log(1+x) pre-transform before z-score
@@ -119,7 +117,6 @@ AUX_LOG_TRANSFORM = {"volume", "basal_area"}
 AUX_CHANNEL_NAMES = [
     "height", "volume", "basal_area", "diameter", "dem",
     "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
-    "harvest_probability",
 ]
 
 # Forest classes in the unified schema (eligible for harvest override)

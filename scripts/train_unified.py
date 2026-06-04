@@ -7,9 +7,9 @@ unified LULC + Crop + Harvest schema (19 classes). Uses UnifiedDataset
 which merges NMD land cover, LPIS crop detail, and SKS harvest data
 from multiple tile directories.
 
-All 8 auxiliary channels enabled by default:
-  height, volume, basal_area, diameter, dem, vpp_sosd, vpp_eosd,
-  harvest_probability
+All 10 auxiliary channels enabled by default:
+  height, volume, basal_area, diameter, dem,
+  vpp_sosd, vpp_eosd, vpp_length, vpp_maxv, vpp_minv
 
 Produces checkpoints compatible with the TASK_HEAD_REGISTRY /
 load_segmentation_model() pipeline.
@@ -177,8 +177,6 @@ def main():
                         help="Disable DEM terrain elevation aux channel")
     parser.add_argument("--disable-vpp", action="store_true",
                         help="Disable HR-VPP phenology aux channels (sosd, eosd)")
-    parser.add_argument("--disable-harvest-prob", action="store_true",
-                        help="Disable harvest probability aux channel")
     parser.add_argument("--disable-all-aux", action="store_true",
                         help="Disable all auxiliary channels")
 
@@ -244,8 +242,6 @@ def main():
         print(f"\n  To stop: kill {proc.pid}")
         return
 
-    # Resolve aux flags — all enabled by default, individual disable flags to ablate
-    all_disabled = args.disable_all_aux
     config = TrainingConfig(
         data_dir=data_dirs[0],  # Primary dir for TrainingConfig compatibility
         backbone_name=args.backbone_name,
@@ -280,14 +276,13 @@ def main():
         # Multi-temporal: 4-frame autumn-first pattern when enabled
         enable_multitemporal=args.enable_multitemporal,
         num_temporal_frames=args.num_temporal_frames if args.enable_multitemporal else 1,
-        # 5 skogliga + VPP (5 band) + harvest_probability = 11 aux
+        # 5 skogliga + VPP (5 band) = 10 aux
         enable_height_channel=True,
         enable_volume_channel=True,
         enable_basal_area_channel=True,
         enable_diameter_channel=True,
         enable_dem_channel=True,
         enable_vpp_channels=True,
-        enable_harvest_probability=True,
         freeze_spectral=args.freeze_spectral,
         resume_from_checkpoint=args.resume_from,
     )
@@ -327,9 +322,6 @@ def main():
 
     # Print aux channel summary
     aux_names = config.enabled_aux_names
-    harvest_enabled = not (all_disabled or args.disable_harvest_prob)
-    if harvest_enabled:
-        aux_names = aux_names + ("harvest_probability",)
     print(f"  Aux channels ({len(aux_names)}): {', '.join(aux_names)}")
 
     if args.evaluate_only:

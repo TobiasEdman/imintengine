@@ -40,6 +40,7 @@ spec:
               pip install --quiet --no-cache-dir numpy matplotlib
               OUT=/cephfs/_dataset_256_viz
               mkdir -p "$OUT"
+              rm -f "$OUT"/* 2>/dev/null || true   # clear stale renders
               python /script/render.py \
                 --tile /data/unified_v2/43983928.npz \
                 --out "$OUT" --frame 2

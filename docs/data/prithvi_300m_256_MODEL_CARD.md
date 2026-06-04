@@ -15,11 +15,17 @@
 
 - **Backbone:** `prithvi_eo_v2_300m_tl` (Prithvi-EO-2.0, 300M)
 - **Temporal:** `num_temporal_frames = 4`
-- **Input:** `(4×6 spectral + 11 aux, 256, 256)` = 35 channels
+- **Input (as trained):** `(4×6 spectral + 11 aux, 256, 256)` = 35 channels
   - 6 bands per frame: **B02, B03, B04, B8A, B11, B12** (raw reflectance,
     ~[0,0.4] — do **not** percentile-stretch model input)
   - 11 aux: height, volume, basal_area, diameter, dem, vpp_sosd, vpp_eosd,
     vpp_length, vpp_maxv, vpp_minv, harvest_probability
+
+  > ⚠️ This checkpoint was trained with the synthetic `harvest_probability`
+  > aux channel (35ch). That channel has since been **dropped from the
+  > dataset** (now 10 aux / **34 channels**) because it leaked the harvest
+  > target into the input. To use this checkpoint with the current dataset,
+  > drop its `harvest_probability` input weight or retrain on the 34ch input.
 - **Heads (dual):**
   1. LULC — 23-class softmax segmentation (focal loss)
   2. Harvest-readiness — binary sigmoid map (BCE loss)

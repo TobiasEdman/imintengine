@@ -137,7 +137,6 @@ PANELS = [
     ("dem",       "Elevation (DEM)",        "Copernicus DEM, cmap=terrain"),
     ("height",    "Forest canopy height",   "SLU Skogliga grunddata, cmap=viridis"),
     ("vpp",       "VPP start-of-season",    "Copernicus HR-VPP, cmap=viridis"),
-    ("harvest",   "Harvest-readiness prob", "Skogsstyrelsen SKS, cmap=magma"),
     ("frames",    "Multitemporal RGB",      "4 frames: autumn(yr-1) + 3 VPP-guided"),
 ]
 
@@ -162,12 +161,6 @@ def render(tile_path: str, out_dir: str, frame: int) -> dict:
         _save_heat(z["height"], out / "height.png", "viridis")
     if "vpp_sosd" in z.files:
         _save_heat(z["vpp_sosd"], out / "vpp.png", "viridis")
-    if "harvest_probability" in z.files:
-        # Nodata is stored as a ~3.3e38 sentinel; mask anything outside the
-        # valid probability range [0,1] before plotting.
-        hp = np.asarray(z["harvest_probability"], dtype=np.float32)
-        hp = np.where((hp >= 0) & (hp <= 1), hp, np.nan)
-        _save_heat(hp, out / "harvest.png", "magma", vmin=0, vmax=1, robust=False)
     _save_frames_strip(spectral, n_frames, dates, out / "frames.png")
     _save_legend(label, out / "legend.png")
 

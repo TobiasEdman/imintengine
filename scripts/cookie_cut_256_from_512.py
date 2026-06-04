@@ -48,7 +48,7 @@ import numpy as np
 SPATIAL_2D_KEYS = (
     "label", "label_mask", "nmd_label", "nmd_label_raw",
     "dem", "height", "volume", "basal_area", "diameter",
-    "harvest_mask", "harvest_probability",
+    "harvest_mask",
     "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
     "nmd_area_ha", "parcel_area_ha",
 )

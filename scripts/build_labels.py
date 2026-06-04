@@ -67,7 +67,6 @@ def _compute_nmd_area_map(nmd_label: np.ndarray, pixel_ha: float = 0.01) -> np.n
 # memory. Each tile pulls only the polygons whose bbox intersects it.
 _rasterize_parcels = None
 _rasterize_sks = None
-_compute_harvest_probability = None
 
 # SpatialParquet handles (SKS + per-year LPIS). Populated on first use.
 # The handles themselves are thread-safe (each thread gets its own
@@ -87,14 +86,13 @@ _SENTINEL_UNSET = object()  # used by _lpis_handle to distinguish "not in cache"
 
 def _ensure_helpers_loaded():
     """Lazy-import rasterize helpers once."""
-    global _rasterize_parcels, _rasterize_sks, _compute_harvest_probability
+    global _rasterize_parcels, _rasterize_sks
     if _rasterize_parcels is None:
         from scripts.enrich_tiles_lpis_mask import rasterize_parcels
         _rasterize_parcels = rasterize_parcels
     if _rasterize_sks is None:
-        from scripts.enrich_tiles_sks import rasterize_sks, compute_harvest_probability
+        from scripts.enrich_tiles_sks import rasterize_sks
         _rasterize_sks = rasterize_sks
-        _compute_harvest_probability = compute_harvest_probability
 
 
 def _sks_utforda_handle(sks_dir: str):
@@ -307,15 +305,10 @@ def build_tile_label(
         if sks_anmalda_sp is not None:
             sks_anmalda_local = sks_anmalda_sp.query(bbox_3006)
             if len(sks_anmalda_local) > 0:
-                mature_mask, n_mature = _rasterize_sks(
+                _, n_mature = _rasterize_sks(
                     sks_anmalda_local, bbox_tuple, tile_size=tile_cfg.size_px,
                 )
                 data["n_mature_polygons"] = np.int32(n_mature)
-
-                if _compute_harvest_probability is not None and harvest_mask is not None:
-                    data["harvest_probability"] = _compute_harvest_probability(
-                        harvest_mask, mature_mask,
-                    )
 
         # --- Step 4: Merge all → unified 20-class ---
         unified = merge_all(nmd_label, lpis_mask, harvest_mask)
