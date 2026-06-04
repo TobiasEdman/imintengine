@@ -132,6 +132,8 @@
     "download_url": "https://dataset-256.icedc.se/unified_v2/",
     "metadata_url": "https://dataset-256.icedc.se/metadata.json",
     "availability": "temporary (~48h) ICE-hosted directory listing",
+    "auth": "HTTP basic-auth required (credentials shared separately)",
+    "listing_note": "The listing shows only the .npz tiles plus useful bookkeeping files (class_stats.json, manifest.json, splits_summary.json, train/val/test.txt). crop_*/urban_* are flat-named tile prefixes, not folders.",
     "loader_hint": "numpy.load(path, allow_pickle=True); train/val split is a deterministic md5(filename) % 100 < 10 → val."
   }
 }

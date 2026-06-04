@@ -1,34 +1,44 @@
 # Temporary download server for the 256-px unified dataset
-# (/data/unified_v2 — 8290 tiles, ~168 GB) — a plain shareable link.
+# (/data/unified_v2 — 8290 tiles, ~168 GB), basic-auth gated.
 #
-# SERVES IN PLACE: read-only mount of the `training-data` PVC, nginx
-# autoindex. No copy / no tar — there is no free space to stage a
-# 168 GB archive (rbd PVC ~51 G free, cephfs ~60 G free), and serving
-# the live files avoids it entirely.
+# SERVES IN PLACE: read-only mount of the `training-data` PVC. No copy /
+# no tar — there is no free space to stage a 168 GB archive (rbd ~51 G
+# free, cephfs ~60 G free), so the live files are served directly.
 #
-# RWO co-mount: `training-data` is ReadWriteOnce (rook-ceph-rbd) and is
-# currently attached on node p02r08srv01 by the training-dashboard pod.
-# RWO = one NODE; multiple pods on the SAME node can mount it. So this
-# pod is hard-pinned to p02r08srv01 (mirrors training-dashboard-server.yaml).
+# CLEAN LISTING: an initContainer builds a symlink farm at
+# /web/unified_v2 containing ONLY the .npz tiles + useful bookkeeping
+# files (class_stats.json, manifest.json, split lists). This hides the
+# stray empty crop/ urban/ cache/ lulc/ .viz dirs that live in the PVC
+# root. Symlinks resolve to the read-only PVC; nginx follows them to
+# stream the files (range/resume supported).
 #
-# ACCESS (public link, no auth — share freely):
+# RWO co-mount: `training-data` is ReadWriteOnce (rook-ceph-rbd), attached
+# on node p02r08srv01 by the training-dashboard pod. RWO = one NODE;
+# multiple pods on the SAME node can mount it, so this pod is hard-pinned
+# to p02r08srv01.
+#
+# AUTH: HTTP basic-auth via secret `dataset-dl-auth` (created imperatively,
+# NOT committed). TLS auto-issued by cert-manager (letsencrypt-prod).
+#
+# ACCESS (credentials required):
 #   https://dataset-256.icedc.se/              -> redirects to the listing
-#   https://dataset-256.icedc.se/unified_v2/   -> 8290 .npz tiles
+#   https://dataset-256.icedc.se/unified_v2/   -> clean tile listing
 #   https://dataset-256.icedc.se/metadata.json -> machine-readable schema
-# TLS auto-issued by cert-manager (letsencrypt-prod) on first apply.
 #
-# The data is derived from open sources (Sentinel-2 / NMD / LPIS / SKS /
-# SLU / Copernicus DEM); the link is unauthenticated by request. Add the
-# basic-auth annotations back (see git history) if gating is needed.
+# SECRET (run before apply; pick user/password):
+#   htpasswd -nbB <user> '<password>' > /tmp/htpasswd
+#   kubectl create secret generic dataset-dl-auth -n prithvi-training-default \
+#     --from-file=auth=/tmp/htpasswd && rm /tmp/htpasswd
 #
-# APPLY (metadata ConfigMap is loaded from the repo file — single source):
+# APPLY (metadata ConfigMap loaded from the repo file — single source):
 #   kubectl create configmap dataset-256-meta -n prithvi-training-default \
 #     --from-file=metadata.json=docs/data/unified_v2_256_metadata.json
 #   kubectl apply -f k8s/dataset-256-download.yaml
 #
-# TEARDOWN (this is a ~2-day temporary surface — delete after):
+# TEARDOWN (~2-day temporary surface):
 #   kubectl delete -f k8s/dataset-256-download.yaml
 #   kubectl delete configmap dataset-256-meta -n prithvi-training-default
+#   kubectl delete secret dataset-dl-auth -n prithvi-training-default
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -46,6 +56,9 @@ data:
       tcp_nopush on;
       default_type application/octet-stream;
       types { application/octet-stream npz; }
+      # Keep redirects relative so they inherit the ingress scheme/host
+      # (https://dataset-256.icedc.se) instead of the internal :8080.
+      absolute_redirect off;
 
       # Bare link -> the tile listing.
       location = / { return 302 /unified_v2/; }
@@ -57,10 +70,10 @@ data:
         add_header Access-Control-Allow-Origin "*";
       }
 
-      # The 168 GB of tiles, served in place from the read-only PVC.
-      # Directory listing + resumable (range) downloads.
+      # Clean listing from the symlink farm (/web/unified_v2). Symlinks
+      # resolve to the read-only PVC mounted at /data; nginx follows them.
       location /unified_v2/ {
-        root /data;
+        root /web;
         autoindex on;
         autoindex_exact_size off;
         autoindex_localtime on;
@@ -84,10 +97,43 @@ spec:
       labels:
         app: dataset-256-dl
     spec:
-      # Hard-pin to the node where the RWO training-data PVC is attached
-      # (same constraint as training-dashboard-server.yaml).
+      # Hard-pin to the node where the RWO training-data PVC is attached.
       nodeSelector:
         kubernetes.io/hostname: p02r08srv01
+      initContainers:
+        # Build a symlink farm of just the tiles + useful files, so the
+        # autoindex doesn't expose the stray empty crop/ urban/ cache/
+        # lulc/ .viz dirs that sit in the PVC root.
+        - name: build-listing
+          image: nginx:1.27-alpine
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              SRC=/data/unified_v2
+              DST=/web/unified_v2
+              mkdir -p "$DST"
+              echo "Linking tiles from $SRC ..."
+              ln -s "$SRC"/*.npz "$DST"/
+              for f in class_stats.json manifest.json splits_summary.json \
+                       train.txt val.txt test.txt; do
+                [ -f "$SRC/$f" ] && ln -s "$SRC/$f" "$DST/"
+              done
+              echo "Linked $(ls "$DST" | wc -l) entries."
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: data256
+              mountPath: /data
+              readOnly: true
+            - name: web
+              mountPath: /web
       containers:
         - name: nginx
           # Version-pinned (never :latest), matching the repo convention
@@ -97,16 +143,20 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+          # ICE admission webhook (iceguard) requires requests == limits.
           resources:
             requests:
-              cpu: "250m"
-              memory: "256Mi"
+              cpu: "500m"
+              memory: "512Mi"
             limits:
-              cpu: "1"
+              cpu: "500m"
               memory: "512Mi"
           volumeMounts:
             - name: data256
               mountPath: /data
+              readOnly: true
+            - name: web
+              mountPath: /web
               readOnly: true
             - name: nginx-conf
               mountPath: /etc/nginx/conf.d
@@ -130,6 +180,8 @@ spec:
         - name: data256
           persistentVolumeClaim:
             claimName: training-data
+        - name: web
+          emptyDir: {}
         - name: nginx-conf
           configMap:
             name: dataset-256-nginx-conf
@@ -162,6 +214,10 @@ metadata:
     app: dataset-256-dl
   annotations:
     cert-manager.io/issuer: letsencrypt-prod
+    # Basic-auth gate (secret dataset-dl-auth — created imperatively).
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: dataset-dl-auth
+    nginx.ingress.kubernetes.io/auth-realm: "ImintEngine 256 dataset — login required"
     # Large multi-GB downloads: stream (no buffering), long timeouts.
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
