@@ -315,11 +315,13 @@ spec:
               # Column layout (11 cols): 1 Tile, 2 RGB, 3 NIR-CIR,
               # 4 Träningsdata, 5 NMD(raw), 6 300M raw, 7 300M+SLIC500,
               # 8 300M+SLIC3000, 9 600M raw, 10 600M+SLIC500,
-              # 11 600M+SLIC3000 — so cols 7,8,10,11 are the SLIC cells.
-              # The group-hdr row uses colspan=3 on m300/m600; JS shrinks
-              # those to colspan=1 after the SLIC cells are hidden so the
-              # model labels don't visually overflow their single column.
+              # 11 600M+SLIC3000 — cols 7,8,10,11 are the SLIC cells; col 5
+              # is NMD(raw), also hidden per request.
+              # The group-hdr row uses colspan=5 on "Reference" and colspan=3
+              # on m300/m600; JS shrinks Reference 5->4 (NMD hidden) and
+              # m300/m600 3->1 (SLIC hidden) so the headers stay aligned.
               COMPARE_SLIC_STRIP = b"""<style>
+              table th:nth-child(5), table td:nth-child(5),
               table th:nth-child(7), table td:nth-child(7),
               table th:nth-child(8), table td:nth-child(8),
               table th:nth-child(10), table td:nth-child(10),
@@ -330,8 +332,15 @@ spec:
                 document.querySelectorAll(".meta ul li").forEach(function(li){
                   if (/SLIC/.test(li.textContent)) li.remove();
                 });
+                // Drop the NMD (raw) legend note now that its column is hidden.
+                document.querySelectorAll(".meta p, .meta li").forEach(function(el){
+                  if (el.textContent.indexOf("NMD (raw)") !== -1) el.remove();
+                });
                 document.querySelectorAll("tr.group-hdr th.m300, tr.group-hdr th.m600")
                   .forEach(function(th){ th.setAttribute("colspan", "1"); });
+                // "Reference" group header spanned 5 cols (incl. NMD raw) -> 4.
+                document.querySelectorAll("tr.group-hdr th:first-child")
+                  .forEach(function(th){ th.setAttribute("colspan", "4"); });
                 document.querySelectorAll("h1").forEach(function(h){
                   h.textContent = h.textContent.replace(" \\u00b7 3 post-processing-varianter", "");
                 });
