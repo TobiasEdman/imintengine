@@ -904,13 +904,19 @@ def repair_to_canonical_layout(
         # (date_str, era5_overpass_pct).
         candidates = [(d, oc) for d, oc in ranked if _ds <= d <= _de]
 
-        # Pre-2018 catalogue gap: explorer.digitalearth.se's STAC starts
-        # in 2018, so DES rank returns no candidates for year=2018 tiles'
-        # slot 0 (autumn 2017) even though the data exists. Fall back to
-        # earth-search (AWS, full S2 history) and re-rank with real ERA5
-        # values — same ranker logic, different STAC source. No synthetic
-        # date generation, no ERA5=50 placeholder.
-        if not candidates and _de < "2018-01-01":
+        # Pre-2018 catalogue gap. The earth-search (AWS) STAC has the
+        # 2017 acquisition dates, but only SH Process via CDSE can
+        # actually FETCH those dates' L2A — DES and CDSE openEO both
+        # have catalogue gaps for pre-2018. Running the fallback for
+        # backends that can't serve the dates just wastes ~5
+        # verify-none calls per failed slot. Suppress unless primary
+        # backend is "cdse" (SH Process). For DES, the canonical fix
+        # for pre-2018 is the Sen2Cor L1C→L2A pipeline run as a
+        # separate batch (scripts/sen2cor_pipeline/), which writes
+        # directly into the tile's .npz.
+        if (not candidates
+                and _de < "2018-01-01"
+                and primary_backend == "cdse"):
             try:
                 era5_ceiling = 65.0 if is_autumn else 50.0
                 aws_ranked = rank_stac_era5_candidates(

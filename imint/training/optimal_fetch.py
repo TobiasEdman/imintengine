@@ -737,7 +737,12 @@ def era5_to_scl_gate(era5_overpass_pct: float, *, is_autumn: bool) -> float:
     fraction = capped / 50.0
     if is_autumn:
         return 0.30 + 0.25 * fraction   # 0.30 .. 0.55
-    return 0.15 + 0.15 * fraction       # 0.15 .. 0.30
+    # Growing-season floor raised 0.15 → 0.20 (2026-06-04) after the
+    # visibility patches measured 11% of failures as verify-cloud
+    # rejections at SCL = 0.50–0.66 when ERA5 was reporting 0% —
+    # i.e. ERA5↔SCL variance bigger than the 0.15 headroom allowed.
+    # Top end stays at 0.30 (we still want to reject genuinely overcast).
+    return 0.20 + 0.10 * fraction       # 0.20 .. 0.30
 
 
 # ── STAC granule pre-filter (used by stac_* modes) ─────────────────────────
