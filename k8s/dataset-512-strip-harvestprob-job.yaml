@@ -1,0 +1,75 @@
+# One-shot job: drop the synthetic `harvest_probability` array from the
+# 512 tiles that have it (~5558). Same verified path as the 256 strip
+# (scripts/strip_tile_keys.py): auto-pick a tile that has the key, VERIFY
+# non-destructively, and only bulk-strip if VERIFY PASSES.
+#
+# 512 lives on training-data-cephfs (RWX) → no node pin needed. Atomic +
+# idempotent. ONLY run when the 512 writers (refetch-late-autumn-512,
+# sen2cor-slot0-2017-512) have finished — a concurrent writer would race.
+#
+#   kubectl create configmap dataset-strip-script -n prithvi-training-default \
+#     --from-file=strip.py=scripts/strip_tile_keys.py
+#   kubectl apply -f k8s/dataset-512-strip-harvestprob-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dataset-512-strip-harvestprob
+  namespace: prithvi-training-default
+  labels:
+    app: dataset-512-strip
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: dataset-512-strip
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: strip
+          image: python:3.11-slim
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+              D=/cephfs/unified_v2_512
+              echo "=== find a tile that has harvest_probability ==="
+              VT=$(python3 -c "
+              import zipfile, glob
+              for f in sorted(glob.glob('$D/*.npz')):
+                  try:
+                      if 'harvest_probability.npy' in zipfile.ZipFile(f).namelist():
+                          print(f); break
+                  except Exception:
+                      pass
+              ")
+              echo "verify tile: $VT"
+              [ -n "$VT" ] || { echo "no tile has harvest_probability — nothing to do"; exit 0; }
+              echo "=== VERIFY (non-destructive) ==="
+              python /script/strip.py --verify "$VT" --key harvest_probability | tee /tmp/v.txt
+              grep -q "VERIFY PASS" /tmp/v.txt || { echo "VERIFY FAILED — aborting"; exit 1; }
+              echo "=== BULK STRIP in place ==="
+              python /script/strip.py --dir "$D" --key harvest_probability --workers 8
+          resources:
+            requests:
+              cpu: "4"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "4Gi"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /cephfs
+            - name: script
+              mountPath: /script
+              readOnly: true
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: script
+          configMap:
+            name: dataset-strip-script
