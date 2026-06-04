@@ -1,0 +1,144 @@
+# Slot 0 / autumn 2017 backfill — fills the temporal-stack slot 0 of
+# year=2018 audit tiles that DES openEO cannot fetch (its catalogue
+# starts in 2018). Same pipeline pattern as sen2cor-frame2016-512-job
+# but parameterised:
+#
+#   selector  --target slot:0 --year 2017 --audit-json {AUDIT}
+#              → ERA5+STAC L1C lookup over autumn 2017 (Aug 15-Oct 31)
+#                for tiles in the audit list whose slot 0 is empty
+#   runner    --target slot:0
+#              → writes the cropped L2A 6-band frame into
+#                spectral[0:6] + dates[0] + doy[0] + temporal_mask[0]
+#                (and provenance fields slot_0_scene / slot_0_source)
+#
+# Runs in parallel with the openEO refetch job (refetch-late-autumn-512):
+# - refetch handles year>=2019 tiles via DES (free, all 4 slots work)
+# - this job handles year=2018 slot 0 only (the ~1900-tile cohort DES
+#   cannot reach)
+#
+# Both update the same .npz files atomically; concurrent writes to
+# *different* slots are safe because _write_temporal_slot loads, modifies
+# its slot's slice, and replaces via tempfile+os.replace.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sen2cor-slot0-2017-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: sen2cor-slot0-autumn-2017-backfill
+spec:
+  backoffLimit: 0
+  # ~1900 audit-flagged year=2018 tiles needing autumn 2017.
+  # Scaling from the 2016 job's ~5219 tiles ÷ 5h estimate → ~2h
+  # wall, but autumn 2017 is cloudier so set 12h budget for safety.
+  activeDeadlineSeconds: 43200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # RTX 2080 Ti only — same constraint as the 2016 job
+                  # (H100 reserved for training; srv04/srv06 GTX 1080 Ti
+                  # carry the cgroup/runc pod-sandbox bug).
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values: ["NVIDIA-GeForce-RTX-2080-Ti"]
+      containers:
+        - name: pipeline
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== sen2cor slot:0 / autumn 2017 backfill ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow \
+                pystac-client openeo torch 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              # Branch carries the --target slot:N flag + audit-json
+              # filter (commit 5bbdbfe runner + select_scenes refactor).
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # Latest audit JSON (the refetch job reads the same file).
+              AUDIT=$(ls -t /data/audits/frame_audit_512_*.json 2>/dev/null | head -1)
+              if [ -z "$AUDIT" ]; then
+                echo "FATAL: no audit JSON found under /data/audits/"
+                exit 1
+              fi
+              echo "audit: $AUDIT"
+
+              # ── Step 1: selector ──────────────────────────────────────
+              echo ""
+              echo "=== Step 1: select_scenes.py --target slot:0 --year 2017 ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir /data/unified_v2_512 \
+                --target slot:0 \
+                --year 2017 \
+                --audit-json "$AUDIT" \
+                --workers 16 \
+                --out /data/debug/sen2cor_slot0_2017_512_plan.json
+
+              python3 -c "
+              import json
+              p = json.load(open('/data/debug/sen2cor_slot0_2017_512_plan.json'))
+              print(f\"  plan: scenes={p['n_scenes']} covered={p['n_tiles_covered']} \"
+                    f\"unassigned={len(p['unassigned'])}\")
+              "
+
+              # ── Step 2: runner ────────────────────────────────────────
+              # --target slot:0 → writes into the temporal stack at slot 0
+              # via _write_temporal_slot (commit 5bbdbfe). Same COT gate,
+              # same sen2cor compute, same 4-worker parallelism as the
+              # 2016 job. cot-max raised slightly (10.0 vs 8.0) because
+              # autumn Swedish skies have heavier high-altitude cirrus.
+              echo ""
+              echo "=== Step 2: run_sen2cor_per_scene.py --target slot:0 ==="
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/sen2cor_slot0_2017_512_plan.json \
+                --data-dir /data/unified_v2_512 \
+                --safe-cache /data/sen2cor_cache \
+                --target slot:0 \
+                --cot-max 10.0 \
+                --workers 4 \
+                --device cuda
+
+              echo ""
+              echo "=== slot:0 backfill complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "24"
+              memory: "64Gi"
+            limits:
+              cpu: "24"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

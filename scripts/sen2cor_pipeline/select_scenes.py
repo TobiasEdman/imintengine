@@ -110,15 +110,91 @@ def _stac_l1c_scenes(
 
 # ── ERA5 prefilter ───────────────────────────────────────────────────────
 
-def _era5_dates(bbox_wgs84: dict, year: int) -> set[str]:
-    """ISO summer dates passing the atmosphere rules for this bbox."""
+def _era5_dates(bbox_wgs84: dict, date_start: str, date_end: str) -> set[str]:
+    """ISO dates in the given window passing the ERA5 atmosphere rules."""
     from imint.training.optimal_fetch import era5_prefilter_dates
-    return set(era5_prefilter_dates(
-        bbox_wgs84, f"{year}-06-01", f"{year}-08-31",
-    ))
+    return set(era5_prefilter_dates(bbox_wgs84, date_start, date_end))
+
+
+# ── Target window helpers ───────────────────────────────────────────────
+
+
+def _window_for_target(target: str, year: int) -> tuple[str, str]:
+    """Per-target date window for ERA5 + STAC lookup.
+
+    - ``frame_2016`` → June 1 .. August 31 of ``year`` (legacy summer
+      background frame).
+    - ``slot:0`` → August 15 .. October 31 of ``year`` (autumn-y-1 of
+      year=2018 audit tiles, year-arg here = 2017 for that case).
+    - ``slot:1`` / ``slot:2`` / ``slot:3`` → growing-season windows
+      consistent with the temporal-stack default layout.
+    """
+    if target == "frame_2016":
+        return f"{year}-06-01", f"{year}-08-31"
+    if target == "slot:0":
+        return f"{year}-08-15", f"{year}-10-31"
+    if target == "slot:1":
+        return f"{year}-04-01", f"{year}-05-31"
+    if target == "slot:2":
+        return f"{year}-06-01", f"{year}-07-31"
+    if target == "slot:3":
+        return f"{year}-08-01", f"{year}-09-15"
+    raise ValueError(
+        f"unknown target {target!r}; expected 'frame_2016' or 'slot:N' (N=0..3)"
+    )
 
 
 # ── Tile inventory ───────────────────────────────────────────────────────
+
+def _missing_slot_tiles(
+    data_dir: str,
+    slot_idx: int,
+    audit_names: set[str] | None = None,
+) -> list[tuple[str, dict]]:
+    """``(tile_name, wgs84_bbox)`` for tiles whose temporal slot ``slot_idx``
+    is empty (``temporal_mask[slot_idx]==0`` OR spectral slice all-zero),
+    optionally filtered to ``audit_names``.
+
+    Used by the slot-N backfill path. The frame_2016-equivalent inventory
+    function is :func:`_missing_frame_2016_tiles`; both share the bbox
+    extraction + WGS84 transform.
+    """
+    from imint.training.tile_bbox import resolve_tile_bbox
+    from imint.training.tile_config import TileConfig
+    from pyproj import Transformer
+
+    n_bands = 6
+    tx = Transformer.from_crs("EPSG:3006", "EPSG:4326", always_xy=True)
+    missing: list[tuple[str, dict]] = []
+    for npz_path in sorted(glob.glob(os.path.join(data_dir, "*.npz"))):
+        name = Path(npz_path).stem
+        if audit_names is not None and name not in audit_names:
+            continue
+        try:
+            with np.load(npz_path, allow_pickle=True) as d:
+                tmask_raw = d.get("temporal_mask")
+                tmask = list(tmask_raw) if tmask_raw is not None else []
+                tmask_set = (slot_idx < len(tmask)
+                             and int(tmask[slot_idx]) == 1)
+                spec = d.get("spectral")
+                if spec is not None and spec.shape[0] >= (slot_idx + 1) * n_bands:
+                    slot_slice = spec[slot_idx * n_bands:(slot_idx + 1) * n_bands]
+                    has_data = bool(np.any(slot_slice))
+                else:
+                    has_data = False
+                if tmask_set and has_data:
+                    continue
+                cfg = TileConfig(size_px=int(d.get("tile_size_px", 512)))
+                bbox3006 = resolve_tile_bbox(name=name, tile=cfg, npz_data=d)
+        except Exception:
+            continue
+        if bbox3006 is None:
+            continue
+        w, s = tx.transform(bbox3006["west"], bbox3006["south"])
+        e, n = tx.transform(bbox3006["east"], bbox3006["north"])
+        missing.append((name, {"west": w, "south": s, "east": e, "north": n}))
+    return missing
+
 
 def _missing_frame_2016_tiles(data_dir: str) -> list[tuple[str, dict]]:
     """(tile_name, wgs84_bbox) for tiles needing a frame_2016 (re-)fetch.
@@ -161,18 +237,20 @@ def _missing_frame_2016_tiles(data_dir: str) -> list[tuple[str, dict]]:
     return missing
 
 
-def _resolve_tile(name: str, bbox: dict, year: int) -> tuple[str, list[dict] | None]:
-    """ERA5 prefilter + STAC lookup for one tile.
+def _resolve_tile(
+    name: str, bbox: dict, date_start: str, date_end: str,
+) -> tuple[str, list[dict] | None]:
+    """ERA5 prefilter + STAC lookup for one tile, in the given window.
 
     Returns ``(name, hit_scenes)`` — ``hit_scenes`` is the L1C scenes
     covering the tile on an ERA5-clear date, or ``None`` if the weather
     prefilter rejects every date or no scene matches. Pure per-tile work
     with no shared state, so it parallelises cleanly.
     """
-    ok = _era5_dates(bbox, year)
+    ok = _era5_dates(bbox, date_start, date_end)
     if not ok:
         return name, None
-    scenes = _stac_l1c_scenes(bbox, f"{year}-06-01", f"{year}-08-31")
+    scenes = _stac_l1c_scenes(bbox, date_start, date_end)
     hit = [s for s in scenes if (s["datetime"] or "")[:10] in ok]
     return name, (hit or None)
 
@@ -237,36 +315,93 @@ def main() -> None:
     p = argparse.ArgumentParser(description="sen2cor scene selector (ERA5 + STAC catalogue)")
     p.add_argument("--data-dir", required=True)
     p.add_argument("--year", type=int, default=2016)
-    p.add_argument("--fallback-year", type=int, default=2015)
+    p.add_argument("--fallback-year", type=int, default=None,
+                   help="Optional second year to try for tiles still uncovered "
+                        "after the primary pass. Legacy frame_2016 default 2015 "
+                        "is only applied if --target=frame_2016 and this is "
+                        "left unset.")
     p.add_argument("--out", required=True)
     p.add_argument("--max-tiles", type=int, default=None)
     p.add_argument("--workers", type=int, default=16,
                    help="Parallel ERA5+STAC lookups. Each tile is one "
                         "Open-Meteo call + one CDSE STAC query.")
+    p.add_argument("--target", default="frame_2016",
+                   help="What slot this plan fills: 'frame_2016' (default — "
+                        "legacy background backfill) or 'slot:N' (N=0..3 — "
+                        "temporal-stack slot, e.g. slot:0 for the 2017 autumn "
+                        "→ year=2018 audit-tile backfill).")
+    p.add_argument("--audit-json", default=None,
+                   help="Optional audit JSON; restricts the tile inventory "
+                        "to the names listed in its unique_affected_tiles / "
+                        "unique_problem_tiles field.")
     args = p.parse_args()
+
+    # Default fallback-year only for legacy frame_2016 backfill.
+    if args.fallback_year is None and args.target == "frame_2016":
+        args.fallback_year = 2015
 
     t0 = time.time()
     print("=== sen2cor scene selector ===")
-    print(f"  data-dir: {args.data_dir}")
-    print(f"  years:    {args.year} (fallback {args.fallback_year})")
+    print(f"  data-dir:    {args.data_dir}")
+    print(f"  target:      {args.target}")
+    print(f"  year:        {args.year}" +
+          (f" (fallback {args.fallback_year})"
+           if args.fallback_year else " (no fallback)"))
 
-    tiles = _missing_frame_2016_tiles(args.data_dir)
+    # Audit filter — restrict to tiles in the audit list, if supplied.
+    audit_names: set[str] | None = None
+    if args.audit_json:
+        with open(args.audit_json) as f:
+            audit = json.load(f)
+        names = (audit.get("unique_affected_tiles")
+                 or audit.get("unique_problem_tiles") or [])
+        audit_names = {n[:-4] if n.endswith(".npz") else n for n in names}
+        print(f"  audit-json:  {args.audit_json} → {len(audit_names)} tiles")
+
+    # Target-aware inventory + window selection.
+    if args.target == "frame_2016":
+        tiles = _missing_frame_2016_tiles(args.data_dir)
+        # If audit-json supplied, intersect.
+        if audit_names is not None:
+            tiles = [(n, b) for n, b in tiles if n in audit_names]
+        inventory_label = "tiles missing frame_2016"
+    elif args.target.startswith("slot:"):
+        try:
+            slot_idx = int(args.target.split(":", 1)[1])
+        except ValueError:
+            sys.exit(f"--target slot:N — N must be an integer, "
+                     f"got {args.target!r}")
+        if slot_idx < 0 or slot_idx > 3:
+            sys.exit(f"--target slot:{slot_idx} out of range; valid 0..3")
+        tiles = _missing_slot_tiles(args.data_dir, slot_idx, audit_names)
+        inventory_label = f"tiles missing slot {slot_idx}"
+    else:
+        sys.exit(f"--target must be 'frame_2016' or 'slot:N', got {args.target!r}")
+
     if args.max_tiles:
         tiles = tiles[:args.max_tiles]
-    print(f"  tiles missing frame_2016: {len(tiles)}")
+    print(f"  {inventory_label}: {len(tiles)}")
 
     plan_scenes: list[dict] = []
     all_fallbacks: dict[str, list[str]] = {}
 
-    for pass_idx, year in enumerate([args.year, args.fallback_year]):
+    # Years to try. Fallback only applies if explicitly set.
+    pass_years = [args.year]
+    if args.fallback_year:
+        pass_years.append(args.fallback_year)
+
+    for pass_idx, year in enumerate(pass_years):
         if not tiles:
             break
-        print(f"\n--- Pass {pass_idx + 1}: year={year}, remaining={len(tiles)} ---")
+        date_start, date_end = _window_for_target(args.target, year)
+        print(f"\n--- Pass {pass_idx + 1}: year={year} "
+              f"({date_start}..{date_end}), remaining={len(tiles)} ---")
         tile_to_scenes: dict[str, list[dict]] = {}
         done = 0
         done_lock = threading.Lock()
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            futs = {pool.submit(_resolve_tile, name, bbox, year): name
+            futs = {pool.submit(_resolve_tile, name, bbox,
+                                date_start, date_end): name
                     for name, bbox in tiles}
             for fut in as_completed(futs):
                 name = futs[fut]
