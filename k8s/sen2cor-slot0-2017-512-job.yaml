@@ -127,6 +127,19 @@ spec:
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
+            # CDSE OData fallback path in _cdse_download_safe (b93e614 +
+            # 56d39b4) requires the resource-owner password grant against
+            # the cdse-public client — the SH-scoped client_credentials
+            # token returns 401 on /odata/v1/Products(<Id>)/$value. Same
+            # secret + same keys as the DES refetch manifest uses; the
+            # CLIENT_ID/SECRET pair is intentionally omitted (this pod
+            # has no SH-Process or openEO calls, only OData download).
+            - name: CDSE_USER
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: user, optional: true}
+            - name: CDSE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: password, optional: true}
           resources:
             requests:
               cpu: "24"
