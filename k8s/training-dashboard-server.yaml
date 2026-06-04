@@ -168,6 +168,8 @@ spec:
                      status:"done",    note:"mIoU 0.4769 · /checkpoints/prithvi_600m_512/"},
                     {slug:"300m", label:"Prithvi 300M · 256",
                      status:"done",    note:"mIoU 0.4716 · /checkpoints/prithvi_300m_256/"},
+                    {slug:"compare", label:"Predictions · 300M vs 600M",
+                     status:"info",    note:"5 viz tiles · model output thumbnails · 300M + 600M (SLIC/GF columns also present in this view — ignore or scroll past)"},
                   ];
                   const STATUS_LABEL = {live:"LIVE", done:"DONE", pending:"PENDING", info:"INFO"};
 
