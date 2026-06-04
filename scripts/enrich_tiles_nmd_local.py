@@ -2,6 +2,12 @@
 """
 Enrich tiles with NMD labels from local GeoTIFF raster.
 
+DEPRECATED: this writes the `nmd_label` key, which has been removed from
+the dataset (it was an inconsistent legacy layer that did not pixel-align
+with the universal `nmd_label_raw`). The canonical NMD path is
+`build_labels.py`, which writes `nmd_label_raw` (NMD 19-class) and maps it
+into the unified `label`. Do not run this to re-add `nmd_label`.
+
 Much faster than openEO API (~1000 tiles/s vs 1 tile/15s).
 Reads NMD codes directly from nmd2018bas_ogeneraliserad_v1_1.tif
 using rasterio windowed reads.

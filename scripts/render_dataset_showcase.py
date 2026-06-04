@@ -43,6 +43,18 @@ UNIFIED_COLORS = {
     21: (220, 200, 0), 22: (0, 206, 209),
 }
 
+# NMD 19-class (nmd_label_raw) -> unified NMD subset (0-10), so the NMD
+# panel renders from the universal nmd_label_raw on every tile.
+# Mirror of imint/training/unified_schema._NMD19_TO_UNIFIED.
+_NMD19_TO_UNIFIED = np.array(
+    [0, 1, 2, 3, 4, 6, 5, 5, 5, 5, 5, 7, 0, 8, 8, 9, 9, 9, 10, 10],
+    dtype=np.uint8,
+)
+
+
+def nmd19_to_unified(raw: np.ndarray) -> np.ndarray:
+    return _NMD19_TO_UNIFIED[np.clip(np.asarray(raw), 0, 19).astype(int)]
+
 
 def _pct_stretch(stack: np.ndarray) -> np.ndarray:
     """2-98 percentile stretch to [0,1] — the repo's display standard."""
@@ -153,8 +165,8 @@ def render(tile_path: str, out_dir: str, frame: int) -> dict:
     _save_rgb(rgb_image(spectral, frame), out / "rgb.png")
     _save_rgb(nir_cir_image(spectral, frame), out / "nir_cir.png")
     _save_rgb(colorize_label(label), out / "label.png")
-    if "nmd_label" in z.files:
-        _save_rgb(colorize_label(z["nmd_label"]), out / "nmd.png")
+    if "nmd_label_raw" in z.files:
+        _save_rgb(colorize_label(nmd19_to_unified(z["nmd_label_raw"])), out / "nmd.png")
     if "dem" in z.files:
         _save_heat(z["dem"], out / "dem.png", "terrain")
     if "height" in z.files:

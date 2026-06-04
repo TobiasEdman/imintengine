@@ -99,8 +99,8 @@ metrics), `dem` (Copernicus DEM), and `vpp_sosd`, `vpp_eosd`, `vpp_length`,
 
 > The synthetic `harvest_probability` channel was dropped (it leaked the
 > harvest target into the input). The real SKS layer `harvest_mask` is
-> kept. For NMD, use `nmd_label_raw` (present on every tile); the legacy
-> `nmd_label` is inconsistent and present only on old tiles.
+> kept. For NMD use `nmd_label_raw` (NMD 19-class, on every tile) — the
+> legacy `nmd_label` key was removed (it didn't pixel-align with it).
 
 Optional extras (present only when the paired `has_*` flag is set):
 `rededge` (12 bands), `s1_vv_vh` (Sentinel-1), `tessera` (128-dim

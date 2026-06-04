@@ -1,0 +1,66 @@
+# One-shot job: drop the inconsistent legacy `nmd_label` array from the
+# ~985 tiles that have it (the universal `nmd_label_raw` is kept).
+# Same verified path as the harvest_probability strip:
+# scripts/strip_tile_keys.py, verify on one tile that HAS the key, then
+# bulk only if VERIFY PASSES. Atomic + idempotent; writes in place to the
+# training-data PVC (RWO), pinned to p02r08srv01.
+#
+#   kubectl create configmap dataset-256-strip-script -n prithvi-training-default \
+#     --from-file=strip.py=scripts/strip_tile_keys.py   # (already exists)
+#   kubectl apply -f k8s/dataset-256-strip-nmdlabel-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dataset-256-strip-nmdlabel
+  namespace: prithvi-training-default
+  labels:
+    app: dataset-256-strip
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: dataset-256-strip
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: strip
+          image: python:3.11-slim
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy
+              echo "=== VERIFY on one tile that has nmd_label (non-destructive) ==="
+              python /script/strip.py --verify /data/unified_v2/43983928.npz \
+                --key nmd_label | tee /tmp/verify.txt
+              if ! grep -q "VERIFY PASS" /tmp/verify.txt; then
+                echo "VERIFY FAILED — aborting before any in-place write."; exit 1
+              fi
+              echo "=== BULK STRIP in place ==="
+              python /script/strip.py --dir /data/unified_v2 \
+                --key nmd_label --workers 8
+          resources:
+            requests:
+              cpu: "4"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "4Gi"
+          volumeMounts:
+            - name: data256
+              mountPath: /data
+            - name: script
+              mountPath: /script
+              readOnly: true
+      volumes:
+        - name: data256
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: script
+          configMap:
+            name: dataset-256-strip-script

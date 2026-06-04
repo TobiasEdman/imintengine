@@ -46,7 +46,7 @@ import numpy as np
 
 # Keys that are spatial (need cropping) — both H and W dims
 SPATIAL_2D_KEYS = (
-    "label", "label_mask", "nmd_label", "nmd_label_raw",
+    "label", "label_mask", "nmd_label_raw",
     "dem", "height", "volume", "basal_area", "diameter",
     "harvest_mask",
     "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
