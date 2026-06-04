@@ -40,12 +40,17 @@
 #     --from-file=README.md=docs/data/unified_v2_256_README.md
 #   kubectl create configmap dataset-256-html -n prithvi-training-default \
 #     --from-file=unified_v2_256.html=docs/data/unified_v2_256.html
+#   kubectl create configmap dataset-256-modelcard -n prithvi-training-default \
+#     --from-file=MODEL_CARD.md=docs/data/prithvi_300m_256_MODEL_CARD.md
 #   kubectl apply -f k8s/dataset-256-download.yaml
+#
+# Also serves the 300M baseline model from the training-checkpoints PVC
+# (read-only) at model/ — symlinked, not copied.
 #
 # TEARDOWN (~2-day temporary surface):
 #   kubectl delete -f k8s/dataset-256-download.yaml
 #   kubectl delete configmap dataset-256-meta dataset-256-readme dataset-256-html \
-#     dataset-256-viz-script -n prithvi-training-default
+#     dataset-256-modelcard dataset-256-viz-script -n prithvi-training-default
 #   kubectl delete job dataset-256-viz -n prithvi-training-default --ignore-not-found
 #   kubectl delete secret dataset-dl-auth -n prithvi-training-default
 ---
@@ -145,6 +150,18 @@ spec:
               cp /cephfs/_dataset_256_viz/*.png "$DST/img/" 2>/dev/null \
                 && cp /cephfs/_dataset_256_viz/showcase.html "$DST/img/" 2>/dev/null \
                 && echo "copied showcase images" || echo "viz images not found (skipped)"
+              # 300M baseline model — symlinked from the read-only checkpoints
+              # PVC (1.3 GB, not copied). nginx follows the symlink to stream it.
+              mkdir -p "$DST/model"
+              cp /modelcard/MODEL_CARD.md "$DST/model/MODEL_CARD.md"
+              if [ -f /checkpoints/prithvi_300m_256/best_model.pt ]; then
+                ln -s /checkpoints/prithvi_300m_256/best_model.pt "$DST/model/prithvi_300m_256_best.pt"
+                [ -f /checkpoints/prithvi_300m_256/training_log.json ] \
+                  && ln -s /checkpoints/prithvi_300m_256/training_log.json "$DST/model/training_log.json"
+                echo "linked 300M model"
+              else
+                echo "300M checkpoint not found (skipped)"
+              fi
               echo "Linked $(ls "$DST" | wc -l) entries."
           resources:
             requests:
@@ -170,6 +187,12 @@ spec:
               readOnly: true
             - name: cephfs
               mountPath: /cephfs
+              readOnly: true
+            - name: modelcard
+              mountPath: /modelcard
+              readOnly: true
+            - name: checkpoints
+              mountPath: /checkpoints
               readOnly: true
       containers:
         - name: nginx
@@ -201,6 +224,11 @@ spec:
             - name: meta
               mountPath: /meta
               readOnly: true
+            # Needed so nginx can follow the model/ symlinks into the
+            # checkpoints PVC and stream the 1.3 GB .pt.
+            - name: checkpoints
+              mountPath: /checkpoints
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /unified_v2/
@@ -231,9 +259,15 @@ spec:
         - name: html
           configMap:
             name: dataset-256-html
+        - name: modelcard
+          configMap:
+            name: dataset-256-modelcard
         - name: cephfs
           persistentVolumeClaim:
             claimName: training-data-cephfs
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
 ---
 apiVersion: v1
 kind: Service

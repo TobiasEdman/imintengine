@@ -128,6 +128,23 @@
     ],
     "note": "All tile types share one flat directory; the dataset loader filters/samples internally."
   },
+  "model": {
+    "name": "Prithvi-EO-2.0 300M — unified v5 256px baseline",
+    "backbone": "prithvi_eo_v2_300m_tl",
+    "num_temporal_frames": 4,
+    "in_channels": 35,
+    "num_classes": 23,
+    "epochs": 10,
+    "batch_size": 4,
+    "lr": 0.0001,
+    "val_miou": 0.4716,
+    "status": "baseline (fine-tuning seed; not production)",
+    "files": {
+      "checkpoint": "model/prithvi_300m_256_best.pt",
+      "training_log": "model/training_log.json",
+      "card": "model/MODEL_CARD.md"
+    }
+  },
   "access": {
     "download_url": "https://dataset-256.icedc.se/unified_v2/",
     "metadata_url": "https://dataset-256.icedc.se/metadata.json",

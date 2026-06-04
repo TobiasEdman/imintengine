@@ -134,6 +134,15 @@ label    = z["label"]      # (256, 256) uint8, 0..22
 
 Deterministic train/val split: `md5(filename) % 100 < 10` → val.
 
+## Baseline model
+
+A Prithvi-EO-2.0 **300M** checkpoint trained on this dataset is shared
+alongside it as a **baseline / fine-tuning seed** (10 epochs, val mIoU
+**0.4716** — not production-grade):
+
+- `model/prithvi_300m_256_best.pt` (1.3 GB) · `model/training_log.json`
+- Details, architecture, and loading: [`model/MODEL_CARD.md`](model/MODEL_CARD.md)
+
 ## Download
 
 - Listing: <https://dataset-256.icedc.se/unified_v2/> (basic-auth)
