@@ -18,6 +18,41 @@ A machine-readable version of everything below is at
 | CRS | EPSG:3006 (SWEREF99 TM) |
 | Schema version | v5 |
 
+## Visual examples
+
+One representative tile (`43983928`, a forest + agriculture mix). RGB and
+NIR-CIR follow the standard viz parameters (B04/B03/B02 and B8A/B03/B04,
+2–98 % stretch); see [`unified_v2_256.html`](unified_v2_256.html) for an
+HTML version.
+
+| True-colour RGB | NIR-CIR pseudocolour |
+|:---:|:---:|
+| ![RGB](img/rgb.png) | ![NIR-CIR](img/nir_cir.png) |
+| Sentinel-2 B04/B03/B02 | B8A/B03/B04 — vegetation in red |
+
+| Unified label (23 cls) | NMD base land cover |
+|:---:|:---:|
+| ![Label](img/label.png) | ![NMD](img/nmd.png) |
+| NMD + LPIS + SKS | Naturvårdsverket NMD |
+
+| Elevation (DEM) | Forest canopy height |
+|:---:|:---:|
+| ![DEM](img/dem.png) | ![Height](img/height.png) |
+| Copernicus DEM (terrain) | SLU Skogliga grunddata (viridis) |
+
+| VPP start-of-season | Harvest-readiness probability |
+|:---:|:---:|
+| ![VPP](img/vpp.png) | ![Harvest](img/harvest.png) |
+| Copernicus HR-VPP (viridis) | Skogsstyrelsen SKS (magma) |
+
+**Multitemporal — 4 frames** (autumn yr-1 + 3 VPP-guided growing-season):
+
+![Frames](img/frames.png)
+
+**Label legend** (classes present in this tile):
+
+![Legend](img/legend.png)
+
 ## Temporal frames
 
 Each tile stacks **4 temporal frames × 6 bands** (`spectral`, shape

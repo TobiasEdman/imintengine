@@ -30,16 +30,23 @@
 #   kubectl create secret generic dataset-dl-auth -n prithvi-training-default \
 #     --from-file=auth=/tmp/htpasswd && rm /tmp/htpasswd
 #
-# APPLY (metadata + readme ConfigMaps loaded from repo files — single source):
+# Showcase images are rendered to cephfs by k8s/dataset-256-viz-job.yaml and
+# copied into the listing's img/ at pod start.
+#
+# APPLY (metadata + readme + html ConfigMaps loaded from repo files):
 #   kubectl create configmap dataset-256-meta -n prithvi-training-default \
 #     --from-file=metadata.json=docs/data/unified_v2_256_metadata.json
 #   kubectl create configmap dataset-256-readme -n prithvi-training-default \
 #     --from-file=README.md=docs/data/unified_v2_256_README.md
+#   kubectl create configmap dataset-256-html -n prithvi-training-default \
+#     --from-file=unified_v2_256.html=docs/data/unified_v2_256.html
 #   kubectl apply -f k8s/dataset-256-download.yaml
 #
 # TEARDOWN (~2-day temporary surface):
 #   kubectl delete -f k8s/dataset-256-download.yaml
-#   kubectl delete configmap dataset-256-meta dataset-256-readme -n prithvi-training-default
+#   kubectl delete configmap dataset-256-meta dataset-256-readme dataset-256-html \
+#     dataset-256-viz-script -n prithvi-training-default
+#   kubectl delete job dataset-256-viz -n prithvi-training-default --ignore-not-found
 #   kubectl delete secret dataset-dl-auth -n prithvi-training-default
 ---
 apiVersion: v1
@@ -57,7 +64,13 @@ data:
       sendfile on;
       tcp_nopush on;
       default_type application/octet-stream;
-      types { application/octet-stream npz; text/plain md; application/json json; }
+      types {
+        application/octet-stream npz;
+        text/plain md;
+        application/json json;
+        text/html html htm;
+        image/png png;
+      }
       # Keep redirects relative so they inherit the ingress scheme/host
       # (https://dataset-256.icedc.se) instead of the internal :8080.
       absolute_redirect off;
@@ -122,8 +135,16 @@ spec:
                        train.txt val.txt test.txt; do
                 [ -f "$SRC/$f" ] && ln -s "$SRC/$f" "$DST/"
               done
-              # Human-readable description (from configmap, not the PVC).
+              # Human-readable description + HTML equivalent (from configmaps).
               cp /readme/README.md "$DST/README.md"
+              cp /html/unified_v2_256.html "$DST/unified_v2_256.html"
+              cp /meta/metadata.json "$DST/metadata.json"
+              # Data-source showcase PNGs + gallery (rendered to cephfs by
+              # k8s/dataset-256-viz-job.yaml). Non-fatal if absent.
+              mkdir -p "$DST/img"
+              cp /cephfs/_dataset_256_viz/*.png "$DST/img/" 2>/dev/null \
+                && cp /cephfs/_dataset_256_viz/showcase.html "$DST/img/" 2>/dev/null \
+                && echo "copied showcase images" || echo "viz images not found (skipped)"
               echo "Linked $(ls "$DST" | wc -l) entries."
           resources:
             requests:
@@ -140,6 +161,15 @@ spec:
               mountPath: /web
             - name: readme
               mountPath: /readme
+              readOnly: true
+            - name: html
+              mountPath: /html
+              readOnly: true
+            - name: meta
+              mountPath: /meta
+              readOnly: true
+            - name: cephfs
+              mountPath: /cephfs
               readOnly: true
       containers:
         - name: nginx
@@ -198,6 +228,12 @@ spec:
         - name: readme
           configMap:
             name: dataset-256-readme
+        - name: html
+          configMap:
+            name: dataset-256-html
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
 ---
 apiVersion: v1
 kind: Service

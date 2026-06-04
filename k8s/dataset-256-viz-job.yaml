@@ -1,0 +1,73 @@
+# One-shot job: render the data-source showcase PNGs + showcase.html for
+# one representative 256 tile, using scripts/render_dataset_showcase.py
+# (shipped via the dataset-256-viz-script configmap — no repo clone).
+#
+# Reads the tile from the read-only training-data PVC, writes outputs to
+# the cephfs PVC at /cephfs/_dataset_256_viz (retrieved into the repo +
+# served by the download pod). Pinned to p02r08srv01 to co-mount the RWO
+# training-data PVC.
+#
+# CREATE SCRIPT CONFIGMAP, THEN APPLY:
+#   kubectl create configmap dataset-256-viz-script -n prithvi-training-default \
+#     --from-file=render.py=scripts/render_dataset_showcase.py
+#   kubectl apply -f k8s/dataset-256-viz-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dataset-256-viz
+  namespace: prithvi-training-default
+  labels:
+    app: dataset-256-viz
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: dataset-256-viz
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: render
+          image: python:3.11-slim
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              pip install --quiet --no-cache-dir numpy matplotlib
+              OUT=/cephfs/_dataset_256_viz
+              mkdir -p "$OUT"
+              python /script/render.py \
+                --tile /data/unified_v2/43983928.npz \
+                --out "$OUT" --frame 2
+              echo "=== outputs ==="
+              ls -la "$OUT"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: data256
+              mountPath: /data
+              readOnly: true
+            - name: cephfs
+              mountPath: /cephfs
+            - name: script
+              mountPath: /script
+              readOnly: true
+      volumes:
+        - name: data256
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: script
+          configMap:
+            name: dataset-256-viz-script

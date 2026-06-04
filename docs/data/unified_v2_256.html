@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ImintEngine — Unified v5 dataset (256 px)</title>
+<style>
+  :root{--bg:#0b0e17;--panel:#111827;--line:#1e293b;--ink:#d8dae5;--mut:#94a3b8;--accent:#3b82f6}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,Segoe UI,Arial,sans-serif;line-height:1.5}
+  header{padding:24px;border-bottom:1px solid var(--line);
+    background:linear-gradient(135deg,#111827,#1e293b)}
+  header h1{margin:0;font-size:19px;color:#f1f5f9}
+  header p{margin:6px 0 0;font-size:13px;color:var(--mut);max-width:70ch}
+  main{padding:24px;max-width:1100px;margin:0 auto}
+  h2{font-size:15px;color:#f1f5f9;border-bottom:1px solid var(--line);
+    padding-bottom:6px;margin:32px 0 14px}
+  .facts{display:flex;flex-wrap:wrap;gap:10px;margin:0;padding:0;list-style:none}
+  .facts li{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:8px 12px;font-size:12px}
+  .facts b{color:#f1f5f9;display:block;font-size:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+  figure{margin:0;background:var(--panel);border:1px solid var(--line);
+    border-radius:8px;overflow:hidden}
+  figure img{display:block;width:100%;height:auto;background:#000}
+  figcaption{padding:8px 10px;font-size:12px;display:flex;flex-direction:column}
+  figcaption span{color:var(--mut);font-size:11px;margin-top:2px}
+  .wide img{max-width:100%;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+  .legend img{max-width:340px}
+  table{border-collapse:collapse;font-size:12px;margin-top:8px}
+  td,th{border:1px solid var(--line);padding:3px 9px;text-align:left}
+  th{color:var(--mut)}
+  .sw{display:inline-block;width:12px;height:12px;border-radius:2px;
+    vertical-align:middle;margin-right:6px}
+  a{color:#93c5fd}
+  code{background:#0b0e17;border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>ImintEngine — Unified v5 dataset (256 px)</h1>
+  <p>Multitemporal Sentinel-2 + auxiliary geospatial tiles over Sweden for
+     23-class LULC + harvest-readiness segmentation (Prithvi-EO-2.0).
+     Machine-readable schema: <a href="metadata.json">metadata.json</a> ·
+     Markdown: <a href="unified_v2_256_README.md">README.md</a></p>
+</header>
+<main>
+
+  <h2>At a glance</h2>
+  <ul class="facts">
+    <li><b>8290</b>tiles (.npz)</li>
+    <li><b>~168 GB</b>total</li>
+    <li><b>256×256</b>px</li>
+    <li><b>10 m</b>GSD</li>
+    <li><b>2560 m</b>extent</li>
+    <li><b>EPSG:3006</b>SWEREF99 TM</li>
+    <li><b>v5</b>schema</li>
+  </ul>
+
+  <h2>Visual examples</h2>
+  <p style="font-size:13px;color:var(--mut)">One representative tile
+    (<code>43983928</code>). RGB &amp; NIR-CIR use the standard viz
+    parameters (B04/B03/B02 and B8A/B03/B04, 2–98% stretch).</p>
+  <div class="grid">
+    <figure><img src="img/rgb.png" alt="RGB"><figcaption><b>True-colour RGB</b><span>Sentinel-2 B04/B03/B02</span></figcaption></figure>
+    <figure><img src="img/nir_cir.png" alt="NIR-CIR"><figcaption><b>NIR-CIR pseudocolour</b><span>B8A/B03/B04 — vegetation in red</span></figcaption></figure>
+    <figure><img src="img/label.png" alt="Label"><figcaption><b>Unified label (23 cls)</b><span>NMD + LPIS + SKS</span></figcaption></figure>
+    <figure><img src="img/nmd.png" alt="NMD"><figcaption><b>NMD base land cover</b><span>Naturvårdsverket NMD</span></figcaption></figure>
+    <figure><img src="img/dem.png" alt="DEM"><figcaption><b>Elevation (DEM)</b><span>Copernicus DEM · terrain</span></figcaption></figure>
+    <figure><img src="img/height.png" alt="Height"><figcaption><b>Forest canopy height</b><span>SLU Skogliga grunddata · viridis</span></figcaption></figure>
+    <figure><img src="img/vpp.png" alt="VPP"><figcaption><b>VPP start-of-season</b><span>Copernicus HR-VPP · viridis</span></figcaption></figure>
+    <figure><img src="img/harvest.png" alt="Harvest"><figcaption><b>Harvest-readiness prob</b><span>Skogsstyrelsen SKS · magma</span></figcaption></figure>
+  </div>
+
+  <h2>Multitemporal — 4 frames</h2>
+  <p style="font-size:13px;color:var(--mut)">Frame 0 = autumn of year−1
+    (stubble / winter crops); frames 1–3 = VPP-phenology-guided
+    growing-season windows. Band order B02,B03,B04,B8A,B11,B12.</p>
+  <div class="wide"><img src="img/frames.png" alt="Multitemporal RGB frames"></div>
+
+  <h2>Label legend</h2>
+  <div class="wide legend"><img src="img/legend.png" alt="Label legend"></div>
+
+  <h2>Label schema (23 classes)</h2>
+  <table>
+    <tr><th>id</th><th>name</th><th>source</th><th>id</th><th>name</th><th>source</th></tr>
+    <tr><td><span class="sw" style="background:#000"></span>0</td><td>bakgrund</td><td>—</td><td><span class="sw" style="background:#d48217"></span>12</td><td>korn</td><td>LPIS</td></tr>
+    <tr><td><span class="sw" style="background:#006400"></span>1</td><td>tallskog</td><td>NMD</td><td><span class="sw" style="background:#ffff64"></span>13</td><td>havre</td><td>LPIS</td></tr>
+    <tr><td><span class="sw" style="background:#228b22"></span>2</td><td>granskog</td><td>NMD</td><td><span class="sw" style="background:#2db45a"></span>14</td><td>oljeväxter</td><td>LPIS</td></tr>
+    <tr><td><span class="sw" style="background:#32cd32"></span>3</td><td>lövskog</td><td>NMD</td><td><span class="sw" style="background:#64c864"></span>15</td><td>slåttervall</td><td>LPIS</td></tr>
+    <tr><td><span class="sw" style="background:#3cb371"></span>4</td><td>blandskog</td><td>NMD</td><td><span class="sw" style="background:#50a03c"></span>16</td><td>bete</td><td>LPIS</td></tr>
+    <tr><td><span class="sw" style="background:#2e4f2e"></span>5</td><td>sumpskog</td><td>NMD</td><td><span class="sw" style="background:#b45028"></span>17</td><td>potatis</td><td>LPIS</td></tr>
+    <tr><td><span class="sw" style="background:#a0c878"></span>6</td><td>tillfälligt ej skog</td><td>NMD</td><td><span class="sw" style="background:#c864c8"></span>18</td><td>sockerbetor</td><td>LPIS</td></tr>
+    <tr><td><span class="sw" style="background:#8b5a2b"></span>7</td><td>våtmark</td><td>NMD</td><td><span class="sw" style="background:#8cb432"></span>19</td><td>trindsäd</td><td>LPIS</td></tr>
+    <tr><td><span class="sw" style="background:#d2b48c"></span>8</td><td>öppen mark</td><td>NMD</td><td><span class="sw" style="background:#be9650"></span>20</td><td>råg</td><td>LPIS</td></tr>
+    <tr><td><span class="sw" style="background:#ff0000"></span>9</td><td>bebyggelse</td><td>NMD</td><td><span class="sw" style="background:#dcc800"></span>21</td><td>majs</td><td>LPIS</td></tr>
+    <tr><td><span class="sw" style="background:#0000ff"></span>10</td><td>vatten</td><td>NMD</td><td><span class="sw" style="background:#00ced1"></span>22</td><td>hygge</td><td>SKS</td></tr>
+    <tr><td><span class="sw" style="background:#e6b422"></span>11</td><td>vete</td><td>LPIS</td><td></td><td></td><td></td></tr>
+  </table>
+
+  <h2>Download</h2>
+  <p>Listing (basic-auth): <code>https://dataset-256.icedc.se/unified_v2/</code> ·
+     schema: <a href="metadata.json">metadata.json</a> ·
+     resumable bulk download via <code>scripts/download_unified_256.sh</code>.
+     Each <code>.npz</code>: <code>spectral</code> (24,256,256) float32 +
+     <code>label</code> (256,256) uint8 + aux stack — full field list in
+     <a href="metadata.json">metadata.json</a>.</p>
+  <p style="color:var(--mut);font-size:12px">⚠️ Temporary ICE-hosted mirror
+     (~48 h window). Derived from open data (Sentinel-2, NMD, LPIS/SJV, SKS,
+     SLU, Copernicus DEM); redistribution subject to source licenses.</p>
+
+</main>
+</body>
+</html>
