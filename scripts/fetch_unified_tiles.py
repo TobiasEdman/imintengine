@@ -996,16 +996,21 @@ def repair_to_canonical_layout(
                 )
             failed_slots.append(sidx)
 
-    if failed_slots:
-        return {
-            "name": name, "status": "failed",
-            "reason": f"fetch_failed_for_slots: {failed_slots}",
-            "kept_slots": sorted(slot_assignments.keys()),
-            "fetched_slots": sorted(fetched.keys()),
-            "dropped_count": len(dropped),
-        }
-
-    # Build canonical (4*N_BANDS, H, W) cube
+    # Build canonical (4*N_BANDS, H, W) cube — partial-write capable.
+    #
+    # Pre-2026-06-04 behaviour: ANY failed slot → fail-fast, no .npz
+    # touched, all successfully-fetched slots discarded. That wasted
+    # ~75% of DES API calls for the year=2018 cohort: every slot 1/2/3
+    # success on a year=2018 tile was thrown away because slot 0 is
+    # structurally suppressed for DES (the Sen2Cor backfill cohort).
+    #
+    # New behaviour: build the cube with whatever we have
+    # (slot_assignments + fetched), leave failed slots at zero. Atomic
+    # write happens regardless. Status is still "failed" if any slot
+    # failed — so SkipIndex doesn't mark partial tiles as done, and the
+    # audit re-flags the still-zero slots. The persisted slots survive
+    # for the next pass (e.g. Sen2Cor filling slot 0 of a tile whose
+    # slot 1/2/3 are now also fresh from DES).
     H = W = tile.size_px
     new_image = np.zeros((4 * N_BANDS, H, W), dtype=np.float32)
     new_dates = ["", "", "", ""]
@@ -1027,20 +1032,44 @@ def repair_to_canonical_layout(
             new_dates[slot_idx] = date_str
             new_doys[slot_idx] = datetime.strptime(date_str, "%Y-%m-%d").timetuple().tm_yday
             new_tmask[slot_idx] = 1
+        # else: failed_slots OR a slot we didn't try — leave zero/empty
+        # so the next audit pass picks it up.
 
-    # Calendar-date monotonicity (autumn-y-1 < spring < early-summer < late-summer)
-    cal_dates = []
-    for slot_idx in range(4):
-        if not new_dates[slot_idx]:
-            return {"name": name, "status": "failed",
-                    "reason": f"slot_{slot_idx}_empty_after_build"}
-        cal_dates.append(datetime.strptime(new_dates[slot_idx], "%Y-%m-%d"))
-    if not (cal_dates[0] < cal_dates[1] < cal_dates[2] < cal_dates[3]):
+    # If nothing changed (no new fetches and the kept-slot layout matches
+    # the old layout exactly), skip the write — saves IO and avoids
+    # touching mtime on a tile that's already in its final state.
+    if not fetched and not failed_slots and len(slot_assignments) == 4 and all(
+        slot_assignments.get(i, (None,))[0] == i for i in range(4)
+    ):
         return {
-            "name": name, "status": "failed",
-            "reason": f"non_monotonic_calendar",
-            "dates_after": new_dates,
+            "name": name, "status": "ok",
+            "kept_slots": sorted(slot_assignments.keys()),
+            "fetched_slots": [],
+            "dropped_count": len(dropped),
+            "no_op": True,
         }
+
+    # Calendar-date monotonicity check — only meaningful on FULL tiles
+    # (every slot populated). Partial tiles legitimately have empty
+    # dates in still-failed slots; we still want to persist the slots
+    # that DID succeed.
+    if not failed_slots:
+        cal_dates = []
+        for slot_idx in range(4):
+            if not new_dates[slot_idx]:
+                # All-slot-populated branch but some slot has no date —
+                # impossible unless a kept slot's old_dates is empty;
+                # fall back to "failed" without write to avoid corrupting
+                # a previously-OK tile.
+                return {"name": name, "status": "failed",
+                        "reason": f"slot_{slot_idx}_empty_after_build"}
+            cal_dates.append(datetime.strptime(new_dates[slot_idx], "%Y-%m-%d"))
+        if not (cal_dates[0] < cal_dates[1] < cal_dates[2] < cal_dates[3]):
+            return {
+                "name": name, "status": "failed",
+                "reason": "non_monotonic_calendar",
+                "dates_after": new_dates,
+            }
 
     # Save: preserve all aux/label fields, replace only the 4 mutated keys
     save = {k: v for k, v in old.items() if k not in (
@@ -1063,6 +1092,18 @@ def repair_to_canonical_layout(
     tmp_path = out_path[:-4] + ".tmp.npz"  # FOO.npz → FOO.tmp.npz
     np.savez_compressed(tmp_path, **save)
     os.replace(tmp_path, out_path)
+
+    if failed_slots:
+        return {
+            "name": name, "status": "failed",
+            "reason": f"fetch_failed_for_slots: {failed_slots} "
+                      f"(but {len(fetched)} slot(s) persisted via partial write)",
+            "kept_slots": sorted(slot_assignments.keys()),
+            "fetched_slots": sorted(fetched.keys()),
+            "failed_slots": failed_slots,
+            "dropped_count": len(dropped),
+            "partial_persisted": True,
+        }
 
     return {
         "name": name, "status": "ok",
