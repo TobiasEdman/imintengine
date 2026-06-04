@@ -1,0 +1,115 @@
+# ImintEngine — Unified v5 dataset (256 px)
+
+Multitemporal Sentinel-2 + auxiliary geospatial tiles over Sweden for
+**23-class LULC + harvest-readiness segmentation** (Prithvi-EO-2.0).
+
+A machine-readable version of everything below is at
+[`metadata.json`](metadata.json).
+
+## At a glance
+
+| | |
+|---|---|
+| Tiles | 8290 (`.npz`) |
+| Total size | ~168 GB (~22 MB/tile) |
+| Tile size | 256 × 256 px |
+| GSD | 10 m |
+| Extent | 2560 m × 2560 m |
+| CRS | EPSG:3006 (SWEREF99 TM) |
+| Schema version | v5 |
+
+## Temporal frames
+
+Each tile stacks **4 temporal frames × 6 bands** (`spectral`, shape
+`(24, 256, 256)`):
+
+- **Frame 0** — autumn (Sep–Oct) of *year − 1* (stubble / winter crops)
+- **Frames 1–3** — VPP-phenology-guided growing-season windows, adapted
+  per tile latitude
+
+Band order (Prithvi-EO-2.0): **B02, B03, B04, B8A, B11, B12**
+(note: NIR is **B8A**, not B08). Values are surface reflectance,
+`float32`, nominal range ~[0.0, 0.4] — **feed raw reflectance to models,
+do not percentile-stretch.**
+
+> Spectral year **must** match the label year (LPIS/SKS); the autumn
+> frame is from the label year minus 1.
+
+## Label schema (23 classes)
+
+`label`, shape `(256, 256)`, `uint8`, class 0 = `bakgrund` (ignore index).
+
+| id | name | source | id | name | source |
+|----|------|--------|----|------|--------|
+| 0 | bakgrund | — | 12 | korn | LPIS |
+| 1 | tallskog | NMD | 13 | havre | LPIS |
+| 2 | granskog | NMD | 14 | oljeväxter | LPIS |
+| 3 | lövskog | NMD | 15 | slåttervall | LPIS |
+| 4 | blandskog | NMD | 16 | bete | LPIS |
+| 5 | sumpskog | NMD | 17 | potatis | LPIS |
+| 6 | tillfälligt ej skog | NMD | 18 | sockerbetor | LPIS |
+| 7 | våtmark | NMD | 19 | trindsäd | LPIS |
+| 8 | öppen mark | NMD | 20 | råg | LPIS |
+| 9 | bebyggelse | NMD | 21 | majs | LPIS |
+| 10 | vatten | NMD | 22 | hygge | SKS |
+| 11 | vete | LPIS | | | |
+
+## What's in each tile
+
+Beyond `spectral` and `label`, each `.npz` carries an auxiliary stack.
+The canonical model input is **(4×6 spectral + 11 aux, H, W) = 35
+channels**, where the 11 aux are: `height`, `volume`, `basal_area`,
+`diameter` (SLU forest metrics), `dem` (Copernicus DEM), `vpp_sosd`,
+`vpp_eosd`, `vpp_length`, `vpp_maxv`, `vpp_minv` (HR-VPP phenology), and
+`harvest_probability` (SKS).
+
+Optional extras (present only when the paired `has_*` flag is set):
+`rededge` (12 bands), `s1_vv_vh` (Sentinel-1), `tessera` (128-dim
+embeddings), `frame_2016` (legacy autumn frame).
+
+Plus per-tile scalars: `bbox_3006`, `easting`/`northing` (tile center),
+`lpis_year`, `dates`, `doy`, parcel/harvest counts, etc.
+
+**See [`metadata.json`](metadata.json) for the full per-array shape /
+dtype / source table.**
+
+## File naming
+
+All tiles live in one flat directory. Filenames are one of:
+
+- `tile_<east>_<north>.npz` — LULC grid
+- `crop_<crop>_<east>_<north>.npz` — LPIS centroid
+- `urban_<east>_<north>.npz` — SCB tätort
+- `<numeric>.npz` — legacy original tiles
+
+> `crop_*` and `urban_*` are **flat-named prefixes, not folders** — the
+> dataset loader filters/samples internally.
+
+Bookkeeping files in the listing: `class_stats.json`, `manifest.json`,
+`splits_summary.json`, `train.txt`, `val.txt`, `test.txt`.
+
+## Loading
+
+```python
+import numpy as np
+z = np.load("tile_281280_6471280.npz", allow_pickle=True)
+spectral = z["spectral"]   # (24, 256, 256) float32
+label    = z["label"]      # (256, 256) uint8, 0..22
+```
+
+Deterministic train/val split: `md5(filename) % 100 < 10` → val.
+
+## Download
+
+- Listing: <https://dataset-256.icedc.se/unified_v2/> (basic-auth)
+- Schema: <https://dataset-256.icedc.se/metadata.json>
+- Resumable bulk download: `scripts/download_unified_256.sh`
+
+> ⚠️ This is a **temporary** ICE-hosted mirror (~48 h window). For a
+> permanent copy, grab it before it's torn down.
+
+## Sources & license
+
+Derived from open data: ESA Copernicus Sentinel-2, Naturvårdsverket NMD,
+Jordbruksverket LPIS/SJV, Skogsstyrelsen SKS, SLU, Copernicus DEM.
+Redistribution is subject to the respective source licenses.

@@ -30,14 +30,16 @@
 #   kubectl create secret generic dataset-dl-auth -n prithvi-training-default \
 #     --from-file=auth=/tmp/htpasswd && rm /tmp/htpasswd
 #
-# APPLY (metadata ConfigMap loaded from the repo file — single source):
+# APPLY (metadata + readme ConfigMaps loaded from repo files — single source):
 #   kubectl create configmap dataset-256-meta -n prithvi-training-default \
 #     --from-file=metadata.json=docs/data/unified_v2_256_metadata.json
+#   kubectl create configmap dataset-256-readme -n prithvi-training-default \
+#     --from-file=README.md=docs/data/unified_v2_256_README.md
 #   kubectl apply -f k8s/dataset-256-download.yaml
 #
 # TEARDOWN (~2-day temporary surface):
 #   kubectl delete -f k8s/dataset-256-download.yaml
-#   kubectl delete configmap dataset-256-meta -n prithvi-training-default
+#   kubectl delete configmap dataset-256-meta dataset-256-readme -n prithvi-training-default
 #   kubectl delete secret dataset-dl-auth -n prithvi-training-default
 ---
 apiVersion: v1
@@ -55,7 +57,7 @@ data:
       sendfile on;
       tcp_nopush on;
       default_type application/octet-stream;
-      types { application/octet-stream npz; }
+      types { application/octet-stream npz; text/plain md; application/json json; }
       # Keep redirects relative so they inherit the ingress scheme/host
       # (https://dataset-256.icedc.se) instead of the internal :8080.
       absolute_redirect off;
@@ -120,6 +122,8 @@ spec:
                        train.txt val.txt test.txt; do
                 [ -f "$SRC/$f" ] && ln -s "$SRC/$f" "$DST/"
               done
+              # Human-readable description (from configmap, not the PVC).
+              cp /readme/README.md "$DST/README.md"
               echo "Linked $(ls "$DST" | wc -l) entries."
           resources:
             requests:
@@ -134,6 +138,9 @@ spec:
               readOnly: true
             - name: web
               mountPath: /web
+            - name: readme
+              mountPath: /readme
+              readOnly: true
       containers:
         - name: nginx
           # Version-pinned (never :latest), matching the repo convention
@@ -188,6 +195,9 @@ spec:
         - name: meta
           configMap:
             name: dataset-256-meta
+        - name: readme
+          configMap:
+            name: dataset-256-readme
 ---
 apiVersion: v1
 kind: Service
