@@ -128,9 +128,54 @@ def _read_12band_toa(safe_dir: Path, bbox_3006: dict, out_px: int) -> dict | Non
 
 # ── sen2cor invocation ───────────────────────────────────────────────────
 
+def _ensure_l1c_datastrip_qi_data(safe_dir: Path) -> None:
+    """Create an empty ``DATASTRIP/<DS_dir>/QI_DATA`` if it's missing.
+
+    Sen2Cor 2.12.04's ``L2A_ProcessDataStrip.generate()`` (TOOLBOX mode,
+    line 410-420 in /opt/Sen2Cor-02.12.04-Linux64/.../L2A_ProcessDataStrip.py)
+    renames L1C's ``DATASTRIP/DS_<...>/`` to the L2A name and then does
+    ``os.listdir(newdir/QI_DATA)`` to scrub stale ``.xml`` files. If
+    ``QI_DATA/`` doesn't exist inside the renamed dir, ``os.listdir``
+    raises ``OSError [Errno 2]`` and the whole scene is lost.
+
+    Some Collection-1 reprocessed L1C SAFEs ship ``DATASTRIP/<DS>/MTD_DS.xml``
+    but no ``QI_DATA`` subdirectory at all. Live observation 2026-06-04:
+    failures span both N0205 and N0500 baselines and both Swedish
+    (T33V**) and non-Swedish (T60V**/T01V**) MGRS prefixes — the missing
+    subdir is per-SAFE, not baseline-dependent. The sub-agent's earlier
+    diagnosis blamed N0205-vs-N0500; the live ``ls`` of in-cache N0205
+    SAFEs (T33VUC, T33VVD) showed they DO have QI_DATA, disproving that.
+
+    The Sen2Cor iteration body is ``for fnIn in filelist: if *.xml:
+    os.remove(...)`` — an empty ``QI_DATA`` is a perfectly valid no-op,
+    so creating an empty directory satisfies the listdir call without
+    affecting L2A correctness. This is a workaround for a Sen2Cor
+    robustness gap, not a data fix.
+    """
+    datastrip = safe_dir / "DATASTRIP"
+    if not datastrip.is_dir():
+        return
+    for ds_subdir in datastrip.iterdir():
+        if not ds_subdir.is_dir():
+            continue
+        qi = ds_subdir / "QI_DATA"
+        if not qi.exists():
+            try:
+                qi.mkdir()
+                _log(f"    [qi-data-shim] created empty QI_DATA in "
+                     f"{ds_subdir.name} (was missing from L1C SAFE)")
+            except Exception as exc:
+                _log(f"    [qi-data-shim] WARN: mkdir {qi} failed: "
+                     f"{type(exc).__name__}: {exc}")
+
+
 def _run_sen2cor(safe_dir: Path, work_dir: Path) -> Path | None:
     """Run L2A_Process on an L1C SAFE; return the produced L2A SAFE dir."""
     work_dir.mkdir(parents=True, exist_ok=True)
+    # Workaround for Sen2Cor 2.12.04 TOOLBOX-mode crash on L1C SAFEs that
+    # lack DATASTRIP/<DS>/QI_DATA. See _ensure_l1c_datastrip_qi_data
+    # docstring for the full diagnosis.
+    _ensure_l1c_datastrip_qi_data(safe_dir)
     cmd = [
         "L2A_Process",
         "--resolution", "10",
