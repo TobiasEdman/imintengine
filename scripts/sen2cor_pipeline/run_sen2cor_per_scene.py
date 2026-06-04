@@ -195,6 +195,98 @@ def _write_frame_2016(
     os.replace(tmp_base + ".npz", tile_path)
 
 
+def _write_temporal_slot(
+    tile_path: Path,
+    slot_idx: int,
+    frame: np.ndarray,
+    scene_id: str,
+    scene_datetime: str,
+) -> None:
+    """Atomically write a 6-band frame into a tile .npz's temporal stack.
+
+    Variant of :func:`_write_frame_2016` that targets one of the four
+    temporal slots (``spectral[slot_idx*6:(slot_idx+1)*6]``) instead of
+    the background ``frame_2016`` field. Used by the 2017 backfill to
+    fill slot 0 (autumn-y-1) of ``year=2018`` audit tiles that DES
+    openEO can't fetch — the L2A_Process output gets written exactly
+    where the unified-flow refetch would have written it had DES had
+    the data.
+
+    Updates ``spectral``, ``dates``, ``doy`` and ``temporal_mask`` to
+    keep the temporal stack consistent, plus per-slot provenance
+    (``slot_N_scene``, ``slot_N_source``) so a future audit can tell
+    which slots came from sen2cor vs the openEO refetch path.
+
+    Args:
+        slot_idx: 0..3 — which temporal slot to overwrite.
+        frame: (6, H, W) float32 reflectance in ``PRITHVI_BANDS`` order.
+        scene_id: L1C SAFE identifier (provenance).
+        scene_datetime: ISO datetime; the date prefix becomes
+            ``dates[slot_idx]`` and is used to derive
+            ``doy[slot_idx]``.
+    """
+    from datetime import datetime as _dt
+
+    if slot_idx < 0 or slot_idx > 3:
+        raise ValueError(f"slot_idx must be 0..3, got {slot_idx}")
+    n_bands = 6
+    if frame.ndim != 3 or frame.shape[0] != n_bands:
+        raise ValueError(
+            f"frame must be (6, H, W), got shape {frame.shape}"
+        )
+
+    with np.load(tile_path, allow_pickle=True) as d:
+        data = {k: d[k] for k in d.files}
+
+    # spectral cube: write the 6-band slice for this slot.
+    if "spectral" in data:
+        spec = data["spectral"].copy()
+        if spec.shape[0] < (slot_idx + 1) * n_bands:
+            raise ValueError(
+                f"spectral has {spec.shape[0]} bands; cannot write slot "
+                f"{slot_idx} (needs ≥ {(slot_idx + 1) * n_bands})"
+            )
+    else:
+        # No existing temporal stack — initialise (4*6, H, W) with zeros.
+        h, w = frame.shape[1], frame.shape[2]
+        spec = np.zeros((4 * n_bands, h, w), dtype=np.float32)
+    spec[slot_idx * n_bands:(slot_idx + 1) * n_bands] = frame.astype(np.float32)
+    data["spectral"] = spec
+
+    # Date + DOY for this slot. Other slots untouched.
+    date_str = (scene_datetime or "")[:10]
+    try:
+        doy_val = (_dt.fromisoformat(date_str).timetuple().tm_yday
+                   if date_str else 0)
+    except Exception:
+        doy_val = 0
+
+    def _put_in_array(key: str, value, fill, dtype):
+        cur = data.get(key)
+        if cur is not None and hasattr(cur, "__len__"):
+            arr = list(cur)
+        else:
+            arr = []
+        while len(arr) < 4:
+            arr.append(fill)
+        arr[slot_idx] = value
+        data[key] = (np.array([str(s) for s in arr]) if dtype is None
+                     else np.array(arr, dtype=dtype))
+
+    _put_in_array("dates", date_str, "", None)
+    _put_in_array("doy", doy_val, 0, np.int32)
+    _put_in_array("temporal_mask", 1, 0, np.int32)
+
+    # Per-slot provenance (parallel to frame_2016_scene / frame_2016_date).
+    data[f"slot_{slot_idx}_scene"] = np.str_(scene_id)
+    data[f"slot_{slot_idx}_source"] = np.str_("sen2cor_l1c_l2a")
+    data[f"slot_{slot_idx}_bands"] = np.array(PRITHVI_BANDS)
+
+    tmp_base = str(tile_path) + ".tmp"
+    np.savez_compressed(tmp_base, **data)
+    os.replace(tmp_base + ".npz", tile_path)
+
+
 # ── Per-scene processing ─────────────────────────────────────────────────
 
 def _process_scene(
@@ -206,8 +298,16 @@ def _process_scene(
     device: str,
     stats: dict,
     stats_lock: threading.Lock,
+    target_slot_idx: int | None = None,
 ) -> None:
-    """Download SAFE, COT-gate tiles, sen2cor, write frame_2016."""
+    """Download SAFE, COT-gate tiles, sen2cor, write the L2A frame.
+
+    Write target is controlled by ``target_slot_idx``:
+      - ``None`` (default) → ``frame_2016`` field via :func:`_write_frame_2016`
+        (legacy 2016 background backfill).
+      - ``0..3`` → temporal stack via :func:`_write_temporal_slot`
+        (2017 autumn → slot 0 backfill for year=2018 audit tiles).
+    """
     from imint.fetch import fetch_l1c_safe_by_name
     from imint.analyzers.cot_l1c import cloud_score_l1c
     from imint.training.tile_bbox import resolve_tile_bbox
@@ -305,10 +405,16 @@ def _process_scene(
                         stats["deferred"] += 1
                     continue
                 frame = np.stack(chans, axis=0)  # (6, H, W)
-                _write_frame_2016(
-                    data_dir / f"{name}.npz", frame,
-                    safe_id, scene.get("datetime", ""),
-                )
+                if target_slot_idx is None:
+                    _write_frame_2016(
+                        data_dir / f"{name}.npz", frame,
+                        safe_id, scene.get("datetime", ""),
+                    )
+                else:
+                    _write_temporal_slot(
+                        data_dir / f"{name}.npz", target_slot_idx, frame,
+                        safe_id, scene.get("datetime", ""),
+                    )
                 with stats_lock:
                     stats["ok"] += 1
             except Exception as e:
@@ -334,7 +440,30 @@ def main() -> None:
                    help="COT-ensemble inference device. 'cuda' needs a "
                         "GPU pod with torch installed.")
     p.add_argument("--max-scenes", type=int, default=None)
+    p.add_argument("--target", default="frame_2016",
+                   help="Where to write the L2A 6-band frame. "
+                        "'frame_2016' (default) → the legacy background-frame "
+                        "field. 'slot:N' with N in 0..3 → the temporal stack "
+                        "slot N (e.g. --target slot:0 for the 2017 autumn "
+                        "backfill targeting year=2018 audit tiles' slot 0).")
     args = p.parse_args()
+
+    # Parse --target → target_slot_idx (None means legacy frame_2016).
+    target_slot_idx: int | None
+    if args.target == "frame_2016":
+        target_slot_idx = None
+    elif args.target.startswith("slot:"):
+        try:
+            target_slot_idx = int(args.target.split(":", 1)[1])
+        except ValueError:
+            sys.exit(f"--target slot:N — N must be an integer, "
+                     f"got {args.target!r}")
+        if target_slot_idx < 0 or target_slot_idx > 3:
+            sys.exit(f"--target slot:{target_slot_idx} out of range; "
+                     f"valid slots are 0..3")
+    else:
+        sys.exit(f"--target must be 'frame_2016' or 'slot:N' (N=0..3), "
+                 f"got {args.target!r}")
 
     with open(args.plan) as f:
         plan = json.load(f)
@@ -352,6 +481,8 @@ def main() -> None:
     print(f"  cot-max:    {args.cot_max}")
     print(f"  workers:    {args.workers}")
     print(f"  device:     {args.device}")
+    print(f"  target:     {args.target} "
+          f"(→ {'frame_2016 field' if target_slot_idx is None else f'spectral slot {target_slot_idx}'})")
 
     from imint.analyzers.cot_l1c import load_ensemble_l1c
     cot_models = load_ensemble_l1c(device=args.device)
@@ -366,7 +497,7 @@ def main() -> None:
         futs = [
             pool.submit(_process_scene, sc, data_dir, safe_cache,
                         args.cot_max, cot_models, args.device,
-                        stats, stats_lock)
+                        stats, stats_lock, target_slot_idx)
             for sc in scenes
         ]
         for i, fut in enumerate(as_completed(futs)):
