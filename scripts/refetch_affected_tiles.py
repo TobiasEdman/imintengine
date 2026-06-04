@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -39,6 +40,109 @@ from imint.training.tile_bbox import resolve_tile_bbox
 from imint.training.tile_fetch import bbox_3006_to_wgs84
 from imint.training.tile_config import TileConfig
 from scripts.fetch_unified_tiles import repair_to_canonical_layout
+
+
+class SkipIndex:
+    """Persistent set of audit tiles that prior runs confirmed
+    OK ("status": "skipped" or "ok" from ``repair_to_canonical_layout``).
+
+    Eliminates the per-iteration skip-burst: instead of re-loading
+    every audit tile's .npz to discover it's already in canonical
+    layout, we record the verdict once and short-circuit the next
+    run. Keyed by the audit-JSON basename so different audits don't
+    cross-contaminate.
+
+    Thread-safe (single lock around the in-memory set + flush). Flushes
+    every ``flush_every`` updates via temp-file + atomic ``os.replace``
+    so a pod kill mid-write never corrupts the on-disk file.
+
+    The skip-index is *durable* across runs because the only thing that
+    modifies a tile's .npz is a successful refetch — and a successful
+    refetch leaves the tile in canonical layout, so it stays "known OK"
+    regardless. If you ever need to invalidate the index (e.g. you
+    deliberately corrupted a tile to force a re-run), delete the
+    index file.
+    """
+
+    def __init__(self, path: str, audit_basename: str, *, flush_every: int = 100):
+        self.path = path
+        self.audit_basename = audit_basename
+        self.flush_every = flush_every
+        self._lock = threading.Lock()
+        self._known: set[str] = set()
+        self._pending = 0
+        self._load()
+
+    def _load(self) -> None:
+        if not os.path.exists(self.path):
+            return
+        try:
+            data = json.load(open(self.path))
+        except Exception as e:
+            print(f"  [skip-index] load failed: {e}", flush=True)
+            return
+        # Cross-audit guard — different audit JSON ⇒ different work list,
+        # don't reuse another audit's set.
+        if data.get("audit") != self.audit_basename:
+            print(
+                f"  [skip-index] audit mismatch "
+                f"(file: {data.get('audit')!r}, want: {self.audit_basename!r}); "
+                f"ignoring",
+                flush=True,
+            )
+            return
+        self._known = set(data.get("tiles_ok", []))
+        print(
+            f"  [skip-index] loaded {len(self._known)} known-OK tiles "
+            f"from {self.path}",
+            flush=True,
+        )
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._known
+
+    def __len__(self) -> int:
+        return len(self._known)
+
+    def add(self, name: str) -> None:
+        with self._lock:
+            if name in self._known:
+                return
+            self._known.add(name)
+            self._pending += 1
+            if self._pending >= self.flush_every:
+                self._flush_locked()
+
+    def _flush_locked(self) -> None:
+        """Caller must hold ``self._lock``. Atomic via temp-file + rename."""
+        try:
+            tmp = self.path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(
+                    {
+                        "audit": self.audit_basename,
+                        "updated_utc": time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                        ),
+                        "n_tiles": len(self._known),
+                        "tiles_ok": sorted(self._known),
+                    },
+                    f,
+                )
+            os.replace(tmp, self.path)
+            self._pending = 0
+        except Exception as e:
+            print(f"  [skip-index] flush failed: {e}", flush=True)
+
+    def flush_final(self) -> None:
+        with self._lock:
+            if self._pending > 0 or not os.path.exists(self.path):
+                self._flush_locked()
+        print(
+            f"  [skip-index] final: {len(self._known)} known-OK tiles "
+            f"persisted to {self.path}",
+            flush=True,
+        )
 
 
 def loc_from_existing(name: str, tile: TileConfig, tiles_dir: str) -> dict | None:
@@ -101,6 +205,13 @@ def main():
                    help="For smoke-testing; limits to first N tiles")
     p.add_argument("--cap-doy", type=int, default=244,
                    help="Refetch any growing-season frame with DOY > cap (default 244=Sep 1, matches PR #15 VPP cap)")
+    p.add_argument("--skip-index-path", default=None,
+                   help="Persistent skip-index JSON. Default: "
+                        "{audit_dir}/skip_index_{audit_basename}. "
+                        "Tiles confirmed OK by a prior run are fast-skipped "
+                        "(no .npz load) on subsequent runs.")
+    p.add_argument("--no-skip-index", action="store_true",
+                   help="Disable the skip-index entirely (always full scan).")
     args = p.parse_args()
 
     sources = tuple(s.strip() for s in args.sources.split(",") if s.strip())
@@ -130,27 +241,77 @@ def main():
 
     tile = TileConfig(size_px=args.tile_size_px)
 
-    # Build locs (sequential — cheap I/O)
+    # Persistent skip-index. Default file colocates with the audit JSON:
+    # /cephfs/audits/skip_index_<audit_basename>. Same audit across runs
+    # ⇒ same skip-index ⇒ no re-loading of confirmed-OK tiles' .npz.
+    audit_basename = os.path.basename(args.audit_json)
+    default_skip_idx = os.path.join(
+        os.path.dirname(args.audit_json) or ".",
+        f"skip_index_{audit_basename}",
+    )
+    skip_index = (
+        None
+        if args.no_skip_index
+        else SkipIndex(args.skip_index_path or default_skip_idx, audit_basename)
+    )
+    print(
+        f"  skip-index:    "
+        + (f"{skip_index.path} ({len(skip_index)} pre-known)"
+           if skip_index else "DISABLED (--no-skip-index)"),
+        flush=True,
+    )
+
+    # Build locs — fast-skip tiles already in skip-index (no .npz load).
     print(f"\n=== building loc dicts ===", flush=True)
     locs = []
     skipped_no_loc = 0
+    fast_skip_count = 0
     for n in names:
+        if skip_index is not None and n in skip_index:
+            fast_skip_count += 1
+            continue
         loc = loc_from_existing(n, tile, args.output_dir)
         if loc is None:
             skipped_no_loc += 1
             continue
         locs.append(loc)
-    print(f"  built {len(locs)} locs ({skipped_no_loc} skipped — no .npz or bbox)", flush=True)
+    print(
+        f"  built {len(locs)} locs "
+        f"({fast_skip_count} fast-skipped via index, "
+        f"{skipped_no_loc} skipped — no .npz or bbox)",
+        flush=True,
+    )
+
+    # Pre-credit fast-skips into the by_status counter so the progress
+    # line + downstream dashboards see the full picture from tile 0,
+    # not "ok=0 skipped=0" until the first pool result lands.
+    total = len(names)
+    by_status = {
+        "ok": 0,
+        "failed": 0,
+        "skipped": fast_skip_count,
+        "error": 0,
+    }
+    pre_credit = fast_skip_count + skipped_no_loc
+    if fast_skip_count or skipped_no_loc:
+        print(
+            f"  [{pre_credit}/{total}] status={by_status} "
+            f"(pre-credit: {fast_skip_count} fast-skip + "
+            f"{skipped_no_loc} no-npz)",
+            flush=True,
+        )
 
     if not locs:
-        print(f"  nothing to do; exiting"); return
+        print(f"  nothing to do; exiting", flush=True)
+        if skip_index is not None:
+            skip_index.flush_final()
+        return
 
     # Execute with thread pool
     print(f"\n=== re-fetching with {args.workers} workers ===", flush=True)
     t0 = time.time()
     results = []
     completed = 0
-    by_status = {"ok": 0, "failed": 0, "skipped": 0, "error": 0}
 
     def task(loc):
         try:
@@ -164,24 +325,38 @@ def main():
         except Exception as e:
             return {"name": loc["name"], "status": "error", "reason": str(e)[:200]}
 
-    with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futs = {ex.submit(task, loc): loc for loc in locs}
-        for fut in as_completed(futs):
-            r = fut.result()
-            results.append(r)
-            completed += 1
-            status = r.get("status", "unknown")
-            by_status[status] = by_status.get(status, 0) + 1
-            if completed % 25 == 0 or completed == len(locs):
-                elapsed = time.time() - t0
-                rate = completed / max(elapsed / 3600, 1e-6)
-                eta_min = (len(locs) - completed) / max(rate / 60, 1e-6)
-                print(
-                    f"  [{completed}/{len(locs)}] "
-                    f"status={by_status} "
-                    f"rate={rate:.0f}/h ETA={eta_min:.1f}min",
-                    flush=True,
-                )
+    try:
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            futs = {ex.submit(task, loc): loc for loc in locs}
+            for fut in as_completed(futs):
+                r = fut.result()
+                results.append(r)
+                completed += 1
+                status = r.get("status", "unknown")
+                by_status[status] = by_status.get(status, 0) + 1
+                # Persist terminal-OK tiles (skipped + ok) to the index.
+                # Tiles with status="failed" or "error" stay out so they
+                # get retried on the next run.
+                if (
+                    skip_index is not None
+                    and status in ("skipped", "ok")
+                    and "name" in r
+                ):
+                    skip_index.add(r["name"])
+                if completed % 25 == 0 or completed == len(locs):
+                    elapsed = time.time() - t0
+                    rate = completed / max(elapsed / 3600, 1e-6)
+                    eta_min = (len(locs) - completed) / max(rate / 60, 1e-6)
+                    total_completed = pre_credit + completed
+                    print(
+                        f"  [{total_completed}/{total}] "
+                        f"status={by_status} "
+                        f"rate={rate:.0f}/h ETA={eta_min:.1f}min",
+                        flush=True,
+                    )
+    finally:
+        if skip_index is not None:
+            skip_index.flush_final()
 
     elapsed = time.time() - t0
     print(f"\n=== done in {elapsed/60:.1f} min ===", flush=True)
