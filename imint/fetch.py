@@ -1551,9 +1551,25 @@ def _gcp_resolve_safe_name(safe_name: str) -> str:
     built straight from the STAC name lists zero files.
 
     This lists the bucket by the stable acquisition prefix and returns
-    the real ``.SAFE`` folder name. If several baselines are present,
-    the orbit token disambiguates and the lowest baseline (original)
-    wins.
+    the real ``.SAFE`` folder name. If several baselines are present
+    (e.g. 2017 acquisitions have BOTH the original ``N0205`` AND the
+    2023-reprocessed ``N0500``), the orbit token disambiguates and the
+    **highest baseline wins** — reversed 2026-06-04 from the previous
+    "lowest baseline" policy after the Sen2Cor 2017 backfill blew up
+    on it. Justification:
+
+    * Sen2Cor 2.12.04 supports PSD 14.2 onward only. The 2017 original
+      ``N0205`` is PSD ~13.x; its DATASTRIP doesn't even contain a
+      ``QI_DATA`` directory (PSD 13 didn't define it), so
+      ``L2A_ProcessDataStrip.generate()`` ``os.listdir(qiDir)`` raises
+      ``Errno 2`` and the whole tile is lost.
+    * ``N0500`` (Collection-1 reprocessing, PSD 14.9) IS supported and
+      has the full DATASTRIP/QI_DATA layout Sen2Cor expects.
+    * CDSE STAC returns the N0500 name anyway, so the downstream
+      ``work_dir = safe_cache/{scene_id}_l2a`` name matches what we
+      actually fetched only when we pick N0500.
+    * For 2016 acquisitions (where only ``N0202``/``N0204`` exist),
+      reversing the sort is a no-op (single folder).
 
     Raises:
         FetchError: If no SAFE for this acquisition exists in the bucket.
@@ -1593,7 +1609,10 @@ def _gcp_resolve_safe_name(safe_name: str) -> str:
             f"GCP bucket {GCP_S2_BUCKET} has no SAFE for acquisition "
             f"{stable} tile T{utm}{lat_band}{square}"
         )
-    folders.sort()  # lowest baseline (original) first
+    # Highest baseline first — N0500 (Sen2Cor-2.12.04 compatible) over
+    # N02xx (PSD ~13, no QI_DATA dir). String-sort is monotone in
+    # baseline because the field is fixed-width `_N\d{4}_`.
+    folders.sort(reverse=True)
     return folders[0]
 
 
@@ -1698,6 +1717,126 @@ def fetch_l1c_safe_from_gcp(
     )
 
 
+def _cdse_download_safe(
+    safe_name: str,
+    dest_root: Path,
+    *,
+    overwrite: bool = False,
+) -> Path:
+    """Download one L1C SAFE via CDSE OData when GCS doesn't have it.
+
+    Used as the fallback path inside :func:`fetch_l1c_safe_by_name`
+    when ``_gcp_resolve_safe_name`` reports "no SAFE for acquisition"
+    on the public GCS bucket. CDSE OData covers the full ESA archive
+    including the re-ingested 2017-vintage SAFEs GCS sometimes lacks
+    (e.g. the S2A 2017-08-28 R108 cohort the Sen2Cor 2017 backfill
+    needed).
+
+    Two-step OData:
+
+      1. ``GET /odata/v1/Products?$filter=Name eq '<safe>.SAFE'&$top=1``
+         → ``value[0].Id`` (CDSE ProductId UUID).
+      2. ``GET /odata/v1/Products(<Id>)/$value`` with
+         ``Authorization: Bearer <token>`` → streamed ZIP of the
+         whole SAFE archive, unpacked into ``dest_root``.
+
+    Reuses :func:`imint.training.cdse_vpp._get_token` for the OAuth2
+    ``client_credentials`` flow against the CDSE Identity endpoint
+    (same endpoint serves both SH Process API and OData — the
+    function name in cdse_vpp is just historical).
+
+    Args:
+        safe_name: SAFE archive name *with* the ``.SAFE`` suffix
+            (e.g. ``S2A_MSIL1C_20170828T103021_N0500_R108_T33VVJ_...SAFE``).
+        dest_root: Local directory to unpack into.
+        overwrite: If ``False`` (default) and the unpacked SAFE
+            directory already exists with content, skip the download.
+
+    Returns:
+        ``Path`` to the unpacked ``.SAFE`` directory.
+
+    Raises:
+        FetchError: If CDSE OData has no product with that name
+            either (every source exhausted), or if the download
+            unpacks to an unexpected location.
+    """
+    import json as _json
+    import urllib.parse
+    import urllib.request
+    import zipfile
+
+    from imint.training.cdse_vpp import _get_token
+
+    name_no_suffix = safe_name[:-5] if safe_name.endswith(".SAFE") else safe_name
+    safe_root = dest_root / (name_no_suffix + ".SAFE")
+    if (not overwrite
+            and safe_root.exists()
+            and any(safe_root.iterdir())):
+        return safe_root  # cached from a prior run
+
+    token = _get_token()
+    auth = {"Authorization": f"Bearer {token}"}
+
+    # Step 1 — resolve name → ProductId
+    filter_expr = f"Name eq '{name_no_suffix}.SAFE'"
+    q = urllib.parse.urlencode({"$filter": filter_expr, "$top": "1"})
+    cat_url = (
+        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?{q}"
+    )
+    req = urllib.request.Request(cat_url, headers=auth)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        body = _json.loads(resp.read())
+    values = body.get("value", [])
+    if not values:
+        raise FetchError(
+            f"CDSE OData has no product matching {name_no_suffix}.SAFE; "
+            f"both GCS and CDSE exhausted."
+        )
+    product_id = values[0]["Id"]
+
+    # Step 2 — stream the ZIP
+    zip_path = dest_root / f"{name_no_suffix}.zip"
+    dl_url = (
+        f"https://download.dataspace.copernicus.eu/odata/v1/"
+        f"Products({product_id})/$value"
+    )
+    dl_req = urllib.request.Request(dl_url, headers=auth)
+    print(
+        f"  [safe-fetch] CDSE OData GET {name_no_suffix}.zip "
+        f"(productId={product_id})",
+        flush=True,
+    )
+    with urllib.request.urlopen(dl_req, timeout=900) as resp, \
+            open(zip_path, "wb") as f:
+        while True:
+            chunk = resp.read(1 << 20)  # 1 MiB
+            if not chunk:
+                break
+            f.write(chunk)
+
+    # Step 3 — unpack and clean up
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(dest_root)
+    zip_path.unlink()
+
+    if safe_root.exists():
+        return safe_root
+    # Some CDSE archives unpack into a folder without the trailing
+    # ``.SAFE`` or with a slightly different processing-timestamp
+    # tail. Be tolerant: pick the most-recently-modified candidate.
+    candidates = sorted(
+        dest_root.glob(f"{name_no_suffix[:60]}*"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+    raise FetchError(
+        f"CDSE OData download for {name_no_suffix}.SAFE unpacked to an "
+        f"unexpected location under {dest_root}"
+    )
+
+
 def fetch_l1c_safe_by_name(
     safe_name: str,
     dest_dir: str | Path | None = None,
@@ -1705,17 +1844,28 @@ def fetch_l1c_safe_by_name(
     max_workers: int = 8,
     overwrite: bool = False,
 ) -> Path:
-    """Download a specific L1C SAFE archive from the GCS public bucket.
+    """Download a specific L1C SAFE archive — GCS first, CDSE fallback.
 
     Unlike :func:`fetch_l1c_safe_from_gcp`, this takes a specific SAFE
     name (== a CDSE STAC L1C item id) and downloads exactly that
     acquisition — no STAC re-resolution that could pick a different
-    scene. The bucket carries the original processing baseline rather
-    than the STAC-served Collection-1 reprocessing, so the baseline and
-    processing-timestamp tokens are resolved against GCS via
-    :func:`_gcp_resolve_safe_name`; mission, level, acquisition time,
-    orbit and tile are preserved. Use it when an upstream selector has
-    already picked the scene and the caller must not get a different one.
+    scene. Use it when an upstream selector has already picked the
+    scene and the caller must not get a different one.
+
+    Source strategy:
+
+      1. **GCS public bucket** (primary, parallel chunked, anonymous,
+         free). The bucket carries multiple baselines per acquisition;
+         :func:`_gcp_resolve_safe_name` picks the highest available
+         (Sen2Cor-compatible) when several exist.
+      2. **CDSE OData fallback** (:func:`_cdse_download_safe`), taken
+         only when GCS responds "no SAFE for acquisition" — happens
+         for some pre-2020 SAFEs that were re-ingested after the GCS
+         mirror was synced. Requires CDSE credentials; covers the full
+         ESA archive.
+
+    Other GCS errors (network, bucket-side) re-raise rather than
+    silently falling back — we don't want to mask transient issues.
 
     Args:
         safe_name: SAFE archive name, with or without the ``.SAFE``
@@ -1733,15 +1883,39 @@ def fetch_l1c_safe_by_name(
 
     if not safe_name.endswith(".SAFE"):
         safe_name = safe_name + ".SAFE"
-    # CDSE/DES STAC serves N0500-reprocessed names; the GCS bucket
-    # carries the original baseline. Resolve to the real bucket name.
-    safe_name = _gcp_resolve_safe_name(safe_name)
-    files = _gcp_list_safe_files(safe_name)
 
     if dest_dir is None:
         dest_dir = Path("outputs") / "safe_archives"
     dest_root = Path(dest_dir)
     dest_root.mkdir(parents=True, exist_ok=True)
+
+    # Two source strategies, GCS-first:
+    #
+    # 1. GCS public bucket — fast (parallel chunked, anonymous, free).
+    #    Covers most acquisitions but is missing a subset of 2017-vintage
+    #    re-ingested-only SAFEs (e.g. the S2A 2017-08-28 R108 cohort the
+    #    Sen2Cor 2017 backfill needed — 4 of 5 returned "no SAFE for
+    #    acquisition" on first try).
+    # 2. CDSE OData fallback — slower (single-stream ZIP), requires
+    #    CDSE credentials (already mounted in the cluster as
+    #    CDSE_CLIENT_ID/CDSE_CLIENT_SECRET), but has the complete ESA
+    #    archive coverage GCS lacks.
+    #
+    # The fallback is taken exclusively on the GCS "no SAFE for
+    # acquisition" FetchError — other GCS failures (network, bucket-side
+    # errors) re-raise so we don't silently mask transient issues.
+    try:
+        safe_name = _gcp_resolve_safe_name(safe_name)
+    except FetchError as gcs_exc:
+        if "no SAFE for acquisition" not in str(gcs_exc):
+            raise
+        print(
+            f"  [safe-fetch] GCS gap → CDSE OData fallback for {safe_name}",
+            flush=True,
+        )
+        return _cdse_download_safe(safe_name, dest_root, overwrite=overwrite)
+
+    files = _gcp_list_safe_files(safe_name)
     safe_root = dest_root / safe_name
     safe_root.mkdir(parents=True, exist_ok=True)
 
