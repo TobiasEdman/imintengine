@@ -938,6 +938,22 @@ def repair_to_canonical_layout(
             failed_slots.append(sidx)
             continue
 
+        if not candidates:
+            # Slot has no usable candidates — fail-fast log so we can
+            # tell why. Two distinct causes; both are visibility wins
+            # for diagnosing the slot-level outcome distribution.
+            reason = (
+                "pre-2018 fallback suppressed on this backend "
+                "(needs Sen2Cor backfill)"
+                if (_de < "2018-01-01" and primary_backend != "cdse")
+                else "rank returned no candidates in slot window"
+            )
+            print(
+                f"    [slot-no-candidates] {name} slot {sidx} "
+                f"({_ds}..{_de}): {reason}",
+                flush=True,
+            )
+
         for cand_date, era5_oc in candidates:
             # ERA5-adaptive SCL gate: tighter when ERA5 says clear,
             # looser when ERA5 says cloudy. Replaces the previous
@@ -966,6 +982,18 @@ def repair_to_canonical_layout(
             fetched[sidx] = (scene, cand_date)
             break
         else:
+            # Reached only if we iterated all candidates without break.
+            # Per-candidate reasons (verify-none / verify-cloud / fetch-*)
+            # are logged upstream in fetch_spectral; this is the
+            # per-slot summary that all of them rejected. Distinct from
+            # [slot-no-candidates] above (no iteration ever happened).
+            if candidates:
+                print(
+                    f"    [slot-exhausted] {name} slot {sidx} "
+                    f"({_ds}..{_de}): all {len(candidates)} "
+                    f"candidates rejected",
+                    flush=True,
+                )
             failed_slots.append(sidx)
 
     if failed_slots:
