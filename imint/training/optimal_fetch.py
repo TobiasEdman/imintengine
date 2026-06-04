@@ -344,6 +344,14 @@ _SCL_BACKEND_DEFAULTS = {
     "des":  {"collection": "s2_msi_l2a",   "band": "scl"},
     "cdse": {"collection": "SENTINEL2_L2A", "band": "SCL"},
 }
+# Alias: ``fetch_spectral._fetch_via_openeo`` and the rest of the unified
+# flow speak the ``--sources`` token namespace where the CDSE openEO
+# source is called ``"cdse-openeo"``; this module historically uses
+# ``"cdse"`` for the same backend. Keep both names working so callers
+# don't have to translate. (Regression caught after a 15 h production
+# run failed every fetch with ``Unknown SCL backend: 'cdse-openeo'`` —
+# don't reintroduce.)
+_SCL_BACKEND_DEFAULTS["cdse-openeo"] = _SCL_BACKEND_DEFAULTS["cdse"]
 
 
 def _scl_chunk(
@@ -390,7 +398,7 @@ def _scl_chunk(
         bands=[cfg["band"]],
     )
 
-    if backend == "cdse":
+    if backend in ("cdse", "cdse-openeo"):
         return _read_scl_netcdf(scl_cube, cfg["band"])
     return _read_scl_geotiff(scl_cube)
 
