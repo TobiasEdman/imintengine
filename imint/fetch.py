@@ -1717,6 +1717,107 @@ def fetch_l1c_safe_from_gcp(
     )
 
 
+# Cached password-grant token for CDSE OData/Catalogue. Distinct from
+# the client-credentials token cached in cdse_vpp because OData
+# specifically rejects client-credentials tokens (SH scope ⊄ OData scope)
+# while accepting password-grant tokens against the public client. Live
+# probe from inside the cluster (2026-06-04):
+#   client_credentials → HTTP 401 Unauthorized
+#   password (cdse-public) → HTTP 200, ZIP magic confirmed
+# Hence: separate cache, separate refresh.
+_CDSE_PWD_TOKEN: str | None = None
+_CDSE_PWD_TOKEN_EXPIRES: float = 0.0
+_CDSE_PWD_TOKEN_LOCK: "object" = None  # threading.Lock, init lazy
+
+
+def _get_cdse_oidc_password_token() -> str:
+    """Get a CDSE OAuth2 access token via the resource-owner password grant.
+
+    Used by :func:`_cdse_download_safe` for CDSE OData/Catalogue access.
+    The token from :func:`imint.training.cdse_vpp._get_token` (client
+    credentials, SH-scoped service account) returns ``401 Unauthorized``
+    on the OData download endpoint — this helper produces a token with
+    the right scope.
+
+    Credentials priority:
+        1. ``CDSE_USER`` + ``CDSE_PASSWORD`` env vars
+        2. ``.cdse_credentials`` file (line 1 email, line 2 password)
+
+    Always authenticates against the PUBLIC client ``cdse-public`` —
+    the confidential service client_id is never reused for the password
+    grant.
+
+    Returns:
+        Bearer access token. Cached in-process with a 60 s safety
+        margin against the server-reported ``expires_in``.
+
+    Raises:
+        RuntimeError: If credentials are not configured or the token
+            exchange fails after retries.
+    """
+    global _CDSE_PWD_TOKEN, _CDSE_PWD_TOKEN_EXPIRES, _CDSE_PWD_TOKEN_LOCK
+    import threading
+    import time
+    import urllib.parse
+    import urllib.request
+    import json as _json
+
+    if _CDSE_PWD_TOKEN_LOCK is None:
+        _CDSE_PWD_TOKEN_LOCK = threading.Lock()
+
+    with _CDSE_PWD_TOKEN_LOCK:
+        if _CDSE_PWD_TOKEN and time.time() < _CDSE_PWD_TOKEN_EXPIRES - 60:
+            return _CDSE_PWD_TOKEN
+
+    username = os.environ.get("CDSE_USER")
+    password = os.environ.get("CDSE_PASSWORD")
+    if not (username and password):
+        # .cdse_credentials fallback for local dev
+        cred_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            ".cdse_credentials",
+        )
+        if os.path.isfile(cred_path):
+            with open(cred_path) as f:
+                lines = [l.strip() for l in f.readlines()]
+            username = username or (lines[0] if len(lines) >= 1 else None)
+            password = password or (lines[1] if len(lines) >= 2 else None)
+    if not (username and password):
+        raise RuntimeError(
+            "CDSE OData requires CDSE_USER + CDSE_PASSWORD env vars "
+            "(or .cdse_credentials lines 1+2). The client_credentials "
+            "service account is NOT sufficient — OData rejects it with 401."
+        )
+
+    data = urllib.parse.urlencode({
+        "grant_type": "password",
+        "username": username,
+        "password": password,
+        "client_id": "cdse-public",
+    }).encode()
+    req = urllib.request.Request(
+        "https://identity.dataspace.copernicus.eu/auth/realms/CDSE"
+        "/protocol/openid-connect/token",
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+
+    last_exc = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                tok = _json.loads(resp.read())
+            with _CDSE_PWD_TOKEN_LOCK:
+                _CDSE_PWD_TOKEN = tok["access_token"]
+                _CDSE_PWD_TOKEN_EXPIRES = time.time() + tok.get("expires_in", 300)
+            return _CDSE_PWD_TOKEN
+        except Exception as e:
+            last_exc = e
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"CDSE password-grant token fetch failed: {last_exc}") from last_exc
+
+
 def _cdse_download_safe(
     safe_name: str,
     dest_root: Path,
@@ -1740,10 +1841,13 @@ def _cdse_download_safe(
          ``Authorization: Bearer <token>`` → streamed ZIP of the
          whole SAFE archive, unpacked into ``dest_root``.
 
-    Reuses :func:`imint.training.cdse_vpp._get_token` for the OAuth2
-    ``client_credentials`` flow against the CDSE Identity endpoint
-    (same endpoint serves both SH Process API and OData — the
-    function name in cdse_vpp is just historical).
+    Uses :func:`_get_cdse_oidc_password_token` for auth — the
+    client_credentials token from ``cdse_vpp._get_token`` returns
+    ``401 Unauthorized`` on the OData download endpoint (scope
+    mismatch: SH-Process service account can read the catalogue but
+    not download SAFEs). The password grant against ``cdse-public``
+    is the only client that consistently authorises ``Products(<Id>)/$value``
+    streaming, verified live 2026-06-04.
 
     Args:
         safe_name: SAFE archive name *with* the ``.SAFE`` suffix
@@ -1765,8 +1869,6 @@ def _cdse_download_safe(
     import urllib.request
     import zipfile
 
-    from imint.training.cdse_vpp import _get_token
-
     name_no_suffix = safe_name[:-5] if safe_name.endswith(".SAFE") else safe_name
     safe_root = dest_root / (name_no_suffix + ".SAFE")
     if (not overwrite
@@ -1774,7 +1876,7 @@ def _cdse_download_safe(
             and any(safe_root.iterdir())):
         return safe_root  # cached from a prior run
 
-    token = _get_token()
+    token = _get_cdse_oidc_password_token()
     auth = {"Authorization": f"Bearer {token}"}
 
     # Step 1 — resolve name → ProductId
