@@ -119,13 +119,23 @@
     "n_mature_polygons":  {"dtype": "int32", "desc": "harvest-ready polygons (head-2 positive supervision)"}
   },
   "file_naming": {
-    "patterns": [
-      "tile_<east>_<north>.npz  (LULC grid)",
-      "crop_<crop>_<east>_<north>.npz  (LPIS centroid)",
-      "urban_<east>_<north>.npz  (SCB tätort)",
-      "<numeric>.npz  (legacy original 256 dataset)"
-    ],
-    "note": "All tile types share one flat directory; the dataset loader filters/samples internally."
+    "schemes": {
+      "coordinate": {
+        "patterns": [
+          "tile_<east>_<north>.npz  (LULC grid)",
+          "crop_<crop>_<east>_<north>.npz  (LPIS crop centroid)",
+          "urban_<east>_<north>.npz  (SCB tätort)"
+        ],
+        "encodes": "EPSG:3006 tile-center easting_northing"
+      },
+      "point_id": {
+        "patterns": ["<point_id>.npz  (e.g. 43983928.npz)"],
+        "encodes": "legacy LUCAS-style point id; coords are stored inside the .npz, not in the name"
+      }
+    },
+    "note": "All tiles share one flat directory; crop_/urban_ are name prefixes, not folders. Every tile also stores easting/northing/bbox_3006 internally.",
+    "split_caveat": "The train/val/test split is md5(filename) % 100 (val < 10; test by latitude), so the filename determines the split. Do NOT rename tiles — it reshuffles the split. New builds should use <type>_<east>_<north>.npz.",
+    "recommended_new_form": "<type>_<east>_<north>.npz"
   },
   "model": {
     "name": "Prithvi-EO-2.0 300M — unified v5 256px baseline",

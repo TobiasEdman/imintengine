@@ -92,11 +92,15 @@ do not percentile-stretch.**
 ## What's in each tile
 
 Beyond `spectral` and `label`, each `.npz` carries an auxiliary stack.
-The canonical model input is **(4×6 spectral + 11 aux, H, W) = 35
-channels**, where the 11 aux are: `height`, `volume`, `basal_area`,
-`diameter` (SLU forest metrics), `dem` (Copernicus DEM), `vpp_sosd`,
-`vpp_eosd`, `vpp_length`, `vpp_maxv`, `vpp_minv` (HR-VPP phenology), and
-`harvest_probability` (SKS).
+The model input is **(4×6 spectral + 10 aux, H, W) = 34 channels**, where
+the 10 aux are: `height`, `volume`, `basal_area`, `diameter` (SLU forest
+metrics), `dem` (Copernicus DEM), and `vpp_sosd`, `vpp_eosd`, `vpp_length`,
+`vpp_maxv`, `vpp_minv` (HR-VPP phenology).
+
+> The synthetic `harvest_probability` channel was dropped (it leaked the
+> harvest target into the input). The real SKS layer `harvest_mask` is
+> kept. For NMD, use `nmd_label_raw` (present on every tile); the legacy
+> `nmd_label` is inconsistent and present only on old tiles.
 
 Optional extras (present only when the paired `has_*` flag is set):
 `rededge` (12 bands), `s1_vv_vh` (Sentinel-1), `tessera` (128-dim
@@ -110,15 +114,26 @@ dtype / source table.**
 
 ## File naming
 
-All tiles live in one flat directory. Filenames are one of:
+All tiles share one flat directory. There are two naming schemes:
 
-- `tile_<east>_<north>.npz` — LULC grid
-- `crop_<crop>_<east>_<north>.npz` — LPIS centroid
-- `urban_<east>_<north>.npz` — SCB tätort
-- `<numeric>.npz` — legacy original tiles
+| pattern | tile type | name encodes |
+|---|---|---|
+| `tile_<east>_<north>.npz` | LULC grid | EPSG:3006 tile-center coords |
+| `crop_<crop>_<east>_<north>.npz` | LPIS crop centroid | crop name + coords |
+| `urban_<east>_<north>.npz` | SCB tätort | coords |
+| `<point_id>.npz` (e.g. `43983928.npz`) | legacy | a LUCAS-style point id |
 
-> `crop_*` and `urban_*` are **flat-named prefixes, not folders** — the
-> dataset loader filters/samples internally.
+Conventions and caveats:
+
+- `crop_*` / `urban_*` are **flat-named prefixes, not folders**.
+- The name is **not** the source of truth for location — every tile also
+  stores `easting`, `northing`, and `bbox_3006` internally. The legacy
+  point-id tiles carry their coords only inside the `.npz`.
+- **The train/val/test split is `md5(filename) % 100`** (val < 10, test by
+  latitude). A tile's *filename therefore determines its split* — so do
+  **not** rename tiles, or you reshuffle the split and break
+  reproducibility against the shared model. New builds should use the
+  uniform `<type>_<east>_<north>.npz` form.
 
 Bookkeeping files in the listing: `class_stats.json`, `manifest.json`,
 `splits_summary.json`, `train.txt`, `val.txt`, `test.txt`.
