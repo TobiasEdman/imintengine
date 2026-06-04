@@ -141,9 +141,24 @@ def _fetch_via_cdse_sh_process(
         )
         _CDSE_SEMAPHORE.report_success()
         if result is None:
+            # fetch_s2_scene returns None for both cloud-rejection AND
+            # no-scene-available (the two-stage prescreen path). Can't
+            # distinguish from here without instrumenting fetch_s2_scene.
+            print(
+                f"    [fetch_spectral:cdse] result-none {date_str}: "
+                f"two-stage returned None (cloud reject or no scene)",
+                flush=True,
+            )
             return None
         spectral = result[0]
-        return spectral if np.any(spectral) else None
+        if not np.any(spectral):
+            print(
+                f"    [fetch_spectral:cdse] result-zero {date_str}: "
+                f"spectral all-zero (degenerate response)",
+                flush=True,
+            )
+            return None
+        return spectral
     except Exception as e:
         _CDSE_SEMAPHORE.report_failure()
         print(
@@ -183,7 +198,24 @@ def _fetch_via_openeo(
             flush=True,
         )
         return None
-    if cloud is None or cloud > cloud_threshold:
+    if cloud is None:
+        # SCL returned None — the date isn't in the screening dict.
+        # Distinct from exception (logged above): the call succeeded
+        # but the backend had no data for this date+1 window.
+        print(
+            f"    [fetch_spectral:{backend}] verify-none {date_str}: "
+            f"SCL dict missing date (likely no-scene / STAC↔openEO mismatch)",
+            flush=True,
+        )
+        return None
+    if cloud > cloud_threshold:
+        # Normal cloud rejection — log compact so the per-tile fan-out
+        # stays readable.
+        print(
+            f"    [fetch_spectral:{backend}] verify-cloud {date_str}: "
+            f"{cloud:.2f} > {cloud_threshold:.2f}",
+            flush=True,
+        )
         return None
 
     # 2) Spectral fetch via tile-graph (single-slot dict). Sub-second
@@ -196,9 +228,21 @@ def _fetch_via_openeo(
         semaphore.report_success()
         entry = result.get(0)
         if entry is None:
+            print(
+                f"    [fetch_spectral:{backend}] fetch-none {date_str}: "
+                f"tile-graph returned no entry for slot 0",
+                flush=True,
+            )
             return None
         spectral = entry[0]
-        return spectral if np.any(spectral) else None
+        if not np.any(spectral):
+            print(
+                f"    [fetch_spectral:{backend}] fetch-zero {date_str}: "
+                f"spectral all-zero (degenerate response)",
+                flush=True,
+            )
+            return None
+        return spectral
     except Exception as e:
         semaphore.report_failure()
         if backend == "cdse-openeo" and _is_payment_required_error(e):
