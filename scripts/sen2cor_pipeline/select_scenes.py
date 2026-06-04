@@ -149,41 +149,72 @@ def _window_for_target(target: str, year: int) -> tuple[str, str]:
 def _missing_slot_tiles(
     data_dir: str,
     slot_idx: int,
-    audit_names: set[str] | None = None,
+    audit_needs: dict[str, set[str]] | None = None,
+    tile_year_filter: int | None = None,
 ) -> list[tuple[str, dict]]:
     """``(tile_name, wgs84_bbox)`` for tiles whose temporal slot ``slot_idx``
-    is empty (``temporal_mask[slot_idx]==0`` OR spectral slice all-zero),
-    optionally filtered to ``audit_names``.
+    needs (re)fetch.
 
-    Used by the slot-N backfill path. The frame_2016-equivalent inventory
-    function is :func:`_missing_frame_2016_tiles`; both share the bbox
-    extraction + WGS84 transform.
+    Two complementary criteria, both required to catch the full audit
+    cohort (2026-06-04 diagnostic — pre-fix the selector caught 39 of
+    2 352 audit-flagged tiles because it only looked at the empty-slot
+    case and missed the PR #15 ``cap_doy=244`` victims whose slot 0
+    held non-empty but wrong-time data):
+
+    * **Audit-driven (preferred):** when ``audit_needs`` is supplied,
+      a tile counts as missing iff ``f"refetch_slot_{slot_idx}"`` is
+      in its needs set. The audit's verdict supersedes the local
+      disk check because the audit captures the broader notion of
+      "wrong" (empty OR wrong-DOY OR empty-date OR mask-clear),
+      whereas the local check sees only the empty cases.
+    * **Disk-derived (fallback, no audit):** ``temporal_mask[slot_idx]``
+      ``== 0`` OR the corresponding spectral slice is all-zero.
+
+    ``tile_year_filter`` (optional) drops tiles whose ``tessera_year``
+    doesn't match. Required for the slot-N backfill so e.g. a 2017
+    autumn pass only targets year=2018 tiles (slot 0 of a 2022 tile
+    is autumn 2021, not 2017).
+
+    The frame_2016-equivalent inventory function is
+    :func:`_missing_frame_2016_tiles`; both share the bbox extraction
+    + WGS84 transform.
     """
     from imint.training.tile_bbox import resolve_tile_bbox
     from imint.training.tile_config import TileConfig
     from pyproj import Transformer
 
     n_bands = 6
+    need_key = f"refetch_slot_{slot_idx}"
     tx = Transformer.from_crs("EPSG:3006", "EPSG:4326", always_xy=True)
     missing: list[tuple[str, dict]] = []
     for npz_path in sorted(glob.glob(os.path.join(data_dir, "*.npz"))):
         name = Path(npz_path).stem
-        if audit_names is not None and name not in audit_names:
-            continue
+        if audit_needs is not None:
+            needs = audit_needs.get(name)
+            if needs is None or need_key not in needs:
+                continue
         try:
             with np.load(npz_path, allow_pickle=True) as d:
-                tmask_raw = d.get("temporal_mask")
-                tmask = list(tmask_raw) if tmask_raw is not None else []
-                tmask_set = (slot_idx < len(tmask)
-                             and int(tmask[slot_idx]) == 1)
-                spec = d.get("spectral")
-                if spec is not None and spec.shape[0] >= (slot_idx + 1) * n_bands:
-                    slot_slice = spec[slot_idx * n_bands:(slot_idx + 1) * n_bands]
-                    has_data = bool(np.any(slot_slice))
-                else:
-                    has_data = False
-                if tmask_set and has_data:
-                    continue
+                if tile_year_filter is not None:
+                    ty_raw = d.get("tessera_year")
+                    if ty_raw is None or int(ty_raw) != tile_year_filter:
+                        continue
+                # Disk-derived empty check only when we don't have the
+                # audit's verdict — the audit-driven path above already
+                # passed membership in ``needs``.
+                if audit_needs is None:
+                    tmask_raw = d.get("temporal_mask")
+                    tmask = list(tmask_raw) if tmask_raw is not None else []
+                    tmask_set = (slot_idx < len(tmask)
+                                 and int(tmask[slot_idx]) == 1)
+                    spec = d.get("spectral")
+                    if spec is not None and spec.shape[0] >= (slot_idx + 1) * n_bands:
+                        slot_slice = spec[slot_idx * n_bands:(slot_idx + 1) * n_bands]
+                        has_data = bool(np.any(slot_slice))
+                    else:
+                        has_data = False
+                    if tmask_set and has_data:
+                        continue
                 cfg = TileConfig(size_px=int(d.get("tile_size_px", 512)))
                 bbox3006 = resolve_tile_bbox(name=name, tile=cfg, npz_data=d)
         except Exception:
@@ -348,15 +379,36 @@ def main() -> None:
           (f" (fallback {args.fallback_year})"
            if args.fallback_year else " (no fallback)"))
 
-    # Audit filter — restrict to tiles in the audit list, if supplied.
+    # Audit filter — two parallel representations:
+    #   audit_names  — flat set, used by the frame_2016 path (no
+    #                  per-tile needs concept on background frames).
+    #   audit_needs  — {name: set(needs)}, used by the slot-N path so
+    #                  the selector trusts the audit's verdict on what
+    #                  "missing" means (catches the PR #15 cap_doy=244
+    #                  victims whose slot is non-empty but wrong-time).
     audit_names: set[str] | None = None
+    audit_needs: dict[str, set[str]] | None = None
     if args.audit_json:
         with open(args.audit_json) as f:
             audit = json.load(f)
-        names = (audit.get("unique_affected_tiles")
-                 or audit.get("unique_problem_tiles") or [])
-        audit_names = {n[:-4] if n.endswith(".npz") else n for n in names}
-        print(f"  audit-json:  {args.audit_json} → {len(audit_names)} tiles")
+        # Prefer the rich tiles_with_issues schema; fall back to the
+        # flat unique_problem_tiles list for older audits.
+        tiles_with_issues = audit.get("tiles_with_issues") if isinstance(audit, dict) else None
+        if tiles_with_issues:
+            audit_needs = {}
+            for t in tiles_with_issues:
+                nm = t.get("name", "")
+                if nm.endswith(".npz"):
+                    nm = nm[:-4]
+                if nm:
+                    audit_needs[nm] = set(t.get("needs") or [])
+            audit_names = set(audit_needs)
+        else:
+            names = (audit.get("unique_affected_tiles")
+                     or audit.get("unique_problem_tiles") or [])
+            audit_names = {n[:-4] if n.endswith(".npz") else n for n in names}
+        print(f"  audit-json:  {args.audit_json} → {len(audit_names)} tiles"
+              + (" (with per-tile needs)" if audit_needs else ""))
 
     # Target-aware inventory + window selection.
     if args.target == "frame_2016":
@@ -373,8 +425,20 @@ def main() -> None:
                      f"got {args.target!r}")
         if slot_idx < 0 or slot_idx > 3:
             sys.exit(f"--target slot:{slot_idx} out of range; valid 0..3")
-        tiles = _missing_slot_tiles(args.data_dir, slot_idx, audit_names)
-        inventory_label = f"tiles missing slot {slot_idx}"
+        # Derive tile_year filter from (target, --year). Slot 0 holds the
+        # autumn-y-1 frame for a tile of year=y, so a 2017 autumn pass
+        # targets year=2018 tiles. Slots 1-3 are same-year growing season.
+        tile_year_filter = None
+        if args.year is not None:
+            tile_year_filter = args.year + 1 if slot_idx == 0 else args.year
+        tiles = _missing_slot_tiles(
+            args.data_dir, slot_idx,
+            audit_needs=audit_needs,
+            tile_year_filter=tile_year_filter,
+        )
+        inventory_label = (f"tiles missing slot {slot_idx}"
+                           + (f" (tile_year={tile_year_filter})"
+                              if tile_year_filter is not None else ""))
     else:
         sys.exit(f"--target must be 'frame_2016' or 'slot:N', got {args.target!r}")
 
