@@ -102,8 +102,10 @@ AUX_NORM = {
     "basal_area": (2.42, 0.71),      # log1p-transformed
     "diameter": (16.33, 7.84),
     "dem": (264.03, 215.37),
-    "vpp_sosd": (21130.90, 49.13),
-    "vpp_eosd": (21280.29, 78.28),
+    # vpp_sosd/eosd are decoded YYDDD->DOY before normalization (see
+    # AUX_YYDDD_DATE_CHANNELS); stats below are day-of-year mean/std.
+    "vpp_sosd": (129.40, 31.11),   # DOY, spring green-up (~May 9)
+    "vpp_eosd": (263.40, 38.32),   # DOY, autumn senescence (~Sep 20)
     "vpp_length": (141.61, 41.39),
     "vpp_maxv": (0.88, 0.57),
     "vpp_minv": (0.04, 0.05),
@@ -111,6 +113,43 @@ AUX_NORM = {
 
 # Channels that need log(1+x) pre-transform before z-score
 AUX_LOG_TRANSFORM = {"volume", "basal_area"}
+
+# HR-VPP date channels: raw band is YYDDD = (year-2000)*1000 + DOY.
+# Decode to day-of-year (value % 1000) before z-score; NoData (0) maps to
+# the channel mean so it normalizes to 0 instead of a huge outlier.
+AUX_YYDDD_DATE_CHANNELS = {"vpp_sosd", "vpp_eosd"}
+
+
+def normalize_aux_channel(name: str, x):
+    """Decode, optionally log-transform, and z-score-normalize one aux channel.
+
+    Single source of truth for auxiliary-channel normalization — every
+    consumer (UnifiedDataset, PixelDataset, preview/visualization tooling)
+    must call this so the transform can never drift between code paths.
+    NoData is encoded as 0 in all aux channels.
+
+    Args:
+        name: Channel name (one of AUX_CHANNEL_NAMES).
+        x: Scalar or ndarray of raw channel values.
+
+    Returns:
+        Normalized value(s) — a float for scalar input, ndarray otherwise.
+    """
+    scalar = np.isscalar(x) or np.ndim(x) == 0
+    arr = np.asarray(x, dtype=np.float32)
+    if name in AUX_YYDDD_DATE_CHANNELS:
+        # YYDDD -> DOY; NoData (0) -> mean so it normalizes to 0 rather
+        # than a large negative outlier.
+        mean, std = AUX_NORM[name]
+        arr = np.where(arr > 0, np.mod(arr, 1000.0), mean).astype(np.float32)
+        arr = (arr - mean) / max(std, 1e-6)
+    else:
+        if name in AUX_LOG_TRANSFORM:
+            arr = np.log1p(np.maximum(arr, 0.0))
+        if name in AUX_NORM:
+            mean, std = AUX_NORM[name]
+            arr = (arr - mean) / max(std, 1e-6)
+    return float(arr) if scalar else arr
 
 # Canonical ordered list of auxiliary channels
 # Must match order from config.enabled_aux_names
@@ -697,13 +736,9 @@ class UnifiedDataset(Dataset):
 
         aux_stack = np.stack(aux_arrays, axis=0)  # (N, H, W)
 
-        # Log-transform skewed channels, then z-score normalize
+        # Decode / log-transform / z-score, per channel (shared transform).
         for i, ch_name in enumerate(AUX_CHANNEL_NAMES):
-            if ch_name in AUX_LOG_TRANSFORM:
-                aux_stack[i] = np.log1p(np.maximum(aux_stack[i], 0.0))
-            if ch_name in AUX_NORM:
-                mean, std = AUX_NORM[ch_name]
-                aux_stack[i] = (aux_stack[i] - mean) / max(std, 1e-6)
+            aux_stack[i] = normalize_aux_channel(ch_name, aux_stack[i])
 
         return aux_stack
 

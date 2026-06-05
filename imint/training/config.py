@@ -168,8 +168,8 @@ class TrainingConfig:
         "basal_area": (15.98, 10.20),      # m²/ha (grundyta)
         "diameter":   (16.33, 7.84),       # cm (medeldiameter)
         "dem":        (264.03, 215.37),    # meters a.s.l. (Copernicus DEM)
-        "vpp_sosd":   (21130.90, 49.13),   # CNES Julian days (days since 1960-01-01)
-        "vpp_eosd":   (21280.29, 78.28),   # CNES Julian days (days since 1960-01-01)
+        "vpp_sosd":   (129.40, 31.11),     # DOY (YYDDD decoded), spring green-up
+        "vpp_eosd":   (263.40, 38.32),     # DOY (YYDDD decoded), autumn senescence
         "vpp_length": (141.61, 41.39),     # days, season length
         "vpp_maxv":   (0.88, 0.57),        # PPI unitless, max vegetation index
         "vpp_minv":   (0.04, 0.05),        # PPI unitless, min vegetation index

@@ -22,6 +22,10 @@ AUX_CHANNELS = [
     "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
 ]
 
+# HR-VPP date channels are YYDDD-encoded ((year-2000)*1000 + DOY); stats
+# must be computed on the decoded day-of-year, not the raw integer.
+from imint.training.unified_dataset import AUX_YYDDD_DATE_CHANNELS
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -63,6 +67,8 @@ def main():
                         mask = arr > 0
                         if mask.any():
                             vals = arr[mask]
+                            if ch in AUX_YYDDD_DATE_CHANNELS:
+                                vals = np.mod(vals, 1000.0)  # YYDDD -> DOY
                             stats[ch]["sum"] += vals.sum()
                             stats[ch]["sq_sum"] += (vals ** 2).sum()
                             stats[ch]["n"] += vals.size

@@ -25,7 +25,7 @@ from imint.training.unified_schema import (
     nmd19_to_unified,
 )
 
-from imint.training.unified_dataset import AUX_CHANNEL_NAMES, AUX_NORM
+from imint.training.unified_dataset import AUX_CHANNEL_NAMES, normalize_aux_channel
 
 CLASS_NAMES = [UNIFIED_CLASSES.get(i, f"cls_{i}") for i in range(NUM_UNIFIED_CLASSES)]
 
@@ -182,10 +182,7 @@ def main():
                         arr = padded
                 else:
                     arr = np.zeros((h, w), dtype=np.float32)
-                if ch_name in AUX_NORM:
-                    mean, std = AUX_NORM[ch_name]
-                    arr = (arr - mean) / max(std, 1e-6)
-                aux_arrays.append(arr)
+                aux_arrays.append(normalize_aux_channel(ch_name, arr))
             aux_stack = np.stack(aux_arrays, axis=0)
             inp   = torch.from_numpy(model_input).unsqueeze(0).to(device)
             aux_t = torch.from_numpy(aux_stack).unsqueeze(0).to(device)

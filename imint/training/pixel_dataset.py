@@ -50,8 +50,7 @@ except ImportError:
 from .unified_schema import NUM_UNIFIED_CLASSES
 from .unified_dataset import (
     AUX_CHANNEL_NAMES,
-    AUX_LOG_TRANSFORM,
-    AUX_NORM,
+    normalize_aux_channel,
 )
 
 # ── Constants ────────────────────────────────────────────────────────────
@@ -321,13 +320,7 @@ class PixelContextDataset:
             else:
                 val = 0.0  # missing channel — will normalize to ~0
 
-            if ch_name in AUX_LOG_TRANSFORM:
-                val = float(np.log1p(max(val, 0.0)))
-            if ch_name in AUX_NORM:
-                mean, std = AUX_NORM[ch_name]
-                val = (val - mean) / max(std, 1e-6)
-
-            aux_vec[i] = val
+            aux_vec[i] = normalize_aux_channel(ch_name, val)
         return aux_vec
 
 

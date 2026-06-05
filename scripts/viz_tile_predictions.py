@@ -154,7 +154,7 @@ def _infer_tile(
     import torch
 
     try:
-        from imint.training.unified_dataset import AUX_CHANNEL_NAMES, AUX_LOG_TRANSFORM, AUX_NORM
+        from imint.training.unified_dataset import AUX_CHANNEL_NAMES, normalize_aux_channel
         _has_aux_meta = True
     except ImportError:
         _has_aux_meta = False
@@ -198,10 +198,7 @@ def _infer_tile(
             for i, r in enumerate(rows):
                 for j, c in enumerate(cols):
                     val = float(arr[min(r, arr.shape[0]-1), min(c, arr.shape[1]-1)])
-                    if ch_name in AUX_LOG_TRANSFORM:
-                        val = float(np.log1p(val))
-                    mu, sigma = AUX_NORM.get(ch_name, (0.0, 1.0))
-                    aux_all[i * gw + j, k] = (val - mu) / max(sigma, 1e-8)
+                    aux_all[i * gw + j, k] = normalize_aux_channel(ch_name, val)
 
     # Inference
     model.eval()

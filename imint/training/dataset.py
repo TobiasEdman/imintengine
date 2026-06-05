@@ -126,12 +126,18 @@ class LULCDataset(Dataset):
                 aux_arrays.append(np.zeros((h, w), dtype=np.float32))
         aux_stack = np.stack(aux_arrays) if aux_arrays else None  # (N,H,W)
 
-        # Normalize aux channels (z-score using empirical mean/std)
+        # Normalize aux channels (z-score using empirical mean/std).
+        # HR-VPP date channels are YYDDD-encoded — decode to DOY first and
+        # map NoData (0) to the mean (see unified_dataset.normalize_aux_channel).
         if aux_stack is not None and self.config.aux_norm:
+            from .unified_dataset import AUX_YYDDD_DATE_CHANNELS
             for i, ch_name in enumerate(aux_names):
                 if ch_name in self.config.aux_norm:
                     mean, std = self.config.aux_norm[ch_name]
-                    aux_stack[i] = (aux_stack[i] - mean) / max(std, 1e-6)
+                    arr = aux_stack[i]
+                    if ch_name in AUX_YYDDD_DATE_CHANNELS:
+                        arr = np.where(arr > 0, np.mod(arr, 1000.0), mean).astype(np.float32)
+                    aux_stack[i] = (arr - mean) / max(std, 1e-6)
 
         # Detect tile format: multitemporal if 'multitemporal' key exists
         # or if image has more than 6 bands

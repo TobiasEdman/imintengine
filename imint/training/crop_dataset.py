@@ -97,9 +97,9 @@ class CropDataset(Dataset):
         "era5_swvl1_mean": (0.25, 0.08),
         "era5_ssrd_sum":   (3500.0, 500.0),
         "era5_gdd":        (1200.0, 400.0),
-        # VPP phenology
-        "vpp_sosd":   (21130.90, 49.13),
-        "vpp_eosd":   (21280.29, 78.28),
+        # VPP phenology — sosd/eosd are YYDDD-decoded to DOY before z-score
+        "vpp_sosd":   (129.40, 31.11),     # DOY, spring green-up
+        "vpp_eosd":   (263.40, 38.32),     # DOY, autumn senescence
         "vpp_length": (141.61, 41.39),
         "vpp_maxv":   (0.88, 0.57),
         "vpp_minv":   (0.04, 0.05),
@@ -237,6 +237,7 @@ class CropDataset(Dataset):
 
         # Load and normalise auxiliary channels
         if self.aux_names:
+            from .unified_dataset import AUX_YYDDD_DATE_CHANNELS
             h, w = image_tensor.shape[-2:]
             aux_arrays = []
             for ch_name in self.aux_names:
@@ -248,9 +249,12 @@ class CropDataset(Dataset):
                 else:
                     arr = np.zeros((h, w), dtype=np.float32)
 
-                # Z-score normalisation
+                # Z-score normalisation. HR-VPP date channels are YYDDD-
+                # encoded — decode to DOY and map NoData (0) to the mean.
                 if ch_name in self.AUX_CHANNELS:
                     mean, std = self.AUX_CHANNELS[ch_name]
+                    if ch_name in AUX_YYDDD_DATE_CHANNELS:
+                        arr = np.where(arr > 0, np.mod(arr, 1000.0), mean).astype(np.float32)
                     arr = (arr - mean) / max(std, 1e-6)
 
                 aux_arrays.append(arr)

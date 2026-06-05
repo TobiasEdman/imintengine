@@ -127,7 +127,7 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
     import torch
     from imint.training.unified_dataset import (
         PRITHVI_MEAN, PRITHVI_STD, N_BANDS,
-        AUX_NORM, AUX_LOG_TRANSFORM, AUX_CHANNEL_NAMES,
+        AUX_CHANNEL_NAMES, normalize_aux_channel,
     )
 
     data = np.load(tile_path, allow_pickle=True)
@@ -152,11 +152,7 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
         if ch_name in data:
             arr = data[ch_name].astype(np.float32)
             arr = arr[y0:y0+crop_sz, x0:x0+crop_sz]
-            if ch_name in AUX_LOG_TRANSFORM:
-                arr = np.log1p(arr)
-            if ch_name in AUX_NORM:
-                m, s = AUX_NORM[ch_name]
-                arr = (arr - m) / max(s, 1e-6)
+            arr = normalize_aux_channel(ch_name, arr)
             aux_list.append(arr[np.newaxis])
         else:
             aux_list.append(np.zeros((1, crop_sz, crop_sz), dtype=np.float32))

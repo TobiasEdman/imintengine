@@ -9,21 +9,21 @@ This handles the natural variation across Sweden:
   - North Sweden: shorter growing season, later start
   - Coastal vs mountain: different phenological timing
 
-HR-VPP Season 1 encodes dates as CNES Julian Days (days since 1960-01-01).
-The "season" in SOSD/EOSD refers to the dormancy season:
-  - SOSD = Start of (dormancy) Season = autumn senescence
-  - EOSD = End of (dormancy) Season = spring green-up
+HR-VPP Season 1 SOSD/EOSD bands are **YYDDD-encoded**:
+``raw = (year - 2000) * 1000 + day_of_year`` (verified against the WEkEO
+COGs, V101 and V105 alike — e.g. raw 21125 → 2021 DOY 125 = May 5).
+  - SOSD = Start Of Season = spring green-up (DOY ~85–165)
+  - EOSD = End Of Season   = autumn senescence (DOY ~200–310)
 
-Growing season = EOSD_doy → SOSD_doy (from spring green-up to autumn dormancy).
+Growing season = SOSD_doy → EOSD_doy. Decode the day-of-year with
+``raw % 1000``. (Reading the raw integer as a CNES/1960 Julian day — a
+prior bug — silently mis-dated every tile; see git history.)
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
 import numpy as np
-
-# CNES Julian Day epoch
-_CNES_EPOCH = datetime(1960, 1, 1)
 
 # Fallback growing-season windows (DOY) when VPP data is unavailable.
 # Per num_frames: each list spans the full Apr–Aug growing season so the
@@ -66,42 +66,41 @@ _MIN_GROWING_SEASON_LENGTH = 60  # At least 60 days
 _GROWING_SEASON_END_CAP_DOY = 244  # September 1 (non-leap; leap = Aug 31)
 
 
-def cnes_to_doy(cnes_val: float) -> int:
-    """Convert CNES Julian Day to day-of-year (1-365/366).
+def vpp_yyddd_to_doy(values: np.ndarray) -> np.ndarray:
+    """Decode HR-VPP YYDDD date values to day-of-year, elementwise.
+
+    HR-VPP SOSD/EOSD bands store ``(year - 2000) * 1000 + day_of_year``.
+    The day-of-year is therefore ``value % 1000``. NoData (0) decodes to
+    0 and must be masked by the caller.
 
     Args:
-        cnes_val: Days since 1960-01-01.
+        values: SOSD or EOSD raw band values (any shape).
 
     Returns:
-        Day-of-year (1-based).
+        Day-of-year array, same shape as ``values``.
     """
-    dt = _CNES_EPOCH + timedelta(days=int(cnes_val))
-    return dt.timetuple().tm_yday
-
-
-def cnes_to_month(cnes_val: float) -> int:
-    """Convert CNES Julian Day to month (1-12)."""
-    dt = _CNES_EPOCH + timedelta(days=int(cnes_val))
-    return dt.month
+    return np.mod(values, 1000)
 
 
 def compute_growing_season_doy(
     sosd_arr: np.ndarray,
     eosd_arr: np.ndarray,
 ) -> tuple[int, int] | None:
-    """Compute growing season start/end DOY from VPP arrays.
+    """Compute growing season start/end DOY from HR-VPP phenology arrays.
 
-    Takes the median of non-zero pixels for SOSD and EOSD,
-    converts from CNES Julian Days to DOY, and determines the
-    growing season boundaries.
+    SOSD (Start Of Season, spring green-up) and EOSD (End Of Season,
+    autumn senescence) are YYDDD-encoded. We decode each valid pixel to
+    its day-of-year (robust to mixed-year pixels at tile edges), take the
+    median, and return the ``(SOSD_doy, EOSD_doy)`` growing-season span.
 
     Args:
-        sosd_arr: (H, W) float32 SOSD values in CNES Julian Days.
-        eosd_arr: (H, W) float32 EOSD values in CNES Julian Days.
+        sosd_arr: (H, W) SOSD values, YYDDD-encoded. NoData = 0.
+        eosd_arr: (H, W) EOSD values, YYDDD-encoded. NoData = 0.
 
     Returns:
-        (gs_start_doy, gs_end_doy) tuple, or None if VPP data
-        is insufficient for reliable window computation.
+        (gs_start_doy, gs_end_doy) tuple, or None if VPP data is
+        insufficient or the decoded span is implausible for Swedish
+        vegetation.
     """
     sosd_valid = sosd_arr[sosd_arr > 0]
     eosd_valid = eosd_arr[eosd_arr > 0]
@@ -111,32 +110,18 @@ def compute_growing_season_doy(
     if len(sosd_valid) < min_pixels or len(eosd_valid) < min_pixels:
         return None
 
-    sosd_median = float(np.median(sosd_valid))
-    eosd_median = float(np.median(eosd_valid))
+    gs_start = int(np.median(vpp_yyddd_to_doy(sosd_valid)))  # spring green-up
+    gs_end = int(np.median(vpp_yyddd_to_doy(eosd_valid)))    # autumn senescence
 
-    sosd_doy = cnes_to_doy(sosd_median)
-    eosd_doy = cnes_to_doy(eosd_median)
-
-    # HR-VPP dormancy interpretation:
-    # SOSD = dormancy start (autumn), EOSD = dormancy end (spring)
-    # Growing season = EOSD_doy → SOSD_doy
-    #
-    # But we also handle the alternative where SOSD < EOSD
-    # (standard start/end interpretation), by checking which
-    # produces a reasonable growing season.
-
-    # Try both interpretations and pick the one that makes sense
-    candidate_a = (eosd_doy, sosd_doy)  # dormancy interpretation
-    candidate_b = (sosd_doy, eosd_doy)  # standard interpretation
-
-    for gs_start, gs_end in [candidate_a, candidate_b]:
-        length = gs_end - gs_start
-        if (
-            _MIN_GROWING_SEASON_DOY <= gs_start <= 180
-            and 200 <= gs_end <= _MAX_GROWING_SEASON_DOY
-            and length >= _MIN_GROWING_SEASON_LENGTH
-        ):
-            return (gs_start, gs_end)
+    # Plausibility gate: green-up in spring, senescence in autumn, and a
+    # season at least _MIN_GROWING_SEASON_LENGTH long. Rejects tiles whose
+    # decoded phenology is degenerate (sparse/edge pixels, water).
+    if (
+        _MIN_GROWING_SEASON_DOY <= gs_start <= 180
+        and 200 <= gs_end <= _MAX_GROWING_SEASON_DOY
+        and gs_end - gs_start >= _MIN_GROWING_SEASON_LENGTH
+    ):
+        return (gs_start, gs_end)
 
     return None
 

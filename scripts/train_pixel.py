@@ -495,7 +495,7 @@ def _infer_tile_grid(
         gt_map:   (grid_h, grid_w) int32 — ground-truth labels
     """
     import contextlib
-    from imint.training.unified_dataset import AUX_CHANNEL_NAMES, AUX_LOG_TRANSFORM, AUX_NORM
+    from imint.training.unified_dataset import AUX_CHANNEL_NAMES, normalize_aux_channel
 
     data = np.load(str(tile_path), allow_pickle=False)
     spectral = np.asarray(data.get("spectral", data.get("image")), dtype=np.float32)
@@ -539,10 +539,7 @@ def _infer_tile_grid(
             for i, r in enumerate(rows):
                 for j, c in enumerate(cols):
                     val = float(arr[min(r, arr.shape[0]-1), min(c, arr.shape[1]-1)])
-                    if AUX_LOG_TRANSFORM.get(ch_name, False):
-                        val = float(np.log1p(val))
-                    mu, sigma = AUX_NORM.get(ch_name, (0.0, 1.0))
-                    aux_all[i * grid_w + j, k] = (val - mu) / max(sigma, 1e-8)
+                    aux_all[i * grid_w + j, k] = normalize_aux_channel(ch_name, val)
 
     # Inference in batches
     model.eval()
