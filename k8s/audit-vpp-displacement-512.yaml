@@ -1,0 +1,69 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-vpp-displacement-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: audit-vpp-window-displacement
+spec:
+  backoffLimit: 2
+  # Scopes the corrected-window re-fetch: scans /cephfs/unified_v2_512 and
+  # flags tiles whose present growing-season frames fall outside the
+  # corrected (YYDDD-decoded) VPP windows. Read-only — writes only the
+  # audit JSON to /cephfs/audits/. Light: numpy only, single CPU.
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              mkdir -p /cephfs/audits
+              echo "=== smoke (--limit 200) ==="
+              PYTHONPATH=/workspace/imintengine python3 \
+                scripts/audit_vpp_window_displacement.py \
+                --data-dir /cephfs/unified_v2_512 \
+                --out /cephfs/audits/vpp_window_displacement_512_smoke.json \
+                --limit 200
+              echo ""
+              echo "=== full scan ==="
+              PYTHONPATH=/workspace/imintengine python3 \
+                scripts/audit_vpp_window_displacement.py \
+                --data-dir /cephfs/unified_v2_512 \
+                --out /cephfs/audits/vpp_window_displacement_512.json
+              echo "=== done ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            # iceguard webhook requires limits == requests.
+            requests: {cpu: "2", memory: "4Gi"}
+            limits:   {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}

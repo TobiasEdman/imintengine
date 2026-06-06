@@ -1,0 +1,100 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: refetch-vpp-window-corrected-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: refetch-vpp-window-corrected
+spec:
+  backoffLimit: 10
+  # Re-fetches growing-season frames displaced by the HR-VPP YYDDD decode
+  # fix (commit 4826ca1). Driven by the audit JSON from
+  # audit-vpp-displacement-512 (unique_affected_tiles). The cloned source
+  # carries the corrected compute_growing_season_windows, so
+  # repair_to_canonical_layout re-derives the right per-tile windows,
+  # drops the displaced frames, and re-fetches only the missing slots.
+  # Skip-index makes re-runs cheap. Idempotent atomic-replace per tile.
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: refetch
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Re-fetch VPP-window-corrected 512 tiles ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj pyyaml Pillow httpx openeo \
+                xarray netCDF4
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              AUDIT=/cephfs/audits/vpp_window_displacement_512.json
+              if [ ! -f "$AUDIT" ]; then
+                echo "FATAL: audit JSON not found: $AUDIT"
+                echo "Run audit-vpp-displacement-512 first."
+                exit 1
+              fi
+              ls -lh "$AUDIT"
+              echo ""
+
+              python3 scripts/refetch_affected_tiles.py \
+                --audit-json "$AUDIT" \
+                --output-dir /cephfs/unified_v2_512 \
+                --tile-size-px 512 \
+                --workers 6 \
+                --sources des \
+                --cloud-max 30.0
+              echo ""
+              echo "=== done ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}
+            - name: CDSE_USER
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: user, optional: true}
+            - name: CDSE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: password, optional: true}
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: user, optional: true}
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: des-credentials, key: password, optional: true}
+          resources:
+            # iceguard webhook requires limits == requests.
+            requests: {cpu: "6", memory: "12Gi"}
+            limits:   {cpu: "6", memory: "12Gi"}
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}
