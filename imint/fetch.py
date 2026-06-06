@@ -3883,6 +3883,11 @@ _STAC_BACKENDS = {
     },
 }
 
+# Safety bound on STAC pagination (200 features/page). A ~6-month window
+# over a 5x5 km AOI yields a few hundred features; 50 pages (10k) is ample
+# headroom while preventing an unbounded loop on a misbehaving catalogue.
+_STAC_MAX_PAGES = 50
+
 
 def _stac_available_dates(
     coords: dict,
@@ -3937,24 +3942,39 @@ def _stac_available_dates(
         "datetime": dt_range,
         "limit": 200,
     })
-    url = f"{cfg['url']}?{params}"
+    url: str | None = f"{cfg['url']}?{params}"
 
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read())
-
-    # Deduplicate: keep lowest cloud per date
+    # Paginate via STAC ``links[rel=next]``. A single page (limit=200) can
+    # truncate a wide window — the catalogue orders chronologically, so the
+    # dropped tail is the LATEST dates, which silently starves the last
+    # (late-summer) slot. Follow ``next`` until exhausted so the full window
+    # is seen. _STAC_MAX_PAGES bounds the loop (200 * pages features).
     date_cloud: dict[str, float] = {}
-    for feat in data.get("features", []):
-        props = feat.get("properties", {})
-        dt_str = (props.get("datetime") or props.get("start_datetime") or "")[:10]
-        if not dt_str:
-            continue
-        cc = props.get("eo:cloud_cover", props.get("cloud_cover"))
-        if cc is None:
-            cc = 100.0
-        if dt_str not in date_cloud or cc < date_cloud[dt_str]:
-            date_cloud[dt_str] = cc
+    for _ in range(_STAC_MAX_PAGES):
+        if not url:
+            break
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+
+        # Deduplicate: keep lowest cloud per date
+        for feat in data.get("features", []):
+            props = feat.get("properties", {})
+            dt_str = (props.get("datetime") or props.get("start_datetime") or "")[:10]
+            if not dt_str:
+                continue
+            cc = props.get("eo:cloud_cover", props.get("cloud_cover"))
+            if cc is None:
+                cc = 100.0
+            if dt_str not in date_cloud or cc < date_cloud[dt_str]:
+                date_cloud[dt_str] = cc
+
+        # Advance to the next page if the catalogue offers one (GET href).
+        url = next(
+            (lk.get("href") for lk in data.get("links", [])
+             if lk.get("rel") == "next" and lk.get("href")),
+            None,
+        )
 
     # Filter and sort by cloud ascending
     result = [
