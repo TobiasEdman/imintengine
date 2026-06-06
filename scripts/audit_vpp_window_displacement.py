@@ -101,7 +101,13 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=None, help="For smoke tests.")
     args = p.parse_args()
 
-    files = sorted(glob.glob(os.path.join(args.data_dir, "tile_*.npz")))
+    # Match UnifiedDataset's discovery: ALL *.npz (current "tile_<e>_<n>"
+    # naming AND legacy numeric IDs like "44143910.npz"), minus atomic-write
+    # leftovers.
+    files = sorted(
+        f for f in glob.glob(os.path.join(args.data_dir, "*.npz"))
+        if not f.endswith("_tmp.npz")
+    )
     if args.limit:
         files = files[: args.limit]
     print(f"scanning {len(files)} tiles in {args.data_dir}", flush=True)
