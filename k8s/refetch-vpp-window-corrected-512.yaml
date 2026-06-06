@@ -59,6 +59,12 @@ spec:
               ls -lh "$AUDIT"
               echo ""
 
+              # Clear any prior skip-index so ALL audit tiles reprocess under
+              # the STAC-pagination fix (aa19ea6) — the first run's "ok" tiles
+              # picked slot-3 from a truncated candidate set.
+              rm -f /cephfs/audits/skip_index_vpp_window_displacement_512.json
+              echo "cleared prior skip-index (fresh full pass)"
+
               python3 scripts/refetch_affected_tiles.py \
                 --audit-json "$AUDIT" \
                 --output-dir /cephfs/unified_v2_512 \
