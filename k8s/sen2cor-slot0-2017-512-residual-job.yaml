@@ -1,0 +1,122 @@
+# Residual slot-0 / autumn-2017 backfill — fills temporal slot 0 of the
+# year=2018 tiles whose slot 0 is STILL empty after the first
+# sen2cor-slot0-2017-512 run (which filled 1736/2352). DES openEO cannot
+# serve pre-2018, so Sen2Cor L1C->L2A is the only route. L1C is pulled via
+# CDSE OData (resource-owner password grant) which is NOT PU-billed, so
+# this runs fine while the SH Process credit pool is exhausted.
+#
+# DIFFERENCE vs the original: NO --audit-json. select_scenes.py then uses
+# its disk-derived path (select_scenes.py:431-437): glob ALL *.npz with
+# tessera_year==2018 (tile_year_filter = year+1 for slot:0) AND
+# temporal_mask[0]==0. Comprehensive — covers numeric-named tiles too, no
+# stale-audit dependency. Idempotent: already-filled slot-0 tiles are not
+# reselected.
+#
+# RUN ONLY when /cephfs/unified_v2_512 has no other writer (the
+# harvest_probability strip does full-file rewrites and would race).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sen2cor-slot0-2017-512-residual
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: sen2cor-slot0-autumn-2017-residual
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values: ["NVIDIA-GeForce-RTX-2080-Ti"]
+      containers:
+        - name: pipeline
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== sen2cor RESIDUAL slot:0 / autumn 2017 backfill ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow \
+                pystac-client openeo torch 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # ── Step 1: selector (DISK-DERIVED, no --audit-json) ──────
+              echo ""
+              echo "=== Step 1: select_scenes.py --target slot:0 --year 2017 (disk-derived) ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir /data/unified_v2_512 \
+                --target slot:0 \
+                --year 2017 \
+                --workers 16 \
+                --out /data/debug/sen2cor_slot0_2017_512_residual_plan.json
+
+              python3 -c "
+              import json
+              p = json.load(open('/data/debug/sen2cor_slot0_2017_512_residual_plan.json'))
+              print(f\"  plan: scenes={p['n_scenes']} covered={p['n_tiles_covered']} \"
+                    f\"unassigned={len(p['unassigned'])}\")
+              "
+
+              # ── Step 2: runner ────────────────────────────────────────
+              echo ""
+              echo "=== Step 2: run_sen2cor_per_scene.py --target slot:0 ==="
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/sen2cor_slot0_2017_512_residual_plan.json \
+                --data-dir /data/unified_v2_512 \
+                --safe-cache /data/sen2cor_cache \
+                --target slot:0 \
+                --cot-max 10.0 \
+                --workers 4 \
+                --device cuda
+
+              echo ""
+              echo "=== residual slot:0 backfill complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_USER
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: user, optional: true}
+            - name: CDSE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: password, optional: true}
+          resources:
+            requests:
+              cpu: "24"
+              memory: "64Gi"
+            limits:
+              cpu: "24"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
