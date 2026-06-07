@@ -116,11 +116,17 @@ def _is_payment_required_error(exc: BaseException) -> bool:
     library version churn.
     """
     msg = f"{type(exc).__name__}: {exc}"
+    low = msg.lower()
     return (
         "[402]" in msg
         or "PaymentRequired" in msg
-        or "insufficient credit" in msg.lower()
-        or "insufficient credits" in msg.lower()
+        or "insufficient credit" in low
+        or "insufficient credits" in low
+        # SH Process API PU exhaustion surfaces as HTTP 403
+        # ACCESS_INSUFFICIENT_PROCESSING_UNITS — same shared PU pool as the
+        # openEO 402, so it must trip the same credit guard.
+        or "insufficient_processing_units" in low
+        or "processing units or requests available" in low
     )
 
 

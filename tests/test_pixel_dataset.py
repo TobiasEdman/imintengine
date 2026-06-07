@@ -425,16 +425,21 @@ class TestAuxAlignment:
         data = np.load(p, allow_pickle=False)
         aux_vec = ds._build_aux_vector(data, row, col)
 
-        # Channels 1..N_AUX-1 are missing → raw val=0 → normalized to ≈ (0-mean)/std
+        # Missing channels are zero-filled. For YYDDD date channels, NoData(0)
+        # maps to the mean → normalized ~0 (neutral, not a huge outlier). For
+        # the other channels, raw 0 normalizes to (0-mean)/std.
+        from imint.training.unified_dataset import AUX_YYDDD_DATE_CHANNELS
         for j in range(1, N_AUX):
             ch_name = AUX_CHANNEL_NAMES[j]
-            if ch_name in AUX_NORM:
-                mean, std = AUX_NORM[ch_name]
-                expected = (0.0 - mean) / max(std, 1e-6)
-                np.testing.assert_allclose(
-                    aux_vec[j], expected, atol=1e-4,
-                    err_msg=f"Missing {ch_name} should yield normalized 0.0",
-                )
+            if ch_name not in AUX_NORM:
+                continue
+            mean, std = AUX_NORM[ch_name]
+            expected = 0.0 if ch_name in AUX_YYDDD_DATE_CHANNELS \
+                else (0.0 - mean) / max(std, 1e-6)
+            np.testing.assert_allclose(
+                aux_vec[j], expected, atol=1e-4,
+                err_msg=f"Missing {ch_name} normalized to unexpected value",
+            )
 
 
 # ── 3. Tensor output types & collation safety ────────────────────────────────

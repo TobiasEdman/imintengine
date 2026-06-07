@@ -188,30 +188,31 @@ class TestFetchVppTilesLocal:
 
 class TestFallbackWiring:
 
-    def test_fallback_reraises_without_cache(self, monkeypatch):
-        """_fallback_to_wekeo must re-raise the CDSE error if no cache."""
+    def test_read_wekeo_returns_none_without_cache(self, monkeypatch):
+        """_read_wekeo_vpp returns None (not raise) when no cache is present.
+
+        That None is the cue for the auto router to fall through to CDSE,
+        and for VPP_SOURCE=wekeo to raise a clear "no cache" error.
+        """
         from imint.training import cdse_vpp
 
         with tempfile.TemporaryDirectory() as d:
             monkeypatch.setenv("VPP_WEKEO_DIR", d)  # empty — no index.json
-            original = RuntimeError("CDSE quota exhausted")
-            with pytest.raises(RuntimeError, match="quota exhausted"):
-                cdse_vpp._fallback_to_wekeo(
-                    0, 0, 1, 1, size_px=(32, 32), year=2021,
-                    cdse_error=original,
-                )
+            assert cdse_vpp._read_wekeo_vpp(
+                0, 0, 1, 1, (32, 32), 2021) is None
 
     def test_vpp_source_wekeo_skips_cdse(self, monkeypatch):
         """VPP_SOURCE=wekeo routes fetch_vpp_tiles straight to WEkEO.
 
-        With no cache present the WEkEO path re-raises its own marker
-        error — reaching it proves CDSE was skipped entirely (no CDSE
-        credentials are set, so a CDSE attempt would fail differently).
+        With no cache present the forced-WEkEO path raises a clear
+        "no WEkEO cache" error — reaching it proves CDSE was skipped
+        entirely (no CDSE credentials are set, so a CDSE attempt would
+        fail with a different message).
         """
         from imint.training import cdse_vpp
 
         with tempfile.TemporaryDirectory() as d:
             monkeypatch.setenv("VPP_SOURCE", "wekeo")
             monkeypatch.setenv("VPP_WEKEO_DIR", d)  # empty — no index.json
-            with pytest.raises(RuntimeError, match="CDSE skipped"):
+            with pytest.raises(RuntimeError, match="no WEkEO cache"):
                 cdse_vpp.fetch_vpp_tiles(0.0, 0.0, 1.0, 1.0, size_px=32)

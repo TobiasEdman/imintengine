@@ -23,12 +23,20 @@ Access:
     Endpoint: https://sh.dataspace.copernicus.eu/api/v1/process
     Auth: CDSE OAuth2 client_credentials grant
 
-Fallback:
-    When the CDSE processing quota is exhausted, fetch_vpp_tiles falls
-    back to the prefetched WEkEO VPP cache (imint.training.wekeo_vpp),
-    if one is present at $VPP_WEKEO_DIR (default /data/vpp_wekeo).
-    Set $VPP_SOURCE=wekeo to skip CDSE entirely and read straight from
-    that cache — for bulk runs when the quota is known to be exhausted.
+Source routing ($VPP_SOURCE):
+    CDSE Sentinel Hub and the WEkEO COG cache serve the SAME HR-VPP
+    product, so routing is by cost/coverage/availability, not quality.
+      * ``auto`` (default): cache-first + circuit breaker.
+          1. WEkEO cache (imint.training.wekeo_vpp, $VPP_WEKEO_DIR, default
+             /data/vpp_wekeo) when it covers the tile — free, local.
+          2. CDSE for coverage gaps, but only while the shared SH-Process
+             PU pool isn't marked dead (imint.training.openeo_tile_graph
+             credit guard, key "cdse"); first PU exhaustion trips it so no
+             later tile wastes a doomed call.
+          3. WEkEO best-effort otherwise.
+      * ``cdse``: force the metered Process API.
+      * ``wekeo``: force the cache (skip CDSE) — a blunt override; rarely
+        needed since ``auto`` already prefers the cache when it has data.
 
 License: Copernicus Open Access
 
@@ -130,51 +138,26 @@ def fetch_vpp_tiles(
             except Exception:
                 pass  # Re-fetch on cache corruption
 
-    # Source selection. VPP_SOURCE=wekeo forces the WEkEO cache and skips
-    # CDSE entirely — for bulk runs when the CDSE quota is known to be
-    # exhausted, where a doomed per-tile CDSE request + retries before
-    # every fallback is pure waste. Default (unset / "auto"): try CDSE,
-    # fall back to WEkEO on failure.
-    if os.environ.get("VPP_SOURCE", "").strip().lower() == "wekeo":
-        result = _fallback_to_wekeo(
-            west, south, east, north,
-            size_px=(h_px, w_px), year=year,
-            cdse_error=RuntimeError("VPP_SOURCE=wekeo — CDSE skipped"),
-        )
+    # Source selection (see module docstring). VPP_SOURCE:
+    #   wekeo → force the local COG cache (skip CDSE entirely)
+    #   cdse  → force the metered SH Process API
+    #   auto/unset (default) → cache-first + circuit breaker (best practice):
+    #     CDSE and WEkEO serve the SAME HR-VPP product, so route by cost,
+    #     not quality — prefer the free local cache when it covers the tile,
+    #     hit the metered CDSE only for coverage gaps, and skip CDSE entirely
+    #     once the shared SH-Process PU pool is marked dead this session.
+    src = os.environ.get("VPP_SOURCE", "").strip().lower()
+    if src == "wekeo":
+        result = _read_wekeo_vpp(west, south, east, north, (h_px, w_px), year)
+        if result is None:
+            raise RuntimeError(
+                f"VPP_SOURCE=wekeo but no WEkEO cache at "
+                f"{os.environ.get('VPP_WEKEO_DIR', '/data/vpp_wekeo')}"
+            )
+    elif src == "cdse":
+        result = _fetch_cdse_vpp(west, south, east, north, h_px, w_px, year)
     else:
-        # Convert bbox from EPSG:3006 to WGS84 for the CDSE Process API.
-        lon_min, lat_min, lon_max, lat_max = _bbox_3006_to_4326(
-            west, south, east, north
-        )
-        # On a CDSE failure (quota exhaustion, outage) fall back to the
-        # prefetched WEkEO VPP cache if one is present.
-        try:
-            token = _get_token()
-            tiff_bytes = _fetch_vpp_tiff(
-                lon_min, lat_min, lon_max, lat_max,
-                w_px, h_px,
-                token=token,
-                year=year,
-            )
-            bands = _parse_multiband_tiff(
-                tiff_bytes, h_px, w_px, len(_VPP_BANDS))
-
-            result: dict[str, np.ndarray] = {}
-            for i, band_name in enumerate(_VPP_BANDS):
-                arr = bands[i].astype(np.float32)
-                # Scale PPI bands: INT16 with factor 0.0001
-                if band_name in _PPI_BANDS:
-                    arr = arr * 0.0001
-                    arr = np.clip(arr, 0.0, None)  # Clamp negatives (nodata)
-                # Day bands: keep as float, clamp nodata to 0
-                if band_name in _DOY_BANDS:
-                    arr = np.clip(arr, 0.0, None)
-                result[band_name.lower()] = arr
-        except RuntimeError as cdse_err:
-            result = _fallback_to_wekeo(
-                west, south, east, north,
-                size_px=(h_px, w_px), year=year, cdse_error=cdse_err,
-            )
+        result = _auto_fetch_vpp(west, south, east, north, h_px, w_px, year)
 
     # Cache
     if cache_dir is not None:
@@ -216,33 +199,116 @@ def fetch_vpp_band(
     return all_bands[key]
 
 
+# Shared SH-Process credit-guard key. CDSE VPP (SH Process API) draws from
+# the SAME PU pool as the CDSE spectral path (imint.training.cdse_s2 marks
+# "cdse"), so one exhaustion must trip the guard for both.
+_PU_POOL = "cdse"
+
+
 # ── Internal helpers ─────────────────────────────────────────────────────
 
-def _fallback_to_wekeo(
+def _fetch_cdse_vpp(
     west: float, south: float, east: float, north: float,
-    *,
-    size_px: tuple[int, int],
-    year: int,
-    cdse_error: Exception,
+    h_px: int, w_px: int, year: int,
 ) -> dict[str, np.ndarray]:
-    """Fall back to the prefetched WEkEO VPP cache after a CDSE failure.
+    """Fetch VPP from the metered CDSE Sentinel Hub Process API.
 
-    The WEkEO cache is populated out-of-band by
-    ``scripts/prefetch_vpp_wekeo.py``. If no cache is present the original
-    CDSE error is re-raised — the fallback is only meaningful once the
-    COGs have been bulk-downloaded.
+    Raises RuntimeError on failure (quota/outage/parse).
+    """
+    lon_min, lat_min, lon_max, lat_max = _bbox_3006_to_4326(
+        west, south, east, north
+    )
+    token = _get_token()
+    tiff_bytes = _fetch_vpp_tiff(
+        lon_min, lat_min, lon_max, lat_max, w_px, h_px,
+        token=token, year=year,
+    )
+    bands = _parse_multiband_tiff(tiff_bytes, h_px, w_px, len(_VPP_BANDS))
+    result: dict[str, np.ndarray] = {}
+    for i, band_name in enumerate(_VPP_BANDS):
+        arr = bands[i].astype(np.float32)
+        if band_name in _PPI_BANDS:
+            arr = np.clip(arr * 0.0001, 0.0, None)  # INT16 scale + clamp nodata
+        if band_name in _DOY_BANDS:
+            arr = np.clip(arr, 0.0, None)
+        result[band_name.lower()] = arr
+    return result
+
+
+def _read_wekeo_vpp(
+    west: float, south: float, east: float, north: float,
+    size_px: tuple[int, int], year: int,
+) -> dict[str, np.ndarray] | None:
+    """Read VPP from the prefetched WEkEO COG cache.
+
+    Returns the band dict, or ``None`` if no cache is present (no
+    ``index.json``) — callers decide whether that's a hard error or a
+    cue to try CDSE. The COGs are populated by scripts/prefetch_vpp_wekeo.py.
     """
     cog_dir = Path(os.environ.get("VPP_WEKEO_DIR", "/data/vpp_wekeo"))
     if not (cog_dir / "index.json").exists():
-        raise cdse_error
-    print(
-        f"[cdse_vpp] CDSE VPP fetch failed ({cdse_error}); "
-        f"falling back to WEkEO cache at {cog_dir}"
-    )
+        return None
     from imint.training.wekeo_vpp import fetch_vpp_tiles_local
     return fetch_vpp_tiles_local(
         west, south, east, north,
         size_px=size_px, vpp_cog_dir=cog_dir, year=year,
+    )
+
+
+def _has_sufficient_coverage(result: dict[str, np.ndarray] | None) -> bool:
+    """True if the WEkEO read actually covers the tile.
+
+    WEkEO returns all-zeros for areas outside the cached COGs' footprint
+    (no exception), so "got a dict" != "covered". Require the SOSD band to
+    have >5% valid (non-zero) pixels — the same floor compute_growing_season
+    uses, so a "covered" result is one that will actually yield a window.
+    """
+    if not result or "sosd" not in result:
+        return False
+    sosd = np.asarray(result["sosd"])
+    if sosd.size == 0:
+        return False
+    return float(np.count_nonzero(sosd)) >= max(10, sosd.size * 0.05)
+
+
+def _auto_fetch_vpp(
+    west: float, south: float, east: float, north: float,
+    h_px: int, w_px: int, year: int,
+) -> dict[str, np.ndarray]:
+    """Cache-first + circuit-breaker VPP routing (the default).
+
+    1. WEkEO cache — if it covers the tile, use it (free, local, equivalent).
+    2. Coverage gap — CDSE, but only if the shared SH-Process PU pool isn't
+       already marked dead this session; on PU exhaustion, mark it dead so
+       no later tile wastes a doomed call.
+    3. Last resort — return the (partial/empty) WEkEO read so windowing
+       degrades to fallback windows rather than aborting the tile; raise
+       only if there is no WEkEO cache at all and CDSE is unavailable.
+    """
+    from imint.training.openeo_tile_graph import (
+        is_source_dead, mark_source_dead, _is_payment_required_error,
+    )
+
+    wk = _read_wekeo_vpp(west, south, east, north, (h_px, w_px), year)
+    if _has_sufficient_coverage(wk):
+        return wk  # cache-first: free + covers the tile
+
+    if not is_source_dead(_PU_POOL):
+        try:
+            return _fetch_cdse_vpp(west, south, east, north, h_px, w_px, year)
+        except RuntimeError as exc:
+            if _is_payment_required_error(exc):
+                mark_source_dead(
+                    _PU_POOL, f"VPP SH-Process PU exhausted: {str(exc)[:160]}")
+            else:
+                print(f"    [cdse_vpp] CDSE error, using WEkEO best-effort: "
+                      f"{str(exc)[:160]}", flush=True)
+
+    if wk is not None:
+        return wk  # best-effort (may be partial → fallback windows)
+    raise RuntimeError(
+        "VPP unavailable: CDSE PU exhausted/failed and no WEkEO cache at "
+        f"{os.environ.get('VPP_WEKEO_DIR', '/data/vpp_wekeo')}"
     )
 
 
