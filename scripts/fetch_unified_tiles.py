@@ -984,16 +984,10 @@ def repair_to_canonical_layout(
             )
             if scene is None:
                 continue
-            # Defensive resize (centre-place, no resample). The dispatcher
-            # already returns ``None`` for zero/empty scenes, so we only
-            # land here with a real array.
-            if scene.shape[1] != tile.size_px or scene.shape[2] != tile.size_px:
-                padded = np.zeros((N_BANDS, tile.size_px, tile.size_px),
-                                  dtype=np.float32)
-                h = min(scene.shape[1], tile.size_px)
-                w = min(scene.shape[2], tile.size_px)
-                padded[:, :h, :w] = scene[:, :h, :w]
-                scene = padded
+            # No resize here: fetch_spectral → tile-graph now grid-snaps every
+            # slot to the bbox extent, so the scene is already (N_BANDS,
+            # size_px, size_px). A residual mismatch is a real bug and fails
+            # loud at the cube assignment below — not silently top-left cropped.
             fetched[sidx] = (scene, cand_date)
             break
         else:

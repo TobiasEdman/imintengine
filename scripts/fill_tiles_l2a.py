@@ -49,6 +49,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from imint.coregistration import coregister_to_reference
 from imint.training.openeo_tile_graph import (
     ALL_BANDS,
     ALL_BANDS_INDEX,
@@ -81,6 +82,32 @@ def _is_corrupt(block: np.ndarray) -> bool:
 
 def _has(frames: list[np.ndarray]) -> np.int32:
     return np.int32(1 if any(bool(np.any(f)) for f in frames) else 0)
+
+
+def _coreg_to_reference(arr12: np.ndarray, ref_hwc6: np.ndarray) -> np.ndarray:
+    """Subpixel-align a fresh ``(12, H, W)`` slot to an existing ``(H, W, 6)`` frame.
+
+    Fresh slots are grid-snapped to the bbox origin (``openeo_tile_graph``); the
+    stored cube sits on the native S2 grid, so the two can differ by a fraction
+    of a pixel. Phase-correlation coregistration on B04 — index 2 in BOTH
+    ``ALL_BANDS`` and the prithvi-6 order — reconciles them so kept + re-fetched
+    bands share one grid.
+
+    ``coregister_to_reference`` shifts its *reference* onto its *target*, so the
+    fixed existing frame is passed as ``target`` and the fresh slot as
+    ``reference``; the returned (shifted) reference is the aligned fresh slot.
+    Transforms are ``None`` → sub-pixel only, no crop (512 shape preserved). The
+    primitive auto-rejects implausible (>1 px) shifts, so a bad correlation is a
+    no-op rather than a corruption.
+    """
+    tgt_hwc12 = np.transpose(arr12, (1, 2, 0))  # (H, W, 12)
+    _existing, aligned_fresh, _meta = coregister_to_reference(
+        target=ref_hwc6,
+        reference=tgt_hwc12.copy(),
+        target_transform=None, reference_transform=None,
+        subpixel=True, reference_band=2,
+    )
+    return np.ascontiguousarray(np.transpose(aligned_fresh, (2, 0, 1)), np.float32)
 
 
 def assemble_bands(
@@ -247,14 +274,35 @@ def fill_one_tile(tile_path: str, out_dir: str | None = None,
     except Exception as e:  # noqa: BLE001 — one tile's fetch error must not kill the run
         return {"name": name, "status": "failed", "reason": f"fetch:{type(e).__name__}:{e}"}
 
+    # Coregistration reference: the first clean, non-empty existing spectral
+    # frame. Fresh slots are grid-snapped to the bbox origin; the stored cube
+    # was built on the native S2 grid, so they can differ by a fraction of a
+    # pixel — coregistering fresh → this frame keeps every re-fetched / added
+    # band pixel-aligned with the kept frames. Copied so coreg can never touch
+    # the stored cube. None when no clean frame exists → snap-only fallback.
+    ref_hwc = None  # (H, W, 6)
+    for fi in range(n_frames):
+        blk = spectral[fi * 6:(fi + 1) * 6]
+        if np.any(blk) and not _is_corrupt(blk):
+            ref_hwc = np.transpose(np.asarray(blk, np.float32), (1, 2, 0)).copy()
+            break
+
     fresh: dict[int, np.ndarray] = {}
     for fi, entry in res.items():
         if entry is None or entry[0] is None:
             continue
         arr = np.asarray(entry[0], np.float32)
-        if arr.shape != (len(ALL_BANDS), height, width):
+        if arr.shape[0] != len(ALL_BANDS):
             return {"name": name, "status": "failed",
-                    "reason": f"bands:{tuple(arr.shape)}!=({len(ALL_BANDS)},{height},{width})"}
+                    "reason": f"bandcount:{arr.shape[0]}!={len(ALL_BANDS)}"}
+        if arr.shape[1:] != (height, width):
+            # The tile-graph now grid-snaps every slot to the bbox extent, so a
+            # mismatch here means the stored bbox disagrees with size_px — a
+            # data error, not the old "513" quirk. Fail loud rather than crop.
+            return {"name": name, "status": "failed",
+                    "reason": f"shape:{tuple(arr.shape[1:])}!=({height},{width})"}
+        if ref_hwc is not None:
+            arr = _coreg_to_reference(arr, ref_hwc)
         fresh[fi] = arr
     if not fresh:
         return {"name": name, "status": "failed", "reason": "fetch_empty_all_slots"}

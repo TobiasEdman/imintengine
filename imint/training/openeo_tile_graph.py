@@ -390,6 +390,7 @@ def fetch_tile_all_slots_cdse_openeo(
         CDSE_COLLECTION,
         FetchError,
         _connect_cdse,
+        _snap_to_target_grid,
         _unpack_openeo_gtiff_bytes,
     )
     import rasterio
@@ -447,6 +448,8 @@ def fetch_tile_all_slots_cdse_openeo(
     # i.e. all bands of slot 0 first, then all bands of slot 1, etc.
     with rasterio.open(io.BytesIO(raw_bytes)) as src:
         full = src.read()  # (n_slots * n_bands, H, W)
+        src_transform = src.transform
+        src_crs = src.crs
 
     n_spec = len(prithvi_bands)
     per_slot = n_spec + (1 if include_scl else 0)   # +1 for the SCL band
@@ -459,14 +462,24 @@ def fetch_tile_all_slots_cdse_openeo(
             f"Likely a band-ordering mismatch in merge_cubes; investigate."
         )
 
+    # Snap each slot's spectral block onto the exact bbox pixel grid (same
+    # strategy as the DES path / imint.fetch.fetch_des_data). SCL is left on
+    # the raw grid: it feeds only the scalar AOI cloud fraction below, where a
+    # ±1 row/col is immaterial — and sinc/bilinear resampling of categorical
+    # class codes would corrupt them.
+    target_bounds = {k: float(bbox_3006[k]) for k in ("west", "south", "east", "north")}
+
     result: dict = {}
     for i, (slot_idx, date_start, date_end) in enumerate(slot_windows):
         base = i * per_slot
         # Spectral bands → reflectance (DN / 10000). NO -1000 offset here:
         # CDSE openEO applies RADIO_ADD_OFFSET server-side (unlike DES, which
         # bakes it into COGs — see the DES path). SCL (if present) is the LAST
-        # band of the slot and is categorical — NOT scaled.
+        # band of the slot and is categorical — NOT scaled, NOT snapped.
         slot_arr = full[base:base + n_spec].astype(np.float32) / 10000.0
+        slot_arr, _ = _snap_to_target_grid(
+            slot_arr, src_transform, src_crs, target_bounds, pixel_size=10,
+        )
         if not np.any(slot_arr):
             continue
         date_str = _window_midpoint(date_start, date_end)
@@ -517,6 +530,7 @@ def fetch_tile_all_slots_des_openeo(
         COLLECTION as DES_COLLECTION,
         FetchError,
         _connect as _connect_des,
+        _snap_to_target_grid,
         _unpack_openeo_gtiff_bytes,
     )
     import rasterio
@@ -560,6 +574,8 @@ def fetch_tile_all_slots_des_openeo(
 
     with rasterio.open(io.BytesIO(raw_bytes)) as src:
         full = src.read()  # (n_slots * n_bands, H, W)
+        src_transform = src.transform
+        src_crs = src.crs
 
     n_bands = len(des_bands)
     expected_bands = len(slot_windows) * n_bands
@@ -569,11 +585,22 @@ def fetch_tile_all_slots_des_openeo(
             f"({len(slot_windows)} slots × {n_bands} bands), got {full.shape[0]}."
         )
 
+    # Snap every slot onto the exact bbox pixel grid. openEO derives the
+    # output grid from the bbox extent + native S2 tiling, so a scene comes
+    # back offset from the requested grid (and one row/col too large — the
+    # "513" bug). _snap_to_target_grid corrects the integer + sub-pixel offset
+    # and yields exactly (n_bands, size, size). This is the SINGLE S2 grid-
+    # alignment strategy across the repo (imint.fetch.fetch_des_data).
+    target_bounds = {k: float(bbox_3006[k]) for k in ("west", "south", "east", "north")}
+
     result: dict[int, tuple[np.ndarray, str]] = {}
     for i, (slot_idx, date_start, date_end) in enumerate(slot_windows):
         # DES bakes the PB04.00 -1000 BOA offset into COGs (CDSE openEO applies
         # it server-side); subtract it so output matches the rest of the dataset.
         slot_arr = dn_to_reflectance(full[i * n_bands:(i + 1) * n_bands], source="des")
+        slot_arr, _ = _snap_to_target_grid(
+            slot_arr, src_transform, src_crs, target_bounds, pixel_size=10,
+        )
         if not np.any(slot_arr):
             continue
         result[slot_idx] = (slot_arr, _window_midpoint(date_start, date_end))
