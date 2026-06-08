@@ -170,12 +170,44 @@ PRITHVI_BANDS = ("B02", "B03", "B04", "B8A", "B11", "B12")
 _CDSE_BANDS_10M = ("B02", "B03", "B04", "B08")
 _CDSE_BANDS_20M = ("B05", "B06", "B07", "B8A", "B11", "B12")
 
+# 60m atmospheric group — B01 (coastal aerosol), B09 (water vapour).
+# Native 60m, resampled to the 10m grid like the 20m bands. Included so a
+# single fetch captures the FULL S2 L2A spectral (12 bands) as training +
+# sample material, not just the model's 6.
+_CDSE_BANDS_60M = ("B01", "B09")
+
 # DES band groups (mirrors imint.fetch.BANDS_*). DES uses lowercase band
 # names with a different collection id (``s2_msi_l2a`` vs CDSE's
-# ``SENTINEL2_L2A``). Same 10m / 20m grouping; same Prithvi output
-# subset, just lowercase in the load_collection call.
+# ``SENTINEL2_L2A``). Same resolution grouping; lowercase in load_collection.
 _DES_BANDS_10M = ("b02", "b03", "b04", "b08")
 _DES_BANDS_20M = ("b05", "b06", "b07", "b8a", "b11", "b12")
+_DES_BANDS_60M = ("b01", "b09")
+
+# Canonical ALL-bands output order (grouped by native resolution, as
+# loaded/merged): 10m, then 20m, then 60m. Every fetch returns bands in
+# THIS order; downstream splits by fixed index (see ALL_BANDS_INDEX).
+ALL_BANDS = (
+    "B02", "B03", "B04", "B08",          # 10m  (idx 0-3)
+    "B05", "B06", "B07", "B8A", "B11", "B12",  # 20m (idx 4-9)
+    "B01", "B09",                        # 60m  (idx 10-11)
+)
+# Index of each logical group within an ALL_BANDS-ordered (N_bands, H, W)
+# array. PRITHVI keeps the model's 6-band order exactly.
+ALL_BANDS_INDEX = {
+    "prithvi": (0, 1, 2, 7, 8, 9),   # B02,B03,B04,B8A,B11,B12
+    "b08": (3,),
+    "rededge": (4, 5, 6),            # B05,B06,B07
+    "b01": (10,),
+    "b09": (11,),
+}
+
+
+def _bands_groups_for_source(source: str):
+    """(bands_10m, bands_20m, bands_60m, all_output_bands) in source casing."""
+    if source == "des":
+        return (_DES_BANDS_10M, _DES_BANDS_20M, _DES_BANDS_60M,
+                tuple(b.lower() for b in ALL_BANDS))
+    return (_CDSE_BANDS_10M, _CDSE_BANDS_20M, _CDSE_BANDS_60M, ALL_BANDS)
 
 
 def _prithvi_bands_for_source(source: str, prithvi_bands: tuple[str, ...]) -> tuple[str, ...]:
@@ -215,6 +247,7 @@ def _build_slot_cube(
     bands_10m: Sequence[str],
     bands_20m: Sequence[str],
     output_bands: Sequence[str],
+    bands_60m: Sequence[str] | None = None,
     scl_band: str | None = None,
 ):
     """Build ONE slot's sub-cube ready to be merged into the tile graph.
@@ -271,6 +304,13 @@ def _build_slot_cube(
 
     # Merge 10m + 20m groups into one cube (still temporal).
     cube = cube_10m.merge_cubes(cube_20m)
+
+    # Optional 60m atmospheric group (B01/B09), resampled to the 10m grid.
+    # Continuous reflectance → bilinear, /10000 like the rest.
+    if bands_60m:
+        cube_60m = conn.load_collection(bands=list(bands_60m), **load_kwargs)
+        cube_60m = cube_60m.resample_cube_spatial(target=cube_10m, method="bilinear")
+        cube = cube.merge_cubes(cube_60m)
 
     # Final output band order. When scl_band is set, the SCL band rides
     # along in the SAME download so the caller can AOI-cloud-gate the
@@ -481,7 +521,10 @@ def fetch_tile_all_slots_des_openeo(
         return {}
 
     conn = _connect_des()
-    des_bands = _prithvi_bands_for_source("des", tuple(prithvi_bands))
+    # Fetch the FULL 12-band S2 spectral (10m+20m+60m), not just Prithvi-6,
+    # so one download yields all training/sample material. Downstream
+    # fetch_spectral splits to the 6-band model cube + per-band extras.
+    b10, b20, b60, des_bands = _bands_groups_for_source("des")
 
     sub_cubes = []
     for slot_idx, date_start, date_end in slot_windows:
@@ -493,8 +536,9 @@ def fetch_tile_all_slots_des_openeo(
             date_end,
             collection_id=DES_COLLECTION,
             cloud_max_pct=cloud_max_pct,
-            bands_10m=_DES_BANDS_10M,
-            bands_20m=_DES_BANDS_20M,
+            bands_10m=b10,
+            bands_20m=b20,
+            bands_60m=b60,
             output_bands=des_bands,
         ))
 

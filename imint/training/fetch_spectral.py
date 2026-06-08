@@ -40,11 +40,34 @@ import numpy as np
 
 from imint.training.cdse_s2 import fetch_s2_scene
 from imint.training.openeo_tile_graph import (
+    ALL_BANDS,
+    ALL_BANDS_INDEX,
     _is_payment_required_error,
     fetch_tile_at_specific_dates,
     is_source_dead,
     mark_source_dead,
 )
+
+
+def _split_all_bands(arr: np.ndarray, collect_extra: dict | None) -> np.ndarray:
+    """Split a full-band slot array into the 6-band Prithvi cube + extras.
+
+    The openEO fetch now returns all 12 S2 bands in ``ALL_BANDS`` order.
+    Return the 6-band Prithvi stack (model input, unchanged) and, when
+    ``collect_extra`` is provided, populate it with the per-band extras for
+    this slot: ``b08`` (H,W), ``rededge`` (3,H,W), ``b01`` (H,W),
+    ``b09`` (H,W). A 6-band array (CDSE-SH path, not yet all-bands) is
+    returned as-is with no extras.
+    """
+    if arr.shape[0] != len(ALL_BANDS):
+        return arr  # already 6-band (legacy / CDSE-SH) — no extras
+    spectral = arr[list(ALL_BANDS_INDEX["prithvi"])]
+    if collect_extra is not None:
+        collect_extra["b08"] = arr[ALL_BANDS_INDEX["b08"][0]]
+        collect_extra["rededge"] = arr[list(ALL_BANDS_INDEX["rededge"])]
+        collect_extra["b01"] = arr[ALL_BANDS_INDEX["b01"][0]]
+        collect_extra["b09"] = arr[ALL_BANDS_INDEX["b09"][0]]
+    return spectral
 from imint.training.optimal_fetch import verify_aoi_scl
 from imint.training.tile_fetch import (
     _CDSE_OPENEO_SEMAPHORE,
@@ -63,6 +86,7 @@ def fetch_spectral(
     backend: str,
     size_px: int,
     cloud_threshold: float,
+    collect_extra: dict | None = None,
 ) -> np.ndarray | None:
     """Fetch one slot's spectral via ``backend`` on ``date_str``.
 
@@ -97,6 +121,7 @@ def fetch_spectral(
             backend="cdse-openeo",
             semaphore=_CDSE_OPENEO_SEMAPHORE,
             cloud_threshold=cloud_threshold,
+            collect_extra=collect_extra,
         )
     if backend == "des":
         return _fetch_via_openeo(
@@ -104,6 +129,7 @@ def fetch_spectral(
             backend="des",
             semaphore=_DES_SEMAPHORE,
             cloud_threshold=cloud_threshold,
+            collect_extra=collect_extra,
         )
     raise ValueError(
         f"fetch_spectral: unknown backend {backend!r}. "
@@ -179,6 +205,7 @@ def _fetch_via_openeo(
     backend: str,
     semaphore,
     cloud_threshold: float,
+    collect_extra: dict | None = None,
 ) -> np.ndarray | None:
     """CDSE openEO or DES openEO — explicit verify-then-fetch.
 
@@ -234,7 +261,8 @@ def _fetch_via_openeo(
                 flush=True,
             )
             return None
-        spectral = entry[0]
+        # Split full-band (12) → 6-band Prithvi cube + per-band extras.
+        spectral = _split_all_bands(entry[0], collect_extra)
         if not np.any(spectral):
             print(
                 f"    [fetch_spectral:{backend}] fetch-zero {date_str}: "
