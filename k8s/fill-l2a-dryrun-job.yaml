@@ -1,0 +1,140 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fill-l2a-dryrun
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600  # 1h — 5 tiles only
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fill-dryrun
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== L2A Fill DRY-RUN (5 tiles -> /data/_fill_dryrun) ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx openeo
+
+              mkdir -p /workspace && cd /workspace
+              # MUST clone the fix branch — the DES offset fix + fill tool are NOT on main.
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "HEAD: $(git rev-parse --short HEAD)"
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              rm -rf /data/_fill_dryrun
+              python scripts/fill_tiles_l2a.py \
+                --data-dir /data/unified_v2_512 \
+                --out-dir /data/_fill_dryrun \
+                --max-tiles 5 \
+                --workers 2 \
+                --no-skip-existing
+
+              echo ""
+              echo "=== VERIFY: original vs filled (floor, new bands, untouched keys) ==="
+              python - <<'PYEOF'
+              import glob, os
+              import numpy as np
+
+              ORIG = "/data/unified_v2_512"
+              FILL = "/data/_fill_dryrun"
+              SKIP = {"spectral", "b08", "b08_dates", "has_b08", "rededge",
+                      "rededge_dates", "has_rededge", "b01", "b01_dates", "has_b01",
+                      "b09", "b09_dates", "has_b09", "l2a_filled"}
+
+              def minpos(a):
+                  f = np.asarray(a, np.float32).reshape(-1)
+                  p = f[f > 1e-6]
+                  return float(p.min()) if p.size else float("nan")
+
+              filled = sorted(glob.glob(os.path.join(FILL, "*.npz")))
+              print(f"verifying {len(filled)} filled tiles\n")
+              all_ok = True
+              for fp in filled:
+                  name = os.path.basename(fp)
+                  o = dict(np.load(os.path.join(ORIG, name), allow_pickle=True))
+                  f = dict(np.load(fp, allow_pickle=True))
+                  sp_o, sp_f = o["spectral"], f["spectral"]
+                  T = sp_o.shape[0] // 6
+                  hw = sp_o.shape[1:]
+
+                  b01_ok = ("b01" not in o) and int(f.get("has_b01", 0)) == 1 and f["b01"].shape == (T,) + hw
+                  b09_ok = ("b09" not in o) and int(f.get("has_b09", 0)) == 1 and f["b09"].shape == (T,) + hw
+                  b08_before = [round(minpos(o["b08"][i]), 4) if "b08" in o and i < o["b08"].shape[0] else None
+                                for i in range(T)]
+                  b08_after = [round(minpos(f["b08"][i]), 4) for i in range(T)]
+
+                  spec_rep, spec_ok = [], True
+                  for i in range(T):
+                      bo, bf = sp_o[i * 6:(i + 1) * 6], sp_f[i * 6:(i + 1) * 6]
+                      mo, mf = minpos(bo), minpos(bf)
+                      if not np.isnan(mo) and mo >= 0.095:
+                          ok = (not np.isnan(mf)) and mf < 0.095
+                          spec_rep.append(f"f{i}:CORRUPT {mo:.3f}->{mf:.3f}{'OK' if ok else '??'}")
+                      else:
+                          ident = np.array_equal(bo, bf)
+                          spec_rep.append(f"f{i}:clean kept={'YES' if ident else 'NO!!'}")
+                          spec_ok = spec_ok and ident
+
+                  diffs = []
+                  for k in o:
+                      if k in SKIP:
+                          continue
+                      if k not in f:
+                          diffs.append(f"{k}:MISSING"); continue
+                      try:
+                          same = np.array_equal(o[k], f[k])
+                      except Exception:
+                          same = str(o[k]) == str(f[k])
+                      if not same:
+                          diffs.append(k)
+
+                  l2a = int(f.get("l2a_filled", 0)) == 1
+                  tile_ok = b01_ok and b09_ok and spec_ok and not diffs and l2a
+                  all_ok = all_ok and tile_ok
+                  print(f"{name}: {'PASS' if tile_ok else 'FAIL'}")
+                  print(f"  b01_added={b01_ok} b09_added={b09_ok} l2a_filled={l2a}")
+                  print(f"  b08 floor/frame  before={b08_before}  after={b08_after}")
+                  print(f"  spectral: {' | '.join(spec_rep)}")
+                  print(f"  untouched-key diffs: {diffs if diffs else 'none (all preserved)'}\n")
+              print("=" * 54)
+              print(f"DRYRUN VERIFY: {'ALL PASS' if all_ok else 'FAILURES PRESENT'}")
+              PYEOF
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
