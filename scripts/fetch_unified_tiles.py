@@ -49,6 +49,7 @@ from imint.training.tile_fetch import (
     fetch_aux_channels,
     fetch_background_frame,
     fetch_nmd_label_local,
+    stack_extra_frames,
     stack_frames,
 )
 from imint.training.tile_config import TileConfig
@@ -501,8 +502,11 @@ def fetch_tile(
     coords = bbox_3006_to_wgs84(bbox)
     tile.assert_bbox_matches(bbox)
 
-    # Fast path: use pre-screened best dates from openEO stage 1
+    # Fast path: use pre-screened best dates from openEO stage 1.
+    # The best-dates path is 6-band only (no all-band extras); the
+    # fetch_4frame_scenes path collects B08/red-edge/B01/B09 per frame.
     tile_best = best_dates.get(name) if best_dates else None
+    extras_list: list | None = None
     if tile_best:
         scene_results = _fetch_frames_from_best_dates(
             bbox, coords, tile_best, tile, NUM_FRAMES, sources=sources,
@@ -510,11 +514,13 @@ def fetch_tile(
     else:
         tile_years = [str(loc["year"])] if "year" in loc else years
         vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
+        extras_list = []
         scene_results = fetch_4frame_scenes(
             bbox, coords, tile_years, tile,
             scene_cloud_max=cloud_max,
             vpp_windows=vpp_windows,
             sources=sources,
+            collect_extra=extras_list,
         )
 
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
@@ -544,6 +550,15 @@ def fetch_tile(
     if nmd_label is not None:
         save["label"] = nmd_label
     save.update(aux)
+
+    # All-band extras (B08/red-edge/B01/B09) from the all-band fetch path.
+    # Only persist when ≥1 frame actually carried them (DES all-band path);
+    # the 6-band best-dates path leaves extras_list None → nothing written.
+    if extras_list is not None:
+        extras = stack_extra_frames(extras_list, dates, NUM_FRAMES, tile)
+        if any(int(extras[k]) for k in
+               ("has_b08", "has_rededge", "has_b01", "has_b09")):
+            save.update(extras)
 
     # Background frame (2016 summer) for clearcut change detection
     bg_result = fetch_background_frame(bbox, tile)
@@ -1173,20 +1188,25 @@ def refetch_tile(
     else:
         fetch_years = years
 
-    # Fast path: pre-screened best dates from openEO stage 1
+    # Fast path: pre-screened best dates from openEO stage 1.
+    # Best-dates path is 6-band only; fetch_4frame_scenes collects the
+    # all-band extras (B08/red-edge/B01/B09) per frame.
     tile_best = best_dates.get(name) if best_dates else None
+    extras_list: list | None = None
     if tile_best:
         scene_results = _fetch_frames_from_best_dates(
             bbox, coords, tile_best, tile, NUM_FRAMES, sources=sources,
         )
     else:
         vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
+        extras_list = []
         scene_results = fetch_4frame_scenes(
             bbox, coords, fetch_years, tile,
             scene_cloud_max=cloud_max,
             max_aoi_cloud=max_aoi_cloud,
             vpp_windows=vpp_windows,
             sources=sources,
+            collect_extra=extras_list,
         )
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
 
@@ -1227,6 +1247,16 @@ def refetch_tile(
     save["northing"] = np.int32(cy)
     save["tile_size_px"] = np.int32(tile.size_px)
     save["source"] = loc.get("source", "lulc")
+
+    # All-band extras LAST so a fresh all-band fetch overwrites any
+    # preserved-old b08/red-edge/B01/B09 (which were aligned to the OLD
+    # spectral dates and are now stale). Only when ≥1 frame carried them;
+    # otherwise the preserved-old block (if any) stays and enrich self-heals.
+    if extras_list is not None:
+        extras = stack_extra_frames(extras_list, dates, NUM_FRAMES, tile)
+        if any(int(extras[k]) for k in
+               ("has_b08", "has_rededge", "has_b01", "has_b09")):
+            save.update(extras)
 
     np.savez_compressed(out_path, **save)
 

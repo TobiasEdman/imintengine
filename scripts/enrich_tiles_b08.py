@@ -40,6 +40,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from imint.utils import dn_to_reflectance
+
 
 # Per-source openEO config — collection id + band name case differ
 # across backends. Keep the script source-agnostic by dispatching here.
@@ -156,8 +158,12 @@ def _fetch_b08_frame(
         except Exception:
             return None
 
-    # DN -> reflectance [0, 1] — matches the convention `spectral` is
-    # stored in (the original 6-band fetch divides by 10000 too).
+    # DN -> reflectance [0, 1]. DES bakes the PB04.00 -1000 BOA offset into
+    # its COGs, so subtract it (via dn_to_reflectance(source="des")) to match
+    # the spectral cube. VITO/CDSE openEO apply the offset server-side → plain
+    # /10000. Must agree with the spectral fetch or b08 lands +0.1 high.
+    if source == "des":
+        return dn_to_reflectance(arr, source="des")
     return arr / 10000.0
 
 

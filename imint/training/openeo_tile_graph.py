@@ -62,6 +62,8 @@ from typing import Sequence
 
 import numpy as np
 
+from imint.utils import dn_to_reflectance
+
 
 # ── Session-scoped credit guard ─────────────────────────────────────────────
 #
@@ -460,8 +462,10 @@ def fetch_tile_all_slots_cdse_openeo(
     result: dict = {}
     for i, (slot_idx, date_start, date_end) in enumerate(slot_windows):
         base = i * per_slot
-        # Spectral bands → reflectance (DN / 10000). SCL (if present) is
-        # the LAST band of the slot and is categorical — NOT scaled.
+        # Spectral bands → reflectance (DN / 10000). NO -1000 offset here:
+        # CDSE openEO applies RADIO_ADD_OFFSET server-side (unlike DES, which
+        # bakes it into COGs — see the DES path). SCL (if present) is the LAST
+        # band of the slot and is categorical — NOT scaled.
         slot_arr = full[base:base + n_spec].astype(np.float32) / 10000.0
         if not np.any(slot_arr):
             continue
@@ -567,7 +571,9 @@ def fetch_tile_all_slots_des_openeo(
 
     result: dict[int, tuple[np.ndarray, str]] = {}
     for i, (slot_idx, date_start, date_end) in enumerate(slot_windows):
-        slot_arr = full[i * n_bands:(i + 1) * n_bands].astype(np.float32) / 10000.0
+        # DES bakes the PB04.00 -1000 BOA offset into COGs (CDSE openEO applies
+        # it server-side); subtract it so output matches the rest of the dataset.
+        slot_arr = dn_to_reflectance(full[i * n_bands:(i + 1) * n_bands], source="des")
         if not np.any(slot_arr):
             continue
         result[slot_idx] = (slot_arr, _window_midpoint(date_start, date_end))

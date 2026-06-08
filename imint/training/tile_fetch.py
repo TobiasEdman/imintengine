@@ -159,6 +159,7 @@ def _fetch_single_scene(
     haze_threshold: float = 0.08,
     sources: tuple[str, ...] = ("cdse", "des"),
     prefetched_dates: list[str] | None = None,
+    collect_extra: dict | None = None,
 ) -> tuple[np.ndarray | None, str]:
     """Fetch the best S2 scene within ``[date_start, date_end]`` via the
     unified per-slot fetch path.
@@ -270,13 +271,21 @@ def _fetch_single_scene(
     for d in top_dates:
         if is_source_dead(primary_backend):
             return None, ""
+        # Per-candidate temp dict: fetch_spectral populates the all-band
+        # extras (b08/rededge/b01/b09) for whatever date it tries. Only the
+        # ACCEPTED candidate's extras are copied out — a rejected (None)
+        # candidate may have left stale extras behind in the temp dict.
+        cand_extra: dict | None = {} if collect_extra is not None else None
         scene = fetch_spectral(
             bbox_3006, coords_wgs84, d,
             backend=primary_backend,
             size_px=tile.size_px,
             cloud_threshold=cloud_threshold,
+            collect_extra=cand_extra,
         )
         if scene is not None:
+            if collect_extra is not None and cand_extra:
+                collect_extra.update(cand_extra)
             return scene, d
     return None, ""
 
@@ -325,6 +334,7 @@ def fetch_4frame_scenes(
     max_candidates: int = 3,
     vpp_windows: list[tuple[int, int]] | None = ...,  # sentinel: fetch on demand
     sources: tuple[str, ...] = ("cdse", "des"),
+    collect_extra: list | None = None,
 ) -> list[tuple[np.ndarray | None, str]]:
     """Fetch 4-frame tile: 1 autumn (year-1) + 3 VPP-guided growing season.
 
@@ -339,6 +349,13 @@ def fetch_4frame_scenes(
         vpp_windows: Pre-fetched list of (doy_start, doy_end) tuples.
             Pass None explicitly to skip VPP (use fixed seasonal dates).
             Omit (default sentinel) to fetch VPP on demand for this tile.
+        collect_extra: Optional out-list. When provided, one per-frame dict
+            is appended per returned frame (same length/order as the result
+            list). Each dict holds the accepted scene's all-band extras
+            (``b08`` (H,W), ``rededge`` (3,H,W), ``b01`` (H,W), ``b09``
+            (H,W); reflectance in the tile's spectral convention) or is
+            empty ``{}`` when the frame failed or the backend returned only
+            the 6 Prithvi bands. Feed to :func:`stack_extra_frames`.
 
     Returns:
         List of 4 (scene, date_str) tuples.
@@ -357,8 +374,10 @@ def fetch_4frame_scenes(
     # DES STAC skipped automatically for pre-2018 in _fetch_single_scene.
     autumn_scene_cloud_max = min(scene_cloud_max * 2.0, 60.0)
     autumn_scene, autumn_date = None, ""
+    autumn_extra: dict = {}
     for year in years:
         prev_year = str(int(year) - 1)
+        year_extra: dict | None = {} if collect_extra is not None else None
         s, a = _fetch_single_scene(
             bbox_3006, coords_wgs84,
             f"{prev_year}-08-15", f"{prev_year}-10-31",
@@ -369,18 +388,25 @@ def fetch_4frame_scenes(
             cloud_threshold=0.30,
             haze_threshold=0.12,
             sources=sources,
+            collect_extra=year_extra,
         )
         if s is not None:
             autumn_scene, autumn_date = s, a
+            if year_extra:
+                autumn_extra = year_extra
             break
     results.append((autumn_scene, autumn_date))
+    if collect_extra is not None:
+        collect_extra.append(autumn_extra)
 
     # --- Frames 1-3: VPP-guided growing season ---
     if vpp_windows and len(vpp_windows) >= 3:
         for doy_start, doy_end in vpp_windows[:3]:
             best_scene, best_date = None, ""
+            best_extra: dict = {}
             for year in years:
                 ds, de = doy_to_date_range(int(year), doy_start, doy_end)
+                year_extra = {} if collect_extra is not None else None
                 s, d = _fetch_single_scene(
                     bbox_3006, coords_wgs84, ds, de,
                     tile,
@@ -388,16 +414,23 @@ def fetch_4frame_scenes(
                     max_aoi_cloud=max_aoi_cloud,
                     max_candidates=max_candidates,
                     sources=sources,
+                    collect_extra=year_extra,
                 )
                 if s is not None:
                     best_scene, best_date = s, d
+                    if year_extra:
+                        best_extra = year_extra
                     break
             results.append((best_scene, best_date))
+            if collect_extra is not None:
+                collect_extra.append(best_extra)
     else:
         # VPP unavailable — should not happen, but handle gracefully
         # Leave frames 1-3 as None (will be zero-padded by stack_frames)
         for _ in range(3):
             results.append((None, ""))
+            if collect_extra is not None:
+                collect_extra.append({})
 
     return results
 
@@ -746,3 +779,98 @@ def stack_frames(
             image[dst:dst + N_BANDS] = image[src:src + N_BANDS]
 
     return image, temporal_mask, doy_arr, dates[:num_frames]
+
+
+def stack_extra_frames(
+    extra_results: list[dict],
+    dates: list[str],
+    num_frames: int,
+    tile: "TileConfig",
+) -> dict:
+    """Assemble per-frame all-band extras into the enrich-script .npz contract.
+
+    The all-band fetch (``fetch_4frame_scenes(collect_extra=...)``) yields one
+    per-frame dict of B08 / red-edge / B01 / B09 slices already in the tile's
+    spectral reflectance convention (DN/10000 — the SAME scaling as the 6-band
+    ``spectral`` cube, since both come from one fetch). This packs them into the
+    exact keys + shapes that ``enrich_tiles_b08`` and ``enrich_tiles_rededge``
+    write, so a tile fetched all-bands needs no separate enrich pass and a later
+    enrich run sees every slot already date-aligned (``*_dates[i] == dates[i]``).
+
+    Missing frames (no scene, or backend returned only the 6 Prithvi bands)
+    become zeros + ``""`` date — identical to how the enrich scripts leave an
+    unfetchable slot, so the self-healing enrich pass can still fill it later.
+
+    Args:
+        extra_results: Per-frame dicts from ``fetch_4frame_scenes``'s
+            ``collect_extra`` out-list. Each is ``{}`` or has ``b08`` (H,W),
+            ``rededge`` (3,H,W), ``b01`` (H,W), ``b09`` (H,W) float32.
+        dates: Canonical per-frame ISO dates from :func:`stack_frames` — the
+            ``*_dates`` arrays are aligned to these so enrich treats the slots
+            as already-fetched.
+        num_frames: Frame count (T).
+        tile: TileConfig for the (H, W) zero-fill of missing frames.
+
+    Returns:
+        Dict of npz keys: ``b08`` (T,H,W), ``b08_dates`` (T,), ``has_b08``;
+        ``rededge`` (T*3,H,W), ``rededge_dates`` (T,), ``has_rededge``;
+        ``b01`` (T,H,W), ``b01_dates`` (T,), ``has_b01``; ``b09`` (T,H,W),
+        ``b09_dates`` (T,), ``has_b09``. Shapes/dtypes mirror the enrich
+        scripts exactly (b08/b01/b09 stacked on a new axis; rededge
+        concatenated band×frame → frame-major B05,B06,B07 per frame).
+    """
+    size_px = tile.size_px
+    b08_frames: list[np.ndarray] = []
+    rededge_frames: list[np.ndarray] = []   # each (3, H, W)
+    b01_frames: list[np.ndarray] = []
+    b09_frames: list[np.ndarray] = []
+    b08_dates: list[str] = []
+    re_dates: list[str] = []
+    b01_dates: list[str] = []
+    b09_dates: list[str] = []
+
+    def _single(ex: dict, key: str) -> np.ndarray | None:
+        v = ex.get(key) if ex else None
+        return np.asarray(v, dtype=np.float32) if v is not None else None
+
+    for fi in range(num_frames):
+        ex = extra_results[fi] if fi < len(extra_results) else {}
+        date_str = dates[fi] if fi < len(dates) and dates[fi] else ""
+
+        b08 = _single(ex, "b08") if date_str else None
+        b08_frames.append(b08 if b08 is not None
+                          else np.zeros((size_px, size_px), dtype=np.float32))
+        b08_dates.append(date_str if b08 is not None else "")
+
+        re = _single(ex, "rededge") if date_str else None
+        rededge_frames.append(re if re is not None
+                              else np.zeros((3, size_px, size_px), dtype=np.float32))
+        re_dates.append(date_str if re is not None else "")
+
+        b01 = _single(ex, "b01") if date_str else None
+        b01_frames.append(b01 if b01 is not None
+                          else np.zeros((size_px, size_px), dtype=np.float32))
+        b01_dates.append(date_str if b01 is not None else "")
+
+        b09 = _single(ex, "b09") if date_str else None
+        b09_frames.append(b09 if b09 is not None
+                          else np.zeros((size_px, size_px), dtype=np.float32))
+        b09_dates.append(date_str if b09 is not None else "")
+
+    def _has(frames: list[np.ndarray]) -> np.int32:
+        return np.int32(1 if any(bool(np.any(f)) for f in frames) else 0)
+
+    return {
+        "b08": np.stack(b08_frames, axis=0),                  # (T, H, W)
+        "b08_dates": np.array(b08_dates),
+        "has_b08": _has(b08_frames),
+        "rededge": np.concatenate(rededge_frames, axis=0),    # (T*3, H, W)
+        "rededge_dates": np.array(re_dates),
+        "has_rededge": _has(rededge_frames),
+        "b01": np.stack(b01_frames, axis=0),                  # (T, H, W)
+        "b01_dates": np.array(b01_dates),
+        "has_b01": _has(b01_frames),
+        "b09": np.stack(b09_frames, axis=0),                  # (T, H, W)
+        "b09_dates": np.array(b09_dates),
+        "has_b09": _has(b09_frames),
+    }
