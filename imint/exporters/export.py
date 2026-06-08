@@ -11,7 +11,7 @@ import json
 import cv2
 import numpy as np
 from PIL import Image
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def save_rgb_png(rgb: np.ndarray, path: str) -> str:
@@ -233,7 +233,7 @@ def save_summary_report(
 
     summary = {
         "date": date,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "analyzers": [],
     }
 

@@ -41,7 +41,7 @@ import os
 import random
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -809,7 +809,7 @@ def main():
     output_data = {
         "metadata": {
             "version": "v3",
-            "created": datetime.utcnow().isoformat() + "Z",
+            "created": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "total": len(balanced),
             "sources": dict(sources),
             "confidences": dict(confidences),

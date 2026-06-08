@@ -23,15 +23,24 @@
         vpp-prefetch vpp-submit-dry vpp-submit \
         s2-submit-dry s2-submit s2-submit-all s2-status s2-local \
         vm-setup vm-transfer vm-train vm-status vm-attach vm-logs \
-        clean help
+        venv clean help
 
 PYTHON     := .venv/bin/python
+PYTHON_BIN ?= python3.11
 IMAGE      := imint-engine:latest
 CUDA_IMAGE := imint-engine:cuda
 DATA_DIR   ?= ~/training_data
 ENV        ?= dev
 ARGS       ?=
 VM_HOST    ?= user@ice-connect-vm
+
+# ── Environment setup ──────────────────────────────────────────────────────
+
+venv:  ## (Re)create .venv on Python 3.11 (matches prod) + install deps
+	@command -v $(PYTHON_BIN) >/dev/null || { echo "$(PYTHON_BIN) not found — run: brew install python@3.11"; exit 1; }
+	$(PYTHON_BIN) -m venv .venv
+	.venv/bin/python -m pip install --upgrade pip
+	.venv/bin/pip install -r requirements.txt pytest
 
 # ── Docker ────────────────────────────────────────────────────────────────
 
