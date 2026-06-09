@@ -36,27 +36,6 @@
             border-color: #245045;
         }
 
-        /* External nav pill — links OUT to a standalone page (not a data-tab).
-           Distinct class so the .theme-tab click handler (preventDefault) does
-           NOT swallow it; green outline marks it as a deep-dive that navigates. */
-        .theme-tab-ext {
-            text-decoration: none;
-            padding: 6px 16px;
-            border-radius: 9999px;
-            font-size: 13px;
-            font-weight: 600;
-            color: #1A4338;
-            background: #ffffff;
-            border: 1px solid #1A4338;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .theme-tab-ext:hover {
-            color: #ffffff;
-            background: #1A4338;
-            border-color: #1A4338;
-        }
-
         /* Figure grid — used by atmosfär & andra showcases */
         .figure-grid {
             display: grid;
@@ -85,6 +64,45 @@
             color: #6b7280;
             margin-top: 6px;
         }
+
+        /* ── Koregistrering sub-tab (folded from coregistration.html) ──────
+           Palette inherited from the DES showcase (styles.css): white bg,
+           Space Grotesk, forest green #1A4338/#245045, mint #cff8e4, #171717
+           text. Scoped to #tab-coregistration so the bare table/th/td rules
+           don't clash with .license-table elsewhere in index.html. */
+        #tab-coregistration .lede { font-size: 19px; color: #2d3a35; max-width: 940px; margin: 6px 0 22px; line-height: 1.6; }
+
+        #tab-coregistration .stage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+        #tab-coregistration .stage-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 18px; }
+        #tab-coregistration .stage-card h3 { margin: 0 0 8px; font-size: 15px; color: #171717; display: flex; align-items: center; gap: 10px; }
+        #tab-coregistration .stage-card p { font-size: 14px; color: #4b5563; margin: 0; max-width: none; }
+        #tab-coregistration .stage-tag { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 700; color: #fff; }
+        #tab-coregistration .tag-m1 { background: #6b7280; }
+        #tab-coregistration .tag-m2 { background: #1A4338; }
+        #tab-coregistration .tag-m3 { background: #b08968; }
+        #tab-coregistration .role { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 12px; }
+
+        #tab-coregistration table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; }
+        #tab-coregistration th, #tab-coregistration td { padding: 10px 14px; text-align: left; font-size: 14px; }
+        #tab-coregistration th { background: #f3f4f6; font-weight: 600; color: #171717; }
+        #tab-coregistration tr + tr td { border-top: 1px solid #e5e7eb; }
+        #tab-coregistration td.num, #tab-coregistration th.num { text-align: right; font-variant-numeric: tabular-nums; }
+        #tab-coregistration .delta { color: #1A4338; font-weight: 700; }
+
+        #tab-coregistration .gif-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+        #tab-coregistration .gif-card { background: #0f0f0f; border: 1px solid #1A4338; border-radius: 10px; overflow: hidden; }
+        #tab-coregistration .gif-pair { display: grid; grid-template-columns: 1fr 1fr; }
+        #tab-coregistration .gif-pane { position: relative; background: #0f0f0f; }
+        #tab-coregistration .gif-pane + .gif-pane { border-left: 1px solid #245045; }
+        #tab-coregistration .gif-pane img { width: 100%; height: auto; display: block; }
+        #tab-coregistration .ba-tag { position: absolute; top: 8px; left: 8px; padding: 2px 10px; border-radius: 999px; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; color: #fff; }
+        #tab-coregistration .ba-before { background: #c0392b; }
+        #tab-coregistration .ba-after { background: #1A4338; }
+        #tab-coregistration .gif-meta { padding: 12px 16px; font-size: 13px; color: #e6e6e6; }
+        #tab-coregistration .gif-meta b { color: #fff; }
+        #tab-coregistration .gif-meta .res { font-variant-numeric: tabular-nums; }
+        #tab-coregistration .gif-meta .note { display: block; color: #9ca3af; font-size: 12px; margin-top: 4px; }
+        #tab-coregistration .src-note { font-size: 13px; color: #6b7280; margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -109,7 +127,6 @@
             <a href="#" class="theme-tab" data-tab="water_quality">💧 Vattenkvalitet</a>
             <a href="#" class="theme-tab" data-tab="pixel_sensor">🔬 Pixel &amp; sensor</a>
             <a href="#" class="theme-tab" data-tab="era5">☁️ Atmosfär</a>
-            <a href="coregistration.html" class="theme-tab-ext">🛰️ Koregistrering ↗</a>
         </div>
     </div>
 
@@ -482,6 +499,7 @@
         <div class="sub-tab-nav">
             <a href="#" class="sub-tab active" data-subtab="sr">🔬 Superresolution</a>
             <a href="#" class="sub-tab" data-subtab="aircraft_parallax">✈️ Push-broom-parallax</a>
+            <a href="#" class="sub-tab" data-subtab="coregistration">🛰️ Koregistrering</a>
         </div>
 
     <!-- ── Superresolution sub-tab — open SR models side-by-side ───────── -->
@@ -724,6 +742,219 @@
             </figure>
         </div>
     </div><!-- /sub-tab-content aircraft_parallax -->
+
+    <!-- ── Koregistrering sub-tab — multitemporal frame-justering (M1→M2→M3) ─── -->
+    <div class="sub-tab-content" id="tab-coregistration">
+        <div class="tab-description">
+
+            <h3>Multitemporal koregistrering — frame-till-frame (M1 → M2 → M3)</h3>
+            <p class="lede">
+                Modellen tränar på fyra Sentinel-2-ramar per tile (1 höstram från år−1
+                + 3 växtsäsongsramar). För Prithvi-backbonens temporala stack måste varje
+                pixels tidsserie vara <em>samma markpunkt</em> genom alla fyra ramar — annars
+                lär sig modellen brus istället för fenologi. Den här sidan visar hur den
+                justeringen görs, och varför <b>mutual information</b> slår
+                <b>phase correlation</b> när ramarna spänner över årstider.
+            </p>
+
+            <h3>Varför ramarna måste vara pixel-justerade</h3>
+            <p>
+                En multitemporal tile är en stack <code>(4×6 + 11, H, W)</code> där de fyra
+                spektralramarna ska representera samma 10 m-ruta sedd vid fyra tidpunkter.
+                Backbone:n läser varje pixels tidsserie som en sekvens. Om ram 2 ligger en
+                knapp pixel fel mot ram 0 blandas en åkerkant ihop med dikesrenen bredvid —
+                den temporala signalen blir geometriskt brus i stället för fenologi. Målet är
+                att alla fyra ramar är <em>sub-pixel-justerade mot varandra</em>.
+            </p>
+            <div class="summary-section">
+                <div class="summary-card">
+                    <h4>Ramar per tile</h4>
+                    <div class="value">4</div>
+                    <div class="detail">1 höst (år−1) + 3 VPP-styrda växtsäsongsramar</div>
+                </div>
+                <div class="summary-card">
+                    <h4>Inter-frame-residual (rå M1)</h4>
+                    <div class="value">0.34 px</div>
+                    <div class="detail">snitt över 15 ramar · 5-tile dry-run</div>
+                </div>
+                <div class="summary-card">
+                    <h4>Efter MI (M2)</h4>
+                    <div class="value">0.01 px</div>
+                    <div class="detail">samma 15 ramar · noll-PU-reprocess</div>
+                </div>
+                <div class="summary-card">
+                    <h4>MI vs phase corr</h4>
+                    <div class="value">0.05 vs 0.75 px</div>
+                    <div class="detail">syntetisk årstidsväxlings-fixture</div>
+                </div>
+            </div>
+
+            <h3>Pipelinen i tre steg</h3>
+            <p>
+                Justeringen sker i tre väl avgränsade steg. M1 är deterministisk och appliceras
+                alltid; M2 är prioriteten och fokus för den här sidan; M3 är sekundär och
+                nedprioriterad.
+            </p>
+            <div class="stage-grid">
+                <div class="stage-card">
+                    <h3><span class="stage-tag tag-m1">M1</span> Grid-snap</h3>
+                    <p>
+                        Varje rams transform snäpps till det svenska nationella NMD 10 m-gittret,
+                        så att output-tiles alltid landar på det nationella rutnätet — etiketter
+                        och aux-kanaler co-lokaliseras automatiskt. Det här flyttar aldrig
+                        något: det är transform-baserat, inte estimerat.
+                    </p>
+                    <div class="role">Deterministisk · appliceras alltid</div>
+                </div>
+                <div class="stage-card">
+                    <h3><span class="stage-tag tag-m2">M2</span> Inter-frame-koregistrering</h3>
+                    <p>
+                        De fyra ramarna registreras mot varandra (mot en vald referensram) så
+                        att de ligger sub-pixel-justerade. Det är här den temporala stacken
+                        faktiskt blir användbar för backbone:n — och det är det som kostar mest
+                        att få rätt när ramarna ser olika ut mellan årstider.
+                    </p>
+                    <div class="role">Prioriteten · fokus för den här sidan</div>
+                </div>
+                <div class="stage-card">
+                    <h3><span class="stage-tag tag-m3">M3</span> Absolut-mot-NMD</h3>
+                    <p>
+                        En liten residual-offset för <em>hela stacken</em> mot NMD. Nedprioriterad,
+                        eftersom en liten helstacks-offset är ett mycket mildare fel än att
+                        ramarna är förskjutna inbördes — en samlad förskjutning bevarar tidsserien
+                        pixel för pixel.
+                    </p>
+                    <div class="role">Valfri · sekundär</div>
+                </div>
+            </div>
+
+            <h3>Nyckelfyndet — mutual information, inte phase correlation</h3>
+            <p>
+                Ramarna spänner över årstider: höststubb i ram 0, sommarkronor i
+                växtsäsongsramarna. Samma markpunkt ser därför radiometriskt <em>olika</em> ut
+                mellan ramarna. Det bryter den klassiska metoden.
+            </p>
+            <h4>Phase correlation jagar utseendet, inte geometrin</h4>
+            <p>
+                Phase correlation (korskorrelation i frekvensdomänen) antar att de två bilderna
+                är samma scen, bara förskjuten. När innehållet ändras mellan årstider låser den
+                på det skenbara mönstret i stället för den sanna geometriska förskjutningen:
+                ~<b>0.75 px</b> fel även på en <em>ren, samma-innehåll</em> strukturerad bild,
+                och på de verkliga dry-run-ramarna <em>försämrade</em> den aktivt justeringen —
+                ramarna hamnade 1–1.8 px fel, ibland sämre än att inte göra något alls.
+            </p>
+            <h4>Mutual information scorar statistiskt beroende</h4>
+            <p>
+                Mutual information mäter det statistiska beroendet i de två ramarnas
+                gemensamma histogram. Den bryr sig inte om att en yta är ljus i en ram och mörk
+                i en annan — bara om förskjutningen som maximerar samvariationen. Därför
+                återfinner den den sanna geometriska förskjutningen oavsett utseendeändringen:
+                ~<b>0.05 px</b> på en syntetisk årstidsväxlings-fixture.
+            </p>
+            <div class="testimonial">
+                <p><b>Implementation:</b> <code>imint.coregistration.estimate_mi_offset</code> —
+                mutual information maximeras över en kontinuerlig sub-pixel-förskjutning (Powell),
+                och förskjutningen appliceras med Fourier-baserad <code>subpixel_shift</code>.
+                Referensband <code>B04</code>.</p>
+            </div>
+
+            <h3>Verkligt resultat — 5-tile dry-run</h3>
+            <p>
+                Noll-PU-reprocess av redan cachade ramar (ingen ny fetch). Inter-frame-residualen
+                gick från <b>0.34 px (rå M1)</b> till <b>0.01 px (efter MI)</b>, snittat över
+                alla 15 ramar. Per ram, före → efter (px):
+            </p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tile</th>
+                        <th class="num">Ram 1</th>
+                        <th class="num">Ram 2</th>
+                        <th class="num">Ram 3</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>43983928</code></td><td class="num">0.53 → <span class="delta">0.02</span></td><td class="num">0.79 → <span class="delta">0.00</span></td><td class="num">0.68 → <span class="delta">0.00</span></td></tr>
+                    <tr><td><code>44003936</code></td><td class="num">0.39 → <span class="delta">0.00</span></td><td class="num">0.21 → <span class="delta">0.00</span></td><td class="num">0.38 → <span class="delta">0.03</span></td></tr>
+                    <tr><td><code>44023928</code></td><td class="num">0.07 → <span class="delta">0.00</span></td><td class="num">0.06 → <span class="delta">0.06</span></td><td class="num">0.13 → <span class="delta">0.00</span></td></tr>
+                    <tr><td><code>44063896</code></td><td class="num">0.21 → <span class="delta">0.00</span></td><td class="num">0.77 → <span class="delta">0.02</span></td><td class="num">0.06 → <span class="delta">0.00</span></td></tr>
+                    <tr><td><code>44123932</code></td><td class="num">0.28 → <span class="delta">0.00</span></td><td class="num">0.27 → <span class="delta">0.00</span></td><td class="num">0.20 → <span class="delta">0.00</span></td></tr>
+                </tbody>
+            </table>
+            <p class="src-note">
+                Residualen mäts som inter-frame-offset mot referensramen. Ram 0 (höstramen)
+                är referens där den används som ankare; siffrorna ovan är de tre övriga ramarna
+                per tile.
+            </p>
+
+            <h3>Före / efter — flicker-GIF:ar</h3>
+            <p>
+                Varje par växlar mellan referensramen och målramen (band B04). I
+                <b>FÖRE</b> hoppar kanterna mellan de två ramarna; i <b>EFTER</b> låser de.
+                Tre representativa ramar:
+            </p>
+            <div class="gif-grid">
+                <div class="gif-card">
+                    <div class="gif-pair">
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-before">Före</span>
+                            <img src="showcase/coreg/43983928_f1_before.gif" alt="Tile 43983928, ram 1, före koregistrering — kanterna hoppar" loading="lazy">
+                        </div>
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-after">Efter</span>
+                            <img src="showcase/coreg/43983928_f1_after.gif" alt="Tile 43983928, ram 1, efter MI-koregistrering — kanterna låser" loading="lazy">
+                        </div>
+                    </div>
+                    <div class="gif-meta">
+                        <b>43983928 · ram 1</b> — inter-frame-residual
+                        <span class="res"><b>0.79 px → 0.00 px</b></span>
+                        <span class="note">Växtsäsongsram mot höstreferens.</span>
+                    </div>
+                </div>
+                <div class="gif-card">
+                    <div class="gif-pair">
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-before">Före</span>
+                            <img src="showcase/coreg/44063896_f2_before.gif" alt="Tile 44063896, ram 2, före koregistrering — kanterna hoppar" loading="lazy">
+                        </div>
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-after">Efter</span>
+                            <img src="showcase/coreg/44063896_f2_after.gif" alt="Tile 44063896, ram 2, efter MI-koregistrering — kanterna låser" loading="lazy">
+                        </div>
+                    </div>
+                    <div class="gif-meta">
+                        <b>44063896 · ram 2</b> — inter-frame-residual
+                        <span class="res"><b>0.77 px → 0.02 px</b></span>
+                        <span class="note">Tydligaste kontrasten: phase correlation hade blåst
+                        upp den här ramen till 1.84 px — MI tar den till 0.02 px.</span>
+                    </div>
+                </div>
+                <div class="gif-card">
+                    <div class="gif-pair">
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-before">Före</span>
+                            <img src="showcase/coreg/44003936_f0_before.gif" alt="Tile 44003936, höstram, före koregistrering — kanterna hoppar" loading="lazy">
+                        </div>
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-after">Efter</span>
+                            <img src="showcase/coreg/44003936_f0_after.gif" alt="Tile 44003936, höstram, efter MI-koregistrering — kanterna låser" loading="lazy">
+                        </div>
+                    </div>
+                    <div class="gif-meta">
+                        <b>44003936 · ram 0 (höst)</b> — inter-frame-residual
+                        <span class="res"><b>0.39 px → 0.00 px</b></span>
+                        <span class="note">Höstramen — störst utseendeskillnad mot
+                        växtsäsongen, just där MI bär.</span>
+                    </div>
+                </div>
+            </div>
+            <p class="src-note">
+                Källa: <code>showcase/coreg/</code> (B04, 5-tile dry-run, noll-PU-reprocess av
+                rå M1-ramar). Producerad av <code>k8s/regrid-mi-validate-pod.yaml</code>.
+            </p>
+
+        </div>
+    </div><!-- /sub-tab-content coregistration -->
 
     </div><!-- /tab-content pixel_sensor (parent) -->
 
