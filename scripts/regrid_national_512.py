@@ -58,7 +58,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from imint.coregistration import coregister_to_reference
+from imint.coregistration import estimate_subpixel_offset, subpixel_shift
 from imint.training.openeo_tile_graph import (
     ALL_BANDS,
     ALL_BANDS_INDEX,
@@ -82,6 +82,18 @@ _I_B09 = ALL_BANDS_INDEX["b09"][0]              # 11
 
 # Band index 2 == B04 (Red) in ALL_BANDS — the phase-correlation band.
 _COREG_BAND = 2
+
+# Sub-pixel shifts below this are a no-op (skip the FFT round-trip, keep the
+# frame byte-identical). Mirrors coregister_to_reference's subpixel_threshold.
+_COREG_MIN_SHIFT = 0.05
+
+# Reject-as-spurious budget for the *inter-frame* phase-correlation estimate.
+# Two frames drifting ~CROP px in opposite directions sit ~2·CROP apart, so the
+# estimate must accept that pairwise span — capping it at CROP would silently
+# drop a real measurement and make the centroid depend on ref_idx. The *applied*
+# shift is still bounded by the halo (CROP) further down; this only governs which
+# correlation peaks are trusted as genuine vs wild mis-latches.
+_INTERFRAME_MAX_DRIFT_PX = 2 * CROP   # = 8 px
 
 # Grid-independent identity carried verbatim. Everything else (spectral, extras,
 # dates, mask, doy, bbox, centre, size, source, national_grid) is freshly set;
@@ -115,11 +127,13 @@ def centre_of(data: dict) -> tuple[int, int] | None:
 
 
 def clearest_frame_idx(frames: dict[int, np.ndarray]) -> int:
-    """Pick the M2 reference frame: most valid pixels, tie-broken by sharpest B04.
+    """Pick the M2 measurement origin: most valid pixels, tie-broken by sharpest B04.
 
-    A clear (cloud-free, fully-valid) frame is the best phase-correlation anchor.
-    The spectral-only fetch has no SCL, so clarity is proxied by
+    A clear (cloud-free, fully-valid) frame is the best phase-correlation
+    reference. The spectral-only fetch has no SCL, so clarity is proxied by
     ``(valid-pixel fraction, B04 spatial std)`` — clouds zero out / flatten B04.
+    Under the composite-centroid anchor the stack lands on its centroid, not on
+    this frame, so the choice only affects correlation accuracy, not position.
     """
     best_i, best_key = next(iter(frames)), (-1.0, -1.0)
     for i, arr in frames.items():
@@ -133,29 +147,62 @@ def clearest_frame_idx(frames: dict[int, np.ndarray]) -> int:
 def coregister_interframe(
     frames: dict[int, np.ndarray], ref_idx: int
 ) -> dict[int, np.ndarray]:
-    """M2: sub-pixel-align every frame to ``frames[ref_idx]`` on the shared grid.
+    """M2: align every frame onto the *composite centroid* of frame positions.
 
-    After M1 all frames sit on the same national lattice (integer offset 0), so
-    only the sub-pixel relative-ortho residual remains. ``coregister_to_reference``
-    shifts its *reference* arg onto its *target* and mutates the reference in
-    place, so the fixed anchor is ``target`` (never copied, never mutated) and the
-    frame-to-move is ``reference`` (a copy, which becomes the aligned output).
-    ``transforms=None`` → sub-pixel only, no crop (520 shape preserved). The
-    primitive auto-rejects >1 px shifts to a no-op, so a bad correlation cannot
-    corrupt a frame.
+    After M1 all frames share the national lattice (integer offset 0), so the
+    only residual is the sub-pixel relative-ortho drift. Rather than pull every
+    frame onto one "clearest" anchor — which bakes that single frame's ortho
+    error into the whole stack — this:
+
+      1. measures each frame's drift ``o_i`` relative to ``frames[ref_idx]``
+         (the anchor's own drift is 0 by definition);
+      2. takes the centroid ``c = mean(o_i)`` over all frames;
+      3. shifts every frame (the anchor included) by ``c - o_i`` so the stack
+         lands on its own centroid.
+
+    The centroid sits at the NMD/label position on average (measured zero-mean
+    on the dry-run tiles), so this removes inter-frame drift *without* inheriting
+    any single frame's absolute error. The result is independent of which frame
+    is ``ref_idx`` — that only sets the measurement origin, so the clearest
+    frame is chosen purely for correlation accuracy.
+
+    Frames are ``(12, H, W)``; the offset/shift primitives work on the 2-D B04
+    plane / each band, so no transpose is needed. The estimate uses
+    ``max_peak_px=_INTERFRAME_MAX_DRIFT_PX`` (2·CROP) so a real pairwise drift
+    between two opposite-drifting frames survives (the 1-px default guard is for
+    transform-aligned callers) while wild mis-latches are still rejected; any
+    final shift the 4-px halo cannot absorb (``> CROP``) is then skipped, so a
+    bad correlation never wrap-corrupts a frame.
     """
-    anchor_hwc = np.transpose(frames[ref_idx], (1, 2, 0))   # (H,W,12) view of anchor
-    out = {ref_idx: frames[ref_idx]}
+    anchor_band = frames[ref_idx][_COREG_BAND]
+    # Pass 1 — each frame's position relative to the anchor (anchor's own = 0).
+    # Arg order is load-bearing: estimate_subpixel_offset(current, reference)
+    # returns where `current` sits relative to `reference`, so the MOVING frame
+    # is `current` and the anchor is `reference` — offsets[i] = frame i's drift
+    # vs the anchor. Reversing the args negates the offset, which makes Pass 2
+    # shift every frame the WRONG way and AMPLIFY inter-frame drift.
+    offsets: dict[int, tuple[float, float]] = {ref_idx: (0.0, 0.0)}
     for i, arr in frames.items():
         if i == ref_idx:
             continue
-        mover_hwc = np.transpose(arr, (1, 2, 0)).copy()      # mutated by the coreg
-        _anchor, aligned, _meta = coregister_to_reference(
-            target=anchor_hwc, reference=mover_hwc,
-            target_transform=None, reference_transform=None,
-            subpixel=True, reference_band=_COREG_BAND,
+        offsets[i] = estimate_subpixel_offset(
+            arr[_COREG_BAND], anchor_band, max_peak_px=float(_INTERFRAME_MAX_DRIFT_PX)
         )
-        out[i] = np.ascontiguousarray(np.transpose(aligned, (2, 0, 1)), np.float32)
+    # Centroid of the frame positions — the zero-mean ≈ NMD anchor.
+    cy = float(np.mean([o[0] for o in offsets.values()]))
+    cx = float(np.mean([o[1] for o in offsets.values()]))
+    # Pass 2 — land every frame on the centroid by shifting it by (c - o_i).
+    out: dict[int, np.ndarray] = {}
+    for i, arr in frames.items():
+        oy, ox = offsets[i]
+        sy, sx = cy - oy, cx - ox
+        if max(abs(sy), abs(sx)) > float(CROP):
+            out[i] = arr            # shift exceeds the halo budget → keep M1 frame
+        elif abs(sy) < _COREG_MIN_SHIFT and abs(sx) < _COREG_MIN_SHIFT:
+            out[i] = arr            # already on the centroid → byte-identical
+        else:
+            shifted = np.stack([subpixel_shift(b, sy, sx) for b in arr])
+            out[i] = np.ascontiguousarray(shifted, np.float32)
     return out
 
 
@@ -205,9 +252,15 @@ def assemble_fresh(
 
 
 def regrid_one_tile(
-    tile_path: str, out_dir: str, *, skip_existing: bool = True
+    tile_path: str, out_dir: str, *, skip_existing: bool = True,
+    debug_precoreg: bool = False,
 ) -> dict:
-    """Re-grid one tile onto the national lattice. See module docstring."""
+    """Re-grid one tile onto the national lattice. See module docstring.
+
+    ``debug_precoreg`` additionally stores the pre-M2 (raw M1, cropped) spectral
+    cube under ``spectral_precoreg`` so a dry-run can render a before/after
+    coregistration comparison. Off by default — it ~doubles the tile size.
+    """
     name = Path(tile_path).stem
     try:
         data = dict(np.load(tile_path, allow_pickle=True))
@@ -262,6 +315,12 @@ def regrid_one_tile(
 
     # M2 inter-frame coreg on the shared 520 grid, then crop the halo to 512.
     ref_idx = clearest_frame_idx(fresh)
+    # Capture the pre-coreg (raw M1) cropped spectral for the before/after viz
+    # BEFORE M2 rebinds `fresh` — this is the "before coregistration" state.
+    precoreg = (
+        assemble_fresh({fi: crop_halo(a) for fi, a in fresh.items()}, dates, n_frames)[0]
+        if debug_precoreg else None
+    )
     fresh = coregister_interframe(fresh, ref_idx)
     cropped = {fi: crop_halo(arr) for fi, arr in fresh.items()}
 
@@ -293,6 +352,8 @@ def regrid_one_tile(
     for k in _CARRY_KEYS:
         if k in data:
             save[k] = data[k]
+    if precoreg is not None:
+        save["spectral_precoreg"] = precoreg   # raw M1 (pre-M2) — dry-run viz only
 
     dest = os.path.join(out_dir, name + ".npz")
     try:
@@ -316,6 +377,9 @@ def main() -> int:
     ap.add_argument("--max-tiles", type=int, default=None)
     ap.add_argument("--skip-existing", action="store_true", default=True)
     ap.add_argument("--no-skip-existing", dest="skip_existing", action="store_false")
+    ap.add_argument("--debug-save-precoreg", action="store_true",
+                    help="Persist the pre-coreg (raw M1) spectral as spectral_precoreg "
+                         "for before/after viz (dry-run only — ~doubles tile size)")
     args = ap.parse_args()
 
     if args.data_dir:
@@ -344,7 +408,8 @@ def main() -> int:
 
     def _run(path: str) -> None:
         nonlocal done
-        r = regrid_one_tile(path, out_dir, skip_existing=args.skip_existing)
+        r = regrid_one_tile(path, out_dir, skip_existing=args.skip_existing,
+                            debug_precoreg=args.debug_save_precoreg)
         with lock:
             done += 1
             stats[r["status"]] = stats.get(r["status"], 0) + 1

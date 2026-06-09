@@ -156,6 +156,7 @@ def estimate_subpixel_offset(
     current_band: np.ndarray,
     reference_band: np.ndarray,
     window_frac: float = 0.3,
+    max_peak_px: float | None = 1.0,
 ) -> tuple[float, float]:
     """Estimate sub-pixel offset between two co-registered images.
 
@@ -172,6 +173,14 @@ def estimate_subpixel_offset(
                         reference image.
         window_frac:    Fraction of image centre to use for correlation
                         (avoids edge artefacts).
+        max_peak_px:    Reject the correlation as spurious (return ``0,0``)
+                        when the integer peak exceeds this many pixels on
+                        either axis. ``1.0`` (default) suits callers that
+                        already did integer alignment from transforms, where
+                        the residual must be sub-pixel. Pass a larger budget
+                        (e.g. the halo width) — or ``None`` to disable — when
+                        no integer alignment preceded the call, so genuine
+                        multi-pixel drift is returned instead of dropped.
 
     Returns:
         (dy, dx) — fractional-pixel offset of the reference relative to
@@ -231,11 +240,14 @@ def estimate_subpixel_offset(
     dy = float(py) + sub_dy
     dx = float(px) + sub_dx
 
-    # Sanity: after integer alignment the residual should be < 1 pixel
-    if abs(py) > 1 or abs(px) > 1:
+    # Reject a spurious peak as a no-op. Transform-aligned callers (the
+    # default) require a sub-pixel residual, so a >1 px peak means the
+    # correlation mis-latched. Callers that skip integer alignment raise
+    # ``max_peak_px`` so real multi-pixel drift survives (``None`` disables it).
+    if max_peak_px is not None and (abs(py) > max_peak_px or abs(px) > max_peak_px):
         print(
-            f"    [coreg] WARNING: phase correlation found large residual "
-            f"shift ({py},{px}) after integer alignment — ignoring sub-pixel"
+            f"    [coreg] WARNING: phase-correlation peak ({py},{px}) exceeds "
+            f"max_peak_px={max_peak_px} — ignoring (likely spurious)"
         )
         return 0.0, 0.0
 

@@ -2,7 +2,7 @@
 
 **Created:** 2026-06-08
 **Target repo:** `/Users/tobiasedman/Developer/ImintEngine`
-**Status:** design approved (store-fork A chosen), pending implementation — no code until this spec is executed
+**Status:** implemented, dry-run in progress — NMD native-window reads (`de335ac`); M1 grid-snap + M2 composite-centroid coreg orchestrator (`scripts/regrid_national_512.py`); 5-tile dry-run on the cluster. Scale step gated on dry-run + explicit go.
 **Estimated diff:** ~3 lines in `tile_config.py` + 1 new orchestrator script (~300 LOC) + test updates; retires the `fill_tiles_l2a.py` keep-clean retrofit for this campaign
 
 ## Context
@@ -14,7 +14,7 @@ Harmonisation directive (verbatim, prior session): *"discard all the code that a
 Two distinct alignment mechanisms exist and are **both required** (this is the load-bearing correction):
 
 - **M1 — grid snap (deterministic, transform-based):** `imint.fetch._snap_to_target_grid`. Reads the offset straight from each scene's source transform vs the target grid (`dx_m = src_x0 - target_w`); integer slice + Fourier sinc `subpixel_shift` for the fractional residual. Aligns each frame's **transform** to the grid. Per-scene, exact, not estimated.
-- **M2 — inter-frame coregistration (estimated, image-based):** `imint.coregistration` phase correlation. Aligns frame **content** to a reference frame. **Mandatory** because S2 L2A orthorectification is *relative* → real per-date geometric drift (~0.3 px, up to ~1 px on older baselines) that M1 (transform-only) cannot remove. (Standing memory: `feedback_s2_coreg_mandatory`.)
+- **M2 — inter-frame coregistration (estimated, image-based):** `imint.coregistration` phase correlation. Aligns frame **content** to the stack's composite centroid. **Mandatory** because S2 L2A orthorectification is *relative* → real per-date geometric drift that M1 (transform-only) cannot remove. The `regrid-nmd-offset-probe` pod measured **up to ~2 px** relative inter-frame drift on the campaign tiles — multi-pixel, well above the ~0.3–1 px first assumed here (see §"Coregistration decision"). (Standing memory: `feedback_s2_coreg_mandatory`.)
 
 The fill tool's old ~28 px coreg failure was M2 applied **across a grid gap** (fresh-on-bbox vs existing-on-S2-native, `transforms=None`, decorrelated content → the `estimate_subpixel_offset` >1 px guard fired and returned 0,0). Re-gridding both frames onto the shared national grid is the precondition that makes M2's phase correlation valid. M2 is **not** broken.
 
@@ -46,7 +46,7 @@ Per tile:
 1. Read source (existing `unified_v2_512` npz | orphan 256 npz / ledger): centre `C`, **stored dates** `D[4]`, `year`.
 2. Snap `C → C'` on the 10 m lattice (via the new `bbox_from_center`).
 3. **Spectral (needs coreg → halo):** fetch **520** all-band @ `D[4]` through the tested all-band path; per-scene **M1** snaps each frame's transform to `TileConfig(520).bbox_from_center(C')`. Integer offset between frames is now ≡ 0 by construction.
-4. **M2** coreg on the shared 520 grid — explicit reference-loop (see §"Coregistration decision"), pure subpixel.
+4. **M2** coreg on the shared 520 grid — composite-centroid anchor (see §"Coregistration decision"); up to ~2 px measured drift, absorbed by the 4 px halo.
 5. Crop 520 → 512 centred `[4:516, 4:516]` (discards the sinc wrap-around ring).
 6. **Labels + aux (no coreg → no halo):** `fetch_nmd_label_local` + `fetch_aux_channels` at the **512** national bbox directly. All final layers 512.
 7. Write tile to a **NEW dir** (e.g. `/data/unified_national_512`), `national_grid=1` sentinel + `year`/`dates`/`center` carried.
@@ -63,21 +63,32 @@ Labels become national automatically once the bbox is lattice-snapped. Two-step 
 
 ## Coregistration decision (a real finding — read before implementing)
 
-`imint/coregistration.py::coregister_timeseries` (line 360) **must not be used blind**: `coregister_to_reference` (line 249) shifts the **reference** arg toward the target (lines 335–341, `reference[...] = subpixel_shift(reference, -dy, -dx)`) and returns the **unshifted** target; `coregister_timeseries` then stores that unshifted target (line 413). It records per-frame offsets in metadata but does not apply subpixel correction to the returned frames.
+**Three corrections landed here (all 2026-06-09). Read (0) first.**
 
-The orchestrator uses an **explicit reference-loop** on the co-gridded stack:
+**(0) M2 had a sign error — it was AMPLIFYING inter-frame drift, not removing it.** `coregister_interframe` called `estimate_subpixel_offset(anchor, frame_i)` with the args reversed: that returns the anchor's position *relative to the frame* — the **negative** of the frame's drift — so the Pass-2 centroid correction `c − o_i` was applied backwards, pushing every frame the wrong way. A dot test made it unambiguous: a known **+3,−2 px** inter-frame drift came out **+7,−4 px** after coreg. Fix: pass the moving frame as `current` and the anchor as `reference` (`estimate_subpixel_offset(frame_i, anchor)`), so `offsets[i]` is the frame's true position vs the anchor; verified with a 4-frame centre-of-mass dot test (all frames collapse to the shared centroid). The old smooth-field residual unit test passed *even on the inverted sign* and was replaced by dot/centre-of-mass tests that fail loudly on any sign or axis error. **Any tile produced before this fix (including anything from `54b30a3`) is mis-registered — discard, do not trust.**
+
+**(1) The "pure sub-pixel after M1" assumption was wrong.** M1 aligns each frame's *transform* to the lattice, but S2 L2A ortho is *relative*, so the frame **content** still drifts ~2 px (`regrid-nmd-offset-probe`). The old `>1 px` guard in `estimate_subpixel_offset` dropped that real drift to `0,0`. Fix (Part A): the guard is parameterised `max_peak_px` (default `1.0` = old behaviour, preserved for existing callers); the orchestrator passes `max_peak_px=_INTERFRAME_MAX_DRIFT_PX` (= 2·CROP = 8 px) — a non-central reference sees ~2× the per-frame drift *pairwise*, so capping at CROP would drop a real measurement. The *applied* shift is still halo-bounded (`> CROP` → skip).
+
+**(2) M2 = relative inter-frame coreg onto the composite centroid.** Each frame's position `o_i` is measured vs `frames[ref_idx]`; the centroid `c = mean(o_i)`; every frame (anchor included) is shifted by `c − o_i`. Removes inter-frame drift **without** baking any single frame's absolute error into the stack, and is independent of `ref_idx` (which only sets the measurement origin).
 
 ```python
-ref = clearest_frame_idx(frames)                     # reuse the fetch path's cloud/variance metric
-for i != ref:
-    dy, dx = estimate_subpixel_offset(frames[ref][B04], frames[i][B04])  # offset of i rel. to ref
-    for b in bands:
-        frames[i][b] = subpixel_shift(frames[i][b], -dy, -dx)            # align i → ref
+ref = clearest_frame_idx(frames)                              # measurement origin only
+off = {ref: (0, 0)} | {                                       # i's position vs the anchor
+    i: estimate_subpixel_offset(frames[i][B04], frames[ref][B04],   # frame=current, anchor=reference
+                                max_peak_px=2 * CROP)
+    for i in frames if i != ref
+}
+cy, cx = mean(dy in off), mean(dx in off)                     # composite centroid
+for i in frames:                                              # land every frame on the centroid
+    sy, sx = cy - off[i][0], cx - off[i][1]
+    frames[i] = subpixel_shift(frames[i], sy, sx)             # skipped if > CROP or < 0.05 px
 ```
 
-Integer offset is 0 by construction (M1), so this is **pure subpixel** — the regime the >1 px guard (`estimate_subpixel_offset`, line 235) expects, so the guard won't fire and the 28 px failure cannot recur. B04 (index 2) is the correlation band, matching `reference_band=2`.
+B04 (index 2) is the correlation band. Any M2 shift the 4 px halo cannot absorb (`> CROP`) is skipped; shifts `< 0.05 px` are a no-op (frame byte-identical).
 
-(Optional follow-up, out of scope here: fix or document `coregister_timeseries` so its returned frames are actually aligned.)
+**(3) Absolute alignment to NMD (M3) — UNDER MEASUREMENT, not yet built.** An earlier probe suggested the centroid was "zero-mean vs NMD (|mean| ≈ 0.05 px)", but that ran on the *broken* M2, so it is **not trusted**. With M2 now correct, the open question is whether M1 + fixed-M2 already land the stack on NMD or a residual absolute offset remains. Being measured directly: a clean 5-tile dry-run persists the pre-coreg frames (`--debug-save-precoreg`) and a viz pod renders a **before/after** coreg GIF plus an **S2-edge-vs-NMD-class-boundary** overlay/correlation. **Decision rule:** if the post-coreg S2 composite already sits on the NMD boundaries → no M3; if a consistent per-tile offset remains → add **M3 = align the whole co-registered stack to NMD class-boundary edges** (gradient-magnitude phase correlation — NMD is class-codes, so *edges* are the only shared signal; no co-registered optical reference exists), one full-stack shift after M2 and before the 520→512 crop, confidence-guarded (skip boundary-poor tiles and shifts the halo can't absorb). If built, M3 makes the orchestrator read NMD **as a geometric ruler only** (not label generation) and degrades to a no-op when the raster is absent — preserving fetch/label independence.
+
+(`coregister_timeseries` (line 360) is still **not used**: `coregister_to_reference` (line 249) shifts its *reference* arg toward the target and returns the *unshifted* target — `coregister_timeseries` then stores that unshifted frame (line 413), recording offsets in metadata but never applying them. The orchestrator calls the `estimate_subpixel_offset` + `subpixel_shift` primitives directly. Optional out-of-scope follow-up: fix or document that trap.)
 
 ## Out of scope
 
@@ -90,7 +101,7 @@ Integer offset is 0 by construction (M1), so this is **pure subpixel** — the r
 
 ## Data & state
 
-- **Read:** `unified_v2_512/*.npz` (142 centres) for stored dates/centre; orphan list from `scripts/build_orphan_fetch_list.py` / `/cephfs/audits/tile_ledger.jsonl` (~1,147 centres, carries `year`); `data/nmd/…tif` for the grid; aux source rasters.
+- **Read:** `unified_v2_512/*.npz` (**6,916 unique centres** — re-counted 2026-06-09; the earlier "142" was stale) for stored dates/centre; orphan list from `scripts/build_orphan_fetch_list.py` / `/cephfs/audits/tile_ledger.jsonl` (~1,147 centres, carries `year`); `data/nmd/…tif` for the grid; aux source rasters.
 - **Write:** new dir `/data/unified_national_512` (name TBD) only. Dry-run → `/data/_national_dryrun`.
 - **Mutate:** nothing existing.
 
@@ -104,13 +115,13 @@ Dry-run **5 tiles → `/data/_national_dryrun`**, report all five checks; **scal
 | Inter-frame residual (measured) | `estimate_subpixel_offset(ref, frame_i)` **after** coreg `< 0.1 px` ∀ i | dryrun verify |
 | Spectral↔label overlay | no visible shift (spectral edge band over NMD class boundary) | screenshot |
 | L2A floor | minpos `< 0.095` per frame | existing dryrun check |
-| Cost | PU/tile, wall-time, **aux cold-cache rebuild** measured → extrapolate ~1,289 tiles | dryrun timing |
+| Cost | PU/tile, wall-time, **aux cold-cache rebuild** measured → extrapolate ~8,063 tiles | dryrun timing |
 
 Unit: `pytest tests/test_spectral_harmonisation.py` (rewritten keep-clean → fresh-for-all; snap + coreg-residual cases retained).
 
 ## Scale (after dry-run approval only)
 
-~1,289 tiles (142 existing 512 centres + ~1,147 orphan centres) × 4 frames all-band, K8s CPU job → national dir; then `build_labels` over the national dir. Existing 512 set retired only after the national set passes verification at scale.
+~8,063 tiles (6,916 existing 512 centres + ~1,147 orphan centres) × 4 frames all-band, K8s CPU job → national dir; then `build_labels` over the national dir. Existing 512 set retired only after the national set passes verification at scale. (Scope re-counted 2026-06-09 — ~6× the original "~1,289" estimate; affects the scale-step PU budget, not the 5-tile dry-run.)
 
 ## Constraints
 

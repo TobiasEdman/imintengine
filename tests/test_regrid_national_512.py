@@ -1,9 +1,10 @@
 """Pure-logic tests for scripts/regrid_national_512.py (no network / no PU).
 
 Covers the parts that are easy to get subtly wrong:
-  * inter-frame coreg ORIENTATION — a known sub-pixel-shifted frame must be
-    pulled back toward the reference, and the reference itself returned
-    untouched (guards against the ``coregister_timeseries`` unshifted-frame bug);
+  * inter-frame coreg lands every frame on the *composite centroid* of frame
+    positions — so the stack ends mutually co-registered, and the result is
+    independent of which frame is the measurement origin (``ref_idx``) rather
+    than inheriting one "clearest" frame's absolute ortho error;
   * the 520 -> 512 halo crop is centred;
   * clearest-frame selection prefers valid + sharp;
   * fresh assembly produces the exact npz key/shape contract;
@@ -63,32 +64,64 @@ class TestClearestFrame:
 
 
 class TestInterframeCoreg:
-    def test_aligns_mover_and_leaves_anchor_untouched(self):
-        anchor = _cube(_smooth_field(10))
-        dy, dx = 0.3, -0.35   # sub-pixel (< 1 px guard, > 0.05 threshold)
-        mover = np.stack([subpixel_shift(b, dy, dx) for b in anchor]).astype(np.float32)
+    """M2 centroid contract, tested on an unambiguous bright dot. A dot makes
+    position measurable to sub-pixel via centre-of-mass, so a sign/axis error is
+    caught loudly — it moves the dots APART instead of onto the shared centroid
+    (the smooth-field residual test this replaces passed even on the inverted
+    sign that amplified drift)."""
 
-        frames = {0: anchor, 1: mover.copy()}
-        out = rg.coregister_interframe(frames, ref_idx=0)
+    _POS = {0: (0, 0), 1: (3, -2), 2: (-2, 3), 3: (1, 1)}   # frame positions vs f0
 
-        # anchor returned byte-identical (target is never shifted)
-        assert np.array_equal(out[0], anchor)
-        assert out[1].shape == anchor.shape
+    @staticmethod
+    def _dot_cube(r: int, c: int, size: int = 160) -> np.ndarray:
+        from scipy.ndimage import gaussian_filter
+        f = np.zeros((size, size), np.float64)
+        f[r, c] = 100.0
+        f = gaussian_filter(f, 2.0) + 0.01
+        return np.repeat(f.astype(np.float32)[None], len(rg.ALL_BANDS), axis=0)
 
-        # interior region only — Fourier shift wraps the edges (the halo crop
-        # exists precisely to discard that contamination).
-        sl = (slice(60, -60), slice(60, -60))
+    @staticmethod
+    def _com(plane: np.ndarray) -> np.ndarray:
+        from scipy.ndimage import center_of_mass
+        p = np.asarray(plane, np.float64)
+        p = np.clip(p - p.mean(), 0.0, None)   # isolate the dot above background
+        return np.array(center_of_mass(p))
+
+    def _frames_at(self, positions: dict[int, tuple[int, int]]) -> dict[int, np.ndarray]:
+        base = self._dot_cube(80, 80)
+        return {
+            i: np.stack([np.roll(np.roll(b, dr, 0), dc, 1) for b in base]).astype(np.float32)
+            for i, (dr, dc) in positions.items()
+        }
+
+    def test_known_drift_removed_not_amplified(self):
+        frames = self._frames_at(self._POS)
         b = rg._COREG_BAND
-        before = float(np.mean(np.abs(mover[b][sl] - anchor[b][sl])))
-        after = float(np.mean(np.abs(out[1][b][sl] - anchor[b][sl])))
-        assert after < 0.5 * before, f"coreg did not reduce residual: {before=} {after=}"
+        gap_before = np.linalg.norm(self._com(frames[2][b]) - self._com(frames[1][b]))
+        out = rg.coregister_interframe(frames, ref_idx=0)
+        coms = np.array([self._com(out[i][b]) for i in sorted(out)])
+        spread = coms.max(0) - coms.min(0)
+        # every frame collapses onto the shared centroid → sub-pixel spread.
+        assert np.all(spread < 0.5), f"frames not co-registered: spread={spread}"
+        # and the gap SHRANK — the inverted sign would have grown it.
+        assert float(np.linalg.norm(spread)) < 0.3 * float(gap_before)
+
+    def test_independent_of_ref_idx(self):
+        """Defining property of the centroid anchor: the stack lands in the same
+        place regardless of which frame is the measurement origin."""
+        b = rg._COREG_BAND
+        out0 = rg.coregister_interframe(self._frames_at(self._POS), ref_idx=0)
+        out2 = rg.coregister_interframe(self._frames_at(self._POS), ref_idx=2)
+        for i in sorted(self._POS):
+            d = float(np.linalg.norm(self._com(out0[i][b]) - self._com(out2[i][b])))
+            assert d < 0.3, f"frame {i} depends on ref_idx: {d:.3f}px"
 
     def test_no_shift_returns_equivalent(self):
-        anchor = _cube(_smooth_field(11))
-        frames = {0: anchor, 1: anchor.copy()}
-        out = rg.coregister_interframe(frames, ref_idx=0)
-        # identical inputs → zero estimated offset → mover effectively unchanged
-        np.testing.assert_allclose(out[1], anchor, atol=1e-4)
+        base = self._dot_cube(80, 80)
+        out = rg.coregister_interframe({0: base, 1: base.copy()}, ref_idx=0)
+        # identical inputs → zero centroid → every frame returned untouched.
+        np.testing.assert_allclose(out[0], base, atol=1e-4)
+        np.testing.assert_allclose(out[1], base, atol=1e-4)
 
 
 class TestAssembleFresh:
@@ -168,7 +201,8 @@ class TestRegridOneTileIO:
             dem=np.ones((512, 512), np.float32),      # stale old-grid aux → must drop
         )
 
-        r = rg.regrid_one_tile(str(src / "tile_x.npz"), str(out), skip_existing=True)
+        r = rg.regrid_one_tile(str(src / "tile_x.npz"), str(out), skip_existing=True,
+                               debug_precoreg=True)
         assert r["status"] == "ok", r
         assert r["frames"] == 4
 
@@ -188,6 +222,8 @@ class TestRegridOneTileIO:
 
         # spectral cropped to canonical; extras present
         assert d["spectral"].shape == (4 * 6, rg.CANON_PX, rg.CANON_PX)
+        # debug_precoreg → pre-M2 (raw M1) spectral persisted at the same shape
+        assert d["spectral_precoreg"].shape == (4 * 6, rg.CANON_PX, rg.CANON_PX)
         assert d["b08"].shape == (4, rg.CANON_PX, rg.CANON_PX)
         assert d["rededge"].shape == (4 * 3, rg.CANON_PX, rg.CANON_PX)
         assert int(d["has_b01"]) == 1 and int(d["has_b09"]) == 1

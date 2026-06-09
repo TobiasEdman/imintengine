@@ -113,6 +113,18 @@ De är helt oberoende och körs i sekvens.
 - **Refetch-mönster:** Vid omhämtning av spektral (`--mode refetch`), läs tile-året från befintligt `.npz` (`year`, `lpis_year` eller `dates`) och använd som primärt sökår.
 - **Ingen årsfallback för grödor:** Tiles med LPIS-etiketter (crop) får ALDRIG falla tillbaka till andra år. Spektral måste matcha etikettåret exakt. Årsfallback är bara tillåtet för rena skog/vatten-tiles (NMD-klasser utan årsspecifika etiketter).
 
+## Koregistrering — M1 → M2 → (M3)
+
+Tre distinkta mekanismer, i denna ordning. **Relativ före absolut; helstacken, aldrig band-för-band.**
+
+- **M1 — grid-snap (deterministisk, transform-baserad).** `imint.fetch._snap_to_target_grid`. Placerar varje frames *transform* på NMD:s 10 m-lattice. Per-scen, exakt, ej skattad.
+- **M2 — relativ inter-frame koregistrering (faskorrelation på B04).** Tar bort den relativa orto-driften (~2 px) mellan ramar som M1 inte kan röra. Centroid-ankare: skatta varje rams position `o_i` mot ankaret, flytta alla till centroiden `c = mean(o_i)`.
+  - **Argordningen till `estimate_subpixel_offset(current, reference)` är sign-bärande.** Den rörliga ramen är `current`, ankaret är `reference` → `offsets[i]` = ramens position mot ankaret. Omvänd ordning negerar offset och **förstärker** driften (buggen i `54b30a3`: känd +3,−2 px → +7,−4 px efter koreg).
+  - **Testa koreg ALLTID med dot/center-of-mass** (entydig positionsmätning). Smooth-field-residual räcker INTE — den passerade på det inverterade tecknet. (Jfr `feedback_compensating_bugs`: reverse-fit är det skottsäkra testet.)
+  - Skatta-budget = `2·CROP` (en icke-central ref ser ~2× per-frame-driften parvis); *applicerad* shift är ändå halo-bunden (`> CROP` → skip).
+- **M3 — absolut till NMD (klassgräns-edges).** ENDAST om mätning (dry-run + before/after-GIF + S2↦NMD-edge-korrelation) visar en kvarvarande per-tile-offset efter M1+M2. NMD är klasskoder → gradient-magnitud-*edges* är enda delade signalen mot S2-reflektans (ingen samregistrerad optisk referens finns). En helstacks-shift, efter M2 och före 520→512-croppen, confidence-guardad. NMD läses då **som geometrisk linjal, inte labels** — degraderar till no-op om rastret saknas (bevarar fetch/label-oberoendet).
+- **Helstacken, aldrig band-för-band.** Skatta skiftet på *ett* ankarband (B04 — hög SNR, skarpa kanter) och applicera samma vektor på alla 12 band. Banden är redan inbördes samregistrerade av L2A; per-band-skift är brusigare på låg-SNR-band (B01/B09) och förstör inter-band-registreringen (kromatisk fransning). Geometrisk drift är en helbilds-egenskap.
+
 ## Arkitekturregler
 
 - Nya analyzers ska subklassa `BaseAnalyzer` och registreras i `ANALYZER_REGISTRY`
