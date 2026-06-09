@@ -52,12 +52,44 @@ class TestBboxFromCenter:
             "south": 6498720, "north": 6501280,
         }
 
-    def test_float_center_coerced_to_int(self):
+    def test_off_lattice_center_snaps_to_grid(self):
+        """Off-lattice centre rounds to the nearest gsd multiple (not int-trunc)."""
         t = TileConfig(size_px=512)
-        b = t.bbox_from_center(east=281280.5, north=6471280.9)
-        # int() truncates toward zero
-        assert b["west"] == 281280 - 2560
-        assert b["east"] == 281280 + 2560
+        b = t.bbox_from_center(east=281283, north=6471286)  # 3 m E, 4 m N off-grid
+        assert (b["west"] + b["east"]) // 2 == 281280    # snapped down
+        assert (b["south"] + b["north"]) // 2 == 6471290  # snapped up
+        # Fractional inputs snap the same way.
+        bf = t.bbox_from_center(east=281280.5, north=6471280.9)
+        assert (bf["west"] + bf["east"]) // 2 == 281280
+
+    def test_all_edges_on_lattice(self):
+        """Arbitrary centres → all four edges are exact 10 m multiples."""
+        t = TileConfig(size_px=512)
+        for e, n in [(281283, 6471287), (500001, 6499999), (123456, 6543217)]:
+            b = t.bbox_from_center(e, n)
+            for k in ("west", "east", "south", "north"):
+                assert b[k] % 10 == 0
+
+    def test_odd_size_px_rejected(self):
+        """Odd size_px → half_m off the gsd lattice → ValueError."""
+        t = TileConfig(size_px=513)
+        with pytest.raises(ValueError, match="must be even"):
+            t.bbox_from_center(500000, 6500000)
+
+    def test_520_512_256_cocentred(self):
+        """Halo (520), canonical (512) and legacy (256) tiles from one centre
+        share a single lattice centre → centred crops are clean (store-fork A)."""
+        e, n = 281283, 6471287
+        centres = {
+            (
+                (b["west"] + b["east"]) // 2,
+                (b["south"] + b["north"]) // 2,
+            )
+            for b in (
+                TileConfig(size_px=px).bbox_from_center(e, n) for px in (520, 512, 256)
+            )
+        }
+        assert len(centres) == 1
 
     def test_custom_gsd(self):
         t = TileConfig(size_px=100, gsd_m=20.0)

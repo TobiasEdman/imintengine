@@ -52,18 +52,40 @@ class TileConfig:
         return self.size_m // 2
 
     def bbox_from_center(self, east: int | float, north: int | float) -> dict[str, int]:
-        """Build a dict bbox centered at the given EPSG:3006 coordinates.
+        """Build a dict bbox centered at the given EPSG:3006 coordinates,
+        snapped to the national ``gsd_m`` lattice.
+
+        The centre is rounded to the nearest ``gsd_m`` multiple so every bbox
+        edge lands on the Swedish national grid (NMD's 10 m lattice at the
+        default GSD; its origin is itself on exact 10 m multiples). This makes
+        ``rasterio.from_bounds`` yield integer window offsets, so label/aux
+        reads are pixel-exact with no resampling displacement and all temporal
+        frames of a tile share one grid.
 
         Returns:
-            dict with integer ``west, south, east, north`` keys,
-            guaranteed to have ``(east - west) == (north - south) == size_m``.
+            dict with integer ``west, south, east, north`` keys, guaranteed
+            ``(east - west) == (north - south) == size_m`` and every edge an
+            exact ``gsd_m`` multiple.
+
+        Raises:
+            ValueError: if ``size_px`` is odd, which makes ``half_m`` half a
+                pixel off the ``gsd_m`` lattice.
         """
+        gsd = int(self.gsd_m)
         h = self.half_m
+        if h % gsd:
+            raise ValueError(
+                f"TileConfig(size_px={self.size_px}, gsd_m={self.gsd_m}): "
+                f"half_m={h} is not a multiple of gsd={gsd} — size_px must be "
+                f"even for national-lattice alignment."
+            )
+        cx = round(east / gsd) * gsd
+        cy = round(north / gsd) * gsd
         return {
-            "west":  int(east)  - h,
-            "east":  int(east)  + h,
-            "south": int(north) - h,
-            "north": int(north) + h,
+            "west":  cx - h,
+            "east":  cx + h,
+            "south": cy - h,
+            "north": cy + h,
         }
 
     def assert_bbox_matches(self, bbox: dict) -> None:
