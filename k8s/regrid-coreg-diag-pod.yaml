@@ -1,0 +1,107 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: regrid-coreg-diag
+  namespace: prithvi-training-default
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 1200   # zero-PU read-only numeric diagnostic of 5 dry-run tiles
+  containers:
+    - name: diag
+      image: python:3.11-slim
+      command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          export PYTHONUNBUFFERED=1
+          apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+          pip install --quiet --no-cache-dir numpy scipy rasterio
+          git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+            https://github.com/TobiasEdman/ImintEngine.git /workspace/ie
+          cd /workspace/ie && pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+          python - <<'PYEOF'
+          import glob, os, math
+          import numpy as np
+          from scipy.ndimage import sobel
+          import rasterio
+          from imint.coregistration import estimate_subpixel_offset
+          from imint.training.tile_config import TileConfig
+
+          OUT = "/data/_national_dryrun"
+          NMD = "/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
+          CANON = 512
+          B04 = 2   # index inside each frame's 6-band prithvi block
+
+          def gmag(a):
+              a = np.asarray(a, np.float64)
+              return np.hypot(sobel(a, 0, mode="nearest"), sobel(a, 1, mode="nearest"))
+
+          def off(a, b):
+              # magnitude with NO guard — we want the true peak, even multi-pixel
+              dy, dx = estimate_subpixel_offset(a, b, window_frac=0.4, max_peak_px=None)
+              return dy, dx, math.hypot(dy, dx)
+
+          files = sorted(glob.glob(os.path.join(OUT, "*.npz")))
+          print(f"diagnosing {len(files)} tiles\n" + "=" * 64)
+          nmd_vecs, reduced_all = [], []
+          for fp in files:
+              d = dict(np.load(fp, allow_pickle=True))
+              name = os.path.basename(fp)[:-4]
+              T = int(d["num_frames"]); ref = int(d.get("coreg_ref_frame", 0))
+              dates = [str(x) for x in d["dates"]]
+              post = d["spectral"]
+              pre = d["spectral_precoreg"] if "spectral_precoreg" in d else None
+              print(f"\n{name}  T={T} ref=f{ref}  precoreg={'yes' if pre is not None else 'MISSING'}")
+              rb_post = post[ref * 6 + B04]
+              rb_pre = pre[ref * 6 + B04] if pre is not None else None
+              for i in range(T):
+                  if i == ref or dates[i] == "":
+                      continue
+                  fb = post[i * 6 + B04]
+                  vf = float((fb > 1e-6).mean()); sd = float(fb.std())
+                  *_, aft = off(rb_post, fb)
+                  if pre is not None:
+                      *_, bef = off(rb_pre, pre[i * 6 + B04])
+                      reduced_all.append(bef - aft)
+                      tag = "OK" if aft < 0.15 else ("residual" if aft < bef - 0.1 else "NOT-FIXED")
+                      print(f"  f{i} {dates[i][:10]}: before={bef:.2f}px after={aft:.2f}px "
+                            f"(Δ{bef-aft:+.2f}) valid={vf:.0%} std={sd:.3f}  [{tag}]")
+                  else:
+                      print(f"  f{i} {dates[i][:10]}: after={aft:.2f}px valid={vf:.0%} std={sd:.3f}")
+              # content-invariant: S2 composite edges vs NMD class-boundary edges
+              comp = np.mean([post[i * 6 + B04] for i in range(T) if dates[i] != ""], axis=0)
+              bb = [int(x) for x in d["bbox_3006"]]
+              try:
+                  with rasterio.open(NMD) as src:
+                      win = TileConfig(size_px=CANON).native_window(src.transform, bb[0], bb[1], bb[2], bb[3])
+                      nmd = src.read(1, window=win)
+                  bden = float((gmag(nmd) > 0).mean())
+                  ndy, ndx, nmag = off(gmag(comp), gmag(nmd))
+                  nmd_vecs.append((ndy, ndx))
+                  print(f"  S2<->NMD: {nmag:.2f}px (dy={ndy:+.2f},dx={ndx:+.2f}) boundary-density={bden:.0%}")
+              except Exception as e:
+                  print(f"  S2<->NMD: failed {type(e).__name__}: {e}")
+          print("\n" + "=" * 64)
+          if reduced_all:
+              print(f"M2: mean drift reduction = {np.mean(reduced_all):+.2f}px over {len(reduced_all)} frames "
+                    f"(positive = coreg moved frames toward the reference)")
+          if nmd_vecs:
+              mdy = np.mean([v[0] for v in nmd_vecs]); mdx = np.mean([v[1] for v in nmd_vecs])
+              mmag = np.mean([math.hypot(*v) for v in nmd_vecs]); syst = math.hypot(mdy, mdx)
+              print(f"S2<->NMD over {len(nmd_vecs)} tiles: mean|resid|={mmag:.2f}px "
+                    f"systematic=({mdy:+.2f},{mdx:+.2f})|{syst:.2f}px|")
+              print(f"M3 VERDICT: {'WARRANTED' if syst > 0.5 else 'NOT needed'} "
+                    f"(systematic S2->NMD offset {syst:.2f}px)")
+          PYEOF
+      resources:
+        requests: { cpu: "2", memory: "4Gi" }
+        limits:   { cpu: "2", memory: "4Gi" }
+      volumeMounts:
+        - name: d
+          mountPath: /data
+          readOnly: true
+  volumes:
+    - name: d
+      persistentVolumeClaim:
+        claimName: training-data-cephfs

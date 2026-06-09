@@ -1,0 +1,176 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: regrid-national-dryrun
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200  # 2h — 5 tiles, each a 520 halo × up to 4 frames × 12 DES bands
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: regrid-dryrun
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== National 512 re-grid DRY-RUN (5 tiles -> /data/_national_dryrun) ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx openeo
+
+              mkdir -p /workspace && cd /workspace
+              # MUST clone the branch carrying regrid_national_512.py + the lattice-snap
+              # bbox + the DES -1000 offset fix — none of these are on main.
+              git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "HEAD: $(git rev-parse --short HEAD)"
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              rm -rf /data/_national_dryrun
+              python scripts/regrid_national_512.py \
+                --data-dir /data/unified_v2_512 \
+                --out-dir /data/_national_dryrun \
+                --max-tiles 5 \
+                --workers 2 \
+                --debug-save-precoreg \
+                --no-skip-existing
+
+              echo ""
+              echo "=== VERIFY: lattice + shape + L2A floor + post-coreg residual + dates ==="
+              python - <<'PYEOF'
+              import glob, os, math
+              import numpy as np
+              from imint.coregistration import estimate_subpixel_offset
+
+              ORIG = "/data/unified_v2_512"
+              OUT  = "/data/_national_dryrun"
+              CANON = 512
+              GSD = 10
+              FLOOR = 0.095            # >= this = corrupt L2A frame
+              RESID_GATE = 0.15        # px — post-coreg inter-frame residual PASS gate
+
+              def minpos(a):
+                  f = np.asarray(a, np.float32).reshape(-1)
+                  p = f[f > 1e-6]
+                  return float(p.min()) if p.size else float("nan")
+
+              def centre_src(o):
+                  if "easting" in o and "northing" in o:
+                      return int(o["easting"]), int(o["northing"])
+                  if "bbox_3006" in o:
+                      b = [int(x) for x in o["bbox_3006"]]
+                      return (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
+                  return None
+
+              outs = sorted(glob.glob(os.path.join(OUT, "*.npz")))
+              print(f"verifying {len(outs)} re-gridded tiles\n")
+              all_ok = True
+              for fp in outs:
+                  name = os.path.basename(fp)
+                  f = dict(np.load(fp, allow_pickle=True))
+                  o = dict(np.load(os.path.join(ORIG, name), allow_pickle=True))
+                  T = int(f["num_frames"])
+                  sp = f["spectral"]
+                  dates = [str(x) for x in f["dates"]]
+                  ref = int(f.get("coreg_ref_frame", 0))
+
+                  # 1) lattice + geometry
+                  bb = [int(x) for x in f["bbox_3006"]]
+                  edges_10 = all(v % GSD == 0 for v in bb)
+                  extent_ok = (bb[2] - bb[0]) == CANON * GSD == (bb[3] - bb[1])
+                  e, n = int(f["easting"]), int(f["northing"])
+                  ctr_10 = (e % GSD == 0) and (n % GSD == 0)
+                  nat_ok = int(f.get("national_grid", 0)) == 1 and int(f.get("tile_size_px", 0)) == CANON
+                  cs = centre_src(o)
+                  drift = max(abs(e - cs[0]), abs(n - cs[1])) if cs else None
+                  drift_ok = (drift is None) or (drift <= GSD)   # snap moves centre <= 5 m/axis
+                  geom_ok = edges_10 and extent_ok and ctr_10 and nat_ok and drift_ok
+
+                  # 2) shape contract + extras present
+                  shape_ok = (
+                      sp.shape == (T * 6, CANON, CANON)
+                      and f["b08"].shape == (T, CANON, CANON)
+                      and f["rededge"].shape == (T * 3, CANON, CANON)
+                      and int(f.get("has_b01", 0)) == 1 and f["b01"].shape == (T, CANON, CANON)
+                      and int(f.get("has_b09", 0)) == 1 and f["b09"].shape == (T, CANON, CANON)
+                  )
+
+                  # 3) L2A reflectance floor — present frames healthy (0 < floor < 0.095)
+                  floor_rep, floor_ok = [], True
+                  for i in range(T):
+                      if dates[i] == "":
+                          floor_rep.append(f"f{i}:empty"); continue
+                      mp = minpos(sp[i * 6:(i + 1) * 6])
+                      ok = (not math.isnan(mp)) and 0.0 < mp < FLOOR
+                      floor_ok = floor_ok and ok
+                      floor_rep.append(f"f{i}:{mp:.3f}{'' if ok else '!!'}")
+
+                  # 4) post-coreg inter-frame residual (B04 = row i*6+2 in prithvi block)
+                  resid_rep, resid_ok = [], True
+                  ref_b04 = sp[ref * 6 + 2]
+                  for i in range(T):
+                      if i == ref or dates[i] == "":
+                          continue
+                      dy, dx = estimate_subpixel_offset(ref_b04, sp[i * 6 + 2])
+                      r = math.hypot(dy, dx)
+                      ok = r < RESID_GATE
+                      resid_ok = resid_ok and ok
+                      resid_rep.append(f"f{i}->ref:{r:.3f}px{'' if ok else '!!'}")
+
+                  # 5) dates preserved from source (stored-date reuse contract)
+                  src_dates = [str(x)[:10] for x in o["dates"]] if "dates" in o else []
+                  out_dates = [d[:10] for d in dates]
+                  dates_ok = all(
+                      (out_dates[i] == src_dates[i]) or (out_dates[i] == "")
+                      for i in range(min(len(out_dates), len(src_dates)))
+                  ) if src_dates else True
+
+                  tile_ok = geom_ok and shape_ok and floor_ok and resid_ok and dates_ok
+                  all_ok = all_ok and tile_ok
+                  print(f"{name}: {'PASS' if tile_ok else 'FAIL'}  (T={T} ref=f{ref})")
+                  print(f"  geom: edges10={edges_10} extent={extent_ok} ctr10={ctr_10} "
+                        f"nat512={nat_ok} centre-drift={drift}m(ok={drift_ok})")
+                  print(f"  shape contract: {shape_ok}")
+                  print(f"  L2A floor:  {' | '.join(floor_rep)}")
+                  print(f"  coreg resid: {' | '.join(resid_rep) if resid_rep else '(single present frame)'}")
+                  print(f"  dates preserved: {dates_ok}  out={out_dates}\n")
+              print("=" * 60)
+              print(f"DRYRUN VERIFY: {'ALL PASS' if all_ok else 'FAILURES PRESENT'}")
+              print("NOTE: PU is billed backend-side by DES; wall-clock above is the time proxy. "
+                    "Aux cold-cache is N/A (spectral-only re-grid).")
+              PYEOF
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "2"
+              memory: "6Gi"
+            limits:
+              cpu: "2"
+              memory: "6Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

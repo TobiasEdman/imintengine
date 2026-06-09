@@ -1,0 +1,196 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: regrid-nmd-offset-probe
+  namespace: prithvi-training-default
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 1800   # zero-PU read-only: clone + pip + local NMD window + 5-tile gradient-NCC
+  containers:
+    - name: probe
+      image: python:3.11-slim
+      command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          export PYTHONUNBUFFERED=1
+          echo "=== NMD absolute-offset probe (ZERO-PU, read-only) ==="
+          echo "Decides: do M1-snapped frames sit at NMD (actual) position, or systematically off?"
+
+          apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+          pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx openeo
+
+          mkdir -p /workspace && cd /workspace
+          # Clone the branch so we reuse the CANONICAL NMD reader
+          # (fetch_nmd_label_local + resolve_tile_bbox) rather than reinventing the
+          # windowed read — same lattice, same nearest resampling, same unified remap
+          # that build_labels uses, so "offset vs NMD" == "offset vs the labels".
+          git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+            https://github.com/TobiasEdman/ImintEngine.git imintengine
+          cd /workspace/imintengine
+          echo "HEAD: $(git rev-parse --short HEAD)"
+          pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+          python - <<'PYEOF'
+          import glob, os, math
+          import numpy as np
+          from scipy.ndimage import sobel
+
+          from imint.training.tile_config import TileConfig
+          from imint.training.tile_bbox import resolve_tile_bbox
+          from imint.training.tile_fetch import fetch_nmd_label_local
+
+          DRY = "/data/_national_dryrun"
+          B04 = 2                       # prithvi-block index of B04 (row i*6+2 in spectral)
+          MS = 6                        # integer-shift search half-range (px)
+          INTERIOR = 64                 # crop to interior to dodge frame/window edges
+          CONTRAST_MIN = 3.0            # peak must stand >=3 sigma above the NCC surface
+          SYS_MAG = 1.0                 # |mean offset| >= this & tight => systematic absolute
+          MILD_MAG = 0.5                # borderline band
+
+          # ---- resolve the national NMD GeoTIFF on the PVC (no remote fallback) ----
+          tifs = sorted(glob.glob("/data/nmd/*.tif"))
+          pref = [t for t in tifs if "bas" in t.lower() and "ogeneraliserad" in t.lower()]
+          NMD = (pref or tifs or [None])[0]
+          print(f"NMD raster: {NMD}")
+          assert NMD and os.path.exists(NMD), "no NMD .tif on /data/nmd — refusing remote fallback"
+
+          def gmag(a):
+              return np.hypot(sobel(a, axis=0, mode="nearest"),
+                              sobel(a, axis=1, mode="nearest")).astype(np.float32)
+
+          def nmd_boundary(nmd):
+              """Binary 4-neighbour class-boundary map of the unified NMD label."""
+              b = np.zeros(nmd.shape, bool)
+              dv = nmd[:-1, :] != nmd[1:, :]
+              b[:-1, :] |= dv; b[1:, :] |= dv
+              dh = nmd[:, :-1] != nmd[:, 1:]
+              b[:, :-1] |= dh; b[:, 1:] |= dh
+              return b.astype(np.float32)
+
+          def ncc_surface(s2_edges, nmd_b):
+              """NCC of S2 gradient magnitude vs NMD boundary over +/-MS integer shifts.
+
+              Returns (dy, dx, peak, contrast) where (dy,dx) is the shift applied to the
+              S2 frame to best land its edges on the NMD boundaries (i.e. the S2->NMD
+              offset), or None when the tile interior carries too little NMD structure.
+              """
+              H, W = s2_edges.shape
+              core = (slice(INTERIOR, H - INTERIOR), slice(INTERIOR, W - INTERIOR))
+              r = nmd_b[core]
+              if r.sum() < 50:                       # too few boundary px to register on
+                  return None
+              a = r - r.mean()
+              aa = math.sqrt(float((a * a).sum())) + 1e-12
+              k = 2 * MS + 1
+              surf = np.full((k, k), -2.0, np.float64)
+              for iy, dy in enumerate(range(-MS, MS + 1)):
+                  for ix, dx in enumerate(range(-MS, MS + 1)):
+                      m = np.roll(np.roll(s2_edges, dy, 0), dx, 1)[core]
+                      bb = m - m.mean()
+                      nb = math.sqrt(float((bb * bb).sum())) + 1e-12
+                      surf[iy, ix] = float((a * bb).sum()) / (aa * nb)
+              iy, ix = np.unravel_index(int(surf.argmax()), surf.shape)
+              peak = float(surf[iy, ix])
+              contrast = (peak - float(surf.mean())) / (float(surf.std()) + 1e-9)
+              return iy - MS, ix - MS, peak, contrast
+
+          files = sorted(glob.glob(os.path.join(DRY, "*.npz")))
+          print(f"probing {len(files)} dry-run tiles vs NMD "
+                f"(offset = S2->NMD shift; contrast>={CONTRAST_MIN} sigma = trustworthy)\n")
+
+          trust = []          # (dy, dx) of trustworthy frame/band samples (global)
+          per_tile_spread = []
+          for fp in files:
+              name = os.path.basename(fp)[:-4]
+              d = dict(np.load(fp, allow_pickle=True))
+              T = int(d["num_frames"]); ref = int(d.get("coreg_ref_frame", 0))
+              sp = d["spectral"]; dates = [str(x) for x in d["dates"]]
+              size_px = int(sp.shape[-1])
+              tile_cfg = TileConfig(size_px=size_px)
+              bbox = resolve_tile_bbox(name=name, tile=tile_cfg, npz_data=d)
+              if bbox is None:
+                  print(f"{name}: NO BBOX — skipped"); continue
+              try:
+                  nmd = fetch_nmd_label_local(bbox, tile_cfg, nmd_raster=NMD)
+              except Exception as e:
+                  print(f"{name}: NMD read failed: {e}"); continue
+              if nmd is None:
+                  print(f"{name}: NMD unavailable for bbox — skipped"); continue
+              nb = nmd_boundary(nmd)
+              bfrac = float(nb.mean())
+              has_b08 = int(d.get("has_b08", 0)) == 1
+              b08 = d["b08"] if has_b08 else None
+              print(f"{name}: T={T} ref=f{ref}  NMD-boundary px-frac={bfrac:.3f}")
+
+              tile_offsets = []
+              for i in range(T):
+                  if dates[i] == "":
+                      continue
+                  parts = []
+                  for band, arr in (("B04", sp[i * 6 + B04]),
+                                    ("B08", b08[i] if b08 is not None else None)):
+                      if arr is None:
+                          continue
+                      res = ncc_surface(gmag(arr.astype(np.float32)), nb)
+                      if res is None:
+                          parts.append(f"{band}:no-struct"); continue
+                      dy, dx, peak, contrast = res
+                      ok = contrast >= CONTRAST_MIN
+                      parts.append(f"{band}=({dy:+d},{dx:+d}) peak={peak:.3f} c={contrast:.1f}"
+                                   f"{'' if ok else ' (weak)'}")
+                      if ok:
+                          trust.append((dy, dx)); tile_offsets.append((dy, dx))
+                  badge = " [REF]" if i == ref else ""
+                  print(f"  f{i} ({dates[i][:10]}){badge}: " + " | ".join(parts))
+              if len(tile_offsets) >= 2:
+                  ad = np.array(tile_offsets, float)
+                  spread = float(np.hypot(*(ad.max(0) - ad.min(0))))
+                  per_tile_spread.append(spread)
+                  print(f"  within-tile offset spread = {spread:.1f}px "
+                        f"(large => relative inter-frame drift)")
+              print()
+
+          print("=" * 60)
+          print("VERDICT — does M2 need an absolute (NMD) anchor, or is relative enough?")
+          if len(trust) < 6:
+              print(f"INCONCLUSIVE: only {len(trust)} trustworthy NMD samples "
+                    f"(thematic-vs-spectral signal too weak on these tiles).")
+              print("=> Default to COMPOSITE relative anchor; absolute-to-NMD (M3) would be "
+                    "unreliable here anyway (low edge agreement).")
+          else:
+              arr = np.array(trust, float)
+              mean = arr.mean(0); med = np.median(arr, 0)
+              mag = float(np.hypot(*mean)); std = float(arr.std(0).mean())
+              print(f"trustworthy samples={len(trust)}  mean offset=({mean[0]:+.2f},{mean[1]:+.2f})px "
+                    f"|mean|={mag:.2f}  median=({med[0]:+.1f},{med[1]:+.1f})  scatter(std)={std:.2f}px")
+              if mag >= SYS_MAG and std < 1.0:
+                  print(f"=> SYSTEMATIC ABSOLUTE OFFSET ~({mean[0]:+.1f},{mean[1]:+.1f})px vs NMD/labels.")
+                  print("   M1 placement is consistently off-position => ESCALATE TO M3 "
+                        "(absolute coreg to NMD), gated on contrast + composite fallback.")
+              elif mag >= MILD_MAG:
+                  print(f"=> MILD systematic tendency (|mean|={mag:.2f}px). Borderline — "
+                        "composite likely OK; flag for QC on the full run.")
+              else:
+                  print(f"=> ZERO-MEAN SCATTER (|mean|={mag:.2f}px < {MILD_MAG}). Frames sit AT "
+                        "NMD position on average; the 2px is relative inter-frame drift.")
+                  print("   COMPOSITE relative anchor is SUFFICIENT — no M3 needed.")
+          if per_tile_spread:
+              print(f"mean within-tile spread = {np.mean(per_tile_spread):.1f}px "
+                    f"(confirms the relative drift the spot-check found)")
+          PYEOF
+      env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+      resources:
+        requests: { cpu: "2", memory: "4Gi" }
+        limits:   { cpu: "2", memory: "4Gi" }
+      volumeMounts:
+        - name: d
+          mountPath: /data
+          readOnly: true
+  volumes:
+    - name: d
+      persistentVolumeClaim:
+        claimName: training-data-cephfs

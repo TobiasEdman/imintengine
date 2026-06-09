@@ -1,0 +1,180 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: regrid-coreg-viz
+  namespace: prithvi-training-default
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 1200   # zero-PU read-only render of the 5 dry-run tiles
+  containers:
+    - name: viz
+      image: python:3.11-slim
+      command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          export PYTHONUNBUFFERED=1
+          apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+          pip install --quiet --no-cache-dir numpy scipy pillow rasterio
+          git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+            https://github.com/TobiasEdman/ImintEngine.git /workspace/ie
+          cd /workspace/ie && pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+          python - <<'PYEOF'
+          import os, glob, io, base64, math, tarfile
+          import numpy as np
+          from scipy.ndimage import sobel
+          from PIL import Image
+          import rasterio
+          from imint.training.tile_config import TileConfig
+          from imint.coregistration import estimate_subpixel_offset
+
+          DRY = "/data/_national_dryrun"
+          NMD = "/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
+          B02, B03, B04 = 0, 1, 2
+          CANON = 512
+
+          def gmag(a):
+              a = np.asarray(a, np.float64)
+              return np.hypot(sobel(a, 0, mode="nearest"), sobel(a, 1, mode="nearest"))
+
+          def stretch(x):
+              v = x[x > 1e-6]
+              lo, hi = (np.percentile(v, 2), np.percentile(v, 98)) if v.size > 10 else (0.0, 1.0)
+              if hi <= lo:
+                  hi = lo + 1e-6
+              return (np.clip((x - lo) / (hi - lo), 0, 1) * 255).astype(np.uint8)
+
+          def best_crop(ref, win=120, step=40):
+              g = gmag(ref); H, W = g.shape
+              best = (-1.0, H // 2 - win // 2, W // 2 - win // 2)
+              for y in range(40, H - win - 40, step):
+                  for x in range(40, W - win - 40, step):
+                      s = float(g[y:y+win, x:x+win].std())
+                      if s > best[0]:
+                          best = (s, y, x)
+              return best[1], best[2], win
+
+          def flicker(a, b, y, x, win, up=3, dur=450):
+              fr = []
+              for im in (a, b):
+                  c = im[y:y+win, x:x+win]
+                  fr.append(Image.fromarray(stretch(c)).resize((win*up, win*up), Image.NEAREST).convert("P"))
+              buf = io.BytesIO()
+              fr[0].save(buf, "GIF", save_all=True, append_images=fr[1:], loop=0, duration=dur)
+              return base64.b64encode(buf.getvalue()).decode()
+
+          def edge_overlay_b64(red, green, y, x, win, up=3):
+              def edges(a):
+                  e = gmag(a); v = e[e > 0]
+                  t = np.percentile(v, 85) if v.size else 0.0
+                  return ((e > t).astype(np.uint8) * 255)
+              R = edges(red[y:y+win, x:x+win]); G = edges(green[y:y+win, x:x+win])
+              img = np.dstack([R, G, np.zeros_like(R)]).astype(np.uint8)
+              im = Image.fromarray(img).resize((win*up, win*up), Image.NEAREST)
+              b = io.BytesIO(); im.save(b, "PNG")
+              return base64.b64encode(b.getvalue()).decode()
+
+          def b64jpg(im, q=80):
+              b = io.BytesIO(); im.convert("RGB").save(b, "JPEG", quality=q)
+              return base64.b64encode(b.getvalue()).decode()
+
+          def off(a, b):
+              dy, dx = estimate_subpixel_offset(a, b, window_frac=0.4, max_peak_px=None)
+              return dy, dx, math.hypot(dy, dx)
+
+          files = sorted(glob.glob(os.path.join(DRY, "*.npz")))
+          parts = []
+          for fp in files:
+              d = dict(np.load(fp, allow_pickle=True)); name = os.path.basename(fp)[:-4]
+              T = int(d["num_frames"]); ref = int(d.get("coreg_ref_frame", 0))
+              dates = [str(x) for x in d["dates"]]
+              post = d["spectral"]; pre = d["spectral_precoreg"] if "spectral_precoreg" in d else None
+              rb_post = post[ref*6 + B04]; rb_pre = pre[ref*6 + B04] if pre is not None else None
+              y, x, win = best_crop(rb_post)
+              frows = []
+              for i in range(T):
+                  if i == ref or dates[i] == "":
+                      continue
+                  fb_post = post[i*6 + B04]
+                  *_, aft = off(rb_post, fb_post)
+                  row = {"i": i, "date": dates[i][:10], "aft_px": aft,
+                         "aft": flicker(rb_post, fb_post, y, x, win)}
+                  if pre is not None:
+                      *_, bef = off(rb_pre, pre[i*6 + B04])
+                      row["bef_px"] = bef
+                      row["bef"] = flicker(rb_pre, pre[i*6 + B04], y, x, win)
+                  frows.append(row)
+              # S2 composite edges vs NMD class-boundary edges (content-invariant)
+              comp = np.mean([post[i*6 + B04] for i in range(T) if dates[i] != ""], axis=0)
+              bb = [int(v) for v in d["bbox_3006"]]
+              nmd_png, nmd_lbl = None, ""
+              try:
+                  with rasterio.open(NMD) as src:
+                      w = TileConfig(size_px=CANON).native_window(src.transform, bb[0], bb[1], bb[2], bb[3])
+                      nmd = src.read(1, window=w).astype(np.float32)
+                  ny, nx, nw = best_crop(comp)
+                  nmd_png = edge_overlay_b64(nmd, comp, ny, nx, nw)
+                  ddy, ddx, dmag = off(gmag(comp), gmag(nmd))
+                  nmd_lbl = f"S2↔NMD {dmag:.2f}px (dy={ddy:+.2f},dx={ddx:+.2f})"
+              except Exception as e:
+                  nmd_lbl = f"NMD overlay failed: {type(e).__name__}: {e}"
+              thumb = b64jpg(Image.fromarray(np.dstack([
+                  stretch(post[ref*6+B04]), stretch(post[ref*6+B03]), stretch(post[ref*6+B02])
+              ])).resize((200, 200)))
+              parts.append({"name": name, "ref": ref, "date": dates[ref][:10], "thumb": thumb,
+                            "frows": frows, "nmd_png": nmd_png, "nmd_lbl": nmd_lbl,
+                            "crop": f"@({y},{x}) {win}px×3"})
+
+          css = ("body{background:#0d0d12;color:#dcdce4;font:14px system-ui,sans-serif;margin:24px}"
+                 "h1{font-size:20px}h2{font-size:15px;margin-top:26px;border-bottom:1px solid #333;padding-bottom:4px}"
+                 ".row{display:flex;gap:18px;flex-wrap:wrap;margin:8px 0;align-items:flex-start}"
+                 ".cell{text-align:center;font-size:11px;color:#9a9aa6}.cell img{display:block;border:1px solid #2a2a33}"
+                 ".ba{display:flex;gap:8px;padding:6px;background:#15151c;border-radius:6px}"
+                 ".tag{margin:3px 0}.b{color:#ff9a6a}.a{color:#8affa0}"
+                 ".note{background:#16161e;padding:10px 14px;border-left:3px solid #c9a227;margin:10px 0}code{color:#c9a227}")
+          h = [f"<!doctype html><meta charset=utf-8><title>regrid coreg before/after</title><style>{css}</style>"]
+          h.append("<h1>National 512 re-grid — coregistration before/after + S2↔NMD (5-tile dry-run, fce4f2a)</h1>")
+          h.append("<div class=note>Per frame: <b class=b>BEFORE</b> = raw M1 flicker (reference↔frame), "
+                   "<b class=a>AFTER</b> = post-M2 flicker. Edges that stop jumping in AFTER → M2 helped; "
+                   "edges that jump the same or more → M2 didn't (or content differs seasonally). "
+                   "<b>S2↔NMD</b> overlay: <span style='color:#f55'>RED</span>=NMD class boundaries, "
+                   "<span style='color:#5f5'>GREEN</span>=S2 composite edges — yellow overlap = on NMD.</div>")
+          for p in parts:
+              h.append(f"<h2>{p['name']} &nbsp;<span style='color:#777'>ref=f{p['ref']} {p['date']} · "
+                       f"{p['crop']} · {p['nmd_lbl']}</span></h2>")
+              h.append("<div class=row>")
+              h.append(f"<div class=cell><img src='data:image/jpeg;base64,{p['thumb']}'><div class=tag>ref RGB</div></div>")
+              if p["nmd_png"]:
+                  h.append(f"<div class=cell><img src='data:image/png;base64,{p['nmd_png']}'>"
+                           f"<div class=tag>S2(green) vs NMD(red)</div></div>")
+              for fr in p["frows"]:
+                  h.append("<div class=cell><div class=ba>")
+                  if fr.get("bef"):
+                      h.append(f"<div><img src='data:image/gif;base64,{fr['bef']}'>"
+                               f"<div class='tag b'>f{fr['i']} BEFORE {fr['bef_px']:.2f}px</div></div>")
+                  h.append(f"<div><img src='data:image/gif;base64,{fr['aft']}'>"
+                           f"<div class='tag a'>f{fr['i']} AFTER {fr['aft_px']:.2f}px</div></div>")
+                  h.append(f"</div><div class=tag>{fr['date']}</div></div>")
+              h.append("</div>")
+          html = "".join(h).encode()
+
+          tbuf = io.BytesIO()
+          with tarfile.open(fileobj=tbuf, mode="w:gz") as tar:
+              ti = tarfile.TarInfo("coreg_before_after.html"); ti.size = len(html)
+              tar.addfile(ti, io.BytesIO(html))
+          blob = base64.b64encode(tbuf.getvalue()).decode()
+          print("===TARGZ_B64_START==="); print(blob); print("===TARGZ_B64_END===")
+          print(f"[viz] tiles={len(parts)} payload_b64={len(blob)} bytes")
+          PYEOF
+      resources:
+        requests: { cpu: "2", memory: "4Gi" }
+        limits:   { cpu: "2", memory: "4Gi" }
+      volumeMounts:
+        - name: d
+          mountPath: /data
+          readOnly: true
+  volumes:
+    - name: d
+      persistentVolumeClaim:
+        claimName: training-data-cephfs

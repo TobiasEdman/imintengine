@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: regrid-pf-nmd-diag
+  namespace: prithvi-training-default
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 1200   # zero-PU read-only: per-frame vs NMD, before/after M2
+  containers:
+    - name: diag
+      image: python:3.11-slim
+      command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          export PYTHONUNBUFFERED=1
+          apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+          pip install --quiet --no-cache-dir numpy scipy rasterio
+          git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+            https://github.com/TobiasEdman/ImintEngine.git /workspace/ie
+          cd /workspace/ie && pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+          python - <<'PYEOF'
+          import glob, os, math
+          import numpy as np
+          from scipy.ndimage import sobel
+          import rasterio
+          from imint.coregistration import estimate_subpixel_offset
+          from imint.training.tile_config import TileConfig
+
+          OUT = "/data/_national_dryrun"
+          NMD = "/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
+          CANON = 512
+          B04 = 2
+          ONNMD = 0.5   # px — "on NMD" tolerance
+
+          def gmag(a):
+              a = np.asarray(a, np.float64)
+              return np.hypot(sobel(a, 0, mode="nearest"), sobel(a, 1, mode="nearest"))
+
+          def off(a, b):
+              dy, dx = estimate_subpixel_offset(a, b, window_frac=0.5, max_peak_px=None)
+              return math.hypot(dy, dx), dy, dx
+
+          files = sorted(glob.glob(os.path.join(OUT, "*.npz")))
+          print(f"per-frame vs NMD edges (content-invariant) — {len(files)} tiles\n" + "=" * 72)
+          pre_all, post_all = [], []
+          m1_on = total = 0
+          for fp in files:
+              d = dict(np.load(fp, allow_pickle=True)); name = os.path.basename(fp)[:-4]
+              T = int(d["num_frames"]); dates = [str(x) for x in d["dates"]]
+              post = d["spectral"]; pre = d["spectral_precoreg"] if "spectral_precoreg" in d else None
+              bb = [int(v) for v in d["bbox_3006"]]
+              try:
+                  with rasterio.open(NMD) as src:
+                      w = TileConfig(size_px=CANON).native_window(src.transform, bb[0], bb[1], bb[2], bb[3])
+                      nmd = src.read(1, window=w).astype(np.float32)
+              except Exception as e:
+                  print(f"{name}: NMD read failed {type(e).__name__}: {e}"); continue
+              gn = gmag(nmd); bden = float((gn > 0).mean())
+              print(f"\n{name}  boundary-density={bden:.0%}  precoreg={'yes' if pre is not None else 'MISSING'}")
+              for i in range(T):
+                  if dates[i] == "":
+                      continue
+                  total += 1
+                  qm, qdy, qdx = off(gmag(post[i*6 + B04]), gn)
+                  post_all.append(qm)
+                  if pre is not None:
+                      pm, pdy, pdx = off(gmag(pre[i*6 + B04]), gn)
+                      pre_all.append(pm)
+                      if pm < ONNMD:
+                          m1_on += 1
+                      tag = "M1 on-NMD" if pm < ONNMD else "M1 OFF"
+                      print(f"  f{i} {dates[i][:10]}: M1-only={pm:.2f}px (dy={pdy:+.2f},dx={pdx:+.2f})  "
+                            f"postM2={qm:.2f}px  M2Δ{qm-pm:+.2f}  [{tag}]")
+                  else:
+                      print(f"  f{i} {dates[i][:10]}: postM2={qm:.2f}px (dy={qdy:+.2f},dx={qdx:+.2f})")
+          print("\n" + "=" * 72)
+          if pre_all:
+              mp = float(np.mean(pre_all)); mq = float(np.mean(post_all))
+              print(f"per-frame vs NMD: M1-only mean={mp:.2f}px   post-M2 mean={mq:.2f}px")
+              print(f"M1 ALONE lands {m1_on}/{total} frames within {ONNMD}px of NMD")
+              print(f"M2 net effect vs NMD: {mq-mp:+.2f}px  (negative = M2 moved frames TOWARD NMD)")
+              if mp < ONNMD and mq >= mp - 0.05:
+                  print("VERDICT: M1 ALONE SUFFICES → M2 adds no value (skip it)")
+              elif mq < mp - 0.1:
+                  print("VERDICT: M2 helps vs NMD → keep some coreg (current or NMD-anchor)")
+              else:
+                  print("VERDICT: M1 leaves frames off NMD AND current-M2 doesn't fix it → need a robust per-frame-to-NMD coreg")
+          else:
+              print(f"post-M2 only: mean={float(np.mean(post_all)):.2f}px (no precoreg to compare)")
+          PYEOF
+      resources:
+        requests: { cpu: "2", memory: "4Gi" }
+        limits:   { cpu: "2", memory: "4Gi" }
+      volumeMounts:
+        - name: d
+          mountPath: /data
+          readOnly: true
+  volumes:
+    - name: d
+      persistentVolumeClaim:
+        claimName: training-data-cephfs

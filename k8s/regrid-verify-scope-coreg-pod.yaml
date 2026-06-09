@@ -1,0 +1,184 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: regrid-verify-scope-coreg
+  namespace: prithvi-training-default
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 1200   # zero-PU read-only: pip + ledger parse + 5-tile gradNCC
+  containers:
+    - name: verify
+      image: python:3.11-slim
+      command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          export PYTHONUNBUFFERED=1
+          echo "=== Verify scope + coreg spot-check (ZERO-PU, read-only) ==="
+          pip install --quiet --no-cache-dir numpy scipy
+          echo "--- /data/audits listing ---"
+          ls -la /data/audits 2>/dev/null || echo "(no /data/audits dir)"
+          echo "--- unified_v2_512 raw .npz count ---"
+          ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l
+          python - <<'PYEOF'
+          import os, glob, json, math
+          import numpy as np
+
+          # ===================== PART A — SCOPE =====================
+          print("=" * 60); print("PART A — SCOPE (authoritative: cephfs audit JSON / ledger)")
+          AUD = "/data/audits"
+
+          def jload(p):
+              try:
+                  with open(p) as f:
+                      return json.load(f)
+              except Exception:
+                  return None
+
+          dirn = len(glob.glob("/data/unified_v2_512/*.npz"))
+          print(f"unified_v2_512 dir .npz count: {dirn}")
+
+          uniq512 = None
+          dedup = jload(os.path.join(AUD, "dedup_plan_512.json"))
+          if dedup:
+              scanned = dedup.get("n_512_tiles_scanned")
+              ndrop = dedup.get("n_drop"); nkeep = dedup.get("n_keep")
+              groups = dedup.get("multi_center_groups")
+              if scanned is not None and ndrop is not None:
+                  uniq512 = scanned - ndrop
+              print(f"[dedup_plan_512.json] scanned={scanned} multi_center_groups={groups} "
+                    f"dup-winners={nkeep} losers_dropped={ndrop}")
+              print(f"  -> unique 512 centres (scanned - dropped) = {uniq512}")
+          else:
+              print("[dedup_plan_512.json] NOT FOUND")
+
+          norph = None
+          orph = jload(os.path.join(AUD, "orphan_fetch_512.json"))
+          if orph is not None:
+              norph = len(orph)
+              print(f"[orphan_fetch_512.json] orphan 512-parents to fetch = {norph}")
+          else:
+              print("[orphan_fetch_512.json] NOT FOUND")
+
+          # Fallback: parse the ledger directly if either number is still missing.
+          if uniq512 is None or norph is None:
+              led = os.path.join(AUD, "tile_ledger.jsonl")
+              if os.path.exists(led):
+                  print(f"[ledger] parsing {led}")
+                  c512 = set(); c256 = set(); n512 = 0; n256 = 0
+                  with open(led) as fh:
+                      for line in fh:
+                          line = line.strip()
+                          if not line:
+                              continue
+                          try:
+                              r = json.loads(line)
+                          except Exception:
+                              continue
+                          if "error" in r or r.get("center_e") is None:
+                              continue
+                          ds = r.get("dataset"); key = (r["center_e"], r["center_n"])
+                          if ds == "512":
+                              c512.add(key); n512 += 1
+                          elif ds == "256":
+                              c256.add(key); n256 += 1
+                  orphans = c256 - c512
+                  print(f"  512 rows={n512} unique512={len(c512)} | "
+                        f"256 rows={n256} unique256={len(c256)} | orphans={len(orphans)}")
+                  if uniq512 is None:
+                      uniq512 = len(c512)
+                  if norph is None:
+                      norph = len(orphans)
+              else:
+                  print(f"[ledger] NOT FOUND at {led}")
+
+          print("-" * 60)
+          print(f"SCOPE: existing-512 unique centres = {uniq512} ; orphans = {norph}")
+          if uniq512 is not None and norph is not None:
+              print(f"  national-grid TOTAL input = {uniq512 + norph}")
+          print(f"  (SPEC stated ~1,289 = 142 + 1,147 ; raw dir holds {dirn} .npz)")
+
+          # ============== PART B — COREG SPOT-CHECK ==============
+          # gradient-NCC: edges/boundaries persist across seasons, so this measures
+          # the TRUE residual where phase-correlation bails (>1px integer-peak guard).
+          print("=" * 60); print("PART B — COREG SPOT-CHECK (gradient-NCC vs phase-corr)")
+          from scipy.ndimage import sobel
+          DRY = "/data/_national_dryrun"
+          B04 = 2  # band index inside each 6-band prithvi block
+
+          def gmag(a):
+              return np.hypot(sobel(a, axis=0, mode="nearest"),
+                              sobel(a, axis=1, mode="nearest"))
+
+          def ncc_best(ref, mov, ms=6):
+              r = gmag(ref); m = gmag(mov); H, W = r.shape
+              core = (slice(ms, H - ms), slice(ms, W - ms))
+              rc = r[core]
+              best = (-2.0, 0, 0)
+              for dy in range(-ms, ms + 1):
+                  for dx in range(-ms, ms + 1):
+                      mm = np.roll(np.roll(m, dy, 0), dx, 1)[core]
+                      v = (rc > 1e-9) & (mm > 1e-9)
+                      if v.sum() < 100:
+                          continue
+                      a = rc[v] - rc[v].mean(); b = mm[v] - mm[v].mean()
+                      d = math.sqrt(float((a * a).sum()) * float((b * b).sum())) + 1e-12
+                      n = float((a * b).sum()) / d
+                      if n > best[0]:
+                          best = (n, dy, dx)
+              return best
+
+          def phase_peak(ref, mov):
+              R = np.fft.fft2(ref); M = np.fft.fft2(mov)
+              cps = R * np.conj(M); cps /= np.abs(cps) + 1e-12
+              c = np.fft.ifft2(cps).real
+              py, px = np.unravel_index(int(np.argmax(c)), c.shape)
+              H, W = c.shape
+              if py > H // 2: py -= H
+              if px > W // 2: px -= W
+              return py, px
+
+          files = sorted(glob.glob(os.path.join(DRY, "*.npz")))
+          print(f"spot-checking {len(files)} dry-run tiles "
+                f"(gradNCC argmax ~0 => aligned; PASS gate = mag <= 1px)\n")
+          allpass = True
+          for fp in files:
+              name = os.path.basename(fp)[:-4]
+              d = dict(np.load(fp, allow_pickle=True))
+              T = int(d["num_frames"]); ref = int(d.get("coreg_ref_frame", 0))
+              sp = d["spectral"]; dates = [str(x) for x in d["dates"]]
+              print(f"{name}: T={T} ref=f{ref} ({dates[ref][:10] if dates[ref] else '-'})")
+              rb = sp[ref * 6 + B04][64:-64, 64:-64]
+              for i in range(T):
+                  if i == ref or dates[i] == "":
+                      continue
+                  mb = sp[i * 6 + B04][64:-64, 64:-64]
+                  peak, dy, dx = ncc_best(rb, mb)
+                  mag = math.hypot(dy, dx)
+                  ppy, ppx = phase_peak(rb, mb)
+                  pbail = abs(ppy) > 1 or abs(ppx) > 1
+                  ok = mag <= 1.0
+                  allpass = allpass and ok
+                  note = "  [phase-corr WOULD-BAIL -> dry-run read 0.000]" if pbail else ""
+                  print(f"  f{i} ({dates[i][:10]}) vs ref: "
+                        f"gradNCC=({dy:+d},{dx:+d}) mag={mag:.2f}px peak={peak:.3f} | "
+                        f"phasePeak=({ppy:+d},{ppx:+d}) -> {'PASS' if ok else 'FAIL'}{note}")
+              print()
+          print("=" * 60)
+          print(f"COREG SPOT-CHECK: "
+                f"{'ALL ALIGNED (<=1px structural residual)' if allpass else 'MISALIGNMENT FOUND'}")
+          print("If a WOULD-BAIL pair shows gradNCC~0 => coreg DID align it; the dry-run "
+                "0.000 was a phase-corr false bail on cross-content frames, not real drift.")
+          PYEOF
+      resources:
+        requests: { cpu: "2", memory: "4Gi" }
+        limits:   { cpu: "2", memory: "4Gi" }
+      volumeMounts:
+        - name: d
+          mountPath: /data
+          readOnly: true
+  volumes:
+    - name: d
+      persistentVolumeClaim:
+        claimName: training-data-cephfs
