@@ -536,38 +536,34 @@ def fetch_nmd_label_local(
     """
     tile.assert_bbox_matches(bbox_3006)
 
+    if not os.path.exists(nmd_raster):
+        return _fetch_nmd_label_remote(bbox_3006, tile)
+
+    w = bbox_3006["west"]; s = bbox_3006["south"]
+    e = bbox_3006["east"]; n = bbox_3006["north"]
+
     try:
-        from rasterio.windows import from_bounds
-        from rasterio.enums import Resampling
-
-        if not os.path.exists(nmd_raster):
-            return _fetch_nmd_label_remote(bbox_3006, tile)
-
         src = _get_nmd_handle(nmd_raster)
-
-        w = bbox_3006["west"]; s = bbox_3006["south"]
-        e = bbox_3006["east"]; n = bbox_3006["north"]
-
-        b = src.bounds
-        if w < b.left or e > b.right or s < b.bottom or n > b.top:
-            return None
-
-        window = from_bounds(w, s, e, n, src.transform)
-        # Read directly into the target shape so rasterio handles the
-        # sub-pixel alignment via its own nearest-neighbour resampling.
-        # Never use scipy.ndimage.zoom here — it distributes dropped rows
-        # unevenly and creates visible seams when the window is fractional.
-        nmd_raw = src.read(
-            1,
-            window=window,
-            out_shape=(tile.size_px, tile.size_px),
-            resampling=Resampling.nearest,
-        )
-
-        from imint.training.class_schema import nmd_raster_to_lulc
-        return nmd_raster_to_lulc(nmd_raw).astype(np.uint8)
     except Exception:
         return _fetch_nmd_label_remote(bbox_3006, tile)
+
+    b = src.bounds
+    if w < b.left or e > b.right or s < b.bottom or n > b.top:
+        return None
+
+    # Lattice-aligned bbox → integer window → pixel-exact native read.
+    # native_window raises loudly when the bbox is off the NMD lattice; that
+    # is a caller bug, so it must propagate rather than fall through to the
+    # openEO target_shape resample below — which would silently re-hide it.
+    window = tile.native_window(src.transform, w, s, e, n)
+
+    try:
+        nmd_raw = src.read(1, window=window)
+    except Exception:
+        return _fetch_nmd_label_remote(bbox_3006, tile)
+
+    from imint.training.class_schema import nmd_raster_to_lulc
+    return nmd_raster_to_lulc(nmd_raw).astype(np.uint8)
 
 
 def _fetch_nmd_label_remote(bbox_3006: dict, tile: "TileConfig") -> np.ndarray | None:

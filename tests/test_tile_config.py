@@ -136,6 +136,60 @@ class TestAssertBboxMatches:
             })
 
 
+class TestNativeWindow:
+    """native_window() must return integer windows for lattice-aligned bboxes
+    and raise loudly otherwise — it replaces the old nearest-neighbour resample."""
+
+    # NMD raster geometry: EPSG:3006, origin on exact 10 m multiples, 10 m pixel.
+    NMD_ORIGIN_X = 208450.0
+    NMD_ORIGIN_Y = 7671060.0
+
+    def _nmd_transform(self, origin_x=None, origin_y=None):
+        from rasterio.transform import from_origin
+        return from_origin(
+            self.NMD_ORIGIN_X if origin_x is None else origin_x,
+            self.NMD_ORIGIN_Y if origin_y is None else origin_y,
+            10.0, 10.0,
+        )
+
+    @pytest.mark.parametrize("size_px", [256, 512, 520])
+    def test_lattice_aligned_bbox_gives_integer_window(self, size_px):
+        t = TileConfig(size_px=size_px)
+        b = t.bbox_from_center(281283, 6471287)  # off-grid centre → snapped bbox
+        win = t.native_window(self._nmd_transform(), b["west"], b["south"], b["east"], b["north"])
+        assert win.col_off == int(win.col_off)
+        assert win.row_off == int(win.row_off)
+        assert win.width == size_px
+        assert win.height == size_px
+
+    def test_window_offsets_match_hand_computation(self):
+        t = TileConfig(size_px=512)
+        b = t.bbox_from_center(281280, 6471280)
+        win = t.native_window(self._nmd_transform(), b["west"], b["south"], b["east"], b["north"])
+        # col = (west - origin_x)/10 ; row = (origin_y - north)/10
+        assert win.col_off == (b["west"] - self.NMD_ORIGIN_X) / 10
+        assert win.row_off == (self.NMD_ORIGIN_Y - b["north"]) / 10
+        assert (win.col_off, win.row_off, win.width, win.height) == (7027, 119722, 512, 512)
+
+    def test_off_lattice_raster_raises(self):
+        """Raster origin off the 10 m lattice → fractional offset → loud raise,
+        NOT a silent nearest-neighbour resample."""
+        t = TileConfig(size_px=512)
+        b = t.bbox_from_center(281280, 6471280)
+        off = self._nmd_transform(origin_x=self.NMD_ORIGIN_X + 3.0)  # 3 m off-grid
+        with pytest.raises(ValueError, match="offset not integer"):
+            t.native_window(off, b["west"], b["south"], b["east"], b["north"])
+
+    def test_wrong_extent_raises(self):
+        """Lattice-aligned but wrong-sized bbox (256 m extent under a 512 config)
+        → size mismatch raises rather than resampling 256→512."""
+        t = TileConfig(size_px=512)
+        # 2560 m square (a 256-tile extent), edges still on the lattice.
+        west, south = 278720, 6468720
+        with pytest.raises(ValueError, match="extent wrong"):
+            t.native_window(self._nmd_transform(), west, south, west + 2560, south + 2560)
+
+
 class TestRoundTrip:
     @pytest.mark.parametrize("size_px", [256, 512, 1024])
     @pytest.mark.parametrize("center", [(281280, 6471280), (500000, 6500000), (0, 0)])

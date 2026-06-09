@@ -110,5 +110,48 @@ class TileConfig:
                 f"TileConfig.bbox_from_center()."
             )
 
+    def native_window(self, src_transform, west, south, east, north):
+        """Build a pixel-exact integer read window for a lattice-aligned bbox.
+
+        Once ``bbox_from_center`` has snapped every edge to the ``gsd_m``
+        lattice — and the raster's own origin is on that lattice —
+        ``rasterio.from_bounds`` yields an integer-offset, ``size_px``-sided
+        window. This asserts exactly that and returns the rounded integer
+        ``Window``, so the caller reads native pixels with NO resampling.
+
+        A fractional offset or a wrong size means the bbox is not on the
+        raster's lattice. That is a caller bug, so raise loudly rather than
+        papering over it with nearest-neighbour resampling (which silently
+        displaces every class boundary by up to half a pixel).
+
+        Args:
+            src_transform: The source raster's affine transform.
+            west, south, east, north: Bbox edges in the raster's CRS.
+
+        Returns:
+            ``rasterio.windows.Window`` with integer offsets and
+            ``size_px`` width/height.
+
+        Raises:
+            ValueError: if the window offset is non-integer or the window
+                size differs from ``size_px``.
+        """
+        from rasterio.windows import from_bounds, Window
+
+        w = from_bounds(west, south, east, north, src_transform)
+        if abs(w.col_off - round(w.col_off)) > 1e-4 or abs(w.row_off - round(w.row_off)) > 1e-4:
+            raise ValueError(
+                f"{self!r}: NMD window offset not integer "
+                f"(col_off={w.col_off:.6f}, row_off={w.row_off:.6f}) — bbox not "
+                f"on the raster's {int(self.gsd_m)} m lattice; rebuild via "
+                f"bbox_from_center()."
+            )
+        if round(w.width) != self.size_px or round(w.height) != self.size_px:
+            raise ValueError(
+                f"{self!r}: NMD window is {round(w.width)}×{round(w.height)} px, "
+                f"expected {self.size_px}² — bbox extent wrong."
+            )
+        return Window(round(w.col_off), round(w.row_off), self.size_px, self.size_px)
+
     def __repr__(self) -> str:
         return f"TileConfig(size_px={self.size_px}, gsd_m={self.gsd_m})"

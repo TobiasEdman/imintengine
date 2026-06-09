@@ -27,13 +27,14 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-from rasterio.windows import from_bounds
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from imint.training.class_schema import nmd_raster_to_lulc
+from imint.training.tile_config import TileConfig
 
 NMD_RASTER = "data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
 TILE_SIZE = 256
+TILE = TileConfig(size_px=TILE_SIZE)
 TILE_M = 2560  # 256 * 10m
 
 
@@ -92,16 +93,9 @@ def main():
                 oob += 1
                 continue
 
-            # Read NMD window
-            window = from_bounds(west, south, east, north, src.transform)
+            # Pixel-exact native read: lattice-aligned bbox → integer window.
+            window = TILE.native_window(src.transform, west, south, east, north)
             nmd_raw = src.read(1, window=window)
-
-            # Resize to TILE_SIZE if needed
-            if nmd_raw.shape != (TILE_SIZE, TILE_SIZE):
-                from scipy.ndimage import zoom
-                zy = TILE_SIZE / nmd_raw.shape[0]
-                zx = TILE_SIZE / nmd_raw.shape[1]
-                nmd_raw = zoom(nmd_raw, (zy, zx), order=0)  # nearest neighbor
 
             # Convert raw NMD codes to 19-class sequential labels
             nmd_label = nmd_raster_to_lulc(nmd_raw)

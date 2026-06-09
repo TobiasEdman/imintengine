@@ -274,15 +274,12 @@ def extract_nmd(nmd_path: str, west: float, south: float, east: float, north: fl
                 tile_px: int = 256) -> np.ndarray:
     """Extract NMD 19-class raster for bbox [W, S, E, N] in EPSG:3006 (E,N)."""
     import rasterio
-    from rasterio.windows import from_bounds as rasterio_from_bounds
-    from rasterio.enums import Resampling
+    from imint.training.tile_config import TileConfig
     with rasterio.open(nmd_path) as src:
-        window = rasterio_from_bounds(west, south, east, north, src.transform)
-        nmd = src.read(
-            1, window=window,
-            out_shape=(tile_px, tile_px),
-            resampling=Resampling.nearest,
+        window = TileConfig(size_px=tile_px).native_window(
+            src.transform, west, south, east, north,
         )
+        nmd = src.read(1, window=window)
     print(f"  NMD raw — unique classes: {sorted(np.unique(nmd).tolist())}")
     return nmd.astype(np.uint8)
 
