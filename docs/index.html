@@ -36,6 +36,27 @@
             border-color: #245045;
         }
 
+        /* External nav pill — links OUT to a standalone page (not a data-tab).
+           Distinct class so the .theme-tab click handler (preventDefault) does
+           NOT swallow it; green outline marks it as a deep-dive that navigates. */
+        .theme-tab-ext {
+            text-decoration: none;
+            padding: 6px 16px;
+            border-radius: 9999px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #1A4338;
+            background: #ffffff;
+            border: 1px solid #1A4338;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .theme-tab-ext:hover {
+            color: #ffffff;
+            background: #1A4338;
+            border-color: #1A4338;
+        }
+
         /* Figure grid — used by atmosfär & andra showcases */
         .figure-grid {
             display: grid;
@@ -88,6 +109,7 @@
             <a href="#" class="theme-tab" data-tab="water_quality">💧 Vattenkvalitet</a>
             <a href="#" class="theme-tab" data-tab="pixel_sensor">🔬 Pixel &amp; sensor</a>
             <a href="#" class="theme-tab" data-tab="era5">☁️ Atmosfär</a>
+            <a href="coregistration.html" class="theme-tab-ext">🛰️ Koregistrering ↗</a>
         </div>
     </div>
 
@@ -1255,7 +1277,6 @@ python demos/cloud_models/run_comparison.py</pre>
         IMINT Engine &middot; &copy; 2024&ndash;2025 RISE Research Institutes of Sweden AB
         &middot; CC0 1.0 Universal &middot; Genererad 2018-07-24 / 2025-07-10 / 2025-06-14 / 2025-06-14
         <br>
-        <a href="coregistration.html" class="license-toggle" style="text-decoration:none; display:inline-block;">Koregistrering — multitemporal frame-justering</a>
         <button class="license-toggle">Visa licenser och upphovsrätt</button>
         <div id="license-info" class="license-section">
             <h4>Modeller</h4>
