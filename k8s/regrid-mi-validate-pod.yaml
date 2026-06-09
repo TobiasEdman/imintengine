@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: regrid-mi-validate
+  namespace: prithvi-training-default
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 1800   # zero-PU: re-process saved raw-M1 frames through MI; no re-fetch
+  containers:
+    - name: mival
+      image: python:3.11-slim
+      command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          export PYTHONUNBUFFERED=1
+          apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+          pip install --quiet --no-cache-dir numpy scipy pillow
+          git clone --depth 1 --branch fix/refetch-late-autumn-frames \
+            https://github.com/TobiasEdman/ImintEngine.git /workspace/ie
+          cd /workspace/ie && pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+          python - <<'PYEOF'
+          import os, glob, io, base64, math, tarfile
+          import numpy as np
+          from scipy.ndimage import sobel
+          from PIL import Image
+          from imint.coregistration import estimate_mi_offset, subpixel_shift
+
+          DRY = "/data/_national_dryrun"
+          B04 = 2
+          CROP = 4
+
+          def gmag(a):
+              a = np.asarray(a, np.float64)
+              return np.hypot(sobel(a, 0, mode="nearest"), sobel(a, 1, mode="nearest"))
+
+          def stretch(x):
+              v = x[x > 1e-6]
+              lo, hi = (np.percentile(v, 2), np.percentile(v, 98)) if v.size > 10 else (0.0, 1.0)
+              if hi <= lo:
+                  hi = lo + 1e-6
+              return (np.clip((x - lo) / (hi - lo), 0, 1) * 255).astype(np.uint8)
+
+          def best_crop(ref, win=120, step=40):
+              g = gmag(ref); H, W = g.shape
+              best = (-1.0, H // 2 - win // 2, W // 2 - win // 2)
+              for y in range(40, H - win - 40, step):
+                  for x in range(40, W - win - 40, step):
+                      s = float(g[y:y+win, x:x+win].std())
+                      if s > best[0]:
+                          best = (s, y, x)
+              return best[1], best[2], win
+
+          def flick(a, b, y, x, win, up=3, dur=450):
+              fr = [Image.fromarray(stretch(im[y:y+win, x:x+win])).resize((win*up, win*up), Image.NEAREST).convert("P")
+                    for im in (a, b)]
+              buf = io.BytesIO()
+              fr[0].save(buf, "GIF", save_all=True, append_images=fr[1:], loop=0, duration=dur)
+              return base64.b64encode(buf.getvalue()).decode()
+
+          def resid(a, b):  # phase-corr-free residual proxy: MI optimum of b vs a
+              dy, dx = estimate_mi_offset(b, a, search_px=float(CROP))
+              return math.hypot(dy, dx)
+
+          files = sorted(glob.glob(os.path.join(DRY, "*.npz")))
+          parts, summary = [], []
+          for fp in files:
+              d = dict(np.load(fp, allow_pickle=True)); name = os.path.basename(fp)[:-4]
+              if "spectral_precoreg" not in d:
+                  print(f"{name}: no precoreg, skip"); continue
+              T = int(d["num_frames"]); dates = [str(x) for x in d["dates"]]
+              pre = d["spectral_precoreg"]; ref = int(d.get("coreg_ref_frame", 0))
+              rb = pre[ref*6 + B04]
+              y, x, win = best_crop(rb)
+              rows = []
+              print(f"\n{name}  ref=f{ref}")
+              for i in range(T):
+                  if i == ref or dates[i] == "":
+                      continue
+                  fb = pre[i*6 + B04]
+                  dy, dx = estimate_mi_offset(fb, rb, search_px=float(CROP))
+                  applied = max(abs(dy), abs(dx)) >= 0.05
+                  fb_after = subpixel_shift(fb, dy, dx) if applied else fb
+                  r_before, r_after = resid(rb, fb), resid(rb, fb_after)
+                  summary.append((r_before, r_after))
+                  print(f"  f{i} {dates[i][:10]}: MI shift=({dy:+.2f},{dx:+.2f})  "
+                        f"resid before={r_before:.2f}px after={r_after:.2f}px")
+                  rows.append({"i": i, "date": dates[i][:10], "sh": f"({dy:+.2f},{dx:+.2f})",
+                               "rb": r_before, "ra": r_after,
+                               "before": flick(rb, fb, y, x, win),
+                               "after": flick(rb, fb_after, y, x, win)})
+              parts.append({"name": name, "ref": ref, "rows": rows, "crop": f"@({y},{x}) {win}px×3"})
+
+          if summary:
+              mb = float(np.mean([s[0] for s in summary])); ma = float(np.mean([s[1] for s in summary]))
+              print(f"\n{'='*60}\nMI inter-frame residual (MI-measured): before={mb:.2f}px  after={ma:.2f}px  "
+                    f"({100*(mb-ma)/mb:+.0f}% change)")
+
+          css = ("body{background:#0d0d12;color:#dcdce4;font:14px system-ui,sans-serif;margin:24px}"
+                 "h1{font-size:20px}h2{font-size:15px;margin-top:24px;border-bottom:1px solid #333}"
+                 ".cell{display:inline-block;text-align:center;font-size:11px;color:#9a9aa6;margin:6px}"
+                 ".ba{display:flex;gap:8px;padding:6px;background:#15151c;border-radius:6px}"
+                 ".b{color:#ff9a6a}.a{color:#8affa0}.note{background:#16161e;padding:10px 14px;border-left:3px solid #c9a227;margin:10px 0}")
+          h = [f"<!doctype html><meta charset=utf-8><title>MI coreg before/after</title><style>{css}</style>"]
+          h.append("<h1>Inter-frame coregistration: raw M1 (BEFORE) vs mutual-information (AFTER) — 5-tile dry-run, c8d0f34</h1>")
+          h.append("<div class=note>Re-processed the saved raw-M1 frames through MI (zero PU). "
+                   "<b class=b>BEFORE</b> = reference↔frame flicker on raw M1; <b class=a>AFTER</b> = after MI. "
+                   "Edges that stop jumping in AFTER = MI locked the frames together.</div>")
+          for p in parts:
+              h.append(f"<h2>{p['name']} <span style='color:#777'>ref=f{p['ref']} · {p['crop']}</span></h2>")
+              for r in p["rows"]:
+                  h.append("<div class=cell><div class=ba>"
+                           f"<div><img src='data:image/gif;base64,{r['before']}'>"
+                           f"<div class=b>f{r['i']} BEFORE resid={r['rb']:.2f}px</div></div>"
+                           f"<div><img src='data:image/gif;base64,{r['after']}'>"
+                           f"<div class=a>f{r['i']} AFTER resid={r['ra']:.2f}px</div></div>"
+                           f"</div><div>{r['date']} · MI shift {r['sh']}</div></div>")
+          html = "".join(h).encode()
+          tbuf = io.BytesIO()
+          with tarfile.open(fileobj=tbuf, mode="w:gz") as tar:
+              ti = tarfile.TarInfo("mi_before_after.html"); ti.size = len(html)
+              tar.addfile(ti, io.BytesIO(html))
+          blob = base64.b64encode(tbuf.getvalue()).decode()
+          print("===TARGZ_B64_START==="); print(blob); print("===TARGZ_B64_END===")
+          print(f"[mival] tiles={len(parts)} payload_b64={len(blob)}")
+          PYEOF
+      resources:
+        requests: { cpu: "2", memory: "4Gi" }
+        limits:   { cpu: "2", memory: "4Gi" }
+      volumeMounts:
+        - name: d
+          mountPath: /data
+          readOnly: true
+  volumes:
+    - name: d
+      persistentVolumeClaim:
+        claimName: training-data-cephfs

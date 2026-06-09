@@ -1,0 +1,14 @@
+{
+  "description": "Before/after inter-frame coregistration flicker GIFs (reference<->frame, B04) for the national 512 re-grid: raw M1 grid-snap vs mutual-information (M2). Each pair shows the same frame before and after MI coregistration.",
+  "produced_by": "k8s/regrid-mi-validate-pod.yaml",
+  "git_sha": "c8d0f34",
+  "runtime": "python:3.11-slim + cloned ImintEngine@c8d0f34 (numpy, scipy, pillow)",
+  "source_data": "/data/_national_dryrun spectral_precoreg (raw M1 frames from the 5-tile dry-run; zero-PU re-process, no re-fetch)",
+  "method": "imint.coregistration.estimate_mi_offset — mutual information maximised over a continuous sub-pixel shift (Powell); shift applied with the Fourier subpixel_shift",
+  "produced_at": "2026-06-09",
+  "files": {
+    "43983928_f1_before.gif / _after.gif": "inter-frame residual 0.79 px -> 0.00 px",
+    "44063896_f2_before.gif / _after.gif": "0.77 px -> 0.02 px (phase correlation had amplified this frame to 1.84 px)",
+    "44003936_f0_before.gif / _after.gif": "autumn frame, 0.39 px -> 0.00 px"
+  }
+}
