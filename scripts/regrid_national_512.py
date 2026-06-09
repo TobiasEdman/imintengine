@@ -9,10 +9,16 @@ tile's OWN stored per-frame dates, fetched on a 520 px HALO bbox, then:
           the bbox edges are exact 10 m NMD multiples because the centre is snapped
           by ``TileConfig.bbox_from_center``). After M1 every frame shares ONE grid,
           so the inter-frame integer offset is 0 by construction.
-  * M2 — inter-frame sub-pixel coregistration on that shared 520 grid. S2 relative
-          orthorectification leaves a real per-date drift (~0.3 px, up to ~1 px); a
-          grid-snap cannot remove it. Every frame is phase-correlated on B04 to the
-          clearest frame and shifted onto it. MANDATORY — never replaceable by M1.
+  * M2 — inter-frame coregistration on that shared 520 grid: each frame is
+          registered to the clearest (reference) frame on B04 by MUTUAL INFORMATION
+          (``estimate_mi_offset``) and shifted onto it. MI is used (not phase
+          correlation) because the frames span seasons — autumn stubble vs summer
+          canopy — so the same ground point looks radiometrically different;
+          intensity correlation chases that phenology (~0.75 px error, even on
+          clean structured imagery) while MI scores joint-histogram dependence and
+          recovers the geometry (~0.05 px on a synthetic season-change fixture).
+          Inter-frame alignment is the priority; absolute placement vs NMD is a
+          separate, secondary concern handled (if needed) downstream.
   * CROP — 520 → 512 (centre crop, 4 px/side). The halo absorbs the sinc
           wrap-around that ``subpixel_shift`` leaves at the frame edges, so the
           stored 512 is clean. Store-fork A: the cropped 512 is canonical; the 520
@@ -58,7 +64,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from imint.coregistration import estimate_subpixel_offset, subpixel_shift
+from imint.coregistration import estimate_mi_offset, subpixel_shift
 from imint.training.openeo_tile_graph import (
     ALL_BANDS,
     ALL_BANDS_INDEX,
@@ -80,20 +86,12 @@ _I_RE = list(ALL_BANDS_INDEX["rededge"])        # (4,5,6) B05,B06,B07
 _I_B01 = ALL_BANDS_INDEX["b01"][0]              # 10
 _I_B09 = ALL_BANDS_INDEX["b09"][0]              # 11
 
-# Band index 2 == B04 (Red) in ALL_BANDS — the phase-correlation band.
+# Band index 2 == B04 (Red) in ALL_BANDS — the band coregistration runs on.
 _COREG_BAND = 2
 
 # Sub-pixel shifts below this are a no-op (skip the FFT round-trip, keep the
 # frame byte-identical). Mirrors coregister_to_reference's subpixel_threshold.
 _COREG_MIN_SHIFT = 0.05
-
-# Reject-as-spurious budget for the *inter-frame* phase-correlation estimate.
-# Two frames drifting ~CROP px in opposite directions sit ~2·CROP apart, so the
-# estimate must accept that pairwise span — capping it at CROP would silently
-# drop a real measurement and make the centroid depend on ref_idx. The *applied*
-# shift is still bounded by the halo (CROP) further down; this only governs which
-# correlation peaks are trusted as genuine vs wild mis-latches.
-_INTERFRAME_MAX_DRIFT_PX = 2 * CROP   # = 8 px
 
 # Grid-independent identity carried verbatim. Everything else (spectral, extras,
 # dates, mask, doy, bbox, centre, size, source, national_grid) is freshly set;
@@ -147,61 +145,37 @@ def clearest_frame_idx(frames: dict[int, np.ndarray]) -> int:
 def coregister_interframe(
     frames: dict[int, np.ndarray], ref_idx: int
 ) -> dict[int, np.ndarray]:
-    """M2: align every frame onto the *composite centroid* of frame positions.
+    """M2: register every frame onto ``frames[ref_idx]`` by mutual information.
 
-    After M1 all frames share the national lattice (integer offset 0), so the
-    only residual is the sub-pixel relative-ortho drift. Rather than pull every
-    frame onto one "clearest" anchor — which bakes that single frame's ortho
-    error into the whole stack — this:
+    The priority is **inter-frame** alignment — the 4 frames pixel-locked to each
+    other so the temporal backbone sees one ground point through time. Absolute
+    placement vs NMD is a separate, secondary concern.
 
-      1. measures each frame's drift ``o_i`` relative to ``frames[ref_idx]``
-         (the anchor's own drift is 0 by definition);
-      2. takes the centroid ``c = mean(o_i)`` over all frames;
-      3. shifts every frame (the anchor included) by ``c - o_i`` so the stack
-         lands on its own centroid.
+    These frames span seasons (autumn stubble vs summer canopy), so the same
+    ground point is radiometrically *different* across frames. Phase correlation
+    then chases phenology, not geometry — measured ~0.75 px error even on clean
+    structured imagery, and it actively degraded the dry-run frames. Mutual
+    information scores the joint-histogram dependence instead, so a sub-pixel
+    shift that lines two frames up geometrically maximises it regardless of the
+    crop appearance change (≈0.05 px on a synthetic season-change fixture).
 
-    The centroid sits at the NMD/label position on average (measured zero-mean
-    on the dry-run tiles), so this removes inter-frame drift *without* inheriting
-    any single frame's absolute error. The result is independent of which frame
-    is ``ref_idx`` — that only sets the measurement origin, so the clearest
-    frame is chosen purely for correlation accuracy.
-
-    Frames are ``(12, H, W)``; the offset/shift primitives work on the 2-D B04
-    plane / each band, so no transpose is needed. The estimate uses
-    ``max_peak_px=_INTERFRAME_MAX_DRIFT_PX`` (2·CROP) so a real pairwise drift
-    between two opposite-drifting frames survives (the 1-px default guard is for
-    transform-aligned callers) while wild mis-latches are still rejected; any
-    final shift the 4-px halo cannot absorb (``> CROP``) is then skipped, so a
-    bad correlation never wrap-corrupts a frame.
+    Each non-reference frame is registered **to the reference** (the reference is
+    left untouched — it is the anchor): ``estimate_mi_offset`` returns the shift
+    to apply, bounded to the halo (``search_px=CROP``) so a bad optimum cannot
+    wrap-corrupt a frame. A shift below ``_COREG_MIN_SHIFT`` (or an MI optimum
+    that beat nothing → ``0,0``) keeps the M1 frame byte-identical. Frames are
+    ``(12, H, W)``; the offset is estimated on B04 and applied to every band.
     """
-    anchor_band = frames[ref_idx][_COREG_BAND]
-    # Pass 1 — each frame's position relative to the anchor (anchor's own = 0).
-    # Arg order is load-bearing: estimate_subpixel_offset(current, reference)
-    # returns where `current` sits relative to `reference`, so the MOVING frame
-    # is `current` and the anchor is `reference` — offsets[i] = frame i's drift
-    # vs the anchor. Reversing the args negates the offset, which makes Pass 2
-    # shift every frame the WRONG way and AMPLIFY inter-frame drift.
-    offsets: dict[int, tuple[float, float]] = {ref_idx: (0.0, 0.0)}
+    ref_band = frames[ref_idx][_COREG_BAND]
+    out: dict[int, np.ndarray] = {ref_idx: frames[ref_idx]}   # reference is the fixed anchor
     for i, arr in frames.items():
         if i == ref_idx:
             continue
-        offsets[i] = estimate_subpixel_offset(
-            arr[_COREG_BAND], anchor_band, max_peak_px=float(_INTERFRAME_MAX_DRIFT_PX)
-        )
-    # Centroid of the frame positions — the zero-mean ≈ NMD anchor.
-    cy = float(np.mean([o[0] for o in offsets.values()]))
-    cx = float(np.mean([o[1] for o in offsets.values()]))
-    # Pass 2 — land every frame on the centroid by shifting it by (c - o_i).
-    out: dict[int, np.ndarray] = {}
-    for i, arr in frames.items():
-        oy, ox = offsets[i]
-        sy, sx = cy - oy, cx - ox
-        if max(abs(sy), abs(sx)) > float(CROP):
-            out[i] = arr            # shift exceeds the halo budget → keep M1 frame
-        elif abs(sy) < _COREG_MIN_SHIFT and abs(sx) < _COREG_MIN_SHIFT:
-            out[i] = arr            # already on the centroid → byte-identical
+        dy, dx = estimate_mi_offset(arr[_COREG_BAND], ref_band, search_px=float(CROP))
+        if max(abs(dy), abs(dx)) < _COREG_MIN_SHIFT:
+            out[i] = arr            # already on the reference (or MI found no gain) → keep M1
         else:
-            shifted = np.stack([subpixel_shift(b, sy, sx) for b in arr])
+            shifted = np.stack([subpixel_shift(b, dy, dx) for b in arr])
             out[i] = np.ascontiguousarray(shifted, np.float32)
     return out
 

@@ -21,7 +21,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import regrid_national_512 as rg  # noqa: E402
-from imint.coregistration import subpixel_shift  # noqa: E402
+from imint.coregistration import estimate_mi_offset, subpixel_shift  # noqa: E402
 
 
 def _smooth_field(seed: int, size: int = 520) -> np.ndarray:
@@ -64,64 +64,56 @@ class TestClearestFrame:
 
 
 class TestInterframeCoreg:
-    """M2 centroid contract, tested on an unambiguous bright dot. A dot makes
-    position measurable to sub-pixel via centre-of-mass, so a sign/axis error is
-    caught loudly — it moves the dots APART instead of onto the shared centroid
-    (the smooth-field residual test this replaces passed even on the inverted
-    sign that amplified drift)."""
+    """M2 = register each frame to the reference by mutual information. Tested on
+    a structured scene whose CONTENT differs between frames (seasonal proxy): MI
+    must recover the geometry and pull the movers onto the (fixed) reference,
+    where intensity correlation would chase the content change. The reference
+    frame itself must come back untouched."""
 
-    _POS = {0: (0, 0), 1: (3, -2), 2: (-2, 3), 3: (1, 1)}   # frame positions vs f0
+    _N = 200
 
     @staticmethod
-    def _dot_cube(r: int, c: int, size: int = 160) -> np.ndarray:
+    def _scene(seed: int, content: float, texture: bool, size: int) -> np.ndarray:
         from scipy.ndimage import gaussian_filter
-        f = np.zeros((size, size), np.float64)
-        f[r, c] = 100.0
-        f = gaussian_filter(f, 2.0) + 0.01
-        return np.repeat(f.astype(np.float32)[None], len(rg.ALL_BANDS), axis=0)
+        rng = np.random.default_rng(seed)
+        lab = np.zeros((size, size), int)
+        lab[28:104, 18:84] = 1; lab[112:172, 36:140] = 2; lab[42:152, 112:182] = 3
+        road = np.zeros((size, size), np.float32); road[:, 90:93] = 1.0; road[78:81, :] = 1.0
+        img = np.zeros((size, size), np.float32)
+        for k, v in {0: 0.20, 1: 0.25 + content, 2: 0.22 - content, 3: 0.28 + content}.items():
+            img[lab == k] = v
+        img += 0.5 * road
+        if texture:
+            img += 0.18 * gaussian_filter(rng.standard_normal((size, size)).astype(np.float32), 1.5) * (lab > 0)
+        img += 0.02 * rng.standard_normal((size, size))
+        return gaussian_filter(img, 1.0).astype(np.float32)
 
-    @staticmethod
-    def _com(plane: np.ndarray) -> np.ndarray:
-        from scipy.ndimage import center_of_mass
-        p = np.asarray(plane, np.float64)
-        p = np.clip(p - p.mean(), 0.0, None)   # isolate the dot above background
-        return np.array(center_of_mass(p))
+    def _cube(self, b04: np.ndarray) -> np.ndarray:
+        # band index _COREG_BAND carries the structured B04; coreg shifts all bands by it.
+        return np.repeat(b04.astype(np.float32)[None], len(rg.ALL_BANDS), axis=0)
 
-    def _frames_at(self, positions: dict[int, tuple[int, int]]) -> dict[int, np.ndarray]:
-        base = self._dot_cube(80, 80)
-        return {
-            i: np.stack([np.roll(np.roll(b, dr, 0), dc, 1) for b in base]).astype(np.float32)
-            for i, (dr, dc) in positions.items()
-        }
-
-    def test_known_drift_removed_not_amplified(self):
-        frames = self._frames_at(self._POS)
-        b = rg._COREG_BAND
-        gap_before = np.linalg.norm(self._com(frames[2][b]) - self._com(frames[1][b]))
+    def test_aligns_movers_to_reference(self):
+        size = self._N
+        ref_b04 = self._scene(1, 0.0, False, size)                      # reference ("autumn")
+        m1 = subpixel_shift(self._scene(2, 0.40, True, size), 1.2, -0.7)  # mover, different content
+        m2 = subpixel_shift(self._scene(3, 0.35, True, size), -0.9, 1.0)
+        frames = {0: self._cube(ref_b04), 1: self._cube(m1), 2: self._cube(m2)}
         out = rg.coregister_interframe(frames, ref_idx=0)
-        coms = np.array([self._com(out[i][b]) for i in sorted(out)])
-        spread = coms.max(0) - coms.min(0)
-        # every frame collapses onto the shared centroid → sub-pixel spread.
-        assert np.all(spread < 0.5), f"frames not co-registered: spread={spread}"
-        # and the gap SHRANK — the inverted sign would have grown it.
-        assert float(np.linalg.norm(spread)) < 0.3 * float(gap_before)
-
-    def test_independent_of_ref_idx(self):
-        """Defining property of the centroid anchor: the stack lands in the same
-        place regardless of which frame is the measurement origin."""
         b = rg._COREG_BAND
-        out0 = rg.coregister_interframe(self._frames_at(self._POS), ref_idx=0)
-        out2 = rg.coregister_interframe(self._frames_at(self._POS), ref_idx=2)
-        for i in sorted(self._POS):
-            d = float(np.linalg.norm(self._com(out0[i][b]) - self._com(out2[i][b])))
-            assert d < 0.3, f"frame {i} depends on ref_idx: {d:.3f}px"
+        # reference is the fixed anchor — untouched
+        assert np.array_equal(out[0], frames[0])
+        for i in (1, 2):
+            # each mover now sits on the reference → residual offset to ref ~0
+            dy, dx = estimate_mi_offset(out[i][b], ref_b04, search_px=4.0)
+            assert float(np.hypot(dy, dx)) < 0.5, f"frame {i} not aligned to ref: ({dy:.2f},{dx:.2f})"
+            assert not np.array_equal(out[i], frames[i])               # it was actually shifted
 
     def test_no_shift_returns_equivalent(self):
-        base = self._dot_cube(80, 80)
-        out = rg.coregister_interframe({0: base, 1: base.copy()}, ref_idx=0)
-        # identical inputs → zero centroid → every frame returned untouched.
-        np.testing.assert_allclose(out[0], base, atol=1e-4)
-        np.testing.assert_allclose(out[1], base, atol=1e-4)
+        ref = self._cube(self._scene(1, 0.0, False, self._N))
+        out = rg.coregister_interframe({0: ref, 1: ref.copy()}, ref_idx=0)
+        # identical content → MI optimum at 0 → both frames returned untouched.
+        np.testing.assert_allclose(out[0], ref, atol=1e-4)
+        np.testing.assert_allclose(out[1], ref, atol=1e-4)
 
 
 class TestAssembleFresh:
