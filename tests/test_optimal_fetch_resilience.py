@@ -118,6 +118,6 @@ def test_era5_cache_persists_to_disk(tmp_path, monkeypatch):
         {"west": 14.9, "south": 58.2, "east": 14.95, "north": 58.25},
         "2016-06-01", "2016-08-31",
     )
-    files = list(tmp_path.glob("era5_*.json"))
+    files = list(tmp_path.glob("era5*.json"))  # era5v2_… (glob tolerates schema bumps)
     assert len(files) == 1, "one JSON cache file written"
     assert json.loads(files[0].read_text()) == out, "disk payload round-trips"

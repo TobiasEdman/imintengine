@@ -128,7 +128,7 @@ def run_job(job: IMINTJob) -> IMINTResult:
     return IMINTResult(
         job_id=job.job_id,
         date=job.date,
-        success=all(r.success for r in results),
+        success=all(r.success for r in results if not r.skipped),
         analyzer_results=results,
         summary_path=summary_path,
     )

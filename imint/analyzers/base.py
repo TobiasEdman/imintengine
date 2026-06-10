@@ -30,8 +30,11 @@ class AnalysisResult:
     outputs: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
     error: str | None = None
+    skipped: bool = False  # optional dependency unavailable: not run, not a failure
 
     def summary(self) -> str:
+        if self.skipped:
+            return f"[{self.analyzer}] skipped — {self.error}"
         if self.success:
             keys = ", ".join(self.outputs.keys()) if self.outputs else "none"
             return f"[{self.analyzer}] OK — outputs: {keys}"

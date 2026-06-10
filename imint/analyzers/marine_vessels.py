@@ -85,8 +85,8 @@ class MarineVesselAnalyzer(BaseAnalyzer):
             from sahi.predict import get_sliced_prediction
         except ImportError:
             return AnalysisResult(
-                analyzer=self.name, success=False,
-                error="sahi not installed. Install with: pip install sahi",
+                analyzer=self.name, success=False, skipped=True,
+                error="sahi not installed (optional) — analyzer skipped. Install: pip install sahi",
             )
 
         try:
