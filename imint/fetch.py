@@ -611,21 +611,54 @@ def _connect(token: str | None = None, token_path: str | None = None):
     except Exception as e:
         raise FetchError(f"Failed to connect to {OPENEO_URL}: {e}")
 
-    # Basic Auth — requires DES_USER + DES_PASSWORD env vars (or .env file)
+    # Authentication priority (see docstring): explicit token -> DES_TOKEN env
+    # -> basic auth -> stored refresh token -> token file. Each tier falls
+    # through to the next on absence/failure; only the last tier raises.
+    PROVIDER = "egi"
+
+    # 1. Explicit token argument
+    if token:
+        conn.authenticate_oidc_access_token(access_token=token, provider_id=PROVIDER)
+        return conn
+
+    # 2. DES_TOKEN environment variable
+    env_token = os.environ.get("DES_TOKEN")
+    if env_token:
+        conn.authenticate_oidc_access_token(access_token=env_token, provider_id=PROVIDER)
+        return conn
+
+    # 3. Basic Auth — DES_USER + DES_PASSWORD (env, else root .env file)
     des_user = os.environ.get("DES_USER")
     des_password = os.environ.get("DES_PASSWORD")
     if not des_user or not des_password:
-        # Try loading from root .env file before giving up
         _try_load_root_dotenv()
         des_user = os.environ.get("DES_USER")
         des_password = os.environ.get("DES_PASSWORD")
-    if not des_user or not des_password:
-        raise FetchError(
-            "DES credentials not configured. "
-            "Set DES_USER and DES_PASSWORD env vars or add them to .env"
-        )
-    conn.authenticate_basic(username=des_user, password=des_password)
-    return conn
+    if des_user and des_password:
+        conn.authenticate_basic(username=des_user, password=des_password)
+        return conn
+
+    # 4. Stored refresh token (from des_login.py --device; auto-renews)
+    try:
+        conn.authenticate_oidc_refresh_token()
+        return conn
+    except Exception:
+        pass  # no/expired stored refresh token -> fall through to the token file
+
+    # 5. Token file (explicit path, else .des_token in project root)
+    tok_path = token_path or TOKEN_PATH_DEFAULT
+    if os.path.isfile(tok_path):
+        with open(tok_path) as fh:
+            file_token = fh.read().strip()
+        if file_token:
+            conn.authenticate_oidc_access_token(access_token=file_token, provider_id=PROVIDER)
+            return conn
+
+    raise FetchError(
+        "DES authentication not configured. Provide a token argument, set "
+        "DES_TOKEN, set DES_USER + DES_PASSWORD, store a refresh token via "
+        f"des_login.py --device, or place a token at {tok_path}."
+    )
 
 
 # ── CDSE connection ──────────────────────────────────────────────────────────
