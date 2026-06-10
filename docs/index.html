@@ -953,6 +953,80 @@
                 rå M1-ramar). Producerad av <code>k8s/regrid-mi-validate-pod.yaml</code>.
             </p>
 
+            <h3>Samma kanter, frysta — kant-overlay</h3>
+            <p>
+                Flicker-GIF:arna ovan visar driften i rörelse; här är samma ram-mot-referens
+                fryst till en enda bild. Kanterna (Sobel-magnitud på B04) läggs på den
+                skogsgröna bakgrunden i två färgkanaler:
+                <span style="color:#6b7280;font-weight:700">grått</span> = referensramens
+                kanter, <span style="color:#c0392b;font-weight:700">tegelrött</span> = målramens,
+                och <span style="color:#1f8a6a;font-weight:700">mint</span> där de sammanfaller.
+                <b>Före</b> MI separerar grått och tegelrött längs kanterna (driften);
+                <b>efter</b> MI låser de till mint.
+            </p>
+            <div class="gif-grid">
+                <div class="gif-card">
+                    <div class="gif-pair">
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-before">Före</span>
+                            <img src="showcase/coreg/43983928_f1_edge_before.png" alt="Tile 43983928 ram 1, kant-overlay före koregistrering — grå och tegelröda kanter separerade" loading="lazy">
+                        </div>
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-after">Efter</span>
+                            <img src="showcase/coreg/43983928_f1_edge_after.png" alt="Tile 43983928 ram 1, kant-overlay efter MI — kanterna sammanfaller i mint" loading="lazy">
+                        </div>
+                    </div>
+                    <div class="gif-meta">
+                        <b>43983928 · ram 1</b> — inter-frame-residual
+                        <span class="res"><b>0.79 px → 0.00 px</b></span>
+                        <span class="note">Grå/tegelröda kantband låser till mint efter MI.</span>
+                    </div>
+                </div>
+                <div class="gif-card">
+                    <div class="gif-pair">
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-before">Före</span>
+                            <img src="showcase/coreg/44063896_f2_edge_before.png" alt="Tile 44063896 ram 2, kant-overlay före koregistrering — kantband separerade" loading="lazy">
+                        </div>
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-after">Efter</span>
+                            <img src="showcase/coreg/44063896_f2_edge_after.png" alt="Tile 44063896 ram 2, kant-overlay efter MI — kanterna sammanfaller" loading="lazy">
+                        </div>
+                    </div>
+                    <div class="gif-meta">
+                        <b>44063896 · ram 2</b> — inter-frame-residual
+                        <span class="res"><b>0.77 px → 0.02 px</b></span>
+                        <span class="note">Tydligaste fallet: phase correlation blåste upp den
+                        till 1.84 px — kantbanden kollapsar rent till mint efter MI.</span>
+                    </div>
+                </div>
+                <div class="gif-card">
+                    <div class="gif-pair">
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-before">Före</span>
+                            <img src="showcase/coreg/44003936_f0_edge_before.png" alt="Tile 44003936 höstram, kant-overlay före koregistrering" loading="lazy">
+                        </div>
+                        <div class="gif-pane">
+                            <span class="ba-tag ba-after">Efter</span>
+                            <img src="showcase/coreg/44003936_f0_edge_after.png" alt="Tile 44003936 höstram, kant-overlay efter MI" loading="lazy">
+                        </div>
+                    </div>
+                    <div class="gif-meta">
+                        <b>44003936 · ram 0 (höst)</b> — inter-frame-residual
+                        <span class="res"><b>0.39 px → 0.00 px</b></span>
+                        <span class="note">Det svåra fallet: höstram mot växtsäsongsreferens. Den
+                        dominerande grå/tegelröd-fransningen är <em>säsongsskillnad i innehåll</em>
+                        — kanter som bara finns i en årstid, inte feljustering. Just den skillnaden är
+                        varför phase correlation faller och mutual information behövs.</span>
+                    </div>
+                </div>
+            </div>
+            <p class="src-note">
+                Kant-overlay (Sobel-magnitud, B04) av samma flicker-GIF-ramar. Producerad av
+                <code>scripts/viz_coreg_edge_overlay.py</code> — noll-PU, helt reproducerbar
+                från de committade GIF:arna.
+            </p>
+
         </div>
     </div><!-- /sub-tab-content coregistration -->
 
