@@ -187,6 +187,40 @@ def fetch_diameter_tile(
     )
 
 
+def fetch_tree_height_tile(
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    *,
+    size_px: int | tuple[int, int] = 256,
+    cache_dir: Path | None = None,
+) -> np.ndarray:
+    """Fetch a tree height tile (meters) from Skogliga grunddata band 5.
+
+    Trädhöjd (laser) — stored in the mosaic as decimeters, converted here
+    to meters. This is the working source for height: the standalone
+    Trädhöjd ImageServer behind ``skg_height.fetch_height_tile`` is dead
+    and silently returns all-zeros.
+
+    Args:
+        west, south, east, north: Bounding box in EPSG:3006 (meters).
+        size_px: Output size — int for square or (H, W) tuple.
+        cache_dir: Optional .npy cache directory.
+
+    Returns:
+        (H, W) float32 array, unit meters.  NoData pixels are 0.
+    """
+    dm = fetch_grunddata_tile(
+        west, south, east, north,
+        band=BAND_TREE_HEIGHT,
+        size_px=size_px,
+        cache_dir=cache_dir,
+        cache_prefix="tree_height",
+    )
+    return dm.astype(np.float32) / 10.0
+
+
 def fetch_grunddata_tile(
     west: float,
     south: float,
