@@ -69,12 +69,12 @@ def spatial_parquet_path(tmp_path):
 class TestSpatialParquetFastPath:
     def test_loads_lazily(self, spatial_parquet_path):
         sp = SpatialParquet(spatial_parquet_path)
-        # File not opened until query
-        assert sp._parq is None
+        # File not opened until query (handle is thread-local; set on first query)
+        assert getattr(sp._tls, "parq", None) is None
         assert sp._rg_bboxes is None
 
         sp.query({"west": 0, "south": 6_000_000, "east": 5_000, "north": 6_005_000})
-        assert sp._parq is not None
+        assert getattr(sp._tls, "parq", None) is not None
         assert sp._rg_bboxes is not None
 
     def test_query_returns_intersecting_polygons(self, spatial_parquet_path):

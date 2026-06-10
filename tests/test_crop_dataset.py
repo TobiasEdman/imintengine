@@ -23,7 +23,7 @@ class TestCropSchema:
     """Verify LUCAS → Swedish crop class mapping."""
 
     def test_num_classes(self):
-        assert NUM_CLASSES == 8
+        assert NUM_CLASSES == 9
 
     def test_class_names_count(self):
         assert len(CLASS_NAMES) == NUM_CLASSES
@@ -49,8 +49,11 @@ class TestCropSchema:
         assert lucas_code_to_class("B21") == 6
 
     def test_other_crop_mapping(self):
-        for code in ["B12", "B16", "B22", "B31"]:
-            assert lucas_code_to_class(code) == 7, f"{code} should be other_crop"
+        # ovrig_akergroda (class 8): rye (B12), triticale (B16), sugar beet (B22)
+        for code in ["B12", "B16", "B22"]:
+            assert lucas_code_to_class(code) == 8, f"{code} should be ovrig_akergroda"
+        # peas / field beans (B31) are now their own class: trindsad (7)
+        assert lucas_code_to_class("B31") == 7
 
     def test_non_crop_returns_zero(self):
         assert lucas_code_to_class("A11") == 0  # Forest
@@ -137,8 +140,8 @@ class TestLoadLucasSweden:
         points = load_lucas_sweden(csv_path)
         summary = summarize_lucas_sweden(points)
         assert summary["total"] == 3
-        assert summary["per_class"]["wheat"] == 2
-        assert summary["per_class"]["barley"] == 1
+        assert summary["per_class"]["vete"] == 2
+        assert summary["per_class"]["korn"] == 1
 
 
 # ── CropDataset tests ────────────────────────────────────────────────────
