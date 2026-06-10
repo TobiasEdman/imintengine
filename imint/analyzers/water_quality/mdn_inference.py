@@ -165,8 +165,10 @@ def run_mdn(
     if not water_mask.any():
         raise MDNUnavailable("no water pixels in tile — MDN inference would be empty")
 
-    image_estimates = _import_mdn(mdn_repo_path)
+    # Validate inputs (cheap) before the heavy, env-fragile MDN import, so a
+    # missing band fails fast and clearly even where upstream MDN can't load.
     rrs = _stack_rrs(bands, water_mask)
+    image_estimates = _import_mdn(mdn_repo_path)
 
     try:
         chla, _idxs = image_estimates(rrs, sensor="MSI")
