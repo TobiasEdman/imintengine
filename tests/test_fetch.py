@@ -61,9 +61,14 @@ class TestCheckCloudFraction:
         scl = np.full((100, 100), 8, dtype=np.uint8)
         assert check_cloud_fraction(scl) == 1.0
 
+    def test_cloud_shadow_counts_as_cloud(self):
+        """SCL class 3 (cloud shadow) is contamination → counts as cloud."""
+        scl = np.full((100, 100), 3, dtype=np.uint8)
+        assert check_cloud_fraction(scl) == 1.0
+
     def test_non_cloud_classes(self):
-        """SCL classes 0-7 and 11 should NOT count as cloud."""
-        for cls in [0, 1, 2, 3, 4, 5, 6, 7, 11]:
+        """SCL classes 0-2, 4-7 and 11 should NOT count as cloud (3 = shadow does)."""
+        for cls in [0, 1, 2, 4, 5, 6, 7, 11]:
             scl = np.full((10, 10), cls, dtype=np.uint8)
             assert check_cloud_fraction(scl) == 0.0, f"SCL class {cls} incorrectly counted as cloud"
 
@@ -78,8 +83,8 @@ class TestCheckCloudFraction:
         assert abs(check_cloud_fraction(scl) - 3.0/12.0) < 1e-6
 
     def test_cloud_classes_constant(self):
-        """SCL_CLOUD_CLASSES should be {8, 9, 10}."""
-        assert SCL_CLOUD_CLASSES == frozenset({8, 9, 10})
+        """SCL_CLOUD_CLASSES = cloud shadow (3) + cloud med/high (8,9) + cirrus (10)."""
+        assert SCL_CLOUD_CLASSES == frozenset({3, 8, 9, 10})
 
 
 # ── FetchResult ──────────────────────────────────────────────────────────────
@@ -189,8 +194,9 @@ class TestConnect:
                 assert result is mock_conn
 
     @patch.dict("os.environ", {}, clear=False)
+    @patch("imint.fetch._try_load_root_dotenv")  # don't let a dev .env leak DES_USER/PASSWORD
     @patch("imint.fetch.openeo", create=True)
-    def test_file_token_fallback(self, mock_openeo_module, tmp_path):
+    def test_file_token_fallback(self, mock_openeo_module, mock_load_dotenv, tmp_path):
         """Token file should be used if no explicit token, env var, or refresh token."""
         mock_conn = MagicMock()
         # Make refresh token fail so it falls through to file token
@@ -277,10 +283,12 @@ class TestFetchDesData:
 
         return mock_conn
 
+    @patch("imint.fetch._snap_to_target_grid")
     @patch("rasterio.open")
     @patch("imint.fetch._connect")
-    def test_returns_fetch_result(self, mock_connect, mock_rasterio_open):
+    def test_returns_fetch_result(self, mock_connect, mock_rasterio_open, mock_snap):
         """fetch_des_data should return a FetchResult with correct fields."""
+        mock_snap.side_effect = lambda raw, *a, **kw: (raw, "mock-transform")
         h, w = 64, 64
         self._mock_single_stage_fetch(mock_connect, mock_rasterio_open, h, w,
                                        scl_value=4)  # vegetation, no clouds
@@ -304,10 +312,12 @@ class TestFetchDesData:
         # Verify reflectance conversion: B04 DN=1960 → (1960-1000)/10000 = 0.096
         assert abs(result.bands["B04"].mean() - 0.096) < 1e-4
 
+    @patch("imint.fetch._snap_to_target_grid")
     @patch("rasterio.open")
     @patch("imint.fetch._connect")
-    def test_rejects_cloudy_scene(self, mock_connect, mock_rasterio_open):
+    def test_rejects_cloudy_scene(self, mock_connect, mock_rasterio_open, mock_snap):
         """Should raise FetchError when cloud fraction exceeds threshold."""
+        mock_snap.side_effect = lambda raw, *a, **kw: (raw, "mock-transform")
         h, w = 64, 64
         self._mock_single_stage_fetch(mock_connect, mock_rasterio_open, h, w,
                                        scl_value=9)  # cloud_high_probability
@@ -319,10 +329,12 @@ class TestFetchDesData:
                 cloud_threshold=0.1,
             )
 
+    @patch("imint.fetch._snap_to_target_grid")
     @patch("rasterio.open")
     @patch("imint.fetch._connect")
-    def test_skips_scl_check_when_disabled(self, mock_connect, mock_rasterio_open):
+    def test_skips_scl_check_when_disabled(self, mock_connect, mock_rasterio_open, mock_snap):
         """With include_scl=False, should skip cloud check and fetch everything."""
+        mock_snap.side_effect = lambda raw, *a, **kw: (raw, "mock-transform")
         h, w = 64, 64
         mock_conn = MagicMock()
         mock_connect.return_value = mock_conn
@@ -504,7 +516,9 @@ class TestToNMDGrid:
         coords = {"west": 14.5, "south": 56.0, "east": 15.5, "north": 57.0}
 
         with patch("imint.fetch._connect", return_value=mock_conn), \
-             patch("rasterio.open", return_value=make_src(merged_raw)):
+             patch("rasterio.open", return_value=make_src(merged_raw)), \
+             patch("imint.fetch._snap_to_target_grid",
+                   side_effect=lambda raw, *a, **kw: (raw, "mock-transform")):
             fetch_des_data(date="2022-06-15", coords=coords)
 
         # Verify all load_collection calls used projected coords with crs key
@@ -520,10 +534,12 @@ class TestToNMDGrid:
 class TestFetchDesDataSTAC:
     """Verify that fetch_des_data uses STAC when date_window > 0."""
 
+    @patch("imint.fetch._snap_to_target_grid",
+           side_effect=lambda raw, *a, **kw: (raw, "mock-transform"))
     @patch("imint.fetch._stac_best_date")
     @patch("rasterio.open")
     @patch("imint.fetch._connect")
-    def test_stac_called_with_date_window(self, mock_connect, mock_rasterio_open, mock_stac):
+    def test_stac_called_with_date_window(self, mock_connect, mock_rasterio_open, mock_stac, mock_snap):
         """fetch_des_data should call _stac_best_date when date_window > 0."""
         mock_stac.return_value = "2022-06-14"  # STAC selects a nearby date
 
@@ -558,9 +574,11 @@ class TestFetchDesDataSTAC:
         assert args[1] == "2022-06-15"
         assert args[2] == 5
 
+    @patch("imint.fetch._snap_to_target_grid",
+           side_effect=lambda raw, *a, **kw: (raw, "mock-transform"))
     @patch("rasterio.open")
     @patch("imint.fetch._connect")
-    def test_stac_not_called_without_date_window(self, mock_connect, mock_rasterio_open):
+    def test_stac_not_called_without_date_window(self, mock_connect, mock_rasterio_open, mock_snap):
         """fetch_des_data should NOT call STAC when date_window == 0."""
         mock_conn = MagicMock()
         mock_connect.return_value = mock_conn
@@ -622,8 +640,9 @@ class TestConnectCDSE:
     """Verify CDSE authentication priority."""
 
     @patch.dict("os.environ", {"CDSE_CLIENT_ID": "test-id", "CDSE_CLIENT_SECRET": "test-secret"}, clear=False)
+    @patch("imint.fetch._discover_openeo_endpoint", return_value=None)  # hermetic: no network -> base URL
     @patch("imint.fetch.openeo", create=True)
-    def test_client_credentials_auth(self, mock_openeo_module):
+    def test_client_credentials_auth(self, mock_openeo_module, mock_discover):
         """Should use client_credentials when env vars are set."""
         mock_conn = MagicMock()
         with patch.dict("sys.modules", {"openeo": mock_openeo_module}):
@@ -657,15 +676,20 @@ class TestConnectCDSE:
                 assert result is mock_conn
 
     @patch.dict("os.environ", {"CDSE_CLIENT_ID": "bad-id", "CDSE_CLIENT_SECRET": "bad-secret"}, clear=False)
+    @patch("imint.fetch._try_load_root_dotenv")
+    @patch("os.path.isfile", return_value=False)
+    @patch("imint.fetch._discover_openeo_endpoint", return_value=None)
     @patch("imint.fetch.openeo", create=True)
-    def test_client_credentials_failure(self, mock_openeo_module):
-        """Should raise FetchError on auth failure."""
+    def test_client_credentials_failure(self, mock_openeo_module, mock_discover, mock_isfile, mock_load_dotenv):
+        """Every auth method failing should raise FetchError (graceful fall-through)."""
         mock_conn = MagicMock()
+        # All tiers fail: client_credentials raises, no password creds, interactive OIDC raises.
         mock_conn.authenticate_oidc_client_credentials.side_effect = Exception("auth failed")
+        mock_conn.authenticate_oidc.side_effect = Exception("no browser")
         with patch.dict("sys.modules", {"openeo": mock_openeo_module}):
             mock_openeo_module.connect.return_value = mock_conn
 
-            with pytest.raises(FetchError, match="client_credentials auth failed"):
+            with pytest.raises(FetchError, match="every configured method"):
                 _connect_cdse()
 
 
