@@ -10,10 +10,11 @@ Two levels of alignment:
    the pixel offset between two raster transforms and crops/places
    arrays to their overlapping region. No reference image needed.
 
-2. **Sub-pixel alignment** — image-based. Uses phase correlation on a
-   reference band to detect fractional-pixel shifts caused by
-   Sentinel-2 orbit geometry and reprojection, then corrects via
-   Fourier phase shift (sinc interpolation).
+2. **Sub-pixel alignment** — image-based. Uses mutual-information
+   matching on a reference band to detect fractional-pixel shifts caused
+   by Sentinel-2 orbit geometry and reprojection — robust to the
+   season-to-season content change that makes phase correlation chase
+   phenology — then corrects via Fourier phase shift (sinc interpolation).
 
 Typical usage in an analyzer::
 
@@ -26,7 +27,7 @@ Typical usage in an analyzer::
         target_transform=cur_geo,      # Affine transform list [a,b,c,d,e,f]
         reference_transform=bl_geo,    # Affine transform list [a,b,c,d,e,f]
         subpixel=True,                 # enable sub-pixel refinement
-        reference_band=2,              # band index for phase correlation
+        reference_band=2,              # band index for MI estimation
     )
 
 For fetch-level grid snapping (no reference image, just transforms)::
@@ -159,6 +160,11 @@ def estimate_subpixel_offset(
     max_peak_px: float | None = 1.0,
 ) -> tuple[float, float]:
     """Estimate sub-pixel offset between two co-registered images.
+
+    **Retired from production — test-only.** The production sub-pixel path uses
+    :func:`estimate_mi_offset` (mutual information, robust to the season-change
+    content shift that makes phase correlation chase phenology). This estimator is
+    retained to document and regression-test the approach MI replaced.
 
     Uses phase correlation (cross-power spectrum) with parabolic peak
     fitting to detect fractional-pixel shifts between Sentinel-2
@@ -351,7 +357,7 @@ def coregister_to_reference(
     """Co-register a target image to a reference image.
 
     Combines integer-pixel alignment (from transforms) and optional
-    sub-pixel refinement (from phase correlation) in a single call.
+    sub-pixel refinement (from mutual-information matching) in a single call.
 
     This is the main entry point for any multi-temporal analysis that
     needs aligned image pairs: change detection, LSTM time-series,
@@ -366,7 +372,7 @@ def coregister_to_reference(
                              If None, integer alignment is skipped.
         pixel_size:          Grid pixel size in metres (default 10 m).
         subpixel:            Whether to apply sub-pixel refinement.
-        reference_band:      Band index to use for phase correlation
+        reference_band:      Band index to use for sub-pixel MI estimation
                              (default 2 = B04/Red in CHANGE_BANDS order).
         subpixel_threshold:  Minimum sub-pixel offset to correct (pixels).
 
@@ -415,7 +421,16 @@ def coregister_to_reference(
                 cur_band = target
                 ref_band = reference
 
-            sub_dy, sub_dx = estimate_subpixel_offset(cur_band, ref_band)
+            # Register the *reference* band onto the *target* (current) band by
+            # mutual information. The reference is the moving image, so MI's
+            # ``moving`` arg is ``ref_band`` and the returned shift is applied to
+            # the reference with a POSITIVE sign below (phase-corr applied −). The
+            # arg order and sign are convention-bearing — guarded by the dot/COM
+            # reverse-fit test (the 54b30a3 trap). ``search_px=1.0``: callers
+            # arrive here after integer alignment, so the residual is sub-pixel —
+            # this approximates the old phase-corr ``max_peak_px=1.0`` reject
+            # intent (the MI wall is stricter: rejection at ``0.95·search_px``).
+            sub_dy, sub_dx = estimate_mi_offset(ref_band, cur_band, search_px=1.0)
 
             if abs(sub_dy) > subpixel_threshold or abs(sub_dx) > subpixel_threshold:
                 print(
@@ -427,10 +442,10 @@ def coregister_to_reference(
                 if reference.ndim == 3:
                     for b in range(reference.shape[2]):
                         reference[..., b] = subpixel_shift(
-                            reference[..., b], -sub_dy, -sub_dx
+                            reference[..., b], sub_dy, sub_dx
                         )
                 else:
-                    reference = subpixel_shift(reference, -sub_dy, -sub_dx)
+                    reference = subpixel_shift(reference, sub_dy, sub_dx)
                 print(f"    [coreg] Sub-pixel correction applied")
             else:
                 sub_dy, sub_dx = 0.0, 0.0
@@ -469,7 +484,7 @@ def coregister_timeseries(
         reference_idx: Index of the reference image in ``images``.
         pixel_size:    Grid pixel size in metres.
         subpixel:      Whether to apply sub-pixel refinement.
-        reference_band: Band index for phase correlation.
+        reference_band: Band index for sub-pixel MI estimation.
 
     Returns:
         (aligned_images, metadata) where aligned_images are all cropped

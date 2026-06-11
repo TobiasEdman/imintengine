@@ -6,7 +6,6 @@ try:
         compute_grid_offset,
         align_arrays,
         subpixel_shift,
-        estimate_subpixel_offset,
     )
 except ImportError:
     # Lightweight mode — torch not installed (e.g. fetch-only pods)

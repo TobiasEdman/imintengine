@@ -30,7 +30,6 @@ from .base import BaseAnalyzer, AnalysisResult
 from ..coregistration import (
     compute_grid_offset,
     align_arrays,
-    estimate_subpixel_offset,
     subpixel_shift,
     coregister_to_reference,
 )
@@ -84,7 +83,6 @@ def _nbr(b08, b12):
 # kept here for backward compatibility with any external callers.
 _compute_grid_offset = compute_grid_offset
 _subpixel_shift = subpixel_shift
-_estimate_subpixel_offset = estimate_subpixel_offset
 _align_arrays = align_arrays
 
 
