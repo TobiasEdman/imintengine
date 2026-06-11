@@ -78,7 +78,7 @@ from imint.coregistration import _COREG_BAND, clearest_frame_idx, coregister_int
 from imint.training.tile_assemble import assemble_fresh, crop_halo, date_to_doy
 from imint.training.tile_config import TileConfig
 
-SUPPORTED_BACKENDS = ("cdse", "cdse-openeo", "des")
+SUPPORTED_BACKENDS = ("cdse", "cdse-openeo", "des", "l1c_sen2cor")
 
 # Backends whose openEO tile-graph returns all-band frames on a snapped halo grid
 # — the precondition for M2 (inter-frame coreg needs 4 frames on one shared grid).
@@ -138,6 +138,13 @@ def fetch_spectral(
             semaphore=_DES_SEMAPHORE,
             cloud_threshold=cloud_threshold,
             collect_extra=collect_extra,
+        )
+    if backend == "l1c_sen2cor":
+        if is_source_dead("l1c_sen2cor"):
+            return None  # no L2A_Process in this image / earlier hard failure.
+        return _fetch_via_l1c_sen2cor(
+            bbox_3006, coords_wgs84, date_str,
+            size_px=size_px, collect_extra=collect_extra,
         )
     raise ValueError(
         f"fetch_spectral: unknown backend {backend!r}. "
@@ -294,6 +301,81 @@ def _fetch_via_openeo(
         return None
     finally:
         semaphore.release()
+
+
+def _fetch_via_l1c_sen2cor(
+    bbox_3006: dict,
+    coords_wgs84: dict,
+    date_str: str,
+    *,
+    size_px: int,
+    collect_extra: dict | None = None,
+) -> np.ndarray | None:
+    """GCS L1C → sen2cor → L2A all-band window — the PU-free, pre-2018-capable
+    LAST-RESORT backend for slots CDSE/DES cannot fill.
+
+    Cloud is decided by an ERA5-over-tile gate (cheap, pre-download); the scene
+    is found by the CDSE-STAC existence lookup (full archive incl. pre-2018) —
+    deliberately NOT ``_stac_best_l1c_scene`` (per-scene cloud, pre-2018-blind
+    DES STAC). Returns the full 12-band cube split into the 6-band model input +
+    extras, exactly like the openEO path.
+
+    Runs only where ``L2A_Process`` exists (the imint-sen2cor image); the first
+    ``FileNotFoundError`` marks the source dead so a non-sen2cor pod no-ops
+    instead of downloading a SAFE per slot forever.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from imint.fetch import fetch_l1c_safe_by_name
+    from imint.training.optimal_fetch import era5_prefilter_dates
+    from imint.training.sen2cor_l2a import (
+        read_l2a_allband,
+        run_sen2cor,
+        stac_l1c_scenes,
+    )
+
+    # 1) ERA5-over-tile gate — reject cloudy dates before any SAFE download.
+    if date_str not in set(era5_prefilter_dates(coords_wgs84, date_str, date_str)):
+        print(f"    [fetch_spectral:l1c_sen2cor] era5-cloud {date_str}", flush=True)
+        return None
+
+    # 2) Existence-based scene selection (CDSE STAC). Among scenes on this exact
+    #    date, the granule-average cloud is a tie-break only — ERA5 already gated.
+    scenes = [s for s in stac_l1c_scenes(coords_wgs84, date_str, date_str)
+              if str(s.get("datetime") or "")[:10] == date_str]
+    if not scenes:
+        print(f"    [fetch_spectral:l1c_sen2cor] no-scene {date_str}", flush=True)
+        return None
+    scene_id = min(scenes, key=lambda s: s["cloud_pct"])["scene_id"]
+
+    # 3) GCS SAFE → sen2cor → all-band window. Temp dirs purged in finally so
+    #    disk stays bounded (one SAFE ~0.8 GB + its L2A ~0.6 GB per call).
+    cube = None
+    work = Path(tempfile.mkdtemp(prefix="l1c_sen2cor_"))
+    try:
+        safe_dir = fetch_l1c_safe_by_name(scene_id, dest_dir=work / "safe")
+        l2a_dir = run_sen2cor(safe_dir, work / "l2a")
+        if l2a_dir is not None:
+            cube = read_l2a_allband(l2a_dir, bbox_3006, size_px)  # (12, H, W)
+    except FileNotFoundError as e:
+        mark_source_dead("l1c_sen2cor", f"L2A_Process not installed: {e}")
+        return None
+    except Exception as e:
+        print(
+            f"    [fetch_spectral:l1c_sen2cor] {date_str}: "
+            f"{type(e).__name__}: {str(e)[:200]}",
+            flush=True,
+        )
+        return None
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    if cube is None:
+        return None
+    # Split full-band (12) → 6-band Prithvi cube + per-band extras (openEO parity).
+    return _split_all_bands(cube, collect_extra)
 
 
 # ── Per-tile canonical entry (M1 + M2) ──────────────────────────────────────
