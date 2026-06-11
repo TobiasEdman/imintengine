@@ -92,8 +92,11 @@ def main() -> None:
         try:
             with np.load(path, allow_pickle=True) as npz:
                 data = {k: npz[k] for k in _META_KEYS if k in npz.files}
-        except (EOFError, OSError, ValueError):
-            n_unreadable += 1  # truncated / empty / corrupt — skip, don't die
+        except Exception:
+            # Bulk scan over 10k+ PVC tiles: any unreadable file (truncated,
+            # empty, BadZipFile, bad pickle, …) is skipped + counted, never
+            # fatal. One corrupt tile must not kill the whole gate.
+            n_unreadable += 1
             continue
         size = infer_size_px(data, args.size_px) if args.infer_size else args.size_px
         got = colocate_plots(plots, name=path.stem, npz_data=data, tile=TileConfig(size_px=size))
