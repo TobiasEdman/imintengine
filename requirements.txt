@@ -26,6 +26,7 @@ psutil>=5.9
 
 # Data processing
 pandas>=2.0
+openpyxl>=3.1   # pandas .read_excel engine for the SLU NFI plot xlsx (imint/training/slu_nfi.py)
 
 # Satellite data (needed for data fetching via DES)
 openeo>=0.20
