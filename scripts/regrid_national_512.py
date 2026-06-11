@@ -57,19 +57,13 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from imint.coregistration import clearest_frame_idx, coregister_interframe
-from imint.training.openeo_tile_graph import (
-    ALL_BANDS,
-    fetch_tile_at_specific_dates,
-)
-from imint.training.tile_assemble import assemble_fresh, crop_halo
+from imint.training.fetch_spectral import fetch_tile_spectral
 from imint.training.tile_config import TileConfig
 
 # Reuse the proven atomic-write helper from the fill script (same dir).
@@ -84,16 +78,6 @@ CROP = (HALO_PX - CANON_PX) // 2   # 4 px centre-crop per side
 # dates, mask, doy, bbox, centre, size, source, national_grid) is freshly set;
 # labels + aux + 2016 bg are regenerated/re-fetched downstream (see docstring).
 _CARRY_KEYS = ("year", "lpis_year", "tessera_year")
-
-
-def _doy(date_str: str) -> int:
-    """Day-of-year for an ISO date, or 0 for an empty/invalid string."""
-    if not date_str:
-        return 0
-    try:
-        return datetime.strptime(date_str[:10], "%Y-%m-%d").timetuple().tm_yday
-    except ValueError:
-        return 0
 
 
 def centre_of(data: dict) -> tuple[int, int] | None:
@@ -115,11 +99,14 @@ def regrid_one_tile(
     tile_path: str, out_dir: str, *, skip_existing: bool = True,
     debug_precoreg: bool = False,
 ) -> dict:
-    """Re-grid one tile onto the national lattice. See module docstring.
+    """Re-grid one tile onto the national lattice via the canonical fetch entry.
 
-    ``debug_precoreg`` additionally stores the pre-M2 (raw M1, cropped) spectral
-    cube under ``spectral_precoreg`` so a dry-run can render a before/after
-    coregistration comparison. Off by default — it ~doubles the tile size.
+    Thin wrapper over ``imint.training.fetch_spectral.fetch_tile_spectral`` (the
+    one production M1+M2 path): read the source tile's centre + stored dates, hand
+    them to the entry, then persist the entry's result with the regrid-specific
+    ``national_grid`` flag + grid-independent carry-keys. ``debug_precoreg`` adds
+    the pre-M2 (raw M1, cropped) spectral under ``spectral_precoreg`` for a
+    before/after coreg viz (dry-run only; ~doubles tile size).
     """
     name = Path(tile_path).stem
     try:
@@ -137,84 +124,33 @@ def regrid_one_tile(
         return {"name": name, "status": "failed", "reason": "no_num_frames"}
 
     raw = data.get("dates", [])
-    dates = [str(raw[fi])[:10] if fi < len(raw) and raw[fi] else "" for fi in range(n_frames)]
-    slot_dates = {fi: dates[fi] for fi in range(n_frames) if dates[fi]}
-    if not slot_dates:
+    dates = {fi: str(raw[fi])[:10] for fi in range(n_frames)
+             if fi < len(raw) and raw[fi]}
+    if not dates:
         return {"name": name, "status": "failed", "reason": "no_dates"}
 
     centre = centre_of(data)
     if centre is None:
         return {"name": name, "status": "failed", "reason": "no_centre"}
-    cx0, cy0 = centre
 
-    # Snap the centre to the national lattice; 512 and 520 share that centre
-    # (TileConfig snaps the SAME input to the SAME 10 m multiple), so the inner
-    # 512 crop is co-centred with the canonical national bbox.
-    bbox512 = TileConfig(size_px=CANON_PX).bbox_from_center(cx0, cy0)
-    bbox520 = TileConfig(size_px=HALO_PX).bbox_from_center(cx0, cy0)
-    cx_new = (bbox512["west"] + bbox512["east"]) // 2
-    cy_new = (bbox512["south"] + bbox512["north"]) // 2
-
+    # The canonical entry owns M1 (grid-snap) + M2 (inter-frame MI coreg) + crop +
+    # assemble; the source tile's stored dates drive the re-fetch (no reselection).
     try:
-        res = fetch_tile_at_specific_dates(bbox520, slot_dates, source="des")
+        res = fetch_tile_spectral(
+            centre, tile=TileConfig(size_px=CANON_PX), dates=dates, n_frames=n_frames,
+            backend="des", halo_px=HALO_PX - CANON_PX, coregister=True,
+            return_precoreg=debug_precoreg,
+        )
     except Exception as e:  # noqa: BLE001 — one tile's fetch must not kill the run
         return {"name": name, "status": "failed", "reason": f"fetch:{type(e).__name__}:{e}"}
-
-    fresh: dict[int, np.ndarray] = {}
-    for fi, entry in res.items():
-        if entry is None or entry[0] is None:
-            continue
-        arr = np.asarray(entry[0], np.float32)
-        want = (len(ALL_BANDS), HALO_PX, HALO_PX)
-        if arr.shape != want:
-            return {"name": name, "status": "failed",
-                    "reason": f"shape:{tuple(arr.shape)}!={want}"}
-        fresh[fi] = arr
-    if not fresh:
+    if res is None:
         return {"name": name, "status": "failed", "reason": "fetch_empty_all_slots"}
 
-    # M2 inter-frame coreg on the shared 520 grid, then crop the halo to 512.
-    ref_idx = clearest_frame_idx(fresh)
-    # Capture the pre-coreg (raw M1) cropped spectral for the before/after viz
-    # BEFORE M2 rebinds `fresh` — this is the "before coregistration" state.
-    precoreg = (
-        assemble_fresh({fi: crop_halo(a, crop=CROP, canon=CANON_PX) for fi, a in fresh.items()},
-                       dates, n_frames, canon=CANON_PX)[0]
-        if debug_precoreg else None
-    )
-    fresh, _ = coregister_interframe(fresh, ref_idx, search_px=float(CROP))
-    cropped = {fi: crop_halo(arr, crop=CROP, canon=CANON_PX) for fi, arr in fresh.items()}
-
-    spectral, extras = assemble_fresh(cropped, dates, n_frames, canon=CANON_PX)
-    temporal_mask = np.array(
-        [1 if fi in cropped else 0 for fi in range(n_frames)], np.uint8)
-    doy = np.array([_doy(dates[fi]) for fi in range(n_frames)], np.int32)
-    out_dates = np.array([dates[fi] if fi in cropped else "" for fi in range(n_frames)])
-
-    save = {
-        "spectral": spectral,
-        "temporal_mask": temporal_mask,
-        "doy": doy,
-        "dates": out_dates,
-        "multitemporal": np.int32(1),
-        "num_frames": np.int32(n_frames),
-        "num_bands": np.int32(6),
-        "bbox_3006": np.array(
-            [bbox512["west"], bbox512["south"], bbox512["east"], bbox512["north"]],
-            dtype=np.int32),
-        "easting": np.int32(cx_new),
-        "northing": np.int32(cy_new),
-        "tile_size_px": np.int32(CANON_PX),
-        "source": "des",
-        "national_grid": np.int32(1),
-        "coreg_ref_frame": np.int32(ref_idx),
-        **extras,
-    }
+    # Persist with the regrid-specific national-grid flag + grid-independent carry-keys.
+    save = {**res, "national_grid": np.int32(1)}
     for k in _CARRY_KEYS:
         if k in data:
             save[k] = data[k]
-    if precoreg is not None:
-        save["spectral_precoreg"] = precoreg   # raw M1 (pre-M2) — dry-run viz only
 
     dest = os.path.join(out_dir, name + ".npz")
     try:
@@ -222,8 +158,9 @@ def regrid_one_tile(
     except Exception as e:  # noqa: BLE001
         return {"name": name, "status": "failed", "reason": f"write:{type(e).__name__}:{e}"}
 
-    return {"name": name, "status": "ok", "frames": len(cropped), "ref": int(ref_idx),
-            "cx": int(cx_new), "cy": int(cy_new)}
+    return {"name": name, "status": "ok", "frames": int(res["temporal_mask"].sum()),
+            "ref": int(res["coreg_ref_frame"]),
+            "cx": int(res["easting"]), "cy": int(res["northing"])}
 
 
 def main() -> int:

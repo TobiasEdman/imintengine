@@ -308,6 +308,7 @@ def fetch_tile_spectral(
     backend: str = "des",
     halo_px: int = 8,
     coregister: bool = True,
+    return_precoreg: bool = False,
 ) -> dict | None:
     """Canonical per-tile spectral fetch — M1 (grid-snap) + M2 (inter-frame MI).
 
@@ -331,6 +332,8 @@ def fetch_tile_spectral(
         halo_px: total halo (``2*crop``) added to the fetch extent and cropped
             away after M2; absorbs the sinc wrap. Must be even.
         coregister: apply M2 inter-frame coregistration (default ``True``).
+        return_precoreg: also return the pre-M2 (raw M1, cropped) spectral under
+            ``spectral_precoreg`` for a before/after coreg viz (dry-run only).
 
     Returns:
         A result dict — ``spectral``/``temporal_mask``/``doy``/``dates`` + the
@@ -378,6 +381,16 @@ def fetch_tile_spectral(
     if not fresh:
         return None
 
+    dates_list = [slot_dates.get(fi, "") for fi in range(n_frames)]
+    # Optional pre-M2 (raw M1, cropped) spectral for a before/after coreg viz —
+    # captured BEFORE coregister_interframe rebinds `fresh`.
+    precoreg = (
+        assemble_fresh(
+            {fi: crop_halo(a, crop=crop, canon=canon) for fi, a in fresh.items()},
+            dates_list, n_frames, canon=canon)[0]
+        if return_precoreg else None
+    )
+
     # M2 — inter-frame MI coreg on the shared halo grid, before the crop. The
     # search budget is the halo width (the non-central reference can see up to
     # ~the halo of pairwise drift); applied shifts are halo-bounded by the crop.
@@ -400,8 +413,6 @@ def fetch_tile_spectral(
         (float(np.hypot(dy, dx)) for dy, dx in shifts.values()), default=0.0))
 
     cropped = {fi: crop_halo(a, crop=crop, canon=canon) for fi, a in fresh.items()}
-
-    dates_list = [slot_dates.get(fi, "") for fi in range(n_frames)]
     spectral, extras = assemble_fresh(cropped, dates_list, n_frames, canon=canon)
     temporal_mask = np.array(
         [1 if fi in cropped else 0 for fi in range(n_frames)], np.uint8)
@@ -409,7 +420,7 @@ def fetch_tile_spectral(
     out_dates = np.array(
         [dates_list[fi] if fi in cropped else "" for fi in range(n_frames)])
 
-    return {
+    result = {
         "spectral": spectral,
         "temporal_mask": temporal_mask,
         "doy": doy,
@@ -433,3 +444,6 @@ def fetch_tile_spectral(
             [shifts.get(fi, (0.0, 0.0)) for fi in range(n_frames)], np.float32),
         **extras,
     }
+    if precoreg is not None:
+        result["spectral_precoreg"] = precoreg   # raw M1 (pre-M2) — dry-run viz only
+    return result
