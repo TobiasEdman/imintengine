@@ -45,7 +45,7 @@ class TestCropHalo:
     def test_shape_and_centred(self):
         arr = np.zeros((len(rg.ALL_BANDS), rg.HALO_PX, rg.HALO_PX), np.float32)
         arr[:, rg.HALO_PX // 2, rg.HALO_PX // 2] = 7.0   # mark the 520-centre
-        out = rg.crop_halo(arr)
+        out = rg.crop_halo(arr, crop=rg.CROP, canon=rg.CANON_PX)
         assert out.shape == (len(rg.ALL_BANDS), rg.CANON_PX, rg.CANON_PX)
         # 520-centre (260) maps to 512-centre (256): CROP=4 px per side.
         assert out[0, rg.CANON_PX // 2, rg.CANON_PX // 2] == 7.0
@@ -130,7 +130,7 @@ class TestAssembleFresh:
             3: np.ones((len(rg.ALL_BANDS), h, w), np.float32) * 3.0,
         }
         dates = ["2022-09-10", "2022-06-01", "2022-07-15", "2022-08-20"]
-        spectral, extras = rg.assemble_fresh(frames, dates, n)
+        spectral, extras = rg.assemble_fresh(frames, dates, n, canon=rg.CANON_PX)
 
         assert spectral.shape == (n * 6, h, w)
         assert spectral.dtype == np.float32

@@ -74,8 +74,16 @@ from imint.training.tile_fetch import (
     _CDSE_SEMAPHORE,
     _DES_SEMAPHORE,
 )
+from imint.coregistration import clearest_frame_idx, coregister_interframe
+from imint.training.tile_assemble import assemble_fresh, crop_halo, date_to_doy
+from imint.training.tile_config import TileConfig
 
 SUPPORTED_BACKENDS = ("cdse", "cdse-openeo", "des")
+
+# Backends whose openEO tile-graph returns all-band frames on a snapped halo grid
+# — the precondition for M2 (inter-frame coreg needs 4 frames on one shared grid).
+# SH-Process is 6-band and renders to the request grid (no halo) → cannot M2.
+_M2_CAPABLE_BACKENDS = ("des", "cdse-openeo")
 
 
 def fetch_spectral(
@@ -286,3 +294,126 @@ def _fetch_via_openeo(
         return None
     finally:
         semaphore.release()
+
+
+# ── Per-tile canonical entry (M1 + M2) ──────────────────────────────────────
+
+
+def fetch_tile_spectral(
+    center_3006: tuple[int, int],
+    *,
+    tile: TileConfig,
+    dates: dict[int, str],
+    n_frames: int,
+    backend: str = "des",
+    halo_px: int = 8,
+    coregister: bool = True,
+) -> dict | None:
+    """Canonical per-tile spectral fetch — M1 (grid-snap) + M2 (inter-frame MI).
+
+    Promotes ``scripts/regrid_national_512.py::regrid_one_tile``'s proven
+    M1→M2→crop→assemble composition into the library so it is the ONE production
+    fetch path. All temporal slots are fetched on a halo grid in a single
+    tile-graph download (M1 snaps each scene's transform to the halo bbox); the
+    frames are coregistered to the clearest one by mutual information (M2), the
+    halo is cropped away, and the ``(T*6, H, W)`` cube + all-band extras are
+    assembled.
+
+    Args:
+        center_3006: ``(easting, northing)`` in EPSG:3006. Snapped to the 10 m
+            lattice; the canonical and halo bboxes share the snapped centre so the
+            inner crop is co-centred with the canonical bbox.
+        tile: ``TileConfig`` defining the canonical edge ``size_px`` (e.g. 512).
+        dates: ``{slot: ISO-date}`` for the temporal frames to fetch.
+        n_frames: number of temporal slots in the assembled cube.
+        backend: ``"des"`` or ``"cdse-openeo"`` — an M2-capable all-band openEO
+            tile-graph backend (SH-Process is 6-band/no-halo and cannot M2).
+        halo_px: total halo (``2*crop``) added to the fetch extent and cropped
+            away after M2; absorbs the sinc wrap. Must be even.
+        coregister: apply M2 inter-frame coregistration (default ``True``).
+
+    Returns:
+        A result dict — ``spectral``/``temporal_mask``/``doy``/``dates`` + the
+        ``b08``/``rededge``/``b01``/``b09`` extras + geometry/provenance
+        (``bbox_3006``/``easting``/``northing``/``tile_size_px``/``source``/
+        ``coreg_ref_frame``/``coreg_m2``) — ready for a caller to persist, or
+        ``None`` if no slot fetched.
+    """
+    if backend not in _M2_CAPABLE_BACKENDS:
+        raise ValueError(
+            f"fetch_tile_spectral: backend {backend!r} cannot do M1+M2 — use one "
+            f"of {_M2_CAPABLE_BACKENDS} (SH-Process is 6-band/no-halo)."
+        )
+    if halo_px % 2 != 0:
+        raise ValueError(f"fetch_tile_spectral: halo_px must be even, got {halo_px}.")
+
+    canon = tile.size_px
+    crop = halo_px // 2
+    halo = canon + halo_px
+    cx0, cy0 = center_3006
+
+    # M1 geometry: canonical and halo bboxes from the SAME snapped centre, so the
+    # inner crop is co-centred with the canonical bbox.
+    bbox_canon = TileConfig(size_px=canon, gsd_m=tile.gsd_m).bbox_from_center(cx0, cy0)
+    bbox_halo = TileConfig(size_px=halo, gsd_m=tile.gsd_m).bbox_from_center(cx0, cy0)
+    cx_new = (bbox_canon["west"] + bbox_canon["east"]) // 2
+    cy_new = (bbox_canon["south"] + bbox_canon["north"]) // 2
+
+    slot_dates = {fi: d for fi, d in dates.items() if d}
+    if not slot_dates:
+        return None
+
+    # Fetch all slots on the HALO grid in ONE tile-graph download. M1 (the
+    # per-scene transform snap to the halo bbox) happens inside the tile-graph.
+    res = fetch_tile_at_specific_dates(bbox_halo, slot_dates, source=backend)
+
+    fresh: dict[int, np.ndarray] = {}
+    for fi, entry in res.items():
+        if entry is None or entry[0] is None:
+            continue
+        arr = np.asarray(entry[0], np.float32)
+        if arr.shape != (len(ALL_BANDS), halo, halo):
+            continue
+        fresh[fi] = arr
+    if not fresh:
+        return None
+
+    # M2 — inter-frame MI coreg on the shared halo grid, before the crop. The
+    # search budget is the halo width (the non-central reference can see up to
+    # ~the halo of pairwise drift); applied shifts are halo-bounded by the crop.
+    did_m2 = coregister and len(fresh) >= 2
+    if did_m2:
+        ref_idx = clearest_frame_idx(fresh)
+        fresh = coregister_interframe(fresh, ref_idx, search_px=float(crop))
+    else:
+        ref_idx = next(iter(fresh))
+
+    cropped = {fi: crop_halo(a, crop=crop, canon=canon) for fi, a in fresh.items()}
+
+    dates_list = [slot_dates.get(fi, "") for fi in range(n_frames)]
+    spectral, extras = assemble_fresh(cropped, dates_list, n_frames, canon=canon)
+    temporal_mask = np.array(
+        [1 if fi in cropped else 0 for fi in range(n_frames)], np.uint8)
+    doy = np.array([date_to_doy(dates_list[fi]) for fi in range(n_frames)], np.int32)
+    out_dates = np.array(
+        [dates_list[fi] if fi in cropped else "" for fi in range(n_frames)])
+
+    return {
+        "spectral": spectral,
+        "temporal_mask": temporal_mask,
+        "doy": doy,
+        "dates": out_dates,
+        "multitemporal": np.int32(1),
+        "num_frames": np.int32(n_frames),
+        "num_bands": np.int32(6),
+        "bbox_3006": np.array(
+            [bbox_canon["west"], bbox_canon["south"],
+             bbox_canon["east"], bbox_canon["north"]], dtype=np.int32),
+        "easting": np.int32(cx_new),
+        "northing": np.int32(cy_new),
+        "tile_size_px": np.int32(canon),
+        "source": backend,
+        "coreg_ref_frame": np.int32(ref_idx),
+        "coreg_m2": np.int32(1 if did_m2 else 0),
+        **extras,
+    }

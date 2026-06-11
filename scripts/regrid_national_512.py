@@ -67,24 +67,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from imint.coregistration import clearest_frame_idx, coregister_interframe
 from imint.training.openeo_tile_graph import (
     ALL_BANDS,
-    ALL_BANDS_INDEX,
     fetch_tile_at_specific_dates,
 )
+from imint.training.tile_assemble import assemble_fresh, crop_halo
 from imint.training.tile_config import TileConfig
 
-# Reuse the proven atomic-write + has-helper from the fill script (same dir).
+# Reuse the proven atomic-write helper from the fill script (same dir).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fill_tiles_l2a import _atomic_savez, _has  # noqa: E402
+from fill_tiles_l2a import _atomic_savez  # noqa: E402
 
 HALO_PX = 520           # fetch size: 512 canonical + 4 px halo per side
 CANON_PX = 512          # stored canonical size
 CROP = (HALO_PX - CANON_PX) // 2   # 4 px centre-crop per side
-
-_I_PRITHVI = list(ALL_BANDS_INDEX["prithvi"])   # (0,1,2,7,8,9) B02,B03,B04,B8A,B11,B12
-_I_B08 = ALL_BANDS_INDEX["b08"][0]              # 3
-_I_RE = list(ALL_BANDS_INDEX["rededge"])        # (4,5,6) B05,B06,B07
-_I_B01 = ALL_BANDS_INDEX["b01"][0]              # 10
-_I_B09 = ALL_BANDS_INDEX["b09"][0]              # 11
 
 # Grid-independent identity carried verbatim. Everything else (spectral, extras,
 # dates, mask, doy, bbox, centre, size, source, national_grid) is freshly set;
@@ -115,51 +109,6 @@ def centre_of(data: dict) -> tuple[int, int] | None:
         bb = [float(x) for x in np.asarray(data["bbox_3006"]).reshape(-1)[:4]]
         return int(round((bb[0] + bb[2]) / 2)), int(round((bb[1] + bb[3]) / 2))
     return None
-
-
-def crop_halo(arr: np.ndarray) -> np.ndarray:
-    """Centre-crop a ``(..., 520, 520)`` array to ``(..., 512, 512)``."""
-    return arr[..., CROP:CROP + CANON_PX, CROP:CROP + CANON_PX]
-
-
-def assemble_fresh(
-    frames512: dict[int, np.ndarray], dates: list[str], n_frames: int
-) -> tuple[np.ndarray, dict]:
-    """Assemble cropped fresh all-band frames into the spectral cube + extras.
-
-    Every frame is fresh (re-gridded), so there is no keep-if-clean branch: a
-    fetched+cropped frame's 6 Prithvi bands go straight into the cube and its
-    B08/red-edge/B01/B09 into the extras. A frame absent from ``frames512``
-    failed to fetch and is zero-filled with an empty date (downstream QC drops
-    <3/4-frame tiles). Output keys/shapes mirror ``stack_extra_frames`` exactly.
-    """
-    h = w = CANON_PX
-    spec, b08_f, re_f, b01_f, b09_f = [], [], [], [], []
-    b08_d, re_d, b01_d, b09_d = [], [], [], []
-    for fi in range(n_frames):
-        f = frames512.get(fi)
-        d = dates[fi] if fi < len(dates) else ""
-        if f is not None:
-            spec.append(f[_I_PRITHVI])
-            b08_f.append(f[_I_B08]); re_f.append(f[_I_RE])
-            b01_f.append(f[_I_B01]); b09_f.append(f[_I_B09])
-            b08_d.append(d); re_d.append(d); b01_d.append(d); b09_d.append(d)
-        else:
-            spec.append(np.zeros((6, h, w), np.float32))
-            b08_f.append(np.zeros((h, w), np.float32))
-            re_f.append(np.zeros((3, h, w), np.float32))
-            b01_f.append(np.zeros((h, w), np.float32))
-            b09_f.append(np.zeros((h, w), np.float32))
-            b08_d.append(""); re_d.append(""); b01_d.append(""); b09_d.append("")
-    spectral = np.concatenate(spec, axis=0).astype(np.float32)   # (T*6, H, W)
-    extras = {
-        "b08": np.stack(b08_f, 0), "b08_dates": np.array(b08_d), "has_b08": _has(b08_f),
-        "rededge": np.concatenate(re_f, 0), "rededge_dates": np.array(re_d),
-        "has_rededge": _has(re_f),
-        "b01": np.stack(b01_f, 0), "b01_dates": np.array(b01_d), "has_b01": _has(b01_f),
-        "b09": np.stack(b09_f, 0), "b09_dates": np.array(b09_d), "has_b09": _has(b09_f),
-    }
-    return spectral, extras
 
 
 def regrid_one_tile(
@@ -229,13 +178,14 @@ def regrid_one_tile(
     # Capture the pre-coreg (raw M1) cropped spectral for the before/after viz
     # BEFORE M2 rebinds `fresh` — this is the "before coregistration" state.
     precoreg = (
-        assemble_fresh({fi: crop_halo(a) for fi, a in fresh.items()}, dates, n_frames)[0]
+        assemble_fresh({fi: crop_halo(a, crop=CROP, canon=CANON_PX) for fi, a in fresh.items()},
+                       dates, n_frames, canon=CANON_PX)[0]
         if debug_precoreg else None
     )
     fresh = coregister_interframe(fresh, ref_idx, search_px=float(CROP))
-    cropped = {fi: crop_halo(arr) for fi, arr in fresh.items()}
+    cropped = {fi: crop_halo(arr, crop=CROP, canon=CANON_PX) for fi, arr in fresh.items()}
 
-    spectral, extras = assemble_fresh(cropped, dates, n_frames)
+    spectral, extras = assemble_fresh(cropped, dates, n_frames, canon=CANON_PX)
     temporal_mask = np.array(
         [1 if fi in cropped else 0 for fi in range(n_frames)], np.uint8)
     doy = np.array([_doy(dates[fi]) for fi in range(n_frames)], np.int32)
