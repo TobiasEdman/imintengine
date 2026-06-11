@@ -45,6 +45,8 @@ dist/
 build/
 .venv/
 .venv-sr/
+# Python 3.9.6 rollback backup from the 2026-06-08 → 3.11 migration; remove once satisfied
+.venv-py39-old/
 venv/
 env/
 

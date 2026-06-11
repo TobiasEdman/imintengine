@@ -50,11 +50,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import threading as _threading
 
-from imint.training.skg_height import fetch_height_tile
 from imint.training.skg_grunddata import (
     fetch_volume_tile,
     fetch_basal_area_tile,
     fetch_diameter_tile,
+    fetch_tree_height_tile,
 )
 from imint.training.copernicus_dem import fetch_dem_tile
 from imint.training.cdse_vpp import fetch_vpp_tiles
@@ -123,7 +123,7 @@ def _fetch_markfukt_float(
         cache_dir=cache_dir,
     )
     arr = raw.astype(np.float32)
-    arr[raw == 0] = np.nan          # nodata → NaN
+    arr[(raw == 0) | (raw > 101)] = np.nan   # nodata (incl. 255) → NaN
     valid = (raw >= 1) & (raw <= 100)
     arr[valid] = arr[valid] / 100.0   # 1–100 → 0.01–1.00
     arr[raw == 101] = 1.01           # water → sentinel above moisture range
@@ -131,7 +131,7 @@ def _fetch_markfukt_float(
 
 
 _CHANNEL_FETCHERS = {
-    "height": fetch_height_tile,
+    "height": fetch_tree_height_tile,
     "volume": fetch_volume_tile,
     "basal_area": fetch_basal_area_tile,
     "diameter": fetch_diameter_tile,

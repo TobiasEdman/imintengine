@@ -11,6 +11,7 @@ shapely>=2.0
 geopandas>=0.14
 fiona>=1.9
 pyproj>=3.6
+pyarrow>=14         # geopandas .read_parquet engine for LPIS spatial parquets
 
 # Deep Learning (training)
 torch>=2.1
@@ -20,6 +21,7 @@ huggingface_hub>=0.20
 
 # Image processing
 opencv-python-headless>=4.8
+scikit-image>=0.22  # superpixel segmentation (imint/inference/superpixel_refine.py)
 
 # System monitoring (dashboard)
 psutil>=5.9

@@ -436,9 +436,11 @@ def fetch_4frame_scenes(
 
 
 def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig") -> dict[str, np.ndarray]:
-    """Fetch auxiliary channels (VPP phenology + DEM) for a tile.
+    """Fetch auxiliary channels for a tile: VPP phenology, DEM, SKG forestry
+    (height/volume/basal_area/diameter) and SLU markfukt.
 
-    Returns dict of channel_name → (H, W) float32. Missing channels skipped.
+    Returns dict of channel_name → (H, W) float32. Each source is independently
+    skip-on-fail, so a single unavailable webservice never aborts the tile.
     """
     tile.assert_bbox_matches(bbox_3006)
     aux = {}
@@ -475,6 +477,48 @@ def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig") -> dict[str, np.ndar
         )
         if dem is not None:
             aux["dem"] = dem.astype(np.float32)
+    except Exception:
+        pass
+
+    # SKG forestry — Skogsstyrelsen ImageServer (height) + Skogliga grunddata
+    # (volume/basal_area/diameter). Free webservice, no CDSE semaphore.
+    w, s, e, n = bbox_3006["west"], bbox_3006["south"], bbox_3006["east"], bbox_3006["north"]
+    try:
+        from imint.training.skg_grunddata import (
+            fetch_basal_area_tile,
+            fetch_diameter_tile,
+            fetch_tree_height_tile,
+            fetch_volume_tile,
+        )
+
+        for name, fetch_fn in (
+            ("height", fetch_tree_height_tile),
+            ("volume", fetch_volume_tile),
+            ("basal_area", fetch_basal_area_tile),
+            ("diameter", fetch_diameter_tile),
+        ):
+            try:
+                arr = fetch_fn(w, s, e, n, size_px=tile.size_px)
+                if arr is not None:
+                    aux[name] = arr.astype(np.float32)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # SLU Markfuktighetskarta — raw codes → float32: 0=nodata (NaN),
+    # 1-100=moisture/100, 101=water (1.01). Mirrors prefetch_aux.
+    try:
+        from imint.training.slu_markfukt import fetch_markfukt_tile
+
+        raw = fetch_markfukt_tile(w, s, e, n, size_px=tile.size_px)
+        if raw is not None:
+            mf = raw.astype(np.float32)
+            mf[(raw == 0) | (raw > 101)] = np.nan   # nodata (incl. 255)
+            valid = (raw >= 1) & (raw <= 100)
+            mf[valid] = mf[valid] / 100.0
+            mf[raw == 101] = 1.01
+            aux["markfukt"] = mf
     except Exception:
         pass
 
