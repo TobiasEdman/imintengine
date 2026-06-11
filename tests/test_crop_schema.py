@@ -1,23 +1,27 @@
-"""Tests for imint/training/crop_dataset.py and crop_schema.py."""
+"""Tests for imint/training/crop_schema.py — the kept crop-class mappings.
+
+Salvaged from the retired tests/test_crop_dataset.py (the CropDataset half went
+away with the LUCAS crop-only pipeline). Covers the LUCAS→crop and SJV→crop
+mappings + the LUCAS CSV reader that crop_schema still provides as validation
+reference, plus the SJV_TO_CROP table relocated here from build_crop_dataset.
+"""
 from __future__ import annotations
 
-import os
-import numpy as np
-import pytest
-
 from imint.training.crop_schema import (
-    lucas_code_to_class,
-    is_agricultural,
     CLASS_NAMES,
-    NUM_CLASSES,
-    LUCAS_TO_CROP,
     LUCAS_SUPPORTED_YEARS,
+    LUCAS_TO_CROP,
+    NUM_CLASSES,
+    SJV_TO_CROP,
+    is_agricultural,
     load_lucas_sweden,
+    lucas_code_to_class,
+    sjv_grodkod_to_class,
     summarize_lucas_sweden,
 )
 
 
-# ── Crop schema tests ────────────────────────────────────────────────────
+# ── LUCAS → crop class ───────────────────────────────────────────────────
 
 class TestCropSchema:
     """Verify LUCAS → Swedish crop class mapping."""
@@ -71,13 +75,35 @@ class TestCropSchema:
         assert 2022 in LUCAS_SUPPORTED_YEARS
 
 
-# ── CSV loading tests ────────────────────────────────────────────────────
+# ── SJV grödkod → crop class (relocated from build_crop_dataset) ──────────
+
+class TestSjvToCrop:
+    """Verify the SJV grödkod → crop class table moved into crop_schema."""
+
+    def test_representative_codes(self):
+        assert sjv_grodkod_to_class(1) == 1    # Höstvete
+        assert sjv_grodkod_to_class(3) == 2    # Höstkorn
+        assert sjv_grodkod_to_class(5) == 3    # Havre
+        assert sjv_grodkod_to_class(85) == 4   # Höstraps
+        assert sjv_grodkod_to_class(50) == 5   # Slåtter-/betesvall
+        assert sjv_grodkod_to_class(70) == 6   # Matpotatis
+        assert sjv_grodkod_to_class(30) == 7   # Ärtor
+        assert sjv_grodkod_to_class(22) == 8   # Sockerbetor
+
+    def test_unknown_code_is_zero(self):
+        assert sjv_grodkod_to_class(9999) == 0
+        assert SJV_TO_CROP.get(9999, 0) == 0
+
+    def test_classes_in_range(self):
+        assert all(0 < v < NUM_CLASSES for v in SJV_TO_CROP.values())
+
+
+# ── LUCAS CSV reader (validation reference) ──────────────────────────────
 
 class TestLoadLucasSweden:
-    """Test LUCAS CSV loading and filtering."""
+    """Test LUCAS CSV loading and filtering (synthetic CSVs — no real data)."""
 
     def _write_csv(self, path, rows):
-        """Write a minimal LUCAS CSV."""
         import csv
         fieldnames = ["POINT_ID", "GPS_LAT", "GPS_LONG", "LC1", "NUTS0", "SURVEY_YEAR"]
         with open(path, "w", newline="") as f:
@@ -111,7 +137,7 @@ class TestLoadLucasSweden:
         assert points[0]["crop_class"] == 2  # barley
 
     def test_multiple_csvs_dedup(self, tmp_path):
-        """2022 should take precedence over 2018 for same point_id."""
+        """2022 should take precedence over 2018 for the same point_id."""
         csv_2018 = str(tmp_path / "lucas_2018.csv")
         csv_2022 = str(tmp_path / "lucas_2022.csv")
         self._write_csv(csv_2018, [
@@ -142,75 +168,3 @@ class TestLoadLucasSweden:
         assert summary["total"] == 3
         assert summary["per_class"]["vete"] == 2
         assert summary["per_class"]["korn"] == 1
-
-
-# ── CropDataset tests ────────────────────────────────────────────────────
-
-class TestCropDataset:
-    """Test CropDataset with synthetic tiles."""
-
-    @pytest.fixture
-    def tile_dir(self, tmp_path):
-        """Create a directory with synthetic crop tiles."""
-        for i in range(10):
-            np.savez_compressed(
-                tmp_path / f"tile_{i:03d}.npz",
-                spectral=np.random.rand(18, 256, 256).astype(np.float32),
-                label=np.uint8(i % NUM_CLASSES),
-                seasons_valid=np.array([True, True, True]),
-                lat=59.0 + i * 0.01,
-                lon=18.0 + i * 0.01,
-                point_id=f"P{i:04d}",
-                bbox_3006=np.array([670000, 6580000, 672560, 6582560]),
-            )
-        return str(tmp_path)
-
-    def test_loads_tiles(self, tile_dir):
-        from imint.training.crop_dataset import CropDataset
-        ds = CropDataset(tile_dir, split="train", patch_size=224)
-        assert len(ds) > 0
-
-    def test_output_shape(self, tile_dir):
-        from imint.training.crop_dataset import CropDataset
-        ds = CropDataset(tile_dir, split="train", patch_size=224)
-        sample = ds[0]
-        assert sample["spectral"].shape == (18, 224, 224)
-        assert sample["label"].shape == ()
-        assert sample["label"].dtype == torch.int64
-
-    def test_label_range(self, tile_dir):
-        from imint.training.crop_dataset import CropDataset
-        ds = CropDataset(tile_dir, split="train", patch_size=224)
-        for i in range(min(5, len(ds))):
-            label = ds[i]["label"].item()
-            assert 0 <= label < NUM_CLASSES
-
-    def test_val_split(self, tile_dir):
-        from imint.training.crop_dataset import CropDataset
-        ds_train = CropDataset(tile_dir, split="train", val_fraction=0.3)
-        ds_val = CropDataset(tile_dir, split="val", val_fraction=0.3)
-        assert len(ds_train) + len(ds_val) == 10
-        assert len(ds_val) >= 1
-
-    def test_seasons_valid(self, tile_dir):
-        from imint.training.crop_dataset import CropDataset
-        ds = CropDataset(tile_dir, split="train", patch_size=224)
-        sample = ds[0]
-        assert "seasons_valid" in sample
-        assert sample["seasons_valid"].shape == (3,)
-
-    def test_weighted_sampler(self, tile_dir):
-        from imint.training.crop_dataset import CropDataset, build_crop_sampler
-        ds = CropDataset(tile_dir, split="train")
-        sampler = build_crop_sampler(ds)
-        assert len(sampler) == len(ds)
-
-
-try:
-    import torch
-except ImportError:
-    torch = None
-
-pytestmark = pytest.mark.skipif(
-    torch is None, reason="torch not installed"
-)

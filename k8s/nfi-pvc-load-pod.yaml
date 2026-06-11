@@ -1,0 +1,30 @@
+---
+# Helper pod: stage the SLU NFI plot data onto the training PVC and inventory
+# /data before the coverage / validation jobs. Mounts training-data-cephfs at
+# /data, makes /data/nfi, then sleeps so we can copy the parquet in and look
+# around:
+#   kubectl apply -f k8s/nfi-pvc-load-pod.yaml
+#   kubectl cp data/nfi/nfi_plots.parquet nfi-pvc-load:/data/nfi/nfi_plots.parquet
+#   kubectl exec nfi-pvc-load -- ls -lh /data /data/nfi
+#   kubectl exec nfi-pvc-load -- bash -c 'ls -d /data/unified_v2* ; ls -d /data/checkpoints* 2>/dev/null'
+#   kubectl delete pod nfi-pvc-load        # when done
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nfi-pvc-load
+  namespace: prithvi-training-default
+spec:
+  restartPolicy: Never
+  containers:
+    - name: helper
+      image: python:3.11-slim
+      command: ["/bin/bash", "-c", "mkdir -p /data/nfi && echo READY && sleep 3600"]
+      resources:
+        requests: {cpu: "500m", memory: "512Mi"}
+        limits: {cpu: "500m", memory: "512Mi"}
+      volumeMounts:
+        - {name: data, mountPath: /data}
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: training-data-cephfs

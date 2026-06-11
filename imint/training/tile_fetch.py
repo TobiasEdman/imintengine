@@ -2,7 +2,7 @@
 imint/training/tile_fetch.py — Shared tile fetching primitives
 
 Core building blocks for fetching Sentinel-2 tiles with seasonal windows.
-Used by both fetch_lucas_tiles.py and fetch_unified_tiles.py.
+Used by fetch_unified_tiles.py.
 """
 from __future__ import annotations
 

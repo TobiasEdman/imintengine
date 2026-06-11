@@ -1,0 +1,61 @@
+---
+# Phase-1 feasibility gate — how many SLU NFI plots (>=2018) land on the built
+# tiles? Clones feat/nfi-validation, reads the NFI parquet staged at
+# /data/nfi/nfi_plots.parquet (by nfi-pvc-load-pod), co-locates it against each
+# unified tile dir present, and writes the plot->tile index to /data/nfi/.
+# The result gates the training track. Run:
+#   kubectl apply -f k8s/nfi-coverage-gate-job.yaml
+#   kubectl logs -f job/nfi-coverage-gate
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-coverage-gate
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: coverage
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== NFI coverage gate — $(date) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow rasterio openpyxl
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch feat/nfi-validation \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd /workspace/ie
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "HEAD: $(git rev-parse HEAD)"
+              echo ""
+              echo "=== /data inventory ==="
+              ls -d /data/unified_v2* 2>/dev/null || echo "(no unified_v2*)"
+              ls -lh /data/nfi/ 2>/dev/null || echo "(no /data/nfi — run nfi-pvc-load-pod first)"
+              for DS in unified_v2_512 unified_v2; do
+                if [ -d "/data/$DS" ]; then
+                  echo ""
+                  echo "=== COVERAGE GATE: $DS ==="
+                  python scripts/nfi_tile_coverage.py \
+                    --tile-dir "/data/$DS" --nfi-dir /data/nfi --infer-size \
+                    --out "/data/nfi/nfi_index_${DS}.parquet" || true
+                fi
+              done
+              echo ""
+              echo "=== Done: $(date) ==="
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
