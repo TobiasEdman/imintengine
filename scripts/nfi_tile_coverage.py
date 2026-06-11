@@ -35,6 +35,11 @@ from imint.training.tile_config import TileConfig
 # handheld Garmin (metre-level) — see docs/data/nfi_plotdata_DATA_CARD.md.
 RTK_FROM_YEAR = 2024
 
+# Only the small geo/temporal metadata is needed to co-locate — never
+# materialise the big image/label arrays (np.load is lazy per key, so this
+# keeps the scan cheap across thousands of PVC tiles).
+_META_KEYS = ("easting", "northing", "bbox_3006", "tile_size_px", "year", "lpis_year", "dates")
+
 
 def parse_years(spec: str) -> list[int]:
     spec = spec.strip()
@@ -64,11 +69,12 @@ def main() -> None:
     ap.add_argument("--size-px", type=int, default=256, help="tile side in px (default 256)")
     ap.add_argument("--infer-size", action="store_true", help="infer size_px per tile from bbox_3006")
     ap.add_argument("--years", default="2018-2025", help="e.g. '2018-2025' or '2022,2023'")
+    ap.add_argument("--nfi-dir", default=None, help="dir with the NFI xlsx/parquet (default: repo data/nfi; on ICE: the PVC /data/nfi)")
     ap.add_argument("--out", default="data/nfi/nfi_plot_tile_index.parquet")
     args = ap.parse_args()
 
     years = parse_years(args.years)
-    plots = load_nfi_plots(years=years)
+    plots = load_nfi_plots(years=years, **({"data_dir": args.nfi_dir} if args.nfi_dir else {}))
     print(f"NFI plots: {len(plots):,} (years {min(years)}–{max(years)})")
     if plots.empty:
         sys.exit("no NFI plots in the requested years")
@@ -85,7 +91,7 @@ def main() -> None:
         path = Path(path)
         try:
             with np.load(path, allow_pickle=True) as npz:
-                data = {k: npz[k] for k in npz.files}
+                data = {k: npz[k] for k in _META_KEYS if k in npz.files}
         except (EOFError, OSError, ValueError):
             n_unreadable += 1  # truncated / empty / corrupt — skip, don't die
             continue
