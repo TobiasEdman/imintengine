@@ -39,8 +39,17 @@ not the harness:
   retired generation that included the leaky `harvest_probability` channel.
 - The current `unified_v2_512` tiles + `AUX_CHANNEL_NAMES` are **10-aux**
   (height, volume, basal_area, diameter, dem, vpp×5 — no `harvest_probability`).
-- 11 ≠ 10 → channel mismatch. There is no aux-compatible trained checkpoint to
-  validate against.
+- 11 ≠ 10 → channel mismatch. The 11th channel was `harvest_probability`,
+  removed in `3447518` ("drop synthetic harvest_probability aux channel") for
+  leaking the harvest target. It's gone from the tiles and `AUX_CHANNEL_NAMES`,
+  and synthesizing it back would corrupt the validation. There is no
+  aux-compatible trained checkpoint to validate against.
+
+**Can't we reuse existing model outputs?** No — the only saved predictions are
+`data/viz_tiles/predictions/v5*/v6*_predictions.json`, which cover **5 showcase
+tiles** (the `inference_comparison.py` model-comparison set), none of which are
+among the 270 NFI-co-located tiles. And re-running v5/v6 hits the
+`harvest_probability` wall above.
 
 **To run validation:** point the harness at a checkpoint trained on the current
 10-aux dataset (e.g. the next `unified_v2_512` training run), stage it to the
