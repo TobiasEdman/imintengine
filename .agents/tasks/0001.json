@@ -1,0 +1,12 @@
+{
+  "id": "0001",
+  "subject": "Fetch Phase 2: route refetch_tile + fetch_4frame_scenes through fetch_tile_spectral; delete race-pool",
+  "description": "Phase 2 of the fetch single-canonical-entry consolidation. Route scripts/fetch_unified_tiles.py::refetch_tile (~:1127) and imint/training/tile_fetch.py::fetch_4frame_scenes (~:326) through imint/training/fetch_spectral.py::fetch_tile_spectral, and DELETE the _fetch_frames_from_best_dates race-pool (scripts/fetch_unified_tiles.py ~:322-477). Verify: bit-equivalence on the DES arm (mock the inner fetch, like test_full_contract) + integration. Phase 3 (halo+M2+DES data change) is human-gated and out of scope here.",
+  "status": "claimed",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-06-11T13:24:33Z",
+  "branch": "agent/te/claude/fetch-phase2-consolidation",
+  "created_at": "2026-06-11T13:24:33Z",
+  "updated_at": "2026-06-11T13:24:33Z"
+}
