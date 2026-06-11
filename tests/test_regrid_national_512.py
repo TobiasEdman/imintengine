@@ -1,10 +1,9 @@
 """Pure-logic tests for scripts/regrid_national_512.py (no network / no PU).
 
 Covers the parts that are easy to get subtly wrong:
-  * inter-frame coreg lands every frame on the *composite centroid* of frame
-    positions — so the stack ends mutually co-registered, and the result is
-    independent of which frame is the measurement origin (``ref_idx``) rather
-    than inheriting one "clearest" frame's absolute ortho error;
+  * inter-frame coreg registers every mover onto the chosen reference frame
+    (``ref_idx``, the clearest) by mutual information — the anchor is left
+    untouched and the stack ends mutually co-registered on the anchor's grid;
   * the 520 -> 512 halo crop is centred;
   * clearest-frame selection prefers valid + sharp;
   * fresh assembly produces the exact npz key/shape contract;
@@ -21,11 +20,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import regrid_national_512 as rg  # noqa: E402
-from imint.coregistration import estimate_mi_offset, subpixel_shift  # noqa: E402
+from imint.coregistration import (  # noqa: E402
+    _COREG_BAND,
+    estimate_mi_offset,
+    subpixel_shift,
+)
 
 
 def _smooth_field(seed: int, size: int = 520) -> np.ndarray:
-    """Band-limited, non-periodic positive field — good phase-correlation target."""
+    """Band-limited, non-periodic positive field — good coregistration target."""
     from scipy.ndimage import gaussian_filter
 
     rng = np.random.default_rng(seed)
@@ -99,7 +102,7 @@ class TestInterframeCoreg:
         m2 = subpixel_shift(self._scene(3, 0.35, True, size), -0.9, 1.0)
         frames = {0: self._cube(ref_b04), 1: self._cube(m1), 2: self._cube(m2)}
         out = rg.coregister_interframe(frames, ref_idx=0)
-        b = rg._COREG_BAND
+        b = _COREG_BAND
         # reference is the fixed anchor — untouched
         assert np.array_equal(out[0], frames[0])
         for i in (1, 2):

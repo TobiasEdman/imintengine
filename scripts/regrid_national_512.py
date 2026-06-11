@@ -64,7 +64,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from imint.coregistration import estimate_mi_offset, subpixel_shift
+from imint.coregistration import clearest_frame_idx, coregister_interframe
 from imint.training.openeo_tile_graph import (
     ALL_BANDS,
     ALL_BANDS_INDEX,
@@ -85,13 +85,6 @@ _I_B08 = ALL_BANDS_INDEX["b08"][0]              # 3
 _I_RE = list(ALL_BANDS_INDEX["rededge"])        # (4,5,6) B05,B06,B07
 _I_B01 = ALL_BANDS_INDEX["b01"][0]              # 10
 _I_B09 = ALL_BANDS_INDEX["b09"][0]              # 11
-
-# Band index 2 == B04 (Red) in ALL_BANDS — the band coregistration runs on.
-_COREG_BAND = 2
-
-# Sub-pixel shifts below this are a no-op (skip the FFT round-trip, keep the
-# frame byte-identical). Mirrors coregister_to_reference's subpixel_threshold.
-_COREG_MIN_SHIFT = 0.05
 
 # Grid-independent identity carried verbatim. Everything else (spectral, extras,
 # dates, mask, doy, bbox, centre, size, source, national_grid) is freshly set;
@@ -122,62 +115,6 @@ def centre_of(data: dict) -> tuple[int, int] | None:
         bb = [float(x) for x in np.asarray(data["bbox_3006"]).reshape(-1)[:4]]
         return int(round((bb[0] + bb[2]) / 2)), int(round((bb[1] + bb[3]) / 2))
     return None
-
-
-def clearest_frame_idx(frames: dict[int, np.ndarray]) -> int:
-    """Pick the M2 measurement origin: most valid pixels, tie-broken by sharpest B04.
-
-    A clear (cloud-free, fully-valid) frame is the best phase-correlation
-    reference. The spectral-only fetch has no SCL, so clarity is proxied by
-    ``(valid-pixel fraction, B04 spatial std)`` — clouds zero out / flatten B04.
-    Under the composite-centroid anchor the stack lands on its centroid, not on
-    this frame, so the choice only affects correlation accuracy, not position.
-    """
-    best_i, best_key = next(iter(frames)), (-1.0, -1.0)
-    for i, arr in frames.items():
-        b04 = arr[_COREG_BAND]
-        key = (float((b04 > 1e-6).mean()), float(b04.std()))
-        if key > best_key:
-            best_key, best_i = key, i
-    return best_i
-
-
-def coregister_interframe(
-    frames: dict[int, np.ndarray], ref_idx: int
-) -> dict[int, np.ndarray]:
-    """M2: register every frame onto ``frames[ref_idx]`` by mutual information.
-
-    The priority is **inter-frame** alignment — the 4 frames pixel-locked to each
-    other so the temporal backbone sees one ground point through time. Absolute
-    placement vs NMD is a separate, secondary concern.
-
-    These frames span seasons (autumn stubble vs summer canopy), so the same
-    ground point is radiometrically *different* across frames. Phase correlation
-    then chases phenology, not geometry — measured ~0.75 px error even on clean
-    structured imagery, and it actively degraded the dry-run frames. Mutual
-    information scores the joint-histogram dependence instead, so a sub-pixel
-    shift that lines two frames up geometrically maximises it regardless of the
-    crop appearance change (≈0.05 px on a synthetic season-change fixture).
-
-    Each non-reference frame is registered **to the reference** (the reference is
-    left untouched — it is the anchor): ``estimate_mi_offset`` returns the shift
-    to apply, bounded to the halo (``search_px=CROP``) so a bad optimum cannot
-    wrap-corrupt a frame. A shift below ``_COREG_MIN_SHIFT`` (or an MI optimum
-    that beat nothing → ``0,0``) keeps the M1 frame byte-identical. Frames are
-    ``(12, H, W)``; the offset is estimated on B04 and applied to every band.
-    """
-    ref_band = frames[ref_idx][_COREG_BAND]
-    out: dict[int, np.ndarray] = {ref_idx: frames[ref_idx]}   # reference is the fixed anchor
-    for i, arr in frames.items():
-        if i == ref_idx:
-            continue
-        dy, dx = estimate_mi_offset(arr[_COREG_BAND], ref_band, search_px=float(CROP))
-        if max(abs(dy), abs(dx)) < _COREG_MIN_SHIFT:
-            out[i] = arr            # already on the reference (or MI found no gain) → keep M1
-        else:
-            shifted = np.stack([subpixel_shift(b, dy, dx) for b in arr])
-            out[i] = np.ascontiguousarray(shifted, np.float32)
-    return out
 
 
 def crop_halo(arr: np.ndarray) -> np.ndarray:
@@ -295,7 +232,7 @@ def regrid_one_tile(
         assemble_fresh({fi: crop_halo(a) for fi, a in fresh.items()}, dates, n_frames)[0]
         if debug_precoreg else None
     )
-    fresh = coregister_interframe(fresh, ref_idx)
+    fresh = coregister_interframe(fresh, ref_idx, search_px=float(CROP))
     cropped = {fi: crop_halo(arr) for fi, arr in fresh.items()}
 
     spectral, extras = assemble_fresh(cropped, dates, n_frames)

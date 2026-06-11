@@ -518,3 +518,73 @@ def coregister_timeseries(
     }
 
     return aligned, meta
+
+
+# ---------------------------------------------------------------------------
+#  Inter-frame co-registration (multi-temporal stack → one reference frame)
+# ---------------------------------------------------------------------------
+
+# Band index 2 == B04 (Red) in ALL_BANDS — the band coregistration runs on.
+_COREG_BAND = 2
+
+# Sub-pixel shifts below this are a no-op (skip the FFT round-trip, keep the
+# frame byte-identical). Mirrors coregister_to_reference's subpixel_threshold.
+_COREG_MIN_SHIFT = 0.05
+
+
+def clearest_frame_idx(frames: dict[int, np.ndarray]) -> int:
+    """Pick the M2 registration anchor: most valid pixels, tie-broken by sharpest B04.
+
+    A clear (cloud-free, fully-valid) frame is the best registration anchor. The
+    spectral-only fetch has no SCL, so clarity is proxied by ``(valid-pixel
+    fraction, B04 spatial std)`` — clouds zero out / flatten B04.
+    ``coregister_interframe`` leaves this frame untouched and aligns the others
+    onto it, so it sets both the MI estimation accuracy and the stack's absolute
+    position.
+    """
+    best_i, best_key = next(iter(frames)), (-1.0, -1.0)
+    for i, arr in frames.items():
+        b04 = arr[_COREG_BAND]
+        key = (float((b04 > 1e-6).mean()), float(b04.std()))
+        if key > best_key:
+            best_key, best_i = key, i
+    return best_i
+
+
+def coregister_interframe(
+    frames: dict[int, np.ndarray], ref_idx: int, *, search_px: float = 4.0
+) -> dict[int, np.ndarray]:
+    """M2: register every frame onto ``frames[ref_idx]`` by mutual information.
+
+    The priority is **inter-frame** alignment — the 4 frames pixel-locked to each
+    other so the temporal backbone sees one ground point through time. Absolute
+    placement vs NMD is a separate, secondary concern.
+
+    These frames span seasons (autumn stubble vs summer canopy), so the same
+    ground point is radiometrically *different* across frames. Phase correlation
+    then chases phenology, not geometry — measured ~0.75 px error even on clean
+    structured imagery, and it actively degraded the dry-run frames. Mutual
+    information scores the joint-histogram dependence instead, so a sub-pixel
+    shift that lines two frames up geometrically maximises it regardless of the
+    crop appearance change (≈0.05 px on a synthetic season-change fixture).
+
+    Each non-reference frame is registered **to the reference** (the reference is
+    left untouched — it is the anchor): ``estimate_mi_offset`` returns the shift
+    to apply, bounded to the halo (``search_px``, the caller's crop width) so a
+    bad optimum cannot wrap-corrupt a frame. A shift below ``_COREG_MIN_SHIFT``
+    (or an MI optimum that beat nothing → ``0,0``) keeps the M1 frame
+    byte-identical. Frames are ``(12, H, W)``; the offset is estimated on B04 and
+    applied to every band.
+    """
+    ref_band = frames[ref_idx][_COREG_BAND]
+    out: dict[int, np.ndarray] = {ref_idx: frames[ref_idx]}   # reference is the fixed anchor
+    for i, arr in frames.items():
+        if i == ref_idx:
+            continue
+        dy, dx = estimate_mi_offset(arr[_COREG_BAND], ref_band, search_px=search_px)
+        if max(abs(dy), abs(dx)) < _COREG_MIN_SHIFT:
+            out[i] = arr            # already on the reference (or MI found no gain) → keep M1
+        else:
+            shifted = np.stack([subpixel_shift(b, dy, dx) for b in arr])
+            out[i] = np.ascontiguousarray(shifted, np.float32)
+    return out
