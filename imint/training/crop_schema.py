@@ -149,6 +149,69 @@ def is_agricultural(lc_code: str) -> bool:
     return lc_code in AGRICULTURAL_CODES
 
 
+# ── SJV grödkod → crop class mapping ─────────────────────────────────────
+# Jordbruksverket grödkodslista. Relocated here from the (retired) crop-only
+# build pipeline because the unified LPIS-enrichment path
+# (scripts/enrich_tiles_lpis_mask.py) maps each parcel's grödkod via this
+# table. Kept alongside LUCAS_TO_CROP as the home for crop-code lookups.
+
+SJV_TO_CROP = {
+    # ── Vete (klass 1) ───────────────────────────────────────────
+    1: 1,    # Höstvete
+    2: 1,    # Vårvete
+    # ── Korn (klass 2) ───────────────────────────────────────────
+    3: 2,    # Höstkorn
+    4: 2,    # Vårkorn
+    # ── Havre (klass 3) ──────────────────────────────────────────
+    5: 3,    # Havre
+    # ── Oljeväxter (klass 4) ─────────────────────────────────────
+    85: 4,   # Höstraps
+    86: 4,   # Vårraps
+    87: 4,   # Höstrybs
+    88: 4,   # Vårrybs
+    90: 4,   # Solros
+    91: 4,   # Oljelin
+    92: 4,   # Övriga oljeväxter
+    # ── Vall/grönfoder (klass 5) ─────────────────────────────────
+    49: 5,   # Slåtter-/betesvall (ej godkänd)
+    50: 5,   # Slåtter-/betesvall
+    51: 5,   # Frövall
+    52: 5,   # Betesvall
+    80: 5,   # Grönfoder
+    # ── Potatis (klass 6) ────────────────────────────────────────
+    70: 6,   # Matpotatis
+    71: 6,   # Stärkelsepotatis
+    72: 6,   # Industripotatis
+    # ── Trindsäd (klass 7) ───────────────────────────────────────
+    30: 7,   # Ärtor (konserv)
+    31: 7,   # Ärtor (foder)
+    32: 7,   # Åkerbönor
+    33: 7,   # Konservbönor
+    34: 7,   # Övriga bönor
+    35: 7,   # Bruna bönor
+    40: 7,   # Sötlupin
+    43: 7,   # Övriga baljväxter
+    # ── Övrig åkergrödor (klass 8) ───────────────────────────────
+    11: 8,   # Höstråg
+    12: 8,   # Vårråg
+    13: 8,   # Rågvete
+    14: 8,   # Blandsäd
+    22: 8,   # Sockerbetor
+    73: 8,   # Jordgubbar
+    74: 8,   # Grönsaker
+    75: 8,   # Blommor
+    76: 8,   # Bärplantering
+    77: 8,   # Fruktträd
+    93: 8,   # Hampa
+    95: 8,   # Energiskog
+}
+
+
+def sjv_grodkod_to_class(grodkod: int) -> int:
+    """Map an SJV grödkod to the crop class index (0 = non-crop)."""
+    return SJV_TO_CROP.get(grodkod, 0)
+
+
 # ── LUCAS data loading ────────────────────────────────────────────────────
 
 LUCAS_COPERNICUS_2018_URL = (
