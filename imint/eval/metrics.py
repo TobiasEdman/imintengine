@@ -125,14 +125,50 @@ def auroc_aupr(
     scores: np.ndarray,
     target_binary: np.ndarray,
 ) -> tuple[float, float]:
-    """Area under ROC + PR for the sigmoid dual-head output.
+    """Area under ROC + PR for a per-sample binary score.
 
-    ``scores`` is the raw sigmoid (in [0, 1]); ``target_binary`` is the
-    SKS-derived n_mature_polygons > 0 mask. Returns (AUROC, AUPR).
+    ``scores`` is a probability in [0, 1] (e.g. a class-22 / maturity softmax
+    sampled at NFI plot pixels, or a sigmoid head); ``target_binary`` is the
+    matching {0, 1} truth (e.g. NFI ``Maturityclass`` ≥ 41). Any matching
+    shapes work — both are flattened.
 
-    TODO: sklearn.metrics if dep available, else hand-rolled trapezoid.
+    Hand-rolled (no sklearn dependency): sort by score descending, sweep every
+    distinct-score threshold, and integrate the ROC (TPR vs FPR) and PR
+    (precision vs recall) curves by trapezoid. Returns ``(AUROC, AUPR)``, or
+    ``(nan, nan)`` when only one class is present (AUROC is undefined).
     """
-    raise NotImplementedError
+    scores = np.asarray(scores, dtype=np.float64).ravel()
+    target = np.asarray(target_binary).ravel().astype(bool)
+    if scores.shape != target.shape:
+        raise ValueError(f"shape mismatch: scores {scores.shape} vs target {target.shape}")
+
+    n_pos = int(target.sum())
+    n_neg = target.size - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return float("nan"), float("nan")
+
+    order = np.argsort(-scores, kind="mergesort")  # stable, descending
+    y = target[order].astype(np.float64)
+    tp = np.cumsum(y)
+    fp = np.cumsum(1.0 - y)
+
+    # One operating point per distinct score (collapse ties).
+    boundary = np.r_[np.diff(scores[order]) != 0, True]
+    tp, fp = tp[boundary], fp[boundary]
+
+    def _trapz(y_vals: np.ndarray, x_vals: np.ndarray) -> float:
+        return float(np.sum(np.diff(x_vals) * (y_vals[1:] + y_vals[:-1]) / 2.0))
+
+    tpr = np.r_[0.0, tp / n_pos]
+    fpr = np.r_[0.0, fp / n_neg]
+    auroc = _trapz(tpr, fpr)
+
+    recall = np.r_[0.0, tp / n_pos]
+    precision = tp / (tp + fp)
+    precision = np.r_[precision[0], precision]  # PR curve anchored at recall 0
+    aupr = _trapz(precision, recall)
+
+    return auroc, aupr
 
 
 # ── Aggregates ──────────────────────────────────────────────────────────────
