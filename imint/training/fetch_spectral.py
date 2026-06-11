@@ -74,7 +74,7 @@ from imint.training.tile_fetch import (
     _CDSE_SEMAPHORE,
     _DES_SEMAPHORE,
 )
-from imint.coregistration import clearest_frame_idx, coregister_interframe
+from imint.coregistration import _COREG_BAND, clearest_frame_idx, coregister_interframe
 from imint.training.tile_assemble import assemble_fresh, crop_halo, date_to_doy
 from imint.training.tile_config import TileConfig
 
@@ -384,9 +384,20 @@ def fetch_tile_spectral(
     did_m2 = coregister and len(fresh) >= 2
     if did_m2:
         ref_idx = clearest_frame_idx(fresh)
-        fresh = coregister_interframe(fresh, ref_idx, search_px=float(crop))
+        fresh, shifts = coregister_interframe(fresh, ref_idx, search_px=float(crop))
     else:
         ref_idx = next(iter(fresh))
+        shifts = {ref_idx: (0.0, 0.0)}
+
+    # Coreg-quality signals — flag low-confidence coreg, don't block (the dataset
+    # loader / audit decides). anchor_valid_frac on B04 (clouds flatten/zero it);
+    # n_aligned = movers given a real MI shift; per-slot applied shifts persisted.
+    anchor_valid_frac = float((fresh[ref_idx][_COREG_BAND] > 1e-6).mean())
+    coreg_n_aligned = int(sum(
+        1 for fi, (dy, dx) in shifts.items()
+        if fi != ref_idx and abs(dy) + abs(dx) > 0.0))
+    coreg_max_shift = float(max(
+        (float(np.hypot(dy, dx)) for dy, dx in shifts.values()), default=0.0))
 
     cropped = {fi: crop_halo(a, crop=crop, canon=canon) for fi, a in fresh.items()}
 
@@ -415,5 +426,10 @@ def fetch_tile_spectral(
         "source": backend,
         "coreg_ref_frame": np.int32(ref_idx),
         "coreg_m2": np.int32(1 if did_m2 else 0),
+        "coreg_n_aligned": np.int32(coreg_n_aligned),
+        "coreg_max_shift": np.float32(coreg_max_shift),
+        "coreg_anchor_valid_frac": np.float32(anchor_valid_frac),
+        "coreg_shifts": np.array(
+            [shifts.get(fi, (0.0, 0.0)) for fi in range(n_frames)], np.float32),
         **extras,
     }

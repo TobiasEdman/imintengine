@@ -101,10 +101,13 @@ class TestInterframeCoreg:
         m1 = subpixel_shift(self._scene(2, 0.40, True, size), 1.2, -0.7)  # mover, different content
         m2 = subpixel_shift(self._scene(3, 0.35, True, size), -0.9, 1.0)
         frames = {0: self._cube(ref_b04), 1: self._cube(m1), 2: self._cube(m2)}
-        out = rg.coregister_interframe(frames, ref_idx=0)
+        out, shifts = rg.coregister_interframe(frames, ref_idx=0)
         b = _COREG_BAND
-        # reference is the fixed anchor — untouched
+        # reference is the fixed anchor — untouched, zero reported shift
         assert np.array_equal(out[0], frames[0])
+        assert shifts[0] == (0.0, 0.0)
+        # movers report a real applied shift
+        assert all(abs(shifts[i][0]) + abs(shifts[i][1]) > 0 for i in (1, 2))
         for i in (1, 2):
             # each mover now sits on the reference → residual offset to ref ~0
             dy, dx = estimate_mi_offset(out[i][b], ref_b04, search_px=4.0)
@@ -113,10 +116,11 @@ class TestInterframeCoreg:
 
     def test_no_shift_returns_equivalent(self):
         ref = self._cube(self._scene(1, 0.0, False, self._N))
-        out = rg.coregister_interframe({0: ref, 1: ref.copy()}, ref_idx=0)
+        out, shifts = rg.coregister_interframe({0: ref, 1: ref.copy()}, ref_idx=0)
         # identical content → MI optimum at 0 → both frames returned untouched.
         np.testing.assert_allclose(out[0], ref, atol=1e-4)
         np.testing.assert_allclose(out[1], ref, atol=1e-4)
+        assert shifts[0] == (0.0, 0.0) and shifts[1] == (0.0, 0.0)
 
 
 class TestAssembleFresh:

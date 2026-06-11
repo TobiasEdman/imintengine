@@ -61,7 +61,7 @@ def _reference_composition(frames: dict[int, np.ndarray], *, coregister: bool):
     fresh = {fi: f.copy() for fi, f in frames.items()}
     if coregister and len(fresh) >= 2:
         ref_idx = clearest_frame_idx(fresh)
-        fresh = coregister_interframe(fresh, ref_idx, search_px=float(_CROP))
+        fresh, _ = coregister_interframe(fresh, ref_idx, search_px=float(_CROP))
     else:
         ref_idx = next(iter(fresh))
     cropped = {fi: crop_halo(a, crop=_CROP, canon=_CANON) for fi, a in fresh.items()}
@@ -96,6 +96,28 @@ def test_composition_matches_regrid_recipe(monkeypatch):
     assert not np.array_equal(res["spectral"], raw_spec)
 
 
+def test_coreg_quality_fields(monkeypatch):
+    frames = _frames()
+    _patch_fetch(monkeypatch, frames)
+    res = fs.fetch_tile_spectral(
+        _CENTRE, tile=TileConfig(size_px=_CANON), dates=_DATES, n_frames=_N,
+        backend="des", halo_px=_HALO_PX, coregister=True,
+    )
+    shifts = res["coreg_shifts"]
+    ref = int(res["coreg_ref_frame"])
+    assert shifts.shape == (_N, 2)
+    assert tuple(shifts[ref]) == (0.0, 0.0)             # anchor is the fixed reference
+    assert tuple(shifts[2]) == (0.0, 0.0)               # slot 2 missing → zero
+    # n_aligned == count of non-anchor slots actually shifted; M2 aligned >= 1 mover
+    n_real = sum(1 for fi in range(_N)
+                 if fi != ref and abs(shifts[fi][0]) + abs(shifts[fi][1]) > 0)
+    assert int(res["coreg_n_aligned"]) == n_real
+    assert n_real >= 1
+    assert float(res["coreg_max_shift"]) == pytest.approx(
+        max(float(np.hypot(*shifts[fi])) for fi in range(_N)))
+    assert 0.9 < float(res["coreg_anchor_valid_frac"]) <= 1.0
+
+
 def test_coregister_false_skips_m2(monkeypatch):
     frames = _frames()
     _patch_fetch(monkeypatch, frames)
@@ -106,6 +128,10 @@ def test_coregister_false_skips_m2(monkeypatch):
     raw_spec, _, _ = _reference_composition(frames, coregister=False)
     assert int(res["coreg_m2"]) == 0
     assert np.array_equal(res["spectral"], raw_spec)
+    # no M2 → zeroed coreg-quality signals (anchor frac is still measured).
+    assert int(res["coreg_n_aligned"]) == 0
+    assert float(res["coreg_max_shift"]) == 0.0
+    assert np.array_equal(res["coreg_shifts"], np.zeros((_N, 2), np.float32))
 
 
 def test_geometry_co_centred(monkeypatch):

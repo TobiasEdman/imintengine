@@ -568,7 +568,7 @@ def clearest_frame_idx(frames: dict[int, np.ndarray]) -> int:
 
 def coregister_interframe(
     frames: dict[int, np.ndarray], ref_idx: int, *, search_px: float = 4.0
-) -> dict[int, np.ndarray]:
+) -> tuple[dict[int, np.ndarray], dict[int, tuple[float, float]]]:
     """M2: register every frame onto ``frames[ref_idx]`` by mutual information.
 
     The priority is **inter-frame** alignment — the 4 frames pixel-locked to each
@@ -590,16 +590,27 @@ def coregister_interframe(
     (or an MI optimum that beat nothing → ``0,0``) keeps the M1 frame
     byte-identical. Frames are ``(12, H, W)``; the offset is estimated on B04 and
     applied to every band.
+
+    Returns:
+        ``(out, shifts)`` — ``out`` maps each slot to its (coregistered) frame
+        (the reference is returned untouched); ``shifts`` maps each slot to the
+        ``(dy, dx)`` **actually applied** to it, with ``(0.0, 0.0)`` for the
+        reference and for any frame kept M1 (sub-threshold or rejected MI
+        optimum). The shifts let a caller flag low-confidence coregistration
+        without re-running MI.
     """
     ref_band = frames[ref_idx][_COREG_BAND]
     out: dict[int, np.ndarray] = {ref_idx: frames[ref_idx]}   # reference is the fixed anchor
+    shifts: dict[int, tuple[float, float]] = {ref_idx: (0.0, 0.0)}
     for i, arr in frames.items():
         if i == ref_idx:
             continue
         dy, dx = estimate_mi_offset(arr[_COREG_BAND], ref_band, search_px=search_px)
         if max(abs(dy), abs(dx)) < _COREG_MIN_SHIFT:
             out[i] = arr            # already on the reference (or MI found no gain) → keep M1
+            shifts[i] = (0.0, 0.0)
         else:
             shifted = np.stack([subpixel_shift(b, dy, dx) for b in arr])
             out[i] = np.ascontiguousarray(shifted, np.float32)
-    return out
+            shifts[i] = (float(dy), float(dx))
+    return out, shifts

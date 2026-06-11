@@ -182,7 +182,7 @@ def regrid_one_tile(
                        dates, n_frames, canon=CANON_PX)[0]
         if debug_precoreg else None
     )
-    fresh = coregister_interframe(fresh, ref_idx, search_px=float(CROP))
+    fresh, _ = coregister_interframe(fresh, ref_idx, search_px=float(CROP))
     cropped = {fi: crop_halo(arr, crop=CROP, canon=CANON_PX) for fi, arr in fresh.items()}
 
     spectral, extras = assemble_fresh(cropped, dates, n_frames, canon=CANON_PX)
