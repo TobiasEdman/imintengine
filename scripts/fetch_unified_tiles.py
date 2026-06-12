@@ -1287,12 +1287,16 @@ def main():
                    help="Tile resolution in pixels (256, 512, 1024, …). "
                         "Sets the runtime TileConfig.size_px.")
     p.add_argument("--fetch-sources", default="cdse,des",
-                   help="Comma-separated list of S2 backends to race. "
-                        "Valid: cdse (SH Process, PU-billed), des (Digital "
-                        "Earth Sweden openEO), cdse-openeo (CDSE openEO, "
-                        "uses the separate 10k-credits/mo pool). Use "
-                        "--fetch-sources=des,cdse-openeo to skip SH Process "
-                        "during a CDSE PU outage.")
+                   help="Comma-separated S2 backends. The first live "
+                        "non-sen2cor token is the primary; l1c_sen2cor (if "
+                        "listed) is the LAST-RESORT fallthrough for slots the "
+                        "primary cannot fill. Valid: cdse (SH Process, "
+                        "PU-billed), des (Digital Earth Sweden openEO), "
+                        "cdse-openeo (CDSE openEO, separate 10k-credits/mo "
+                        "pool), l1c_sen2cor (GCS L1C -> sen2cor, PU-free + "
+                        "pre-2018; needs the imint-sen2cor image). E.g. "
+                        "--fetch-sources=des,l1c_sen2cor during a CDSE PU "
+                        "outage.")
     args = p.parse_args()
     random.seed(args.seed)
 

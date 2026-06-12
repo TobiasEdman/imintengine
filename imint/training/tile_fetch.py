@@ -165,14 +165,14 @@ def _fetch_single_scene(
     unified per-slot fetch path.
 
     Routes the chosen date through
-    :func:`imint.training.fetch_spectral.fetch_spectral` on a SINGLE
-    backend — the first token in ``sources`` that is supported and not
-    marked dead this session. No backend race, no cross-backend
-    fallback: if every ranked candidate fails on the chosen backend,
-    the function returns ``(None, "")``. The race-pool that used to
-    live in this body, with its silent ``except Exception: pass``
-    failure mode, has been retired — see the unified dispatcher for
-    the visible-error semantics that replace it.
+    :func:`imint.training.fetch_spectral.fetch_spectral`. The first live
+    non-sen2cor token in ``sources`` is the primary backend (no backend race).
+    ``l1c_sen2cor``, when present in ``sources``, is the deliberate LAST-RESORT
+    fallthrough — tried (and visibly logged) only after the primary yields
+    nothing for every ranked candidate: the PU-free, pre-2018-capable sen2cor
+    path that backfills slots the openEO backends cannot reach. The old silent
+    race-pool (``except Exception: pass``) stays retired — this fallthrough is
+    single, ordered, and logged, not a race.
 
     Candidate dates come from (in priority order):
 
@@ -255,38 +255,53 @@ def _fetch_single_scene(
     candidates.sort(key=_dist_to_center)
     top_dates = [d for d, _ in candidates[:max_candidates]]
 
-    # 3) Backend selection: first sources token that is supported and
-    #    not marked dead this session. Fixed for the call.
-    primary_backend: str | None = None
+    # 3) Backend order. The first live non-sen2cor token is the primary backend
+    #    (the existing single-backend rule — no race). ``l1c_sen2cor``, when
+    #    requested in ``sources``, is appended as a deliberate, LOGGED
+    #    last-resort fallthrough: a scoped reversal of the
+    #    no-cross-backend-fallback rule for the PU-free, pre-2018-capable
+    #    sen2cor path ONLY (never a general race over the other backends).
+    backends: list[str] = []
     for src in sources:
+        if src == "l1c_sen2cor":
+            continue
         if src in SUPPORTED_BACKENDS and not is_source_dead(src):
-            primary_backend = src
+            backends.append(src)
             break
-    if primary_backend is None:
+    if "l1c_sen2cor" in sources:
+        backends.append("l1c_sen2cor")
+    if not backends:
         return None, ""
 
-    # 4) Per-candidate retry on the chosen backend — first scene wins.
-    #    Mid-call health re-check covers cdse-openeo's 402 PaymentRequired
-    #    flipping ``is_source_dead`` between candidates.
-    for d in top_dates:
-        if is_source_dead(primary_backend):
-            return None, ""
-        # Per-candidate temp dict: fetch_spectral populates the all-band
-        # extras (b08/rededge/b01/b09) for whatever date it tries. Only the
-        # ACCEPTED candidate's extras are copied out — a rejected (None)
-        # candidate may have left stale extras behind in the temp dict.
-        cand_extra: dict | None = {} if collect_extra is not None else None
-        scene = fetch_spectral(
-            bbox_3006, coords_wgs84, d,
-            backend=primary_backend,
-            size_px=tile.size_px,
-            cloud_threshold=cloud_threshold,
-            collect_extra=cand_extra,
-        )
-        if scene is not None:
-            if collect_extra is not None and cand_extra:
-                collect_extra.update(cand_extra)
-            return scene, d
+    # 4) Try backends in order; within a backend the first accepted candidate
+    #    wins. The per-candidate ``is_source_dead`` re-check covers cdse-openeo's
+    #    402 PaymentRequired flipping the flag mid-call. Per-candidate temp extras
+    #    dict: only the ACCEPTED candidate's b08/rededge/b01/b09 are copied out;
+    #    a rejected (None) candidate may have left stale extras behind.
+    for bi, backend in enumerate(backends):
+        if is_source_dead(backend):
+            continue
+        if bi > 0:
+            print(
+                f"    [fetch_single_scene] {date_start[:7]}..{date_end[:7]}: "
+                f"primary empty → last-resort fallthrough to {backend}",
+                flush=True,
+            )
+        for d in top_dates:
+            if is_source_dead(backend):
+                break
+            cand_extra: dict | None = {} if collect_extra is not None else None
+            scene = fetch_spectral(
+                bbox_3006, coords_wgs84, d,
+                backend=backend,
+                size_px=tile.size_px,
+                cloud_threshold=cloud_threshold,
+                collect_extra=cand_extra,
+            )
+            if scene is not None:
+                if collect_extra is not None and cand_extra:
+                    collect_extra.update(cand_extra)
+                return scene, d
     return None, ""
 
 

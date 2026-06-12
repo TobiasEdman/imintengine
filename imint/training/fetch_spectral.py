@@ -25,10 +25,13 @@ Design contract — read this before adding code here:
     ``fetch_tile_at_specific_dates`` only if AOI-clean (saves the
     expensive openEO spectral call on cloudy rejects).
 
-* **No backend race, no cross-backend fallback.** Single backend per
-  call. If a slot exhausts its candidate list on one backend, the slot
-  fails. Backend health is surfaced cleanly via ``is_source_dead``
-  (402 PaymentRequired marks ``cdse-openeo`` dead for the process).
+* **One backend per ``fetch_spectral`` call.** This dispatcher never races
+  or falls back — selection and the single last-resort fallthrough are the
+  orchestrator's job (``tile_fetch._fetch_single_scene``): one primary
+  backend, then a logged fallthrough to ``l1c_sen2cor`` ONLY if it is in
+  ``sources`` (the PU-free, pre-2018 sen2cor path). Backend health is
+  surfaced via ``is_source_dead`` (402 PaymentRequired marks ``cdse-openeo``
+  dead for the process).
 
 The unified shape is what makes "no more silent fall-throughs to a
 different code path" the architectural property of the system, not a
