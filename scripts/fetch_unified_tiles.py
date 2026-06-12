@@ -319,164 +319,6 @@ def prefetch_vpp_batch(
 # ── Core Fetch ────────────────────────────────────────────────────────────────
 
 
-def _fetch_frames_from_best_dates(
-    bbox: dict,
-    coords_wgs84: dict,
-    best: dict,
-    tile: TileConfig,
-    n_frames: int = 4,
-    sources: tuple[str, ...] = ("cdse", "des"),
-) -> list:
-    """Fetch spectral frames using pre-screened best dates (from openEO stage 1).
-
-    Races selected providers in parallel for each frame — first result wins.
-    Skips STAC search, VPP lookup, and cloud screening entirely.
-
-    Args:
-        bbox: Tile bbox in EPSG:3006.
-        coords_wgs84: Tile center in WGS84.
-        best: {frame_idx: {date, cloud_frac}} from best_dates.json.
-        n_frames: Number of frames.
-        sources: Which backends to race. Subset of ("cdse", "des").
-            Pass ("des",) to skip CDSE during a CDSE outage.
-
-    Returns:
-        List of (spectral, date_str) tuples matching stack_frames input.
-    """
-    from concurrent.futures import (
-    ThreadPoolExecutor,
-    TimeoutError as _FuturesTimeout,
-    as_completed,
-)
-    from imint.training.cdse_s2 import fetch_s2_scene
-    from imint.training.tile_fetch import (
-        _CDSE_SEMAPHORE, _DES_SEMAPHORE, _CDSE_OPENEO_SEMAPHORE,
-        PRITHVI_BANDS,
-    )
-    from imint.fetch import fetch_seasonal_image
-
-    def _cdse_fetch(date_str):
-        _CDSE_SEMAPHORE.acquire()
-        try:
-            result = fetch_s2_scene(
-                bbox["west"], bbox["south"], bbox["east"], bbox["north"],
-                date=date_str,
-                size_px=tile.size_px,
-                cloud_threshold=1.0,
-                haze_threshold=1.0,
-                nodata_threshold=None,
-            )
-            _CDSE_SEMAPHORE.report_success()
-            if result is not None:
-                return result[0], date_str
-        except Exception:
-            _CDSE_SEMAPHORE.report_failure()
-        finally:
-            _CDSE_SEMAPHORE.release()
-        return None, date_str
-
-    def _des_fetch(date_str):
-        _DES_SEMAPHORE.acquire()
-        try:
-            result = fetch_seasonal_image(
-                date=date_str,
-                coords=coords_wgs84,
-                prithvi_bands=PRITHVI_BANDS,
-                source="des",
-            )
-            _DES_SEMAPHORE.report_success()
-            if result is not None:
-                return result[0], date_str
-        except Exception:
-            _DES_SEMAPHORE.report_failure()
-        finally:
-            _DES_SEMAPHORE.release()
-        return None, date_str
-
-    def _cdse_openeo_fetch(date_str):
-        # CDSE openEO (openeo.dataspace.copernicus.eu) uses a separate
-        # monthly-credit pool from SH Process PUs.
-        #
-        # Session-scoped 402-guard (same pattern as the unified flow
-        # in fetch_spectral._fetch_via_openeo): on first PaymentRequired we
-        # mark the source dead for this process; subsequent attempts
-        # short-circuit without any HTTP roundtrip. Cleared by next
-        # pod restart, so credit-reset / package-purchase auto-recovers.
-        from imint.training.openeo_tile_graph import (
-            is_source_dead, mark_source_dead, _is_payment_required_error,
-        )
-        if is_source_dead("cdse-openeo"):
-            return None, date_str
-        _CDSE_OPENEO_SEMAPHORE.acquire()
-        try:
-            result = fetch_seasonal_image(
-                date=date_str,
-                coords=coords_wgs84,
-                prithvi_bands=PRITHVI_BANDS,
-                source="copernicus",
-            )
-            _CDSE_OPENEO_SEMAPHORE.report_success()
-            if result is not None:
-                return result[0], date_str
-        except Exception as exc:
-            if _is_payment_required_error(exc):
-                mark_source_dead(
-                    "cdse-openeo",
-                    f"402 in _cdse_openeo_fetch: {str(exc)[:160]}",
-                )
-            _CDSE_OPENEO_SEMAPHORE.report_failure()
-        finally:
-            _CDSE_OPENEO_SEMAPHORE.release()
-        return None, date_str
-
-    results = []
-    for fi in range(n_frames):
-        info = best.get(str(fi))
-        if not info or not info.get("date"):
-            results.append((None, ""))
-            continue
-
-        date_str = info["date"]
-
-        # Race selected providers — first success wins
-        submit_map = {}
-        if "cdse" in sources:
-            submit_map["cdse"] = _cdse_fetch
-        if "des" in sources:
-            submit_map["des"] = _des_fetch
-        if "cdse-openeo" in sources:
-            submit_map["cdse-openeo"] = _cdse_openeo_fetch
-        if not submit_map:
-            results.append((None, date_str))
-            continue
-
-        # Race selected providers — first success wins. Hard 180 s
-        # timeout per frame and break on first success so one stalled
-        # provider (e.g. DES openEO process-graph hang) cannot block
-        # tile completion. shutdown(wait=False) skips waiting for the
-        # remaining (possibly hung) threads; they die naturally when
-        # the socket layer eventually times out. cancel_futures=True
-        # cancels queued-but-not-started futures.
-        pool = ThreadPoolExecutor(max_workers=max(len(submit_map), 1))
-        futs = [pool.submit(fn, date_str) for fn in submit_map.values()]
-        got_result = False
-        try:
-            for f in as_completed(futs, timeout=180):
-                spectral, d = f.result()
-                if spectral is not None:
-                    results.append((spectral, d))
-                    got_result = True
-                    break
-        except _FuturesTimeout:
-            pass  # 3-min hard cap reached — treat as no-result for this frame
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
-        if not got_result:
-            results.append((None, date_str))
-
-    return results
-
-
 def fetch_tile(
     loc: dict,
     years: list[str],
@@ -484,7 +326,6 @@ def fetch_tile(
     tile: TileConfig,
     cloud_max: float = 30.0,
     vpp_cache: dict | None = None,
-    best_dates: dict | None = None,
     sources: tuple[str, ...] = ("cdse", "des"),
 ) -> dict:
     """Fetch one tile: 4 seasonal frames + NMD + aux → .npz."""
@@ -502,26 +343,18 @@ def fetch_tile(
     coords = bbox_3006_to_wgs84(bbox)
     tile.assert_bbox_matches(bbox)
 
-    # Fast path: use pre-screened best dates from openEO stage 1.
-    # The best-dates path is 6-band only (no all-band extras); the
-    # fetch_4frame_scenes path collects B08/red-edge/B01/B09 per frame.
-    tile_best = best_dates.get(name) if best_dates else None
-    extras_list: list | None = None
-    if tile_best:
-        scene_results = _fetch_frames_from_best_dates(
-            bbox, coords, tile_best, tile, NUM_FRAMES, sources=sources,
-        )
-    else:
-        tile_years = [str(loc["year"])] if "year" in loc else years
-        vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
-        extras_list = []
-        scene_results = fetch_4frame_scenes(
-            bbox, coords, tile_years, tile,
-            scene_cloud_max=cloud_max,
-            vpp_windows=vpp_windows,
-            sources=sources,
-            collect_extra=extras_list,
-        )
+    # All-band 4-frame fetch: 1 autumn (year-1) + 3 VPP growing-season,
+    # collecting B08/red-edge/B01/B09 extras per frame.
+    tile_years = [str(loc["year"])] if "year" in loc else years
+    vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
+    extras_list: list = []
+    scene_results = fetch_4frame_scenes(
+        bbox, coords, tile_years, tile,
+        scene_cloud_max=cloud_max,
+        vpp_windows=vpp_windows,
+        sources=sources,
+        collect_extra=extras_list,
+    )
 
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
     if int(temporal_mask.sum()) == 0:
@@ -551,14 +384,13 @@ def fetch_tile(
         save["label"] = nmd_label
     save.update(aux)
 
-    # All-band extras (B08/red-edge/B01/B09) from the all-band fetch path.
-    # Only persist when ≥1 frame actually carried them (DES all-band path);
-    # the 6-band best-dates path leaves extras_list None → nothing written.
-    if extras_list is not None:
-        extras = stack_extra_frames(extras_list, dates, NUM_FRAMES, tile)
-        if any(int(extras[k]) for k in
-               ("has_b08", "has_rededge", "has_b01", "has_b09")):
-            save.update(extras)
+    # All-band extras (B08/red-edge/B01/B09). Only persist when ≥1 frame
+    # actually carried them (e.g. the DES all-band path); frames from a
+    # 6-band-only backend contribute nothing.
+    extras = stack_extra_frames(extras_list, dates, NUM_FRAMES, tile)
+    if any(int(extras[k]) for k in
+           ("has_b08", "has_rededge", "has_b01", "has_b09")):
+        save.update(extras)
 
     # Background frame (2016 summer) for clearcut change detection
     bg_result = fetch_background_frame(bbox, tile)
@@ -1132,7 +964,6 @@ def refetch_tile(
     cloud_max: float = 30.0,
     max_aoi_cloud: float = 0.10,
     vpp_cache: dict | None = None,
-    best_dates: dict | None = None,
     sources: tuple[str, ...] = ("cdse", "des"),
     force: bool = False,
 ) -> dict:
@@ -1182,26 +1013,18 @@ def refetch_tile(
     else:
         fetch_years = years
 
-    # Fast path: pre-screened best dates from openEO stage 1.
-    # Best-dates path is 6-band only; fetch_4frame_scenes collects the
-    # all-band extras (B08/red-edge/B01/B09) per frame.
-    tile_best = best_dates.get(name) if best_dates else None
-    extras_list: list | None = None
-    if tile_best:
-        scene_results = _fetch_frames_from_best_dates(
-            bbox, coords, tile_best, tile, NUM_FRAMES, sources=sources,
-        )
-    else:
-        vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
-        extras_list = []
-        scene_results = fetch_4frame_scenes(
-            bbox, coords, fetch_years, tile,
-            scene_cloud_max=cloud_max,
-            max_aoi_cloud=max_aoi_cloud,
-            vpp_windows=vpp_windows,
-            sources=sources,
-            collect_extra=extras_list,
-        )
+    # All-band 4-frame fetch: 1 autumn (year-1) + 3 VPP growing-season,
+    # collecting B08/red-edge/B01/B09 extras per frame.
+    vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
+    extras_list: list = []
+    scene_results = fetch_4frame_scenes(
+        bbox, coords, fetch_years, tile,
+        scene_cloud_max=cloud_max,
+        max_aoi_cloud=max_aoi_cloud,
+        vpp_windows=vpp_windows,
+        sources=sources,
+        collect_extra=extras_list,
+    )
     image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
 
     if int(temporal_mask.sum()) == 0:
@@ -1246,11 +1069,10 @@ def refetch_tile(
     # preserved-old b08/red-edge/B01/B09 (which were aligned to the OLD
     # spectral dates and are now stale). Only when ≥1 frame carried them;
     # otherwise the preserved-old block (if any) stays and enrich self-heals.
-    if extras_list is not None:
-        extras = stack_extra_frames(extras_list, dates, NUM_FRAMES, tile)
-        if any(int(extras[k]) for k in
-               ("has_b08", "has_rededge", "has_b01", "has_b09")):
-            save.update(extras)
+    extras = stack_extra_frames(extras_list, dates, NUM_FRAMES, tile)
+    if any(int(extras[k]) for k in
+           ("has_b08", "has_rededge", "has_b01", "has_b09")):
+        save.update(extras)
 
     np.savez_compressed(out_path, **save)
 
@@ -1396,26 +1218,8 @@ def main():
     if not work:
         return
 
-    # ── Load best_dates from openEO screening (if available) ───────────────
-    best_dates_path = os.path.join(args.output_dir, "best_dates.json")
-    best_dates_cache = None
-    if os.path.exists(best_dates_path):
-        with open(best_dates_path) as f:
-            best_dates_cache = json.load(f)
-        n_with_dates = sum(1 for loc, _ in work if loc["name"] in best_dates_cache)
-        print(f"  best_dates.json: {n_with_dates}/{len(work)} tiles have pre-screened dates")
-
-    # ── VPP prefetch (skip for tiles with best_dates) ─────────────────────
-    if best_dates_cache:
-        # Only prefetch VPP for tiles WITHOUT pre-screened dates
-        vpp_work = [(loc, d) for loc, d in work if loc["name"] not in best_dates_cache]
-        if vpp_work:
-            vpp_cache = prefetch_vpp_batch(vpp_work, workers=args.workers)
-        else:
-            vpp_cache = {}
-            print("  VPP prefetch skipped — all tiles have best_dates")
-    else:
-        vpp_cache = prefetch_vpp_batch(work, workers=args.workers)
+    # ── VPP prefetch (all tiles) ──────────────────────────────────────────
+    vpp_cache = prefetch_vpp_batch(work, workers=args.workers)
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     t0 = time.time()
@@ -1428,11 +1232,11 @@ def main():
         if use_refetch:
             return refetch_tile(loc, args.years, d, tile,
                                 cloud_max=args.cloud_max,
-                                vpp_cache=vpp_cache, best_dates=best_dates_cache,
+                                vpp_cache=vpp_cache,
                                 sources=sources_tuple)
         return fetch_tile(loc, args.years, d, tile,
                           cloud_max=args.cloud_max,
-                          vpp_cache=vpp_cache, best_dates=best_dates_cache,
+                          vpp_cache=vpp_cache,
                           sources=sources_tuple)
 
     CHUNK = max(max_w * 2, len(work) // 10)
