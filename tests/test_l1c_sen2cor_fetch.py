@@ -4,8 +4,10 @@ No network, no sen2cor: era5 / stac / SAFE-download / sen2cor / window-read are
 patched at their SOURCE modules (the handler imports them lazily, so patching the
 fs module namespace would not take). Proves: the ERA5-over-tile gate fires before
 any download, the 12→6-band split with extras matches the openEO path, a missing
-``L2A_Process`` marks the source dead (graceful no-op off the sen2cor image), and
-the dispatcher short-circuits a dead source.
+``L2A_Process`` marks the source dead (graceful no-op off the sen2cor image) —
+both via the ``shutil.which`` pre-check that skips the download entirely and the
+post-download ``FileNotFoundError`` fallback — and the dispatcher short-circuits
+a dead source.
 """
 from __future__ import annotations
 
@@ -30,6 +32,9 @@ def _l2a_cube() -> np.ndarray:
 
 
 def _patch_chain(monkeypatch, *, era5_clear=True, scenes=None, l2a="ok", cube="ok"):
+    # L2A_Process present (simulate the imint-sen2cor image) so the pre-check
+    # passes and the rest of the chain runs; the test box has no real binary.
+    monkeypatch.setattr("shutil.which", lambda name: "/opt/Sen2Cor/bin/L2A_Process")
     monkeypatch.setattr(
         "imint.training.optimal_fetch.era5_prefilter_dates",
         lambda bbox, d0, d1: [_DATE] if era5_clear else [],
@@ -65,6 +70,7 @@ def test_success_returns_6band_plus_extras(monkeypatch):
 
 def test_era5_cloudy_skips_download(monkeypatch):
     calls = {"stac": 0}
+    monkeypatch.setattr("shutil.which", lambda name: "/opt/Sen2Cor/bin/L2A_Process")
     monkeypatch.setattr(
         "imint.training.optimal_fetch.era5_prefilter_dates", lambda *a, **k: [])
     monkeypatch.setattr(
@@ -92,6 +98,30 @@ def test_missing_binary_marks_dead(monkeypatch):
     out = fs._fetch_via_l1c_sen2cor(_BBOX, _COORDS, _DATE, size_px=_SIZE)
     assert out is None
     assert "l1c_sen2cor" in dead
+
+
+def test_missing_l2a_binary_skips_everything(monkeypatch):
+    """Pre-check: no ``L2A_Process`` on PATH → mark dead + bail BEFORE the ERA5 /
+    STAC calls and the ~0.8 GB SAFE download. Complement of
+    ``test_missing_binary_marks_dead`` (the post-download FileNotFoundError race
+    fallback): here nothing downstream runs at all."""
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    calls = {"era5": 0, "stac": 0, "safe": 0}
+    monkeypatch.setattr(
+        "imint.training.optimal_fetch.era5_prefilter_dates",
+        lambda *a, **k: calls.__setitem__("era5", calls["era5"] + 1) or [_DATE])
+    monkeypatch.setattr(
+        "imint.training.sen2cor_l2a.stac_l1c_scenes",
+        lambda *a, **k: calls.__setitem__("stac", calls["stac"] + 1) or [])
+    monkeypatch.setattr(
+        "imint.fetch.fetch_l1c_safe_by_name",
+        lambda *a, **k: calls.__setitem__("safe", calls["safe"] + 1))
+    dead: dict = {}
+    monkeypatch.setattr(fs, "mark_source_dead", lambda s, why="": dead.__setitem__(s, why))
+    out = fs._fetch_via_l1c_sen2cor(_BBOX, _COORDS, _DATE, size_px=_SIZE)
+    assert out is None
+    assert "l1c_sen2cor" in dead                       # later slots no-op at the dispatcher
+    assert calls == {"era5": 0, "stac": 0, "safe": 0}  # nothing ran before the guard
 
 
 def test_dispatch_skips_when_dead(monkeypatch):

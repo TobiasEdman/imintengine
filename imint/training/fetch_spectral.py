@@ -323,9 +323,12 @@ def _fetch_via_l1c_sen2cor(
     DES STAC). Returns the full 12-band cube split into the 6-band model input +
     extras, exactly like the openEO path.
 
-    Runs only where ``L2A_Process`` exists (the imint-sen2cor image); the first
-    ``FileNotFoundError`` marks the source dead so a non-sen2cor pod no-ops
-    instead of downloading a SAFE per slot forever.
+    Runs only where ``L2A_Process`` exists (the imint-sen2cor image): a
+    ``shutil.which`` pre-check marks the source dead and bails BEFORE any
+    download off that image, so a non-sen2cor pod no-ops at the dispatcher's
+    ``is_source_dead`` gate instead of fetching a ~0.8 GB SAFE per slot. The
+    ``FileNotFoundError`` handler below is defense-in-depth for the rare case the
+    binary vanishes between the pre-check and the exec.
     """
     import shutil
     import tempfile
@@ -338,6 +341,15 @@ def _fetch_via_l1c_sen2cor(
         run_sen2cor,
         stac_l1c_scenes,
     )
+
+    # 0) L2A_Process pre-check — sen2cor lives only in the imint-sen2cor image.
+    #    Off it, mark the source dead and bail before the ERA5/STAC calls and the
+    #    ~0.8 GB SAFE download that would otherwise just precede run_sen2cor's
+    #    FileNotFoundError. Marking dead makes every later slot short-circuit at
+    #    the is_source_dead gate in fetch_spectral (no per-slot re-download).
+    if shutil.which("L2A_Process") is None:
+        mark_source_dead("l1c_sen2cor", "L2A_Process not on PATH (non-sen2cor image)")
+        return None
 
     # 1) ERA5-over-tile gate — reject cloudy dates before any SAFE download.
     if date_str not in set(era5_prefilter_dates(coords_wgs84, date_str, date_str)):
@@ -363,6 +375,8 @@ def _fetch_via_l1c_sen2cor(
         if l2a_dir is not None:
             cube = read_l2a_allband(l2a_dir, bbox_3006, size_px)  # (12, H, W)
     except FileNotFoundError as e:
+        # Defense-in-depth: the pre-check above guards the common case; this
+        # catches the binary vanishing between that check and the exec here.
         mark_source_dead("l1c_sen2cor", f"L2A_Process not installed: {e}")
         return None
     except Exception as e:
