@@ -1,0 +1,170 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-l1c-sen2cor-fetch
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: smoke-l1c-sen2cor-fetch
+spec:
+  backoffLimit: 0
+  # One real tile center → one ERA5-clear 2016 date with an L1C scene → ONE
+  # fetch_spectral(backend="l1c_sen2cor") call: ERA5(Open-Meteo) gate →
+  # CDSE-STAC existence → GCS L1C SAFE (~0.8 GB) → sen2cor L2A → window read.
+  # sen2cor's own L2A_Process timeout is 1h; allow headroom for download+read.
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # srv04 + srv06 fail pod-sandbox creation (cgroup/runc
+                  # "load program: operation not supported"). Exclude both.
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: smoke
+          # imint-sen2cor carries L2A_Process (the only image where the
+          # l1c_sen2cor backend self-enables); add python3 + fetch deps at start.
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== l1c_sen2cor fetch smoke ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow \
+                pystac-client openeo 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch agent/te/claude/fetch-phase2-consolidation \
+                https://github.com/TobiasEdman/imintengine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # Verify the pod cloned the intended commit WITH the pre-check
+              # (a --depth 1 clone pins to the branch tip at submit time).
+              echo "CLONED HEAD: $(git rev-parse HEAD)  (expect 5d66668)"
+              git log --oneline -1
+              grep -q 'L2A_Process not on PATH' imint/training/fetch_spectral.py \
+                && echo "  pre-check present in clone: OK"
+
+              echo ""
+              echo "L2A_Process on PATH: $(which L2A_Process)"
+              echo ""
+              echo "=== running fetch smoke ==="
+              python3 - <<'PYEOF'
+              import glob, json, os, sys
+              import numpy as np
+              from pyproj import Transformer
+
+              from imint.training.tile_config import TileConfig
+              from imint.training.optimal_fetch import era5_prefilter_dates
+              from imint.training.sen2cor_l2a import stac_l1c_scenes
+              from imint.training.fetch_spectral import fetch_spectral
+
+              SIZE = 512
+              tile = TileConfig(size_px=SIZE, gsd_m=10)
+
+              # 1) Real land center from an existing tile — the production
+              #    frame_2016 back-fill scenario (any Swedish tile has 2016 S2).
+              tiles = sorted(glob.glob("/data/unified_v2_512/*.npz"))
+              assert tiles, "no tiles in /data/unified_v2_512"
+              d = np.load(tiles[0], allow_pickle=True)
+              cx, cy = int(d["easting"]), int(d["northing"])
+              print(f"tile={os.path.basename(tiles[0])} center_3006=({cx},{cy})")
+
+              bbox = tile.bbox_from_center(cx, cy)
+              tr = Transformer.from_crs(3006, 4326, always_xy=True)
+              w, s = tr.transform(bbox["west"], bbox["south"])
+              e, n = tr.transform(bbox["east"], bbox["north"])
+              coords = {"west": w, "south": s, "east": e, "north": n}
+              print(f"bbox_3006={bbox}")
+              print(f"coords_wgs84={ {k: round(v, 4) for k, v in coords.items()} }")
+
+              # 2) ERA5(Open-Meteo) clear dates → first with an L1C scene (STAC).
+              clear = era5_prefilter_dates(coords, "2016-04-01", "2016-10-15")
+              print(f"era5-clear dates in window: {len(clear)}; first few {clear[:5]}")
+              date = None
+              for cand in clear:
+                  sc = [x for x in stac_l1c_scenes(coords, cand, cand)
+                        if str(x.get("datetime") or "")[:10] == cand]
+                  if sc:
+                      date = cand
+                      print(f"  -> {cand}: {len(sc)} L1C scene(s); "
+                            f"e.g. {sc[0]['scene_id']} cloud={sc[0]['cloud_pct']}")
+                      break
+              assert date, "no ERA5-clear date with an L1C scene in the 2016 window"
+
+              # 3) THE call under test — real GCS→sen2cor→window path.
+              extra = {}
+              print(f"=== fetch_spectral(backend='l1c_sen2cor', date={date}) ===",
+                    flush=True)
+              out = fetch_spectral(bbox, coords, date, backend="l1c_sen2cor",
+                                   size_px=SIZE, cloud_threshold=1.0,
+                                   collect_extra=extra)
+
+              # 4) Assertions — a real frame + the openEO-parity extras.
+              assert out is not None, "fetch_spectral returned None (see stage logs)"
+              assert out.shape == (6, SIZE, SIZE), f"bad shape {out.shape}"
+              nz = float((out > 0).mean())
+              assert nz > 0.5, f"frame mostly zero (nonzero frac {nz:.3f})"
+              for k in ("b08", "rededge", "b01", "b09"):
+                  assert k in extra, f"missing extra {k}"
+              assert extra["b08"].shape == (SIZE, SIZE), extra["b08"].shape
+              assert extra["rededge"].shape == (3, SIZE, SIZE), extra["rededge"].shape
+              assert extra["b01"].shape == (SIZE, SIZE) and \
+                     extra["b09"].shape == (SIZE, SIZE)
+
+              # 5) Persist the verification artifact to the PVC (survives the pod).
+              od = "/data/debug/l1c_sen2cor_smoke"
+              os.makedirs(od, exist_ok=True)
+              np.savez_compressed(f"{od}/result.npz", spectral=out,
+                                  b08=extra["b08"], rededge=extra["rededge"],
+                                  b01=extra["b01"], b09=extra["b09"])
+              json.dump({"tile": os.path.basename(tiles[0]),
+                         "center_3006": [cx, cy], "date": date,
+                         "shape": list(out.shape), "nonzero": nz,
+                         "refl_min": float(out.min()),
+                         "refl_max": float(out.max())},
+                        open(f"{od}/summary.json", "w"), indent=2)
+              print(f"SMOKE PASS shape={out.shape} nonzero={nz:.3f} "
+                    f"refl=[{out.min():.4f},{out.max():.4f}] "
+                    f"extras={ {k: tuple(extra[k].shape) for k in extra} }")
+              print(f"wrote {od}/result.npz + summary.json")
+              PYEOF
+
+              echo ""
+              echo "=== smoke complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
