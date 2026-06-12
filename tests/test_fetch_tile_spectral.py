@@ -73,6 +73,14 @@ def _reference_composition(frames: dict[int, np.ndarray], *, coregister: bool):
 _DATES = {0: "2021-09-10", 1: "2022-06-01", 2: "2022-07-15", 3: "2022-08-20"}
 
 
+@pytest.fixture(autouse=True)
+def _no_l1c_fallthrough(monkeypatch):
+    """Default: the entry's l1c_sen2cor halo fallthrough is a no-op — there is no
+    sen2cor binary in the test env, and we must not touch the process-global
+    _DEAD_SOURCES set. Tests that exercise the fallthrough override this."""
+    monkeypatch.setattr(fs, "_l1c_sen2cor_allband_cube", lambda *a, **k: None)
+
+
 def test_composition_matches_regrid_recipe(monkeypatch):
     frames = _frames()
     _patch_fetch(monkeypatch, frames)
@@ -93,6 +101,42 @@ def test_composition_matches_regrid_recipe(monkeypatch):
     assert list(res["dates"]) == ["2021-09-10", "2022-06-01", "", "2022-08-20"]
     # M2 actually moved the movers — the cube is NOT the raw cropped frames.
     raw_spec, _, _ = _reference_composition(frames, coregister=False)
+    assert not np.array_equal(res["spectral"], raw_spec)
+
+
+def test_l1c_sen2cor_fallthrough_frame_is_m2_coregistered(monkeypatch):
+    """A pre-2018 slot filled by the l1c_sen2cor halo fallthrough is NOT merely
+    concatenated — it rides through M2 inter-frame coreg with the rest of the
+    stack. The fallthrough frame carries a KNOWN shift so a no-op/broken M2 on
+    that slot is detectable (a zero-shift frame would pass vacuously)."""
+    tg_frames = _frames()                 # tile-graph yields slots 0,1,3; slot 2 missing
+    _patch_fetch(monkeypatch, tg_frames)
+    fall_frame = _structured_frame(np.random.default_rng(7), 0.40, -0.25)
+    calls: dict = {}
+
+    def _fake_cube(bbox_3006, coords_wgs84, date_str, *, size_px):
+        calls["args"] = (date_str, size_px)
+        return fall_frame.copy()          # (len(ALL_BANDS), _HALO, _HALO)
+    monkeypatch.setattr(fs, "_l1c_sen2cor_allband_cube", _fake_cube)
+
+    res = fs.fetch_tile_spectral(
+        _CENTRE, tile=TileConfig(size_px=_CANON), dates=_DATES, n_frames=_N,
+        backend="des", halo_px=_HALO_PX, coregister=True,
+    )
+    assert res is not None
+    assert list(res["temporal_mask"]) == [1, 1, 1, 1]       # slot 2 filled
+    # fetched on the halo grid (size_px == halo) for the missing slot's date.
+    assert calls["args"] == ("2022-07-15", _HALO)
+
+    # Headline: the entry's output equals the full M1→M2→crop→assemble recipe
+    # over ALL 4 frames (slot 2 from the fallthrough). If slot 2 were concatenated
+    # WITHOUT coreg, its channels would be the raw shifted frame and this equality
+    # would fail — so it proves slot 2 went THROUGH M2.
+    all_frames = {**tg_frames, 2: fall_frame}
+    ref_spec, _, _ = _reference_composition(all_frames, coregister=True)
+    assert np.array_equal(res["spectral"], ref_spec)
+    # And M2 was not a global no-op — the corrected cube differs from the raw one.
+    raw_spec, _, _ = _reference_composition(all_frames, coregister=False)
     assert not np.array_equal(res["spectral"], raw_spec)
 
 

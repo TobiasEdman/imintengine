@@ -76,6 +76,7 @@ from imint.training.tile_fetch import (
     _CDSE_OPENEO_SEMAPHORE,
     _CDSE_SEMAPHORE,
     _DES_SEMAPHORE,
+    bbox_3006_to_wgs84,
 )
 from imint.coregistration import _COREG_BAND, clearest_frame_idx, coregister_interframe
 from imint.training.tile_assemble import assemble_fresh, crop_halo, date_to_doy
@@ -306,29 +307,32 @@ def _fetch_via_openeo(
         semaphore.release()
 
 
-def _fetch_via_l1c_sen2cor(
+def _l1c_sen2cor_allband_cube(
     bbox_3006: dict,
     coords_wgs84: dict,
     date_str: str,
     *,
     size_px: int,
-    collect_extra: dict | None = None,
 ) -> np.ndarray | None:
-    """GCS L1C → sen2cor → L2A all-band window — the PU-free, pre-2018-capable
-    LAST-RESORT backend for slots CDSE/DES cannot fill.
+    """GCS L1C → sen2cor → L2A → ``(len(ALL_BANDS), size_px, size_px)`` cube.
+
+    The PU-free, pre-2018-capable all-band fetch shared by two callers: the
+    single-slot fallback :func:`_fetch_via_l1c_sen2cor` (splits the cube to the
+    6-band Prithvi input + extras) and :func:`fetch_tile_spectral`'s per-slot
+    halo fallthrough (keeps the full 12-band cube on the halo grid so M2
+    coregisters the slot with the rest of the stack).
 
     Cloud is decided by an ERA5-over-tile gate (cheap, pre-download); the scene
     is found by the CDSE-STAC existence lookup (full archive incl. pre-2018) —
     deliberately NOT ``_stac_best_l1c_scene`` (per-scene cloud, pre-2018-blind
-    DES STAC). Returns the full 12-band cube split into the 6-band model input +
-    extras, exactly like the openEO path.
+    DES STAC).
 
     Runs only where ``L2A_Process`` exists (the imint-sen2cor image): a
     ``shutil.which`` pre-check marks the source dead and bails BEFORE any
-    download off that image, so a non-sen2cor pod no-ops at the dispatcher's
-    ``is_source_dead`` gate instead of fetching a ~0.8 GB SAFE per slot. The
-    ``FileNotFoundError`` handler below is defense-in-depth for the rare case the
-    binary vanishes between the pre-check and the exec.
+    download off that image, so a non-sen2cor pod no-ops instead of fetching a
+    ~0.8 GB SAFE per slot. The ``FileNotFoundError`` handler below is
+    defense-in-depth for the rare case the binary vanishes between the pre-check
+    and the exec.
     """
     import shutil
     import tempfile
@@ -367,13 +371,13 @@ def _fetch_via_l1c_sen2cor(
 
     # 3) GCS SAFE → sen2cor → all-band window. Temp dirs purged in finally so
     #    disk stays bounded (one SAFE ~0.8 GB + its L2A ~0.6 GB per call).
-    cube = None
     work = Path(tempfile.mkdtemp(prefix="l1c_sen2cor_"))
     try:
         safe_dir = fetch_l1c_safe_by_name(scene_id, dest_dir=work / "safe")
         l2a_dir = run_sen2cor(safe_dir, work / "l2a")
-        if l2a_dir is not None:
-            cube = read_l2a_allband(l2a_dir, bbox_3006, size_px)  # (12, H, W)
+        if l2a_dir is None:
+            return None
+        return read_l2a_allband(l2a_dir, bbox_3006, size_px)  # (len(ALL_BANDS), H, W)
     except FileNotFoundError as e:
         # Defense-in-depth: the pre-check above guards the common case; this
         # catches the binary vanishing between that check and the exec here.
@@ -381,17 +385,33 @@ def _fetch_via_l1c_sen2cor(
         return None
     except Exception as e:
         print(
-            f"    [fetch_spectral:l1c_sen2cor] {date_str}: "
-            f"{type(e).__name__}: {str(e)[:200]}",
+            f"    [l1c_sen2cor] {date_str}: {type(e).__name__}: {str(e)[:200]}",
             flush=True,
         )
         return None
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
+
+def _fetch_via_l1c_sen2cor(
+    bbox_3006: dict,
+    coords_wgs84: dict,
+    date_str: str,
+    *,
+    size_px: int,
+    collect_extra: dict | None = None,
+) -> np.ndarray | None:
+    """Single-slot ``l1c_sen2cor`` fallback backend — PU-free, pre-2018-capable
+    last resort for a slot CDSE/DES cannot fill.
+
+    Thin wrapper over :func:`_l1c_sen2cor_allband_cube`: fetch the 12-band cube,
+    then split to the 6-band Prithvi input + ``b08``/``rededge``/``b01``/``b09``
+    extras (openEO parity). ``None`` if the cube fetch failed.
+    """
+    cube = _l1c_sen2cor_allband_cube(
+        bbox_3006, coords_wgs84, date_str, size_px=size_px)
     if cube is None:
         return None
-    # Split full-band (12) → 6-band Prithvi cube + per-band extras (openEO parity).
     return _split_all_bands(cube, collect_extra)
 
 
@@ -477,6 +497,21 @@ def fetch_tile_spectral(
         if arr.shape != (len(ALL_BANDS), halo, halo):
             continue
         fresh[fi] = arr
+
+    # Per-slot l1c_sen2cor fallthrough — fill any slot the openEO tile-graph
+    # could not (pre-2018 dates: DES/CDSE openEO are L2A-indexed 2018+). Fetched
+    # all-band on the SAME halo grid so M2 coregisters it with the rest. No-ops
+    # off the imint-sen2cor image (the L2A_Process pre-check in
+    # _l1c_sen2cor_allband_cube marks the source dead and bails).
+    missing = [fi for fi in slot_dates if fi not in fresh]
+    if missing and not is_source_dead("l1c_sen2cor"):
+        coords_halo = bbox_3006_to_wgs84(bbox_halo)
+        for fi in missing:
+            cube = _l1c_sen2cor_allband_cube(
+                bbox_halo, coords_halo, slot_dates[fi], size_px=halo)
+            if cube is not None and cube.shape == (len(ALL_BANDS), halo, halo):
+                fresh[fi] = cube
+
     if not fresh:
         return None
 
