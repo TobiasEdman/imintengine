@@ -338,6 +338,90 @@ def doy_to_date_range(year: int, doy_start: int, doy_end: int) -> tuple[str, str
     return d_start.strftime("%Y-%m-%d"), d_end.strftime("%Y-%m-%d")
 
 
+def _best_date_in_window(
+    coords_wgs84: dict,
+    date_start: str,
+    date_end: str,
+    *,
+    mode: str,
+    scl_backend: str,
+) -> str | None:
+    """The :func:`optimal_fetch_dates` clean date nearest the window midpoint, or None.
+
+    ``mode`` is ``"era5_then_scl"`` for ≥2018 slots (full ERA5→STAC→SCL screen) or
+    ``"era5_then_stac"`` for pre-2018 (DES SCL has no L2A index before 2018, so the
+    SCL stage is skipped and STAC existence is the gate). Midpoint-nearest keeps a
+    VPP growing-season pick phenologically centred within its window.
+    """
+    from datetime import date as _date
+
+    from imint.training.optimal_fetch import optimal_fetch_dates
+
+    plan = optimal_fetch_dates(
+        coords_wgs84, date_start, date_end, mode=mode, scl_backend=scl_backend)
+    if not plan.dates:
+        return None
+    mid = (_date.fromisoformat(date_start).toordinal()
+           + _date.fromisoformat(date_end).toordinal()) // 2
+    return min(plan.dates,
+               key=lambda d: abs(_date.fromisoformat(d).toordinal() - mid))
+
+
+def select_slot_dates(
+    coords_wgs84: dict,
+    *,
+    tile_year: int,
+    vpp_windows: list[tuple[int, int]] | None,
+    background_year: int = 2016,
+    background_fallback_year: int = 2015,
+    scl_backend: str = "des",
+) -> dict[int, str]:
+    """One ERA5/SCL-clean date per temporal slot for the 5-slot through-entry fetch.
+
+    Canonical 5-slot layout (matches ``fetch_tile_spectral(n_frames=5)``)::
+
+        0       autumn, tile_year-1 (Aug 15 - Oct 31)    era5_then_scl
+        1..3    VPP growing-season windows, tile_year    era5_then_scl
+        4       2016 summer background (Jun 1 - Aug 16)   era5_then_stac (pre-2018:
+                DES SCL is pre-2018-blind; falls back to background_fallback_year)
+
+    Each window is screened with the repo-sanctioned :func:`optimal_fetch_dates`;
+    the clean date nearest the window midpoint is taken. Slots with no clean
+    candidate are omitted — the entry zero-fills them and ``temporal_mask`` records
+    the gap. For FRESH fetches only; refetch reuses the tile's stored dates instead
+    (never re-selects, so the spectral year can't drift off the labels).
+    """
+    dates: dict[int, str] = {}
+
+    # Slot 0 — autumn from the previous year.
+    d0 = _best_date_in_window(
+        coords_wgs84, f"{tile_year - 1}-08-15", f"{tile_year - 1}-10-31",
+        mode="era5_then_scl", scl_backend=scl_backend)
+    if d0:
+        dates[0] = d0
+
+    # Slots 1-3 — VPP-guided growing season (current year).
+    for slot, (doy_start, doy_end) in enumerate(vpp_windows or [], start=1):
+        if slot > 3:
+            break
+        ds, de = doy_to_date_range(tile_year, doy_start, doy_end)
+        di = _best_date_in_window(
+            coords_wgs84, ds, de, mode="era5_then_scl", scl_backend=scl_backend)
+        if di:
+            dates[slot] = di
+
+    # Slot 4 — 2016 summer background. ERA5 + STAC-existence (pre-2018, no SCL).
+    for year in (background_year, background_fallback_year):
+        dbg = _best_date_in_window(
+            coords_wgs84, f"{year}-06-01", f"{year}-08-16",
+            mode="era5_then_stac", scl_backend=scl_backend)
+        if dbg:
+            dates[4] = dbg
+            break
+
+    return dates
+
+
 def fetch_4frame_scenes(
     bbox_3006: dict,
     coords_wgs84: dict,
