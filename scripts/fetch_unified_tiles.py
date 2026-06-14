@@ -47,11 +47,12 @@ from imint.training.tile_fetch import (
     bbox_3006_to_wgs84,
     fetch_4frame_scenes,
     fetch_aux_channels,
-    fetch_background_frame,
     fetch_nmd_label_local,
+    select_slot_dates,
     stack_extra_frames,
     stack_frames,
 )
+from imint.training.fetch_spectral import fetch_tile_spectral
 from imint.training.tile_config import TileConfig
 from imint.training.sampler import generate_grid, grid_to_wgs84
 from imint.training.scb_tatort import generate_scb_densification_regions
@@ -319,6 +320,83 @@ def prefetch_vpp_batch(
 # ── Core Fetch ────────────────────────────────────────────────────────────────
 
 
+def _split_entry_result(res: dict) -> tuple[dict, dict, dict | None]:
+    """Split a 5-slot ``fetch_tile_spectral`` result into the unified-schema
+    layout: the 4 temporal training frames (core + all-band extras) and the
+    slot-4 2016 background frame.
+
+    The canonical entry fetches 5 slots — 0-3 temporal (autumn y-1 + 3 VPP) and
+    4 = 2016 summer background — in ONE M1+M2 pass, so the background frame is
+    inter-frame coregistered with the temporal stack (the legacy separate
+    ``fetch_background_frame`` was not). The training schema stays at 4 temporal
+    frames, so slots 0-3 become ``spectral``/extras and slot 4 becomes the
+    6-band ``frame_2016*`` block (its all-band extras are dropped — the legacy
+    background frame was 6-band only).
+
+    Expects a 5-slot result (slot 4 = background). Returns ``(core, extras, bg)``:
+      * ``core`` — always-written spectral + temporal metadata (sliced to the 4
+        persisted frames) + M1/M2 coreg provenance. ``coreg_shifts`` is the
+        4-frame view (per-frame applied MI shift); the scalar coreg fields
+        (``coreg_ref_frame``, ``coreg_n_aligned``, ``coreg_max_shift``,
+        ``coreg_anchor_valid_frac``) are whole-fetch 5-slot M2 aggregates — the
+        coreg ran jointly over all 5 slots, so they cannot be re-expressed per
+        4-frame. ``coreg_ref_frame`` may be 4 (the 2016 background) when it was
+        the clearest anchor.
+      * ``extras`` — the b08/red-edge/B01/B09 all-band block sliced to the first
+        4 frames, ``has_*`` recomputed over the slice. Caller gates on ``has_*``.
+      * ``bg`` — the 6-band ``frame_2016*`` dict, or ``None`` if slot 4 did not
+        fetch (e.g. a des-only fetch: pre-2018 needs the l1c_sen2cor backend).
+    """
+    nb, nf = N_BANDS, NUM_FRAMES                        # 6, 4
+    spectral_full = res["spectral"]                     # (5*nb, H, W)
+
+    core = {
+        "spectral": spectral_full[: nb * nf],           # (4*nb, H, W)
+        "temporal_mask": res["temporal_mask"][:nf],
+        "doy": res["doy"][:nf],
+        "dates": res["dates"][:nf],
+        "multitemporal": np.int32(1),
+        "num_frames": np.int32(nf),
+        "num_bands": np.int32(nb),
+        "bbox_3006": res["bbox_3006"],
+        "easting": res["easting"],
+        "northing": res["northing"],
+        "tile_size_px": res["tile_size_px"],
+        # Whole-fetch (5-slot) M2 aggregates — the coreg ran jointly over all
+        # slots, so these stay as-is (coreg_ref_frame may be 4 = background).
+        "coreg_ref_frame": res["coreg_ref_frame"],
+        "coreg_m2": res["coreg_m2"],
+        "coreg_n_aligned": res["coreg_n_aligned"],
+        "coreg_max_shift": res["coreg_max_shift"],
+        "coreg_anchor_valid_frac": res["coreg_anchor_valid_frac"],
+        "coreg_shifts": res["coreg_shifts"][:nf],   # per-frame: 4-frame view
+    }
+
+    # All-band extras sliced to slots 0-3 (red-edge is frame-major, 3 bands per
+    # frame → first nf*3 channels); recompute has_* over the 4-frame slice.
+    extras = {
+        "b08": res["b08"][:nf], "b08_dates": res["b08_dates"][:nf],
+        "rededge": res["rededge"][: nf * 3], "rededge_dates": res["rededge_dates"][:nf],
+        "b01": res["b01"][:nf], "b01_dates": res["b01_dates"][:nf],
+        "b09": res["b09"][:nf], "b09_dates": res["b09_dates"][:nf],
+    }
+    for k in ("b08", "rededge", "b01", "b09"):
+        extras[f"has_{k}"] = np.int32(1 if np.any(extras[k]) else 0)
+
+    # Slot 4 — 2016 summer background (6-band; slot-4 all-band extras dropped).
+    bg = None
+    if int(res["temporal_mask"][4]) == 1:
+        bg_date = str(res["dates"][4])
+        bg = {
+            "frame_2016": spectral_full[nb * 4: nb * 5],   # (nb, H, W)
+            "frame_2016_date": np.bytes_(bg_date),
+            "frame_2016_doy": np.int32(int(res["doy"][4])),
+            "frame_2016_year": np.int32(int(bg_date[:4])),
+            "has_frame_2016": np.int32(1),
+        }
+    return core, extras, bg
+
+
 def fetch_tile(
     loc: dict,
     years: list[str],
@@ -328,7 +406,10 @@ def fetch_tile(
     vpp_cache: dict | None = None,
     sources: tuple[str, ...] = ("cdse", "des"),
 ) -> dict:
-    """Fetch one tile: 4 seasonal frames + NMD + aux → .npz."""
+    """Fetch one tile through the canonical M1+M2 entry as a single 5-slot
+    ``fetch_tile_spectral`` call — 4 temporal frames (autumn y-1 + 3 VPP) + a
+    2016 background frame — then split into the unified-schema layout + NMD +
+    aux → .npz."""
     name = loc["name"]
     out_path = os.path.join(output_dir, f"{name}.npz")
     if os.path.exists(out_path):
@@ -343,64 +424,69 @@ def fetch_tile(
     coords = bbox_3006_to_wgs84(bbox)
     tile.assert_bbox_matches(bbox)
 
-    # All-band 4-frame fetch: 1 autumn (year-1) + 3 VPP growing-season,
-    # collecting B08/red-edge/B01/B09 extras per frame.
-    tile_years = [str(loc["year"])] if "year" in loc else years
-    vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
-    extras_list: list = []
-    scene_results = fetch_4frame_scenes(
-        bbox, coords, tile_years, tile,
-        scene_cloud_max=cloud_max,
-        vpp_windows=vpp_windows,
-        sources=sources,
-        collect_extra=extras_list,
-    )
+    # VPP-guided growing-season windows. Cache hit → use it; no cache (direct /
+    # test call) → resolve eagerly here, because the entry takes concrete dates,
+    # not the legacy ``...`` sentinel that let the producer fetch VPP itself.
+    if vpp_cache is not None:
+        vpp_windows = vpp_cache.get(name)
+    else:
+        from imint.training.tile_fetch import _get_vpp_doy_windows
+        vpp_windows = _get_vpp_doy_windows(bbox)
 
-    image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
-    if int(temporal_mask.sum()) == 0:
+    # 5-slot date selection (0 autumn y-1, 1-3 VPP, 4 = 2016 background).
+    # Labelled tiles are strict on their label year. No-year forest/water tiles
+    # fall back across --years per slot — the ONLY tiles CLAUDE.md permits
+    # year-fallback for (NMD classes carry no year-specific labels). Slot 4 may
+    # be re-probed across years; the cost is a STAC-existence check, not a fetch.
+    if "year" in loc:
+        dates = select_slot_dates(
+            coords, tile_year=int(loc["year"]), vpp_windows=vpp_windows)
+    else:
+        dates = {}
+        for y in years:
+            if len(dates) == 5:
+                break
+            picked = select_slot_dates(
+                coords, tile_year=int(y), vpp_windows=vpp_windows)
+            for slot, d in picked.items():
+                dates.setdefault(slot, d)
+    if not dates:
+        return {"name": name, "status": "failed", "reason": "no_scenes"}
+
+    # M1 (grid-snap) + M2 (inter-frame MI coreg) run inside the entry on the
+    # shared halo grid; all slots land coregistered on the anchor's grid.
+    res = fetch_tile_spectral(
+        (cx, cy), tile=tile, dates=dates, n_frames=5, backend="des")
+    if res is None:
+        return {"name": name, "status": "failed", "reason": "no_scenes"}
+
+    core, extras, bg = _split_entry_result(res)
+    if int(core["temporal_mask"].sum()) == 0:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
     nmd_label = fetch_nmd_label_local(bbox, tile)
     aux = fetch_aux_channels(bbox, tile)
 
-    save = {
-        "spectral": image,
-        "temporal_mask": temporal_mask,
-        "doy": doy,
-        "dates": np.array(dates),
-        "multitemporal": np.int32(1),
-        "num_frames": np.int32(NUM_FRAMES),
-        "num_bands": np.int32(N_BANDS),
-        "bbox_3006": np.array(
-            [bbox["west"], bbox["south"], bbox["east"], bbox["north"]],
-            dtype=np.int32,
-        ),
-        "easting": np.int32(cx),
-        "northing": np.int32(cy),
-        "tile_size_px": np.int32(tile.size_px),
-        "source": loc["source"],
-    }
+    save = {**core, "source": loc["source"]}
     if nmd_label is not None:
         save["label"] = nmd_label
     save.update(aux)
 
-    # All-band extras (B08/red-edge/B01/B09). Only persist when ≥1 frame
-    # actually carried them (e.g. the DES all-band path); frames from a
-    # 6-band-only backend contribute nothing.
-    extras = stack_extra_frames(extras_list, dates, NUM_FRAMES, tile)
+    # All-band extras (B08/red-edge/B01/B09). Only persist when ≥1 of the 4
+    # temporal frames carried them; a 6-band-only backend contributes nothing.
     if any(int(extras[k]) for k in
            ("has_b08", "has_rededge", "has_b01", "has_b09")):
         save.update(extras)
 
-    # Background frame (2016 summer) for clearcut change detection
-    bg_result = fetch_background_frame(bbox, tile)
-    if bg_result is not None:
-        save.update(bg_result)
+    # Background frame (2016 summer, slot 4) for clearcut change detection.
+    # Absent on a des-only fetch (pre-2018 needs l1c_sen2cor on the sen2cor image).
+    if bg is not None:
+        save.update(bg)
 
     np.savez_compressed(out_path, **save)
     has_bg = int(save.get("has_frame_2016", 0))
     return {"name": name, "status": "ok",
-            "valid_frames": int(temporal_mask.sum()),
+            "valid_frames": int(core["temporal_mask"].sum()),
             "has_bg": has_bg}
 
 
