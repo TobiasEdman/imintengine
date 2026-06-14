@@ -45,12 +45,9 @@ load_env()
 from imint.training.tile_fetch import (
     N_BANDS,
     bbox_3006_to_wgs84,
-    fetch_4frame_scenes,
     fetch_aux_channels,
     fetch_nmd_label_local,
     select_slot_dates,
-    stack_extra_frames,
-    stack_frames,
 )
 from imint.training.fetch_spectral import fetch_tile_spectral
 from imint.training.tile_config import TileConfig
@@ -395,6 +392,22 @@ def _split_entry_result(res: dict) -> tuple[dict, dict, dict | None]:
             "has_frame_2016": np.int32(1),
         }
     return core, extras, bg
+
+
+def _npz_str(v) -> str:
+    """Decode a scalar string read back from an .npz to a plain ``str``.
+
+    Handles the variants np.savez round-trips a string scalar into: ``np.str_``
+    (unicode ``dates``), ``np.bytes_`` (the ``frame_2016_date`` byte string), and
+    0-d arrays of either. Returns ``""`` for ``None``/missing.
+    """
+    if v is None:
+        return ""
+    if hasattr(v, "item"):
+        v = v.item()
+    if isinstance(v, bytes):
+        return v.decode()
+    return str(v)
 
 
 def fetch_tile(
@@ -1042,6 +1055,24 @@ def repair_to_canonical_layout(
     }
 
 
+# Spectral-derived keys that refetch rebuilds from the entry. Everything else in
+# the old .npz (aux channels, nmd_label_raw, geometry, …) is preserved; labels
+# are rebuilt separately by build_labels.py.
+_REFETCH_DROP = frozenset((
+    "image", "spectral", "temporal_mask", "doy", "dates",
+    "multitemporal", "num_frames", "num_bands", "seasons_valid",
+    "label", "label_mask", "label_year",
+    "coreg_ref_frame", "coreg_m2", "coreg_n_aligned", "coreg_max_shift",
+    "coreg_anchor_valid_frac", "coreg_shifts",
+    "b08", "b08_dates", "has_b08",
+    "rededge", "rededge_dates", "has_rededge",
+    "b01", "b01_dates", "has_b01",
+    "b09", "b09_dates", "has_b09",
+    "frame_2016", "frame_2016_date", "frame_2016_doy",
+    "frame_2016_year", "frame_2016_cloud_pct", "has_frame_2016",
+))
+
+
 def refetch_tile(
     loc: dict,
     years: list[str],
@@ -1053,21 +1084,28 @@ def refetch_tile(
     sources: tuple[str, ...] = ("cdse", "des"),
     force: bool = False,
 ) -> dict:
-    """Re-fetch spectral data for an existing tile, keep all other fields.
+    """Re-fetch an existing tile's spectral through the canonical M1+M2 entry,
+    reusing the tile's STORED dates — never re-selecting.
+
+    Refetch exists to re-apply M1+M2 coregistration to tiles already on disk. It
+    reads the stored per-slot dates (slots 0-3 from ``dates``, slot 4 from
+    ``frame_2016_date``) and re-fetches exactly those via ``fetch_tile_spectral``,
+    so the spectral year can never drift off the tile's labels (temporal
+    matching). Date *selection* belongs to the fresh path (``fetch_tile``) or
+    ``repair_to_canonical_layout`` — not here. Every spectral-derived field is
+    rebuilt from the entry; only non-spectral fields are preserved (see
+    ``_REFETCH_DROP``).
 
     Args:
-        force: When True, re-fetch even if the tile already has
-            multitemporal=1 and num_frames=4. Required for upgrading
-            tiles fetched with a buggy VPP-window logic (see PR #15
-            and IM-017: ~58% of tiles ended up with a growing-season
-            frame in late-autumn DOY > 244 before that fix landed).
+        force: re-fetch even if the tile already has multitemporal=1 and
+            num_frames=4 (otherwise such tiles are skipped). Required to upgrade
+            already-multitemporal tiles to the M1+M2-coregistered layout.
     """
     name = loc["name"]
     existing_path = loc.get("_existing_path")
     out_path = os.path.join(output_dir, f"{name}.npz")
 
-    # Skip if already re-fetched (check for multitemporal flag) —
-    # unless force=True, in which case re-fetch regardless.
+    # Skip if already re-fetched (multitemporal flag) — unless force=True.
     if not force and os.path.exists(out_path):
         try:
             d = np.load(out_path, allow_pickle=True)
@@ -1076,97 +1114,65 @@ def refetch_tile(
         except Exception:
             pass
 
-    # Always normalize bbox to the current TileConfig extent — never
-    # trust the incoming loc bbox blindly; it may carry a stale 256-era
-    # extent. Trust only the center.
+    # Load the existing tile — source of BOTH the stored dates (reused, never
+    # re-selected) and the non-spectral fields to preserve.
+    src_path = (existing_path if existing_path and os.path.exists(existing_path)
+                else out_path)
+    try:
+        old = dict(np.load(src_path, allow_pickle=True))
+    except Exception:
+        old = {}
+
+    # Stored dates → slot dict. Slots 0-3 from `dates`; slot 4 from the stored
+    # background date. No re-selection: spectral must land on the same dates
+    # (hence the same year) as the existing labels.
+    dates: dict[int, str] = {}
+    stored = old.get("dates")
+    if stored is not None:
+        for slot in range(NUM_FRAMES):
+            if slot < len(stored):
+                ds = _npz_str(stored[slot])
+                if ds:
+                    dates[slot] = ds
+    bg_date = _npz_str(old.get("frame_2016_date"))
+    if bg_date:
+        dates[4] = bg_date
+    if not dates:
+        return {"name": name, "status": "failed", "reason": "no_stored_dates"}
+
+    # Normalize bbox/centre to the current TileConfig extent (trust only centre).
     raw_bbox = loc["bbox_3006"]
     cx = (raw_bbox["west"] + raw_bbox["east"]) // 2
     cy = (raw_bbox["south"] + raw_bbox["north"]) // 2
     bbox = tile.bbox_from_center(cx, cy)
-    coords = bbox_3006_to_wgs84(bbox)
     tile.assert_bbox_matches(bbox)
 
-    # Determine fetch years based on tile type
-    # Crop tiles: strict year match only (LPIS labels are year-specific)
-    # Forest/water tiles: tile year first, other years as fallback
-    tile_year = loc.get("year")
-    has_crop_labels = loc.get("source") == "crop" or loc.get("_has_lpis", False)
-
-    if tile_year and has_crop_labels:
-        fetch_years = [str(tile_year)]
-    elif tile_year:
-        fetch_years = [str(tile_year)] + [y for y in years if y != str(tile_year)]
-    else:
-        fetch_years = years
-
-    # All-band 4-frame fetch: 1 autumn (year-1) + 3 VPP growing-season,
-    # collecting B08/red-edge/B01/B09 extras per frame.
-    vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
-    extras_list: list = []
-    scene_results = fetch_4frame_scenes(
-        bbox, coords, fetch_years, tile,
-        scene_cloud_max=cloud_max,
-        max_aoi_cloud=max_aoi_cloud,
-        vpp_windows=vpp_windows,
-        sources=sources,
-        collect_extra=extras_list,
-    )
-    image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
-
-    if int(temporal_mask.sum()) == 0:
+    res = fetch_tile_spectral(
+        (cx, cy), tile=tile, dates=dates, n_frames=5, backend="des")
+    if res is None:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
-    save = {}
-    if existing_path and os.path.exists(existing_path):
-        try:
-            old = dict(np.load(existing_path, allow_pickle=True))
-            # Spectral is always overwritten; labels always rebuilt.
-            _DROP = frozenset((
-                "image", "spectral", "temporal_mask", "doy",
-                "dates", "multitemporal", "num_frames", "num_bands",
-                "seasons_valid",
-                "label", "label_mask", "label_year",
-            ))
-            for k, v in old.items():
-                if k not in _DROP:
-                    save[k] = v
-        except Exception:
-            pass
+    core, extras, bg = _split_entry_result(res)
+    if int(core["temporal_mask"].sum()) == 0:
+        return {"name": name, "status": "failed", "reason": "no_scenes"}
 
-    save["spectral"] = image
-    save["temporal_mask"] = temporal_mask
-    save["doy"] = doy
-    save["dates"] = np.array(dates)
-    save["multitemporal"] = np.int32(1)
-    save["num_frames"] = np.int32(NUM_FRAMES)
-    save["num_bands"] = np.int32(N_BANDS)
-
-    # Persist bbox that matches the raster we just wrote.
-    save["bbox_3006"] = np.array(
-        [bbox["west"], bbox["south"], bbox["east"], bbox["north"]],
-        dtype=np.int32,
-    )
-    save["easting"] = np.int32(cx)
-    save["northing"] = np.int32(cy)
-    save["tile_size_px"] = np.int32(tile.size_px)
+    # Preserve only NON-spectral fields; every spectral-derived field is rebuilt
+    # from the entry so nothing stays misaligned with the re-coregistered stack.
+    save = {k: v for k, v in old.items() if k not in _REFETCH_DROP}
+    save.update(core)
     save["source"] = loc.get("source", "lulc")
-
-    # All-band extras LAST so a fresh all-band fetch overwrites any
-    # preserved-old b08/red-edge/B01/B09 (which were aligned to the OLD
-    # spectral dates and are now stale). Only when ≥1 frame carried them;
-    # otherwise the preserved-old block (if any) stays and enrich self-heals.
-    extras = stack_extra_frames(extras_list, dates, NUM_FRAMES, tile)
     if any(int(extras[k]) for k in
            ("has_b08", "has_rededge", "has_b01", "has_b09")):
         save.update(extras)
+    if bg is not None:
+        save.update(bg)
 
     np.savez_compressed(out_path, **save)
 
-    # NOTE: Do NOT delete source tiles — they contain bbox info needed
-    # for future re-fetches. Labels are built separately by build_labels.py.
-
+    # NOTE: source tiles are NOT deleted — they carry bbox/date info needed for
+    # future re-fetches. Labels are rebuilt separately by build_labels.py.
     return {"name": name, "status": "ok",
-            "valid_frames": int(temporal_mask.sum())}
+            "valid_frames": int(core["temporal_mask"].sum())}
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

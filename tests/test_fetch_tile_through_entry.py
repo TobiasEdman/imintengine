@@ -280,3 +280,179 @@ class TestFetchTileThroughEntry:
         assert r["status"] == "failed"
         assert r["reason"] == "no_scenes"
         assert not (tmp_path / "tile_test.npz").exists()
+
+
+class TestRefetchTileThroughEntry:
+    @staticmethod
+    def _write_source(path, *, with_bg=True, extra=None):
+        """A pre-existing tile .npz: stored dates + aux + stale derived fields."""
+        src = {
+            "dates": np.array(["2021-09-15", "2022-05-01",
+                               "2022-06-15", "2022-07-20"]),
+            "spectral": np.zeros((24, 8, 8), np.float32),     # stale
+            "temporal_mask": np.ones(4, np.uint8),
+            "doy": np.array([258, 121, 166, 201], np.int32),
+            "multitemporal": np.int32(1),
+            "num_frames": np.int32(4),
+            "num_bands": np.int32(6),
+            # non-spectral — MUST be preserved:
+            "dem": np.full((8, 8), 42.0, np.float32),
+            "nmd_label_raw": np.full((8, 8), 7, np.uint8),
+            # spectral-derived stale — MUST be dropped/rebuilt:
+            "frame_2016_cloud_pct": np.float32(0.5),
+            "coreg_m2": np.int32(0),
+            "b08": np.zeros((4, 8, 8), np.float32), "has_b08": np.int32(0),
+            # rebuilt separately by build_labels → dropped:
+            "label": np.zeros((8, 8), np.uint8),
+            "source": "crop",
+            "year": 2022,
+        }
+        if with_bg:
+            src["frame_2016_date"] = np.bytes_("2016-07-15")
+            src["frame_2016"] = np.zeros((6, 8, 8), np.float32)   # stale
+        if extra:
+            src.update(extra)
+        np.savez_compressed(path, **src)
+
+    @staticmethod
+    def _loc(tile, existing_path):
+        bbox = tile.bbox_from_center(402560, 6402560)
+        return {"name": "tile_test", "source": "crop", "bbox_3006": bbox,
+                "year": 2022, "_existing_path": str(existing_path),
+                "_has_lpis": True}
+
+    def _no_reselect(self, monkeypatch):
+        def _boom(*a, **k):
+            raise AssertionError("refetch must NOT re-select dates")
+        monkeypatch.setattr(fut, "select_slot_dates", _boom)
+
+    def test_reuses_stored_dates_no_reselect(self, tmp_path, monkeypatch):
+        tile = TileConfig(size_px=512)
+        src = tmp_path / "src.npz"
+        self._write_source(src, with_bg=True)
+        out = tmp_path / "out"
+        out.mkdir()
+        self._no_reselect(monkeypatch)
+
+        captured = {}
+
+        def _spy(center, *, tile, dates, n_frames, backend):
+            captured.update(dates=dict(dates), n_frames=n_frames, backend=backend)
+            return _fake_res()
+        monkeypatch.setattr(fut, "fetch_tile_spectral", _spy)
+
+        r = fut.refetch_tile(self._loc(tile, src), ["2022"], str(out), tile)
+        assert r["status"] == "ok"
+        # Stored dates reused verbatim — slots 0-3 from `dates`, slot 4 from
+        # frame_2016_date. No re-selection (select_slot_dates would have raised).
+        assert captured["dates"] == {0: "2021-09-15", 1: "2022-05-01",
+                                     2: "2022-06-15", 3: "2022-07-20",
+                                     4: "2016-07-15"}
+        assert captured["n_frames"] == 5 and captured["backend"] == "des"
+
+    def test_preserves_aux_rebuilds_spectral(self, tmp_path, monkeypatch):
+        tile = TileConfig(size_px=512)
+        src = tmp_path / "src.npz"
+        self._write_source(src, with_bg=True)
+        out = tmp_path / "out"
+        out.mkdir()
+        self._no_reselect(monkeypatch)
+        monkeypatch.setattr(fut, "fetch_tile_spectral", lambda *a, **k: _fake_res())
+
+        r = fut.refetch_tile(self._loc(tile, src), ["2022"], str(out), tile)
+        assert r["status"] == "ok"
+        d = dict(np.load(out / "tile_test.npz", allow_pickle=True))
+
+        # Non-spectral preserved:
+        assert np.all(d["dem"] == 42.0)
+        assert np.all(d["nmd_label_raw"] == 7)
+        # Spectral-derived rebuilt from the entry (not the stale source):
+        assert d["spectral"].shape == (24, 8, 8)
+        assert np.all(d["spectral"][:6] == 1)          # entry slot-0 value
+        assert int(d["coreg_m2"]) == 1                 # was 0 in source
+        assert int(d["has_b08"]) == 1                  # was 0 in source
+        assert d["frame_2016"].shape == (6, 8, 8)
+        assert int(d["frame_2016_year"]) == 2016
+        # Stale spectral-derived dropped; label left to build_labels:
+        assert "frame_2016_cloud_pct" not in d
+        assert "label" not in d
+        assert str(d["source"]) == "crop"
+
+    def test_no_stored_dates_fails(self, tmp_path, monkeypatch):
+        tile = TileConfig(size_px=512)
+        src = tmp_path / "src.npz"
+        # A source with neither `dates` nor `frame_2016_date`.
+        np.savez_compressed(src, dem=np.zeros((8, 8), np.float32),
+                            source="lulc")
+        out = tmp_path / "out"
+        out.mkdir()
+        self._no_reselect(monkeypatch)
+
+        def _boom_entry(*a, **k):
+            raise AssertionError("must not fetch without stored dates")
+        monkeypatch.setattr(fut, "fetch_tile_spectral", _boom_entry)
+
+        loc = {"name": "tile_test", "source": "lulc",
+               "bbox_3006": tile.bbox_from_center(402560, 6402560),
+               "_existing_path": str(src)}
+        r = fut.refetch_tile(loc, ["2022"], str(out), tile)
+        assert r["status"] == "failed"
+        assert r["reason"] == "no_stored_dates"
+        assert not (out / "tile_test.npz").exists()
+
+    def test_skips_existing_multitemporal_without_force(self, tmp_path, monkeypatch):
+        tile = TileConfig(size_px=512)
+        src = tmp_path / "src.npz"
+        self._write_source(src)
+        out = tmp_path / "out"
+        out.mkdir()
+        # An already-multitemporal output → skip unless force.
+        np.savez_compressed(out / "tile_test.npz", multitemporal=np.int32(1),
+                            num_frames=np.int32(4))
+
+        def _boom_entry(*a, **k):
+            raise AssertionError("must skip without force")
+        monkeypatch.setattr(fut, "fetch_tile_spectral", _boom_entry)
+
+        r = fut.refetch_tile(self._loc(tile, src), ["2022"], str(out), tile,
+                             force=False)
+        assert r["status"] == "skipped"
+
+    def test_force_refetches_existing(self, tmp_path, monkeypatch):
+        tile = TileConfig(size_px=512)
+        src = tmp_path / "src.npz"
+        self._write_source(src)
+        out = tmp_path / "out"
+        out.mkdir()
+        np.savez_compressed(out / "tile_test.npz", multitemporal=np.int32(1),
+                            num_frames=np.int32(4))
+        self._no_reselect(monkeypatch)
+        monkeypatch.setattr(fut, "fetch_tile_spectral", lambda *a, **k: _fake_res())
+
+        r = fut.refetch_tile(self._loc(tile, src), ["2022"], str(out), tile,
+                             force=True)
+        assert r["status"] == "ok"
+        assert r["valid_frames"] == 4
+
+    def test_no_stored_background_omits_slot4(self, tmp_path, monkeypatch):
+        tile = TileConfig(size_px=512)
+        src = tmp_path / "src.npz"
+        self._write_source(src, with_bg=False)        # no frame_2016_date
+        out = tmp_path / "out"
+        out.mkdir()
+        self._no_reselect(monkeypatch)
+
+        captured = {}
+
+        def _spy(center, *, tile, dates, n_frames, backend):
+            captured.update(dates=dict(dates))
+            return _fake_res(bg=False)
+        monkeypatch.setattr(fut, "fetch_tile_spectral", _spy)
+
+        r = fut.refetch_tile(self._loc(tile, src), ["2022"], str(out), tile)
+        assert r["status"] == "ok"
+        assert captured["dates"] == {0: "2021-09-15", 1: "2022-05-01",
+                                     2: "2022-06-15", 3: "2022-07-20"}
+        assert 4 not in captured["dates"]
+        d = dict(np.load(out / "tile_test.npz", allow_pickle=True))
+        assert "frame_2016" not in d
