@@ -371,9 +371,12 @@ class TestRefetchTileThroughEntry:
         assert np.all(d["spectral"][:6] == 1)          # entry slot-0 value
         assert int(d["coreg_m2"]) == 1                 # was 0 in source
         assert int(d["has_b08"]) == 1                  # was 0 in source
+        assert np.all(d["b08"] == 1)                    # extras content rebuilt, not stale zeros
         assert d["frame_2016"].shape == (6, 8, 8)
         assert int(d["frame_2016_year"]) == 2016
-        # Stale spectral-derived dropped; label left to build_labels:
+        # Stale spectral-derived dropped. frame_2016_cloud_pct is a legacy-only
+        # key the entry path never re-emits (same as fetch_tile) — a stored 0.5
+        # must NOT survive the refetch. label is left to build_labels.
         assert "frame_2016_cloud_pct" not in d
         assert "label" not in d
         assert str(d["source"]) == "crop"
@@ -433,6 +436,10 @@ class TestRefetchTileThroughEntry:
                              force=True)
         assert r["status"] == "ok"
         assert r["valid_frames"] == 4
+        # force overwrote the 2-key stub with a genuinely rebuilt stack.
+        d = dict(np.load(out / "tile_test.npz", allow_pickle=True))
+        assert d["spectral"].shape == (24, 8, 8)
+        assert np.all(d["spectral"][:6] == 1)          # entry slot-0 value
 
     def test_no_stored_background_omits_slot4(self, tmp_path, monkeypatch):
         tile = TileConfig(size_px=512)
