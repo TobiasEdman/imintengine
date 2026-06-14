@@ -178,7 +178,7 @@ def _fetch_single_scene(
 
       1. ``prefetched_dates`` filtered to the window — used directly
          when the caller has already run a tile-wide ERA5 ∩ SCL ranker
-         (e.g. ``fetch_4frame_scenes``).
+         (e.g. a caller that pre-ranked dates tile-wide).
       2. ``optimal_fetch_dates(mode="era5_then_scl")`` for ≥ 2018.
       3. Synthetic every-N-days fallback for pre-2018 (no ERA5/STAC).
 
@@ -420,118 +420,6 @@ def select_slot_dates(
             break
 
     return dates
-
-
-def fetch_4frame_scenes(
-    bbox_3006: dict,
-    coords_wgs84: dict,
-    years: list[str],
-    tile: "TileConfig",
-    *,
-    scene_cloud_max: float = 30.0,
-    max_aoi_cloud: float = 0.10,
-    max_candidates: int = 3,
-    vpp_windows: list[tuple[int, int]] | None = ...,  # sentinel: fetch on demand
-    sources: tuple[str, ...] = ("cdse", "des"),
-    collect_extra: list | None = None,
-) -> list[tuple[np.ndarray | None, str]]:
-    """Fetch 4-frame tile: 1 autumn (year-1) + 3 VPP-guided growing season.
-
-    Frame layout:
-        0: Autumn (Sep-Oct from previous year)
-        1-3: Growing season (VPP-guided DOY windows)
-
-    Args:
-        bbox_3006: Tile bbox in EPSG:3006.
-        coords_wgs84: WGS84 bbox for STAC queries.
-        years: Growing season years to search, e.g. ["2022", "2023"].
-        vpp_windows: Pre-fetched list of (doy_start, doy_end) tuples.
-            Pass None explicitly to skip VPP (use fixed seasonal dates).
-            Omit (default sentinel) to fetch VPP on demand for this tile.
-        collect_extra: Optional out-list. When provided, one per-frame dict
-            is appended per returned frame (same length/order as the result
-            list). Each dict holds the accepted scene's all-band extras
-            (``b08`` (H,W), ``rededge`` (3,H,W), ``b01`` (H,W), ``b09``
-            (H,W); reflectance in the tile's spectral convention) or is
-            empty ``{}`` when the frame failed or the backend returned only
-            the 6 Prithvi bands. Feed to :func:`stack_extra_frames`.
-
-    Returns:
-        List of 4 (scene, date_str) tuples.
-    """
-    # Get VPP-guided growing season windows (3 frames)
-    if vpp_windows is ...:  # sentinel → fetch on demand for this tile
-        vpp_windows = _get_vpp_doy_windows(bbox_3006, num_growing_frames=3)
-    # vpp_windows is None if VPP was skipped or failed — handled below
-
-    results: list[tuple[np.ndarray | None, str]] = []
-
-    # --- Frame 0: Autumn (Sep-Oct from year-1) ---
-    # Two-pass cloud filtering, same pattern as growing season but more permissive:
-    #   scene_cloud_max: full S2 swath STAC filter (up to 2× scene_cloud_max, max 60%)
-    #   cloud_threshold: tile spectral cutout acceptance (0.20 vs 0.15 for crops)
-    # DES STAC skipped automatically for pre-2018 in _fetch_single_scene.
-    autumn_scene_cloud_max = min(scene_cloud_max * 2.0, 60.0)
-    autumn_scene, autumn_date = None, ""
-    autumn_extra: dict = {}
-    for year in years:
-        prev_year = str(int(year) - 1)
-        year_extra: dict | None = {} if collect_extra is not None else None
-        s, a = _fetch_single_scene(
-            bbox_3006, coords_wgs84,
-            f"{prev_year}-08-15", f"{prev_year}-10-31",
-            tile,
-            scene_cloud_max=autumn_scene_cloud_max,
-            max_aoi_cloud=min(max_aoi_cloud * 2, 0.30),  # autumn permissivt
-            max_candidates=max(max_candidates, 16),
-            cloud_threshold=0.30,
-            haze_threshold=0.12,
-            sources=sources,
-            collect_extra=year_extra,
-        )
-        if s is not None:
-            autumn_scene, autumn_date = s, a
-            if year_extra:
-                autumn_extra = year_extra
-            break
-    results.append((autumn_scene, autumn_date))
-    if collect_extra is not None:
-        collect_extra.append(autumn_extra)
-
-    # --- Frames 1-3: VPP-guided growing season ---
-    if vpp_windows and len(vpp_windows) >= 3:
-        for doy_start, doy_end in vpp_windows[:3]:
-            best_scene, best_date = None, ""
-            best_extra: dict = {}
-            for year in years:
-                ds, de = doy_to_date_range(int(year), doy_start, doy_end)
-                year_extra = {} if collect_extra is not None else None
-                s, d = _fetch_single_scene(
-                    bbox_3006, coords_wgs84, ds, de,
-                    tile,
-                    scene_cloud_max=scene_cloud_max,
-                    max_aoi_cloud=max_aoi_cloud,
-                    max_candidates=max_candidates,
-                    sources=sources,
-                    collect_extra=year_extra,
-                )
-                if s is not None:
-                    best_scene, best_date = s, d
-                    if year_extra:
-                        best_extra = year_extra
-                    break
-            results.append((best_scene, best_date))
-            if collect_extra is not None:
-                collect_extra.append(best_extra)
-    else:
-        # VPP unavailable — should not happen, but handle gracefully
-        # Leave frames 1-3 as None (will be zero-padded by stack_frames)
-        for _ in range(3):
-            results.append((None, ""))
-            if collect_extra is not None:
-                collect_extra.append({})
-
-    return results
 
 
 def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig") -> dict[str, np.ndarray]:
@@ -928,7 +816,7 @@ def stack_extra_frames(
 ) -> dict:
     """Assemble per-frame all-band extras into the enrich-script .npz contract.
 
-    The all-band fetch (``fetch_4frame_scenes(collect_extra=...)``) yields one
+    The all-band fetch (``_fetch_single_scene(collect_extra=...)``) yields one
     per-frame dict of B08 / red-edge / B01 / B09 slices already in the tile's
     spectral reflectance convention (DN/10000 — the SAME scaling as the 6-band
     ``spectral`` cube, since both come from one fetch). This packs them into the
@@ -941,7 +829,7 @@ def stack_extra_frames(
     unfetchable slot, so the self-healing enrich pass can still fill it later.
 
     Args:
-        extra_results: Per-frame dicts from ``fetch_4frame_scenes``'s
+        extra_results: Per-frame dicts from ``_fetch_single_scene``'s
             ``collect_extra`` out-list. Each is ``{}`` or has ``b08`` (H,W),
             ``rededge`` (3,H,W), ``b01`` (H,W), ``b09`` (H,W) float32.
         dates: Canonical per-frame ISO dates from :func:`stack_frames` — the

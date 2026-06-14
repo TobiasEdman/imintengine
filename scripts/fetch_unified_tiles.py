@@ -690,7 +690,7 @@ def repair_to_canonical_layout(
                 "reason": f"vpp_windows_collapsed: orig={vpp_windows}"}
 
     # Define 4 canonical slots
-    # Autumn (slot 0): hardcoded Aug 15..Oct 31 of year-1 per fetch_4frame_scenes
+    # Autumn (slot 0): hardcoded Aug 15..Oct 31 of year-1 per select_slot_dates
     AUTUMN_DOY_MIN, AUTUMN_DOY_MAX = 228, 304
     slot_defs = [
         ("autumn_y_minus_1", tile_year - 1, AUTUMN_DOY_MIN, AUTUMN_DOY_MAX),
