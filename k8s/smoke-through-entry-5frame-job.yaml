@@ -52,8 +52,9 @@ spec:
               apt-get update -qq && apt-get install -y -qq \
                 git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
               # shapely: scb_tatort (imported by fetch_unified_tiles) needs it.
+              # scipy: M2 coreg (imint.coregistration.estimate_mi_offset) needs it.
               pip3 install --quiet --no-cache-dir \
-                numpy rasterio pyproj requests Pillow \
+                numpy scipy rasterio pyproj requests Pillow \
                 pystac-client openeo shapely 2>&1 | tail -3
 
               mkdir -p /workspace && cd /workspace
