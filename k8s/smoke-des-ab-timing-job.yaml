@@ -52,6 +52,7 @@ spec:
               git clone --branch agent/te/claude/fetch-phase2-consolidation \
                 https://github.com/TobiasEdman/imintengine.git imintengine
               cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
               TIP=$(git rev-parse HEAD)
               BUNDLED=4d83c2c
               echo "tip=$TIP  bundled=$BUNDLED"
