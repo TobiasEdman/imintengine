@@ -1,0 +1,138 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-refetch-validation
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: campaign-refetch-validation
+spec:
+  backoffLimit: 0
+  # VALIDATION BATCH for the re-fetch campaign (NOT the full run): re-fetches 10
+  # real tiles through the consolidated entry on MAIN (post PR #26 merge), at
+  # --workers 2, --fetch-sources des,l1c_sen2cor, --force. Reads the live dataset
+  # (/data/unified_v2_512) but writes to a SEPARATE debug dir — the live dataset
+  # is NOT touched. Confirms the campaign orchestration (main → _run → refetch_tile
+  # → per-frame des + l1c_sen2cor 2016 slot → M2 → split) before the full run.
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: refetch
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign re-fetch VALIDATION batch (10 tiles) ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              # Run from MAIN (PR #26 merged) — the production code.
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/imintengine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+              echo "L2A_Process on PATH: $(which L2A_Process)"
+
+              OUT=/data/debug/campaign_validation
+              echo ""
+              echo "=== refetch: 10 tiles, --workers 2, des,l1c_sen2cor, --force → $OUT ==="
+              python3 scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-existing /data/unified_v2_512 \
+                --output-dir "$OUT" \
+                --tile-size-px 512 \
+                --workers 2 \
+                --fetch-sources des,l1c_sen2cor \
+                --force \
+                --max-tiles 10
+
+              echo ""
+              echo "=== validate outputs ==="
+              python3 - <<'PYEOF'
+              import glob
+              import numpy as np
+              outs = sorted(glob.glob("/data/debug/campaign_validation/*.npz"))
+              print(f"output tiles: {len(outs)}")
+              assert outs, "no output tiles written!"
+              ok = bg = coreg = 0
+              for p in outs:
+                  d = np.load(p, allow_pickle=True)
+                  assert d["spectral"].shape == (24, 512, 512), (p, d["spectral"].shape)
+                  assert int(d["num_frames"]) == 4 and int(d["num_bands"]) == 6
+                  if int(d.get("has_frame_2016", 0)) == 1:
+                      bg += 1
+                      assert d["frame_2016"].shape == (6, 512, 512)
+                  if int(d.get("coreg_m2", 0)) == 1:
+                      coreg += 1
+                  ok += 1
+              print(f"VALIDATION PASS — {ok}/{len(outs)} tiles (24,512,512) spectral; "
+                    f"{bg} with frame_2016; {coreg} with coreg_m2=1")
+              PYEOF
+
+              echo ""
+              echo "=== validation batch complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
