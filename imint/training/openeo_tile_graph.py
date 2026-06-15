@@ -509,9 +509,12 @@ def fetch_tile_all_slots_des_openeo(
 ) -> dict[int, tuple[np.ndarray, str]]:
     """DES openEO 1.1 variant of :func:`fetch_tile_all_slots_cdse_openeo`.
 
-    Same merge_cubes + rename_labels + single download pattern, but
-    against DES (``openeo.digitalearth.se``, API 1.1) using the
-    lowercase band convention and ``s2_msi_l2a`` collection id.
+    Per-slot download: ONE openEO job per slot (reusing one connection), NOT a
+    merged N-slot cube — a merged download hangs/times-out server-side on DES for
+    large band counts (observed: a 60-band merge → openEO [408]). Against DES
+    (``openeo.digitalearth.se``, API 1.1) using the lowercase band convention and
+    ``s2_msi_l2a`` collection id. A slow/failing slot is skipped (partial
+    success); the caller's QC keeps tiles with >=3/4 frames.
 
     Args:
         cloud_max_pct: Scene-level cloud cover ceiling. Default ``None``
@@ -528,7 +531,6 @@ def fetch_tile_all_slots_des_openeo(
     # Local imports to avoid forcing openeo on the rest of the package.
     from imint.fetch import (
         COLLECTION as DES_COLLECTION,
-        FetchError,
         _connect as _connect_des,
         _snap_to_target_grid,
         _unpack_openeo_gtiff_bytes,
@@ -543,10 +545,24 @@ def fetch_tile_all_slots_des_openeo(
     # so one download yields all training/sample material. Downstream
     # fetch_spectral splits to the 6-band model cube + per-band extras.
     b10, b20, b60, des_bands = _bands_groups_for_source("des")
+    n_bands = len(des_bands)
 
-    sub_cubes = []
+    # Snap each slot onto the exact bbox pixel grid. openEO derives the output
+    # grid from the bbox extent + native S2 tiling, so a scene comes back offset
+    # from the requested grid (and one row/col too large — the "513" bug).
+    # _snap_to_target_grid corrects the integer + sub-pixel offset → exactly
+    # (n_bands, size, size). SINGLE S2 grid-alignment strategy across the repo.
+    target_bounds = {k: float(bbox_3006[k]) for k in ("west", "south", "east", "north")}
+
+    # Per-slot download — ONE openEO job per slot (reusing the single connection),
+    # NOT a merged N-slot cube. A merged download hangs/times-out server-side on
+    # DES for large band counts (observed: a 60-band merge → [408]); one
+    # n_bands-band download per slot stays well under the timeout, fails a slow /
+    # bad slot in isolation (partial success — the caller keeps >=3/4 frames), and
+    # is gentler on DES. M1 (grid-snap) is per-slot anyway, so this is equivalent.
+    result: dict[int, tuple[np.ndarray, str]] = {}
     for slot_idx, date_start, date_end in slot_windows:
-        sub_cubes.append(_build_slot_cube(
+        cube = _build_slot_cube(
             conn,
             bbox_3006,
             slot_idx,
@@ -558,46 +574,33 @@ def fetch_tile_all_slots_des_openeo(
             bands_20m=b20,
             bands_60m=b60,
             output_bands=des_bands,
-        ))
-
-    merged = sub_cubes[0]
-    for c in sub_cubes[1:]:
-        merged = merged.merge_cubes(c)
-
-    print(f"    [DES-tile-graph] downloading {len(slot_windows)} slots × "
-          f"{len(des_bands)} bands = {len(slot_windows)*len(des_bands)} bands",
-          flush=True)
-    raw_bytes = merged.download(format="gtiff")
-    if not raw_bytes:
-        raise FetchError("DES openEO returned empty bytes from tile-graph download")
-    raw_bytes = _unpack_openeo_gtiff_bytes(raw_bytes)
-
-    with rasterio.open(io.BytesIO(raw_bytes)) as src:
-        full = src.read()  # (n_slots * n_bands, H, W)
-        src_transform = src.transform
-        src_crs = src.crs
-
-    n_bands = len(des_bands)
-    expected_bands = len(slot_windows) * n_bands
-    if full.shape[0] != expected_bands:
-        raise FetchError(
-            f"DES tile-graph: expected {expected_bands} bands "
-            f"({len(slot_windows)} slots × {n_bands} bands), got {full.shape[0]}."
         )
-
-    # Snap every slot onto the exact bbox pixel grid. openEO derives the
-    # output grid from the bbox extent + native S2 tiling, so a scene comes
-    # back offset from the requested grid (and one row/col too large — the
-    # "513" bug). _snap_to_target_grid corrects the integer + sub-pixel offset
-    # and yields exactly (n_bands, size, size). This is the SINGLE S2 grid-
-    # alignment strategy across the repo (imint.fetch.fetch_des_data).
-    target_bounds = {k: float(bbox_3006[k]) for k in ("west", "south", "east", "north")}
-
-    result: dict[int, tuple[np.ndarray, str]] = {}
-    for i, (slot_idx, date_start, date_end) in enumerate(slot_windows):
+        print(f"    [DES-tile-graph] slot {slot_idx}: downloading {n_bands} bands "
+              f"({date_start}..{date_end})", flush=True)
+        try:
+            raw_bytes = cube.download(format="gtiff")
+        except Exception as e:
+            print(f"    [DES-tile-graph] slot {slot_idx} download failed "
+                  f"({type(e).__name__}: {e}); skipping", flush=True)
+            continue
+        if not raw_bytes:
+            print(f"    [DES-tile-graph] slot {slot_idx}: empty bytes; skipping",
+                  flush=True)
+            continue
+        raw_bytes = _unpack_openeo_gtiff_bytes(raw_bytes)
+        with rasterio.open(io.BytesIO(raw_bytes)) as src:
+            full = src.read()  # (n_bands, H, W)
+            src_transform = src.transform
+            src_crs = src.crs
+        if full.shape[0] != n_bands:
+            # A single malformed slot is skipped like any other per-slot
+            # failure (partial success) — it must not abort the good slots.
+            print(f"    [DES-tile-graph] slot {slot_idx}: expected {n_bands} "
+                  f"bands, got {full.shape[0]}; skipping", flush=True)
+            continue
         # DES bakes the PB04.00 -1000 BOA offset into COGs (CDSE openEO applies
         # it server-side); subtract it so output matches the rest of the dataset.
-        slot_arr = dn_to_reflectance(full[i * n_bands:(i + 1) * n_bands], source="des")
+        slot_arr = dn_to_reflectance(full, source="des")
         slot_arr, _ = _snap_to_target_grid(
             slot_arr, src_transform, src_crs, target_bounds, pixel_size=10,
         )
