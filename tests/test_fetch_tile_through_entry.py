@@ -166,10 +166,8 @@ class TestFetchTileThroughEntry:
             lambda coords, **k: {0: "2021-09-15", 1: "2022-05-01",
                                  2: "2022-06-15", 3: "2022-07-20", 4: "2016-07-15"})
 
-        # cloud_max + sources still accepted (main() passes them).
         r = fut.fetch_tile(self._loc(tile, year=2022), ["2022"], str(tmp_path),
-                           tile, cloud_max=30.0, vpp_cache={"tile_test": _VPP},
-                           sources=("des",))
+                           tile, vpp_cache={"tile_test": _VPP}, backend="des")
         assert r == {"name": "tile_test", "status": "ok",
                      "valid_frames": 4, "has_bg": 1}
 
@@ -341,7 +339,7 @@ class TestRefetchTileThroughEntry:
             return _fake_res()
         monkeypatch.setattr(fut, "fetch_tile_spectral", _spy)
 
-        r = fut.refetch_tile(self._loc(tile, src), ["2022"], str(out), tile)
+        r = fut.refetch_tile(self._loc(tile, src), str(out), tile)
         assert r["status"] == "ok"
         # Stored dates reused verbatim — slots 0-3 from `dates`, slot 4 from
         # frame_2016_date. No re-selection (select_slot_dates would have raised).
@@ -359,7 +357,7 @@ class TestRefetchTileThroughEntry:
         self._no_reselect(monkeypatch)
         monkeypatch.setattr(fut, "fetch_tile_spectral", lambda *a, **k: _fake_res())
 
-        r = fut.refetch_tile(self._loc(tile, src), ["2022"], str(out), tile)
+        r = fut.refetch_tile(self._loc(tile, src), str(out), tile)
         assert r["status"] == "ok"
         d = dict(np.load(out / "tile_test.npz", allow_pickle=True))
 
@@ -398,7 +396,7 @@ class TestRefetchTileThroughEntry:
         loc = {"name": "tile_test", "source": "lulc",
                "bbox_3006": tile.bbox_from_center(402560, 6402560),
                "_existing_path": str(src)}
-        r = fut.refetch_tile(loc, ["2022"], str(out), tile)
+        r = fut.refetch_tile(loc, str(out), tile)
         assert r["status"] == "failed"
         assert r["reason"] == "no_stored_dates"
         assert not (out / "tile_test.npz").exists()
@@ -417,8 +415,7 @@ class TestRefetchTileThroughEntry:
             raise AssertionError("must skip without force")
         monkeypatch.setattr(fut, "fetch_tile_spectral", _boom_entry)
 
-        r = fut.refetch_tile(self._loc(tile, src), ["2022"], str(out), tile,
-                             force=False)
+        r = fut.refetch_tile(self._loc(tile, src), str(out), tile, force=False)
         assert r["status"] == "skipped"
 
     def test_force_refetches_existing(self, tmp_path, monkeypatch):
@@ -432,8 +429,7 @@ class TestRefetchTileThroughEntry:
         self._no_reselect(monkeypatch)
         monkeypatch.setattr(fut, "fetch_tile_spectral", lambda *a, **k: _fake_res())
 
-        r = fut.refetch_tile(self._loc(tile, src), ["2022"], str(out), tile,
-                             force=True)
+        r = fut.refetch_tile(self._loc(tile, src), str(out), tile, force=True)
         assert r["status"] == "ok"
         assert r["valid_frames"] == 4
         # force overwrote the 2-key stub with a genuinely rebuilt stack.
@@ -456,7 +452,7 @@ class TestRefetchTileThroughEntry:
             return _fake_res(bg=False)
         monkeypatch.setattr(fut, "fetch_tile_spectral", _spy)
 
-        r = fut.refetch_tile(self._loc(tile, src), ["2022"], str(out), tile)
+        r = fut.refetch_tile(self._loc(tile, src), str(out), tile)
         assert r["status"] == "ok"
         assert captured["dates"] == {0: "2021-09-15", 1: "2022-05-01",
                                      2: "2022-06-15", 3: "2022-07-20"}

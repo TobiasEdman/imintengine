@@ -49,7 +49,7 @@ from imint.training.tile_fetch import (
     fetch_nmd_label_local,
     select_slot_dates,
 )
-from imint.training.fetch_spectral import fetch_tile_spectral
+from imint.training.fetch_spectral import fetch_tile_spectral, _M2_CAPABLE_BACKENDS
 from imint.training.tile_config import TileConfig
 from imint.training.sampler import generate_grid, grid_to_wgs84
 from imint.training.scb_tatort import generate_scb_densification_regions
@@ -415,14 +415,16 @@ def fetch_tile(
     years: list[str],
     output_dir: str,
     tile: TileConfig,
-    cloud_max: float = 30.0,
     vpp_cache: dict | None = None,
-    sources: tuple[str, ...] = ("cdse", "des"),
+    backend: str = "des",
 ) -> dict:
     """Fetch one tile through the canonical M1+M2 entry as a single 5-slot
     ``fetch_tile_spectral`` call — 4 temporal frames (autumn y-1 + 3 VPP) + a
     2016 background frame — then split into the unified-schema layout + NMD +
-    aux → .npz."""
+    aux → .npz.
+
+    ``backend`` is the M2-capable primary (``des`` or ``cdse-openeo``); the entry
+    auto-fills pre-2018 / des-empty slots via l1c_sen2cor."""
     name = loc["name"]
     out_path = os.path.join(output_dir, f"{name}.npz")
     if os.path.exists(out_path):
@@ -469,7 +471,7 @@ def fetch_tile(
     # M1 (grid-snap) + M2 (inter-frame MI coreg) run inside the entry on the
     # shared halo grid; all slots land coregistered on the anchor's grid.
     res = fetch_tile_spectral(
-        (cx, cy), tile=tile, dates=dates, n_frames=5, backend="des")
+        (cx, cy), tile=tile, dates=dates, n_frames=5, backend=backend)
     if res is None:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
@@ -1075,13 +1077,9 @@ _REFETCH_DROP = frozenset((
 
 def refetch_tile(
     loc: dict,
-    years: list[str],
     output_dir: str,
     tile: TileConfig,
-    cloud_max: float = 30.0,
-    max_aoi_cloud: float = 0.10,
-    vpp_cache: dict | None = None,
-    sources: tuple[str, ...] = ("cdse", "des"),
+    backend: str = "des",
     force: bool = False,
 ) -> dict:
     """Re-fetch an existing tile's spectral through the canonical M1+M2 entry,
@@ -1148,7 +1146,7 @@ def refetch_tile(
     tile.assert_bbox_matches(bbox)
 
     res = fetch_tile_spectral(
-        (cx, cy), tile=tile, dates=dates, n_frames=5, backend="des")
+        (cx, cy), tile=tile, dates=dates, n_frames=5, backend=backend)
     if res is None:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
@@ -1185,7 +1183,14 @@ def main():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--years", nargs="+", default=["2018", "2019", "2022", "2023"])
     p.add_argument("--workers", type=int, default=1)
-    p.add_argument("--cloud-max", type=float, default=30.0)
+    p.add_argument("--force", action="store_true",
+                   help="refetch even if a tile is already multitemporal "
+                        "(refetch mode); required to re-coregister existing tiles "
+                        "through the M1+M2 entry.")
+    p.add_argument("--cloud-max", type=float, default=30.0,
+                   help="(deprecated, unused) — cloud is now handled by the "
+                        "entry's optimal_fetch date selection. Accepted for "
+                        "backward-compat with existing job manifests.")
     p.add_argument("--max-tiles", type=int, default=None)
     p.add_argument("--grid-spacing", type=int, default=2500)
     p.add_argument("--seed", type=int, default=42)
@@ -1200,31 +1205,35 @@ def main():
     p.add_argument("--tile-size-px", type=int, default=256,
                    help="Tile resolution in pixels (256, 512, 1024, …). "
                         "Sets the runtime TileConfig.size_px.")
-    p.add_argument("--fetch-sources", default="cdse,des",
-                   help="Comma-separated S2 backends. The first live "
-                        "non-sen2cor token is the primary; l1c_sen2cor (if "
-                        "listed) is the LAST-RESORT fallthrough for slots the "
-                        "primary cannot fill. Valid: cdse (SH Process, "
-                        "PU-billed), des (Digital Earth Sweden openEO), "
-                        "cdse-openeo (CDSE openEO, separate 10k-credits/mo "
-                        "pool), l1c_sen2cor (GCS L1C -> sen2cor, PU-free + "
-                        "pre-2018; needs the imint-sen2cor image). E.g. "
-                        "--fetch-sources=des,l1c_sen2cor during a CDSE PU "
-                        "outage.")
+    p.add_argument("--fetch-sources", default="des",
+                   help="M2-capable primary backend for the canonical entry: "
+                        "des (Digital Earth Sweden openEO, default) or cdse-openeo "
+                        "(CDSE openEO, separate credits pool). cdse (SH-Process) "
+                        "is 6-band/no-halo -> cannot M2, rejected. l1c_sen2cor "
+                        "(GCS L1C -> sen2cor) is ALWAYS ON automatically — it "
+                        "auto-fills pre-2018 / des-empty slots and cannot be "
+                        "disabled; it is accepted in the list for backward-compat "
+                        "but listing it has no effect.")
     args = p.parse_args()
     random.seed(args.seed)
 
-    # Parse fetch sources
+    # Resolve --fetch-sources to the entry's M2-capable primary backend. The
+    # entry fetches >=2018 slots via this backend and auto-fills the rest (incl.
+    # pre-2018) via l1c_sen2cor. cdse (SH-Process) is 6-band/no-halo → cannot M2.
     sources_tuple = tuple(
         s.strip().lower() for s in args.fetch_sources.split(",") if s.strip()
     )
-    valid = {"cdse", "des", "cdse-openeo"}
+    valid = set(_M2_CAPABLE_BACKENDS) | {"l1c_sen2cor"}
     unknown = set(sources_tuple) - valid
     if unknown:
+        if "cdse" in unknown:
+            p.error("cdse (SH-Process) is 6-band/no-halo and cannot do M2 — use "
+                    "des or cdse-openeo (l1c_sen2cor is the always-on fallthrough).")
         p.error(f"Unknown fetch source(s): {sorted(unknown)}. Valid: {sorted(valid)}")
-    if not sources_tuple:
-        p.error("At least one fetch source required")
-    print(f"  Fetch sources: {', '.join(sources_tuple)}")
+    backend = next((s for s in sources_tuple if s in _M2_CAPABLE_BACKENDS), None)
+    if backend is None:
+        p.error("--fetch-sources needs an M2-capable primary: des or cdse-openeo.")
+    print(f"  Fetch backend: {backend} (+ l1c_sen2cor fallthrough)")
 
     # Single source of truth for tile geometry — threaded explicitly
     # through every function that needs it. No monkey-patching, no
@@ -1322,14 +1331,9 @@ def main():
     def _run(item):
         loc, d = item
         if use_refetch:
-            return refetch_tile(loc, args.years, d, tile,
-                                cloud_max=args.cloud_max,
-                                vpp_cache=vpp_cache,
-                                sources=sources_tuple)
+            return refetch_tile(loc, d, tile, backend=backend, force=args.force)
         return fetch_tile(loc, args.years, d, tile,
-                          cloud_max=args.cloud_max,
-                          vpp_cache=vpp_cache,
-                          sources=sources_tuple)
+                          vpp_cache=vpp_cache, backend=backend)
 
     CHUNK = max(max_w * 2, len(work) // 10)
     completed = 0

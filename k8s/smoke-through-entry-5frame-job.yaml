@@ -113,7 +113,7 @@ spec:
                      "bbox_3006": tile.bbox_from_center(cx, cy),
                      "_existing_path": src}
               print("=== refetch_tile(force=True) ===", flush=True)
-              r = fut.refetch_tile(loc, [], out_dir, tile, force=True)
+              r = fut.refetch_tile(loc, out_dir, tile, force=True)
               print("refetch result:", r)
               assert r["status"] == "ok", f"refetch failed: {r}"
 

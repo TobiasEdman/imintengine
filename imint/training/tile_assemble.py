@@ -63,7 +63,9 @@ def assemble_fresh(
     fetched+cropped frame's 6 Prithvi bands go straight into the cube and its
     B08/red-edge/B01/B09 into the extras. A frame absent from ``frames`` failed to
     fetch and is zero-filled with an empty date (downstream QC drops <3/4-frame
-    tiles). Output keys/shapes mirror ``stack_extra_frames`` exactly.
+    tiles). Output keys/shapes match the enrich-script .npz contract (b08/b01/b09
+    stacked on a new axis; rededge concatenated band×frame → frame-major
+    B05,B06,B07 per frame; each with ``*_dates`` + ``has_*``).
 
     Args:
         frames:   ``{slot: (12, canon, canon)}`` — already halo-cropped.
