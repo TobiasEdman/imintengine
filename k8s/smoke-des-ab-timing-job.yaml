@@ -1,0 +1,124 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-des-ab-timing
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: smoke-des-ab-timing
+spec:
+  backoffLimit: 0
+  # A/B wall-time: bundled (merged N-slot download) vs per-frame (one openEO job
+  # per slot) for the SAME des 4-slot fetch, back-to-back in ONE pod (controls for
+  # DES load). Checks out the bundled commit (4d83c2c), times
+  # fetch_tile_at_specific_dates(source="des") on a real tile's 4 >=2018 dates,
+  # then checks out the per-frame tip and times the same. Pure DES openEO — no
+  # sen2cor / no M2, so the delta isolates the request-shape change.
+  activeDeadlineSeconds: 5400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: ab
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== des bundled-vs-per-frame A/B timing ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow pystac-client openeo 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              # FULL clone (not --depth 1) so the bundled ancestor commit is present.
+              git clone --branch agent/te/claude/fetch-phase2-consolidation \
+                https://github.com/TobiasEdman/imintengine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              TIP=$(git rev-parse HEAD)
+              BUNDLED=4d83c2c
+              echo "tip=$TIP  bundled=$BUNDLED"
+
+              # Timing script lives OUTSIDE the repo so it survives git checkout.
+              cat > /tmp/time_des.py <<'PYEOF'
+              import glob, time
+              import numpy as np
+              from imint.training.tile_config import TileConfig
+              from imint.training.openeo_tile_graph import fetch_tile_at_specific_dates
+
+              HALO = 520  # canon 512 + 8 px halo, matching the entry
+              src = None
+              for p in sorted(glob.glob("/data/unified_v2_512/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  if "dates" not in d or "easting" not in d:
+                      continue
+                  good = [str(x) for x in d["dates"] if str(x) and str(x) >= "2018-01-01"]
+                  if len(good) >= 4:
+                      src, cx, cy = p, int(d["easting"]), int(d["northing"])
+                      dates4 = good[:4]
+                      break
+              assert src, "no tile with >=4 post-2018 dates in /data/unified_v2_512"
+              bbox_halo = TileConfig(size_px=HALO, gsd_m=10).bbox_from_center(cx, cy)
+              slot_dates = {i: dt for i, dt in enumerate(dates4)}
+              print(f"tile={src.split('/')[-1]} dates={dates4}", flush=True)
+              t0 = time.time()
+              res = fetch_tile_at_specific_dates(bbox_halo, slot_dates, source="des")
+              dt = time.time() - t0
+              print(f"DES_4SLOT_SECONDS={dt:.1f} slots_returned={sorted(res)}", flush=True)
+              PYEOF
+
+              for ref in "$BUNDLED" "$TIP"; do
+                git checkout -q "$ref"
+                echo ""
+                echo "===== ref=$ref ($(git log --oneline -1)) ====="
+                python3 /tmp/time_des.py 2>&1 | grep -E "tile=|DES_4SLOT_SECONDS|Error|Traceback" || true
+              done
+              echo ""
+              echo "=== A/B complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

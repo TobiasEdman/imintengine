@@ -11,9 +11,13 @@ import math
 
 import numpy as np
 import pytest
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import center_of_mass, gaussian_filter
 
-from imint.coregistration import estimate_mi_offset, subpixel_shift
+from imint.coregistration import (
+    coregister_to_reference,
+    estimate_mi_offset,
+    subpixel_shift,
+)
 
 _N = 220
 # Season-stable geometry: 3 field polygons + a road cross. Boundaries/roads are
@@ -73,3 +77,66 @@ def test_out_of_range_returns_zero():
 def test_no_shift_returns_near_zero():
     dy, dx = estimate_mi_offset(_AUTUMN.copy(), _AUTUMN, search_px=4.0)
     assert max(abs(dy), abs(dx)) < 0.1, (dy, dx)
+
+
+def test_coregister_to_reference_removes_shift_dot_com():
+    """Sign-convention guard for the production MI swap — the 54b30a3 trap.
+
+    ``coregister_to_reference`` shifts its *reference* onto its *target*. We inject
+    a known sub-pixel shift into the reference and confirm the reference's
+    bright-dot centre-of-mass is driven BACK onto the target (misregistration
+    removed), not pushed to ~2x (the sign-inverted failure). COM is a direct
+    geometric position measure, so — unlike a residual metric — it cannot be
+    fooled by an estimator that rejects an out-of-range (doubled) offset as
+    ``(0, 0)``. (CLAUDE.md: "Testa koreg ALLTID med dot/center-of-mass".)
+    """
+    size = 160
+    yy, xx = np.mgrid[0:size, 0:size]
+    # Sharp dots (sigma=2) on faint non-negative texture: the dots dominate the COM
+    # while the texture gives MI a rich joint histogram. Centres sit inside the
+    # central MI window and clear of the edges (no Fourier-shift wrap into the COM).
+    centres = [(58.0, 64.0), (96.0, 102.0), (72.0, 110.0), (104.0, 60.0), (120.0, 120.0)]
+    sigma = 2.0
+    tex = gaussian_filter(
+        np.random.default_rng(7).standard_normal((size, size)).astype(np.float32), 2.0
+    )
+    base = 0.05 * (tex - tex.min())
+    for cy, cx in centres:
+        base = base + np.exp(
+            -((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * sigma**2)
+        ).astype(np.float32)
+
+    dy0, dx0 = 0.6, -0.5  # sub-pixel (< 0.95·search_px); a sign flip doubles to 1.2/1.0 px
+    shifted = subpixel_shift(base.astype(np.float64), dy0, dx0).astype(np.float32)
+    target = np.repeat(base[..., None], 3, axis=-1)  # fixed anchor
+    reference = np.repeat(shifted[..., None], 3, axis=-1)  # misregistered by +(dy0, dx0)
+
+    def _dot_com(frame):  # isolate the dot cores from the texture floor
+        return np.array(center_of_mass(np.clip(frame[..., 2] - 0.3, 0.0, None)))
+
+    com_target = _dot_com(target)
+    pre_err = math.hypot(*(_dot_com(reference) - com_target))
+    assert pre_err > 0.4, f"injected misregistration too small to test: {pre_err:.3f}"
+
+    _aligned_tgt, aligned_ref, meta = coregister_to_reference(
+        target=target.copy(),
+        reference=reference.copy(),
+        target_transform=None,
+        reference_transform=None,
+        subpixel=True,
+        reference_band=2,
+    )
+    post_err = math.hypot(*(_dot_com(aligned_ref) - com_target))
+
+    # Misregistration REMOVED: dot driven onto the target, residual well sub-pixel.
+    assert post_err < 0.1, (
+        f"reference dot not driven onto target: pre={pre_err:.3f} "
+        f"post={post_err:.3f} applied={tuple(round(v, 3) for v in meta['subpixel_offset'])}"
+    )
+    assert post_err < pre_err * 0.3
+    # Sign guard: the APPLIED shift is the negative of the injected one (the
+    # reference dot moves from c+delta back to c). A positive/doubled result == 54b30a3.
+    s_dy, s_dx = meta["subpixel_offset"]
+    assert s_dy * dy0 < 0 and s_dx * dx0 < 0, (
+        f"sign inverted/wrong: injected=({dy0},{dx0}) applied=({s_dy:.3f},{s_dx:.3f})"
+    )

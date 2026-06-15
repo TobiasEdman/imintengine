@@ -45,13 +45,11 @@ load_env()
 from imint.training.tile_fetch import (
     N_BANDS,
     bbox_3006_to_wgs84,
-    fetch_4frame_scenes,
     fetch_aux_channels,
-    fetch_background_frame,
     fetch_nmd_label_local,
-    stack_extra_frames,
-    stack_frames,
+    select_slot_dates,
 )
+from imint.training.fetch_spectral import fetch_tile_spectral, _M2_CAPABLE_BACKENDS
 from imint.training.tile_config import TileConfig
 from imint.training.sampler import generate_grid, grid_to_wgs84
 from imint.training.scb_tatort import generate_scb_densification_regions
@@ -319,162 +317,97 @@ def prefetch_vpp_batch(
 # ── Core Fetch ────────────────────────────────────────────────────────────────
 
 
-def _fetch_frames_from_best_dates(
-    bbox: dict,
-    coords_wgs84: dict,
-    best: dict,
-    tile: TileConfig,
-    n_frames: int = 4,
-    sources: tuple[str, ...] = ("cdse", "des"),
-) -> list:
-    """Fetch spectral frames using pre-screened best dates (from openEO stage 1).
+def _split_entry_result(res: dict) -> tuple[dict, dict, dict | None]:
+    """Split a 5-slot ``fetch_tile_spectral`` result into the unified-schema
+    layout: the 4 temporal training frames (core + all-band extras) and the
+    slot-4 2016 background frame.
 
-    Races selected providers in parallel for each frame — first result wins.
-    Skips STAC search, VPP lookup, and cloud screening entirely.
+    The canonical entry fetches 5 slots — 0-3 temporal (autumn y-1 + 3 VPP) and
+    4 = 2016 summer background — in ONE M1+M2 pass, so the background frame is
+    inter-frame coregistered with the temporal stack (the legacy separate
+    ``fetch_background_frame`` was not). The training schema stays at 4 temporal
+    frames, so slots 0-3 become ``spectral``/extras and slot 4 becomes the
+    6-band ``frame_2016*`` block (its all-band extras are dropped — the legacy
+    background frame was 6-band only).
 
-    Args:
-        bbox: Tile bbox in EPSG:3006.
-        coords_wgs84: Tile center in WGS84.
-        best: {frame_idx: {date, cloud_frac}} from best_dates.json.
-        n_frames: Number of frames.
-        sources: Which backends to race. Subset of ("cdse", "des").
-            Pass ("des",) to skip CDSE during a CDSE outage.
-
-    Returns:
-        List of (spectral, date_str) tuples matching stack_frames input.
+    Expects a 5-slot result (slot 4 = background). Returns ``(core, extras, bg)``:
+      * ``core`` — always-written spectral + temporal metadata (sliced to the 4
+        persisted frames) + M1/M2 coreg provenance. ``coreg_shifts`` is the
+        4-frame view (per-frame applied MI shift); the scalar coreg fields
+        (``coreg_ref_frame``, ``coreg_n_aligned``, ``coreg_max_shift``,
+        ``coreg_anchor_valid_frac``) are whole-fetch 5-slot M2 aggregates — the
+        coreg ran jointly over all 5 slots, so they cannot be re-expressed per
+        4-frame. ``coreg_ref_frame`` may be 4 (the 2016 background) when it was
+        the clearest anchor.
+      * ``extras`` — the b08/red-edge/B01/B09 all-band block sliced to the first
+        4 frames, ``has_*`` recomputed over the slice. Caller gates on ``has_*``.
+      * ``bg`` — the 6-band ``frame_2016*`` dict, or ``None`` if slot 4 did not
+        fetch (e.g. a des-only fetch: pre-2018 needs the l1c_sen2cor backend).
     """
-    from concurrent.futures import (
-    ThreadPoolExecutor,
-    TimeoutError as _FuturesTimeout,
-    as_completed,
-)
-    from imint.training.cdse_s2 import fetch_s2_scene
-    from imint.training.tile_fetch import (
-        _CDSE_SEMAPHORE, _DES_SEMAPHORE, _CDSE_OPENEO_SEMAPHORE,
-        PRITHVI_BANDS,
-    )
-    from imint.fetch import fetch_seasonal_image
+    nb, nf = N_BANDS, NUM_FRAMES                        # 6, 4
+    spectral_full = res["spectral"]                     # (5*nb, H, W)
 
-    def _cdse_fetch(date_str):
-        _CDSE_SEMAPHORE.acquire()
-        try:
-            result = fetch_s2_scene(
-                bbox["west"], bbox["south"], bbox["east"], bbox["north"],
-                date=date_str,
-                size_px=tile.size_px,
-                cloud_threshold=1.0,
-                haze_threshold=1.0,
-                nodata_threshold=None,
-            )
-            _CDSE_SEMAPHORE.report_success()
-            if result is not None:
-                return result[0], date_str
-        except Exception:
-            _CDSE_SEMAPHORE.report_failure()
-        finally:
-            _CDSE_SEMAPHORE.release()
-        return None, date_str
+    core = {
+        "spectral": spectral_full[: nb * nf],           # (4*nb, H, W)
+        "temporal_mask": res["temporal_mask"][:nf],
+        "doy": res["doy"][:nf],
+        "dates": res["dates"][:nf],
+        "multitemporal": np.int32(1),
+        "num_frames": np.int32(nf),
+        "num_bands": np.int32(nb),
+        "bbox_3006": res["bbox_3006"],
+        "easting": res["easting"],
+        "northing": res["northing"],
+        "tile_size_px": res["tile_size_px"],
+        # Whole-fetch (5-slot) M2 aggregates — the coreg ran jointly over all
+        # slots, so these stay as-is (coreg_ref_frame may be 4 = background).
+        "coreg_ref_frame": res["coreg_ref_frame"],
+        "coreg_m2": res["coreg_m2"],
+        "coreg_n_aligned": res["coreg_n_aligned"],
+        "coreg_max_shift": res["coreg_max_shift"],
+        "coreg_anchor_valid_frac": res["coreg_anchor_valid_frac"],
+        "coreg_shifts": res["coreg_shifts"][:nf],   # per-frame: 4-frame view
+    }
 
-    def _des_fetch(date_str):
-        _DES_SEMAPHORE.acquire()
-        try:
-            result = fetch_seasonal_image(
-                date=date_str,
-                coords=coords_wgs84,
-                prithvi_bands=PRITHVI_BANDS,
-                source="des",
-            )
-            _DES_SEMAPHORE.report_success()
-            if result is not None:
-                return result[0], date_str
-        except Exception:
-            _DES_SEMAPHORE.report_failure()
-        finally:
-            _DES_SEMAPHORE.release()
-        return None, date_str
+    # All-band extras sliced to slots 0-3 (red-edge is frame-major, 3 bands per
+    # frame → first nf*3 channels); recompute has_* over the 4-frame slice.
+    extras = {
+        "b08": res["b08"][:nf], "b08_dates": res["b08_dates"][:nf],
+        "rededge": res["rededge"][: nf * 3], "rededge_dates": res["rededge_dates"][:nf],
+        "b01": res["b01"][:nf], "b01_dates": res["b01_dates"][:nf],
+        "b09": res["b09"][:nf], "b09_dates": res["b09_dates"][:nf],
+    }
+    for k in ("b08", "rededge", "b01", "b09"):
+        extras[f"has_{k}"] = np.int32(1 if np.any(extras[k]) else 0)
 
-    def _cdse_openeo_fetch(date_str):
-        # CDSE openEO (openeo.dataspace.copernicus.eu) uses a separate
-        # monthly-credit pool from SH Process PUs.
-        #
-        # Session-scoped 402-guard (same pattern as the unified flow
-        # in fetch_spectral._fetch_via_openeo): on first PaymentRequired we
-        # mark the source dead for this process; subsequent attempts
-        # short-circuit without any HTTP roundtrip. Cleared by next
-        # pod restart, so credit-reset / package-purchase auto-recovers.
-        from imint.training.openeo_tile_graph import (
-            is_source_dead, mark_source_dead, _is_payment_required_error,
-        )
-        if is_source_dead("cdse-openeo"):
-            return None, date_str
-        _CDSE_OPENEO_SEMAPHORE.acquire()
-        try:
-            result = fetch_seasonal_image(
-                date=date_str,
-                coords=coords_wgs84,
-                prithvi_bands=PRITHVI_BANDS,
-                source="copernicus",
-            )
-            _CDSE_OPENEO_SEMAPHORE.report_success()
-            if result is not None:
-                return result[0], date_str
-        except Exception as exc:
-            if _is_payment_required_error(exc):
-                mark_source_dead(
-                    "cdse-openeo",
-                    f"402 in _cdse_openeo_fetch: {str(exc)[:160]}",
-                )
-            _CDSE_OPENEO_SEMAPHORE.report_failure()
-        finally:
-            _CDSE_OPENEO_SEMAPHORE.release()
-        return None, date_str
+    # Slot 4 — 2016 summer background (6-band; slot-4 all-band extras dropped).
+    bg = None
+    if int(res["temporal_mask"][4]) == 1:
+        bg_date = str(res["dates"][4])
+        bg = {
+            "frame_2016": spectral_full[nb * 4: nb * 5],   # (nb, H, W)
+            "frame_2016_date": np.bytes_(bg_date),
+            "frame_2016_doy": np.int32(int(res["doy"][4])),
+            "frame_2016_year": np.int32(int(bg_date[:4])),
+            "has_frame_2016": np.int32(1),
+        }
+    return core, extras, bg
 
-    results = []
-    for fi in range(n_frames):
-        info = best.get(str(fi))
-        if not info or not info.get("date"):
-            results.append((None, ""))
-            continue
 
-        date_str = info["date"]
+def _npz_str(v) -> str:
+    """Decode a scalar string read back from an .npz to a plain ``str``.
 
-        # Race selected providers — first success wins
-        submit_map = {}
-        if "cdse" in sources:
-            submit_map["cdse"] = _cdse_fetch
-        if "des" in sources:
-            submit_map["des"] = _des_fetch
-        if "cdse-openeo" in sources:
-            submit_map["cdse-openeo"] = _cdse_openeo_fetch
-        if not submit_map:
-            results.append((None, date_str))
-            continue
-
-        # Race selected providers — first success wins. Hard 180 s
-        # timeout per frame and break on first success so one stalled
-        # provider (e.g. DES openEO process-graph hang) cannot block
-        # tile completion. shutdown(wait=False) skips waiting for the
-        # remaining (possibly hung) threads; they die naturally when
-        # the socket layer eventually times out. cancel_futures=True
-        # cancels queued-but-not-started futures.
-        pool = ThreadPoolExecutor(max_workers=max(len(submit_map), 1))
-        futs = [pool.submit(fn, date_str) for fn in submit_map.values()]
-        got_result = False
-        try:
-            for f in as_completed(futs, timeout=180):
-                spectral, d = f.result()
-                if spectral is not None:
-                    results.append((spectral, d))
-                    got_result = True
-                    break
-        except _FuturesTimeout:
-            pass  # 3-min hard cap reached — treat as no-result for this frame
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
-        if not got_result:
-            results.append((None, date_str))
-
-    return results
+    Handles the variants np.savez round-trips a string scalar into: ``np.str_``
+    (unicode ``dates``), ``np.bytes_`` (the ``frame_2016_date`` byte string), and
+    0-d arrays of either. Returns ``""`` for ``None``/missing.
+    """
+    if v is None:
+        return ""
+    if hasattr(v, "item"):
+        v = v.item()
+    if isinstance(v, bytes):
+        return v.decode()
+    return str(v)
 
 
 def fetch_tile(
@@ -482,12 +415,16 @@ def fetch_tile(
     years: list[str],
     output_dir: str,
     tile: TileConfig,
-    cloud_max: float = 30.0,
     vpp_cache: dict | None = None,
-    best_dates: dict | None = None,
-    sources: tuple[str, ...] = ("cdse", "des"),
+    backend: str = "des",
 ) -> dict:
-    """Fetch one tile: 4 seasonal frames + NMD + aux → .npz."""
+    """Fetch one tile through the canonical M1+M2 entry as a single 5-slot
+    ``fetch_tile_spectral`` call — 4 temporal frames (autumn y-1 + 3 VPP) + a
+    2016 background frame — then split into the unified-schema layout + NMD +
+    aux → .npz.
+
+    ``backend`` is the M2-capable primary (``des`` or ``cdse-openeo``); the entry
+    auto-fills pre-2018 / des-empty slots via l1c_sen2cor."""
     name = loc["name"]
     out_path = os.path.join(output_dir, f"{name}.npz")
     if os.path.exists(out_path):
@@ -502,73 +439,69 @@ def fetch_tile(
     coords = bbox_3006_to_wgs84(bbox)
     tile.assert_bbox_matches(bbox)
 
-    # Fast path: use pre-screened best dates from openEO stage 1.
-    # The best-dates path is 6-band only (no all-band extras); the
-    # fetch_4frame_scenes path collects B08/red-edge/B01/B09 per frame.
-    tile_best = best_dates.get(name) if best_dates else None
-    extras_list: list | None = None
-    if tile_best:
-        scene_results = _fetch_frames_from_best_dates(
-            bbox, coords, tile_best, tile, NUM_FRAMES, sources=sources,
-        )
+    # VPP-guided growing-season windows. Cache hit → use it; no cache (direct /
+    # test call) → resolve eagerly here, because the entry takes concrete dates,
+    # not the legacy ``...`` sentinel that let the producer fetch VPP itself.
+    if vpp_cache is not None:
+        vpp_windows = vpp_cache.get(name)
     else:
-        tile_years = [str(loc["year"])] if "year" in loc else years
-        vpp_windows = vpp_cache.get(name) if vpp_cache is not None else ...
-        extras_list = []
-        scene_results = fetch_4frame_scenes(
-            bbox, coords, tile_years, tile,
-            scene_cloud_max=cloud_max,
-            vpp_windows=vpp_windows,
-            sources=sources,
-            collect_extra=extras_list,
-        )
+        from imint.training.tile_fetch import _get_vpp_doy_windows
+        vpp_windows = _get_vpp_doy_windows(bbox)
 
-    image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
-    if int(temporal_mask.sum()) == 0:
+    # 5-slot date selection (0 autumn y-1, 1-3 VPP, 4 = 2016 background).
+    # Labelled tiles are strict on their label year. No-year forest/water tiles
+    # fall back across --years per slot — the ONLY tiles CLAUDE.md permits
+    # year-fallback for (NMD classes carry no year-specific labels). Slot 4 may
+    # be re-probed across years; the cost is a STAC-existence check, not a fetch.
+    if "year" in loc:
+        dates = select_slot_dates(
+            coords, tile_year=int(loc["year"]), vpp_windows=vpp_windows)
+    else:
+        dates = {}
+        for y in years:
+            if len(dates) == 5:
+                break
+            picked = select_slot_dates(
+                coords, tile_year=int(y), vpp_windows=vpp_windows)
+            for slot, d in picked.items():
+                dates.setdefault(slot, d)
+    if not dates:
+        return {"name": name, "status": "failed", "reason": "no_scenes"}
+
+    # M1 (grid-snap) + M2 (inter-frame MI coreg) run inside the entry on the
+    # shared halo grid; all slots land coregistered on the anchor's grid.
+    res = fetch_tile_spectral(
+        (cx, cy), tile=tile, dates=dates, n_frames=5, backend=backend)
+    if res is None:
+        return {"name": name, "status": "failed", "reason": "no_scenes"}
+
+    core, extras, bg = _split_entry_result(res)
+    if int(core["temporal_mask"].sum()) == 0:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
     nmd_label = fetch_nmd_label_local(bbox, tile)
     aux = fetch_aux_channels(bbox, tile)
 
-    save = {
-        "spectral": image,
-        "temporal_mask": temporal_mask,
-        "doy": doy,
-        "dates": np.array(dates),
-        "multitemporal": np.int32(1),
-        "num_frames": np.int32(NUM_FRAMES),
-        "num_bands": np.int32(N_BANDS),
-        "bbox_3006": np.array(
-            [bbox["west"], bbox["south"], bbox["east"], bbox["north"]],
-            dtype=np.int32,
-        ),
-        "easting": np.int32(cx),
-        "northing": np.int32(cy),
-        "tile_size_px": np.int32(tile.size_px),
-        "source": loc["source"],
-    }
+    save = {**core, "source": loc["source"]}
     if nmd_label is not None:
         save["label"] = nmd_label
     save.update(aux)
 
-    # All-band extras (B08/red-edge/B01/B09) from the all-band fetch path.
-    # Only persist when ≥1 frame actually carried them (DES all-band path);
-    # the 6-band best-dates path leaves extras_list None → nothing written.
-    if extras_list is not None:
-        extras = stack_extra_frames(extras_list, dates, NUM_FRAMES, tile)
-        if any(int(extras[k]) for k in
-               ("has_b08", "has_rededge", "has_b01", "has_b09")):
-            save.update(extras)
+    # All-band extras (B08/red-edge/B01/B09). Only persist when ≥1 of the 4
+    # temporal frames carried them; a 6-band-only backend contributes nothing.
+    if any(int(extras[k]) for k in
+           ("has_b08", "has_rededge", "has_b01", "has_b09")):
+        save.update(extras)
 
-    # Background frame (2016 summer) for clearcut change detection
-    bg_result = fetch_background_frame(bbox, tile)
-    if bg_result is not None:
-        save.update(bg_result)
+    # Background frame (2016 summer, slot 4) for clearcut change detection.
+    # Absent on a des-only fetch (pre-2018 needs l1c_sen2cor on the sen2cor image).
+    if bg is not None:
+        save.update(bg)
 
     np.savez_compressed(out_path, **save)
     has_bg = int(save.get("has_frame_2016", 0))
     return {"name": name, "status": "ok",
-            "valid_frames": int(temporal_mask.sum()),
+            "valid_frames": int(core["temporal_mask"].sum()),
             "has_bg": has_bg}
 
 
@@ -759,7 +692,7 @@ def repair_to_canonical_layout(
                 "reason": f"vpp_windows_collapsed: orig={vpp_windows}"}
 
     # Define 4 canonical slots
-    # Autumn (slot 0): hardcoded Aug 15..Oct 31 of year-1 per fetch_4frame_scenes
+    # Autumn (slot 0): hardcoded Aug 15..Oct 31 of year-1 per select_slot_dates
     AUTUMN_DOY_MIN, AUTUMN_DOY_MAX = 228, 304
     slot_defs = [
         ("autumn_y_minus_1", tile_year - 1, AUTUMN_DOY_MIN, AUTUMN_DOY_MAX),
@@ -1124,33 +1057,53 @@ def repair_to_canonical_layout(
     }
 
 
+# Spectral-derived keys that refetch rebuilds from the entry. Everything else in
+# the old .npz (aux channels, nmd_label_raw, geometry, …) is preserved; labels
+# are rebuilt separately by build_labels.py.
+_REFETCH_DROP = frozenset((
+    "image", "spectral", "temporal_mask", "doy", "dates",
+    "multitemporal", "num_frames", "num_bands", "seasons_valid",
+    "label", "label_mask", "label_year",
+    "coreg_ref_frame", "coreg_m2", "coreg_n_aligned", "coreg_max_shift",
+    "coreg_anchor_valid_frac", "coreg_shifts",
+    "b08", "b08_dates", "has_b08",
+    "rededge", "rededge_dates", "has_rededge",
+    "b01", "b01_dates", "has_b01",
+    "b09", "b09_dates", "has_b09",
+    "frame_2016", "frame_2016_date", "frame_2016_doy",
+    "frame_2016_year", "frame_2016_cloud_pct", "has_frame_2016",
+))
+
+
 def refetch_tile(
     loc: dict,
-    years: list[str],
     output_dir: str,
     tile: TileConfig,
-    cloud_max: float = 30.0,
-    max_aoi_cloud: float = 0.10,
-    vpp_cache: dict | None = None,
-    best_dates: dict | None = None,
-    sources: tuple[str, ...] = ("cdse", "des"),
+    backend: str = "des",
     force: bool = False,
 ) -> dict:
-    """Re-fetch spectral data for an existing tile, keep all other fields.
+    """Re-fetch an existing tile's spectral through the canonical M1+M2 entry,
+    reusing the tile's STORED dates — never re-selecting.
+
+    Refetch exists to re-apply M1+M2 coregistration to tiles already on disk. It
+    reads the stored per-slot dates (slots 0-3 from ``dates``, slot 4 from
+    ``frame_2016_date``) and re-fetches exactly those via ``fetch_tile_spectral``,
+    so the spectral year can never drift off the tile's labels (temporal
+    matching). Date *selection* belongs to the fresh path (``fetch_tile``) or
+    ``repair_to_canonical_layout`` — not here. Every spectral-derived field is
+    rebuilt from the entry; only non-spectral fields are preserved (see
+    ``_REFETCH_DROP``).
 
     Args:
-        force: When True, re-fetch even if the tile already has
-            multitemporal=1 and num_frames=4. Required for upgrading
-            tiles fetched with a buggy VPP-window logic (see PR #15
-            and IM-017: ~58% of tiles ended up with a growing-season
-            frame in late-autumn DOY > 244 before that fix landed).
+        force: re-fetch even if the tile already has multitemporal=1 and
+            num_frames=4 (otherwise such tiles are skipped). Required to upgrade
+            already-multitemporal tiles to the M1+M2-coregistered layout.
     """
     name = loc["name"]
     existing_path = loc.get("_existing_path")
     out_path = os.path.join(output_dir, f"{name}.npz")
 
-    # Skip if already re-fetched (check for multitemporal flag) —
-    # unless force=True, in which case re-fetch regardless.
+    # Skip if already re-fetched (multitemporal flag) — unless force=True.
     if not force and os.path.exists(out_path):
         try:
             d = np.load(out_path, allow_pickle=True)
@@ -1159,106 +1112,65 @@ def refetch_tile(
         except Exception:
             pass
 
-    # Always normalize bbox to the current TileConfig extent — never
-    # trust the incoming loc bbox blindly; it may carry a stale 256-era
-    # extent. Trust only the center.
+    # Load the existing tile — source of BOTH the stored dates (reused, never
+    # re-selected) and the non-spectral fields to preserve.
+    src_path = (existing_path if existing_path and os.path.exists(existing_path)
+                else out_path)
+    try:
+        old = dict(np.load(src_path, allow_pickle=True))
+    except Exception:
+        old = {}
+
+    # Stored dates → slot dict. Slots 0-3 from `dates`; slot 4 from the stored
+    # background date. No re-selection: spectral must land on the same dates
+    # (hence the same year) as the existing labels.
+    dates: dict[int, str] = {}
+    stored = old.get("dates")
+    if stored is not None:
+        for slot in range(NUM_FRAMES):
+            if slot < len(stored):
+                ds = _npz_str(stored[slot])
+                if ds:
+                    dates[slot] = ds
+    bg_date = _npz_str(old.get("frame_2016_date"))
+    if bg_date:
+        dates[4] = bg_date
+    if not dates:
+        return {"name": name, "status": "failed", "reason": "no_stored_dates"}
+
+    # Normalize bbox/centre to the current TileConfig extent (trust only centre).
     raw_bbox = loc["bbox_3006"]
     cx = (raw_bbox["west"] + raw_bbox["east"]) // 2
     cy = (raw_bbox["south"] + raw_bbox["north"]) // 2
     bbox = tile.bbox_from_center(cx, cy)
-    coords = bbox_3006_to_wgs84(bbox)
     tile.assert_bbox_matches(bbox)
 
-    # Determine fetch years based on tile type
-    # Crop tiles: strict year match only (LPIS labels are year-specific)
-    # Forest/water tiles: tile year first, other years as fallback
-    tile_year = loc.get("year")
-    has_crop_labels = loc.get("source") == "crop" or loc.get("_has_lpis", False)
-
-    if tile_year and has_crop_labels:
-        fetch_years = [str(tile_year)]
-    elif tile_year:
-        fetch_years = [str(tile_year)] + [y for y in years if y != str(tile_year)]
-    else:
-        fetch_years = years
-
-    # Fast path: pre-screened best dates from openEO stage 1.
-    # Best-dates path is 6-band only; fetch_4frame_scenes collects the
-    # all-band extras (B08/red-edge/B01/B09) per frame.
-    tile_best = best_dates.get(name) if best_dates else None
-    extras_list: list | None = None
-    if tile_best:
-        scene_results = _fetch_frames_from_best_dates(
-            bbox, coords, tile_best, tile, NUM_FRAMES, sources=sources,
-        )
-    else:
-        vpp_windows = vpp_cache.get(loc["name"]) if vpp_cache is not None else ...
-        extras_list = []
-        scene_results = fetch_4frame_scenes(
-            bbox, coords, fetch_years, tile,
-            scene_cloud_max=cloud_max,
-            max_aoi_cloud=max_aoi_cloud,
-            vpp_windows=vpp_windows,
-            sources=sources,
-            collect_extra=extras_list,
-        )
-    image, temporal_mask, doy, dates = stack_frames(scene_results, NUM_FRAMES, tile)
-
-    if int(temporal_mask.sum()) == 0:
+    res = fetch_tile_spectral(
+        (cx, cy), tile=tile, dates=dates, n_frames=5, backend=backend)
+    if res is None:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
-    save = {}
-    if existing_path and os.path.exists(existing_path):
-        try:
-            old = dict(np.load(existing_path, allow_pickle=True))
-            # Spectral is always overwritten; labels always rebuilt.
-            _DROP = frozenset((
-                "image", "spectral", "temporal_mask", "doy",
-                "dates", "multitemporal", "num_frames", "num_bands",
-                "seasons_valid",
-                "label", "label_mask", "label_year",
-            ))
-            for k, v in old.items():
-                if k not in _DROP:
-                    save[k] = v
-        except Exception:
-            pass
+    core, extras, bg = _split_entry_result(res)
+    if int(core["temporal_mask"].sum()) == 0:
+        return {"name": name, "status": "failed", "reason": "no_scenes"}
 
-    save["spectral"] = image
-    save["temporal_mask"] = temporal_mask
-    save["doy"] = doy
-    save["dates"] = np.array(dates)
-    save["multitemporal"] = np.int32(1)
-    save["num_frames"] = np.int32(NUM_FRAMES)
-    save["num_bands"] = np.int32(N_BANDS)
-
-    # Persist bbox that matches the raster we just wrote.
-    save["bbox_3006"] = np.array(
-        [bbox["west"], bbox["south"], bbox["east"], bbox["north"]],
-        dtype=np.int32,
-    )
-    save["easting"] = np.int32(cx)
-    save["northing"] = np.int32(cy)
-    save["tile_size_px"] = np.int32(tile.size_px)
+    # Preserve only NON-spectral fields; every spectral-derived field is rebuilt
+    # from the entry so nothing stays misaligned with the re-coregistered stack.
+    save = {k: v for k, v in old.items() if k not in _REFETCH_DROP}
+    save.update(core)
     save["source"] = loc.get("source", "lulc")
-
-    # All-band extras LAST so a fresh all-band fetch overwrites any
-    # preserved-old b08/red-edge/B01/B09 (which were aligned to the OLD
-    # spectral dates and are now stale). Only when ≥1 frame carried them;
-    # otherwise the preserved-old block (if any) stays and enrich self-heals.
-    if extras_list is not None:
-        extras = stack_extra_frames(extras_list, dates, NUM_FRAMES, tile)
-        if any(int(extras[k]) for k in
-               ("has_b08", "has_rededge", "has_b01", "has_b09")):
-            save.update(extras)
+    if any(int(extras[k]) for k in
+           ("has_b08", "has_rededge", "has_b01", "has_b09")):
+        save.update(extras)
+    if bg is not None:
+        save.update(bg)
 
     np.savez_compressed(out_path, **save)
 
-    # NOTE: Do NOT delete source tiles — they contain bbox info needed
-    # for future re-fetches. Labels are built separately by build_labels.py.
-
+    # NOTE: source tiles are NOT deleted — they carry bbox/date info needed for
+    # future re-fetches. Labels are rebuilt separately by build_labels.py.
     return {"name": name, "status": "ok",
-            "valid_frames": int(temporal_mask.sum())}
+            "valid_frames": int(core["temporal_mask"].sum())}
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -1271,7 +1183,14 @@ def main():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--years", nargs="+", default=["2018", "2019", "2022", "2023"])
     p.add_argument("--workers", type=int, default=1)
-    p.add_argument("--cloud-max", type=float, default=30.0)
+    p.add_argument("--force", action="store_true",
+                   help="refetch even if a tile is already multitemporal "
+                        "(refetch mode); required to re-coregister existing tiles "
+                        "through the M1+M2 entry.")
+    p.add_argument("--cloud-max", type=float, default=30.0,
+                   help="(deprecated, unused) — cloud is now handled by the "
+                        "entry's optimal_fetch date selection. Accepted for "
+                        "backward-compat with existing job manifests.")
     p.add_argument("--max-tiles", type=int, default=None)
     p.add_argument("--grid-spacing", type=int, default=2500)
     p.add_argument("--seed", type=int, default=42)
@@ -1286,27 +1205,35 @@ def main():
     p.add_argument("--tile-size-px", type=int, default=256,
                    help="Tile resolution in pixels (256, 512, 1024, …). "
                         "Sets the runtime TileConfig.size_px.")
-    p.add_argument("--fetch-sources", default="cdse,des",
-                   help="Comma-separated list of S2 backends to race. "
-                        "Valid: cdse (SH Process, PU-billed), des (Digital "
-                        "Earth Sweden openEO), cdse-openeo (CDSE openEO, "
-                        "uses the separate 10k-credits/mo pool). Use "
-                        "--fetch-sources=des,cdse-openeo to skip SH Process "
-                        "during a CDSE PU outage.")
+    p.add_argument("--fetch-sources", default="des",
+                   help="M2-capable primary backend for the canonical entry: "
+                        "des (Digital Earth Sweden openEO, default) or cdse-openeo "
+                        "(CDSE openEO, separate credits pool). cdse (SH-Process) "
+                        "is 6-band/no-halo -> cannot M2, rejected. l1c_sen2cor "
+                        "(GCS L1C -> sen2cor) is ALWAYS ON automatically — it "
+                        "auto-fills pre-2018 / des-empty slots and cannot be "
+                        "disabled; it is accepted in the list for backward-compat "
+                        "but listing it has no effect.")
     args = p.parse_args()
     random.seed(args.seed)
 
-    # Parse fetch sources
+    # Resolve --fetch-sources to the entry's M2-capable primary backend. The
+    # entry fetches >=2018 slots via this backend and auto-fills the rest (incl.
+    # pre-2018) via l1c_sen2cor. cdse (SH-Process) is 6-band/no-halo → cannot M2.
     sources_tuple = tuple(
         s.strip().lower() for s in args.fetch_sources.split(",") if s.strip()
     )
-    valid = {"cdse", "des", "cdse-openeo"}
+    valid = set(_M2_CAPABLE_BACKENDS) | {"l1c_sen2cor"}
     unknown = set(sources_tuple) - valid
     if unknown:
+        if "cdse" in unknown:
+            p.error("cdse (SH-Process) is 6-band/no-halo and cannot do M2 — use "
+                    "des or cdse-openeo (l1c_sen2cor is the always-on fallthrough).")
         p.error(f"Unknown fetch source(s): {sorted(unknown)}. Valid: {sorted(valid)}")
-    if not sources_tuple:
-        p.error("At least one fetch source required")
-    print(f"  Fetch sources: {', '.join(sources_tuple)}")
+    backend = next((s for s in sources_tuple if s in _M2_CAPABLE_BACKENDS), None)
+    if backend is None:
+        p.error("--fetch-sources needs an M2-capable primary: des or cdse-openeo.")
+    print(f"  Fetch backend: {backend} (+ l1c_sen2cor fallthrough)")
 
     # Single source of truth for tile geometry — threaded explicitly
     # through every function that needs it. No monkey-patching, no
@@ -1392,26 +1319,8 @@ def main():
     if not work:
         return
 
-    # ── Load best_dates from openEO screening (if available) ───────────────
-    best_dates_path = os.path.join(args.output_dir, "best_dates.json")
-    best_dates_cache = None
-    if os.path.exists(best_dates_path):
-        with open(best_dates_path) as f:
-            best_dates_cache = json.load(f)
-        n_with_dates = sum(1 for loc, _ in work if loc["name"] in best_dates_cache)
-        print(f"  best_dates.json: {n_with_dates}/{len(work)} tiles have pre-screened dates")
-
-    # ── VPP prefetch (skip for tiles with best_dates) ─────────────────────
-    if best_dates_cache:
-        # Only prefetch VPP for tiles WITHOUT pre-screened dates
-        vpp_work = [(loc, d) for loc, d in work if loc["name"] not in best_dates_cache]
-        if vpp_work:
-            vpp_cache = prefetch_vpp_batch(vpp_work, workers=args.workers)
-        else:
-            vpp_cache = {}
-            print("  VPP prefetch skipped — all tiles have best_dates")
-    else:
-        vpp_cache = prefetch_vpp_batch(work, workers=args.workers)
+    # ── VPP prefetch (all tiles) ──────────────────────────────────────────
+    vpp_cache = prefetch_vpp_batch(work, workers=args.workers)
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     t0 = time.time()
@@ -1422,14 +1331,9 @@ def main():
     def _run(item):
         loc, d = item
         if use_refetch:
-            return refetch_tile(loc, args.years, d, tile,
-                                cloud_max=args.cloud_max,
-                                vpp_cache=vpp_cache, best_dates=best_dates_cache,
-                                sources=sources_tuple)
+            return refetch_tile(loc, d, tile, backend=backend, force=args.force)
         return fetch_tile(loc, args.years, d, tile,
-                          cloud_max=args.cloud_max,
-                          vpp_cache=vpp_cache, best_dates=best_dates_cache,
-                          sources=sources_tuple)
+                          vpp_cache=vpp_cache, backend=backend)
 
     CHUNK = max(max_w * 2, len(work) // 10)
     completed = 0

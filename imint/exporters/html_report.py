@@ -1822,7 +1822,7 @@ _ANALYSIS_DESCRIPTIONS = {
             "alla 12 spektralband (B01\u2013B12 exkl. B10) och en SCL-baserad "
             "molnmask. Tidssnitt med \u22651% moln inom polygonen filtreras bort. "
             "Alla kvarst\u00e5ende datum co-registreras geometriskt mot ett "
-            "referensdatum med sub-pixel Fourier-faskorrelation f\u00f6r att "
+            "referensdatum med sub-pixel \u00f6msesidig information (MI) f\u00f6r att "
             "s\u00e4kerst\u00e4lla perfekt pixeljustering mellan tidssnitt. "
             "Resultatet \u00e4r en (T, 12, H, W)-tensor redo f\u00f6r "
             "CNN-LSTM-klassificering av betesaktivitet."

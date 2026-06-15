@@ -25,10 +25,13 @@ Design contract — read this before adding code here:
     ``fetch_tile_at_specific_dates`` only if AOI-clean (saves the
     expensive openEO spectral call on cloudy rejects).
 
-* **No backend race, no cross-backend fallback.** Single backend per
-  call. If a slot exhausts its candidate list on one backend, the slot
-  fails. Backend health is surfaced cleanly via ``is_source_dead``
-  (402 PaymentRequired marks ``cdse-openeo`` dead for the process).
+* **One backend per ``fetch_spectral`` call.** This dispatcher never races
+  or falls back — selection and the single last-resort fallthrough are the
+  orchestrator's job (``tile_fetch._fetch_single_scene``): one primary
+  backend, then a logged fallthrough to ``l1c_sen2cor`` ONLY if it is in
+  ``sources`` (the PU-free, pre-2018 sen2cor path). Backend health is
+  surfaced via ``is_source_dead`` (402 PaymentRequired marks ``cdse-openeo``
+  dead for the process).
 
 The unified shape is what makes "no more silent fall-throughs to a
 different code path" the architectural property of the system, not a
@@ -73,9 +76,24 @@ from imint.training.tile_fetch import (
     _CDSE_OPENEO_SEMAPHORE,
     _CDSE_SEMAPHORE,
     _DES_SEMAPHORE,
+    bbox_3006_to_wgs84,
 )
+from imint.coregistration import _COREG_BAND, clearest_frame_idx, coregister_interframe
+from imint.training.tile_assemble import assemble_fresh, crop_halo, date_to_doy
+from imint.training.tile_config import TileConfig
 
-SUPPORTED_BACKENDS = ("cdse", "cdse-openeo", "des")
+SUPPORTED_BACKENDS = ("cdse", "cdse-openeo", "des", "l1c_sen2cor")
+
+# Backends whose openEO tile-graph returns all-band frames on a snapped halo grid
+# — the precondition for M2 (inter-frame coreg needs 4 frames on one shared grid).
+# SH-Process is 6-band and renders to the request grid (no halo) → cannot M2.
+_M2_CAPABLE_BACKENDS = ("des", "cdse-openeo")
+
+# des / CDSE openEO are L2A-indexed from this date. A slot earlier than this must
+# not enter the tile-graph — the merged download hangs server-side for a date with
+# no L2A (observed: a 2016 slot in a 60-band merged download → openEO [408]). The
+# single source of truth for this floor; tile_fetch._fetch_single_scene imports it.
+DES_L2A_FLOOR = "2018-01-01"
 
 
 def fetch_spectral(
@@ -130,6 +148,13 @@ def fetch_spectral(
             semaphore=_DES_SEMAPHORE,
             cloud_threshold=cloud_threshold,
             collect_extra=collect_extra,
+        )
+    if backend == "l1c_sen2cor":
+        if is_source_dead("l1c_sen2cor"):
+            return None  # no L2A_Process in this image / earlier hard failure.
+        return _fetch_via_l1c_sen2cor(
+            bbox_3006, coords_wgs84, date_str,
+            size_px=size_px, collect_extra=collect_extra,
         )
     raise ValueError(
         f"fetch_spectral: unknown backend {backend!r}. "
@@ -286,3 +311,285 @@ def _fetch_via_openeo(
         return None
     finally:
         semaphore.release()
+
+
+def _l1c_sen2cor_allband_cube(
+    bbox_3006: dict,
+    coords_wgs84: dict,
+    date_str: str,
+    *,
+    size_px: int,
+) -> np.ndarray | None:
+    """GCS L1C → sen2cor → L2A → ``(len(ALL_BANDS), size_px, size_px)`` cube.
+
+    The PU-free, pre-2018-capable all-band fetch shared by two callers: the
+    single-slot fallback :func:`_fetch_via_l1c_sen2cor` (splits the cube to the
+    6-band Prithvi input + extras) and :func:`fetch_tile_spectral`'s per-slot
+    halo fallthrough (keeps the full 12-band cube on the halo grid so M2
+    coregisters the slot with the rest of the stack).
+
+    Cloud is decided by an ERA5-over-tile gate (cheap, pre-download); the scene
+    is found by the CDSE-STAC existence lookup (full archive incl. pre-2018) —
+    deliberately NOT ``_stac_best_l1c_scene`` (per-scene cloud, pre-2018-blind
+    DES STAC).
+
+    Runs only where ``L2A_Process`` exists (the imint-sen2cor image): a
+    ``shutil.which`` pre-check marks the source dead and bails BEFORE any
+    download off that image, so a non-sen2cor pod no-ops instead of fetching a
+    ~0.8 GB SAFE per slot. The ``FileNotFoundError`` handler below is
+    defense-in-depth for the rare case the binary vanishes between the pre-check
+    and the exec.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from imint.fetch import fetch_l1c_safe_by_name
+    from imint.training.optimal_fetch import era5_prefilter_dates
+    from imint.training.sen2cor_l2a import (
+        read_l2a_allband,
+        run_sen2cor,
+        stac_l1c_scenes,
+    )
+
+    # 0) L2A_Process pre-check — sen2cor lives only in the imint-sen2cor image.
+    #    Off it, mark the source dead and bail before the ERA5/STAC calls and the
+    #    ~0.8 GB SAFE download that would otherwise just precede run_sen2cor's
+    #    FileNotFoundError. Marking dead makes every later slot short-circuit at
+    #    the is_source_dead gate in fetch_spectral (no per-slot re-download).
+    if shutil.which("L2A_Process") is None:
+        mark_source_dead("l1c_sen2cor", "L2A_Process not on PATH (non-sen2cor image)")
+        return None
+
+    # 1) ERA5-over-tile gate — reject cloudy dates before any SAFE download.
+    if date_str not in set(era5_prefilter_dates(coords_wgs84, date_str, date_str)):
+        print(f"    [fetch_spectral:l1c_sen2cor] era5-cloud {date_str}", flush=True)
+        return None
+
+    # 2) Existence-based scene selection (CDSE STAC). Among scenes on this exact
+    #    date, the granule-average cloud is a tie-break only — ERA5 already gated.
+    scenes = [s for s in stac_l1c_scenes(coords_wgs84, date_str, date_str)
+              if str(s.get("datetime") or "")[:10] == date_str]
+    if not scenes:
+        print(f"    [fetch_spectral:l1c_sen2cor] no-scene {date_str}", flush=True)
+        return None
+    scene_id = min(scenes, key=lambda s: s["cloud_pct"])["scene_id"]
+
+    # 3) GCS SAFE → sen2cor → all-band window. Temp dirs purged in finally so
+    #    disk stays bounded (one SAFE ~0.8 GB + its L2A ~0.6 GB per call).
+    work = Path(tempfile.mkdtemp(prefix="l1c_sen2cor_"))
+    try:
+        safe_dir = fetch_l1c_safe_by_name(scene_id, dest_dir=work / "safe")
+        l2a_dir = run_sen2cor(safe_dir, work / "l2a")
+        if l2a_dir is None:
+            return None
+        return read_l2a_allband(l2a_dir, bbox_3006, size_px)  # (len(ALL_BANDS), H, W)
+    except FileNotFoundError as e:
+        # Defense-in-depth: the pre-check above guards the common case; this
+        # catches the binary vanishing between that check and the exec here.
+        mark_source_dead("l1c_sen2cor", f"L2A_Process not installed: {e}")
+        return None
+    except Exception as e:
+        print(
+            f"    [l1c_sen2cor] {date_str}: {type(e).__name__}: {str(e)[:200]}",
+            flush=True,
+        )
+        return None
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _fetch_via_l1c_sen2cor(
+    bbox_3006: dict,
+    coords_wgs84: dict,
+    date_str: str,
+    *,
+    size_px: int,
+    collect_extra: dict | None = None,
+) -> np.ndarray | None:
+    """Single-slot ``l1c_sen2cor`` fallback backend — PU-free, pre-2018-capable
+    last resort for a slot CDSE/DES cannot fill.
+
+    Thin wrapper over :func:`_l1c_sen2cor_allband_cube`: fetch the 12-band cube,
+    then split to the 6-band Prithvi input + ``b08``/``rededge``/``b01``/``b09``
+    extras (openEO parity). ``None`` if the cube fetch failed.
+    """
+    cube = _l1c_sen2cor_allband_cube(
+        bbox_3006, coords_wgs84, date_str, size_px=size_px)
+    if cube is None:
+        return None
+    return _split_all_bands(cube, collect_extra)
+
+
+# ── Per-tile canonical entry (M1 + M2) ──────────────────────────────────────
+
+
+def fetch_tile_spectral(
+    center_3006: tuple[int, int],
+    *,
+    tile: TileConfig,
+    dates: dict[int, str],
+    n_frames: int,
+    backend: str = "des",
+    halo_px: int = 8,
+    coregister: bool = True,
+    return_precoreg: bool = False,
+) -> dict | None:
+    """Canonical per-tile spectral fetch — M1 (grid-snap) + M2 (inter-frame MI).
+
+    Promotes ``scripts/regrid_national_512.py::regrid_one_tile``'s proven
+    M1→M2→crop→assemble composition into the library so it is the ONE production
+    fetch path. All temporal slots are fetched on a halo grid in a single
+    tile-graph download (M1 snaps each scene's transform to the halo bbox); the
+    frames are coregistered to the clearest one by mutual information (M2), the
+    halo is cropped away, and the ``(T*6, H, W)`` cube + all-band extras are
+    assembled.
+
+    Args:
+        center_3006: ``(easting, northing)`` in EPSG:3006. Snapped to the 10 m
+            lattice; the canonical and halo bboxes share the snapped centre so the
+            inner crop is co-centred with the canonical bbox.
+        tile: ``TileConfig`` defining the canonical edge ``size_px`` (e.g. 512).
+        dates: ``{slot: ISO-date}`` for the temporal frames to fetch.
+        n_frames: number of temporal slots in the assembled cube.
+        backend: ``"des"`` or ``"cdse-openeo"`` — an M2-capable all-band openEO
+            tile-graph backend (SH-Process is 6-band/no-halo and cannot M2).
+        halo_px: total halo (``2*crop``) added to the fetch extent and cropped
+            away after M2; absorbs the sinc wrap. Must be even.
+        coregister: apply M2 inter-frame coregistration (default ``True``).
+        return_precoreg: also return the pre-M2 (raw M1, cropped) spectral under
+            ``spectral_precoreg`` for a before/after coreg viz (dry-run only).
+
+    Returns:
+        A result dict — ``spectral``/``temporal_mask``/``doy``/``dates`` + the
+        ``b08``/``rededge``/``b01``/``b09`` extras + geometry/provenance
+        (``bbox_3006``/``easting``/``northing``/``tile_size_px``/``source``/
+        ``coreg_ref_frame``/``coreg_m2``) — ready for a caller to persist, or
+        ``None`` if no slot fetched.
+    """
+    if backend not in _M2_CAPABLE_BACKENDS:
+        raise ValueError(
+            f"fetch_tile_spectral: backend {backend!r} cannot do M1+M2 — use one "
+            f"of {_M2_CAPABLE_BACKENDS} (SH-Process is 6-band/no-halo)."
+        )
+    if halo_px % 2 != 0:
+        raise ValueError(f"fetch_tile_spectral: halo_px must be even, got {halo_px}.")
+
+    canon = tile.size_px
+    crop = halo_px // 2
+    halo = canon + halo_px
+    cx0, cy0 = center_3006
+
+    # M1 geometry: canonical and halo bboxes from the SAME snapped centre, so the
+    # inner crop is co-centred with the canonical bbox.
+    bbox_canon = TileConfig(size_px=canon, gsd_m=tile.gsd_m).bbox_from_center(cx0, cy0)
+    bbox_halo = TileConfig(size_px=halo, gsd_m=tile.gsd_m).bbox_from_center(cx0, cy0)
+    cx_new = (bbox_canon["west"] + bbox_canon["east"]) // 2
+    cy_new = (bbox_canon["south"] + bbox_canon["north"]) // 2
+
+    slot_dates = {fi: d for fi, d in dates.items() if d}
+    if not slot_dates:
+        return None
+
+    # Split slots by era: only >=2018 dates may enter the des tile-graph. A
+    # pre-2018 date in the merged download makes des hang server-side (it has no
+    # L2A to serve) → openEO [408]; such slots skip the graph and are filled by
+    # the l1c_sen2cor fallthrough below (they land in `missing`, never `fresh`).
+    des_dates = {fi: d for fi, d in slot_dates.items() if d >= DES_L2A_FLOOR}
+
+    # Fetch the des-eligible slots on the HALO grid in ONE tile-graph download.
+    # M1 (the per-scene transform snap to the halo bbox) happens inside the graph.
+    fresh: dict[int, np.ndarray] = {}
+    if des_dates:
+        res = fetch_tile_at_specific_dates(bbox_halo, des_dates, source=backend)
+        for fi, entry in res.items():
+            if entry is None or entry[0] is None:
+                continue
+            arr = np.asarray(entry[0], np.float32)
+            if arr.shape != (len(ALL_BANDS), halo, halo):
+                continue
+            fresh[fi] = arr
+
+    # Per-slot l1c_sen2cor fallthrough — fills (a) pre-2018 slots never sent to
+    # the tile-graph and (b) any >=2018 slot the graph returned empty for.
+    # Fetched all-band on the SAME halo grid so M2 coregisters it with the rest.
+    # No-ops off the imint-sen2cor image (the L2A_Process pre-check in
+    # _l1c_sen2cor_allband_cube marks the source dead and bails).
+    missing = [fi for fi in slot_dates if fi not in fresh]
+    if missing and not is_source_dead("l1c_sen2cor"):
+        coords_halo = bbox_3006_to_wgs84(bbox_halo)
+        for fi in missing:
+            cube = _l1c_sen2cor_allband_cube(
+                bbox_halo, coords_halo, slot_dates[fi], size_px=halo)
+            if cube is not None and cube.shape == (len(ALL_BANDS), halo, halo):
+                fresh[fi] = cube
+
+    if not fresh:
+        return None
+
+    dates_list = [slot_dates.get(fi, "") for fi in range(n_frames)]
+    # Optional pre-M2 (raw M1, cropped) spectral for a before/after coreg viz —
+    # captured BEFORE coregister_interframe rebinds `fresh`.
+    precoreg = (
+        assemble_fresh(
+            {fi: crop_halo(a, crop=crop, canon=canon) for fi, a in fresh.items()},
+            dates_list, n_frames, canon=canon)[0]
+        if return_precoreg else None
+    )
+
+    # M2 — inter-frame MI coreg on the shared halo grid, before the crop. The
+    # search budget is the halo width (the non-central reference can see up to
+    # ~the halo of pairwise drift); applied shifts are halo-bounded by the crop.
+    did_m2 = coregister and len(fresh) >= 2
+    if did_m2:
+        ref_idx = clearest_frame_idx(fresh)
+        fresh, shifts = coregister_interframe(fresh, ref_idx, search_px=float(crop))
+    else:
+        ref_idx = next(iter(fresh))
+        shifts = {ref_idx: (0.0, 0.0)}
+
+    # Coreg-quality signals — flag low-confidence coreg, don't block (the dataset
+    # loader / audit decides). anchor_valid_frac on B04 (clouds flatten/zero it);
+    # n_aligned = movers given a real MI shift; per-slot applied shifts persisted.
+    anchor_valid_frac = float((fresh[ref_idx][_COREG_BAND] > 1e-6).mean())
+    coreg_n_aligned = int(sum(
+        1 for fi, (dy, dx) in shifts.items()
+        if fi != ref_idx and abs(dy) + abs(dx) > 0.0))
+    coreg_max_shift = float(max(
+        (float(np.hypot(dy, dx)) for dy, dx in shifts.values()), default=0.0))
+
+    cropped = {fi: crop_halo(a, crop=crop, canon=canon) for fi, a in fresh.items()}
+    spectral, extras = assemble_fresh(cropped, dates_list, n_frames, canon=canon)
+    temporal_mask = np.array(
+        [1 if fi in cropped else 0 for fi in range(n_frames)], np.uint8)
+    doy = np.array([date_to_doy(dates_list[fi]) for fi in range(n_frames)], np.int32)
+    out_dates = np.array(
+        [dates_list[fi] if fi in cropped else "" for fi in range(n_frames)])
+
+    result = {
+        "spectral": spectral,
+        "temporal_mask": temporal_mask,
+        "doy": doy,
+        "dates": out_dates,
+        "multitemporal": np.int32(1),
+        "num_frames": np.int32(n_frames),
+        "num_bands": np.int32(6),
+        "bbox_3006": np.array(
+            [bbox_canon["west"], bbox_canon["south"],
+             bbox_canon["east"], bbox_canon["north"]], dtype=np.int32),
+        "easting": np.int32(cx_new),
+        "northing": np.int32(cy_new),
+        "tile_size_px": np.int32(canon),
+        "source": backend,
+        "coreg_ref_frame": np.int32(ref_idx),
+        "coreg_m2": np.int32(1 if did_m2 else 0),
+        "coreg_n_aligned": np.int32(coreg_n_aligned),
+        "coreg_max_shift": np.float32(coreg_max_shift),
+        "coreg_anchor_valid_frac": np.float32(anchor_valid_frac),
+        "coreg_shifts": np.array(
+            [shifts.get(fi, (0.0, 0.0)) for fi in range(n_frames)], np.float32),
+        **extras,
+    }
+    if precoreg is not None:
+        result["spectral_precoreg"] = precoreg   # raw M1 (pre-M2) — dry-run viz only
+    return result

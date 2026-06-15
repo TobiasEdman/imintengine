@@ -89,7 +89,7 @@ def _coreg_to_reference(arr12: np.ndarray, ref_hwc6: np.ndarray) -> np.ndarray:
 
     Fresh slots are grid-snapped to the bbox origin (``openeo_tile_graph``); the
     stored cube sits on the native S2 grid, so the two can differ by a fraction
-    of a pixel. Phase-correlation coregistration on B04 — index 2 in BOTH
+    of a pixel. Mutual-information coregistration on B04 — index 2 in BOTH
     ``ALL_BANDS`` and the prithvi-6 order — reconciles them so kept + re-fetched
     bands share one grid.
 
@@ -97,7 +97,7 @@ def _coreg_to_reference(arr12: np.ndarray, ref_hwc6: np.ndarray) -> np.ndarray:
     fixed existing frame is passed as ``target`` and the fresh slot as
     ``reference``; the returned (shifted) reference is the aligned fresh slot.
     Transforms are ``None`` → sub-pixel only, no crop (512 shape preserved). The
-    primitive auto-rejects implausible (>1 px) shifts, so a bad correlation is a
+    MI estimator auto-rejects out-of-range (≳1 px) shifts, so a bad match is a
     no-op rather than a corruption.
     """
     tgt_hwc12 = np.transpose(arr12, (1, 2, 0))  # (H, W, 12)

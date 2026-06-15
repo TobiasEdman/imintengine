@@ -2,7 +2,7 @@
 
 **Created:** 2026-06-08
 **Target repo:** `/Users/tobiasedman/Developer/ImintEngine`
-**Status:** implemented, dry-run in progress — NMD native-window reads (`de335ac`); M1 grid-snap + M2 composite-centroid coreg orchestrator (`scripts/regrid_national_512.py`); 5-tile dry-run on the cluster. Scale step gated on dry-run + explicit go.
+**Status:** implemented, dry-run in progress — NMD native-window reads (`de335ac`); M1 grid-snap + M2 reference-anchored MI coreg orchestrator (`scripts/regrid_national_512.py`); 5-tile dry-run on the cluster. Scale step gated on dry-run + explicit go.
 **Estimated diff:** ~3 lines in `tile_config.py` + 1 new orchestrator script (~300 LOC) + test updates; retires the `fill_tiles_l2a.py` keep-clean retrofit for this campaign
 
 ## Context
@@ -14,9 +14,9 @@ Harmonisation directive (verbatim, prior session): *"discard all the code that a
 Two distinct alignment mechanisms exist and are **both required** (this is the load-bearing correction):
 
 - **M1 — grid snap (deterministic, transform-based):** `imint.fetch._snap_to_target_grid`. Reads the offset straight from each scene's source transform vs the target grid (`dx_m = src_x0 - target_w`); integer slice + Fourier sinc `subpixel_shift` for the fractional residual. Aligns each frame's **transform** to the grid. Per-scene, exact, not estimated.
-- **M2 — inter-frame coregistration (estimated, image-based):** `imint.coregistration` phase correlation. Aligns frame **content** to the stack's composite centroid. **Mandatory** because S2 L2A orthorectification is *relative* → real per-date geometric drift that M1 (transform-only) cannot remove. The `regrid-nmd-offset-probe` pod measured **up to ~2 px** relative inter-frame drift on the campaign tiles — multi-pixel, well above the ~0.3–1 px first assumed here (see §"Coregistration decision"). (Standing memory: `feedback_s2_coreg_mandatory`.)
+- **M2 — inter-frame coregistration (estimated, image-based):** `imint.coregistration.estimate_mi_offset` (mutual information). Registers each frame's **content** onto the clearest (reference) frame, left untouched as the anchor. MI (not phase correlation) because the frames span seasons — same ground point, different radiometry — so intensity correlation chases phenology, not geometry. **Mandatory** because S2 L2A orthorectification is *relative* → real per-date geometric drift that M1 (transform-only) cannot remove. The `regrid-nmd-offset-probe` pod measured **up to ~2 px** relative inter-frame drift on the campaign tiles — multi-pixel, well above the ~0.3–1 px first assumed here (see §"Coregistration decision"). (Standing memory: `feedback_s2_coreg_mandatory`.)
 
-The fill tool's old ~28 px coreg failure was M2 applied **across a grid gap** (fresh-on-bbox vs existing-on-S2-native, `transforms=None`, decorrelated content → the `estimate_subpixel_offset` >1 px guard fired and returned 0,0). Re-gridding both frames onto the shared national grid is the precondition that makes M2's phase correlation valid. M2 is **not** broken.
+The fill tool's old ~28 px coreg failure was M2 applied **across a grid gap** (fresh-on-bbox vs existing-on-S2-native, `transforms=None`, decorrelated content → the sub-pixel estimator's reject guard fired and returned 0,0). Re-gridding both frames onto the shared national grid is the precondition that makes M2 valid. M2 is **not** broken.
 
 **Snap target = the Swedish national NMD 10 m lattice.** Probed from `data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif`: EPSG:3006, origin (208450.0, 7671060.0), pixel 10/−10, lattice phase 0.0/0.0 (exact 10 m multiples). The current `bbox_from_center` integer-metre grid is 0–0.5 px off this lattice.
 
@@ -46,7 +46,7 @@ Per tile:
 1. Read source (existing `unified_v2_512` npz | orphan 256 npz / ledger): centre `C`, **stored dates** `D[4]`, `year`.
 2. Snap `C → C'` on the 10 m lattice (via the new `bbox_from_center`).
 3. **Spectral (needs coreg → halo):** fetch **520** all-band @ `D[4]` through the tested all-band path; per-scene **M1** snaps each frame's transform to `TileConfig(520).bbox_from_center(C')`. Integer offset between frames is now ≡ 0 by construction.
-4. **M2** coreg on the shared 520 grid — composite-centroid anchor (see §"Coregistration decision"); up to ~2 px measured drift, absorbed by the 4 px halo.
+4. **M2** coreg on the shared 520 grid — reference-anchored MI, the clearest frame is the fixed anchor (see §"Coregistration decision"); up to ~2 px measured drift, absorbed by the 4 px halo.
 5. Crop 520 → 512 centred `[4:516, 4:516]` (discards the sinc wrap-around ring).
 6. **Labels + aux (no coreg → no halo):** `fetch_nmd_label_local` + `fetch_aux_channels` at the **512** national bbox directly. All final layers 512.
 7. Write tile to a **NEW dir** (e.g. `/data/unified_national_512`), `national_grid=1` sentinel + `year`/`dates`/`center` carried.
@@ -64,6 +64,19 @@ Labels become national automatically once the bbox is lattice-snapped. Two-step 
 ## Coregistration decision (a real finding — read before implementing)
 
 **Three corrections landed here (all 2026-06-09). Read (0) first.**
+
+> **UPDATE (2026-06-11): M2 is now reference-anchored mutual information.** The
+> production inter-frame coreg (`imint.coregistration.coregister_interframe`,
+> promoted out of this orchestrator into the library) registers each mover onto
+> the **clearest reference frame** — the anchor is left untouched — using
+> `estimate_mi_offset`, NOT phase correlation onto a composite centroid. That
+> estimator swap + reference-anchor are the current truth: see CLAUDE.md
+> §Koregistrering and the dot/COM sign guard
+> `tests/test_coregistration.py::test_coregister_to_reference_removes_shift_dot_com`.
+> Sections (0)–(2) below are retained as the historical record of the superseded
+> phase-correlation/centroid design; the **sign-convention lesson in (0) still
+> holds**, now applied to `estimate_mi_offset(moving, reference)` (moving = the
+> frame being aligned; the returned shift is applied to it with a positive sign).
 
 **(0) M2 had a sign error — it was AMPLIFYING inter-frame drift, not removing it.** `coregister_interframe` called `estimate_subpixel_offset(anchor, frame_i)` with the args reversed: that returns the anchor's position *relative to the frame* — the **negative** of the frame's drift — so the Pass-2 centroid correction `c − o_i` was applied backwards, pushing every frame the wrong way. A dot test made it unambiguous: a known **+3,−2 px** inter-frame drift came out **+7,−4 px** after coreg. Fix: pass the moving frame as `current` and the anchor as `reference` (`estimate_subpixel_offset(frame_i, anchor)`), so `offsets[i]` is the frame's true position vs the anchor; verified with a 4-frame centre-of-mass dot test (all frames collapse to the shared centroid). The old smooth-field residual unit test passed *even on the inverted sign* and was replaced by dot/centre-of-mass tests that fail loudly on any sign or axis error. **Any tile produced before this fix (including anything from `54b30a3`) is mis-registered — discard, do not trust.**
 
