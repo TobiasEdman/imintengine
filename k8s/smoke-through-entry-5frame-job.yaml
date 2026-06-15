@@ -1,0 +1,205 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-through-entry-5frame
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: smoke-through-entry-5frame
+spec:
+  backoffLimit: 0
+  # End-to-end smoke for the 4b-3 through-entry rewire: drives the ACTUAL
+  # orchestrator (refetch_tile, force=True) on one real tile that already has a
+  # 2016 background, so the full path is exercised — STORED dates → 5-slot
+  # fetch_tile_spectral (des for slots 0-3, l1c_sen2cor for the 2016 slot 4) →
+  # M2 coreg → _split_entry_result → .npz. Asserts the rebuilt 5-frame split
+  # layout incl. frame_2016. The split itself is exhaustively unit-tested; this
+  # job validates the real mixed-backend 5-slot fetch the units mock.
+  # sen2cor's L2A_Process timeout is 1h; allow headroom for download + des.
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # srv04 + srv06 fail pod-sandbox creation (cgroup/runc
+                  # "load program: operation not supported"). Exclude both.
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: smoke
+          # imint-sen2cor carries L2A_Process (the only image where the
+          # l1c_sen2cor backend self-enables); pinned by digest, not tag.
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== through-entry 5-frame refetch smoke ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              # shapely: scb_tatort (imported by fetch_unified_tiles) needs it.
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch agent/te/claude/fetch-phase2-consolidation \
+                https://github.com/TobiasEdman/imintengine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              # Confirm the pod cloned the branch tip WITH the 4b-3 rewire (a
+              # --depth 1 clone pins to the branch tip at submit time).
+              echo "CLONED HEAD: $(git rev-parse HEAD)"
+              git log --oneline -1
+              grep -q '_REFETCH_DROP' scripts/fetch_unified_tiles.py \
+                && echo "  refetch rewire present in clone: OK"
+              echo "L2A_Process on PATH: $(which L2A_Process)"
+
+              echo ""
+              echo "=== running through-entry refetch smoke ==="
+              python3 - <<'PYEOF'
+              import glob, json, os, importlib.util
+              import numpy as np
+
+              from imint.training.tile_config import TileConfig
+
+              # Load the orchestrator script (not a package) by path.
+              spec = importlib.util.spec_from_file_location(
+                  "fut", "/workspace/imintengine/scripts/fetch_unified_tiles.py")
+              fut = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(fut)
+
+              SIZE = 512
+              tile = TileConfig(size_px=SIZE, gsd_m=10)
+
+              # 1) Pick a real tile that already has a 2016 background, so the
+              #    refetch exercises slot 4 (l1c_sen2cor) as well as slots 0-3 (des).
+              src = None
+              for p in sorted(glob.glob("/data/unified_v2_512/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  if int(d.get("has_frame_2016", 0)) == 1 and "dates" in d:
+                      src = p
+                      break
+              assert src, "no tile with has_frame_2016==1 in /data/unified_v2_512"
+              d = np.load(src, allow_pickle=True)
+              cx, cy = int(d["easting"]), int(d["northing"])
+              stored_dates = [str(x) for x in d["dates"]]
+              bg_date = fut._npz_str(d.get("frame_2016_date"))
+              name = os.path.basename(src)[:-4]
+              print(f"src={name} center=({cx},{cy})")
+              print(f"stored temporal dates={stored_dates}  frame_2016_date={bg_date}")
+
+              # 2) Drive the ACTUAL orchestrator — refetch_tile(force=True) into a
+              #    debug dir (never touches the source tile).
+              out_dir = "/data/debug/through_entry_5frame"
+              os.makedirs(out_dir, exist_ok=True)
+              loc = {"name": name, "source": str(d.get("source", "lulc")),
+                     "bbox_3006": tile.bbox_from_center(cx, cy),
+                     "_existing_path": src}
+              print("=== refetch_tile(force=True) ===", flush=True)
+              r = fut.refetch_tile(loc, [], out_dir, tile, force=True)
+              print("refetch result:", r)
+              assert r["status"] == "ok", f"refetch failed: {r}"
+
+              # 3) Assert the rebuilt 5-frame split layout.
+              o = dict(np.load(f"{out_dir}/{name}.npz", allow_pickle=True))
+              assert o["spectral"].shape == (24, SIZE, SIZE), o["spectral"].shape
+              assert int(o["num_frames"]) == 4 and int(o["num_bands"]) == 6
+              assert int(o["coreg_m2"]) == 1, "M2 coreg did not run"
+              assert o["coreg_shifts"].shape == (4, 2), o["coreg_shifts"].shape
+              assert "frame_2016" in o and o["frame_2016"].shape == (6, SIZE, SIZE)
+              assert int(o["has_frame_2016"]) == 1, \
+                  "frame_2016 missing — l1c_sen2cor slot-4 fill failed"
+              assert int(o["frame_2016_year"]) in (2015, 2016)
+
+              # dates REUSED, not re-selected: every fetched slot keeps its stored date.
+              tm = o["temporal_mask"]
+              assert int(tm.sum()) >= 3, f"only {int(tm.sum())}/4 temporal frames"
+              for i in range(4):
+                  if int(tm[i]) == 1:
+                      assert str(o["dates"][i]) == stored_dates[i], \
+                          (i, str(o["dates"][i]), stored_dates[i])
+
+              # non-spectral preserved: a source aux field survives the refetch.
+              for k in ("dem", "height", "nmd_label_raw"):
+                  if k in d:
+                      assert k in o, f"preserved aux {k} lost"
+
+              nz = float((o["spectral"] > 0).mean())
+              assert nz > 0.3, f"temporal stack mostly zero ({nz:.3f})"
+
+              # 4) Persist the verification artifact to the PVC (survives the pod).
+              json.dump({"src": name, "center": [cx, cy],
+                         "stored_dates": stored_dates,
+                         "out_dates": [str(x) for x in o["dates"]],
+                         "valid_frames": int(tm.sum()),
+                         "frame_2016_year": int(o["frame_2016_year"]),
+                         "coreg_m2": int(o["coreg_m2"]),
+                         "coreg_max_shift": float(o["coreg_max_shift"]),
+                         "spectral_nonzero": nz, "result": r},
+                        open(f"{out_dir}/summary.json", "w"), indent=2, default=str)
+              print(f"THROUGH-ENTRY SMOKE PASS — spectral{o['spectral'].shape} "
+                    f"frame_2016{o['frame_2016'].shape} "
+                    f"valid={int(tm.sum())}/4 coreg_m2={int(o['coreg_m2'])} "
+                    f"frame_2016_year={int(o['frame_2016_year'])} nonzero={nz:.3f}")
+              print(f"wrote {out_dir}/{name}.npz + summary.json")
+              PYEOF
+
+              echo ""
+              echo "=== smoke complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
