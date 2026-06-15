@@ -140,6 +140,74 @@ def test_l1c_sen2cor_fallthrough_frame_is_m2_coregistered(monkeypatch):
     assert not np.array_equal(res["spectral"], raw_spec)
 
 
+def test_pre2018_slot_skips_des_tilegraph(monkeypatch):
+    """A pre-2018 slot must NOT enter the des tile-graph: des is L2A-indexed
+    2018+, and a pre-2018 date in the merged download hangs des server-side
+    (regression for the 4b-3 step-4 cluster failure — a 2016 background slot
+    408'd the 60-band merged fetch). It's routed to the l1c_sen2cor fallthrough
+    instead, so only the >=2018 slots reach the tile-graph."""
+    rng = np.random.default_rng(3)
+    tg_frames = {0: _structured_frame(rng, 0.0, 0.0),
+                 1: _structured_frame(rng, 0.30, -0.20),
+                 3: _structured_frame(rng, -0.40, 0.15)}
+    dates = {0: "2021-09-10", 1: "2022-06-01", 2: "2016-07-15", 3: "2022-08-20"}
+
+    seen: dict = {}
+
+    def _fake_des(bbox_3006, slot_dates, source):
+        seen["slots"] = dict(slot_dates)
+        return {fi: (tg_frames[fi], None) for fi in slot_dates if fi in tg_frames}
+    monkeypatch.setattr(fs, "fetch_tile_at_specific_dates", _fake_des)
+
+    fall = _structured_frame(np.random.default_rng(9), 0.35, -0.20)
+    l1c_dates: list = []
+
+    def _fake_cube(bbox_3006, coords_wgs84, date_str, *, size_px):
+        l1c_dates.append(date_str)
+        return fall.copy()
+    monkeypatch.setattr(fs, "_l1c_sen2cor_allband_cube", _fake_cube)
+
+    res = fs.fetch_tile_spectral(
+        _CENTRE, tile=TileConfig(size_px=_CANON), dates=dates, n_frames=_N,
+        backend="des", halo_px=_HALO_PX, coregister=True,
+    )
+    assert res is not None
+    # The pre-2018 slot (2) never reached the des tile-graph.
+    assert set(seen["slots"]) == {0, 1, 3}
+    assert "2016-07-15" not in seen["slots"].values()
+    # It was filled by l1c_sen2cor instead → all 4 slots present.
+    assert l1c_dates == ["2016-07-15"]
+    assert list(res["temporal_mask"]) == [1, 1, 1, 1]
+
+
+def test_all_pre2018_skips_des_entirely(monkeypatch):
+    """All slots pre-2018 → des_dates is empty → the `if des_dates:` guard holds
+    and the tile-graph is never called; every slot is filled by l1c_sen2cor."""
+    called = {"des": 0}
+
+    def _fake_des(bbox_3006, slot_dates, source):
+        called["des"] += 1
+        return {}
+    monkeypatch.setattr(fs, "fetch_tile_at_specific_dates", _fake_des)
+
+    l1c_dates: list = []
+
+    def _fake_cube(bbox_3006, coords_wgs84, date_str, *, size_px):
+        l1c_dates.append(date_str)
+        return _structured_frame(np.random.default_rng(1), 0.0, 0.0)
+    monkeypatch.setattr(fs, "_l1c_sen2cor_allband_cube", _fake_cube)
+
+    dates = {0: "2016-09-10", 1: "2017-06-01", 2: "2017-07-15", 3: "2016-08-20"}
+    res = fs.fetch_tile_spectral(
+        _CENTRE, tile=TileConfig(size_px=_CANON), dates=dates, n_frames=_N,
+        backend="des", halo_px=_HALO_PX, coregister=True,
+    )
+    assert res is not None
+    assert called["des"] == 0                              # tile-graph never called
+    assert sorted(l1c_dates) == sorted(dates.values())    # every slot via l1c
+    assert list(res["temporal_mask"]) == [1, 1, 1, 1]
+
+
 def test_coreg_quality_fields(monkeypatch):
     frames = _frames()
     _patch_fetch(monkeypatch, frames)

@@ -202,7 +202,8 @@ def _fetch_single_scene(
         ``(scene, date_str)`` — ``(None, "")`` on failure or when no
         ``sources`` token resolves to a healthy backend.
     """
-    from imint.training.fetch_spectral import fetch_spectral, SUPPORTED_BACKENDS
+    from imint.training.fetch_spectral import (
+        fetch_spectral, SUPPORTED_BACKENDS, DES_L2A_FLOOR)
     from imint.training.openeo_tile_graph import is_source_dead
 
     # 1) Build candidate list.
@@ -212,7 +213,7 @@ def _fetch_single_scene(
             (d, 0.0) for d in prefetched_dates
             if date_start <= d <= date_end
         ]
-    elif date_end >= "2018-01-01":
+    elif date_end >= DES_L2A_FLOOR:
         try:
             from imint.training.optimal_fetch import optimal_fetch_dates
             plan = optimal_fetch_dates(
@@ -231,7 +232,7 @@ def _fetch_single_scene(
         from datetime import datetime as _dt, timedelta as _td
         d0 = _dt.strptime(date_start, "%Y-%m-%d")
         d1 = _dt.strptime(date_end, "%Y-%m-%d")
-        step = 3 if date_end < "2018-01-01" else max(1, (d1 - d0).days // 6)
+        step = 3 if date_end < DES_L2A_FLOOR else max(1, (d1 - d0).days // 6)
         for i in range(0, (d1 - d0).days + 1, step):
             candidates.append(((d0 + _td(days=i)).strftime("%Y-%m-%d"), 50.0))
 

@@ -89,6 +89,12 @@ SUPPORTED_BACKENDS = ("cdse", "cdse-openeo", "des", "l1c_sen2cor")
 # SH-Process is 6-band and renders to the request grid (no halo) → cannot M2.
 _M2_CAPABLE_BACKENDS = ("des", "cdse-openeo")
 
+# des / CDSE openEO are L2A-indexed from this date. A slot earlier than this must
+# not enter the tile-graph — the merged download hangs server-side for a date with
+# no L2A (observed: a 2016 slot in a 60-band merged download → openEO [408]). The
+# single source of truth for this floor; tile_fetch._fetch_single_scene imports it.
+DES_L2A_FLOOR = "2018-01-01"
+
 
 def fetch_spectral(
     bbox_3006: dict,
@@ -485,23 +491,29 @@ def fetch_tile_spectral(
     if not slot_dates:
         return None
 
-    # Fetch all slots on the HALO grid in ONE tile-graph download. M1 (the
-    # per-scene transform snap to the halo bbox) happens inside the tile-graph.
-    res = fetch_tile_at_specific_dates(bbox_halo, slot_dates, source=backend)
+    # Split slots by era: only >=2018 dates may enter the des tile-graph. A
+    # pre-2018 date in the merged download makes des hang server-side (it has no
+    # L2A to serve) → openEO [408]; such slots skip the graph and are filled by
+    # the l1c_sen2cor fallthrough below (they land in `missing`, never `fresh`).
+    des_dates = {fi: d for fi, d in slot_dates.items() if d >= DES_L2A_FLOOR}
 
+    # Fetch the des-eligible slots on the HALO grid in ONE tile-graph download.
+    # M1 (the per-scene transform snap to the halo bbox) happens inside the graph.
     fresh: dict[int, np.ndarray] = {}
-    for fi, entry in res.items():
-        if entry is None or entry[0] is None:
-            continue
-        arr = np.asarray(entry[0], np.float32)
-        if arr.shape != (len(ALL_BANDS), halo, halo):
-            continue
-        fresh[fi] = arr
+    if des_dates:
+        res = fetch_tile_at_specific_dates(bbox_halo, des_dates, source=backend)
+        for fi, entry in res.items():
+            if entry is None or entry[0] is None:
+                continue
+            arr = np.asarray(entry[0], np.float32)
+            if arr.shape != (len(ALL_BANDS), halo, halo):
+                continue
+            fresh[fi] = arr
 
-    # Per-slot l1c_sen2cor fallthrough — fill any slot the openEO tile-graph
-    # could not (pre-2018 dates: DES/CDSE openEO are L2A-indexed 2018+). Fetched
-    # all-band on the SAME halo grid so M2 coregisters it with the rest. No-ops
-    # off the imint-sen2cor image (the L2A_Process pre-check in
+    # Per-slot l1c_sen2cor fallthrough — fills (a) pre-2018 slots never sent to
+    # the tile-graph and (b) any >=2018 slot the graph returned empty for.
+    # Fetched all-band on the SAME halo grid so M2 coregisters it with the rest.
+    # No-ops off the imint-sen2cor image (the L2A_Process pre-check in
     # _l1c_sen2cor_allband_cube marks the source dead and bails).
     missing = [fi for fi in slot_dates if fi not in fresh]
     if missing and not is_source_dead("l1c_sen2cor"):
