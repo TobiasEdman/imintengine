@@ -66,16 +66,27 @@ _L1C_COLLECTION = "sentinel-2-l1c"
 
 # ── STAC catalogue lookup (existence only, no cloud filter) ──────────────
 
+def _utm_zone(lon: float) -> int:
+    """UTM / Sentinel-2 MGRS zone number for a longitude (Sweden -> 32..34)."""
+    return int((lon + 180.0) / 6.0) + 1
+
+
 def _stac_l1c_scenes(
     bbox_wgs84: dict,
     date_start: str,
     date_end: str,
 ) -> list[dict]:
-    """All L1C scenes intersecting bbox in the window. No cloud filter.
+    """L1C scenes covering bbox in the window, in the tile's UTM zone.
 
-    cloud_pct is still captured (free, comes with the item) and used
-    only as a tie-breaker in set-cover — the real cloud gate is COT in
-    the runner.
+    No cloud filter — cloud_pct is captured (free) and used only as a
+    set-cover tie-breaker; the real cloud gate is COT in the runner.
+
+    The UTM-zone filter is load-bearing: CDSE STAC bbox-search returns
+    antimeridian granules (MGRS zone 01/60) as false positives — their
+    footprints wrap the globe in longitude, so they intersect ANY bbox in the
+    same latitude band (a 16°E/58°N Swedish tile matched 01VCE/60VXK). Keeping
+    only the tile's zone (±1 for boundary tiles) drops them; it can never drop a
+    legitimate scene (Sweden is zones 32-35).
     """
     from pystac_client import Client
 
@@ -92,6 +103,7 @@ def _stac_l1c_scenes(
         )
         return list(search.items())
 
+    zone = _utm_zone((bbox_wgs84["west"] + bbox_wgs84["east"]) / 2.0)
     out: list[dict] = []
     for item in retry_on_rate_limit(_query):
         props = item.properties or {}
@@ -99,6 +111,9 @@ def _stac_l1c_scenes(
         if not mgrs:
             seg = item.id.split("_T")
             mgrs = seg[-1].split("_")[0] if len(seg) > 1 else ""
+        # Drop antimeridian false-positives (see docstring): keep the tile's zone.
+        if not (str(mgrs)[:2].isdigit() and abs(int(str(mgrs)[:2]) - zone) <= 1):
+            continue
         out.append({
             "scene_id": item.id,
             "datetime": props.get("datetime") or props.get("start_datetime"),
@@ -286,6 +301,84 @@ def _resolve_tile(
     return name, (hit or None)
 
 
+def _as_date_str(v) -> str:
+    """Decode an npz-stored date scalar (np.str_ OR np.bytes_) to 'YYYY-MM-DD'."""
+    if v is None:
+        return ""
+    if hasattr(v, "item"):
+        v = v.item()
+    if isinstance(v, bytes):
+        return v.decode()[:10]
+    return str(v)[:10]
+
+
+def _stored_target_date(npz_path: Path, target: str) -> str:
+    """The tile's STORED ISO date for ``target`` (--reuse-stored-dates mode).
+
+    ``frame_2016`` → ``frame_2016_date``; ``slot:N`` → ``dates[N]``. Returns ""
+    when absent (→ caller falls back to ERA5 selection).
+    """
+    if not npz_path.exists():
+        return ""
+    try:
+        with np.load(npz_path, allow_pickle=True) as d:
+            if target == "frame_2016":
+                return _as_date_str(d.get("frame_2016_date"))
+            if target.startswith("slot:"):
+                slot = int(target.split(":", 1)[1])
+                dates = d.get("dates")
+                if dates is not None and slot < len(dates):
+                    return _as_date_str(dates[slot])
+    except Exception:
+        return ""
+    return ""
+
+
+def _resolve_tile_stored(
+    name: str, bbox: dict, stored_date: str, window_days: int = 7,
+) -> tuple[str, list[dict] | None]:
+    """Resolve a tile's STORED date to its covering L1C granule (campaign mode).
+
+    ``±window_days`` around the stored date (it isn't always an exact L1C
+    overpass), zone-filtered by ``_stac_l1c_scenes``, picking the scene closest
+    to the stored date (tie: least cloud). The set-cover then just groups tiles
+    by the resolved granule. Returns ``(name, [best])`` or ``(name, None)``.
+    """
+    from datetime import date as _date, timedelta
+    try:
+        d0 = _date.fromisoformat(stored_date[:10])
+    except ValueError:
+        return name, None
+    scenes = _stac_l1c_scenes(
+        bbox, (d0 - timedelta(days=window_days)).isoformat(),
+        (d0 + timedelta(days=window_days)).isoformat(),
+    )
+    if not scenes:
+        return name, None
+
+    def _key(s: dict) -> tuple[int, float]:
+        sd = str(s.get("datetime") or "")[:10]
+        try:
+            delta = abs((_date.fromisoformat(sd) - d0).days)
+        except ValueError:
+            delta = 10 ** 6
+        return (delta, float(s.get("cloud_pct", 100.0)))
+
+    return name, [min(scenes, key=_key)]
+
+
+def _resolve_tile_or_stored(
+    name, bbox, date_start, date_end, data_dir, target, reuse_stored,
+):
+    """Dispatch: stored-date resolution (campaign) when ``reuse_stored`` and the
+    tile has a stored date, else the ERA5-window resolver (legacy/fallback)."""
+    if reuse_stored:
+        sd = _stored_target_date(Path(data_dir) / f"{name}.npz", target)
+        if sd:
+            return _resolve_tile_stored(name, bbox, sd)
+    return _resolve_tile(name, bbox, date_start, date_end)
+
+
 # ── Greedy set-cover ─────────────────────────────────────────────────────
 
 def _set_cover(
@@ -365,11 +458,18 @@ def main() -> None:
                    help="Optional audit JSON; restricts the tile inventory "
                         "to the names listed in its unique_affected_tiles / "
                         "unique_problem_tiles field.")
+    p.add_argument("--reuse-stored-dates", action="store_true",
+                   help="Re-coreg campaign mode: resolve each tile to its "
+                        "STORED date's granule (±7d window, zone-filtered) "
+                        "instead of an ERA5 reselect; ERA5 fallback only when "
+                        "no date is stored. Forces a single pass (no fallback-year).")
     args = p.parse_args()
 
     # Default fallback-year only for legacy frame_2016 backfill.
     if args.fallback_year is None and args.target == "frame_2016":
         args.fallback_year = 2015
+    if args.reuse_stored_dates:
+        args.fallback_year = None  # single pass — the stored date IS the date
 
     t0 = time.time()
     print("=== sen2cor scene selector ===")
@@ -464,8 +564,9 @@ def main() -> None:
         done = 0
         done_lock = threading.Lock()
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            futs = {pool.submit(_resolve_tile, name, bbox,
-                                date_start, date_end): name
+            futs = {pool.submit(_resolve_tile_or_stored, name, bbox,
+                                date_start, date_end, args.data_dir,
+                                args.target, args.reuse_stored_dates): name
                     for name, bbox in tiles}
             for fut in as_completed(futs):
                 name = futs[fut]

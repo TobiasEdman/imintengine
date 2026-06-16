@@ -6,6 +6,21 @@
 **Note:** filename is `SPEC_recoreg_campaign.md` because `SPEC.md` holds an unrelated draft
 (WaterQualityAnalyzer). Don't touch that one.
 
+> **CORRECTION (2026-06-16) — Phase 2 AUGMENTS the existing `scripts/sen2cor_pipeline/`; it does NOT build a new `fetch_pre2018_sen2cor.py`.**
+> The granule selection + per-scene sen2cor + frame write-back the text below proposes building from scratch
+> ALREADY EXISTS and is production-proven (it wrote the current `frame_2016` + 2017-slot0 data via the
+> `sen2cor-frame2016-512` / `sen2cor-slot0-2017-512` jobs): `select_scenes.py` (ERA5/STAC + greedy set-cover)
+> + `run_sen2cor_per_scene.py` (SAFE → COT-gate → sen2cor → `_write_frame_2016` / `_write_temporal_slot`).
+> Phase 2 is therefore **three changes only**:
+> 1. `select_scenes._resolve_tile`: reuse each tile's **STORED** date (`frame_2016_date` / slot-0) → ±7 d window →
+>    **UTM-zone filter** (drops CDSE-STAC antimeridian false-positives, MGRS 01/60) → closest scene; ERA5 fallback
+>    only when no stored date. Set-cover then just groups tiles by the resolved granule.
+> 2. `run_sen2cor_per_scene`: insert `imint.coregistration.coregister_to_reference` (M2, B04 MI vs the tile's
+>    Phase-1 anchor) before the write-back — the existing pipeline does **not** coregister; this is the only real gap.
+> 3. Persistent keep-all granule cache (optional; the runner currently purges SAFE/L2A per scene).
+> The from-scratch Stage-0 `build_pre2018_granule_map.py` (commit `b367aaf`) is **SUPERSEDED** — its stored-date +
+> zone logic ports into `select_scenes._resolve_tile`. Decisions (user, 2026-06-16): augment existing; reuse stored dates.
+
 ## Context
 
 PR #26 routed all S2 fetch through the canonical M1+M2 entry
