@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "sen2cor_pipeline"))
 import select_scenes as ss  # noqa: E402
@@ -88,3 +89,29 @@ def test_dispatch_stored_when_available_else_era5(monkeypatch, tmp_path):
     assert calls == {"stored": 1, "era5": 1}                       # no stored date -> ERA5 fallback
     ss._resolve_tile_or_stored("z", bbox, "2016-06-01", "2016-08-31", str(tmp_path), "frame_2016", False)
     assert calls == {"stored": 1, "era5": 2}                       # reuse off -> ERA5
+
+
+def test_cross_dir_reads_date_from_source_dir(monkeypatch, tmp_path):
+    """Cross-dir re-coreg: the stored date is read from ``date_source_dir``, not
+    the enumerate dir. Mirrors the campaign — the ``_recoreg`` tile carries NO
+    ``frame_2016_date`` (Phase-1 dropped the pre-2018 frame), and the date is
+    reused from the original ``unified_v2_512``."""
+    captured = {}
+
+    def fake_stored(name, bbox, sd, window_days=7):
+        captured["sd"] = sd
+        return name, [{"scene_id": "s"}]
+    monkeypatch.setattr(ss, "_resolve_tile_stored", fake_stored)
+    monkeypatch.setattr(ss, "_resolve_tile",
+                        lambda *a: pytest.fail("must resolve via stored date"))
+
+    recoreg = tmp_path / "recoreg"; recoreg.mkdir()
+    original = tmp_path / "original"; original.mkdir()
+    # _recoreg tile lacks the date; the original carries it.
+    np.savez_compressed(recoreg / "z.npz", spectral=np.zeros((1, 1, 1)))
+    np.savez_compressed(original / "z.npz", frame_2016_date=np.str_("2016-07-20"))
+
+    bbox = {"west": 16, "east": 16.1, "south": 58, "north": 58.1}
+    ss._resolve_tile_or_stored(
+        "z", bbox, "2016-06-01", "2016-08-31", str(original), "frame_2016", True)
+    assert captured["sd"] == "2016-07-20"     # read from the original, cross-dir

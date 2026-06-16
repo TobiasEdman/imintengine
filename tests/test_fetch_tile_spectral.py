@@ -206,6 +206,66 @@ def test_all_pre2018_skips_des_entirely(monkeypatch):
     assert called["des"] == 0                              # tile-graph never called
     assert sorted(l1c_dates) == sorted(dates.values())    # every slot via l1c
     assert list(res["temporal_mask"]) == [1, 1, 1, 1]
+def test_skip_pre2018_omits_pre2018_slots_entirely(monkeypatch):
+    """Phase-1 re-coreg: ``skip_pre2018=True`` drops pre-2018 slots BEFORE the
+    fetch — they reach NEITHER the des tile-graph NOR the l1c_sen2cor fallthrough,
+    landing empty with ``temporal_mask==0`` for a separate sen2cor Phase-2 pass.
+
+    Non-vacuous: ``_l1c_sen2cor_allband_cube`` is wired to a real cube here
+    (overriding the autouse no-op), so if the filter failed and slot 0 stayed in
+    ``slot_dates``, des would miss it → it would land in ``missing`` → the
+    fallthrough WOULD fire and ``l1c_dates`` would be ``["2017-09-10"]``. Asserting
+    it stayed empty proves the slot was dropped up front, not merely unfilled."""
+    rng = np.random.default_rng(5)
+    tg_frames = {1: _structured_frame(rng, 0.0, 0.0),
+                 2: _structured_frame(rng, 0.30, -0.20),
+                 3: _structured_frame(rng, -0.40, 0.15)}
+    # slot 0 = 2017 autumn (pre-2018, the y-1 frame of a 2018 tile); 1-3 are 2018+.
+    dates = {0: "2017-09-10", 1: "2018-06-01", 2: "2018-07-15", 3: "2018-08-20"}
+
+    seen: dict = {}
+
+    def _fake_des(bbox_3006, slot_dates, source):
+        seen["slots"] = dict(slot_dates)
+        return {fi: (tg_frames[fi], None) for fi in slot_dates if fi in tg_frames}
+    monkeypatch.setattr(fs, "fetch_tile_at_specific_dates", _fake_des)
+
+    l1c_dates: list = []
+
+    def _fake_cube(bbox_3006, coords_wgs84, date_str, *, size_px):
+        l1c_dates.append(date_str)
+        return _structured_frame(np.random.default_rng(9), 0.0, 0.0)
+    monkeypatch.setattr(fs, "_l1c_sen2cor_allband_cube", _fake_cube)
+
+    res = fs.fetch_tile_spectral(
+        _CENTRE, tile=TileConfig(size_px=_CANON), dates=dates, n_frames=_N,
+        backend="des", halo_px=_HALO_PX, coregister=True, skip_pre2018=True,
+    )
+    assert res is not None
+    assert set(seen["slots"]) == {1, 2, 3}            # slot 0 never reached des
+    assert l1c_dates == []                            # nor the fallthrough
+    assert list(res["temporal_mask"]) == [0, 1, 1, 1]  # slot 0 empty for Phase 2
+    assert list(res["dates"]) == ["", "2018-06-01", "2018-07-15", "2018-08-20"]
+
+
+def test_skip_pre2018_all_pre2018_returns_none(monkeypatch):
+    """All slots pre-2018 + ``skip_pre2018`` → ``slot_dates`` empties → return
+    None. Non-vacuous: l1c is wired to fail (overriding the autouse no-op), so if
+    the up-front filter were removed the fallthrough WOULD fire on the pre-2018
+    slots — the empty-``slot_dates`` early-exit is the only thing that can produce
+    None here, which is precisely what this test pins."""
+    monkeypatch.setattr(fs, "fetch_tile_at_specific_dates",
+                        lambda *a, **k: pytest.fail("des must not be called"))
+    monkeypatch.setattr(fs, "_l1c_sen2cor_allband_cube",
+                        lambda *a, **k: pytest.fail("l1c fallthrough must not fire"))
+    dates = {0: "2016-09-10", 1: "2017-06-01", 2: "2017-07-15", 3: "2016-08-20"}
+    res = fs.fetch_tile_spectral(
+        _CENTRE, tile=TileConfig(size_px=_CANON), dates=dates, n_frames=_N,
+        backend="des", halo_px=_HALO_PX, coregister=True, skip_pre2018=True,
+    )
+    assert res is None
+
+
 
 
 def test_coreg_quality_fields(monkeypatch):

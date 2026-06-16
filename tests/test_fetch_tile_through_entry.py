@@ -235,7 +235,7 @@ class TestFetchTileThroughEntry:
 
         captured: dict = {}
 
-        def _spy_entry(center, *, tile, dates, n_frames, backend):
+        def _spy_entry(center, *, tile, dates, n_frames, backend, skip_pre2018=False):
             captured.update(center=center, dates=dict(dates),
                             n_frames=n_frames, backend=backend)
             return res
@@ -334,7 +334,7 @@ class TestRefetchTileThroughEntry:
 
         captured = {}
 
-        def _spy(center, *, tile, dates, n_frames, backend):
+        def _spy(center, *, tile, dates, n_frames, backend, skip_pre2018=False):
             captured.update(dates=dict(dates), n_frames=n_frames, backend=backend)
             return _fake_res()
         monkeypatch.setattr(fut, "fetch_tile_spectral", _spy)
@@ -447,7 +447,7 @@ class TestRefetchTileThroughEntry:
 
         captured = {}
 
-        def _spy(center, *, tile, dates, n_frames, backend):
+        def _spy(center, *, tile, dates, n_frames, backend, skip_pre2018=False):
             captured.update(dates=dict(dates))
             return _fake_res(bg=False)
         monkeypatch.setattr(fut, "fetch_tile_spectral", _spy)

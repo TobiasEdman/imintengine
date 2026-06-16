@@ -1,0 +1,146 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-phase1-des-recoreg
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: campaign-phase1-des-recoreg
+spec:
+  # Idempotent resume: fetch_unified_tiles skips tiles already in --output-dir,
+  # so a evicted/retried pod picks up where it left off (no re-fetch of done work).
+  backoffLimit: 3
+  # PHASE 1 of the re-coreg campaign — des-only re-coreg of the full 6921-tile
+  # unified_v2_512 into a NEW dir unified_v2_512_recoreg (live dataset untouched).
+  # --no-pre2018 omits the 2016 background + 2017-autumn slots entirely (they get
+  # a separate sen2cor Phase-2 pass); only >=2018 slots are fetched + M2-coreg'd.
+  #
+  # WALL-TIME: des is ~3 min/tile and --workers 2 is a HARD constraint (DES openEO
+  # credit rate-limit, user-stated 2026-06-15) — so the full run is ~6-7 days.
+  # The job is idempotent (resumes on restart); activeDeadlineSeconds budgets 6d.
+  # Sharding across pods would multiply DES load → also throttled, so a single
+  # rate-limited stream is the intended shape. Sizing is a launch-time decision.
+  #
+  # REQUIRES: the campaign commits (skip_pre2018 / --no-pre2018) on origin/main
+  # BEFORE apply — the pod clones main HEAD. Verify the echoed CLONED HEAD below.
+  activeDeadlineSeconds: 518400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: recoreg
+          # sen2cor image reused for its proven dep set; Phase 1 does NOT invoke
+          # L2A_Process (--no-pre2018 bypasses the l1c_sen2cor fallthrough).
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign Phase 1: des-only re-coreg → unified_v2_512_recoreg ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+
+              OUT=/data/unified_v2_512_recoreg
+              echo ""
+              echo "=== refetch existing 512 tiles, des-only, --workers 2 → $OUT ==="
+              python3 scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-existing /data/unified_v2_512 \
+                --output-dir "$OUT" \
+                --tile-size-px 512 \
+                --workers 2 \
+                --fetch-sources des \
+                --no-pre2018 \
+                --force
+
+              # Orphan tiles (256-without-512) — see scripts/build_orphan_fetch_list.py
+              # (build the ledger first, then a --from-json des-only --no-pre2018
+              #  fetch into the SAME $OUT). Run as a follow-up once the main pass
+              #  is in good shape; omitted here to keep one job one purpose.
+
+              echo ""
+              echo "=== Phase-1 layout sanity (sample 5 tiles) ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              outs = sorted(glob.glob("/data/unified_v2_512_recoreg/*.npz"))
+              print(f"recoreg tiles so far: {len(outs)}")
+              for p in outs[:5]:
+                  d = np.load(p, allow_pickle=True)
+                  assert d["spectral"].shape == (24, 512, 512), (p, d["spectral"].shape)
+                  # Phase 1 must NOT carry frame_2016 — that is Phase 2's job.
+                  assert int(d.get("has_frame_2016", 0)) == 0, f"{p} has frame_2016!"
+                  assert "coreg_ref_frame" in d.files, f"{p} missing anchor"
+                  print(f"  {p.split('/')[-1]}: mask={list(d['temporal_mask'])} "
+                        f"coreg_m2={int(d.get('coreg_m2', 0))} "
+                        f"ref={int(d['coreg_ref_frame'])}")
+              print("LAYOUT OK — (24,512,512), no frame_2016, anchor present")
+              PYEOF
+              echo ""
+              echo "=== Phase 1 complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

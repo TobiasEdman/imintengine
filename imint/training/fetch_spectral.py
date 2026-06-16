@@ -434,6 +434,7 @@ def fetch_tile_spectral(
     halo_px: int = 8,
     coregister: bool = True,
     return_precoreg: bool = False,
+    skip_pre2018: bool = False,
 ) -> dict | None:
     """Canonical per-tile spectral fetch — M1 (grid-snap) + M2 (inter-frame MI).
 
@@ -459,6 +460,11 @@ def fetch_tile_spectral(
         coregister: apply M2 inter-frame coregistration (default ``True``).
         return_precoreg: also return the pre-M2 (raw M1, cropped) spectral under
             ``spectral_precoreg`` for a before/after coreg viz (dry-run only).
+        skip_pre2018: drop pre-``DES_L2A_FLOOR`` slots from the fetch entirely
+            (des-only). Those slots are never sent to the tile-graph and never
+            take the l1c_sen2cor fallthrough, so they land empty with
+            ``temporal_mask==0`` — the re-coreg campaign's Phase-1 wants the
+            pre-2018 slots filled by a separate sen2cor pass, not inline.
 
     Returns:
         A result dict — ``spectral``/``temporal_mask``/``doy``/``dates`` + the
@@ -488,6 +494,12 @@ def fetch_tile_spectral(
     cy_new = (bbox_canon["south"] + bbox_canon["north"]) // 2
 
     slot_dates = {fi: d for fi, d in dates.items() if d}
+    # Phase-1 re-coreg: omit pre-2018 slots up front so they never reach the
+    # tile-graph OR the l1c_sen2cor fallthrough — they stay empty for a separate
+    # sen2cor pass. Filtering here (not relying on the runtime image lacking
+    # L2A_Process) keeps the behaviour explicit and image-independent.
+    if skip_pre2018:
+        slot_dates = {fi: d for fi, d in slot_dates.items() if d >= DES_L2A_FLOOR}
     if not slot_dates:
         return None
 
@@ -495,6 +507,8 @@ def fetch_tile_spectral(
     # pre-2018 date in the merged download makes des hang server-side (it has no
     # L2A to serve) → openEO [408]; such slots skip the graph and are filled by
     # the l1c_sen2cor fallthrough below (they land in `missing`, never `fresh`).
+    # (A no-op when skip_pre2018 already filtered slot_dates to >=2018 above; this
+    # filter stays load-bearing on the default path where pre-2018 dates survive.)
     des_dates = {fi: d for fi, d in slot_dates.items() if d >= DES_L2A_FLOOR}
 
     # Fetch the des-eligible slots on the HALO grid in ONE tile-graph download.

@@ -368,12 +368,20 @@ def _resolve_tile_stored(
 
 
 def _resolve_tile_or_stored(
-    name, bbox, date_start, date_end, data_dir, target, reuse_stored,
+    name, bbox, date_start, date_end, date_source_dir, target, reuse_stored,
 ):
     """Dispatch: stored-date resolution (campaign) when ``reuse_stored`` and the
-    tile has a stored date, else the ERA5-window resolver (legacy/fallback)."""
+    tile has a stored date, else the ERA5-window resolver (legacy/fallback).
+
+    ``date_source_dir`` is where the STORED date is read from — the cross-dir
+    re-coreg wiring. Phase-1 ``_recoreg`` tiles drop ``frame_2016_date`` (they
+    fetch no pre-2018 frame), so the campaign enumerates the frame_2016-lacking
+    ``_recoreg`` tiles via ``--data-dir`` but reuses each tile's ORIGINAL date
+    from the live ``unified_v2_512`` here. Defaults to ``--data-dir`` when the
+    two aren't split. A tile with no stored date (genuine gap) falls through to
+    the ERA5 resolver."""
     if reuse_stored:
-        sd = _stored_target_date(Path(data_dir) / f"{name}.npz", target)
+        sd = _stored_target_date(Path(date_source_dir) / f"{name}.npz", target)
         if sd:
             return _resolve_tile_stored(name, bbox, sd)
     return _resolve_tile(name, bbox, date_start, date_end)
@@ -463,6 +471,13 @@ def main() -> None:
                         "STORED date's granule (±7d window, zone-filtered) "
                         "instead of an ERA5 reselect; ERA5 fallback only when "
                         "no date is stored. Forces a single pass (no fallback-year).")
+    p.add_argument("--date-source-dir", default=None,
+                   help="Read STORED dates from this dir instead of --data-dir "
+                        "(cross-dir re-coreg). Enumerate the frame_2016-lacking "
+                        "_recoreg tiles via --data-dir, but reuse each tile's "
+                        "original date from the live unified_v2_512 here — "
+                        "Phase-1 _recoreg tiles drop frame_2016_date. Only "
+                        "meaningful with --reuse-stored-dates.")
     args = p.parse_args()
 
     # Default fallback-year only for legacy frame_2016 backfill.
@@ -470,10 +485,15 @@ def main() -> None:
         args.fallback_year = 2015
     if args.reuse_stored_dates:
         args.fallback_year = None  # single pass — the stored date IS the date
+    # Cross-dir: enumerate via --data-dir, read stored dates from here (defaults
+    # to --data-dir when not split).
+    date_source_dir = args.date_source_dir or args.data_dir
 
     t0 = time.time()
     print("=== sen2cor scene selector ===")
     print(f"  data-dir:    {args.data_dir}")
+    if date_source_dir != args.data_dir:
+        print(f"  date-source: {date_source_dir} (cross-dir re-coreg)")
     print(f"  target:      {args.target}")
     print(f"  year:        {args.year}" +
           (f" (fallback {args.fallback_year})"
@@ -565,7 +585,7 @@ def main() -> None:
         done_lock = threading.Lock()
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             futs = {pool.submit(_resolve_tile_or_stored, name, bbox,
-                                date_start, date_end, args.data_dir,
+                                date_start, date_end, date_source_dir,
                                 args.target, args.reuse_stored_dates): name
                     for name, bbox in tiles}
             for fut in as_completed(futs):

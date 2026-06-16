@@ -417,6 +417,7 @@ def fetch_tile(
     tile: TileConfig,
     vpp_cache: dict | None = None,
     backend: str = "des",
+    skip_pre2018: bool = False,
 ) -> dict:
     """Fetch one tile through the canonical M1+M2 entry as a single 5-slot
     ``fetch_tile_spectral`` call — 4 temporal frames (autumn y-1 + 3 VPP) + a
@@ -471,7 +472,8 @@ def fetch_tile(
     # M1 (grid-snap) + M2 (inter-frame MI coreg) run inside the entry on the
     # shared halo grid; all slots land coregistered on the anchor's grid.
     res = fetch_tile_spectral(
-        (cx, cy), tile=tile, dates=dates, n_frames=5, backend=backend)
+        (cx, cy), tile=tile, dates=dates, n_frames=5, backend=backend,
+        skip_pre2018=skip_pre2018)
     if res is None:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
@@ -1081,6 +1083,7 @@ def refetch_tile(
     tile: TileConfig,
     backend: str = "des",
     force: bool = False,
+    skip_pre2018: bool = False,
 ) -> dict:
     """Re-fetch an existing tile's spectral through the canonical M1+M2 entry,
     reusing the tile's STORED dates — never re-selecting.
@@ -1146,7 +1149,8 @@ def refetch_tile(
     tile.assert_bbox_matches(bbox)
 
     res = fetch_tile_spectral(
-        (cx, cy), tile=tile, dates=dates, n_frames=5, backend=backend)
+        (cx, cy), tile=tile, dates=dates, n_frames=5, backend=backend,
+        skip_pre2018=skip_pre2018)
     if res is None:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
 
@@ -1214,6 +1218,12 @@ def main():
                         "auto-fills pre-2018 / des-empty slots and cannot be "
                         "disabled; it is accepted in the list for backward-compat "
                         "but listing it has no effect.")
+    p.add_argument("--no-pre2018", action="store_true",
+                   help="Re-coreg campaign Phase 1: omit pre-2018 slots entirely "
+                        "(des-only, no l1c_sen2cor fallthrough). Pre-2018 slots "
+                        "land empty with temporal_mask==0 for a separate sen2cor "
+                        "Phase-2 pass. Drops the 2016 background frame and the "
+                        "2017 autumn slot 0 of 2018-labelled tiles.")
     args = p.parse_args()
     random.seed(args.seed)
 
@@ -1331,9 +1341,11 @@ def main():
     def _run(item):
         loc, d = item
         if use_refetch:
-            return refetch_tile(loc, d, tile, backend=backend, force=args.force)
+            return refetch_tile(loc, d, tile, backend=backend, force=args.force,
+                                skip_pre2018=args.no_pre2018)
         return fetch_tile(loc, args.years, d, tile,
-                          vpp_cache=vpp_cache, backend=backend)
+                          vpp_cache=vpp_cache, backend=backend,
+                          skip_pre2018=args.no_pre2018)
 
     CHUNK = max(max_w * 2, len(work) // 10)
     completed = 0

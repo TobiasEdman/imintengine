@@ -1,0 +1,156 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-phase2-sen2cor
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: campaign-phase2-sen2cor
+spec:
+  # On restart the selector re-enumerates only tiles STILL missing the target in
+  # _recoreg, so a retried pod shrinks the remaining work rather than redoing it.
+  backoffLimit: 2
+  # PHASE 2 of the re-coreg campaign — sen2cor the pre-2018 frames Phase 1 left
+  # empty, coregistered to each tile's Phase-1 anchor, written into _recoreg.
+  # Two passes:
+  #   A. frame_2016  — 2016 summer background, ~all tiles.
+  #   B. slot:0      — 2017 autumn, ONLY 2018-labelled tiles (year+1 filter).
+  # Cross-dir wiring: enumerate the frame-lacking _recoreg tiles via --data-dir,
+  # but reuse each tile's ORIGINAL stored date from the live unified_v2_512 via
+  # --date-source-dir (Phase-1 _recoreg tiles drop frame_2016_date). Granule
+  # dedup is handled per-run by select_scenes' set-cover (one scene → many tiles);
+  # a persistent keep-all L2A cache is a deferred throughput optimization.
+  #
+  # COT-gate runs on GPU (--device cuda). Wall-time is sen2cor-bound (~5h for the
+  # frame_2016 pass; slot:0 is a smaller subset). REQUIRES: Phase 1 finished into
+  # unified_v2_512_recoreg AND the campaign commits on origin/main (verify the
+  # echoed CLONED HEAD). Sample-verify the reverse-fit coreg before a full run.
+  activeDeadlineSeconds: 129600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # RTX 2080 Ti only — excludes H100 (training-reserved) and the
+                  # GTX 1080 Ti nodes (srv04/srv06 carry the runc pod-sandbox bug).
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values: ["NVIDIA-GeForce-RTX-2080-Ti"]
+      containers:
+        - name: pipeline
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign Phase 2: sen2cor pre-2018 frames, coreg-to-anchor ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow \
+                pystac-client openeo torch 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+              echo "L2A_Process on PATH: $(which L2A_Process)"
+
+              RECOREG=/data/unified_v2_512_recoreg
+              LIVE=/data/unified_v2_512
+
+              # ── Pass A: frame_2016 (2016 background, ~all tiles) ─────────
+              echo ""
+              echo "=== Pass A.1: select frame_2016 (cross-dir, reuse stored dates) ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir "$RECOREG" \
+                --date-source-dir "$LIVE" \
+                --reuse-stored-dates \
+                --target frame_2016 \
+                --year 2016 \
+                --workers 16 \
+                --out /data/debug/campaign_phase2_frame2016_plan.json
+
+              echo "=== Pass A.2: run sen2cor frame_2016, coreg-to-anchor ==="
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/campaign_phase2_frame2016_plan.json \
+                --data-dir "$RECOREG" \
+                --target frame_2016 \
+                --coreg-to-anchor \
+                --safe-cache /data/sen2cor_cache \
+                --cot-max 8.0 \
+                --workers 4 \
+                --device cuda
+
+              # ── Pass B: slot:0 (2017 autumn, 2018-labelled tiles only) ──
+              echo ""
+              echo "=== Pass B.1: select slot:0 / 2017 autumn (year+1 → 2018 tiles) ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir "$RECOREG" \
+                --date-source-dir "$LIVE" \
+                --reuse-stored-dates \
+                --target slot:0 \
+                --year 2017 \
+                --workers 16 \
+                --out /data/debug/campaign_phase2_slot0_plan.json
+
+              echo "=== Pass B.2: run sen2cor slot:0, coreg-to-anchor ==="
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/campaign_phase2_slot0_plan.json \
+                --data-dir "$RECOREG" \
+                --target slot:0 \
+                --coreg-to-anchor \
+                --safe-cache /data/sen2cor_cache \
+                --cot-max 8.0 \
+                --workers 4 \
+                --device cuda
+
+              echo ""
+              echo "=== Phase 2 layout sanity (sample 5 tiles with frame_2016) ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              outs = sorted(glob.glob("/data/unified_v2_512_recoreg/*.npz"))
+              bg = [p for p in outs if int(np.load(p, allow_pickle=True)
+                    .get("has_frame_2016", 0)) == 1]
+              print(f"recoreg tiles: {len(outs)}; with frame_2016: {len(bg)}")
+              for p in bg[:5]:
+                  d = np.load(p, allow_pickle=True)
+                  assert d["frame_2016"].shape == (6, 512, 512), (p, d["frame_2016"].shape)
+                  print(f"  {p.split('/')[-1]}: frame_2016 {d['frame_2016'].shape} "
+                        f"date={str(d.get('frame_2016_date'))}")
+              print("LAYOUT OK — frame_2016 (6,512,512) present + coreg'd to anchor")
+              PYEOF
+              echo ""
+              echo "=== Phase 2 complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "24"
+              memory: "64Gi"
+            limits:
+              cpu: "24"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
