@@ -1,25 +1,37 @@
 # PR-förslag mot `DigitalEarthSweden/space-datalab-metafilter`
 
-## Status — 2026-05-28
+## Status — 2026-06-16
 
-- **Implementation:** klar. 5 commits ovanpå upstream `master` på
-  `TobiasEdman/space-datalab-metafilter`, branch
-  `feat/extended-filters-and-s1-support`.
-- **Test-suite:** 45 pytest-tester passerar (synthetic NetCDF-fixtures via
-  scipy-backend, ingen CDS-access krävs).
-- **Lokal workspace:** `~/Developer/space-datalab-metafilter/`.
-- **PR mot upstream:** schemalagd till **2026-06-02 09:00 Europe/Stockholm**
-  via remote-routine `trig_01Ea6ggTUgaFCTohhMkEYBfF`
-  (https://claude.ai/code/routines/trig_01Ea6ggTUgaFCTohhMkEYBfF).
-- **Follow-up för ImintEngine:** när DES-PR:n mergas kan vår interna ERA5-
-  prefilter-väg (`imint/training/optimal_fetch.py` Stage 1 + den föreslagna
-  `era5_prefilter.py` i [`integration_proposal.md`](integration_proposal.md))
-  ersättas med konsumtion av DES-paketets utbyggda filterprofiler. PR #3
-  (Open-Meteo-backend) i scope-listan nedan skulle dessutom rymma vår
-  nuvarande Open-Meteo-prefilter direkt.
+Tre PR:er pushade mot `DigitalEarthSweden/space-datalab-metafilter`:
+
+| # | Branch | Innehåll | Status |
+|---|---|---|---|
+| [#1](https://github.com/DigitalEarthSweden/space-datalab-metafilter/pull/1) | `feat/extended-filters-and-s1-support` | Schema + operatorer + härledda kolumner + S1 + CDS-cloud (5 commits, 45 tester) | Öppen (manuellt 2026-06-02 efter att routinen failade) |
+| [#2](https://github.com/DigitalEarthSweden/space-datalab-metafilter/pull/2) | `fix/setup-friction` | Pinade requirements, README `-m`-invokering, lazy openEO-cred-validation (3 commits) | Öppen |
+| (väntar) | `feat/open-meteo-backend` | Open-Meteo som alternativ ERA5-backend (5 commits, 65 tester) | Schemalagd 2026-06-16 09:00 CEST, villkorlig på #1-merge |
+
+Plus en samlingsgren för externa konsumenter:
+
+- **`TobiasEdman/space-datalab-metafilter:try/extended-with-pinned-deps`** —
+  setup-fix + extended features i en enda branch som kan klonas direkt och
+  fungera utan väntan på upstream-merge.
+
+**Lokal workspace:** `~/Developer/space-datalab-metafilter/`.
+
+**Follow-up för ImintEngine** *(öppna trådar att hantera när DES-PR:erna
+mergar)*:
+
+1. När #1 mergar — uppdatera `imint/training/optimal_fetch.py` att konsumera
+   DES-paketets filterprofiler istället för Stage 1-prefiltret in-house.
+2. När open-meteo-backend-PR mergar — `optimal_fetch.py` Stage 1 + den
+   föreslagna `era5_prefilter.py` i [`integration_proposal.md`](integration_proposal.md)
+   blir helt redundant. Refaktorera till en `backend: open-meteo`-profil-
+   konsumtion istället.
+3. Audit `imint/training/era5_aux.py` `_fetch_via_cdsapi`-fallback — samma
+   `cftime`-gotcha som DES #2 fixade kan dyka upp där också.
 
 Dokumentet nedan är designspecen som implementationen följer, bevarad för
-framtida referens och som råmaterial till PR-beskrivningen.
+framtida referens och som råmaterial till PR-beskrivningarna.
 
 ---
 

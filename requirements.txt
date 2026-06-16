@@ -34,6 +34,25 @@ openpyxl>=3.1   # pandas .read_excel engine for the SLU NFI plot xlsx (imint/tra
 openeo>=0.20
 requests>=2.31
 
+# Atmosphere / ERA5 — used by imint/training/era5_aux.py and
+# imint/training/optimal_fetch.py. xarray is needed for both the SCL netCDF
+# screening and the polytope fallback; cftime is the transitive xarray
+# dependency that pip won't pull on its own and whose absence presents as a
+# misleading "did not find a match in any of xarray's currently installed
+# IO backends" error when xarray's auto-decoder tries to read CDS-style
+# NetCDFs. See DigitalEarthSweden/space-datalab-metafilter PR #2 and
+# ~/Developer/agentic_workflow/docs/lessons/import_time_credential_validation.md
+# for the documented gotcha.
+xarray>=2024.7
+cftime>=1.6.4
+
+# cdsapi (era5_aux._fetch_via_cdsapi fallback) and polytope-client
+# (era5_aux primary fetcher) are lazy-imported inside their respective
+# functions, so they're optional at install time — install them only when
+# you actually need to fetch via CDS or ECMWF Polytope:
+#   pip install cdsapi
+#   pip install polytope-client
+
 # Visualization helpers
 svgpath2mpl>=0.2
 

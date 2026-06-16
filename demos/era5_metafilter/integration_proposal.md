@@ -1,7 +1,18 @@
 # Integrationsförslag — ERA5-prefilter i fetch-pipelinen
 
-**Status:** Förslag, ej implementerat. Skapad som komplement till
-[REPORT.md](REPORT.md).
+**Status:** Förslag, **delvis överspelat av extern utveckling**. Skapad som
+komplement till [REPORT.md](REPORT.md).
+
+> **Update 2026-06-16 — supersedes-not:** Det här dokumentet skissar en
+> in-house `imint/training/era5_prefilter.py`. Sedan dess har vi pushat
+> motsvarande filter-funktionalitet *uppströms* till
+> `DigitalEarthSweden/space-datalab-metafilter` (PR-trådar dokumenterade i
+> [`pr_proposal_des_metafilter_extensions.md`](pr_proposal_des_metafilter_extensions.md#status--2026-06-16)).
+> När DES-PR:erna mergas blir den föreslagna implementationen nedan
+> överflödig: `optimal_fetch.py` Stage 1 + den här `era5_prefilter.py`
+> kan båda ersättas med en `from metafilter import apply_metafilter`-
+> konsumtion av DES-paketets `backend: open-meteo`-profil. Skissen nedan
+> bevaras som referens men ska inte implementeras nu — vänta på upstream-merge.
 
 Detta dokument skissar hur ett ERA5-baserat dagsfilter skulle slottas in i
 befintlig fetch-pipeline (`imint/training/tile_fetch.py`,

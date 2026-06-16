@@ -225,7 +225,17 @@ def _fetch_via_cdsapi(
     params: list[str],
     cache_dir: str | None,
 ) -> list[dict]:
-    """Fallback: Fetch ERA5 data using CDS API (slower, downloads full fields)."""
+    """Fallback: Fetch ERA5 data using CDS API (slower, downloads full fields).
+
+    KNOWN GOTCHA — if you hit this fallback path and the GRIB→xarray decode
+    in _extract_grib_points() raises "did not find a match in any of xarray's
+    currently installed IO backends", the cause is almost certainly a missing
+    ``cftime`` package (transitive xarray dependency that pip doesn't pull
+    on its own). Same symptom that bit the DES metafilter colleague —
+    `pip install cftime` and re-run. We pinned cftime in requirements.txt
+    for exactly this reason; this comment exists in case someone bypasses
+    requirements.txt during a debugging session.
+    """
     import cdsapi
 
     client = cdsapi.Client()
