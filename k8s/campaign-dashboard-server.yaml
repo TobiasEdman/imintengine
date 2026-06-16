@@ -1,0 +1,134 @@
+# Re-coreg campaign progress dashboard.
+#
+# Serves scripts/campaign_dashboard.py output: live Phase-1 progress derived
+# purely by counting *.npz in /data/unified_v2_512_recoreg (RBAC-free). The
+# script regenerates index.html + campaign_status.json every 60 s; a stdlib
+# http.server serves /www.
+#
+# training-data-cephfs is RWX (CephFS), so this mounts read-only on ANY node
+# alongside the Phase-1 writer — no node pin / Multi-Attach concern.
+#
+# Access:
+#   kubectl -n prithvi-training-default port-forward svc/campaign-dashboard 8080:8080
+#   → http://localhost:8080/
+#   or the auto-assigned NodePort: kubectl get svc campaign-dashboard
+#   or https://campaign-dashboard.icedc.se (ingress, cert auto-issued)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: campaign-dashboard
+  namespace: prithvi-training-default
+  labels:
+    app: campaign-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: campaign-dashboard
+  template:
+    metadata:
+      labels:
+        app: campaign-dashboard
+    spec:
+      containers:
+        - name: server
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign dashboard server ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git /workspace/imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              mkdir -p /www
+              # Regenerate the page every 60 s from the live _recoreg dir.
+              python3 scripts/campaign_dashboard.py \
+                --recoreg-dir /data/unified_v2_512_recoreg \
+                --total 6921 \
+                --title "Re-coreg campaign · Phase 1" \
+                --out-dir /www --watch 60 &
+
+              cd /www
+              echo "Serving /www on :8080"
+              exec python3 -m http.server 8080
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+          volumeMounts:
+            # read-only: the dashboard only counts *.npz + reads mtimes.
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 45
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: campaign-dashboard
+  namespace: prithvi-training-default
+  labels:
+    app: campaign-dashboard
+spec:
+  type: NodePort
+  selector:
+    app: campaign-dashboard
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: campaign-dashboard-ingress
+  namespace: prithvi-training-default
+  labels:
+    app: campaign-dashboard
+  annotations:
+    cert-manager.io/issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: campaign-dashboard.icedc.se
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: campaign-dashboard
+                port:
+                  number: 8080
+  tls:
+    - hosts:
+        - campaign-dashboard.icedc.se
+      secretName: campaign-dashboard-icedc-tls

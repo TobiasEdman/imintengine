@@ -1,29 +1,22 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: campaign-phase1-des-recoreg
+  name: campaign-phase1-validation
   namespace: prithvi-training-default
   labels:
     app: ensemble-prep
-    purpose: campaign-phase1-des-recoreg
+    purpose: campaign-phase1-validation
 spec:
-  # Idempotent resume: fetch_unified_tiles skips tiles already in --output-dir,
-  # so a evicted/retried pod picks up where it left off (no re-fetch of done work).
-  backoffLimit: 3
-  # PHASE 1 of the re-coreg campaign — des-only re-coreg of the full 6921-tile
-  # unified_v2_512 into a NEW dir unified_v2_512_recoreg (live dataset untouched).
-  # --no-pre2018 omits the 2016 background + 2017-autumn slots entirely (they get
-  # a separate sen2cor Phase-2 pass); only >=2018 slots are fetched + M2-coreg'd.
-  #
-  # WALL-TIME: des is ~3 min/tile and --workers 2 is a HARD constraint (DES openEO
-  # credit rate-limit, user-stated 2026-06-15) — so the full run is ~6-7 days.
-  # The job is idempotent (resumes on restart); activeDeadlineSeconds budgets 6d.
-  # Sharding across pods would multiply DES load → also throttled, so a single
-  # rate-limited stream is the intended shape. Sizing is a launch-time decision.
-  #
-  # REQUIRES: the campaign commits (skip_pre2018 / --no-pre2018) on origin/main
-  # BEFORE apply — the pod clones main HEAD. Verify the echoed CLONED HEAD below.
-  activeDeadlineSeconds: 518400
+  backoffLimit: 0
+  # VALIDATION batch (NOT the full run) for the campaign Phase-1 --no-pre2018
+  # path: re-fetch a few real tiles des-only into a DEBUG dir (the real _recoreg
+  # is untouched). Runs on python:3.11-slim — NO L2A_Process, so l1c_sen2cor is
+  # auto-dead and Phase 1 is STRICTLY des (no sen2cor on >=2018 des-gaps either).
+  # Confirms slim deps import + run on real tiles + cluster before the ~6-7 day
+  # full run: >=2018 slots filled + M2-coreg'd, NO frame_2016, anchor present.
+  # 2018-labelled tiles → temporal_mask [0,1,1,1] (2017 autumn dropped);
+  # 2019+ tiles → [1,1,1,1]. Either way has_frame_2016 == 0.
+  activeDeadlineSeconds: 7200
   template:
     metadata:
       labels:
@@ -42,11 +35,8 @@ spec:
                     values: ["p02r09srv04", "p02r09srv06"]
       containers:
         - name: recoreg
-          # python:3.11-slim (not the sen2cor image): no L2A_Process ⇒ l1c_sen2cor
-          # is auto-dead ⇒ Phase 1 is STRICTLY des. A >=2018 slot des can't fill is
-          # left empty (temporal_mask=0) rather than paying sen2cor — keeps Phase 1
-          # the fast des-only pass the decoupling intends. The des fetch chain
-          # (fetch_spectral / coregistration / openeo) is torch-free.
+          # python:3.11-slim (not the sen2cor image): no L2A_Process ⇒
+          # l1c_sen2cor auto-dead ⇒ strictly des-only Phase 1.
           image: python:3.11-slim
           command:
             - bash
@@ -54,7 +44,7 @@ spec:
             - |
               set -e
               export PYTHONUNBUFFERED=1
-              echo "=== campaign Phase 1: des-only re-coreg → unified_v2_512_recoreg ==="
+              echo "=== campaign Phase-1 VALIDATION (5 tiles, --no-pre2018, slim) ==="
               echo "Started: $(date)"
               apt-get update -qq && apt-get install -y -qq \
                 git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
@@ -69,9 +59,10 @@ spec:
               export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
               echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
 
-              OUT=/data/unified_v2_512_recoreg
+              OUT=/data/debug/campaign_phase1_validation
+              rm -rf "$OUT" && mkdir -p "$OUT"
               echo ""
-              echo "=== refetch existing 512 tiles, des-only, --workers 2 → $OUT ==="
+              echo "=== refetch 5 tiles, des-only, --no-pre2018, --workers 2 → $OUT ==="
               python3 scripts/fetch_unified_tiles.py \
                 --mode refetch \
                 --from-existing /data/unified_v2_512 \
@@ -80,32 +71,42 @@ spec:
                 --workers 2 \
                 --fetch-sources des \
                 --no-pre2018 \
-                --force
-
-              # Orphan tiles (256-without-512) — see scripts/build_orphan_fetch_list.py
-              # (build the ledger first, then a --from-json des-only --no-pre2018
-              #  fetch into the SAME $OUT). Run as a follow-up once the main pass
-              #  is in good shape; omitted here to keep one job one purpose.
+                --force \
+                --max-tiles 5 \
+                2>&1 | tee /tmp/p1val.log
 
               echo ""
-              echo "=== Phase-1 layout sanity (sample 5 tiles) ==="
+              echo "=== strict-des check: l1c_sen2cor must NOT have fired ==="
+              if grep -q "l1c_sen2cor" /tmp/p1val.log; then
+                echo "WARN: l1c_sen2cor referenced in log — NOT strictly des:"
+                grep "l1c_sen2cor" /tmp/p1val.log | head
+              else
+                echo "OK — no l1c_sen2cor activity (strictly des on slim)"
+              fi
+
+              echo ""
+              echo "=== VALIDATE Phase-1 layout (all output tiles) ==="
               python3 - <<'PYEOF'
               import glob, numpy as np
-              outs = sorted(glob.glob("/data/unified_v2_512_recoreg/*.npz"))
-              print(f"recoreg tiles so far: {len(outs)}")
-              for p in outs[:5]:
+              outs = sorted(glob.glob("/data/debug/campaign_phase1_validation/*.npz"))
+              print(f"output tiles: {len(outs)}")
+              assert outs, "no output tiles written!"
+              for p in outs:
                   d = np.load(p, allow_pickle=True)
                   assert d["spectral"].shape == (24, 512, 512), (p, d["spectral"].shape)
-                  # Phase 1 must NOT carry frame_2016 — that is Phase 2's job.
-                  assert int(d.get("has_frame_2016", 0)) == 0, f"{p} has frame_2016!"
+                  assert int(d.get("has_frame_2016", 0)) == 0, f"{p} HAS frame_2016!"
                   assert "coreg_ref_frame" in d.files, f"{p} missing anchor"
+                  ge2018 = sum(1 for s in d["dates"] if str(s)[:4] >= "2018")
+                  assert int(d["temporal_mask"].sum()) == ge2018, (
+                      p, list(d["dates"]), list(d["temporal_mask"]))
                   print(f"  {p.split('/')[-1]}: mask={list(d['temporal_mask'])} "
-                        f"coreg_m2={int(d.get('coreg_m2', 0))} "
-                        f"ref={int(d['coreg_ref_frame'])}")
-              print("LAYOUT OK — (24,512,512), no frame_2016, anchor present")
+                        f"dates={[str(s)[:7] for s in d['dates']]} "
+                        f"coreg_m2={int(d.get('coreg_m2', 0))}")
+              print("VALIDATION PASS — des-only --no-pre2018: (24,512,512), "
+                    "no frame_2016, anchor present, only >=2018 slots filled")
               PYEOF
               echo ""
-              echo "=== Phase 1 complete: $(date) ==="
+              echo "=== validation complete: $(date) ==="
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
