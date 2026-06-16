@@ -332,6 +332,47 @@ def _write_temporal_slot(
     os.replace(tmp_base + ".npz", tile_path)
 
 
+def _coreg_frame_to_anchor(
+    frame: np.ndarray, tile_path: Path,
+) -> tuple[np.ndarray | None, dict]:
+    """Sub-pixel-align a fresh ``(6, H, W)`` pre-2018 frame to the tile's anchor.
+
+    The anchor is the tile's recorded M2 reference frame (``coreg_ref_frame``,
+    set by ``clearest_frame_idx`` during the ≥2018 M2 pass) — the clearest
+    temporal frame. Mirrors ``fill_tiles_l2a._coreg_to_reference``: the fixed
+    anchor is ``target``, the fresh frame is ``reference`` (moving), and the
+    returned shifted reference is the aligned frame. ``*_transform=None`` ⇒
+    sub-pixel only (512 shape preserved); the MI estimator auto-rejects ≳1 px
+    shifts, so a bad match is a no-op rather than a corruption.
+
+    Returns ``(aligned (6,H,W), meta)`` or ``(None, {"reason": ...})`` when the
+    tile has no valid anchor — per spec, do NOT write a mis-aligned frame.
+    """
+    from imint.coregistration import coregister_to_reference
+
+    n_bands = 6
+    with np.load(tile_path, allow_pickle=True) as d:
+        ref_idx = int(d["coreg_ref_frame"]) if "coreg_ref_frame" in d.files else -1
+        spec = d.get("spectral")
+    if ref_idx < 0 or spec is None:
+        return None, {"reason": "no_anchor"}
+    if spec.shape[0] < (ref_idx + 1) * n_bands:
+        return None, {"reason": "anchor_out_of_range"}
+    anchor = spec[ref_idx * n_bands:(ref_idx + 1) * n_bands]  # (6, H, W)
+    if not bool(np.any(anchor)):
+        return None, {"reason": "anchor_empty"}
+
+    anchor_hwc = np.transpose(anchor, (1, 2, 0))                 # (H, W, 6) fixed
+    fresh_hwc = np.transpose(frame, (1, 2, 0)).astype(np.float32, copy=True)
+    _anchor, aligned_fresh, meta = coregister_to_reference(
+        target=anchor_hwc, reference=fresh_hwc,
+        target_transform=None, reference_transform=None,
+        subpixel=True, reference_band=2,
+    )
+    aligned = np.ascontiguousarray(np.transpose(aligned_fresh, (2, 0, 1)), np.float32)
+    return aligned, meta
+
+
 # ── Per-scene processing ─────────────────────────────────────────────────
 
 def _process_scene(
@@ -344,6 +385,7 @@ def _process_scene(
     stats: dict,
     stats_lock: threading.Lock,
     target_slot_idx: int | None = None,
+    coreg_to_anchor: bool = False,
 ) -> None:
     """Download SAFE, COT-gate tiles, sen2cor, write the L2A frame.
 
@@ -450,6 +492,16 @@ def _process_scene(
                         stats["deferred"] += 1
                     continue
                 frame = np.stack(chans, axis=0)  # (6, H, W)
+                if coreg_to_anchor:
+                    aligned, cmeta = _coreg_frame_to_anchor(
+                        frame, data_dir / f"{name}.npz")
+                    if aligned is None:
+                        _log(f"    coreg-skip {name}: {cmeta.get('reason')}")
+                        with stats_lock:
+                            stats["coreg_skipped"] += 1
+                            stats["deferred"] += 1
+                        continue
+                    frame = aligned
                 if target_slot_idx is None:
                     _write_frame_2016(
                         data_dir / f"{name}.npz", frame,
@@ -485,6 +537,12 @@ def main() -> None:
                    help="COT-ensemble inference device. 'cuda' needs a "
                         "GPU pod with torch installed.")
     p.add_argument("--max-scenes", type=int, default=None)
+    p.add_argument("--coreg-to-anchor", action="store_true",
+                   help="Coregister each fresh frame to the tile's Phase-1 "
+                        "anchor (coreg_ref_frame) before write-back — the "
+                        "re-coreg campaign. Default off preserves the legacy "
+                        "backfill behavior. Tiles with no valid anchor are "
+                        "skipped (no mis-aligned write).")
     p.add_argument("--target", default="frame_2016",
                    help="Where to write the L2A 6-band frame. "
                         "'frame_2016' (default) → the legacy background-frame "
@@ -528,13 +586,14 @@ def main() -> None:
     print(f"  device:     {args.device}")
     print(f"  target:     {args.target} "
           f"(→ {'frame_2016 field' if target_slot_idx is None else f'spectral slot {target_slot_idx}'})")
+    print(f"  coreg:      {'ON → anchor (coreg_ref_frame)' if args.coreg_to_anchor else 'off (legacy backfill)'}")
 
     from imint.analyzers.cot_l1c import load_ensemble_l1c
     cot_models = load_ensemble_l1c(device=args.device)
     print(f"  COT ensemble: {len(cot_models)} models")
 
     stats = {"ok": 0, "deferred": 0, "cot_rejected": 0,
-             "sen2cor_fail": 0, "scene_dl_fail": 0}
+             "sen2cor_fail": 0, "scene_dl_fail": 0, "coreg_skipped": 0}
     stats_lock = threading.Lock()
     t0 = time.time()
 
@@ -542,7 +601,8 @@ def main() -> None:
         futs = [
             pool.submit(_process_scene, sc, data_dir, safe_cache,
                         args.cot_max, cot_models, args.device,
-                        stats, stats_lock, target_slot_idx)
+                        stats, stats_lock, target_slot_idx,
+                        args.coreg_to_anchor)
             for sc in scenes
         ]
         for i, fut in enumerate(as_completed(futs)):
