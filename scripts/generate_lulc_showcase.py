@@ -80,11 +80,10 @@ def render_heatmap(
     """Render a float array as a color-mapped heatmap PNG."""
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.cm as cm
     from PIL import Image
 
     norm = ((arr.astype(np.float32) - vmin) / (vmax - vmin + 1e-10)).clip(0, 1)
-    cmap = cm.get_cmap(cmap_name)
+    cmap = matplotlib.colormaps[cmap_name]
     rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
     Image.fromarray(rgba).save(output_path)
     return output_path

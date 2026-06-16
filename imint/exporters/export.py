@@ -617,7 +617,7 @@ def save_prithvi_overlay(
     import matplotlib.patches as mpatches
 
     n_classes = int(seg_mask.max()) + 1
-    cmap = plt.cm.get_cmap("tab20", max(n_classes, 2))
+    cmap = matplotlib.colormaps["tab20"].resampled(max(n_classes, 2))
 
     if rgb is not None:
         fig, axes = plt.subplots(1, 2, figsize=(14, 6))
@@ -809,10 +809,9 @@ def save_ndvi_clean_png(ndvi: np.ndarray, path: str) -> str:
     """
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.cm as cm
 
     norm = ((ndvi + 1.0) / 2.0).clip(0, 1)
-    cmap = cm.get_cmap("RdYlGn")
+    cmap = matplotlib.colormaps["RdYlGn"]
     rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
     Image.fromarray(rgba).save(path)
     print(f"    saved: {path}")
@@ -840,10 +839,9 @@ def save_spectral_index_clean_png(
     """
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.cm as cm
 
     norm = ((index_arr - vmin) / (vmax - vmin + 1e-10)).clip(0, 1)
-    cmap = cm.get_cmap(cmap_name)
+    cmap = matplotlib.colormaps[cmap_name]
     rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
     Image.fromarray(rgba).save(path)
     print(f"    saved: {path}")
@@ -899,11 +897,10 @@ def save_cot_clean_png(cot_map: np.ndarray, path: str) -> str:
     """
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.cm as cm
 
     COT_VIZ_MAX = 0.05  # 2× thick cloud threshold (0.025)
     norm = (cot_map / COT_VIZ_MAX).clip(0, 1)
-    cmap = cm.get_cmap("hot_r")
+    cmap = matplotlib.colormaps["hot_r"]
     rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
     Image.fromarray(rgba).save(path)
     print(f"    saved: {path}")
@@ -966,12 +963,11 @@ def save_change_gradient_png(diff: np.ndarray, path: str) -> str:
     """
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.cm as cm
 
     vmax = float(np.percentile(diff[diff > 0], 98)) if (diff > 0).any() else 1.0
     vmax = max(vmax, 1e-6)
     norm = (diff / vmax).clip(0, 1)
-    cmap = cm.get_cmap("hot_r")
+    cmap = matplotlib.colormaps["hot_r"]
     rgba = (cmap(norm)[:, :, :3] * 255).astype(np.uint8)
     Image.fromarray(rgba).save(path)
     print(f"    saved: {path}")
@@ -1238,7 +1234,6 @@ def save_vessel_heatmap_png(
     """
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.cm as cm
 
     vmax = heatmap.max()
     if vmax > 0:
@@ -1246,7 +1241,7 @@ def save_vessel_heatmap_png(
     else:
         norm = heatmap
 
-    cmap = cm.get_cmap(cmap_name)
+    cmap = matplotlib.colormaps[cmap_name]
     rgba = (cmap(norm) * 255).astype(np.uint8)  # (H, W, 4) RGBA
 
     # Scale alpha by normalised density so low-value areas fade out
@@ -1806,7 +1801,6 @@ def save_water_quality_png(
     """
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.cm as cm
 
     arr = array.astype(np.float32)
     finite = arr[np.isfinite(arr)]
@@ -1831,7 +1825,7 @@ def save_water_quality_png(
     norm = (arr - vmin) / (vmax - vmin)
     norm = np.where(np.isfinite(norm), norm.clip(0, 1), 0.0)
 
-    cmap = cm.get_cmap(cmap_name)
+    cmap = matplotlib.colormaps[cmap_name]
     rgba = (cmap(norm) * 255).astype(np.uint8)
     # Alpha: 0 over NaN, 255 over valid
     valid = np.isfinite(arr)
