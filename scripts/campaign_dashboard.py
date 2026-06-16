@@ -97,7 +97,61 @@ def build_status(recoreg_dir: str, total: int, *, now: float | None = None) -> d
     }
 
 
-def render_html(status: dict, *, title: str = "Re-coreg campaign") -> str:
+def build_frames(recoreg_dir: str, *, max_px: int = 256, n_frames: int = 4) -> dict:
+    """Render the latest-fetched tile's temporal frames as true-colour RGB.
+
+    Picks the most-recently-written ``*.npz`` and renders each filled temporal
+    slot (B04/B03/B02, 2-98% stretch via ``tile_rgb``) to a base64 PNG, downscaled
+    to ``max_px``. Best-effort: returns ``{}`` if numpy/PIL/tile_rgb are missing or
+    the npz can't be read — the progress view never depends on this.
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+        from tile_rgb import frame_rgb, png_b64
+    except Exception:
+        return {}
+    npzs = [p for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
+            if ".tmp" not in os.path.basename(p)]
+    if not npzs:
+        return {}
+    latest = max(npzs, key=os.path.getmtime)
+    try:
+        with np.load(latest, allow_pickle=True) as d:
+            spec = d.get("spectral")
+            if spec is None:
+                return {}
+            spec = np.asarray(spec, np.float32)
+            mask = list(d.get("temporal_mask")) if d.get("temporal_mask") is not None else []
+            dates = [str(x)[:10] for x in (d.get("dates") if d.get("dates") is not None else [])]
+    except Exception:
+        return {}
+    frames = []
+    for fi in range(n_frames):
+        filled = (fi < len(mask) and int(mask[fi]) == 1
+                  and spec.shape[0] >= (fi + 1) * 6
+                  and bool(np.any(spec[fi * 6:(fi + 1) * 6])))
+        b64 = None
+        if filled:
+            try:
+                rgb = frame_rgb(spec, fi)
+                if max_px and rgb.shape[0] > max_px:
+                    rgb = np.asarray(Image.fromarray(rgb).resize((max_px, max_px)))
+                b64 = png_b64(rgb)
+            except Exception:
+                b64 = None
+        frames.append({"fi": fi, "date": dates[fi] if fi < len(dates) else "",
+                       "filled": bool(filled), "b64": b64})
+    return {
+        "tile": os.path.basename(latest)[:-4],
+        "frames": frames,
+        "mtime_utc": datetime.fromtimestamp(
+            os.path.getmtime(latest), timezone.utc).isoformat(),
+    }
+
+
+def render_html(status: dict, *, frames: dict | None = None,
+                title: str = "Re-coreg campaign") -> str:
     """A single DES-styled page (palette per docs/css/styles.css) with a
     progress bar, stat cards, and a meta-refresh. Self-contained — no JS deps."""
     pct = status["pct"]
@@ -108,6 +162,25 @@ def render_html(status: dict, *, title: str = "Re-coreg campaign") -> str:
     banner = ("" if status["exists"] else
               '<div class="warn">Output dir not present yet — '
               'Phase&nbsp;1 may still be installing deps / cloning.</div>')
+
+    frames_html = ""
+    if frames and frames.get("frames"):
+        cells = []
+        for fr in frames["frames"]:
+            cap = f"frame {fr['fi']}" + (f" · {fr['date']}" if fr["date"] else "")
+            if fr["b64"]:
+                cells.append(
+                    f'<figure class="frame">'
+                    f'<img src="data:image/png;base64,{fr["b64"]}" alt="{cap}">'
+                    f'<figcaption class="cap">{cap}</figcaption></figure>')
+            else:
+                why = "empty&nbsp;·&nbsp;Phase&nbsp;2" if not fr["filled"] else "no preview"
+                cells.append(f'<div class="frame empty">{cap}<br>{why}</div>')
+        frames_html = (
+            '<h2>Latest tile · RGB frames</h2>'
+            f'<div class="tilename">{frames["tile"]} · written {frames["mtime_utc"]}</div>'
+            f'<div class="frames">{"".join(cells)}</div>')
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -144,6 +217,19 @@ def render_html(status: dict, *, title: str = "Re-coreg campaign") -> str:
   .card .unit{{font-size:13px;color:#6b7280;font-weight:400}}
   .warn{{background:#cff8e4;border:1px solid #245045;color:#1A4338;
     border-radius:10px;padding:12px 16px;margin-bottom:22px;font-size:14px}}
+  h2{{font-size:16px;font-weight:700;color:#1A4338;margin:34px 0 4px}}
+  .tilename{{color:#6b7280;font-size:13px;margin-bottom:12px;
+    font-family:ui-monospace,Menlo,monospace}}
+  .frames{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}}
+  .frame{{border:1px solid #e5e7eb;border-radius:10px;overflow:hidden}}
+  .frame img{{width:100%;display:block;aspect-ratio:1/1;object-fit:cover;
+    background:#f3f4f6}}
+  .frame .cap{{font-size:12px;color:#6b7280;padding:6px 9px;
+    border-top:1px solid #e5e7eb}}
+  .frame.empty{{display:flex;align-items:center;justify-content:center;
+    min-height:130px;color:#6b7280;font-size:12px;background:#f9fafb;
+    text-align:center;padding:10px;line-height:1.7}}
+  @media(max-width:640px){{.frames{{grid-template-columns:repeat(2,1fr)}}}}
   .foot{{color:#6b7280;font-size:12px;margin-top:24px;border-top:1px solid #e5e7eb;
     padding-top:14px}}
 </style>
@@ -169,6 +255,7 @@ def render_html(status: dict, *, title: str = "Re-coreg campaign") -> str:
       <div class="card"><div class="label">ETA</div>
         <div class="value">{eta}</div></div>
     </div>
+    {frames_html}
     <div class="foot">
       first tile: {status['first_tile_utc'] or '—'} ·
       last tile: {status['last_tile_utc'] or '—'} ·
@@ -179,15 +266,25 @@ def render_html(status: dict, *, title: str = "Re-coreg campaign") -> str:
 </html>"""
 
 
-def _write(out_dir: str, status: dict, title: str) -> None:
+def _write(out_dir: str, status: dict, frames: dict | None = None,
+           title: str = "Re-coreg campaign") -> None:
     os.makedirs(out_dir, exist_ok=True)
+    # JSON mirrors the page minus the base64 frame blobs (keep it small + linkable).
+    status_out = dict(status)
+    if frames and frames.get("frames"):
+        status_out["latest_tile"] = {
+            "tile": frames["tile"],
+            "mtime_utc": frames["mtime_utc"],
+            "frames": [{k: v for k, v in fr.items() if k != "b64"}
+                       for fr in frames["frames"]],
+        }
     tmp_j = os.path.join(out_dir, "campaign_status.json.tmp")
     with open(tmp_j, "w") as f:
-        json.dump(status, f, indent=2)
+        json.dump(status_out, f, indent=2)
     os.replace(tmp_j, os.path.join(out_dir, "campaign_status.json"))
     tmp_h = os.path.join(out_dir, "index.html.tmp")
     with open(tmp_h, "w") as f:
-        f.write(render_html(status, title=title))
+        f.write(render_html(status, frames=frames, title=title))
     os.replace(tmp_h, os.path.join(out_dir, "index.html"))
 
 
@@ -205,10 +302,12 @@ def main() -> None:
 
     while True:
         status = build_status(args.recoreg_dir, args.total)
-        _write(args.out_dir, status, args.title)
+        frames = build_frames(args.recoreg_dir)
+        _write(args.out_dir, status, frames, args.title)
+        latest = frames.get("tile", "—") if frames else "—"
         print(f"[campaign-dashboard] done={status['done']}/{status['total']} "
               f"({status['pct']}%) rate={status['rate_recent_per_h']}/h "
-              f"eta={_fmt_eta(status['eta_hours'])}", flush=True)
+              f"eta={_fmt_eta(status['eta_hours'])} latest={latest}", flush=True)
         if args.watch <= 0:
             break
         time.sleep(args.watch)

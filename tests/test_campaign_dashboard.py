@@ -92,7 +92,53 @@ def test_write_emits_html_and_json(tmp_path):
     d = tmp_path / "recoreg"; _tiles(d, 5)
     out = tmp_path / "www"
     s = cd.build_status(str(d), total=10)
-    cd._write(str(out), s, "T")
+    cd._write(str(out), s, None, "T")
     assert (out / "index.html").exists() and (out / "campaign_status.json").exists()
     import json
     assert json.loads((out / "campaign_status.json").read_text())["done"] == 5
+
+
+def test_build_frames_renders_latest_tile(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    now = time.time()
+    # older tile (should be ignored) + newer tile (the "latest fetched").
+    np.savez_compressed(d / "tile_old.npz", spectral=np.zeros((24, 16, 16), np.float32))
+    os.utime(d / "tile_old.npz", (now - 100, now - 100))
+    spec = np.random.rand(24, 16, 16).astype(np.float32)
+    spec[0:6] = 0.0                                   # slot 0 empty (2017 dropped)
+    np.savez_compressed(
+        d / "tile_new.npz", spectral=spec,
+        temporal_mask=np.array([0, 1, 1, 1], np.uint8),
+        dates=np.array(["", "2018-06-01", "2018-07-01", "2018-08-01"]))
+    os.utime(d / "tile_new.npz", (now, now))
+
+    fr = cd.build_frames(str(d), max_px=16)
+    assert fr["tile"] == "tile_new"                   # newest mtime
+    assert len(fr["frames"]) == 4
+    assert fr["frames"][0]["filled"] is False and fr["frames"][0]["b64"] is None
+    for fi in (1, 2, 3):
+        assert fr["frames"][fi]["filled"] is True
+        assert isinstance(fr["frames"][fi]["b64"], str) and fr["frames"][fi]["b64"]
+    assert fr["frames"][1]["date"] == "2018-06-01"
+
+
+def test_build_frames_empty_dir(tmp_path):
+    d = tmp_path / "recoreg"; d.mkdir()
+    assert cd.build_frames(str(d)) == {}
+
+
+def test_render_html_includes_frames_section(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    np.savez_compressed(
+        d / "t.npz", spectral=np.random.rand(24, 16, 16).astype(np.float32),
+        temporal_mask=np.array([1, 1, 1, 1], np.uint8),
+        dates=np.array(["2021-09-01", "2022-06-01", "2022-07-01", "2022-08-01"]))
+    s = cd.build_status(str(d), total=10)
+    fr = cd.build_frames(str(d), max_px=16)
+    html = cd.render_html(s, frames=fr, title="X")
+    assert "Latest tile · RGB frames" in html
+    assert "t" in html and "data:image/png;base64," in html
+    # no-frames render must omit the section (back-compat)
+    assert "Latest tile" not in cd.render_html(s, title="X")

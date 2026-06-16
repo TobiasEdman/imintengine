@@ -41,10 +41,18 @@ spec:
               export PYTHONUNBUFFERED=1
               echo "=== campaign dashboard server ==="
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              git clone --depth 1 --branch main \
+              # numpy + Pillow power the latest-tile RGB frame previews (via
+              # scripts/tile_rgb.py); the progress view is stdlib-only and degrades
+              # gracefully (no frames) if these are absent.
+              pip3 install --quiet --no-cache-dir numpy Pillow 2>&1 | tail -1
+              # Sparse clone — only scripts/ (the dashboard imports just
+              # campaign_dashboard.py + tile_rgb.py). Checking out all 1113 repo
+              # files took >45s and the liveness probe killed the pod mid-clone →
+              # crash loop. Sparse = fast startup + fast restarts.
+              git clone --depth 1 --filter=blob:none --sparse --branch main \
                 https://github.com/TobiasEdman/ImintEngine.git /workspace/imintengine
               cd /workspace/imintengine
-              export PYTHONPATH=/workspace/imintengine
+              git sparse-checkout set scripts
               echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
 
               mkdir -p /www
@@ -64,10 +72,10 @@ spec:
           resources:
             requests:
               cpu: "200m"
-              memory: "256Mi"
+              memory: "512Mi"
             limits:
               cpu: "200m"
-              memory: "256Mi"
+              memory: "512Mi"
           volumeMounts:
             # read-only: the dashboard only counts *.npz + reads mtimes.
             - name: training-data
@@ -77,13 +85,13 @@ spec:
             httpGet:
               path: /
               port: 8080
-            initialDelaySeconds: 45
+            initialDelaySeconds: 90
             periodSeconds: 30
           readinessProbe:
             httpGet:
               path: /
               port: 8080
-            initialDelaySeconds: 20
+            initialDelaySeconds: 25
             periodSeconds: 10
       volumes:
         - name: training-data

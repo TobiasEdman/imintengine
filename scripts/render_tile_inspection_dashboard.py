@@ -21,16 +21,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
 import glob
-import io
 import os
 import sys
 from pathlib import Path
 
 import numpy as np
 from matplotlib import colormaps
-from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from imint.training.unified_schema import (  # noqa: E402
@@ -39,7 +36,15 @@ from imint.training.unified_schema import (  # noqa: E402
     UNIFIED_COLORS,
 )
 
-N_BANDS = 6  # prithvi per-frame: [B02, B03, B04, B8A, B11, B12]
+# Canonical RGB helpers live in scripts/tile_rgb.py (shared with the campaign
+# dashboard). Alias to the legacy private names so the call sites stay unchanged.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tile_rgb import (  # noqa: E402
+    N_BANDS,
+    png_b64 as _png_b64,
+    stretch_rgb as _stretch_rgb,
+    frame_rgb as _frame_rgb,
+)
 
 _COLOR_LUT = np.zeros((NUM_UNIFIED_CLASSES, 3), dtype=np.uint8)
 for _i in range(NUM_UNIFIED_CLASSES):
@@ -59,28 +64,6 @@ AUX_PANELS: list[tuple[str, str]] = [
     ("vpp_maxv", "YlGn"),
     ("vpp_minv", "YlGn"),
 ]
-
-
-def _png_b64(rgb_u8: np.ndarray) -> str:
-    """Encode an (H, W, 3) uint8 array as a base64 PNG data URI payload."""
-    buf = io.BytesIO()
-    Image.fromarray(rgb_u8, mode="RGB").save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
-
-
-def _stretch_rgb(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Per-channel 2-98% percentile stretch → (H, W, 3) uint8."""
-    rgb = np.stack([r, g, b], axis=-1).astype(np.float32)
-    for c in range(3):
-        lo, hi = np.percentile(rgb[..., c], (2, 98))
-        span = max(float(hi - lo), 1e-6)
-        rgb[..., c] = np.clip((rgb[..., c] - lo) / span, 0.0, 1.0)
-    return (rgb * 255.0).astype(np.uint8)
-
-
-def _frame_rgb(spectral: np.ndarray, fi: int) -> np.ndarray:
-    base = fi * N_BANDS
-    return _stretch_rgb(spectral[base + 2], spectral[base + 1], spectral[base + 0])
 
 
 def _label_rgb(label: np.ndarray) -> np.ndarray:
