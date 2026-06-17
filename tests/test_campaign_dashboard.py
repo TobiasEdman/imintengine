@@ -92,10 +92,44 @@ def test_write_emits_html_and_json(tmp_path):
     d = tmp_path / "recoreg"; _tiles(d, 5)
     out = tmp_path / "www"
     s = cd.build_status(str(d), total=10)
-    cd._write(str(out), s, None, None, "T")
+    cd._write(str(out), s, None, None, None, "T")
     assert (out / "index.html").exists() and (out / "campaign_status.json").exists()
     import json
     assert json.loads((out / "campaign_status.json").read_text())["done"] == 5
+
+
+def test_build_label_cross_dir_from_original(tmp_path):
+    import numpy as np
+    rec = tmp_path / "recoreg"; rec.mkdir()
+    orig = tmp_path / "orig"; orig.mkdir()
+    # _recoreg tile has NO label; the same-named original carries the unified label.
+    np.savez_compressed(rec / "t.npz", spectral=np.zeros((24, 16, 16), np.float32))
+    lab = np.zeros((16, 16), np.uint8); lab[:8] = 3; lab[8:] = 11   # two classes
+    np.savez_compressed(orig / "t.npz", label=lab)
+    out = cd.build_label(str(rec), str(orig), max_px=16)
+    assert out["tile"] == "t" and isinstance(out["b64"], str) and out["b64"]
+    assert {e["idx"] for e in out["legend"]} == {3, 11}
+    assert all(e["name"] for e in out["legend"])              # names from real schema
+    assert abs(sum(e["pct"] for e in out["legend"]) - 100.0) < 1.0
+
+
+def test_build_label_missing_original_is_empty(tmp_path):
+    import numpy as np
+    rec = tmp_path / "recoreg"; rec.mkdir()
+    np.savez_compressed(rec / "t.npz", spectral=np.zeros((24, 8, 8), np.float32))
+    assert cd.build_label(str(rec), str(tmp_path / "orig_absent")) == {}
+
+
+def test_render_html_includes_label_section(tmp_path):
+    import numpy as np
+    rec = tmp_path / "recoreg"; rec.mkdir(); orig = tmp_path / "orig"; orig.mkdir()
+    np.savez_compressed(rec / "t.npz", spectral=np.zeros((24, 8, 8), np.float32))
+    np.savez_compressed(orig / "t.npz", label=np.full((8, 8), 3, np.uint8))
+    s = cd.build_status(str(rec), total=10)
+    lab = cd.build_label(str(rec), str(orig), max_px=8)
+    html = cd.render_html(s, label=lab, title="X")
+    assert "Training data" in html and "data:image/png;base64," in html
+    assert "Training data" not in cd.render_html(s, title="X")   # back-compat
 
 
 def test_build_aux_renders_present_channels_with_nodata(tmp_path):

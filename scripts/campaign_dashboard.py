@@ -97,6 +97,24 @@ def build_status(recoreg_dir: str, total: int, *, now: float | None = None) -> d
     }
 
 
+def _unified_palette():
+    """``(color_list, class_names, n_classes)`` from the canonical unified_schema,
+    loaded by FILE PATH so we never import the ``imint`` package (its ``__init__``
+    pulls torch). The schema module itself is numpy-only. Returns ``None`` if the
+    file isn't checked out — the label panel then degrades to nothing."""
+    try:
+        import importlib.util
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(repo, "imint", "training", "unified_schema.py")
+        spec = importlib.util.spec_from_file_location("_unified_schema", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return (list(mod.UNIFIED_COLOR_LIST), list(mod.UNIFIED_CLASS_NAMES),
+                int(mod.NUM_UNIFIED_CLASSES))
+    except Exception:
+        return None
+
+
 def _latest_npz(recoreg_dir: str) -> str | None:
     """Path of the most-recently-written ``*.npz`` (ignoring atomic-write tmps)."""
     npzs = [p for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
@@ -212,8 +230,57 @@ def build_aux(recoreg_dir: str, *, max_px: int = 200) -> dict:
     return {"tile": os.path.basename(latest)[:-4], "channels": channels}
 
 
+def build_label(recoreg_dir: str, orig_dir: str, *, max_px: int = 256) -> dict:
+    """Render the latest tile's unified 23-class label, loaded CROSS-DIR from the
+    original dataset.
+
+    ``refetch`` drops ``label`` from the ``_recoreg`` tiles (re-coreg may shift the
+    grid, so labels are re-derived later), but the tile bbox/centre is unchanged so
+    the original ``unified_v2_512`` label still aligns. Colormapped via the schema's
+    ``UNIFIED_COLORS`` (nearest-neighbour — categorical), with a per-class legend.
+    Best-effort → ``{}``.
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+        from tile_rgb import label_rgb, png_b64
+    except Exception:
+        return {}
+    pal = _unified_palette()
+    if pal is None:
+        return {}
+    colors, names, nclasses = pal
+    latest = _latest_npz(recoreg_dir)
+    if latest is None:
+        return {}
+    fname = os.path.basename(latest)
+    orig = os.path.join(orig_dir, fname)
+    if not os.path.exists(orig):
+        return {}
+    try:
+        with np.load(orig, allow_pickle=True) as d:
+            if "label" not in d.files:
+                return {}
+            lab = np.asarray(d["label"]).astype(np.int64)
+    except Exception:
+        return {}
+    if lab.ndim != 2:
+        return {}
+    rgb = label_rgb(lab, colors)
+    if max_px and rgb.shape[0] > max_px:
+        rgb = np.asarray(Image.fromarray(rgb).resize((max_px, max_px), Image.NEAREST))
+    classes, counts = np.unique(lab, return_counts=True)
+    total = float(lab.size)
+    legend = sorted(
+        ({"idx": int(c), "name": (names[int(c)] if int(c) < len(names) else str(int(c))),
+          "rgb": list(colors[int(c)]), "pct": round(100.0 * int(n) / total, 1)}
+         for c, n in zip(classes, counts) if 0 <= int(c) < nclasses),
+        key=lambda e: -e["pct"])
+    return {"tile": fname[:-4], "b64": png_b64(rgb), "legend": legend}
+
+
 def render_html(status: dict, *, frames: dict | None = None,
-                aux: dict | None = None,
+                aux: dict | None = None, label: dict | None = None,
                 title: str = "Re-coreg campaign") -> str:
     """A single DES-styled page (palette per docs/css/styles.css) with a
     progress bar, stat cards, and a meta-refresh. Self-contained — no JS deps."""
@@ -254,6 +321,22 @@ def render_html(status: dict, *, frames: dict | None = None,
                     f'<div class="tilename">{aux["tile"]} · '
                     f'{len(aux["channels"])} channels</div>'
                     f'<div class="aux">{"".join(cells)}</div>')
+
+    label_html = ""
+    if label and label.get("b64"):
+        rows = []
+        for e in label["legend"]:
+            r, g, b = e["rgb"]
+            rows.append(
+                f'<div><span class="sw" style="background:rgb({r},{g},{b})"></span>'
+                f'{e["name"]}</div><div class="pct">{e["pct"]}%</div>')
+        label_html = (
+            '<h2>Training data · label (23-class)</h2>'
+            f'<div class="tilename">{label["tile"]} · unified label from original '
+            'unified_v2_512</div>'
+            '<div class="label-wrap">'
+            f'<img src="data:image/png;base64,{label["b64"]}" alt="unified label">'
+            f'<div class="legend">{"".join(rows)}</div></div>')
 
     return f"""<!doctype html>
 <html lang="en">
@@ -311,6 +394,14 @@ def render_html(status: dict, *, frames: dict | None = None,
     background:#f3f4f6}}
   .aux .cap{{font-size:11px;color:#6b7280;padding:5px 8px;
     border-top:1px solid #e5e7eb}}
+  .label-wrap{{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}}
+  .label-wrap img{{width:256px;max-width:100%;border:1px solid #e5e7eb;
+    border-radius:10px;image-rendering:pixelated}}
+  .legend{{display:grid;grid-template-columns:auto auto;gap:3px 14px;
+    font-size:12px;color:#171717;align-content:start}}
+  .legend .sw{{display:inline-block;width:12px;height:12px;border-radius:3px;
+    margin-right:6px;vertical-align:-1px;border:1px solid #0000001f}}
+  .legend .pct{{color:#6b7280;text-align:right}}
   .foot{{color:#6b7280;font-size:12px;margin-top:24px;border-top:1px solid #e5e7eb;
     padding-top:14px}}
 </style>
@@ -337,6 +428,7 @@ def render_html(status: dict, *, frames: dict | None = None,
         <div class="value">{eta}</div></div>
     </div>
     {frames_html}
+    {label_html}
     {aux_html}
     <div class="foot">
       first tile: {status['first_tile_utc'] or '—'} ·
@@ -349,7 +441,8 @@ def render_html(status: dict, *, frames: dict | None = None,
 
 
 def _write(out_dir: str, status: dict, frames: dict | None = None,
-           aux: dict | None = None, title: str = "Re-coreg campaign") -> None:
+           aux: dict | None = None, label: dict | None = None,
+           title: str = "Re-coreg campaign") -> None:
     os.makedirs(out_dir, exist_ok=True)
     # JSON mirrors the page minus the base64 blobs (keep it small + linkable).
     status_out = dict(status)
@@ -362,13 +455,18 @@ def _write(out_dir: str, status: dict, frames: dict | None = None,
         }
     if aux and aux.get("channels"):
         status_out["latest_aux"] = [ch["name"] for ch in aux["channels"]]
+    if label and label.get("legend"):
+        status_out["latest_label"] = {
+            "tile": label["tile"],
+            "classes": [{"name": e["name"], "pct": e["pct"]} for e in label["legend"]],
+        }
     tmp_j = os.path.join(out_dir, "campaign_status.json.tmp")
     with open(tmp_j, "w") as f:
         json.dump(status_out, f, indent=2)
     os.replace(tmp_j, os.path.join(out_dir, "campaign_status.json"))
     tmp_h = os.path.join(out_dir, "index.html.tmp")
     with open(tmp_h, "w") as f:
-        f.write(render_html(status, frames=frames, aux=aux, title=title))
+        f.write(render_html(status, frames=frames, aux=aux, label=label, title=title))
     os.replace(tmp_h, os.path.join(out_dir, "index.html"))
 
 
@@ -376,6 +474,9 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--recoreg-dir", default="/data/unified_v2_512_recoreg")
+    p.add_argument("--orig-dir", default="/data/unified_v2_512",
+                   help="Original dataset — source of the unified label (refetch "
+                        "drops it from _recoreg; read cross-dir for the same tile).")
     p.add_argument("--total", type=int, default=6921,
                    help="Expected tile count (default 6921 = unified_v2_512).")
     p.add_argument("--out-dir", default="/www")
@@ -388,13 +489,15 @@ def main() -> None:
         status = build_status(args.recoreg_dir, args.total)
         frames = build_frames(args.recoreg_dir)
         aux = build_aux(args.recoreg_dir)
-        _write(args.out_dir, status, frames, aux, args.title)
+        label = build_label(args.recoreg_dir, args.orig_dir)
+        _write(args.out_dir, status, frames, aux, label, args.title)
         latest = frames.get("tile", "—") if frames else "—"
         n_aux = len(aux.get("channels", [])) if aux else 0
+        n_cls = len(label.get("legend", [])) if label else 0
         print(f"[campaign-dashboard] done={status['done']}/{status['total']} "
               f"({status['pct']}%) rate={status['rate_recent_per_h']}/h "
-              f"eta={_fmt_eta(status['eta_hours'])} latest={latest} aux={n_aux}",
-              flush=True)
+              f"eta={_fmt_eta(status['eta_hours'])} latest={latest} aux={n_aux} "
+              f"label_classes={n_cls}", flush=True)
         if args.watch <= 0:
             break
         time.sleep(args.watch)

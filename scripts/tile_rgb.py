@@ -97,3 +97,14 @@ def aux_rgb(arr: np.ndarray, name: str) -> np.ndarray:
         rgb = np.zeros(a.shape + (3,), np.uint8)
     rgb[~finite] = _NODATA_RGB
     return rgb
+
+
+def label_rgb(label: np.ndarray, color_list) -> np.ndarray:
+    """Map a categorical class raster through an ``index → (R,G,B)`` list.
+
+    Indexed (not interpolated) — a class map must keep hard edges; out-of-range
+    indices clamp to the last colour.
+    """
+    lut = np.asarray(color_list, np.uint8)
+    idx = np.clip(np.asarray(label).astype(np.int64), 0, len(lut) - 1)
+    return lut[idx]

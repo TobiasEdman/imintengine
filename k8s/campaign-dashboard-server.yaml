@@ -45,20 +45,22 @@ spec:
               # scripts/tile_rgb.py); the progress view is stdlib-only and degrades
               # gracefully (no frames) if these are absent.
               pip3 install --quiet --no-cache-dir numpy Pillow 2>&1 | tail -1
-              # Sparse clone — only scripts/ (the dashboard imports just
-              # campaign_dashboard.py + tile_rgb.py). Checking out all 1113 repo
-              # files took >45s and the liveness probe killed the pod mid-clone →
-              # crash loop. Sparse = fast startup + fast restarts.
+              # Sparse clone — scripts/ (campaign_dashboard.py + tile_rgb.py) plus
+              # imint/training/ for unified_schema.py (the 23-class label palette,
+              # loaded by FILE PATH so imint/__init__ + torch never import).
+              # Checking out all 1113 repo files took >45s → liveness killed the
+              # pod mid-clone → crash loop. Sparse = fast startup + fast restarts.
               git clone --depth 1 --filter=blob:none --sparse --branch main \
                 https://github.com/TobiasEdman/ImintEngine.git /workspace/imintengine
               cd /workspace/imintengine
-              git sparse-checkout set scripts
+              git sparse-checkout set scripts imint/training
               echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
 
               mkdir -p /www
               # Regenerate the page every 60 s from the live _recoreg dir.
               python3 scripts/campaign_dashboard.py \
                 --recoreg-dir /data/unified_v2_512_recoreg \
+                --orig-dir /data/unified_v2_512 \
                 --total 6921 \
                 --title "Re-coreg campaign · Phase 1" \
                 --out-dir /www --watch 60 &

@@ -52,3 +52,11 @@ def test_aux_rgb_paints_nodata_gray():
 def test_aux_rgb_all_nodata_is_safe():
     rgb = tr.aux_rgb(np.full((4, 4), np.nan, np.float32), "viridis")
     assert (rgb == np.array(tr._NODATA_RGB)).all()
+
+
+def test_label_rgb_indexed_and_clamps():
+    colors = [(0, 0, 0), (255, 0, 0), (0, 255, 0)]
+    lab = np.array([[0, 1], [2, 1]], np.uint8)
+    rgb = tr.label_rgb(lab, colors)
+    assert tuple(rgb[0, 1]) == (255, 0, 0) and tuple(rgb[1, 0]) == (0, 255, 0)
+    assert tuple(tr.label_rgb(np.array([[9]]), colors)[0, 0]) == (0, 255, 0)  # clamp
