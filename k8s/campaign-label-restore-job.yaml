@@ -1,0 +1,122 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-label-restore
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: campaign-label-restore
+spec:
+  # Idempotent + resumable: restore_recoreg_labels skips any _recoreg tile that
+  # already carries `label`, so an evicted/retried pod re-processes only the
+  # still-unlabelled tiles (never re-writes done work).
+  backoffLimit: 2
+  # LABEL RESTORE (SPEC §2, carry-forward) of the re-coreg campaign — refetch_tile
+  # drops label/label_mask/label_year (_REFETCH_DROP) from the unified_v2_512_recoreg
+  # tiles, leaving them with no training target. This pass copies those three fields
+  # from the same-named ORIGINAL unified_v2_512 tile (cross-dir). Valid because
+  # re-coreg keeps the canonical bbox/grid (M1 grid-snap + M2 sub-pixel; M3 absolute
+  # OFF), so the original land-cover label still aligns pixel-for-pixel.
+  #
+  # SEQUENCING: runs POST-Phase-1/2, PRE-promote (the original labels must exist and
+  # the _recoreg tiles must be fetched). Numpy-only field copy — no spectral fetch,
+  # no torch, no GPU. Fast: per-tile is one npz read + one atomic re-save.
+  #
+  # REQUIRES: the restore_recoreg_labels.py commit on origin/main BEFORE apply — the
+  # pod clones main HEAD. Verify the echoed CLONED HEAD below.
+  activeDeadlineSeconds: 14400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: label-restore
+          # python:3.11-slim — this pass is pure numpy field-copy (read the original
+          # label, write it into the _recoreg npz atomically). No spectral fetch, no
+          # coregistration, no torch ⇒ no sen2cor image, no GPU.
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign label-restore: carry-forward label → unified_v2_512_recoreg ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir numpy 2>&1 | tail -1
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+
+              RECOREG=/data/unified_v2_512_recoreg
+              ORIG=/data/unified_v2_512
+              echo ""
+              echo "=== dry-run first: size the restore burden (no writes) ==="
+              python3 scripts/restore_recoreg_labels.py \
+                --recoreg-dir "$RECOREG" \
+                --orig-dir    "$ORIG" \
+                --workers 4 \
+                --dry-run
+
+              echo ""
+              echo "=== restore labels into $RECOREG (atomic per-tile) ==="
+              python3 scripts/restore_recoreg_labels.py \
+                --recoreg-dir "$RECOREG" \
+                --orig-dir    "$ORIG" \
+                --workers 4
+
+              echo ""
+              echo "=== post-restore sanity (sample 5 tiles) ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              outs = sorted(glob.glob("/data/unified_v2_512_recoreg/*.npz"))
+              print(f"recoreg tiles: {len(outs)}")
+              with_label = 0
+              for p in outs:
+                  with np.load(p, allow_pickle=True) as d:
+                      if "label" in d.files:
+                          with_label += 1
+              print(f"tiles carrying a label after restore: {with_label}/{len(outs)}")
+              for p in outs[:5]:
+                  with np.load(p, allow_pickle=True) as d:
+                      has = [k for k in ("label", "label_mask", "label_year") if k in d.files]
+                      shape = tuple(d["label"].shape) if "label" in d.files else None
+                      print(f"  {p.split('/')[-1]}: {has}  label_shape={shape}")
+              print("LABEL-RESTORE OK")
+              PYEOF
+              echo ""
+              echo "=== label-restore complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

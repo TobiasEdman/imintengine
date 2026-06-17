@@ -1,0 +1,127 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-vpp-backfill
+  namespace: prithvi-training-default
+  labels:
+    app: dataset-completion
+    purpose: vpp-backfill
+spec:
+  backoffLimit: 0
+  # Dataset-completion campaign, workstream #1 (SPEC_dataset_completion.md §1):
+  # backfill HR-VPP phenology into the ~36% of unified_v2_512_recoreg tiles
+  # whose vpp_{sosd,eosd,length,maxv,minv} are absent or all-zero (the CDSE
+  # SH-Process PU-exhaustion gap). Source is WEkEO (PU-free); CDSE is the
+  # fallback only. Runs POST-Phase-1/2, PRE-promote. Idempotent + resumable —
+  # tiles that already carry non-empty VPP are skipped, so a re-run after an
+  # eviction resumes cleanly. NEVER zero-fills: double-miss tiles are recorded
+  # in /data/unified_v2_512_recoreg/vpp_known_empty.json, not fabricated.
+  #
+  # WEkEO credentials come from the `wekeo-creds` Secret (read by
+  # imint.training.wekeo_vpp); CDSE fallback creds from `cdse-credentials`
+  # (CDSE_CLIENT_ID/SECRET). Neither is ever in this manifest. The WEkEO COG
+  # cache lives on the PVC at
+  # $VPP_WEKEO_DIR (default /data/vpp_wekeo), populated by the
+  # prefetch-vpp-wekeo job.
+  activeDeadlineSeconds: 28800   # 8 h — ~2,500 tiles at WEkEO-cache read speed
+  template:
+    metadata:
+      labels:
+        app: dataset-completion
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation
+                  # (cgroup/runc bug, 2026-05-{12,17}). Exclude both.
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: backfill
+          # Pinned by DIGEST, not tag (CLAUDE.md docker-skew rule). Same
+          # imint-sen2cor image the WEkEO prefetch job uses — carries the hda
+          # + rasterio + pyproj deps backfill_vpp needs.
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== VPP backfill (dataset-completion #1) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj scipy hda 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              # Verify we cloned the intended tip (a shallow clone pins to the
+              # remote HEAD at submit time — log it so the pod's commit is
+              # auditable against what was reviewed). See
+              # memory/feedback_verify_remote_before_resubmit.
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+
+              python3 scripts/backfill_vpp.py \
+                --data-dir /data/unified_v2_512_recoreg \
+                --workers 2
+
+              echo "=== backfill complete: $(date) ==="
+              echo "=== known-empty catalogue (if any) ==="
+              cat /data/unified_v2_512_recoreg/vpp_known_empty.json 2>/dev/null \
+                | head -40 || echo "(none)"
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # WEkEO COG cache on the PVC (PU-free primary source).
+            - name: VPP_WEKEO_DIR
+              value: "/data/vpp_wekeo"
+            # Force WEkEO-first routing for any code path that consults the
+            # env directly; backfill_vpp also sets it per-call, but pin the
+            # default so the metered CDSE is never the unintended primary.
+            - name: VPP_SOURCE
+              value: "wekeo"
+            # CDSE fallback creds (metered) — cdse_vpp reads CDSE_CLIENT_ID/SECRET,
+            # so use the same secret + key mapping the campaign Phase-1 job uses
+            # (envFrom would expose the KEY names, not CDSE_CLIENT_ID).
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+          envFrom:
+            # WEkEO HDA creds (primary; wekeo_vpp reads WEKEO_USERNAME/PASSWORD).
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

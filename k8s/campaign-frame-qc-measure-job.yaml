@@ -1,0 +1,107 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-frame-qc-measure
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: campaign-frame-qc-measure
+spec:
+  # PHASE A (measure) of the SPEC §3 per-frame cloud QC. CHEAP, in-place, no
+  # network: reads every unified_v2_512_recoreg tile, computes the B02
+  # brightness cloud fraction per temporal frame (slots 0-3 + frame_2016) and
+  # the ERA5 date verdict, and writes one JSON report (per-slot fail-rate + the
+  # (tile, slot) replace-list that Phase B consumes). Sizes the burden before
+  # paying for any re-fetch.
+  #
+  # Idempotent: re-running just overwrites the report (atomic tmp + os.replace).
+  # python:3.11-slim — no GPU, no sen2cor, no des/cdse creds (measure never
+  # fetches). ERA5 hits Open-Meteo (free, no auth); --no-era5 drops even that.
+  #
+  # REQUIRES: the QC commits on origin/main BEFORE apply (the pod clones main
+  # HEAD — verify the echoed CLONED HEAD). Run AFTER Phase-1/2 fill the frames.
+  backoffLimit: 2
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: frame-qc-measure
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign frame-QC Phase A (measure): B02 + ERA5 per frame ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+
+              RECOREG=/data/unified_v2_512_recoreg
+              REPORT=/data/debug/frame_cloud_qc_report.json
+              mkdir -p /data/debug
+
+              echo ""
+              echo "=== measure: threshold 0.2 (B02>0.2 cloud), ERA5 on, workers 8 ==="
+              python3 scripts/frame_cloud_qc.py \
+                --phase measure \
+                --data-dir "$RECOREG" \
+                --report "$REPORT" \
+                --threshold 0.2 \
+                --workers 8
+
+              echo ""
+              echo "=== report summary ==="
+              python3 - <<'PYEOF'
+              import json
+              with open("/data/debug/frame_cloud_qc_report.json") as f:
+                  r = json.load(f)
+              s = r["summary"]
+              print(f"tiles={s['n_tiles']}  frames_to_replace={s['n_frames_to_replace']}")
+              for k, v in s["per_slot"].items():
+                  print(f"  {k:12s} present={v['present']:6d} fail={v['fail']:6d} "
+                        f"fail_rate={v['fail_rate']}")
+              PYEOF
+              echo ""
+              echo "=== Phase A complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

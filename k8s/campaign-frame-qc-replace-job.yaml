@@ -1,0 +1,156 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-frame-qc-replace
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: campaign-frame-qc-replace
+spec:
+  # PHASE B (replace) of the SPEC §3 per-frame cloud QC. HEAVY: for each (tile,
+  # slot) in Phase A's replace_list, re-select a CLEANER date in the SAME year +
+  # SAME slot window (optimal_fetch_dates mode="era5_then_scl"), re-fetch that
+  # single slot via fetch_tile_spectral (M1 grid-snap + M2 inter-frame MI coreg —
+  # the M2 sign convention lives INSIDE coregister_interframe and is untouched
+  # here), and write it back atomically (tmp + os.replace). Two HARD guards:
+  #   1. NEVER-WORSE — overwrite only if the candidate's B02 cloud fraction is
+  #      strictly lower; else keep the original.
+  #   2. TEMPORAL-MATCHING — the replacement date stays in the slot's own
+  #      (year, window): slot 0 = tile_year-1 autumn, slots 1-3 = tile_year
+  #      growing season, frame_2016 = 2016. Asserted before every fetch.
+  #
+  # IMAGE: the imint-sen2cor image (digest-pinned, same as Phase-2) — its
+  # L2A_Process is REQUIRED for the pre-2018 path (frame_2016 + slot 0 of
+  # 2018-tiles). >=2018 slots go via des; fetch_tile_spectral routes pre-2018
+  # dates to the l1c_sen2cor fallthrough internally. des needs DES_USER/
+  # DES_PASSWORD; the SCL re-screen + l1c STAC can use CDSE creds.
+  #
+  # --workers 2 is a HARD constraint (DES openEO credit rate-limit, user-stated
+  # 2026-06-15). Idempotent + resumable: a frame already QC-replaced-and-passing
+  # is skipped (qc_replaced_<slot> marker), so a retried pod shrinks the work.
+  # Run a --dry-run first to size the burden + verify the year guard before LIVE.
+  #
+  # REQUIRES: Phase A's report at /data/debug/frame_cloud_qc_report.json AND the
+  # QC commits on origin/main (verify the echoed CLONED HEAD). CPU-only — the
+  # cloud metric is B02 (numpy) and pre-2018 re-fetch is L2A_Process (CPU).
+  backoffLimit: 2
+  activeDeadlineSeconds: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # No GPU needed — the QC cloud metric is B02 (numpy) and the
+                  # pre-2018 re-fetch is the L2A_Process binary (CPU); nothing
+                  # here runs CUDA. Just avoid the runc-buggy 1080 Ti boxes.
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: frame-qc-replace
+          # Digest-pinned imint-sen2cor (carries L2A_Process) — same image the
+          # campaign Phase-2 sen2cor pass uses. NEVER :latest / mutable tag.
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign frame-QC Phase B (replace): re-fetch cloudy frames ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+              echo "L2A_Process on PATH: $(which L2A_Process)"
+
+              RECOREG=/data/unified_v2_512_recoreg
+              REPORT=/data/debug/frame_cloud_qc_report.json
+              LOG=/data/debug/frame_cloud_qc_replace_verdicts.json
+
+              if [ ! -f "$REPORT" ]; then
+                echo "FATAL: $REPORT missing — run Phase A (measure) first."
+                exit 1
+              fi
+
+              echo ""
+              echo "=== DRY-RUN first: resolve candidates + year guard, no fetch ==="
+              python3 scripts/frame_cloud_qc.py \
+                --phase replace \
+                --data-dir "$RECOREG" \
+                --report "$REPORT" \
+                --threshold 0.2 \
+                --workers 2 \
+                --dry-run
+
+              echo ""
+              echo "=== LIVE replace: same year+window, never-worse, --workers 2 ==="
+              python3 scripts/frame_cloud_qc.py \
+                --phase replace \
+                --data-dir "$RECOREG" \
+                --report "$REPORT" \
+                --replace-log "$LOG" \
+                --threshold 0.2 \
+                --workers 2
+
+              echo ""
+              echo "=== Phase B complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "24"
+              memory: "64Gi"
+            limits:
+              cpu: "24"
+              memory: "64Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
