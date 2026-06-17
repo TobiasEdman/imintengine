@@ -459,3 +459,16 @@ class TestRefetchTileThroughEntry:
         assert 4 not in captured["dates"]
         d = dict(np.load(out / "tile_test.npz", allow_pickle=True))
         assert "frame_2016" not in d
+
+
+def test_atomic_savez_and_valid_existing_tile(tmp_path):
+    """A 0-byte / truncated npz (interrupted write) is treated as MISSING so a
+    resume re-fetches it; _atomic_savez never leaves a 0-byte out_path or a tmp."""
+    p = str(tmp_path / "a.npz")
+    fut._atomic_savez(p, {"x": np.arange(4)})
+    assert fut._valid_existing_tile(p)
+    assert not (tmp_path / "a.tmp.npz").exists()          # tmp consumed by os.replace
+    assert dict(np.load(p, allow_pickle=True))["x"].tolist() == [0, 1, 2, 3]
+    z = tmp_path / "z.npz"; z.write_bytes(b"")            # 0-byte (interrupted write)
+    assert z.stat().st_size == 0 and not fut._valid_existing_tile(str(z))
+    assert not fut._valid_existing_tile(str(tmp_path / "absent.npz"))

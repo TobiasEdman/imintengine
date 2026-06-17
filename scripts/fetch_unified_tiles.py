@@ -410,6 +410,35 @@ def _npz_str(v) -> str:
     return str(v)
 
 
+def _valid_existing_tile(path: str) -> bool:
+    """A tile counts as 'already done' only if it exists, is non-empty, AND loads.
+
+    A 0-byte / truncated npz — e.g. from a write interrupted by a full disk or an
+    evicted pod — is treated as MISSING so a resume re-fetches it instead of
+    silently skipping the corruption forward into the dataset.
+    """
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return False
+    try:
+        with np.load(path, allow_pickle=True) as d:
+            _ = d.files
+        return True
+    except Exception:
+        return False
+
+
+def _atomic_savez(out_path: str, save: dict) -> None:
+    """Write an npz atomically: compress to a sibling tmp, then ``os.replace``.
+
+    An interrupted/failed write leaves the tmp (or nothing) — NEVER a 0-byte
+    ``out_path``. The tmp must end in ``.npz`` or ``np.savez_compressed`` appends a
+    second ``.npz`` and the rename misses.
+    """
+    tmp_path = out_path[:-4] + ".tmp.npz"   # FOO.npz → FOO.tmp.npz
+    np.savez_compressed(tmp_path, **save)
+    os.replace(tmp_path, out_path)
+
+
 def fetch_tile(
     loc: dict,
     years: list[str],
@@ -428,7 +457,7 @@ def fetch_tile(
     auto-fills pre-2018 / des-empty slots via l1c_sen2cor."""
     name = loc["name"]
     out_path = os.path.join(output_dir, f"{name}.npz")
-    if os.path.exists(out_path):
+    if _valid_existing_tile(out_path):
         return {"name": name, "status": "skipped"}
 
     # Always normalize bbox to the current tile size. Manifest/loc bboxes
@@ -500,7 +529,7 @@ def fetch_tile(
     if bg is not None:
         save.update(bg)
 
-    np.savez_compressed(out_path, **save)
+    _atomic_savez(out_path, save)
     has_bg = int(save.get("has_frame_2016", 0))
     return {"name": name, "status": "ok",
             "valid_frames": int(core["temporal_mask"].sum()),
@@ -1169,7 +1198,7 @@ def refetch_tile(
     if bg is not None:
         save.update(bg)
 
-    np.savez_compressed(out_path, **save)
+    _atomic_savez(out_path, save)
 
     # NOTE: source tiles are NOT deleted — they carry bbox/date info needed for
     # future re-fetches. Labels are rebuilt separately by build_labels.py.

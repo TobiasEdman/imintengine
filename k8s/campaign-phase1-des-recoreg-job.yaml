@@ -7,8 +7,11 @@ metadata:
     app: ensemble-prep
     purpose: campaign-phase1-des-recoreg
 spec:
-  # Idempotent resume: fetch_unified_tiles skips tiles already in --output-dir,
-  # so a evicted/retried pod picks up where it left off (no re-fetch of done work).
+  # Idempotent resume: refetch skips tiles already VALID in --output-dir and
+  # re-fetches any 0-byte/truncated ones, so a retried pod (or a re-launch after an
+  # interruption) picks up where it left off. NOTE: no --force — it would bypass
+  # the skip and re-fetch everything; the skip + atomic write are what make resume
+  # correct (see scripts/fetch_unified_tiles.py _valid_existing_tile/_atomic_savez).
   backoffLimit: 3
   # PHASE 1 of the re-coreg campaign — des-only re-coreg of the full 6921-tile
   # unified_v2_512 into a NEW dir unified_v2_512_recoreg (live dataset untouched).
@@ -79,8 +82,7 @@ spec:
                 --tile-size-px 512 \
                 --workers 2 \
                 --fetch-sources des \
-                --no-pre2018 \
-                --force
+                --no-pre2018
 
               # Orphan tiles (256-without-512) — see scripts/build_orphan_fetch_list.py
               # (build the ledger first, then a --from-json des-only --no-pre2018
