@@ -82,9 +82,18 @@ spec:
                   r = json.load(f)
               s = r["summary"]
               print(f"tiles={s['n_tiles']}  frames_to_replace={s['n_frames_to_replace']}")
+              worst = 0.0
               for k, v in s["per_slot"].items():
                   print(f"  {k:12s} present={v['present']:6d} fail={v['fail']:6d} "
                         f"fail_rate={v['fail_rate']}")
+                  worst = max(worst, float(v["fail_rate"]))
+              # Verdict line the campaign orchestrator reads (kubectl logs) — the
+              # frameqc-measure gate halts the campaign if worst >= --max-fail-frac.
+              print("CAMPAIGN_GATE_VERDICT=" + json.dumps({
+                  "gate": "frameqc-measure", "ok": True,
+                  "reason": f"report written; worst per-slot fail-rate {worst:.3f}",
+                  "metrics": {"worst_fail_rate": round(worst, 4),
+                              "frames_to_replace": s["n_frames_to_replace"]}}))
               PYEOF
               echo ""
               echo "=== Phase A complete: $(date) ==="

@@ -1,0 +1,114 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-promote
+  namespace: prithvi-training-default
+  labels:
+    app: dataset-completion
+    purpose: campaign-promote
+spec:
+  # FINAL PROMOTE of the dataset-completion campaign. Runs IN-CLUSTER (needs the
+  # PVC to rename dirs on /data). The orchestrator applies this ONLY after EVERY
+  # prior gate passed (phase2 → frameqc-measure → frameqc-replace → label-restore →
+  # vpp-backfill → verify), so reaching this Job already means the dataset is
+  # verified. It REUSES scripts/promote_recoreg.py --execute (rename-with-backup,
+  # reversible) — it does NOT reimplement the swap:
+  #   unified_v2_512         -> unified_v2_512_pre_recoreg_<ts>   (timestamped backup)
+  #   unified_v2_512_recoreg -> unified_v2_512                    (promote)
+  # Both renames are metadata-only + atomic on the one PVC filesystem; rollback is
+  # `promote_recoreg.py --rollback --execute`. --min-frac 0.9 is a final safety rail
+  # (refuse if _recoreg shrank below 90% of live's tile count — a dropped-tiles
+  # signal). A DRY-RUN promote runs first to print the plan, then the real --execute.
+  #
+  # The pod emits the single verdict line the orchestrator reads back:
+  #   CAMPAIGN_GATE_VERDICT={"gate":"promote","ok":<bool>,"reason":...,"metrics":...}
+  # ok=true only if --execute returned 0 AND live now points at the recoreg tile
+  # count. python:3.11-slim — promote is pure os.rename, no fetch/torch/GPU.
+  # REQUIRES: the campaign commits on origin/main (verify the echoed CLONED HEAD).
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: dataset-completion
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: promote
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign promote: unified_v2_512_recoreg -> unified_v2_512 ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+
+              LIVE=/data/unified_v2_512
+              RECOREG=/data/unified_v2_512_recoreg
+
+              echo ""
+              echo "=== DRY-RUN promote plan (no changes) ==="
+              python3 scripts/promote_recoreg.py \
+                --live "$LIVE" --recoreg "$RECOREG" --min-frac 0.9
+
+              echo ""
+              echo "=== EXECUTE promote (rename-with-backup; reversible) ==="
+              set +e
+              python3 scripts/promote_recoreg.py \
+                --live "$LIVE" --recoreg "$RECOREG" --min-frac 0.9 --execute
+              PROMOTE_RC=$?
+              set -e
+
+              # Emit the verdict line off the promote exit code + a post-check that
+              # live now exists with tiles and recoreg was consumed by the rename.
+              python3 - "$LIVE" "$RECOREG" "$PROMOTE_RC" <<'PYEOF'
+              import glob, json, os, sys
+              live, recoreg, rc = sys.argv[1], sys.argv[2], int(sys.argv[3])
+              n_live = len(glob.glob(os.path.join(live, "*.npz")))
+              recoreg_gone = not os.path.isdir(recoreg)
+              ok = rc == 0 and n_live > 0 and recoreg_gone
+              reason = ("promote ok" if ok else
+                        f"promote rc={rc} live_tiles={n_live} recoreg_gone={recoreg_gone}")
+              print("CAMPAIGN_GATE_VERDICT=" + json.dumps(
+                  {"gate": "promote", "ok": bool(ok), "reason": reason,
+                   "metrics": {"promote_rc": rc, "live_tiles": n_live,
+                               "recoreg_consumed": recoreg_gone}}))
+              PYEOF
+              echo "=== promote complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

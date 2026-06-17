@@ -103,6 +103,8 @@ spec:
               PYEOF
               echo ""
               echo "=== label-restore complete: $(date) ==="
+              # Verdict for the campaign orchestrator (reached only on success).
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"label-restore","ok":true,"reason":"label carry-forward job complete"}'
           env:
             - name: PYTHONUNBUFFERED
               value: "1"

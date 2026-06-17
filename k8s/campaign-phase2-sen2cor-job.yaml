@@ -136,6 +136,9 @@ spec:
               PYEOF
               echo ""
               echo "=== Phase 2 complete: $(date) ==="
+              # Verdict line the campaign orchestrator reads (only reached on full
+              # success thanks to set -e; a failure → Job Failed → orchestrator halts).
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"phase2-sen2cor","ok":true,"reason":"phase2 sen2cor job complete"}'
           env:
             - name: PYTHONUNBUFFERED
               value: "1"

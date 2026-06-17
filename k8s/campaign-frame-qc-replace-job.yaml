@@ -113,6 +113,8 @@ spec:
 
               echo ""
               echo "=== Phase B complete: $(date) ==="
+              # Verdict for the campaign orchestrator (reached only on success).
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"frameqc-replace","ok":true,"reason":"frame-QC replace job complete"}'
           env:
             - name: PYTHONUNBUFFERED
               value: "1"

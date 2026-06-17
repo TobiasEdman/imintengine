@@ -81,6 +81,8 @@ spec:
               echo "=== known-empty catalogue (if any) ==="
               cat /data/unified_v2_512_recoreg/vpp_known_empty.json 2>/dev/null \
                 | head -40 || echo "(none)"
+              # Verdict for the campaign orchestrator (reached only on success).
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"vpp-backfill","ok":true,"reason":"VPP backfill job complete"}'
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
