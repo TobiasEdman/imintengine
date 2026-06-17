@@ -98,19 +98,18 @@ def build_status(recoreg_dir: str, total: int, *, now: float | None = None) -> d
 
 
 def _unified_palette():
-    """``(color_list, class_names, n_classes)`` from the canonical unified_schema,
-    loaded by FILE PATH so we never import the ``imint`` package (its ``__init__``
-    pulls torch). The schema module itself is numpy-only. Returns ``None`` if the
-    file isn't checked out — the label panel then degrades to nothing."""
+    """``(color_list, class_names, n_classes)`` from ``scripts/unified_palette.json``
+    — exported from ``imint.training.unified_schema`` (a drift-guard test keeps them
+    in sync). Read from this script's own dir so there's NO ``imint/`` dependency:
+    the slim dashboard pod sparse-checks-out only ``scripts/``, and a nested
+    ``imint/`` cone-checkout proved unreliable. Returns ``None`` if absent."""
     try:
-        import importlib.util
-        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        path = os.path.join(repo, "imint", "training", "unified_schema.py")
-        spec = importlib.util.spec_from_file_location("_unified_schema", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return (list(mod.UNIFIED_COLOR_LIST), list(mod.UNIFIED_CLASS_NAMES),
-                int(mod.NUM_UNIFIED_CLASSES))
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "unified_palette.json")
+        with open(path, encoding="utf-8") as f:
+            pal = json.load(f)
+        return ([tuple(c) for c in pal["colors"]],
+                list(pal["names"]), int(pal["num_classes"]))
     except Exception:
         return None
 

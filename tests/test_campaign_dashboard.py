@@ -120,6 +120,21 @@ def test_build_label_missing_original_is_empty(tmp_path):
     assert cd.build_label(str(rec), str(tmp_path / "orig_absent")) == {}
 
 
+def test_unified_palette_json_matches_schema():
+    """scripts/unified_palette.json must stay in sync with the canonical schema —
+    the dashboard reads the JSON (no imint/ on the slim pod), so a schema change
+    has to regenerate it. This test fails loudly if they drift."""
+    import json
+    from imint.training.unified_schema import (
+        NUM_UNIFIED_CLASSES, UNIFIED_CLASS_NAMES, UNIFIED_COLOR_LIST)
+    p = Path(__file__).resolve().parents[1] / "scripts" / "unified_palette.json"
+    pal = json.loads(p.read_text(encoding="utf-8"))
+    assert pal["num_classes"] == NUM_UNIFIED_CLASSES
+    assert pal["names"] == [str(n) for n in UNIFIED_CLASS_NAMES]
+    assert [tuple(c) for c in pal["colors"]] == \
+        [tuple(int(x) for x in rgb) for rgb in UNIFIED_COLOR_LIST]
+
+
 def test_render_html_includes_label_section(tmp_path):
     import numpy as np
     rec = tmp_path / "recoreg"; rec.mkdir(); orig = tmp_path / "orig"; orig.mkdir()
