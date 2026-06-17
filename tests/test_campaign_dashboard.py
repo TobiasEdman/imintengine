@@ -92,10 +92,46 @@ def test_write_emits_html_and_json(tmp_path):
     d = tmp_path / "recoreg"; _tiles(d, 5)
     out = tmp_path / "www"
     s = cd.build_status(str(d), total=10)
-    cd._write(str(out), s, None, "T")
+    cd._write(str(out), s, None, None, "T")
     assert (out / "index.html").exists() and (out / "campaign_status.json").exists()
     import json
     assert json.loads((out / "campaign_status.json").read_text())["done"] == 5
+
+
+def test_build_aux_renders_present_channels_with_nodata(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    mark = np.random.rand(16, 16).astype(np.float32)
+    mark[:, :4] = np.nan                                   # markfukt SLU gap
+    np.savez_compressed(
+        d / "t.npz",
+        spectral=np.zeros((24, 16, 16), np.float32),
+        dem=np.random.rand(16, 16).astype(np.float32) * 40,
+        height=np.random.rand(16, 16).astype(np.float32) * 30,
+        markfukt=mark)                                     # 'volume' etc. absent
+    a = cd.build_aux(str(d), max_px=16)
+    names = [c["name"] for c in a["channels"]]
+    assert names == ["dem", "height", "markfukt"]          # only present, in panel order
+    assert all(isinstance(c["b64"], str) and c["b64"] for c in a["channels"])
+
+
+def test_build_aux_empty_when_no_aux(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    np.savez_compressed(d / "t.npz", spectral=np.zeros((24, 8, 8), np.float32))
+    assert cd.build_aux(str(d)) == {}
+
+
+def test_render_html_includes_aux_section(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    np.savez_compressed(d / "t.npz", spectral=np.zeros((24, 8, 8), np.float32),
+                        dem=np.random.rand(8, 8).astype(np.float32))
+    s = cd.build_status(str(d), total=10)
+    aux = cd.build_aux(str(d), max_px=8)
+    html = cd.render_html(s, aux=aux, title="X")
+    assert "Aux channels" in html and "DEM" in html
+    assert "Aux channels" not in cd.render_html(s, title="X")   # back-compat
 
 
 def test_build_frames_renders_latest_tile(tmp_path):

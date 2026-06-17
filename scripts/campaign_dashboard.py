@@ -97,6 +97,30 @@ def build_status(recoreg_dir: str, total: int, *, now: float | None = None) -> d
     }
 
 
+def _latest_npz(recoreg_dir: str) -> str | None:
+    """Path of the most-recently-written ``*.npz`` (ignoring atomic-write tmps)."""
+    npzs = [p for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
+            if ".tmp" not in os.path.basename(p)]
+    return max(npzs, key=os.path.getmtime) if npzs else None
+
+
+# (npz key, tile_rgb colormap, label) — continuous aux rasters, mirrors
+# render_tile_inspection_dashboard's AUX_PANELS.
+AUX_PANELS = [
+    ("dem", "terrain", "DEM"),
+    ("height", "viridis", "tree height"),
+    ("volume", "viridis", "volume"),
+    ("basal_area", "viridis", "basal area"),
+    ("diameter", "viridis", "diameter"),
+    ("markfukt", "Blues", "soil moisture"),
+    ("vpp_sosd", "RdYlGn_r", "VPP start"),
+    ("vpp_eosd", "RdYlGn", "VPP end"),
+    ("vpp_length", "magma", "VPP length"),
+    ("vpp_maxv", "viridis", "VPP max"),
+    ("vpp_minv", "viridis", "VPP min"),
+]
+
+
 def build_frames(recoreg_dir: str, *, max_px: int = 256, n_frames: int = 4) -> dict:
     """Render the latest-fetched tile's temporal frames as true-colour RGB.
 
@@ -111,11 +135,9 @@ def build_frames(recoreg_dir: str, *, max_px: int = 256, n_frames: int = 4) -> d
         from tile_rgb import frame_rgb, png_b64
     except Exception:
         return {}
-    npzs = [p for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
-            if ".tmp" not in os.path.basename(p)]
-    if not npzs:
+    latest = _latest_npz(recoreg_dir)
+    if latest is None:
         return {}
-    latest = max(npzs, key=os.path.getmtime)
     try:
         with np.load(latest, allow_pickle=True) as d:
             spec = d.get("spectral")
@@ -150,7 +172,48 @@ def build_frames(recoreg_dir: str, *, max_px: int = 256, n_frames: int = 4) -> d
     }
 
 
+def build_aux(recoreg_dir: str, *, max_px: int = 200) -> dict:
+    """Render the latest tile's continuous aux channels as colormapped PNGs.
+
+    Each present ``AUX_PANELS`` raster is 2-98% normalised + colormapped (nodata →
+    gray) via ``tile_rgb.aux_rgb``. Best-effort: ``{}`` on missing deps / unreadable
+    npz / no aux present.
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+        from tile_rgb import aux_rgb, png_b64
+    except Exception:
+        return {}
+    latest = _latest_npz(recoreg_dir)
+    if latest is None:
+        return {}
+    try:
+        d = np.load(latest, allow_pickle=True)
+        files = set(d.files)
+    except Exception:
+        return {}
+    channels = []
+    for name, cmap, label in AUX_PANELS:
+        if name not in files:
+            continue
+        try:
+            arr = np.asarray(d[name], np.float32)
+            if arr.ndim != 2 or not np.isfinite(arr).any():
+                continue
+            rgb = aux_rgb(arr, cmap)
+            if max_px and rgb.shape[0] > max_px:
+                rgb = np.asarray(Image.fromarray(rgb).resize((max_px, max_px)))
+            channels.append({"name": name, "label": label, "b64": png_b64(rgb)})
+        except Exception:
+            continue
+    if not channels:
+        return {}
+    return {"tile": os.path.basename(latest)[:-4], "channels": channels}
+
+
 def render_html(status: dict, *, frames: dict | None = None,
+                aux: dict | None = None,
                 title: str = "Re-coreg campaign") -> str:
     """A single DES-styled page (palette per docs/css/styles.css) with a
     progress bar, stat cards, and a meta-refresh. Self-contained — no JS deps."""
@@ -180,6 +243,17 @@ def render_html(status: dict, *, frames: dict | None = None,
             '<h2>Latest tile · RGB frames</h2>'
             f'<div class="tilename">{frames["tile"]} · written {frames["mtime_utc"]}</div>'
             f'<div class="frames">{"".join(cells)}</div>')
+
+    aux_html = ""
+    if aux and aux.get("channels"):
+        cells = [
+            f'<figure><img src="data:image/png;base64,{ch["b64"]}" alt="{ch["label"]}">'
+            f'<figcaption class="cap">{ch["label"]}</figcaption></figure>'
+            for ch in aux["channels"]]
+        aux_html = ('<h2>Aux channels</h2>'
+                    f'<div class="tilename">{aux["tile"]} · '
+                    f'{len(aux["channels"])} channels</div>'
+                    f'<div class="aux">{"".join(cells)}</div>')
 
     return f"""<!doctype html>
 <html lang="en">
@@ -230,6 +304,13 @@ def render_html(status: dict, *, frames: dict | None = None,
     min-height:130px;color:#6b7280;font-size:12px;background:#f9fafb;
     text-align:center;padding:10px;line-height:1.7}}
   @media(max-width:640px){{.frames{{grid-template-columns:repeat(2,1fr)}}}}
+  .aux{{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));
+    gap:12px}}
+  .aux figure{{border:1px solid #e5e7eb;border-radius:10px;overflow:hidden}}
+  .aux img{{width:100%;display:block;aspect-ratio:1/1;image-rendering:pixelated;
+    background:#f3f4f6}}
+  .aux .cap{{font-size:11px;color:#6b7280;padding:5px 8px;
+    border-top:1px solid #e5e7eb}}
   .foot{{color:#6b7280;font-size:12px;margin-top:24px;border-top:1px solid #e5e7eb;
     padding-top:14px}}
 </style>
@@ -256,6 +337,7 @@ def render_html(status: dict, *, frames: dict | None = None,
         <div class="value">{eta}</div></div>
     </div>
     {frames_html}
+    {aux_html}
     <div class="foot">
       first tile: {status['first_tile_utc'] or '—'} ·
       last tile: {status['last_tile_utc'] or '—'} ·
@@ -267,9 +349,9 @@ def render_html(status: dict, *, frames: dict | None = None,
 
 
 def _write(out_dir: str, status: dict, frames: dict | None = None,
-           title: str = "Re-coreg campaign") -> None:
+           aux: dict | None = None, title: str = "Re-coreg campaign") -> None:
     os.makedirs(out_dir, exist_ok=True)
-    # JSON mirrors the page minus the base64 frame blobs (keep it small + linkable).
+    # JSON mirrors the page minus the base64 blobs (keep it small + linkable).
     status_out = dict(status)
     if frames and frames.get("frames"):
         status_out["latest_tile"] = {
@@ -278,13 +360,15 @@ def _write(out_dir: str, status: dict, frames: dict | None = None,
             "frames": [{k: v for k, v in fr.items() if k != "b64"}
                        for fr in frames["frames"]],
         }
+    if aux and aux.get("channels"):
+        status_out["latest_aux"] = [ch["name"] for ch in aux["channels"]]
     tmp_j = os.path.join(out_dir, "campaign_status.json.tmp")
     with open(tmp_j, "w") as f:
         json.dump(status_out, f, indent=2)
     os.replace(tmp_j, os.path.join(out_dir, "campaign_status.json"))
     tmp_h = os.path.join(out_dir, "index.html.tmp")
     with open(tmp_h, "w") as f:
-        f.write(render_html(status, frames=frames, title=title))
+        f.write(render_html(status, frames=frames, aux=aux, title=title))
     os.replace(tmp_h, os.path.join(out_dir, "index.html"))
 
 
@@ -303,11 +387,14 @@ def main() -> None:
     while True:
         status = build_status(args.recoreg_dir, args.total)
         frames = build_frames(args.recoreg_dir)
-        _write(args.out_dir, status, frames, args.title)
+        aux = build_aux(args.recoreg_dir)
+        _write(args.out_dir, status, frames, aux, args.title)
         latest = frames.get("tile", "—") if frames else "—"
+        n_aux = len(aux.get("channels", [])) if aux else 0
         print(f"[campaign-dashboard] done={status['done']}/{status['total']} "
               f"({status['pct']}%) rate={status['rate_recent_per_h']}/h "
-              f"eta={_fmt_eta(status['eta_hours'])} latest={latest}", flush=True)
+              f"eta={_fmt_eta(status['eta_hours'])} latest={latest} aux={n_aux}",
+              flush=True)
         if args.watch <= 0:
             break
         time.sleep(args.watch)
