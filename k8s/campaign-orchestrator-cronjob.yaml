@@ -1,0 +1,115 @@
+# In-cluster scheduler for the dataset-completion + promote campaign.
+#
+# Fires every 30 min and runs scripts/run_dataset_completion_campaign.py --advance,
+# which makes AT MOST one transition per firing (CLAUDE.md §8 async hand-off):
+#   wait-phase1 → phase2-sen2cor → frameqc-measure → frameqc-replace →
+#   label-restore → vpp-backfill → verify → promote.
+# Each firing: if the current stage's Job is still Running → exit (wait); if Complete
+# → run its gate; gate PASS → apply the next stage's Job; gate FAIL → HALT (sentinel,
+# no further stages). State persists on the PVC at /data/debug/campaign_orchestrator_state.json
+# so the campaign survives every firing. concurrencyPolicy: Forbid → never two advances at once.
+#
+# APPLY THIS when Phase-1 (campaign-phase1-des-recoreg) is close to Complete — until
+# then every firing just idles on wait-phase1 (cheap, but no reason to idle for days).
+# Orchestrator is stdlib-only; the pod just needs python3 + kubectl + the repo.
+#
+# Pause:   kubectl -n prithvi-training-default patch cronjob campaign-orchestrator -p '{"spec":{"suspend":true}}'
+# Inspect: kubectl -n prithvi-training-default logs job/<the cronjob's last job>
+# HALT:    a HALTED state writes /data/debug/campaign_orchestrator_HALTED.json — inspect, fix, clear it.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: campaign-orchestrator
+  namespace: prithvi-training-default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: campaign-orchestrator
+  namespace: prithvi-training-default
+rules:
+  # apply/poll the stage Jobs + read their pods' logs for the verdict line.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: campaign-orchestrator
+  namespace: prithvi-training-default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: campaign-orchestrator
+subjects:
+  - kind: ServiceAccount
+    name: campaign-orchestrator
+    namespace: prithvi-training-default
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: campaign-orchestrator
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: campaign-orchestrator
+spec:
+  schedule: "*/30 * * * *"          # every 30 min
+  concurrencyPolicy: Forbid          # one advance at a time
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800     # one advance is quick; the stage Jobs run async
+      template:
+        metadata:
+          labels:
+            app: ensemble-prep
+        spec:
+          restartPolicy: Never
+          serviceAccountName: campaign-orchestrator
+          containers:
+            - name: orchestrator
+              image: python:3.11-slim
+              command:
+                - bash
+                - -c
+                - |
+                  set -e
+                  export PYTHONUNBUFFERED=1
+                  apt-get update -qq && apt-get install -y -qq git curl > /dev/null 2>&1
+                  # kubectl (in-pod uses the SA token + in-cluster API automatically).
+                  curl -sSLo /usr/local/bin/kubectl \
+                    https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl
+                  chmod +x /usr/local/bin/kubectl
+                  mkdir -p /workspace && cd /workspace
+                  git clone --depth 1 --branch main \
+                    https://github.com/TobiasEdman/ImintEngine.git imintengine
+                  cd /workspace/imintengine
+                  echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+                  python3 scripts/run_dataset_completion_campaign.py \
+                    --advance \
+                    --namespace prithvi-training-default \
+                    --state-file /data/debug/campaign_orchestrator_state.json
+              volumeMounts:
+                - name: training-data
+                  mountPath: /data      # state file + (jobs it applies read tiles)
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+          volumes:
+            - name: training-data
+              persistentVolumeClaim:
+                claimName: training-data-cephfs
