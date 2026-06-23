@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -59,6 +58,7 @@ from imint.training.skg_grunddata import (
 from imint.training.copernicus_dem import fetch_dem_tile
 from imint.training.cdse_vpp import fetch_vpp_tiles
 from imint.training.slu_markfukt import fetch_markfukt_tile
+from imint.training.tile_bbox import resolve_fetch_bbox
 
 
 # ── Global CDSE rate limiter ─────────────────────────────────────────────
@@ -150,8 +150,6 @@ ALL_CHANNELS = list(_CHANNEL_FETCHERS.keys()) + ["vpp"]
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-_TILE_RE = re.compile(r"tile_(\d+)_(\d+)\.npz$")
-
 # Straggler years lumped to the nearest enriched year (decided 2026-05-19)
 # — too few tiles (≈8 across both datasets) to warrant their own WEkEO
 # prefetch pass.
@@ -180,54 +178,6 @@ def _tile_year(tile_path: Path) -> int | None:
         return None
     y = max(years)
     return _LUMP_YEAR.get(y, y)
-
-
-def _bbox_from_tile(tile_path: Path, half_m: int) -> tuple[int, int, int, int]:
-    """Extract EPSG:3006 bbox in (W, S, E, N) order, ±half_m around center.
-
-    Resolution order (mirrors imint.training.tile_bbox.resolve_tile_bbox):
-      1. easting/northing keys inside the .npz  (preferred — set by fetcher)
-      2. tile_{east}_{north}.npz  filename parse
-      3. crop_<name>_{east}_{north}.npz / urban_{east}_{north}.npz
-      4. bbox_3006 array inside the .npz — center extracted
-
-    Required because the unified_v2/_512 directories contain a mix of
-    tile_*, crop_*, urban_*, and legacy numeric filenames; only tile_*
-    encodes coordinates in the name itself.
-    """
-    # Method 1: easting/northing keys inside the .npz
-    try:
-        with np.load(tile_path, allow_pickle=True) as d:
-            east_val = d["easting"] if "easting" in d.files else None
-            north_val = d["northing"] if "northing" in d.files else None
-            if east_val is not None and north_val is not None:
-                e = int(np.asarray(east_val).item())
-                n = int(np.asarray(north_val).item())
-                return (e - half_m, n - half_m, e + half_m, n + half_m)
-            # Method 4 (npz fallback): bbox_3006 array — derive center
-            if "bbox_3006" in d.files:
-                b = np.asarray(d["bbox_3006"]).flatten()
-                if b.size >= 4:
-                    cx = (int(b[0]) + int(b[2])) // 2
-                    cy = (int(b[1]) + int(b[3])) // 2
-                    return (cx - half_m, cy - half_m, cx + half_m, cy + half_m)
-    except (OSError, KeyError, ValueError):
-        pass
-
-    # Method 2: tile_{east}_{north}.npz
-    m = _TILE_RE.search(tile_path.name)
-    if m:
-        e, n = int(m.group(1)), int(m.group(2))
-        return (e - half_m, n - half_m, e + half_m, n + half_m)
-
-    # Method 3: crop_<name>_{east}_{north}.npz / urban_{east}_{north}.npz —
-    # last two underscore-separated integer groups before the extension.
-    m = re.search(r"_(\d+)_(\d+)\.npz$", tile_path.name)
-    if m:
-        e, n = int(m.group(1)), int(m.group(2))
-        return (e - half_m, n - half_m, e + half_m, n + half_m)
-
-    raise ValueError(f"Cannot resolve bbox for {tile_path.name}")
 
 
 def _tile_missing_channels(
@@ -266,7 +216,6 @@ def _tile_missing_channels(
 def _add_channels_to_tile(
     tile_path: Path,
     channels: list[str],
-    half_m: int,
     cache_dirs: dict[str, Path | None],
     *,
     year: int | None = None,
@@ -286,33 +235,19 @@ def _add_channels_to_tile(
             return {"status": "skip", "tile": tile_path.name}
         existing = dict(d)
 
-    # Determine output pixel size from the image shape (C, H, W)
-    img = existing.get("spectral", existing.get("image"))
-    if img is not None and img.ndim >= 2:
-        h_px, w_px = img.shape[-2], img.shape[-1]
-    else:
-        h_px, w_px = 256, 256
-
-    # Bounding box — via the canonical SSOT resolver (imint.training.tile_bbox),
-    # NOT a local reimplementation. resolve_tile_bbox rebuilds the extent from the
-    # TileConfig (size_px = the spectral pixel count) on EVERY path, so a stale or
-    # legacy bbox_3006 — or a wrong --patch-size-m — can never decouple ground
-    # extent from output pixels. That decoupling is what rendered the central
-    # 2560 m of each 512 px tile at 5 m/px (the central quarter, stretched 2×),
-    # misaligning every aux channel against the 10 m/px grid. Bypassing this SSOT
-    # with a local half_m bbox is precisely what caused the bug. Guard:
-    # tests/test_fetch_contract.py::test_stale_bbox_array_is_renormalized.
-    from imint.training.tile_bbox import resolve_tile_bbox
-    from imint.training.tile_config import TileConfig
-
-    bbox = resolve_tile_bbox(
-        name=tile_path.stem, tile=TileConfig(size_px=int(w_px)), npz_data=existing)
-    if bbox is not None:
-        west, south, east, north = (
-            bbox["west"], bbox["south"], bbox["east"], bbox["north"])
-    else:
-        # Unresolvable name (legacy numeric, no manifest) — last-resort CLI hint.
-        west, south, east, north = _bbox_from_tile(tile_path, half_m)
+    # Output size + bbox — via the shared SSOT resolver. resolve_fetch_bbox
+    # derives size_px from the tile's own spectral grid and rebuilds the bbox
+    # extent to match it (10 m GSD), so ground extent is ALWAYS coupled to output
+    # pixels. This is the ONE place tile-aligned aux geometry is resolved — no
+    # local --patch-size-m / _bbox_from_tile math (that decoupling rendered the
+    # central 2560 m of each 512 px tile at 5 m/px — the 256/512 aux-misalignment).
+    bbox, size_px = resolve_fetch_bbox(name=tile_path.stem, npz_data=existing)
+    if bbox is None:
+        return {"status": "fail", "tile": tile_path.name,
+                "error": "could not resolve tile bbox"}
+    h_px = w_px = size_px
+    west, south, east, north = (
+        bbox["west"], bbox["south"], bbox["east"], bbox["north"])
 
     # Fetch each missing channel
     fetched = {}
@@ -390,10 +325,6 @@ def main():
         help="Number of parallel download threads (default: 4)",
     )
     parser.add_argument(
-        "--patch-size-m", type=int, default=2560,
-        help="Tile spatial extent in meters (default: 2560 = 256px × 10m)",
-    )
-    parser.add_argument(
         "--no-cache", action="store_true",
         help="Disable tile caching",
     )
@@ -434,7 +365,6 @@ def main():
     if not tiles_dir.exists() or not any(tiles_dir.glob("*.npz")):
         # Fall back to data_dir itself — the unified layout.
         tiles_dir = data_dir
-    half_m = args.patch_size_m // 2
 
     # Build per-channel cache dirs (always under data_dir, not tiles_dir,
     # so caches are shared across crop_/urban_/tile_ naming conventions).
@@ -526,7 +456,7 @@ def main():
         tile_path, missing = item
         try:
             return _add_channels_to_tile(
-                tile_path, missing, half_m, cache_dirs, year=args.year,
+                tile_path, missing, cache_dirs, year=args.year,
                 force=args.force)
         except Exception as e:
             return {

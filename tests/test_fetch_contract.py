@@ -173,14 +173,15 @@ class TestPrefetchAuxBboxCoupling:
             hw = size_px if isinstance(size_px, tuple) else (size_px, size_px)
             return np.zeros(hw, np.float32)
 
-        # half_m=99999 simulates a wildly wrong --patch-size-m; must be ignored.
+        # resolve_fetch_bbox must rebuild the extent from the 64px spectral grid
+        # (640 m), never trust the stale 2560 m bbox_3006 stored on the tile.
         with patch.dict(pa._CHANNEL_FETCHERS, {"dem": fake_dem}):
-            pa._add_channels_to_tile(npz, ["dem"], 99999, {"dem": None})
+            pa._add_channels_to_tile(npz, ["dem"], {"dem": None})
 
         w, s, e, n = captured["bbox"]
         assert (e - w) == px * 10 == 640, \
             f"extent {(e - w)} m decoupled from {px}px — expected 640 m " \
-            f"(old half_m path would give {2 * 99999}, stale bbox would give 2560)"
+            f"(stale bbox would give 2560)"
         assert (n - s) == px * 10 == 640
         assert (w + e) // 2 == center[0]          # center preserved
         assert (s + n) // 2 == center[1]
@@ -195,3 +196,68 @@ class TestPrefetchAuxBboxCoupling:
         assert pa._tile_missing_channels(npz, ["dem", "volume"]) == []
         assert pa._tile_missing_channels(
             npz, ["dem", "volume"], force=True) == ["dem", "volume"]
+
+
+class TestResolveFetchBbox:
+    """The shared entry point every aux fetcher uses — size_px from the tile's
+    own grid + bbox extent rebuilt to match it (10 m GSD). Replaces the per-script
+    _bbox_from_tile / _tile_bbox_3006 / _spatial_size helpers."""
+
+    def test_size_px_from_spectral_or_image(self):
+        from imint.training.tile_bbox import tile_size_px
+        assert tile_size_px({"spectral": np.zeros((24, 512, 512), np.float32)}) == 512
+        assert tile_size_px({"image": np.zeros((6, 256, 256), np.float32)}) == 256
+
+    def test_size_px_default_when_absent(self):
+        from imint.training.tile_bbox import tile_size_px
+        assert tile_size_px({}, default=512) == 512
+        assert tile_size_px(None, default=256) == 256
+
+    @pytest.mark.parametrize("px", [256, 512])
+    def test_couples_extent_to_pixels_ignoring_stale_bbox(self, px):
+        from imint.training.tile_bbox import resolve_fetch_bbox
+        # A stale 256-era 2560 m bbox stored alongside a `px`-sized spectral —
+        # the returned extent must be rebuilt to px*10, never the stale 2560 m.
+        npz = {
+            "spectral": np.zeros((24, px, px), np.float32),
+            "bbox_3006": np.array([100000, 6500000, 102560, 6502560], np.int32),
+            "easting": np.int32(101280), "northing": np.int32(6501280),
+        }
+        bbox, size = resolve_fetch_bbox(name="tile_101280_6501280", npz_data=npz)
+        assert size == px
+        assert (bbox["east"] - bbox["west"]) == px * 10
+        assert (bbox["north"] - bbox["south"]) == px * 10
+
+
+class TestBackfillVppForce:
+    """backfill_vpp --force must re-fetch VPP that already exists (to overwrite
+    the wrong-grid VPP); without it, a tile with present VPP is skipped."""
+
+    def _tile(self, tmp_path):
+        npz = tmp_path / "tile_20_20.npz"
+        ones = np.ones((4, 4), np.float32)
+        np.savez(npz,
+                 spectral=np.zeros((6, 4, 4), np.float32),
+                 bbox_3006=np.array([0, 0, 40, 40], np.int32),
+                 tessera_year=np.int32(2020),
+                 **{f"vpp_{n}": ones for n in
+                    ("sosd", "eosd", "length", "maxv", "minv")})
+        return npz
+
+    def test_force_bypasses_vpp_present_skip(self, tmp_path, monkeypatch):
+        bv = pytest.importorskip("scripts.backfill_vpp")
+        npz = self._tile(tmp_path)
+        called = {}
+
+        def fake_fetch(w, s, e, n, *, size_px, year, cache_dir):
+            called["hit"] = True
+            return ({k: np.ones((4, 4), np.float32) for k in
+                     ("sosd", "eosd", "length", "maxv", "minv")}, "wekeo")
+
+        monkeypatch.setattr(bv, "_fetch_vpp_wekeo_then_cdse", fake_fetch)
+        # present VPP → skipped, no fetch
+        r = bv.backfill_one_tile(str(npz), cache_dir=None, dry_run=True)
+        assert r["status"] == "skipped" and "hit" not in called
+        # --force → re-fetched despite present VPP
+        r = bv.backfill_one_tile(str(npz), cache_dir=None, dry_run=True, force=True)
+        assert r["status"] == "filled" and called.get("hit")

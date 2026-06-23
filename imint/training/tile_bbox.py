@@ -111,3 +111,50 @@ def resolve_tile_bbox(
             return tile.bbox_from_center(cx, cy)
 
     return None
+
+
+def tile_size_px(npz_data: Any | None, *, default: int = 512) -> int:
+    """Square pixel size of a tile, read from its stored spectral/image cube.
+
+    Every aux fetcher must derive the output size the same way — from the tile's
+    own data, never a CLI flag or module constant — so the fetched channel always
+    matches the tile's pixel grid. Falls back to ``default`` only when no
+    spectral/image cube is present (tiles are square; the last axis is returned).
+    """
+    if npz_data is not None and hasattr(npz_data, "get"):
+        img = npz_data.get("spectral", npz_data.get("image"))
+        if img is not None:
+            arr = np.asarray(img)
+            if arr.ndim >= 2:
+                return int(arr.shape[-1])
+    return default
+
+
+def resolve_fetch_bbox(
+    *,
+    name: str,
+    npz_data: Any | None = None,
+    manifest_path: str | None = None,
+    default_size_px: int = 512,
+) -> tuple[dict[str, int] | None, int]:
+    """Resolve ``(bbox_3006, size_px)`` for fetching tile-aligned aux data.
+
+    THE single entry point every per-pixel aux/spectral fetcher must use. It
+    derives ``size_px`` from the tile's own grid (:func:`tile_size_px`) and then
+    calls :func:`resolve_tile_bbox` with a matching :class:`TileConfig`, so the
+    fetched ground extent is ALWAYS coupled to the output pixel count at the 10 m
+    NMD GSD. This replaces the per-script bbox math (``--patch-size-m`` and
+    private ``_bbox_from_tile`` / ``_tile_bbox_3006`` helpers) that decoupled
+    extent from pixels and produced the 256/512 aux-misalignment.
+
+    Returns ``(bbox, size_px)``; ``bbox`` is ``None`` only when the tile's
+    location cannot be resolved by any :func:`resolve_tile_bbox` method.
+    """
+    from imint.training.tile_config import TileConfig
+
+    size = tile_size_px(npz_data, default=default_size_px)
+    bbox = resolve_tile_bbox(
+        name=name, tile=TileConfig(size_px=size),
+        npz_data=npz_data, manifest_path=manifest_path,
+    )
+    return bbox, size

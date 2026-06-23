@@ -63,6 +63,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.cdse_vpp import _has_sufficient_coverage, fetch_vpp_tiles
+from imint.training.tile_bbox import resolve_fetch_bbox
 
 # The five HR-VPP channels stored per tile. ``fetch_vpp_tiles`` returns the
 # bare metric names (sosd, eosd, …); the .npz key is ``vpp_<name>`` — the
@@ -116,31 +117,6 @@ def _tile_year(data) -> int | None:
         if len(str(s)) >= 4 and str(s)[:4].isdigit()
     ]
     return max(years) if years else None
-
-
-def _tile_bbox_3006(data) -> tuple[float, float, float, float] | None:
-    """Return the tile's EPSG:3006 (west, south, east, north) bbox.
-
-    Reads the ``bbox_3006`` array (4 floats, W/S/E/N) written by the fetcher —
-    the same key fill_tiles_l2a.py uses. The bbox already sits on the NMD 10 m
-    lattice (M1 grid-snap), so it is passed to ``fetch_vpp_tiles`` verbatim; no
-    re-snap. Returns None if absent/malformed.
-    """
-    if "bbox_3006" not in data:
-        return None
-    b = np.asarray(data["bbox_3006"]).flatten()
-    if b.size < 4:
-        return None
-    return (float(b[0]), float(b[1]), float(b[2]), float(b[3]))
-
-
-def _spatial_size(data) -> tuple[int, int]:
-    """(H, W) pixel size from the spectral/image cube; default 512 for _recoreg."""
-    img = data.get("spectral", data.get("image"))
-    if img is not None and np.asarray(img).ndim >= 2:
-        shp = np.asarray(img).shape
-        return int(shp[-2]), int(shp[-1])
-    return 512, 512
 
 
 # ── Fetch: WEkEO first (PU-free), CDSE fallback ──────────────────────────
@@ -242,6 +218,7 @@ def backfill_one_tile(
     *,
     cache_dir: Path | None,
     dry_run: bool = False,
+    force: bool = False,
 ) -> dict:
     """Backfill VPP into one tile. Returns a status dict (never raises).
 
@@ -249,6 +226,10 @@ def backfill_one_tile(
     ``filled`` (VPP written, or would-be in dry-run), ``empty`` (both
     sources missed — recorded in the known-empty sidecar by the caller),
     ``failed`` (load/write error). The tile is rewritten only on ``filled``.
+
+    With ``force`` the ``vpp_present`` skip is bypassed — every tile's VPP is
+    re-fetched and overwritten (corrects already-stored-but-wrong VPP, e.g. the
+    256/512 aux-misalignment).
     """
     name = Path(tile_path).stem
     try:
@@ -256,23 +237,25 @@ def backfill_one_tile(
     except Exception as e:  # noqa: BLE001 — a corrupt .npz must not kill the run
         return {"name": name, "status": "failed", "reason": f"load:{type(e).__name__}"}
 
-    if not _vpp_is_empty(data):
+    if not force and not _vpp_is_empty(data):
         return {"name": name, "status": "skipped", "reason": "vpp_present"}
 
-    bbox = _tile_bbox_3006(data)
+    # bbox + size via the shared SSOT resolver (extent coupled to the tile's own
+    # pixel grid at 10 m GSD) — the ONE place tile-aligned fetch geometry lives.
+    bbox, size = resolve_fetch_bbox(name=name, npz_data=data)
     if bbox is None:
-        return {"name": name, "status": "skipped", "reason": "no_bbox_3006"}
+        return {"name": name, "status": "skipped", "reason": "no_bbox"}
 
     year = _tile_year(data)
     if year is None:
         return {"name": name, "status": "skipped", "reason": "no_year"}
 
-    size_px = _spatial_size(data)
-    west, south, east, north = bbox
+    west = bbox["west"]; south = bbox["south"]
+    east = bbox["east"]; north = bbox["north"]
 
     bands, source = _fetch_vpp_wekeo_then_cdse(
         west, south, east, north,
-        size_px=size_px, year=year, cache_dir=cache_dir,
+        size_px=(size, size), year=year, cache_dir=cache_dir,
     )
     if bands is None:
         # NEVER zero-fill — leave VPP absent, record for the known-empty set.
@@ -323,6 +306,7 @@ def run(
     dry_run: bool = False,
     cache_dir: str | None = None,
     max_tiles: int | None = None,
+    force: bool = False,
 ) -> dict:
     """Backfill VPP across every ``*.npz`` under ``data_dir``.
 
@@ -348,7 +332,7 @@ def run(
 
     def _run_one(path: str) -> None:
         nonlocal done
-        r = backfill_one_tile(path, cache_dir=cdir, dry_run=dry_run)
+        r = backfill_one_tile(path, cache_dir=cdir, dry_run=dry_run, force=force)
         with lock:
             done += 1
             stats[r["status"]] = stats.get(r["status"], 0) + 1
@@ -401,6 +385,9 @@ def main() -> int:
                     help="Cap tiles processed (smoke/dry-run subset)")
     ap.add_argument("--dry-run", action="store_true",
                     help="Measure only — fetch + report, write nothing")
+    ap.add_argument("--force", action="store_true",
+                    help="Re-fetch and OVERWRITE VPP even if already present "
+                         "(corrects wrong-grid VPP). Atomic per-tile.")
     args = ap.parse_args()
 
     stats = run(
@@ -409,6 +396,7 @@ def main() -> int:
         dry_run=args.dry_run,
         cache_dir=args.cache_dir,
         max_tiles=args.max_tiles,
+        force=args.force,
     )
     return 0 if stats["failed"] == 0 else 1
 

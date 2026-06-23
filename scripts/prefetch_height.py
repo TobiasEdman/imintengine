@@ -9,7 +9,6 @@ downloaded in the background while training continues.
 Usage:
     python scripts/prefetch_height.py [--data-dir data/lulc_full]
                                        [--workers 4]
-                                       [--patch-size-m 2560]
 
 The script is fully resumable — tiles that already contain a ``height``
 key are skipped, and progress is printed every 50 tiles.
@@ -19,7 +18,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import sys
 import time
@@ -33,33 +31,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from imint.training.skg_height import fetch_height_tile
+from imint.training.tile_bbox import resolve_fetch_bbox
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
-
-_TILE_RE = re.compile(r"tile_(\d+)_(\d+)\.npz$")
-
-
-def _bbox_from_tile(tile_path: Path, half_m: int) -> tuple[int, int, int, int]:
-    """Extract EPSG:3006 bbox from tile filename.
-
-    Tile names are ``tile_{easting}_{northing}.npz`` where easting and
-    northing are the grid-cell center.  The bbox extends ±half_m around
-    that center.
-
-    Returns (west, south, east, north) in EPSG:3006 meters.
-    """
-    m = _TILE_RE.search(tile_path.name)
-    if not m:
-        raise ValueError(f"Cannot parse easting/northing from {tile_path.name}")
-    easting = int(m.group(1))
-    northing = int(m.group(2))
-    return (
-        easting - half_m,
-        northing - half_m,
-        easting + half_m,
-        northing + half_m,
-    )
 
 
 def _tile_has_height(tile_path: Path) -> bool:
@@ -73,7 +48,6 @@ def _tile_has_height(tile_path: Path) -> bool:
 
 def _add_height_to_tile(
     tile_path: Path,
-    half_m: int,
     cache_dir: Path | None,
 ) -> dict:
     """Fetch height and write it into an existing .npz tile.
@@ -86,29 +60,15 @@ def _add_height_to_tile(
             return {"status": "skip", "tile": tile_path.name}
         existing = dict(d)
 
-    # Determine output pixel size from the image shape (C, H, W)
-    img = existing.get("spectral", existing.get("image"))
-    if img is not None and img.ndim >= 2:
-        h_px, w_px = img.shape[-2], img.shape[-1]
-    else:
-        h_px, w_px = 256, 256
-
-    # Bounding box — via the canonical SSOT resolver (imint.training.tile_bbox),
-    # which rebuilds the extent from the TileConfig (size_px = the spectral pixel
-    # count) on every path, so a stale/legacy bbox_3006 or a wrong --patch-size-m
-    # can never decouple ground extent from output pixels. See prefetch_aux.py for
-    # the full analysis of the 256/512 aux-misalignment this prevents.
-    from imint.training.tile_bbox import resolve_tile_bbox
-    from imint.training.tile_config import TileConfig
-
-    bbox = resolve_tile_bbox(
-        name=tile_path.stem, tile=TileConfig(size_px=int(w_px)), npz_data=existing)
-    if bbox is not None:
-        west, south, east, north = (
-            bbox["west"], bbox["south"], bbox["east"], bbox["north"])
-    else:
-        # Unresolvable name (legacy numeric, no manifest) — last-resort CLI hint.
-        west, south, east, north = _bbox_from_tile(tile_path, half_m)
+    # Output size + bbox — shared SSOT resolver (extent always coupled to the
+    # tile's own pixel grid at 10 m GSD). See prefetch_aux.py / resolve_fetch_bbox.
+    bbox, size_px = resolve_fetch_bbox(name=tile_path.stem, npz_data=existing)
+    if bbox is None:
+        return {"status": "fail", "tile": tile_path.name,
+                "error": "could not resolve tile bbox"}
+    h_px = w_px = size_px
+    west, south, east, north = (
+        bbox["west"], bbox["south"], bbox["east"], bbox["north"])
 
     # Fetch height matching the tile's spatial dimensions exactly
     height = fetch_height_tile(
@@ -149,10 +109,6 @@ def main():
         help="Number of parallel download threads (default: 4)",
     )
     parser.add_argument(
-        "--patch-size-m", type=int, default=2560,
-        help="Tile spatial extent in meters (default: 2560 = 256px × 10m)",
-    )
-    parser.add_argument(
         "--no-cache", action="store_true",
         help="Disable height tile caching",
     )
@@ -165,7 +121,6 @@ def main():
     data_dir = Path(args.data_dir)
     tiles_dir = data_dir / "tiles"
     cache_dir = data_dir / "cache" / "height" if not args.no_cache else None
-    half_m = args.patch_size_m // 2
 
     if not tiles_dir.exists():
         print(f"ERROR: Tiles directory not found: {tiles_dir}")
@@ -223,7 +178,7 @@ def main():
 
     def _worker(tile_path):
         try:
-            return _add_height_to_tile(tile_path, half_m, cache_dir)
+            return _add_height_to_tile(tile_path, cache_dir)
         except Exception as e:
             return {
                 "status": "fail",

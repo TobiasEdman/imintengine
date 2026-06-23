@@ -27,15 +27,7 @@ from imint.training.skg_grunddata import (
     fetch_basal_area_tile,
     fetch_diameter_tile,
 )
-
-TILE_M = 2560
-
-
-def get_bbox(data: dict) -> tuple[float, float, float, float] | None:
-    if "bbox_3006" in data:
-        b = data["bbox_3006"]
-        return float(b[0]), float(b[1]), float(b[2]), float(b[3])
-    return None
+from imint.training.tile_bbox import resolve_fetch_bbox
 
 
 def process_tile(tile_path: str) -> dict:
@@ -57,26 +49,29 @@ def process_tile(tile_path: str) -> dict:
         if not needs:
             return {"name": name, "status": "skip"}
 
-        bbox = get_bbox(data)
-        if bbox is None:
+        # bbox + size via the shared SSOT resolver (extent + fetch size coupled
+        # to the tile's own pixel grid at 10 m GSD); crop tiles are 256 px.
+        bbox_d, size = resolve_fetch_bbox(
+            name=name, npz_data=data, default_size_px=256)
+        if bbox_d is None:
             return {"name": name, "status": "error", "msg": "no bbox"}
-
-        west, south, east, north = bbox
+        west, south, east, north = (
+            bbox_d["west"], bbox_d["south"], bbox_d["east"], bbox_d["north"])
 
         for var in needs:
             try:
                 if var == "height":
-                    arr = fetch_height_tile(west, south, east, north, size_px=256)
+                    arr = fetch_height_tile(west, south, east, north, size_px=size)
                 elif var == "volume":
-                    arr = fetch_volume_tile(west, south, east, north, size_px=256)
+                    arr = fetch_volume_tile(west, south, east, north, size_px=size)
                 elif var == "basal_area":
-                    arr = fetch_basal_area_tile(west, south, east, north, size_px=256)
+                    arr = fetch_basal_area_tile(west, south, east, north, size_px=size)
                 elif var == "diameter":
-                    arr = fetch_diameter_tile(west, south, east, north, size_px=256)
+                    arr = fetch_diameter_tile(west, south, east, north, size_px=size)
                 data[var] = arr.astype(np.float32)
             except Exception as e:
                 # Fill with zeros if fetch fails (coastal/urban tiles)
-                data[var] = np.zeros((256, 256), dtype=np.float32)
+                data[var] = np.zeros((size, size), dtype=np.float32)
 
         np.savez(tile_path, **data)
         return {"name": name, "status": "ok", "fetched": needs}

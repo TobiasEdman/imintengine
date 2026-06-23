@@ -42,10 +42,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-
-import os as _os
-TILE_SIZE_PX = int(_os.environ.get("TILE_SIZE_PX", 256))
-TILE_SIZE_M = TILE_SIZE_PX * 10
+from imint.training.tile_bbox import resolve_fetch_bbox
 
 
 def _get_tile_dates(data: dict) -> list[str]:
@@ -64,25 +61,10 @@ def _get_tile_max_year(data: dict) -> int:
     return max(years) if years else 0
 
 
-def _bbox_from_tile(data: dict) -> tuple[int, int, int, int] | None:
-    """Reconstruct bbox [west, south, east, north] from tile easting/northing."""
-    if "bbox_3006" in data:
-        bbox = data["bbox_3006"]
-        return int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-
-    if "easting" in data and "northing" in data:
-        easting = int(data["easting"])
-        northing = int(data["northing"])
-        half = TILE_SIZE_M // 2
-        return easting - half, northing - half, easting + half, northing + half
-
-    return None
-
-
 def rasterize_sks(
     gdf,
     bbox: tuple[int, int, int, int],
-    tile_size: int = TILE_SIZE_PX,
+    tile_size: int,
 ) -> tuple[np.ndarray, int]:
     """Rasterize SKS polygons within bbox to a binary mask.
 
@@ -137,15 +119,18 @@ def process_tile(
         if "harvest_mask" in data and "mature_forest_mask" in data:
             return {"name": name, "status": "skip"}
 
-        bbox = _bbox_from_tile(data)
-        if bbox is None:
+        # bbox + raster size via the shared SSOT resolver (extent + size coupled
+        # to the tile's own pixel grid at 10 m GSD) — no module TILE_SIZE_PX.
+        bbox_d, size = resolve_fetch_bbox(name=Path(tile_path).stem, npz_data=data)
+        if bbox_d is None:
             return {"name": name, "status": "error", "msg": "no bbox"}
+        bbox = (bbox_d["west"], bbox_d["south"], bbox_d["east"], bbox_d["north"])
 
         # Rasterize utförda avverkningar → harvest_mask (binary)
-        harvest_mask, n_harvest = rasterize_sks(utforda_gdf, bbox)
+        harvest_mask, n_harvest = rasterize_sks(utforda_gdf, bbox, tile_size=size)
 
         # Rasterize avverkningsanmälningar → anmalda_mask (binary)
-        anmalda_mask, n_mature = rasterize_sks(anmalda_gdf, bbox)
+        anmalda_mask, n_mature = rasterize_sks(anmalda_gdf, bbox, tile_size=size)
 
         # Save the real SKS layers only (the synthetic harvest_probability
         # channel was dropped — it leaked the harvest target into the input).
