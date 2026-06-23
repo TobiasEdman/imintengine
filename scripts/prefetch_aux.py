@@ -267,8 +267,6 @@ def _add_channels_to_tile(
 
     The tile is rewritten atomically (tmp → rename) to avoid corruption.
     """
-    west, south, east, north = _bbox_from_tile(tile_path, half_m)
-
     # Load existing tile data
     with np.load(tile_path, allow_pickle=True) as d:
         # Re-check which channels are actually missing
@@ -283,6 +281,27 @@ def _add_channels_to_tile(
         h_px, w_px = img.shape[-2], img.shape[-1]
     else:
         h_px, w_px = 256, 256
+
+    # Bounding box — via the canonical SSOT resolver (imint.training.tile_bbox),
+    # NOT a local reimplementation. resolve_tile_bbox rebuilds the extent from the
+    # TileConfig (size_px = the spectral pixel count) on EVERY path, so a stale or
+    # legacy bbox_3006 — or a wrong --patch-size-m — can never decouple ground
+    # extent from output pixels. That decoupling is what rendered the central
+    # 2560 m of each 512 px tile at 5 m/px (the central quarter, stretched 2×),
+    # misaligning every aux channel against the 10 m/px grid. Bypassing this SSOT
+    # with a local half_m bbox is precisely what caused the bug. Guard:
+    # tests/test_fetch_contract.py::test_stale_bbox_array_is_renormalized.
+    from imint.training.tile_bbox import resolve_tile_bbox
+    from imint.training.tile_config import TileConfig
+
+    bbox = resolve_tile_bbox(
+        name=tile_path.stem, tile=TileConfig(size_px=int(w_px)), npz_data=existing)
+    if bbox is not None:
+        west, south, east, north = (
+            bbox["west"], bbox["south"], bbox["east"], bbox["north"])
+    else:
+        # Unresolvable name (legacy numeric, no manifest) — last-resort CLI hint.
+        west, south, east, north = _bbox_from_tile(tile_path, half_m)
 
     # Fetch each missing channel
     fetched = {}

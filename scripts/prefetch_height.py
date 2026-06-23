@@ -80,8 +80,6 @@ def _add_height_to_tile(
 
     The tile is rewritten atomically (tmp → rename) to avoid corruption.
     """
-    west, south, east, north = _bbox_from_tile(tile_path, half_m)
-
     # Load existing tile data
     with np.load(tile_path, allow_pickle=True) as d:
         if "height" in d:
@@ -94,6 +92,23 @@ def _add_height_to_tile(
         h_px, w_px = img.shape[-2], img.shape[-1]
     else:
         h_px, w_px = 256, 256
+
+    # Bounding box — via the canonical SSOT resolver (imint.training.tile_bbox),
+    # which rebuilds the extent from the TileConfig (size_px = the spectral pixel
+    # count) on every path, so a stale/legacy bbox_3006 or a wrong --patch-size-m
+    # can never decouple ground extent from output pixels. See prefetch_aux.py for
+    # the full analysis of the 256/512 aux-misalignment this prevents.
+    from imint.training.tile_bbox import resolve_tile_bbox
+    from imint.training.tile_config import TileConfig
+
+    bbox = resolve_tile_bbox(
+        name=tile_path.stem, tile=TileConfig(size_px=int(w_px)), npz_data=existing)
+    if bbox is not None:
+        west, south, east, north = (
+            bbox["west"], bbox["south"], bbox["east"], bbox["north"])
+    else:
+        # Unresolvable name (legacy numeric, no manifest) — last-resort CLI hint.
+        west, south, east, north = _bbox_from_tile(tile_path, half_m)
 
     # Fetch height matching the tile's spatial dimensions exactly
     height = fetch_height_tile(

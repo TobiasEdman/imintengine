@@ -252,6 +252,23 @@ def fetch_grunddata_tile(
     else:
         h_px, w_px = size_px
 
+    # Extent/size_px consistency guard (mirrors the cdse_s2 bbox/size_px check).
+    # This pipeline samples Skogliga grunddata at 10 m/px exclusively. A bbox
+    # whose extent implies a different GSD means the caller decoupled the ground
+    # extent from the output pixel count — the 256/512 aux-misalignment bug, where
+    # a 2560 m bbox rendered at 512 px gave 5 m/px (the central quarter, stretched
+    # 2×). Fail loudly BEFORE the HTTP call rather than silently returning data on
+    # the wrong grid. Build the bbox via TileConfig.bbox_from_center /
+    # resolve_tile_bbox so extent stays coupled to pixels.
+    _GSD_M = 10.0
+    ew, ns = (east - west), (north - south)
+    if abs(ew - w_px * _GSD_M) > _GSD_M or abs(ns - h_px * _GSD_M) > _GSD_M:
+        raise ValueError(
+            f"grunddata bbox/size_px mismatch: extent {ew:.0f}x{ns:.0f} m vs "
+            f"{w_px}x{h_px} px implies {ew / max(w_px, 1):.1f} m/px, expected "
+            f"{_GSD_M:.0f} m/px — caller decoupled extent from pixels."
+        )
+
     # Check cache
     if cache_dir is not None:
         cache_key = (f"{cache_prefix}_{int(west)}_{int(south)}"

@@ -1,0 +1,179 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verify-aux-bbox-fix
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: verify-aux-bbox-fix
+spec:
+  backoffLimit: 0
+  # READ-ONLY verification of the prefetch_aux bbox fix. For 3 recoreg tiles it
+  # re-fetches volume/dem/markfukt at the tile's STORED bbox_3006 (the fix) and
+  # at the old center +/- 1280 m / 512 px (the bug), and correlates both against
+  # the known-correct stored `height`. Expected:
+  #   corr(stored_volume, height)        ~ 0     (current bug: misaligned)
+  #   corr(fixed_volume,  height)        ~ 0.8   (fix: aligns to true grid)
+  #   corr(stored_volume, broken_refetch)~ 1.0   (stored == 2560 m bbox render)
+  #   corr(stored_aux, central(fixed)x2) ~ high  (stored == central-half stretched 2x)
+  # Writes a JSON report to /data/debug/aux_bbox_fix_verify.json. Touches NO tile.
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: verify
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== verify aux bbox fix (READ-ONLY) ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+              cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
+              echo "SKG endpoints wired:"; grep -i "url" /workspace/imintengine/.skg_endpoints || true
+
+              cat > /workspace/verify.py <<'PYEOF'
+              import glob, json
+              import numpy as np
+              from imint.training.skg_grunddata import fetch_volume_tile
+              from imint.training.copernicus_dem import fetch_dem_tile
+              from imint.training.slu_markfukt import fetch_markfukt_tile
+
+              def corr(a, b):
+                  a = np.asarray(a, float); b = np.asarray(b, float)
+                  m = np.isfinite(a) & np.isfinite(b) & (a != 0) & (b != 0)
+                  if m.sum() < 200:
+                      return float("nan")
+                  ac = a[m] - a[m].mean(); bc = b[m] - b[m].mean()
+                  den = np.sqrt((ac * ac).sum() * (bc * bc).sum())
+                  return float((ac * bc).sum() / den) if den > 0 else float("nan")
+
+              def up2(a):
+                  return np.repeat(np.repeat(np.asarray(a, float), 2, 0), 2, 1)
+
+              def central(a):
+                  a = np.asarray(a, float); n = a.shape[0]; q = n // 4
+                  return a[q:n - q, q:n - q]   # central half (256 of 512)
+
+              all_t = sorted(glob.glob("/data/unified_v2_512_recoreg/tile_*.npz"))
+              tiles = []
+              for cand in all_t:        # prefer data-rich tiles (>45% volume cov)
+                  try:
+                      zz = np.load(cand, allow_pickle=True)
+                  except Exception:
+                      continue
+                  if "volume" not in zz.files or "height" not in zz.files:
+                      continue
+                  if float((np.nan_to_num(zz["volume"].astype(float)) > 0).mean()) > 0.45:
+                      tiles.append(cand)
+                  if len(tiles) >= 3:
+                      break
+              if not tiles:
+                  tiles = all_t[:3]
+              print(f"verifying {len(tiles)} recoreg tiles")
+              report = []
+              for p in tiles:
+                  z = np.load(p, allow_pickle=True)
+                  b = np.asarray(z["bbox_3006"]).flatten()
+                  W, S, E, N = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+                  px = int(z["spectral"].shape[-1])
+                  H = z["height"].astype(float)
+                  rec = {"tile": p.split("/")[-1], "bbox_3006": [W, S, E, N], "px": px}
+
+                  Vs = z["volume"].astype(float)
+                  Vc = np.asarray(fetch_volume_tile(west=W, south=S, east=E,
+                                                    north=N, size_px=px), float)
+                  cx, cy = (W + E) // 2, (S + N) // 2
+                  Vb = np.asarray(fetch_volume_tile(west=cx - 1280, south=cy - 1280,
+                                                    east=cx + 1280, north=cy + 1280,
+                                                    size_px=px), float)
+                  rec["volume"] = {
+                      "corr(stored,height)":         round(corr(Vs, H), 3),
+                      "corr(FIXED,height)":          round(corr(Vc, H), 3),
+                      "corr(stored,broken_refetch)": round(corr(Vs, Vb), 3),
+                      "corr(stored,FIXED)":          round(corr(Vs, Vc), 3),
+                  }
+                  for name, fn, key in (("dem", fetch_dem_tile, "dem"),
+                                        ("markfukt", fetch_markfukt_tile, "markfukt")):
+                      try:
+                          stored = z[key].astype(float)
+                          fixed = np.asarray(fn(west=W, south=S, east=E,
+                                                north=N, size_px=px), float)
+                          rec[name] = {
+                              "corr(stored,FIXED)":            round(corr(stored, fixed), 3),
+                              "corr(stored,central(FIXED)x2)": round(corr(stored, up2(central(fixed))), 3),
+                          }
+                      except Exception as e:
+                          rec[name] = {"error": f"{type(e).__name__}: {e}"}
+                  report.append(rec)
+                  print(json.dumps(rec, indent=2))
+
+              import os
+              os.makedirs("/data/debug", exist_ok=True)
+              with open("/data/debug/aux_bbox_fix_verify.json", "w") as f:
+                  json.dump(report, f, indent=2)
+              print("WROTE /data/debug/aux_bbox_fix_verify.json")
+
+              # NaN-aware: a tile with <200 valid px yields NaN corr (sparse
+              # far-north tiles); judge only on tiles where corr is computable.
+              def _num(x):
+                  return isinstance(x, float) and x == x   # finite, not NaN
+              fixed = [r["volume"]["corr(FIXED,height)"] for r in report]
+              fixed = [c for c in fixed if _num(c)]
+              brk = [r["volume"]["corr(stored,broken_refetch)"] for r in report]
+              brk = [c for c in brk if _num(c)]
+              ok = (len(fixed) >= 2 and all(c > 0.6 for c in fixed)
+                    and len(brk) >= 2 and all(c > 0.95 for c in brk))
+              print("VERDICT:", "PASS — bbox fix aligns aux to true grid" if ok
+                    else "FAIL — fix did not produce expected alignment")
+              PYEOF
+              python3 /workspace/verify.py
+              echo "=== done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: skg-endpoints
+              mountPath: /etc/skg
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints

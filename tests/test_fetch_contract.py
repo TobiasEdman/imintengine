@@ -109,3 +109,78 @@ class TestTileFetchModuleNoGlobals:
         assert not hasattr(tf, "TILE_SIZE_PX"), \
             "TILE_SIZE_PX was removed intentionally — tile size is a " \
             "TileConfig parameter, not a module global."
+
+
+class TestGrunddataExtentGuard:
+    """skg_grunddata.fetch_grunddata_tile must reject a (bbox, size_px) whose
+    extent implies a GSD != 10 m BEFORE the HTTP call — the fetcher-level guard
+    the SKG/DEM/markfukt path lacked when prefetch_aux silently produced aux on
+    the central-2560m-stretched grid (volume/basal/diameter/dem/markfukt/vpp on
+    unified_v2_512 were the central quarter of each tile, scaled 2x)."""
+
+    def test_mismatched_extent_raises_before_network(self):
+        from imint.training import skg_grunddata
+        # 2560 m extent rendered at 512 px → 5 m/px: the actual bug.
+        with patch.object(skg_grunddata, "_download_tile",
+                          side_effect=AssertionError("should not reach network")):
+            with pytest.raises(ValueError, match="bbox/size_px mismatch"):
+                skg_grunddata.fetch_volume_tile(
+                    100000, 6500000, 102560, 6502560, size_px=512)
+
+    def test_correct_extent_passes_guard_to_download(self):
+        from imint.training import skg_grunddata
+        # 5120 m extent at 512 px → 10 m/px: guard passes, reaches the HTTP layer.
+        with patch.object(skg_grunddata, "_download_tile",
+                          side_effect=AssertionError("reached download")):
+            with pytest.raises(AssertionError, match="reached download"):
+                skg_grunddata.fetch_volume_tile(
+                    100000, 6500000, 105120, 6505120, size_px=512)
+
+    def test_256_dataset_extent_is_valid(self):
+        # 2560 m at 256 px IS correct (10 m/px) — must NOT raise on the guard.
+        from imint.training import skg_grunddata
+        with patch.object(skg_grunddata, "_download_tile",
+                          side_effect=AssertionError("reached download")):
+            with pytest.raises(AssertionError, match="reached download"):
+                skg_grunddata.fetch_volume_tile(
+                    100000, 6500000, 102560, 6502560, size_px=256)
+
+
+class TestPrefetchAuxBboxCoupling:
+    """Regression for the prefetch_aux 256/512 misalignment: the fetch bbox must
+    be derived from the tile's grid via the SSOT resolve_tile_bbox (extent coupled
+    to the spectral pixel count), NEVER from --patch-size-m/half_m or a stale
+    bbox_3006. Would FAIL on the old `_bbox_from_tile(tile_path, half_m)` path."""
+
+    def test_fetch_bbox_coupled_to_spectral_px(self, tmp_path):
+        pa = pytest.importorskip("scripts.prefetch_aux")
+
+        px = 64                          # 64 px tile → expect 640 m extent
+        center = (391280, 6201280)
+        # A stale 256-era bbox (2560 m) stored on the tile — must be ignored.
+        stale = np.array([center[0] - 1280, center[1] - 1280,
+                          center[0] + 1280, center[1] + 1280], dtype=np.int32)
+        npz = tmp_path / "tile_391280_6201280.npz"
+        np.savez(npz,
+                 spectral=np.zeros((1, px, px), np.float32),
+                 bbox_3006=stale,
+                 easting=np.int32(center[0]), northing=np.int32(center[1]))
+
+        captured = {}
+
+        def fake_dem(west, south, east, north, *, size_px, cache_dir=None):
+            captured["bbox"] = (west, south, east, north)
+            hw = size_px if isinstance(size_px, tuple) else (size_px, size_px)
+            return np.zeros(hw, np.float32)
+
+        # half_m=99999 simulates a wildly wrong --patch-size-m; must be ignored.
+        with patch.dict(pa._CHANNEL_FETCHERS, {"dem": fake_dem}):
+            pa._add_channels_to_tile(npz, ["dem"], 99999, {"dem": None})
+
+        w, s, e, n = captured["bbox"]
+        assert (e - w) == px * 10 == 640, \
+            f"extent {(e - w)} m decoupled from {px}px — expected 640 m " \
+            f"(old half_m path would give {2 * 99999}, stale bbox would give 2560)"
+        assert (n - s) == px * 10 == 640
+        assert (w + e) // 2 == center[0]          # center preserved
+        assert (s + n) // 2 == center[1]
