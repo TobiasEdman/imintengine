@@ -184,3 +184,14 @@ class TestPrefetchAuxBboxCoupling:
         assert (n - s) == px * 10 == 640
         assert (w + e) // 2 == center[0]          # center preserved
         assert (s + n) // 2 == center[1]
+
+    def test_force_overwrites_present_channels(self, tmp_path):
+        """--force must re-fetch channels that already exist (to overwrite the
+        wrong-grid aux); without it, present channels are skipped."""
+        pa = pytest.importorskip("scripts.prefetch_aux")
+        npz = tmp_path / "tile_1_2.npz"
+        np.savez(npz, dem=np.zeros((4, 4), np.float32),
+                 volume=np.zeros((4, 4), np.float32))
+        assert pa._tile_missing_channels(npz, ["dem", "volume"]) == []
+        assert pa._tile_missing_channels(
+            npz, ["dem", "volume"], force=True) == ["dem", "volume"]

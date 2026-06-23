@@ -1,0 +1,126 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: refetch-recoreg-aux-free
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: refetch-recoreg-aux-free
+spec:
+  backoffLimit: 1
+  # ─────────────────────────────────────────────────────────────────────────
+  # APPLY ONLY AFTER Phase-1 (campaign-phase1-des-recoreg) IS Complete.
+  # Phase-1 is the live writer of /data/unified_v2_512_recoreg; running this
+  # concurrently means two writers on the same .npz (os.replace race) → tile
+  # corruption. Gate on Phase-1 succeeded before `kubectl apply`.
+  # ─────────────────────────────────────────────────────────────────────────
+  #
+  # Corrects the 256/512 aux-misalignment (commit 086294d): the free SKG/DEM/SLU
+  # channels in unified_v2_512_recoreg were fetched at a 2560 m extent rendered
+  # at 512 px (5 m/px) — the central quarter of each tile, stretched 2× — so they
+  # don't align with the 10 m/px spectral+label grid. prefetch_aux now derives the
+  # bbox from the tile's stored grid via resolve_tile_bbox, so --force re-fetches
+  # these 5 channels at the correct extent and overwrites the wrong data
+  # (atomic per-tile; all other keys, incl. the correct `height`, are preserved).
+  #
+  # SCOPE: the 5 PU-FREE channels only — volume, basal_area, diameter (SKG
+  # grunddata), dem (Copernicus S3), markfukt (SLU). VPP (also broken) is
+  # CDSE-billed via this path and is handled by a separate WEkEO (PU-free) job;
+  # `height` is correct and is NOT touched.
+  activeDeadlineSeconds: 28800   # 8 h — 5952 tiles x 5 channels, free webservices
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: refetch
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== re-fetch recoreg aux (free channels) at corrected bbox ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git libexpat1 libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio requests pyproj Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              # The bbox fix must be present in the cloned tip — verify the commit.
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+              git grep -q "resolve_tile_bbox" scripts/prefetch_aux.py \
+                && echo "OK: prefetch_aux uses resolve_tile_bbox (bbox fix present)" \
+                || { echo "FATAL: bbox fix NOT in clone — abort"; exit 1; }
+              cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
+
+              echo ""
+              echo "Tiles: $(ls /data/unified_v2_512_recoreg/*.npz 2>/dev/null | wc -l)"
+              echo "=== --force overwrite of volume/basal_area/diameter/dem/markfukt ==="
+              python3 scripts/prefetch_aux.py \
+                --data-dir /data/unified_v2_512_recoreg \
+                --channels volume basal_area diameter dem markfukt \
+                --force \
+                --workers 8
+
+              echo ""
+              echo "=== post-check: volume now aligns with height (sample 3 tiles) ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              def corr(a, b):
+                  a = a.astype(float); b = b.astype(float)
+                  m = np.isfinite(a) & np.isfinite(b) & (a != 0) & (b != 0)
+                  if m.sum() < 200: return float("nan")
+                  ac = a[m]-a[m].mean(); bc = b[m]-b[m].mean()
+                  d = np.sqrt((ac*ac).sum()*(bc*bc).sum())
+                  return float((ac*bc).sum()/d) if d else float("nan")
+              n = 0
+              for p in sorted(glob.glob("/data/unified_v2_512_recoreg/tile_*.npz")):
+                  if n >= 3: break
+                  z = np.load(p, allow_pickle=True)
+                  if "volume" not in z.files or "height" not in z.files: continue
+                  c = corr(z["volume"], z["height"])
+                  print(f"  {p.split('/')[-1]}: corr(volume,height)={c:.3f}  (want ~0.8)")
+                  n += 1
+              print("POST-CHECK DONE")
+              PYEOF
+              echo "=== done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "32Gi"
+            limits:
+              cpu: "16"
+              memory: "32Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: skg-endpoints
+              mountPath: /etc/skg
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints

@@ -232,13 +232,21 @@ def _bbox_from_tile(tile_path: Path, half_m: int) -> tuple[int, int, int, int]:
 
 def _tile_missing_channels(
     tile_path: Path, channels: list[str], *, force_vpp: bool = False,
+    force: bool = False,
 ) -> list[str]:
     """Return list of requested channels missing from the tile.
 
     For "vpp", checks whether all 5 VPP sub-bands are present. With
     ``force_vpp`` "vpp" is always reported missing — for year-matched
     re-enrichment that must overwrite an existing (wrong-year) VPP.
+
+    With ``force`` EVERY requested channel is reported missing regardless of
+    presence — used to OVERWRITE already-stored-but-wrong channels (e.g. the
+    256/512 aux-misalignment), re-fetching them at the now-correct bbox. The
+    per-tile rewrite stays atomic (tmp + rename).
     """
+    if force:
+        return list(channels)
     try:
         with np.load(tile_path, allow_pickle=True) as d:
             missing = []
@@ -262,15 +270,18 @@ def _add_channels_to_tile(
     cache_dirs: dict[str, Path | None],
     *,
     year: int | None = None,
+    force: bool = False,
 ) -> dict:
     """Fetch missing channels and write them into an existing .npz tile.
 
     The tile is rewritten atomically (tmp → rename) to avoid corruption.
+    With ``force`` the requested channels are re-fetched and overwritten even
+    if already present (corrects wrong-grid aux).
     """
     # Load existing tile data
     with np.load(tile_path, allow_pickle=True) as d:
-        # Re-check which channels are actually missing
-        missing = [ch for ch in channels if ch not in d]
+        # Re-check which channels are actually missing (or all, when overwriting)
+        missing = list(channels) if force else [ch for ch in channels if ch not in d]
         if not missing:
             return {"status": "skip", "tile": tile_path.name}
         existing = dict(d)
@@ -387,6 +398,12 @@ def main():
         help="Disable tile caching",
     )
     parser.add_argument(
+        "--force", action="store_true",
+        help="Re-fetch and OVERWRITE the requested channels even if already "
+             "present. Use to correct already-stored-but-wrong channels (e.g. "
+             "the 256/512 aux-misalignment). Per-tile rewrite stays atomic.",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Only count tiles needing channels, don't fetch",
     )
@@ -452,7 +469,7 @@ def main():
     already = 0
     for tp in all_tiles:
         missing = _tile_missing_channels(
-            tp, channels, force_vpp=(args.year is not None))
+            tp, channels, force_vpp=(args.year is not None), force=args.force)
         if missing:
             todo.append((tp, missing))
         else:
@@ -509,7 +526,8 @@ def main():
         tile_path, missing = item
         try:
             return _add_channels_to_tile(
-                tile_path, missing, half_m, cache_dirs, year=args.year)
+                tile_path, missing, half_m, cache_dirs, year=args.year,
+                force=args.force)
         except Exception as e:
             return {
                 "status": "fail",
