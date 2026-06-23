@@ -485,18 +485,31 @@ def main() -> None:
     args = p.parse_args()
 
     while True:
-        status = build_status(args.recoreg_dir, args.total)
-        frames = build_frames(args.recoreg_dir)
-        aux = build_aux(args.recoreg_dir)
-        label = build_label(args.recoreg_dir, args.orig_dir)
-        _write(args.out_dir, status, frames, aux, label, args.title)
-        latest = frames.get("tile", "—") if frames else "—"
-        n_aux = len(aux.get("channels", [])) if aux else 0
-        n_cls = len(label.get("legend", [])) if label else 0
-        print(f"[campaign-dashboard] done={status['done']}/{status['total']} "
-              f"({status['pct']}%) rate={status['rate_recent_per_h']}/h "
-              f"eta={_fmt_eta(status['eta_hours'])} latest={latest} aux={n_aux} "
-              f"label_classes={n_cls}", flush=True)
+        try:
+            status = build_status(args.recoreg_dir, args.total)
+            frames = build_frames(args.recoreg_dir)
+            aux = build_aux(args.recoreg_dir)
+            label = build_label(args.recoreg_dir, args.orig_dir)
+            _write(args.out_dir, status, frames, aux, label, args.title)
+            latest = frames.get("tile", "—") if frames else "—"
+            n_aux = len(aux.get("channels", [])) if aux else 0
+            n_cls = len(label.get("legend", [])) if label else 0
+            print(f"[campaign-dashboard] done={status['done']}/{status['total']} "
+                  f"({status['pct']}%) rate={status['rate_recent_per_h']}/h "
+                  f"eta={_fmt_eta(status['eta_hours'])} latest={latest} aux={n_aux} "
+                  f"label_classes={n_cls}", flush=True)
+        except Exception as e:
+            # A single bad regen cycle MUST NOT kill the watch loop. The live
+            # Phase-1 writer atomically replaces tiles under us (os.replace) and a
+            # build_* read can momentarily race a rename or hit a transiently
+            # unreadable npz. Previously an uncaught exception here froze the page
+            # for days — the http.server kept serving the last index.html while no
+            # further regen ran. Log and retry next cycle instead.
+            import traceback
+            traceback.print_exc()
+            print(f"[campaign-dashboard] regen cycle failed: "
+                  f"{type(e).__name__}: {e}; retrying in {max(args.watch, 1)}s",
+                  flush=True)
         if args.watch <= 0:
             break
         time.sleep(args.watch)
