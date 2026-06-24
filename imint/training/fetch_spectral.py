@@ -81,6 +81,7 @@ from imint.training.tile_fetch import (
 from imint.coregistration import _COREG_BAND, clearest_frame_idx, coregister_interframe
 from imint.training.tile_assemble import assemble_fresh, crop_halo, date_to_doy
 from imint.training.tile_config import TileConfig
+from imint.training.frame_coverage_qc import frame_valid_fraction
 
 SUPPORTED_BACKENDS = ("cdse", "cdse-openeo", "des", "l1c_sen2cor")
 
@@ -88,6 +89,15 @@ SUPPORTED_BACKENDS = ("cdse", "cdse-openeo", "des", "l1c_sen2cor")
 # — the precondition for M2 (inter-frame coreg needs 4 frames on one shared grid).
 # SH-Process is 6-band and renders to the request grid (no halo) → cannot M2.
 _M2_CAPABLE_BACKENDS = ("des", "cdse-openeo")
+
+# A present frame whose valid (non-no-data) fraction is below this floor is
+# MAJORITY no-data — a swath-edge wedge, or a frame the M2 shift + inner crop
+# left empty post-crop (which the raw-halo all-zero guard never sees). It is
+# unusable, so it is dropped from temporal_mask rather than shipped as valid.
+# The per-frame valid fraction is stored regardless (frame_valid_frac) so a
+# downstream gate / loss can act on the merely-partial frames too. See
+# imint.training.frame_coverage_qc.
+_FRAME_VALID_FLOOR = 0.5
 
 # des / CDSE openEO are L2A-indexed from this date. A slot earlier than this must
 # not enter the tile-graph — the merged download hangs server-side for a date with
@@ -574,8 +584,18 @@ def fetch_tile_spectral(
 
     cropped = {fi: crop_halo(a, crop=crop, canon=canon) for fi, a in fresh.items()}
     spectral, extras = assemble_fresh(cropped, dates_list, n_frames, canon=canon)
+
+    # Per-frame valid (non-no-data) fraction on the CROPPED frames — the
+    # swath-edge / empty-post-crop wedge the single coreg_anchor_valid_frac
+    # scalar missed. A present frame that is majority no-data is dropped from
+    # temporal_mask (the loader ignores mask==0); the metric is stored for every
+    # frame so the QC gate / loss can act on the partial ones too.
+    frame_valid_frac = np.zeros(n_frames, np.float32)
+    for fi, arr in cropped.items():
+        frame_valid_frac[fi] = frame_valid_fraction(arr)
     temporal_mask = np.array(
-        [1 if fi in cropped else 0 for fi in range(n_frames)], np.uint8)
+        [1 if (fi in cropped and frame_valid_frac[fi] >= _FRAME_VALID_FLOOR)
+         else 0 for fi in range(n_frames)], np.uint8)
     doy = np.array([date_to_doy(dates_list[fi]) for fi in range(n_frames)], np.int32)
     out_dates = np.array(
         [dates_list[fi] if fi in cropped else "" for fi in range(n_frames)])
@@ -600,6 +620,7 @@ def fetch_tile_spectral(
         "coreg_n_aligned": np.int32(coreg_n_aligned),
         "coreg_max_shift": np.float32(coreg_max_shift),
         "coreg_anchor_valid_frac": np.float32(anchor_valid_frac),
+        "frame_valid_frac": frame_valid_frac,
         "coreg_shifts": np.array(
             [shifts.get(fi, (0.0, 0.0)) for fi in range(n_frames)], np.float32),
         **extras,
