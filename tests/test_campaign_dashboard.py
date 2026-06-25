@@ -227,3 +227,65 @@ def test_render_html_includes_frames_section(tmp_path):
     assert "t" in html and "data:image/png;base64," in html
     # no-frames render must omit the section (back-compat)
     assert "Latest tile" not in cd.render_html(s, title="X")
+
+
+def test_label_progress_counts_labelled_tiles(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    for i in range(3):                                       # carry a label
+        np.savez_compressed(d / f"lab_{i}.npz",
+                            spectral=np.zeros((24, 8, 8), np.float32),
+                            label=np.zeros((8, 8), np.uint8))
+    for i in range(2):                                       # label dropped by refetch
+        np.savez_compressed(d / f"nolab_{i}.npz",
+                            spectral=np.zeros((24, 8, 8), np.float32))
+    lp = cd.build_label_progress(str(d))
+    assert lp["labelled"] == 3 and lp["labelled_total"] == 5
+    assert lp["labelled_pct"] == 60.0
+
+
+def test_label_progress_ignores_tmp_and_corrupt(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    np.savez_compressed(d / "ok.npz", spectral=np.zeros((24, 8, 8), np.float32),
+                        label=np.zeros((8, 8), np.uint8))
+    (d / "broken.npz").write_bytes(b"")            # 0-byte → BadZipFile, uncounted
+    (d / "tile.tmp.npz").write_bytes(b"x")         # atomic-write tmp → excluded entirely
+    lp = cd.build_label_progress(str(d))
+    assert lp["labelled"] == 1 and lp["labelled_total"] == 2   # ok+broken; tmp excluded
+
+
+def test_label_progress_cache_reuses_then_refreshes_on_mtime(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    p = d / "t.npz"
+    np.savez_compressed(p, spectral=np.zeros((24, 8, 8), np.float32))   # no label
+    cache: dict = {}
+    lp1 = cd.build_label_progress(str(d), cache=cache)
+    assert lp1["labelled"] == 0 and cache[str(p)][1] is False
+    mt0 = cache[str(p)][0]
+
+    # Restore a label + bump mtime (what the atomic os.replace does) → recounted.
+    np.savez_compressed(p, spectral=np.zeros((24, 8, 8), np.float32),
+                        label=np.zeros((8, 8), np.uint8))
+    os.utime(p, (mt0 + 10, mt0 + 10))
+    lp2 = cd.build_label_progress(str(d), cache=cache)
+    assert lp2["labelled"] == 1 and cache[str(p)][1] is True
+
+    # Mutate content but keep mtime → cache HIT returns the stale verdict (proves the
+    # cache short-circuits the zip-open rather than re-reading every cycle).
+    mt1 = cache[str(p)][0]
+    np.savez_compressed(p, spectral=np.zeros((24, 8, 8), np.float32))   # label dropped
+    os.utime(p, (mt1, mt1))
+    lp3 = cd.build_label_progress(str(d), cache=cache)
+    assert lp3["labelled"] == 1                          # stale-by-design (mtime unchanged)
+
+
+def test_render_html_includes_labelled_card(tmp_path):
+    d = tmp_path / "recoreg"; _tiles(d, 10)
+    s = cd.build_status(str(d), total=10)
+    s.update({"labelled": 7, "labelled_total": 9, "labelled_pct": 77.8})
+    html = cd.render_html(s, title="X")
+    assert ">Labelled<" in html and "/ 9" in html            # card rendered (≠ Done's /10)
+    # back-compat: a status without label keys renders no Labelled card.
+    assert ">Labelled<" not in cd.render_html(cd.build_status(str(d), total=10), title="X")

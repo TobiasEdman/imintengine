@@ -97,6 +97,52 @@ def build_status(recoreg_dir: str, total: int, *, now: float | None = None) -> d
     }
 
 
+def build_label_progress(recoreg_dir: str, *, cache: dict | None = None) -> dict:
+    """Count how many ``_recoreg`` tiles carry a ``label`` — the carry-forward
+    restore target (``scripts/restore_recoreg_labels.py``).
+
+    An ``.npz`` is a zip whose members are ``<key>.npy``; a tile is "labelled" iff
+    it contains ``label.npy``. Checked with stdlib ``zipfile`` (reads only the zip
+    central directory — no array decompress, no numpy) so it works on the slim pod
+    regardless of numpy and never touches the 25 MB spectral cube.
+
+    ``cache`` (optional, caller-persisted across watch cycles):
+    ``{path: (mtime, has_label)}``. A tile is re-opened only when its mtime changes
+    — the atomic restore replaces the file (bumping mtime), so a relabelled tile is
+    picked up the next cycle while steady-state costs one ``stat()`` per tile, not
+    one zip-open per tile. Pass ``None`` for a stateless fresh scan (tests). The
+    tile set is bounded + stable (the campaign writes, never deletes) so the cache
+    needs no eviction.
+    """
+    import zipfile
+    paths = [p for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
+             if ".tmp" not in os.path.basename(p)]
+    labelled = 0
+    for p in paths:
+        try:
+            mt = os.path.getmtime(p)
+        except OSError:
+            continue
+        hit = cache.get(p) if cache is not None else None
+        if hit is not None and hit[0] == mt:
+            present = hit[1]
+        else:
+            try:
+                with zipfile.ZipFile(p) as z:
+                    present = "label.npy" in z.namelist()
+            except Exception:
+                present = False        # empty / truncated / mid-write tile → uncounted
+            if cache is not None:
+                cache[p] = (mt, present)
+        labelled += int(present)
+    n = len(paths)
+    return {
+        "labelled": labelled,
+        "labelled_total": n,
+        "labelled_pct": round(100.0 * labelled / n, 1) if n else 0.0,
+    }
+
+
 def _unified_palette():
     """``(color_list, class_names, n_classes)`` from ``scripts/unified_palette.json``
     — exported from ``imint.training.unified_schema`` (a drift-guard test keeps them
@@ -292,6 +338,17 @@ def render_html(status: dict, *, frames: dict | None = None,
               '<div class="warn">Output dir not present yet — '
               'Phase&nbsp;1 may still be installing deps / cloning.</div>')
 
+    # Label carry-forward counter (present only once build_label_progress is merged
+    # into status — absent callers/tests render the original 4-card row unchanged).
+    labelled = status.get("labelled")
+    labelled_total = status.get("labelled_total")
+    labelled_card = ""
+    if labelled is not None and labelled_total is not None:
+        labelled_card = (
+            '<div class="card"><div class="label">Labelled</div>'
+            f'<div class="value">{labelled:,}'
+            f'<span class="unit"> / {labelled_total:,}</span></div></div>')
+
     frames_html = ""
     if frames and frames.get("frames"):
         cells = []
@@ -419,6 +476,7 @@ def render_html(status: dict, *, frames: dict | None = None,
     <div class="cards">
       <div class="card"><div class="label">Done</div>
         <div class="value">{done:,}<span class="unit"> / {total:,}</span></div></div>
+      {labelled_card}
       <div class="card"><div class="label">Rate (30&nbsp;min)</div>
         <div class="value">{status['rate_recent_per_h']:.0f}<span class="unit"> tiles/h</span></div></div>
       <div class="card"><div class="label">Rate (avg)</div>
@@ -484,9 +542,11 @@ def main() -> None:
                    help="Regenerate every N seconds (0 = once and exit).")
     args = p.parse_args()
 
+    label_cache: dict = {}        # persisted across cycles: {path: (mtime, has_label)}
     while True:
         try:
             status = build_status(args.recoreg_dir, args.total)
+            status.update(build_label_progress(args.recoreg_dir, cache=label_cache))
             frames = build_frames(args.recoreg_dir)
             aux = build_aux(args.recoreg_dir)
             label = build_label(args.recoreg_dir, args.orig_dir)
@@ -495,7 +555,9 @@ def main() -> None:
             n_aux = len(aux.get("channels", [])) if aux else 0
             n_cls = len(label.get("legend", [])) if label else 0
             print(f"[campaign-dashboard] done={status['done']}/{status['total']} "
-                  f"({status['pct']}%) rate={status['rate_recent_per_h']}/h "
+                  f"({status['pct']}%) labelled={status['labelled']}/"
+                  f"{status['labelled_total']} ({status['labelled_pct']}%) "
+                  f"rate={status['rate_recent_per_h']}/h "
                   f"eta={_fmt_eta(status['eta_hours'])} latest={latest} aux={n_aux} "
                   f"label_classes={n_cls}", flush=True)
         except Exception as e:
