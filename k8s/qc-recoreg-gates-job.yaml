@@ -1,0 +1,118 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: qc-recoreg-gates
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: qc-recoreg-gates
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  # READ-ONLY post-Phase-1 QC of /data/unified_v2_512_recoreg. Runs the two
+  # standing gates against the stored .npz (no re-fetch, no writes to tiles):
+  #   1. frame-coverage (scripts/qc_frame_coverage.py) -> /data/debug/frame_coverage_qc.json
+  #   2. aux-alignment  (scripts/qc_aux_alignment.py)  -> /data/debug/aux_alignment_qc.json
+  # Plus an 8-tile key/shape inventory + a 200-tile label-presence sample (the
+  # aux-alignment gate can only certify tiles that carry a `label`). Both gates
+  # always run (exit captured, pod exits 0); verdicts are in the logs
+  # (CAMPAIGN_GATE_VERDICT=) and the JSON refetch lists. Touches NO tile.
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: qc
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== recoreg QC gates (READ-ONLY) ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+              DATA=/data/unified_v2_512_recoreg
+              mkdir -p /data/debug
+
+              echo "=== sample inventory (load-check + label presence) ==="
+              python3 - "$DATA" <<'PYEOF'
+              import glob, os, random, sys
+              import numpy as np
+              d = sys.argv[1]
+              paths = sorted(glob.glob(os.path.join(d, "*.npz")))
+              print(f"total .npz in {d}: {len(paths)}", flush=True)
+              for p in paths[:8]:
+                  sz = os.path.getsize(p)
+                  if sz == 0:
+                      print(f"  {os.path.basename(p)}: 0-BYTE (corrupt)", flush=True)
+                      continue
+                  try:
+                      z = np.load(p, allow_pickle=True)
+                      keys = list(z.files)
+                      spec = z["spectral"].shape if "spectral" in keys else None
+                      tm = z["temporal_mask"].tolist() if "temporal_mask" in keys else None
+                      faux = [k for k in ("height", "volume", "basal_area", "diameter") if k in keys]
+                      print(f"  {os.path.basename(p)} [{sz/1e6:.1f}MB]: spectral={spec} "
+                            f"tmask={tm} label={'label' in keys} forestry_aux={faux}", flush=True)
+                  except Exception as e:
+                      print(f"  {os.path.basename(p)}: UNLOADABLE {type(e).__name__}: {e}", flush=True)
+              samp = paths if len(paths) <= 200 else random.sample(paths, 200)
+              nl = ok = bad = 0
+              for p in samp:
+                  try:
+                      z = np.load(p, allow_pickle=True)
+                      ok += 1
+                      nl += int("label" in z.files)
+                  except Exception:
+                      bad += 1
+              print(f"label present in {nl}/{ok} loadable of a {len(samp)}-tile sample "
+                    f"({bad} unloadable)", flush=True)
+              PYEOF
+
+              set +e
+              echo "=== gate 1: frame-coverage ==="
+              python3 scripts/qc_frame_coverage.py --data-dir "$DATA" \
+                --workers 8 --report /data/debug/frame_coverage_qc.json
+              echo "frame-coverage exit=$?"
+              echo "=== gate 2: aux-alignment ==="
+              python3 scripts/qc_aux_alignment.py --data-dir "$DATA" \
+                --workers 8 --report /data/debug/aux_alignment_qc.json
+              echo "aux-alignment exit=$?"
+              echo "=== done: $(date) ==="
+              exit 0
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
