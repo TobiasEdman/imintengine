@@ -50,6 +50,15 @@ def _fmt_eta(hours: float | None) -> str:
     return f"{hours / 24:.1f} d"
 
 
+def _parse_since(s: str) -> float:
+    """``--refetch-since`` accepts epoch seconds or an ISO-8601 UTC timestamp
+    (``2026-06-25T09:47:30Z``) — the moment the refetch job started writing."""
+    try:
+        return float(s)
+    except ValueError:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+
+
 def build_status(recoreg_dir: str, total: int, *, now: float | None = None) -> dict:
     """Progress snapshot from the on-disk tile count + mtimes.
 
@@ -140,6 +149,110 @@ def build_label_progress(recoreg_dir: str, *, cache: dict | None = None) -> dict
         "labelled": labelled,
         "labelled_total": n,
         "labelled_pct": round(100.0 * labelled / n, 1) if n else 0.0,
+    }
+
+
+def _aux_corr(a, b) -> float:
+    """Pearson φ between two rasters over their shared finite, non-zero pixels.
+
+    Mirrors the refetch job's post-check exactly: needs ≥200 joint-valid px else
+    NaN (too few overlapping forest pixels to trust). The 0-exclusion drops the
+    no-data / non-forest background both channels share so φ measures the forest
+    signal, not the common zero-mass.
+    """
+    import numpy as np
+    a = np.asarray(a, np.float64)
+    b = np.asarray(b, np.float64)
+    m = np.isfinite(a) & np.isfinite(b) & (a != 0) & (b != 0)
+    if int(m.sum()) < 200:
+        return float("nan")
+    ac = a[m] - a[m].mean()
+    bc = b[m] - b[m].mean()
+    d = np.sqrt((ac * ac).sum() * (bc * bc).sum())
+    return float((ac * bc).sum() / d) if d else float("nan")
+
+
+def build_aux_alignment(recoreg_dir: str, *, sample: int = 24,
+                        cache: dict | None = None) -> dict:
+    """Sampled corr(volume↔height) — the bbox-fix *verification* metric.
+
+    The free-aux refetch overwrites volume/basal_area/diameter on the tile's own
+    512-grid. On the correct grid they track tree height (forest structure
+    co-varies) → φ≈0.6–0.8; on the wrong 256-grid (central-quarter rendered at
+    5 m/px, stretched 2×) they don't → φ≈0. So mean φ over a fixed geographic
+    sample *rises from ~0 to ~0.7* as the refetch sweeps the dir — a live quality
+    signal that doubles as progress.
+
+    Sampling is a deterministic stride over the sorted names (geographic spread,
+    stable across cycles), so the ``cache`` ({path: (mtime, phi)}) stays warm: a
+    sampled tile is re-opened only when the atomic rewrite bumps its mtime — same
+    contract as ``build_label_progress``. numpy-only (the imagery panels already
+    require it); best-effort → ``{}`` on missing numpy / empty dir.
+    """
+    try:
+        import numpy as np
+    except Exception:
+        return {}
+    paths = sorted(p for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
+                   if ".tmp" not in os.path.basename(p))
+    if not paths:
+        return {}
+    if len(paths) > sample:                       # stride-spread, not first-N
+        paths = paths[::max(1, len(paths) // sample)][:sample]
+    phis: list[float] = []
+    for p in paths:
+        try:
+            mt = os.path.getmtime(p)
+        except OSError:
+            continue
+        hit = cache.get(p) if cache is not None else None
+        if hit is not None and hit[0] == mt:
+            phi = hit[1]
+        else:
+            phi = float("nan")
+            try:
+                with np.load(p, allow_pickle=True) as z:
+                    if "volume" in z.files and "height" in z.files:
+                        phi = _aux_corr(z["volume"], z["height"])
+            except Exception:
+                phi = float("nan")           # mid-write / truncated → skip this cycle
+            if cache is not None:
+                cache[p] = (mt, phi)
+        if phi == phi:                       # exclude NaN (unmeasurable tiles)
+            phis.append(phi)
+    if not phis:
+        return {"align_n": 0, "align_sample": len(paths),
+                "align_phi_mean": None, "align_phi_median": None,
+                "align_frac_ok": None}
+    arr = np.asarray(phis, dtype=float)
+    return {
+        "align_n": len(phis),
+        "align_sample": len(paths),
+        "align_phi_mean": round(float(arr.mean()), 3),
+        "align_phi_median": round(float(np.median(arr)), 3),
+        "align_frac_ok": round(float((arr >= 0.3).mean()), 3),   # 0.3 splits ~0 ↔ ~0.7
+    }
+
+
+def build_refetch_progress(recoreg_dir: str, since_epoch: float,
+                           total: int) -> dict:
+    """Tiles rewritten since ``since_epoch`` — a live churn bar for an in-flight
+    refetch (free-aux now, VPP next).
+
+    The atomic per-tile rewrite bumps mtime, so ``mtime ≥ since_epoch`` ⇒ this
+    refetch has overwritten that tile. Measures *rewritten*, not
+    *verified-correct* — that's ``build_aux_alignment``'s φ. ``total`` falls back
+    to the on-disk count when 0/None.
+    """
+    mtimes = _scan_mtimes(recoreg_dir)
+    total = total or len(mtimes)
+    done = sum(1 for t in mtimes if t >= since_epoch)
+    return {
+        "refetch_done": done,
+        "refetch_total": total,
+        "refetch_pct": round(100.0 * done / total, 1) if total else 0.0,
+        "refetch_since_utc": datetime.fromtimestamp(
+            since_epoch, timezone.utc).isoformat(),
     }
 
 
@@ -349,6 +462,31 @@ def render_html(status: dict, *, frames: dict | None = None,
             f'<div class="value">{labelled:,}'
             f'<span class="unit"> / {labelled_total:,}</span></div></div>')
 
+    # Aux-alignment φ card — corr(volume↔height); rises ~0 → ~0.7 as the bbox fix
+    # lands. Absent callers/tests render the card-row without it (back-compat).
+    align_mean = status.get("align_phi_mean")
+    align_card = ""
+    if align_mean is not None:
+        align_card = (
+            '<div class="card"><div class="label">Aux align &phi;</div>'
+            f'<div class="value">{align_mean:.2f}'
+            f'<span class="unit"> vol&harr;h · n={status.get("align_n", 0)}</span>'
+            '</div></div>')
+
+    # Secondary "rewritten since <T>" bar for an in-flight refetch — present only
+    # when --refetch-since is set (else the page shows just the campaign bar).
+    refetch_html = ""
+    if status.get("refetch_done") is not None:
+        rd, rt = status["refetch_done"], status["refetch_total"]
+        rpct = status["refetch_pct"]
+        since_hm = status.get("refetch_since_utc", "")[11:16]
+        refetch_html = (
+            '<div class="bar-wrap sub"><div class="bar sub" '
+            f'style="width:{min(100.0, rpct)}%"></div></div>'
+            '<div class="pct-row sub"><span>aux refetch · '
+            f'<strong>{rpct:.1f}%</strong> · {rd:,} / {rt:,} rewritten</span>'
+            f'<span>since {since_hm} UTC</span></div>')
+
     frames_html = ""
     if frames and frames.get("frames"):
         cells = []
@@ -421,6 +559,9 @@ def render_html(status: dict, *, frames: dict | None = None,
   .pct-row{{display:flex;justify-content:space-between;color:#6b7280;font-size:13px;
     margin-bottom:30px}}
   .pct-row strong{{color:#1A4338;font-weight:700}}
+  .bar-wrap.sub{{height:14px;margin:2px 0 5px}}
+  .bar.sub{{background:linear-gradient(90deg,#245045,#3a7a68)}}
+  .pct-row.sub{{margin-bottom:26px}}
   .cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
     gap:16px;margin-bottom:28px}}
   .card{{border:1px solid #e5e7eb;border-radius:12px;padding:18px 20px}}
@@ -473,10 +614,12 @@ def render_html(status: dict, *, frames: dict | None = None,
     {banner}
     <div class="bar-wrap"><div class="bar"></div></div>
     <div class="pct-row"><span><strong>{pct:.1f}%</strong> · {done:,} / {total:,} tiles</span><span>{status['remaining']:,} remaining</span></div>
+    {refetch_html}
     <div class="cards">
       <div class="card"><div class="label">Done</div>
         <div class="value">{done:,}<span class="unit"> / {total:,}</span></div></div>
       {labelled_card}
+      {align_card}
       <div class="card"><div class="label">Rate (30&nbsp;min)</div>
         <div class="value">{status['rate_recent_per_h']:.0f}<span class="unit"> tiles/h</span></div></div>
       <div class="card"><div class="label">Rate (avg)</div>
@@ -538,15 +681,24 @@ def main() -> None:
                    help="Expected tile count (default 6921 = unified_v2_512).")
     p.add_argument("--out-dir", default="/www")
     p.add_argument("--title", default="Re-coreg campaign · Phase 1")
+    p.add_argument("--refetch-since", default=None,
+                   help="Epoch or ISO-8601 UTC start of an in-flight refetch; adds "
+                        "a 'rewritten since' progress bar (free-aux now, VPP next).")
     p.add_argument("--watch", type=int, default=0,
                    help="Regenerate every N seconds (0 = once and exit).")
     args = p.parse_args()
 
     label_cache: dict = {}        # persisted across cycles: {path: (mtime, has_label)}
+    align_cache: dict = {}        # persisted across cycles: {path: (mtime, phi)}
+    refetch_since = _parse_since(args.refetch_since) if args.refetch_since else None
     while True:
         try:
             status = build_status(args.recoreg_dir, args.total)
             status.update(build_label_progress(args.recoreg_dir, cache=label_cache))
+            status.update(build_aux_alignment(args.recoreg_dir, cache=align_cache))
+            if refetch_since is not None:
+                status.update(build_refetch_progress(
+                    args.recoreg_dir, refetch_since, args.total))
             frames = build_frames(args.recoreg_dir)
             aux = build_aux(args.recoreg_dir)
             label = build_label(args.recoreg_dir, args.orig_dir)
@@ -554,9 +706,13 @@ def main() -> None:
             latest = frames.get("tile", "—") if frames else "—"
             n_aux = len(aux.get("channels", [])) if aux else 0
             n_cls = len(label.get("legend", [])) if label else 0
+            rf = (f" refetch={status['refetch_pct']}%"
+                  if "refetch_pct" in status else "")
             print(f"[campaign-dashboard] done={status['done']}/{status['total']} "
                   f"({status['pct']}%) labelled={status['labelled']}/"
                   f"{status['labelled_total']} ({status['labelled_pct']}%) "
+                  f"align_phi={status.get('align_phi_mean')}"
+                  f"(n={status.get('align_n', 0)}){rf} "
                   f"rate={status['rate_recent_per_h']}/h "
                   f"eta={_fmt_eta(status['eta_hours'])} latest={latest} aux={n_aux} "
                   f"label_classes={n_cls}", flush=True)

@@ -289,3 +289,127 @@ def test_render_html_includes_labelled_card(tmp_path):
     assert ">Labelled<" in html and "/ 9" in html            # card rendered (≠ Done's /10)
     # back-compat: a status without label keys renders no Labelled card.
     assert ">Labelled<" not in cd.render_html(cd.build_status(str(d), total=10), title="X")
+
+
+# ── aux-alignment φ (corr volume↔height) ──────────────────────────────────
+def test_aux_corr_aligned_vs_random_vs_too_few(tmp_path):
+    import numpy as np
+    rng = np.random.default_rng(0)
+    h = rng.random((16, 16)) * 30 + 1                      # 256 px, all > 0
+    assert cd._aux_corr(h * 2.5, h) > 0.99                 # perfectly linear → φ≈1
+    assert abs(cd._aux_corr(rng.random((16, 16)) + 1, h)) < 0.3   # independent → ~0
+    # <200 joint-valid px (most masked to 0) → NaN, not a bogus φ.
+    a = np.zeros((16, 16)); b = np.zeros((16, 16))
+    a[:1] = h[:1] * 2.5; b[:1] = h[:1]                     # 16 valid px < 200
+    assert cd._aux_corr(a, b) != cd._aux_corr(a, b)        # NaN
+
+
+def _aux_tile(p, vol, hgt):
+    import numpy as np
+    np.savez_compressed(p, spectral=np.zeros((24, 16, 16), np.float32),
+                        volume=vol.astype(np.float32), height=hgt.astype(np.float32))
+
+
+def test_build_aux_alignment_high_for_corrected_grid(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    rng = np.random.default_rng(1)
+    for i in range(4):
+        h = rng.random((16, 16)) * 30 + 1
+        _aux_tile(d / f"t{i}.npz", h * 2.5 + rng.standard_normal((16, 16)) * 0.4, h)
+    a = cd.build_aux_alignment(str(d))
+    assert a["align_n"] == 4 and a["align_phi_mean"] > 0.8
+    assert a["align_frac_ok"] == 1.0                       # all ≥ 0.3
+
+
+def test_build_aux_alignment_low_for_wrong_grid(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    rng = np.random.default_rng(2)
+    for i in range(4):                                     # volume independent of height
+        _aux_tile(d / f"t{i}.npz", rng.random((16, 16)) * 100 + 1,
+                  rng.random((16, 16)) * 30 + 1)
+    a = cd.build_aux_alignment(str(d))
+    assert a["align_n"] == 4 and a["align_phi_mean"] < 0.3
+    assert a["align_frac_ok"] == 0.0
+
+
+def test_build_aux_alignment_empty_when_no_volume_or_height(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir()
+    np.savez_compressed(d / "t.npz", spectral=np.zeros((24, 8, 8), np.float32),
+                        height=np.ones((8, 8), np.float32))   # volume absent
+    a = cd.build_aux_alignment(str(d))
+    assert a["align_n"] == 0 and a["align_phi_mean"] is None
+
+
+def test_build_aux_alignment_cache_refreshes_on_mtime(tmp_path):
+    import numpy as np
+    d = tmp_path / "recoreg"; d.mkdir(); p = d / "t.npz"
+    rng = np.random.default_rng(3)
+    h = rng.random((16, 16)) * 30 + 1
+    _aux_tile(p, h * 2.5, h)                               # aligned → φ high
+    cache: dict = {}
+    a1 = cd.build_aux_alignment(str(d), cache=cache)
+    assert a1["align_phi_mean"] > 0.9 and cache[str(p)][1] > 0.9
+    mt0 = cache[str(p)][0]
+
+    # Refetch overwrites with wrong-grid data + bumps mtime (atomic rename) → recomputed.
+    _aux_tile(p, rng.random((16, 16)) * 100 + 1, h)
+    os.utime(p, (mt0 + 10, mt0 + 10))
+    a2 = cd.build_aux_alignment(str(d), cache=cache)
+    assert a2["align_phi_mean"] < 0.3
+
+    # Mutate content but keep mtime → cache HIT returns the stale φ (proves short-circuit).
+    mt1 = cache[str(p)][0]
+    _aux_tile(p, h * 2.5, h)                               # aligned again, but...
+    os.utime(p, (mt1, mt1))                                # ...mtime unchanged
+    a3 = cd.build_aux_alignment(str(d), cache=cache)
+    assert a3["align_phi_mean"] < 0.3                      # stale-by-design
+
+
+def test_render_html_includes_align_card(tmp_path):
+    d = tmp_path / "recoreg"; _tiles(d, 10)
+    s = cd.build_status(str(d), total=10)
+    s.update({"align_phi_mean": 0.74, "align_n": 24, "align_frac_ok": 0.96})
+    html = cd.render_html(s, title="X")
+    assert "Aux align" in html and "0.74" in html
+    assert "Aux align" not in cd.render_html(cd.build_status(str(d), total=10), title="X")
+
+
+# ── refetch progress bar ──────────────────────────────────────────────────
+def test_build_refetch_progress_counts_by_mtime(tmp_path):
+    d = tmp_path / "recoreg"
+    now = time.time()
+    # 4 tiles rewritten "now", 6 left untouched from before the refetch started.
+    _tiles(d, 4, mtimes=[now, now, now, now])
+    for i in range(6):
+        p = d / f"old_{i}.npz"; p.touch(); os.utime(p, (now - 9999, now - 9999))
+    r = cd.build_refetch_progress(str(d), since_epoch=now - 100, total=20)
+    assert r["refetch_done"] == 4 and r["refetch_total"] == 20
+    assert r["refetch_pct"] == 20.0 and r["refetch_since_utc"].endswith("+00:00")
+
+
+def test_build_refetch_progress_total_falls_back_to_count(tmp_path):
+    d = tmp_path / "recoreg"
+    now = time.time()
+    _tiles(d, 5, mtimes=[now] * 5)
+    r = cd.build_refetch_progress(str(d), since_epoch=now - 100, total=0)
+    assert r["refetch_total"] == 5 and r["refetch_pct"] == 100.0
+
+
+def test_render_html_includes_refetch_bar(tmp_path):
+    d = tmp_path / "recoreg"; _tiles(d, 10)
+    s = cd.build_status(str(d), total=10)
+    s.update({"refetch_done": 3, "refetch_total": 10, "refetch_pct": 30.0,
+              "refetch_since_utc": "2026-06-25T09:47:30+00:00"})
+    html = cd.render_html(s, title="X")
+    assert "aux refetch" in html and "3 / 10 rewritten" in html and "09:47" in html
+    assert "aux refetch" not in cd.render_html(cd.build_status(str(d), total=10), title="X")
+
+
+def test_parse_since_accepts_epoch_and_iso():
+    assert cd._parse_since("1000.0") == 1000.0
+    from datetime import datetime, timezone
+    want = datetime(2026, 6, 25, 9, 47, 30, tzinfo=timezone.utc).timestamp()
+    assert abs(cd._parse_since("2026-06-25T09:47:30Z") - want) < 1e-6
