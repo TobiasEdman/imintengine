@@ -250,7 +250,9 @@ def test_label_progress_ignores_tmp_and_corrupt(tmp_path):
     np.savez_compressed(d / "ok.npz", spectral=np.zeros((24, 8, 8), np.float32),
                         label=np.zeros((8, 8), np.uint8))
     (d / "broken.npz").write_bytes(b"")            # 0-byte → BadZipFile, uncounted
-    (d / "tile.tmp.npz").write_bytes(b"x")         # atomic-write tmp → excluded entirely
+    # prefetch_aux's REAL atomic-write temp is ``<stem>_tmp.npz`` (underscore) —
+    # not ``.tmp.npz``. Must be excluded entirely.
+    (d / "tile_0_tmp.npz").write_bytes(b"x")
     lp = cd.build_label_progress(str(d))
     assert lp["labelled"] == 1 and lp["labelled_total"] == 2   # ok+broken; tmp excluded
 
@@ -413,3 +415,64 @@ def test_parse_since_accepts_epoch_and_iso():
     from datetime import datetime, timezone
     want = datetime(2026, 6, 25, 9, 47, 30, tzinfo=timezone.utc).timestamp()
     assert abs(cd._parse_since("2026-06-25T09:47:30Z") - want) < 1e-6
+
+
+# ── concurrent-writer race hardening (the live free-aux crash) ─────────────
+# prefetch_aux writes ``<stem>_tmp.npz`` then os.replace → ``<stem>.npz``. The
+# dashboard globs the same dir every 60 s while free-aux writes, so it must
+# (a) never COUNT a temp as a done tile and (b) never CRASH when a globbed path
+# vanishes (the os.replace) before getmtime/load. The prior ``'.tmp' not in
+# name`` filter did neither for the real ``_tmp.npz`` name; _scan_mtimes had no
+# guard at all and killed the whole regen cycle → /www/campaign_status.json was
+# never written → dashboard served nothing.
+def test_tile_npz_paths_excludes_real_atomic_tmp(tmp_path):
+    d = tmp_path / "recoreg"; d.mkdir()
+    (d / "tile_1.npz").touch()
+    (d / "tile_2.npz").touch()
+    (d / "tile_2_tmp.npz").touch()                 # in-flight atomic temp
+    got = {os.path.basename(p) for p in cd._tile_npz_paths(str(d))}
+    assert got == {"tile_1.npz", "tile_2.npz"}     # temp excluded
+
+
+def test_scan_mtimes_excludes_tmp_from_count(tmp_path):
+    d = tmp_path / "recoreg"; d.mkdir()
+    for i in range(5):
+        (d / f"tile_{i}.npz").touch()
+    (d / "tile_5_tmp.npz").touch()                 # must not inflate the count
+    assert len(cd._scan_mtimes(str(d))) == 5
+    assert cd.build_status(str(d), total=10)["done"] == 5   # headline progress too
+
+
+def test_scan_mtimes_survives_file_vanishing_mid_scan(tmp_path, monkeypatch):
+    """The exact live crash: glob lists a path, the writer's os.replace removes
+    it before getmtime → FileNotFoundError. Must skip it, not raise."""
+    d = tmp_path / "recoreg"; d.mkdir()
+    real = d / "tile_real.npz"; real.touch()
+    ghost = str(d / "tile_ghost.npz")              # listed but never on disk
+    monkeypatch.setattr(cd.glob, "glob", lambda *a, **k: [str(real), ghost])
+    mt = cd._scan_mtimes(str(d))                   # must not raise
+    assert len(mt) == 1                            # ghost skipped, real kept
+
+
+def test_build_refetch_progress_ignores_tmp(tmp_path):
+    """The refetch bar counts via _scan_mtimes, so temp-exclusion must hold there
+    too — else it over-reports rewrites for every in-flight atomic temp."""
+    d = tmp_path / "recoreg"
+    now = time.time()
+    _tiles(d, 3, mtimes=[now, now, now])
+    p = d / "tile_3_tmp.npz"; p.touch(); os.utime(p, (now, now))
+    r = cd.build_refetch_progress(str(d), since_epoch=now - 100, total=10)
+    assert r["refetch_done"] == 3                  # temp not counted as rewritten
+
+
+def test_latest_npz_excludes_tmp_and_survives_vanish(tmp_path, monkeypatch):
+    d = tmp_path / "recoreg"; d.mkdir()
+    now = time.time()
+    old = d / "tile_old.npz"; old.touch(); os.utime(old, (now - 100, now - 100))
+    new = d / "tile_new.npz"; new.touch(); os.utime(new, (now, now))
+    tmp = d / "tile_new_tmp.npz"; tmp.touch(); os.utime(tmp, (now + 50, now + 50))
+    # newest mtime is the TEMP — must be ignored, so latest = tile_new.
+    assert os.path.basename(cd._latest_npz(str(d))) == "tile_new.npz"
+    ghost = str(d / "tile_ghost.npz")
+    monkeypatch.setattr(cd.glob, "glob", lambda *a, **k: [str(new), ghost])
+    assert os.path.basename(cd._latest_npz(str(d))) == "tile_new.npz"   # vanish-safe

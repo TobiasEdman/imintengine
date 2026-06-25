@@ -33,11 +33,30 @@ _RECENT_WINDOW_MIN = 30          # rate window for the responsive ETA
 _REFRESH_S = 60                  # page meta-refresh cadence
 
 
+def _tile_npz_paths(recoreg_dir: str) -> list[str]:
+    """Paths of the done tiles: every ``*.npz`` EXCEPT the ``*_tmp.npz``
+    atomic-write temporaries ``prefetch_aux`` (free-aux) creates then
+    ``os.replace``s into place. Excluding them keeps the progress count honest
+    (a temp is not a done tile) and is half of surviving the concurrent writer;
+    the caller's per-file ``getmtime`` guard is the other half. (``backfill_vpp``
+    uses ``mkstemp(suffix='.tmp')`` temps, which never match the ``*.npz`` glob,
+    so need no handling here.)"""
+    return [p for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
+            if not p.endswith("_tmp.npz")]
+
+
 def _scan_mtimes(recoreg_dir: str) -> list[float]:
-    """Epoch mtimes of every ``*.npz`` in the dir (the done tiles)."""
-    return sorted(
-        os.path.getmtime(p) for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
-    )
+    """Sorted epoch mtimes of the done tiles. A tile can be renamed/removed
+    between the listing and ``getmtime`` (a writer finishing an atomic replace);
+    skip it rather than crash the whole 60 s regen cycle — the dropped sample
+    re-appears next cycle."""
+    out: list[float] = []
+    for p in _tile_npz_paths(recoreg_dir):
+        try:
+            out.append(os.path.getmtime(p))
+        except OSError:
+            continue
+    return sorted(out)
 
 
 def _fmt_eta(hours: float | None) -> str:
@@ -124,8 +143,7 @@ def build_label_progress(recoreg_dir: str, *, cache: dict | None = None) -> dict
     needs no eviction.
     """
     import zipfile
-    paths = [p for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
-             if ".tmp" not in os.path.basename(p)]
+    paths = _tile_npz_paths(recoreg_dir)
     labelled = 0
     for p in paths:
         try:
@@ -193,8 +211,7 @@ def build_aux_alignment(recoreg_dir: str, *, sample: int = 24,
         import numpy as np
     except Exception:
         return {}
-    paths = sorted(p for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
-                   if ".tmp" not in os.path.basename(p))
+    paths = sorted(_tile_npz_paths(recoreg_dir))
     if not paths:
         return {}
     if len(paths) > sample:                       # stride-spread, not first-N
@@ -274,10 +291,17 @@ def _unified_palette():
 
 
 def _latest_npz(recoreg_dir: str) -> str | None:
-    """Path of the most-recently-written ``*.npz`` (ignoring atomic-write tmps)."""
-    npzs = [p for p in glob.glob(os.path.join(recoreg_dir, "*.npz"))
-            if ".tmp" not in os.path.basename(p)]
-    return max(npzs, key=os.path.getmtime) if npzs else None
+    """Path of the most-recently-written done tile (atomic-write tmps excluded).
+    Stats defensively: a candidate vanishing mid-scan is skipped, not fatal."""
+    best_p, best_mt = None, -1.0
+    for p in _tile_npz_paths(recoreg_dir):
+        try:
+            mt = os.path.getmtime(p)
+        except OSError:
+            continue
+        if mt > best_mt:
+            best_p, best_mt = p, mt
+    return best_p
 
 
 # (npz key, tile_rgb colormap, label) — continuous aux rasters, mirrors
