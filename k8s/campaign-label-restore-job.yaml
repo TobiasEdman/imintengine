@@ -24,7 +24,8 @@ spec:
   #
   # REQUIRES: the restore_recoreg_labels.py commit on origin/main BEFORE apply — the
   # pod clones main HEAD. Verify the echoed CLONED HEAD below.
-  activeDeadlineSeconds: 14400
+  activeDeadlineSeconds: 28800   # 8h — resume headroom; the first 4h pass hit the
+                                 # cap at 87.8% (6069/6912); only ~843 tiles remain.
   template:
     metadata:
       labels:
