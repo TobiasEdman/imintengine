@@ -65,8 +65,8 @@ spec:
               export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
               # The bbox fix must be present in the cloned tip — verify the commit.
               echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
-              git grep -q "resolve_tile_bbox" scripts/prefetch_aux.py \
-                && echo "OK: prefetch_aux uses resolve_tile_bbox (bbox fix present)" \
+              git grep -q "resolve_fetch_bbox" scripts/prefetch_aux.py \
+                && echo "OK: prefetch_aux uses resolve_fetch_bbox (bbox fix present)" \
                 || { echo "FATAL: bbox fix NOT in clone — abort"; exit 1; }
               cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
 
@@ -91,7 +91,7 @@ spec:
                   d = np.sqrt((ac*ac).sum()*(bc*bc).sum())
                   return float((ac*bc).sum()/d) if d else float("nan")
               n = 0
-              for p in sorted(glob.glob("/data/unified_v2_512_recoreg/tile_*.npz")):
+              for p in sorted(glob.glob("/data/unified_v2_512_recoreg/*.npz")):
                   if n >= 3: break
                   z = np.load(p, allow_pickle=True)
                   if "volume" not in z.files or "height" not in z.files: continue
