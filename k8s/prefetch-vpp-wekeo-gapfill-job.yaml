@@ -1,0 +1,126 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prefetch-vpp-wekeo-gapfill
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: prefetch-vpp-wekeo-gapfill
+spec:
+  backoffLimit: 0
+  # ─────────────────────────────────────────────────────────────────────────
+  # Targeted top-up of the WEkEO VPP COG cache (/data/vpp_wekeo) for the years
+  # the existing cache lacks. The bulk prefetch (prefetch-vpp-wekeo-job.yaml)
+  # filled 2018/2021/2022; a year-scan of unified_v2_512_recoreg found exactly
+  # 6 tiles outside that coverage — five in 2019, one in 2023 — mapped to MGRS
+  # squares (verified 3 ways: COG footprints + pyproj + mgrs lib):
+  #     2019: 33VWL, 33WWM, 33VWG     2023: 33VXL
+  # Filling these makes the cache complete for the whole recoreg set, so the
+  # downstream VPP re-fetch (backfill_vpp --force) stays 100% PU-free (WEkEO),
+  # never falling through to the metered CDSE path.
+  #
+  # RACE-SAFE vs the live free-aux job: this writes ONLY to /data/vpp_wekeo,
+  # a different directory from /data/unified_v2_512_recoreg — no two-writer
+  # contention, so it can run concurrently with campaign Phase-1 / free-aux.
+  # ─────────────────────────────────────────────────────────────────────────
+  activeDeadlineSeconds: 3600   # 1 h — ~20 COGs over WEkEO HDA, ample
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: prefetch
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== WEkEO VPP gap-fill prefetch (2019 + 2023) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj hda 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              echo ""
+              echo "--- 2019: 33VWL, 33WWM, 33VWG ---"
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles 33VWL,33WWM,33VWG \
+                --years 2019 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "--- 2023: 33VXL ---"
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles 33VXL \
+                --years 2023 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "=== new cache contents (2019/2023) ==="
+              ls -la /data/vpp_wekeo/VPP_2019_* /data/vpp_wekeo/VPP_2023_* 2>&1 | tail -30
+
+              echo ""
+              echo "=== read-back check: fetch_vpp_tiles_local on a 2019 COG ==="
+              python3 -c "
+              import glob, rasterio
+              from rasterio.warp import transform_bounds
+              from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+              cogs = sorted(glob.glob('/data/vpp_wekeo/VPP_2019_*_SOSD.tif'))
+              assert cogs, 'no 2019 SOSD COG fetched'
+              with rasterio.open(cogs[0]) as src:
+                  w, s, e, n = transform_bounds(src.crs, 'EPSG:3006', *src.bounds)
+              cx, cy = (w + e) / 2, (s + n) / 2
+              dx, dy = (e - w) * 0.05, (n - s) * 0.05
+              bbox = (cx - dx, cy - dy, cx + dx, cy + dy)
+              out = fetch_vpp_tiles_local(
+                  *bbox, size_px=64, vpp_cog_dir='/data/vpp_wekeo', year=2019)
+              nonzero = sum(1 for v in out.values() if v.max() > 0)
+              for k, v in out.items():
+                  print(f'  {k}: shape={v.shape} range=[{v.min():.3f}, {v.max():.3f}]')
+              assert nonzero >= 3, f'expected most bands non-zero, got {nonzero}/5'
+              print('READBACK OK')
+              "
+              echo "=== gap-fill complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
