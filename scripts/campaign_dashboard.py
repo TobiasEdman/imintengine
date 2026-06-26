@@ -321,13 +321,17 @@ AUX_PANELS = [
 ]
 
 
-def build_frames(recoreg_dir: str, *, max_px: int = 256, n_frames: int = 4) -> dict:
+def build_frames(recoreg_dir: str, *, latest: str | None = None,
+                 max_px: int = 256, n_frames: int = 4) -> dict:
     """Render the latest-fetched tile's temporal frames as true-colour RGB.
 
-    Picks the most-recently-written ``*.npz`` and renders each filled temporal
-    slot (B04/B03/B02, 2-98% stretch via ``tile_rgb``) to a base64 PNG, downscaled
-    to ``max_px``. Best-effort: returns ``{}`` if numpy/PIL/tile_rgb are missing or
-    the npz can't be read — the progress view never depends on this.
+    Renders each filled temporal slot (B04/B03/B02, 2-98% stretch via ``tile_rgb``)
+    to a base64 PNG, downscaled to ``max_px``. ``latest`` lets the caller pin one
+    resolved tile path so the frames/aux/label panels all render the SAME tile;
+    when ``None`` each re-resolves ``_latest_npz`` itself and, mid-refetch, can land
+    on a different adjacent tile (the cross-panel "lag"). Best-effort: returns ``{}``
+    if numpy/PIL/tile_rgb are missing or the npz can't be read — the progress view
+    never depends on this.
     """
     try:
         import numpy as np
@@ -335,7 +339,8 @@ def build_frames(recoreg_dir: str, *, max_px: int = 256, n_frames: int = 4) -> d
         from tile_rgb import frame_rgb, png_b64
     except Exception:
         return {}
-    latest = _latest_npz(recoreg_dir)
+    if latest is None:
+        latest = _latest_npz(recoreg_dir)
     if latest is None:
         return {}
     try:
@@ -372,12 +377,14 @@ def build_frames(recoreg_dir: str, *, max_px: int = 256, n_frames: int = 4) -> d
     }
 
 
-def build_aux(recoreg_dir: str, *, max_px: int = 200) -> dict:
+def build_aux(recoreg_dir: str, *, latest: str | None = None,
+              max_px: int = 200) -> dict:
     """Render the latest tile's continuous aux channels as colormapped PNGs.
 
     Each present ``AUX_PANELS`` raster is 2-98% normalised + colormapped (nodata →
-    gray) via ``tile_rgb.aux_rgb``. Best-effort: ``{}`` on missing deps / unreadable
-    npz / no aux present.
+    gray) via ``tile_rgb.aux_rgb``. ``latest`` lets the caller pin one resolved tile
+    so all panels render the SAME tile (see ``build_frames``). Best-effort: ``{}`` on
+    missing deps / unreadable npz / no aux present.
     """
     try:
         import numpy as np
@@ -385,7 +392,8 @@ def build_aux(recoreg_dir: str, *, max_px: int = 200) -> dict:
         from tile_rgb import aux_rgb, png_b64
     except Exception:
         return {}
-    latest = _latest_npz(recoreg_dir)
+    if latest is None:
+        latest = _latest_npz(recoreg_dir)
     if latest is None:
         return {}
     try:
@@ -412,15 +420,17 @@ def build_aux(recoreg_dir: str, *, max_px: int = 200) -> dict:
     return {"tile": os.path.basename(latest)[:-4], "channels": channels}
 
 
-def build_label(recoreg_dir: str, orig_dir: str, *, max_px: int = 256) -> dict:
+def build_label(recoreg_dir: str, orig_dir: str, *, latest: str | None = None,
+                max_px: int = 256) -> dict:
     """Render the latest tile's unified 23-class label, loaded CROSS-DIR from the
     original dataset.
 
     ``refetch`` drops ``label`` from the ``_recoreg`` tiles (re-coreg may shift the
     grid, so labels are re-derived later), but the tile bbox/centre is unchanged so
-    the original ``unified_v2_512`` label still aligns. Colormapped via the schema's
-    ``UNIFIED_COLORS`` (nearest-neighbour — categorical), with a per-class legend.
-    Best-effort → ``{}``.
+    the original ``unified_v2_512`` label still aligns. ``latest`` lets the caller pin
+    one resolved tile so all panels render the SAME tile (see ``build_frames``).
+    Colormapped via the schema's ``UNIFIED_COLORS`` (nearest-neighbour — categorical),
+    with a per-class legend. Best-effort → ``{}``.
     """
     try:
         import numpy as np
@@ -432,7 +442,8 @@ def build_label(recoreg_dir: str, orig_dir: str, *, max_px: int = 256) -> dict:
     if pal is None:
         return {}
     colors, names, nclasses = pal
-    latest = _latest_npz(recoreg_dir)
+    if latest is None:
+        latest = _latest_npz(recoreg_dir)
     if latest is None:
         return {}
     fname = os.path.basename(latest)
@@ -723,9 +734,14 @@ def main() -> None:
             if refetch_since is not None:
                 status.update(build_refetch_progress(
                     args.recoreg_dir, refetch_since, args.total))
-            frames = build_frames(args.recoreg_dir)
-            aux = build_aux(args.recoreg_dir)
-            label = build_label(args.recoreg_dir, args.orig_dir)
+            # Resolve the latest tile ONCE so all three panels render the SAME
+            # tile. Re-resolving per panel races the live refetch's atomic
+            # rewrites (~1 tile / few s) and shows three different adjacent
+            # tiles — the cross-panel "lag" the dashboard exhibited mid-fetch.
+            latest = _latest_npz(args.recoreg_dir)
+            frames = build_frames(args.recoreg_dir, latest=latest)
+            aux = build_aux(args.recoreg_dir, latest=latest)
+            label = build_label(args.recoreg_dir, args.orig_dir, latest=latest)
             _write(args.out_dir, status, frames, aux, label, args.title)
             latest = frames.get("tile", "—") if frames else "—"
             n_aux = len(aux.get("channels", [])) if aux else 0

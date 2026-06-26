@@ -476,3 +476,41 @@ def test_latest_npz_excludes_tmp_and_survives_vanish(tmp_path, monkeypatch):
     ghost = str(d / "tile_ghost.npz")
     monkeypatch.setattr(cd.glob, "glob", lambda *a, **k: [str(new), ghost])
     assert os.path.basename(cd._latest_npz(str(d))) == "tile_new.npz"   # vanish-safe
+
+
+def test_latest_pinned_across_panels(tmp_path):
+    """Cross-panel race fix: main() resolves the latest tile ONCE and passes it to
+    build_frames/build_aux/build_label so all three render the SAME tile. tile_B is
+    newest (what _latest_npz returns), but pinning ``latest`` to the OLDER tile_A
+    must make every panel report tile_A — proving the pin overrides each builder's
+    own _latest_npz call. With latest=None each still self-resolves to B (back-compat).
+    """
+    import numpy as np
+    rec = tmp_path / "recoreg"; rec.mkdir()
+    orig = tmp_path / "orig"; orig.mkdir()
+    now = time.time()
+
+    def _tile(stem: str, mt: float) -> None:
+        np.savez_compressed(
+            rec / f"{stem}.npz",
+            spectral=np.random.rand(24, 16, 16).astype(np.float32),
+            temporal_mask=np.array([1, 1, 1, 1], np.uint8),
+            dates=np.array(["2021-09-01", "2022-06-01", "2022-07-01", "2022-08-01"]),
+            dem=np.random.rand(16, 16).astype(np.float32) * 40)
+        os.utime(rec / f"{stem}.npz", (mt, mt))
+        np.savez_compressed(orig / f"{stem}.npz", label=np.full((16, 16), 3, np.uint8))
+
+    _tile("tile_A", now - 100)        # older
+    _tile("tile_B", now)              # newer → _latest_npz picks this
+    assert os.path.basename(cd._latest_npz(str(rec))) == "tile_B.npz"
+
+    # Pin to the OLDER tile; every panel must follow the pin, not re-resolve to B.
+    pin = str(rec / "tile_A.npz")
+    assert cd.build_frames(str(rec), latest=pin, max_px=16)["tile"] == "tile_A"
+    assert cd.build_aux(str(rec), latest=pin, max_px=16)["tile"] == "tile_A"
+    assert cd.build_label(str(rec), str(orig), latest=pin, max_px=16)["tile"] == "tile_A"
+
+    # latest=None still self-resolves to the newest tile_B (back-compat).
+    assert cd.build_frames(str(rec), max_px=16)["tile"] == "tile_B"
+    assert cd.build_aux(str(rec), max_px=16)["tile"] == "tile_B"
+    assert cd.build_label(str(rec), str(orig), max_px=16)["tile"] == "tile_B"
