@@ -1,0 +1,103 @@
+---
+# Job: re-run merge_all() label build for the 8 "label-less" recoreg tiles.
+#
+# Why: these 8 tiles in unified_v2_512_recoreg have complete spectral + dense
+#   nmd_label_raw (0% bg, 18-19 classes) + all aux, but are MISSING the final
+#   `label` (the merge_all() output). The campaign-label-restore job didn't
+#   cover them. Verified on disk 2026-06-25 (key diff vs a labelled tile:
+#   missing exactly `label`/`label_mask`). They are forest tiles → merge_all
+#   path is NMD baseline + SKS hygge gate (no LPIS crop overlay expected).
+#
+# What this writes per tile: `label` (uint8 unified 23-class) + recomputed
+#   nmd_label_raw / nmd_area_ha / harvest_mask (deterministic, same refs).
+#   No spectral touched. No refetch. The other 6904 tiles are NOT touched
+#   (`--tile-ids` scopes the build to exactly these stems).
+#
+# Verify-one-before-all: wave 1 builds ONE tile and asserts a valid label
+#   came out (shape 512x512, class<=22) before wave 2 builds the other 7.
+#   build_tile_label() also asserts shape/range internally and writes
+#   atomically (tmp + os.replace), so a bad build fails loud, never garbage.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-labels-recoreg-8
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 2400   # 40 min: ~4 min clone/install + 8 tiles
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: builder
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== Re-merge labels: 8 recoreg tiles ==="
+              echo "Started: $(date -u)"
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)   (want 087eede or later)"
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              DATA=/data/unified_v2_512_recoreg
+              NMD=/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif
+              TILE1=43983928
+              REST="44003936 44023928 44063896 44123932 44123940 44143910 44183896"
+
+              echo ""
+              echo "=== reference data inventory ==="
+              echo "  tiles dir: $(ls $DATA/*.npz 2>/dev/null | wc -l) npz"
+              echo "  NMD: $(ls -lh $NMD | awk '{print $5}')"
+              echo "  LPIS: $(ls /data/lpis/*.parquet 2>/dev/null | wc -l)  SKS: $(ls /data/sks/*.parquet 2>/dev/null | wc -l)"
+              echo ""
+
+              echo "=== WAVE 1 (verify-one): tile $TILE1 ==="
+              python scripts/build_labels.py \
+                --data-dir "$DATA" --nmd-raster "$NMD" \
+                --lpis-dir /data/lpis --sks-dir /data/sks \
+                --tile-ids $TILE1 --workers 1
+
+              echo "=== assert wave-1 produced a valid label ==="
+              python3 -c "import numpy as np; z=np.load('$DATA/$TILE1.npz', allow_pickle=True); assert 'label' in z.files, 'NO label key'; lab=z['label']; assert lab.shape==(512,512) and lab.dtype==np.uint8 and int(lab.max())<=22, ('bad', lab.shape, lab.dtype, int(lab.max())); u,c=np.unique(lab, return_counts=True); print('WAVE1_OK', lab.shape, lab.dtype, 'classes=', dict(zip(u.tolist(), c.tolist())))"
+
+              echo ""
+              echo "=== WAVE 2: remaining 7 tiles ==="
+              python scripts/build_labels.py \
+                --data-dir "$DATA" --nmd-raster "$NMD" \
+                --lpis-dir /data/lpis --sks-dir /data/sks \
+                --tile-ids $REST --workers 4
+
+              echo ""
+              echo "=== verify ALL 8 now carry a valid label ==="
+              python3 -c "import os,numpy as np; d='$DATA'; ids='43983928 44003936 44023928 44063896 44123932 44123940 44143910 44183896'.split(); zs=[(t, np.load(os.path.join(d,t+'.npz'), allow_pickle=True)) for t in ids]; rows=[(t, ('label' in z.files and z['label'].shape==(512,512) and z['label'].dtype==np.uint8 and int(z['label'].max())<=22), (float((z['label']!=0).mean()) if 'label' in z.files else 0.0)) for t,z in zs]; [print('  ', t, 'OK' if ok else 'FAIL', 'nonbg=%.3f'%nz) for t,ok,nz in rows]; print('ALL8_OK' if all(ok for _,ok,_ in rows) else 'FAILED'); assert all(ok for _,ok,_ in rows)"
+
+              echo ""
+              echo "=== Done: $(date -u) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
