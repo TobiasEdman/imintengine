@@ -1,0 +1,125 @@
+---
+# Job: decision-2 accept/drop — DROP the residual 78 recoreg tiles.
+#
+# Why: after the no-data frame demote (demote-nodata-frames-recoreg), 78 tiles
+#   would fall below 3 good frames if their no-data frame were cleared — too few
+#   for the 4-frame multitemporal model (crop-phenology classes 11-21 need the
+#   temporal curve). The frame-coverage gate already PASSES at 1.13% with these
+#   left in, so this is a final-quality call, not a blocker. User decision
+#   (2026-06-26): DROP all 78 for a uniform >=3-good-frame dataset (6912 -> 6834).
+#   Breakdown: n_good {0:5, 1:16, 2:57}.
+#
+# Reversible: tiles are MOVED to /data/quarantine/recoreg_residual_lt3frames
+#   (not deleted) with a drop_manifest.json, so the call can be undone by moving
+#   them back. Idempotent: a re-run treats already-quarantined tiles as done.
+#
+# SERIALIZATION: this WRITES the same npz dir the VPP --force re-fetch is
+#   rewriting. APPLY ONLY AFTER refetch-recoreg-vpp is Complete. PHASE A also
+#   aborts if any *.tmp.npz is present (an atomic write mid-flight) as a second
+#   safety net against the os.replace race.
+#
+# Verify-before-done: PHASE A sanity-gates the residual count == 78 BEFORE any
+#   move. PHASE C re-runs the frame-coverage gate and asserts fail == 0 (every
+#   remaining tile fully covered) — the drop's verification artifact.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: drop-residual-78-recoreg
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800   # 30 min: ~3 min clone/install + <1 min moves + ~7 min gate scan
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: dropper
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== decision-2 accept/drop: DROP residual 78 (recoreg) ==="
+              echo "Started: $(date -u)"
+
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy > /dev/null 2>&1
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+              test -f scripts/qc_frame_coverage.py || { echo "FATAL: qc script not on main"; exit 1; }
+
+              DATA=/data/unified_v2_512_recoreg
+              QUAR=/data/quarantine/recoreg_residual_lt3frames
+              mkdir -p /data/debug
+              test -f /data/debug/demote_applied.json || { echo "FATAL: demote_applied.json missing — run demote first"; exit 1; }
+
+              echo ""
+              echo "=== PHASE A: extract + sanity-gate the 78 residual names (NO move yet) ==="
+              python3 -c "import json; print(chr(10).join(sorted(x['name'] for x in json.load(open('/data/debug/demote_applied.json'))['residual'])))" > /tmp/drop_names.txt
+              COUNT=$(grep -c . /tmp/drop_names.txt)
+              echo "residual names extracted: $COUNT"
+              test "$COUNT" -eq 78 || { echo "FATAL: expected 78 residual, got $COUNT — aborting before any move"; exit 1; }
+              if ls "$DATA"/*.tmp.npz >/dev/null 2>&1; then echo "FATAL: .tmp.npz present in dataset (a writer is mid-flight — is VPP still running?) — abort"; exit 1; fi
+              echo "PHASE_A_OK"
+
+              echo ""
+              echo "=== PHASE B: move 78 -> quarantine (reversible) ==="
+              mkdir -p "$QUAR"
+              moved=0; already=0
+              while IFS= read -r nm; do
+                [ -z "$nm" ] && continue
+                src="$DATA/$nm.npz"; dst="$QUAR/$nm.npz"
+                if [ -f "$src" ]; then mv "$src" "$dst"; moved=$((moved+1));
+                elif [ -f "$dst" ]; then already=$((already+1));
+                else echo "FATAL: $nm missing from BOTH dataset and quarantine"; exit 1; fi
+              done < /tmp/drop_names.txt
+              echo "moved=$moved already_present=$already"
+
+              # post-conditions: none of the 78 remain in DATA; all 78 present in QUAR
+              while IFS= read -r nm; do
+                [ -z "$nm" ] && continue
+                if [ -f "$DATA/$nm.npz" ]; then echo "FATAL: still in dataset: $nm"; exit 1; fi
+                if [ ! -f "$QUAR/$nm.npz" ]; then echo "FATAL: not in quarantine: $nm"; exit 1; fi
+              done < /tmp/drop_names.txt
+              REMAIN=$(ls "$DATA"/*.npz | wc -l | tr -d ' ')
+              echo "dataset now: $REMAIN npz (was 6912 -> expect 6834)"
+              test "$REMAIN" -eq 6834 || { echo "FATAL: dataset count $REMAIN != 6834"; exit 1; }
+
+              python3 -c "import json,time; names=open('/tmp/drop_names.txt').read().split(); json.dump({'dropped':names,'count':len(names),'from':'$DATA','to':'$QUAR','reason':'residual: <3 good frames after no-data demote (decision-2 accept/drop -> DROP all 78)','source_report':'/data/debug/demote_applied.json','produced_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}, open('$QUAR/drop_manifest.json','w'), indent=2); print('MANIFEST_WROTE n=%d'%len(names))"
+              echo "PHASE_B_OK"
+
+              echo ""
+              echo "=== PHASE C: re-run frame-coverage gate (expect fail=0, 100% PASS) ==="
+              python scripts/qc_frame_coverage.py \
+                --data-dir "$DATA" --workers 8 \
+                --min-valid-frac 0.90 --max-fail-frac 0.02 \
+                --report /data/debug/frame_coverage_qc_postdrop.json
+
+              echo "=== assert post-drop gate is clean (zero failures) ==="
+              python3 -c "import json; r=json.load(open('/data/debug/frame_coverage_qc_postdrop.json')); print('POSTDROP ok=%s fail=%d/%d fail_frac=%.4f'%(r['ok'], r['stats']['fail'], r['evaluated'], r['fail_frac'])); assert r['ok'] is True and r['stats']['fail']==0, ('post-drop gate not clean', r['reason']); print('DROP_GATE_CLEAN')"
+
+              echo ""
+              echo "=== Done: $(date -u) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
