@@ -1,0 +1,107 @@
+---
+# Job: decision-2 frame demote — clear no-data spectral frames out of
+#   temporal_mask for the recoreg tiles that retain >= 3 good frames.
+#
+# Why: qc_frame_coverage flags 144/6912 tiles FAIL (2.08% > 2.0% gate) because a
+#   present frame is a swath-edge / empty-post-crop no-data wedge. The correct
+#   fix for such a frame is temporal_mask -> 0 (it was never real data) — exactly
+#   what fetch_spectral does at fetch time. 66 of the 144 retain >= 3 good frames
+#   after demote, so demoting just them drops the gate to 78/6912 = 1.13% < 2.0%
+#   (PASS) with zero PU and zero quality loss. NO re-fetch, NO spectral mutation.
+#   The residual 78 (< 3 good if demoted) are left untouched for a separate
+#   accept/drop call.
+#
+# Safety: the spectral frame-coverage is set by SPECTRAL data only; free-aux
+#   rewrote AUX channels, so the 144 count is stable. The two-writer race is over
+#   (free-aux complete + 8-tile re-merge complete before this runs). Atomic writes
+#   (tmp + os.replace). Only temporal_mask is mutated; every other field verbatim.
+#
+# Gated verify-before-write: PHASE A runs --dry-run and ASSERTS the demote count
+#   lands in a sane band around the expected 66 BEFORE any npz is written; a wild
+#   partition aborts the job before touching data. PHASE B writes. PHASE C re-runs
+#   the gate and asserts VERDICT PASS.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: demote-nodata-frames-recoreg
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600   # 60 min: ~4 min clone/install + 3 full scans
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: demoter
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== decision-2 frame demote: recoreg ==="
+              echo "Started: $(date -u)"
+
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy > /dev/null 2>&1
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+              test -f scripts/demote_nodata_frames.py || { echo "FATAL: demote script not on main"; exit 1; }
+
+              DATA=/data/unified_v2_512_recoreg
+              mkdir -p /data/debug
+
+              echo ""
+              echo "=== PHASE A: dry-run partition gate (NO writes) ==="
+              python scripts/demote_nodata_frames.py \
+                --data-dir "$DATA" --workers 8 \
+                --min-valid-frac 0.90 --min-good-frames 3 \
+                --dry-run --report /data/debug/demote_dryrun.json
+
+              echo "=== assert dry-run partition is sane BEFORE writing ==="
+              python3 -c "import json; r=json.load(open('/data/debug/demote_dryrun.json')); c=r['counts']; dem=c['demote']; res=c['residual']; print('DRYRUN demote=%d residual=%d clean=%d skip=%d err=%d'%(dem,res,c['clean'],c['skipped'],c['error'])); assert c['error']==0, ('errors in dry-run', c); assert 40<=dem<=90, ('demote count out of sane band [40,90]', dem); assert 40<=res<=120, ('residual out of sane band [40,120]', res); print('DRYRUN_GATE_OK')"
+
+              echo ""
+              echo "=== PHASE B: apply demote (writes temporal_mask) ==="
+              python scripts/demote_nodata_frames.py \
+                --data-dir "$DATA" --workers 8 \
+                --min-valid-frac 0.90 --min-good-frames 3 \
+                --report /data/debug/demote_applied.json
+
+              echo "=== assert applied == dry-run partition (consistency) ==="
+              python3 -c "import json; a=json.load(open('/data/debug/demote_applied.json'))['counts']; d=json.load(open('/data/debug/demote_dryrun.json'))['counts']; print('APPLIED demote=%d residual=%d clean=%d err=%d'%(a['demote'],a['residual'],a['clean'],a['error'])); assert a['error']==0, ('write errors', a); assert a['demote']==d['demote'] and a['residual']==d['residual'], ('partition drifted between dry-run and apply', a, d); print('APPLY_OK')"
+
+              echo ""
+              echo "=== PHASE C: re-run frame-coverage gate (expect PASS ~1.13%) ==="
+              python scripts/qc_frame_coverage.py \
+                --data-dir "$DATA" --workers 8 \
+                --min-valid-frac 0.90 --max-fail-frac 0.02 \
+                --report /data/debug/frame_coverage_qc_postdemote.json
+
+              echo "=== assert post-demote gate verdict is PASS ==="
+              python3 -c "import json; r=json.load(open('/data/debug/frame_coverage_qc_postdemote.json')); print('POSTDEMOTE ok=%s fail=%d/%d fail_frac=%.4f'%(r['ok'], r['stats']['fail'], r['evaluated'], r['fail_frac'])); assert r['ok'] is True, ('gate still FAIL after demote', r['reason']); print('GATE_PASS')"
+
+              echo ""
+              echo "=== Done: $(date -u) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
