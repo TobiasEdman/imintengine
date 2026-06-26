@@ -58,17 +58,21 @@ spec:
 
               mkdir -p /www
               # Regenerate the page every 60 s from the live _recoreg dir.
-              # --refetch-since = the instant refetch-recoreg-aux-free began
-              # writing (job .status.startTime). Adds the "rewritten since" bar
-              # that tracks free-aux now and the gated VPP --force re-fetch next;
-              # build_aux_alignment (corr(volume,height) φ card) renders
+              # --refetch-since = the instant the CURRENT --force re-fetch began
+              # writing (job .status.startTime). Repointed from free-aux
+              # (2026-06-25T09:47:22Z, now complete) to the VPP --force re-fetch
+              # (refetch-recoreg-vpp, started 2026-06-26T06:03:38Z) so the
+              # "rewritten since" bar tracks VPP progress. NOTE: the bar's label
+              # is hardcoded "aux refetch" in render_html — repointing the epoch
+              # does not relabel it (no code change in the "progress bar only"
+              # scope). build_aux_alignment (corr(volume,height) φ card) renders
               # unconditionally from the new code this fresh clone picks up.
               python3 scripts/campaign_dashboard.py \
                 --recoreg-dir /data/unified_v2_512_recoreg \
                 --orig-dir /data/unified_v2_512 \
                 --total 6921 \
                 --title "Re-coreg campaign · Phase 1" \
-                --refetch-since 2026-06-25T09:47:22Z \
+                --refetch-since 2026-06-26T06:03:38Z \
                 --out-dir /www --watch 60 &
 
               cd /www
