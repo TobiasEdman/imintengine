@@ -58,8 +58,14 @@ spec:
 
               apt-get update -qq && apt-get install -y -qq \
                 git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              # scipy is REQUIRED: estimate_mi_offset() (coregistration.py:314)
+              # hard-imports scipy.optimize.minimize; without it
+              # coregister_to_reference() catches the ImportError (L452-454) and
+              # SILENTLY skips sub-pixel alignment → --coreg-to-anchor becomes a
+              # no-op (frames written un-coreg'd to the anchor, no error). Verified
+              # by phase2-sample-verify-recoreg: reverse-fit 72/72, coreg SKIPPED=0.
               pip3 install --quiet --no-cache-dir \
-                numpy rasterio pyproj requests Pillow \
+                numpy scipy rasterio pyproj requests Pillow \
                 pystac-client openeo torch 2>&1 | tail -3
 
               mkdir -p /workspace && cd /workspace
