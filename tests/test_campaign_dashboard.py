@@ -293,6 +293,87 @@ def test_render_html_includes_labelled_card(tmp_path):
     assert ">Labelled<" not in cd.render_html(cd.build_status(str(d), total=10), title="X")
 
 
+# ── Phase-2 backfill (frame_2016 + slot:0 counts + sample-verify render) ────
+def _p2_tile(p, *, f2016=False, slot0=False):
+    """A recoreg npz optionally carrying the Phase-2 backfill members the
+    dashboard counts: ``frame_2016.npy`` (Pass A) and/or ``slot_0_scene.npy``
+    (Pass B — the per-scene provenance member ``_write_temporal_slot`` adds
+    alongside folding the bands into ``spectral``, so slot:0 is namelist-
+    detectable without decoding the cube)."""
+    import numpy as np
+    kw = {"spectral": np.zeros((24, 8, 8), np.float32)}
+    if f2016:
+        kw["frame_2016"] = np.zeros((6, 8, 8), np.float32)
+    if slot0:
+        kw["slot_0_scene"] = np.array("S2A_MSIL1C_20171003")
+    np.savez_compressed(p, **kw)
+
+
+def test_phase2_progress_counts_frame2016_and_slot0(tmp_path):
+    d = tmp_path / "recoreg"; d.mkdir()
+    _p2_tile(d / "a.npz", f2016=True)                  # frame_2016 only
+    _p2_tile(d / "b.npz", f2016=True, slot0=True)      # both
+    _p2_tile(d / "c.npz", slot0=True)                  # slot:0 only
+    _p2_tile(d / "d.npz")                              # neither (pre-backfill)
+    pp = cd.build_phase2_progress(str(d))
+    assert pp["phase2_frame2016"] == 2 and pp["phase2_slot0"] == 2
+    assert pp["phase2_total"] == 4
+    assert pp["phase2_frame2016_pct"] == 50.0          # 2/4; slot:0 has no pct (subset)
+
+
+def test_phase2_progress_ignores_tmp_and_corrupt(tmp_path):
+    d = tmp_path / "recoreg"; d.mkdir()
+    _p2_tile(d / "ok.npz", f2016=True)
+    (d / "broken.npz").write_bytes(b"")                # 0-byte → BadZipFile, uncounted
+    (d / "tile_0_tmp.npz").write_bytes(b"x")           # atomic-write temp → excluded
+    pp = cd.build_phase2_progress(str(d))
+    assert pp["phase2_frame2016"] == 1 and pp["phase2_total"] == 2   # ok+broken; tmp out
+
+
+def test_phase2_progress_cache_reuses_then_refreshes_on_mtime(tmp_path):
+    d = tmp_path / "recoreg"; d.mkdir(); p = d / "t.npz"
+    _p2_tile(p)                                        # neither member yet
+    cache: dict = {}
+    pp1 = cd.build_phase2_progress(str(d), cache=cache)
+    assert pp1["phase2_frame2016"] == 0 and cache[str(p)][1] == (False, False)
+    mt0 = cache[str(p)][0]
+
+    # Pass A re-saves the npz with frame_2016 + bumps mtime (atomic replace) → recounted.
+    _p2_tile(p, f2016=True)
+    os.utime(p, (mt0 + 10, mt0 + 10))
+    pp2 = cd.build_phase2_progress(str(d), cache=cache)
+    assert pp2["phase2_frame2016"] == 1 and cache[str(p)][1] == (True, False)
+
+    # Add slot:0 but keep mtime → cache HIT returns the stale (True, False) tuple
+    # (proves the cache short-circuits the zip-open rather than re-reading each cycle).
+    mt1 = cache[str(p)][0]
+    _p2_tile(p, f2016=True, slot0=True)
+    os.utime(p, (mt1, mt1))
+    pp3 = cd.build_phase2_progress(str(d), cache=cache)
+    assert pp3["phase2_slot0"] == 0                    # stale-by-design (mtime unchanged)
+
+
+def test_render_html_includes_phase2_section(tmp_path):
+    d = tmp_path / "recoreg"; _tiles(d, 10)
+    s = cd.build_status(str(d), total=10)
+    s.update({"phase2_frame2016": 4500, "phase2_slot0": 120,
+              "phase2_total": 6834, "phase2_frame2016_pct": 65.8})
+    html = cd.render_html(s, title="X")
+    # Section heading + live fetch sub-bar (the "follow the fetch" pattern).
+    assert "sen2cor pre-2018 backfill" in html
+    assert "65.8%" in html and "4,500 / 6,834 tiles" in html
+    assert "120 filled" in html                        # slot:0 raw counter (no pct)
+    # Compact verdict — mint badge + one-liner, not a full callout / cards grid.
+    assert 'class="verdict-badge">VERIFIED' in html    # the mint pill itself
+    assert "reverse-fit&nbsp;72/72" in html and "0.000&nbsp;px" in html
+    assert "HEAD&nbsp;7014c95" in html                 # provenance kept
+    # Negative: the previous full-callout + 3-card form must NOT appear.
+    assert "Sample-verify PASS" not in html and ">Reverse-fit<" not in html
+    # back-compat: a status without phase2 keys renders no Phase-2 section.
+    assert "sen2cor pre-2018 backfill" not in cd.render_html(
+        cd.build_status(str(d), total=10), title="X")
+
+
 # ── aux-alignment φ (corr volume↔height) ──────────────────────────────────
 def test_aux_corr_aligned_vs_random_vs_too_few(tmp_path):
     import numpy as np

@@ -32,6 +32,31 @@ from datetime import datetime, timezone
 _RECENT_WINDOW_MIN = 30          # rate window for the responsive ETA
 _REFRESH_S = 60                  # page meta-refresh cadence
 
+# Phase-2 sample-verify verdict — the pre-flight proof that `--coreg-to-anchor`
+# actually registers, vs the silent no-op of the pre-db34d20 missing-scipy bug
+# (ImportError swallowed by coregister_to_reference → frames written un-coreg'd
+# under a green check). These are FIXED outputs of the throwaway validation job
+# `phase2-sample-verify-recoreg` (cloned HEAD 7014c95, scipy 1.15.3): a known
+# sub-pixel shift was injected into each of 72 real anchors, run through the exact
+# runner coreg call, and the recovered offset asserted ≈ −injected (reverse-fit —
+# the bulletproof sign+magnitude test, not a smooth-field residual which passed
+# the inverted-sign bug). They describe the *method*, not live PVC state, so they
+# live here as a constant rather than a build_* derivation. The 5/72 tiles >1px
+# are a pre-existing M1 grid-snap fallback (transforms=None + 0.95px reject wall),
+# not a coreg regression — user-accepted 2026-06-27.
+_PHASE2_VERDICT = {
+    "passed": True,
+    "reverse_fit_ok": 72,
+    "reverse_fit_total": 72,
+    "tol_px": 0.20,
+    "injected_px": "(0.45,&nbsp;−0.35)",
+    "residual_median_px": 0.000,
+    "residual_max_px": 1.891,
+    "residual_gt1px": 5,
+    "coreg_skipped": 0,
+    "source": "job phase2-sample-verify-recoreg · HEAD 7014c95 · scipy 1.15.3",
+}
+
 
 def _tile_npz_paths(recoreg_dir: str) -> list[str]:
     """Paths of the done tiles: every ``*.npz`` EXCEPT the ``*_tmp.npz``
@@ -167,6 +192,63 @@ def build_label_progress(recoreg_dir: str, *, cache: dict | None = None) -> dict
         "labelled": labelled,
         "labelled_total": n,
         "labelled_pct": round(100.0 * labelled / n, 1) if n else 0.0,
+    }
+
+
+def build_phase2_progress(recoreg_dir: str, *, cache: dict | None = None) -> dict:
+    """Count the Phase-2 sen2cor pre-2018 backfill landing in-place on the
+    ``_recoreg`` tiles: a 2016 summer background frame (Pass A, ~all tiles) and a
+    2017 autumn ``slot:0`` frame (Pass B, 2018-labelled tiles only). Both are
+    coreg'd to each tile's Phase-1 anchor.
+
+    A tile carries the 2016 frame iff its npz holds ``frame_2016.npy`` and the
+    slot:0 backfill iff it holds ``slot_0_scene.npy`` — the per-scene provenance
+    member ``_write_temporal_slot`` adds alongside folding the bands into
+    ``spectral.npy``, so slot:0 is namelist-detectable without decoding the cube.
+    Both are read from the zip central directory with stdlib ``zipfile`` (no array
+    decompress, no numpy, never touches the 25 MB spectral cube) — exactly like
+    ``build_label_progress``.
+
+    ``cache`` (caller-persisted across watch cycles):
+    ``{path: (mtime, (has_f2016, has_slot0))}``. The backfill re-writes the npz in
+    place (bumping mtime), so a freshly filled tile is re-read next cycle while
+    steady-state costs one ``stat()`` per tile. Pass ``None`` for a stateless scan
+    (tests).
+
+    ``slot:0`` is reported as a raw count (no pct): its eligible denominator is the
+    2018-labelled subset, not the full tile set, so a pct vs ``total`` would
+    understate it. ``frame_2016`` targets ~all tiles, so its pct is meaningful.
+    """
+    import zipfile
+    paths = _tile_npz_paths(recoreg_dir)
+    f2016 = 0
+    slot0 = 0
+    for p in paths:
+        try:
+            mt = os.path.getmtime(p)
+        except OSError:
+            continue
+        hit = cache.get(p) if cache is not None else None
+        if hit is not None and hit[0] == mt:
+            has_f2016, has_slot0 = hit[1]
+        else:
+            try:
+                with zipfile.ZipFile(p) as z:
+                    names = set(z.namelist())
+                has_f2016 = "frame_2016.npy" in names
+                has_slot0 = "slot_0_scene.npy" in names
+            except Exception:
+                has_f2016 = has_slot0 = False   # empty / truncated / mid-write tile
+            if cache is not None:
+                cache[p] = (mt, (has_f2016, has_slot0))
+        f2016 += int(has_f2016)
+        slot0 += int(has_slot0)
+    n = len(paths)
+    return {
+        "phase2_frame2016": f2016,
+        "phase2_slot0": slot0,
+        "phase2_total": n,
+        "phase2_frame2016_pct": round(100.0 * f2016 / n, 1) if n else 0.0,
     }
 
 
@@ -508,6 +590,39 @@ def render_html(status: dict, *, frames: dict | None = None,
             f'<span class="unit"> vol&harr;h · n={status.get("align_n", 0)}</span>'
             '</div></div>')
 
+    # Phase-2 backfill section — a live frame_2016 sub-bar + slot:0 counter,
+    # styled like the existing refetch-bar (the dashboard's "follow the fetch"
+    # pattern). The sample-verify result rides along as a compact mint badge +
+    # one-liner under the bar, not a full callout — the dashboard's primary job
+    # is fetch-following, the verdict is a "this method was pre-validated" tag.
+    # Present only once build_phase2_progress is merged into status (absent
+    # callers/tests render the page without it).
+    phase2_html = ""
+    if status.get("phase2_frame2016") is not None:
+        f2016 = status["phase2_frame2016"]
+        slot0 = status["phase2_slot0"]
+        p2total = status["phase2_total"]
+        f2016_pct = status["phase2_frame2016_pct"]
+        v = _PHASE2_VERDICT
+        badge = "VERIFIED" if v["passed"] else "FAILED"
+        phase2_html = (
+            '<h2>Phase&nbsp;2 · sen2cor pre-2018 backfill '
+            '(coreg-to-anchor)</h2>'
+            '<div class="tilename">2016 summer background + 2017 autumn '
+            'slot:0, each registered to the tile&rsquo;s Phase-1 anchor</div>'
+            '<div class="bar-wrap sub"><div class="bar sub" '
+            f'style="width:{min(100.0, f2016_pct)}%"></div></div>'
+            '<div class="pct-row sub">'
+            f'<span>frame&nbsp;2016 · <strong>{f2016_pct:.1f}%</strong> · '
+            f'{f2016:,} / {p2total:,} tiles</span>'
+            f'<span>slot:0 (2018 tiles) · {slot0:,} filled</span></div>'
+            '<div class="tilename">'
+            f'<span class="verdict-badge">{badge}</span>'
+            f'reverse-fit&nbsp;{v["reverse_fit_ok"]}/{v["reverse_fit_total"]}'
+            f' · residual median&nbsp;{v["residual_median_px"]:.3f}&nbsp;px'
+            f' · {v["coreg_skipped"]}&nbsp;coreg-skipped · '
+            'sample-verify HEAD&nbsp;7014c95</div>')
+
     # Secondary "rewritten since <T>" bar for an in-flight refetch — present only
     # when --refetch-since is set (else the page shows just the campaign bar).
     refetch_html = ""
@@ -606,6 +721,9 @@ def render_html(status: dict, *, frames: dict | None = None,
   .card .unit{{font-size:13px;color:#6b7280;font-weight:400}}
   .warn{{background:#cff8e4;border:1px solid #245045;color:#1A4338;
     border-radius:10px;padding:12px 16px;margin-bottom:22px;font-size:14px}}
+  .verdict-badge{{display:inline-block;background:#cff8e4;color:#1A4338;
+    border:1px solid #245045;border-radius:6px;padding:1px 7px;font-size:11px;
+    font-weight:700;letter-spacing:.04em;margin-right:8px}}
   h2{{font-size:16px;font-weight:700;color:#1A4338;margin:34px 0 4px}}
   .tilename{{color:#6b7280;font-size:13px;margin-bottom:12px;
     font-family:ui-monospace,Menlo,monospace}}
@@ -662,6 +780,7 @@ def render_html(status: dict, *, frames: dict | None = None,
       <div class="card"><div class="label">ETA</div>
         <div class="value">{eta}</div></div>
     </div>
+    {phase2_html}
     {frames_html}
     {label_html}
     {aux_html}
@@ -725,12 +844,14 @@ def main() -> None:
 
     label_cache: dict = {}        # persisted across cycles: {path: (mtime, has_label)}
     align_cache: dict = {}        # persisted across cycles: {path: (mtime, phi)}
+    phase2_cache: dict = {}       # persisted: {path: (mtime, (has_f2016, has_slot0))}
     refetch_since = _parse_since(args.refetch_since) if args.refetch_since else None
     while True:
         try:
             status = build_status(args.recoreg_dir, args.total)
             status.update(build_label_progress(args.recoreg_dir, cache=label_cache))
             status.update(build_aux_alignment(args.recoreg_dir, cache=align_cache))
+            status.update(build_phase2_progress(args.recoreg_dir, cache=phase2_cache))
             if refetch_since is not None:
                 status.update(build_refetch_progress(
                     args.recoreg_dir, refetch_since, args.total))
@@ -753,6 +874,8 @@ def main() -> None:
                   f"{status['labelled_total']} ({status['labelled_pct']}%) "
                   f"align_phi={status.get('align_phi_mean')}"
                   f"(n={status.get('align_n', 0)}){rf} "
+                  f"phase2_f2016={status['phase2_frame2016']}/{status['phase2_total']} "
+                  f"slot0={status['phase2_slot0']} "
                   f"rate={status['rate_recent_per_h']}/h "
                   f"eta={_fmt_eta(status['eta_hours'])} latest={latest} aux={n_aux} "
                   f"label_classes={n_cls}", flush=True)
