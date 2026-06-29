@@ -1,0 +1,93 @@
+# promote-recoreg-job.yaml — one-shot k8s Job that landed the re-coreg
+# campaign by renaming the corrected dir over the live training dataset.
+#
+# Wraps `scripts/promote_recoreg.py --execute`, which does TWO atomic
+# `os.rename` calls on the same PVC (`/data` = `training-data-cephfs`):
+#
+#   /data/unified_v2_512          ->  /data/unified_v2_512_pre_recoreg_<UTC-ts>   (backup)
+#   /data/unified_v2_512_recoreg  ->  /data/unified_v2_512                       (promote)
+#
+# Rationale for keeping this in-repo even after it ran once:
+# 1. AUDIT — the campaign ended here; this file is the operational receipt.
+#    The actual run was on 2026-06-29 06:45:28Z (backup retained at
+#    `unified_v2_512_pre_recoreg_20260629T064528Z`, 6921 tiles → backup;
+#    6834 tiles → live; delta -87 = 78 drop-residual + 9 Phase-1 misses).
+# 2. REUSE — the next re-coreg campaign will re-apply this verbatim (after
+#    pointing it at a fresh `*_recoreg` dir).
+# 3. CONVENTION — captures the two iceguard admission rules that any new
+#    `prithvi-training-default` Job has to satisfy:
+#       (a) `resources.requests` and `resources.limits` MUST be present, and
+#       (b) requests == limits (Guaranteed QoS class) per-resource.
+#    Without (a) you get `Resource requests are missing for Pod ...`.
+#    Without (b) you get `Resource limit X:Y is not equal to the request X:Z`.
+#    These show up as `FailedCreate` events on the Job, not on a pod (no pod
+#    is ever created), which is easy to miss without `kubectl describe job`.
+#
+# Re-running this manifest WILL exit non-zero once the recoreg dir is consumed
+# — promote_recoreg.py errors out with "recoreg dir not found" by design.
+# That's the safety. To re-promote, point the args at a new recoreg dir.
+#
+# Rollback (in a similarly-shaped RW pod, while the backup dir still exists):
+#   python3 scripts/promote_recoreg.py \
+#       --live /data/unified_v2_512 --rollback --execute
+# Restores the newest `*_pre_recoreg_*` backup over the current live dir.
+#
+# Sibling scripts (campaign chain, all Complete as of 2026-06-29):
+#   campaign-label-restore, build-labels-recoreg-8, refetch-recoreg-aux-free,
+#   prefetch-vpp-wekeo-gapfill, refetch-recoreg-vpp,
+#   demote-nodata-frames-recoreg, drop-residual-78-recoreg,
+#   qc-recoreg-gates, phase2-sample-verify-recoreg, campaign-phase2-sen2cor
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: promote-recoreg-oneshot
+  labels:
+    purpose: promote-recoreg
+    campaign: recoreg-512
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400   # auto-cleanup 24h after terminal
+  template:
+    metadata:
+      labels:
+        purpose: promote-recoreg
+        campaign: recoreg-512
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: promote
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              python3 -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/TobiasEdman/imintengine/main/scripts/promote_recoreg.py', '/tmp/p.py')"
+              echo "=== promote --execute ==="
+              python3 /tmp/p.py \
+                --live /data/unified_v2_512 \
+                --recoreg /data/unified_v2_512_recoreg \
+                --execute
+              echo "=== post-state ==="
+              ls -d /data/unified_v2_512 /data/unified_v2_512_pre_recoreg_* 2>&1 | head
+              echo "--- recoreg-dir gone? ---"
+              (ls -d /data/unified_v2_512_recoreg 2>&1 || echo "OK: recoreg-dir consumed") | head -2
+              echo "--- live tile count ---"
+              ls /data/unified_v2_512/*.npz 2>/dev/null | wc -l
+              echo "--- backup tile count ---"
+              ls /data/unified_v2_512_pre_recoreg_*/*.npz 2>/dev/null | wc -l
+          resources:
+            # iceguard: requests == limits (Guaranteed QoS) — see header comment.
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - mountPath: /data
+              name: data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
