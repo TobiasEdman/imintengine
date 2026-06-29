@@ -1,0 +1,166 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-orphan-512
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: campaign-orphan-512
+spec:
+  # ORPHAN-256 → 512 fetch campaign. Fills the 1,147 centers that exist in the
+  # 256 ledger but have no 512 parent (per /data/audits/orphan_fetch_512.json,
+  # rebuilt this session 2026-06-29 via orphan-list-rebuild Job: 1,147 entries,
+  # 1,142 carry year, by-cohort {lulc:613, numeric:217, crop:178, urban:117,
+  # other:22}, by-year {2018:546, 2021:337, 2022:254, 2019:5, '?':5}).
+  #
+  # Mirrors campaign-phase1-des-recoreg's shape — des-only, --workers 2, no
+  # pre-2018 (Phase-2 sen2cor handles that as a follow-up). DIFFERENCES vs
+  # Phase-1:
+  #
+  #   --mode refetch  --from-json /data/audits/orphan_fetch_512.json    (was --from-existing /data/unified_v2_512)
+  #   --output-dir    /data/unified_v2_512_orphans_staging              (was /data/unified_v2_512_recoreg)
+  #   --years         2018 2019 2021 2022 2023                          (was default — orphan list has 2021, which is NOT in default)
+  #   activeDeadlineSeconds 259200 (=3d)                                (was 518400 / 6d — orphan set is ~1/6 the size)
+  #   backoffLimit 1                                                    (was 3 — smaller, well-defined input)
+  #
+  # STAGING strategy: writes go to *_orphans_staging, NOT directly into live
+  # /data/unified_v2_512. After QC + Phase-2 sen2cor pre-2018 backfill on the
+  # staging dir, a separate step merges *.npz → live (additions only — orphans
+  # never collide with existing 512 names by construction of the orphan list).
+  # Same atomic-write semantics + _valid_existing_tile resume guards as Phase-1.
+  #
+  # WALL-TIME: des is ~3 min/tile × 1,147 / 2 workers ≈ ~28 h fetch; 3 d budget.
+  # Five tiles in the orphan JSON have no 'year' field (build_orphan_fetch_list
+  # found a 256 source center with no year recorded in the ledger). Fetch will
+  # likely skip them — accepted, surface in the post-run sanity for a manual
+  # follow-up rather than dropping them client-side here.
+  #
+  # REQUIRES: orphan_fetch_512.json refreshed (DONE 2026-06-29 by Job
+  # orphan-list-rebuild). The pod clones main HEAD; verify CLONED HEAD echoed.
+  backoffLimit: 1
+  activeDeadlineSeconds: 259200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: orphan-fetch
+          # python:3.11-slim (not the sen2cor image): no L2A_Process ⇒ l1c_sen2cor
+          # is auto-dead ⇒ this Job is STRICTLY des. Pre-2018 slots land empty
+          # with temporal_mask==0 for the Phase-2 sen2cor follow-up.
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign orphan-256→512: des-only fresh-fetch → unified_v2_512_orphans_staging ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+
+              OUT=/data/unified_v2_512_orphans_staging
+              ORPHAN_JSON=/data/audits/orphan_fetch_512.json
+              echo ""
+              echo "=== orphan list ==="
+              python3 -c "
+              import json
+              d = json.load(open('$ORPHAN_JSON'))
+              print(f'  {len(d)} orphan parents, {sum(1 for r in d if r.get(\"year\")):,} with year')
+              import collections
+              print(f'  by year: {dict(collections.Counter(r.get(\"year\",\"?\") for r in d).most_common())}')"
+              echo ""
+              echo "=== fetch des-only, --workers 2 → $OUT ==="
+              python3 scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json "$ORPHAN_JSON" \
+                --output-dir "$OUT" \
+                --tile-size-px 512 \
+                --years 2018 2019 2021 2022 2023 \
+                --workers 2 \
+                --fetch-sources des \
+                --no-pre2018
+
+              echo ""
+              echo "=== orphan layout sanity (sample 5 tiles) ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              outs = sorted(glob.glob("/data/unified_v2_512_orphans_staging/*.npz"))
+              print(f"orphan tiles so far: {len(outs)}")
+              for p in outs[:5]:
+                  d = np.load(p, allow_pickle=True)
+                  assert d["spectral"].shape == (24, 512, 512), (p, d["spectral"].shape)
+                  # No frame_2016 yet — Phase-2 sen2cor backfill is the follow-up.
+                  assert int(d.get("has_frame_2016", 0)) == 0, f"{p} has frame_2016!"
+                  assert "coreg_ref_frame" in d.files, f"{p} missing anchor"
+                  print(f"  {p.split('/')[-1]}: mask={list(d['temporal_mask'])} "
+                        f"coreg_m2={int(d.get('coreg_m2', 0))} "
+                        f"ref={int(d['coreg_ref_frame'])}")
+              print("LAYOUT OK — (24,512,512), no frame_2016, anchor present")
+              PYEOF
+              echo ""
+              echo "=== orphan fetch complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
