@@ -1369,7 +1369,21 @@ def main():
 
     def _run(item):
         loc, d = item
-        if use_refetch:
+        # Dispatch fresh vs refetch by ACTUAL tile presence, not by the umbrella
+        # use_refetch flag. `--from-json` historically triggered use_refetch on
+        # the assumption that listed tiles already existed on disk; that holds
+        # for `--from-existing` (where gen_from_existing populates
+        # `_existing_path`) but NOT for the orphan-256 → 512 backfill where the
+        # listed centers were never fetched at 512 (the whole point of the
+        # campaign). For those, refetch_tile returns `failed: no_stored_dates`
+        # in microseconds — silent exit-0, 0 tiles written (orphan-512 first
+        # attempt 2026-06-29). Fix: if the tile has no on-disk source, take
+        # the fresh path which selects dates from VPP windows + STAC instead
+        # of reading stored dates from a non-existent npz.
+        existing = loc.get("_existing_path")
+        on_disk = (existing and os.path.exists(existing)) or os.path.exists(
+            os.path.join(d, f"{loc['name']}.npz"))
+        if use_refetch and on_disk:
             return refetch_tile(loc, d, tile, backend=backend, force=args.force,
                                 skip_pre2018=args.no_pre2018)
         return fetch_tile(loc, args.years, d, tile,
