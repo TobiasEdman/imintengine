@@ -22,6 +22,7 @@ spec:
   #   --years         2018 2019 2021 2022 2023                          (was default — orphan list has 2021, which is NOT in default)
   #   activeDeadlineSeconds 259200 (=3d)                                (was 518400 / 6d — orphan set is ~1/6 the size)
   #   backoffLimit 1                                                    (was 3 — smaller, well-defined input)
+  #   env VPP_SOURCE=wekeo + VPP_WEKEO_DIR + envFrom wekeo-creds        (NEW — see env block below; Phase-1 ran VPP as a separate Job so it didn't need this)
   #
   # STAGING strategy: writes go to *_orphans_staging, NOT directly into live
   # /data/unified_v2_512. After QC + Phase-2 sen2cor pre-2018 backfill on the
@@ -126,6 +127,25 @@ spec:
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
+            # ── VPP ROUTING — MUST be wekeo for any fetch_unified_tiles run ─
+            # The auto-router (cdse_vpp._auto_fetch_vpp) falls through to CDSE
+            # on a WEkEO cache miss. For 1147 orphans against a partially-
+            # populated cache, that drained the SHARED `cdse` PU pool mid-VPP
+            # (HTTP 403 "Insufficient processing units"), the credit-guard
+            # marked CDSE DEAD, and the spectral fetch then had no working
+            # backend — 0/1147 written, exit-0 silent (orphan run 2026-06-29
+            # 14:11Z, commit 1927a1c).
+            #
+            # VPP_SOURCE=wekeo forces cache-only: any miss raises RuntimeError
+            # per-tile (visible in logs) instead of silently spending PU.
+            # Cache gaps are addressed by a separate prefetch_vpp_wekeo run,
+            # NOT by paying CDSE PU here. Same env as
+            # k8s/refetch-recoreg-vpp-job.yaml — that's how the recoreg
+            # VPP backfill stayed 100% PU-free.
+            - name: VPP_SOURCE
+              value: "wekeo"
+            - name: VPP_WEKEO_DIR
+              value: "/data/vpp_wekeo"
             - name: CDSE_CLIENT_ID
               valueFrom:
                 secretKeyRef:
@@ -150,6 +170,11 @@ spec:
                   name: des-credentials
                   key: password
                   optional: true
+          envFrom:
+            # WEkEO HDA credentials (WEKEO_USERNAME + WEKEO_PASSWORD) for the
+            # WEkEO COG cache reads. Same secret as refetch-recoreg-vpp.
+            - secretRef:
+                name: wekeo-creds
           resources:
             requests:
               cpu: "4"

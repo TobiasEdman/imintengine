@@ -99,6 +99,42 @@ Fetch-scriptet (`fetch_unified_tiles.py`) hanterar BARA spektral.
 Label-scriptet (`build_labels.py`) hanterar BARA NMD/LPIS/SKS → labels.
 De är helt oberoende och körs i sekvens.
 
+### VPP — ALLTID `VPP_SOURCE=wekeo` i fetch-yamls
+
+`scripts/fetch_unified_tiles.py` kör VPP-prefetch via
+`imint.training.cdse_vpp.fetch_vpp_tiles`. Default-routing (`_auto_fetch_vpp`)
+är "cache-first med CDSE-fallback" — men på en cache-miss faller den
+tillbaka till CDSE Sentinel Hub Process API, som **delar PU-pool med
+spektralfetchen**. En större fetch mot ett delvis befolkat WEkEO-cache
+dränerar därför CDSE-budgeten innan spektralfetchen ens börjat
+(HTTP 403 "Insufficient processing units" → `credit_guard` markerar
+hela CDSE som DEAD → spektralfetchen failar tyst → exit-0, 0 tiles).
+
+Det här hände i `campaign-orphan-512` 2026-06-29 (commit `1927a1c`):
+0/1147 tiles, silent exit-0. Diagnos i `feedback_vpp_source_wekeo_mandatory.md`.
+
+**Regel — varje k8s-yaml som kör `fetch_unified_tiles.py` MÅSTE sätta:**
+
+```yaml
+env:
+  - { name: VPP_SOURCE,    value: "wekeo" }      # cache-only, fail-loud on miss
+  - { name: VPP_WEKEO_DIR, value: "/data/vpp_wekeo" }
+envFrom:
+  - secretRef: { name: wekeo-creds }              # WEKEO_USERNAME + WEKEO_PASSWORD
+```
+
+Med `VPP_SOURCE=wekeo` raises en cache-miss `RuntimeError` per tile
+(synligt i loggen) istället för att tyst spendera PU. Cache-gaps fylls
+med en separat `prefetch_vpp_wekeo.py`-körning (PU-fri, via WEkEO HDA)
+INNAN spektralfetchen — aldrig genom att betala CDSE PU. Samma mönster
+som `k8s/refetch-recoreg-vpp-job.yaml` (recoreg-kampanjen var 100%
+PU-fri tack vare den här regeln).
+
+Audit-status 2026-06-29: 12 av 13 `fetch_unified_tiles.py`-yamls
+saknar dessa env vars (alla utom `campaign-orphan-512-job.yaml` efter
+fix). De är inaktiva nu men måste retroaktivt patchas innan
+återanvändning — annars upprepas drainen.
+
 ## Viktiga regler
 
 - **Verifiera varje steg.** När du gör en transformation (flip, transpose, rotation), verifiera visuellt att resultatet är korrekt INNAN du applicerar på alla tiles. Gör INTE flera ändringar utan att kontrollera varje.
