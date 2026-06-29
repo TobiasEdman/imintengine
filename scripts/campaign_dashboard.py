@@ -252,6 +252,40 @@ def build_phase2_progress(recoreg_dir: str, *, cache: dict | None = None) -> dic
     }
 
 
+def build_orphan_summary(orphan_json_path: str) -> dict:
+    """Read the orphan-fetch list composition (by-year, by-cohort, total).
+
+    The orphan campaign's manifest at ``/data/audits/orphan_fetch_512.json`` is
+    static across the campaign (the orphan set is fixed once the ledger is
+    rebuilt). This reads it ONCE per regen cycle to render a "what is this
+    dashboard tracking" header section — the main progress bar already counts
+    fetched tiles in ``recoreg_dir`` via ``build_status``, with the matching
+    ``--total`` set to ``len(orphans)``.
+
+    Degrades gracefully: missing/unreadable JSON returns an empty dict, so the
+    render section disappears rather than crashing the page. Cheap (~150 KB
+    JSON, parsed in <10 ms) so no cache.
+    """
+    if not os.path.isfile(orphan_json_path):
+        return {}
+    try:
+        with open(orphan_json_path) as f:
+            d = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(d, list) or not d:
+        return {}
+    import collections
+    by_year = collections.Counter(r.get("year", "?") for r in d)
+    by_cohort = collections.Counter(r.get("cohort", "?") for r in d)
+    return {
+        "orphan_total": len(d),
+        "orphan_with_year": sum(1 for r in d if r.get("year")),
+        "orphan_by_year": dict(by_year.most_common()),
+        "orphan_by_cohort": dict(by_cohort.most_common()),
+    }
+
+
 def _aux_corr(a, b) -> float:
     """Pearson φ between two rasters over their shared finite, non-zero pixels.
 
@@ -597,8 +631,37 @@ def render_html(status: dict, *, frames: dict | None = None,
     # is fetch-following, the verdict is a "this method was pre-validated" tag.
     # Present only once build_phase2_progress is merged into status (absent
     # callers/tests render the page without it).
+    # Orphan-256→512 campaign header: "what is this dashboard tracking?". The
+    # main progress bar already counts staged tiles (build_status with --total
+    # set to len(orphans)); this section adds composition context (by-year,
+    # by-cohort) read from the static orphan manifest. Auto-hides if
+    # orphan_total is absent (recoreg-era usage of the dashboard).
+    orphan_html = ""
+    if status.get("orphan_total"):
+        ot = status["orphan_total"]
+        wy = status["orphan_with_year"]
+        bys = status["orphan_by_year"]
+        bcs = status["orphan_by_cohort"]
+        year_chips = " · ".join(
+            f"<strong>{y}</strong>:&nbsp;{c:,}"
+            for y, c in bys.items() if y != "?")
+        cohort_chips = " · ".join(
+            f"<strong>{k}</strong>:&nbsp;{v:,}"
+            for k, v in bcs.items() if k != "?")
+        missing_year = ot - wy
+        skip_note = (f" · {missing_year} entries with no year (skipped by "
+                     "fetch)" if missing_year else "")
+        orphan_html = (
+            '<h2>Orphan-256 &rarr; 512 campaign</h2>'
+            '<div class="tilename">'
+            f'{ot:,} parents from <code>/data/audits/orphan_fetch_512.json</code>; '
+            '&ge;2018 spectral fetched here, pre-2018 backfilled by a separate '
+            f'Phase-2 sen2cor pass{skip_note}.</div>'
+            f'<div class="tilename"><strong>By&nbsp;year:</strong> {year_chips}</div>'
+            f'<div class="tilename"><strong>By&nbsp;cohort:</strong> {cohort_chips}</div>')
+
     phase2_html = ""
-    if status.get("phase2_frame2016") is not None:
+    if status.get("phase2_frame2016", 0) > 0:
         f2016 = status["phase2_frame2016"]
         slot0 = status["phase2_slot0"]
         p2total = status["phase2_total"]
@@ -780,6 +843,7 @@ def render_html(status: dict, *, frames: dict | None = None,
       <div class="card"><div class="label">ETA</div>
         <div class="value">{eta}</div></div>
     </div>
+    {orphan_html}
     {phase2_html}
     {frames_html}
     {label_html}
@@ -838,6 +902,11 @@ def main() -> None:
     p.add_argument("--refetch-since", default=None,
                    help="Epoch or ISO-8601 UTC start of an in-flight refetch; adds "
                         "a 'rewritten since' progress bar (free-aux now, VPP next).")
+    p.add_argument("--orphan-json", default=None,
+                   help="Path to orphan_fetch_512.json — renders the orphan "
+                        "campaign header (composition by-year + by-cohort) when "
+                        "set. Pair with --recoreg-dir=<orphan_staging> + "
+                        "--total=<len(orphans)>.")
     p.add_argument("--watch", type=int, default=0,
                    help="Regenerate every N seconds (0 = once and exit).")
     args = p.parse_args()
@@ -852,6 +921,8 @@ def main() -> None:
             status.update(build_label_progress(args.recoreg_dir, cache=label_cache))
             status.update(build_aux_alignment(args.recoreg_dir, cache=align_cache))
             status.update(build_phase2_progress(args.recoreg_dir, cache=phase2_cache))
+            if args.orphan_json:
+                status.update(build_orphan_summary(args.orphan_json))
             if refetch_since is not None:
                 status.update(build_refetch_progress(
                     args.recoreg_dir, refetch_since, args.total))

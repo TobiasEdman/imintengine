@@ -57,22 +57,25 @@ spec:
               echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
 
               mkdir -p /www
-              # Regenerate the page every 60 s from the live _recoreg dir.
-              # --refetch-since = the instant the CURRENT --force re-fetch began
-              # writing (job .status.startTime). Repointed from free-aux
-              # (2026-06-25T09:47:22Z, now complete) to the VPP --force re-fetch
-              # (refetch-recoreg-vpp, started 2026-06-26T06:03:38Z) so the
-              # "rewritten since" bar tracks VPP progress. NOTE: the bar's label
-              # is hardcoded "aux refetch" in render_html — repointing the epoch
-              # does not relabel it (no code change in the "progress bar only"
-              # scope). build_aux_alignment (corr(volume,height) φ card) renders
-              # unconditionally from the new code this fresh clone picks up.
+              # Re-pointed 2026-06-29 to the orphan-256→512 campaign after the
+              # recoreg promote consumed /data/unified_v2_512_recoreg. Target is
+              # now /data/unified_v2_512_orphans_staging (the fetch destination
+              # of k8s/campaign-orphan-512-job.yaml). --total = 1147 (size of
+              # /data/audits/orphan_fetch_512.json, rebuilt this session) so the
+              # main progress bar fills 0→100% as orphans land. --orphan-json
+              # turns on the composition header (by-year + by-cohort) so the
+              # page tells the viewer "this is what we're tracking now". The
+              # Phase-2 section in render_html auto-hides until orphan-Phase-2
+              # backfills frame_2016 (step 2d), so during fetch we see just the
+              # orphan composition + main progress bar + latest-tile panels.
+              # --refetch-since dropped: no in-flight rewrite during the orphan
+              # fetch (orphans are pure additions, never overwrite existing).
               python3 scripts/campaign_dashboard.py \
-                --recoreg-dir /data/unified_v2_512_recoreg \
+                --recoreg-dir /data/unified_v2_512_orphans_staging \
                 --orig-dir /data/unified_v2_512 \
-                --total 6921 \
-                --title "Re-coreg campaign · Phase 1" \
-                --refetch-since 2026-06-26T06:03:38Z \
+                --total 1147 \
+                --title "Orphan-256 → 512 campaign · staging" \
+                --orphan-json /data/audits/orphan_fetch_512.json \
                 --out-dir /www --watch 60 &
 
               cd /www

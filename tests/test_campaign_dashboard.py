@@ -374,6 +374,75 @@ def test_render_html_includes_phase2_section(tmp_path):
         cd.build_status(str(d), total=10), title="X")
 
 
+def test_render_html_hides_phase2_section_when_frame2016_zero(tmp_path):
+    """During the orphan-fetch phase, build_phase2_progress returns 0/0
+    (staged tiles have no frame_2016 yet — that's step 2d, future). The
+    section must be hidden, NOT rendered with "0 / 0 tiles". The tightened
+    condition is ``phase2_frame2016 > 0`` rather than ``is not None``."""
+    d = tmp_path / "recoreg"; _tiles(d, 10)
+    s = cd.build_status(str(d), total=10)
+    s.update({"phase2_frame2016": 0, "phase2_slot0": 0,
+              "phase2_total": 10, "phase2_frame2016_pct": 0.0})
+    html = cd.render_html(s, title="X")
+    assert "sen2cor pre-2018 backfill" not in html      # heading absent
+    # The .verdict-badge CSS class lives unconditionally in the <style> block;
+    # what must NOT render is the actual badge USE in the body.
+    assert 'class="verdict-badge">' not in html         # no badge element
+    assert ">VERIFIED" not in html                      # no badge text
+
+
+# ── orphan-256→512 campaign header (composition by-year + by-cohort) ──────
+def test_orphan_summary_reads_composition(tmp_path):
+    """`build_orphan_summary` reads the static manifest and returns total +
+    by-year + by-cohort counters for the render header."""
+    import json
+    p = tmp_path / "orphans.json"
+    p.write_text(json.dumps([
+        {"name": "a", "year": 2018, "cohort": "lulc"},
+        {"name": "b", "year": 2018, "cohort": "crop"},
+        {"name": "c", "year": 2022, "cohort": "lulc"},
+        {"name": "d", "year": None, "cohort": "lulc"},     # year missing
+        {"name": "e", "cohort": "urban"},                  # year absent
+    ]))
+    s = cd.build_orphan_summary(str(p))
+    assert s["orphan_total"] == 5
+    assert s["orphan_with_year"] == 3                       # d (None) + e (absent) skipped
+    assert s["orphan_by_year"][2018] == 2
+    assert s["orphan_by_cohort"]["lulc"] == 3
+
+
+def test_orphan_summary_missing_file_returns_empty(tmp_path):
+    """Missing / unreadable / empty manifest → empty dict → render section
+    auto-hides (the page must not crash if the file isn't on the PVC yet)."""
+    assert cd.build_orphan_summary(str(tmp_path / "absent.json")) == {}
+    bad = tmp_path / "bad.json"; bad.write_text("{not json")
+    assert cd.build_orphan_summary(str(bad)) == {}
+    empty = tmp_path / "empty.json"; empty.write_text("[]")
+    assert cd.build_orphan_summary(str(empty)) == {}
+
+
+def test_render_html_includes_orphan_section(tmp_path):
+    d = tmp_path / "staging"; _tiles(d, 10)
+    s = cd.build_status(str(d), total=1147)
+    s.update({
+        "orphan_total": 1147,
+        "orphan_with_year": 1142,
+        "orphan_by_year": {2018: 546, 2021: 337, 2022: 254, 2019: 5, "?": 5},
+        "orphan_by_cohort": {"lulc": 613, "numeric": 217, "crop": 178,
+                             "urban": 117, "other": 22},
+    })
+    html = cd.render_html(s, title="Orphan campaign")
+    assert "Orphan-256 &rarr; 512 campaign" in html        # section heading
+    assert "1,147 parents" in html                          # total
+    assert "5 entries with no year" in html                 # the skip-flag
+    assert "2018</strong>:&nbsp;546" in html                # by-year chip
+    assert "lulc</strong>:&nbsp;613" in html                # by-cohort chip
+    assert "?" not in html.split("By&nbsp;year:")[1].split("</div>")[0]   # '?' filtered
+    # back-compat: status without orphan_* keys renders no header.
+    assert "Orphan-256" not in cd.render_html(
+        cd.build_status(str(d), total=10), title="X")
+
+
 # ── aux-alignment φ (corr volume↔height) ──────────────────────────────────
 def test_aux_corr_aligned_vs_random_vs_too_few(tmp_path):
     import numpy as np
