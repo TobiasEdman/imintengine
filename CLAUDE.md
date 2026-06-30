@@ -135,6 +135,35 @@ saknar dessa env vars (alla utom `campaign-orphan-512-job.yaml` efter
 fix). De är inaktiva nu men måste retroaktivt patchas innan
 återanvändning — annars upprepas drainen.
 
+### DES `--workers` är **dynamiskt** — fråga teamet före bulk-fetch
+
+Antalet samtidiga workers mot DES openEO (`openeo.digitalearth.se`)
+styrs server-side av digitalearth.se-teamet och **varierar över tid**.
+Att hårdkoda en siffra i fetch-yamls är fel mönster — för många
+workers => andra worker:n köas tyst på serversidan (ingen
+throughput-vinst, kanske 429), för få => suboptimal wall-time.
+
+**Tidslinje:**
+- **2026-06-15:** `--workers 2` var det säkra maxet (user-stated;
+  bakad in i `campaign-phase1-des-recoreg-job.yaml` header som
+  "HARD constraint").
+- **2026-06-30:** teamet skruvade ner till **1 effektiv worker**
+  (orphan-512 full-run observerade 14 tiles/h med `--workers 2`,
+  dvs identiskt med single-worker → andra worker:n queued
+  server-side). Datum-stämplad här.
+- **Framtid:** kan ramp:as upp till **~6** efter team-beslut.
+
+**Regel:** innan en ny `fetch_unified_tiles.py`-körning **fråga
+användaren / DES-teamet** vad aktuell allotment är. Sätt `--workers
+N` till exakt det numret. Hardkoda inte `2` baserat på gamla
+checkpoints (inkl. denna fil) eller äldre yaml-headers.
+
+Verifiera live: per-tile loggraderna visar `DES: permits=N` —
+matchar `_DES_SEMAPHORE.initial`. Reell concurrency = `min(--workers,
+DES-server-allotment)`. Om wall-rate per worker är konstant oavsett
+`--workers 1` vs `--workers 2` → server är bottleneck, sänk till
+allotment.
+
 ## Viktiga regler
 
 - **Verifiera varje steg.** När du gör en transformation (flip, transpose, rotation), verifiera visuellt att resultatet är korrekt INNAN du applicerar på alla tiles. Gör INTE flera ändringar utan att kontrollera varje.
