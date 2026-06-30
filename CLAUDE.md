@@ -164,6 +164,43 @@ DES-server-allotment)`. Om wall-rate per worker är konstant oavsett
 `--workers 1` vs `--workers 2` → server är bottleneck, sänk till
 allotment.
 
+### CDSE PU — **delad pool**, använd klokt
+
+`imint.training.cdse_vpp._PU_POOL = "cdse"` är **delad** mellan tre
+clients som alla räknas mot samma månatliga PU-budget:
+
+1. **CDSE SH-Process API** (`--fetch-sources cdse` backend, plus
+   per-tile aux/VPP fallthrough).
+2. **CDSE openEO** (`--fetch-sources cdse-openeo` backend — separat
+   protocol men samma PU-mätare server-side).
+3. **VPP via SH-Process** (cdse_vpp auto-router cache-miss fallback;
+   blockeras numera av `VPP_SOURCE=wekeo` per regeln ovan).
+
+Drainen är **per session** — `credit_guard` markerar `cdse` DEAD vid
+första HTTP 403, och då dör alla tre vägar för resten av poden.
+Drainen är också **per månad** budgeten resetar månadsskiftet.
+
+Princip: **DES tar bulk-spektral (fritt). CDSE PU reserveras för
+saker DES inte kan göra.** Konkret:
+
+- ✅ **Phase-2 sen2cor pre-2018 backfill** — `cdse` SH-Process eller
+  `cdse-openeo`. M2-kapabilitet behövs inte (`--coreg-to-anchor`
+  använder existing tile's ankare → 6-band/no-halo OK). Mätbar scope
+  (orphan-Phase-2: ~546 pre-2018 tiles × 1-2 slots = ~600-1000 PU).
+- ✅ **WEkEO-cache gap-fill** — engångs, mätbart per (mgrs, year).
+- ✅ **Spot-fix** av enskilda DES-failade tiles (post-run cleanup).
+- ❌ **Bulk-spektral**. DES är fritt och M2-kapabelt — det är fel
+  pool för det. Parallellt cdse-openeo-Job på orphan-bulken skulle
+  dränera precis det som behövs för Phase-2 nästa steg.
+- ❌ **VPP via SH-Process** — `VPP_SOURCE=wekeo` (cache-only) per
+  regeln ovan; cache-miss raises hellre än drainar.
+
+Datum-stämplad: **2026-06-29** orphan-512-runen dränerade hela poolen
+i VPP-prefetch (yaml saknade `VPP_SOURCE=wekeo` — fix 64d9cab). Reset
+2026-07-01 — nästa session som vill köra cdse-spektral måste först
+verifiera PU-saldo (`fetch_vpp_tiles`-call returnerar HTTP 403 om
+exhausted) och scopa körningen mot mätbar budget, aldrig bulk.
+
 ## Viktiga regler
 
 - **Verifiera varje steg.** När du gör en transformation (flip, transpose, rotation), verifiera visuellt att resultatet är korrekt INNAN du applicerar på alla tiles. Gör INTE flera ändringar utan att kontrollera varje.
