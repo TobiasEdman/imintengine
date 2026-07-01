@@ -97,24 +97,38 @@ def _is_rate_limited(exc: Exception) -> bool:
     return "429" in msg or "Rate limit exceeded" in msg
 
 
+_TRANSIENT_HTTP_STATUS = frozenset({500, 502, 503, 504})
+
+
 def _is_transient_upstream(exc: Exception) -> bool:
     """True if *exc* is a transient upstream failure worth retrying.
 
-    Covers empty / malformed JSON bodies and connection-layer faults —
-    Open-Meteo occasionally returns an empty 200 under load (crashed
-    orphan-512 fetch 2026-07-01 at 390/1147 tiles: ``r.json()`` raised
-    ``requests.exceptions.JSONDecodeError`` inside ``_request_era5_daily``,
-    ``_is_rate_limited`` returned False, ``retry_on_rate_limit`` reraised
-    immediately, both retry pods burned, Job died).
+    Covers three classes of transient faults observed against Open-Meteo
+    (all crashed the orphan-512 pipeline over 2026-06-30/07-01):
 
-    Both stdlib ``json.JSONDecodeError`` and requests' own subclass are
-    caught by ``isinstance(exc, json.JSONDecodeError)`` — requests' variant
-    inherits from the stdlib one. Duck-typed name check is belt-and-
-    suspenders against upstream subclass reshuffles + covers
-    ``requests.exceptions.ConnectionError`` and ``ChunkedEncodingError``
-    without importing them here.
+    * Empty / malformed JSON bodies — ``r.json()`` on an empty 200 raises
+      ``requests.exceptions.JSONDecodeError`` (subclasses stdlib
+      ``json.JSONDecodeError``). Killed the first DES pod at 390/1147.
+
+    * Connection-layer faults — ``ConnectionError`` /
+      ``ChunkedEncodingError`` from DNS hiccups or TCP resets. Caught by
+      duck-typed name so the requests package need not be imported here.
+
+    * HTTP 5xx server errors — 500/502/503/504 (Bad Gateway et al) from
+      upstream infrastructure. ``requests.HTTPError`` carries a
+      ``.response`` with ``.status_code``; we treat the standard "server-
+      side transient" bucket as retryable. This is the specific fault
+      that killed the cdse-openeo probe 2026-07-01 (502 Bad Gateway from
+      archive-api.open-meteo.com), which the JSON-decode fix (d2558b7)
+      could not catch alone.
+
+    Non-transient errors (4xx client faults, ValueError, etc) still
+    propagate immediately — silent-degrade would corrupt scene selection.
     """
     if isinstance(exc, json.JSONDecodeError):
+        return True
+    resp = getattr(exc, "response", None)
+    if resp is not None and getattr(resp, "status_code", None) in _TRANSIENT_HTTP_STATUS:
         return True
     name = type(exc).__name__
     return name in ("JSONDecodeError", "ConnectionError", "ChunkedEncodingError")

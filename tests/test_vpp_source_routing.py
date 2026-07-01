@@ -100,3 +100,37 @@ def test_non_pu_cdse_error_does_not_trip_breaker(monkeypatch):
     out = cdse_vpp._auto_fetch_vpp(0, 0, 1, 1, H, W, 2021)
     assert guard.is_source_dead("cdse") is False  # transient != exhaustion
     assert out["sosd"].shape == (H, W)            # WEkEO best-effort
+
+
+# ── VPP_SOURCE=wekeo forced path: coverage check (2026-07-01 silent zero-fill)
+#
+# A WEkEO read for a bbox outside cached MGRS returns an all-zero array, not
+# None. Without _has_sufficient_coverage the wekeo-forced path silently
+# accepts that and 130/390 orphan-512 tiles landed with all-zero VPP fields
+# (2019: 3/44 MGRS + 2020: 0/44 MGRS covered in cache). Fix: raise loud on
+# insufficient coverage so gap-fill or CDSE fallback is triggered explicitly.
+
+def test_wekeo_forced_covered_returns_result(monkeypatch):
+    monkeypatch.setenv("VPP_SOURCE", "wekeo")
+    monkeypatch.setattr(cdse_vpp, "_read_wekeo_vpp", lambda *a, **k: _covered())
+    out = cdse_vpp.fetch_vpp_tiles(0, 0, 1, 1, size_px=(H, W), year=2021)
+    assert out["sosd"].shape == (H, W)
+    assert int(np.median(out["sosd"])) == 18122
+
+
+def test_wekeo_forced_none_raises(monkeypatch):
+    """Cache truly absent (no COGs for MGRS × year) → raise, don't silent-degrade."""
+    monkeypatch.setenv("VPP_SOURCE", "wekeo")
+    monkeypatch.setattr(cdse_vpp, "_read_wekeo_vpp", lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="no covering WEkEO cache"):
+        cdse_vpp.fetch_vpp_tiles(0, 0, 1, 1, size_px=(H, W), year=2020)
+
+
+def test_wekeo_forced_all_zero_raises(monkeypatch):
+    """The 2026-07-01 shape: WEkEO reader returns all-zero (partial coverage,
+    bbox in nodata region within cached COG). Previously silent-accepted →
+    ~130 tiles landed with all-zero VPP. Must raise now."""
+    monkeypatch.setenv("VPP_SOURCE", "wekeo")
+    monkeypatch.setattr(cdse_vpp, "_read_wekeo_vpp", lambda *a, **k: _empty())
+    with pytest.raises(RuntimeError, match="no covering WEkEO cache"):
+        cdse_vpp.fetch_vpp_tiles(0, 0, 1, 1, size_px=(H, W), year=2019)

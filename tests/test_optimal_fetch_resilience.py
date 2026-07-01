@@ -108,7 +108,8 @@ def test_is_transient_upstream_connection_error_by_name():
 
 def test_is_transient_upstream_ignores_other_errors():
     assert not of._is_transient_upstream(ValueError("bad bbox"))
-    assert not of._is_transient_upstream(_HTTPErrorLike(500))
+    # HTTP 5xx handled by the dedicated tests below (added when Open-Meteo
+    # started serving 502s during the 2026-07-01 orphan-512 probe).
 
 
 def test_retry_succeeds_after_json_decode_error():
@@ -137,6 +138,41 @@ def test_retry_exhausts_on_persistent_json_decode():
 
     with pytest.raises(json.JSONDecodeError):
         of.retry_on_rate_limit(fn, attempts=3, base_delay=0.0)
+    assert len(calls) == 3
+
+
+# ── HTTP 5xx transient retry (Open-Meteo 502 killed cdse-openeo probe 2026-07-01)
+
+def test_is_transient_upstream_http_502():
+    assert of._is_transient_upstream(_HTTPErrorLike(502))
+
+
+def test_is_transient_upstream_http_500_503_504():
+    for code in (500, 503, 504):
+        assert of._is_transient_upstream(_HTTPErrorLike(code)), (
+            f"HTTP {code} must be classified transient")
+
+
+def test_is_transient_upstream_ignores_4xx_client_errors():
+    for code in (400, 401, 403, 404, 429):
+        # 429 is rate-limit (handled by _is_rate_limited); 4xx client errors
+        # must NOT be retried by the transient path or they'd mask bugs.
+        assert not of._is_transient_upstream(_HTTPErrorLike(code)), (
+            f"HTTP {code} must not be classified transient")
+
+
+def test_retry_succeeds_after_http_502():
+    """The exact shape of the 2026-07-01 cdse-openeo probe crash: two 502s
+    from Open-Meteo, then a valid response. Must recover."""
+    calls = []
+
+    def fn():
+        calls.append(1)
+        if len(calls) < 3:
+            raise _HTTPErrorLike(502)
+        return "ok"
+
+    assert of.retry_on_rate_limit(fn, base_delay=0.0) == "ok"
     assert len(calls) == 3
 
 

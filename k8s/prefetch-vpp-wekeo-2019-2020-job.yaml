@@ -1,0 +1,148 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prefetch-vpp-wekeo-2019-2020
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: prefetch-vpp-wekeo-2019-2020
+spec:
+  backoffLimit: 0
+  # ─────────────────────────────────────────────────────────────────────────
+  # Sweden-wide WEkEO VPP COG gap-fill for 2019 + 2020, driven by the
+  # orphan-512 fetch scan 2026-07-01: 130 of 390 written tiles had all-zero
+  # vpp_{sosd,eosd,length,maxv,minv}. Concentrated on dates[0] years 2019
+  # (58 tiles) + 2020 (53 tiles). Cause: WEkEO cache had 3/44 MGRS for 2019
+  # (only 33VWG, 33VWL, 33WWM from the recoreg gap-fill 2026-06-25) and
+  # 0/44 MGRS for 2020. The wekeo-forced reader used to silent-accept the
+  # all-zero return; code fix landed in the same commit that adds this
+  # manifest (cdse_vpp._auto_fetch_vpp: raise on _has_sufficient_coverage
+  # miss). Without this cache fill the fixed code will fail loud on every
+  # 2019/2020 orphan — this Job closes that gap so the DES re-run lands
+  # them with real VPP.
+  #
+  # MGRS lists derived from the existing 2018 cache set (Sweden's full
+  # coverage baseline, 44 MGRS). 2019 gap = 2018 set minus 3 already-cached
+  # (42 MGRS). 2020 gap = 2018 set entirely (44 MGRS).
+  #
+  # RACE-SAFE vs any spectral fetch: writes ONLY to /data/vpp_wekeo, a
+  # different dir from /data/unified_v2_512_orphans_staging. Downloads are
+  # PU-FREE (WEkEO HDA, not CDSE Sentinel Hub).
+  #
+  # WALL-TIME: 86 (MGRS × year) × 5 bands = 430 COGs over WEkEO HDA;
+  # historical rate ≈ 3-5 min per COG serial → ~20-40 h worst case, but
+  # HDA parallelises within prefetch_vpp_cogs so ~4 h in practice.
+  # activeDeadlineSeconds set to 6h for a safety margin.
+  # ─────────────────────────────────────────────────────────────────────────
+  activeDeadlineSeconds: 21600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: prefetch
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== WEkEO VPP gap-fill: 2019 (42 MGRS) + 2020 (44 MGRS) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj hda 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              # 2019 gap = 2018 baseline (44 MGRS) − 3 already-cached (33VWG, 33VWL, 33WWM)
+              MGRS_2019="32VPK,32VPR,33UUB,33UVB,33VUC,33VUD,33VUE,33VUF,33VUG,33VUH,33VUJ,33VUK,33VVE,33VVF,33VVG,33VVJ,33VVK,33VVL,33VWF,33VWK,33VXG,33VXH,33VXK,33VXL,33WVM,33WWN,33WWQ,33WWR,33WXM,33WXN,33WXP,33WXQ,33WXR,34VCQ,34VDR,34WDA,34WDB,34WDS,34WDT,34WDV,34WEB,34WET"
+
+              # 2020 gap = full 2018 baseline (cache had 0 MGRS for 2020)
+              MGRS_2020="32VPK,32VPR,33UUB,33UVB,33VUC,33VUD,33VUE,33VUF,33VUG,33VUH,33VUJ,33VUK,33VVE,33VVF,33VVG,33VVJ,33VVK,33VVL,33VWF,33VWK,33VWL,33VXG,33VXH,33VXK,33VXL,33WVM,33WWM,33WWN,33WWQ,33WWR,33WXM,33WXN,33WXP,33WXQ,33WXR,34VCQ,34VDR,34WDA,34WDB,34WDS,34WDT,34WDV,34WEB,34WET"
+
+              echo ""
+              echo "--- 2019 gap-fill (42 MGRS) ---"
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles "$MGRS_2019" \
+                --years 2019 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "--- 2020 gap-fill (44 MGRS) ---"
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles "$MGRS_2020" \
+                --years 2020 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "=== new cache contents (COG counts per year) ==="
+              for y in 2019 2020; do
+                echo "  $y: $(ls /data/vpp_wekeo/VPP_${y}_*_SOSD.tif 2>/dev/null | wc -l) MGRS × 5 bands"
+              done
+
+              echo ""
+              echo "=== read-back check: fetch_vpp_tiles_local on a 2019 + 2020 COG ==="
+              python3 -c "
+              import glob, rasterio
+              from rasterio.warp import transform_bounds
+              from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+              for year in (2019, 2020):
+                  cogs = sorted(glob.glob(f'/data/vpp_wekeo/VPP_{year}_*_SOSD.tif'))
+                  assert cogs, f'no {year} SOSD COG fetched'
+                  with rasterio.open(cogs[0]) as src:
+                      w, s, e, n = transform_bounds(src.crs, 'EPSG:3006', *src.bounds)
+                  cx, cy = (w + e) / 2, (s + n) / 2
+                  dx, dy = (e - w) * 0.05, (n - s) * 0.05
+                  bbox = (cx - dx, cy - dy, cx + dx, cy + dy)
+                  out = fetch_vpp_tiles_local(*bbox, size_px=64, vpp_cog_dir='/data/vpp_wekeo', year=year)
+                  nonzero = sum(1 for v in out.values() if v.max() > 0)
+                  print(f'  {year}: {nonzero}/5 bands non-zero, sosd range=[{out[\"sosd\"].min():.0f}, {out[\"sosd\"].max():.0f}]')
+                  assert nonzero >= 3, f'expected most bands non-zero for {year}, got {nonzero}/5'
+              print('READBACK OK for 2019 + 2020')
+              "
+
+              echo "=== gap-fill complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"vpp-wekeo-2019-2020","ok":true,"reason":"gap-fill complete"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

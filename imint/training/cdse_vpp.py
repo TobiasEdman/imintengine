@@ -149,10 +149,20 @@ def fetch_vpp_tiles(
     src = os.environ.get("VPP_SOURCE", "").strip().lower()
     if src == "wekeo":
         result = _read_wekeo_vpp(west, south, east, north, (h_px, w_px), year)
-        if result is None:
+        # A partial-coverage read returns an all-zero array instead of None
+        # (WEkEO reader fills nodata with 0). Without _has_sufficient_coverage
+        # the wekeo-forced path silently accepts that as a hit and writes
+        # all-zero VPP into the tile — 130/390 orphan-512 tiles landed with
+        # all-zero vpp_{sosd,eosd,length,maxv,minv} 2026-07-01 (concentrated
+        # on dates[0] years 2019 + 2020, the years the WEkEO cache had 3/44
+        # and 0/44 MGRS respectively). Same >=5% non-zero-sosd floor the
+        # auto-router already applies. Miss → raise loud, don't zero-fill.
+        if result is None or not _has_sufficient_coverage(result):
             raise RuntimeError(
-                f"VPP_SOURCE=wekeo but no WEkEO cache at "
-                f"{os.environ.get('VPP_WEKEO_DIR', '/data/vpp_wekeo')}"
+                f"VPP_SOURCE=wekeo but no covering WEkEO cache at "
+                f"{os.environ.get('VPP_WEKEO_DIR', '/data/vpp_wekeo')} "
+                f"for year={year} bbox=({west:.0f},{south:.0f},"
+                f"{east:.0f},{north:.0f})"
             )
     elif src == "cdse":
         result = _fetch_cdse_vpp(west, south, east, north, h_px, w_px, year)
