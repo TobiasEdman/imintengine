@@ -189,9 +189,17 @@ saker DES inte kan göra.** Konkret:
   (orphan-Phase-2: ~546 pre-2018 tiles × 1-2 slots = ~600-1000 PU).
 - ✅ **WEkEO-cache gap-fill** — engångs, mätbart per (mgrs, year).
 - ✅ **Spot-fix** av enskilda DES-failade tiles (post-run cleanup).
-- ❌ **Bulk-spektral**. DES är fritt och M2-kapabelt — det är fel
-  pool för det. Parallellt cdse-openeo-Job på orphan-bulken skulle
-  dränera precis det som behövs för Phase-2 nästa steg.
+- ⚠ **Bulk-spektral via cdse-openeo som PARALLELL BOOST** — acceptabelt
+  när DES är server-side throttled så hårt att wall-timen blir en
+  kampanjblockerare (t.ex. orphan-512 2026-06-30 med `DES: permits=1`
+  → ~67h ETA för 1147 tiles). CDSE PU + DES parallellt på samma
+  staging-dir (idempotent skip via `_valid_existing_tile`) halverar
+  ungefär. Villkor: (a) PU-saldo verifierad, (b) scopet mätbart (t.ex.
+  ~1000 tiles × 4 slots ≈ ~4000 openEO-jobs → jämför mot månadsbudget),
+  (c) DES-jobbet lämnas kvar (kör vidare parallellt — inte swap).
+  ALDRIG som primär när DES har kapacitet, och ALDRIG istället för
+  Phase-2-sen2cor (använd GCS+l1c_sen2cor för sen2cor via
+  `ghcr.io/tobiasedman/imint-sen2cor` — fritt).
 - ❌ **VPP via SH-Process** — `VPP_SOURCE=wekeo` (cache-only) per
   regeln ovan; cache-miss raises hellre än drainar.
 
