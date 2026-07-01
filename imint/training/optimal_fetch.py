@@ -97,20 +97,52 @@ def _is_rate_limited(exc: Exception) -> bool:
     return "429" in msg or "Rate limit exceeded" in msg
 
 
-def retry_on_rate_limit(fn, *, attempts: int = 5, base_delay: float = 2.0):
-    """Run *fn*, retrying on HTTP 429 with exponential backoff + jitter.
+def _is_transient_upstream(exc: Exception) -> bool:
+    """True if *exc* is a transient upstream failure worth retrying.
 
-    Open-Meteo and the CDSE STAC are both fronted by WAF burst limiters
-    that reject the cold-start thundering herd when many worker threads
-    fire at once. Without backoff a throttled call raises and its tile is
-    silently dropped from scene selection; a few retries absorb the burst.
-    Non-rate-limit errors propagate immediately.
+    Covers empty / malformed JSON bodies and connection-layer faults —
+    Open-Meteo occasionally returns an empty 200 under load (crashed
+    orphan-512 fetch 2026-07-01 at 390/1147 tiles: ``r.json()`` raised
+    ``requests.exceptions.JSONDecodeError`` inside ``_request_era5_daily``,
+    ``_is_rate_limited`` returned False, ``retry_on_rate_limit`` reraised
+    immediately, both retry pods burned, Job died).
+
+    Both stdlib ``json.JSONDecodeError`` and requests' own subclass are
+    caught by ``isinstance(exc, json.JSONDecodeError)`` — requests' variant
+    inherits from the stdlib one. Duck-typed name check is belt-and-
+    suspenders against upstream subclass reshuffles + covers
+    ``requests.exceptions.ConnectionError`` and ``ChunkedEncodingError``
+    without importing them here.
+    """
+    if isinstance(exc, json.JSONDecodeError):
+        return True
+    name = type(exc).__name__
+    return name in ("JSONDecodeError", "ConnectionError", "ChunkedEncodingError")
+
+
+def retry_on_rate_limit(fn, *, attempts: int = 5, base_delay: float = 2.0):
+    """Run *fn*, retrying on transient upstream failures with exponential
+    backoff + jitter. Retries on either:
+
+    * HTTP 429 / WAF rate-limit rejections (``_is_rate_limited``) —
+      Open-Meteo and the CDSE STAC are both fronted by WAF burst limiters
+      that reject the cold-start thundering herd when many worker threads
+      fire at once. Without backoff a throttled call raises and its tile
+      is silently dropped from scene selection.
+
+    * Transient upstream faults (``_is_transient_upstream``) — empty /
+      malformed JSON bodies and connection-layer errors. Same asymmetry
+      as 429: retryable in principle, and without the retry the caller's
+      whole pipeline dies (see the predicate for the incident).
+
+    Other errors propagate immediately.
     """
     for attempt in range(attempts):
         try:
             return fn()
         except Exception as exc:
-            if attempt == attempts - 1 or not _is_rate_limited(exc):
+            retryable = _is_rate_limited(exc) or _is_transient_upstream(exc)
+            if attempt == attempts - 1 or not retryable:
                 raise
             time.sleep(base_delay * 2 ** attempt + random.uniform(0.0, 1.0))
 

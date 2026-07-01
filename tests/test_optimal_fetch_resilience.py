@@ -80,6 +80,66 @@ def test_retry_exhausts_attempts():
     assert len(calls) == 3
 
 
+# ── _is_transient_upstream + retry over JSON-decode / connection errors ──
+#
+# Open-Meteo occasionally returns an empty 200 under load: r.json() raises
+# JSONDecodeError, which _is_rate_limited did not classify → retry reraised
+# → both orphan-512 fetch pods died 2026-07-01 (390/1147 stalled). The
+# predicate + retry extension below is the fix; these tests lock it in.
+
+def test_is_transient_upstream_stdlib_json_decode_error():
+    exc = json.JSONDecodeError("Expecting value", "", 0)
+    assert of._is_transient_upstream(exc)
+
+
+def test_is_transient_upstream_requests_json_decode_by_name():
+    # Simulate requests.exceptions.JSONDecodeError without importing requests
+    # in the test — the duck-typed name check must catch it too.
+    class JSONDecodeError(Exception):
+        pass
+    assert of._is_transient_upstream(JSONDecodeError("empty body"))
+
+
+def test_is_transient_upstream_connection_error_by_name():
+    class ConnectionError(Exception):
+        pass
+    assert of._is_transient_upstream(ConnectionError("dns hiccup"))
+
+
+def test_is_transient_upstream_ignores_other_errors():
+    assert not of._is_transient_upstream(ValueError("bad bbox"))
+    assert not of._is_transient_upstream(_HTTPErrorLike(500))
+
+
+def test_retry_succeeds_after_json_decode_error():
+    """The orphan-512 incident's exact shape: 2 empty-body responses, then
+    a valid one. Must recover, not reraise on the first."""
+    calls = []
+
+    def fn():
+        calls.append(1)
+        if len(calls) < 3:
+            raise json.JSONDecodeError("Expecting value", "", 0)
+        return "ok"
+
+    assert of.retry_on_rate_limit(fn, base_delay=0.0) == "ok"
+    assert len(calls) == 3
+
+
+def test_retry_exhausts_on_persistent_json_decode():
+    """A persistent upstream fault must still surface once attempts run out —
+    silent-degrade would corrupt scene selection."""
+    calls = []
+
+    def fn():
+        calls.append(1)
+        raise json.JSONDecodeError("Expecting value", "", 0)
+
+    with pytest.raises(json.JSONDecodeError):
+        of.retry_on_rate_limit(fn, attempts=3, base_delay=0.0)
+    assert len(calls) == 3
+
+
 # ── ERA5 disk cache ───────────────────────────────────────────────────────
 
 def test_era5_cache_dedups_within_grid_cell(tmp_path, monkeypatch):
