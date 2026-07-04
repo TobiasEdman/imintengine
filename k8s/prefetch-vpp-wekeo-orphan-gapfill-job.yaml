@@ -1,0 +1,126 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prefetch-vpp-wekeo-orphan-gapfill
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: prefetch-vpp-wekeo-orphan-gapfill
+spec:
+  backoffLimit: 0
+  # Orphan-512 VPP remediation STEP 2: WEkEO COG gap-fill for the 57
+  # (MGRS, year) pairs derived by Job derive-missing-vpp-mgrs 2026-07-04
+  # (report: /data/audits/orphan_512_missing_vpp_mgrs.json — 414/1135
+  # staging tiles missing vpp_*, 9 pairs already cached and subtracted).
+  # MGRS lists below are copied verbatim from the report's
+  # prefetch_commands.
+  #
+  # RACE-SAFE: writes ONLY to /data/vpp_wekeo. PU-FREE (WEkEO HDA, not
+  # CDSE Sentinel Hub). Step 3 (orphan-vpp-backfill) MUST wait for this
+  # Job — its CDSE fallback would burn PU on every still-missing pair.
+  #
+  # WALL-TIME: 57 pairs × 5 bands = 285 COGs; the 86-pair/430-COG
+  # 2019/2020 job budgeted 6 h and finished in ~4 h — same margin here.
+  activeDeadlineSeconds: 21600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: prefetch
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== WEkEO VPP orphan gap-fill: 57 (MGRS, year) pairs ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj hda 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              # Lists verbatim from orphan_512_missing_vpp_mgrs.json (2026-07-04)
+              echo ""
+              echo "--- 2018 gap-fill (22 MGRS) ---"
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles 33VWC,33VWD,33VWE,33VWG,33VWH,33VXJ,33WVN,33WVP,33WWP,34VCL,34VER,34WDR,34WDU,34WEA,34WER,34WES,34WEU,34WEV,34WFA,34WFU,34WFV,35WLQ \
+                --years 2018 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "--- 2020 gap-fill (1 MGRS) ---"
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles 33VVC \
+                --years 2020 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "--- 2021 gap-fill (17 MGRS) ---"
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles 32VPL,33UVC,33VVC,33VVD,33VWC,33VWD,33VWE,33VWG,33VWH,33VXC,33VXD,33VXF,33VXJ,33WVN,33WWP,34VCL,34WES \
+                --years 2021 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "--- 2022 gap-fill (17 MGRS) ---"
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles 32VPL,33UVC,33VVC,33VVD,33VVH,33VWC,33VWD,33VWE,33VWG,33VWH,33VXC,33VXD,33VXF,33WWP,34VCL,34WDU,34WEU \
+                --years 2022 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "=== re-derive: remaining gap after fill (expect pairs_to_fetch=0) ==="
+              pip3 install --quiet --no-cache-dir mgrs packaging 2>&1 | tail -1
+              python3 scripts/derive_missing_vpp_mgrs.py \
+                --data-dir /data/unified_v2_512_orphans_staging \
+                --vpp-cog-dir /data/vpp_wekeo \
+                --output /data/audits/orphan_512_missing_vpp_mgrs_postfill.json \
+                | python3 -c "import json,sys; r=json.load(sys.stdin); print('pairs_to_fetch after fill:', r['pairs_to_fetch'])"
+
+              echo "=== gap-fill complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"vpp-wekeo-orphan-gapfill","ok":true,"reason":"57-pair gap-fill complete"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
