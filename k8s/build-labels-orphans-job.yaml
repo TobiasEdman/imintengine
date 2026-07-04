@@ -1,0 +1,101 @@
+---
+# Job: Build unified labels for the orphan-512 staging tiles.
+#
+# Pipeline step 2 for the orphan campaign (QC 2026-07-04 found staging
+# tiles carry only the fetch-time base `label` — no label_mask /
+# nmd_label_raw / harvest_mask / n_mature_polygons etc., which the
+# dual-head training requires). Same build_labels.py invocation as
+# build-labels-512, pointed at the staging dir. Tile year resolves from
+# the modal year of `dates` (staging tiles carry no explicit year key —
+# verified supported, scripts/build_labels.py:224).
+#
+# WRITER EXCLUSIVITY: rewrites staging npz — submit ONLY after
+# orphan-aux-skg AND campaign-orphan-512-retry are terminal.
+#
+# Sizing: 1,147 tiles ≈ 1/6 of the 2026-04-25 run → 16 workers / 64 Gi
+# (4 Gi/worker, the proven floor) ≈ ~20 min + reference-data load.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-labels-orphans
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: build-labels-orphans
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: builder
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Build Labels — orphan staging (NMD + LPIS + SKS) ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              echo ""
+              echo "Data inventory:"
+              echo "  Tiles:      $(ls /data/unified_v2_512_orphans_staging/*.npz 2>/dev/null | wc -l)"
+              echo "  NMD raster: $(ls -lh /data/nmd/*.tif 2>/dev/null | head -1)"
+              echo "  LPIS:       $(ls /data/lpis/*.parquet 2>/dev/null | wc -l) parquets"
+              echo "  SKS:        $(ls /data/sks/*.parquet 2>/dev/null | wc -l) parquets"
+              echo ""
+
+              python scripts/build_labels.py \
+                --data-dir  /data/unified_v2_512_orphans_staging \
+                --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
+                --lpis-dir  /data/lpis \
+                --sks-dir   /data/sks \
+                --workers 16
+
+              echo ""
+              echo "=== QC ==="
+              python scripts/postprocess_qc.py --data-dir /data/unified_v2_512_orphans_staging || true
+
+              echo ""
+              echo "=== Done: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"build-labels-orphans","ok":true,"reason":"labels built"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "64Gi"
+            limits:
+              cpu: "16"
+              memory: "64Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
