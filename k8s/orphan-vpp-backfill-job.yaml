@@ -1,0 +1,116 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: orphan-vpp-backfill
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: orphan-vpp-backfill
+spec:
+  backoffLimit: 0
+  # Orphan-512 VPP remediation STEP 3: backfill vpp_* into the orphan
+  # staging tiles. Runs AFTER the WEkEO gap-fill Job has filled the
+  # (MGRS, year) COGs derived by derive-missing-vpp-mgrs — submit order
+  # matters, or the WEkEO reads miss and the CDSE fallback burns PU.
+  #
+  # --force per the approved remediation plan (checkpoint 2026-07-03):
+  # every tile's VPP is re-read from the (now complete) COG cache, so
+  # tiles written before/after the 599eecd coverage-raise behave
+  # identically. Cost is local cache reads for the ~56% that already
+  # carry VPP — cheap, PU-free. CDSE creds stay optional-fallback for
+  # genuine cache gaps only; double-misses land in vpp_known_empty.json
+  # (never zero-filled).
+  #
+  # campaign-vpp-backfill-job.yaml pattern; only name/dir/deadline differ
+  # (1,135 tiles vs ~2,500 → 4 h deadline).
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: backfill
+          # Pinned by DIGEST (CLAUDE.md docker-skew rule) — same image as
+          # campaign-vpp-backfill; carries hda + rasterio + pyproj.
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== orphan-512 VPP backfill (remediation step 3) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj scipy hda 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+
+              python3 scripts/backfill_vpp.py \
+                --data-dir /data/unified_v2_512_orphans_staging \
+                --workers 2 \
+                --force
+
+              echo "=== backfill complete: $(date) ==="
+              echo "=== known-empty catalogue (if any) ==="
+              cat /data/unified_v2_512_orphans_staging/vpp_known_empty.json 2>/dev/null \
+                | head -40 || echo "(none)"
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"orphan-vpp-backfill","ok":true,"reason":"VPP backfill complete"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: VPP_WEKEO_DIR
+              value: "/data/vpp_wekeo"
+            - name: VPP_SOURCE
+              value: "wekeo"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
