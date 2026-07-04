@@ -26,6 +26,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -284,6 +285,97 @@ def build_orphan_summary(orphan_json_path: str) -> dict:
         "orphan_by_year": dict(by_year.most_common()),
         "orphan_by_cohort": dict(by_cohort.most_common()),
     }
+
+
+_VPP_KEYS = ("vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv")
+_VPP_METRICS = frozenset(k.removeprefix("vpp_").upper() for k in _VPP_KEYS)
+# HR-VPP COG filename (mirrors imint.training.wekeo_vpp._VPP_FILENAME_RE —
+# duplicated because the dashboard is deliberately imint-free / sparse-clone).
+_VPP_COG_RE = re.compile(
+    r"VPP_(?P<year>\d{4})_S2_(?P<tile>T?[0-9A-Z]+)-0?\d+m_.*_(?P<metric>[A-Z]+)\.tif$")
+
+
+def build_vpp_remediation(staging_dir: str, *, report_path: str,
+                          postfill_path: str, cog_dir: str,
+                          cache: dict | None = None) -> dict:
+    """Live progress of the orphan VPP remediation chain (steps 2 + 3).
+
+    Step 2 (WEkEO gap-fill): of the (MGRS, year) pairs the derive report
+    listed as missing, how many now have all 5 metric COGs in ``cog_dir``.
+    Step 3 (backfill): how many staging tiles carry a non-empty vpp_* block
+    — rises as orphan-vpp-backfill rewrites tiles. npz reads are mtime-cached
+    (``{path: (mtime, has_vpp)}``) so only rewritten tiles are re-read; the
+    backfill's atomic os.replace bumps mtime, invalidating exactly the
+    rewritten entries. Auto-hides (empty dict) until the derive report exists.
+    """
+    if not os.path.isfile(report_path):
+        return {}
+    try:
+        with open(report_path) as f:
+            report = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    baseline_pairs = set(report.get("tiles_per_missing_pair", {}))  # "CELL:year"
+
+    # Step 2 — COG-cache fill state for the baseline pairs.
+    got: dict[str, set] = {}
+    for path in glob.glob(os.path.join(cog_dir, "VPP_*.tif")):
+        m = _VPP_COG_RE.search(os.path.basename(path))
+        if not m:
+            continue
+        tile = m["tile"].removeprefix("T")
+        got.setdefault(f"{tile}:{m['year']}", set()).add(m["metric"])
+    filled = sum(1 for p in baseline_pairs if got.get(p, set()) >= _VPP_METRICS)
+
+    # Step 3 — staging tiles with a non-empty vpp_* block (mtime-cached).
+    import numpy as np
+    cache = cache if cache is not None else {}
+    have = 0
+    paths = _tile_npz_paths(staging_dir)
+    for path in paths:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        hit = cache.get(path)
+        if hit is not None and hit[0] == mtime:
+            have += 1 if hit[1] else 0
+            continue
+        has_vpp = False
+        try:
+            with np.load(path, allow_pickle=True) as z:
+                if all(k in z.files for k in _VPP_KEYS):
+                    has_vpp = any(bool(np.any(z[k])) for k in _VPP_KEYS)
+        except Exception:
+            pass  # transient read race with the atomic rewrite — retry next cycle
+        cache[path] = (mtime, has_vpp)
+        have += 1 if has_vpp else 0
+
+    # Known-empty sidecar (water/urban double-misses — catalogued, not filled).
+    known_empty = 0
+    sidecar = os.path.join(staging_dir, "vpp_known_empty.json")
+    if os.path.isfile(sidecar):
+        try:
+            with open(sidecar) as f:
+                known_empty = len(json.load(f))
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
+
+    out = {
+        "vpp_pairs_total": len(baseline_pairs),
+        "vpp_pairs_filled": filled,
+        "vpp_tiles_total": len(paths),
+        "vpp_tiles_have": have,
+        "vpp_missing_at_derive": report.get("tiles_missing_vpp"),
+        "vpp_known_empty": known_empty,
+    }
+    if os.path.isfile(postfill_path):
+        try:
+            with open(postfill_path) as f:
+                out["vpp_postfill_remaining"] = json.load(f).get("pairs_to_fetch")
+        except (OSError, json.JSONDecodeError):
+            pass
+    return out
 
 
 def _aux_corr(a, b) -> float:
@@ -660,6 +752,42 @@ def render_html(status: dict, *, frames: dict | None = None,
             f'<div class="tilename"><strong>By&nbsp;year:</strong> {year_chips}</div>'
             f'<div class="tilename"><strong>By&nbsp;cohort:</strong> {cohort_chips}</div>')
 
+    # VPP remediation chain — derive ✓ → WEkEO gap-fill (pairs bar) →
+    # backfill (tiles bar). Present only once the derive report exists on the
+    # PVC (build_vpp_remediation returns {} before that), so recoreg-era and
+    # pre-derive usages render unchanged.
+    vpp_html = ""
+    if status.get("vpp_pairs_total"):
+        vp_t, vp_f = status["vpp_pairs_total"], status["vpp_pairs_filled"]
+        vt_t, vt_h = status["vpp_tiles_total"], status["vpp_tiles_have"]
+        pair_pct = 100.0 * vp_f / vp_t if vp_t else 0.0
+        tile_pct = 100.0 * vt_h / vt_t if vt_t else 0.0
+        postfill = status.get("vpp_postfill_remaining")
+        gapfill_state = (
+            f'<span class="verdict-badge">GAP-FILL&nbsp;DONE</span>' if postfill == 0
+            else (f'<strong>{postfill}</strong> pairs still missing post-fill'
+                  if postfill is not None else "gap-fill running"))
+        known_empty = status.get("vpp_known_empty", 0)
+        ke_note = (f' · {known_empty} known-empty (water/urban, catalogued)'
+                   if known_empty else "")
+        vpp_html = (
+            '<h2>VPP remediation · WEkEO gap-fill &rarr; backfill</h2>'
+            '<div class="tilename">derive report: '
+            f'<strong>{status.get("vpp_missing_at_derive", "?")}</strong> tiles '
+            f'missing vpp_* &rarr; <strong>{vp_t}</strong> (MGRS, year) pairs '
+            f'to fetch · {gapfill_state}</div>'
+            '<div class="bar-wrap sub"><div class="bar sub" '
+            f'style="width:{min(100.0, pair_pct)}%"></div></div>'
+            '<div class="pct-row sub"><span>COG pairs cached · '
+            f'<strong>{pair_pct:.0f}%</strong> · {vp_f} / {vp_t}</span>'
+            '<span>step 2 · PU-free WEkEO HDA</span></div>'
+            '<div class="bar-wrap sub"><div class="bar sub" '
+            f'style="width:{min(100.0, tile_pct)}%"></div></div>'
+            '<div class="pct-row sub"><span>tiles with VPP · '
+            f'<strong>{tile_pct:.1f}%</strong> · {vt_h:,} / {vt_t:,}'
+            f'{ke_note}</span>'
+            '<span>step 3 · orphan-vpp-backfill</span></div>')
+
     phase2_html = ""
     if status.get("phase2_frame2016", 0) > 0:
         f2016 = status["phase2_frame2016"]
@@ -844,6 +972,7 @@ def render_html(status: dict, *, frames: dict | None = None,
         <div class="value">{eta}</div></div>
     </div>
     {orphan_html}
+    {vpp_html}
     {phase2_html}
     {frames_html}
     {label_html}
@@ -907,6 +1036,12 @@ def main() -> None:
                         "campaign header (composition by-year + by-cohort) when "
                         "set. Pair with --recoreg-dir=<orphan_staging> + "
                         "--total=<len(orphans)>.")
+    p.add_argument("--vpp-report", default=None,
+                   help="Path to the derive-missing-vpp-mgrs report JSON — "
+                        "renders the VPP remediation section (gap-fill pair "
+                        "bar + backfill tile bar) once the file exists.")
+    p.add_argument("--vpp-cog-dir", default="/data/vpp_wekeo",
+                   help="WEkEO COG cache dir for the gap-fill pair bar.")
     p.add_argument("--watch", type=int, default=0,
                    help="Regenerate every N seconds (0 = once and exit).")
     args = p.parse_args()
@@ -914,6 +1049,7 @@ def main() -> None:
     label_cache: dict = {}        # persisted across cycles: {path: (mtime, has_label)}
     align_cache: dict = {}        # persisted across cycles: {path: (mtime, phi)}
     phase2_cache: dict = {}       # persisted: {path: (mtime, (has_f2016, has_slot0))}
+    vpp_cache: dict = {}          # persisted: {path: (mtime, has_vpp)}
     refetch_since = _parse_since(args.refetch_since) if args.refetch_since else None
     while True:
         try:
@@ -923,6 +1059,13 @@ def main() -> None:
             status.update(build_phase2_progress(args.recoreg_dir, cache=phase2_cache))
             if args.orphan_json:
                 status.update(build_orphan_summary(args.orphan_json))
+            if args.vpp_report:
+                status.update(build_vpp_remediation(
+                    args.recoreg_dir,
+                    report_path=args.vpp_report,
+                    postfill_path=args.vpp_report.replace(".json", "_postfill.json"),
+                    cog_dir=args.vpp_cog_dir,
+                    cache=vpp_cache))
             if refetch_since is not None:
                 status.update(build_refetch_progress(
                     args.recoreg_dir, refetch_since, args.total))
@@ -940,6 +1083,10 @@ def main() -> None:
             n_cls = len(label.get("legend", [])) if label else 0
             rf = (f" refetch={status['refetch_pct']}%"
                   if "refetch_pct" in status else "")
+            vp = (f" vpp_pairs={status['vpp_pairs_filled']}/"
+                  f"{status['vpp_pairs_total']} vpp_tiles="
+                  f"{status['vpp_tiles_have']}/{status['vpp_tiles_total']}"
+                  if "vpp_pairs_total" in status else "")
             print(f"[campaign-dashboard] done={status['done']}/{status['total']} "
                   f"({status['pct']}%) labelled={status['labelled']}/"
                   f"{status['labelled_total']} ({status['labelled_pct']}%) "
@@ -949,7 +1096,7 @@ def main() -> None:
                   f"slot0={status['phase2_slot0']} "
                   f"rate={status['rate_recent_per_h']}/h "
                   f"eta={_fmt_eta(status['eta_hours'])} latest={latest} aux={n_aux} "
-                  f"label_classes={n_cls}", flush=True)
+                  f"label_classes={n_cls}{vp}", flush=True)
         except Exception as e:
             # A single bad regen cycle MUST NOT kill the watch loop. The live
             # Phase-1 writer atomically replaces tiles under us (os.replace) and a

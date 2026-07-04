@@ -70,12 +70,19 @@ spec:
               # orphan composition + main progress bar + latest-tile panels.
               # --refetch-since dropped: no in-flight rewrite during the orphan
               # fetch (orphans are pure additions, never overwrite existing).
+              # --vpp-report added 2026-07-04 (fetch terminal 2026-07-03): renders
+              # the VPP remediation section — WEkEO gap-fill pair bar (of the 57
+              # (MGRS, year) pairs the derive Job listed) + backfill tile bar
+              # (tiles with non-empty vpp_*, rises as orphan-vpp-backfill rewrites)
+              # + GAP-FILL DONE badge once the postfill re-derive lands on 0.
               python3 scripts/campaign_dashboard.py \
                 --recoreg-dir /data/unified_v2_512_orphans_staging \
                 --orig-dir /data/unified_v2_512 \
                 --total 1147 \
                 --title "Orphan-256 → 512 campaign · staging" \
                 --orphan-json /data/audits/orphan_fetch_512.json \
+                --vpp-report /data/audits/orphan_512_missing_vpp_mgrs.json \
+                --vpp-cog-dir /data/vpp_wekeo \
                 --out-dir /www --watch 60 &
 
               cd /www
