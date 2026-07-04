@@ -1,0 +1,86 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: derive-missing-vpp-mgrs
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: derive-missing-vpp-mgrs
+spec:
+  backoffLimit: 0
+  # Orphan-512 VPP remediation STEP 1 (post-run 2026-07-04): scan the
+  # completed staging dir (1,135 tiles; campaign-orphan-512 terminal
+  # 2026-07-03 19:46Z with OK=876/Failed=11) for tiles whose vpp_* block
+  # is missing/empty, derive the covering (MGRS, year) pairs, subtract
+  # what the WEkEO COG cache already holds, and write the gap-fill list
+  # to /data/audits/orphan_512_missing_vpp_mgrs.json. The follow-up
+  # gap-fill Job (prefetch-vpp-wekeo pattern, PU-free) is authored from
+  # that report.
+  #
+  # READ-ONLY on tiles; writes only the JSON report under /data/audits.
+  # Scan of ~1.1k npz + a directory glob — minutes, not hours; the 1h
+  # deadline is generous margin over apt+pip+clone.
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: derive
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== derive missing VPP (MGRS, year) set from orphan staging ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              # mgrs needs `packaging` at import time (mgrs/core.py) — pin it in.
+              pip3 install --quiet --no-cache-dir \
+                numpy pyproj mgrs packaging 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              python3 scripts/derive_missing_vpp_mgrs.py \
+                --data-dir /data/unified_v2_512_orphans_staging \
+                --vpp-cog-dir /data/vpp_wekeo \
+                --output /data/audits/orphan_512_missing_vpp_mgrs.json
+
+              echo "=== derive complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"derive-missing-vpp-mgrs","ok":true,"reason":"report written"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
