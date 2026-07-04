@@ -1,0 +1,148 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-orphan-512-retry
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: campaign-orphan-512-retry
+spec:
+  # SPOT-FIX retry of campaign-orphan-512 (terminal 2026-07-03 19:46Z with
+  # OK=876/Failed=11): re-runs the same des-only fetch over the same orphan
+  # list. The 1,135 already-staged tiles are skipped by the
+  # _valid_existing_tile resume guard, so only the ~12 missing (11 failed +
+  # 1 other; the 5 no-year entries still skip) are attempted. New Job name
+  # because the terminal original is kept for its logs.
+  #
+  # DIFF vs campaign-orphan-512-job.yaml (besides name/deadline):
+  # mounts the skg-endpoints Secret and copies it to .skg_endpoints —
+  # the original run silently skipped height/volume/basal_area/diameter on
+  # every tile because the gitignored config was absent from the clone
+  # (fixed for existing tiles by Job orphan-aux-skg; this makes the
+  # retried tiles land complete).
+  backoffLimit: 1
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: orphan-fetch
+          # python:3.11-slim (not the sen2cor image): no L2A_Process ⇒ this Job
+          # is STRICTLY des, same as the original run.
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign orphan-512 RETRY: des-only, resume-skip of staged tiles ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+              # SKG forestry endpoint (gitignored config; absence was the
+              # root cause of the 0/1135 forest-aux gap in the original run).
+              cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
+
+              OUT=/data/unified_v2_512_orphans_staging
+              ORPHAN_JSON=/data/audits/orphan_fetch_512.json
+              echo ""
+              echo "Staged already: $(ls $OUT/*.npz 2>/dev/null | wc -l) (resume-skipped)"
+              echo "=== fetch des-only, --workers 2 → $OUT ==="
+              python3 scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json "$ORPHAN_JSON" \
+                --output-dir "$OUT" \
+                --tile-size-px 512 \
+                --years 2018 2019 2021 2022 2023 \
+                --workers 2 \
+                --fetch-sources des \
+                --no-pre2018
+
+              echo ""
+              echo "=== retry outcome ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              outs = sorted(glob.glob("/data/unified_v2_512_orphans_staging/*.npz"))
+              print(f"staging total after retry: {len(outs)} (target 1,142 of 1,147; 5 no-year skip)")
+              PYEOF
+              echo "=== retry complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"orphan-512-retry","ok":true,"reason":"spot-fix retry complete"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # VPP routing — MUST stay wekeo (see campaign-orphan-512-job.yaml
+            # header for the 2026-06-29 PU-drain incident this rule prevents).
+            - name: VPP_SOURCE
+              value: "wekeo"
+            - name: VPP_WEKEO_DIR
+              value: "/data/vpp_wekeo"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: skg-endpoints
+              mountPath: /etc/skg
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints
