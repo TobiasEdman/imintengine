@@ -212,18 +212,6 @@ def _bands_groups_for_source(source: str):
     return (_CDSE_BANDS_10M, _CDSE_BANDS_20M, _CDSE_BANDS_60M, ALL_BANDS)
 
 
-def _prithvi_bands_for_source(source: str, prithvi_bands: tuple[str, ...]) -> tuple[str, ...]:
-    """Map canonical (uppercase) PRITHVI_BANDS to the backend's casing.
-
-    DES uses lowercase band ids; CDSE openEO uses uppercase. Filter_bands
-    requires the exact label as advertised by ``load_collection`` —
-    case-sensitive.
-    """
-    if source == "des":
-        return tuple(b.lower() for b in prithvi_bands)
-    return tuple(prithvi_bands)
-
-
 def _window_midpoint(start: str, end: str) -> str:
     """Return ``YYYY-MM-DD`` halfway between ``start`` and ``end``.
 
@@ -350,7 +338,6 @@ def fetch_tile_all_slots_cdse_openeo(
     bbox_3006: dict,
     slot_windows: Sequence[tuple[int, str, str]],
     *,
-    prithvi_bands: Sequence[str] = PRITHVI_BANDS,
     cloud_max_pct: float = 30.0,
     include_scl: bool = False,
 ) -> dict:
@@ -362,16 +349,15 @@ def fetch_tile_all_slots_cdse_openeo(
         slot_windows: List of ``(slot_idx, date_start, date_end)``. May
             cover any subset of slots (1-4). Order in the returned dict
             is the same as input.
-        prithvi_bands: Bands to fetch per slot. Default matches the
-            project-wide ``PRITHVI_BANDS`` constant.
         cloud_max_pct: Scene-level cloud cover ceiling, in percent.
             Acquisitions over this are excluded before the temporal
             reduce.
 
     Returns:
         When ``include_scl=False`` (default): ``{slot_idx: (array,
-        date_str)}`` — ``array`` is ``(len(prithvi_bands), H, W)``
-        ``float32`` reflectance (DN / 10000).
+        date_str)}`` — ``array`` is ``(len(ALL_BANDS), H, W)`` = 12-band
+        ``float32`` reflectance (DN / 10000), band parity with the DES
+        path.
 
         When ``include_scl=True``: ``{slot_idx: (array, aoi_cloud_frac,
         date_str)}`` — the SCL band rides along in the SAME download and
@@ -407,6 +393,14 @@ def fetch_tile_all_slots_cdse_openeo(
     conn = _connect_cdse()
     scl_band = "SCL" if include_scl else None
 
+    # Fetch the FULL 12-band S2 spectral (10m+20m+60m), not just Prithvi-6 —
+    # band parity with the DES path (fetch_tile_all_slots_des_openeo).
+    # Downstream _split_all_bands splits to the 6-band model cube + extras;
+    # a 6-band download here made the multi-slot caller's ALL_BANDS shape
+    # check drop every slot (the orphan-512 "0 tiles via cdse-openeo" bug).
+    b10, b20, b60, cdse_bands = _bands_groups_for_source("cdse-openeo")
+    n_spec = len(cdse_bands)
+
     # Build one sub-cube per slot, then merge into a single download.
     sub_cubes = []
     for slot_idx, date_start, date_end in slot_windows:
@@ -418,9 +412,10 @@ def fetch_tile_all_slots_cdse_openeo(
             date_end,
             collection_id=CDSE_COLLECTION,
             cloud_max_pct=cloud_max_pct,
-            bands_10m=_CDSE_BANDS_10M,
-            bands_20m=_CDSE_BANDS_20M,
-            output_bands=prithvi_bands,
+            bands_10m=b10,
+            bands_20m=b20,
+            bands_60m=b60,
+            output_bands=cdse_bands,
             scl_band=scl_band,
         ))
 
@@ -429,7 +424,7 @@ def fetch_tile_all_slots_cdse_openeo(
         merged = merged.merge_cubes(c)
 
     print(f"    [CDSE-tile-graph] downloading {len(slot_windows)} slots × "
-          f"{len(prithvi_bands)} bands = {len(slot_windows)*len(prithvi_bands)} bands",
+          f"{n_spec} bands = {len(slot_windows)*n_spec} bands",
           flush=True)
     try:
         with _cdse_single_flight("cdse-openeo"):
@@ -451,7 +446,6 @@ def fetch_tile_all_slots_cdse_openeo(
         src_transform = src.transform
         src_crs = src.crs
 
-    n_spec = len(prithvi_bands)
     per_slot = n_spec + (1 if include_scl else 0)   # +1 for the SCL band
     expected_bands = len(slot_windows) * per_slot
     if full.shape[0] != expected_bands:
@@ -504,7 +498,6 @@ def fetch_tile_all_slots_des_openeo(
     bbox_3006: dict,
     slot_windows: Sequence[tuple[int, str, str]],
     *,
-    prithvi_bands: Sequence[str] = PRITHVI_BANDS,
     cloud_max_pct: float | None = None,
 ) -> dict[int, tuple[np.ndarray, str]]:
     """DES openEO 1.1 variant of :func:`fetch_tile_all_slots_cdse_openeo`.
@@ -616,7 +609,6 @@ def fetch_tile_all_slots(
     slot_windows: Sequence[tuple[int, str, str]],
     *,
     source: str = "cdse-openeo",
-    prithvi_bands: Sequence[str] = PRITHVI_BANDS,
     cloud_max_pct: float | None = 30.0,
     include_scl: bool = False,
 ) -> dict:
@@ -636,7 +628,6 @@ def fetch_tile_all_slots(
         # wrongly coerce None → 30.0 and re-apply the (now lte) filter.
         return fetch_tile_all_slots_cdse_openeo(
             bbox_3006, slot_windows,
-            prithvi_bands=prithvi_bands,
             cloud_max_pct=cloud_max_pct,
             include_scl=include_scl,
         )
@@ -647,7 +638,6 @@ def fetch_tile_all_slots(
             )
         return fetch_tile_all_slots_des_openeo(
             bbox_3006, slot_windows,
-            prithvi_bands=prithvi_bands,
             cloud_max_pct=cloud_max_pct,
         )
     raise ValueError(f"fetch_tile_all_slots: unknown source {source!r}")
@@ -658,7 +648,6 @@ def fetch_tile_at_specific_dates(
     slot_dates: dict[int, str],
     *,
     source: str = "des",
-    prithvi_bands: Sequence[str] = PRITHVI_BANDS,
     with_scl: bool = False,
 ) -> dict:
     """Tile-graph variant where the caller has already chosen one date per slot.
@@ -693,7 +682,8 @@ def fetch_tile_at_specific_dates(
         slot_dates: ``{slot_idx: "YYYY-MM-DD"}``. May cover any subset
             of slots (1-4). Slots not in the dict are not fetched.
         source: ``"cdse-openeo"`` or ``"des"``.
-        prithvi_bands: Bands to fetch per slot.
+        with_scl: Ride the SCL band along in the same download
+            (``cdse-openeo`` only) for AOI cloud gating.
 
     Returns:
         ``{slot_idx: (array, date_str)}`` — one entry per input slot.
@@ -725,7 +715,6 @@ def fetch_tile_at_specific_dates(
     result = fetch_tile_all_slots(
         bbox_3006, slot_windows,
         source=source,
-        prithvi_bands=prithvi_bands,
         cloud_max_pct=None,
         include_scl=with_scl,
     )
