@@ -62,8 +62,13 @@ spec:
               export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
               echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
               # Parity fix MUST be in the clone — the whole point of this leg.
-              git merge-base --is-ancestor 5c36bd9 HEAD \
-                && echo "OK: parity fix 5c36bd9 present" \
+              # Content check, NOT ancestry: a --depth 1 clone has no history,
+              # so `git merge-base --is-ancestor <sha>` always fails (first
+              # pod attempt 2026-07-05 died on exactly that). Same pattern as
+              # refetch-recoreg-aux-free's resolve_fetch_bbox guard.
+              git grep -q '_bands_groups_for_source("cdse-openeo")' \
+                  imint/training/openeo_tile_graph.py \
+                && echo "OK: 12-band parity fix present in clone" \
                 || { echo "FATAL: parity fix NOT in clone — abort"; exit 1; }
               cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
 
