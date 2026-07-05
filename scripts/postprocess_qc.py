@@ -30,7 +30,17 @@ def main():
                    help="Max fraction of zero pixels per frame (default 0.05)")
     p.add_argument("--min-valid-frames", type=int, default=3,
                    help="Min valid temporal frames (default 3 of 4)")
+    p.add_argument("--no-remove", action="store_true",
+                   help="Report-only: count QC failures but DELETE NOTHING. "
+                        "Mandatory first run in any new context — the remove "
+                        "default wiped 901/1136 orphan-staging tiles on "
+                        "2026-07-05 (by-design-empty pre-2018 slots read as "
+                        "nodata before the mask-aware fix).")
     args = p.parse_args()
+
+    def _remove(path: str) -> None:
+        if not args.no_remove:
+            os.remove(path)
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
     print(f"Scanning {len(tiles)} tiles...")
@@ -49,23 +59,29 @@ def main():
             img = d.get("spectral", d.get("image"))
             n_frames = img.shape[0] // 6
 
-            # Nodata filter: >threshold zero pixels in any frame
+            # Nodata filter: >threshold zero pixels in any PRESENT frame.
+            # Frames with temporal_mask==0 are empty BY CONTRACT (e.g. the
+            # pre-2018 slot 0 a later Phase-2 sen2cor pass fills) — judging
+            # them as nodata deleted 900/1136 orphan-staging tiles on
+            # 2026-07-05. Presence coverage is the frame check's job below.
+            tmask = d.get("temporal_mask", None)
             has_nodata = False
             for fi in range(n_frames):
+                if tmask is not None and int(tmask[fi]) == 0:
+                    continue
                 frame = img[fi * 6:(fi + 1) * 6]
                 nodata_frac = float((frame.max(axis=0) == 0).mean())
                 if nodata_frac > args.nodata_threshold:
                     has_nodata = True
                     break
             if has_nodata:
-                os.remove(f)
+                _remove(f)
                 removed_nodata += 1
                 continue
 
             # Frame check: need min valid frames
-            tmask = d.get("temporal_mask", None)
             if tmask is not None and int(tmask.sum()) < args.min_valid_frames:
-                os.remove(f)
+                _remove(f)
                 removed_frames += 1
                 continue
 
@@ -89,11 +105,12 @@ def main():
                       flush=True)
 
         except Exception:
-            os.remove(f)
+            _remove(f)
             removed_corrupt += 1
 
     print()
-    print("=== Results ===")
+    print("=== Results ===" + ("  (--no-remove: NOTHING deleted)"
+                               if args.no_remove else ""))
     print(f"  Kept:                    {kept}")
     print(f"  Removed (nodata >5%):    {removed_nodata}")
     print(f"  Removed (<3 frames):     {removed_frames}")

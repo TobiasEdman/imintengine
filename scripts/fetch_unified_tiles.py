@@ -435,6 +435,70 @@ def _valid_existing_tile(path: str) -> bool:
         return False
 
 
+def _try_claim(claim_dir: str, name: str) -> bool:
+    """Atomically claim ``name`` for this worker via O_EXCL file create.
+
+    The cross-JOB work divider for two fetch backends (DES + CDSE) running
+    the SAME tile list against the SAME staging dir: each tile is fetched by
+    whichever pod claims it first, so a fast backend naturally takes more of
+    the list instead of both racing tile-by-tile. O_CREAT|O_EXCL is atomic on
+    CephFS — exactly one claimer wins. The claim body records who/when for
+    forensics and for the stale sweep.
+    """
+    os.makedirs(claim_dir, exist_ok=True)
+    path = os.path.join(claim_dir, f"{name}.claim")
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps({
+            "host": os.environ.get("HOSTNAME", "unknown"),
+            "backend": os.environ.get("FETCH_BACKEND_LABEL", ""),
+            "ts": time.time(),
+        }))
+    return True
+
+
+def _release_claim(claim_dir: str, name: str) -> None:
+    """Release a claim so the OTHER backend may try the tile.
+
+    Called on fetch FAILURE only — a tile one backend cannot land (e.g. the
+    scene is missing from the DES mirror) becomes automatically available to
+    the other. On success the claim is kept: the written npz already makes
+    every worker skip via _valid_existing_tile.
+    """
+    try:
+        os.remove(os.path.join(claim_dir, f"{name}.claim"))
+    except FileNotFoundError:
+        pass
+
+
+def _sweep_stale_claims(claim_dir: str, output_dir: str, stale_h: float) -> int:
+    """Remove claims older than ``stale_h`` hours with no valid tile behind.
+
+    A pod that died mid-tile (eviction, deadline) leaves its claims behind;
+    without this sweep those tiles would never be fetched by anyone. Runs at
+    worker startup. A claim whose npz exists is left alone (fetch done).
+    """
+    if not os.path.isdir(claim_dir):
+        return 0
+    cutoff = time.time() - stale_h * 3600
+    swept = 0
+    for path in glob.glob(os.path.join(claim_dir, "*.claim")):
+        try:
+            if os.path.getmtime(path) >= cutoff:
+                continue
+            name = os.path.basename(path)[:-len(".claim")]
+            if _valid_existing_tile(os.path.join(output_dir, f"{name}.npz")):
+                continue
+            os.remove(path)
+            swept += 1
+        except OSError:
+            continue
+    return swept
+
+
 def _atomic_savez(out_path: str, save: dict) -> None:
     """Write an npz atomically: compress to a sibling tmp, then ``os.replace``.
 
@@ -1225,6 +1289,15 @@ def main():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--years", nargs="+", default=["2018", "2019", "2022", "2023"])
     p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--claim-dir", default=None,
+                   help="Shared claim dir for multi-backend work division "
+                        "(e.g. <staging>/.claims): each tile is fetched by "
+                        "whichever pod O_EXCL-claims it first; a FAILED fetch "
+                        "releases the claim so the other backend may try. "
+                        "Omit for single-job runs.")
+    p.add_argument("--claim-stale-h", type=float, default=6.0,
+                   help="At startup, remove claims older than this many hours "
+                        "that have no valid npz behind them (dead-pod cleanup).")
     p.add_argument("--force", action="store_true",
                    help="refetch even if a tile is already multitemporal "
                         "(refetch mode); required to re-coregister existing tiles "
@@ -1370,7 +1443,13 @@ def main():
     # ── VPP prefetch (all tiles) ──────────────────────────────────────────
     vpp_cache = prefetch_vpp_batch(work, workers=args.workers)
 
-    stats = {"ok": 0, "skipped": 0, "failed": 0}
+    if args.claim_dir:
+        swept = _sweep_stale_claims(args.claim_dir, args.output_dir,
+                                    args.claim_stale_h)
+        print(f"  [claims] dir={args.claim_dir} "
+              f"(swept {swept} stale > {args.claim_stale_h}h)")
+
+    stats = {"ok": 0, "skipped": 0, "failed": 0, "claimed": 0}
     t0 = time.time()
 
     max_w = args.workers
@@ -1390,14 +1469,27 @@ def main():
         # the fresh path which selects dates from VPP windows + STAC instead
         # of reading stored dates from a non-existent npz.
         existing = loc.get("_existing_path")
-        on_disk = (existing and os.path.exists(existing)) or os.path.exists(
-            os.path.join(d, f"{loc['name']}.npz"))
+        out_path = os.path.join(d, f"{loc['name']}.npz")
+        on_disk = (existing and os.path.exists(existing)) or os.path.exists(out_path)
+        # Multi-backend work division: claim the tile before fetching (skip
+        # if the sibling job already holds it). Gated on the cheap
+        # exists-check so already-landed tiles don't litter the claim dir —
+        # full validity is still fetch_tile/refetch_tile's job.
+        if args.claim_dir and not os.path.exists(out_path):
+            if not _try_claim(args.claim_dir, loc["name"]):
+                return {"name": loc["name"], "status": "claimed"}
         if use_refetch and on_disk:
-            return refetch_tile(loc, d, tile, backend=backend, force=args.force,
-                                skip_pre2018=args.no_pre2018)
-        return fetch_tile(loc, args.years, d, tile,
-                          vpp_cache=vpp_cache, backend=backend,
-                          skip_pre2018=args.no_pre2018)
+            r = refetch_tile(loc, d, tile, backend=backend, force=args.force,
+                             skip_pre2018=args.no_pre2018)
+        else:
+            r = fetch_tile(loc, args.years, d, tile,
+                           vpp_cache=vpp_cache, backend=backend,
+                           skip_pre2018=args.no_pre2018)
+        if args.claim_dir and r.get("status") == "failed":
+            # Free the tile for the OTHER backend — e.g. a scene missing from
+            # the DES mirror is often present in the CDSE full archive.
+            _release_claim(args.claim_dir, loc["name"])
+        return r
 
     CHUNK = max(max_w * 2, len(work) // 10)
     completed = 0
@@ -1421,7 +1513,8 @@ def main():
 
     elapsed = time.time() - t0
     print(f"\n=== Done in {elapsed/60:.1f} min ===")
-    print(f"  OK={stats['ok']}  Skipped={stats['skipped']}  Failed={stats['failed']}")
+    print(f"  OK={stats['ok']}  Skipped={stats['skipped']}  Failed={stats['failed']}"
+          + (f"  ClaimedElsewhere={stats['claimed']}" if args.claim_dir else ""))
 
     json.dump({
         "mode": args.mode, "years": args.years,
