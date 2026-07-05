@@ -58,7 +58,8 @@ spec:
                 git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
               pip3 install --quiet --no-cache-dir \
                 numpy scipy rasterio pyproj requests Pillow \
-                pystac-client openeo shapely 2>&1 | tail -2
+                pystac-client openeo shapely \
+                xarray netcdf4 2>&1 | tail -2
 
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 --branch main \
