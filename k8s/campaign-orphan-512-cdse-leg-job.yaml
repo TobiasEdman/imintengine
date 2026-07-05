@@ -1,0 +1,138 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: campaign-orphan-512-cdse-leg
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: campaign-orphan-512-cdse-leg
+spec:
+  # CDSE leg for the 11 tiles DES failed TWICE (persistent, clustered —
+  # likely scenes absent from the DES mirror; CDSE carries the full
+  # archive). Unblocked by the 12-band parity fix 5c36bd9: cdse-openeo
+  # now returns ALL_BANDS arrays that pass fetch_spectral's shape gate
+  # (pre-fix: every slot dropped → 0 tiles).
+  #
+  # PU scope (measurable, per CLAUDE.md spot-fix rule): ≤11 tiles ×
+  # 4-5 slots ≈ ~50 openEO jobs against the monthly pool (reset July 1,
+  # ~unspent). A 402/403 marks cdse-openeo dead and fails loud. The
+  # cdse-openeo account is single-flight (1 conn hard cap) → --workers 1;
+  # resume guard skips the 1,136 staged tiles.
+  #
+  # VPP stays wekeo-only (env below); skg-endpoints Secret mounted so
+  # fetched tiles land with forest aux (parity with the retry Job).
+  backoffLimit: 1
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: orphan-fetch
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== campaign orphan-512 CDSE LEG: cdse-openeo (12-band post-parity), resume-skip ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+              # Parity fix MUST be in the clone — the whole point of this leg.
+              git merge-base --is-ancestor 5c36bd9 HEAD \
+                && echo "OK: parity fix 5c36bd9 present" \
+                || { echo "FATAL: parity fix NOT in clone — abort"; exit 1; }
+              cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
+
+              OUT=/data/unified_v2_512_orphans_staging
+              ORPHAN_JSON=/data/audits/orphan_fetch_512.json
+              echo ""
+              echo "Staged already: $(ls $OUT/*.npz 2>/dev/null | wc -l) (resume-skipped)"
+              echo "=== fetch cdse-openeo, --workers 1 → $OUT ==="
+              python3 scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json "$ORPHAN_JSON" \
+                --output-dir "$OUT" \
+                --tile-size-px 512 \
+                --years 2018 2019 2021 2022 2023 \
+                --workers 1 \
+                --fetch-sources cdse-openeo \
+                --no-pre2018
+
+              echo ""
+              echo "=== leg outcome ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              outs = sorted(glob.glob("/data/unified_v2_512_orphans_staging/*.npz"))
+              print(f"staging total after CDSE leg: {len(outs)} (target 1,142 of 1,147; 5 no-year skip)")
+              # Band sanity on the newest tile: 4-frame 6-band core + extras present.
+              p = max(outs, key=lambda f: __import__('os').path.getmtime(f))
+              with np.load(p, allow_pickle=True) as d:
+                  print(f"newest: {p.split('/')[-1]} spectral={d['spectral'].shape} "
+                        f"has_b08={int(d.get('has_b08', 0))} has_rededge={int(d.get('has_rededge', 0))}")
+              PYEOF
+              echo "=== CDSE leg complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"orphan-512-cdse-leg","ok":true,"reason":"cdse leg complete"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: VPP_SOURCE
+              value: "wekeo"
+            - name: VPP_WEKEO_DIR
+              value: "/data/vpp_wekeo"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: skg-endpoints
+              mountPath: /etc/skg
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints
