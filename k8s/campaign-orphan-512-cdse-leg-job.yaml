@@ -118,6 +118,21 @@ spec:
                 secretKeyRef:
                   name: cdse-credentials
                   key: client_secret
+            # DES creds are REQUIRED even on a cdse-spectral leg: the
+            # era5_then_scl date selector's SCL screen runs on DES openEO
+            # (free) regardless of spectral backend — without these,
+            # optimal_fetch._connect_des_openeo raises per tile (both
+            # first-submit attempts 2026-07-05 died on exactly that).
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
           envFrom:
             - secretRef:
                 name: wekeo-creds
