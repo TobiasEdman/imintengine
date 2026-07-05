@@ -69,6 +69,7 @@ spec:
               # Claim coordination + SCL contract must be in the clone
               # (content check — ancestry is invisible in a depth-1 clone).
               git grep -q 'claim-dir' scripts/fetch_unified_tiles.py \
+                && git grep -q 'scl-backend' scripts/fetch_unified_tiles.py \
                 && git grep -q '_bands_groups_for_source("cdse-openeo")' \
                      imint/training/openeo_tile_graph.py \
                 && echo "OK: claim + parity fixes present" \
@@ -87,7 +88,8 @@ spec:
                 --workers 1 \
                 --fetch-sources des \
                 --no-pre2018 \
-                --claim-dir "$OUT/.claims"
+                --claim-dir "$OUT/.claims" \
+                --scl-backend cdse
 
               echo ""
               echo "Staging total after DES leg: $(ls $OUT/*.npz 2>/dev/null | wc -l)"

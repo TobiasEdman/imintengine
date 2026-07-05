@@ -58,6 +58,7 @@ spec:
               export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
               echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
               git grep -q 'claim-dir' scripts/fetch_unified_tiles.py \
+                && git grep -q 'scl-backend' scripts/fetch_unified_tiles.py \
                 && git grep -q '_bands_groups_for_source("cdse-openeo")' \
                      imint/training/openeo_tile_graph.py \
                 && echo "OK: claim + parity fixes present" \
@@ -76,7 +77,8 @@ spec:
                 --workers 1 \
                 --fetch-sources cdse-openeo \
                 --no-pre2018 \
-                --claim-dir "$OUT/.claims"
+                --claim-dir "$OUT/.claims" \
+                --scl-backend cdse
 
               echo ""
               echo "Staging total after CDSE leg: $(ls $OUT/*.npz 2>/dev/null | wc -l)"

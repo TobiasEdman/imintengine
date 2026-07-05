@@ -519,6 +519,7 @@ def fetch_tile(
     vpp_cache: dict | None = None,
     backend: str = "des",
     skip_pre2018: bool = False,
+    scl_backend: str = "des",
 ) -> dict:
     """Fetch one tile through the canonical M1+M2 entry as a single 5-slot
     ``fetch_tile_spectral`` call — 4 temporal frames (autumn y-1 + 3 VPP) + a
@@ -557,14 +558,16 @@ def fetch_tile(
     # be re-probed across years; the cost is a STAC-existence check, not a fetch.
     if "year" in loc:
         dates = select_slot_dates(
-            coords, tile_year=int(loc["year"]), vpp_windows=vpp_windows)
+            coords, tile_year=int(loc["year"]), vpp_windows=vpp_windows,
+            scl_backend=scl_backend)
     else:
         dates = {}
         for y in years:
             if len(dates) == 5:
                 break
             picked = select_slot_dates(
-                coords, tile_year=int(y), vpp_windows=vpp_windows)
+                coords, tile_year=int(y), vpp_windows=vpp_windows,
+                scl_backend=scl_backend)
             for slot, d in picked.items():
                 dates.setdefault(slot, d)
     if not dates:
@@ -1298,6 +1301,15 @@ def main():
     p.add_argument("--claim-stale-h", type=float, default=6.0,
                    help="At startup, remove claims older than this many hours "
                         "that have no valid npz behind them (dead-pod cleanup).")
+    p.add_argument("--scl-backend", default="des", choices=["des", "cdse"],
+                   help="openEO endpoint for the era5_then_scl date-selection "
+                        "screen (NOT the spectral fetch — that is "
+                        "--fetch-sources). Default 'des' (free). Use 'cdse' "
+                        "when DES openEO is throttled/timing out on the SCL "
+                        "screen (the 2026-07-05 [408] storm blocked BOTH legs, "
+                        "since both screen dates via DES); costs a few CDSE PU "
+                        "per tile for the screen. Repo-sanctioned lever "
+                        "(optimal_fetch.scl_stack_screen backend=).")
     p.add_argument("--force", action="store_true",
                    help="refetch even if a tile is already multitemporal "
                         "(refetch mode); required to re-coregister existing tiles "
@@ -1484,7 +1496,8 @@ def main():
         else:
             r = fetch_tile(loc, args.years, d, tile,
                            vpp_cache=vpp_cache, backend=backend,
-                           skip_pre2018=args.no_pre2018)
+                           skip_pre2018=args.no_pre2018,
+                           scl_backend=args.scl_backend)
         if args.claim_dir and r.get("status") == "failed":
             # Free the tile for the OTHER backend — e.g. a scene missing from
             # the DES mirror is often present in the CDSE full archive.

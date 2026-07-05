@@ -36,6 +36,35 @@ def test_claim_exactly_one_winner(tmp_path):
     assert sum(results) == 1, f"expected exactly 1 winner, got {sum(results)}"
 
 
+def test_scl_backend_threads_to_date_selection(monkeypatch):
+    """--scl-backend must reach select_slot_dates (the date screen), so a DES
+    openEO SCL outage can be bypassed by routing the screen to CDSE. The
+    2026-07-05 [408] storm blocked BOTH legs because both screen dates via DES;
+    this flag is the repo-sanctioned escape (scl_stack_screen backend=)."""
+    import fetch_unified_tiles as fut
+
+    captured = {}
+
+    def _fake_select(coords, *, tile_year, vpp_windows, scl_backend="des", **kw):
+        captured["scl_backend"] = scl_backend
+        return {i: f"2021-0{i + 4}-01" for i in range(5)}
+
+    monkeypatch.setattr(fut, "select_slot_dates", _fake_select)
+    monkeypatch.setattr(fut, "fetch_tile_spectral", lambda *a, **k: None)
+    monkeypatch.setattr(fut, "_valid_existing_tile", lambda p: False)
+    monkeypatch.setattr(fut, "bbox_3006_to_wgs84",
+                        lambda b: {"west": 0, "south": 0, "east": 0, "north": 0})
+
+    from imint.training.tile_config import TileConfig
+    loc = {"name": "t", "year": 2021,
+           "bbox_3006": {"west": 600000, "south": 6600000,
+                         "east": 605120, "north": 6605120}}
+    fut.fetch_tile(loc, ["2021"], "/tmp", TileConfig(size_px=512),
+                   vpp_cache={"t": [(120, 160)]}, scl_backend="cdse")
+    assert captured.get("scl_backend") == "cdse", (
+        "--scl-backend did not reach select_slot_dates")
+
+
 def test_release_reopens_claim(tmp_path):
     claim_dir = str(tmp_path / "claims")
     assert _try_claim(claim_dir, "tile_B")
