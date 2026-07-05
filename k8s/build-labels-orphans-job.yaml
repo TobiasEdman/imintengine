@@ -76,8 +76,12 @@ spec:
                 --workers 16
 
               echo ""
-              echo "=== QC ==="
-              python scripts/postprocess_qc.py --data-dir /data/unified_v2_512_orphans_staging || true
+              echo "=== QC (report-only — the destructive default deleted 901/1136"
+              echo "    staging tiles 2026-07-05; removal decisions belong to the"
+              echo "    merge gate, never to a mid-pipeline job) ==="
+              python scripts/postprocess_qc.py \
+                --data-dir /data/unified_v2_512_orphans_staging \
+                --no-remove || true
 
               echo ""
               echo "=== Done: $(date) ==="

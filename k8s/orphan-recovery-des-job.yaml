@@ -1,0 +1,141 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: orphan-recovery-des
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: orphan-recovery-des
+spec:
+  # RECOVERY of the ~885 orphan-staging tiles postprocess_qc deleted on
+  # 2026-07-05 (pre-fix: masked pre-2018 slots judged as nodata). DES leg
+  # of the claim-coordinated pair — runs the SAME orphan list as
+  # orphan-recovery-cdse against the SAME staging dir; --claim-dir divides
+  # the work (each tile fetched by whichever pod claims it first; a FAILED
+  # fetch releases the claim so the sibling backend gets the tile — the 11
+  # DES-mirror-gap tiles flow to CDSE automatically).
+  #
+  # Tiles land COMPLETE inline: 12 bands + SCL (post-876f48f), skg forest
+  # aux (Secret below), VPP from the now-warm WEkEO cache. Follow-up after
+  # both legs: build-labels-orphans (QC now mask-aware + --no-remove).
+  backoffLimit: 1
+  activeDeadlineSeconds: 259200   # 3 d — ~885 tiles, DES ~18/h historical
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: orphan-fetch
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== orphan RECOVERY (DES leg, claim-coordinated) ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+              # Claim coordination + SCL contract must be in the clone
+              # (content check — ancestry is invisible in a depth-1 clone).
+              git grep -q 'claim-dir' scripts/fetch_unified_tiles.py \
+                && git grep -q '_bands_groups_for_source("cdse-openeo")' \
+                     imint/training/openeo_tile_graph.py \
+                && echo "OK: claim + parity fixes present" \
+                || { echo "FATAL: required fixes NOT in clone — abort"; exit 1; }
+              cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
+
+              OUT=/data/unified_v2_512_orphans_staging
+              echo ""
+              echo "Staged already: $(ls $OUT/*.npz 2>/dev/null | wc -l) (resume-skipped)"
+              python3 scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json /data/audits/orphan_fetch_512.json \
+                --output-dir "$OUT" \
+                --tile-size-px 512 \
+                --years 2018 2019 2021 2022 2023 \
+                --workers 2 \
+                --fetch-sources des \
+                --no-pre2018 \
+                --claim-dir "$OUT/.claims"
+
+              echo ""
+              echo "Staging total after DES leg: $(ls $OUT/*.npz 2>/dev/null | wc -l)"
+              echo "=== DES recovery leg complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"orphan-recovery-des","ok":true,"reason":"DES leg complete"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: FETCH_BACKEND_LABEL
+              value: "des"
+            - name: VPP_SOURCE
+              value: "wekeo"
+            - name: VPP_WEKEO_DIR
+              value: "/data/vpp_wekeo"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: skg-endpoints
+              mountPath: /etc/skg
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints
