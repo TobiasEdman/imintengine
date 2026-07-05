@@ -137,6 +137,8 @@ def _snap_to_target_grid(
     src_crs,
     target_bounds: dict,
     pixel_size: int = 10,
+    *,
+    resample: str = "subpixel",
 ) -> tuple[np.ndarray, "Affine"]:
     """Reproject/snap a raster to the exact target pixel grid.
 
@@ -156,11 +158,25 @@ def _snap_to_target_grid(
         src_crs:        CRS of the downloaded GeoTIFF.
         target_bounds:  Dict with west/south/east/north in EPSG:3006.
         pixel_size:     Grid cell size (default 10m).
+        resample:       ``"subpixel"`` (default) applies a Fourier sinc
+                        sub-pixel shift for the fractional offset — correct
+                        for continuous reflectance. ``"nearest"`` rounds the
+                        offset to the nearest integer pixel and never runs
+                        the sinc branch — MANDATORY for categorical rasters
+                        (SCL class codes): a sinc/bilinear shift would ring
+                        across class boundaries and invent codes that never
+                        existed. For a CRS-mismatch warp, ``"nearest"``
+                        selects ``Resampling.nearest`` (else bilinear).
 
     Returns:
         (aligned_raw, target_transform) — the raster snapped to the
         target grid, and the corresponding Affine transform.
     """
+    if resample not in ("subpixel", "nearest"):
+        raise ValueError(
+            f"_snap_to_target_grid: resample must be 'subpixel' or 'nearest', "
+            f"got {resample!r}"
+        )
     from rasterio.transform import from_origin
     from rasterio.crs import CRS
 
@@ -206,7 +222,8 @@ def _snap_to_target_grid(
                 src_crs=src_crs_obj,
                 dst_transform=target_transform,
                 dst_crs=target_crs,
-                resampling=Resampling.bilinear,
+                resampling=(Resampling.nearest if resample == "nearest"
+                            else Resampling.bilinear),
             )
         print(f"    [grid] Reprojected from {src_crs_obj} to target grid "
               f"(offset was {dx_px:.2f}, {dy_px:.2f} px)")
@@ -234,8 +251,11 @@ def _snap_to_target_grid(
         aligned[:, tgt_r0:tgt_r0 + copy_h, tgt_c0:tgt_c0 + copy_w] = \
             raw[:, src_r0:src_r0 + copy_h, src_c0:src_c0 + copy_w]
 
-    # Apply sub-pixel correction if needed (uses shared coregistration module)
-    if abs(frac_dx) > 0.01 or abs(frac_dy) > 0.01:
+    # Apply sub-pixel correction if needed (uses shared coregistration module).
+    # Skipped entirely for categorical rasters (resample="nearest") — the
+    # integer overlap-copy above already placed the class codes; a sinc shift
+    # would corrupt them.
+    if resample == "subpixel" and (abs(frac_dx) > 0.01 or abs(frac_dy) > 0.01):
         from .coregistration import subpixel_shift
         for b in range(n_bands):
             aligned[b] = subpixel_shift(

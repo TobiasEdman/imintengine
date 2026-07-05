@@ -445,6 +445,7 @@ def fetch_tile_spectral(
     coregister: bool = True,
     return_precoreg: bool = False,
     skip_pre2018: bool = False,
+    with_scl: bool = True,
 ) -> dict | None:
     """Canonical per-tile spectral fetch — M1 (grid-snap) + M2 (inter-frame MI).
 
@@ -475,13 +476,27 @@ def fetch_tile_spectral(
             take the l1c_sen2cor fallthrough, so they land empty with
             ``temporal_mask==0`` — the re-coreg campaign's Phase-1 wants the
             pre-2018 slots filled by a separate sen2cor pass, not inline.
+        with_scl: fetch + persist the per-slot Scene-Classification (SCL)
+            band alongside the spectral (default ``True`` — the Step-B SCL
+            contract: the canonical fetch is 12 bands + SCL per slot for both
+            openEO backends). The SCL raster rides in the SAME tile-graph
+            download, is nearest-snapped onto the halo grid, integer-shifted
+            by the M2 coreg (categorical → ``np.roll`` on the ROUNDED shift,
+            never a sinc shift), halo-cropped, and returned as ``scl`` =
+            ``(n_frames, canon, canon)`` ``uint8`` (0 = no_data for missing
+            slots, matching ``temporal_mask``). PU note: 12 bands + SCL is
+            >2× PU/tile on CDSE vs a 6-band fetch — accepted for the SCL
+            contract. l1c_sen2cor-filled slots contribute SCL=0 (that path
+            yields no SCL band); their coverage is carried by
+            ``temporal_mask`` as before.
 
     Returns:
         A result dict — ``spectral``/``temporal_mask``/``doy``/``dates`` + the
-        ``b08``/``rededge``/``b01``/``b09`` extras + geometry/provenance
-        (``bbox_3006``/``easting``/``northing``/``tile_size_px``/``source``/
-        ``coreg_ref_frame``/``coreg_m2``) — ready for a caller to persist, or
-        ``None`` if no slot fetched.
+        ``b08``/``rededge``/``b01``/``b09`` extras + (when ``with_scl``) the
+        ``scl`` ``(n_frames, canon, canon)`` ``uint8`` block + geometry/
+        provenance (``bbox_3006``/``easting``/``northing``/``tile_size_px``/
+        ``source``/``coreg_ref_frame``/``coreg_m2``) — ready for a caller to
+        persist, or ``None`` if no slot fetched.
     """
     if backend not in _M2_CAPABLE_BACKENDS:
         raise ValueError(
@@ -523,9 +538,14 @@ def fetch_tile_spectral(
 
     # Fetch the des-eligible slots on the HALO grid in ONE tile-graph download.
     # M1 (the per-scene transform snap to the halo bbox) happens inside the graph.
+    # With SCL requested, each entry is (spectral, scl, date); the SCL raster is
+    # already nearest-snapped onto the halo grid by the tile-graph — collect it
+    # per slot to ride through M2 + halo-crop with the spectral.
     fresh: dict[int, np.ndarray] = {}
+    scl_halo: dict[int, np.ndarray] = {}
     if des_dates:
-        res = fetch_tile_at_specific_dates(bbox_halo, des_dates, source=backend)
+        res = fetch_tile_at_specific_dates(
+            bbox_halo, des_dates, source=backend, with_scl=with_scl)
         for fi, entry in res.items():
             if entry is None or entry[0] is None:
                 continue
@@ -533,6 +553,13 @@ def fetch_tile_spectral(
             if arr.shape != (len(ALL_BANDS), halo, halo):
                 continue
             fresh[fi] = arr
+            if with_scl:
+                # entry = (spectral, scl, date). Guard the shape — a malformed
+                # SCL band is dropped to zero-fill (that slot's SCL unknown)
+                # rather than aborting the good spectral.
+                scl = np.asarray(entry[1])
+                if scl.shape == (halo, halo):
+                    scl_halo[fi] = scl.astype(np.uint8)
 
     # Per-slot l1c_sen2cor fallthrough — fills (a) pre-2018 slots never sent to
     # the tile-graph and (b) any >=2018 slot the graph returned empty for.
@@ -585,6 +612,29 @@ def fetch_tile_spectral(
     cropped = {fi: crop_halo(a, crop=crop, canon=canon) for fi, a in fresh.items()}
     spectral, extras = assemble_fresh(cropped, dates_list, n_frames, canon=canon)
 
+    # SCL — categorical, so it takes the M2 shift as an INTEGER np.roll on the
+    # ROUNDED (dy, dx), never the Fourier sub-pixel path the spectral used
+    # (sinc ringing would invent class codes across boundaries). The M2 shifts
+    # are sub-pixel (typically <1 px); rounding sends a <0.5 px shift to 0
+    # (SCL stays put — inter-frame drift below half a pixel is invisible at
+    # SCL's granularity anyway) and a >=0.5 px shift to ±1 px, matching the
+    # dominant integer component of the spectral shift. Sign convention matches
+    # subpixel_shift(band, dy, dx): a +dy moves content toward higher row
+    # index, so np.roll along axis 0 by +round(dy). Assembled to
+    # (n_frames, canon, canon) uint8, 0 = no_data for missing/absent slots
+    # (temporal_mask coupling).
+    scl_out = None
+    if with_scl:
+        scl_out = np.zeros((n_frames, canon, canon), np.uint8)
+        for fi, scl in scl_halo.items():
+            dy, dx = shifts.get(fi, (0.0, 0.0))
+            r_dy, r_dx = int(round(dy)), int(round(dx))
+            # np.roll wraps at the edges, but |roll| <= search_px = crop, so the
+            # wrapped strip lives entirely inside the halo that crop_halo then
+            # discards — the canonical interior never sees wrap-around content.
+            shifted = np.roll(scl, shift=(r_dy, r_dx), axis=(0, 1))
+            scl_out[fi] = crop_halo(shifted, crop=crop, canon=canon)
+
     # Per-frame valid (non-no-data) fraction on the CROPPED frames — the
     # swath-edge / empty-post-crop wedge the single coreg_anchor_valid_frac
     # scalar missed. A present frame that is majority no-data is dropped from
@@ -625,6 +675,8 @@ def fetch_tile_spectral(
             [shifts.get(fi, (0.0, 0.0)) for fi in range(n_frames)], np.float32),
         **extras,
     }
+    if scl_out is not None:
+        result["scl"] = scl_out          # (n_frames, canon, canon) uint8, 0 = no_data
     if precoreg is not None:
         result["spectral_precoreg"] = precoreg   # raw M1 (pre-M2) — dry-run viz only
     return result

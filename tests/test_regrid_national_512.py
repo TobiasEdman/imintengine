@@ -236,15 +236,16 @@ class TestRegridOneTileIO:
     """End-to-end local path with the DES fetch mocked (no network / no PU)."""
 
     def test_full_contract(self, tmp_path, monkeypatch):
-        def _fake_fetch(bbox, slot_dates, source):
+        def _fake_fetch(bbox, slot_dates, source, with_scl=False):
             # orchestrator must fetch the 520 HALO on DES
             assert source == "des"
             assert round(bbox["east"] - bbox["west"]) == rg.HALO_PX * 10
             assert round(bbox["north"] - bbox["south"]) == rg.HALO_PX * 10
-            return {
-                fi: (np.full((len(ALL_BANDS), rg.HALO_PX, rg.HALO_PX), 0.1, np.float32), d)
-                for fi, d in slot_dates.items()
-            }
+            frame = np.full((len(ALL_BANDS), rg.HALO_PX, rg.HALO_PX), 0.1, np.float32)
+            if with_scl:
+                scl = np.full((rg.HALO_PX, rg.HALO_PX), 4, np.uint8)
+                return {fi: (frame, scl, d) for fi, d in slot_dates.items()}
+            return {fi: (frame, d) for fi, d in slot_dates.items()}
 
         # The shim delegates to fetch_tile_spectral, which calls the tile-graph
         # inside imint.training.fetch_spectral — mock it there.

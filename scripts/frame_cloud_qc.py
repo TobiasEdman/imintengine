@@ -481,6 +481,7 @@ def _fetch_replacement_frame(
             backend=backend,
             halo_px=halo_px,
             coregister=True,
+            with_scl=False,   # QC replacement uses only spectral; skip SCL PU cost
         )
     except Exception as e:
         _log(f"    [replace] fetch_tile_spectral failed {new_date}: "

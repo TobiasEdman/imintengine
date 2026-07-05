@@ -78,3 +78,36 @@ def test_cdse_scl_rides_along(recorded):
             _BBOX, _WINDOW, source="cdse-openeo",
             cloud_max_pct=None, include_scl=True)
     assert recorded.get("scl_band") == "SCL"
+
+
+@pytest.mark.parametrize("source,expected_scl_band", [
+    ("cdse-openeo", "SCL"),   # CDSE convention: uppercase
+    ("des", "scl"),           # DES convention: lowercase (imint.fetch BANDS_20M_CATEGORICAL)
+])
+def test_both_backends_request_scl_on_refetch_path(source, expected_scl_band, recorded):
+    """Step-B SCL contract: the canonical refetch entry point
+    (``fetch_tile_at_specific_dates(with_scl=True)``) must ride the SCL band on
+    BOTH backends — CDSE as "SCL", DES as "scl". This pins the per-backend band
+    id at the call-site (no network); the old dispatcher spuriously raised
+    ValueError for des+SCL, which this would have caught."""
+    with pytest.raises(_Stop):
+        otg.fetch_tile_at_specific_dates(
+            _BBOX, {0: "2022-06-01"}, source=source, with_scl=True)
+    assert recorded.get("scl_band") == expected_scl_band, (
+        f"{source} must request SCL as {expected_scl_band!r} on the "
+        f"with_scl refetch path, got {recorded.get('scl_band')!r}")
+
+
+def test_des_include_scl_no_longer_raises(monkeypatch):
+    """The dispatcher's ``des + include_scl`` ValueError guard is gone — DES SCL
+    parity is the Step-B contract. Patch the DES fetcher to a no-op so we assert
+    the dispatch reaches it (does not raise before)."""
+    reached = {}
+
+    def _stub(bbox, windows, *, cloud_max_pct=None, include_scl=False):
+        reached["include_scl"] = include_scl
+        return {}
+    monkeypatch.setattr(otg, "fetch_tile_all_slots_des_openeo", _stub)
+    otg.fetch_tile_all_slots(
+        _BBOX, _WINDOW, source="des", cloud_max_pct=None, include_scl=True)
+    assert reached["include_scl"] is True

@@ -50,8 +50,21 @@ def _frames() -> dict[int, np.ndarray]:
     }
 
 
+def _scl_halo(fi: int) -> np.ndarray:
+    """A (halo, halo) uint8 SCL raster with a slot-distinct constant class code
+    (fi+4 → vegetation/soil range) so the persisted-SCL tests can tell slots
+    apart. Categorical: NO fractional content."""
+    return np.full((_HALO, _HALO), fi + 4, np.uint8)
+
+
 def _patch_fetch(monkeypatch, frames: dict[int, np.ndarray]) -> None:
-    def _fake(bbox_3006, slot_dates, source):       # signature of fetch_tile_at_specific_dates
+    # Signature of fetch_tile_at_specific_dates: with_scl controls the tuple
+    # arity — (frame, scl, date) when set, else (frame, date). fetch_tile_spectral
+    # defaults with_scl=True (Step-B contract), so the fake must honour it.
+    def _fake(bbox_3006, slot_dates, source, with_scl=False):
+        if with_scl:
+            return {fi: (frames[fi], _scl_halo(fi), None)
+                    for fi in slot_dates if fi in frames}
         return {fi: (frames[fi], None) for fi in slot_dates if fi in frames}
     monkeypatch.setattr(fs, "fetch_tile_at_specific_dates", _fake)
 
@@ -154,8 +167,11 @@ def test_pre2018_slot_skips_des_tilegraph(monkeypatch):
 
     seen: dict = {}
 
-    def _fake_des(bbox_3006, slot_dates, source):
+    def _fake_des(bbox_3006, slot_dates, source, with_scl=False):
         seen["slots"] = dict(slot_dates)
+        if with_scl:
+            return {fi: (tg_frames[fi], _scl_halo(fi), None)
+                    for fi in slot_dates if fi in tg_frames}
         return {fi: (tg_frames[fi], None) for fi in slot_dates if fi in tg_frames}
     monkeypatch.setattr(fs, "fetch_tile_at_specific_dates", _fake_des)
 
@@ -185,7 +201,7 @@ def test_all_pre2018_skips_des_entirely(monkeypatch):
     and the tile-graph is never called; every slot is filled by l1c_sen2cor."""
     called = {"des": 0}
 
-    def _fake_des(bbox_3006, slot_dates, source):
+    def _fake_des(bbox_3006, slot_dates, source, with_scl=False):
         called["des"] += 1
         return {}
     monkeypatch.setattr(fs, "fetch_tile_at_specific_dates", _fake_des)
@@ -225,8 +241,11 @@ def test_skip_pre2018_omits_pre2018_slots_entirely(monkeypatch):
 
     seen: dict = {}
 
-    def _fake_des(bbox_3006, slot_dates, source):
+    def _fake_des(bbox_3006, slot_dates, source, with_scl=False):
         seen["slots"] = dict(slot_dates)
+        if with_scl:
+            return {fi: (tg_frames[fi], _scl_halo(fi), None)
+                    for fi in slot_dates if fi in tg_frames}
         return {fi: (tg_frames[fi], None) for fi in slot_dates if fi in tg_frames}
     monkeypatch.setattr(fs, "fetch_tile_at_specific_dates", _fake_des)
 

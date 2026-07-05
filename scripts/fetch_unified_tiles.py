@@ -369,6 +369,14 @@ def _split_entry_result(res: dict) -> tuple[dict, dict, dict | None]:
         "coreg_shifts": res["coreg_shifts"][:nf],   # per-frame: 4-frame view
     }
 
+    # Per-slot SCL (Step-B contract), sliced to the 4 persisted frames. Present
+    # only when the fetch ran with_scl (the canonical refetch path does). uint8,
+    # 0 = no_data — already M2-integer-shifted + halo-cropped by fetch_spectral,
+    # so it is pixel-aligned with `spectral`. A slot with temporal_mask==0 has
+    # SCL all-zero (missing / l1c_sen2cor-filled slot, which yields no SCL band).
+    if "scl" in res:
+        core["scl"] = res["scl"][:nf].astype(np.uint8)
+
     # All-band extras sliced to slots 0-3 (red-edge is frame-major, 3 bands per
     # frame → first nf*3 channels); recompute has_* over the 4-frame slice.
     extras = {
@@ -1097,6 +1105,7 @@ _REFETCH_DROP = frozenset((
     "label", "label_mask", "label_year",
     "coreg_ref_frame", "coreg_m2", "coreg_n_aligned", "coreg_max_shift",
     "coreg_anchor_valid_frac", "coreg_shifts",
+    "scl",   # per-slot SCL is spectral-derived (re-aligned each fetch) → rebuild
     "b08", "b08_dates", "has_b08",
     "rededge", "rededge_dates", "has_rededge",
     "b01", "b01_dates", "has_b01",

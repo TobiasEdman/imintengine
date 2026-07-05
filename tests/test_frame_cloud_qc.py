@@ -223,8 +223,10 @@ def _patch_select(monkeypatch, returned_dates: list[str]):
 
 def _patch_fetch(monkeypatch, b02_value: float):
     """Patch fetch_tile_spectral to return a 1-frame cube with a given B02."""
-    def _fake(center, *, tile, dates, n_frames, backend, halo_px, coregister):
-        # Mirror the real contract: spectral is (n_frames*6, H, W).
+    def _fake(center, *, tile, dates, n_frames, backend, halo_px, coregister,
+              with_scl=False):
+        # Mirror the real contract: spectral is (n_frames*6, H, W). QC replacement
+        # calls with with_scl=False (spectral-only), which the entry accepts.
         return {"spectral": _frame(b02_value), "temporal_mask": np.array([1])}
 
     monkeypatch.setattr(

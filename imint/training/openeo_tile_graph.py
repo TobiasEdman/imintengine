@@ -331,9 +331,6 @@ def _build_slot_cube(
     return cube
 
 
-_SCL_CLOUD_CLASSES = (3, 8, 9, 10)   # shadow, cloud_medium, cloud_high, cirrus
-
-
 def fetch_tile_all_slots_cdse_openeo(
     bbox_3006: dict,
     slot_windows: Sequence[tuple[int, str, str]],
@@ -359,11 +356,17 @@ def fetch_tile_all_slots_cdse_openeo(
         ``float32`` reflectance (DN / 10000), band parity with the DES
         path.
 
-        When ``include_scl=True``: ``{slot_idx: (array, aoi_cloud_frac,
-        date_str)}`` — the SCL band rides along in the SAME download and
-        ``aoi_cloud_frac`` is the fraction of AOI pixels in cloud/shadow
-        classes (3/8/9/10). Lets the caller AOI-gate the chosen scene
-        without a separate SCL call.
+        When ``include_scl=True``: ``{slot_idx: (array, scl, date_str)}``
+        — the SCL band rides along in the SAME download and ``scl`` is the
+        ``(H, W)`` ``uint8`` Scene-Classification raster on the SAME tile
+        grid as ``array`` (nearest-snapped, categorical: NOT scaled, NOT
+        sinc-shifted). The **raster** is returned rather than a scalar
+        cloud fraction so the caller can BOTH AOI-gate the scene (derive
+        the fraction itself) AND persist per-slot SCL into the tile npz —
+        the Step-B SCL contract. Any consumer needing the fraction computes
+        it from ``scl`` (cloud/shadow classes 3/8/9/10 over valid>0). PU
+        note: 12 bands + SCL is >2× PU/tile on CDSE vs the 6-band fetch;
+        this cost is accepted for the SCL-persistence contract.
 
     Raises:
         FetchError: If the openEO download returns empty bytes or the
@@ -457,10 +460,11 @@ def fetch_tile_all_slots_cdse_openeo(
         )
 
     # Snap each slot's spectral block onto the exact bbox pixel grid (same
-    # strategy as the DES path / imint.fetch.fetch_des_data). SCL is left on
-    # the raw grid: it feeds only the scalar AOI cloud fraction below, where a
-    # ±1 row/col is immaterial — and sinc/bilinear resampling of categorical
-    # class codes would corrupt them.
+    # strategy as the DES path / imint.fetch.fetch_des_data). SCL is snapped
+    # onto the SAME grid with resample="nearest" — categorical class codes,
+    # so integer-only placement (sinc/bilinear would ring across class edges
+    # and invent codes) — so it lands pixel-aligned with the spectral for
+    # per-slot persistence.
     target_bounds = {k: float(bbox_3006[k]) for k in ("west", "south", "east", "north")}
 
     result: dict = {}
@@ -469,7 +473,7 @@ def fetch_tile_all_slots_cdse_openeo(
         # Spectral bands → reflectance (DN / 10000). NO -1000 offset here:
         # CDSE openEO applies RADIO_ADD_OFFSET server-side (unlike DES, which
         # bakes it into COGs — see the DES path). SCL (if present) is the LAST
-        # band of the slot and is categorical — NOT scaled, NOT snapped.
+        # band of the slot and is categorical — NOT scaled; snapped NEAREST.
         slot_arr = full[base:base + n_spec].astype(np.float32) / 10000.0
         slot_arr, _ = _snap_to_target_grid(
             slot_arr, src_transform, src_crs, target_bounds, pixel_size=10,
@@ -478,16 +482,14 @@ def fetch_tile_all_slots_cdse_openeo(
             continue
         date_str = _window_midpoint(date_start, date_end)
         if include_scl:
-            scl = full[base + n_spec]            # raw SCL class codes
-            scl_int = np.rint(scl).astype(np.int16)
-            valid = scl_int > 0                  # 0 = no_data, exclude from frac
-            n_valid = int(valid.sum())
-            if n_valid == 0:
-                aoi_cloud_frac = 1.0             # all nodata → treat as unusable
-            else:
-                cloud = np.isin(scl_int, _SCL_CLOUD_CLASSES) & valid
-                aoi_cloud_frac = float(cloud.sum()) / float(n_valid)
-            result[slot_idx] = (slot_arr, aoi_cloud_frac, date_str)
+            # Snap SCL nearest onto the tile grid so it is pixel-aligned with
+            # the spectral for persistence; parse the categorical raster back.
+            scl_snapped, _ = _snap_to_target_grid(
+                full[base + n_spec][None].astype(np.float32), src_transform,
+                src_crs, target_bounds, pixel_size=10, resample="nearest",
+            )
+            scl = np.rint(scl_snapped[0]).astype(np.uint8)
+            result[slot_idx] = (slot_arr, scl, date_str)
         else:
             result[slot_idx] = (slot_arr, date_str)
 
@@ -499,7 +501,8 @@ def fetch_tile_all_slots_des_openeo(
     slot_windows: Sequence[tuple[int, str, str]],
     *,
     cloud_max_pct: float | None = None,
-) -> dict[int, tuple[np.ndarray, str]]:
+    include_scl: bool = False,
+) -> dict:
     """DES openEO 1.1 variant of :func:`fetch_tile_all_slots_cdse_openeo`.
 
     Per-slot download: ONE openEO job per slot (reusing one connection), NOT a
@@ -509,6 +512,13 @@ def fetch_tile_all_slots_des_openeo(
     ``s2_msi_l2a`` collection id. A slow/failing slot is skipped (partial
     success); the caller's QC keeps tiles with >=3/4 frames.
 
+    SCL parity with the CDSE path (Step-B contract): with ``include_scl=True``
+    the lowercase ``"scl"`` band (DES convention — ``imint.fetch`` uses
+    ``BANDS_20M_CATEGORICAL = ["scl"]``) rides along in each slot's download via
+    ``_build_slot_cube(scl_band="scl")``, is the LAST band of the returned
+    stack, and is nearest-snapped onto the tile grid (categorical — never
+    sinc-shifted).
+
     Args:
         cloud_max_pct: Scene-level cloud cover ceiling. Default ``None``
             skips the ``properties={"eo:cloud_cover"}`` filter — DES 1.1
@@ -516,10 +526,13 @@ def fetch_tile_all_slots_des_openeo(
             reliable as CDSE 1.2's. With ``None`` the temporal reduce
             picks chronologically first; pair with caller-side ERA5+SCL
             pre-filtered date windows for cloud-clear selection.
+        include_scl: Ride the ``"scl"`` band along in each slot's download
+            and return it as a ``(H, W)`` ``uint8`` raster on the tile grid.
 
     Returns:
-        ``{slot_idx: (array, date_str)}`` — same shape as the CDSE
-        variant. ``date_str`` is the window midpoint.
+        ``{slot_idx: (array, date_str)}`` when ``include_scl=False``, or
+        ``{slot_idx: (array, scl, date_str)}`` when ``include_scl=True`` —
+        same shape as the CDSE variant. ``date_str`` is the window midpoint.
     """
     # Local imports to avoid forcing openeo on the rest of the package.
     from imint.fetch import (
@@ -539,6 +552,9 @@ def fetch_tile_all_slots_des_openeo(
     # fetch_spectral splits to the 6-band model cube + per-band extras.
     b10, b20, b60, des_bands = _bands_groups_for_source("des")
     n_bands = len(des_bands)
+    # DES SCL band id is lowercase per the repo convention (imint.fetch
+    # BANDS_20M_CATEGORICAL = ["scl"]); the CDSE path uses uppercase "SCL".
+    scl_band = "scl" if include_scl else None
 
     # Snap each slot onto the exact bbox pixel grid. openEO derives the output
     # grid from the bbox extent + native S2 tiling, so a scene comes back offset
@@ -553,7 +569,11 @@ def fetch_tile_all_slots_des_openeo(
     # n_bands-band download per slot stays well under the timeout, fails a slow /
     # bad slot in isolation (partial success — the caller keeps >=3/4 frames), and
     # is gentler on DES. M1 (grid-snap) is per-slot anyway, so this is equivalent.
-    result: dict[int, tuple[np.ndarray, str]] = {}
+    # per_slot band count: 12 spectral + (1 SCL if requested). The SCL band
+    # is the LAST band of the returned stack (out_bands = spectral + [scl]).
+    per_slot = n_bands + (1 if include_scl else 0)
+
+    result: dict = {}
     for slot_idx, date_start, date_end in slot_windows:
         cube = _build_slot_cube(
             conn,
@@ -567,8 +587,10 @@ def fetch_tile_all_slots_des_openeo(
             bands_20m=b20,
             bands_60m=b60,
             output_bands=des_bands,
+            scl_band=scl_band,
         )
-        print(f"    [DES-tile-graph] slot {slot_idx}: downloading {n_bands} bands "
+        print(f"    [DES-tile-graph] slot {slot_idx}: downloading {per_slot} bands"
+              f"{' incl SCL' if include_scl else ''} "
               f"({date_start}..{date_end})", flush=True)
         try:
             raw_bytes = cube.download(format="gtiff")
@@ -582,24 +604,36 @@ def fetch_tile_all_slots_des_openeo(
             continue
         raw_bytes = _unpack_openeo_gtiff_bytes(raw_bytes)
         with rasterio.open(io.BytesIO(raw_bytes)) as src:
-            full = src.read()  # (n_bands, H, W)
+            full = src.read()  # (per_slot, H, W)
             src_transform = src.transform
             src_crs = src.crs
-        if full.shape[0] != n_bands:
+        if full.shape[0] != per_slot:
             # A single malformed slot is skipped like any other per-slot
             # failure (partial success) — it must not abort the good slots.
-            print(f"    [DES-tile-graph] slot {slot_idx}: expected {n_bands} "
+            print(f"    [DES-tile-graph] slot {slot_idx}: expected {per_slot} "
                   f"bands, got {full.shape[0]}; skipping", flush=True)
             continue
         # DES bakes the PB04.00 -1000 BOA offset into COGs (CDSE openEO applies
         # it server-side); subtract it so output matches the rest of the dataset.
-        slot_arr = dn_to_reflectance(full, source="des")
+        # Only the 12 spectral bands take the offset — SCL is categorical.
+        slot_arr = dn_to_reflectance(full[:n_bands], source="des")
         slot_arr, _ = _snap_to_target_grid(
             slot_arr, src_transform, src_crs, target_bounds, pixel_size=10,
         )
         if not np.any(slot_arr):
             continue
-        result[slot_idx] = (slot_arr, _window_midpoint(date_start, date_end))
+        date_str = _window_midpoint(date_start, date_end)
+        if include_scl:
+            # SCL is the last band; nearest-snap onto the tile grid so it is
+            # pixel-aligned with the spectral (categorical → integer only).
+            scl_snapped, _ = _snap_to_target_grid(
+                full[n_bands][None].astype(np.float32), src_transform,
+                src_crs, target_bounds, pixel_size=10, resample="nearest",
+            )
+            scl = np.rint(scl_snapped[0]).astype(np.uint8)
+            result[slot_idx] = (slot_arr, scl, date_str)
+        else:
+            result[slot_idx] = (slot_arr, date_str)
 
     return result
 
@@ -632,13 +666,12 @@ def fetch_tile_all_slots(
             include_scl=include_scl,
         )
     if source == "des":
-        if include_scl:
-            raise ValueError(
-                "include_scl is only supported for source='cdse-openeo'"
-            )
+        # SCL parity (Step-B contract): DES rides the lowercase "scl" band
+        # per slot just like CDSE rides "SCL" — no longer cdse-only.
         return fetch_tile_all_slots_des_openeo(
             bbox_3006, slot_windows,
             cloud_max_pct=cloud_max_pct,
+            include_scl=include_scl,
         )
     raise ValueError(f"fetch_tile_all_slots: unknown source {source!r}")
 
@@ -682,12 +715,16 @@ def fetch_tile_at_specific_dates(
         slot_dates: ``{slot_idx: "YYYY-MM-DD"}``. May cover any subset
             of slots (1-4). Slots not in the dict are not fetched.
         source: ``"cdse-openeo"`` or ``"des"``.
-        with_scl: Ride the SCL band along in the same download
-            (``cdse-openeo`` only) for AOI cloud gating.
+        with_scl: Ride the SCL band along in the same download (BOTH
+            backends — Step-B SCL contract) and return the per-slot SCL
+            raster for persistence + AOI cloud gating.
 
     Returns:
-        ``{slot_idx: (array, date_str)}`` — one entry per input slot.
-        ``date_str`` is the input date verbatim (no midpoint approx).
+        ``{slot_idx: (array, date_str)}`` when ``with_scl=False``, or
+        ``{slot_idx: (array, scl, date_str)}`` when ``with_scl=True`` —
+        ``scl`` is the ``(H, W)`` ``uint8`` tile-grid SCL raster. One
+        entry per input slot; ``date_str`` is the input date verbatim
+        (no midpoint approx).
     """
     if not slot_dates:
         return {}
@@ -709,9 +746,10 @@ def fetch_tile_at_specific_dates(
     # confuse the picture (it could exclude a date the caller deemed
     # acceptable).
     #
-    # with_scl=True (cdse-openeo only): the SCL band rides along in the
-    # same download so the caller can AOI-gate the fetched scene without
-    # a separate SCL call. Returns {slot: (spectral, aoi_cloud_frac, date)}.
+    # with_scl=True (both backends): the SCL band rides along in the same
+    # download so the caller can persist per-slot SCL AND AOI-gate the
+    # fetched scene without a separate SCL call. Returns
+    # {slot: (spectral, scl, date)}.
     result = fetch_tile_all_slots(
         bbox_3006, slot_windows,
         source=source,
@@ -722,8 +760,8 @@ def fetch_tile_at_specific_dates(
     # date — we trust the input over the window midpoint.
     if with_scl:
         return {
-            slot_idx: (arr, frac, slot_dates[slot_idx])
-            for slot_idx, (arr, frac, _) in result.items()
+            slot_idx: (arr, scl, slot_dates[slot_idx])
+            for slot_idx, (arr, scl, _) in result.items()
         }
     return {
         slot_idx: (arr, slot_dates[slot_idx])
