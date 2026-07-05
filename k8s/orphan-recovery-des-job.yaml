@@ -18,6 +18,14 @@ spec:
   # Tiles land COMPLETE inline: 12 bands + SCL (post-876f48f), skg forest
   # aux (Secret below), VPP from the now-warm WEkEO cache. Follow-up after
   # both legs: build-labels-orphans (QC now mask-aware + --no-remove).
+  #
+  # --workers 1 (dropped from 2 on 2026-07-05 ~10h in): workers=2 drove DES
+  # openEO into a [408] RequestTimeout storm on the SCL-screen chunk
+  # requests — its spectral fetch + the fan-out SCL screen at 2 workers
+  # exceeded the live DES allotment, collapsing the leg to net-zero
+  # throughput (it started FAILING tiles). Per the CLAUDE.md rule, match
+  # --workers to the current DES allotment (1 now). Restart is resume-safe:
+  # staged tiles skip via _valid_existing_tile, stale claims sweep at start.
   backoffLimit: 1
   activeDeadlineSeconds: 259200   # 3 d — ~885 tiles, DES ~18/h historical
   ttlSecondsAfterFinished: 172800
@@ -76,7 +84,7 @@ spec:
                 --output-dir "$OUT" \
                 --tile-size-px 512 \
                 --years 2018 2019 2021 2022 2023 \
-                --workers 2 \
+                --workers 1 \
                 --fetch-sources des \
                 --no-pre2018 \
                 --claim-dir "$OUT/.claims"
