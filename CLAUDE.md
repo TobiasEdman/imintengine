@@ -151,6 +151,11 @@ throughput-vinst, kanske 429), för få => suboptimal wall-time.
   (orphan-512 full-run observerade 14 tiles/h med `--workers 2`,
   dvs identiskt med single-worker → andra worker:n queued
   server-side). Datum-stämplad här.
+- **2026-07-06:** user-bekräftat att allotment fortfarande är **1**
+  ("det finns bara en worker på DES server sida") — recovery-körningen
+  stannade på `--workers 1`. OBS: `--workers 2` mot allotment 1 var
+  också en bidragande faktor till [408]-stormen 2026-07-05 (spektral +
+  SCL-screen konkurrerade om samma enda server-slot).
 - **Framtid:** kan ramp:as upp till **~6** efter team-beslut.
 
 **Regel:** innan en ny `fetch_unified_tiles.py`-körning **fråga
