@@ -19,6 +19,14 @@ if TYPE_CHECKING:
     from imint.training.tile_config import TileConfig
 
 N_BANDS = 6
+
+# Relaxed AOI-cloud ceiling for the date-rescue pass in select_slot_dates:
+# when a growing-season VPP window has NO date at the production ceiling
+# (DEFAULT_SCL_CLOUD_THRESHOLD = 0.10), retry scl_only at this ceiling
+# rather than leaving the slot empty — an empty growing-season slot fails
+# the fetch write-gate, so the tile could otherwise never land (endemic
+# for ~30% of tiles in cloudy Swedish summers; user-set 2026-07-06).
+RELAXED_SCL_CLOUD = 0.40
 PRITHVI_BANDS = ["B02", "B03", "B04", "B8A", "B11", "B12"]
 
 # NOTE: Tile size (size_px, size_m, half_m) is NOT stored as a module-level
@@ -346,6 +354,7 @@ def _best_date_in_window(
     *,
     mode: str,
     scl_backend: str,
+    max_aoi_cloud: float | None = None,
 ) -> str | None:
     """The :func:`optimal_fetch_dates` clean date nearest the window midpoint, or None.
 
@@ -353,13 +362,17 @@ def _best_date_in_window(
     ``"era5_then_stac"`` for pre-2018 (DES SCL has no L2A index before 2018, so the
     SCL stage is skipped and STAC existence is the gate). Midpoint-nearest keeps a
     VPP growing-season pick phenologically centred within its window.
+    ``max_aoi_cloud`` overrides the production AOI-cloud ceiling (used by the
+    relaxed rescue pass in :func:`select_slot_dates`); ``None`` keeps the default.
     """
     from datetime import date as _date
 
     from imint.training.optimal_fetch import optimal_fetch_dates
 
-    plan = optimal_fetch_dates(
-        coords_wgs84, date_start, date_end, mode=mode, scl_backend=scl_backend)
+    kwargs = {"mode": mode, "scl_backend": scl_backend}
+    if max_aoi_cloud is not None:
+        kwargs["max_aoi_cloud"] = max_aoi_cloud
+    plan = optimal_fetch_dates(coords_wgs84, date_start, date_end, **kwargs)
     if not plan.dates:
         return None
     mid = (_date.fromisoformat(date_start).toordinal()
@@ -401,13 +414,30 @@ def select_slot_dates(
     if d0:
         dates[0] = d0
 
-    # Slots 1-3 — VPP-guided growing season (current year).
+    # Slots 1-3 — VPP-guided growing season (current year). These are the
+    # slots the fetch write-gate REQUIRES (_growing_season_complete), so a
+    # windowed no-clean-date is not acceptable-loss here the way it is for
+    # slot 0: without a rescue the tile can never land. Rescue ladder
+    # (user-set 2026-07-06, after finding ~30% of tiles endemically lack a
+    # ≤10% AOI-cloud date in some VPP window):
+    #   1. strict:  era5_then_scl at the production ceiling (0.10);
+    #   2. relaxed: scl_only at RELAXED_SCL_CLOUD (0.40) — drops the ERA5
+    #      pre-filter (it can zero the calendar in a wet window) but stays
+    #      AOI-SCL-screened, so the rescued scene is the least-cloudy one
+    #      that actually exists. Costs one extra SCL screen per rescue.
     for slot, (doy_start, doy_end) in enumerate(vpp_windows or [], start=1):
         if slot > 3:
             break
         ds, de = doy_to_date_range(tile_year, doy_start, doy_end)
         di = _best_date_in_window(
             coords_wgs84, ds, de, mode="era5_then_scl", scl_backend=scl_backend)
+        if not di:
+            di = _best_date_in_window(
+                coords_wgs84, ds, de, mode="scl_only",
+                scl_backend=scl_backend, max_aoi_cloud=RELAXED_SCL_CLOUD)
+            print(f"    [date-rescue] slot {slot} ({ds}..{de}): strict pass "
+                  f"empty → relaxed scl_only ≤{RELAXED_SCL_CLOUD:.0%} → "
+                  f"{di or 'still none'}", flush=True)
         if di:
             dates[slot] = di
 
