@@ -1555,7 +1555,17 @@ def main():
                     if True:  # log every tile
                         from imint.training.tile_fetch import _CDSE_SEMAPHORE, _DES_SEMAPHORE
                         elapsed = time.time() - t0
-                        print(f"  [{completed}/{len(work)}] {r['name']}: {r['status']} "
+                        # Failure REASON in the line — without it a gate
+                        # rejection (incomplete_frames + mask) and a
+                        # no-scenes miss are indistinguishable in pod logs,
+                        # which blinded the 2026-07-05/06 storm forensics.
+                        why = ""
+                        if r.get("reason"):
+                            why = f" ({r['reason']}"
+                            if r.get("mask") is not None:
+                                why += f" mask={r['mask']}"
+                            why += ")"
+                        print(f"  [{completed}/{len(work)}] {r['name']}: {r['status']}{why} "
                               f"| {completed/elapsed*3600:.0f}/h "
                               f"| {_CDSE_SEMAPHORE.stats} | {_DES_SEMAPHORE.stats}",
                               flush=True)
