@@ -90,6 +90,7 @@ spec:
                 --fetch-sources des \
                 --no-pre2018 \
                 --claim-dir "$OUT/.claims" \
+                --claim-stale-h 1 \
                 --scl-backend cdse
 
               echo ""

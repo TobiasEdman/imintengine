@@ -418,18 +418,37 @@ def _npz_str(v) -> str:
     return str(v)
 
 
-def _valid_existing_tile(path: str) -> bool:
-    """A tile counts as 'already done' only if it exists, is non-empty, AND loads.
+def _growing_season_complete(temporal_mask) -> bool:
+    """True when growing-season slots 1-3 are all present.
 
-    A 0-byte / truncated npz — e.g. from a write interrupted by a full disk or an
-    evicted pod — is treated as MISSING so a resume re-fetches it instead of
-    silently skipping the corruption forward into the dataset.
+    The tile completeness contract (user-set 2026-07-06): slot 0 (autumn
+    y-1) MAY be empty — the 2018 cohort awaits Phase-2 sen2cor — but a
+    tile missing any growing-season frame is degraded training data and
+    must be re-fetched with FRESH date selection. The 2026-07-05 openEO
+    throttle storm wrote ~150 such tiles (SCL screen picked dates from
+    partial cloud data, and DES spectral 408'd mid-tile).
+    """
+    tm = np.asarray(temporal_mask).ravel()[:4]
+    return tm.size >= 4 and bool((tm[1:4] != 0).all())
+
+
+def _valid_existing_tile(path: str) -> bool:
+    """A tile counts as 'already done' only if it exists, loads, AND carries a
+    complete growing season (slots 1-3; see _growing_season_complete).
+
+    A 0-byte / truncated npz — e.g. from a write interrupted by a full disk or
+    an evicted pod — is treated as MISSING so a resume re-fetches it instead of
+    silently skipping the corruption forward. Likewise a loadable-but-degraded
+    tile (missing growing-season frames) is MISSING: without this, resume
+    skipped the storm-written holes forever — degraded tiles never self-healed.
+    Legacy tiles without a temporal_mask key keep the loadable-only check.
     """
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return False
     try:
         with np.load(path, allow_pickle=True) as d:
-            _ = d.files
+            if "temporal_mask" in d.files:
+                return _growing_season_complete(d["temporal_mask"])
         return True
     except Exception:
         return False
@@ -584,6 +603,14 @@ def fetch_tile(
     core, extras, bg = _split_entry_result(res)
     if int(core["temporal_mask"].sum()) == 0:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
+    # WRITE GATE: never persist a tile with an incomplete growing season
+    # (slots 1-3; slot 0 may be empty — 2018 cohort awaits Phase-2). The
+    # 2026-07-05 throttle storm wrote partially-fetched tiles that resume
+    # then skipped forever. Failing here instead releases the claim, so a
+    # later run against healthy backends re-selects dates fresh.
+    if not _growing_season_complete(core["temporal_mask"]):
+        return {"name": name, "status": "failed", "reason": "incomplete_frames",
+                "mask": [int(v) for v in core["temporal_mask"][:4]]}
 
     nmd_label = fetch_nmd_label_local(bbox, tile)
     aux = fetch_aux_channels(bbox, tile)
@@ -1390,11 +1417,17 @@ def main():
         print(f"  Loaded {len(tile_locs)} tile locations from {args.from_json}")
 
         # Skip tiles already fetched in output dir
+        # Skip by VALIDITY, not name-existence: a degraded on-disk tile
+        # (incomplete growing season — see _valid_existing_tile) must enter
+        # the work list so the fresh path re-selects dates and overwrites
+        # the hole. Name-existence skipping is how the 2026-07-05 storm
+        # holes became permanent.
         existing = set(os.path.basename(f).replace(".npz", "")
                        for f in glob.glob(os.path.join(args.output_dir, "*.npz")))
         skipped = 0
         for t in tile_locs:
-            if t["name"] in existing:
+            if t["name"] in existing and _valid_existing_tile(
+                    os.path.join(args.output_dir, f"{t['name']}.npz")):
                 skipped += 1
                 continue
             # Support both JSON formats (gen_lulc dict or legacy list).
@@ -1482,12 +1515,15 @@ def main():
         # of reading stored dates from a non-existent npz.
         existing = loc.get("_existing_path")
         out_path = os.path.join(d, f"{loc['name']}.npz")
-        on_disk = (existing and os.path.exists(existing)) or os.path.exists(out_path)
-        # Multi-backend work division: claim the tile before fetching (skip
-        # if the sibling job already holds it). Gated on the cheap
-        # exists-check so already-landed tiles don't litter the claim dir —
-        # full validity is still fetch_tile/refetch_tile's job.
-        if args.claim_dir and not os.path.exists(out_path):
+        # VALIDITY (not mere existence) drives both dispatch and claiming:
+        # a degraded on-disk tile (incomplete growing season — the storm
+        # holes) must take the FRESH path so date selection reruns from
+        # scratch; refetch_tile would re-read the tile's own stored dates,
+        # including the very gaps that made it degraded. The fresh fetch
+        # overwrites the hole atomically.
+        out_valid = _valid_existing_tile(out_path)
+        on_disk = (existing and os.path.exists(existing)) or out_valid
+        if args.claim_dir and not out_valid:
             if not _try_claim(args.claim_dir, loc["name"]):
                 return {"name": loc["name"], "status": "claimed"}
         if use_refetch and on_disk:

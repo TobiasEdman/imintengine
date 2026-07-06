@@ -142,3 +142,42 @@ def test_qc_no_remove_deletes_nothing(tmp_path):
     # Same tile WITHOUT --no-remove is removed (destructive default intact).
     r2 = _run_qc(tmp_path)
     assert not os.path.exists(tmp_path / "bad_unmasked.npz")
+
+
+# ── Growing-season completeness: write gate + resume invalidation ─────────
+
+from fetch_unified_tiles import (  # noqa: E402
+    _growing_season_complete,
+    _valid_existing_tile,
+)
+
+
+def test_growing_season_complete_semantics():
+    # Slot 0 may be empty (2018 cohort awaits Phase-2) — still complete.
+    assert _growing_season_complete([0, 1, 1, 1])
+    assert _growing_season_complete([1, 1, 1, 1])
+    # Any missing growing-season slot (1-3) = degraded.
+    assert not _growing_season_complete([1, 0, 1, 1])
+    assert not _growing_season_complete([1, 1, 1, 0])
+    assert not _growing_season_complete([1, 0, 0, 0])
+    # 5-slot masks (with 2016 background) judge only the first 4.
+    assert _growing_season_complete([0, 1, 1, 1, 1])
+
+
+def test_valid_existing_tile_rejects_storm_holes(tmp_path):
+    """The 2026-07-05 storm wrote tiles with empty growing-season frames;
+    resume must treat them as MISSING (re-fetch) — while a slot0-empty
+    2018-cohort tile and a legacy tile without temporal_mask stay valid."""
+    def _tile(name, tmask):
+        p = str(tmp_path / f"{name}.npz")
+        save = {"spectral": np.ones((24, 4, 4), np.float32)}
+        if tmask is not None:
+            save["temporal_mask"] = np.array(tmask, np.uint8)
+        np.savez_compressed(p, **save)
+        return p
+
+    assert _valid_existing_tile(_tile("full", [1, 1, 1, 1]))
+    assert _valid_existing_tile(_tile("cohort2018", [0, 1, 1, 1]))
+    assert not _valid_existing_tile(_tile("storm_hole", [1, 0, 0, 0]))
+    assert not _valid_existing_tile(_tile("one_missing", [1, 1, 0, 1]))
+    assert _valid_existing_tile(_tile("legacy_no_mask", None))
