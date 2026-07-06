@@ -55,6 +55,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -400,6 +401,35 @@ _SCL_BACKEND_DEFAULTS = {
 _SCL_BACKEND_DEFAULTS["cdse-openeo"] = _SCL_BACKEND_DEFAULTS["cdse"]
 
 
+# SCL-screen transient-error handling. Both openEO endpoints throttle the
+# date-selection screen under load: DES returns [408] RequestTimeout, CDSE
+# returns [429] Too Many Requests (with a Retry-After header). The openEO
+# client surfaces these as exceptions and does NOT back off — so without this
+# every throttled chunk was simply dropped, and when two recovery legs shared
+# the CDSE SCL endpoint EVERY chunk 429'd → empty screen → 0 tiles selected
+# (2026-07-05). Retry those two statuses only, honouring Retry-After when the
+# header is parseable, else exponential backoff. NoDataAvailable and any other
+# error propagate unchanged (a chunk with no S2 overpass must not be retried).
+_SCL_RETRY_MAX = 5
+_SCL_RETRY_BACKOFF_CAP_S = 30.0
+_RETRY_AFTER_RE = re.compile(r"[Rr]etry-?[Aa]fter'?\s*[:=]\s*'?(\d+(?:\.\d+)?)")
+
+
+def _is_throttle_error(msg: str) -> bool:
+    return ("429" in msg or "Too Many Requests" in msg
+            or "408" in msg or "RequestTimeout" in msg)
+
+
+def _retry_after_seconds(msg: str, fallback: float) -> float:
+    m = _RETRY_AFTER_RE.search(msg)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            pass
+    return fallback
+
+
 def _scl_chunk(
     conn: Any,
     bbox_wgs84: dict,
@@ -444,9 +474,21 @@ def _scl_chunk(
         bands=[cfg["band"]],
     )
 
-    if backend in ("cdse", "cdse-openeo"):
-        return _read_scl_netcdf(scl_cube, cfg["band"])
-    return _read_scl_geotiff(scl_cube)
+    def _read():
+        if backend in ("cdse", "cdse-openeo"):
+            return _read_scl_netcdf(scl_cube, cfg["band"])
+        return _read_scl_geotiff(scl_cube)
+
+    # Retry only throttle statuses (429/408), honouring Retry-After; anything
+    # else (NoDataAvailable, parse errors) propagates on the first try.
+    for attempt in range(_SCL_RETRY_MAX):
+        try:
+            return _read()
+        except Exception as exc:
+            if attempt == _SCL_RETRY_MAX - 1 or not _is_throttle_error(str(exc)):
+                raise
+            wait = _retry_after_seconds(str(exc), fallback=2.0 * (2 ** attempt))
+            time.sleep(min(wait, _SCL_RETRY_BACKOFF_CAP_S))
 
 
 def _read_scl_netcdf(scl_cube: Any, band_name: str) -> dict[str, float]:
