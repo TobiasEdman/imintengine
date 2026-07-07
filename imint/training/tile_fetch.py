@@ -374,6 +374,17 @@ def _best_date_in_window(
         kwargs["max_aoi_cloud"] = max_aoi_cloud
     plan = optimal_fetch_dates(coords_wgs84, date_start, date_end, **kwargs)
     if not plan.dates:
+        # Funnel forensics on the empty case only: WHICH stage emptied the
+        # selection? Distinguishes "weather gate killed it" (era5=0) from
+        # "genuinely cloudy" (scl candidates all over threshold) — the two
+        # need different remedies (rule tuning vs relaxed rescue). Added
+        # 2026-07-07 while diagnosing the 10°C-gate false negatives.
+        # getattr-defensive: a diagnostics line must never be able to crash
+        # date selection (and test stubs model FetchPlan minimally).
+        n = getattr(plan, "n_candidates_after", None) or {}
+        print(f"    [date-funnel] {date_start}..{date_end} {mode}: "
+              f"era5={n.get('era5', '-')} scl_pre={n.get('scl_pre_threshold', '-')} "
+              f"final=0", flush=True)
         return None
     mid = (_date.fromisoformat(date_start).toordinal()
            + _date.fromisoformat(date_end).toordinal()) // 2

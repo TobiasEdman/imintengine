@@ -69,7 +69,15 @@ import numpy as np
 DEFAULT_ATMOSPHERE_RULES = {
     "precip_today_max_mm":  0.5,
     "precip_prev2d_max_mm": 3.0,
-    "t2m_mean_min_c":       10.0,
+    # SNOW/FROST GUARD, nothing more (user-set 2026-07-07: "ta med alla
+    # bilder över 0 grader, vi vill bara inte ha snö och frost"). The old
+    # 10 °C value acted as a growing-season gate and zeroed entire autumn/
+    # spring windows in mid/north Sweden BEFORE the SCL screen ever ran —
+    # the strict pass came back empty and the tile fell through to the
+    # relaxed 0.40-cloud rescue even when pristine ≤0.10 dates existed.
+    # This rule must stay >0-ish: SCL does NOT count snow (class 11) as
+    # cloud, so the ERA5 temperature gate is the pipeline's only snow guard.
+    "t2m_mean_min_c":       0.0,
     # Overpass-time (10-11 local) ERA5 cloud ceiling, percent. Permissive
     # by design — this is a CHEAP prefilter to drop the obviously-overcast
     # dates; the precise cut is the downstream AOI-SCL screen
