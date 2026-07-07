@@ -91,7 +91,7 @@ spec:
                 --no-pre2018 \
                 --claim-dir "$OUT/.claims" \
                 --claim-stale-h 1 \
-                --scl-backend cdse
+                --scl-backend des
 
               echo ""
               echo "Staging total after DES leg: $(ls $OUT/*.npz 2>/dev/null | wc -l)"
