@@ -12,6 +12,77 @@ independent remedies plus a zero-rebuild hotfix.
 
 ---
 
+## UPDATE 2026-07-07 (pm): reproducer delivered, affected range bracketed
+
+You asked for a reproducer and noted that **xvec is hard-locked
+upstream** — confirmed on our side: `openeo_processes_dask` (checked
+2026.6.4) declares `Requires-Dist: xvec (==0.2.0)`. Everything below
+works *within* that lock.
+
+### Minimal reproducer — 6 lines, no xvec, no rioxarray, no openEO
+
+`repro_geometry_index.py` (attached). Core:
+
+```python
+import xarray as xr, geopandas as gpd
+from shapely.geometry import box
+
+geoms = gpd.GeoSeries([box(0, 0, 1, 1), box(1, 1, 2, 2)], crs="EPSG:4326")
+pieces = [xr.DataArray([float(i)], dims="geometry") for i in range(2)]
+xr.concat(pieces, dim=xr.DataArray(geoms, name="geometry", dims="geometry"))
+```
+
+On an affected xarray this raises your exact error:
+
+```
+TypeError: Cannot interpret '<geopandas.array.GeometryDtype object at …>'
+    as a data type
+```
+
+### End-to-end reproducer — through your exact xvec pin
+
+`repro_zonal.py` with **xvec==0.2.0** + xarray 2025.1.0 +
+geopandas 1.0.1 / pandas 2.2.3:
+
+```
+method=iterate: FAILED — TypeError: Cannot interpret
+    '<geopandas.array.GeometryDtype object at 0x…>' as a data type
+```
+
+— identical to production. The trigger requires the geometries to reach
+`zonal_stats` as a **GeoSeries** (pandas extension array), which is what
+your `aggregate_spatial` version does. Current upstream
+`openeo_processes_dask` passes `list(gdf.geometry.values)` instead
+(commented *"addressing potential issues with xvec's zonal_stats
+expecting list input"*) — i.e. upstream has already worked around this
+very bug at the call site.
+
+### Affected xarray range (bisected, all with xvec 0.2.0-era stack)
+
+| xarray | verdict |
+|---|---|
+| ≤ 2024.9.0 | ✅ not affected (extension dtype object-coerced before indexing) |
+| **2024.10.0 – 2025.3.0** | ❌ **affected** — `np.dtype(GeometryDtype)` TypeError |
+| ≥ 2025.4.0 | ✅ not affected (fixed in the indexing adapter) |
+
+This also explains the timeline: the worker image picked up an xarray
+in the affected window at some rebuild (xarray is unpinned-floor
+`>=2022.11.0` in openeo_processes_dask), and the bug appeared without
+any xvec change.
+
+### Revised remedies, respecting the xvec hard-lock
+
+1. **Pin `xarray>=2025.4`** in the worker image — one constraint line.
+   **Verified compatible with the locked `xvec==0.2.0`**: `iterate`
+   zonal stats green on xarray 2025.4.0 + xvec 0.2.0.
+2. **Or bump `openeo_processes_dask`** to a version with the
+   `list(gdf.geometry.values)` call-site conversion — defuses the
+   trigger without touching xarray or xvec.
+3. **Or the 3-line hotfix** below (object-dtype coercion) — works on
+   every combination, no dependency changes at all.
+
+---
+
 ## The failing statement (pinpointed)
 
 Your traceback (`xvec/zonal.py:193 in _zonal_stats_iterative`) matches
