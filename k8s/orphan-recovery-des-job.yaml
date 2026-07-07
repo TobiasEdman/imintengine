@@ -106,6 +106,12 @@ spec:
               value: "wekeo"
             - name: VPP_WEKEO_DIR
               value: "/data/vpp_wekeo"
+            # Persistent SCL-screen fraction cache (perf commit series
+            # 2026-07-07): complete screens are stable facts — cross-run
+            # retries and the date-rescue read them from here instead of
+            # re-downloading 12-24 openEO rasters per tile.
+            - name: SCL_FRACS_CACHE
+              value: "/data/scl_fracs_cache"
             - name: CDSE_CLIENT_ID
               valueFrom:
                 secretKeyRef:
