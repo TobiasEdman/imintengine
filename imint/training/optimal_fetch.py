@@ -614,6 +614,30 @@ def _read_scl_geotiff(scl_cube: Any) -> dict[str, float]:
     return out
 
 
+# SCL-screen result cache — two layers, one mechanism. The AOI cloud
+# fraction of (bbox, window, backend) is a STABLE FACT once every chunk
+# succeeded, so re-screening it is pure waste. Layer 1 (in-process memo)
+# makes the relaxed date-rescue pass free: rescue re-screens the SAME
+# window it just screened strictly — the threshold is applied AFTER the
+# screen, so the fractions are identical (2026-07-06: 124 rescue
+# re-screens in one night, each ~2-5 openEO raster downloads). Layer 2
+# (disk, $SCL_FRACS_CACHE) makes cross-run retries nearly free: a tile
+# that fails the completeness gate releases its claim and is re-attempted
+# by a later run, which used to re-pay the full 12-24-call screen.
+# ONLY COMPLETE screens are stored: caching a partial screen (throttled/
+# errored chunks) would freeze storm-blindness in as truth — a screen
+# with any failed chunk is returned but never cached, so the next attempt
+# re-screens. NoDataAvailable is benign (no S2 overpass in the chunk).
+_SCL_SCREEN_MEMO: dict[str, dict[str, float]] = {}
+
+
+def _scl_screen_key(bbox_wgs84: dict, date_start: str, date_end: str,
+                    backend: str) -> str:
+    return (f"{bbox_wgs84['west']:.5f}_{bbox_wgs84['south']:.5f}_"
+            f"{bbox_wgs84['east']:.5f}_{bbox_wgs84['north']:.5f}_"
+            f"{date_start}_{date_end}_{backend}")
+
+
 def scl_stack_screen(
     bbox_wgs84: dict,
     date_start: str,
@@ -622,6 +646,7 @@ def scl_stack_screen(
     conn: Any | None = None,
     chunk_days: int = 19,
     backend: str = "des",
+    cache_dir: str | None = None,
 ) -> dict[str, float]:
     """Stage 2: openEO-driven AOI cloud-fraction per scene date.
 
@@ -647,6 +672,27 @@ def scl_stack_screen(
     """
     from datetime import date as _date, timedelta
 
+    # Cache lookup (memo → disk). See _SCL_SCREEN_MEMO block above; only
+    # complete screens are ever stored, so a hit is always trustworthy.
+    if cache_dir is None:
+        cache_dir = os.environ.get("SCL_FRACS_CACHE") or None
+    key = _scl_screen_key(bbox_wgs84, date_start, date_end, backend)
+    hit = _SCL_SCREEN_MEMO.get(key)
+    if hit is not None:
+        return dict(hit)
+    disk_path = None
+    if cache_dir:
+        import hashlib
+        disk_path = os.path.join(
+            cache_dir, hashlib.sha1(key.encode()).hexdigest() + ".json")
+        try:
+            with open(disk_path) as f:
+                cached = json.load(f)
+            _SCL_SCREEN_MEMO[key] = cached
+            return dict(cached)
+        except (OSError, json.JSONDecodeError):
+            pass
+
     if conn is None:
         conn = _connect_cdse_openeo() if backend == "cdse" else _connect_des_openeo()
 
@@ -663,6 +709,7 @@ def scl_stack_screen(
     else:
         effective_chunk = chunk_days
     out: dict[str, float] = {}
+    failed_chunks = 0
     cur = d0
     while cur <= d1:
         cend = min(cur + timedelta(days=effective_chunk - 1), d1)
@@ -681,8 +728,24 @@ def scl_stack_screen(
             msg = str(e)
             if "NoDataAvailable" not in msg:
                 # Don't lose the whole stack to one bad chunk.
+                failed_chunks += 1
                 print(f"  scl_stack chunk {cur}..{cend} failed: {e}")
         cur = cend + timedelta(days=1)
+
+    # Store ONLY complete screens (see cache block above). A partial
+    # screen is still returned — the caller works with what exists — but
+    # the next attempt re-screens rather than trusting storm-blindness.
+    if failed_chunks == 0:
+        _SCL_SCREEN_MEMO[key] = dict(out)
+        if disk_path:
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                tmp = disk_path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(out, f)
+                os.replace(tmp, disk_path)
+            except OSError:
+                pass    # cache write failure must never fail the screen
     return out
 
 
