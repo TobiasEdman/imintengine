@@ -591,6 +591,15 @@ def fetch_tile(
                 dates.setdefault(slot, d)
     if not dates:
         return {"name": name, "status": "failed", "reason": "no_scenes"}
+    # PRE-GATE: growing-season slots 1-3 must all have dates, or the write
+    # gate will reject the tile after the (expensive) spectral fetch anyway.
+    # select_slot_dates screens slots 1-3 first and early-exits, so a doomed
+    # tile costs only its growing-season screens — no slot-0/-4 screens, no
+    # spectral calls. Distinct reason from no_scenes for forensics.
+    missing_gs = sorted(s for s in (1, 2, 3) if s not in dates)
+    if missing_gs:
+        return {"name": name, "status": "failed",
+                "reason": f"no_dates_slots_{missing_gs}"}
 
     # M1 (grid-snap) + M2 (inter-frame MI coreg) run inside the entry on the
     # shared halo grid; all slots land coregistered on the anchor's grid.

@@ -407,13 +407,6 @@ def select_slot_dates(
     """
     dates: dict[int, str] = {}
 
-    # Slot 0 — autumn from the previous year.
-    d0 = _best_date_in_window(
-        coords_wgs84, f"{tile_year - 1}-08-15", f"{tile_year - 1}-10-31",
-        mode="era5_then_scl", scl_backend=scl_backend)
-    if d0:
-        dates[0] = d0
-
     # Slots 1-3 — VPP-guided growing season (current year). These are the
     # slots the fetch write-gate REQUIRES (_growing_season_complete), so a
     # windowed no-clean-date is not acceptable-loss here the way it is for
@@ -440,6 +433,21 @@ def select_slot_dates(
                   f"{di or 'still none'}", flush=True)
         if di:
             dates[slot] = di
+
+    # EARLY EXIT: growing season incomplete even after rescue → the tile
+    # can never pass the fetch write-gate, so screening slot 0 (the
+    # LARGEST window, ~5 SCL chunks) and slot 4 for it is pure waste.
+    # Return the partial dict — fetch_tile pre-gates on it before any
+    # spectral call. Slots are screened 1-3 FIRST for exactly this reason.
+    if any(s not in dates for s in (1, 2, 3)):
+        return dates
+
+    # Slot 0 — autumn from the previous year.
+    d0 = _best_date_in_window(
+        coords_wgs84, f"{tile_year - 1}-08-15", f"{tile_year - 1}-10-31",
+        mode="era5_then_scl", scl_backend=scl_backend)
+    if d0:
+        dates[0] = d0
 
     # Slot 4 — 2016 summer background. ERA5 + STAC-existence (pre-2018, no SCL).
     for year in (background_year, background_fallback_year):
