@@ -12,6 +12,56 @@ independent remedies plus a zero-rebuild hotfix.
 
 ---
 
+## LIVE STATUS 2026-07-07 (pm) — tested against production: the TypeError is GONE, one shallow bug remains
+
+We ran the May-report minimal graph against
+`openeo.digitalearth.se` today (authenticated, synchronous execute).
+Result: **the GeometryDtype TypeError no longer occurs.** Your worker
+now runs python **3.14** (was 3.12 in May) — the image rebuild walked
+the stack out of the affected xarray window (consistent with the bisect
+below), whether intentionally or not.
+
+**The aggregation itself now completes** — and dies at the very last
+step, in the driver's own response serialization:
+
+```
+File "/proj/src/openeo_des_driver/apis/data_processing_api.py",
+     line 100, in compute_result
+    return JSONResponse(res)
+  …
+ValueError: Out of range float values are not JSON compliant: nan
+    when serializing dict item 'nodata'
+    when serializing dict item 'attrs'
+```
+
+The result dict's `attrs` carry `nodata: NaN`; starlette's
+`JSONResponse` encodes with `allow_nan=False`. Suggested fix in
+`compute_result` (or a shared response helper):
+
+```python
+import math
+
+def _json_safe(o):
+    if isinstance(o, float) and not math.isfinite(o):
+        return None
+    if isinstance(o, dict):
+        return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_safe(v) for v in o]
+    return o
+
+return JSONResponse(_json_safe(res))
+```
+
+One serialization guard and `aggregate_spatial` is fully working — the
+zonal numbers are already computed server-side. We re-ran the probe to
+confirm reproducibility of the new error (same 500, same NaN item).
+Everything below this line is the original dependency analysis — still
+correct, now mostly historical context for why the rebuild fixed the
+first bug.
+
+---
+
 ## UPDATE 2026-07-07 (pm): reproducer delivered, affected range bracketed
 
 You asked for a reproducer and noted that **xvec is hard-locked
