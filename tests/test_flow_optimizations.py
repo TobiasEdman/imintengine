@@ -49,7 +49,7 @@ def chunk_counter(monkeypatch):
         d = date.fromisoformat(cs)
         out = {}
         while d <= date.fromisoformat(ce):
-            out[d.isoformat()] = 0.2
+            out[d.isoformat()] = (0.2, 0.0)
             d += timedelta(days=5)
         return out
 
@@ -77,7 +77,7 @@ def test_disk_cache_survives_new_process(chunk_counter, tmp_path):
     out = of.scl_stack_screen(_BBOX, "2021-06-01", "2021-06-14",
                               cache_dir=str(tmp_path))
     assert len(chunk_counter) == n, "disk hit must not re-download"
-    assert out and all(v == 0.2 for v in out.values())
+    assert out and all(v == (0.2, 0.0) for v in out.values())
 
 
 def test_partial_screen_never_cached(monkeypatch, tmp_path):
@@ -87,7 +87,7 @@ def test_partial_screen_never_cached(monkeypatch, tmp_path):
         calls.append(cs)
         if len(calls) == 1:
             raise RuntimeError("boom")   # non-throttle, non-NoData
-        return {cs: 0.2}
+        return {cs: (0.2, 0.0)}
 
     monkeypatch.setattr(of, "_scl_chunk", _flaky)
     monkeypatch.setattr(of, "_connect_des_openeo", lambda: object())
@@ -102,7 +102,7 @@ def test_nodata_chunk_counts_as_complete(monkeypatch, tmp_path):
     def _nodata_then_ok(conn, bbox, cs, ce, *, backend="des"):
         if cs == "2021-06-01":
             raise RuntimeError("NoDataAvailable: no scenes")
-        return {cs: 0.2}
+        return {cs: (0.2, 0.0)}
 
     monkeypatch.setattr(of, "_scl_chunk", _nodata_then_ok)
     monkeypatch.setattr(of, "_connect_des_openeo", lambda: object())
@@ -196,3 +196,50 @@ def test_era5_keeps_cold_but_snowfree_dates(monkeypatch):
     assert "2021-10-01" in kept, "4°C snow-free autumn date must now pass"
     assert "2021-10-02" not in kept, "sub-zero date must still be rejected"
     assert "2021-10-03" in kept
+
+
+# ── SCL class-11 snow gate: hard in BOTH passes ───────────────────────────
+
+def test_snow_gate_hard_in_strict_and_rescue(monkeypatch):
+    """A snowy-but-clear date (cloud 2%, snow 50%) must be rejected by the
+    strict pass AND by the relaxed rescue — the rescue raises the cloud
+    ceiling, never the snow ceiling (user 2026-07-07: snow/frost is a hard
+    no). A clean date in the same window is picked instead."""
+    def _chunks(conn, bbox, cs, ce, *, backend="des"):
+        return {cs: (0.02, 0.50),                                  # snowy-clear
+                (__import__("datetime").date.fromisoformat(cs)
+                 + __import__("datetime").timedelta(days=6)).isoformat():
+                    (0.30, 0.0)}                                   # cloudy, no snow
+    monkeypatch.setattr(of, "_scl_chunk", _chunks)
+    monkeypatch.setattr(of, "_connect_des_openeo", lambda: object())
+    monkeypatch.setattr(
+        of, "era5_prefilter_dates",
+        lambda bbox, ds, de, rules=None: [])       # force rescue path
+    monkeypatch.setattr(
+        of, "stac_filter_dates",
+        lambda bbox, ds, de, scene_cloud_max=30.0: ["2016-07-01"])
+
+    vpp = [(140, 153)]
+    dates = tf.select_slot_dates(_BBOX, tile_year=2021, vpp_windows=vpp)
+    # Strict (0.10 cloud) rejects both; rescue (0.40 cloud) may take ONLY the
+    # cloudy-but-snowfree date — never the snowy one.
+    assert dates.get(1) is not None, "rescue should find the snow-free date"
+    from imint.training.tile_fetch import doy_to_date_range
+    w1, _ = doy_to_date_range(2021, 140, 153)
+    assert dates[1] != w1, "the snowy-clear date must never be selected"
+
+
+def test_legacy_v1_cache_reads_as_snow_unknown(tmp_path, monkeypatch):
+    """Pre-snow-gate cache files (plain {date: cloud}) are read as
+    (cloud, None): still usable (no re-screen) and snow-unknown passes the
+    gate — ERA5 t2m>=0 guards those dates."""
+    import hashlib, json as _json
+    key = of._scl_screen_key(_BBOX, "2021-06-01", "2021-06-14", "des")
+    (tmp_path / (hashlib.sha1(key.encode()).hexdigest() + ".json")).write_text(
+        _json.dumps({"2021-06-05": 0.03}))
+    def _boom(*a, **k):
+        raise AssertionError("cache hit expected — no download allowed")
+    monkeypatch.setattr(of, "_scl_chunk", _boom)
+    out = of.scl_stack_screen(_BBOX, "2021-06-01", "2021-06-14",
+                              cache_dir=str(tmp_path))
+    assert out == {"2021-06-05": (0.03, None)}

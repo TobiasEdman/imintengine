@@ -359,6 +359,15 @@ def era5_prefilter_dates(
 
 # Sen2Cor SCL classes counted as cloud / cloud-shadow
 _SCL_CLOUD_CLASSES = (3, 8, 9, 10)
+# Sen2Cor SCL snow/ice class. Tracked SEPARATELY from cloud: snow is a
+# HARD data-quality gate (user 2026-07-07: "vi vill bara inte ha snö och
+# frost") that the relaxed date-rescue must never soften, while cloud is
+# the soft gate the rescue may raise to 0.40. Complements the ERA5
+# t2m>=0 rule: ERA5 catches frost + forecastable cold at ~30 km; SCL 11
+# catches OBSERVED snow in the actual AOI (lingering snowpack after a
+# warm spell slips past a daily-mean rule).
+_SCL_SNOW_CLASS = 11
+DEFAULT_SCL_SNOW_MAX = 0.05   # AOI snow-fraction ceiling, both passes
 
 
 def _connect_des_openeo():
@@ -499,7 +508,7 @@ def _scl_chunk(
             time.sleep(min(wait, _SCL_RETRY_BACKOFF_CAP_S))
 
 
-def _read_scl_netcdf(scl_cube: Any, band_name: str) -> dict[str, float]:
+def _read_scl_netcdf(scl_cube: Any, band_name: str) -> dict[str, tuple[float, float]]:
     """Download as NetCDF and aggregate per timestep. Used for CDSE backend.
 
     NetCDF preserves the time dimension (CDSE GTiff doesn't), so we get
@@ -536,13 +545,17 @@ def _read_scl_netcdf(scl_cube: Any, band_name: str) -> dict[str, float]:
             d_str = str(ts)[:10]  # 'YYYY-MM-DD' from numpy.datetime64
             scl_slice = scl_var.isel(t=ti).values
             cloud_frac = float(np.isin(scl_slice, _SCL_CLOUD_CLASSES).mean())
+            snow_frac = float((scl_slice == _SCL_SNOW_CLASS).mean())
             prev = out.get(d_str)
-            if prev is None or cloud_frac < prev:
-                out[d_str] = cloud_frac
+            # Duplicates same date (adjacent granules): keep the entry with
+            # the LOWEST cloud — its snow value rides along, since that is
+            # the granule a fetch of this date would actually use.
+            if prev is None or cloud_frac < prev[0]:
+                out[d_str] = (cloud_frac, snow_frac)
     return out
 
 
-def _read_scl_geotiff(scl_cube: Any) -> dict[str, float]:
+def _read_scl_geotiff(scl_cube: Any) -> dict[str, tuple[float, float]]:
     """Download as GeoTIFF (zip-of-tifs / single tif / tar.gz) and aggregate.
 
     Used for DES backend. DES returns one file per timestep in a zip,
@@ -616,9 +629,10 @@ def _read_scl_geotiff(scl_cube: Any) -> dict[str, float]:
                     cloud_frac = float(
                         np.isin(bands[bi], _SCL_CLOUD_CLASSES).mean()
                     )
+                    snow_frac = float((bands[bi] == _SCL_SNOW_CLASS).mean())
                     prev = out.get(d_str)
-                    if prev is None or cloud_frac < prev:
-                        out[d_str] = cloud_frac
+                    if prev is None or cloud_frac < prev[0]:
+                        out[d_str] = (cloud_frac, snow_frac)
     return out
 
 
@@ -696,9 +710,19 @@ def scl_stack_screen(
         try:
             with open(disk_path) as f:
                 cached = json.load(f)
-            _SCL_SCREEN_MEMO[key] = cached
-            return dict(cached)
-        except (OSError, json.JSONDecodeError):
+            # Schema v2 ({"v": 2, "fracs": {date: [cloud, snow]}}) vs legacy
+            # v1 (plain {date: cloud_float}). Legacy entries carry NO snow
+            # observation — normalized to (cloud, None), which the snow gate
+            # treats as pass (the ERA5 t2m>=0 rule still guards those dates).
+            # Delete $SCL_FRACS_CACHE to force full snow coverage.
+            if isinstance(cached, dict) and cached.get("v") == 2:
+                norm = {d: (float(c), None if s is None else float(s))
+                        for d, (c, s) in cached["fracs"].items()}
+            else:
+                norm = {d: (float(c), None) for d, c in cached.items()}
+            _SCL_SCREEN_MEMO[key] = norm
+            return dict(norm)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
 
     if conn is None:
@@ -730,7 +754,8 @@ def scl_stack_screen(
             )
             for k, v in chunk.items():
                 prev = out.get(k)
-                if prev is None or v < prev:
+                # v = (cloud_frac, snow_frac); best-of-duplicates by cloud.
+                if prev is None or v[0] < prev[0]:
                     out[k] = v
         except Exception as e:
             msg = str(e)
@@ -750,7 +775,9 @@ def scl_stack_screen(
                 os.makedirs(cache_dir, exist_ok=True)
                 tmp = disk_path + ".tmp"
                 with open(tmp, "w") as f:
-                    json.dump(out, f)
+                    json.dump({"v": 2,
+                               "fracs": {d: [c, s] for d, (c, s) in out.items()}},
+                              f)
                 os.replace(tmp, disk_path)
             except OSError:
                 pass    # cache write failure must never fail the screen
@@ -850,7 +877,11 @@ def verify_aoi_scl(
     from datetime import date as _date, timedelta
     end = (_date.fromisoformat(date_str) + timedelta(days=1)).isoformat()
     fr = scl_stack_screen(coords_wgs84, date_str, end, backend=backend)
-    return fr.get(date_str)
+    v = fr.get(date_str)
+    # Screen values are (cloud, snow) tuples; this function's contract is
+    # the CLOUD fraction (single caller: fetch_spectral's verify gate).
+    # Snow gating happens at date SELECTION (optimal_fetch_dates).
+    return v[0] if isinstance(v, tuple) else v
 
 
 def era5_to_scl_gate(era5_overpass_pct: float, *, is_autumn: bool) -> float:
@@ -961,6 +992,7 @@ def optimal_fetch_dates(
     *,
     mode: str = "era5_then_scl",
     max_aoi_cloud: float = DEFAULT_SCL_CLOUD_THRESHOLD,
+    max_aoi_snow: float = DEFAULT_SCL_SNOW_MAX,
     scene_cloud_max: float = DEFAULT_STAC_CLOUD_MAX,
     atmosphere_rules: dict | None = None,
     scl_backend: str = "des",
@@ -1018,6 +1050,14 @@ def optimal_fetch_dates(
         plan.n_candidates_after["scl_pre_threshold"] = len(scl_fracs)
         plan.notes["scl_backend"] = scl_backend
 
+    def _scl_ok(v) -> bool:
+        # v = (cloud, snow) from the screen; legacy v1 cache gives
+        # (cloud, None) — snow unobserved passes (ERA5 t2m>=0 guards).
+        # SNOW IS A HARD GATE: the relaxed date-rescue raises
+        # max_aoi_cloud but never max_aoi_snow (user 2026-07-07).
+        cloud, snow = v if isinstance(v, tuple) else (v, None)
+        return cloud <= max_aoi_cloud and (snow is None or snow <= max_aoi_snow)
+
     # --- Combine
     if mode == "stac_only":
         keep = sorted(stac_dates or set())
@@ -1025,16 +1065,16 @@ def optimal_fetch_dates(
         # ERA5 ∩ STAC calendar — atmosphere can't know S2 pass days alone
         keep = sorted(set(era5_dates or []) & (stac_dates or set()))
     elif mode == "scl_only":
-        keep = sorted(d for d, f in (scl_fracs or {}).items() if f <= max_aoi_cloud)
+        keep = sorted(d for d, f in (scl_fracs or {}).items() if _scl_ok(f))
     elif mode == "stac_then_scl":
         keep = sorted(
             (stac_dates or set())
-            & {d for d, f in (scl_fracs or {}).items() if f <= max_aoi_cloud}
+            & {d for d, f in (scl_fracs or {}).items() if _scl_ok(f)}
         )
     elif mode == "era5_then_scl":
         keep = sorted(
             set(era5_dates or [])
-            & {d for d, f in (scl_fracs or {}).items() if f <= max_aoi_cloud}
+            & {d for d, f in (scl_fracs or {}).items() if _scl_ok(f)}
         )
     elif mode == "era5_then_stac":
         keep = sorted(set(era5_dates or []) & (stac_dates or set()))
@@ -1044,6 +1084,7 @@ def optimal_fetch_dates(
     plan.dates = keep
     plan.n_candidates_after["final"] = len(keep)
     plan.notes["max_aoi_cloud"] = str(max_aoi_cloud)
+    plan.notes["max_aoi_snow"] = str(max_aoi_snow)
     plan.notes["scene_cloud_max"] = str(scene_cloud_max)
     # Stash per-date cloud fractions when SCL ran, so callers using the
     # ranked variant can audit the ranking.
