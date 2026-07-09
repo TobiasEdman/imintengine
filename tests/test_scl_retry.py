@@ -44,12 +44,12 @@ def test_scl_chunk_retries_429_then_succeeds(monkeypatch):
         calls["n"] += 1
         if calls["n"] < 3:                       # 429 twice, then succeed
             raise RuntimeError("[429] 'Too Many Requests' 'Retry-After': '2'")
-        return {"2021-06-01": (0.05, 0.0)}
+        return {"2021-06-01": (0.05, 0.0, 1.0)}
 
     monkeypatch.setattr(of, "_read_scl_netcdf", _flaky)
     out = of._scl_chunk(_make_conn(), {"west": 0, "south": 0, "east": 1, "north": 1},
                         "2021-06-01", "2021-06-15", backend="cdse")
-    assert out == {"2021-06-01": (0.05, 0.0)}
+    assert out == {"2021-06-01": (0.05, 0.0, 1.0)}
     assert calls["n"] == 3
     assert sleeps == [2.0, 2.0], "must honour Retry-After: 2 on each retry"
 

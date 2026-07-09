@@ -368,6 +368,14 @@ _SCL_CLOUD_CLASSES = (3, 8, 9, 10)
 # warm spell slips past a daily-mean rule).
 _SCL_SNOW_CLASS = 11
 DEFAULT_SCL_SNOW_MAX = 0.05   # AOI snow-fraction ceiling, both passes
+# Minimum fraction of the AOI actually covered by the scene (SCL > 0).
+# The screen was coverage-blind: nodata counted as "not cloud", so a
+# half-swath scene screened as pristine, got selected, and its spectral
+# frame was then majority-nodata -> dropped -> incomplete_frames ->
+# recycled forever (observed 2026-07-09 on the recovery queue tail).
+# HARD gate like snow: a swath edge does not improve with a higher
+# cloud ceiling, so the rescue never relaxes it.
+DEFAULT_SCL_MIN_COVERAGE = 0.60
 
 
 def _connect_des_openeo():
@@ -546,12 +554,13 @@ def _read_scl_netcdf(scl_cube: Any, band_name: str) -> dict[str, tuple[float, fl
             scl_slice = scl_var.isel(t=ti).values
             cloud_frac = float(np.isin(scl_slice, _SCL_CLOUD_CLASSES).mean())
             snow_frac = float((scl_slice == _SCL_SNOW_CLASS).mean())
+            valid_frac = float((scl_slice > 0).mean())
             prev = out.get(d_str)
             # Duplicates same date (adjacent granules): keep the entry with
-            # the LOWEST cloud — its snow value rides along, since that is
-            # the granule a fetch of this date would actually use.
+            # the LOWEST cloud — its snow/coverage ride along, since that
+            # is the granule a fetch of this date would actually use.
             if prev is None or cloud_frac < prev[0]:
-                out[d_str] = (cloud_frac, snow_frac)
+                out[d_str] = (cloud_frac, snow_frac, valid_frac)
     return out
 
 
@@ -630,9 +639,10 @@ def _read_scl_geotiff(scl_cube: Any) -> dict[str, tuple[float, float]]:
                         np.isin(bands[bi], _SCL_CLOUD_CLASSES).mean()
                     )
                     snow_frac = float((bands[bi] == _SCL_SNOW_CLASS).mean())
+                    valid_frac = float((bands[bi] > 0).mean())
                     prev = out.get(d_str)
                     if prev is None or cloud_frac < prev[0]:
-                        out[d_str] = (cloud_frac, snow_frac)
+                        out[d_str] = (cloud_frac, snow_frac, valid_frac)
     return out
 
 
@@ -710,18 +720,21 @@ def scl_stack_screen(
         try:
             with open(disk_path) as f:
                 cached = json.load(f)
-            # Schema v2 ({"v": 2, "fracs": {date: [cloud, snow]}}) vs legacy
-            # v1 (plain {date: cloud_float}). Legacy entries carry NO snow
-            # observation — normalized to (cloud, None), which the snow gate
-            # treats as pass (the ERA5 t2m>=0 rule still guards those dates).
-            # Delete $SCL_FRACS_CACHE to force full snow coverage.
-            if isinstance(cached, dict) and cached.get("v") == 2:
-                norm = {d: (float(c), None if s is None else float(s))
-                        for d, (c, s) in cached["fracs"].items()}
-            else:
-                norm = {d: (float(c), None) for d, c in cached.items()}
-            _SCL_SCREEN_MEMO[key] = norm
-            return dict(norm)
+            # Schema v3 only ({"v": 3, "fracs": {date: [cloud, snow,
+            # coverage]}}). Older entries (v1 float / v2 [cloud, snow])
+            # carry NO coverage observation and are treated as a cache
+            # MISS on purpose: the coverage-blind screen is exactly what
+            # kept selecting half-swath dates for the recycling tiles, so
+            # a coverage-less entry must be re-screened, not trusted.
+            # Lazy invalidation: only windows still being consulted
+            # (pending tiles) pay one re-screen and are rewritten as v3;
+            # finished tiles never touch the cache again.
+            if isinstance(cached, dict) and cached.get("v") == 3:
+                norm = {d: (float(c), None if s is None else float(s),
+                            None if cov is None else float(cov))
+                        for d, (c, s, cov) in cached["fracs"].items()}
+                _SCL_SCREEN_MEMO[key] = norm
+                return dict(norm)
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
 
@@ -775,8 +788,8 @@ def scl_stack_screen(
                 os.makedirs(cache_dir, exist_ok=True)
                 tmp = disk_path + ".tmp"
                 with open(tmp, "w") as f:
-                    json.dump({"v": 2,
-                               "fracs": {d: [c, s] for d, (c, s) in out.items()}},
+                    json.dump({"v": 3,
+                               "fracs": {d: list(v) for d, v in out.items()}},
                               f)
                 os.replace(tmp, disk_path)
             except OSError:
@@ -993,6 +1006,7 @@ def optimal_fetch_dates(
     mode: str = "era5_then_scl",
     max_aoi_cloud: float = DEFAULT_SCL_CLOUD_THRESHOLD,
     max_aoi_snow: float = DEFAULT_SCL_SNOW_MAX,
+    min_aoi_coverage: float = DEFAULT_SCL_MIN_COVERAGE,
     scene_cloud_max: float = DEFAULT_STAC_CLOUD_MAX,
     atmosphere_rules: dict | None = None,
     scl_backend: str = "des",
@@ -1051,12 +1065,19 @@ def optimal_fetch_dates(
         plan.notes["scl_backend"] = scl_backend
 
     def _scl_ok(v) -> bool:
-        # v = (cloud, snow) from the screen; legacy v1 cache gives
-        # (cloud, None) — snow unobserved passes (ERA5 t2m>=0 guards).
-        # SNOW IS A HARD GATE: the relaxed date-rescue raises
-        # max_aoi_cloud but never max_aoi_snow (user 2026-07-07).
-        cloud, snow = v if isinstance(v, tuple) else (v, None)
-        return cloud <= max_aoi_cloud and (snow is None or snow <= max_aoi_snow)
+        # v = (cloud, snow, coverage) from the screen. SNOW and COVERAGE
+        # are HARD gates: the relaxed date-rescue raises max_aoi_cloud but
+        # never max_aoi_snow (user 2026-07-07) nor min_aoi_coverage — a
+        # snowy or half-swath date does not improve with a higher cloud
+        # ceiling. None (unobserved) passes defensively; the cache layer
+        # guarantees fresh entries always carry all three.
+        if isinstance(v, tuple):
+            cloud, snow, cov = (v + (None, None))[:3]
+        else:
+            cloud, snow, cov = v, None, None
+        return (cloud <= max_aoi_cloud
+                and (snow is None or snow <= max_aoi_snow)
+                and (cov is None or cov >= min_aoi_coverage))
 
     # --- Combine
     if mode == "stac_only":
@@ -1085,6 +1106,7 @@ def optimal_fetch_dates(
     plan.n_candidates_after["final"] = len(keep)
     plan.notes["max_aoi_cloud"] = str(max_aoi_cloud)
     plan.notes["max_aoi_snow"] = str(max_aoi_snow)
+    plan.notes["min_aoi_coverage"] = str(min_aoi_coverage)
     plan.notes["scene_cloud_max"] = str(scene_cloud_max)
     # Stash per-date cloud fractions when SCL ran, so callers using the
     # ranked variant can audit the ranking.
