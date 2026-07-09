@@ -156,6 +156,11 @@ throughput-vinst, kanske 429), för få => suboptimal wall-time.
   stannade på `--workers 1`. OBS: `--workers 2` mot allotment 1 var
   också en bidragande faktor till [408]-stormen 2026-07-05 (spektral +
   SCL-screen konkurrerade om samma enda server-slot).
+- **2026-07-09:** user-meddelat: **"du kan öka till två workers på DES"**
+  — allotment höjd till 2. Recovery-legget uppdaterat till `--workers 2`
+  (OBS: SCL-screen kör också via DES sedan CDSE-402:an, så 2 workers =
+  2 samtidiga strömmar totalt — matchar allotment 2 exakt; höj INTE
+  workers utöver allotment igen, se [408]-stormen 07-05).
 - **Framtid:** kan ramp:as upp till **~6** efter team-beslut.
 
 **Regel:** innan en ny `fetch_unified_tiles.py`-körning **fråga
