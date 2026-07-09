@@ -287,6 +287,24 @@ def _parse_tiff(
                 if nodata is not None:
                     data = np.where(data == nodata, 0, data)
 
+                # Guard against a silently-empty response. The ImageServer
+                # returns a valid but ENTIRELY-ZERO tile (nodata unset) when it
+                # has no data for this bbox — a stale mosaicRule product filter,
+                # an out-of-coverage request, or missing Geodatasamverkan access.
+                # Returning those zeros is indistinguishable from genuine 0 m
+                # height and would corrupt every downstream tile that ingests
+                # them, so fail loud instead. (A real tile — even mostly water —
+                # has some non-zero forest; a true all-water tile is vanishingly
+                # rare and a caller that expects one can catch this.)
+                if not data.any():
+                    raise RuntimeError(
+                        "Skogsstyrelsen height ImageServer returned an "
+                        "all-zero/empty tile (no height data for this bbox). "
+                        "Check the mosaicRule product filter, that the bbox is "
+                        "within coverage, and Geodatasamverkan access — "
+                        "returning silent zeros would corrupt downstream data."
+                    )
+
                 # Resize if needed (shouldn't be, but safety check)
                 if data.shape != (expected_h, expected_w):
                     from scipy.ndimage import zoom
