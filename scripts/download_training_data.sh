@@ -48,6 +48,13 @@ else
     echo "  OK: $(wc -l < "$LUCAS_DIR/EU_LUCAS_2022.csv") rows"
 fi
 
+# ── LPIS (Jordbruksverket WFS) ──────────────────────────────────────────
+# ⚠ AXELORDNING: WFS:ens shape-zip levererar EPSG:3006 i OFFICIELL
+# axelordning (Northing, Easting). Konvertera ALDRIG zip→parquet ad hoc —
+# använd scripts/convert_lpis_wfs_zip.py som bounds-gatar och swappar
+# axlarna. Oswappad parquet ⇒ 0 parceller i varje tile-query (tyst).
+# Historik: ae5fe17/ff0d51f (apr 2026), återupptäckt 2026-07-20 (2021).
+
 # ── LPIS 2022 (Jordbruksverket WFS) ─────────────────────────────────────
 echo "[3/6] LPIS 2022 — Jordbruksskiften (SJV WFS, ~300 MB)..."
 if [ -f "$LPIS_DIR/jordbruksskiften_2022.zip" ] && unzip -t "$LPIS_DIR/jordbruksskiften_2022.zip" > /dev/null 2>&1; then
