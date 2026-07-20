@@ -1,0 +1,86 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: merge-orphans
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: merge-orphans
+spec:
+  backoffLimit: 0
+  # FINAL MERGE of the orphan-512 campaign: additive move of the verified
+  # staging tiles into the live dataset via scripts/merge_orphan_staging.py
+  # (collision-abort + key-parity gates + counted move; see the script
+  # docstring). Runs the DRY-RUN first and only proceeds to --execute if
+  # it exits 0. Precondition (verified 2026-07-20, scan_true_final):
+  # staging = 1048 tiles, 1048/1048 unified labels, VPP 1036 + 12
+  # catalogued known-empty. REQUIRES the merge script on origin/main —
+  # verify the echoed CLONED HEAD.
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: merge
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== orphan staging -> live: additive merge ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              echo ""
+              echo "--- DRY-RUN ---"
+              python3 scripts/merge_orphan_staging.py \
+                --staging /data/unified_v2_512_orphans_staging \
+                --live /data/unified_v2_512
+
+              echo ""
+              echo "--- EXECUTE ---"
+              python3 scripts/merge_orphan_staging.py \
+                --staging /data/unified_v2_512_orphans_staging \
+                --live /data/unified_v2_512 \
+                --execute
+
+              echo ""
+              echo "=== merge complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"merge-orphans","ok":true,"reason":"additive merge verified"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
