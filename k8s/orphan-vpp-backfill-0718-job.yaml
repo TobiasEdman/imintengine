@@ -1,0 +1,99 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: orphan-vpp-backfill-0718
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: orphan-vpp-backfill-0718
+spec:
+  backoffLimit: 0
+  # Orphan-512 VPP remediation round 2, STEP 3: backfill vpp_* into the
+  # 139 staging tiles the 2026-07-18 derive found empty. Runs AFTER
+  # prefetch-vpp-wekeo-orphan-gapfill-0718 (submit order matters) and
+  # AFTER build-labels-orphans (terminal 07-18 13:23Z — writer
+  # exclusivity on the staging npz).
+  #
+  # NON-force (unlike the 07-04 round): per checkpoint 2026-07-10 the
+  # incremental round only needs the empty-VPP tiles rewritten; the 907
+  # tiles that already carry VPP are left untouched.
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: backfill
+          # Pinned by DIGEST (CLAUDE.md docker-skew rule) — same image as
+          # campaign-vpp-backfill; carries hda + rasterio + pyproj.
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== orphan-512 VPP backfill round 2 (non-force, 139 empty tiles) ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj scipy hda 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+
+              echo "Tiles before: $(ls /data/unified_v2_512_orphans_staging/*.npz | wc -l)"
+              python3 scripts/backfill_vpp.py \
+                --data-dir /data/unified_v2_512_orphans_staging \
+                --workers 2
+              echo "Tiles after: $(ls /data/unified_v2_512_orphans_staging/*.npz | wc -l)"
+
+              echo "=== backfill complete: $(date) ==="
+              echo "=== known-empty catalogue (if any) ==="
+              cat /data/unified_v2_512_orphans_staging/vpp_known_empty.json 2>/dev/null \
+                | head -40 || echo "(none)"
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"orphan-vpp-backfill-0718","ok":true,"reason":"VPP backfill round 2 complete"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: VPP_WEKEO_DIR
+              value: "/data/vpp_wekeo"
+            - name: VPP_SOURCE
+              value: "wekeo"
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

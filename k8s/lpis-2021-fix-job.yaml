@@ -1,0 +1,146 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lpis-2021-fix
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: lpis-2021-fix
+spec:
+  backoffLimit: 0
+  # 2026-07-20 FIX: lpis-2021-backfill's conversion ran gdf.to_crs(ref.crs)
+  # because str(crs) differed — but ref's projjson declares official
+  # SWEREF99 TM axis order (Northing,Easting), so the "transform" SWAPPED
+  # the coordinate axes of all 1.15M geometries (probe: 2021 _bbox_minx
+  # holds northings ~6.1e6; 2022 holds eastings ~3.9e5). Rebuild the
+  # parquet from the (correct, E-N) source zip WITHOUT reprojection,
+  # delete the stale _spatial, re-run preprocess, and gate on an
+  # end-to-end build_tile_label of a previously failing crop tile.
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: fix
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== LPIS 2021 axis-swap fix ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              python3 - <<'PYEOF'
+              import geopandas as gpd
+              import numpy as np
+              import shapely
+
+              print("reading source zip (layer arslager_skiftePolygon)...")
+              gdf = gpd.read_file("zip:///data/lpis/jordbruksskiften_2021.zip",
+                                  layer="arslager_skiftePolygon")
+              print(f"2021: {len(gdf)} parcels, crs={gdf.crs}")
+
+              def axes_ok(bounds):
+                  # Sweden i EPSG:3006: easting ~[250k, 950k], northing ~[6.1M, 7.7M]
+                  return (200_000 < bounds[0] < 1_000_000
+                          and 200_000 < bounds[2] < 1_000_000
+                          and 6_000_000 < bounds[1] < 7_800_000
+                          and 6_000_000 < bounds[3] < 7_800_000)
+
+              b = gdf.total_bounds
+              print("total_bounds:", b)
+              if not axes_ok(b):
+                  # SJV:s WFS 2.0 shape-zip levererar EPSG:3006 i OFFICIELL
+                  # axelordning (Northing,Easting) — swappa till GIS-konvention
+                  # (x=E, y=N) som referensaren/NMD-pipelinen anvander.
+                  print("axes SWAPPED in source (WFS official N,E order) — swapping...")
+                  gdf["geometry"] = shapely.transform(
+                      gdf.geometry.values, lambda c: c[:, ::-1])
+                  b = gdf.total_bounds
+                  print("total_bounds after swap:", b)
+              assert axes_ok(b), f"axes still wrong after swap: {b}"
+              print("axis sanity OK (x=easting, y=northing)")
+
+              ref = gpd.read_parquet("/data/lpis/jordbruksskiften_2022.parquet")
+              missing = set(ref.columns) - set(gdf.columns)
+              assert not missing, f"schema mismatch: {missing}"
+              assert gdf.crs == ref.crs, f"CRS olika enligt pyproj-likhet: {gdf.crs} vs {ref.crs}"
+              # INGEN to_crs — pyproj-likhet ovan garanterar samma CRS;
+              # str()-jamforelsen i forsta forsoket orsakade axel-swappen.
+              gdf = gdf[list(ref.columns)]
+              gdf.to_parquet("/data/lpis/jordbruksskiften_2021.parquet", index=False)
+              print("rewrote jordbruksskiften_2021.parquet")
+              PYEOF
+
+              rm -f /data/lpis/jordbruksskiften_2021_spatial.parquet
+              echo "deleted stale 2021_spatial"
+              python3 scripts/preprocess_sks_lpis_spatial.py --lpis-dir /data/lpis --sks-dir /data/sks
+
+              echo ""
+              echo "=== end-to-end gate: build_tile_label on previously failing crop tile ==="
+              mkdir -p /tmp/one
+              cp /data/unified_v2_512_orphans_staging/crop_havre_409617_6188843.npz /tmp/one/
+              python3 - <<'PYEOF'
+              import sys
+              sys.path.insert(0, "/workspace/imintengine")
+              sys.path.insert(0, "/workspace/imintengine/scripts")
+              import numpy as np
+              from build_labels import build_tile_label
+
+              r = build_tile_label("/tmp/one/crop_havre_409617_6188843.npz",
+                                   "/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif",
+                                   "/data/lpis", "/data/sks")
+              print("result:", r)
+              assert r.get("status") == "ok", f"GATE FAIL: {r}"
+              d = np.load("/tmp/one/crop_havre_409617_6188843.npz", allow_pickle=True)
+              n = int(d["n_parcels"]) if "n_parcels" in d.files else 0
+              lab = d["label"]
+              crop_px = int(((lab >= 11) & (lab <= 21)).sum())
+              print(f"n_parcels={n}  crop-pixlar (11-21)={crop_px}  label max={int(lab.max())}")
+              assert n > 0 and crop_px > 0, "GATE FAIL: inga parceller/grodpixlar efter fix"
+              print("END-TO-END GATE OK")
+              PYEOF
+
+              echo "=== LPIS 2021 fix complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"lpis-2021-fix","ok":true,"reason":"axis swap fixed + e2e verified"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "32Gi"
+            limits:
+              cpu: "4"
+              memory: "32Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

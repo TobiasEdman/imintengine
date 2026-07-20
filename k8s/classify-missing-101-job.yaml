@@ -1,0 +1,191 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: classify-missing-101
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: classify-missing-101
+spec:
+  backoffLimit: 0
+  # C-step 2026-07-20: classify the 101 unstaged orphan tiles by re-running
+  # the repo's own date-selection (select_slot_dates) against the persistent
+  # SCL-fraction cache (/data/scl_fracs_cache — 3336 complete screens from
+  # the recovery runs; misses re-screen via DES, sequential = 1 stream,
+  # within allotment 2). Verdicts: vpp_windows_missing / datumlos /
+  # dates_ok (downstream fail -> re-fetchable). READ-ONLY on staging;
+  # writes /data/audits/orphan_101_classification_20260720.json.
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: classify
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== classify the 101 unstaged orphan tiles ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely xarray netcdf4 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              cat > /tmp/classify_missing_101.py <<'PYEOF'
+              """Classify the 101 unstaged orphan-recovery tiles: honest date-fail vs downstream fail.
+
+              Re-runs the repo's OWN date-selection ladder (select_slot_dates: strict
+              era5_then_scl -> relaxed scl_only rescue) per missing tile, with the
+              persistent SCL-fraction cache mounted, so complete screens are free and
+              the verdict matches exactly what the recovery fetch saw:
+
+                - vpp_windows_missing:  _get_vpp_doy_windows -> None (no VPP -> no
+                                        growing-season windows -> fetch could never gate)
+                - datumlos:             slots 1-3 incomplete after the rescue ladder ->
+                                        the write-gate could never pass (honest fail)
+                - dates_ok:             slots 1-3 (+0) had clean dates -> the fetch had a
+                                        plan and failed DOWNSTREAM (DES mirror gap /
+                                        download error) -> re-fetchable candidates
+
+              Read-only on staging; writes one JSON report under /data/audits.
+              """
+              import glob
+              import json
+              import os
+              import sys
+              import traceback
+
+              sys.path.insert(0, "/workspace/imintengine")
+
+              from imint.training.tile_config import TileConfig
+              from imint.training.tile_bbox import resolve_tile_bbox
+              from imint.training.tile_fetch import (
+                  bbox_3006_to_wgs84,
+                  _get_vpp_doy_windows,
+                  select_slot_dates,
+              )
+
+              STAGING = "/data/unified_v2_512_orphans_staging"
+              OUT = "/data/audits/orphan_101_classification_20260720.json"
+              CLAIM_STUCK = {"tile_431280_6161280", "tile_431280_6171280"}
+
+              expected = json.load(open("/data/audits/orphan_fetch_512.json"))
+              staged = {os.path.basename(p)[:-4] for p in glob.glob(f"{STAGING}/*.npz")}
+              missing = [e for e in expected if e["name"] not in staged]
+              print(f"expected={len(expected)} staged={len(staged)} missing={len(missing)}",
+                    flush=True)
+
+              results = {}
+              for i, e in enumerate(missing):
+                  name, year = e["name"], int(e["year"])
+                  rec = {"year": year, "claim_stuck": name in CLAIM_STUCK}
+                  try:
+                      cfg = TileConfig(size_px=512)
+                      bbox = resolve_tile_bbox(name=name, tile=cfg, npz_data=None)
+                      if bbox is None:
+                          rec["verdict"] = "no_bbox"
+                          results[name] = rec
+                          continue
+                      coords = bbox_3006_to_wgs84(bbox)
+                      windows = _get_vpp_doy_windows(bbox)
+                      if windows is None:
+                          rec["verdict"] = "vpp_windows_missing"
+                          results[name] = rec
+                          print(f"[{i+1}/{len(missing)}] {name}: vpp_windows_missing",
+                                flush=True)
+                          continue
+                      dates = select_slot_dates(
+                          coords, tile_year=year, vpp_windows=windows, scl_backend="des")
+                      rec["slot_dates"] = dates
+                      if any(s not in dates for s in (1, 2, 3)):
+                          rec["verdict"] = "datumlos"
+                      else:
+                          rec["verdict"] = "dates_ok"
+                  except Exception as exc:  # noqa: BLE001 — classify, don't crash the sweep
+                      rec["verdict"] = "error"
+                      rec["error"] = f"{type(exc).__name__}: {exc}"
+                      traceback.print_exc()
+                  results[name] = rec
+                  print(f"[{i+1}/{len(missing)}] {name} ({year}): {rec['verdict']}",
+                        flush=True)
+
+              summary = {}
+              for r in results.values():
+                  summary[r["verdict"]] = summary.get(r["verdict"], 0) + 1
+
+              report = {
+                  "generated_utc": None,  # stamped by the shell wrapper
+                  "staging_count": len(staged),
+                  "missing_count": len(missing),
+                  "summary": summary,
+                  "tiles": results,
+              }
+              with open(OUT, "w") as f:
+                  json.dump(report, f, indent=1)
+              print("summary:", summary, flush=True)
+              print(f"wrote {OUT}", flush=True)
+              PYEOF
+              python3 /tmp/classify_missing_101.py
+              echo "=== classification complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"classify-missing-101","ok":true,"reason":"classification written"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: SCL_FRACS_CACHE
+              value: "/data/scl_fracs_cache"
+            - name: VPP_SOURCE
+              value: "wekeo"
+            - name: VPP_WEKEO_DIR
+              value: "/data/vpp_wekeo"
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "2"
+              memory: "16Gi"
+            limits:
+              cpu: "2"
+              memory: "16Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

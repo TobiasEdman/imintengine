@@ -1,0 +1,138 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lpis-2021-backfill
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: lpis-2021-backfill
+spec:
+  backoffLimit: 0
+  # 2026-07-20: /data/lpis has 2018/2019/2022/2023/2024 but NOT 2021 —
+  # build-labels-orphans (07-18) therefore failed ALL 174 staged
+  # crop_*-tiles (every one is LPIS-year 2021; the crop-guard fails loud
+  # on missing overlay). Download SJV INSPIRE WFS arslager=2021 (same
+  # endpoint as the other years, scripts/download_training_data.sh),
+  # convert shape-zip -> jordbruksskiften_2021.parquet (schema-checked
+  # against 2022), then preprocess_sks_lpis_spatial.py builds the
+  # _spatial variant (skip-existing spares all other years).
+  #
+  # Writes ONLY under /data/lpis. No npz writes — safe to run alongside
+  # orphan-vpp-backfill-0718. The build-labels re-run is a SEPARATE job
+  # submitted after BOTH this and the VPP backfill are terminal.
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: lpis
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== LPIS 2021 backfill (SJV INSPIRE WFS) ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git curl unzip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir \
+                geopandas pyarrow shapely pyproj fiona
+
+              ZIP=/data/lpis/jordbruksskiften_2021.zip
+              URL="http://epub.sjv.se/inspire/inspire/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=inspire:arslager_skifte&outputFormat=shape-zip&CQL_FILTER=arslager%3D2021"
+              if [ -f "$ZIP" ] && unzip -t "$ZIP" > /dev/null 2>&1; then
+                echo "zip already present and valid — skipping download"
+              else
+                # SJV:s WFS-export dör ibland mid-transfer (SSL EOF, curl 56;
+                # observerat 2026-07-20 vid 356 MB). -C - återupptar partialen;
+                # loopen täcker fel som --retry inte klassar som transienta.
+                for attempt in 1 2 3 4 5 6; do
+                  echo "download attempt $attempt (resume from $(stat -c%s "$ZIP" 2>/dev/null || echo 0) bytes)..."
+                  if curl -L -sS -C - --retry 3 --retry-delay 30 -o "$ZIP" "$URL"; then
+                    if unzip -t "$ZIP" > /dev/null 2>&1; then
+                      echo "downloaded + zip valid: $(ls -lh "$ZIP" | awk '{print $5}')"
+                      break
+                    fi
+                    echo "zip INVALID after complete download — server-side error page? restarting from scratch"
+                    rm -f "$ZIP"
+                  fi
+                  [ "$attempt" = 6 ] && { echo "FATAL: download failed after 6 attempts"; exit 1; }
+                  sleep 60
+                done
+                unzip -t "$ZIP" > /dev/null
+              fi
+
+              python3 - <<'PYEOF'
+              import geopandas as gpd
+              import pandas as pd
+
+              print("reading shape-zip (this is the slow step)...")
+              gdf = gpd.read_file("zip:///data/lpis/jordbruksskiften_2021.zip")
+              print(f"2021: {len(gdf)} parcels, crs={gdf.crs}")
+              print("columns:", list(gdf.columns))
+
+              ref = gpd.read_parquet("/data/lpis/jordbruksskiften_2022.parquet")
+              print(f"ref 2022: {len(ref)} parcels, crs={ref.crs}")
+              print("ref columns:", list(ref.columns))
+
+              missing = set(ref.columns) - set(gdf.columns)
+              if missing:
+                  raise SystemExit(f"SCHEMA MISMATCH — 2021 saknar kolumner: {missing}")
+              if str(gdf.crs) != str(ref.crs):
+                  print(f"CRS differs ({gdf.crs} vs {ref.crs}) — reprojecting")
+                  gdf = gdf.to_crs(ref.crs)
+
+              gdf = gdf[list(ref.columns)]
+              gdf.to_parquet("/data/lpis/jordbruksskiften_2021.parquet", index=False)
+              print("wrote /data/lpis/jordbruksskiften_2021.parquet")
+
+              chk = gpd.read_parquet("/data/lpis/jordbruksskiften_2021.parquet")
+              assert len(chk) == len(gdf) and len(chk) > 100_000, \
+                  f"readback mismatch: {len(chk)}"
+              print(f"readback OK: {len(chk)} parcels")
+              PYEOF
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+              pip install -q --no-cache-dir numpy
+              python3 scripts/preprocess_sks_lpis_spatial.py --lpis-dir /data/lpis --sks-dir /data/sks
+
+              echo ""
+              echo "Verify: "
+              ls -lh /data/lpis/jordbruksskiften_2021*
+              echo "=== LPIS 2021 backfill complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"lpis-2021-backfill","ok":true,"reason":"2021 parquet + spatial built"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "32Gi"
+            limits:
+              cpu: "4"
+              memory: "32Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

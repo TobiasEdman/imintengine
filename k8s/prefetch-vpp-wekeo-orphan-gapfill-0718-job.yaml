@@ -1,0 +1,99 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prefetch-vpp-wekeo-orphan-gapfill-0718
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: prefetch-vpp-wekeo-orphan-gapfill-0718
+spec:
+  backoffLimit: 0
+  # Orphan-512 VPP remediation, round 2 (2026-07-18 fresh derive:
+  # /data/audits/orphan_512_missing_vpp_mgrs_20260718.json — 139/1046
+  # staging tiles missing vpp_*, 20/23 pairs already cached). Only 3
+  # (MGRS, year) pairs remain: 34WDR/34WER/35WLQ @ 2018, 1 tile each.
+  # List verbatim from the report's prefetch_commands.
+  #
+  # RACE-SAFE: writes ONLY to /data/vpp_wekeo. PU-FREE (WEkEO HDA).
+  # The follow-up backfill Job MUST wait for this one.
+  #
+  # WALL-TIME: 3 pairs x 5 bands = 15 COGs; generous 2 h deadline.
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: prefetch
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== WEkEO VPP orphan gap-fill round 2: 3 (MGRS, year) pairs ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj hda mgrs packaging 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              # List verbatim from orphan_512_missing_vpp_mgrs_20260718.json
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles 34WDR,34WER,35WLQ \
+                --years 2018 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "=== re-derive: remaining gap after fill (expect pairs_to_fetch=0) ==="
+              python3 scripts/derive_missing_vpp_mgrs.py \
+                --data-dir /data/unified_v2_512_orphans_staging \
+                --vpp-cog-dir /data/vpp_wekeo \
+                --output /data/audits/orphan_512_missing_vpp_mgrs_20260718_postfill.json \
+                | python3 -c "import json,sys; r=json.load(sys.stdin); print('pairs_to_fetch after fill:', r['pairs_to_fetch'])"
+
+              echo "=== gap-fill complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"vpp-wekeo-orphan-gapfill-0718","ok":true,"reason":"3-pair gap-fill complete"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
