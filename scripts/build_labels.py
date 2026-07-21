@@ -22,6 +22,7 @@ import os
 import sys
 import threading
 import time
+from collections import Counter
 from concurrent.futures import (
     ProcessPoolExecutor,
     ThreadPoolExecutor,
@@ -379,6 +380,11 @@ def main():
                    help="Only process these tile IDs (filename stems, e.g. 45843596)")
     p.add_argument("--workers", type=int, default=1,
                    help="Parallel workers (use 1 to minimize memory)")
+    p.add_argument("--max-failed", type=int, default=0,
+                   help="Exit non-zero if more than this many tiles fail "
+                        "(default 0 — any failure fails the run; a silent "
+                        "OK=872/Failed=174 hid the missing-LPIS-2021 and "
+                        "axis-swap bugs for two days, 2026-07-18..20)")
     p.add_argument(
         "--executor",
         choices=["thread", "process"],
@@ -420,6 +426,7 @@ def main():
         _sks_anmalda_handle(args.sks_dir)
 
     stats = {"ok": 0, "failed": 0}
+    fail_reasons: Counter[str] = Counter()
     t0 = time.time()
 
     print(f"  Executor:  {args.executor} (workers={args.workers})")
@@ -438,12 +445,25 @@ def main():
                 elapsed = time.time() - t0
                 print(f"  [{i+1}/{len(tiles)}] {r['name']}: {r['status']} "
                       f"| {(i+1)/elapsed*3600:.0f}/h", flush=True)
-            if r["status"] == "failed" and (i + 1) <= 10:
-                print(f"  FAIL: {r['name']} — {r.get('reason', '?')}", flush=True)
+            if r["status"] == "failed":
+                fail_reasons[r.get("reason", "?")] += 1
+                if sum(fail_reasons.values()) <= 10:
+                    print(f"  FAIL: {r['name']} — {r.get('reason', '?')}",
+                          flush=True)
 
     elapsed = time.time() - t0
     print(f"\nDone in {elapsed:.1f}s ({elapsed/60:.1f} min)")
     print(f"  OK={stats['ok']}  Failed={stats['failed']}")
+    if fail_reasons:
+        # Per-reason counts — 10 example lines is not a failure report; a
+        # systematic error later in the list must be visible in the log.
+        print("  Failure reasons:")
+        for reason, n in fail_reasons.most_common():
+            print(f"    {n:5d} × {reason}")
+    if stats["failed"] > args.max_failed:
+        print(f"FAILED: {stats['failed']} tiles failed "
+              f"(> --max-failed {args.max_failed})")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
