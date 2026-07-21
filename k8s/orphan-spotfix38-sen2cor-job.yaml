@@ -86,7 +86,7 @@ spec:
                 --tile-size-px 512 \
                 --years 2018 2019 2021 2022 2023 \
                 --workers 3 \
-                --fetch-sources l1c_sen2cor \
+                --fetch-sources des,l1c_sen2cor \
                 --claim-dir "$OUT/.claims" \
                 --claim-stale-h 1 \
                 --scl-backend des
