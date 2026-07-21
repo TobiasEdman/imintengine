@@ -161,7 +161,13 @@ throughput-vinst, kanske 429), för få => suboptimal wall-time.
   (OBS: SCL-screen kör också via DES sedan CDSE-402:an, så 2 workers =
   2 samtidiga strömmar totalt — matchar allotment 2 exakt; höj INTE
   workers utöver allotment igen, se [408]-stormen 07-05).
-- **Framtid:** kan ramp:as upp till **~6** efter team-beslut.
+- **2026-07-20:** `DES: permits=6` observerat server-side i
+  orphan-retry40-loggen — servern annonserar 6 slots.
+- **2026-07-21:** user-beslut: **"kör dynamiskt med 6 som max, optimera"**
+  — sätt `--workers` ≤ 6, läs `DES: permits=N` i loggen och jämför
+  wall-rate: faller per-worker-raten (server bottleneck) eller dyker
+  [408]/429 upp → sänk. Räkna SCL-screen-strömmen in i totalen.
+  **6 är TAK, inte default.**
 
 **Regel:** innan en ny `fetch_unified_tiles.py`-körning **fråga
 användaren / DES-teamet** vad aktuell allotment är. Sätt `--workers
