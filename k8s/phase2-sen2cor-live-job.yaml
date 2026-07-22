@@ -1,0 +1,158 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phase2-sen2cor-live
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: phase2-sen2cor-live
+spec:
+  # On restart the selector re-enumerates only tiles STILL missing the
+  # target, so a retried pod shrinks the remaining work.
+  backoffLimit: 2
+  # PHASE 2 for the MERGED live set (7882 tiles, 2026-07-22): sen2cor the
+  # pre-2018 frames, coregistered to each tile's anchor, in place in
+  # /data/unified_v2_512. Two passes (campaign-phase2-sen2cor pattern):
+  #   A. frame_2016 — 2016 summer background for tiles lacking it
+  #      (the 1048 merged orphans + any old-live stragglers).
+  #   B. slot:0    — 2017 autumn, only 2018-labelled tiles lacking it.
+  # No --reuse-stored-dates: the orphans never carried these frames, so
+  # the selector's default ERA5+STAC set-cover picks scenes. Entirely
+  # PU-free: Open-Meteo + STAC existence + GCS L1C + local sen2cor.
+  # COT gate on GPU. WRITER EXCLUSIVITY: nothing else may rewrite live
+  # npz while this runs.
+  activeDeadlineSeconds: 172800
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # RTX 2080 Ti only — excludes H100 (training-reserved) and the
+                  # GTX 1080 Ti nodes (srv04/srv06 carry the runc pod-sandbox bug).
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values: ["NVIDIA-GeForce-RTX-2080-Ti"]
+      containers:
+        - name: pipeline
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Phase 2 (live 7882): sen2cor pre-2018 frames, coreg-to-anchor ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              # scipy REQUIRED: estimate_mi_offset — without it coreg-to-anchor
+              # degrades silently to no-op (see campaign-phase2 header).
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo torch 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+              echo "L2A_Process on PATH: $(which L2A_Process)"
+
+              LIVE=/data/unified_v2_512
+
+              echo ""
+              echo "=== Pass A.1: select frame_2016 (ERA5+STAC set-cover) ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir "$LIVE" \
+                --target frame_2016 \
+                --year 2016 \
+                --fallback-year 2015 \
+                --workers 16 \
+                --out /data/debug/phase2_live_frame2016_plan.json
+
+              echo "=== Pass A.2: run sen2cor frame_2016, coreg-to-anchor ==="
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/phase2_live_frame2016_plan.json \
+                --data-dir "$LIVE" \
+                --target frame_2016 \
+                --coreg-to-anchor \
+                --safe-cache /data/sen2cor_cache \
+                --cot-max 8.0 \
+                --workers 4 \
+                --device cuda
+
+              echo ""
+              echo "=== Pass B.1: select slot:0 / 2017 autumn (2018-labelled tiles) ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir "$LIVE" \
+                --target slot:0 \
+                --year 2017 \
+                --workers 16 \
+                --out /data/debug/phase2_live_slot0_plan.json
+
+              echo "=== Pass B.2: run sen2cor slot:0, coreg-to-anchor ==="
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/phase2_live_slot0_plan.json \
+                --data-dir "$LIVE" \
+                --target slot:0 \
+                --coreg-to-anchor \
+                --safe-cache /data/sen2cor_cache \
+                --cot-max 8.0 \
+                --workers 4 \
+                --device cuda
+
+              echo ""
+              echo "=== Layout sanity (sample 5 tiles with frame_2016) ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              outs = sorted(glob.glob("/data/unified_v2_512/*.npz"))
+              bg = []
+              for p in outs:
+                  try:
+                      if int(np.load(p, allow_pickle=True).get("has_frame_2016", 0)) == 1:
+                          bg.append(p)
+                  except Exception:
+                      pass
+                  if len(bg) >= 5:
+                      break
+              assert bg, "ingen tile med frame_2016 hittad efter Pass A"
+              for p in bg[:5]:
+                  d = np.load(p, allow_pickle=True)
+                  assert d["frame_2016"].shape == (6, 512, 512), (p, d["frame_2016"].shape)
+                  print(f"  {p.split('/')[-1]}: frame_2016 {d['frame_2016'].shape} "
+                        f"date={str(d.get('frame_2016_date'))}")
+              print("LAYOUT OK")
+              PYEOF
+
+              echo ""
+              echo "=== Phase 2 (live) complete: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"phase2-sen2cor-live","ok":true,"reason":"phase2 live backfill complete"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "24"
+              memory: "64Gi"
+            limits:
+              cpu: "24"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
