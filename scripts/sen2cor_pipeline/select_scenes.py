@@ -104,8 +104,24 @@ def _stac_l1c_scenes(
         return list(search.items())
 
     zone = _utm_zone((bbox_wgs84["west"] + bbox_wgs84["east"]) / 2.0)
+    # STACError-bursts (CDSE landing-page 429/5xx under load) pass straight
+    # through retry_on_rate_limit — 175/3161 tiles WARNed out of the
+    # 2026-07-22 phase2-live run. Retry the whole query with backoff before
+    # letting the per-tile WARN handler give the tile up.
+    items = None
+    for attempt in range(3):
+        try:
+            items = retry_on_rate_limit(_query)
+            break
+        except Exception as exc:  # noqa: BLE001 — retried, then re-raised
+            if attempt == 2:
+                raise
+            print(f"    [stac-retry] {type(exc).__name__} — "
+                  f"attempt {attempt + 1}/3, backoff {30 * (attempt + 1)}s",
+                  flush=True)
+            time.sleep(30 * (attempt + 1))
     out: list[dict] = []
-    for item in retry_on_rate_limit(_query):
+    for item in items:
         props = item.properties or {}
         mgrs = props.get("s2:mgrs_tile") or props.get("mgrs_tile") or ""
         if not mgrs:

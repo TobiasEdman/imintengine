@@ -141,6 +141,20 @@ spec:
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
+            # OData-fallback för GCS-luckor (2023-omprocessade N0500-scener
+            # saknas i Googles spegel under sina nya ID:n). OData kräver
+            # lösenordscreds — client_credentials-kontot avvisas med 401
+            # (observerat Pass B 2026-07-23). OData-nedladdning är PU-fri.
+            - name: CDSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: user
+            - name: CDSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: password
           resources:
             requests:
               cpu: "24"
