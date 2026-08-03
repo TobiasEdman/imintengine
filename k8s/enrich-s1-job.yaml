@@ -21,7 +21,7 @@ spec:
               echo "=== S1 SAR Enrichment ==="
 
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
-              pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx
+              pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx pystac-client
 
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine

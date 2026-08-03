@@ -129,6 +129,8 @@ def enrich_one_tile(
     s1_frames = []
     s1_mask = []
     s1_dates_out = []
+    fetch_errors = 0
+    first_error: str | None = None
 
     for fi in range(n_frames):
         date_str = str(dates[fi])[:10] if fi < len(dates) and dates[fi] else ""
@@ -167,13 +169,28 @@ def enrich_one_tile(
                     s1_dates_out.append(try_date)
                     got_scene = True
                     break
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 — räknas + rapporteras
+                # 2026-08-03: `continue` utan bokföring dolde en
+                # ModuleNotFoundError (pystac_client saknades i podden) —
+                # varje anrop failade, alla frames nollfylldes och tilen
+                # rapporterades "ok (0/4)" i 4000/h. Skilj fetch-FEL från
+                # äkta scen-frånvaro (None) så systematiska fel syns.
+                fetch_errors += 1
+                if first_error is None:
+                    first_error = f"{type(exc).__name__}: {exc}"
                 continue
 
         if not got_scene:
             s1_frames.append(np.zeros((2, h, w), dtype=np.float32))
             s1_mask.append(0)
             s1_dates_out.append("")
+
+    if sum(s1_mask) == 0 and fetch_errors > 0:
+        # Alla frames saknas OCH minst ett anrop kraschade — det är ett
+        # miljö-/infra-fel, inte "inga scener fanns". Skriv INGENTING.
+        return {"name": name, "status": "failed",
+                "reason": f"all_frames_missed_with_{fetch_errors}_fetch_errors "
+                          f"(first: {first_error})"}
 
     # Stack and save
     s1_vv_vh = np.concatenate(s1_frames, axis=0)  # (T*2, H, W)
@@ -250,10 +267,14 @@ def main():
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     lock = threading.Lock()
     completed = 0
+    consecutive_fetch_error_fails = 0
+    abort = threading.Event()
     t0 = time.time()
 
     def _run(path):
-        nonlocal completed
+        nonlocal completed, consecutive_fetch_error_fails
+        if abort.is_set():
+            return
         r = enrich_one_tile(
             path,
             fetch_s1_scene=fetch_s1_scene,
@@ -261,6 +282,19 @@ def main():
         )
         with lock:
             completed += 1
+            # Systematiskt miljöfel (t.ex. saknat pystac_client 2026-08-03):
+            # 10 raka fetch-error-fails ⇒ abortera hela körningen högljutt
+            # istället för att nollfylla 7 882 tiles i 4000/h.
+            if "fetch_errors" in r.get("reason", ""):
+                consecutive_fetch_error_fails += 1
+                if consecutive_fetch_error_fails >= 10 and not abort.is_set():
+                    abort.set()
+                    print(f"\nABORT: {consecutive_fetch_error_fails} raka tiles "
+                          f"failade med fetch-errors — miljö-/infra-fel, "
+                          f"inte scen-frånvaro. Senaste: {r.get('reason')}",
+                          flush=True)
+            elif r.get("status") != "skipped":
+                consecutive_fetch_error_fails = 0
             stats[r.get("status", "failed")] = stats.get(r.get("status", "failed"), 0) + 1
             elapsed = time.time() - t0
             rate = completed / elapsed * 3600 if elapsed > 0 else 0
@@ -283,6 +317,11 @@ def main():
     elapsed = time.time() - t0
     print(f"\n=== Done in {elapsed/60:.1f} min ===")
     print(f"  OK={stats['ok']}  Skipped={stats['skipped']}  Failed={stats['failed']}")
+    if abort.is_set():
+        sys.exit(2)
+    if stats["failed"] > stats["ok"] + stats["skipped"]:
+        print("FAILED: fler failade än lyckade/skippade — granska innan re-run")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
