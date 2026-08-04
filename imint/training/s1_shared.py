@@ -116,12 +116,31 @@ def pick_best_item(items: list[Any], bbox_4326: tuple[float, float, float, float
 
 # ── Asset URL extraction ──────────────────────────────────────────────────
 
+def _download_href(asset: Any) -> str:
+    """Return a fetchable URL for an asset.
+
+    CDSE STAC gives measurement assets an ``s3://eodata/...`` primary href
+    (which urllib can't fetch — "unknown url type: s3", 2026-08-04) plus the
+    real HTTPS mirror in ``extra_fields["alternate"]["https"]["href"]`` (the
+    zipper OData Nodes() path). Prefer that HTTPS alternate when the primary
+    is s3://; otherwise return href unchanged (MPC/AWS give https/blob URLs).
+    """
+    href = asset.href
+    if href.lower().startswith("s3://"):
+        alt = (getattr(asset, "extra_fields", {}) or {}).get("alternate", {})
+        https = (alt.get("https") or {}).get("href")
+        if https:
+            return https
+    return href
+
+
 def pick_measurement_urls(item: Any) -> tuple[str, str]:
     """Extract VV and VH measurement COG URLs from item.assets.
 
     Different providers name the assets differently (``vv`` / ``measurement-vv``
     / ``vv-grd`` / etc.) — match on either the asset key or the href path
-    containing the polarisation token.
+    containing the polarisation token. The returned URL is the fetchable one
+    (HTTPS alternate on CDSE; see ``_download_href``).
     """
     vv_url = vh_url = None
     for name, asset in (item.assets or {}).items():
@@ -145,9 +164,9 @@ def pick_measurement_urls(item: Any) -> tuple[str, str]:
         ):
             continue
         if "vv" in lname or "-vv-" in lhref or "_vv_" in lhref or "vv.tiff" in lhref:
-            vv_url = href
+            vv_url = _download_href(asset)
         elif "vh" in lname or "-vh-" in lhref or "_vh_" in lhref or "vh.tiff" in lhref:
-            vh_url = href
+            vh_url = _download_href(asset)
     if vv_url is None or vh_url is None:
         raise RuntimeError(
             f"Item {item.id} missing VV or VH measurement asset "
@@ -168,9 +187,9 @@ def pick_calibration_urls(item: Any) -> tuple[str, str]:
         if "noise" in lname or "noise" in lhref:
             continue
         if "vv" in lname or "-vv-" in lhref or "_vv_" in lhref or "vv.xml" in lhref:
-            vv_url = href
+            vv_url = _download_href(asset)
         elif "vh" in lname or "-vh-" in lhref or "_vh_" in lhref or "vh.xml" in lhref:
-            vh_url = href
+            vh_url = _download_href(asset)
     if vv_url is None or vh_url is None:
         raise RuntimeError(
             f"Item {item.id} missing VV or VH calibration asset "
@@ -198,29 +217,56 @@ def read_window(
         values (no calibration applied), ``window`` is the rasterio
         ``Window`` used to read it.
     """
+    import contextlib
+
     import rasterio
     from rasterio.warp import transform_bounds
     from rasterio.windows import from_bounds as window_from_bounds
     from rasterio.enums import Resampling
+    from rasterio.vrt import WarpedVRT
 
     if resampling is None:
         resampling = Resampling.bilinear
 
     with rasterio.open(str(cog_path_or_uri)) as ds:
-        dst_bounds = transform_bounds(
-            f"EPSG:{src_epsg}", ds.crs,
-            west, south, east, north,
-            densify_pts=21,
-        )
-        window = window_from_bounds(*dst_bounds, transform=ds.transform)
-        dn = ds.read(
-            1,
-            window=window,
-            out_shape=(h_px, w_px),
-            resampling=resampling,
-            boundless=True,
-            fill_value=0,
-        ).astype(np.float32)
+        # S1 GRD COGs (MPC, and CDSE's *-COG products) are GCP-referenced:
+        # no projected ``ds.crs``/``ds.transform``, just a grid of GCPs in
+        # EPSG:4326 describing a ROTATED swath. A plain from_gcps affine +
+        # window read raised "CRS is invalid: None" then "Bounds and
+        # transform are inconsistent" (2026-08-04) because the swath grid is
+        # not north-up. Warp the GCP-referenced source onto a regular grid in
+        # its GCP CRS via WarpedVRT, then window-read that (mirrors how a
+        # projected COG is read). Projected COGs skip the VRT entirely.
+        with contextlib.ExitStack() as stack:
+            if ds.crs is not None:
+                reader = ds
+            else:
+                _, gcp_crs = ds.gcps
+                if gcp_crs is None:
+                    raise RuntimeError(
+                        f"{cog_path_or_uri}: no projected CRS and no GCP CRS "
+                        "— cannot georeference the window read")
+                reader = stack.enter_context(WarpedVRT(ds, src_crs=gcp_crs,
+                                                       crs=gcp_crs))
+            dst_bounds = transform_bounds(
+                f"EPSG:{src_epsg}", reader.crs,
+                west, south, east, north,
+                densify_pts=21,
+            )
+            window = window_from_bounds(*dst_bounds, transform=reader.transform)
+            # WarpedVRT rejects boundless reads; a training-tile window sits
+            # well inside a ~250 km GRD swath so clamping is a no-op in
+            # practice (a swath-edge tile clips, and nodata_threshold catches
+            # it). Projected COGs keep the boundless+fill path.
+            boundless = reader is ds
+            dn = reader.read(
+                1,
+                window=window,
+                out_shape=(h_px, w_px),
+                resampling=resampling,
+                boundless=boundless,
+                fill_value=0,
+            ).astype(np.float32)
     return dn, window
 
 
