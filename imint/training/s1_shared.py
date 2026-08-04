@@ -254,12 +254,17 @@ def read_window(
                 densify_pts=21,
             )
             window = window_from_bounds(*dst_bounds, transform=reader.transform)
+            # WarpedVRT rejects boundless reads; a training-tile window sits
+            # well inside a ~250 km GRD swath so clamping is a no-op in
+            # practice (a swath-edge tile clips, and nodata_threshold catches
+            # it). Projected COGs keep the boundless+fill path.
+            boundless = reader is ds
             dn = reader.read(
                 1,
                 window=window,
                 out_shape=(h_px, w_px),
                 resampling=resampling,
-                boundless=True,
+                boundless=boundless,
                 fill_value=0,
             ).astype(np.float32)
     return dn, window
