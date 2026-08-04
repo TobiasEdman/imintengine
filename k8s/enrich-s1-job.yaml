@@ -4,11 +4,20 @@ metadata:
   name: enrich-s1
   namespace: prithvi-training-default
 spec:
-  backoffLimit: 1
+  backoffLimit: 4
   activeDeadlineSeconds: 172800  # 48h
   template:
     spec:
       restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # srv04/srv06 = runc pod-sandbox bug + observed OOM host
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
       containers:
         - name: enricher
           image: python:3.11-slim
@@ -34,10 +43,14 @@ spec:
               # not the client_credentials account — follow-up); skipping it
               # avoids a wasted search+401 per tile. MPC is auth-free and not
               # WAF-limited, so concurrency is fine again.
+              # --workers 2: WarpedVRT over a ~250 km GRD swath is memory-
+              # heavy; 4 workers OOMKilled at 8 Gi (2026-08-04, after 5885
+              # real hits). 2 workers + 24 Gi holds. skip-existing means a
+              # restart continues from where the OOM left off.
               python scripts/enrich_tiles_s1.py \
                 --data-dir /data/unified_v2_512 \
                 --s1-backend cascade \
-                --workers 4 \
+                --workers 2 \
                 --skip-existing
 
           env:
@@ -60,10 +73,10 @@ spec:
           resources:
             requests:
               cpu: "4"
-              memory: "8Gi"
+              memory: "24Gi"
             limits:
               cpu: "4"
-              memory: "8Gi"
+              memory: "24Gi"
           volumeMounts:
             - name: training-data
               mountPath: /data
