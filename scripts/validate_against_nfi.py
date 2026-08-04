@@ -209,6 +209,17 @@ def main() -> None:
     print(f"plot index: {len(index_df):,} co-located plots on "
           f"{index_df['tile_name'].nunique()} tiles")
 
+    # The index was built against an earlier unified_v2_512 snapshot; merge/
+    # rename since then dropped some tiles. Filter to plots whose tile still
+    # exists so a stale row can't abort the whole run (FileNotFoundError).
+    import os
+    exists = index_df["tile_path"].map(os.path.exists)
+    if not exists.all():
+        gone = int((~exists).sum())
+        print(f"dropping {gone} plots on tiles no longer in the dataset "
+              f"({index_df.loc[~exists, 'tile_name'].nunique()} tiles)")
+        index_df = index_df[exists].copy()
+
     # run_inference centre-crops to img_size; remap plot (row,col) into crop
     # coords and drop plots in the discarded border (else they'd index the
     # wrong pixel / fall outside the returned array).
