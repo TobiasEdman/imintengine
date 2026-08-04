@@ -44,7 +44,7 @@ spec:
               pip install --quiet --no-cache-dir torch torchvision \
                 --index-url https://download.pytorch.org/whl/cu121
               pip install --quiet --no-cache-dir \
-                timm numpy Pillow scipy scikit-learn huggingface_hub \
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
                 pandas pyarrow rasterio pyproj
 
               mkdir -p /workspace && cd /workspace
