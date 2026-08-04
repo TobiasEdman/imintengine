@@ -57,6 +57,41 @@ PVC, and submit a validation job mirroring `k8s/nfi-coverage-gate-job.yaml`.
 `make_model_predict_fn` will also need adapting from `LULCDataset` to
 `UnifiedDataset` (the 512 tiles are `spectral`/`multitemporal` format).
 
+## Result — v8 (2026-08-04)
+
+Unblocked: `unified_v8_full7882` is the first 10-aux checkpoint (val mIoU
+0.5148) on the merged 7 882-tile set. Harness rewired to the unified path
+(`make_model_predict_fn` → `inference_comparison.{load_model, run_inference}`,
+504-crop coord remap), run via `k8s/nfi-validate-v8-job.yaml`. Full numbers in
+[`nfi-validation-v8.json`](nfi-validation-v8.json).
+
+| | |
+|---|---|
+| plots scored (in-crop) | **944** (of 973 in the index; 29 dropped in the 4 px crop border, tiles removed since the June index also excluded) |
+| plots with a derivable forest type | 884 |
+| **forest-type accuracy (4-way, argmax)** | **41.6 %** |
+| per-class AUROC | tallskog 0.80 · granskog 0.80 · lövskog 0.73 · blandskog 0.70 |
+| per-class AUPR | tallskog 0.73 · granskog 0.62 · lövskog 0.53 · blandskog 0.28 |
+
+**Reading it.** AUROC 0.70–0.80 says the softmax *ranks* the true forest type
+well — the model has real discriminative signal against independent field truth.
+The modest 41.6 % exact-argmax accuracy is dragged down by two structural,
+largely-expected effects, not a broken model:
+
+1. **Blandskog is definitionally fuzzy** (AUPR 0.28): "mixed" plots scatter
+   across tall/gran/löv — 12+19+6 of 105 blandskog plots go to a pure conifer/
+   deciduous class, which a strict 4-way match penalises but isn't wrong in kind.
+2. **Forest → non-forest-forest confusion**: a large share of true-forest plots
+   predict as *sumpskog* (class 5), *tillfälligt ej skog* (6) or *hygge* (22) —
+   e.g. 60/151-region of tallskog → sumpskog. Some are real (an NFI plot in a
+   wet or recently-thinned stand), some are the model over-reaching on those
+   classes. The harness derives only the 4 pure forest types from NFI species
+   volume (sumpskog is a *site* condition, not derivable — see
+   `derive_nfi_forest_class`), so these land as misses by construction.
+
+**Not** a head-to-head vs the 256 model — that comparison
+(`inference-compare-v8-vs-256`) is tracked separately.
+
 ## Artifacts
 
 - Loader + co-location: `imint/training/{slu_nfi,nfi_colocate}.py`

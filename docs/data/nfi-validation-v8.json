@@ -1,0 +1,26 @@
+{
+  "model": "unified_v8_full7882",
+  "checkpoint": "/checkpoints/unified_v8_full7882/best_model.pt",
+  "checkpoint_val_mIoU": 0.5148,
+  "run_date": "2026-08-04",
+  "index": "nfi_index_unified_v2_512.parquet",
+  "img_size": 504,
+  "n_plots": 944,
+  "n_forest": 884,
+  "n_mature": 298,
+  "plots_in_crop": 944,
+  "plots_total": 973,
+  "forest_type_accuracy": 0.416289592760181,
+  "confusion_nfi_x_pred": {
+    "tallskog":  {"tallskog": 151, "granskog": 48, "lövskog": 18, "blandskog": 37, "class_5": 60, "class_6": 28, "class_7": 7,  "class_8": 12, "class_9": 2, "class_22": 9},
+    "granskog":  {"tallskog": 24,  "granskog": 120, "lövskog": 3, "blandskog": 41, "class_5": 12, "class_6": 32, "class_7": 6,  "class_8": 5,  "class_16": 1, "class_22": 3},
+    "lövskog":   {"tallskog": 5,   "granskog": 2,  "lövskog": 55, "blandskog": 20, "class_5": 11, "class_6": 21, "class_7": 4,  "class_8": 7,  "class_9": 1, "class_15": 1, "class_22": 6},
+    "blandskog": {"tallskog": 12,  "granskog": 19, "lövskog": 6,  "blandskog": 42, "class_5": 19, "class_6": 23, "class_7": 4,  "class_8": 5,  "class_12": 1, "class_22": 1}
+  },
+  "per_class_auroc": {
+    "tallskog":  {"auroc": 0.7995, "aupr": 0.7251},
+    "granskog":  {"auroc": 0.7969, "aupr": 0.6240},
+    "lövskog":   {"auroc": 0.7347, "aupr": 0.5342},
+    "blandskog": {"auroc": 0.7018, "aupr": 0.2819}
+  }
+}
