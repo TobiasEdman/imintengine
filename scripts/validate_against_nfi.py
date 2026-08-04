@@ -148,86 +148,94 @@ def score_against_nfi(
     }
 
 
-def make_model_predict_fn(checkpoint: str, data_dir: str, config, device):
-    """Real ``predict_fn`` (load_model + sliding-window). Verified on ICE.
+def make_model_predict_fn(checkpoint: str, device, img_size: int):
+    """Real ``predict_fn`` for a UNIFIED-format checkpoint (v8+, 10-aux).
 
-    Reuses ``scripts.predict_lulc.load_model`` + ``imint.inference.sliding_window``
-    and ``LULCDataset`` for the per-tile normalized input (the aux set must match
-    the checkpoint — pass the matching ``--enable-*`` flags). Indexes dataset
-    samples by tile name so ``predict_fn(tile_path)`` maps a plot-index row to
-    the right tile. Not exercised in local CI: CPU inference is slow and there
-    is no local plot∩tile overlap on unified-format tiles — the meaningful run
-    is the ICE job against the PVC.
+    Reuses ``inference_comparison.{load_model, run_inference}`` — the same
+    multitemporal + aux normalization the model was trained with (spectral
+    reflectance → Prithvi z-score, ``AUX_CHANNEL_NAMES`` from
+    ``unified_dataset``, temporal/location coords). This replaces the retired
+    ``LULCDataset`` wiring: the 512 tiles are ``spectral``/``multitemporal``
+    format, and the checkpoints since v8 are 10-aux (no leaky
+    ``harvest_probability``), so the old 11-aux ``LULCDataset`` path could
+    never be scored (see docs/data/nfi_validation_findings.md).
+
+    ``run_inference`` centre-crops each tile to ``img_size`` (504 for the
+    600M patch-14 backbone on 512 tiles); the crop offset is returned so the
+    caller can remap plot ``(row, col)`` and drop plots in the discarded
+    border. ``predict_fn(tile_path) -> (class_map (cs,cs), probs (C,cs,cs))``
+    is in CROP coordinates.
     """
-    import torch
-
-    from imint.inference.sliding_window import sliding_window_inference
-    from imint.training.dataset import LULCDataset
-
-    # load_model lives in the sibling script; import it without a package.
     import importlib.util
+
     spec = importlib.util.spec_from_file_location(
-        "_predict_lulc", str(Path(__file__).resolve().parent / "predict_lulc.py"),
+        "_infcmp", str(Path(__file__).resolve().parent / "inference_comparison.py"),
     )
-    predict_lulc = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(predict_lulc)
+    infcmp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(infcmp)
 
-    model, _ = predict_lulc.load_model(checkpoint, config, device)
-    aux_names = config.enabled_aux_names
-
-    dataset = LULCDataset(data_dir, split="all", config=config)
-    by_name = {}
-    for i in range(len(dataset)):
-        meta = dataset[i].get("metadata", {})
-        by_name[meta.get("tile", f"tile_{i:04d}").replace(".npz", "")] = i
+    model, epoch, miou, model_img_size = infcmp.load_model(checkpoint, device)
+    print(f"  [load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size}")
 
     def predict_fn(tile_path):
-        name = Path(tile_path).stem
-        sample = dataset[by_name[name]]
-        image_5d = sample["spectral"].unsqueeze(0).unsqueeze(2).to(device)  # (1,6,1,H,W)
-        aux_parts = [sample[n].unsqueeze(0).to(device) for n in aux_names if n in sample]
-        aux = torch.cat(aux_parts, dim=1) if aux_parts else None
-        probs = sliding_window_inference(
-            model, image_5d, aux, num_classes=config.num_classes,
-        )  # (1, C, H, W)
-        probs = probs.squeeze(0).cpu().numpy()
+        probs, _raw_spectral, _raw_aux = infcmp.run_inference(
+            model, tile_path, device, img_size=img_size, return_probs=True,
+        )  # probs: (C, cs, cs)
         return probs.argmax(0).astype(np.int64), probs
 
     return predict_fn
 
 
+def crop_offset(tile_h: int, img_size: int) -> int:
+    """Centre-crop top-left offset ``run_inference`` applies (matches its
+    ``(h - crop_sz) // 2``)."""
+    return (tile_h - min(img_size, tile_h)) // 2
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--data-dir", required=True, help="tile dir LULCDataset reads")
     ap.add_argument("--plot-index", required=True, help="parquet from nfi_tile_coverage.py")
     ap.add_argument("--out", default="docs/data/nfi-validation.json")
-    ap.add_argument("--enable-all-aux", action="store_true")
+    ap.add_argument("--img-size", type=int, default=504,
+                    help="inference crop (504 = 600M patch-14 on 512 tiles)")
+    ap.add_argument("--num-classes", type=int, default=23)
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
     import torch
 
-    from imint.training.config import TrainingConfig
-
     index_df = pd.read_parquet(args.plot_index)
-    print(f"plot index: {len(index_df):,} co-located plots on {index_df['tile_name'].nunique()} tiles")
+    print(f"plot index: {len(index_df):,} co-located plots on "
+          f"{index_df['tile_name'].nunique()} tiles")
 
-    config = TrainingConfig(
-        data_dir=args.data_dir,
-        enable_height_channel=args.enable_all_aux,
-        enable_volume_channel=args.enable_all_aux,
-        enable_basal_area_channel=args.enable_all_aux,
-        enable_diameter_channel=args.enable_all_aux,
-        enable_dem_channel=args.enable_all_aux,
-        enable_vpp_channels=args.enable_all_aux,
-    )
+    # run_inference centre-crops to img_size; remap plot (row,col) into crop
+    # coords and drop plots in the discarded border (else they'd index the
+    # wrong pixel / fall outside the returned array).
+    sample_path = index_df["tile_path"].iloc[0]
+    tile_h = int(np.load(sample_path, allow_pickle=True)["spectral"].shape[-1])
+    off = crop_offset(tile_h, args.img_size)
+    cs = min(args.img_size, tile_h)
+    before = len(index_df)
+    index_df = index_df[
+        (index_df["row"] >= off) & (index_df["row"] < off + cs)
+        & (index_df["col"] >= off) & (index_df["col"] < off + cs)
+    ].copy()
+    index_df["row"] -= off
+    index_df["col"] -= off
+    print(f"crop offset={off} (tile {tile_h}→{cs}); kept {len(index_df)}/{before} "
+          f"plots in-crop ({before - len(index_df)} border-dropped)")
+
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
-    predict_fn = make_model_predict_fn(args.checkpoint, args.data_dir, config, device)
+    predict_fn = make_model_predict_fn(args.checkpoint, device, args.img_size)
 
-    results = score_against_nfi(index_df, predict_fn, num_classes=config.num_classes)
+    results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes)
+    results["_meta"] = {
+        "checkpoint": args.checkpoint, "img_size": args.img_size,
+        "plots_in_crop": len(index_df), "plots_total": before,
+    }
     print(json.dumps(results, indent=2, ensure_ascii=False))
 
     out = Path(args.out)

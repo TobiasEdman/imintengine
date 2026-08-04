@@ -1,0 +1,95 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-validate-v8
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: nfi-validate-v8
+spec:
+  backoffLimit: 0
+  # Independent FIELD-TRUTH validation of the v8 model against SLU NFI
+  # (riksskogstaxeringen) plots. 982 plots co-located on 270 tiles of
+  # /data/unified_v2_512 (docs/data/nfi_validation_findings.md). Scores
+  # forest-type accuracy (NFI dominant species → tallskog/granskog/
+  # lövskog/blandskog vs predicted class) + confusion + per-class AUROC.
+  #
+  # v8 is the first 10-aux checkpoint on the current dataset — the run
+  # that was blocked in June (only 11-aux v5/v6 existed then). Reads the
+  # checkpoint copied to cephfs by copy-v8-ckpt (avoids the RWO
+  # training-checkpoints multi-attach). PU-free, GPU inference of 270
+  # tiles ≈ minutes.
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: validate
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== NFI field-truth validation — v8 ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm numpy Pillow scipy scikit-learn huggingface_hub \
+                pandas pyarrow rasterio pyproj
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              OUT=/data/nfi_eval/nfi_validation_v8.json
+              python3 scripts/validate_against_nfi.py \
+                --checkpoint /data/nfi_eval/v8_best_model.pt \
+                --plot-index /data/nfi/nfi_index_unified_v2_512.parquet \
+                --img-size 504 \
+                --out "$OUT" \
+                --device cuda
+
+              echo ""
+              echo "=== validation JSON ==="
+              cat "$OUT"
+              echo ""
+              echo "=== Done: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"nfi-validate-v8","ok":true,"reason":"field-truth validation complete"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
