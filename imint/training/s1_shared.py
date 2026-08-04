@@ -217,10 +217,13 @@ def read_window(
         values (no calibration applied), ``window`` is the rasterio
         ``Window`` used to read it.
     """
+    import contextlib
+
     import rasterio
     from rasterio.warp import transform_bounds
     from rasterio.windows import from_bounds as window_from_bounds
     from rasterio.enums import Resampling
+    from rasterio.vrt import WarpedVRT
 
     if resampling is None:
         resampling = Resampling.bilinear
@@ -228,33 +231,37 @@ def read_window(
     with rasterio.open(str(cog_path_or_uri)) as ds:
         # S1 GRD COGs (MPC, and CDSE's *-COG products) are GCP-referenced:
         # no projected ``ds.crs``/``ds.transform``, just a grid of GCPs in
-        # EPSG:4326. transform_bounds against ``ds.crs=None`` raised
-        # "CRS is invalid: None" (2026-08-04). Fall back to a GCP-derived
-        # affine + the GCP CRS when the dataset carries no projected CRS.
-        if ds.crs is not None:
-            dst_crs, dst_transform = ds.crs, ds.transform
-        else:
-            gcps, gcp_crs = ds.gcps
-            if not gcps or gcp_crs is None:
-                raise RuntimeError(
-                    f"{cog_path_or_uri}: no projected CRS and no GCPs — "
-                    "cannot georeference the window read")
-            from rasterio.transform import from_gcps
-            dst_crs, dst_transform = gcp_crs, from_gcps(gcps)
-        dst_bounds = transform_bounds(
-            f"EPSG:{src_epsg}", dst_crs,
-            west, south, east, north,
-            densify_pts=21,
-        )
-        window = window_from_bounds(*dst_bounds, transform=dst_transform)
-        dn = ds.read(
-            1,
-            window=window,
-            out_shape=(h_px, w_px),
-            resampling=resampling,
-            boundless=True,
-            fill_value=0,
-        ).astype(np.float32)
+        # EPSG:4326 describing a ROTATED swath. A plain from_gcps affine +
+        # window read raised "CRS is invalid: None" then "Bounds and
+        # transform are inconsistent" (2026-08-04) because the swath grid is
+        # not north-up. Warp the GCP-referenced source onto a regular grid in
+        # its GCP CRS via WarpedVRT, then window-read that (mirrors how a
+        # projected COG is read). Projected COGs skip the VRT entirely.
+        with contextlib.ExitStack() as stack:
+            if ds.crs is not None:
+                reader = ds
+            else:
+                _, gcp_crs = ds.gcps
+                if gcp_crs is None:
+                    raise RuntimeError(
+                        f"{cog_path_or_uri}: no projected CRS and no GCP CRS "
+                        "— cannot georeference the window read")
+                reader = stack.enter_context(WarpedVRT(ds, src_crs=gcp_crs,
+                                                       crs=gcp_crs))
+            dst_bounds = transform_bounds(
+                f"EPSG:{src_epsg}", reader.crs,
+                west, south, east, north,
+                densify_pts=21,
+            )
+            window = window_from_bounds(*dst_bounds, transform=reader.transform)
+            dn = reader.read(
+                1,
+                window=window,
+                out_shape=(h_px, w_px),
+                resampling=resampling,
+                boundless=True,
+                fill_value=0,
+            ).astype(np.float32)
     return dn, window
 
 
