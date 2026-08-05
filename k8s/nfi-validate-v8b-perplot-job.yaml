@@ -1,0 +1,98 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-validate-v8b-perplot
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: nfi-validate-v8b-perplot
+spec:
+  backoffLimit: 0
+  # Re-run the v8b NFI field-truth validation, this time dumping ONE ROW PER
+  # PLOT (TractID/PlotID/Easting/Northing + NFI forest truth + model_pred) so
+  # the model can be scored offline on exactly the plots NMD2023 v2.1 covers —
+  # a rigorous same-ytor three-way (NMD2023 / NMD2018 / v8b). The prior v8b run
+  # only saved aggregates, which cannot be re-subset to the covered plots.
+  #
+  # Same checkpoint + index + img-size as nfi-validate-v8b; the only change is
+  # the branch (adds --dump-per-plot) and the extra output parquet. GPU
+  # inference of 270 tiles ≈ minutes; PU-free.
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: validate
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== NFI field-truth validation — v8b (per-plot dump) ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
+                pandas pyarrow rasterio pyproj
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              # Fail loud if the clone predates the --dump-per-plot flag.
+              grep -q 'dump-per-plot' scripts/validate_against_nfi.py \
+                || { echo "FATAL: --dump-per-plot missing on clone"; exit 1; }
+
+              OUT=/data/nfi_eval/nfi_validation_v8b_rerun.json
+              PP=/data/nfi_eval/v8b_per_plot.parquet
+              python3 scripts/validate_against_nfi.py \
+                --checkpoint /data/nfi_eval/v8b_best_model.pt \
+                --plot-index /data/nfi/nfi_index_unified_v2_512.parquet \
+                --img-size 504 \
+                --out "$OUT" \
+                --dump-per-plot "$PP" \
+                --device cuda
+
+              echo ""
+              echo "=== per-plot dump head ==="
+              python3 -c "import pandas as pd; d=pd.read_parquet('$PP'); print(d.shape); print(d.head())"
+              echo "=== Done: $(date) ==="
+              echo 'CAMPAIGN_GATE_VERDICT={"gate":"nfi-validate-v8b-perplot","ok":true,"reason":"per-plot dump written"}'
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

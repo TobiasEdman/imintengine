@@ -21,6 +21,8 @@ from imint.training.unified_schema import (
     _NMD19_TO_UNIFIED,
     HARVEST_CLASS,
     nmd19_to_unified,
+    nmd2023_to_unified,
+    NMD2023_TO_UNIFIED,
     merge_nmd_sjv,
     merge_all,
     get_class_weights,
@@ -30,7 +32,33 @@ from imint.training.unified_schema import (
 # ── 1. Schema identity ─────────────────────────────────────────────────────────
 
 def test_num_classes():
-    assert NUM_UNIFIED_CLASSES == 23, "Schema must have exactly 23 classes"
+    assert NUM_UNIFIED_CLASSES == 29, "Schema must have exactly 29 classes"
+
+
+def test_nmd2023_mapping():
+    """NMD2023 raw codes → unified: forest consistent with 2018, new classes 23-28."""
+    # Forest fastmark resolves identically to the NMD2018 chain.
+    for code, want in [(111, 1), (112, 2), (113, 3), (114, 4), (118, 6)]:
+        assert nmd2023_to_unified(np.array([code]))[0] == want, code
+    # Forest wetland → sumpskog (5).
+    assert (nmd2023_to_unified(np.array([121, 124, 128])) == 5).all()
+    # NMD2023-new classes.
+    assert nmd2023_to_unified(np.array([54]))[0] == 23    # torvtäkt
+    assert (nmd2023_to_unified(np.array([421, 4212])) == 24).all()  # busk (+moisture collapsed)
+    assert (nmd2023_to_unified(np.array([422, 4223])) == 25).all()  # ris
+    assert (nmd2023_to_unified(np.array([423, 4231])) == 26).all()  # gräs
+    assert nmd2023_to_unified(np.array([411]))[0] == 27  # bar mark
+    assert (nmd2023_to_unified(np.array([412, 413])) == 28).all()  # snö/is merged
+    # Låg fjällskog: fastmark → lövskog, våtmark → sumpskog.
+    assert nmd2023_to_unified(np.array([43]))[0] == 3
+    assert (nmd2023_to_unified(np.array([23, 230])) == 5).all()
+    # No-data (0) and unmapped/out-of-range → background (0).
+    assert nmd2023_to_unified(np.array([0, 999, 99999]))[0:3].tolist() == [0, 0, 0]
+    # Every mapped target is a valid unified class.
+    assert all(0 <= v < NUM_UNIFIED_CLASSES for v in NMD2023_TO_UNIFIED.values())
+    # dtype/shape preserved.
+    out = nmd2023_to_unified(np.array([[111, 54], [411, 0]], dtype=np.uint16))
+    assert out.shape == (2, 2) and out.dtype == np.uint8
 
 
 def test_class_21_is_majs():
