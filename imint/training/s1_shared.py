@@ -217,11 +217,10 @@ def read_window(
         values (no calibration applied), ``window`` is the rasterio
         ``Window`` used to read it.
     """
-    import contextlib
-
     import rasterio
     from rasterio.warp import transform_bounds
-    from rasterio.windows import from_bounds as window_from_bounds
+    from rasterio.windows import from_bounds as window_from_bounds, Window
+    from rasterio.transform import from_bounds as transform_from_bounds, from_gcps
     from rasterio.enums import Resampling
     from rasterio.vrt import WarpedVRT
 
@@ -229,44 +228,55 @@ def read_window(
         resampling = Resampling.bilinear
 
     with rasterio.open(str(cog_path_or_uri)) as ds:
-        # S1 GRD COGs (MPC, and CDSE's *-COG products) are GCP-referenced:
-        # no projected ``ds.crs``/``ds.transform``, just a grid of GCPs in
-        # EPSG:4326 describing a ROTATED swath. A plain from_gcps affine +
-        # window read raised "CRS is invalid: None" then "Bounds and
-        # transform are inconsistent" (2026-08-04) because the swath grid is
-        # not north-up. Warp the GCP-referenced source onto a regular grid in
-        # its GCP CRS via WarpedVRT, then window-read that (mirrors how a
-        # projected COG is read). Projected COGs skip the VRT entirely.
-        with contextlib.ExitStack() as stack:
-            if ds.crs is not None:
-                reader = ds
-            else:
-                _, gcp_crs = ds.gcps
-                if gcp_crs is None:
-                    raise RuntimeError(
-                        f"{cog_path_or_uri}: no projected CRS and no GCP CRS "
-                        "— cannot georeference the window read")
-                reader = stack.enter_context(WarpedVRT(ds, src_crs=gcp_crs,
-                                                       crs=gcp_crs))
+        if ds.crs is not None:
+            # Projected COG: window-read directly in its own pixel space
+            # (which is the product line/pixel space the calibration LUT is
+            # defined on, so ``window`` is calibration-correct as-is).
             dst_bounds = transform_bounds(
-                f"EPSG:{src_epsg}", reader.crs,
-                west, south, east, north,
+                f"EPSG:{src_epsg}", ds.crs, west, south, east, north,
                 densify_pts=21,
             )
-            window = window_from_bounds(*dst_bounds, transform=reader.transform)
-            # WarpedVRT rejects boundless reads; a training-tile window sits
-            # well inside a ~250 km GRD swath so clamping is a no-op in
-            # practice (a swath-edge tile clips, and nodata_threshold catches
-            # it). Projected COGs keep the boundless+fill path.
-            boundless = reader is ds
-            dn = reader.read(
-                1,
-                window=window,
-                out_shape=(h_px, w_px),
-                resampling=resampling,
-                boundless=boundless,
-                fill_value=0,
+            window = window_from_bounds(*dst_bounds, transform=ds.transform)
+            dn = ds.read(
+                1, window=window, out_shape=(h_px, w_px),
+                resampling=resampling, boundless=True, fill_value=0,
             ).astype(np.float32)
+            return dn, window
+
+        # S1 GRD COGs (MPC, CDSE *-COG) are GCP-referenced: no projected CRS,
+        # a grid of GCPs in EPSG:4326 over a ROTATED swath. Warping the FULL
+        # swath (WarpedVRT with default extent) OOMKilled on high-latitude
+        # tiles (2026-08-05, tile_681280_726xxxx, N Sweden) — a 250 km swath
+        # near the pole warps to a huge regular grid. Instead warp ONLY the
+        # tile bbox straight to the request CRS at the tile grid (memory
+        # bounded to h×w). The calibration LUT needs the window in ORIGINAL
+        # PRODUCT pixel space, so compute that separately from the inverse
+        # GCP affine (independent of the bounded warp).
+        gcps, gcp_crs = ds.gcps
+        if not gcps or gcp_crs is None:
+            raise RuntimeError(
+                f"{cog_path_or_uri}: no projected CRS and no GCPs — "
+                "cannot georeference the window read")
+
+        dst_transform = transform_from_bounds(west, south, east, north,
+                                              w_px, h_px)
+        with WarpedVRT(ds, src_crs=gcp_crs, crs=f"EPSG:{src_epsg}",
+                       transform=dst_transform, width=w_px, height=h_px,
+                       resampling=resampling) as vrt:
+            dn = vrt.read(1).astype(np.float32)  # already (h_px, w_px)
+
+        # Calibration window in product pixel space: tile bbox → GCP CRS →
+        # product (col,row) via the inverse of the pixel→world GCP affine.
+        gcp_fwd = from_gcps(gcps)          # pixel -> gcp_crs
+        gcp_inv = ~gcp_fwd                 # gcp_crs -> pixel
+        tb = transform_bounds(f"EPSG:{src_epsg}", gcp_crs,
+                              west, south, east, north, densify_pts=21)
+        corners = [(tb[0], tb[1]), (tb[2], tb[1]),
+                   (tb[2], tb[3]), (tb[0], tb[3])]
+        cols, rows = zip(*(gcp_inv * (x, y) for x, y in corners))
+        col_off, row_off = min(cols), min(rows)
+        window = Window(col_off, row_off,
+                        max(cols) - col_off, max(rows) - row_off)
     return dn, window
 
 
