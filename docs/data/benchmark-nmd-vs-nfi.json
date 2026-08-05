@@ -1,5 +1,5 @@
 {
-  "source": "NMD (nmd2018bas)",
+  "source": "NMD (nmd2018bas_ogeneraliserad_v1_1)",
   "n_plots": 982,
   "n_forest": 921,
   "forest_type_accuracy": 0.3898,
@@ -52,6 +52,43 @@
       "class_7": 4,
       "class_8": 9,
       "class_9": 1
+    }
+  },
+  "accuracy_suite": {
+    "n_plots_all": 982,
+    "overall_accuracy_5class": 0.4022,
+    "cohen_kappa": 0.2546,
+    "per_class": {
+      "tallskog": {
+        "users_accuracy": 0.7173,
+        "producers_accuracy": 0.437,
+        "f1": 0.5431,
+        "support": 389
+      },
+      "granskog": {
+        "users_accuracy": 0.5783,
+        "producers_accuracy": 0.3825,
+        "f1": 0.4604,
+        "support": 251
+      },
+      "lövskog": {
+        "users_accuracy": 0.3315,
+        "producers_accuracy": 0.4317,
+        "f1": 0.375,
+        "support": 139
+      },
+      "blandskog": {
+        "users_accuracy": 0.3474,
+        "producers_accuracy": 0.2324,
+        "f1": 0.2785,
+        "support": 142
+      },
+      "annat (icke-skog)": {
+        "users_accuracy": 0.1188,
+        "producers_accuracy": 0.5902,
+        "f1": 0.1978,
+        "support": 61
+      }
     }
   }
 }

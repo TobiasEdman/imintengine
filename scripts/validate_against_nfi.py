@@ -45,6 +45,74 @@ FOREST_CLASSES = (TALLSKOG, GRANSKOG, LOVSKOG, BLANDSKOG)
 FOREST_NAMES = {1: "tallskog", 2: "granskog", 3: "lövskog", 4: "blandskog"}
 MATURE_FROM_CLASS = 41  # NFI Maturityclass ≥ 41 = final-felling-age / overmature
 
+# Full accuracy-suite classes: the 4 forest types + a single "non-forest /
+# other" bucket (0) that collects every treeless-truth plot and every
+# non-forest prediction. Scoring over ALL plots (not just forest-truth) is
+# what makes user's accuracy (precision) and Cohen's kappa well-defined —
+# they need the plots the forest-only metric drops. Mirrors how NMD /
+# WorldCover validation reports the standard confusion-matrix measures.
+NONFOREST = 0
+SUITE_CLASSES = (TALLSKOG, GRANSKOG, LOVSKOG, BLANDSKOG, NONFOREST)
+SUITE_NAMES = {**FOREST_NAMES, 0: "annat (icke-skog)"}
+
+
+def _collapse(v: int) -> int:
+    """Map a class id to the suite space: keep 1-4, everything else → 0."""
+    return int(v) if int(v) in (1, 2, 3, 4) else NONFOREST
+
+
+def accuracy_suite(truth, pred) -> dict:
+    """Standard confusion-matrix accuracy measures over SUITE_CLASSES.
+
+    ``truth`` / ``pred`` are collapsed to {1,2,3,4, 0=non-forest} first, so
+    every plot is counted. Returns overall accuracy, per-class user's
+    accuracy (precision), producer's accuracy (recall), F1 and support, and
+    Cohen's kappa (chance-corrected agreement over all classes).
+    """
+    import numpy as np
+
+    t = np.array([_collapse(x) for x in truth])
+    p = np.array([_collapse(x) for x in pred])
+    idx = {c: i for i, c in enumerate(SUITE_CLASSES)}
+    k = len(SUITE_CLASSES)
+    cm = np.zeros((k, k), dtype=np.int64)  # rows = truth, cols = pred
+    for tt, pp in zip(t, p):
+        cm[idx[tt], idx[pp]] += 1
+    n = int(cm.sum())
+
+    overall = float(np.trace(cm) / n) if n else float("nan")
+    per_class = {}
+    for c in SUITE_CLASSES:
+        i = idx[c]
+        tp = int(cm[i, i])
+        row = int(cm[i, :].sum())   # truth = c  → producer's denom
+        col = int(cm[:, i].sum())   # pred  = c  → user's denom
+        prod = tp / row if row else float("nan")   # recall
+        user = tp / col if col else float("nan")   # precision
+        f1 = (2 * user * prod / (user + prod)
+              if (user and prod and not np.isnan(user) and not np.isnan(prod))
+              else 0.0)
+        per_class[SUITE_NAMES[c]] = {
+            "users_accuracy": round(user, 4) if col else None,
+            "producers_accuracy": round(prod, 4) if row else None,
+            "f1": round(f1, 4),
+            "support": row,
+        }
+
+    # Cohen's kappa: (po - pe) / (1 - pe).
+    po = overall
+    row_tot = cm.sum(axis=1)
+    col_tot = cm.sum(axis=0)
+    pe = float((row_tot * col_tot).sum() / (n * n)) if n else 0.0
+    kappa = (po - pe) / (1 - pe) if (1 - pe) else float("nan")
+
+    return {
+        "n_plots_all": n,
+        "overall_accuracy_5class": round(overall, 4),
+        "cohen_kappa": round(kappa, 4),
+        "per_class": per_class,
+    }
+
 
 def derive_nfi_forest_class(row, *, dominant_frac: float = 0.7) -> int | None:
     """NFI per-species volume → unified forest class, or None if non-treed.
@@ -145,6 +213,10 @@ def score_against_nfi(
         "forest_type_accuracy": accuracy,
         "confusion_nfi_x_pred": confusion,
         "per_class_auroc": per_class_auroc,
+        # Standard confusion-matrix suite over ALL plots (forest + non-forest):
+        # overall accuracy, per-class user's/producer's/F1, Cohen's kappa.
+        "accuracy_suite": accuracy_suite(
+            [c if c is not None else 0 for c in nfi_class], pred_class),
     }
 
 
