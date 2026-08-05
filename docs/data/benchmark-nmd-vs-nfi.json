@@ -1,0 +1,57 @@
+{
+  "source": "NMD (nmd2018bas)",
+  "n_plots": 982,
+  "n_forest": 921,
+  "forest_type_accuracy": 0.3898,
+  "per_class_recall": {
+    "tallskog": 0.437,
+    "granskog": 0.3825,
+    "lövskog": 0.4317,
+    "blandskog": 0.2324
+  },
+  "confusion_nfi_x_nmd": {
+    "tallskog": {
+      "tallskog": 170,
+      "granskog": 34,
+      "lövskog": 59,
+      "blandskog": 19,
+      "class_5": 46,
+      "class_6": 37,
+      "class_7": 8,
+      "class_8": 12,
+      "class_9": 4
+    },
+    "granskog": {
+      "tallskog": 34,
+      "granskog": 96,
+      "lövskog": 34,
+      "blandskog": 30,
+      "class_5": 6,
+      "class_6": 35,
+      "class_7": 4,
+      "class_8": 11,
+      "class_9": 1
+    },
+    "lövskog": {
+      "tallskog": 7,
+      "granskog": 3,
+      "lövskog": 60,
+      "blandskog": 12,
+      "class_5": 10,
+      "class_6": 29,
+      "class_7": 12,
+      "class_8": 6
+    },
+    "blandskog": {
+      "tallskog": 22,
+      "granskog": 16,
+      "lövskog": 25,
+      "blandskog": 33,
+      "class_5": 10,
+      "class_6": 22,
+      "class_7": 4,
+      "class_8": 9,
+      "class_9": 1
+    }
+  }
+}

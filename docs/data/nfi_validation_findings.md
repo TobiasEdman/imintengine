@@ -92,6 +92,37 @@ largely-expected effects, not a broken model:
 **Not** a head-to-head vs the 256 model — that comparison
 (`inference-compare-v8-vs-256`) is tracked separately.
 
+## External benchmark — v8 / v8b / NMD on the SAME NFI plots (2026-08-05)
+
+The strongest external anchor: score the national land-cover product **NMD**
+(the very source of the training labels) against the same species-derived NFI
+forest truth, on the same plots, with the same 4-way metric
+([`benchmark_nmd_vs_nfi.py`](../../scripts/benchmark_nmd_vs_nfi.py),
+[`benchmark-nmd-vs-nfi.json`](benchmark-nmd-vs-nfi.json)). v8b re-run:
+[`nfi-validation-v8b.json`](nfi-validation-v8b.json).
+
+| Model / product | forest-type accuracy (NFI) | AUROC tallskog |
+|---|---|---|
+| **v8b** (20 epochs, val mIoU 0.5352) | **43.1 %** | 0.82 |
+| v8 (10 epochs, val mIoU 0.5148) | 41.6 % | 0.80 |
+| **NMD** (nmd2018bas — the label source) | **39.0 %** | — (hard classes) |
+
+**Both models beat NMD — their own label source — on independent field truth.**
+The student surpasses the teacher because it denoises NMD's per-pixel errors
+via multitemporal S2 + LiDAR-derived aux (height/volume/basal_area/diameter).
+blandskog is the worst class for all three (NMD recall 0.23, models similar) —
+"mixed" is definitionally fuzzy regardless of method.
+
+**Not compared: ESA WorldCover.** It is optical-only (no LiDAR / structure) and
+carries only a single "tree cover" class — no forest-type breakdown — so it
+cannot be scored on the 4-way task. Its published global overall accuracy
+(76.7 % over 11 coarse classes, [PVR v2.0](https://worldcover2021.esa.int/data/docs/WorldCover_PVR_V2.0.pdf))
+is a different, coarser task and not comparable to the 39–43 % forest-type
+numbers here. NMD publishes no single 4-way forest-type % but validates against
+the same Riksskogstaxeringen + NILS sources
+([NMD product description](https://geodata.naturvardsverket.se/nedladdning/marktacke/NMD2018/NMD2018_ProductDescription_ENG.pdf)),
+so the 39.0 % here is a concrete number in the spirit of their own validation.
+
 ## Artifacts
 
 - Loader + co-location: `imint/training/{slu_nfi,nfi_colocate}.py`

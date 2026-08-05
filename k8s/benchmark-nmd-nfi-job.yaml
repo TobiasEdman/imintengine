@@ -1,0 +1,70 @@
+apiVersion: batch/v1
+kind: Job
+metadata: {name: benchmark-nmd-nfi, namespace: prithvi-training-default, labels: {app: ensemble-prep, purpose: benchmark-nmd-nfi}}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata: {labels: {app: ensemble-prep}}
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: kubernetes.io/hostname, operator: NotIn, values: ["p02r09srv04","p02r09srv06"]}
+      containers:
+        - name: bench
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow rasterio 2>&1 | tail -1
+              mkdir -p /w && cd /w
+              git clone -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git ie
+              export PYTHONPATH=/w/ie
+              cd /w/ie; echo "HEAD $(git rev-parse --short HEAD)"
+              python3 - <<'PYEOF'
+              import glob, json, numpy as np, pandas as pd, rasterio, sys
+              sys.path.insert(0, "/w/ie/scripts")
+              from validate_against_nfi import derive_nfi_forest_class, FOREST_CLASSES, FOREST_NAMES
+              from imint.training.class_schema import nmd_raster_to_lulc
+              from imint.training.unified_schema import nmd19_to_unified
+
+              df = pd.read_parquet("/data/nfi/nfi_index_unified_v2_512.parquet")
+              nmd_path = sorted(glob.glob("/data/nmd/*.tif"))[0]
+              print("NMD:", nmd_path, "plots:", len(df))
+              with rasterio.open(nmd_path) as src:
+                  print("  crs", src.crs, "dtype", src.dtypes[0])
+                  coords = list(zip(df["Easting"].astype(float), df["Northing"].astype(float)))
+                  raw = np.array([v[0] for v in src.sample(coords)], dtype=np.int64)
+              seq = nmd_raster_to_lulc(np.clip(raw,0,255).astype(np.uint8))
+              pred = nmd19_to_unified(seq.astype(np.uint8)).astype(int)
+              truth = np.array([derive_nfi_forest_class(r) if derive_nfi_forest_class(r) is not None else -1
+                                for _, r in df.iterrows()])
+              forest = truth >= 1
+              nF = int(forest.sum())
+              acc = float((pred[forest]==truth[forest]).mean())
+              conf = {}
+              for t in FOREST_CLASSES:
+                  if (truth==t).any():
+                      conf[FOREST_NAMES[t]] = {FOREST_NAMES.get(int(p), f"class_{int(p)}"):
+                          int(((truth==t)&(pred==p)).sum()) for p in np.unique(pred[truth==t])}
+              # per-forest-class recall (producer's-liknande)
+              recall = {FOREST_NAMES[t]: round(float((pred[(truth==t)]==t).mean()),4)
+                        for t in FOREST_CLASSES if (truth==t).any()}
+              out = {"source":"NMD (nmd2018bas)","n_plots":int(len(df)),"n_forest":nF,
+                     "forest_type_accuracy":round(acc,4),"per_class_recall":recall,
+                     "confusion_nfi_x_nmd":conf}
+              print(json.dumps(out, indent=2, ensure_ascii=False))
+              open("/data/nfi_eval/benchmark_nmd_vs_nfi.json","w").write(json.dumps(out,indent=2,ensure_ascii=False))
+              print("wrote /data/nfi_eval/benchmark_nmd_vs_nfi.json")
+              PYEOF
+          resources: {requests: {cpu: "2", memory: "8Gi"}, limits: {cpu: "2", memory: "8Gi"}}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes: [{name: data, persistentVolumeClaim: {claimName: training-data-cephfs}}]
