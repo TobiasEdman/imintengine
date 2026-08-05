@@ -260,7 +260,12 @@ def read_window(
 
         dst_transform = transform_from_bounds(west, south, east, north,
                                               w_px, h_px)
-        with WarpedVRT(ds, src_crs=gcp_crs, crs=f"EPSG:{src_epsg}",
+        # Do NOT pass src_crs: with GCPs present, setting a src CRS makes GDAL
+        # treat the source as CRS-georeferenced and IGNORE the GCPs, warping
+        # nothing (all-zero DN, 2026-08-05). Omitting src_crs lets GDAL use
+        # the source's own GCPs (which carry gcp_crs) and warp to the target
+        # CRS over the bounded tile grid.
+        with WarpedVRT(ds, crs=f"EPSG:{src_epsg}",
                        transform=dst_transform, width=w_px, height=h_px,
                        resampling=resampling) as vrt:
             dn = vrt.read(1).astype(np.float32)  # already (h_px, w_px)
