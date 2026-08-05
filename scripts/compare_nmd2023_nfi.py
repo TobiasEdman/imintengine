@@ -77,27 +77,28 @@ def main() -> None:
     ap.add_argument("--out", default="docs/data/compare-nmd2023-nfi.json")
     a = ap.parse_args()
 
-    plots = pd.read_parquet(a.plots)
-    print(f"NFI plots: {len(plots):,}")
-
-    # Restrict to the model's plots (same ytor as the model) when a per-plot
-    # dump is given — join by the unique (TractID, PlotID) key.
     model_pred_col = None
     if a.model_per_plot:
-        mp = pd.read_parquet(a.model_per_plot)
-        key = ["TractID", "PlotID"]
-        keep = [c for c in key + ["model_pred"] if c in mp.columns]
-        plots = plots.merge(mp[keep].drop_duplicates(key), on=key, how="inner")
-        model_pred_col = "model_pred" if "model_pred" in plots.columns else None
-        print(f"  ∩ model per-plot dump: {len(plots):,} plots"
-              + (" (with model_pred)" if model_pred_col else ""))
-
-    # NFI forest truth (1-4) or 0 for non-forest / treeless.
-    truth = np.array([
-        (c if (c := derive_nfi_forest_class(r, dominant_frac=a.dominant_frac))
-         is not None else 0)
-        for _, r in plots.iterrows()
-    ])
+        # The per-plot dump IS the plot table for the same-ytor comparison: it
+        # already carries Easting/Northing, the NFI forest truth the model was
+        # scored against (nfi_forest, -1 = treeless), and the model prediction.
+        # No re-join to nfi_plots — (TractID, PlotID) is not unique across
+        # inventory years, so a join fans out; the dump has one row per scored
+        # plot already.
+        plots = pd.read_parquet(a.model_per_plot)
+        model_pred_col = "model_pred"
+        truth = plots["nfi_forest"].to_numpy(dtype=int)
+        truth = np.where(truth < 0, 0, truth)  # treeless (-1) → non-forest (0)
+        print(f"model per-plot dump: {len(plots):,} plots (same ytor as the model)")
+    else:
+        plots = pd.read_parquet(a.plots)
+        print(f"NFI plots: {len(plots):,}")
+        # NFI forest truth (1-4) or 0 for non-forest / treeless.
+        truth = np.array([
+            (c if (c := derive_nfi_forest_class(r, dominant_frac=a.dominant_frac))
+             is not None else 0)
+            for _, r in plots.iterrows()
+        ])
 
     nmd23, raw23 = sample_nmd_unified(a.nmd2023, plots.Easting, plots.Northing)
     covered = raw23 != 0
