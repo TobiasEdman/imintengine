@@ -144,12 +144,19 @@ def nfi_is_mature(row) -> int:
     return int(m is not None and not pd.isna(m) and float(m) >= MATURE_FROM_CLASS)
 
 
+# Plot identifiers carried into a per-plot dump when requested. TractID+PlotID
+# uniquely key an NFI plot, so a downstream consumer can re-join to the full
+# nfi_plots table for coordinates even if Easting/Northing are absent here.
+_PER_PLOT_ID_COLS = ("TractID", "PlotID", "Year", "Easting", "Northing")
+
+
 def score_against_nfi(
     index_df: pd.DataFrame,
     predict_fn,
     *,
     num_classes: int = 23,
     dominant_frac: float = 0.7,
+    per_plot_sink: list | None = None,
 ) -> dict:
     """Sample predictions at plot pixels and score forest-type agreement.
 
@@ -160,6 +167,10 @@ def score_against_nfi(
             Called once per tile.
         num_classes: softmax width (23 for the unified schema).
         dominant_frac: conifer/deciduous dominance threshold.
+        per_plot_sink: if given, one dict per scored plot is appended
+            (identifiers + NFI forest truth + model prediction). Enables an
+            external same-plots comparison (e.g. NMD2023/NMD2018 sampled at the
+            identical coordinates) without re-running inference.
 
     Returns:
         A JSON-able dict: plot counts, forest-type overall accuracy, the
@@ -176,10 +187,18 @@ def score_against_nfi(
         class_map, probs = predict_fn(tile_path)
         for _, r in grp.iterrows():
             rr, cc = int(r["row"]), int(r["col"])
-            pred_class.append(int(class_map[rr, cc]))
-            nfi_class.append(derive_nfi_forest_class(r, dominant_frac=dominant_frac))
+            pc = int(class_map[rr, cc])
+            nc = derive_nfi_forest_class(r, dominant_frac=dominant_frac)
+            pred_class.append(pc)
+            nfi_class.append(nc)
             mature.append(nfi_is_mature(r))
             probs_at_plot.append(np.asarray(probs[:, rr, cc], dtype=np.float64))
+            if per_plot_sink is not None:
+                rec = {k: r[k] for k in _PER_PLOT_ID_COLS if k in r}
+                rec.update(tile_name=str(tile_name),
+                           nfi_forest=int(nc) if nc is not None else -1,
+                           model_pred=pc)
+                per_plot_sink.append(rec)
 
     pred = np.array(pred_class)
     truth = np.array([c if c is not None else -1 for c in nfi_class])
@@ -269,6 +288,10 @@ def main() -> None:
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--plot-index", required=True, help="parquet from nfi_tile_coverage.py")
     ap.add_argument("--out", default="docs/data/nfi-validation.json")
+    ap.add_argument("--dump-per-plot", default=None,
+                    help="parquet path: one row per scored plot (identifiers + "
+                         "NFI forest truth + model prediction) for an external "
+                         "same-plots comparison")
     ap.add_argument("--img-size", type=int, default=504,
                     help="inference crop (504 = 600M patch-14 on 512 tiles)")
     ap.add_argument("--num-classes", type=int, default=23)
@@ -314,7 +337,9 @@ def main() -> None:
     )
     predict_fn = make_model_predict_fn(args.checkpoint, device, args.img_size)
 
-    results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes)
+    per_plot: list | None = [] if args.dump_per_plot else None
+    results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes,
+                                per_plot_sink=per_plot)
     results["_meta"] = {
         "checkpoint": args.checkpoint, "img_size": args.img_size,
         "plots_in_crop": len(index_df), "plots_total": before,
@@ -325,6 +350,12 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2, ensure_ascii=False))
     print(f"\nwrote {out}")
+
+    if args.dump_per_plot:
+        pp = Path(args.dump_per_plot)
+        pp.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(per_plot).to_parquet(pp, index=False)
+        print(f"wrote {pp} ({len(per_plot)} plots)")
 
 
 if __name__ == "__main__":
