@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from validate_against_nfi import (  # noqa: E402
-    derive_nfi_forest_class, FOREST_CLASSES, FOREST_NAMES,
+    derive_nfi_forest_class, FOREST_CLASSES, FOREST_NAMES, accuracy_suite,
 )
 from imint.training.class_schema import nmd_raster_to_lulc  # noqa: E402
 from imint.training.unified_schema import nmd19_to_unified  # noqa: E402
@@ -79,6 +79,10 @@ def score_nmd(nmd_path: str, index_df: pd.DataFrame,
         "forest_type_accuracy": round(acc, 4),
         "per_class_recall": recall,
         "confusion_nfi_x_nmd": confusion,
+        # Standard confusion-matrix suite over ALL plots — same as the model
+        # harness (validate_against_nfi.accuracy_suite), so v8/v8b and NMD are
+        # directly comparable on user's/producer's/F1/overall/kappa.
+        "accuracy_suite": accuracy_suite(list(truth), list(pred)),
     }
 
 
