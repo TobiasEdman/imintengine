@@ -23,6 +23,7 @@ from imint.training.unified_schema import (
     nmd19_to_unified,
     nmd2023_to_unified,
     NMD2023_TO_UNIFIED,
+    merge_all_2023,
     merge_nmd_sjv,
     merge_all,
     get_class_weights,
@@ -59,6 +60,29 @@ def test_nmd2023_mapping():
     # dtype/shape preserved.
     out = nmd2023_to_unified(np.array([[111, 54], [411, 0]], dtype=np.uint16))
     assert out.shape == (2, 2) and out.dtype == np.uint8
+
+
+def test_merge_all_2023():
+    """NMD2023 base + LPIS + SKS overlays, same priority as merge_all."""
+    # row0: tallskog, åker, bar mark, torvtäkt ; row1: busk, granskog, åker, våtmark
+    raw = np.array([[111, 3, 411, 54],
+                    [421, 112, 3, 200]], dtype=np.uint16)
+    lpis = np.zeros((2, 4), dtype=np.uint16)
+    lpis[0, 1] = 4     # SJV 4 (höstvete) on an åker pixel → vete (11)
+    lpis[0, 0] = 4     # vete code on a FOREST pixel → must NOT override (gate)
+    harvest = np.zeros((2, 4), dtype=np.uint8)
+    harvest[1, 1] = 1  # clearcut on granskog → hygge (22)
+    harvest[0, 2] = 1  # clearcut on bar mark (non-forest) → must NOT apply
+    out = merge_all_2023(raw, lpis, harvest)
+    assert out[0, 0] == 1      # tallskog kept (LPIS gate blocks forest override)
+    assert out[0, 1] == 11     # åker + LPIS vete → vete
+    assert out[0, 2] == 27     # bar mark (harvest ignored on non-forest)
+    assert out[0, 3] == 23     # torvtäkt
+    assert out[1, 0] == 24     # buskdominerad
+    assert out[1, 1] == 22     # granskog + clearcut → hygge
+    assert out[1, 2] == 0      # åker without LPIS → background
+    assert out[1, 3] == 7      # öppen våtmark → våtmark
+    assert out.dtype == np.uint8 and int(out.max()) <= 28
 
 
 def test_class_21_is_majs():

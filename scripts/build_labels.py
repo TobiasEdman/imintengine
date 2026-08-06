@@ -36,7 +36,7 @@ from scipy.ndimage import label as nd_label
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.tile_fetch import fetch_nmd_label_local
-from imint.training.unified_schema import merge_all, UNIFIED_CLASS_NAMES
+from imint.training.unified_schema import merge_all, merge_all_2023, UNIFIED_CLASS_NAMES
 
 def _compute_nmd_area_map(nmd_label: np.ndarray, pixel_ha: float = 0.01) -> np.ndarray:
     """Per-pixel area map derived from NMD raster via connected components.
@@ -189,12 +189,18 @@ def build_tile_label(
     nmd_raster: str,
     lpis_dir: str,
     sks_dir: str,
+    nmd_version: int = 2018,
+    label_out_dir: str | None = None,
 ) -> dict:
-    """Build unified 23-class label for one tile from scratch.
+    """Build the unified label for one tile from scratch.
 
     Tile geometry is derived from the on-disk raster (``spectral`` shape)
     or ``tile_size_px`` persisted by the fetcher — no global tile-size
     constants.
+
+    ``nmd_version`` selects the NMD base: 2018 → the 19-class chain + merge_all
+    (23-class output); 2023 → raw NMD2023 codes + merge_all_2023 (29-class
+    output, with the NMD2023-only fine classes). LPIS/SKS overlays are identical.
     """
     from imint.training.tile_config import TileConfig
     from imint.training.tile_bbox import resolve_tile_bbox
@@ -248,7 +254,11 @@ def build_tile_label(
             tile_year = 2022  # default
 
         # --- Step 1: NMD label from local raster ---
-        nmd_label = fetch_nmd_label_local(bbox_3006, tile_cfg, nmd_raster=nmd_raster)
+        # 2023 reads raw uint16 codes (mapped later by merge_all_2023); 2018
+        # reads the 19-class sequential label.
+        nmd_label = fetch_nmd_label_local(
+            bbox_3006, tile_cfg, nmd_raster=nmd_raster, raw=(nmd_version == 2023),
+        )
         if nmd_label is None:
             return {"name": name, "status": "failed", "reason": "no_nmd"}
 
@@ -311,8 +321,11 @@ def build_tile_label(
                 )
                 data["n_mature_polygons"] = np.int32(n_mature)
 
-        # --- Step 4: Merge all → unified 20-class ---
-        unified = merge_all(nmd_label, lpis_mask, harvest_mask)
+        # --- Step 4: Merge all → unified label ---
+        if nmd_version == 2023:
+            unified = merge_all_2023(nmd_label, lpis_mask, harvest_mask)
+        else:
+            unified = merge_all(nmd_label, lpis_mask, harvest_mask)
         data["label"] = unified
         data["nmd_label_raw"] = nmd_label
 
@@ -324,17 +337,23 @@ def build_tile_label(
                 raise AssertionError(
                     f"label.shape={unified.shape} != spectral HW=({sp_h},{sp_w})"
                 )
-        # NMD label must be in the 19-class sequential range.
-        if nmd_label.dtype != np.uint8 or int(nmd_label.max()) > 19:
+        # NMD base sanity: 2018 → 19-class uint8; 2023 → raw uint16 codes.
+        if nmd_version == 2023:
+            if nmd_label.dtype != np.uint16:
+                raise AssertionError(
+                    f"nmd2023 raw must be uint16, got {nmd_label.dtype}"
+                )
+        elif nmd_label.dtype != np.uint8 or int(nmd_label.max()) > 19:
             raise AssertionError(
                 f"nmd_label_raw out of range: dtype={nmd_label.dtype} "
                 f"max={int(nmd_label.max())} (expected uint8, max <= 19)"
             )
-        # Unified label must be in the 23-class range.
-        if int(unified.max()) > 22:
+        # Unified label must be in range: 2018 → <=22, 2023 → <=28.
+        _max_unified = 28 if nmd_version == 2023 else 22
+        if int(unified.max()) > _max_unified:
             raise AssertionError(
                 f"unified label out of range: max={int(unified.max())} "
-                f"(expected <= 22)"
+                f"(expected <= {_max_unified})"
             )
         # Crop-named tiles must end up with at least one parcel — these
         # were specifically fetched at LPIS centroids, so empty is a bug.
@@ -344,24 +363,36 @@ def build_tile_label(
                 f"thread-safety race or a bbox / parquet alignment bug"
             )
 
-        # ── Atomic write: tmp + os.replace ──────────────────────────────
-        # Without atomic write, a failure mid-savez_compressed leaves a
-        # truncated .npz on disk (we hit BadZipFile / EOFError on those
-        # earlier). os.replace is atomic on POSIX so the original tile
-        # stays usable until the new write completes.
-        #
-        # np.savez_compressed unconditionally appends ".npz" to its path
-        # argument unless the path already ends in ".npz". We pass a
-        # path WITHOUT the .npz suffix (`tile.npz.tmp`) so the produced
-        # file lands at `tile.npz.tmp.npz`, then rename onto `tile.npz`.
-        tmp_base = tile_path + ".tmp"          # e.g. /…/foo.npz.tmp
-        np.savez_compressed(tmp_base, **data)  # writes /…/foo.npz.tmp.npz
-        os.replace(tmp_base + ".npz", tile_path)
+        # ── Persist: sidecar label-only, or overwrite the tile atomically ──
+        # label_out_dir writes ONLY the label fields to a separate directory,
+        # leaving the source tile (spectral/aux) untouched — this is how the
+        # NMD2023 relabel avoids overwriting the NMD2018 labels and avoids a
+        # full 806G dataset copy on a tight PVC. The training loader reads
+        # spectral/aux from the source tile and the label from the sidecar.
+        if label_out_dir is not None:
+            _LABEL_KEYS = ("label", "nmd_label_raw", "nmd_area_ha", "label_mask",
+                           "parcel_area_ha", "n_parcels", "harvest_mask",
+                           "n_harvest_polygons", "n_mature_polygons")
+            payload = {k: data[k] for k in _LABEL_KEYS if k in data}
+            payload["tile_size_px"] = np.int32(size_px)
+            out_path = os.path.join(label_out_dir, name + ".npz")
+        else:
+            payload = data
+            out_path = tile_path
+
+        # Atomic write: tmp + os.replace. Without it, a failure mid-savez leaves
+        # a truncated .npz (BadZipFile / EOFError). np.savez_compressed appends
+        # ".npz" unless the path already ends in it, so we pass a suffix-less
+        # tmp base and rename the produced ".npz" onto the target.
+        tmp_base = out_path + ".tmp"
+        np.savez_compressed(tmp_base, **payload)
+        os.replace(tmp_base + ".npz", out_path)
         return {"name": name, "status": "ok"}
 
     except Exception as e:
         # Clean up any half-written tmp file (.tmp.npz from savez)
-        stale = tile_path + ".tmp.npz"
+        stale = (os.path.join(label_out_dir, name + ".npz")
+                 if label_out_dir is not None else tile_path) + ".tmp.npz"
         if os.path.exists(stale):
             try:
                 os.unlink(stale)
@@ -374,6 +405,13 @@ def main():
     p = argparse.ArgumentParser(description="Build unified 20-class labels from scratch")
     p.add_argument("--data-dir", required=True, help="Directory with .npz tiles")
     p.add_argument("--nmd-raster", default="data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif")
+    p.add_argument("--nmd-version", type=int, choices=[2018, 2023], default=2018,
+                   help="NMD base: 2018 (19-class chain, 23-class out) or 2023 "
+                        "(raw codes, 29-class out with fine open-land classes)")
+    p.add_argument("--label-out-dir", default=None,
+                   help="if set, write ONLY the label fields to this dir "
+                        "(sidecar) instead of overwriting the source tile — "
+                        "non-destructive relabel, no full dataset copy")
     p.add_argument("--lpis-dir", default="data/lpis")
     p.add_argument("--sks-dir", default="data/sks")
     p.add_argument("--tile-ids", nargs="+",
@@ -401,6 +439,9 @@ def main():
     args = p.parse_args()
     # Tile size is derived per-tile from the raster shape / tile_size_px key.
     # No CLI flag needed — the script adapts to whatever fetch_unified_tiles wrote.
+
+    if args.label_out_dir:
+        os.makedirs(args.label_out_dir, exist_ok=True)
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
     if args.tile_ids:
@@ -435,7 +476,8 @@ def main():
     with Executor(max_workers=args.workers) as pool:
         futs = {
             pool.submit(build_tile_label, t, args.nmd_raster,
-                        args.lpis_dir, args.sks_dir): t
+                        args.lpis_dir, args.sks_dir, args.nmd_version,
+                        args.label_out_dir): t
             for t in tiles
         }
         for i, f in enumerate(as_completed(futs)):

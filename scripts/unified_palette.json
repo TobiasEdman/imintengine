@@ -1,5 +1,5 @@
 {
- "num_classes": 23,
+ "num_classes": 29,
  "names": [
   "bakgrund",
   "tallskog",
@@ -23,7 +23,13 @@
   "trindsäd",
   "råg",
   "majs",
-  "hygge"
+  "hygge",
+  "torvtäkt",
+  "buskdominerad mark",
+  "risdominerad mark",
+  "gräsdominerad mark",
+  "öppen mark utan vegetation",
+  "snö/is"
  ],
  "colors": [
   [
@@ -140,6 +146,36 @@
    0,
    206,
    209
+  ],
+  [
+   140,
+   25,
+   100
+  ],
+  [
+   171,
+   200,
+   166
+  ],
+  [
+   205,
+   170,
+   102
+  ],
+  [
+   255,
+   210,
+   126
+  ],
+  [
+   224,
+   224,
+   224
+  ],
+  [
+   255,
+   255,
+   255
   ]
  ]
 }

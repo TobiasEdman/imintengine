@@ -602,23 +602,30 @@ def fetch_nmd_label_local(
     bbox_3006: dict,
     tile: "TileConfig",
     nmd_raster: str = "data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif",
+    *,
+    raw: bool = False,
 ) -> np.ndarray | None:
-    """Read NMD 19-class sequential label from local GeoTIFF raster.
+    """Read an NMD label from a local GeoTIFF raster.
 
     Args:
         bbox_3006: Tile bounding box in SWEREF99 TM.
         tile: Tile geometry — used to size the output raster.
         nmd_raster: Path to NMD GeoTIFF.
+        raw: if True, return the raw raster codes as uint16 without the
+            NMD2018 19-class mapping (used for the NMD2023 base, whose 4-digit
+            codes must go through ``nmd2023_to_unified``). No remote fallback in
+            raw mode — NMD2023 is local-only.
 
-    Returns (H, W) uint8 with indices 0-19, or None if unavailable.
-    Falls back to openEO remote fetch if the local raster is missing.
+    Returns (H, W) uint8 indices 0-19 (default), or uint16 raw codes (raw=True),
+    or None if unavailable. Falls back to openEO remote fetch only when the local
+    raster is missing and raw=False.
 
     Thread-safe: each calling thread gets its own rasterio handle.
     """
     tile.assert_bbox_matches(bbox_3006)
 
     if not os.path.exists(nmd_raster):
-        return _fetch_nmd_label_remote(bbox_3006, tile)
+        return None if raw else _fetch_nmd_label_remote(bbox_3006, tile)
 
     w = bbox_3006["west"]; s = bbox_3006["south"]
     e = bbox_3006["east"]; n = bbox_3006["north"]
@@ -626,7 +633,7 @@ def fetch_nmd_label_local(
     try:
         src = _get_nmd_handle(nmd_raster)
     except Exception:
-        return _fetch_nmd_label_remote(bbox_3006, tile)
+        return None if raw else _fetch_nmd_label_remote(bbox_3006, tile)
 
     b = src.bounds
     if w < b.left or e > b.right or s < b.bottom or n > b.top:
@@ -641,8 +648,10 @@ def fetch_nmd_label_local(
     try:
         nmd_raw = src.read(1, window=window)
     except Exception:
-        return _fetch_nmd_label_remote(bbox_3006, tile)
+        return None if raw else _fetch_nmd_label_remote(bbox_3006, tile)
 
+    if raw:
+        return nmd_raw.astype(np.uint16)
     from imint.training.class_schema import nmd_raster_to_lulc
     return nmd_raster_to_lulc(nmd_raw).astype(np.uint8)
 

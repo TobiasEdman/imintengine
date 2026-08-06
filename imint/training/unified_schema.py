@@ -341,6 +341,62 @@ def merge_all(
     return unified
 
 
+# Raw NMD2023 codes eligible for an LPIS crop override: åkermark + öppen
+# fastmark (bare + shrub/dwarf-shrub/grass). Mirrors merge_all's {12,13,14}
+# (cropland + open_bare + open_veg) gate in NMD2018 raw space. Glacier/snow
+# (412/413) and öppen våtmark are excluded — no farm parcels there.
+_NMD2023_AGRI_RAW = np.array(
+    [3, 411, 421, 422, 423, 4211, 4212, 4213, 4221, 4222, 4223, 4231, 4232, 4233],
+    dtype=np.uint16,
+)
+
+
+def merge_all_2023(
+    nmd2023_raw: np.ndarray,
+    lpis_mask: np.ndarray | None = None,
+    harvest_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Merge raw NMD2023 codes + LPIS + SKS harvest into the unified 29-class label.
+
+    Same priority and gating as ``merge_all`` (LPIS > SKS > NMD), but the base
+    comes from ``nmd2023_to_unified`` (0-28) instead of the NMD2018 19-class
+    chain, and the LPIS eligibility gate is expressed in raw NMD2023 codes
+    (``_NMD2023_AGRI_RAW``). Forest classes 1-6 stay SKS-clearcut-eligible.
+
+    Args:
+        nmd2023_raw: (H, W) uint16 raw NMD2023 basskikt v2.1 codes.
+        lpis_mask: (H, W) uint16 raw SJV grödkoder (0 = no parcel), or None.
+        harvest_mask: (H, W) uint8 binary SKS harvest mask (0/1), or None.
+
+    Returns:
+        (H, W) uint8, unified class indices (0-28).
+    """
+    raw = np.asarray(nmd2023_raw, dtype=np.uint16)
+    unified = nmd2023_to_unified(raw)
+    nmd_base = unified.copy()   # forest gate reference — never modified
+
+    # Step 2: LPIS crops — gate on raw NMD2023 agri/open codes.
+    where_agri = np.isin(raw, _NMD2023_AGRI_RAW)
+    if lpis_mask is not None and where_agri.any():
+        sjv_codes = np.asarray(lpis_mask, dtype=np.uint16)
+        has_parcel = (sjv_codes > 0) & where_agri
+        if has_parcel.any():
+            sjv_mapped = np.isin(sjv_codes, list(SJV_TO_UNIFIED.keys()))
+            for sjv_code, unified_class in SJV_TO_UNIFIED.items():
+                mask = (sjv_codes == sjv_code) & where_agri
+                if mask.any():
+                    unified[mask] = unified_class
+            unified[has_parcel & ~sjv_mapped] = _SJV_DEFAULT
+
+    # Step 3: SKS harvest — only where NMD says forest (unified 1–6).
+    _NMD_FOREST = np.array([1, 2, 3, 4, 5, 6], dtype=np.uint8)
+    where_forest = np.isin(nmd_base, _NMD_FOREST)
+    if harvest_mask is not None and where_forest.any():
+        unified[(harvest_mask > 0) & where_forest] = HARVEST_CLASS
+
+    return unified
+
+
 def get_class_weights(
     class_counts: dict[int, int],
     max_weight: float = 10.0,
