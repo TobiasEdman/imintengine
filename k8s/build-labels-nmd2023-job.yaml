@@ -1,0 +1,100 @@
+---
+# Job: build NMD2023-based unified labels (29-class) for all unified_v2_512
+# tiles, NON-DESTRUCTIVELY. Reads NMD2023 v2.1 raster + LPIS + SKS; writes ONLY
+# the label fields to a sidecar dir (/data/nmd2023_labels), leaving the NMD2018
+# tiles untouched. Step 2 of docs/experiments/nmd2023_label_source_retrain.md.
+#
+# Differs from build-labels-512: clones the retrain branch, --nmd-version 2023,
+# --label-out-dir (sidecar, no in-place overwrite, no 806G copy), and NO
+# postprocess_qc (that deletes tiles; our sidecars are separate).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-labels-nmd2023
+  namespace: prithvi-training-default
+  labels:
+    app: ops
+    purpose: build-labels-nmd2023
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600   # 6 h cap
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ops
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: builder
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Build NMD2023 labels (29-class, sidecar) — $(date) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              # Fail loud if the clone predates the NMD2023 flags.
+              grep -q 'label-out-dir' scripts/build_labels.py \
+                && grep -q 'nmd-version' scripts/build_labels.py \
+                || { echo "FATAL: NMD2023 flags missing on clone"; exit 1; }
+
+              echo "Inventory: tiles=$(ls /data/unified_v2_512/*.npz | wc -l) | NMD2023=$(ls -lh /data/nmd2023/NMD2023bas_v2_1.tif | awk '{print $5}') | LPIS=$(ls /data/lpis/*.parquet | wc -l) | SKS=$(ls /data/sks/*.parquet | wc -l)"
+
+              python scripts/build_labels.py \
+                --data-dir     /data/unified_v2_512 \
+                --nmd-raster   /data/nmd2023/NMD2023bas_v2_1.tif \
+                --nmd-version  2023 \
+                --lpis-dir     /data/lpis \
+                --sks-dir      /data/sks \
+                --label-out-dir /data/nmd2023_labels \
+                --workers 16
+
+              echo ""
+              echo "=== class-distribution QC over sidecars ==="
+              python3 - <<'PY'
+              import glob, numpy as np, collections
+              from imint.training.unified_schema import UNIFIED_CLASSES, NUM_UNIFIED_CLASSES
+              files = sorted(glob.glob("/data/nmd2023_labels/*.npz"))
+              print(f"sidecars written: {len(files)}")
+              tot = collections.Counter()
+              for f in files:
+                  lab = np.load(f)["label"]
+                  v, c = np.unique(lab, return_counts=True)
+                  tot.update(dict(zip(v.tolist(), c.tolist())))
+              g = sum(tot.values()) or 1
+              for k in range(NUM_UNIFIED_CLASSES):
+                  print(f"  {k:2d} {UNIFIED_CLASSES[k]:28s} {100*tot.get(k,0)/g:6.3f}%")
+              new = [23,24,25,26,27,28]
+              print("NEW classes present:", {k: tot.get(k,0) for k in new})
+              assert any(tot.get(k,0) > 0 for k in new), "no NMD2023-new classes produced!"
+              PY
+              echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "96Gi"
+            limits:
+              cpu: "16"
+              memory: "96Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
