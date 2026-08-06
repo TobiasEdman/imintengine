@@ -172,17 +172,22 @@ def load_model(ckpt_path: str, device):
 
 
 def run_inference(model, tile_path: str, device, img_size: int = 224,
-                  return_probs: bool = False):
+                  return_probs: bool = False, aux_channel_names=None):
     """Run inference on a single tile.
 
     Returns (H, W) prediction, or ((C, H, W) softmax, (B, H, W) spectral_raw, (N, H, W) aux)
     when return_probs=True (for superpixel refinement).
+
+    ``aux_channel_names`` overrides the aux stack (default: the canonical 10).
+    Pass the 11-channel list (…+"markfukt") for a wetness-aux checkpoint so the
+    fed aux count matches the model's input embedding.
     """
     import torch
     from imint.training.unified_dataset import (
         PRITHVI_MEAN, PRITHVI_STD, N_BANDS,
         AUX_CHANNEL_NAMES, normalize_aux_channel,
     )
+    aux_names = aux_channel_names if aux_channel_names is not None else AUX_CHANNEL_NAMES
 
     data = np.load(tile_path, allow_pickle=True)
     spectral = data.get("spectral", data.get("image")).astype(np.float32)
@@ -202,7 +207,7 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
 
     # Aux channels
     aux_list = []
-    for ch_name in AUX_CHANNEL_NAMES:
+    for ch_name in aux_names:
         if ch_name in data:
             arr = data[ch_name].astype(np.float32)
             arr = arr[y0:y0+crop_sz, x0:x0+crop_sz]
@@ -251,7 +256,7 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
             raw_spectral = raw_spectral[:, y0:y0+crop_sz, x0:x0+crop_sz]
             # Collect raw aux
             raw_aux_list = []
-            for ch_name in AUX_CHANNEL_NAMES:
+            for ch_name in aux_names:
                 if ch_name in data:
                     a = data[ch_name].astype(np.float32)[y0:y0+crop_sz, x0:x0+crop_sz]
                     raw_aux_list.append(a[np.newaxis])

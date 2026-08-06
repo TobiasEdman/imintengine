@@ -239,7 +239,8 @@ def score_against_nfi(
     }
 
 
-def make_model_predict_fn(checkpoint: str, device, img_size: int):
+def make_model_predict_fn(checkpoint: str, device, img_size: int,
+                          aux_channel_names=None):
     """Real ``predict_fn`` for a UNIFIED-format checkpoint (v8+, 10-aux).
 
     Reuses ``inference_comparison.{load_model, run_inference}`` — the same
@@ -271,6 +272,7 @@ def make_model_predict_fn(checkpoint: str, device, img_size: int):
     def predict_fn(tile_path):
         probs, _raw_spectral, _raw_aux = infcmp.run_inference(
             model, tile_path, device, img_size=img_size, return_probs=True,
+            aux_channel_names=aux_channel_names,
         )  # probs: (C, cs, cs)
         return probs.argmax(0).astype(np.int64), probs
 
@@ -295,6 +297,9 @@ def main() -> None:
     ap.add_argument("--img-size", type=int, default=504,
                     help="inference crop (504 = 600M patch-14 on 512 tiles)")
     ap.add_argument("--num-classes", type=int, default=23)
+    ap.add_argument("--enable-markfukt", action="store_true",
+                    help="feed markfukt as the 11th aux (for a wetness-aux "
+                         "checkpoint); appends it to the canonical 10")
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
@@ -335,7 +340,13 @@ def main() -> None:
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
-    predict_fn = make_model_predict_fn(args.checkpoint, device, args.img_size)
+    aux_names = None
+    if args.enable_markfukt:
+        from imint.training.unified_dataset import AUX_CHANNEL_NAMES
+        aux_names = list(AUX_CHANNEL_NAMES) + ["markfukt"]
+        print(f"  markfukt enabled → {len(aux_names)} aux channels")
+    predict_fn = make_model_predict_fn(args.checkpoint, device, args.img_size,
+                                       aux_channel_names=aux_names)
 
     per_plot: list | None = [] if args.dump_per_plot else None
     results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes,
