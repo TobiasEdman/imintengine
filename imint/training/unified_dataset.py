@@ -176,6 +176,52 @@ AUX_CHANNEL_NAMES = [
 # Forest classes in the unified schema (eligible for harvest override)
 _FOREST_CLASSES = frozenset({1, 2, 3, 4, 5})
 
+# Label-derived keys the dataset consumes for the segmentation target and
+# per-pixel loss weighting. When a `label_dir` sidecar is supplied, exactly
+# these keys are sourced from the sidecar npz (if present there) instead of
+# the source tile; every other key (spectral/aux/temporal/coords) still comes
+# from the source tile. `label` is the training target (`_build_label`);
+# `parcel_area_ha`/`nmd_area_ha` drive inverse-area pixel weighting in
+# `__getitem__`. Only these three are read in `__getitem__`; the sidecar's
+# other bookkeeping keys (nmd_label_raw, label_mask, harvest_mask, n_parcels,
+# …) are not consumed here and are left untouched.
+_LABEL_SIDECAR_KEYS = ("label", "parcel_area_ha", "nmd_area_ha")
+
+
+class _LabelOverlay:
+    """Read-only overlay of a label sidecar npz over a source tile npz.
+
+    Presents the union of both mappings so downstream ``data[...]`` /
+    ``data.get(...)`` / ``key in data`` calls work unchanged. For the
+    keys in ``_LABEL_SIDECAR_KEYS`` the sidecar value wins when present;
+    every other lookup falls through to the source tile. Only the label
+    target and area-weighting rasters are ever overridden — spectral, aux,
+    temporal and coordinate arrays always resolve to the source tile.
+    """
+
+    __slots__ = ("_source", "_sidecar")
+
+    def __init__(self, source, sidecar):
+        self._source = source
+        self._sidecar = sidecar
+
+    def _from_sidecar(self, key: str) -> bool:
+        return key in _LABEL_SIDECAR_KEYS and key in self._sidecar
+
+    def __contains__(self, key: str) -> bool:
+        return self._from_sidecar(key) or key in self._source
+
+    def __getitem__(self, key: str):
+        if self._from_sidecar(key):
+            return self._sidecar[key]
+        return self._source[key]
+
+    def get(self, key: str, default=None):
+        if self._from_sidecar(key):
+            return self._sidecar[key]
+        # np.lib.npyio.NpzFile has no .get(); emulate it.
+        return self._source[key] if key in self._source else default
+
 
 # ---------------------------------------------------------------------------
 # Dataset
@@ -228,9 +274,15 @@ class UnifiedDataset(Dataset):
         num_temporal_frames: int = 4,
         model_keys: tuple[str, ...] = (),
         aux_channel_names: Sequence[str] | None = None,
+        label_dir: str | Path | None = None,
     ):
         super().__init__()
         self.patch_size = patch_size
+        # Optional non-destructive label sidecar directory. When set, the
+        # label-derived keys (_LABEL_SIDECAR_KEYS) are read from
+        # <label_dir>/<tile_name>.npz per tile; spectral/aux/temporal/coords
+        # still come from the source tile. None → byte-identical legacy path.
+        self.label_dir = Path(label_dir) if label_dir is not None else None
         self.enable_aux = enable_aux
         # Ordered aux-channel list. Defaults to the canonical 10-channel
         # AUX_CHANNEL_NAMES so the historical behaviour is byte-identical;
@@ -263,10 +315,29 @@ class UnifiedDataset(Dataset):
         self._load_tile_list(lulc_dir, "lulc", split)
         self._load_tile_list(crop_dir, "crop", split)
 
+        # Drop tiles whose label sidecar is missing so training never crashes
+        # mid-epoch on an absent sidecar. Done at construction; logged.
+        if self.label_dir is not None:
+            kept: list[dict] = []
+            dropped = 0
+            for e in self._entries:
+                if (self.label_dir / e["name"]).exists():
+                    kept.append(e)
+                else:
+                    dropped += 1
+            self._entries = kept
+            logger.info(
+                "UnifiedDataset[%s]: label_dir=%s — kept %d tiles, "
+                "dropped %d with missing sidecar",
+                split, self.label_dir, len(kept), dropped,
+            )
+
         if not self._entries:
             raise FileNotFoundError(
                 f"No tiles found for split='{split}'. "
                 f"Searched lulc_dir={lulc_dir}, crop_dir={crop_dir}"
+                + (f", label_dir={self.label_dir} (all sidecars missing?)"
+                   if self.label_dir is not None else "")
             )
 
         logger.info(
@@ -379,6 +450,26 @@ class UnifiedDataset(Dataset):
                 raise RuntimeError(f"No valid tiles found after {_retries} retries from idx {idx}")
             alt = (idx + 1) % len(self._entries)
             return self.__getitem__(alt, _retries=_retries + 1)
+
+        # Overlay the label sidecar (if configured) so `label` and the
+        # area-weighting rasters resolve to <label_dir>/<tile>.npz while
+        # spectral/aux/temporal/coords still come from the source tile.
+        if self.label_dir is not None:
+            try:
+                sidecar = np.load(
+                    self.label_dir / entry["name"], allow_pickle=True
+                )
+                data = _LabelOverlay(data, sidecar)
+            except Exception:
+                # Sidecar unreadable at read-time (should have been dropped
+                # at construction) — skip to the next tile rather than crash.
+                if _retries >= 50:
+                    raise RuntimeError(
+                        f"No valid tiles found after {_retries} retries "
+                        f"from idx {idx}"
+                    )
+                alt = (idx + 1) % len(self._entries)
+                return self.__getitem__(alt, _retries=_retries + 1)
 
         source = entry["source"]
 

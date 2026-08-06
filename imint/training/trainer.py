@@ -977,6 +977,92 @@ class LULCTrainer:
             )
         return out
 
+    def _expand_head_output(self, sd: dict) -> dict:
+        """Warm-start expansion of the segmentation head's final classifier
+        along the OUTPUT dim when the checkpoint has fewer classes than the
+        current model (e.g. v8b's 23 classes → 28 for the NMD2023 finetune).
+
+        The classifier is the ``Conv2d(decoder_channels, num_classes, 1)`` at
+        ``head.head.2`` (see ``imint.fm.upernet.SegmentationHead``), with
+        weight shape ``(num_classes, C, 1, 1)`` and bias ``(num_classes,)``.
+        The overlapping leading rows are copied from the checkpoint
+        (warm-start of the existing classes) and the new trailing rows are
+        zero-initialized (cold start), so the model reproduces the checkpoint
+        on the shared classes and learns the new classes from scratch.
+
+        Without this, ``load_state_dict(strict=False)`` would silently drop the
+        shape-mismatched head, leaving ALL rows — including the 23 existing
+        classes — at random init and destroying the warm-start.
+
+        Operates on a *copy* of ``sd`` and returns it. Only fires on a genuine
+        out-dim increase; never truncates; logs exactly what it did. The layer
+        is located dynamically as the tensor whose out-dim equals num_classes,
+        so it stays correct if the head key layout changes.
+
+        Args:
+            sd: Incoming (prefix-stripped) checkpoint state dict.
+
+        Returns:
+            The state dict with the head weight+bias expanded (new copy);
+            unchanged if no expansion is needed.
+        """
+        import torch
+
+        model_sd = self.model.state_dict()
+        num_classes = self.config.num_classes
+
+        # Locate the classifier weight: the 4-D conv weight under the head
+        # whose out-dim == num_classes in the MODEL, with a matching bias.
+        weight_key = None
+        for key, model_w in model_sd.items():
+            if (".head." in key and key.endswith(".weight")
+                    and model_w.dim() == 4
+                    and model_w.shape[0] == num_classes):
+                weight_key = key
+                break
+        if weight_key is None:
+            return sd  # no head classifier found — nothing to expand
+
+        bias_key = weight_key[: -len("weight")] + "bias"
+        out = dict(sd)
+
+        model_w = model_sd[weight_key]
+        ckpt_w = out.get(weight_key)
+        if ckpt_w is None:
+            return out  # head absent from checkpoint — leave to load_state_dict
+
+        # Only expand on a genuine out-dim increase with otherwise-matching
+        # shape. Anything else is left for load_state_dict to surface.
+        if (ckpt_w.dim() != 4
+                or ckpt_w.shape[1:] != model_w.shape[1:]
+                or model_w.shape[0] <= ckpt_w.shape[0]):
+            return out
+
+        ckpt_cls = ckpt_w.shape[0]
+        model_cls = model_w.shape[0]
+        expanded_w = torch.zeros_like(model_w)
+        expanded_w[:ckpt_cls] = ckpt_w
+        out[weight_key] = expanded_w
+
+        msg_bias = ""
+        if bias_key in out and bias_key in model_sd:
+            ckpt_b = out[bias_key]
+            model_b = model_sd[bias_key]
+            if (ckpt_b.dim() == 1 and model_b.dim() == 1
+                    and ckpt_b.shape[0] == ckpt_cls
+                    and model_b.shape[0] == model_cls):
+                expanded_b = torch.zeros_like(model_b)
+                expanded_b[:ckpt_cls] = ckpt_b
+                out[bias_key] = expanded_b
+                msg_bias = " + bias"
+
+        print(
+            f"  ↑ Expanded seg head '{weight_key}'{msg_bias}: "
+            f"{ckpt_cls} → {model_cls} classes "
+            f"(warm-start {ckpt_cls}, zero-init {model_cls - ckpt_cls} new)"
+        )
+        return out
+
     def _load_spectral_checkpoint(self, path: Path) -> None:
         """Load spectral-only checkpoint for stage-2 aux training.
 
@@ -1013,6 +1099,14 @@ class LULCTrainer:
         # pad the aux input conv so overlapping channels warm-start and the
         # new channel cold-starts. No-op on a channel-count match.
         sd = self._expand_aux_input_conv(sd)
+
+        # Warm-start expansion: if the checkpoint has fewer classes than the
+        # current model (e.g. v8b's 23 classes → 28 for the NMD2023 finetune),
+        # expand the seg head's final classifier along the output dim so the
+        # 23 existing classes warm-start and the 5 new classes cold-start.
+        # Without this, strict=False silently drops the mismatched head and
+        # ALL 28 rows would be random. No-op on a class-count match.
+        sd = self._expand_head_output(sd)
 
         missing, unexpected = self.model.load_state_dict(sd, strict=False)
         # aux_encoder and aux_fusion are expected to be missing

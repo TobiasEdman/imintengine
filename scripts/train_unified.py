@@ -72,6 +72,15 @@ def main():
         "--limit-tiles", type=int, default=None,
         help="Limit total tiles loaded (for quick local testing)",
     )
+    parser.add_argument(
+        "--label-dir", type=str, default=None,
+        help="Optional non-destructive label sidecar directory. When set, "
+             "the label + area-weighting rasters are read from "
+             "<label-dir>/<tile>.npz per tile (spectral/aux/temporal/coords "
+             "still come from the source tile). Tiles without a sidecar are "
+             "dropped at construction. Default None → labels come from the "
+             "source tile (legacy, byte-identical).",
+    )
 
     # Resolution
     parser.add_argument("--patch-size", type=int, default=_defaults.patch_pixels,
@@ -326,6 +335,7 @@ def main():
         multitemporal=config.enable_multitemporal,
         num_temporal_frames=config.num_temporal_frames,
         aux_channel_names=aux_names,
+        label_dir=args.label_dir,
     )
     val_dataset = UnifiedDataset(
         lulc_dir=lulc_dir,
@@ -336,6 +346,7 @@ def main():
         multitemporal=config.enable_multitemporal,
         num_temporal_frames=config.num_temporal_frames,
         aux_channel_names=aux_names,
+        label_dir=args.label_dir,
     )
     print(f"  Train: {len(train_dataset)} tiles, Val: {len(val_dataset)} tiles")
 
