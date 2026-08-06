@@ -33,7 +33,7 @@ from imint.training.unified_schema import (
 # ── 1. Schema identity ─────────────────────────────────────────────────────────
 
 def test_num_classes():
-    assert NUM_UNIFIED_CLASSES == 29, "Schema must have exactly 29 classes"
+    assert NUM_UNIFIED_CLASSES == 28, "Schema must have exactly 28 classes"
 
 
 def test_nmd2023_mapping():
@@ -49,7 +49,7 @@ def test_nmd2023_mapping():
     assert (nmd2023_to_unified(np.array([422, 4223])) == 25).all()  # ris
     assert (nmd2023_to_unified(np.array([423, 4231])) == 26).all()  # gräs
     assert nmd2023_to_unified(np.array([411]))[0] == 27  # bar mark
-    assert (nmd2023_to_unified(np.array([412, 413])) == 28).all()  # snö/is merged
+    assert (nmd2023_to_unified(np.array([412, 413])) == 8).all()  # glaciär/snöfält → öppen mark (no own class)
     # Låg fjällskog: fastmark → lövskog, våtmark → sumpskog.
     assert nmd2023_to_unified(np.array([43]))[0] == 3
     assert (nmd2023_to_unified(np.array([23, 230])) == 5).all()
@@ -82,7 +82,7 @@ def test_merge_all_2023():
     assert out[1, 1] == 22     # granskog + clearcut → hygge
     assert out[1, 2] == 0      # åker without LPIS → background
     assert out[1, 3] == 7      # öppen våtmark → våtmark
-    assert out.dtype == np.uint8 and int(out.max()) <= 28
+    assert out.dtype == np.uint8 and int(out.max()) <= 27
 
 
 def test_class_21_is_majs():

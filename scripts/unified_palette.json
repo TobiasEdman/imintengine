@@ -1,5 +1,5 @@
 {
- "num_classes": 29,
+ "num_classes": 28,
  "names": [
   "bakgrund",
   "tallskog",
@@ -28,8 +28,7 @@
   "buskdominerad mark",
   "risdominerad mark",
   "gräsdominerad mark",
-  "öppen mark utan vegetation",
-  "snö/is"
+  "öppen mark utan vegetation"
  ],
  "colors": [
   [
@@ -171,11 +170,6 @@
    224,
    224,
    224
-  ],
-  [
-   255,
-   255,
-   255
   ]
  ]
 }

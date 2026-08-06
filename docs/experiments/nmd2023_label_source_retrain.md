@@ -71,10 +71,10 @@ nomenklaturen korrekt — och där skiljer sig NMD2023:
       `open_land_bare` (19-klass 13) från `open_land_vegetated` (14) — unified
       kollapsade dem till 8; klass 27 återexponerar den. SLU 33VWC: prod. 96 %,
       user's 65 % — NMD överskattar bar mark, men spektralt separerbart.)
-    - `412` glaciär + `413` snöfält → **ny sammanslagen klass 28 "snö/is"**.
-      Snö/is är spektralt mycket distinkt (extremt ljus, hög synlig reflektans),
-      men glaciär vs snöfält är inte spektralt separerbart från varandra → slås
-      ihop till en klass. Sällsynt/alpin → låg support, class-weighting behövs.
+    - `412` glaciär + `413` snöfält → öppen mark (8). Övervägdes som egen
+      "snö/is"-klass men fick **0 pixlar** under ren-NMD2023 sydlig täckning
+      (glaciärer/permanent snö ligger i norra fjällen v2.1 ej täcker) → ingen
+      egen klass. Återinför om nordlig täckning tillkommer.
     - Efter utbrytningen är generisk **öppen mark (8) nästan tom på NMD2023-
       fastmark** → residual-/legacy-hink (påverkar class-weighting).
 - **Torvtäkt (54)** — **NY egen unified-klass 23**.
@@ -122,9 +122,9 @@ mot en handfull tiles visuellt innan full retrain.
 Samma arkitektur, aux-kanaler och splits som v8b (`scripts/train_unified.py`,
 `--enable-multitemporal`), varmstart från v8b-checkpointen.
 
-**Head-expansion (pga sex nya klasser):** v8b:s klassificeringshuvud är
-23-brett. Utöka till **29** — de 23 befintliga raderna ärvs från v8b, de sex nya
-(23 torvtäkt, 24 busk, 25 ris, 26 gräs, 27 bar öppen mark, 28 snö/is) kallstartar.
+**Head-expansion (pga fem nya klasser):** v8b:s klassificeringshuvud är
+23-brett. Utöka till **28** — de 23 befintliga raderna ärvs från v8b, de fem nya
+(23 torvtäkt, 24 busk, 25 ris, 26 gräs, 27 bar öppen mark) kallstartar.
 Med finetune räcker några epoker för de nya raderna; backbone + 23 gamla rader är
 varmstartade, så konvergensen är snabb.
 
@@ -165,13 +165,13 @@ v8b-2023 / NMD2023 / v8b-2018 / NMD2018.
 - **Träning:** en H100-körning (finetune kortare än full 20-epoks retrain).
 - **Validering:** en 2080ti-inferens (~minuter), PU-fri.
 
-## Schema-ändring — 23 → 29 klasser
+## Schema-ändring — 23 → 28 klasser
 
 Sex nya unified-klasser, alla bara kodade i NMD2023:
 `23 torvtäkt · 24 buskdominerad · 25 risdominerad · 26 gräsdominerad ·
-27 öppen mark utan vegetation (bar) · 28 snö/is (glaciär + snöfält)`.
+27 öppen mark utan vegetation (bar)`.  (snö/is övervägdes men fick 0 support → droppad)
 Touch points: `unified_schema.py` (mappning + `UNIFIED_CLASSES`-namn + colormap),
-`num_classes` 23→29 (loss/head/dataset), `tests/test_schema.py`, dashboard-legend.
+`num_classes` 23→28 (loss/head/dataset), `tests/test_schema.py`, dashboard-legend.
 
 ### Caveats för de nya klasserna
 
@@ -179,7 +179,7 @@ Touch points: `unified_schema.py` (mappning + `UNIFIED_CLASSES`-namn + colormap)
   kommer bara ur NMD2023. Med den rena run:en (ingen NMD2018-fallback) är
   labelkällan enhetlig överallt → **ingen blandad-källa-konflikt** för öppen
   mark. Pris: ~5,5 % nordliga tiles/pixlar utan NMD2023 tränas inte (→ bakgrund).
-- **Låg support (särskilt torvtäkt + snö/is).** Torvtäkt och snö/is är spatialt
+- **Låg support (särskilt torvtäkt).** Torvtäkt är spatialt
   små → få pixlar. Busk/ris/gräs är vanligare men fortfarande minoritet. Kräver
   class-weighting (`compute_class_weights`, sqrt/inverse) eller riktad sampling;
   annars lärs de rara klasserna inte trots att de är separerbara.
@@ -197,11 +197,11 @@ Touch points: `unified_schema.py` (mappning + `UNIFIED_CLASSES`-namn + colormap)
 
 ## Beslut (fastställda 2026-08-05)
 
-1. **Träning:** finetune från v8b (ej full retrain), head 23 → 29.
+1. **Träning:** finetune från v8b (ej full retrain), head 23 → 28.
 2. **Ren NMD2023-run** (ingen NMD2018-fallback). Pixlar utan NMD2023 → bakgrund/
    `ignore_index`; enhetlig labelkälla, ingen blandad-källa-konflikt. Pris:
    ~5,5 % nordliga tiles tränas inte. Hybrid sparas för produktionsmodell.
-3. **Nya klasser (schema 23 → 29):** torvtäkt (54) → 23; busk (421/42x) → 24;
+3. **Nya klasser (schema 23 → 28):** torvtäkt (54) → 23; busk (421/42x) → 24;
    ris (422/42x) → 25; gräs (423/42x) → 26; bar öppen mark (411) → 27;
    snö/is (glaciär 412 + snöfält 413, sammanslagna) → 28. Fuktnivån
    (torr/frisk/frisk-fuktig) bortkollapsad i första run:en — ej spektral.

@@ -25,7 +25,7 @@ import numpy as np
 
 # ── Unified Class Schema ──────────────────────────────────────────────────────
 
-NUM_UNIFIED_CLASSES = 29
+NUM_UNIFIED_CLASSES = 28
 
 UNIFIED_CLASSES = {
     0: "bakgrund",          # ignore_index
@@ -65,7 +65,10 @@ UNIFIED_CLASSES = {
     25: "risdominerad mark",    # NMD2023 422/42xx — dwarf-shrub-dominated
     26: "gräsdominerad mark",   # NMD2023 423/42xx — grass-dominated
     27: "öppen mark utan vegetation",  # NMD2023 411 — bare ground/rock
-    28: "snö/is",           # NMD2023 412+413 — glacier + permanent snowfield
+    # NOTE: NMD2023 glaciär (412) + snöfält (413) → öppen mark (8). A dedicated
+    # snö/is class had 0 pixel support under the pure-NMD2023 southern coverage
+    # (glaciers/permanent snow are in the far-northern fjäll v2.1 doesn't cover),
+    # so it is not carried. Re-introduce if northern coverage is added later.
 }
 
 UNIFIED_CLASS_NAMES = [UNIFIED_CLASSES[i] for i in range(NUM_UNIFIED_CLASSES)]
@@ -101,7 +104,6 @@ UNIFIED_COLORS = {
     25: (205, 170, 102),    # risdominerad — tan-brown
     26: (255, 210, 126),    # gräsdominerad — light amber
     27: (224, 224, 224),    # öppen mark utan vegetation — light grey
-    28: (255, 255, 255),    # snö/is — white
 }
 
 
@@ -161,7 +163,7 @@ NMD2023_TO_UNIFIED: dict[int, int] = {
     61: 10, 62: 10,
     # Öppen fastmark — structure broken out, moisture level (4-digit) collapsed
     411: 27,                                   # utan vegetation (bar) → 27
-    412: 28, 413: 28,                          # glaciär + snöfält → snö/is 28
+    412: 8, 413: 8,                            # glaciär + snöfält → öppen mark (rare/northern; no own class)
     421: 24, 4211: 24, 4212: 24, 4213: 24,     # buskdominerad → 24
     422: 25, 4221: 25, 4222: 25, 4223: 25,     # risdominerad → 25
     423: 26, 4231: 26, 4232: 26, 4233: 26,     # gräsdominerad → 26

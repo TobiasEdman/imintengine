@@ -348,8 +348,8 @@ def build_tile_label(
                 f"nmd_label_raw out of range: dtype={nmd_label.dtype} "
                 f"max={int(nmd_label.max())} (expected uint8, max <= 19)"
             )
-        # Unified label must be in range: 2018 → <=22, 2023 → <=28.
-        _max_unified = 28 if nmd_version == 2023 else 22
+        # Unified label must be in range: 2018 → <=22, 2023 → <=27.
+        _max_unified = 27 if nmd_version == 2023 else 22
         if int(unified.max()) > _max_unified:
             raise AssertionError(
                 f"unified label out of range: max={int(unified.max())} "
