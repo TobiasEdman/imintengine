@@ -157,6 +157,7 @@ class TrainingConfig:
     enable_diameter_channel: bool = False                # Medeldiameter (Dgv), cm
     enable_dem_channel: bool = False                     # Copernicus DEM (terrain elev.)
     enable_vpp_channels: bool = False                    # HR-VPP phenology (5 bands)
+    enable_markfukt_channel: bool = False                # SLU Markfuktighetskarta (soil moisture)
     aux_cache_enabled: bool = True                       # Cache aux tiles as .npy
 
     # Z-score normalization for aux channels: {name: (mean, std)}
@@ -173,6 +174,13 @@ class TrainingConfig:
         "vpp_length": (141.61, 41.39),     # days, season length
         "vpp_maxv":   (0.88, 0.57),        # PPI unitless, max vegetation index
         "vpp_minv":   (0.04, 0.05),        # PPI unitless, min vegetation index
+        # markfukt: SLU Markfuktighetskarta soil-moisture probability. In the
+        # npz it is already float32 in [0.01, 1.00] (raw code/100) with 1.01 =
+        # saturated water and NaN = nodata (see tile_fetch.py L546). NaN is
+        # filled with the channel's finite mean before z-score in the loader.
+        # (mean, std) are a broad prior over the [0, 1.01] probability range;
+        # refine with compute_aux_stats.py once real-tile stats are gathered.
+        "markfukt":   (0.50, 0.25),        # soil-moisture probability, unitless
     })
 
     # ── Validation split (latitude-based) ─────────────────────────────────
@@ -190,6 +198,14 @@ class TrainingConfig:
     save_every_n_epochs: int = 5
     resume_from_checkpoint: str | None = None     # Path to last_checkpoint.pt
     freeze_spectral: bool = False                  # Stage 2: freeze backbone+decoder, train only aux
+    # Warm-start finetune: load model weights from a best_model.pt (no
+    # optimizer/epoch resume, nothing frozen) and start a fresh schedule.
+    # Used to finetune an existing checkpoint into a new architecture — e.g.
+    # expanding v8b's 10-aux input to 11 aux (markfukt) via
+    # _expand_aux_input_conv. Distinct from resume_from_checkpoint (which
+    # restores full training state) and freeze_spectral (which freezes all
+    # but the aux branch).
+    warm_start_from_checkpoint: str | None = None
 
     # ── Prithvi normalization (from config.json, DN-scale) ────────────────
     prithvi_mean: list[float] = field(
@@ -225,6 +241,12 @@ class TrainingConfig:
                 "vpp_sosd", "vpp_eosd", "vpp_length",
                 "vpp_maxv", "vpp_minv",
             ])
+        # markfukt is appended LAST (after vpp) so the existing 10-aux
+        # ordering is untouched — the warm-started channels keep their
+        # index and the new markfukt channel is the trailing one that
+        # cold-starts on checkpoint expansion.
+        if self.enable_markfukt_channel:
+            names.append("markfukt")
         return tuple(names)
 
     def __post_init__(self) -> None:

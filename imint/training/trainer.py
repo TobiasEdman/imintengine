@@ -424,11 +424,28 @@ class LULCTrainer:
               f"lr={cfg.lr}, device={self.device}")
         print(f"{'='*60}\n")
 
+        # ── Warm-start finetune ───────────────────────────────────
+        # Load model weights from a best_model.pt and start a fresh
+        # schedule (no optimizer/epoch resume, nothing frozen). Expands
+        # the aux input conv on a channel-count mismatch (e.g. v8b 10 → 11
+        # aux with markfukt). Takes precedence over resume when both set.
+        if cfg.warm_start_from_checkpoint:
+            warm_path = Path(cfg.warm_start_from_checkpoint)
+            if not warm_path.exists():
+                raise FileNotFoundError(
+                    f"warm_start_from_checkpoint not found: {warm_path}"
+                )
+            print(f"  Warm-start finetune from: {warm_path}")
+            self._load_spectral_checkpoint(warm_path)
+            self._init_training_log()
+            # Fall through to the normal training loop with start_epoch=1,
+            # a fresh optimizer, and every parameter trainable.
+
         # ── Resume from checkpoint ────────────────────────────────
         resume_path = None
-        if cfg.resume_from_checkpoint:
+        if cfg.resume_from_checkpoint and not cfg.warm_start_from_checkpoint:
             resume_path = Path(cfg.resume_from_checkpoint)
-        else:
+        elif not cfg.warm_start_from_checkpoint:
             auto_path = ckpt_dir / "last_checkpoint.pt"
             if auto_path.exists():
                 resume_path = auto_path
@@ -450,7 +467,9 @@ class LULCTrainer:
                 best_epoch = state["best_epoch"]
                 patience_counter = state["patience_counter"]
                 train_loss_history = state.get("train_loss_history", [])
-        else:
+        elif not cfg.warm_start_from_checkpoint:
+            # Fresh run (no resume, no warm-start). Warm-start already
+            # loaded weights + init'd the log above, so skip here.
             if cfg.freeze_spectral:
                 self._freeze_for_aux_training()
             self._init_training_log()
@@ -897,6 +916,67 @@ class LULCTrainer:
             print(f"  ⚠ WARNING: Checkpoint has n_aux_channels="
                   f"{ckpt_n_aux}, current config has {current_n_aux}.")
 
+    def _expand_aux_input_conv(self, sd: dict) -> dict:
+        """Warm-start expansion of the aux input conv when the checkpoint
+        has fewer aux channels than the current model (e.g. 10 → 11 after
+        enabling markfukt).
+
+        The auxiliary branch's first conv (``lidar_branch.net.0.conv`` for
+        multilevel-aux, ``aux_encoder.net.0.conv`` for legacy late fusion)
+        has weight shape ``(out, in_aux, kH, kW)``. When ``in_aux`` grows,
+        the overlapping channels are copied from the checkpoint and the new
+        trailing channel(s) are zero-initialized (cold start) so the model
+        starts identical to the checkpoint on the existing channels and
+        learns the new channel's contribution from scratch.
+
+        Operates on a *copy* of the given state dict and returns it; other
+        tensors are untouched. Only fires on a genuine channel-count
+        mismatch and logs exactly what it did.
+
+        Args:
+            sd: Incoming (prefix-stripped) checkpoint state dict.
+
+        Returns:
+            The state dict with the aux input-conv weight expanded in place
+            (new copy); unchanged if no expansion is needed.
+        """
+        import torch
+
+        model_sd = self.model.state_dict()
+        # The one weight whose in-channels == number of aux channels.
+        candidates = [
+            "lidar_branch.net.0.conv.weight",
+            "aux_encoder.net.0.conv.weight",
+        ]
+        out = dict(sd)
+        for key in candidates:
+            if key not in out or key not in model_sd:
+                continue
+            ckpt_w = out[key]
+            model_w = model_sd[key]
+            # Shape: (out_ch, in_aux, kH, kW). Expand along dim=1 only.
+            if ckpt_w.shape == model_w.shape:
+                continue
+            if (ckpt_w.dim() != 4 or model_w.dim() != 4
+                    or ckpt_w.shape[0] != model_w.shape[0]
+                    or ckpt_w.shape[2:] != model_w.shape[2:]):
+                # Non-channel mismatch — leave it for load_state_dict to
+                # surface rather than silently reshaping something else.
+                continue
+            ckpt_in = ckpt_w.shape[1]
+            model_in = model_w.shape[1]
+            if model_in <= ckpt_in:
+                continue  # only ever expand, never truncate silently
+            expanded = torch.zeros_like(model_w)
+            expanded[:, :ckpt_in] = ckpt_w
+            out[key] = expanded
+            print(
+                f"  ↑ Expanded aux input conv '{key}': "
+                f"{ckpt_in} → {model_in} in-channels "
+                f"(copied {ckpt_in}, zero-init {model_in - ckpt_in} new)"
+            )
+        return out
+
     def _load_spectral_checkpoint(self, path: Path) -> None:
         """Load spectral-only checkpoint for stage-2 aux training.
 
@@ -927,6 +1007,12 @@ class LULCTrainer:
         for k, v in raw_sd.items():
             key = k[len("model."):] if k.startswith("model.") else k
             sd[key] = v
+
+        # Warm-start expansion: if the checkpoint has fewer aux channels
+        # than the current model (e.g. v8b's 10 aux → 11 with markfukt),
+        # pad the aux input conv so overlapping channels warm-start and the
+        # new channel cold-starts. No-op on a channel-count match.
+        sd = self._expand_aux_input_conv(sd)
 
         missing, unexpected = self.model.load_state_dict(sd, strict=False)
         # aux_encoder and aux_fusion are expected to be missing

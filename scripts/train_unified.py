@@ -179,6 +179,10 @@ def main():
                         help="Disable HR-VPP phenology aux channels (sosd, eosd)")
     parser.add_argument("--disable-all-aux", action="store_true",
                         help="Disable all auxiliary channels")
+    parser.add_argument("--enable-markfukt", action="store_true",
+                        help="Enable SLU Markfuktighetskarta soil-moisture "
+                             "aux channel (11th aux, appended last). Default "
+                             "OFF — keeps the 10-aux path byte-identical.")
 
     # Temporal
     parser.add_argument("--enable-multitemporal", action="store_true",
@@ -191,6 +195,12 @@ def main():
                         help="Stage 2: freeze backbone+decoder, train only AuxEncoder")
     parser.add_argument("--resume-from", type=str, default=None,
                         help="Path to checkpoint to load (spectral model for stage 2)")
+    parser.add_argument("--warm-start-from", type=str, default=None,
+                        help="Finetune: warm-start model weights from a "
+                             "best_model.pt (no optimizer/epoch resume, "
+                             "nothing frozen). Expands the aux input conv on "
+                             "a channel-count mismatch (e.g. 10 → 11 aux with "
+                             "--enable-markfukt).")
 
     # Dashboard
     parser.add_argument("--dashboard", action="store_true",
@@ -283,8 +293,12 @@ def main():
         enable_diameter_channel=True,
         enable_dem_channel=True,
         enable_vpp_channels=True,
+        # markfukt: 11th aux, flag-gated, default OFF. When on it is
+        # appended LAST so the existing 10-aux ordering is untouched.
+        enable_markfukt_channel=args.enable_markfukt,
         freeze_spectral=args.freeze_spectral,
         resume_from_checkpoint=args.resume_from,
+        warm_start_from_checkpoint=args.warm_start_from,
     )
 
     # ── Load datasets ─────────────────────────────────────────────
@@ -300,6 +314,9 @@ def main():
     lulc_dir = data_dirs[0] if len(data_dirs) > 0 else None
     crop_dir = data_dirs[1] if len(data_dirs) > 1 else None
 
+    # Honour the config's enabled aux set (adds markfukt when the flag is
+    # on; otherwise identical to the canonical 10-channel list).
+    aux_names = config.enabled_aux_names
     train_dataset = UnifiedDataset(
         lulc_dir=lulc_dir,
         crop_dir=crop_dir,
@@ -308,6 +325,7 @@ def main():
         enable_aux=True,
         multitemporal=config.enable_multitemporal,
         num_temporal_frames=config.num_temporal_frames,
+        aux_channel_names=aux_names,
     )
     val_dataset = UnifiedDataset(
         lulc_dir=lulc_dir,
@@ -317,11 +335,11 @@ def main():
         enable_aux=True,
         multitemporal=config.enable_multitemporal,
         num_temporal_frames=config.num_temporal_frames,
+        aux_channel_names=aux_names,
     )
     print(f"  Train: {len(train_dataset)} tiles, Val: {len(val_dataset)} tiles")
 
     # Print aux channel summary
-    aux_names = config.enabled_aux_names
     print(f"  Aux channels ({len(aux_names)}): {', '.join(aux_names)}")
 
     if args.evaluate_only:

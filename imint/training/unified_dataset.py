@@ -109,10 +109,19 @@ AUX_NORM = {
     "vpp_length": (141.61, 41.39),
     "vpp_maxv": (0.88, 0.57),
     "vpp_minv": (0.04, 0.05),
+    # markfukt: SLU soil-moisture probability, already float32 [0.01, 1.01]
+    # in the npz with NaN nodata. See config.aux_norm for provenance.
+    "markfukt": (0.50, 0.25),
 }
 
 # Channels that need log(1+x) pre-transform before z-score
 AUX_LOG_TRANSFORM = {"volume", "basal_area"}
+
+# Channels whose npz nodata is encoded as NaN (float) rather than 0.
+# For these, NaN is filled with the channel's z-score mean BEFORE the
+# transform so nodata normalizes to ~0 and never leaks NaN into the model.
+# (Every other aux channel uses 0 as its nodata sentinel.)
+AUX_NAN_NODATA_CHANNELS = {"markfukt"}
 
 # HR-VPP date channels: raw band is YYDDD = (year-2000)*1000 + DOY.
 # Decode to day-of-year (value % 1000) before z-score; NoData (0) maps to
@@ -137,6 +146,12 @@ def normalize_aux_channel(name: str, x):
     """
     scalar = np.isscalar(x) or np.ndim(x) == 0
     arr = np.asarray(x, dtype=np.float32)
+    # NaN-nodata channels (markfukt): replace NaN with the channel mean so
+    # nodata normalizes to ~0 rather than propagating NaN through the model.
+    # Fall back to a constant if the whole tile is nodata (no finite pixels).
+    if name in AUX_NAN_NODATA_CHANNELS:
+        fill = AUX_NORM.get(name, (0.0, 1.0))[0]
+        arr = np.where(np.isnan(arr), np.float32(fill), arr)
     if name in AUX_YYDDD_DATE_CHANNELS:
         # YYDDD -> DOY; NoData (0) -> mean so it normalizes to 0 rather
         # than a large negative outlier.
@@ -212,10 +227,18 @@ class UnifiedDataset(Dataset):
         multitemporal: bool = False,
         num_temporal_frames: int = 4,
         model_keys: tuple[str, ...] = (),
+        aux_channel_names: Sequence[str] | None = None,
     ):
         super().__init__()
         self.patch_size = patch_size
         self.enable_aux = enable_aux
+        # Ordered aux-channel list. Defaults to the canonical 10-channel
+        # AUX_CHANNEL_NAMES so the historical behaviour is byte-identical;
+        # pass config.enabled_aux_names to opt in to markfukt (11 channels).
+        self.aux_channel_names: tuple[str, ...] = (
+            tuple(AUX_CHANNEL_NAMES) if aux_channel_names is None
+            else tuple(aux_channel_names)
+        )
         self.augment = (split == "train") if augment_override is None else augment_override
         self.multitemporal = multitemporal
         self.num_temporal_frames = num_temporal_frames
@@ -412,7 +435,7 @@ class UnifiedDataset(Dataset):
         # crop+flip transform is applied. Channel-counts tracked so we
         # can slice them back out post-crop.
         n_area = 1
-        n_aux = len(AUX_CHANNEL_NAMES) if self.enable_aux else 0
+        n_aux = len(self.aux_channel_names) if self.enable_aux else 0
         extras_specs: list[tuple[str, int]] = []  # [(name, n_channels)]
         if self.model_keys:
             extras_tensors = self._build_model_specific_tensors(data, source)
@@ -482,7 +505,7 @@ class UnifiedDataset(Dataset):
 
         # Attach each auxiliary channel as (1, H, W) tensor
         if aux_stack is not None:
-            for i, ch_name in enumerate(AUX_CHANNEL_NAMES):
+            for i, ch_name in enumerate(self.aux_channel_names):
                 result[ch_name] = torch.from_numpy(
                     np.ascontiguousarray(aux_stack[i:i + 1])
                 )  # (1, H', W')
@@ -846,13 +869,19 @@ class UnifiedDataset(Dataset):
     # Auxiliary channels
     # ------------------------------------------------------------------
 
-    @staticmethod
     def _load_aux_channels(
+        self,
         data: np.lib.npyio.NpzFile,
         h: int,
         w: int,
     ) -> np.ndarray:
-        """Load, zero-fill, and z-score-normalize auxiliary channels.
+        """Load, fill, and z-score-normalize the enabled auxiliary channels.
+
+        Channels and their order come from ``self.aux_channel_names``
+        (defaults to the canonical 10-channel ``AUX_CHANNEL_NAMES``).
+        A missing channel is filled with the channel's nodata sentinel:
+        ``NaN`` for NaN-nodata channels (markfukt) so it normalizes to the
+        channel mean, ``0`` otherwise (existing behaviour).
 
         Args:
             data: Loaded .npz file.
@@ -863,7 +892,7 @@ class UnifiedDataset(Dataset):
             (N, H, W) float32 stacked aux channels, normalized.
         """
         aux_arrays: list[np.ndarray] = []
-        for ch_name in AUX_CHANNEL_NAMES:
+        for ch_name in self.aux_channel_names:
             if ch_name in data:
                 arr = data[ch_name].astype(np.float32)
                 # Ensure spatial dimensions match
@@ -871,17 +900,23 @@ class UnifiedDataset(Dataset):
                     arr = arr[:h, :w]
                     # Pad if smaller (edge case)
                     if arr.shape[0] < h or arr.shape[1] < w:
-                        padded = np.zeros((h, w), dtype=np.float32)
+                        fill = (np.nan if ch_name in AUX_NAN_NODATA_CHANNELS
+                                else 0.0)
+                        padded = np.full((h, w), fill, dtype=np.float32)
                         padded[:arr.shape[0], :arr.shape[1]] = arr
                         arr = padded
             else:
-                arr = np.zeros((h, w), dtype=np.float32)
+                # Absent channel → all-nodata. NaN sentinel for markfukt
+                # (normalizes to channel mean), 0 for every other channel.
+                fill = (np.nan if ch_name in AUX_NAN_NODATA_CHANNELS
+                        else 0.0)
+                arr = np.full((h, w), fill, dtype=np.float32)
             aux_arrays.append(arr)
 
         aux_stack = np.stack(aux_arrays, axis=0)  # (N, H, W)
 
         # Decode / log-transform / z-score, per channel (shared transform).
-        for i, ch_name in enumerate(AUX_CHANNEL_NAMES):
+        for i, ch_name in enumerate(self.aux_channel_names):
             aux_stack[i] = normalize_aux_channel(ch_name, aux_stack[i])
 
         return aux_stack
