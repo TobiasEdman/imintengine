@@ -1,0 +1,85 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-validate-v8b-markfukt
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: nfi-validate-v8b-markfukt
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: validate
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== NFI validation — v8b + markfukt (wetness aux) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
+                pandas pyarrow rasterio pyproj
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              grep -q 'enable-markfukt' scripts/validate_against_nfi.py \
+                || { echo "FATAL: --enable-markfukt missing on clone"; exit 1; }
+
+              OUT=/data/nfi_eval/nfi_validation_v8b_markfukt.json
+              PP=/data/nfi_eval/v8b_markfukt_per_plot.parquet
+              python3 scripts/validate_against_nfi.py \
+                --checkpoint /data/checkpoints/v8b_markfukt/best_model.pt \
+                --plot-index /data/nfi/nfi_index_unified_v2_512.parquet \
+                --img-size 504 \
+                --enable-markfukt \
+                --out "$OUT" \
+                --dump-per-plot "$PP" \
+                --device cuda
+
+              echo ""; echo "=== validation JSON ==="; cat "$OUT"
+              echo ""; echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
