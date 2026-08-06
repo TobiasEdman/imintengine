@@ -98,6 +98,9 @@ def load_model(ckpt_path: str, device):
     ck_cfg = ck.get("config", {})
     num_frames = ck_cfg.get("num_temporal_frames", cfg.num_temporal_frames)
     n_aux = ck_cfg.get("n_aux_channels", 11)
+    # num_classes from the checkpoint (23 for v8b, 28 for the NMD2023 finetune),
+    # so the head is built to match the saved weights rather than the default.
+    n_classes = ck_cfg.get("num_classes", cfg.num_classes)
 
     # State-dict first so we can inspect shapes for backbone detection
     sd = {k.replace("model.", "", 1): v for k, v in
@@ -154,7 +157,7 @@ def load_model(ckpt_path: str, device):
     model = build_segmentation_from_spec(
         spec,
         encoder=backbone,
-        num_classes=cfg.num_classes,
+        num_classes=n_classes,
         img_size=img_size,
         decoder_channels=cfg.decoder_channels,
         dropout=getattr(cfg, "dropout", 0.1),
