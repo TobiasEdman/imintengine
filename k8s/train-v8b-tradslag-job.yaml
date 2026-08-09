@@ -20,6 +20,16 @@ spec:
       restartPolicy: Never
       nodeSelector:
         accelerator: nvidia-h100
+      # srv02's GPU admission is desynced (UnexpectedAdmissionError 2026-08-09,
+      # 2 pods failed) — exclude it; the job queues until srv01/srv03 frees.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: [p02r08srv02]
       containers:
         - name: trainer
           image: python:3.11-slim
