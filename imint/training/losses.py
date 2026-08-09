@@ -296,6 +296,77 @@ class LovaszSoftmaxLoss(nn.Module):
         return torch.stack(losses).mean()
 
 
+# ── Trädslag fraction loss (continuous crown-cover supervision) ──────────────
+
+
+class FractionLoss(nn.Module):
+    """Masked regression loss for the Trädslag fraction head.
+
+    Supervises the fraction head's ``sigmoid(logits)`` against the NMD2023
+    Trädslag crown-cover targets in [0, 1] (raw 0-100 rasters divided by 100).
+    Pixels are masked out where the target is unreliable OR carries no
+    supervision:
+
+        mask_out = frac_unreliable  OR  (all K species fractions == 0)
+
+    An all-zero target means "no supervision here" (outside NMD2023 coverage,
+    ~5.5% of pixels), NOT "0% of every species is present" — supervising toward
+    zero there would teach the model that unlabelled land is treeless. Masking
+    is applied per-pixel (shared across the K channels): a pixel either
+    contributes for all species or for none.
+
+    Args:
+        loss_type: ``"l1"`` (default) or ``"smooth_l1"`` (Huber, beta=0.1).
+    """
+
+    def __init__(self, loss_type: str = "l1"):
+        super().__init__()
+        if loss_type not in ("l1", "smooth_l1"):
+            raise ValueError(f"loss_type must be l1|smooth_l1, got {loss_type!r}")
+        self.loss_type = loss_type
+
+    def forward(
+        self,
+        frac_logits: torch.Tensor,
+        frac_target: torch.Tensor,
+        frac_unreliable: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute the masked fraction loss.
+
+        Args:
+            frac_logits: (B, K, H, W) raw fraction-head logits.
+            frac_target: (B, K, H, W) target crown-cover in [0, 1].
+            frac_unreliable: (B, H, W) uint8/bool — 1 where the pixel is
+                flagged unreliable (osakerklassning).
+
+        Returns:
+            Scalar loss (mean over unmasked pixel-species entries). Returns a
+            differentiable 0 when no pixel is supervised in the batch.
+        """
+        pred = torch.sigmoid(frac_logits)
+        target = frac_target.to(pred)
+
+        # Per-pixel supervision mask (B, 1, H, W): keep where reliable AND at
+        # least one species is present.
+        unreliable = frac_unreliable.to(pred).bool()          # (B, H, W)
+        has_signal = (target > 0).any(dim=1)                  # (B, H, W)
+        keep = (~unreliable) & has_signal                     # (B, H, W)
+        keep = keep.unsqueeze(1).to(pred)                     # (B, 1, H, W)
+
+        if self.loss_type == "smooth_l1":
+            per = F.smooth_l1_loss(pred, target, beta=0.1, reduction="none")
+        else:
+            per = torch.abs(pred - target)                    # (B, K, H, W)
+
+        per = per * keep
+        denom = keep.sum() * pred.shape[1]                    # unmasked entries
+        if denom > 0:
+            return per.sum() / denom
+        # Nothing to supervise this batch — return a differentiable 0 so the
+        # multi-task sum stays connected to the graph.
+        return (frac_logits.sum() * 0.0)
+
+
 # ── Combined loss ─────────────────────────────────────────────────────────────
 
 

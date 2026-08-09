@@ -166,6 +166,26 @@ def main():
     parser.add_argument("--lovasz-weight", type=float, default=_defaults.lovasz_weight,
                         help="Lovász-softmax loss weight (0.0 = disabled, 0.3 = recommended)")
 
+    # Trädslag fraction head (multi-task continuous crown-cover supervision)
+    parser.add_argument("--enable-tradslag-head", action="store_true",
+                        help="Add a parallel fraction head (Conv2d→4) on the "
+                             "decoder feature, supervised by NMD2023 Trädslag "
+                             "crown-cover targets (masked L1, multi-task). "
+                             "Default OFF → existing paths byte-identical.")
+    parser.add_argument("--frac-dir", type=str, default=None,
+                        help="Trädslag fraction sidecar directory "
+                             "(<frac-dir>/<tile>.npz with keys frac/"
+                             "frac_unreliable). Required for the frac loss to "
+                             "supervise; tiles without a sidecar train on hard "
+                             "labels only.")
+    parser.add_argument("--lambda-frac", type=float, default=_defaults.lambda_frac,
+                        help="Weight on the fraction loss: "
+                             "L = L_hard + lambda_frac * L_frac (default 1.0)")
+    parser.add_argument("--frac-loss-type", type=str,
+                        default=_defaults.frac_loss_type,
+                        choices=["l1", "smooth_l1"],
+                        help="Fraction regression loss (default l1)")
+
     # Early stopping metric
     parser.add_argument("--early-stop-metric", type=str,
                         default=_defaults.early_stop_metric,
@@ -308,6 +328,10 @@ def main():
         freeze_spectral=args.freeze_spectral,
         resume_from_checkpoint=args.resume_from,
         warm_start_from_checkpoint=args.warm_start_from,
+        # Trädslag fraction head (multi-task). Off by default.
+        enable_tradslag_head=args.enable_tradslag_head,
+        lambda_frac=args.lambda_frac,
+        frac_loss_type=args.frac_loss_type,
     )
 
     # ── Load datasets ─────────────────────────────────────────────
@@ -336,6 +360,7 @@ def main():
         num_temporal_frames=config.num_temporal_frames,
         aux_channel_names=aux_names,
         label_dir=args.label_dir,
+        frac_dir=args.frac_dir,
     )
     val_dataset = UnifiedDataset(
         lulc_dir=lulc_dir,
@@ -347,6 +372,7 @@ def main():
         num_temporal_frames=config.num_temporal_frames,
         aux_channel_names=aux_names,
         label_dir=args.label_dir,
+        frac_dir=args.frac_dir,
     )
     print(f"  Train: {len(train_dataset)} tiles, Val: {len(val_dataset)} tiles")
 

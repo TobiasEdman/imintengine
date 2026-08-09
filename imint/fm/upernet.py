@@ -366,12 +366,16 @@ class PrithviSegmentationModel(nn.Module):
         pool_sizes: tuple[int, ...] | None = None,
         enable_temporal_pooling: bool = True,
         enable_multilevel_aux: bool = True,
+        enable_tradslag_head: bool = False,
+        num_tradslag: int = 4,
     ):
         super().__init__()
         self.feature_indices = list(feature_indices)
         self.n_aux_channels = n_aux_channels
         self.enable_temporal_pooling = enable_temporal_pooling
         self.enable_multilevel_aux = enable_multilevel_aux
+        self.enable_tradslag_head = enable_tradslag_head
+        self.num_tradslag = num_tradslag
 
         # Get the ViT encoder from PrithviMAE if needed
         if hasattr(encoder, "encoder"):
@@ -454,6 +458,16 @@ class PrithviSegmentationModel(nn.Module):
 
         # Segmentation head
         self.head = SegmentationHead(decoder_channels, num_classes, dropout)
+
+        # Optional Trädslag fraction head: a parallel Conv2d on the SAME
+        # decoder_channels-dim feature that feeds the classifier. Outputs
+        # num_tradslag continuous crown-cover logits (sigmoid at use-time).
+        # Flag-gated so the default path is byte-identical (attribute absent
+        # from the module → no new parameters, no state-dict keys).
+        if enable_tradslag_head:
+            self.frac_head = nn.Conv2d(decoder_channels, num_tradslag, 1)
+        else:
+            self.frac_head = None
 
         # Auxiliary fusion: mid-level (gated per FPN level) or legacy late fusion
         if n_aux_channels > 0 and enable_multilevel_aux:
@@ -594,7 +608,8 @@ class PrithviSegmentationModel(nn.Module):
         aux: torch.Tensor | None = None,
         temporal_coords: torch.Tensor | None = None,
         location_coords: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        return_fractions: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Full forward pass: encoder → temporal pool → scale → UperNet → head.
 
         Args:
@@ -603,9 +618,16 @@ class PrithviSegmentationModel(nn.Module):
                 (e.g. height, volume, basal area).
             temporal_coords: Optional (B, T, 2) float32 [year, doy] per frame.
             location_coords: Optional (B, 2) float32 [lat, lon] in WGS84.
+            return_fractions: When True AND the fraction head is enabled,
+                also return the (B, num_tradslag, H, W) fraction logits
+                computed from the SAME decoded feature that feeds the
+                classifier. When the head is disabled the second element is
+                ``None``. Default False → returns logits only (byte-identical
+                to the pre-fraction-head signature for existing callers).
 
         Returns:
-            (B, num_classes, H, W) logits at input resolution.
+            ``(B, num_classes, H, W)`` logits at input resolution, or
+            ``(logits, frac_logits)`` when ``return_fractions`` is True.
         """
         if x.dim() == 4:
             input_h, input_w = x.shape[2:]
@@ -631,7 +653,12 @@ class PrithviSegmentationModel(nn.Module):
             decoded = self.aux_fusion(
                 torch.cat([decoded, aux_enc], dim=1))
             logits = self.head(decoded)
-            return logits
+            # In legacy late fusion `decoded` is already at input resolution,
+            # so the head output needs no upsample — and neither does the
+            # fraction head sharing the same feature.
+            return self._maybe_with_fractions(
+                logits, decoded, input_h, input_w, return_fractions,
+            )
         else:
             decoded = self._decode(features)
 
@@ -642,7 +669,35 @@ class PrithviSegmentationModel(nn.Module):
                 logits, size=(input_h, input_w),
                 mode="bilinear", align_corners=True,
             )
-        return logits
+        return self._maybe_with_fractions(
+            logits, decoded, input_h, input_w, return_fractions,
+        )
+
+    def _maybe_with_fractions(
+        self,
+        logits: torch.Tensor,
+        decoded: torch.Tensor,
+        input_h: int,
+        input_w: int,
+        return_fractions: bool,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
+        """Attach the fraction-head output to the return, upsampled to match.
+
+        The fraction head runs on the same ``decoded`` feature as the
+        classifier and is upsampled to input resolution the same way, so its
+        spatial grid always aligns pixel-for-pixel with ``logits``.
+        """
+        if not return_fractions:
+            return logits
+        if self.frac_head is None:
+            return logits, None
+        frac_logits = self.frac_head(decoded)
+        if frac_logits.shape[2:] != (input_h, input_w):
+            frac_logits = F.interpolate(
+                frac_logits, size=(input_h, input_w),
+                mode="bilinear", align_corners=True,
+            )
+        return logits, frac_logits
 
 
 # ── UNet decoder (BurnScars checkpoint) ──────────────────────────────────────
@@ -875,6 +930,8 @@ def build_segmentation_from_spec(
     n_aux_channels: int = 0,
     enable_temporal_pooling: bool = True,
     enable_multilevel_aux: bool = True,
+    enable_tradslag_head: bool = False,
+    num_tradslag: int = 4,
     device: str | torch.device | None = None,
 ):
     """Build a segmentation model from a ModelSpec + encoder.
@@ -916,6 +973,8 @@ def build_segmentation_from_spec(
             pool_sizes=pool_sizes,
             enable_temporal_pooling=enable_temporal_pooling,
             enable_multilevel_aux=enable_multilevel_aux,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
 
     if spec.family == "terramind":

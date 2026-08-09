@@ -138,6 +138,47 @@ def derive_nfi_forest_class(row, *, dominant_frac: float = 0.7) -> int | None:
     return BLANDSKOG
 
 
+def collapse_fractions_to_nfi_class(
+    tall: float, gran: float, trivial: float, adel: float,
+    *, dominant_frac: float = 0.7, forest_floor: float = 0.1,
+) -> int:
+    """Collapse 4 predicted crown-cover fractions with the NFI dominance rule.
+
+    This is the fraction-head analogue of ``derive_nfi_forest_class``: instead
+    of argmaxing the 28-class hard head, we take the fraction head's per-species
+    crown-cover (each in [0, 1], from sigmoid) at a plot pixel and apply the
+    SAME dominance logic the NFI truth uses — collapse-rule alignment is the
+    whole point of the experiment.
+
+        conifer = tall + gran
+        decid   = trivial + adel
+        total   = conifer + decid
+        total < forest_floor            → 0  (non-forest)
+        conifer/total ≥ dominant_frac   → 1 tall  if tall ≥ gran else 2 gran
+        decid/total   ≥ dominant_frac   → 3 löv
+        otherwise                       → 4 bland
+
+    Args:
+        tall, gran, trivial, adel: predicted crown-cover fractions in [0, 1].
+        dominant_frac: one-side dominance threshold (matches NFI's 0.7).
+        forest_floor: minimum summed crown-cover to count as forest at all;
+            below it the pixel collapses to non-forest (0).
+
+    Returns:
+        Unified forest class in {0, 1, 2, 3, 4}.
+    """
+    conifer = float(tall) + float(gran)
+    decid = float(trivial) + float(adel)
+    total = conifer + decid
+    if total < forest_floor:
+        return NONFOREST
+    if conifer / total >= dominant_frac:
+        return TALLSKOG if tall >= gran else GRANSKOG
+    if decid / total >= dominant_frac:
+        return LOVSKOG
+    return BLANDSKOG
+
+
 def nfi_is_mature(row) -> int:
     """1 if the plot is final-felling-age (NFI Maturityclass ≥ 41), else 0."""
     m = row.get("Maturityclass")
@@ -279,6 +320,74 @@ def make_model_predict_fn(checkpoint: str, device, img_size: int,
     return predict_fn
 
 
+def make_fraction_predict_fn(
+    checkpoint: str, device, img_size: int, aux_channel_names=None,
+    *, dominant_frac: float = 0.7, forest_floor: float = 0.1,
+    num_classes: int = 28,
+):
+    """``predict_fn`` that collapses the FRACTION HEAD with the NFI rule.
+
+    Instead of argmaxing the 28-class hard head, this runs the fraction head,
+    takes its 4 sigmoid crown-cover maps, and applies
+    ``collapse_fractions_to_nfi_class`` per pixel → a {0..4} class map. The
+    returned ``probs`` array is num_classes-wide but only channels 1-4 are
+    populated (with the tall/gran/(trivial+adel löv) fractions) so the existing
+    per-class AUROC over FOREST_CLASSES still resolves; every other channel is
+    left at 0. ``predict_fn(tile_path) -> (class_map (cs,cs), probs (C,cs,cs))``
+    in CROP coordinates (same centre-crop as the hard path).
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_infcmp", str(Path(__file__).resolve().parent / "inference_comparison.py"),
+    )
+    infcmp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(infcmp)
+
+    model, epoch, miou, model_img_size = infcmp.load_model(checkpoint, device)
+    if getattr(model, "frac_head", None) is None:
+        raise ValueError(
+            "checkpoint has no fraction head — retrain with "
+            "--enable-tradslag-head or drop --use-fraction-head"
+        )
+    print(f"  [load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size} "
+          f"(fraction-head mode)")
+
+    def predict_fn(tile_path):
+        fracs = infcmp.run_fraction_inference(
+            model, tile_path, device, img_size=img_size,
+            aux_channel_names=aux_channel_names,
+        )  # (4, cs, cs) in [0,1], order tall/gran/trivial/adel
+        k, cs, _ = fracs.shape
+        # Vectorized collapse over the whole crop.
+        tall, gran, trivial, adel = fracs[0], fracs[1], fracs[2], fracs[3]
+        conifer = tall + gran
+        decid = trivial + adel
+        total = conifer + decid
+        with np.errstate(divide="ignore", invalid="ignore"):
+            conifer_share = np.where(total > 0, conifer / total, 0.0)
+            decid_share = np.where(total > 0, decid / total, 0.0)
+        class_map = np.zeros((cs, cs), dtype=np.int64)  # default non-forest
+        is_forest = total >= forest_floor
+        conif_dom = is_forest & (conifer_share >= dominant_frac)
+        decid_dom = is_forest & (decid_share >= dominant_frac)
+        bland = is_forest & ~conif_dom & ~decid_dom
+        class_map[conif_dom & (tall >= gran)] = TALLSKOG
+        class_map[conif_dom & (tall < gran)] = GRANSKOG
+        class_map[decid_dom] = LOVSKOG
+        class_map[bland] = BLANDSKOG
+        # probs: put the raw fractions on the forest-class channels so
+        # per-class AUROC (which reads P[:, c] for c in 1..4) stays defined.
+        probs = np.zeros((num_classes, cs, cs), dtype=np.float32)
+        probs[TALLSKOG] = tall
+        probs[GRANSKOG] = gran
+        probs[LOVSKOG] = decid          # deciduous total drives "löv" ranking
+        probs[BLANDSKOG] = np.minimum(conifer, decid)  # mixedness proxy
+        return class_map, probs
+
+    return predict_fn
+
+
 def crop_offset(tile_h: int, img_size: int) -> int:
     """Centre-crop top-left offset ``run_inference`` applies (matches its
     ``(h - crop_sz) // 2``)."""
@@ -297,6 +406,18 @@ def main() -> None:
     ap.add_argument("--img-size", type=int, default=504,
                     help="inference crop (504 = 600M patch-14 on 512 tiles)")
     ap.add_argument("--num-classes", type=int, default=23)
+    ap.add_argument("--use-fraction-head", action="store_true",
+                    help="Collapse the Trädslag fraction head with the NFI "
+                         "dominance rule instead of argmaxing the class head. "
+                         "Requires a checkpoint trained with "
+                         "--enable-tradslag-head.")
+    ap.add_argument("--forest-floor", type=float, default=0.1,
+                    help="Min summed crown-cover to count as forest in the "
+                         "fraction-head collapse (below → non-forest). "
+                         "Default 0.1.")
+    ap.add_argument("--dominant-frac", type=float, default=0.7,
+                    help="One-side dominance threshold for the collapse rule "
+                         "(matches NFI's 0.7).")
     ap.add_argument("--enable-markfukt", action="store_true",
                     help="feed markfukt as the 11th aux (for a wetness-aux "
                          "checkpoint); appends it to the canonical 10")
@@ -345,11 +466,22 @@ def main() -> None:
         from imint.training.unified_dataset import AUX_CHANNEL_NAMES
         aux_names = list(AUX_CHANNEL_NAMES) + ["markfukt"]
         print(f"  markfukt enabled → {len(aux_names)} aux channels")
-    predict_fn = make_model_predict_fn(args.checkpoint, device, args.img_size,
-                                       aux_channel_names=aux_names)
+    if args.use_fraction_head:
+        predict_fn = make_fraction_predict_fn(
+            args.checkpoint, device, args.img_size,
+            aux_channel_names=aux_names,
+            dominant_frac=args.dominant_frac, forest_floor=args.forest_floor,
+            num_classes=args.num_classes,
+        )
+        print(f"  fraction-head collapse: dominant_frac={args.dominant_frac}, "
+              f"forest_floor={args.forest_floor}")
+    else:
+        predict_fn = make_model_predict_fn(args.checkpoint, device, args.img_size,
+                                           aux_channel_names=aux_names)
 
     per_plot: list | None = [] if args.dump_per_plot else None
     results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes,
+                                dominant_frac=args.dominant_frac,
                                 per_plot_sink=per_plot)
     results["_meta"] = {
         "checkpoint": args.checkpoint, "img_size": args.img_size,

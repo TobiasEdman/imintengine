@@ -275,6 +275,7 @@ class UnifiedDataset(Dataset):
         model_keys: tuple[str, ...] = (),
         aux_channel_names: Sequence[str] | None = None,
         label_dir: str | Path | None = None,
+        frac_dir: str | Path | None = None,
     ):
         super().__init__()
         self.patch_size = patch_size
@@ -283,6 +284,13 @@ class UnifiedDataset(Dataset):
         # <label_dir>/<tile_name>.npz per tile; spectral/aux/temporal/coords
         # still come from the source tile. None → byte-identical legacy path.
         self.label_dir = Path(label_dir) if label_dir is not None else None
+        # Optional Trädslag fraction sidecar directory. When set, each sample
+        # carries `frac` (K,H,W) target crown-cover in [0,1] and `frac_mask`
+        # (H,W) — 1 where supervision applies. Tiles without a frac sidecar
+        # return an all-masked frac (no supervision) but are NOT dropped:
+        # the hard label still supervises them. None → no frac keys emitted
+        # (byte-identical legacy path).
+        self.frac_dir = Path(frac_dir) if frac_dir is not None else None
         self.enable_aux = enable_aux
         # Ordered aux-channel list. Defaults to the canonical 10-channel
         # AUX_CHANNEL_NAMES so the historical behaviour is byte-identical;
@@ -534,6 +542,18 @@ class UnifiedDataset(Dataset):
                 aug_stack = np.concatenate([aug_stack, arr], axis=0)
                 extras_specs.append((name, arr.shape[0]))
 
+        # --- Trädslag fraction bundle (folded into aug_stack for crop
+        # consistency): K target channels in [0,1] + 1 supervision-mask
+        # channel (1 = supervise this pixel). Missing sidecar / disabled →
+        # all-masked (mask all-zero), so the loss contributes nothing but the
+        # tile still trains via the hard label. Stored as the LAST block so
+        # the area/aux/extras offsets above are untouched.
+        n_frac_bundle = 0
+        if self.frac_dir is not None:
+            frac_bundle = self._load_frac_bundle(entry["name"], h, w)  # (K+1,H,W)
+            aug_stack = np.concatenate([aug_stack, frac_bundle], axis=0)
+            n_frac_bundle = frac_bundle.shape[0]
+
         # --- Prithvi normalization: reflectance [0,1] -> DN -> z-score -
         # Normalize all T frames identically (mean/std tile across frames)
         n_frames = image.shape[0] // N_BANDS
@@ -558,6 +578,14 @@ class UnifiedDataset(Dataset):
         for name, n_ch in extras_specs:
             extras_cropped[name] = aug_stack[offset:offset + n_ch]
             offset += n_ch
+        # Frac bundle is the trailing block: K target channels + 1 mask.
+        frac_target_cropped = None
+        frac_mask_cropped = None
+        if n_frac_bundle:
+            bundle = aug_stack[offset:offset + n_frac_bundle]  # (K+1, H', W')
+            frac_target_cropped = bundle[:-1]                  # (K, H', W')
+            frac_mask_cropped = bundle[-1]                     # (H', W')
+            offset += n_frac_bundle
 
         # Compute per-pixel loss weights from cropped area map
         area_t = torch.from_numpy(np.ascontiguousarray(area_map_cropped))
@@ -607,7 +635,71 @@ class UnifiedDataset(Dataset):
         for name, arr in extras_cropped.items():
             result[name] = torch.from_numpy(np.ascontiguousarray(arr))
 
+        # Trädslag fraction target + supervision mask (crop-consistent).
+        if frac_target_cropped is not None:
+            result["frac"] = torch.from_numpy(
+                np.ascontiguousarray(frac_target_cropped)
+            )  # (K, H', W') float32 in [0,1]
+            result["frac_mask"] = torch.from_numpy(
+                np.ascontiguousarray(frac_mask_cropped)
+            )  # (H', W') float32 {0,1}
+
         return result
+
+    # ------------------------------------------------------------------
+    # Trädslag fraction sidecar
+    # ------------------------------------------------------------------
+
+    def _load_frac_bundle(self, name: str, h: int, w: int) -> np.ndarray:
+        """Load the Trädslag fraction sidecar as a (K+1, H, W) float32 bundle.
+
+        Channels 0..K-1 are per-species crown-cover targets normalized to
+        [0, 1] (raw 0-100 / 100). Channel K is the per-pixel supervision mask
+        (1 = supervise, 0 = mask out), which is 0 where the pixel is flagged
+        unreliable (``frac_unreliable``) OR carries no signal (all species 0).
+
+        A missing / unreadable sidecar returns an all-masked bundle (mask
+        all-zero, targets zero) so the tile still trains via the hard label
+        but contributes nothing to the fraction loss.
+
+        The bundle is folded into ``aug_stack`` by the caller so the same
+        crop/flip/rotate applies — keeping the target pixel-aligned with the
+        label and spectral crops.
+        """
+        NUM_SPECIES = 4
+        bundle = np.zeros((NUM_SPECIES + 1, h, w), dtype=np.float32)  # mask=0
+        if self.frac_dir is None:
+            return bundle
+        path = self.frac_dir / name
+        if not path.exists():
+            return bundle
+        try:
+            sc = np.load(path, allow_pickle=True)
+            frac = np.asarray(sc["frac"], dtype=np.float32)          # (K,H,W) 0-100
+            unreliable = np.asarray(sc["frac_unreliable"]).astype(bool)  # (H,W)
+        except Exception:
+            return bundle
+
+        # Spatial alignment: crop/pad to (h, w) defensively (sidecars are
+        # built at the tile's own size, so this is normally a no-op).
+        if frac.shape[1:] != (h, w):
+            k = frac.shape[0]
+            fitted = np.zeros((k, h, w), dtype=np.float32)
+            hh = min(h, frac.shape[1]); ww = min(w, frac.shape[2])
+            fitted[:, :hh, :ww] = frac[:, :hh, :ww]
+            frac = fitted
+        if unreliable.shape != (h, w):
+            fitted_u = np.zeros((h, w), dtype=bool)
+            hh = min(h, unreliable.shape[0]); ww = min(w, unreliable.shape[1])
+            fitted_u[:hh, :ww] = unreliable[:hh, :ww]
+            unreliable = fitted_u
+
+        k = min(frac.shape[0], NUM_SPECIES)
+        bundle[:k] = frac[:k] / 100.0
+        # Supervision mask: reliable AND at least one species present.
+        has_signal = (bundle[:NUM_SPECIES] > 0).any(axis=0)
+        bundle[NUM_SPECIES] = (has_signal & (~unreliable)).astype(np.float32)
+        return bundle
 
     # ------------------------------------------------------------------
     # Prithvi TL coordinates

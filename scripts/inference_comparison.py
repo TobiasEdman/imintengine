@@ -174,16 +174,14 @@ def load_model(ckpt_path: str, device):
     return model, epoch, miou, img_size
 
 
-def run_inference(model, tile_path: str, device, img_size: int = 224,
-                  return_probs: bool = False, aux_channel_names=None):
-    """Run inference on a single tile.
+def _build_inference_inputs(tile_path, device, img_size, aux_channel_names):
+    """Build (img5d, aux, temporal_coords, location_coords, crop meta) for a tile.
 
-    Returns (H, W) prediction, or ((C, H, W) softmax, (B, H, W) spectral_raw, (N, H, W) aux)
-    when return_probs=True (for superpixel refinement).
-
-    ``aux_channel_names`` overrides the aux stack (default: the canonical 10).
-    Pass the 11-channel list (…+"markfukt") for a wetness-aux checkpoint so the
-    fed aux count matches the model's input embedding.
+    Shared preprocessing for both the class-head and fraction-head inference
+    paths — identical spectral normalization, aux stacking, centre-crop and TL
+    coordinate construction, so the fraction head sees exactly the inputs the
+    hard head was validated on. Returns a dict of the built tensors plus the
+    crop offsets ``(y0, x0, crop_sz)`` and the raw ``data`` handle.
     """
     import torch
     from imint.training.unified_dataset import (
@@ -225,7 +223,6 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
 
     aux = torch.from_numpy(np.concatenate(aux_list, axis=0)).unsqueeze(0).to(device)
 
-    # Build TL coords
     temporal_coords = None
     location_coords = None
     doy = data.get("doy")
@@ -243,6 +240,56 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
         location_coords = torch.from_numpy(
             np.array([[lat, lon]], dtype=np.float32)
         ).to(device)
+
+    return {
+        "img5d": img5d, "aux": aux,
+        "temporal_coords": temporal_coords, "location_coords": location_coords,
+        "y0": y0, "x0": x0, "crop_sz": crop_sz, "data": data,
+        "aux_names": aux_names,
+    }
+
+
+def run_fraction_inference(model, tile_path: str, device, img_size: int = 224,
+                           aux_channel_names=None):
+    """Run the FRACTION head on a single tile → (4, cs, cs) sigmoid fractions.
+
+    Uses the same preprocessing/crop as ``run_inference`` and calls the model
+    with ``return_fractions=True``. Returns the per-species crown-cover in
+    [0, 1] (order tall/gran/trivial/adel). Raises if the model has no fraction
+    head (build it with ``enable_tradslag_head=True``).
+    """
+    import torch
+    if getattr(model, "frac_head", None) is None:
+        raise ValueError("model has no fraction head (enable_tradslag_head=False)")
+    inp = _build_inference_inputs(tile_path, device, img_size, aux_channel_names)
+    with torch.no_grad():
+        _logits, frac_logits = model(
+            inp["img5d"], aux=inp["aux"],
+            temporal_coords=inp["temporal_coords"],
+            location_coords=inp["location_coords"],
+            return_fractions=True,
+        )
+        fracs = torch.sigmoid(frac_logits).squeeze(0).cpu().numpy()  # (4, cs, cs)
+    return fracs
+
+
+def run_inference(model, tile_path: str, device, img_size: int = 224,
+                  return_probs: bool = False, aux_channel_names=None):
+    """Run inference on a single tile.
+
+    Returns (H, W) prediction, or ((C, H, W) softmax, (B, H, W) spectral_raw, (N, H, W) aux)
+    when return_probs=True (for superpixel refinement).
+
+    ``aux_channel_names`` overrides the aux stack (default: the canonical 10).
+    Pass the 11-channel list (…+"markfukt") for a wetness-aux checkpoint so the
+    fed aux count matches the model's input embedding.
+    """
+    import torch
+    inp = _build_inference_inputs(tile_path, device, img_size, aux_channel_names)
+    img5d = inp["img5d"]; aux = inp["aux"]
+    temporal_coords = inp["temporal_coords"]; location_coords = inp["location_coords"]
+    y0 = inp["y0"]; x0 = inp["x0"]; crop_sz = inp["crop_sz"]
+    data = inp["data"]; aux_names = inp["aux_names"]
 
     with torch.no_grad():
         logits = model(

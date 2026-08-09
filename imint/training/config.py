@@ -132,6 +132,16 @@ class TrainingConfig:
     label_smoothing: float = 0.05                     # 0.0 = disabled
     lovasz_weight: float = 0.0                        # 0.0 = disabled, 0.3 = recommended
 
+    # ── Trädslag fraction head (multi-task, continuous crown-cover) ──────
+    # When enabled, a parallel Conv2d(decoder_channels, 4, 1) fraction head is
+    # added on the same decoder feature that feeds the classifier, supervised
+    # by NMD2023 Trädslag crown-cover targets (masked L1). Off by default →
+    # existing paths byte-identical (no head, no loss term, no frac keys).
+    enable_tradslag_head: bool = False
+    num_tradslag: int = 4                              # tall/gran/trivial/adel
+    lambda_frac: float = 1.0                           # weight on L_frac
+    frac_loss_type: str = "l1"                         # "l1" | "smooth_l1"
+
     # ── Rare class handling ────────────────────────────────────────────
     rare_class_threshold: float = 0.02                 # Classes < 2% are "rare"
     max_tile_weight: float = 5.0                       # Max oversampling for rare tiles

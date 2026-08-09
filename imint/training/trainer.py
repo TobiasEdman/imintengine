@@ -170,6 +170,8 @@ class LULCTrainer:
             n_aux_channels=n_aux,
             enable_temporal_pooling=self.config.enable_temporal_pooling,
             enable_multilevel_aux=self.config.enable_multilevel_aux,
+            enable_tradslag_head=self.config.enable_tradslag_head,
+            num_tradslag=self.config.num_tradslag,
             device=self.device,
         )
 
@@ -332,6 +334,15 @@ class LULCTrainer:
             )
             print(f"  Loss: CrossEntropy")
 
+        # Trädslag fraction head: masked-L1 auxiliary loss (multi-task).
+        frac_criterion = None
+        if cfg.enable_tradslag_head:
+            from .losses import FractionLoss
+            frac_criterion = FractionLoss(loss_type=cfg.frac_loss_type)
+            print(f"  Trädslag head: ENABLED "
+                  f"(K={cfg.num_tradslag}, λ_frac={cfg.lambda_frac}, "
+                  f"loss={cfg.frac_loss_type})")
+
         if cfg.enable_area_weighting and cfg.loss_type != "cross_entropy":
             print(f"  Area weighting: enabled  "
                   f"(mmu_ha={cfg.mmu_ha}, max_weight={cfg.area_weight_max})")
@@ -481,6 +492,8 @@ class LULCTrainer:
             self.model.encoder.eval()
 
             epoch_loss = 0.0
+            epoch_frac_loss = 0.0
+            n_frac_batches = 0
             n_batches = 0
             t0 = time.time()
 
@@ -533,20 +546,50 @@ class LULCTrainer:
                 # runs in FP32 (standard PyTorch AMP pattern). No
                 # GradScaler for BF16 — full FP32 exponent range is
                 # preserved so gradients can't underflow.
+                # Fraction targets (only present when the frac head is on and
+                # a frac_dir was supplied to the dataset).
+                frac_target = None
+                frac_mask = None
+                if frac_criterion is not None:
+                    ft = batch.get("frac")
+                    fm = batch.get("frac_mask")
+                    if ft is not None and fm is not None:
+                        frac_target = ft.to(self.device)   # (B, K, H, W) in [0,1]
+                        frac_mask = fm.to(self.device)     # (B, H, W) {0,1}
+
                 with torch.autocast(
                     device_type=self.device.type,
                     dtype=self._amp_dtype,
                     enabled=self._amp_enabled,
                 ):
-                    logits = self.model(
+                    want_frac = frac_criterion is not None
+                    out = self.model(
                         images_5d, aux=aux,
                         temporal_coords=temporal_coords,
                         location_coords=location_coords,
-                    ).contiguous()
+                        return_fractions=want_frac,
+                    )
+                    if want_frac:
+                        logits, frac_logits = out
+                    else:
+                        logits, frac_logits = out, None
+                    logits = logits.contiguous()
                     if pixel_weight is not None:
                         loss = criterion(logits, labels, pixel_weight=pixel_weight)
                     else:
                         loss = criterion(logits, labels)
+
+                    # Multi-task: L_total = L_hard + λ_frac · L_frac. Masked
+                    # where a pixel is unreliable OR carries no signal; a batch
+                    # with no frac supervision contributes a differentiable 0.
+                    if (frac_criterion is not None and frac_logits is not None
+                            and frac_target is not None):
+                        frac_loss = frac_criterion(
+                            frac_logits, frac_target, frac_mask,
+                        )
+                        loss = loss + cfg.lambda_frac * frac_loss
+                        epoch_frac_loss += float(frac_loss.item())
+                        n_frac_batches += 1
                 loss.backward()
                 optimizer.step()
 
@@ -558,6 +601,8 @@ class LULCTrainer:
                 step += 1
 
             avg_loss = epoch_loss / max(n_batches, 1)
+            avg_frac_loss = (epoch_frac_loss / n_frac_batches
+                             if n_frac_batches else None)
             elapsed = time.time() - t0
 
             # ── Validate ──────────────────────────────────────────────
@@ -578,8 +623,10 @@ class LULCTrainer:
                 worst_iou = 0.0
 
             lr_now = optimizer.param_groups[0]["lr"]
+            frac_str = (f" | L_frac={avg_frac_loss:.4f}"
+                        if avg_frac_loss is not None else "")
             print(f"  Epoch {epoch:3d}/{cfg.epochs} | "
-                  f"loss={avg_loss:.4f} | val_mIoU={val_miou:.4f} | "
+                  f"loss={avg_loss:.4f}{frac_str} | val_mIoU={val_miou:.4f} | "
                   f"worst={worst_iou:.4f} ({worst_class}) | "
                   f"lr={lr_now:.2e} | {elapsed:.0f}s")
 
@@ -606,6 +653,8 @@ class LULCTrainer:
             self._update_training_log({
                 "epoch": epoch,
                 "train_loss": round(avg_loss, 6),
+                **({"train_frac_loss": round(avg_frac_loss, 6)}
+                   if avg_frac_loss is not None else {}),
                 "val_miou": round(val_miou, 6),
                 "per_class_iou": {k: round(v, 6) for k, v in per_class.items()
                                   if not math.isnan(v)},
@@ -1186,6 +1235,8 @@ class LULCTrainer:
                 "n_aux_channels": self._count_aux_channels(),
                 "num_temporal_frames": num_frames,
                 "enable_multitemporal": self.config.enable_multitemporal,
+                "enable_tradslag_head": self.config.enable_tradslag_head,
+                "num_tradslag": self.config.num_tradslag,
             },
         }
         torch.save(checkpoint, path)
