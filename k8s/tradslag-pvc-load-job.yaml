@@ -33,7 +33,8 @@ spec:
               curl -sSL -o tradslag.zip "https://geodata.naturvardsverket.se/nedladdning/marktacke/NMD2023/Tillaggsskikt/NMD2023_Tradslag_v1_1.zip"
               echo "zip contents:"; unzip -l tradslag.zip | head -40
               echo "unzipping all rasters ($(date))..."
-              unzip -o -j tradslag.zip "*.tif" "*.tfw" "*.aux.xml" "*.qml" -d .
+              # unzip exits 11 on an unmatched pattern (no .tfw in this zip) — tolerate it
+              unzip -o -j tradslag.zip "*.tif" "*.aux.xml" "*.qml" -d . || [ $? -eq 11 ]
               rm -f tradslag.zip
               touch TRADSLAG_DONE
               echo "=== done ($(date)) ==="; ls -lh /data/nmd2023_tradslag/; df -h /data | tail -1
