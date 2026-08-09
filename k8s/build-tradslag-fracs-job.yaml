@@ -1,0 +1,79 @@
+---
+# Job: build NMD2023-based unified labels (29-class) for all unified_v2_512
+# tiles, NON-DESTRUCTIVELY. Reads NMD2023 v2.1 raster + LPIS + SKS; writes ONLY
+# the label fields to a sidecar dir (/data/nmd2023_labels), leaving the NMD2018
+# tiles untouched. Step 2 of docs/experiments/nmd2023_label_source_retrain.md.
+#
+# Differs from build-labels-512: clones the retrain branch, --nmd-version 2023,
+# --label-out-dir (sidecar, no in-place overwrite, no 806G copy), and NO
+# postprocess_qc (that deletes tiles; our sidecars are separate).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-tradslag-fracs
+  namespace: prithvi-training-default
+  labels:
+    app: ops
+    purpose: build-tradslag-fracs
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600   # 6 h cap
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ops
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: builder
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Build NMD2023 labels (29-class, sidecar) — $(date) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              # Fail loud if the clone predates the NMD2023 flags.
+              grep -q 'label-out-dir' scripts/build_labels.py \
+                && grep -q 'nmd-version' scripts/build_labels.py \
+                || { echo "FATAL: NMD2023 flags missing on clone"; exit 1; }
+
+              grep -q 'build_tile_fracs' scripts/build_tradslag_fracs.py \
+                || { echo "FATAL: builder missing on clone"; exit 1; }
+              echo "Inventory: tiles=$(ls /data/unified_v2_512/*.npz | wc -l) | tradslag tifs=$(ls /data/nmd2023_tradslag/*.tif | wc -l)"
+              python scripts/build_tradslag_fracs.py \
+                --data-dir     /data/unified_v2_512 \
+                --tradslag-dir /data/nmd2023_tradslag \
+                --out-dir      /data/tradslag_fracs \
+                --workers 8
+
+              echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "96Gi"
+            limits:
+              cpu: "16"
+              memory: "96Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
