@@ -7,8 +7,9 @@ const fs = require("fs");
 const path = require("path");
 const FR = path.join(__dirname, "frames");
 const OUT = __dirname;
-const NMD_IMG = "image/png;base64," + fs.readFileSync(`${FR}/nmd2023_frame.png`).toString("base64");
-const MODEL_IMG = "image/png;base64," + fs.readFileSync(`${FR}/distill_frame.png`).toString("base64");
+const img64 = f => "image/png;base64," + fs.readFileSync(`${FR}/${f}`).toString("base64");
+const FRAMES = [img64("nmd2018_frame.png"), img64("v8b_frame.png"),
+                img64("nmd2023_frame.png"), img64("distill_frame.png")];
 
 const LEGEND = [["tallskog","006400"],["granskog","228B22"],["lövskog","32CD32"],["blandskog","3CB371"],
                 ["sumpskog","2E4F2E"],["hygge","00CED1"],["öppen mark","D2B48C"],["vatten","0000FF"],
@@ -43,8 +44,8 @@ const T = {
     h1:"Modellen slår nu NMD2023 — ",h2:"på oberoende fältdata",
     headsub:"Håll-ut-validering (209 NFI-plottar ingen träningsfas sett): full modell 50,2 % vs NMD2023 43,1 % · skogstypslager 57,9 %",
     facts:[["28","klasser (unified)"],["7 882","tiles, hela Sverige"],["944","NFI-fältplottar"],["+0,07 / +0,15","över NMD2023 (håll-ut)"]],
-    s2t:"Exempel — NMD2023 vs modellen",s2s:"En 5×5 km-tile, unified färgpalett (tile_331280_6541280). Vänster: NMD2023-baserad etikett. Höger: distillerad modell.",
-    lab1:"NMD2023-etikett",lab2:"v8b-NFI (distillerad)",
+    s2t:"Fyra generationer — samma landskap",s2s:"En 5×5 km-tile, identisk extent och unified färgpalett (tile_331280_6541280): etikettkällorna 2018/2023 och modellerna tränade mot respektive mål.",
+    panelLabs:["NMD2018-etikett","v8b (tränad på 2018)","NMD2023-etikett","v8b-NFI (distillerad)"],
     s3t:"Håll-ut-resultat — overall accuracy",s3s:"209 NFI-plottar på tiles som varken huvudträning, distillering eller finetune sett. NMD2023 poängsatt på exakt samma plottar.",
     bar:["NMD2023","Distillerad modell","Skogstypslager (fraktioner)"],
     s3h:"Ärlig utvärdering",
@@ -62,8 +63,8 @@ const T = {
     h1:"The model now beats NMD2023 — ",h2:"on independent field data",
     headsub:"Held-out validation (209 NFI plots unseen by any training stage): full model 50.2% vs NMD2023 43.1% · forest-type layer 57.9%",
     facts:[["28","classes (unified)"],["7,882","tiles, all of Sweden"],["944","NFI field plots"],["+0.07 / +0.15","over NMD2023 (held-out)"]],
-    s2t:"Example — NMD2023 vs the model",s2s:"One 5×5 km tile, unified palette (tile_331280_6541280). Left: NMD2023-based label. Right: distilled model.",
-    lab1:"NMD2023 label",lab2:"v8b-NFI (distilled)",
+    s2t:"Four generations — same landscape",s2s:"One 5×5 km tile, identical extent and unified palette (tile_331280_6541280): the 2018/2023 label sources and the models trained against each target.",
+    panelLabs:["NMD2018 label","v8b (trained on 2018)","NMD2023 label","v8b-NFI (distilled)"],
     s3t:"Held-out results — overall accuracy",s3s:"209 NFI plots on tiles unseen by head training, distillation and finetune. NMD2023 scored on the exact same plots.",
     bar:["NMD2023","Distilled model","Forest-type layer (fractions)"],
     s3h:"Honest evaluation",
@@ -96,16 +97,16 @@ function build(t,useEN,out){
   let fx=0.7; t.facts.forEach(([b,l])=>{ s.addText(b,{x:fx,y:5.9,w:2.95,h:0.6,fontFace:F,fontSize:26,color:WHITE,bold:true,margin:0});
     s.addText(l,{x:fx,y:6.55,w:2.95,h:0.4,fontFace:F,fontSize:13,color:MUTED,margin:0}); fx+=3.13; });
 
-  // S2 — example frames
+  // S2 — four-generation frames (2018-etikett · v8b · 2023-etikett · distill)
   s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
   s.addText(t.s2t,{x:0.7,y:0.5,w:11,h:0.8,fontFace:F,fontSize:32,color:WHITE,bold:true,margin:0});
-  s.addText(t.s2s,{x:0.72,y:1.24,w:12,h:0.4,fontFace:F,fontSize:13.5,color:MUTED,margin:0});
-  const iy=1.9, isz=3.85, ix1=1.9, ix2=ix1+isz+1.9;
-  s.addImage({data:NMD_IMG,x:ix1,y:iy,w:isz,h:isz});
-  s.addImage({data:MODEL_IMG,x:ix2,y:iy,w:isz,h:isz});
-  s.addText(t.lab1,{x:ix1,y:iy+isz+0.08,w:isz,h:0.4,fontFace:F,fontSize:15,color:MINT,bold:true,align:"center",margin:0});
-  s.addText(t.lab2,{x:ix2,y:iy+isz+0.08,w:isz,h:0.4,fontFace:F,fontSize:15,color:CORAL,bold:true,align:"center",margin:0});
-  const leg=useEN?LEGEND_EN:LEGEND; const ly=6.55, lx=0.75, lw=3.0;
+  s.addText(t.s2s,{x:0.72,y:1.24,w:12.2,h:0.4,fontFace:F,fontSize:13,color:MUTED,margin:0});
+  const isz=2.95, gap=0.15, ix0=(13.33-(4*isz+3*gap))/2, iy=1.95;
+  const labCol=[MUTED,WHITE,MINT,CORAL];
+  FRAMES.forEach((im,i)=>{ const x=ix0+i*(isz+gap);
+    s.addImage({data:im,x:x,y:iy,w:isz,h:isz});
+    s.addText(t.panelLabs[i],{x:x-0.05,y:iy+isz+0.06,w:isz+0.1,h:0.35,fontFace:F,fontSize:12.5,color:labCol[i],bold:true,align:"center",margin:0}); });
+  const leg=useEN?LEGEND_EN:LEGEND; const ly=5.75, lx=0.75, lw=3.0;
   leg.forEach((e,i)=>{ const col=i%4, row=Math.floor(i/4); const x=lx+col*lw, y=ly+row*0.32;
     s.addShape(p.ShapeType.rect,{x:x,y:y+0.02,w:0.2,h:0.2,fill:{color:e[1]},line:{type:"none"}});
     s.addText(e[0],{x:x+0.3,y:y-0.03,w:lw-0.5,h:0.3,fontFace:F,fontSize:11.5,color:WHITE,margin:0,valign:"middle"}); });
