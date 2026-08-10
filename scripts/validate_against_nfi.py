@@ -239,6 +239,11 @@ def score_against_nfi(
                 rec.update(tile_name=str(tile_name),
                            nfi_forest=int(nc) if nc is not None else -1,
                            model_pred=pc)
+                # Channels 1-4 of the prob vector: softmax probs in hard mode,
+                # RAW crown-cover fractions in --use-fraction-head mode — the
+                # latter is what lets collapse thresholds (forest_floor /
+                # dominant_frac) be calibrated offline from the dump.
+                rec.update({f"p{k}": float(probs[k, rr, cc]) for k in (1, 2, 3, 4)})
                 per_plot_sink.append(rec)
 
     pred = np.array(pred_class)
