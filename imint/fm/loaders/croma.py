@@ -12,7 +12,7 @@ Output: dict with ``{sar,optical,joint}_encodings`` (B, N, D) where
 N = (H/8)² patches. We'll use ``joint_encodings`` as the segmentation
 feature source when both modalities are available.
 
-Weights: CROMA_base.pt / CROMA_large.pt on HF antofuller/CROMA_benchmarks.
+Weights: CROMA_base.pt / CROMA_large.pt on HF antofuller/CROMA.
 Model code: github.com/antofuller/CROMA/blob/main/use_croma.py
 """
 from __future__ import annotations
@@ -112,14 +112,14 @@ def load_croma(
         try:
             from huggingface_hub import hf_hub_download
             checkpoint_path = hf_hub_download(
-                "antofuller/CROMA_benchmarks",
+                "antofuller/CROMA",
                 f"CROMA_{variant}.pt",
             )
         except Exception as e:
             raise FileNotFoundError(
                 f"No CROMA {variant} checkpoint found. Either:\n"
                 f"  - Download CROMA_{variant}.pt from\n"
-                f"    https://huggingface.co/antofuller/CROMA_benchmarks\n"
+                f"    https://huggingface.co/antofuller/CROMA\n"
                 f"    and place it at /data/model_cache/CROMA_{variant}.pt\n"
                 f"  - Or pass checkpoint_path= explicitly."
             ) from e
