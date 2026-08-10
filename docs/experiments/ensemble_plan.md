@@ -14,7 +14,22 @@ fraktioner vinner tall/löv, distill vinner gran/icke-skog, v8b är bäst på bl
 Dessutom finns hybrid-head-maskineriet (per-plot-features/-dumps + train/test-split +
 kalibrering) som generaliserar direkt till **stacking kalibrerad på fältdata**.
 
-## Medlemsinventering
+## Medlemsinventering (rev 2 — ensemblen bygger på MODELLDIVERSITET, Tessera först)
+
+**Princip (user 2026-08-10):** ensemblen ska byggas på andra modeller och på
+Tessera — inte bara Prithvi-varianter. Prithvi-medlemmarna bidrar med
+mål-diversitet; äkta encoder-diversitet kommer från Tessera (nu) och
+CROMA/TerraMind (senare).
+
+| Diversitetskälla | Medlem | Kostnad |
+|---|---|---|
+| Encoder (annan FM) | **Tessera-seg** — liten head på förberäknade (128,512,512)-embeddings som redan ligger i ALLA tiles (40/40 samplade); ingen encoder-forward | **BILLIG — träna nu (steg 0)** |
+| Encoder + modalitet (S1) | CROMA-seg (S1 `s1_vv_vh` finns i tiles) | träningskampanj — steg 6 |
+| Encoder | TerraMind-seg | träningskampanj — steg 6 |
+| (Mål-diversitet) | Prithvi-varianterna nedan | ✅ klara |
+
+Clay utgår (bara poolad embedding — ej segmenterbar).
+
 
 | Medlem | Checkpoint | Status |
 |---|---|---|
@@ -40,6 +55,12 @@ splitten är redan "förbrukad" åt rätt håll: inga av de 209 har sett någon 
 
 ## Steg
 
+0. **Träna Tessera-medlemmen** (NYTT, före allt annat): `train_unified.py
+   --backbone-name tessera` (registry-familjen finns) på 512-tiles med
+   **distillerade labels** (bästa målet), 28 klasser. Ingen encoder-forward →
+   snabb träning även med stor batch. FÖRSTA delsteg: verifiera att
+   UnifiedDataset matar tessera-tensorn till tessera_seg-vägen end-to-end
+   (1-epok smoke) — wiring-status okänd. Sedan NFI-validate + per-plot-dump.
 1. **Per-plot-dumpar för saknade medlemmar** (GPU, ~15 min/st på 2080ti):
    v8b+markfukt (finns: aggregat men ej dump med p-kanaler), v8b_nmd2023_long,
    ev. 300M/256. Kör `validate_against_nfi.py --dump-per-plot` (p1–p4 finns redan
@@ -65,12 +86,12 @@ träningskampanj — eget beslut.
 
 ## Risker / beslutspunkter
 
-- **Korrelerade medlemmar:** alla fem är Prithvi-600M-varianter — vinsten kan bli
-  liten. Steg 3-grinden skyddar mot att bygga vidare på en död idé. Äkta diversitet
-  (annan backbone, S1, tessera-embeddings som combiner-features) är steg 6-frågor.
+- **Korrelerade medlemmar:** Prithvi-varianterna delar backbone — därför är
+  Tessera-medlemmen (steg 0) central, inte valfri. CROMA (S1) och TerraMind är
+  nästa diversitetssteg (6) om grinden visar mer att hämta.
 - **209 plottar är tunt** för att särskilja stack vs bästa medlem — rapportera
   parad jämförelse (McNemar) och var ärlig om osäkerheten.
-- **Beslut för användaren:** (a) medlemsmängd i steg 1 (alla 5 vs topp-3),
+- **Beslut för användaren:** (a) medlemsmängd (Prithvi: alla 5 vs topp-2 [distill+trädslag] + Tessera),
   (b) combiner-features (bara 5-klass-p vs +fraktioner vs +256-features),
   (c) om steg 6 (ny backbone) ska förberedas parallellt.
 
