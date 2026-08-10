@@ -115,16 +115,12 @@ Thor overifierad; Prithvi-300M/256 tveksam (schema/tile-mismatch).
 | P5–P6 | GPU (test-split) | timmar |
 | P8 | H100 | kampanj/medlem (grindad) |
 
-## Beslut att ratificera före P2
+## Beslut — RATIFICERADE 2026-08-10
 
-1. **Medlemsmängd:** alla 5 Prithvi + tessera, eller topp-2 (distill+trädslag)
-   + tessera? (Fler medlemmar = mer combiner-överfit på 735; rek: kör båda,
-   rapportera.)
-2. **Combiner-features:** kör alla tre varianterna (i/ii/iii) och rapportera —
-   valet ÄR ablationen. (Rek: ja.)
-3. **Output-space P4:** skogstyps-raffinering över distillerad bas (rek) vs
-   ren 5-klassprodukt.
-4. **P8:** vänta på G2 (rek) eller förbered CROMA-kampanjen parallellt?
+1. **Medlemsmängd:** ✅ kör BÅDA uppsättningarna (alla-5+tessera OCH topp-2+tessera), rapportera.
+2. **Combiner-features:** ✅ alla tre varianterna (i/ii/iii).
+3. **Output-space P4:** ✅ skogstyps-raffinering över distillerade 28-klassbasen.
+4. **P8/CROMA:** ✅ FÖRBERED PARALLELLT (user-val, avviker från rek): hämta vikter + skriv träningsjobb under Track A; själva H100-kampanjen startar först efter G2.
 
 ## Risker
 R1 korrelerade Prithvi-medlemmar (därför är tessera på kritiska vägen; parvis
