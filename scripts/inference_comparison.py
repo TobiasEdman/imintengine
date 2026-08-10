@@ -164,6 +164,11 @@ def load_model(ckpt_path: str, device):
         n_aux_channels=n_aux,
         enable_temporal_pooling=cfg.enable_temporal_pooling,
         enable_multilevel_aux=cfg.enable_multilevel_aux,
+        # Fraction head: the trainer persists these in the checkpoint config —
+        # without threading them the frac_head weights are silently dropped by
+        # strict=False and --use-fraction-head cannot run.
+        enable_tradslag_head=ck_cfg.get("enable_tradslag_head", False),
+        num_tradslag=ck_cfg.get("num_tradslag", 4),
         device=device,
     )
     model.load_state_dict(sd, strict=False)
