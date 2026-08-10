@@ -1,0 +1,81 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: render-2018-v8b-frames
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: render-2018-v8b-frames
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: validate
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== NFI validation — frame render (v8b vs NMD2018 label) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
+                pandas pyarrow rasterio pyproj
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              grep -q 'colorize' scripts/render_endgame_frames.py \
+                || { echo "FATAL: render script missing on clone"; exit 1; }
+              pip install --quiet --no-cache-dir Pillow
+              python3 scripts/render_endgame_frames.py \
+                --checkpoint /data/nfi_eval/v8b_best_model.pt \
+                --tile /data/unified_v2_512/tile_331280_6541280.npz \
+                --label-sidecar /data/unified_v2_512/tile_331280_6541280.npz \
+                --img-size 504 --out-dir /data/nfi_eval/frames18 \
+                --device cuda
+
+              echo ""; echo "=== validation JSON ==="; cat "$OUT"
+              echo ""; echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
