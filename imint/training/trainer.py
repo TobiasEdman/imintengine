@@ -44,6 +44,10 @@ class LULCTrainer:
         self.device = self._resolve_device()
         self._setup_cuda_perf_knobs()
         self.model = self._build_model()
+        # Backbone family drives input routing in the train/val loops (4D
+        # tessera embedding vs 5D Prithvi Conv3d layout). Read once from the
+        # spec stashed on the model rather than branching on tensor shape.
+        self._model_family = self.model.fm_spec.family
         self._freeze_backbone()
         self.model.to(self.device)
         # BF16 autocast on CUDA only. H100/A100 have hardware BF16; no
@@ -501,15 +505,22 @@ class LULCTrainer:
                 images = batch["spectral"].to(self.device)
                 labels = batch["label"].to(self.device)    # (B, H, W)
 
-                # Reshape to 5D for Prithvi Conv3d: (B, C=6, T, H, W)
-                B, CT, H, W = images.shape
-                if CT > 6:
-                    # Multitemporal: (B, T*6, H, W) → (B, 6, T, H, W)
-                    T = CT // 6
-                    images_5d = images.view(B, T, 6, H, W).permute(0, 2, 1, 3, 4)
+                # Build the model input tensor. Routed on backbone family
+                # (never on channel count): tessera consumes the 4D
+                # (B, 128, H, W) embedding as-is; Prithvi needs the 5D
+                # Conv3d layout (B, C=6, T, H, W). fm_spec is stashed on the
+                # model in _build_model.
+                if self._model_family == "tessera":
+                    model_input = images  # (B, 128, H, W)
                 else:
-                    # Single-date: (B, 6, H, W) → (B, 6, 1, H, W)
-                    images_5d = images.unsqueeze(2)
+                    B, CT, H, W = images.shape
+                    if CT > 6:
+                        # Multitemporal: (B, T*6, H, W) → (B, 6, T, H, W)
+                        T = CT // 6
+                        model_input = images.view(B, T, 6, H, W).permute(0, 2, 1, 3, 4)
+                    else:
+                        # Single-date: (B, 6, H, W) → (B, 6, 1, H, W)
+                        model_input = images.unsqueeze(2)
 
                 # Collect auxiliary channels (height/volume/etc.)
                 aux = self._collect_aux(batch, self.device)
@@ -564,7 +575,7 @@ class LULCTrainer:
                 ):
                     want_frac = frac_criterion is not None
                     out = self.model(
-                        images_5d, aux=aux,
+                        model_input, aux=aux,
                         temporal_coords=temporal_coords,
                         location_coords=location_coords,
                         return_fractions=want_frac,

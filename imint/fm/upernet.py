@@ -1030,6 +1030,8 @@ def build_segmentation_from_spec(
             embed_dim=spec.embed_dim,
             n_aux_channels=n_aux_channels,
             dropout=dropout,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
 
     raise NotImplementedError(

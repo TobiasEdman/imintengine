@@ -173,13 +173,17 @@ def load_model(ckpt_path: str, device):
     )
     model.load_state_dict(sd, strict=False)
     model = model.to(device).eval()
+    # Stash the spec so the inference input builder can route on family
+    # (tessera reads the pre-baked embedding; Prithvi reads reflectance).
+    model.fm_spec = spec
 
     epoch = ck.get("epoch", "?")
     miou = ck.get("metrics", {}).get("miou", "?")
     return model, epoch, miou, img_size
 
 
-def _build_inference_inputs(tile_path, device, img_size, aux_channel_names):
+def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
+                            family="prithvi"):
     """Build (img5d, aux, temporal_coords, location_coords, crop meta) for a tile.
 
     Shared preprocessing for both the class-head and fraction-head inference
@@ -187,6 +191,13 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names):
     coordinate construction, so the fraction head sees exactly the inputs the
     hard head was validated on. Returns a dict of the built tensors plus the
     crop offsets ``(y0, x0, crop_sz)`` and the raw ``data`` handle.
+
+    ``family`` routes the image tensor: ``"tessera"`` reads the pre-baked
+    ``tessera`` embedding (128, H, W) with NO Prithvi normalization (it ships
+    normalized) and NO temporal/location coords (annual, single-frame); any
+    other family reads Sentinel-2 reflectance and z-scores it. The ``img5d``
+    key holds a 5D tensor for Prithvi and the 4D (1, 128, H, W) embedding for
+    tessera — the model's forward consumes each family's native rank.
     """
     import torch
     from imint.training.unified_dataset import (
@@ -196,20 +207,32 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names):
     aux_names = aux_channel_names if aux_channel_names is not None else AUX_CHANNEL_NAMES
 
     data = np.load(tile_path, allow_pickle=True)
-    spectral = data.get("spectral", data.get("image")).astype(np.float32)
 
-    # Normalize: reflectance → DN → Prithvi z-score
-    n_frames = spectral.shape[0] // N_BANDS
-    mean = np.tile(PRITHVI_MEAN.reshape(N_BANDS, 1, 1), (n_frames, 1, 1))
-    std = np.tile(PRITHVI_STD.reshape(N_BANDS, 1, 1), (n_frames, 1, 1))
-    spectral = (spectral * 10000.0 - mean) / std
+    if family == "tessera":
+        # Pre-baked (128, H, W) embedding — already normalized on the TESSERA
+        # cluster; skip the reflectance z-score entirely.
+        emb = np.asarray(data["tessera"], dtype=np.float32)
+        _, h, w = emb.shape
+        crop_sz = min(img_size, h, w)
+        y0 = (h - crop_sz) // 2
+        x0 = (w - crop_sz) // 2
+        emb = emb[:, y0:y0+crop_sz, x0:x0+crop_sz]
+        img5d = torch.from_numpy(emb).unsqueeze(0).to(device)  # (1, 128, H, W)
+    else:
+        spectral = data.get("spectral", data.get("image")).astype(np.float32)
 
-    # Center crop to img_size (no crop if tile == img_size)
-    _, h, w = spectral.shape
-    crop_sz = min(img_size, h, w)
-    y0 = (h - crop_sz) // 2
-    x0 = (w - crop_sz) // 2
-    spectral = spectral[:, y0:y0+crop_sz, x0:x0+crop_sz]
+        # Normalize: reflectance → DN → Prithvi z-score
+        n_frames = spectral.shape[0] // N_BANDS
+        mean = np.tile(PRITHVI_MEAN.reshape(N_BANDS, 1, 1), (n_frames, 1, 1))
+        std = np.tile(PRITHVI_STD.reshape(N_BANDS, 1, 1), (n_frames, 1, 1))
+        spectral = (spectral * 10000.0 - mean) / std
+
+        # Center crop to img_size (no crop if tile == img_size)
+        _, h, w = spectral.shape
+        crop_sz = min(img_size, h, w)
+        y0 = (h - crop_sz) // 2
+        x0 = (w - crop_sz) // 2
+        spectral = spectral[:, y0:y0+crop_sz, x0:x0+crop_sz]
 
     # Aux channels
     aux_list = []
@@ -222,29 +245,32 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names):
         else:
             aux_list.append(np.zeros((1, crop_sz, crop_sz), dtype=np.float32))
 
-    img = torch.from_numpy(spectral).unsqueeze(0).to(device)
-    T = img.shape[1] // 6
-    img5d = img.view(1, T, 6, crop_sz, crop_sz).permute(0, 2, 1, 3, 4)
-
     aux = torch.from_numpy(np.concatenate(aux_list, axis=0)).unsqueeze(0).to(device)
 
     temporal_coords = None
     location_coords = None
-    doy = data.get("doy")
-    if doy is not None:
-        from imint.training.sampler import _sweref99_to_wgs84
-        year = int(data.get("year", data.get("lpis_year", 2022)))
-        tc = np.zeros((n_frames, 2), dtype=np.float32)
-        tc[:, 0] = float(year)
-        tc[:len(doy), 1] = doy[:n_frames].astype(np.float32)
-        temporal_coords = torch.from_numpy(tc).unsqueeze(0).to(device)
+    if family != "tessera":
+        # Prithvi image tensor + TL coords. Tessera already built img5d above
+        # and has no per-frame/location coords (annual embedding).
+        img = torch.from_numpy(spectral).unsqueeze(0).to(device)
+        T = img.shape[1] // 6
+        img5d = img.view(1, T, 6, crop_sz, crop_sz).permute(0, 2, 1, 3, 4)
 
-        easting = float(data.get("easting", 500_000))
-        northing = float(data.get("northing", 6_500_000))
-        lat, lon = _sweref99_to_wgs84(easting, northing)
-        location_coords = torch.from_numpy(
-            np.array([[lat, lon]], dtype=np.float32)
-        ).to(device)
+        doy = data.get("doy")
+        if doy is not None:
+            from imint.training.sampler import _sweref99_to_wgs84
+            year = int(data.get("year", data.get("lpis_year", 2022)))
+            tc = np.zeros((n_frames, 2), dtype=np.float32)
+            tc[:, 0] = float(year)
+            tc[:len(doy), 1] = doy[:n_frames].astype(np.float32)
+            temporal_coords = torch.from_numpy(tc).unsqueeze(0).to(device)
+
+            easting = float(data.get("easting", 500_000))
+            northing = float(data.get("northing", 6_500_000))
+            lat, lon = _sweref99_to_wgs84(easting, northing)
+            location_coords = torch.from_numpy(
+                np.array([[lat, lon]], dtype=np.float32)
+            ).to(device)
 
     return {
         "img5d": img5d, "aux": aux,
@@ -266,7 +292,9 @@ def run_fraction_inference(model, tile_path: str, device, img_size: int = 224,
     import torch
     if getattr(model, "frac_head", None) is None:
         raise ValueError("model has no fraction head (enable_tradslag_head=False)")
-    inp = _build_inference_inputs(tile_path, device, img_size, aux_channel_names)
+    family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
+    inp = _build_inference_inputs(
+        tile_path, device, img_size, aux_channel_names, family=family)
     with torch.no_grad():
         _logits, frac_logits = model(
             inp["img5d"], aux=inp["aux"],
@@ -290,7 +318,9 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
     fed aux count matches the model's input embedding.
     """
     import torch
-    inp = _build_inference_inputs(tile_path, device, img_size, aux_channel_names)
+    family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
+    inp = _build_inference_inputs(
+        tile_path, device, img_size, aux_channel_names, family=family)
     img5d = inp["img5d"]; aux = inp["aux"]
     temporal_coords = inp["temporal_coords"]; location_coords = inp["location_coords"]
     y0 = inp["y0"]; x0 = inp["x0"]; crop_sz = inp["crop_sz"]

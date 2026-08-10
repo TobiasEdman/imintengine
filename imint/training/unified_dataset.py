@@ -276,9 +276,23 @@ class UnifiedDataset(Dataset):
         aux_channel_names: Sequence[str] | None = None,
         label_dir: str | Path | None = None,
         frac_dir: str | Path | None = None,
+        backbone_family: str = "prithvi",
     ):
         super().__init__()
         self.patch_size = patch_size
+        # Which backbone family the emitted samples feed. "prithvi" (the
+        # default) reads the multi-frame `spectral` reflectance and applies
+        # Prithvi z-score normalization + temporal/location coords. "tessera"
+        # reads the pre-baked `tessera` embedding (128, H, W) instead — no
+        # normalization (embeddings ship normalized), no temporal reshape
+        # (annual, single-frame). Routed explicitly on family, never on
+        # tensor shape.
+        self.backbone_family = backbone_family
+        if backbone_family == "tessera" and multitemporal:
+            raise ValueError(
+                "backbone_family='tessera' is single-frame (annual "
+                "embeddings) — do not combine with multitemporal=True."
+            )
         # Optional non-destructive label sidecar directory. When set, the
         # label-derived keys (_LABEL_SIDECAR_KEYS) are read from
         # <label_dir>/<tile_name>.npz per tile; spectral/aux/temporal/coords
@@ -449,10 +463,16 @@ class UnifiedDataset(Dataset):
             and ``metadata``.
         """
         entry = self._entries[idx]
+        # The tessera path needs the `tessera` embedding present; the Prithvi
+        # path needs `spectral`/`image`. Require the right key up front so a
+        # tile missing it is skipped by the retry loop, not silently zeroed.
+        required_key = "tessera" if self.backbone_family == "tessera" else None
         try:
             data = np.load(entry["path"], allow_pickle=True)
             if "spectral" not in data and "image" not in data:
                 raise KeyError("missing spectral")
+            if required_key is not None and required_key not in data:
+                raise KeyError(f"missing {required_key}")
         except Exception:
             if _retries >= 50:
                 raise RuntimeError(f"No valid tiles found after {_retries} retries from idx {idx}")
@@ -481,8 +501,14 @@ class UnifiedDataset(Dataset):
 
         source = entry["source"]
 
-        # --- Spectral image ---------------------------------------------
-        if self.multitemporal:
+        # --- Image tensor -----------------------------------------------
+        # Tessera consumes the pre-baked (128, H, W) annual embedding; every
+        # other family reads Sentinel-2 reflectance (single- or multi-frame).
+        if self.backbone_family == "tessera":
+            image = np.asarray(data["tessera"], dtype=np.float32)  # (128, H, W)
+            temporal_mask = None
+            doy = None
+        elif self.multitemporal:
             image, temporal_mask, doy = self._extract_all_frames(
                 data, source, self.num_temporal_frames
             )
@@ -555,11 +581,13 @@ class UnifiedDataset(Dataset):
             n_frac_bundle = frac_bundle.shape[0]
 
         # --- Prithvi normalization: reflectance [0,1] -> DN -> z-score -
-        # Normalize all T frames identically (mean/std tile across frames)
-        n_frames = image.shape[0] // N_BANDS
-        mean_t = np.tile(self._mean, (n_frames, 1, 1))  # (T*6, 1, 1)
-        std_t = np.tile(self._std, (n_frames, 1, 1))
-        image = (image * 10000.0 - mean_t) / std_t
+        # Normalize all T frames identically (mean/std tile across frames).
+        # Skipped for tessera: the embeddings ship already normalized.
+        if self.backbone_family != "tessera":
+            n_frames = image.shape[0] // N_BANDS
+            mean_t = np.tile(self._mean, (n_frames, 1, 1))  # (T*6, 1, 1)
+            std_t = np.tile(self._std, (n_frames, 1, 1))
+            image = (image * 10000.0 - mean_t) / std_t
 
         # --- Spatial augmentation / crop --------------------------------
         if self.augment:
@@ -596,23 +624,35 @@ class UnifiedDataset(Dataset):
         )
 
         # --- Prithvi TL coordinate tensors ------------------------------
-        n_frames = image.shape[0] // N_BANDS
-        temporal_coords, location_coords = self._build_coords(
-            data, doy, n_frames,
-        )
+        # Tessera has no per-frame/location coords (annual embedding); the
+        # head ignores them. Emit None so the batch key stays present.
+        if self.backbone_family == "tessera":
+            temporal_coords, location_coords = None, None
+        else:
+            n_frames = image.shape[0] // N_BANDS
+            temporal_coords, location_coords = self._build_coords(
+                data, doy, n_frames,
+            )
 
         # --- Build output dict ------------------------------------------
+        # `spectral` carries the image tensor for ALL families (Prithvi
+        # reflectance or tessera embedding); the trainer routes on family,
+        # not on this key's channel count. Coord keys are only emitted when
+        # present so every sample in a (single-family) batch has the same
+        # key set: Prithvi always includes them, tessera always omits them.
         result: dict = {
             "spectral":     torch.from_numpy(np.ascontiguousarray(image)),
             "label":        torch.from_numpy(np.ascontiguousarray(label)),
             "pixel_weight": pixel_weight,
-            "temporal_coords": temporal_coords,
-            "location_coords": location_coords,
             "metadata": {
                 "tile":   entry["name"],
                 "source": source,
             },
         }
+        if temporal_coords is not None:
+            result["temporal_coords"] = temporal_coords
+        if location_coords is not None:
+            result["location_coords"] = location_coords
 
         # Multitemporal metadata
         if temporal_mask is not None:

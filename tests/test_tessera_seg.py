@@ -106,6 +106,83 @@ class TestTesseraSegmentationForward:
         assert out.shape == (1, 23, h, w)
 
 
+class TestTesseraFractionHead:
+    """Frac-head mirrors PrithviSegmentationModel: flag-gated Conv2d that
+    returns (B, num_tradslag, H, W) crown-cover logits aligned with the
+    class logits."""
+
+    def test_disabled_by_default(self):
+        model = TesseraSegmentationModel(
+            encoder=load_tessera(), num_classes=28, embed_dim=128,
+        )
+        assert model.frac_head is None
+        # return_fractions on a headless model → (logits, None)
+        emb = torch.randn(1, 128, 64, 64)
+        logits, frac = model(emb, return_fractions=True)
+        assert logits.shape == (1, 28, 64, 64)
+        assert frac is None
+
+    def test_enabled_returns_fraction_logits(self):
+        model = TesseraSegmentationModel(
+            encoder=load_tessera(), num_classes=28, embed_dim=128,
+            enable_tradslag_head=True, num_tradslag=4,
+        )
+        assert model.frac_head is not None
+        emb = torch.randn(2, 128, 64, 64)
+        logits, frac = model(emb, return_fractions=True)
+        assert logits.shape == (2, 28, 64, 64)
+        assert frac.shape == (2, 4, 64, 64)
+
+    def test_default_return_is_logits_only(self):
+        """Without return_fractions the signature stays a bare tensor —
+        byte-compatible with the pre-frac-head callers."""
+        model = TesseraSegmentationModel(
+            encoder=load_tessera(), num_classes=28, embed_dim=128,
+            enable_tradslag_head=True,
+        )
+        out = model(torch.randn(1, 128, 32, 32))
+        assert isinstance(out, torch.Tensor)
+        assert out.shape == (1, 28, 32, 32)
+
+    def test_frac_head_aligns_with_logits_under_aux(self):
+        model = TesseraSegmentationModel(
+            encoder=load_tessera(), num_classes=28, embed_dim=128,
+            n_aux_channels=10, enable_tradslag_head=True, num_tradslag=4,
+        )
+        emb = torch.randn(1, 128, 48, 48)
+        aux = torch.randn(1, 10, 48, 48)
+        logits, frac = model(emb, aux=aux, return_fractions=True)
+        assert logits.shape[2:] == frac.shape[2:] == (48, 48)
+
+    def test_ignores_tl_coords(self):
+        """Accepts temporal/location coords for call parity but ignores
+        them (annual embedding has no per-frame coords)."""
+        model = TesseraSegmentationModel(
+            encoder=load_tessera(), num_classes=28, embed_dim=128,
+        )
+        emb = torch.randn(1, 128, 32, 32)
+        out = model(
+            emb,
+            temporal_coords=torch.randn(1, 1, 2),
+            location_coords=torch.randn(1, 2),
+        )
+        assert out.shape == (1, 28, 32, 32)
+
+    def test_backward_pass(self):
+        """Loss is finite and gradients flow to both heads + the scale."""
+        model = TesseraSegmentationModel(
+            encoder=load_tessera(), num_classes=28, embed_dim=128,
+            enable_tradslag_head=True, num_tradslag=4,
+        )
+        emb = torch.randn(2, 128, 32, 32)
+        logits, frac = model(emb, return_fractions=True)
+        loss = logits.mean() + frac.mean()
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert model.classifier.weight.grad is not None
+        assert model.frac_head.weight.grad is not None
+
+
 class TestRegistryIntegration:
     def test_tessera_in_registry(self):
         from imint.fm.registry import MODEL_CONFIGS
@@ -131,3 +208,18 @@ class TestRegistryIntegration:
         emb = torch.randn(1, 128, 256, 256)
         out = seg(emb)
         assert out.shape == (1, 23, 256, 256)
+
+    def test_build_segmentation_threads_frac_head(self):
+        """build_segmentation_from_spec passes enable_tradslag_head/
+        num_tradslag into the tessera wrapper (was silently dropped)."""
+        from imint.fm.registry import build_backbone
+        from imint.fm.upernet import build_segmentation_from_spec
+        model, spec = build_backbone("tessera_v1", num_frames=1, pretrained=False)
+        seg = build_segmentation_from_spec(
+            spec, encoder=model, num_classes=28, img_size=512,
+            enable_tradslag_head=True, num_tradslag=4,
+        )
+        assert seg.frac_head is not None
+        logits, frac = seg(torch.randn(1, 128, 64, 64), return_fractions=True)
+        assert logits.shape == (1, 28, 64, 64)
+        assert frac.shape == (1, 4, 64, 64)

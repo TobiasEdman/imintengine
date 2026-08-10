@@ -347,6 +347,14 @@ def main():
     lulc_dir = data_dirs[0] if len(data_dirs) > 0 else None
     crop_dir = data_dirs[1] if len(data_dirs) > 1 else None
 
+    # Resolve the backbone family so the dataset reads the right image key
+    # (Prithvi → `spectral` reflectance; tessera → pre-baked `tessera`
+    # embedding). Explicit routing on family, never on tile shape.
+    from imint.fm.registry import MODEL_CONFIGS, resolve_backbone_name
+    backbone_family = MODEL_CONFIGS[
+        resolve_backbone_name(config.backbone_name, config.backbone)
+    ].family
+
     # Honour the config's enabled aux set (adds markfukt when the flag is
     # on; otherwise identical to the canonical 10-channel list).
     aux_names = config.enabled_aux_names
@@ -361,6 +369,7 @@ def main():
         aux_channel_names=aux_names,
         label_dir=args.label_dir,
         frac_dir=args.frac_dir,
+        backbone_family=backbone_family,
     )
     val_dataset = UnifiedDataset(
         lulc_dir=lulc_dir,
@@ -373,6 +382,7 @@ def main():
         aux_channel_names=aux_names,
         label_dir=args.label_dir,
         frac_dir=args.frac_dir,
+        backbone_family=backbone_family,
     )
     print(f"  Train: {len(train_dataset)} tiles, Val: {len(val_dataset)} tiles")
 
@@ -380,7 +390,15 @@ def main():
     print(f"  Aux channels ({len(aux_names)}): {', '.join(aux_names)}")
 
     if args.evaluate_only:
-        # Evaluate-only mode
+        # Evaluate-only mode. Prithvi-only: the model rebuild below is a
+        # hardcoded single-date Prithvi head, so other families would be
+        # silently mis-evaluated — refuse loudly instead.
+        if backbone_family != "prithvi":
+            raise SystemExit(
+                f"--evaluate-only rebuilds a Prithvi model; backbone family "
+                f"{backbone_family!r} is not supported here. Use "
+                f"scripts/inference_comparison.py for non-Prithvi checkpoints."
+            )
         checkpoint_path = args.checkpoint or str(
             Path(config.checkpoint_dir) / "best_model.pt"
         )
@@ -422,6 +440,9 @@ def main():
                     split=split_name,
                     patch_size=config.patch_pixels,
                     enable_aux=True,
+                    label_dir=args.label_dir,
+                    frac_dir=args.frac_dir,
+                    backbone_family=backbone_family,
                 )
                 print(f"\n  Evaluating on {split_name} ({len(ds)} tiles)...")
                 metrics = evaluate_model(model, ds, config, device)
