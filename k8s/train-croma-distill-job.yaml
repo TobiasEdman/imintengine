@@ -1,0 +1,151 @@
+# ============================================================================
+# DRAFT — GATED ON G2. DO NOT SUBMIT.
+#
+# CROMA ensemble member (P8, docs/experiments/ensemble_campaign_plan.md).
+# Prepared in parallel per ratified decision 4 (2026-08-10); the H100
+# campaign starts only after G2 shows encoder diversity pays.
+#
+# Prerequisites before this can run:
+#   1. G2 passed (tessera ablation delta > 0 on the 209 hold-out plots).
+#   2. CROMA dataset/trainer wiring (does NOT exist yet — the croma family
+#      needs 12-band S2 assembly via build_s2_croma_tensor + S1 vv/vh
+#      routing in unified_dataset, mirroring the D1 tessera pattern).
+#   3. CROMA_base.pt cached on PVC (cache-croma-weights-job.yaml).
+# ============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-croma-distill
+  namespace: prithvi-training-default
+  labels:
+    app: unified-training
+    purpose: croma-distill
+    dataset: "512"
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 43200   # 12h cap
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: unified-training
+        purpose: croma-distill
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      # srv02's GPU admission is desynced (UnexpectedAdmissionError 2026-08-09,
+      # 2 pods failed) — exclude it; the job queues until srv01/srv03 frees.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: [p02r08srv02]
+      containers:
+        - name: trainer
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== CROMA ensemble member — distill labels + frac head (28-class) — $(date) ==="
+              echo "Modality-diversity member: S1 vv/vh + 12-band S2, single-date."
+              T=$(ls /cephfs/unified_v2_512/*.npz 2>/dev/null | wc -l)
+              D=$(ls /cephfs/nmd2023_distill_labels/*.npz 2>/dev/null | wc -l)
+              F=$(ls /cephfs/tradslag_fracs/*.npz 2>/dev/null | wc -l)
+              echo "Tiles: $T | distill sidecars: $D | frac sidecars: $F"
+              [ "$T" -lt 100 ] && { echo "ERROR: too few tiles"; exit 1; }
+              [ "$D" -lt 100 ] && { echo "FATAL: distill labels missing"; exit 1; }
+              [ "$F" -lt 100 ] && { echo "FATAL: frac sidecars missing"; exit 1; }
+              [ -s /cephfs/model_cache/CROMA_base.pt ] \
+                || { echo "FATAL: CROMA_base.pt not cached — run cache-croma-weights first"; exit 1; }
+
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir timm numpy scipy scikit-learn einops huggingface_hub
+
+              mkdir -p /cephfs/checkpoints/croma_distill
+              rm -f /cephfs/checkpoints/croma_distill/*.pt.tmp 2>/dev/null || true
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              # CROMA model code isn't a pip package — use_croma.py comes from
+              # the CROMA repo and is exposed via PYTHONPATH (loader contract,
+              # imint/fm/loaders/croma.py).
+              git clone --depth 1 https://github.com/antofuller/CROMA /workspace/CROMA
+              export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              grep -q 'enable-tradslag-head' scripts/train_unified.py \
+                || { echo "FATAL: tradslag flags missing on clone"; exit 1; }
+              # CROMA wiring gate — fails until the croma dataset routing lands.
+              grep -q 'croma' imint/training/unified_dataset.py \
+                || { echo "FATAL: croma dataset wiring missing on clone"; exit 1; }
+              # Weights land on this PVC as model_cache/CROMA_base.pt (the
+              # loader searches /data/model_cache/ — expose via symlink).
+              mkdir -p /data/model_cache 2>/dev/null \
+                || { mkdir -p /workspace/models; ln -sf /cephfs/model_cache/CROMA_base.pt /workspace/models/CROMA_base.pt; }
+              [ -d /data/model_cache ] && ln -sf /cephfs/model_cache/CROMA_base.pt /data/model_cache/CROMA_base.pt
+              cd /cephfs
+
+              # Same target as tessera member (distill labels + frac head),
+              # croma_base backbone: single-date (NO --enable-multitemporal),
+              # cold-started seg head, frozen encoder per registry default.
+              # NOTE: flags provisional — revisit after D-wiring + local smoke.
+              python /workspace/imintengine/scripts/train_unified.py \
+                --backbone-name croma_base \
+                --data-dirs /cephfs/unified_v2_512 \
+                --label-dir /cephfs/nmd2023_distill_labels \
+                --frac-dir /cephfs/tradslag_fracs \
+                --enable-tradslag-head \
+                --lambda-frac 1.0 \
+                --checkpoint-dir /cephfs/checkpoints/croma_distill \
+                --num-classes 28 \
+                --epochs 15 \
+                --batch-size 4 \
+                --lr 1e-4 \
+                --weight-decay 0.35 \
+                --loss-type focal_dice \
+                --focal-gamma 2.0 \
+                --patch-size 504 \
+                --img-size 504 \
+                --weighting-method sqrt \
+                --label-smoothing 0.05 \
+                --lovasz-weight 0.3 \
+                --patience 20 \
+                --num-workers 16 \
+                --device cuda
+              echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "80Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "16"
+              memory: "80Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /cephfs
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi

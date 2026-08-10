@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cache-croma-weights
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: weights-cache
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 3600  # 1 h max — single ~1.2 GB download
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: cache
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              # Land CROMA_base.pt at the flat path the loader searches
+              # first (imint/fm/loaders/croma.py): /data/model_cache/.
+              # Training jobs mount this same PVC at /cephfs, so the file
+              # is /cephfs/model_cache/CROMA_base.pt from their side.
+              export HF_HOME=/data/model_cache/hf
+              export HUGGINGFACE_HUB_CACHE=/data/model_cache/hf
+              DST=/data/model_cache/CROMA_base.pt
+
+              if [ -s "$DST" ]; then
+                echo "Already cached: $(ls -la $DST)"
+                exit 0
+              fi
+
+              pip install --quiet --no-cache-dir huggingface_hub
+              python - <<'PY'
+              import shutil
+              from huggingface_hub import hf_hub_download
+
+              src = hf_hub_download("antofuller/CROMA", "CROMA_base.pt")
+              shutil.copy2(src, "/data/model_cache/CROMA_base.pt")
+              print(f"Copied {src} -> /data/model_cache/CROMA_base.pt")
+              PY
+
+              echo "=== Result ==="
+              ls -la "$DST"
+              sha256sum "$DST"
+              echo "=== Done ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /data
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
