@@ -71,13 +71,25 @@ Not LUCAS-observable (documented exclusions, not silent drops): 5 sumpskog,
 - Write `data/lucas/lucas_truth_sweden.parquet` (point_id, lat/lon, E/N in
   3006, unified_class, lc1, year, purity).
 
-### L1 — coverage + point→pixel index (local, then PVC)
-Run `nfi_tile_coverage.py`-equivalent on the LUCAS truth set against
-`unified_v2_512` → `data/lucas/lucas_tile_index.parquet`
-(point → tile, row, col, tile_year). Report coverage: how many of the 34k
-land on built tiles, by class and year. **Leakage guard:** tag each point
-train/test by the SAME `distill_split.json` tile grouping so L-head's held-out
-never shares a tile with training.
+### L1 — coverage + point→pixel index (local, then PVC) — DONE
+`scan_tile_bboxes.py` dumped the 7,882-tile centers → manifest;
+`lucas_tile_coverage.py --manifest` co-located locally →
+`data/lucas/lucas_tile_index.parquet`. **Result:** 10,329 of 35,644 scorable
+points land on built tiles (4,303 tiles), strong per-class support (tall 838,
+gran 502, löv 804, bland 1,008, water 1,066, bete 1,108, hundreds/crop).
+
+**Leakage framing (revised after L1):** `distill_split.json` holds out only
+53 tiles (it was built for the 209 NFI plots), so it strands just **71** LUCAS
+points held-out — useless per class. But the models trained on **NMD2023
+labels, never LUCAS**, so LUCAS is independent truth regardless of which tiles
+the backbone saw. Therefore:
+- **L-head (L3):** grouped-tile K-fold CV over **all 10,329** points (every
+  point OOF from folds excluding its tile). Full power, leakage-clean for the
+  head by construction. Do NOT gate on distill_split.
+- **L-direct (L2):** headline = all-tile numbers (independent-truth check,
+  LUCAS never a training target); the 71 distill_split held-out points are a
+  strict sanity anchor to show train-tile numbers aren't memorization-inflated.
+  Report the gap.
 
 ### L2 — L-direct validation (GPU, test-split tiles)
 Split by what the model actually outputs, matched to LUCAS's granularity.

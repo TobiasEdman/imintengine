@@ -139,6 +139,10 @@ class LULCTrainer:
         registry_name = resolve_backbone_name(
             self.config.backbone_name, self.config.backbone,
         )
+        # Stash the resolved backbone so the checkpoint config records it
+        # (load_model needs it for non-Prithvi families that have no
+        # pos_embed to infer from).
+        self._registry_name = registry_name
 
         num_frames = (
             self.config.num_temporal_frames
@@ -1238,6 +1242,7 @@ class LULCTrainer:
             "metrics": {k: v for k, v in metrics.items()
                         if k != "confusion_matrix"},
             "config": {
+                "backbone_name": self._registry_name,
                 "num_classes": self.config.num_classes,
                 "decoder_type": self.config.decoder_type,
                 "decoder_channels": self.config.decoder_channels,

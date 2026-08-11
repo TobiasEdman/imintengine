@@ -69,8 +69,8 @@ def rgb_to_b64png(rgb: np.ndarray) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def load_model(ckpt_path: str, device):
-    """Load a Prithvi-family segmentation model from checkpoint.
+def load_model(ckpt_path: str, device, backbone_name: str | None = None):
+    """Load a segmentation model from checkpoint.
 
     Routes through the model registry (``imint.fm.registry.MODEL_CONFIGS``)
     so the correct backbone variant — including its ``patch_size`` —
@@ -117,9 +117,17 @@ def load_model(ckpt_path: str, device):
     #      (trainer.py:1000-1009), so (1)+(2) are None for any checkpoint
     #      saved before that gets fixed. Embed-dim inference is robust as
     #      long as the checkpoint actually loaded a registered backbone.
-    backbone_name = resolve_backbone_name(
-        ck_cfg.get("backbone_name"), ck_cfg.get("backbone"),
-    )
+    # An explicit override wins over the ck_cfg chain. Required for
+    # non-Prithvi families (e.g. tessera_v1): their checkpoints have no
+    # pos_embed to infer from and the trainer's minimal config omits
+    # backbone_name, so neither the ck_cfg lookup nor the embed-dim
+    # inference below can recover it.
+    if backbone_name is not None:
+        backbone_name = resolve_backbone_name(backbone_name, None)
+    else:
+        backbone_name = resolve_backbone_name(
+            ck_cfg.get("backbone_name"), ck_cfg.get("backbone"),
+        )
     if backbone_name == "prithvi_300m" and pos_embed is not None:
         # only trust the default if we can't infer otherwise
         embed_dim = pos_embed.shape[-1]

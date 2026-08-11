@@ -286,7 +286,7 @@ def score_against_nfi(
 
 
 def make_model_predict_fn(checkpoint: str, device, img_size: int,
-                          aux_channel_names=None):
+                          aux_channel_names=None, backbone_name=None):
     """Real ``predict_fn`` for a UNIFIED-format checkpoint (v8+, 10-aux).
 
     Reuses ``inference_comparison.{load_model, run_inference}`` — the same
@@ -312,7 +312,8 @@ def make_model_predict_fn(checkpoint: str, device, img_size: int,
     infcmp = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(infcmp)
 
-    model, epoch, miou, model_img_size = infcmp.load_model(checkpoint, device)
+    model, epoch, miou, model_img_size = infcmp.load_model(
+        checkpoint, device, backbone_name=backbone_name)
     print(f"  [load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size}")
 
     def predict_fn(tile_path):
@@ -328,7 +329,7 @@ def make_model_predict_fn(checkpoint: str, device, img_size: int,
 def make_fraction_predict_fn(
     checkpoint: str, device, img_size: int, aux_channel_names=None,
     *, dominant_frac: float = 0.7, forest_floor: float = 0.1,
-    num_classes: int = 28,
+    num_classes: int = 28, backbone_name=None,
 ):
     """``predict_fn`` that collapses the FRACTION HEAD with the NFI rule.
 
@@ -349,7 +350,8 @@ def make_fraction_predict_fn(
     infcmp = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(infcmp)
 
-    model, epoch, miou, model_img_size = infcmp.load_model(checkpoint, device)
+    model, epoch, miou, model_img_size = infcmp.load_model(
+        checkpoint, device, backbone_name=backbone_name)
     if getattr(model, "frac_head", None) is None:
         raise ValueError(
             "checkpoint has no fraction head — retrain with "
@@ -411,6 +413,10 @@ def main() -> None:
     ap.add_argument("--img-size", type=int, default=504,
                     help="inference crop (504 = 600M patch-14 on 512 tiles)")
     ap.add_argument("--num-classes", type=int, default=23)
+    ap.add_argument("--backbone-name", default=None,
+                    help="override the checkpoint's backbone (required for "
+                    "non-Prithvi families, e.g. tessera_v1, whose minimal "
+                    "config omits backbone_name and has no pos_embed to infer)")
     ap.add_argument("--use-fraction-head", action="store_true",
                     help="Collapse the Trädslag fraction head with the NFI "
                          "dominance rule instead of argmaxing the class head. "
@@ -476,13 +482,14 @@ def main() -> None:
             args.checkpoint, device, args.img_size,
             aux_channel_names=aux_names,
             dominant_frac=args.dominant_frac, forest_floor=args.forest_floor,
-            num_classes=args.num_classes,
+            num_classes=args.num_classes, backbone_name=args.backbone_name,
         )
         print(f"  fraction-head collapse: dominant_frac={args.dominant_frac}, "
               f"forest_floor={args.forest_floor}")
     else:
         predict_fn = make_model_predict_fn(args.checkpoint, device, args.img_size,
-                                           aux_channel_names=aux_names)
+                                           aux_channel_names=aux_names,
+                                           backbone_name=args.backbone_name)
 
     per_plot: list | None = [] if args.dump_per_plot else None
     results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes,

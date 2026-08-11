@@ -126,11 +126,20 @@ ALL_MEMBERS: tuple[Member, ...] = (
     Member("v8b_nmd2023_long", "hard", 28),
     Member("distill", "hard", 28),
     Member("tradslag", "fraction", 28),
+    # Encoder-diversity member (distill labels + frac head on frozen Tessera
+    # embeddings). Absent until its dump lands — load_members skips it, so
+    # the *_tessera sets silently equal their base until then.
+    Member("tessera", "hard", 28),
 )
 
 MEMBER_SETS: dict[str, tuple[str, ...]] = {
+    # Ratified sets (decision 1) — the tessera-OUT ablation baselines.
     "all5": ("v8b", "v8b_markfukt", "v8b_nmd2023_long", "distill", "tradslag"),
     "top2": ("distill", "tradslag"),
+    # tessera-IN sets — G2 ablation is *_tessera vs its base.
+    "all5_tessera": ("v8b", "v8b_markfukt", "v8b_nmd2023_long", "distill",
+                     "tradslag", "tessera"),
+    "top2_tessera": ("distill", "tradslag", "tessera"),
 }
 
 # Feature variants (decision 2). Each maps to a predicate over member.mode that
