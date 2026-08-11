@@ -23,7 +23,8 @@ metadata:
     dataset: "512"
 spec:
   backoffLimit: 1
-  activeDeadlineSeconds: 43200   # 12h cap
+  # Run cap lives on the pod (see train-tessera-distill for why: a
+  # Job-level deadline counts queue time and can die before running).
   ttlSecondsAfterFinished: 172800
   template:
     metadata:
@@ -32,6 +33,7 @@ spec:
         purpose: croma-distill
     spec:
       restartPolicy: Never
+      activeDeadlineSeconds: 43200   # 12h RUN cap (from pod start, not queue)
       nodeSelector:
         accelerator: nvidia-h100
       # srv02's GPU admission is desynced (UnexpectedAdmissionError 2026-08-09,
