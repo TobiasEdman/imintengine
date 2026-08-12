@@ -31,12 +31,13 @@ from scripts.validate_against_nfi import accuracy_suite  # noqa: E402
 # model → (per-plot dump stem, backbone, collapse). "hard" = 28→5 argmax
 # collapse; "fraction" = the calibrated Trädslag collapse.
 MODELS = [
+    ("Tessera · frac", "tessera_frac", "Tessera", "fraction"),
     ("Prithvi-600M · tradslag", "tradslag", "Prithvi-600M", "fraction"),
     ("Prithvi-600M · distill", "distill", "Prithvi-600M", "hard"),
+    ("Tessera · distill (hard)", "tessera", "Tessera", "hard"),
     ("Prithvi-600M · v8b_nmd2023_long", "v8b_nmd2023_long", "Prithvi-600M", "hard"),
     ("Prithvi-600M · v8b_markfukt", "v8b_markfukt", "Prithvi-600M", "hard"),
     ("Prithvi-600M · v8b", "v8b", "Prithvi-600M", "hard"),
-    ("Tessera · distill+frac", "tessera", "Tessera", "hard"),
 ]
 
 FOREST = (1, 2, 3, 4)
