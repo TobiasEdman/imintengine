@@ -9,7 +9,6 @@ metadata:
     dataset: "512"
 spec:
   backoffLimit: 2
-  activeDeadlineSeconds: 43200   # 12h max (4-frame multitemporal, larger model + input)
   template:
     metadata:
       labels:
@@ -17,6 +16,7 @@ spec:
         purpose: ensemble-prithvi-600m
     spec:
       restartPolicy: Never
+      activeDeadlineSeconds: 43200   # RUN cap (from pod start, not queue) — Job-level counts queue time
       nodeSelector:
         accelerator: nvidia-h100
       containers:

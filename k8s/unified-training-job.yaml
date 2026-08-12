@@ -8,13 +8,13 @@ metadata:
     version: v5
 spec:
   backoffLimit: 2
-  activeDeadlineSeconds: 43200  # 12 hours max (4-frame = slower)
   template:
     metadata:
       labels:
         app: unified-training
     spec:
       restartPolicy: Never
+      activeDeadlineSeconds: 43200   # RUN cap (from pod start, not queue) — Job-level counts queue time
       nodeSelector:
         accelerator: nvidia-h100
       containers:
