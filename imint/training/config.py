@@ -125,6 +125,9 @@ class TrainingConfig:
     # ── Architecture v5 ──────────────────────────────────────────────────
     enable_temporal_pooling: bool = True                # Mean+max temporal pooling
     enable_multilevel_aux: bool = True                  # Gated LiDAR fusion per FPN level
+    # Tessera-only aux fusion mode: "concat" (default, historical) or
+    # "gated" (GatedFusion residual gate). Ignored by non-tessera families.
+    aux_fusion: str = "concat"                          # "concat" | "gated"
 
     # ── Loss ───────────────────────────────────────────────────────────
     loss_type: str = "focal_dice"                      # "cross_entropy", "focal", "focal_dice"

@@ -932,6 +932,7 @@ def build_segmentation_from_spec(
     enable_multilevel_aux: bool = True,
     enable_tradslag_head: bool = False,
     num_tradslag: int = 4,
+    aux_fusion: str = "concat",
     device: str | torch.device | None = None,
 ):
     """Build a segmentation model from a ModelSpec + encoder.
@@ -953,6 +954,8 @@ def build_segmentation_from_spec(
         n_aux_channels: Auxiliary raster channels (DEM, VPP, etc.).
         enable_temporal_pooling: Use mean+max over temporal frames.
         enable_multilevel_aux: Use gated mid-level aux fusion.
+        aux_fusion: Tessera-only aux fusion mode ("concat" | "gated");
+            ignored by all other families.
         device: Used to pick MPS-safe pool sizes.
 
     Returns:
@@ -1032,6 +1035,7 @@ def build_segmentation_from_spec(
             dropout=dropout,
             enable_tradslag_head=enable_tradslag_head,
             num_tradslag=num_tradslag,
+            aux_fusion=aux_fusion,
         )
 
     raise NotImplementedError(

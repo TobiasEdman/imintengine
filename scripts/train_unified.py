@@ -185,6 +185,14 @@ def main():
                         default=_defaults.frac_loss_type,
                         choices=["l1", "smooth_l1"],
                         help="Fraction regression loss (default l1)")
+    parser.add_argument("--aux-fusion", type=str,
+                        default=_defaults.aux_fusion,
+                        choices=["concat", "gated"],
+                        help="Tessera-only aux fusion mode: 'concat' "
+                             "(default, historical) projects aux and "
+                             "concatenates with the smoothed embedding; "
+                             "'gated' fuses via the GatedFusion residual gate "
+                             "(same-channel). Ignored by non-tessera families.")
 
     # Early stopping metric
     parser.add_argument("--early-stop-metric", type=str,
@@ -332,6 +340,8 @@ def main():
         enable_tradslag_head=args.enable_tradslag_head,
         lambda_frac=args.lambda_frac,
         frac_loss_type=args.frac_loss_type,
+        # Tessera-only aux fusion mode ("concat" default | "gated").
+        aux_fusion=args.aux_fusion,
     )
 
     # ── Load datasets ─────────────────────────────────────────────

@@ -180,6 +180,7 @@ class LULCTrainer:
             enable_multilevel_aux=self.config.enable_multilevel_aux,
             enable_tradslag_head=self.config.enable_tradslag_head,
             num_tradslag=self.config.num_tradslag,
+            aux_fusion=self.config.aux_fusion,
             device=self.device,
         )
 

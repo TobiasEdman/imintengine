@@ -14,9 +14,18 @@ TESSERA (cheap, label-efficient transfer).
 Architecture:
     1. 1x1 Conv(128 → 256)                  (expand, share context)
     2. 3x3 Conv(256 → 128)                  (spatial smoothing)
-    3. Optional aux fusion (concat)
+    3. Optional aux fusion — "concat" (default) or "gated"
     4. Dropout
-    5. 1x1 Conv(128 → num_classes)
+    5. 1x1 Conv(final_in → num_classes)
+
+Aux fusion modes:
+    - "concat": aux is Conv3x3-projected to hidden//2 and concatenated
+      with the smoothed Tessera feature → classifier sees ``hidden``
+      channels. This is the historical (byte-identical) default.
+    - "gated": aux is Conv3x3-projected to hidden//2, then fused with
+      the smoothed feature via the proven ``GatedFusion`` residual gate
+      (``fused = s2 + gate * (aux_proj - s2)``, reused from the Prithvi
+      UPerNet decoder). Same-channel output → classifier sees ``hidden//2``.
 """
 from __future__ import annotations
 
@@ -43,6 +52,12 @@ class TesseraSegmentationModel(nn.Module):
             exact multi-task pattern PrithviSegmentationModel uses.
             Flag-gated so the default path carries no extra parameters.
         num_tradslag: Number of Trädslag fraction channels (default 4).
+        aux_fusion: How aux is combined with the smoothed Tessera feature
+            when ``n_aux_channels > 0``. ``"concat"`` (default) reproduces
+            the historical behaviour byte-for-byte. ``"gated"`` uses the
+            proven ``GatedFusion`` residual gate (same-channel output →
+            classifier/frac input is ``hidden//2``, not ``hidden``).
+            Irrelevant when ``n_aux_channels == 0``.
     """
 
     def __init__(
@@ -55,13 +70,19 @@ class TesseraSegmentationModel(nn.Module):
         dropout: float = 0.1,
         enable_tradslag_head: bool = False,
         num_tradslag: int = 4,
+        aux_fusion: str = "concat",
     ):
         super().__init__()
+        if aux_fusion not in ("concat", "gated"):
+            raise ValueError(
+                f"aux_fusion must be 'concat' or 'gated'; got {aux_fusion!r}."
+            )
         self.encoder = encoder
         self.embed_dim = embed_dim
         self.num_classes = num_classes
         self.n_aux_channels = n_aux_channels
         self.enable_tradslag_head = enable_tradslag_head
+        self.aux_fusion = aux_fusion
 
         self.expand = nn.Sequential(
             nn.Conv2d(embed_dim, hidden, kernel_size=1, bias=False),
@@ -73,13 +94,26 @@ class TesseraSegmentationModel(nn.Module):
         )
 
         final_in = hidden // 2
+        self.gated_fusion = None
         if n_aux_channels > 0:
+            # Spatial aux extraction is shared by both fusion modes:
+            # Conv3x3(n_aux → hidden//2) + BN + GELU → (B, hidden//2, H, W).
             self.aux_proj = nn.Sequential(
                 nn.Conv2d(n_aux_channels, hidden // 2, kernel_size=3,
                           padding=1, bias=False),
                 nn.BatchNorm2d(hidden // 2), nn.GELU(),
             )
-            final_in = hidden
+            if aux_fusion == "concat":
+                # Historical path — concatenate → classifier sees `hidden`.
+                final_in = hidden
+            else:
+                # Gated residual fusion, same-channel → classifier sees
+                # `hidden//2`. Reuse the Prithvi decoder's GatedFusion.
+                from imint.fm.upernet import GatedFusion
+                self.gated_fusion = GatedFusion(
+                    s2_channels=hidden // 2, aux_channels=hidden // 2,
+                )
+                final_in = hidden // 2
         else:
             self.aux_proj = None
 
@@ -137,7 +171,12 @@ class TesseraSegmentationModel(nn.Module):
 
         if self.aux_proj is not None and aux is not None:
             a = self.aux_proj(aux)
-            x = torch.cat([x, a], dim=1)
+            if self.gated_fusion is not None:
+                # Gated residual fusion — same-channel (B, hidden//2, H, W).
+                x = self.gated_fusion(x, a)
+            else:
+                # Concat fusion — (B, hidden, H, W).
+                x = torch.cat([x, a], dim=1)
 
         x = self.dropout(x)
         logits = self.classifier(x)
