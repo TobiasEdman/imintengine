@@ -1,0 +1,96 @@
+# LUCAS L2 validation — one member. Placeholders substituted at launch:
+#   __MEMBER__   ensemble member id (dump/JSON stem)
+#   __CKPT__     checkpoint dir under /data/checkpoints
+#   __BACKBONE__ registry backbone name (prithvi_600m | tessera_v1)
+#   __EXTRA__    extra flags (e.g. --enable-markfukt), or empty
+# Reused by scripts/launch_lucas_validate.sh; do not apply raw.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lucas-validate-__MEMBER__
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: lucas-validate
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800   # 8h — ~4303 tiles inference
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: validate
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== LUCAS L2 validation — __MEMBER__ ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
+                pandas pyarrow rasterio pyproj
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              grep -q 'assert_crop_year_match' scripts/validate_against_lucas.py \
+                || { echo "FATAL: LUCAS validator missing on clone"; exit 1; }
+              [ -f /data/checkpoints/__CKPT__/best_model.pt ] \
+                || { echo "FATAL: checkpoint __CKPT__ not found"; exit 1; }
+              [ -f /data/lucas/lucas_tile_index.parquet ] \
+                || { echo "FATAL: LUCAS index not on PVC"; exit 1; }
+
+              python3 scripts/validate_against_lucas.py \
+                --checkpoint /data/checkpoints/__CKPT__/best_model.pt \
+                --backbone-name __BACKBONE__ \
+                --img-size 504 --num-classes 28 \
+                --data-dir /data/unified_v2_512 \
+                --lucas-index /data/lucas/lucas_tile_index.parquet \
+                --min-support 20 --auto-fraction __EXTRA__ \
+                --device cuda \
+                --out /data/nfi_eval/lucas-validation-__MEMBER__.json \
+                --dump-per-point /data/nfi_eval/lucas-per-point-__MEMBER__.parquet
+
+              echo ""; echo "=== summary ==="
+              python3 -c "import json;d=json.load(open('/data/nfi_eval/lucas-validation-__MEMBER__.json'));print(json.dumps({k:v for k,v in d.items() if not k.startswith('_')},indent=1)[:1500])"
+              echo ""; echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
