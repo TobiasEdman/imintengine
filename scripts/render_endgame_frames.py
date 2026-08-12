@@ -36,9 +36,17 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--tile", required=True)
-    ap.add_argument("--label-sidecar", required=True)
+    ap.add_argument("--label-sidecar", default=None,
+                    help="required unless --skip-label")
     ap.add_argument("--img-size", type=int, default=504)
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--backbone-name", default=None,
+                    help="override the checkpoint backbone (needed for "
+                    "non-Prithvi families e.g. tessera_v1)")
+    ap.add_argument("--model-frame-name", default="model_frame",
+                    help="basename for the model-prediction PNG (no ext)")
+    ap.add_argument("--skip-label", action="store_true",
+                    help="only render the model prediction, not the NMD label")
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
@@ -53,25 +61,28 @@ def main() -> None:
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu")
 
-    model, epoch, miou, _ = infcmp.load_model(args.checkpoint, device)
+    model, epoch, miou, _ = infcmp.load_model(
+        args.checkpoint, device, backbone_name=args.backbone_name)
     print(f"[load_model] epoch={epoch} mIoU={miou}")
     pred = infcmp.run_inference(model, args.tile, device, img_size=args.img_size)
     pred = np.asarray(pred)
     print(f"pred {pred.shape}, classes {sorted(np.unique(pred).tolist())}")
 
-    label = np.load(args.label_sidecar, allow_pickle=True)["label"]
-    # Same centre-crop extent as run_inference so both frames cover identical ground.
-    h = label.shape[0]
-    cs = min(args.img_size, h)
-    off = (h - cs) // 2
-    label = label[off:off + cs, off:off + cs]
-    print(f"label {label.shape}, classes {sorted(np.unique(label).tolist())}")
-
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(colorize(pred)).save(out / "model_frame.png", optimize=True)
-    Image.fromarray(colorize(label)).save(out / "nmd2023_frame.png", optimize=True)
-    print(f"wrote {out}/model_frame.png + nmd2023_frame.png")
+    Image.fromarray(colorize(pred)).save(
+        out / f"{args.model_frame_name}.png", optimize=True)
+    print(f"wrote {out}/{args.model_frame_name}.png")
+
+    if not args.skip_label:
+        label = np.load(args.label_sidecar, allow_pickle=True)["label"]
+        # Same centre-crop extent as run_inference so both cover identical ground.
+        h = label.shape[0]
+        cs = min(args.img_size, h)
+        off = (h - cs) // 2
+        label = label[off:off + cs, off:off + cs]
+        Image.fromarray(colorize(label)).save(out / "nmd2023_frame.png", optimize=True)
+        print(f"wrote {out}/nmd2023_frame.png")
 
 
 if __name__ == "__main__":
