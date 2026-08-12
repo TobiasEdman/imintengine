@@ -104,6 +104,28 @@ else
     echo "  OK: $(ls -lh "$LPIS_DIR/jordbruksskiften_2025.gml.zip" | awk '{print $5}')"
 fi
 
+# ── Convert LPIS zip → GeoParquet (axis-corrected) ──────────────────────
+# The WFS shape-zip is (Northing, Easting); convert_lpis_wfs_zip.py bounds-
+# gates and swaps to (Easting, Northing) so every consumer sees correct axes.
+# Doing it HERE (not ad hoc later) is the fix for the axis-swap that recurred
+# twice — see the script's header. Idempotent: skips a parquet that already
+# exists and reads as (E, N).
+echo ""
+echo "=== Convert LPIS → parquet (axis-corrected) ==="
+LPIS_REF=""
+for yr in 2022 2023 2024; do
+    zip="$LPIS_DIR/jordbruksskiften_${yr}.zip"
+    out="$LPIS_DIR/jordbruksskiften_${yr}.parquet"
+    [ -f "$zip" ] || continue
+    if python3 -c "import geopandas as g,sys; b=g.read_parquet('$out').total_bounds; sys.exit(0 if 200000<b[0]<1000000 and 6000000<b[1]<7800000 else 1)" 2>/dev/null; then
+        echo "  ${yr}: parquet exists and axes OK — skip"
+    else
+        python3 "$(dirname "$0")/convert_lpis_wfs_zip.py" --zip "$zip" \
+            ${LPIS_REF:+--ref-parquet "$LPIS_REF"} --out "$out"
+    fi
+    [ -z "$LPIS_REF" ] && [ -f "$out" ] && LPIS_REF="$out"
+done
+
 # ── Verify ───────────────────────────────────────────────────────────────
 echo ""
 echo "=== Verification ==="
