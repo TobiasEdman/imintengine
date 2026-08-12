@@ -9,7 +9,8 @@ const FR = path.join(__dirname, "frames");
 const OUT = __dirname;
 const img64 = f => "image/png;base64," + fs.readFileSync(`${FR}/${f}`).toString("base64");
 const FRAMES = [img64("nmd2018_frame.png"), img64("v8b_frame.png"),
-                img64("nmd2023_frame.png"), img64("distill_frame.png")];
+                img64("nmd2023_frame.png"), img64("distill_frame.png"),
+                img64("tessera_frame.png")];
 
 // Digital Earth Sweden brand
 const BG="0E433C", BG2="145043", HEAD="0A322C", MINT="CDFCE3", CORAL="FF826C",
@@ -186,12 +187,12 @@ function build(){
 
   // =========================================================== S8 — Four generations (frames)
   s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
-  title(p,s,"Four generations, same landscape");
-  s.addText("One 5×5 km tile, identical extent and unified palette (tile_331280_6541280): the 2018/2023 label sources and the models trained against each target.",
+  title(p,s,"Five views, same landscape");
+  s.addText("One 5×5 km tile, identical extent and unified palette (tile_331280_6541280): the 2018/2023 label sources, and three models — v8b, the distilled Prithvi, and Tessera — each trained against the field-calibrated target.",
     {x:0.9,y:1.22,w:11.5,h:0.4,fontFace:F,fontSize:12.5,color:MUTED,align:"center",margin:0});
-  const isz=2.9, gap=0.15, ix0=(13.33-(4*isz+3*gap))/2, iy=1.9;
-  const panelLabs=["NMD2018 label","v8b (trained on 2018)","NMD2023 label","v8b-NFI (distilled)"];
-  const labCol=[MUTED,WHITE,MINT,CORAL];
+  const isz=2.3, gap=0.13, ix0=(13.33-(5*isz+4*gap))/2, iy=1.95;
+  const panelLabs=["NMD2018 label","v8b (trained on 2018)","NMD2023 label","Distilled Prithvi","Tessera"];
+  const labCol=[MUTED,WHITE,MINT,CORAL,"F2C879"];
   FRAMES.forEach((im,i)=>{ const x=ix0+i*(isz+gap);
     s.addImage({data:im,x:x,y:iy,w:isz,h:isz});
     s.addText(panelLabs[i],{x:x-0.05,y:iy+isz+0.05,w:isz+0.1,h:0.35,fontFace:F,fontSize:12.5,color:labCol[i],bold:true,align:"center",margin:0}); });
@@ -199,7 +200,7 @@ function build(){
   LEGEND_EN.forEach((e,i)=>{ const col=i%4, row=Math.floor(i/4); const x=lx+col*lw, y=ly+row*0.34;
     s.addShape(p.ShapeType.rect,{x:x,y:y+0.02,w:0.2,h:0.2,fill:{color:e[1]},line:{type:"none"}});
     s.addText(e[0],{x:x+0.3,y:y-0.03,w:lw-0.5,h:0.3,fontFace:F,fontSize:11.5,color:WHITE,valign:"middle",margin:0}); });
-  s.addNotes("Qualitatively, the same 5-by-5 kilometre tile through four lenses. Left to right: the 2018 NMD label, our model trained on 2018, the 2023 NMD label, and the distilled NFI model. The distilled output is visibly crisper and more coherent than the label it learned from — denoising you can see, not just measure.");
+  s.addNotes("Qualitatively, the same 5-by-5 kilometre tile through five lenses. Left to right: the 2018 NMD label, our model trained on 2018, the 2023 NMD label, the distilled Prithvi model, and Tessera. Both models' outputs are visibly crisper and more coherent than the labels they learned from — denoising you can see, not just measure — and Tessera matches the 600-million-parameter Prithvi from a frozen, precomputed embedding.");
 
   // =========================================================== S9 — Per-class F1 table
   s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
