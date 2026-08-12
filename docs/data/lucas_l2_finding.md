@@ -1,16 +1,27 @@
 # Finding — LUCAS L2 model validation (independent field truth)
 
 **Date:** 2026-08-12 · 10,108 in-crop LUCAS points, year-matched.
-**Status:** distill + tessera done; tradslag (Prithvi-600M frac) still running.
+**Status:** all three done (distill, tessera, tradslag).
 
 ## L2b — 28-class breadth (all points, the QA the 209 couldn't give)
 | model | overall | κ |
 |---|--:|--:|
-| distill (Prithvi-600M, hard) | 0.484 | 0.458 |
 | **tessera (hard)** | **0.499** | **0.473** |
+| distill (Prithvi-600M, hard) | 0.484 | 0.458 |
+| tradslag (Prithvi-600M) | 0.477 | 0.451 |
 
-Tessera edges distill on independent LUCAS truth too (0.499 vs 0.484) —
-**corroborates the NFI picture** (tessera ≈ the best Prithvi, nominally ahead).
+Tessera leads on independent LUCAS breadth too — **corroborates the NFI picture**
+across a truth source no model trained on: tessera ≥ the best Prithvi.
+
+## L2a — forest fraction, dominant-species argmax vs LUCAS (both frac models)
+| model | overall | tall | gran | löv |
+|---|--:|--:|--:|--:|
+| **tessera** | **0.809** | 0.827 | 0.553 | 0.951 |
+| tradslag (Prithvi-600M) | 0.784 | 0.811 | 0.528 | 0.916 |
+
+Tessera edges Prithvi-600M on the **fraction forest-typing** too (0.809 vs 0.784).
+**gran (spruce) is the hard axis for BOTH** (0.53–0.55) — a task/data limit, not
+model-specific; swapping backbones won't fix spruce. löv is near-perfect for both.
 
 **Per-class (both models similar) — the breadth payoff:**
 - **Strong (F1):** vatten 0.96, majs/sockerbetor/potatis 0.79–0.94, vete 0.78,
