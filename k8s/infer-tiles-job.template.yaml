@@ -95,7 +95,16 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            # DataLoader workers pass batch tensors through /dev/shm; the
+            # container default (64Mi) overflows on 130 MB tessera tiles
+            # ("Bus error … out of shared memory"). Give it a real shm.
+            - name: dshm
+              mountPath: /dev/shm
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: training-data-cephfs
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
