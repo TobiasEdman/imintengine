@@ -1,0 +1,88 @@
+# Stage B — CPU-only scoring from the prediction cache
+# (scripts/score_against_truth.py). No GPU: reads <CACHE_DIR>/<ckpt_sha>/ and
+# calls the EXISTING score_against_nfi / score_against_lucas unchanged, so the
+# JSON output is bit-identical to the fused validators. Placeholders:
+#   __MEMBER__   job-name suffix / output stem
+#   __TRUTH__    nfi | lucas
+#   __CKPT_SHA__ checkpoint sha subdir written by infer-tiles (16 hex)
+#   __TRUTH_ARGS__ truth-index args, e.g. for nfi:
+#       "--plot-index /data/nfi/nfi_index_unified_v2_512.parquet"
+#     for lucas:
+#       "--lucas-index /data/lucas/lucas_tile_index.parquet \
+#        --data-dir /data/unified_v2_512 --min-support 20 --auto-fraction"
+#   __DUMP__     "--dump-per-plot <path>" / "--dump-per-point <path>", or empty
+# Mirrors the validate jobs minus the GPU. Do NOT apply raw.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: score-truth-__MEMBER__
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: score-truth
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800   # CPU-only over a cached raster set = minutes
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: score
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Stage B score_against_truth — __MEMBER__ (__TRUTH__) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              # CPU-only: no torch install needed (scoring is pure numpy/pandas).
+              pip install --quiet --no-cache-dir \
+                numpy pandas pyarrow scikit-learn scipy pyproj
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              grep -q 'make_cached_predict_fn' scripts/score_against_truth.py \
+                || { echo "FATAL: score_against_truth.py missing on clone"; exit 1; }
+              [ -d /data/pred_cache/__CKPT_SHA__ ] \
+                || { echo "FATAL: cache /data/pred_cache/__CKPT_SHA__ not found — run infer-tiles first"; exit 1; }
+
+              python3 scripts/score_against_truth.py \
+                --truth __TRUTH__ \
+                --cache-dir /data/pred_cache \
+                --ckpt-sha __CKPT_SHA__ \
+                --img-size 504 --num-classes 28 \
+                __TRUTH_ARGS__ \
+                --out /data/nfi_eval/__TRUTH__-validation-__MEMBER__.json \
+                __DUMP__
+
+              echo ""; echo "=== summary ==="
+              python3 -c "import json;d=json.load(open('/data/nfi_eval/__TRUTH__-validation-__MEMBER__.json'));print(json.dumps({k:v for k,v in d.items() if not k.startswith('_')},indent=1)[:1500])"
+              echo ""; echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
