@@ -162,12 +162,32 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
         pretrained=False,
     )
 
+    # decoder_channels: infer from the checkpoint's head weights rather than
+    # trusting ck_cfg. The logged config can disagree with the model that was
+    # actually built (e.g. the tessera_gated run logs 256 but its head/frac_head
+    # are 128-wide), and every decoder conv keys off this value — a wrong width
+    # is an unrecoverable shape-mismatch on load, not a droppable key. The head
+    # classifier and frac_head are Conv2d(decoder_channels, ...), so their
+    # in-channel dim IS decoder_channels.
+    _dc = None
+    for _k in sd:
+        if _k.endswith("frac_head.weight") and sd[_k].dim() == 4:
+            _dc = sd[_k].shape[1]; break
+    if _dc is None:
+        for _k in sd:
+            if _k.endswith("classifier.weight") and sd[_k].dim() == 4:
+                _dc = sd[_k].shape[1]; break
+    decoder_channels = _dc if _dc is not None else cfg.decoder_channels
+    if _dc is not None and _dc != cfg.decoder_channels:
+        print(f"  [load_model] decoder_channels inferred from checkpoint: "
+              f"{_dc} (config default was {cfg.decoder_channels})")
+
     model = build_segmentation_from_spec(
         spec,
         encoder=backbone,
         num_classes=n_classes,
         img_size=img_size,
-        decoder_channels=cfg.decoder_channels,
+        decoder_channels=decoder_channels,
         dropout=getattr(cfg, "dropout", 0.1),
         n_aux_channels=n_aux,
         enable_temporal_pooling=cfg.enable_temporal_pooling,
