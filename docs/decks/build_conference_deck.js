@@ -1,5 +1,5 @@
 // Scientific-conference oral deck (DES brand): field-calibrated land-cover for Sweden.
-// Writes docs/decks/v8b_nfi_conference.pptx — ENGLISH ONLY. 16-slide conference arc.
+// Writes docs/decks/v8b_nfi_conference.pptx — ENGLISH ONLY. 19-slide conference arc.
 // Brand + helpers mirror docs/decks/build_des_endgame_deck.js (do NOT modify that file).
 // Run: NODE_PATH=$(npm root -g) node docs/decks/build_conference_deck.js
 const pptxgen = require("pptxgenjs");
@@ -8,6 +8,8 @@ const path = require("path");
 const FR = path.join(__dirname, "frames");
 const OUT = __dirname;
 const img64 = f => "image/png;base64," + fs.readFileSync(`${FR}/${f}`).toString("base64");
+const IMG = path.join(__dirname, "..", "data", "img");  // rendered example-tile channels
+const dimg = f => "image/png;base64," + fs.readFileSync(`${IMG}/${f}`).toString("base64");
 const FRAMES = [img64("nmd2018_frame.png"), img64("v8b_frame.png"),
                 img64("nmd2023_frame.png"), img64("distill_frame.png"),
                 img64("tessera_frame.png")];
@@ -58,13 +60,20 @@ const D = {
   f1rows:[["Pine","0.59","0.61","0.74",3],["Spruce","0.56","0.63","0.55",2],
           ["Deciduous","0.30","0.43","0.59",3],["Mixed","0.28","0.30","0.29",2],
           ["Non-forest","0.24","0.32","0.00",2]],
-  raceLabels:["Tessera + fraction head","Prithvi-600M + fraction head"],
-  race:[0.589,0.579],
   lucasL2b:[["Tessera","0.499"],["Distilled","0.484"],["Prithvi-600M / tradslag","0.477"]],
   lucasL2aLabels:["Tessera","Prithvi-600M"],
   lucasL2a:[0.809,0.784],
   cropLabels:["Sugar-beet","Potato","Barley","Wheat"],
   crop:[0.91,0.90,0.85,0.78],
+  // head-to-head: same field-calibrated target, three independent truths
+  h2hLabels:["NFI-209","LUCAS-28","LUCAS-frac"],
+  h2hPrithvi:[0.579,0.477,0.784],
+  h2hTessera:[0.589,0.499,0.809],
+  // training-label taxonomy by source [name, id-range, class-count]
+  srcGroups:[["NMD land cover","1–10",10],["LPIS crops","11–21",11],["SKS clear-cut","22",1],["NMD2023 add.","23–27",5]],
+  // NFI reference forest-type distribution (944 plots, from confusion-matrix support)
+  nfiDistLabels:["Pine","Spruce","Deciduous","Mixed","Non-forest"],
+  nfiDist:[372,247,133,132,60],
 };
 
 function build(){
@@ -117,6 +126,54 @@ function build(){
   s.addText("The models see only Sentinel-2 pixels and NMD2023 labels; every accuracy number in this talk is measured against field truth the model never touched.",
     {x:0.8,y:5.7,w:11.7,h:0.6,fontFace:F,fontSize:13,italic:true,color:MUTED,margin:0,lineSpacingMultiple:1.1});
   s.addNotes("Two worlds of data. On the left, the training signal: nearly 8,000 Sentinel-2 tiles labelled by the NMD2023 map, four temporal frames each. On the right, independent field truth we never train on — NFI plots, LUCAS points and LPIS crop parcels. That separation is what makes the later comparisons honest.");
+
+  // =========================================================== S3b — Anatomy of a training tile (visual)
+  s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
+  title(p,s,"Anatomy of a training tile");
+  s.addText("One example tile shown as its inputs: four seasons of Sentinel-2 plus a deep auxiliary stack — 35 channels — with one merged 28-class label.",
+    {x:0.9,y:1.12,w:11.5,h:0.42,fontFace:F,fontSize:13.5,color:MINT,align:"center",margin:0,lineSpacingMultiple:1.1});
+  const thumbs=[["rgb.png","Sentinel-2 RGB\n(1 of 4 frames)"],["nir_cir.png","False-colour NIR\n(vegetation red)"],
+    ["dem.png","Terrain\nCopernicus DEM"],["height.png","Forest height\nSLU grunddata"],
+    ["vpp.png","Phenology\nVPP start-of-season"],["label.png","Merged\n28-class label"]];
+  const tsz=1.78, tgap=0.14, tx0=(13.33-(6*tsz+5*tgap))/2, ty=1.62;
+  thumbs.forEach(([f,cap],i)=>{ const x=tx0+i*(tsz+tgap);
+    s.addImage({data:dimg(f),x:x,y:ty,w:tsz,h:tsz,rounding:false});
+    s.addText(cap,{x:x-0.08,y:ty+tsz+0.05,w:tsz+0.16,h:0.55,fontFace:F,fontSize:10,color:i===5?MINT:WHITE,bold:i===5,align:"center",valign:"top",margin:0,lineSpacingMultiple:0.95}); });
+  card(p,s,0.8,4.4,5.75,1.62,"Spectral — 4 frames × 6 bands = 24",
+    "Frame 0 is autumn (Sep–Oct) of the year BEFORE the label; frames 1–3 follow VPP phenology through the growing season. Each frame carries B02 B03 B04 B8A B11 B12 (Prithvi order; NIR is B8A, not B08).",MINT,15,12);
+  card(p,s,6.85,4.4,5.7,1.62,"Auxiliary — 11 channels",
+    "SLU forestry: canopy height, volume, basal area, stem diameter. Terrain: Copernicus DEM. Phenology (HR-VPP): start- & end-of-season, season length, peak & trough vegetation. Plus SLU soil moisture (markfukt).",CORAL,15,12);
+  s.addText([{text:"Label build:  ",options:{color:MINT,bold:true}},
+    {text:"NMD2023 land cover (base)  →  LPIS crop parcels (year-matched SJV codes)  →  SKS clear-cut (hygge).  QC drops tiles with >5% nodata or <3 of 4 usable frames.  ",options:{color:WHITE}},
+    {text:"7,882 tiles · 10 m GSD · 2018–24 · Sweden-wide.",options:{color:MUTED}}],
+    {x:0.8,y:6.28,w:11.75,h:0.7,fontFace:F,fontSize:12,align:"center",valign:"top",margin:0,lineSpacingMultiple:1.1});
+  s.addNotes("Now made concrete: the same tile shown as its actual inputs. The first two panels are two renderings of one Sentinel-2 frame — true colour and false-colour near-infrared — and there are four such temporal frames, six bands each, giving 24 spectral channels. The next three panels are auxiliary layers: Copernicus terrain, SLU forest canopy height, and a Copernicus phenology metric; eleven auxiliary channels in total — four SLU forestry metrics, the DEM, five HR-VPP phenology features, and SLU soil moisture. The last panel is the training target: the 28-class label, merged from NMD2023 land cover, LPIS crop parcels rasterised from year-matched agricultural codes, and Skogsstyrelsen clear-cut notifications, after quality control.");
+
+  // =========================================================== S3c — Label taxonomy & class distribution
+  s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
+  title(p,s,"Label taxonomy and class distribution");
+  s.addText("28 classes drawn from four national label sources",{x:0.8,y:1.22,w:11.7,h:0.35,fontFace:F,fontSize:14,color:MINT,bold:true,margin:0});
+  const srcColors=[MINT,CORAL,"F2C879",NMDCOL], srcTxt=[BG,WHITE,BG,WHITE];
+  let segx=0.8; const unit=11.75/27;
+  D.srcGroups.forEach(([name,range,n],i)=>{ const w=unit*n;
+    s.addShape(p.ShapeType.roundRect,{x:segx,y:1.68,w:w-0.05,h:0.6,rectRadius:0.06,fill:{color:srcColors[i]},line:{type:"none"}});
+    s.addText(String(n),{x:segx,y:1.68,w:w-0.05,h:0.6,fontFace:F,fontSize:n===1?13:19,bold:true,color:srcTxt[i],align:"center",valign:"middle",margin:0}); segx+=w; });
+  let lgx=0.85; [["NMD land cover (1–10)"],["LPIS crops (11–21)"],["SKS clear-cut (22)"],["NMD2023 additions (23–27)"]].forEach(([t],i)=>{
+    s.addShape(p.ShapeType.rect,{x:lgx,y:2.46,w:0.22,h:0.22,fill:{color:srcColors[i]},line:{type:"none"}});
+    s.addText(t,{x:lgx+0.3,y:2.42,w:2.7,h:0.32,fontFace:F,fontSize:11.5,color:WHITE,valign:"middle",margin:0}); lgx+=2.95; });
+  s.addText("NFI reference forest types (944 field plots)",{x:0.7,y:3.05,w:6.2,h:0.35,fontFace:F,fontSize:13.5,color:CORAL,bold:true,margin:0});
+  s.addChart(p.ChartType.bar,[{name:"NFI plots",labels:D.nfiDistLabels,values:D.nfiDist}],
+    {x:0.5,y:3.45,w:6.35,h:3.05,barDir:"col",
+     chartColors:[MINT,"3E7D68",CORAL,"C98A5B",NMDCOL],
+     showValue:true,dataLabelPosition:"outEnd",dataLabelFontFace:F,dataLabelFontSize:12,dataLabelColor:WHITE,dataLabelFormatCode:'0',
+     showTitle:false,showLegend:false,
+     valAxisMinVal:0,valAxisMaxVal:400,valAxisMajorUnit:100,valAxisLabelColor:MUTED,valAxisLabelFontFace:F,valAxisLabelFontSize:10,
+     catAxisLabelColor:WHITE,catAxisLabelFontFace:F,catAxisLabelFontSize:11,
+     valGridLine:{color:GRID,size:1},catGridLine:{style:"none"},barGapWidthPct:45});
+  card(p,s,7.1,3.25,5.45,3.5,"Forest-dominated, and imbalanced",
+    "Of 944 NFI plots, 884 are forest and only 60 are non-forest. Within forest, pine (372) and spruce (247) are 70% of plots; deciduous (133) and mixed (132) about 15% each.\n\nThe training labels inherit this skew: forest covers most of Sweden, crops occupy a thin southern agricultural band, and clear-cut (hygge) is rarer still.\n\nSo the rare classes — mixed forest, minor crops, non-forest — carry the widest confidence intervals, and are why a thin 209-plot held-out set limits statistical power.",
+    CORAL,17,12.5);
+  s.addNotes("The taxonomy and its balance. The bar at the top shows the 28 classes split by their source survey: ten NMD land-cover classes, eleven LPIS crop classes, a single SKS clear-cut class, and five classes new in NMD2023. The distribution is deeply uneven. On the field-truth side, of 944 NFI plots 884 are forest and only 60 non-forest; within forest, pine and spruce alone are seventy percent, with deciduous and mixed around fifteen percent each. The training labels inherit the same skew — forest everywhere, crops in a thin southern band, clear-cuts rarer still. That imbalance is why the rare classes have the widest error bars and why our thin held-out set limits statistical power.");
 
   // =========================================================== S4 — Architecture
   s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
@@ -185,6 +242,31 @@ function build(){
     s.addText(r,{x:8.5,y:ry-0.05,w:4.1,h:1.25,fontFace:F,fontSize:13.5,color:WHITE,valign:"top",margin:0,lineSpacingMultiple:1.1}); ry+=1.35; });
   s.addNotes("On the held-out plots the numbers speak for themselves: NMD2023 scores 43.1 percent, the distilled 28-class model 50.2, and the forest-type fraction layer 57.9. Kappa climbs from 0.30 to 0.42. Crucially, all thresholds were fit only on the training plots, so this is a clean generalization result, not a tuned one.");
 
+  // =========================================================== S7b — Student beats teacher
+  s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
+  title(p,s,"The student beats the teacher");
+  s.addText("In distillation a student normally cannot exceed its teacher. Trained ONLY on NMD2023 labels, on independent NFI field truth it does — and its forest-type layer more so.",
+    {x:0.7,y:1.25,w:7.5,h:0.65,fontFace:F,fontSize:13.5,color:MINT,margin:0,lineSpacingMultiple:1.15});
+  s.addChart(p.ChartType.bar,[{name:"NFI held-out",labels:["NMD2023\nteacher","Student\n28-class","Student\nforest-type"],values:D.bench}],
+    {x:0.5,y:2.05,w:7.45,h:4.35,barDir:"col",
+     chartColors:[NMDCOL,CORAL,MINT],
+     showValue:true,dataLabelPosition:"outEnd",dataLabelFontFace:F,dataLabelFontSize:15,dataLabelColor:WHITE,dataLabelFormatCode:'0.0"%"',
+     showTitle:false,showLegend:false,
+     valAxisMinVal:40,valAxisMaxVal:62,valAxisMajorUnit:5,valAxisLabelColor:MUTED,valAxisLabelFontFace:F,valAxisLabelFontSize:10.5,valAxisLabelFormatCode:'0"%"',
+     catAxisLabelColor:WHITE,catAxisLabelFontFace:F,catAxisLabelFontSize:11.5,
+     valGridLine:{color:GRID,size:1},catGridLine:{style:"none"},barGapWidthPct:55});
+  // delta pills centered in each student bar (dark fill so text reads over the coloured bar)
+  [[3.77,4.75,"+7.1 pp"],[6.03,4.55,"+14.8 pp"]].forEach(([px,py,txt])=>{
+    s.addShape(p.ShapeType.roundRect,{x:px,y:py,w:1.3,h:0.44,rectRadius:0.22,fill:{color:HEAD},line:{type:"none"}});
+    s.addText(txt,{x:px,y:py,w:1.3,h:0.44,fontFace:F,fontSize:14,color:WHITE,bold:true,align:"center",valign:"middle",margin:0}); });
+  s.addText("Cohen's kappa  0.298 → 0.371 → 0.420",{x:0.5,y:6.5,w:7.45,h:0.35,fontFace:F,fontSize:12,italic:true,color:MUTED,align:"center",margin:0});
+  const why=[
+    ["Label noise averages out","Random per-pixel teacher errors regularize away over 7,882 tiles — denoising you can see.",MINT],
+    ["Field truth exposes the teacher","NMD's own errors are invisible when it is scored against itself; NFI plots reveal them.",CORAL],
+    ["Richer than the label","4 temporal frames + 11 auxiliary channels carry what a single-date NMD label cannot.",MINT]];
+  why.forEach(([h,b,ac],i)=>{ card(p,s,8.25,1.55+i*1.66,4.3,1.5,h,b,ac,15.5,12.5); });
+  s.addNotes("The scientific hook: in classical distillation a student is bounded by its teacher. Here the student, trained only on NMD2023 labels, beats it on independent NFI field truth — 50.2 versus 43.1 percent overall, and 57.9 on forest type, gains of 7.1 and 14.8 points. Kappa rises from 0.30 to 0.42. Three reasons: label noise averages out over nearly 8,000 tiles, field truth exposes the teacher's own errors that self-scoring hides, and four temporal frames plus eleven aux channels encode more than a single-date label ever could.");
+
   // =========================================================== S8 — Four generations (frames)
   s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
   title(p,s,"Five views, same landscape");
@@ -244,24 +326,33 @@ function build(){
     CORAL,19,15);
   s.addNotes("A natural question: does ensembling help? We tried six members and an out-of-fold-locked stacked combiner. It reaches 0.617 versus 0.579 for the single best member — but McNemar's p is 0.37 and the bootstrap confidence interval on the gap spans zero. Adding an encoder-diverse Tessera member changed almost nothing. Honestly reported: the ensemble is within noise. We do not ship it.");
 
-  // =========================================================== S11 — Model race
+  // =========================================================== S11 — Prithvi vs Tessera head-to-head
   s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
-  title(p,s,"The model race: Tessera ≈ Prithvi-600M");
-  s.addText("Best single backbone (209 held-out, forest type, same calibrated collapse)",
-    {x:0.7,y:1.28,w:7.2,h:0.4,fontFace:F,fontSize:14,color:MINT,bold:true,margin:0});
-  s.addChart(p.ChartType.bar,[{name:"forest-type acc",labels:D.raceLabels,values:D.race}],
-    {x:0.55,y:1.9,w:7.3,h:4.6,barDir:"col",
-     chartColors:[MINT,NMDCOL],
-     showValue:true,dataLabelPosition:"outEnd",dataLabelFontFace:F,dataLabelFontSize:16,dataLabelColor:WHITE,dataLabelFormatCode:'0.000',
-     showTitle:false,showLegend:false,
-     valAxisMinVal:0.5,valAxisMaxVal:0.62,valAxisMajorUnit:0.02,valAxisLabelColor:MUTED,valAxisLabelFontFace:F,valAxisLabelFontSize:11,valAxisLabelFormatCode:'0.00',
+  title(p,s,"Prithvi vs Tessera: head to head");
+  s.addText("Two backbones, same field-calibrated target, raced on three independent truths — Tessera ≥ Prithvi on every one.",
+    {x:0.7,y:1.28,w:11.8,h:0.4,fontFace:F,fontSize:14,color:MINT,bold:true,margin:0});
+  s.addChart(p.ChartType.bar,[
+      {name:"Prithvi-600M",labels:D.h2hLabels,values:D.h2hPrithvi},
+      {name:"Tessera",labels:D.h2hLabels,values:D.h2hTessera}],
+    {x:0.5,y:1.9,w:7.45,h:4.35,barDir:"col",barGrouping:"clustered",
+     chartColors:[NMDCOL,MINT],
+     showValue:true,dataLabelPosition:"outEnd",dataLabelFontFace:F,dataLabelFontSize:10.5,dataLabelColor:WHITE,dataLabelFormatCode:'0.000',
+     showTitle:false,showLegend:true,legendPos:"b",legendColor:WHITE,legendFontFace:F,legendFontSize:12,
+     valAxisMinVal:0.4,valAxisMaxVal:0.85,valAxisMajorUnit:0.1,valAxisLabelColor:MUTED,valAxisLabelFontFace:F,valAxisLabelFontSize:10,valAxisLabelFormatCode:'0.00',
      catAxisLabelColor:WHITE,catAxisLabelFontFace:F,catAxisLabelFontSize:12,
-     valGridLine:{color:GRID,size:1},catGridLine:{style:"none"},barGapWidthPct:60});
-  card(p,s,8.2,1.9,4.4,1.7,"A statistical tie",
-    "Δ = +0.010, McNemar p = 0.88. Tessera and the 600M Prithvi are indistinguishable on forest type.",MINT,18,14);
-  card(p,s,8.2,3.75,4.4,2.75,"...at a fraction of the compute",
-    "Tessera uses precomputed embeddings — NO 600M encoder forward pass at train or inference time. It MATCHES the best Prithvi while being far cheaper to run. That makes it the deployment winner.",CORAL,18,14);
-  s.addNotes("If representation isn't the ceiling, how cheap can it get? Tessera scores 0.589 on forest type, Prithvi-600M 0.579 — a 0.010 gap with McNemar p of 0.88, a statistical tie. But Tessera runs on precomputed embeddings with no 600-million-parameter forward pass at all. Same accuracy, a fraction of the compute: that is the deployment winner.");
+     valGridLine:{color:GRID,size:1},catGridLine:{style:"none"},barGapWidthPct:40});
+  const vh={fill:{color:HEAD},bold:true,fontFace:F,fontSize:12,align:"center",valign:"middle"};
+  const vrows=[["Encoder","600M forward","frozen 128-d"],["Inference cost","heavy","~ free"],
+               ["NFI-209 type","0.579","0.589"],["LUCAS-28","0.477","0.499"],["LUCAS-frac","0.784","0.809"]];
+  const vtable=[[{text:"",options:{...vh,color:WHITE,align:"left"}},{text:"Prithvi-600M",options:{...vh,color:WHITE}},{text:"Tessera",options:{...vh,color:MINT}}],
+    ...vrows.map((r,i)=>{ const bg=i%2?ROWA:ROWB;
+      return [{text:r[0],options:{fill:{color:bg},color:WHITE,bold:true,fontFace:F,fontSize:12,align:"left",valign:"middle"}},
+        {text:r[1],options:{fill:{color:bg},color:MUTED,fontFace:F,fontSize:12,align:"center",valign:"middle"}},
+        {text:r[2],options:{fill:{color:WINBG},color:MINT,bold:true,fontFace:F,fontSize:12,align:"center",valign:"middle"}}];})];
+  s.addTable(vtable,{x:8.2,y:1.9,w:4.4,colW:[1.7,1.35,1.35],rowH:0.5,border:{type:"solid",color:GRID,pt:1}});
+  card(p,s,8.2,5.0,4.4,1.45,"Deployment winner: Tessera",
+    "Statistical tie on accuracy across three independent truths (NFI McNemar p = 0.88) — Tessera wins decisively on compute.",CORAL,16,13);
+  s.addNotes("Now race the two backbones directly on the same field-calibrated target across three independent truths. On NFI-209 forest type Tessera scores 0.589 to Prithvi's 0.579; on the LUCAS 28-class task 0.499 to 0.477; on LUCAS forest fraction 0.809 to 0.784. Tessera is at least as good on all three. But it runs on precomputed 128-dimensional embeddings — no 600-million-parameter forward pass at train or inference time. A statistical tie on accuracy, a decisive win on compute: Tessera is the deployment winner.");
 
   // =========================================================== S12 — LUCAS validation
   s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
