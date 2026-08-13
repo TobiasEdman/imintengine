@@ -354,8 +354,11 @@ def main() -> None:
     ap.add_argument("--img-size", type=int, default=504)
     ap.add_argument("--num-classes", type=int, default=28)
     ap.add_argument("--cache-dir", default="/cephfs/pred_cache")
-    ap.add_argument("--batch-size", type=int, default=16)
-    ap.add_argument("--num-workers", type=int, default=8)
+    # Defaults sized for large 128-ch tessera embeddings (~130 MB/tile): the
+    # DataLoader buffers batch×workers×prefetch tiles, so batch16/workers8 OOMs
+    # a 24Gi pod. Raise these only for small-channel tiles with memory headroom.
+    ap.add_argument("--batch-size", type=int, default=8)
+    ap.add_argument("--num-workers", type=int, default=2)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--shard", default=None,
                     help="i/K: infer only this shard of the tile list")
