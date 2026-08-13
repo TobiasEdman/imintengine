@@ -197,12 +197,15 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
         # strict=False and --use-fraction-head cannot run.
         enable_tradslag_head=ck_cfg.get("enable_tradslag_head", False),
         num_tradslag=ck_cfg.get("num_tradslag", 4),
-        # Aux fusion ("concat" | "gated"): same rationale as the fraction
-        # head — the trainer persists it in the checkpoint config, so read it
-        # back rather than hardcoding. Without threading it, a gated-fusion
-        # checkpoint builds a concat model and its gated_fusions.* weights are
-        # silently dropped by strict=False → wrong outputs, not a load error.
-        aux_fusion=ck_cfg.get("aux_fusion", "concat"),
+        # Aux fusion ("concat" | "gated"): detect from the weights, not the
+        # config. best_model.pt's embedded config is minimal and can omit
+        # aux_fusion (the tessera_gated run does), so a config-only read
+        # defaults to concat and builds a 256-wide head that can't accept the
+        # gated checkpoint's 128-wide one. The gated path is self-identifying:
+        # it carries gated_fusion(s).* modules. Fall back to config/concat when
+        # no such keys exist.
+        aux_fusion=("gated" if any("gated_fusion" in k for k in sd)
+                    else ck_cfg.get("aux_fusion", "concat")),
         device=device,
     )
     incompat = model.load_state_dict(sd, strict=False)
