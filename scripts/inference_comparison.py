@@ -177,9 +177,26 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
         # strict=False and --use-fraction-head cannot run.
         enable_tradslag_head=ck_cfg.get("enable_tradslag_head", False),
         num_tradslag=ck_cfg.get("num_tradslag", 4),
+        # Aux fusion ("concat" | "gated"): same rationale as the fraction
+        # head — the trainer persists it in the checkpoint config, so read it
+        # back rather than hardcoding. Without threading it, a gated-fusion
+        # checkpoint builds a concat model and its gated_fusions.* weights are
+        # silently dropped by strict=False → wrong outputs, not a load error.
+        aux_fusion=ck_cfg.get("aux_fusion", "concat"),
         device=device,
     )
-    model.load_state_dict(sd, strict=False)
+    incompat = model.load_state_dict(sd, strict=False)
+    # Surface load mismatches: with strict=False a mismatched architecture
+    # (e.g. gated checkpoint into a concat model) loads "successfully" but
+    # drops weights silently. Warn loudly on anything beyond the expected
+    # backbone-buffer misses so a bad load can't masquerade as a valid run.
+    _miss = [k for k in incompat.missing_keys if "encoder." not in k]
+    if _miss or incompat.unexpected_keys:
+        print(f"  [load_model] WARN state_dict mismatch — "
+              f"missing(non-encoder)={len(_miss)}, "
+              f"unexpected={len(incompat.unexpected_keys)}")
+        for k in (_miss[:8] + list(incompat.unexpected_keys)[:8]):
+            print(f"    · {k}")
     model = model.to(device).eval()
     # Stash the spec so the inference input builder can route on family
     # (tessera reads the pre-baked embedding; Prithvi reads reflectance).
