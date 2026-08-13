@@ -305,14 +305,31 @@ def infer_all(
 
 
 def _tile_hw(path) -> tuple[int, int]:
-    """(H, W) of a tile's raster — from tessera embedding or spectral."""
-    with np.load(path, allow_pickle=True) as d:
-        if "tessera" in d:
-            _, h, w = d["tessera"].shape
-        else:
-            key = "spectral" if "spectral" in d else "image"
-            _, h, w = d[key].shape
-    return h, w
+    """(H, W) of a tile's raster, read from the .npz member HEADER only.
+
+    ``np.load(path)[key].shape`` inflates the whole array (e.g. a
+    128×512×512 tessera embedding) just to read two ints — pathological
+    across thousands of tiles (it turned the size-grouping pre-pass into a
+    full-dataset decompression before any GPU work). numpy stores each array
+    as a ``.npy`` member whose shape lives in the first ~128-byte header, so
+    stream just that header out of the zip and never touch the payload.
+    """
+    import zipfile
+    from numpy.lib import format as npformat
+    with zipfile.ZipFile(path) as zf:
+        members = set(zf.namelist())
+        for key in ("tessera.npy", "spectral.npy", "image.npy"):
+            if key in members:
+                with zf.open(key) as f:
+                    version = npformat.read_magic(f)
+                    if version == (1, 0):
+                        shape, _f, _dt = npformat.read_array_header_1_0(f)
+                    elif version == (2, 0):
+                        shape, _f, _dt = npformat.read_array_header_2_0(f)
+                    else:
+                        shape, _f, _dt = npformat._read_array_header(f, version)
+                return int(shape[-2]), int(shape[-1])
+    raise KeyError(f"no tessera/spectral/image array in {path}")
 
 
 def _parse_shard(s: str | None):
