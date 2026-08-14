@@ -35,8 +35,13 @@ K_FRAC = 4
 
 # ── Synthetic tile ────────────────────────────────────────────────────────
 
-def _write_tile(path, *, with_s1: bool):
-    """A 4-frame tile carrying every enrichment key the members read."""
+def _write_tile(path, *, with_s1: bool, with_b01_b09: bool = True):
+    """A 4-frame tile carrying every enrichment key the members read.
+
+    ``with_b01_b09`` mirrors real unified_v2_512 tiles, which carry real
+    per-frame B01 (coastal aerosol) and B09 (water vapour) + has-flags — so
+    CROMA gets the FULL 12-band stack, not two zero-padded channels.
+    """
     data = {
         "spectral": (np.random.rand(24, H, W) * 0.4).astype(np.float32),   # 4×6
         "b08":      (np.random.rand(4, H, W) * 0.4).astype(np.float32),     # (T,H,W)
@@ -47,6 +52,13 @@ def _write_tile(path, *, with_s1: bool):
         "easting":  np.float32(500000.0),
         "northing": np.float32(6500000.0),
     }
+    if with_b01_b09:
+        # Distinct constants per band so the emission test can prove the REAL
+        # band reached s2_croma (not a zero-pad).
+        data["b01"] = np.full((4, H, W), 0.05, dtype=np.float32)   # (T,H,W)
+        data["b09"] = np.full((4, H, W), 0.30, dtype=np.float32)
+        data["has_b01"] = np.int32(1)
+        data["has_b09"] = np.int32(1)
     if with_s1:
         data["s1_vv_vh"] = (np.random.rand(8, H, W) * 0.2).astype(np.float32)  # T*2
         data["has_s1"] = np.int32(1)
@@ -216,6 +228,42 @@ class TestDatasetEmitsModelKeys:
         s = ds[0]
         assert s["s2_croma"].shape == (12, H, W)
         assert s["s1_vv_vh"].shape == (2, H, W)
+
+    def test_croma_uses_real_b01_b09(self, tile_dir):
+        """CROMA_S2_BAND_ORDER puts B01 at index 0 and B09 at index 9. When
+        the tile carries real B01/B09 (has-flags set), those channels must
+        hold the real values — NOT zeros. This is the fairness fix: two real
+        bands were previously discarded via zero-padding."""
+        ds = UnifiedDataset(
+            lulc_dir=tile_dir, split="train", patch_size=H,
+            augment_override=False, model_keys=("croma_base",),
+            backbone_family="croma",
+        )
+        s2 = ds[0]["s2_croma"]           # (12, H, W)
+        b01_channel = s2[0]              # B01
+        b09_channel = s2[9]              # B09
+        # Real constants written by _write_tile: 0.05 and 0.30.
+        assert torch.allclose(b01_channel, torch.full_like(b01_channel, 0.05))
+        assert torch.allclose(b09_channel, torch.full_like(b09_channel, 0.30))
+        assert (b01_channel != 0).all() and (b09_channel != 0).all()
+
+    def test_croma_zero_pads_b01_b09_when_absent(self, tmp_path):
+        """If the tile lacks B01/B09 (or has-flag=0), those channels fall
+        back to zero-pad — the loader/dataset must not crash and must emit
+        a finite 12-band stack."""
+        d = tmp_path / "tiles"
+        d.mkdir()
+        _write_tile(d / "tile_0.npz", with_s1=True, with_b01_b09=False)
+        (d / "split_train.txt").write_text("tile_0.npz\n")
+        ds = UnifiedDataset(
+            lulc_dir=d, split="train", patch_size=H,
+            augment_override=False, model_keys=("croma_base",),
+            backbone_family="croma",
+        )
+        s2 = ds[0]["s2_croma"]
+        assert s2.shape == (12, H, W)
+        assert torch.isfinite(s2).all()
+        assert (s2[0] == 0).all() and (s2[9] == 0).all()  # B01, B09 padded
 
     def test_clay_keys(self, tile_dir):
         ds = UnifiedDataset(

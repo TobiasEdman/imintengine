@@ -952,6 +952,78 @@ class UnifiedDataset(Dataset):
                     return int(valid[0])
         return frame_idx
 
+    def _select_aux_band_frame(
+        self,
+        data: np.lib.npyio.NpzFile,
+        key: str,
+        has_flag: str,
+        idx: int,
+    ) -> "np.ndarray | None":
+        """Return the (H, W) frame ``idx`` of a per-frame aux band, or None.
+
+        Used for CROMA's B01/B09 (and extensible to other optional bands).
+        The band is enriched as a (T, H, W) array with a ``has_<band>`` flag.
+        Returns None (→ caller zero-pads) only when the band is genuinely
+        absent: the has-flag is 0 OR the key is missing OR the requested
+        frame is entirely nodata. NaN pixels within an otherwise-valid frame
+        are scrubbed to 0. A None return is logged once so a real coverage
+        gap is visible rather than silently zero-padded.
+
+        Args:
+            data: Loaded tile (or _LabelOverlay wrapper).
+            key: Band array key, e.g. ``"b01"``.
+            has_flag: Presence flag key, e.g. ``"has_b01"``.
+            idx: Best-frame index (same as the optical/SAR selection).
+
+        Returns:
+            (H, W) float32 frame, or None if the band is unavailable.
+        """
+        # Respect the has-flag first: an explicit 0 means "not fetched".
+        flag = data.get(has_flag, None)
+        if flag is not None and int(np.asarray(flag).ravel()[0]) == 0:
+            self._log_band_missing(key, reason="has-flag=0")
+            return None
+
+        arr = data.get(key, None)
+        if arr is None:
+            self._log_band_missing(key, reason="key absent")
+            return None
+
+        arr = np.asarray(arr, dtype=np.float32)
+        if arr.ndim == 2:
+            frame = arr  # already a single (H, W) frame
+        else:
+            n = arr.shape[0]
+            f = idx if idx < n else n - 1
+            frame = arr[f]  # (H, W)
+
+        # A frame that is entirely NaN/zero carries no signal → treat as
+        # absent so the loader zero-pads consistently (and logs it).
+        if not np.isfinite(frame).any() or np.all(frame == 0):
+            self._log_band_missing(key, reason="frame all-nodata")
+            return None
+
+        return np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0)
+
+    def _log_band_missing(self, key: str, *, reason: str) -> None:
+        """Log a per-band zero-pad fallback at most once per (key, reason).
+
+        Keeps the training log readable: a systematic coverage gap surfaces
+        once, not once per tile per epoch.
+        """
+        seen = getattr(self, "_band_miss_logged", None)
+        if seen is None:
+            seen = set()
+            self._band_miss_logged = seen
+        tag = (key, reason)
+        if tag not in seen:
+            seen.add(tag)
+            logger.warning(
+                "CROMA s2_croma: band %r unavailable (%s) — zero-padding "
+                "this band. (Logged once per reason.)",
+                key, reason,
+            )
+
     def _build_model_specific_tensors(
         self, data: np.lib.npyio.NpzFile, source: str,
     ) -> dict[str, np.ndarray]:
@@ -1028,9 +1100,18 @@ class UnifiedDataset(Dataset):
                 spectral_6band, b08_frame, rededge=rededge_frame,
             ).astype(np.float32)  # (10, H, W)
         if "croma_base" in self.model_keys:
-            # B01/B09 left as None → zero-padded per CROMA's MAE-robust design
+            # CROMA's native S2 input is the FULL 12-band stack. B01 (coastal
+            # aerosol) and B09 (water vapour) are enriched onto the tile as
+            # (T, H, W) per-frame arrays with has_b01/has_b09 flags. Feed the
+            # REAL bands (same best-frame idx, NaN-scrubbed) so CROMA is not
+            # handicapped by two zero-padded channels. Only fall back to
+            # zero-pad if a band is genuinely absent — and log it, so a
+            # coverage gap is visible rather than silent.
+            b01_frame = self._select_aux_band_frame(data, "b01", "has_b01", idx)
+            b09_frame = self._select_aux_band_frame(data, "b09", "has_b09", idx)
             out["s2_croma"] = build_s2_croma_tensor(
                 spectral_6band, b08_frame, rededge=rededge_frame,
+                b01=b01_frame, b09=b09_frame,
             ).astype(np.float32)  # (12, H, W)
 
         # SAR (VV/VH) for CROMA joint + TerraMind S1GRD. Layout is

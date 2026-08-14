@@ -149,23 +149,28 @@ def build_s2_croma_tensor(
             [0]=B02, [1]=B03, [2]=B04, [3]=B8A, [4]=B11, [5]=B12
         b08            (H, W)    — B08
         rededge        (3, H, W) — B05, B06, B07 (from enrichment)
-        b01            (H, W)    — B01 coastal aerosol (optional, padded if None)
-        b09            (H, W)    — B09 water vapour   (optional, padded if None)
+        b01            (H, W)    — B01 coastal aerosol
+        b09            (H, W)    — B09 water vapour
 
-    If b01 or b09 is None, that band is zero-padded with a clear
-    warning. CROMA is robust to band ablation because of its MAE
-    pretraining but performance degrades.
+    The tiles carry REAL B01/B09 (enriched as per-frame arrays with
+    has_b01/has_b09 flags), so callers should pass them — the dataset does.
+    B01/B09 are only zero-padded when genuinely absent (b01/b09 is None),
+    and that fallback is logged (not silent) because a zero-padded band
+    handicaps CROMA relative to a full 12-band stack.
 
     Args:
         spectral_6band, b08, rededge: required on-disk tensors.
-        b01, b09: optional, zero-padded when missing.
+        b01, b09: real (H, W) bands; zero-padded (and warned) only if None.
         bands: band list (default CROMA_S2_BAND_ORDER).
 
     Returns:
-        (len(bands), H, W) tensor.
+        (len(bands), H, W) tensor in CROMA_S2_BAND_ORDER
+        (B01,B02,B03,B04,B05,B06,B07,B08,B8A,B09,B11,B12).
     """
+    import logging
     import numpy as np
 
+    _log = logging.getLogger(__name__)
     h, w = spectral_6band.shape[-2:]
     zero_band = None  # lazy construct in the right backend
 
@@ -205,9 +210,17 @@ def build_s2_croma_tensor(
                 )
             layers.append(rededge[rededge_idx[name]])
         elif name == "B01":
-            layers.append(b01 if b01 is not None else _zeros_like())
+            if b01 is not None:
+                layers.append(b01)
+            else:
+                _log.warning("CROMA build: B01 absent — zero-padding.")
+                layers.append(_zeros_like())
         elif name == "B09":
-            layers.append(b09 if b09 is not None else _zeros_like())
+            if b09 is not None:
+                layers.append(b09)
+            else:
+                _log.warning("CROMA build: B09 absent — zero-padding.")
+                layers.append(_zeros_like())
         else:
             raise KeyError(f"Unknown CROMA band {name!r}.")
 
