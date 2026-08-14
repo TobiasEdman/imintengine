@@ -143,13 +143,26 @@ def load_clay(
     # happens to be the repo. Resolve a real path (or materialize the yaml
     # from our transcribed band metadata) and override the hparam.
     metadata_path = _resolve_clay_metadata_path()
+    # mask_ratio=0 is MANDATORY for dense feature extraction: Clay's MAE
+    # Encoder.forward masks out ~75% of patches by default (returns only the
+    # unmasked subset + CLS, e.g. 197 of 785 tokens at 224px/patch8), which
+    # cannot be reshaped to a spatial grid for segmentation. Zeroing it makes
+    # the encoder return ALL patch tokens.
     module = ClayMAEModule.load_from_checkpoint(
         checkpoint_path, strict=False, metadata_path=metadata_path,
+        mask_ratio=0.0,
     )
     module.eval()
+    clay = module.model
+    # Belt-and-suspenders: force mask_ratio=0 on both the wrapper and the
+    # encoder in case the hparam override above is ignored by a given
+    # checkpoint's saved config.
+    for obj in (clay, getattr(clay, "encoder", None)):
+        if obj is not None and hasattr(obj, "mask_ratio"):
+            obj.mask_ratio = 0.0
     # Return the encoder (what we actually use for feature extraction);
     # the full module also contains the decoder we don't need.
-    return module.model
+    return clay
 
 
 def _resolve_clay_metadata_path() -> str:

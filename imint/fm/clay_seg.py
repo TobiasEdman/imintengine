@@ -138,32 +138,57 @@ class ClaySegmentationModel(nn.Module):
         timestamps: torch.Tensor,
         wavelengths: torch.Tensor,
     ) -> torch.Tensor:
-        """Return the pre-pool token sequence (B, N+1, D).
+        """Return the encoder token sequence (B, 1+L, D).
 
-        Clay's ``encoder.forward`` pools and returns (B, D). We hook the
-        final transformer block's output to grab the un-pooled tokens.
+        Clay v1.5's real ``Encoder.forward(datacube)`` takes a dict and
+        returns a tuple whose first element is the encoded patch sequence
+        ``(B, 1+L, D)`` (CLS + all patch tokens). It must be loaded with
+        ``mask_ratio=0`` (see load_clay) so ALL patches are returned; the
+        default MAE mask drops ~75%, which cannot be reshaped to a grid.
+
+        A fake encoder in tests may instead expose a ``.blocks`` ModuleList
+        and a positional ``forward(chips, timestamps, wavelengths)`` that
+        returns a pooled vector — we hook its last block in that case. The
+        real-vs-fake path is chosen by whether the encoder accepts a
+        datacube dict (has a DynamicEmbedding-style ``patch_embedding``).
         """
-        captured: dict[str, torch.Tensor] = {}
+        # Real Clay encoder path: build the datacube dict.
+        if hasattr(self.encoder, "patch_embedding") or hasattr(
+            self.encoder, "transformer"
+        ):
+            # timestamps is (B, 4) = [week, hour, lat, lon]; Clay's encoder
+            # wants time=(B,2) and latlon=(B,2), concatenated internally to
+            # the 8-dim metadata encoding.
+            time = timestamps[:, :2]
+            latlon = timestamps[:, 2:4]
+            gsd = torch.tensor(10.0, device=chips.device)  # Sentinel-2 10 m
+            datacube = {
+                "pixels": chips,
+                "time": time,
+                "latlon": latlon,
+                "waves": wavelengths[0] if wavelengths.dim() == 2 else wavelengths,
+                "gsd": gsd,
+            }
+            out = self.encoder(datacube)
+            tokens = out[0] if isinstance(out, (tuple, list)) else out
+            return tokens
 
-        # Identify the last transformer block. Clay MAE ViT structures
-        # vary across versions; try the common attribute names.
+        # Fake-encoder fallback (tests): hook the last transformer block.
+        captured: dict[str, torch.Tensor] = {}
         blocks = None
-        for attr in ("blocks", "transformer", "layers"):
+        for attr in ("blocks", "layers"):
             if hasattr(self.encoder, attr):
                 blocks = getattr(self.encoder, attr)
                 break
         if blocks is None:
             raise AttributeError(
-                "Clay encoder has no .blocks/.transformer/.layers — "
-                "cannot hook final transformer block. Inspect the "
-                "encoder structure with print(encoder) and wire the "
-                "correct attribute."
+                "Clay encoder exposes neither a datacube forward "
+                "(patch_embedding/transformer) nor a hookable .blocks/"
+                ".layers ModuleList. Inspect the encoder structure."
             )
-
         last_block = blocks[-1]
 
         def hook(module, inputs, output):
-            # Some blocks return (tokens,) tuple; normalize to tensor
             t = output[0] if isinstance(output, tuple) else output
             captured["tokens"] = t
 
@@ -173,11 +198,9 @@ class ClaySegmentationModel(nn.Module):
                 _ = self.encoder(chips, timestamps, wavelengths)
         finally:
             handle.remove()
-
         if "tokens" not in captured:
             raise RuntimeError(
-                "Forward hook did not capture tokens from Clay's last "
-                "transformer block. Encoder internals may have changed."
+                "Forward hook did not capture tokens from Clay's last block."
             )
         return captured["tokens"]
 
