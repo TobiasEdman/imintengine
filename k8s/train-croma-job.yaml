@@ -12,6 +12,14 @@
 # the smoke ran at 224px only because the 2080ti (11 GB) OOMs at 504.
 # Weights cached at /data/model_cache/CROMA_base.pt; loader also needs
 # use_croma.py from github.com/antofuller/CROMA on PYTHONPATH (cloned below).
+#
+# HEAD (2026-08-14): multi-level UPerNet (ViTUPerNetHead), hooking 4 evenly-
+#   spaced blocks of cross_encoder.layers (joint SAR↔optical, 6 blocks) —
+#   fairness parity with Prithvi, not a linear probe.
+# MEMORY (2026-08-14): request 48Gi (was 80Gi). Measured peak host tree-RSS
+#   at bs=8/workers=16/504px = 8.3 GB (dataloader footprint); +CUDA host
+#   overhead + margin → 48Gi is ~3× headroom and lets all 3 FM jobs run in
+#   parallel under the 250Gi namespace quota (3×48=144 < ~195 available).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -122,10 +130,10 @@ spec:
         - { mountPath: /data, name: cephfs }
         - { mountPath: /dev/shm, name: dshm }
         resources:
-          requests: { cpu: "16", memory: "80Gi", nvidia.com/gpu: "1" }
-          limits:   { cpu: "16", memory: "80Gi", nvidia.com/gpu: "1" }
+          requests: { cpu: "16", memory: "48Gi", nvidia.com/gpu: "1" }
+          limits:   { cpu: "16", memory: "48Gi", nvidia.com/gpu: "1" }
       volumes:
       - name: cephfs
         persistentVolumeClaim: { claimName: training-data-cephfs }
       - name: dshm
-        emptyDir: { medium: Memory, sizeLimit: "32Gi" }
+        emptyDir: { medium: Memory, sizeLimit: "16Gi" }

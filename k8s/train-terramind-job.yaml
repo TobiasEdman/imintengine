@@ -15,6 +15,14 @@
 #   CROP / IMG SIZE = 496 (NOT 504): TerraMind is patch_size=16.
 #   504/16 = 31.5 → model build raises ("must be divisible by patch_size=16").
 #   496/16 = 31 (OK). Tiles are 512 px so 496 fits.
+#
+# HEAD (2026-08-14): multi-level UPerNet (ViTUPerNetHead), using 4 evenly-
+#   spaced blocks of the 12 per-block token sequences terratorch returns —
+#   fairness parity with Prithvi, not a linear probe.
+# MEMORY (2026-08-14): request 48Gi (was 80Gi). Measured peak host tree-RSS
+#   at bs=8/workers=16/496px = 7.5 GB (dataloader footprint); +CUDA host
+#   overhead + margin → 48Gi lets all 3 FM jobs run in parallel under the
+#   250Gi namespace quota (3×48=144 < ~195 available).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -121,10 +129,10 @@ spec:
         - { mountPath: /data, name: cephfs }
         - { mountPath: /dev/shm, name: dshm }
         resources:
-          requests: { cpu: "16", memory: "80Gi", nvidia.com/gpu: "1" }
-          limits:   { cpu: "16", memory: "80Gi", nvidia.com/gpu: "1" }
+          requests: { cpu: "16", memory: "48Gi", nvidia.com/gpu: "1" }
+          limits:   { cpu: "16", memory: "48Gi", nvidia.com/gpu: "1" }
       volumes:
       - name: cephfs
         persistentVolumeClaim: { claimName: training-data-cephfs }
       - name: dshm
-        emptyDir: { medium: Memory, sizeLimit: "32Gi" }
+        emptyDir: { medium: Memory, sizeLimit: "16Gi" }
