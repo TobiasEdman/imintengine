@@ -44,6 +44,34 @@ class TestTerraMindSegmentationForward:
         out = model(x)
         assert out.shape == (2, 23, 224, 224)
 
+    def test_list_of_block_tokens_uses_last(self):
+        """terratorch's real TerraMind backbone returns a LIST of per-block
+        (B, N, D) token sequences — not a single tensor. The wrapper must
+        take the last block. (Verified on-cluster: 12 tensors of (1,961,768)
+        at 496px/patch16.)"""
+        class _ListEncoder(nn.Module):
+            def __init__(self, n_tokens, embed_dim, depth=12):
+                super().__init__()
+                self.n_tokens = n_tokens
+                self.embed_dim = embed_dim
+                self.depth = depth
+                self.scale = nn.Parameter(torch.ones(1))
+
+            def forward(self, inputs: dict):
+                B = next(iter(inputs.values())).shape[0]
+                return [torch.randn(B, self.n_tokens, self.embed_dim) * self.scale
+                        for _ in range(self.depth)]
+
+        enc = _ListEncoder(n_tokens=196, embed_dim=768)
+        model = TerraMindSegmentationModel(
+            encoder=enc, num_classes=23,
+            img_size=224, embed_dim=768, patch_size=16,
+        )
+        x = {"S2L2A": torch.randn(2, 6, 224, 224),
+             "S1GRD": torch.randn(2, 2, 224, 224)}
+        out = model(x)
+        assert out.shape == (2, 23, 224, 224)
+
     def test_cls_token_dropped(self):
         enc = _FakeEncoder(n_tokens=196, embed_dim=768, add_cls=True)
         model = TerraMindSegmentationModel(

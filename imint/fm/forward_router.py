@@ -101,6 +101,10 @@ def family_forward(
         from imint.fm.normalize import CromaNormalizer
         optical = batch["s2_croma"].to(device).float()   # (B, 12, H, W) raw
         sar = batch["s1_vv_vh"].to(device).float()       # (B, 2, H, W) linear
+        # Defensive: SAR nodata frames can carry NaN. The dataset scrubs them,
+        # but guard here too — a single NaN propagates to a NaN loss.
+        sar = torch.nan_to_num(sar, nan=0.0, posinf=0.0, neginf=0.0)
+        optical = torch.nan_to_num(optical, nan=0.0, posinf=0.0, neginf=0.0)
         norm = _get_normalizer(model, "croma", CromaNormalizer, device)
         n = norm({"s2_full": optical, "s1": sar})
         return model(
@@ -139,6 +143,9 @@ def family_forward(
         # raw linear-σ⁰ 2-band frame. TerraMind's own normalizer scales both.
         s2_raw = batch["s2_terramind"].to(device).float()  # (B, 6, H, W)
         sar = batch["s1_vv_vh"].to(device).float()          # (B, 2, H, W)
+        # Defensive NaN scrub (SAR nodata frames) — see CROMA branch note.
+        sar = torch.nan_to_num(sar, nan=0.0, posinf=0.0, neginf=0.0)
+        s2_raw = torch.nan_to_num(s2_raw, nan=0.0, posinf=0.0, neginf=0.0)
         norm = _get_normalizer(model, "terramind", TerraMindNormalizer, device)
         n = norm({"s2": s2_raw, "s1": sar})
         return model(

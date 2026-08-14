@@ -194,7 +194,16 @@ class TerraMindSegmentationModel(nn.Module):
         any_t = next(iter(inputs.values()))
         input_h, input_w = any_t.shape[-2:]
 
-        tokens = self.encoder(inputs)  # (B, N, D) or (B, N+1, D)
+        tokens = self.encoder(inputs)
+        # terratorch's TerraMind backbone returns a LIST of per-block token
+        # sequences (one (B, N, D) per transformer layer), not a single
+        # tensor. Take the last block's tokens for the linear-probe head.
+        # (A single-tensor return is also tolerated for fake encoders / other
+        # backends.)
+        if isinstance(tokens, (list, tuple)):
+            if not tokens:
+                raise ValueError("TerraMind encoder returned an empty list.")
+            tokens = tokens[-1]
         feat = self._tokens_to_spatial(tokens)   # (B, D, grid, grid)
 
         feat = self.up1(feat)                     # (B, D/2, 2*grid, 2*grid)

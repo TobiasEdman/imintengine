@@ -1044,9 +1044,28 @@ class UnifiedDataset(Dataset):
                 )
             s1_all = np.asarray(s1_all, dtype=np.float32)  # (T*2, H, W)
             n_s1_frames = s1_all.shape[0] // 2
-            # SAR may have fewer frames than optical on some tiles; clamp.
-            s1_idx = idx if idx < n_s1_frames else n_s1_frames - 1
-            out["s1_vv_vh"] = s1_all[s1_idx * 2:(s1_idx + 1) * 2]  # (2, H, W)
+
+            # Not every frame carries a real S1 scene: missing frames are
+            # stored as NaN/zeros (s1_temporal_mask==0). Selecting an all-NaN
+            # frame would make the S1 dB normalizer produce NaN → NaN loss
+            # (observed on tile 43983928 with 75% NaN). Prefer the optical
+            # best-frame index IF that frame is a valid S1 scene; otherwise
+            # fall back to the nearest valid S1 frame. NaN is scrubbed to 0
+            # (nodata) as a final guard.
+            s1_mask = data.get("s1_temporal_mask", None)
+            valid = None
+            if s1_mask is not None:
+                sm = np.asarray(s1_mask).ravel()[:n_s1_frames]
+                valid = np.where(sm > 0)[0]
+            preferred = idx if idx < n_s1_frames else n_s1_frames - 1
+            if valid is not None and len(valid) > 0 and preferred not in valid:
+                s1_idx = int(valid[np.argmin(np.abs(valid - preferred))])
+            else:
+                s1_idx = preferred
+            s1_frame = s1_all[s1_idx * 2:(s1_idx + 1) * 2]  # (2, H, W)
+            out["s1_vv_vh"] = np.nan_to_num(
+                s1_frame, nan=0.0, posinf=0.0, neginf=0.0,
+            ).astype(np.float32)
         return out
 
     # ------------------------------------------------------------------
