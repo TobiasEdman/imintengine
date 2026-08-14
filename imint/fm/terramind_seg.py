@@ -76,6 +76,8 @@ class TerraMindSegmentationModel(nn.Module):
         patch_size: int = 16,
         n_aux_channels: int = 0,
         dropout: float = 0.1,
+        enable_tradslag_head: bool = False,
+        num_tradslag: int = 4,
     ):
         super().__init__()
         self.encoder = encoder
@@ -84,6 +86,8 @@ class TerraMindSegmentationModel(nn.Module):
         self.embed_dim = embed_dim
         self.patch_size = patch_size
         self.n_aux_channels = n_aux_channels
+        self.enable_tradslag_head = enable_tradslag_head
+        self.num_tradslag = num_tradslag
 
         grid = img_size // patch_size
         if grid * patch_size != img_size:
@@ -126,6 +130,14 @@ class TerraMindSegmentationModel(nn.Module):
         self.dropout = nn.Dropout2d(dropout)
         self.classifier = nn.Conv2d(classifier_in, num_classes, kernel_size=1)
 
+        # Optional Trädslag fraction head — parallel Conv2d on the SAME
+        # ``classifier_in``-dim feature that feeds the classifier. Flag-gated
+        # so the default path carries no extra parameters or state-dict keys.
+        if enable_tradslag_head:
+            self.frac_head = nn.Conv2d(classifier_in, num_tradslag, kernel_size=1)
+        else:
+            self.frac_head = None
+
     def _tokens_to_spatial(self, tokens: torch.Tensor) -> torch.Tensor:
         """(B, N, D) → (B, D, grid, grid). Validates N matches grid²."""
         B, N, D = tokens.shape
@@ -153,7 +165,8 @@ class TerraMindSegmentationModel(nn.Module):
         self,
         inputs: dict[str, torch.Tensor],
         aux: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        return_fractions: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
         """Forward pass.
 
         Args:
@@ -162,9 +175,14 @@ class TerraMindSegmentationModel(nn.Module):
                 Shapes must match what TerraMind was built with (typ. 224).
             aux: Optional (B, n_aux, H, W) auxiliary raster channels,
                 concatenated at the final resolution before classifier.
+            return_fractions: When True AND the fraction head is enabled,
+                also return the (B, num_tradslag, H, W) fraction logits from
+                the SAME feature that feeds the classifier. Head disabled →
+                second element is ``None``. Default False → logits only.
 
         Returns:
-            (B, num_classes, H, W) logits at input resolution.
+            (B, num_classes, H, W) logits, or ``(logits, frac_logits)`` when
+            ``return_fractions`` is True.
         """
         if not isinstance(inputs, dict):
             raise TypeError(
@@ -194,4 +212,11 @@ class TerraMindSegmentationModel(nn.Module):
 
         feat = self.dropout(feat)
         logits = self.classifier(feat)
-        return logits
+
+        if not return_fractions:
+            return logits
+        if self.frac_head is None:
+            return logits, None
+        # Frac head shares the SAME dropped feature (already at input res),
+        # so the fraction grid aligns pixel-for-pixel with the logits.
+        return logits, self.frac_head(feat)

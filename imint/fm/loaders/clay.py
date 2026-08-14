@@ -116,17 +116,22 @@ def load_clay(
                 break
 
     if pretrained and checkpoint_path is None:
-        # Try downloading from HuggingFace Hub
+        # Try downloading from HuggingFace Hub. The checkpoint lives under
+        # the ``v1.5/`` subdirectory in the repo — filename ``clay-v1.5.ckpt``
+        # at the repo root 404s (that stale path is what left the
+        # ``.no_exist`` marker in /cephfs/model_cache/hf). Verified live:
+        #   made-with-clay/Clay :: v1.5/clay-v1.5.ckpt  (5.16 GB, HTTP 200).
         try:
             from huggingface_hub import hf_hub_download
             checkpoint_path = hf_hub_download(
                 "made-with-clay/Clay",
-                "clay-v1.5.ckpt",
+                "v1.5/clay-v1.5.ckpt",
             )
         except Exception as e:
             raise FileNotFoundError(
                 "No Clay v1.5 checkpoint found. Either:\n"
-                "  - Download clay-v1.5.ckpt from https://huggingface.co/made-with-clay/Clay\n"
+                "  - Download v1.5/clay-v1.5.ckpt from "
+                "https://huggingface.co/made-with-clay/Clay\n"
                 "    and place it at /data/model_cache/clay-v1.5.ckpt\n"
                 "  - Or pass checkpoint_path= explicitly."
             ) from e

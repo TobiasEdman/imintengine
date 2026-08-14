@@ -254,13 +254,25 @@ class UnifiedDataset(Dataset):
     """
 
     # Model registry keys for which this dataset can build per-model
-    # input tensors (Clay / CROMA stacks). Other ensemble members are
-    # routed through different keys (Prithvi → `spectral`; TerraMind →
-    # `spectral`+`s1_vv_vh`; Tessera → `tessera`) which require their
-    # own wiring landed separately.
+    # input tensors. Each key selects which extra tensors __getitem__ emits:
+    #   clay_v1_5        → s2_clay (10-band optical stack), optical-only
+    #   croma_base       → s2_croma (12-band optical) + s1_vv_vh (2-band SAR)
+    #   terramind_v1_base→ s1_vv_vh (2-band SAR); S2 comes from `spectral`
+    # Prithvi/Tessera route through `spectral`/`tessera` and set no model key.
     _SUPPORTED_MODEL_KEYS: frozenset[str] = frozenset({
-        "clay_v1_5", "croma_base",
+        "clay_v1_5", "croma_base", "terramind_v1_base",
     })
+
+    # Per-model-key set of tile .npz keys that MUST be present for the
+    # emitted sample to be usable. Tiles missing any required key for the
+    # active backbone are dropped at index-construction time (fail-loud +
+    # logged) so __getitem__ never KeyErrors mid-epoch. `s1_vv_vh` is the
+    # constraining one: present on ~6011/7882 tiles.
+    _MODEL_REQUIRED_TILE_KEYS: dict[str, tuple[str, ...]] = {
+        "clay_v1_5":         ("b08", "rededge"),
+        "croma_base":        ("b08", "rededge", "s1_vv_vh"),
+        "terramind_v1_base": ("s1_vv_vh",),
+    }
 
     def __init__(
         self,
@@ -354,12 +366,46 @@ class UnifiedDataset(Dataset):
                 split, self.label_dir, len(kept), dropped,
             )
 
+        # Drop tiles that lack a required key for the active backbone so
+        # __getitem__ never KeyErrors mid-epoch. The constraining key is
+        # `s1_vv_vh` (SAR), present on ~6011/7882 tiles — CROMA/TerraMind
+        # need it, Clay/Prithvi/Tessera do not. Reading `.files` inspects
+        # only the npz zip directory (no array decompression), so this is
+        # cheap even over the full 7882-tile set.
+        required = set()
+        for k in self.model_keys:
+            required.update(self._MODEL_REQUIRED_TILE_KEYS.get(k, ()))
+        if required:
+            kept: list[dict] = []
+            dropped = 0
+            for e in self._entries:
+                try:
+                    with np.load(e["path"], allow_pickle=True) as z:
+                        present = set(z.files)
+                except Exception:
+                    dropped += 1
+                    continue
+                if required.issubset(present):
+                    kept.append(e)
+                else:
+                    dropped += 1
+            self._entries = kept
+            logger.info(
+                "UnifiedDataset[%s]: model_keys=%s require tile keys %s — "
+                "kept %d tiles, dropped %d missing a required key",
+                split, self.model_keys, sorted(required),
+                len(kept), dropped,
+            )
+
         if not self._entries:
             raise FileNotFoundError(
                 f"No tiles found for split='{split}'. "
                 f"Searched lulc_dir={lulc_dir}, crop_dir={crop_dir}"
                 + (f", label_dir={self.label_dir} (all sidecars missing?)"
                    if self.label_dir is not None else "")
+                + (f", model_keys={self.model_keys} required tile keys "
+                   f"{sorted(required)} (none present?)"
+                   if required else "")
             )
 
         logger.info(
@@ -934,24 +980,49 @@ class UnifiedDataset(Dataset):
         spectral = np.asarray(raw_spectral, dtype=np.float32)  # (T*6, H, W)
         n_frames = spectral.shape[0] // N_BANDS
 
+        # Single, shared best-frame index so the optical stack AND the SAR
+        # frame refer to the SAME temporal frame (year-consistent inputs).
         idx = self._select_best_frame_idx(data, source, n_frames)
         spectral_6band = spectral[idx * N_BANDS:(idx + 1) * N_BANDS]  # (6, H, W)
 
-        # b08 layout: (T, H, W) per scripts/enrich_tiles_b08.py
-        b08_all = data.get("b08", None)
-        if b08_all is None:
-            raise KeyError("tile missing 'b08' (run enrich_tiles_b08.py)")
-        b08_all = np.asarray(b08_all, dtype=np.float32)
-        b08_frame = b08_all[idx]  # (H, W)
+        needs_optical = bool(
+            {"clay_v1_5", "croma_base"} & set(self.model_keys)
+        )
+        needs_sar = bool(
+            {"croma_base", "terramind_v1_base"} & set(self.model_keys)
+        )
+        # TerraMind consumes a RAW 6-band S2 frame (its own normalizer runs
+        # in the forward router). Our `spectral` order (B02,B03,B04,B8A,B11,
+        # B12) matches TerraMind's [BLUE,GREEN,RED,NIR_NARROW,SWIR_1,SWIR_2],
+        # so we emit the un-z-scored frame directly under `s2_terramind`.
+        needs_s2_raw6 = "terramind_v1_base" in self.model_keys
 
-        # rededge layout: (T*3, H, W) per scripts/enrich_tiles_rededge.py
-        rededge_all = data.get("rededge", None)
-        if rededge_all is None:
-            raise KeyError("tile missing 'rededge' (run enrich_tiles_rededge.py)")
-        rededge_all = np.asarray(rededge_all, dtype=np.float32)
-        rededge_frame = rededge_all[idx * 3:(idx + 1) * 3]  # (3, H, W)
+        # b08 / rededge only needed for the optical stacks (Clay/CROMA).
+        b08_frame = None
+        rededge_frame = None
+        if needs_optical:
+            # b08 layout: (T, H, W) per scripts/enrich_tiles_b08.py
+            b08_all = data.get("b08", None)
+            if b08_all is None:
+                raise KeyError("tile missing 'b08' (run enrich_tiles_b08.py)")
+            b08_all = np.asarray(b08_all, dtype=np.float32)
+            b08_frame = b08_all[idx]  # (H, W)
+
+            # rededge layout: (T*3, H, W) per scripts/enrich_tiles_rededge.py
+            rededge_all = data.get("rededge", None)
+            if rededge_all is None:
+                raise KeyError(
+                    "tile missing 'rededge' (run enrich_tiles_rededge.py)"
+                )
+            rededge_all = np.asarray(rededge_all, dtype=np.float32)
+            rededge_frame = rededge_all[idx * 3:(idx + 1) * 3]  # (3, H, W)
 
         out: dict[str, np.ndarray] = {}
+        if needs_s2_raw6:
+            # Raw 6-band reflectance frame for TerraMind's S2L2A modality.
+            out["s2_terramind"] = np.ascontiguousarray(
+                spectral_6band, dtype=np.float32,
+            )  # (6, H, W)
         if "clay_v1_5" in self.model_keys:
             out["s2_clay"] = build_s2_clay_tensor(
                 spectral_6band, b08_frame, rededge=rededge_frame,
@@ -961,6 +1032,21 @@ class UnifiedDataset(Dataset):
             out["s2_croma"] = build_s2_croma_tensor(
                 spectral_6band, b08_frame, rededge=rededge_frame,
             ).astype(np.float32)  # (12, H, W)
+
+        # SAR (VV/VH) for CROMA joint + TerraMind S1GRD. Layout is
+        # (T*2, H, W) per scripts/enrich_tiles_s1.py — take the same frame
+        # as the optical stack so the two modalities are temporally aligned.
+        if needs_sar:
+            s1_all = data.get("s1_vv_vh", None)
+            if s1_all is None:
+                raise KeyError(
+                    "tile missing 's1_vv_vh' (run enrich_tiles_s1.py)"
+                )
+            s1_all = np.asarray(s1_all, dtype=np.float32)  # (T*2, H, W)
+            n_s1_frames = s1_all.shape[0] // 2
+            # SAR may have fewer frames than optical on some tiles; clamp.
+            s1_idx = idx if idx < n_s1_frames else n_s1_frames - 1
+            out["s1_vv_vh"] = s1_all[s1_idx * 2:(s1_idx + 1) * 2]  # (2, H, W)
         return out
 
     # ------------------------------------------------------------------

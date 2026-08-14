@@ -1,0 +1,137 @@
+# CROMA-base ensemble member — distill labels + Trädslag frac head.
+#
+# ⚠ NOT LAUNCH-READY as of 2026-08-13. Preflight guard below fails the job
+#   in seconds if the training-path wiring is still missing. See the
+#   go/no-go report. Blockers (all in the model/trainer glue, not the data):
+#     1. train_unified.py never passes model_keys=("croma_base",) to
+#        UnifiedDataset → s2_croma is never built.
+#     2. UnifiedDataset never emits s1_vv_vh at all (only a comment says it
+#        "requires own wiring landed separately"). CROMA modality='joint'
+#        needs SAR.
+#     3. trainer.py forward reads ONLY batch["spectral"]; it never routes
+#        sar=/optical= into CromaSegmentationModel.forward(sar, optical, ...).
+#     4. build_segmentation_from_spec does not pass enable_tradslag_head to
+#        the croma branch, and CromaSegmentationModel.forward returns a single
+#        tensor (no frac_logits) and rejects return_fractions/temporal_coords.
+#   Coverage is fine: 6011/7882 tiles have s1_vv_vh (CROMA-complete).
+#
+# When the glue lands: CROMA is patch_size=8 → 504 crop is OK (504/8=63).
+# Weights cached at /data/model_cache/CROMA_base.pt; loader also needs
+# use_croma.py from github.com/antofuller/CROMA on PYTHONPATH (cloned below).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-croma
+  namespace: prithvi-training-default
+  labels: { app: unified-training, dataset: "512", purpose: croma }
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: unified-training, purpose: croma }
+    spec:
+      activeDeadlineSeconds: 43200
+      restartPolicy: Never
+      nodeSelector: { accelerator: nvidia-h100 }
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - { key: kubernetes.io/hostname, operator: NotIn, values: ["p02r08srv02"] }
+      containers:
+      - name: trainer
+        image: python:3.11-slim
+        env:
+        - { name: PYTHONUNBUFFERED, value: "1" }
+        - { name: HF_HOME, value: "/cephfs/model_cache/hf" }
+        - { name: PYTHONPATH, value: "/workspace/CROMA" }
+        command: ["/bin/bash","-c"]
+        args:
+        - |
+          set -e
+          export PYTHONUNBUFFERED=1
+          echo "=== CROMA-base member — distill labels + frac head (28-class) — $(date) ==="
+
+          apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+          pip install --quiet --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
+          pip install --quiet --no-cache-dir timm numpy scipy scikit-learn huggingface_hub einops
+
+          mkdir -p /workspace && cd /workspace
+          git clone --depth 1 https://github.com/antofuller/CROMA.git /workspace/CROMA
+          BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+          git clone --depth 1 --branch "$BRANCH" \
+            https://github.com/TobiasEdman/ImintEngine.git imintengine
+          cd /workspace/imintengine
+          pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+          echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+
+          # --- PREFLIGHT: fail loud unless the training-path wiring is real ---
+          python - <<'PY'
+          import inspect, sys
+          from imint.training import unified_dataset as ud
+          from imint.fm import forward_router as fr
+          from imint.fm.croma_seg import CromaSegmentationModel as C
+          fails = []
+          if "croma_base" not in ud.UnifiedDataset._SUPPORTED_MODEL_KEYS:
+              fails.append("dataset cannot build croma tensors")
+          src_train = inspect.getsource(__import__('scripts.train_unified', fromlist=['x']))
+          if "model_keys" not in src_train:
+              fails.append("train_unified.py never sets model_keys")
+          if "s1_vv_vh" not in inspect.getsource(ud):
+              fails.append("dataset never emits s1_vv_vh (SAR)")
+          fp = inspect.signature(C.forward).parameters
+          if "return_fractions" not in fp:
+              fails.append("CromaSeg.forward lacks return_fractions/frac head")
+          # The per-family forward routing lives in forward_router.family_forward
+          # (shared by trainer + evaluate). Assert the CROMA branch routes SAR +
+          # optical through the model.
+          src_fr = inspect.getsource(fr)
+          if 'family == "croma"' not in src_fr or "optical=" not in src_fr:
+              fails.append("forward_router never routes sar/optical into CROMA")
+          if fails:
+              print("PREFLIGHT FAILED — CROMA training path not wired:")
+              for f in fails: print("  -", f)
+              sys.exit(3)
+          print("preflight OK")
+          PY
+
+          mkdir -p /cephfs/checkpoints/croma
+          cd /cephfs
+          python /workspace/imintengine/scripts/train_unified.py \
+            --backbone-name croma_base \
+            --data-dirs /cephfs/unified_v2_512 \
+            --label-dir /cephfs/nmd2023_distill_labels \
+            --frac-dir /cephfs/tradslag_fracs \
+            --enable-tradslag-head \
+            --lambda-frac 1.0 \
+            --checkpoint-dir /cephfs/checkpoints/croma \
+            --num-classes 28 \
+            --epochs 30 \
+            --batch-size 8 \
+            --lr 1e-4 \
+            --weight-decay 0.35 \
+            --loss-type focal_dice \
+            --focal-gamma 2.0 \
+            --patch-size 504 \
+            --img-size 504 \
+            --weighting-method sqrt \
+            --label-smoothing 0.05 \
+            --lovasz-weight 0.3 \
+            --patience 20 \
+            --num-workers 16 \
+            --device cuda
+          echo "=== Done: $(date) ==="
+        volumeMounts:
+        - { mountPath: /cephfs, name: cephfs }
+        - { mountPath: /data, name: cephfs }
+        - { mountPath: /dev/shm, name: dshm }
+        resources:
+          requests: { cpu: "16", memory: "80Gi", nvidia.com/gpu: "1" }
+          limits:   { cpu: "16", memory: "80Gi", nvidia.com/gpu: "1" }
+      volumes:
+      - name: cephfs
+        persistentVolumeClaim: { claimName: training-data-cephfs }
+      - name: dshm
+        emptyDir: { medium: Memory, sizeLimit: "32Gi" }

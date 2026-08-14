@@ -361,9 +361,21 @@ def main():
     # (Prithvi → `spectral` reflectance; tessera → pre-baked `tessera`
     # embedding). Explicit routing on family, never on tile shape.
     from imint.fm.registry import MODEL_CONFIGS, resolve_backbone_name
-    backbone_family = MODEL_CONFIGS[
-        resolve_backbone_name(config.backbone_name, config.backbone)
-    ].family
+    registry_name = resolve_backbone_name(config.backbone_name, config.backbone)
+    backbone_family = MODEL_CONFIGS[registry_name].family
+
+    # Per-model input tensors: the dataset only builds the Clay/CROMA/TerraMind
+    # stacks (s2_clay / s2_croma / s2_terramind / s1_vv_vh) when the active
+    # backbone's registry key is in model_keys. Prithvi/Tessera need no extra
+    # keys (empty tuple → historical byte-identical behaviour). The dataset
+    # also uses model_keys to filter its tile index to tiles that carry every
+    # required key for the backbone (e.g. SAR is on ~6011/7882 tiles).
+    from imint.training.unified_dataset import UnifiedDataset as _UD
+    model_keys = (
+        (registry_name,) if registry_name in _UD._SUPPORTED_MODEL_KEYS else ()
+    )
+    if model_keys:
+        print(f"  Model-specific dataset keys: {model_keys}")
 
     # Honour the config's enabled aux set (adds markfukt when the flag is
     # on; otherwise identical to the canonical 10-channel list).
@@ -380,6 +392,7 @@ def main():
         label_dir=args.label_dir,
         frac_dir=args.frac_dir,
         backbone_family=backbone_family,
+        model_keys=model_keys,
     )
     val_dataset = UnifiedDataset(
         lulc_dir=lulc_dir,
@@ -393,6 +406,7 @@ def main():
         label_dir=args.label_dir,
         frac_dir=args.frac_dir,
         backbone_family=backbone_family,
+        model_keys=model_keys,
     )
     print(f"  Train: {len(train_dataset)} tiles, Val: {len(val_dataset)} tiles")
 

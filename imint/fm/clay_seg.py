@@ -71,6 +71,8 @@ class ClaySegmentationModel(nn.Module):
         embed_dim: int = 1024,
         n_aux_channels: int = 0,
         dropout: float = 0.1,
+        enable_tradslag_head: bool = False,
+        num_tradslag: int = 4,
     ):
         super().__init__()
         self.encoder = encoder
@@ -79,6 +81,8 @@ class ClaySegmentationModel(nn.Module):
         self.patch_size = patch_size
         self.embed_dim = embed_dim
         self.n_aux_channels = n_aux_channels
+        self.enable_tradslag_head = enable_tradslag_head
+        self.num_tradslag = num_tradslag
 
         grid = img_size // patch_size
         if grid * patch_size != img_size:
@@ -119,6 +123,14 @@ class ClaySegmentationModel(nn.Module):
 
         self.dropout = nn.Dropout2d(dropout)
         self.classifier = nn.Conv2d(classifier_in, num_classes, kernel_size=1)
+
+        # Optional Trädslag fraction head — parallel Conv2d on the SAME
+        # ``classifier_in``-dim feature that feeds the classifier. Flag-gated
+        # so the default path carries no extra parameters or state-dict keys.
+        if enable_tradslag_head:
+            self.frac_head = nn.Conv2d(classifier_in, num_tradslag, kernel_size=1)
+        else:
+            self.frac_head = None
 
     def _extract_tokens(
         self,
@@ -196,7 +208,8 @@ class ClaySegmentationModel(nn.Module):
         timestamps: torch.Tensor,
         wavelengths: torch.Tensor,
         aux: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        return_fractions: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
         """Per-pixel class logits from Clay encoder features.
 
         Args:
@@ -209,9 +222,14 @@ class ClaySegmentationModel(nn.Module):
             wavelengths: (B, n_bands) tensor of per-band central
                 wavelength in nanometers.
             aux: Optional (B, n_aux, H, W) auxiliary raster channels.
+            return_fractions: When True AND the fraction head is enabled,
+                also return the (B, num_tradslag, H, W) fraction logits from
+                the SAME feature that feeds the classifier. Head disabled →
+                second element is ``None``. Default False → logits only.
 
         Returns:
-            (B, num_classes, H, W) logits at input resolution.
+            (B, num_classes, H, W) logits, or ``(logits, frac_logits)`` when
+            ``return_fractions`` is True.
         """
         input_h, input_w = chips.shape[-2:]
 
@@ -232,4 +250,11 @@ class ClaySegmentationModel(nn.Module):
 
         feat = self.dropout(feat)
         logits = self.classifier(feat)
-        return logits
+
+        if not return_fractions:
+            return logits
+        if self.frac_head is None:
+            return logits, None
+        # Frac head shares the SAME dropped feature (already at input res),
+        # so the fraction grid aligns pixel-for-pixel with the logits.
+        return logits, self.frac_head(feat)

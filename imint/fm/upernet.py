@@ -993,6 +993,8 @@ def build_segmentation_from_spec(
             patch_size=spec.patch_size,
             n_aux_channels=n_aux_channels,
             dropout=dropout,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
 
     if spec.family == "clay":
@@ -1008,6 +1010,8 @@ def build_segmentation_from_spec(
             embed_dim=spec.embed_dim,
             n_aux_channels=n_aux_channels,
             dropout=dropout,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
 
     if spec.family == "croma":
@@ -1021,6 +1025,8 @@ def build_segmentation_from_spec(
             modality="joint",
             n_aux_channels=n_aux_channels,
             dropout=dropout,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
 
     if spec.family == "tessera":

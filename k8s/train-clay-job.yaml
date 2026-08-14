@@ -1,0 +1,135 @@
+# Clay v1.5 ensemble member — distill labels + Trädslag frac head.
+#
+# ⚠ NOT LAUNCH-READY as of 2026-08-13 — TWO independent blockers. Preflight
+#   guard fails the job in seconds. See the go/no-go report.
+#
+#   A. WEIGHTS NOT CACHED. /cephfs/model_cache/hf has only a `.no_exist`
+#      404 marker for clay-v1.5.ckpt (a prior hf_hub_download returned 404).
+#      The loader's repo/filename (made-with-clay/Clay :: clay-v1.5.ckpt) does
+#      not resolve. Fix the download source and place the .ckpt at
+#      /data/model_cache/clay-v1.5.ckpt before this can run.
+#   B. TRAINING-PATH GLUE MISSING (same as CROMA/TerraMind):
+#      - train_unified.py never sets model_keys=("clay_v1_5",) → s2_clay
+#        tensor never built by the dataset.
+#      - trainer.py forward reads only batch["spectral"]; never calls
+#        ClaySegmentationModel.forward(chips, timestamps, wavelengths, aux).
+#      - build_segmentation_from_spec's clay branch does not pass
+#        enable_tradslag_head; ClaySeg.forward returns a single tensor
+#        (no frac_logits) and rejects return_fractions/temporal_coords.
+#
+#   Coverage is fine: 7882/7882 tiles are Clay-complete (spectral+b08+rededge,
+#   no SAR needed). Clay is patch_size=8 → 504 crop OK (504/8=63).
+#   Also needs the claymodel pip pkg (git+Clay-foundation/model).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-clay
+  namespace: prithvi-training-default
+  labels: { app: unified-training, dataset: "512", purpose: clay }
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: unified-training, purpose: clay }
+    spec:
+      activeDeadlineSeconds: 43200
+      restartPolicy: Never
+      nodeSelector: { accelerator: nvidia-h100 }
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - { key: kubernetes.io/hostname, operator: NotIn, values: ["p02r08srv02"] }
+      containers:
+      - name: trainer
+        image: python:3.11-slim
+        env:
+        - { name: PYTHONUNBUFFERED, value: "1" }
+        - { name: HF_HOME, value: "/cephfs/model_cache/hf" }
+        command: ["/bin/bash","-c"]
+        args:
+        - |
+          set -e
+          export PYTHONUNBUFFERED=1
+          echo "=== Clay v1.5 member — distill labels + frac head (28-class) — $(date) ==="
+
+          apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+          pip install --quiet --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
+          pip install --quiet --no-cache-dir timm numpy scipy scikit-learn huggingface_hub einops
+          pip install --quiet --no-cache-dir "git+https://github.com/Clay-foundation/model.git"
+
+          mkdir -p /workspace && cd /workspace
+          BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+          git clone --depth 1 --branch "$BRANCH" \
+            https://github.com/TobiasEdman/ImintEngine.git imintengine
+          cd /workspace/imintengine
+          pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+          echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+
+          # --- PREFLIGHT: fail loud unless weights + training glue are real ---
+          python - <<'PY'
+          import inspect, os, sys
+          from imint.training import unified_dataset as ud
+          from imint.fm import forward_router as fr
+          from imint.fm.clay_seg import ClaySegmentationModel as C
+          fails = []
+          if not os.path.exists("/data/model_cache/clay-v1.5.ckpt"):
+              fails.append("clay-v1.5.ckpt not present at /data/model_cache")
+          if "clay_v1_5" not in ud.UnifiedDataset._SUPPORTED_MODEL_KEYS:
+              fails.append("dataset cannot build clay tensors")
+          if "model_keys" not in inspect.getsource(__import__('scripts.train_unified', fromlist=['x'])):
+              fails.append("train_unified.py never sets model_keys")
+          if "return_fractions" not in inspect.signature(C.forward).parameters:
+              fails.append("ClaySeg.forward lacks return_fractions/frac head")
+          # Per-family routing lives in forward_router.family_forward. Assert the
+          # Clay branch routes chips/timestamps/wavelengths into the model.
+          src_fr = inspect.getsource(fr)
+          if 'family == "clay"' not in src_fr or "chips=" not in src_fr:
+              fails.append("forward_router never routes chips/timestamps into Clay")
+          if fails:
+              print("PREFLIGHT FAILED — Clay path not ready:")
+              for f in fails: print("  -", f)
+              sys.exit(3)
+          print("preflight OK")
+          PY
+
+          mkdir -p /cephfs/checkpoints/clay
+          cd /cephfs
+          python /workspace/imintengine/scripts/train_unified.py \
+            --backbone-name clay_v1_5 \
+            --data-dirs /cephfs/unified_v2_512 \
+            --label-dir /cephfs/nmd2023_distill_labels \
+            --frac-dir /cephfs/tradslag_fracs \
+            --enable-tradslag-head \
+            --lambda-frac 1.0 \
+            --checkpoint-dir /cephfs/checkpoints/clay \
+            --num-classes 28 \
+            --epochs 30 \
+            --batch-size 8 \
+            --lr 1e-4 \
+            --weight-decay 0.35 \
+            --loss-type focal_dice \
+            --focal-gamma 2.0 \
+            --patch-size 504 \
+            --img-size 504 \
+            --weighting-method sqrt \
+            --label-smoothing 0.05 \
+            --lovasz-weight 0.3 \
+            --patience 20 \
+            --num-workers 16 \
+            --device cuda
+          echo "=== Done: $(date) ==="
+        volumeMounts:
+        - { mountPath: /cephfs, name: cephfs }
+        - { mountPath: /data, name: cephfs }
+        - { mountPath: /dev/shm, name: dshm }
+        resources:
+          requests: { cpu: "16", memory: "80Gi", nvidia.com/gpu: "1" }
+          limits:   { cpu: "16", memory: "80Gi", nvidia.com/gpu: "1" }
+      volumes:
+      - name: cephfs
+        persistentVolumeClaim: { claimName: training-data-cephfs }
+      - name: dshm
+        emptyDir: { medium: Memory, sizeLimit: "32Gi" }

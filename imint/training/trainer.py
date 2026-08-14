@@ -507,25 +507,15 @@ class LULCTrainer:
             t0 = time.time()
 
             for batch in train_loader:
-                images = batch["spectral"].to(self.device)
                 labels = batch["label"].to(self.device)    # (B, H, W)
 
-                # Build the model input tensor. Routed on backbone family
-                # (never on channel count): tessera consumes the 4D
-                # (B, 128, H, W) embedding as-is; Prithvi needs the 5D
-                # Conv3d layout (B, C=6, T, H, W). fm_spec is stashed on the
-                # model in _build_model.
-                if self._model_family == "tessera":
-                    model_input = images  # (B, 128, H, W)
-                else:
-                    B, CT, H, W = images.shape
-                    if CT > 6:
-                        # Multitemporal: (B, T*6, H, W) → (B, 6, T, H, W)
-                        T = CT // 6
-                        model_input = images.view(B, T, 6, H, W).permute(0, 2, 1, 3, 4)
-                    else:
-                        # Single-date: (B, 6, H, W) → (B, 6, 1, H, W)
-                        model_input = images.unsqueeze(2)
+                # Input tensor construction + per-family forward routing is
+                # centralized in imint.fm.forward_router.family_forward (used
+                # by both the train loop and evaluate_model, so the routing
+                # never drifts between them). Prithvi → 5D Conv3d stack;
+                # tessera → 4D embedding; croma/clay/terramind → their raw
+                # per-model stacks + family normalizer. Routed on family, not
+                # on tensor shape. fm_spec is stashed on the model at build.
 
                 # Collect auxiliary channels (height/volume/etc.)
                 aux = self._collect_aux(batch, self.device)
@@ -579,8 +569,10 @@ class LULCTrainer:
                     enabled=self._amp_enabled,
                 ):
                     want_frac = frac_criterion is not None
-                    out = self.model(
-                        model_input, aux=aux,
+                    from ..fm.forward_router import family_forward
+                    out = family_forward(
+                        self.model, self._model_family, batch, self.device,
+                        aux=aux,
                         temporal_coords=temporal_coords,
                         location_coords=location_coords,
                         return_fractions=want_frac,

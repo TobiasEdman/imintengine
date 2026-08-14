@@ -44,6 +44,8 @@ class CromaSegmentationModel(nn.Module):
         modality: str = "joint",
         n_aux_channels: int = 0,
         dropout: float = 0.1,
+        enable_tradslag_head: bool = False,
+        num_tradslag: int = 4,
     ):
         super().__init__()
         self.encoder = encoder
@@ -53,6 +55,8 @@ class CromaSegmentationModel(nn.Module):
         self.embed_dim = embed_dim
         self.modality = modality
         self.n_aux_channels = n_aux_channels
+        self.enable_tradslag_head = enable_tradslag_head
+        self.num_tradslag = num_tradslag
 
         grid = img_size // patch_size
         if grid * patch_size != img_size:
@@ -99,6 +103,16 @@ class CromaSegmentationModel(nn.Module):
         self.dropout = nn.Dropout2d(dropout)
         self.classifier = nn.Conv2d(classifier_in, num_classes, kernel_size=1)
 
+        # Optional Trädslag fraction head: a parallel Conv2d on the SAME
+        # ``classifier_in``-dim feature that feeds the classifier — mirrors
+        # PrithviSegmentationModel / TesseraSegmentationModel so the frac-loss
+        # wiring in the trainer stays backbone-agnostic. Flag-gated → the
+        # default path carries no extra parameters or state-dict keys.
+        if enable_tradslag_head:
+            self.frac_head = nn.Conv2d(classifier_in, num_tradslag, kernel_size=1)
+        else:
+            self.frac_head = None
+
     def _pick_encoding(self, enc_dict: dict) -> torch.Tensor:
         """Select the token sequence per ``self.modality``, with a
         graceful fallback when joint encodings are unavailable."""
@@ -142,7 +156,8 @@ class CromaSegmentationModel(nn.Module):
         optical: torch.Tensor | None = None,
         aux: torch.Tensor | None = None,
         output_size: tuple[int, int] | None = None,
-    ) -> torch.Tensor:
+        return_fractions: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
         """Per-pixel class logits from CROMA encodings.
 
         Args:
@@ -154,9 +169,15 @@ class CromaSegmentationModel(nn.Module):
             aux: Optional (B, n_aux, Ho, Wo) at the desired output res.
             output_size: Optional (H, W) for the output logits. Defaults
                 to the input sar/optical tensor's (H, W).
+            return_fractions: When True AND the fraction head is enabled,
+                also return the (B, num_tradslag, Ho, Wo) fraction logits
+                computed from the SAME feature that feeds the classifier.
+                Head disabled → second element is ``None``. Default False →
+                logits only (byte-identical to the pre-frac signature).
 
         Returns:
-            (B, num_classes, Ho, Wo) logits.
+            (B, num_classes, Ho, Wo) logits, or ``(logits, frac_logits)``
+            when ``return_fractions`` is True.
         """
         if self.modality in ("joint", "sar") and sar is None:
             raise ValueError(f"CROMA modality={self.modality!r} requires 'sar'.")
@@ -188,4 +209,12 @@ class CromaSegmentationModel(nn.Module):
             feat = torch.cat([feat, aux_feat], dim=1)
 
         feat = self.dropout(feat)
-        return self.classifier(feat)
+        logits = self.classifier(feat)
+
+        if not return_fractions:
+            return logits
+        if self.frac_head is None:
+            return logits, None
+        # The frac head runs on the SAME dropped feature as the classifier,
+        # already at output_size, so the fraction grid aligns pixel-for-pixel.
+        return logits, self.frac_head(feat)
