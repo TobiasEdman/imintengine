@@ -73,14 +73,17 @@ class TestTerraMindSegmentationForward:
         assert out.shape == (2, 23, 224, 224)
 
     def test_cls_token_dropped(self):
+        # B=2: the UPerNet head has BatchNorm (PSP pool_size=1 → 1×1 maps);
+        # training-mode BN needs >1 sample. Real training uses B=8; B=1 only
+        # occurs at eval where BN uses running stats. Test the realistic path.
         enc = _FakeEncoder(n_tokens=196, embed_dim=768, add_cls=True)
         model = TerraMindSegmentationModel(
             encoder=enc, num_classes=23,
             img_size=224, embed_dim=768, patch_size=16,
         )
-        x = {"S2L2A": torch.randn(1, 6, 224, 224)}
+        x = {"S2L2A": torch.randn(2, 6, 224, 224)}
         out = model(x)
-        assert out.shape == (1, 23, 224, 224)
+        assert out.shape == (2, 23, 224, 224)
 
     def test_wrong_token_count_raises(self):
         enc = _FakeEncoder(n_tokens=400, embed_dim=768)  # not 196 or 197
@@ -88,7 +91,7 @@ class TestTerraMindSegmentationForward:
             encoder=enc, num_classes=23,
             img_size=224, embed_dim=768, patch_size=16,
         )
-        x = {"S2L2A": torch.randn(1, 6, 224, 224)}
+        x = {"S2L2A": torch.randn(2, 6, 224, 224)}
         with pytest.raises(ValueError, match="400 tokens"):
             model(x)
 
@@ -98,7 +101,7 @@ class TestTerraMindSegmentationForward:
             encoder=enc, num_classes=23,
             img_size=224, embed_dim=768, patch_size=16,
         )
-        x = {"S2L2A": torch.randn(1, 6, 224, 224)}
+        x = {"S2L2A": torch.randn(2, 6, 224, 224)}
         with pytest.raises(ValueError, match="embed_dim"):
             model(x)
 
@@ -122,17 +125,19 @@ class TestTerraMindSegmentationForward:
 
 class TestTerraMindSegmentationAux:
     def test_aux_channels_wired(self):
+        # Aux now flows through the UPerNet head's gated mid-level fusion
+        # (decoder_head.lidar_branch), not a top-level aux_proj concat.
         enc = _FakeEncoder(n_tokens=196, embed_dim=768)
         model = TerraMindSegmentationModel(
             encoder=enc, num_classes=23,
             img_size=224, embed_dim=768, patch_size=16,
             n_aux_channels=5,
         )
-        assert model.aux_proj is not None
-        x = {"S2L2A": torch.randn(1, 6, 224, 224)}
-        aux = torch.randn(1, 5, 224, 224)
+        assert model.decoder_head.lidar_branch is not None
+        x = {"S2L2A": torch.randn(2, 6, 224, 224)}
+        aux = torch.randn(2, 5, 224, 224)
         out = model(x, aux=aux)
-        assert out.shape == (1, 23, 224, 224)
+        assert out.shape == (2, 23, 224, 224)
 
     def test_no_aux_channels(self):
         enc = _FakeEncoder(n_tokens=196, embed_dim=768)
@@ -141,26 +146,24 @@ class TestTerraMindSegmentationAux:
             img_size=224, embed_dim=768, patch_size=16,
             n_aux_channels=0,
         )
-        assert model.aux_proj is None
-        x = {"S2L2A": torch.randn(1, 6, 224, 224)}
+        assert model.decoder_head.lidar_branch is None
+        x = {"S2L2A": torch.randn(2, 6, 224, 224)}
         out = model(x)
-        assert out.shape == (1, 23, 224, 224)
+        assert out.shape == (2, 23, 224, 224)
 
     def test_aux_none_with_aux_channels_skipped(self):
-        """Passing aux=None when the model expects aux should skip the
-        branch rather than crash (useful for inference-time flexibility)."""
+        """Passing aux=None when the model has an aux branch must skip the
+        branch gracefully (UPerNet gated fusion is only applied when aux is
+        given), not crash — inference-time flexibility."""
         enc = _FakeEncoder(n_tokens=196, embed_dim=768)
         model = TerraMindSegmentationModel(
             encoder=enc, num_classes=23,
             img_size=224, embed_dim=768, patch_size=16,
             n_aux_channels=5,
         )
-        x = {"S2L2A": torch.randn(1, 6, 224, 224)}
-        # Not passing aux — model.aux_proj is set but we pass aux=None.
-        # Classifier expects c4*2 input channels; skipping aux leaves c4.
-        # This path SHOULD raise a shape error at the classifier.
-        with pytest.raises(Exception):
-            model(x, aux=None)
+        x = {"S2L2A": torch.randn(2, 6, 224, 224)}
+        out = model(x, aux=None)  # gated fusion skipped, no crash
+        assert out.shape == (2, 23, 224, 224)
 
 
 @pytest.mark.parametrize("img_size,patch_size", [
@@ -175,6 +178,6 @@ class TestTerraMindSegmentationResolutions:
             encoder=enc, num_classes=23,
             img_size=img_size, embed_dim=768, patch_size=patch_size,
         )
-        x = {"S2L2A": torch.randn(1, 6, img_size, img_size)}
+        x = {"S2L2A": torch.randn(2, 6, img_size, img_size)}
         out = model(x)
-        assert out.shape == (1, 23, img_size, img_size)
+        assert out.shape == (2, 23, img_size, img_size)

@@ -96,47 +96,24 @@ class TerraMindSegmentationModel(nn.Module):
             )
         self.grid_size = grid
 
-        # Progressive upsampling: (B, 768, 14, 14) → (B, 384, 28, 28)
-        # → (B, 192, 56, 56) → (B, 96, 112, 112) → via bilinear to input.
-        c1 = embed_dim             # 768
-        c2 = embed_dim // 2        # 384
-        c3 = embed_dim // 4        # 192
-        c4 = embed_dim // 8        # 96
-
-        self.up1 = nn.Sequential(
-            nn.ConvTranspose2d(c1, c2, kernel_size=2, stride=2),
-            nn.BatchNorm2d(c2), nn.GELU(),
+        # Multi-level UPerNet head (fairness parity with Prithvi). TerraMind's
+        # encoder returns per-block token sequences, so we feed 4 evenly-spaced
+        # blocks into the SAME UPerNet decoder Prithvi uses — not a linear
+        # probe. Pool sizes are sized to the feature-map grid.
+        from imint.fm.upernet import ViTUPerNetHead, get_default_pool_sizes
+        pool_sizes = get_default_pool_sizes(
+            device=None, img_size=img_size, patch_size=patch_size,
         )
-        self.up2 = nn.Sequential(
-            nn.ConvTranspose2d(c2, c3, kernel_size=2, stride=2),
-            nn.BatchNorm2d(c3), nn.GELU(),
+        self.decoder_head = ViTUPerNetHead(
+            embed_dim=embed_dim,
+            num_classes=num_classes,
+            decoder_channels=256,
+            dropout=dropout,
+            n_aux_channels=n_aux_channels,
+            pool_sizes=pool_sizes,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
-        self.smooth = nn.Sequential(
-            nn.Conv2d(c3, c4, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(c4), nn.GELU(),
-        )
-
-        # Optional aux branch — concat-fuse at the final resolution.
-        if n_aux_channels > 0:
-            self.aux_proj = nn.Sequential(
-                nn.Conv2d(n_aux_channels, c4, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(c4), nn.GELU(),
-            )
-            classifier_in = c4 * 2
-        else:
-            self.aux_proj = None
-            classifier_in = c4
-
-        self.dropout = nn.Dropout2d(dropout)
-        self.classifier = nn.Conv2d(classifier_in, num_classes, kernel_size=1)
-
-        # Optional Trädslag fraction head — parallel Conv2d on the SAME
-        # ``classifier_in``-dim feature that feeds the classifier. Flag-gated
-        # so the default path carries no extra parameters or state-dict keys.
-        if enable_tradslag_head:
-            self.frac_head = nn.Conv2d(classifier_in, num_tradslag, kernel_size=1)
-        else:
-            self.frac_head = None
 
     def _tokens_to_spatial(self, tokens: torch.Tensor) -> torch.Tensor:
         """(B, N, D) → (B, D, grid, grid). Validates N matches grid²."""
@@ -194,38 +171,23 @@ class TerraMindSegmentationModel(nn.Module):
         any_t = next(iter(inputs.values()))
         input_h, input_w = any_t.shape[-2:]
 
-        tokens = self.encoder(inputs)
+        out = self.encoder(inputs)
         # terratorch's TerraMind backbone returns a LIST of per-block token
-        # sequences (one (B, N, D) per transformer layer), not a single
-        # tensor. Take the last block's tokens for the linear-probe head.
-        # (A single-tensor return is also tolerated for fake encoders / other
-        # backends.)
-        if isinstance(tokens, (list, tuple)):
-            if not tokens:
+        # sequences (one (B, N, D) per transformer layer). Pick 4 evenly-
+        # spaced blocks for the multi-level UPerNet head. A single-tensor
+        # return (fake encoders) is replicated to 4 levels so tests still run.
+        if isinstance(out, (list, tuple)):
+            if not out:
                 raise ValueError("TerraMind encoder returned an empty list.")
-            tokens = tokens[-1]
-        feat = self._tokens_to_spatial(tokens)   # (B, D, grid, grid)
+            n = len(out)
+            idxs = [n // 4 - 1, n // 2 - 1, 3 * n // 4 - 1, n - 1]
+            idxs = [max(0, i) for i in idxs]
+            block_tokens = [out[i] for i in idxs]
+        else:
+            block_tokens = [out, out, out, out]
 
-        feat = self.up1(feat)                     # (B, D/2, 2*grid, 2*grid)
-        feat = self.up2(feat)                     # (B, D/4, 4*grid, 4*grid)
-        feat = self.smooth(feat)                  # (B, D/8, ...)
-
-        # Upsample to input resolution before (optional) aux fusion
-        feat = F.interpolate(
-            feat, size=(input_h, input_w), mode="bilinear", align_corners=True,
+        feats = [self._tokens_to_spatial(t) for t in block_tokens]  # 4× (B,D,g,g)
+        return self.decoder_head(
+            feats, output_size=(input_h, input_w), aux=aux,
+            return_fractions=return_fractions,
         )
-
-        if self.aux_proj is not None and aux is not None:
-            aux_feat = self.aux_proj(aux)
-            feat = torch.cat([feat, aux_feat], dim=1)
-
-        feat = self.dropout(feat)
-        logits = self.classifier(feat)
-
-        if not return_fractions:
-            return logits
-        if self.frac_head is None:
-            return logits, None
-        # Frac head shares the SAME dropped feature (already at input res),
-        # so the fraction grid aligns pixel-for-pixel with the logits.
-        return logits, self.frac_head(feat)

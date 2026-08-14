@@ -92,16 +92,18 @@ class TestClaySegmentationForward:
         assert out.shape == (2, 23, 256, 256)
 
     def test_output_shape_without_cls(self):
+        # B=2: the UPerNet head's BatchNorm (PSP pool_size=1 → 1×1) needs >1
+        # sample in train mode. Training uses B=8; B=1 only at eval.
         enc = _FakeClayEncoder(patch_size=8, embed_dim=1024, include_cls=False)
         model = ClaySegmentationModel(
             encoder=enc, num_classes=23,
             img_size=256, patch_size=8, embed_dim=1024,
         )
-        chips = torch.randn(1, 10, 256, 256)
-        ts = torch.zeros(1, 4)
-        wl = torch.full((1, 10), 500.0)
+        chips = torch.randn(2, 10, 256, 256)
+        ts = torch.zeros(2, 4)
+        wl = torch.full((2, 10), 500.0)
         out = model(chips, ts, wl)
-        assert out.shape == (1, 23, 256, 256)
+        assert out.shape == (2, 23, 256, 256)
 
     def test_wrong_embed_dim_raises(self):
         enc = _FakeClayEncoder(patch_size=8, embed_dim=768, include_cls=True)
@@ -136,19 +138,22 @@ class TestClaySegmentationForward:
 
 class TestClaySegmentationAux:
     def test_aux_wired(self):
+        # Aux now flows through the UPerNet head's gated mid-level fusion
+        # (decoder_head.lidar_branch), not a top-level aux_proj concat.
         enc = _FakeClayEncoder(patch_size=8, embed_dim=1024, include_cls=True)
         model = ClaySegmentationModel(
             encoder=enc, num_classes=23,
             img_size=256, patch_size=8, embed_dim=1024,
             n_aux_channels=5,
         )
-        chips = torch.randn(1, 10, 256, 256)
-        aux = torch.randn(1, 5, 256, 256)
+        assert model.decoder_head.lidar_branch is not None
+        chips = torch.randn(2, 10, 256, 256)
+        aux = torch.randn(2, 5, 256, 256)
         out = model(
-            chips, torch.zeros(1, 4), torch.full((1, 10), 500.0),
+            chips, torch.zeros(2, 4), torch.full((2, 10), 500.0),
             aux=aux,
         )
-        assert out.shape == (1, 23, 256, 256)
+        assert out.shape == (2, 23, 256, 256)
 
     def test_no_aux(self):
         enc = _FakeClayEncoder(patch_size=8, embed_dim=1024, include_cls=True)
@@ -157,10 +162,10 @@ class TestClaySegmentationAux:
             img_size=256, patch_size=8, embed_dim=1024,
             n_aux_channels=0,
         )
-        assert model.aux_proj is None
-        chips = torch.randn(1, 10, 256, 256)
-        out = model(chips, torch.zeros(1, 4), torch.full((1, 10), 500.0))
-        assert out.shape == (1, 23, 256, 256)
+        assert model.decoder_head.lidar_branch is None
+        chips = torch.randn(2, 10, 256, 256)
+        out = model(chips, torch.zeros(2, 4), torch.full((2, 10), 500.0))
+        assert out.shape == (2, 23, 256, 256)
 
 
 @pytest.mark.parametrize("img_size", [128, 256, 512])
@@ -173,6 +178,6 @@ class TestClaySegmentationResolutions:
             encoder=enc, num_classes=23,
             img_size=img_size, patch_size=8, embed_dim=1024,
         )
-        chips = torch.randn(1, 10, img_size, img_size)
-        out = model(chips, torch.zeros(1, 4), torch.full((1, 10), 500.0))
-        assert out.shape == (1, 23, img_size, img_size)
+        chips = torch.randn(2, 10, img_size, img_size)
+        out = model(chips, torch.zeros(2, 4), torch.full((2, 10), 500.0))
+        assert out.shape == (2, 23, img_size, img_size)
