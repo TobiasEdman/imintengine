@@ -152,7 +152,12 @@ def _interpolate_pos_encoding(
         # Re-compute pos embedding to handle changed num_frames
         new_grid_size = (t_patches, *grid_size[1:])
         new_pos_embed = get_3d_sincos_pos_embed(pos_embed.shape[-1], new_grid_size, add_cls_token=True)
-        new_pos_embed = torch.from_numpy(new_pos_embed).float().unsqueeze(0)
+        # Recomputed from numpy → lands on CPU; move to the source pos_embed's
+        # device (and dtype) so the caller's `x + pos_embed` doesn't hit a
+        # cuda/cpu device mismatch. Triggers when the eval frame-count differs
+        # from the checkpoint's native temporal grid (e.g. Prithvi-300M at 496).
+        new_pos_embed = torch.from_numpy(new_pos_embed).float().unsqueeze(0).to(
+            device=pos_embed.device, dtype=pos_embed.dtype)
     else:
         new_grid_size = grid_size
         new_pos_embed = pos_embed
