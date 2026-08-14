@@ -170,11 +170,28 @@ class ClaySegmentationModel(nn.Module):
         if hasattr(real_enc, "patch_embedding") or hasattr(
             real_enc, "transformer"
         ):
-            # timestamps is (B, 4) = [week, hour, lat, lon]; Clay's encoder
-            # wants time=(B,2) and latlon=(B,2), concatenated internally to
-            # the 8-dim metadata encoding.
-            time = timestamps[:, :2]
-            latlon = timestamps[:, 2:4]
+            # Clay's Encoder.add_encodings builds an 8-dim metadata vector
+            # from ``hstack((time, latlon))`` and concatenates it onto a
+            # positional encoding of dim ``self.dim - 8``. That arithmetic
+            # requires time and latlon to be 4-wide EACH (total 8) — a 2+2
+            # split yields dim-4 metadata and a 1020≠1024 mismatch (observed).
+            # Clay's convention: time=[week_sin,week_cos,hour_sin,hour_cos],
+            # latlon=[lat_sin,lat_cos,lon_sin,lon_cos]. We derive sin/cos from
+            # the (B,4)=[week,hour,lat,lon] timestamps; unknown → zeros, which
+            # Clay tolerates (metadata is additive, not gating).
+            B = chips.shape[0]
+            week = timestamps[:, 0]
+            hour = timestamps[:, 1]
+            lat = timestamps[:, 2]
+            lon = timestamps[:, 3]
+            time = torch.stack([
+                torch.sin(week), torch.cos(week),
+                torch.sin(hour), torch.cos(hour),
+            ], dim=1)                                       # (B, 4)
+            latlon = torch.stack([
+                torch.sin(lat), torch.cos(lat),
+                torch.sin(lon), torch.cos(lon),
+            ], dim=1)                                       # (B, 4)
             gsd = torch.tensor(10.0, device=chips.device)  # Sentinel-2 10 m
             datacube = {
                 "pixels": chips,
