@@ -1,6 +1,26 @@
 # Plan — faster, reusable validation/inference architecture
 
-**Status:** plan, ready to execute · **Created:** 2026-08-13
+**Status:** IMPLEMENTED 2026-08-13 (bit-parity gate pending) · **Created:** 2026-08-13
+
+## Implementation status (2026-08-13)
+- **Shipped:** `scripts/infer_tiles.py` (Stage A), `scripts/score_against_truth.py`
+  (Stage B), `scripts/cache_predict.py`, `tests/test_cached_validation_parity.py`
+  (18 tests green), `k8s/{infer-tiles,score-truth}-job.template.yaml`. Committed on
+  `agent/te/opus/nfi-nmd2023-benchmark`.
+- **Three cluster-scale bugs found + fixed** (all passed unit tests — only bit at
+  7k-tile scale): (1) size pre-pass decompressed every tile → read shape from the
+  npz header (35×); (2) `batch16×workers8` DataLoader OOM → `batch8×workers2`;
+  (3) 64Mi `/dev/shm` → in-memory emptyDir. **Follow-up: add a "scale smoke"
+  fixture so these are caught pre-cluster.**
+- **Bit-parity gate: not yet passed.** The full-dataset infer for `tessera_gated`
+  crashed on tiles missing the `tessera` key (`KeyError: 'tessera is not a file
+  in the archive'`) — not every `unified_v2_512` tile is enrichment-complete.
+  **Re-run restricted to the NFI+LUCAS tile-list** (known-complete; they validated
+  fine on the fused path) to confirm 0.588 / 0.507 / 0.825, then retire the fused
+  `*-validate-*` jobs. This missing-key gap also affects the model-race campaign
+  (`docs/experiments/model_race_plan.md`) — the dataset must filter incomplete
+  tiles per required backbone key.
+
 **Motivation:** `lucas-validate-tessera-gated` took ~2 h wall for one
 checkpoint on one truth source (4,303 tiles). CPU is not the bottleneck —
 the pod used 1.5 of 4 allocated cores. The cost is structural: serial,
