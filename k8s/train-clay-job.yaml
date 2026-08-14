@@ -1,24 +1,21 @@
 # Clay v1.5 ensemble member — distill labels + Trädslag frac head.
 #
-# ⚠ NOT LAUNCH-READY as of 2026-08-13 — TWO independent blockers. Preflight
-#   guard fails the job in seconds. See the go/no-go report.
+# LAUNCH-READY as of 2026-08-14 — both prior blockers resolved. GO:
+#   real-weight smoke on a 2080ti passed end to end (dataset → family_forward
+#   → logits (2,28,H,W) + frac (2,4,H,W) → finite loss → backward).
 #
-#   A. WEIGHTS NOT CACHED. /cephfs/model_cache/hf has only a `.no_exist`
-#      404 marker for clay-v1.5.ckpt (a prior hf_hub_download returned 404).
-#      The loader's repo/filename (made-with-clay/Clay :: clay-v1.5.ckpt) does
-#      not resolve. Fix the download source and place the .ckpt at
-#      /data/model_cache/clay-v1.5.ckpt before this can run.
-#   B. TRAINING-PATH GLUE MISSING (same as CROMA/TerraMind):
-#      - train_unified.py never sets model_keys=("clay_v1_5",) → s2_clay
-#        tensor never built by the dataset.
-#      - trainer.py forward reads only batch["spectral"]; never calls
-#        ClaySegmentationModel.forward(chips, timestamps, wavelengths, aux).
-#      - build_segmentation_from_spec's clay branch does not pass
-#        enable_tradslag_head; ClaySeg.forward returns a single tensor
-#        (no frac_logits) and rejects return_fractions/temporal_coords.
+#   A. WEIGHTS NOW CACHED. The loader requested the wrong filename
+#      (clay-v1.5.ckpt at repo root → 404, leaving the .no_exist marker);
+#      the real path is v1.5/clay-v1.5.ckpt (5.16 GB). Downloaded to
+#      /data/model_cache/clay-v1.5.ckpt.
+#   B. GLUE LANDED. The loaded object is a ClayMAE whose datacube-forward
+#      Encoder is at .encoder; it must be loaded with mask_ratio=0 (else it
+#      masks ~75% of patches) and fed a datacube dict with 4-wide
+#      time+latlon. All handled in imint.fm.loaders.clay + clay_seg.
 #
-#   Coverage is fine: 7882/7882 tiles are Clay-complete (spectral+b08+rededge,
-#   no SAR needed). Clay is patch_size=8 → 504 crop OK (504/8=63).
+#   Coverage: 7882/7882 tiles are Clay-complete (spectral+b08+rededge, no
+#   SAR needed). Clay is patch_size=8 → 504 crop OK (504/8=63). H100 has
+#   ample memory; the smoke ran at 224px only to fit the 2080ti.
 #   Also needs the claymodel pip pkg (git+Clay-foundation/model).
 apiVersion: batch/v1
 kind: Job

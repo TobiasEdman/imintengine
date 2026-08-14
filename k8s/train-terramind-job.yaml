@@ -1,23 +1,20 @@
 # TerraMind v1-base ensemble member — distill labels + Trädslag frac head.
 #
-# ⚠ NOT LAUNCH-READY as of 2026-08-13. Preflight guard fails the job in
-#   seconds if the training-path glue is still missing. See go/no-go report.
-#   Blockers (model/trainer glue, not data):
-#     1. train_unified.py never sets model_keys; the dataset never emits
-#        s1_vv_vh (SAR) — TerraMind needs {"S2L2A": spectral, "S1GRD": s1}.
-#     2. trainer.py forward reads only batch["spectral"]; never builds the
-#        modality dict TerraMindSegmentationModel.forward(inputs: dict) needs.
-#     3. build_segmentation_from_spec's terramind branch does not pass
-#        enable_tradslag_head; TerraMindSeg.forward returns a single tensor
-#        (no frac_logits) and rejects return_fractions/temporal_coords.
+# LAUNCH-READY as of 2026-08-14 — the model↔trainer glue landed. GO:
+#   real-weight smoke on a 2080ti passed end to end (dataset → family_forward
+#   → logits (2,28,H,W) + frac (2,4,H,W) → finite loss → backward). Note the
+#   terratorch TerraMind backbone returns a LIST of 12 per-block token
+#   sequences; the seg wrapper takes the last block (fixed in the glue).
+#   The preflight guard below fail-fasts on any regression.
 #
-#   Coverage: 6011/7882 tiles TerraMind-complete (spectral+s1_vv_vh).
+#   Coverage: 6011/7882 tiles TerraMind-complete (spectral+s1_vv_vh); the
+#   dataset filters to this subset automatically via model_keys.
 #   Weights: TerraMind cached under /cephfs/model_cache/hf (loaded via
 #   terratorch BACKBONE_REGISTRY). Needs the terratorch pip pkg.
 #
 #   CROP / IMG SIZE = 496 (NOT 504): TerraMind is patch_size=16.
-#   504/16 = 31.5 → model build raises ("must be divisible by patch_size=16",
-#   verified locally). 496/16 = 31 (OK). Tiles are 512 px so 496 fits.
+#   504/16 = 31.5 → model build raises ("must be divisible by patch_size=16").
+#   496/16 = 31 (OK). Tiles are 512 px so 496 fits.
 apiVersion: batch/v1
 kind: Job
 metadata:
