@@ -152,9 +152,23 @@ class ClaySegmentationModel(nn.Module):
         real-vs-fake path is chosen by whether the encoder accepts a
         datacube dict (has a DynamicEmbedding-style ``patch_embedding``).
         """
+        # load_clay returns the ClayMAE wrapper; the datacube-forward
+        # Encoder is at ``.encoder``. Unwrap it (a bare Encoder is used
+        # directly). Fake test encoders expose neither and fall through to
+        # the .blocks hook path below.
+        real_enc = self.encoder
+        if not (hasattr(real_enc, "patch_embedding")
+                or hasattr(real_enc, "transformer")):
+            inner = getattr(real_enc, "encoder", None)
+            if inner is not None and (
+                hasattr(inner, "patch_embedding")
+                or hasattr(inner, "transformer")
+            ):
+                real_enc = inner
+
         # Real Clay encoder path: build the datacube dict.
-        if hasattr(self.encoder, "patch_embedding") or hasattr(
-            self.encoder, "transformer"
+        if hasattr(real_enc, "patch_embedding") or hasattr(
+            real_enc, "transformer"
         ):
             # timestamps is (B, 4) = [week, hour, lat, lon]; Clay's encoder
             # wants time=(B,2) and latlon=(B,2), concatenated internally to
@@ -169,7 +183,7 @@ class ClaySegmentationModel(nn.Module):
                 "waves": wavelengths[0] if wavelengths.dim() == 2 else wavelengths,
                 "gsd": gsd,
             }
-            out = self.encoder(datacube)
+            out = real_enc(datacube)
             tokens = out[0] if isinstance(out, (tuple, list)) else out
             return tokens
 
