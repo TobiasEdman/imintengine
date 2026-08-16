@@ -72,8 +72,7 @@ spec:
               python scripts/enrich_tiles_s1.py \
                 --data-dir /data/unified_v2_512 \
                 --workers 2 \
-                --skip-existing \
-                --limit 5
+                --skip-existing
 
           env:
             - name: PYTHONUNBUFFERED
