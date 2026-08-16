@@ -352,3 +352,62 @@ def test_load_model_reconciles_psp_pool_count(tmp_path):
     assert len(loaded.decoder.psp_modules) == n_pools
     # Clean load: no non-encoder missing / unexpected keys.
     assert "WARN state_dict mismatch" not in log, log
+
+
+def test_load_model_explicit_img_size_builds_at_that_resolution(tmp_path):
+    """An explicit runtime img_size builds the head at exactly that grid.
+
+    The pool-count SEARCH picks the *smallest* matching img_size (448 for
+    5 pools / patch 16), which fixes the pool structure but NOT the grid_size
+    used to reshape encoder tokens — so a model built at 448 would raise on
+    504-px chips ("expected N patches"). The validator therefore threads its
+    runtime --img-size into load_model. Given a pos_embed-less checkpoint
+    whose true resolution is 512 (patch16 → 32 grid → still 5 pools), passing
+    img_size=512 must build the head at 512 (not the 448 the search would
+    pick), with no pool-mismatch correction and a clean load.
+    """
+    from imint.fm.registry import MODEL_CONFIGS, build_backbone
+    from imint.fm.upernet import build_segmentation_from_spec, get_default_pool_sizes
+
+    # 512/16 = 32 grid → 5 pools (same count as 448, but a DIFFERENT grid).
+    assert len(get_default_pool_sizes(device="cpu", img_size=512, patch_size=16)) == 5
+
+    spec = MODEL_CONFIGS["prithvi_300m"]
+    enc, _ = build_backbone(
+        "prithvi_300m", num_frames=1, img_size=512, pretrained=False)
+    model = build_segmentation_from_spec(
+        spec, encoder=enc, num_classes=N_CLASSES, img_size=512,
+        decoder_channels=256, n_aux_channels=10,
+        enable_tradslag_head=True, num_tradslag=K_FRAC, device="cpu",
+    )
+    sd = {"model." + k: v for k, v in model.state_dict().items()
+          if k != "encoder.pos_embed"}
+    ckpt = {
+        "model_state_dict": sd,
+        "config": {
+            "backbone_name": "prithvi_300m",
+            "num_temporal_frames": 1,
+            "num_classes": N_CLASSES,
+            "enable_tradslag_head": True,
+            "num_tradslag": K_FRAC,
+        },
+        "epoch": 5,
+    }
+    ckpt_path = tmp_path / "prithvi512_5pool.pt"
+    torch.save(ckpt, str(ckpt_path))
+
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        loaded, epoch, miou, out_img_size = infcmp.load_model(
+            str(ckpt_path), device="cpu", backbone_name="prithvi_300m",
+            img_size=512)
+    log = buf.getvalue()
+
+    # Explicit img_size honoured: built at 512, NOT the search's 448.
+    assert out_img_size == 512
+    # No pool-count correction needed (512 already yields the 5 pools).
+    assert "PSP pool count mismatch" not in log, log
+    assert len(loaded.decoder.psp_modules) == 5
+    assert "WARN state_dict mismatch" not in log, log

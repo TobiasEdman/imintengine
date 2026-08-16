@@ -109,7 +109,7 @@ class _FakeInfcmp:
         self.run_inference = infcmp.run_inference
         self.run_fraction_inference = infcmp.run_fraction_inference
 
-    def load_model(self, ckpt_path, device, backbone_name=None):
+    def load_model(self, ckpt_path, device, backbone_name=None, img_size=None):
         return self._model, 0, 0.0, TILE
 
 

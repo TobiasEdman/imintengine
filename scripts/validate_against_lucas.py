@@ -413,8 +413,10 @@ def make_lucas_frac_predict_fn(checkpoint, device, img_size, aux_channel_names,
     collapsed proxy channels that ``make_fraction_predict_fn`` produces).
     """
     infcmp = _load_infcmp()
+    # Thread runtime img_size so clay/croma build the head at the exact
+    # resolution inference feeds (see load_model docstring / NFI validator).
     model, epoch, miou, native = infcmp.load_model(
-        checkpoint, device, backbone_name=backbone_name)
+        checkpoint, device, backbone_name=backbone_name, img_size=img_size)
     if getattr(model, "frac_head", None) is None:
         raise ValueError(
             "checkpoint has no fraction head — cannot run L2a. Drop "

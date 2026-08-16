@@ -70,7 +70,8 @@ def rgb_to_b64png(rgb: np.ndarray) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def load_model(ckpt_path: str, device, backbone_name: str | None = None):
+def load_model(ckpt_path: str, device, backbone_name: str | None = None,
+               img_size: int | None = None):
     """Load a segmentation model from checkpoint.
 
     Routes through the model registry (``imint.fm.registry.MODEL_CONFIGS``)
@@ -85,6 +86,16 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
       2. ``LEGACY_BACKBONE_ALIAS`` mapping on ``ck_cfg["backbone"]`` —
          old TrainingConfig field
       3. Default ``"prithvi_300m"`` — pre-registry runs were 300M-only
+
+    ``img_size``: optional runtime input resolution the model will actually
+    receive (e.g. the validator's ``--img-size 504``). Prithvi recovers its
+    img_size from ``pos_embed``, but the FM families that carry no pos_embed
+    AND omit ``img_size`` in their minimal config (clay/croma) otherwise
+    default to 224 — which fixes the WRONG grid_size / PSP pool count. When
+    given and self-consistent with the checkpoint's PSP pool count, this is
+    used verbatim so the head is built at the exact resolution inference
+    feeds (grid_size + expected token count match the encoder output). None →
+    the historical behaviour (pos_embed / config / pool-count reconciliation).
     """
     import torch
     from imint.fm.registry import (
@@ -172,6 +183,13 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
         n_spatial = n_tokens // max(num_frames, 1)
         grid_size = int(n_spatial ** 0.5)
         img_size = grid_size * patch_size
+    elif img_size is not None:
+        # Caller passed the runtime resolution (e.g. validator --img-size 504).
+        # For the FM families with no pos_embed, this is the authoritative
+        # img_size — it fixes grid_size / expected token count to the exact
+        # resolution inference feeds, not a config default. The pool-count
+        # reconciliation below still guards it against the checkpoint.
+        pass
     else:
         img_size = ck_cfg.get("img_size", cfg.img_size)
 

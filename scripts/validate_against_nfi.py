@@ -312,8 +312,11 @@ def make_model_predict_fn(checkpoint: str, device, img_size: int,
     infcmp = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(infcmp)
 
+    # Thread the runtime img_size so the FM families (clay/croma — no
+    # pos_embed, minimal config) build their head at the EXACT resolution
+    # inference feeds (grid_size + PSP pool count), not a 224 default.
     model, epoch, miou, model_img_size = infcmp.load_model(
-        checkpoint, device, backbone_name=backbone_name)
+        checkpoint, device, backbone_name=backbone_name, img_size=img_size)
     print(f"  [load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size}")
 
     def predict_fn(tile_path):
@@ -351,7 +354,7 @@ def make_fraction_predict_fn(
     spec.loader.exec_module(infcmp)
 
     model, epoch, miou, model_img_size = infcmp.load_model(
-        checkpoint, device, backbone_name=backbone_name)
+        checkpoint, device, backbone_name=backbone_name, img_size=img_size)
     if getattr(model, "frac_head", None) is None:
         raise ValueError(
             "checkpoint has no fraction head — retrain with "

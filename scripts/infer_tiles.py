@@ -227,8 +227,11 @@ def infer_all(
         print(f"shard {i}/{k}: {len(tiles)} tiles")
 
     print(f"[infer_tiles] checkpoint sha={sha} cache={sha_dir}")
+    # Thread runtime img_size so clay/croma (no pos_embed, minimal config)
+    # build their head at the exact resolution inference feeds — see
+    # inference_comparison.load_model docstring.
     model, epoch, miou, native = infcmp.load_model(
-        checkpoint, dev, backbone_name=backbone_name)
+        checkpoint, dev, backbone_name=backbone_name, img_size=img_size)
     family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
     print(f"  loaded epoch={epoch} ckpt_mIoU={miou} native_img={native} "
           f"family={family}")
