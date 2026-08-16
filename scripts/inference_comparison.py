@@ -18,6 +18,7 @@ import argparse
 import base64
 import io
 import json
+import re as _re
 import sys
 from pathlib import Path
 
@@ -173,6 +174,61 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
         img_size = grid_size * patch_size
     else:
         img_size = ck_cfg.get("img_size", cfg.img_size)
+
+    # PSP pool-count reconciliation — the decoder head's PSP module count is a
+    # deterministic function of `img_size`+`patch_size` via get_default_pool_
+    # sizes. The head is built from that img_size, so a wrong img_size builds
+    # the WRONG number of PSP pools, and the PSP bottleneck's in-channels
+    # (C_deep + decoder_channels × N_pools) then mismatches the checkpoint —
+    # an unrecoverable size-mismatch on load, not a droppable key.
+    #
+    # This bit the FM families that carry NO pos_embed AND no `img_size` in
+    # their minimal config (clay/croma): img_size defaulted to 224, which at
+    # patch=8 yields 5 pools, while the trainer built at img=504 → 6 pools
+    # (bottleneck 256×2560 vs the rebuilt 256×2304 — exactly one pool branch).
+    #
+    # Self-describing fix (same discipline as decoder_channels / aux_fusion /
+    # n_aux above): recover the pool COUNT from the checkpoint's
+    # `decoder.psp_modules.N.*` indices — robust and exact — then, if the
+    # provisional img_size does not reproduce that count, correct img_size to
+    # the smallest patch-multiple that DOES. Because get_default_pool_sizes
+    # returns a single tuple per (count, patch) band for the FM patch sizes,
+    # matching the count also fixes the pool GRID SIZES — which are load-
+    # bearing for inference correctness (each PSP AdaptiveAvgPool2d pools the
+    # deepest feature map to pool_size², and the learned 256→256 conv was
+    # trained on that specific grid; the conv weights are pool_size-agnostic
+    # so a wrong grid loads cleanly but feeds the conv an off-distribution
+    # input). Prithvi/Tessera are untouched: their provisional img_size (from
+    # pos_embed / a present config) already reproduces the checkpoint count,
+    # so the correction is a no-op for them.
+    from imint.fm.upernet import get_default_pool_sizes as _pool_sizes
+    _psp_idxs = set()
+    for _k in sd:
+        _m = _re.search(r"decoder\.psp_modules\.(\d+)\.", _k)
+        if _m:
+            _psp_idxs.add(int(_m.group(1)))
+    _n_pools_ckpt = (max(_psp_idxs) + 1) if _psp_idxs else 0
+    if _n_pools_ckpt:
+        _built = len(_pool_sizes(device=device, img_size=img_size,
+                                 patch_size=patch_size))
+        if _built != _n_pools_ckpt:
+            _fixed = None
+            for _cand in range(patch_size, 1024 + 1, patch_size):
+                if len(_pool_sizes(device=device, img_size=_cand,
+                                   patch_size=patch_size)) == _n_pools_ckpt:
+                    _fixed = _cand
+                    break
+            if _fixed is None:
+                raise ValueError(
+                    f"[load_model] checkpoint has {_n_pools_ckpt} PSP pools but "
+                    f"no img_size (patch={patch_size}) reproduces that count — "
+                    f"cannot rebuild the head to match the checkpoint."
+                )
+            print(f"  [load_model] PSP pool count mismatch: provisional "
+                  f"img_size={img_size} → {_built} pools, checkpoint has "
+                  f"{_n_pools_ckpt}; corrected img_size to {_fixed} "
+                  f"(pool_sizes={_pool_sizes(device=device, img_size=_fixed, patch_size=patch_size)})")
+            img_size = _fixed
 
     # build_backbone returns (encoder, spec) — use the spec we already
     # resolved so feature_indices / embed_dim / etc. are consistent.

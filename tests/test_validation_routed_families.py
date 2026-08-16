@@ -282,3 +282,73 @@ def test_load_model_infers_n_aux_from_weights_and_loads_clean(tmp_path):
     assert "WARN state_dict mismatch" not in log, log
     assert loaded.frac_head is not None  # frac head loaded
     assert epoch == 7
+
+
+def test_load_model_reconciles_psp_pool_count(tmp_path):
+    """load_model rebuilds the head with the checkpoint's PSP pool count.
+
+    Reproduces the live Clay NFI load failure: a head trained at img=504 /
+    patch=8 has 6 PSP pools (bottleneck in-ch = C_deep + 256×6 = 2560), but a
+    checkpoint carrying NEITHER pos_embed NOR an img_size in its minimal
+    config made load_model default to img=224, rebuilding a 5-pool head
+    (bottleneck 256×2304) → an unrecoverable size mismatch on load.
+
+    Prithvi stands in for the mechanism with NO external FM package: build a
+    Prithvi head at img=448 (patch=16 → fm=28 → 5 pools), STRIP pos_embed and
+    OMIT img_size from the config so load_model would otherwise default to 224
+    (patch=16 → 4 pools). The reconciliation must recover the pool count (5)
+    from the checkpoint's psp_modules indices, correct img_size to a 5-pool
+    value, and load with ZERO non-encoder missing/unexpected keys.
+    """
+    from imint.fm.registry import MODEL_CONFIGS, build_backbone
+    from imint.fm.upernet import build_segmentation_from_spec, get_default_pool_sizes
+
+    # Sanity: the trap only exists if 448 and 224 give different pool counts.
+    assert len(get_default_pool_sizes(device="cpu", img_size=448, patch_size=16)) == 5
+    assert len(get_default_pool_sizes(device="cpu", img_size=224, patch_size=16)) == 4
+
+    spec = MODEL_CONFIGS["prithvi_300m"]
+    enc, _ = build_backbone(
+        "prithvi_300m", num_frames=1, img_size=448, pretrained=False)
+    model = build_segmentation_from_spec(
+        spec, encoder=enc, num_classes=N_CLASSES, img_size=448,
+        decoder_channels=256, n_aux_channels=10,
+        enable_tradslag_head=True, num_tradslag=K_FRAC, device="cpu",
+    )
+    n_pools = len(model.decoder.psp_modules)
+    assert n_pools == 5
+
+    # Strip pos_embed (→ no grid inference) AND omit img_size from config
+    # (→ would default to 224 / 4 pools) so the reconciliation MUST fire.
+    sd = {"model." + k: v for k, v in model.state_dict().items()
+          if k != "encoder.pos_embed"}
+    ckpt = {
+        "model_state_dict": sd,
+        "config": {
+            "backbone_name": "prithvi_300m",
+            "num_temporal_frames": 1,
+            "num_classes": N_CLASSES,
+            "enable_tradslag_head": True,
+            "num_tradslag": K_FRAC,
+            # NB: no img_size, no n_aux_channels — the minimal-config trap.
+        },
+        "epoch": 3,
+    }
+    ckpt_path = tmp_path / "prithvi448_5pool.pt"
+    torch.save(ckpt, str(ckpt_path))
+
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        loaded, epoch, miou, out_img_size = infcmp.load_model(
+            str(ckpt_path), device="cpu", backbone_name="prithvi_300m")
+    log = buf.getvalue()
+
+    # The reconciliation corrected img_size to a 5-pool value (448 is the
+    # smallest patch-16 multiple that yields 5 pools).
+    assert "PSP pool count mismatch" in log, log
+    assert out_img_size == 448
+    assert len(loaded.decoder.psp_modules) == n_pools
+    # Clean load: no non-encoder missing / unexpected keys.
+    assert "WARN state_dict mismatch" not in log, log
