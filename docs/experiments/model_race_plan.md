@@ -89,10 +89,10 @@ Status as of 2026-08-13 (verified by ml-engineer smoke pass):
 |---|---|---|---|---|---|---|
 | **Prithvi-600M** | 14 | ✓ | ✓ | ✓ | **0.579** (leader) | — |
 | **Tessera** | 1 | ✓ | ✓ (baked) | ✓ | **0.589** concat / 0.588 gated | 0.507 / 0.825 |
-| **Prithvi-300M** | 16 | ✓ | ✓ (496 crop) | 🔄 **training on H100** (coarse anchor) | — | — |
-| CROMA | 8 | ✓ | ✗ glue missing | blocked | — | — |
-| Clay | 8 | ✓ | ✗ glue + no weights | blocked | — | — |
-| TerraMind | 16 | ✓ | ✗ glue missing | blocked (coarse anchor) | — | — |
+| **Prithvi-300M** | 16 | ✓ | ✓ (496 crop) | ✓ **field-validated 08-17** (coarse anchor) | **0.558** (913 plots) | 0.438 / 0.746 |
+| Clay | 8 | ✓ | ✓ (glue + weights landed) | ✓ trained (mIoU **0.319** — weak) · field-val running | pending | pending |
+| CROMA | 8 | ✓ | ✓ glue landed | awaits S1 v2 re-enrich → retrain | — | — |
+| TerraMind | 16 | ✓ | ✓ glue landed | awaits S1 v2 re-enrich → retrain | — | — |
 | ~~thor~~ | — | ✗ no model | — | dropped | — | — |
 
 **Data coverage** (7882 tiles): `spectral`/`b08`/`rededge` 7882, `tessera` 7874,
@@ -168,3 +168,17 @@ Expectation (base rate): everything so far has tied, so the likely outcome is al
 four land near the pack — but CROMA (radar) and Clay (resolution) are the only
 untested axes, so they're the best remaining shot at a real separation, and
 TerraMind/300M pay for themselves as controls regardless of where they land.
+
+## Update — 2026-08-17 (300M complete: the coarse anchor lands below the pack)
+Prithvi-300M field-validated (single-frame input fix `d958653`): **NFI 0.558 ·
+LUCAS-28 0.438 · LUCAS-frac 0.746** — consistently lowest on BOTH truths
+(pack: 0.579–0.589 / 0.477–0.507 / 0.784–0.825). The resolution axis now has
+three measured points falling monotonically with coarser patch: p1 0.589 →
+p14 0.579 → p16 0.558 — first real supporting data for C6 (equivalence-test
+caveats still apply; 496-crop → 913 plots, not the exact 944 set). Per-species
+spruce 0.457 — the shared weak axis again. Clay trained to val mIoU **0.319**
+(surprisingly weak for the resolution bet — if its field numbers confirm,
+that NUANCES C6: fine patch alone doesn't win; encoder quality gates it).
+S1 v2 season-composite re-enrichment running (~41–48 tiles/h cold-cache,
+watch rate); validation routing for clay/croma/terramind landed `4b9b785`
+(82 tests). Clay NFI+LUCAS validation launched 08-17.
