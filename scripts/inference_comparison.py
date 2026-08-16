@@ -224,6 +224,11 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
     # Stash the spec so the inference input builder can route on family
     # (tessera reads the pre-baked embedding; Prithvi reads reflectance).
     model.fm_spec = spec
+    # Stash the temporal-frame count so the inference input builder can
+    # mirror training's single-frame selection for num_temporal_frames=1
+    # checkpoints (e.g. Prithvi-300M) instead of feeding the full 4-frame
+    # stack (which 4x:es the token grid and breaks the pos_embed add).
+    model.num_frames = num_frames
 
     epoch = ck.get("epoch", "?")
     miou = ck.get("metrics", {}).get("miou", "?")
@@ -231,7 +236,7 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
 
 
 def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
-                            family="prithvi"):
+                            family="prithvi", num_frames=None):
     """Build (img5d, aux, temporal_coords, location_coords, crop meta) for a tile.
 
     Shared preprocessing for both the class-head and fraction-head inference
@@ -268,6 +273,22 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
         img5d = torch.from_numpy(emb).unsqueeze(0).to(device)  # (1, 128, H, W)
     else:
         spectral = data.get("spectral", data.get("image")).astype(np.float32)
+
+        # Single-frame checkpoints (num_temporal_frames=1, e.g. Prithvi-300M)
+        # must see the SAME one frame training selected — feeding the tile's
+        # full 4-frame stack builds a 4x token grid the model can't add its
+        # pos_embed to. Reuse the dataset's own selectors verbatim (peak-summer
+        # DOY for lulc tiles, frame 1 for crop_* tiles) so the choice is
+        # bit-identical to training rather than a re-implementation.
+        single_frame = (num_frames == 1
+                        and spectral.shape[0] // N_BANDS > 1)
+        if single_frame:
+            from imint.training.unified_dataset import UnifiedDataset
+            stem = Path(str(tile_path)).stem
+            if stem.startswith("crop_"):
+                spectral = UnifiedDataset._extract_crop_frame(data)
+            else:
+                spectral = UnifiedDataset._extract_lulc_frame(data)
 
         # Normalize: reflectance → DN → Prithvi z-score
         n_frames = spectral.shape[0] // N_BANDS
@@ -310,7 +331,12 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
             year = int(data.get("year", data.get("lpis_year", 2022)))
             tc = np.zeros((n_frames, 2), dtype=np.float32)
             tc[:, 0] = float(year)
-            tc[:len(doy), 1] = doy[:n_frames].astype(np.float32)
+            if not single_frame:
+                # Multitemporal: per-frame DOY, as trained.
+                tc[:len(doy), 1] = doy[:n_frames].astype(np.float32)
+            # Single-frame mirrors training's non-multitemporal path, which
+            # builds coords with doy=None → [[year, 0]] (unified_dataset
+            # ~L582/L834). Leaving tc[:,1]=0 here matches it exactly.
             temporal_coords = torch.from_numpy(tc).unsqueeze(0).to(device)
 
             easting = float(data.get("easting", 500_000))
@@ -342,7 +368,8 @@ def run_fraction_inference(model, tile_path: str, device, img_size: int = 224,
         raise ValueError("model has no fraction head (enable_tradslag_head=False)")
     family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
     inp = _build_inference_inputs(
-        tile_path, device, img_size, aux_channel_names, family=family)
+        tile_path, device, img_size, aux_channel_names, family=family,
+        num_frames=getattr(model, "num_frames", None))
     with torch.no_grad():
         _logits, frac_logits = model(
             inp["img5d"], aux=inp["aux"],
@@ -368,7 +395,8 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
     import torch
     family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
     inp = _build_inference_inputs(
-        tile_path, device, img_size, aux_channel_names, family=family)
+        tile_path, device, img_size, aux_channel_names, family=family,
+        num_frames=getattr(model, "num_frames", None))
     img5d = inp["img5d"]; aux = inp["aux"]
     temporal_coords = inp["temporal_coords"]; location_coords = inp["location_coords"]
     y0 = inp["y0"]; x0 = inp["x0"]; crop_sz = inp["crop_sz"]
