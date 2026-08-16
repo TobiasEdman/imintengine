@@ -145,6 +145,30 @@ _RETRY_DELAY_S = 2.0
 _product_locks: dict[str, threading.Lock] = {}
 _product_locks_guard = threading.Lock()
 
+# CDSE STAC's Cloudflare WAF rate-limits by source IP. All tile-workers in a
+# pod share one IP, so a burst of parallel searches (orbit probe + 2
+# composites × N workers) trips a 429 storm that the per-call backoff then
+# serialises into multi-minute sleeps. Serialise searches process-wide with a
+# minimum spacing so we stay under the WAF's rate rather than bouncing off it.
+# Tunable via $S1_STAC_MIN_INTERVAL_S (default 1.0s ≈ ≤1 search/s/IP).
+_STAC_MIN_INTERVAL_S = float(os.environ.get("S1_STAC_MIN_INTERVAL_S", "1.0"))
+_stac_rate_lock = threading.Lock()
+_stac_last_search_t = [0.0]  # mutable cell, guarded by _stac_rate_lock
+
+
+def _stac_rate_limit() -> None:
+    """Block until at least ``_STAC_MIN_INTERVAL_S`` has passed since the last
+    search, then stamp the clock. Process-global (all workers, one IP)."""
+    import time
+
+    if _STAC_MIN_INTERVAL_S <= 0:
+        return
+    with _stac_rate_lock:
+        wait = _STAC_MIN_INTERVAL_S - (time.monotonic() - _stac_last_search_t[0])
+        if wait > 0:
+            time.sleep(wait)
+        _stac_last_search_t[0] = time.monotonic()
+
 
 # ── Public API ───────────────────────────────────────────────────────────
 
@@ -306,6 +330,7 @@ def fetch_s1_season_composite(
     max_scenes: int = 3,
     output_db: bool = True,
     nodata_threshold: float = 0.10,
+    items: list[Any] | None = None,
 ) -> tuple[np.ndarray, list[str], str] | None:
     """Per-orbit **median** VV/VH season composite over ≤``max_scenes`` scenes.
 
@@ -331,6 +356,10 @@ def fetch_s1_season_composite(
             the SAR encoders' normalizers expect).
         nodata_threshold: Reject a scene when its VV zero fraction exceeds
             this (swath-edge / partial coverage).
+        items: Pre-fetched STAC items for this window (e.g. from
+            :func:`probe_orbit_availability`) — skips the redundant STAC
+            search, halving WAF-rate-limited search traffic. Filtered to
+            ``orbit_direction`` internally. ``None`` runs the search.
 
     Returns:
         ``(sar, contributing_dates, orbit)`` on success:
@@ -360,9 +389,10 @@ def fetch_s1_season_composite(
     # Inclusive of the end day.
     dt_to = f"{date_end}T23:59:59Z"
 
-    items = _stac_search_with_backoff(
-        None, bbox_4326, dt_from, dt_to, f"{date_start}..{date_end}",
-    )
+    if items is None:
+        items = _stac_search_with_backoff(
+            None, bbox_4326, dt_from, dt_to, f"{date_start}..{date_end}",
+        )
     if not items:
         return None
 
@@ -494,21 +524,23 @@ def _nodata_median(stack: np.ndarray) -> np.ndarray:
     return np.nan_to_num(med, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
 
-def probe_orbit_availability(
+def probe_orbits_with_items(
     west: float, south: float, east: float, north: float,
     *,
     windows: list[tuple[tuple[int, int], int]],
     crs: str = "http://www.opengis.net/def/crs/EPSG/0/3006",
-) -> str | None:
-    """Return the orbit direction with the most valid passes across windows.
+) -> tuple[str | None, dict[int, list[Any]]]:
+    """Dominant orbit across windows + the raw items per window index.
 
-    ``windows`` is a list of ``((doy_start, doy_end), year)`` — the label-year
-    growing season and (optionally) the 2016 season. The tile's dominant
-    orbit is chosen ONCE and reused for both composites so their backscatter
-    is comparable (never ASC-vs-DESC across the pair).
-
-    Returns ``"ASCENDING"`` / ``"DESCENDING"`` or ``None`` if no IW-GRDH
-    scene was found in any window.
+    Runs ONE STAC search per window and returns:
+      * the orbit direction with the most valid IW-GRDH passes across all
+        windows (chosen ONCE, reused for both composites so their
+        backscatter is comparable — never ASC-vs-DESC across the pair), or
+        ``None`` if no scene was found in any window;
+      * ``{window_index: [items]}`` so the caller can feed the already-
+        fetched items straight into :func:`fetch_s1_season_composite`
+        (``items=`` kwarg), avoiding a second search per window against the
+        WAF-rate-limited endpoint.
     """
     from rasterio.warp import transform_bounds
 
@@ -520,7 +552,8 @@ def probe_orbit_availability(
     )
 
     counts: dict[str, int] = {"ASCENDING": 0, "DESCENDING": 0}
-    for (doy_start, doy_end), year in windows:
+    items_by_window: dict[int, list[Any]] = {}
+    for wi, ((doy_start, doy_end), year) in enumerate(windows):
         date_start = doy_to_date_str(year, max(1, doy_start))
         date_end = doy_to_date_str(year, min(365, doy_end))
         items = _stac_search_with_backoff(
@@ -528,16 +561,30 @@ def probe_orbit_availability(
             f"{date_start}T00:00:00Z", f"{date_end}T23:59:59Z",
             f"{date_start}..{date_end}",
         )
-        if not items:
-            continue
+        items = list(items) if items else []
+        items_by_window[wi] = items
         for it in s1_shared.filter_iw_grdh(items, None):
             orbit = s1_shared.orbit_from_item(it)
             if orbit in counts:
                 counts[orbit] += 1
 
     if counts["ASCENDING"] == 0 and counts["DESCENDING"] == 0:
-        return None
-    return max(counts, key=counts.get)
+        return None, items_by_window
+    return max(counts, key=counts.get), items_by_window
+
+
+def probe_orbit_availability(
+    west: float, south: float, east: float, north: float,
+    *,
+    windows: list[tuple[tuple[int, int], int]],
+    crs: str = "http://www.opengis.net/def/crs/EPSG/0/3006",
+) -> str | None:
+    """Dominant orbit across ``windows`` (thin wrapper over
+    :func:`probe_orbits_with_items` that drops the per-window items)."""
+    orbit, _ = probe_orbits_with_items(
+        west, south, east, north, windows=windows, crs=crs,
+    )
+    return orbit
 
 
 def _stac_search_with_backoff(
@@ -570,6 +617,7 @@ def _stac_search_with_backoff(
     delay = base_delay_s
     for attempt in range(max_attempts):
         try:
+            _stac_rate_limit()
             client = Client.open(_STAC_ROOT)
             search = client.search(
                 collections=[_STAC_COLLECTION],

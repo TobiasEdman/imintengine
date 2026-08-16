@@ -281,6 +281,58 @@ def test_probe_orbit_none_when_empty(monkeypatch):
     assert orbit is None
 
 
+def test_probe_returns_items_per_window(monkeypatch):
+    win0 = _mk_items([("DESCENDING", _dt(2023, 6, 1))])
+    win1 = _mk_items([("DESCENDING", _dt(2016, 6, 1))])
+    calls = iter([win0, win1])
+    monkeypatch.setattr(stac, "_stac_search_with_backoff",
+                        lambda *a, **k: next(calls))
+    orbit, items_by_window = stac.probe_orbits_with_items(
+        380000, 6170000, 382560, 6172560,
+        windows=[((152, 244), 2023), ((152, 244), 2016)],
+    )
+    assert orbit == "DESCENDING"
+    assert items_by_window[0] == win0
+    assert items_by_window[1] == win1
+
+
+def test_composite_reuses_items_no_research(monkeypatch):
+    """Passing items= must NOT trigger a second STAC search."""
+    items = _mk_items([("ASCENDING", _dt(2023, 6, 1)),
+                       ("ASCENDING", _dt(2023, 6, 13))])
+    search_calls = {"n": 0}
+
+    def _fake_search(*a, **k):
+        search_calls["n"] += 1
+        return items
+
+    monkeypatch.setattr(stac, "_stac_search_with_backoff", _fake_search)
+    monkeypatch.setattr(
+        stac, "_read_calibrated_scene",
+        lambda item, *a, **k: np.full((2, 256, 256), 2.0, dtype=np.float32),
+    )
+    res = stac.fetch_s1_season_composite(
+        380000, 6170000, 382560, 6172560,
+        doy_window=(152, 244), year=2023,
+        orbit_direction="ASCENDING", size_px=256, max_scenes=3,
+        items=items,  # pre-fetched → no search
+    )
+    assert res is not None
+    assert search_calls["n"] == 0
+
+
+def test_stac_rate_limit_spaces_searches(monkeypatch):
+    import time as _time
+
+    monkeypatch.setattr(stac, "_STAC_MIN_INTERVAL_S", 0.05)
+    stac._stac_last_search_t[0] = 0.0
+    t0 = _time.monotonic()
+    stac._stac_rate_limit()
+    stac._stac_rate_limit()
+    # Second call must wait ~one interval after the first.
+    assert _time.monotonic() - t0 >= 0.05
+
+
 # ── Growing-season window resolution (enrich script) ────────────────────────
 
 def test_latitude_fallback_window_shifts_north():

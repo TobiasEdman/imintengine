@@ -62,11 +62,16 @@ spec:
               mkdir -p "$S1_CACHE_DIR"
 
               # --limit 5  ← SMOKE. Remove for the full run (after CDSE budget check).
-              # --workers 4: STAC + direct-COG window reads are lighter than the
-              # WarpedVRT-over-swath path the MPC v1 job used; 4 holds at 24 Gi.
+              # --workers 2: CDSE STAC's Cloudflare WAF rate-limits by source
+              # IP (all workers share the pod IP), so search concurrency — not
+              # CPU/mem — is the binding constraint. 2 workers + the process-
+              # global search throttle (S1_STAC_MIN_INTERVAL_S) keeps us under
+              # the WAF's rate instead of bouncing off 429s into multi-minute
+              # backoff sleeps. Downloads (2 GB COGs, cached on the PVC) are
+              # the wall-time cost, not searches.
               python scripts/enrich_tiles_s1.py \
                 --data-dir /data/unified_v2_512 \
-                --workers 4 \
+                --workers 2 \
                 --skip-existing \
                 --limit 5
 
@@ -75,6 +80,9 @@ spec:
               value: "1"
             - name: S1_CACHE_DIR
               value: "/data/s1_cache"
+            # Min seconds between STAC searches, process-global (WAF is per-IP).
+            - name: S1_STAC_MIN_INTERVAL_S
+              value: "1.5"
             # Client-credentials pair (STAC search + client-credentials token).
             - name: CDSE_CLIENT_ID
               valueFrom:

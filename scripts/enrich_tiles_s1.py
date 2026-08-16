@@ -185,7 +185,7 @@ def enrich_one_tile(
     from imint.training.tile_bbox import resolve_tile_bbox
     from imint.training.cdse_s1_stac import (
         fetch_s1_season_composite,
-        probe_orbit_availability,
+        probe_orbits_with_items,
     )
 
     name = Path(tile_path).stem
@@ -225,8 +225,10 @@ def enrich_one_tile(
     w0, s0, e0, n0 = bbox["west"], bbox["south"], bbox["east"], bbox["north"]
 
     # --- Pick ONE orbit for the tile (dominant across both windows) ---------
+    # probe_orbits_with_items runs ONE search per window and hands the items
+    # back so the composites don't re-search (halves WAF-limited traffic).
     try:
-        orbit = probe_orbit_availability(
+        orbit, items_by_window = probe_orbits_with_items(
             w0, s0, e0, n0, windows=windows,
         )
     except Exception as exc:  # noqa: BLE001 — infra vs data distinction below
@@ -244,6 +246,7 @@ def enrich_one_tile(
             orbit_direction=orbit, size_px=size_px,
             max_scenes=MAX_SCENES, output_db=OUTPUT_DB,
             nodata_threshold=NODATA_THRESHOLD,
+            items=items_by_window.get(0),
         )
     except Exception as exc:  # noqa: BLE001
         return {"name": name, "status": "failed",
@@ -265,6 +268,7 @@ def enrich_one_tile(
                 orbit_direction=orbit, size_px=size_px,
                 max_scenes=MAX_SCENES, output_db=OUTPUT_DB,
                 nodata_threshold=NODATA_THRESHOLD,
+                items=items_by_window.get(1),
             )
         except Exception as exc:  # noqa: BLE001 — 2016 gap must not fail the tile
             comp16 = None
