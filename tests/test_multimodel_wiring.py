@@ -60,19 +60,22 @@ def _write_tile(path, *, with_s1: bool, with_b01_b09: bool = True):
         data["has_b01"] = np.int32(1)
         data["has_b09"] = np.int32(1)
     if with_s1:
-        data["s1_vv_vh"] = (np.random.rand(8, H, W) * 0.2).astype(np.float32)  # T*2
+        # v2 layout: a single per-orbit season median composite (2, H, W) +
+        # the version marker. The old (T*2, H, W) ±3-day stack is retired.
+        data["s1_vv_vh"] = (np.random.rand(2, H, W) * 0.2).astype(np.float32)
+        data["s1_orbit"] = np.bytes_("DESCENDING")
         data["has_s1"] = np.int32(1)
+        data["s1_enrich_v"] = np.int32(2)
     np.savez_compressed(str(path), **data)
 
 
-def _write_tile_nan_s1(path, *, bad_frame: int):
-    """S1-complete tile whose SAR frame ``bad_frame`` is all-NaN (nodata),
-    with s1_temporal_mask marking it invalid. Mirrors real tiles where a
-    frame has no S1 scene (e.g. 43983928.npz: 75% NaN)."""
-    s1 = (np.random.rand(8, H, W) * 0.2).astype(np.float32)  # 4 frames × 2
-    s1[bad_frame * 2:(bad_frame + 1) * 2] = np.nan
-    mask = np.ones(4, dtype=np.uint8)
-    mask[bad_frame] = 0
+def _write_tile_nan_s1(path):
+    """S1-complete v2 tile whose composite carries some NaN pixels (nodata).
+
+    Mirrors real tiles where part of the composite is a genuine swath-edge
+    gap; the dataset must scrub NaN→0 so the dB normalizer never sees NaN."""
+    s1 = (np.random.rand(2, H, W) * 0.2).astype(np.float32)  # (2, H, W)
+    s1[:, : H // 2, :] = np.nan  # top half is nodata
     np.savez_compressed(
         str(path),
         spectral=(np.random.rand(24, H, W) * 0.4).astype(np.float32),
@@ -82,7 +85,8 @@ def _write_tile_nan_s1(path, *, bad_frame: int):
         doy=np.array([260, 130, 190, 220], dtype=np.float32),
         year=np.int32(2022),
         easting=np.float32(500000.0), northing=np.float32(6500000.0),
-        s1_vv_vh=s1, s1_temporal_mask=mask, has_s1=np.int32(1),
+        s1_vv_vh=s1, s1_orbit=np.bytes_("DESCENDING"),
+        has_s1=np.int32(1), s1_enrich_v=np.int32(2),
     )
 
 
@@ -275,13 +279,11 @@ class TestDatasetEmitsModelKeys:
         assert s["s2_clay"].shape == (10, H, W)
 
     def test_s1_nan_frame_scrubbed(self, tmp_path):
-        """A tile whose best-frame S1 is all-NaN must emit a finite SAR
-        tensor (nodata → 0), else the S1 dB normalizer yields a NaN loss."""
+        """A v2 composite carrying NaN nodata pixels must emit a finite SAR
+        tensor (NaN → 0), else the S1 dB normalizer yields a NaN loss."""
         d = tmp_path / "tiles"
         d.mkdir()
-        # doy best-frame for a lulc tile resolves near frame 1; make that the
-        # NaN frame so the selector must fall back to a valid one.
-        _write_tile_nan_s1(d / "tile_0000.npz", bad_frame=1)
+        _write_tile_nan_s1(d / "tile_0000.npz")
         (d / "split_train.txt").write_text("tile_0000.npz\n")
         ds = UnifiedDataset(
             lulc_dir=d, split="train", patch_size=H,

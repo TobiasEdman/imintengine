@@ -375,26 +375,41 @@ class UnifiedDataset(Dataset):
         required = set()
         for k in self.model_keys:
             required.update(self._MODEL_REQUIRED_TILE_KEYS.get(k, ()))
+        # SAR models (CROMA/TerraMind) require the v2 season composite; a v1
+        # ±3-day (T*2,H,W) stack under the same `s1_vv_vh` key is a silent
+        # trap. Gate on `s1_enrich_v==2` at index time so v1 leftovers are
+        # dropped here (logged) instead of raising mid-epoch in __getitem__.
+        needs_sar_v2 = bool(
+            {"croma_base", "terramind_v1_base"} & set(self.model_keys)
+        )
         if required:
             kept: list[dict] = []
             dropped = 0
+            dropped_v1 = 0
             for e in self._entries:
                 try:
                     with np.load(e["path"], allow_pickle=True) as z:
                         present = set(z.files)
+                        if not required.issubset(present):
+                            dropped += 1
+                            continue
+                        if needs_sar_v2 and int(z["s1_enrich_v"].item()
+                                                if "s1_enrich_v" in present
+                                                else 0) != 2:
+                            dropped_v1 += 1
+                            continue
                 except Exception:
                     dropped += 1
                     continue
-                if required.issubset(present):
-                    kept.append(e)
-                else:
-                    dropped += 1
+                kept.append(e)
             self._entries = kept
             logger.info(
                 "UnifiedDataset[%s]: model_keys=%s require tile keys %s — "
-                "kept %d tiles, dropped %d missing a required key",
+                "kept %d tiles, dropped %d missing a required key, "
+                "dropped %d with s1_enrich_v!=2 (v1 ±3-day S1 — re-run "
+                "enrich_tiles_s1.py)",
                 split, self.model_keys, sorted(required),
-                len(kept), dropped,
+                len(kept), dropped, dropped_v1,
             )
 
         if not self._entries:
@@ -1114,38 +1129,38 @@ class UnifiedDataset(Dataset):
                 b01=b01_frame, b09=b09_frame,
             ).astype(np.float32)  # (12, H, W)
 
-        # SAR (VV/VH) for CROMA joint + TerraMind S1GRD. Layout is
-        # (T*2, H, W) per scripts/enrich_tiles_s1.py — take the same frame
-        # as the optical stack so the two modalities are temporally aligned.
+        # SAR (VV/VH) for CROMA joint + TerraMind S1GRD. v2 layout is a single
+        # per-orbit growing-season median composite (2, H, W) per
+        # scripts/enrich_tiles_s1.py — a direct read, no frame selection. The
+        # old ±3-day (T*2, H, W) stack is a hard break: require s1_enrich_v==2
+        # and fail loud on any v1 leftover rather than silently feeding a
+        # mis-shaped or mis-composited stack to the SAR encoders.
         if needs_sar:
-            s1_all = data.get("s1_vv_vh", None)
-            if s1_all is None:
+            s1_ver = int(data.get("s1_enrich_v", 0))
+            if s1_ver != 2:
                 raise KeyError(
-                    "tile missing 's1_vv_vh' (run enrich_tiles_s1.py)"
+                    f"tile requires s1_enrich_v==2 season composite for "
+                    f"model_keys={sorted(set(self.model_keys) & {'croma_base', 'terramind_v1_base'})}"
+                    f" but found s1_enrich_v={s1_ver}. Re-run the S1 season "
+                    f"enrichment job (scripts/enrich_tiles_s1.py / "
+                    f"k8s/enrich-s1-season-job.yaml) over this tile."
                 )
-            s1_all = np.asarray(s1_all, dtype=np.float32)  # (T*2, H, W)
-            n_s1_frames = s1_all.shape[0] // 2
-
-            # Not every frame carries a real S1 scene: missing frames are
-            # stored as NaN/zeros (s1_temporal_mask==0). Selecting an all-NaN
-            # frame would make the S1 dB normalizer produce NaN → NaN loss
-            # (observed on tile 43983928 with 75% NaN). Prefer the optical
-            # best-frame index IF that frame is a valid S1 scene; otherwise
-            # fall back to the nearest valid S1 frame. NaN is scrubbed to 0
-            # (nodata) as a final guard.
-            s1_mask = data.get("s1_temporal_mask", None)
-            valid = None
-            if s1_mask is not None:
-                sm = np.asarray(s1_mask).ravel()[:n_s1_frames]
-                valid = np.where(sm > 0)[0]
-            preferred = idx if idx < n_s1_frames else n_s1_frames - 1
-            if valid is not None and len(valid) > 0 and preferred not in valid:
-                s1_idx = int(valid[np.argmin(np.abs(valid - preferred))])
-            else:
-                s1_idx = preferred
-            s1_frame = s1_all[s1_idx * 2:(s1_idx + 1) * 2]  # (2, H, W)
+            s1_comp = data.get("s1_vv_vh", None)
+            if s1_comp is None:
+                raise KeyError(
+                    "tile missing 's1_vv_vh' composite (run "
+                    "scripts/enrich_tiles_s1.py / k8s/enrich-s1-season-job.yaml)"
+                )
+            s1_comp = np.asarray(s1_comp, dtype=np.float32)  # (2, H, W)
+            if s1_comp.ndim != 3 or s1_comp.shape[0] != 2:
+                raise ValueError(
+                    f"s1_vv_vh must be (2, H, W) in v2, got {s1_comp.shape}. "
+                    f"Re-run the S1 season enrichment over this tile."
+                )
+            # NaN-scrub guard: a fully-nodata pixel is 0 in the composite; any
+            # residual non-finite → 0 so the dB normalizer never sees NaN.
             out["s1_vv_vh"] = np.nan_to_num(
-                s1_frame, nan=0.0, posinf=0.0, neginf=0.0,
+                s1_comp, nan=0.0, posinf=0.0, neginf=0.0,
             ).astype(np.float32)
         return out
 

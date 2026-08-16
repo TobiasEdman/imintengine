@@ -1,40 +1,61 @@
 #!/usr/bin/env python3
-"""Add Sentinel-1 SAR (VV/VH) to existing tiles.
+"""Add Sentinel-1 SAR (VV/VH) season composites to existing tiles (v2).
 
-For each tile, fetches S1 GRD scenes matching the S2 frame dates (±3 days).
-Stores as separate keys in .npz — does not modify existing spectral data.
+For each tile this builds TWO per-orbit **median season composites** and
+overwrites the old ±3-day-per-frame S1 stack:
 
-Idempotent: skips tiles with has_s1=1.
+    1. Label-year growing season  → ``s1_vv_vh``      (2, H, W)
+       — what CROMA / TerraMind consume.
+    2. 2016 season (same DOY window) → ``s1_vv_vh_2016`` (2, H, W)
+       — SAR analogue of the ``frame_2016`` clearcut change anchor; written
+       only where ``has_frame_2016 == 1``.
 
-Backends (``--s1-backend``):
-    sh    Sentinel Hub Process API via ``imint.training.cdse_s1``.
-          Bills CDSE Processing Units (10k/month free tier, 100 PU
-          minimum per S1 request — unsuitable for bulk enrichment at
-          our scale).
-    stac  CDSE STAC + direct COG + local σ⁰ calibration via
-          ``imint.training.cdse_s1_stac``. Bills OData bandwidth
-          (12 TB/month) and HTTP COG requests (50k/month). Requires
-          ``pystac-client`` + ``scipy`` + ``rasterio``. Preferred for
-          full dataset enrichment — see docs/training/s1_fetch.md.
+Rationale (docs/plans/s1_monthly_enrichment.md): land cover is stable over
+weeks, and the model glue consumes exactly ONE S1 frame. A per-orbit median
+over ≤3 same-orbit scenes across the growing season gives full coverage and
+suppresses speckle, replacing the sparse ±3-day co-dating that left
+1,871/7,882 tiles SAR-blind.
 
-Atomicity:
-    Writes go to ``<tile>.npz.tmp`` and are atomically renamed on
-    success. Killing the job mid-write leaves the original .npz
-    untouched. Stale .tmp files from prior aborted runs are deleted
-    on next pass.
+Growing-season window
+    Preferred: the tile's own persisted VPP phenology (``vpp_sosd`` /
+    ``vpp_eosd``, YYDDD-encoded) → SOSD→EOSD DOY span, offline, no CDSE call.
+    Fallback: a latitude-scaled May–Sep window (documented in
+    ``_growing_season_window``) when VPP is absent/degenerate.
 
-Keys written:
-    s1_vv_vh          (T*2, H, W) float32 — VV/VH per temporal frame
-    s1_temporal_mask  (T,) uint8 — 1=valid S1 scene found, 0=no data
-    s1_dates          (T,) object — actual S1 acquisition dates
-    has_s1            int32 — 1 if any frame has S1 data
+Orbit consistency (the correctness risk)
+    A median across mixed ASC/DESC orbits corrupts backscatter (different
+    look geometry). The tile's dominant orbit — most valid passes across
+    both windows — is chosen ONCE and used for BOTH composites.
+
+Backend
+    Only the CDSE STAC + direct-COG + local-σ⁰ path
+    (``imint.training.cdse_s1_stac``). Bills OData bandwidth (12 TB/mo) +
+    COG requests (50k/mo), NOT the shared PU pool. Requires pystac-client +
+    scipy + rasterio.
+
+Atomicity
+    Writes go to ``<tile>.npz.tmp.npz`` and are atomically renamed on
+    success (unchanged from v1). Stale .tmp files are cleaned on start.
+
+Keys written (v2)
+    s1_vv_vh        (2, H, W) float32 — label-year median composite, dB σ⁰
+    s1_vv_vh_2016   (2, H, W) float32 — 2016 median composite (if has_frame_2016)
+    s1_dates        (K,) str  — contributing scene dates, label year
+    s1_dates_2016   (K,) str  — contributing scene dates, 2016
+    s1_orbit        str        — chosen orbit ("ASCENDING"/"DESCENDING")
+    has_s1          int32      — 1 if the label-year composite was written
+    s1_enrich_v     int32      — 2 (version marker; --skip-existing keys on ==2)
+
+Re-enrichment
+    Old v1 tiles are RE-enriched: ``has_s1`` no longer short-circuits;
+    ``--skip-existing`` skips only tiles already at ``s1_enrich_v == 2``.
 
 Usage:
     python scripts/enrich_tiles_s1.py \\
         --data-dir /data/unified_v2_512 \\
-        --s1-backend stac \\
-        --workers 6 \\
-        --skip-existing
+        --workers 4 \\
+        --skip-existing \\
+        --limit 5            # smoke run over the first 5 tiles
 """
 from __future__ import annotations
 
@@ -45,58 +66,127 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# The scope of a "growing season" median composite. Both composites share the
+# tile's dominant orbit; ≤3 scenes spread across the window is the speckle
+# sweet spot (plan §Budget). dB σ⁰ is what the SAR encoders' normalizers want.
+MAX_SCENES = 3
+OUTPUT_DB = True
+NODATA_THRESHOLD = 0.10
+S1_ENRICH_VERSION = 2
 
-def _resolve_fetch_fn(backend: str):
-    """Return the ``fetch_s1_scene`` implementation for the given backend.
+# Latitude-scaled May–Sep fallback window when VPP phenology is unavailable.
+# Sweden spans ~55.3°N (Smygehuk) to ~69.1°N (Treriksröset). Green-up is later
+# and senescence earlier further north, so the window shifts + shortens with
+# latitude. DOY 121 = May 1, 273 = Sep 30 (non-leap; ±1 day is immaterial for
+# a season composite). Anchored to the southern extreme, then nudged.
+_FALLBACK_SOUTH_LAT = 55.0
+_FALLBACK_NORTH_LAT = 69.0
+_FALLBACK_START_SOUTH_DOY = 121  # May 1 in the south
+_FALLBACK_START_NORTH_DOY = 152  # Jun 1 in the far north
+_FALLBACK_END_SOUTH_DOY = 273    # Sep 30 in the south
+_FALLBACK_END_NORTH_DOY = 244    # Sep 1 in the far north
 
-    Raises ValueError for unknown names. Import errors for optional
-    extras (pystac-client, scipy) surface here rather than per tile.
+
+def _growing_season_window(data: dict) -> tuple[tuple[int, int], str]:
+    """Return the tile's ``(doy_start, doy_end)`` growing season + its source.
+
+    Preferred source is the persisted VPP phenology (``vpp_sosd``/``vpp_eosd``,
+    YYDDD-encoded HR-VPP bands) decoded to a SOSD→EOSD DOY span — fully
+    offline, no CDSE call. Falls back to a latitude-scaled May–Sep window
+    when VPP is absent or decodes to a degenerate span.
+
+    Returns ``((doy_start, doy_end), source)`` where source is ``"vpp"`` or
+    ``"latitude_fallback"``.
     """
-    if backend == "sh":
-        from imint.training.cdse_s1 import fetch_s1_scene
-        return fetch_s1_scene
-    if backend == "stac":
-        from imint.training.cdse_s1_stac import fetch_s1_scene
-        return fetch_s1_scene
-    if backend == "cascade":
-        # CDSE → MPC → AWS chain. Resilient to single-provider outages;
-        # falls through to the next backend on exception or None.
-        from imint.training.s1_fetch import fetch_s1_scene
-        return fetch_s1_scene
-    raise ValueError(
-        f"Unknown --s1-backend {backend!r}. "
-        "Valid choices: 'sh' (Sentinel Hub Process API), "
-        "'stac' (CDSE STAC + direct COG), "
-        "'cascade' (CDSE → MPC → AWS fallback chain)."
-    )
+    sosd = data.get("vpp_sosd")
+    eosd = data.get("vpp_eosd")
+    if sosd is not None and eosd is not None:
+        try:
+            from imint.training.vpp_windows import compute_growing_season_doy
+
+            gs = compute_growing_season_doy(
+                np.asarray(sosd, dtype=np.float64),
+                np.asarray(eosd, dtype=np.float64),
+            )
+            if gs is not None:
+                return gs, "vpp"
+        except Exception:
+            pass
+    return _latitude_fallback_window(data), "latitude_fallback"
+
+
+def _latitude_fallback_window(data: dict) -> tuple[int, int]:
+    """Latitude-scaled May–Sep DOY window from the tile's EPSG:3006 northing."""
+    lat = _tile_latitude(data)
+    if lat is None:
+        # No geometry to scale on — southern-Sweden default (widest window).
+        return (_FALLBACK_START_SOUTH_DOY, _FALLBACK_END_SOUTH_DOY)
+    frac = (lat - _FALLBACK_SOUTH_LAT) / (_FALLBACK_NORTH_LAT - _FALLBACK_SOUTH_LAT)
+    frac = float(np.clip(frac, 0.0, 1.0))
+    start = round(_FALLBACK_START_SOUTH_DOY
+                  + frac * (_FALLBACK_START_NORTH_DOY - _FALLBACK_START_SOUTH_DOY))
+    end = round(_FALLBACK_END_SOUTH_DOY
+                + frac * (_FALLBACK_END_NORTH_DOY - _FALLBACK_END_SOUTH_DOY))
+    return (int(start), int(end))
+
+
+def _tile_latitude(data: dict) -> float | None:
+    """Approximate tile-centre latitude (deg) from persisted EPSG:3006 geom."""
+    northing = data.get("northing")
+    easting = data.get("easting")
+    if northing is None or easting is None:
+        return None
+    try:
+        from pyproj import Transformer
+
+        tf = Transformer.from_crs("EPSG:3006", "EPSG:4326", always_xy=True)
+        _, lat = tf.transform(float(easting), float(northing))
+        return float(lat)
+    except Exception:
+        return None
+
+
+def _tile_year(data: dict) -> int | None:
+    """Label year of the tile — matches the temporal-matching data rules."""
+    for key in ("tessera_year", "lpis_year", "year"):
+        v = data.get(key)
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                continue
+    dates = data.get("dates")
+    if dates is not None:
+        for d in np.asarray(dates).ravel():
+            s = str(d)
+            if len(s) >= 4 and s[:4].isdigit():
+                return int(s[:4])
+    return None
 
 
 def enrich_one_tile(
     tile_path: str,
     *,
-    fetch_s1_scene,
     skip_existing: bool = True,
 ) -> dict:
-    """Add S1 VV/VH to one tile .npz file.
+    """Build both S1 season composites for one tile .npz (v2).
 
-    Tile geometry is derived from the on-disk raster (``spectral`` shape)
-    and either the persisted ``tile_size_px`` key or the pixel dimension
-    itself. No module-level constants — fully size-agnostic.
-
-    Writes atomically via ``<tile>.npz.tmp`` → ``os.replace(...)`` so
-    that killing the job mid-write leaves the original tile intact
-    instead of producing the BadZipFile / EOF-truncated archives we
-    saw after the previous aborted run.
+    Tile geometry + label year come from persisted keys (no module-level
+    grid constants). Writes atomically via ``<tile>.npz.tmp.npz`` →
+    ``os.replace`` so a killed job leaves the original tile intact.
     """
     from imint.training.tile_config import TileConfig
     from imint.training.tile_bbox import resolve_tile_bbox
+    from imint.training.cdse_s1_stac import (
+        fetch_s1_season_composite,
+        probe_orbit_availability,
+    )
 
     name = Path(tile_path).stem
     try:
@@ -104,149 +194,143 @@ def enrich_one_tile(
     except Exception as e:
         return {"name": name, "status": "failed", "reason": str(e)}
 
-    if skip_existing and int(data.get("has_s1", 0)) == 1:
+    if skip_existing and int(data.get("s1_enrich_v", 0)) == S1_ENRICH_VERSION:
         return {"name": name, "status": "skipped"}
 
-    dates = data.get("dates", [])
     spectral = data.get("spectral", data.get("image"))
     if spectral is None:
         return {"name": name, "status": "failed", "reason": "no_spectral"}
-
-    n_bands = 6
     h, w = spectral.shape[1], spectral.shape[2]
-    n_frames = spectral.shape[0] // n_bands
 
-    # Prefer persisted tile_size_px; fall back to raster dimension
     size_px = int(data.get("tile_size_px", h))
     tile_cfg = TileConfig(size_px=size_px)
-
     bbox = resolve_tile_bbox(name=name, tile=tile_cfg, npz_data=data)
     if bbox is None:
         return {"name": name, "status": "failed", "reason": "no_bbox"}
     tile_cfg.assert_bbox_matches(bbox)
 
-    # Fetch S1 for each frame date (±3 day window)
-    s1_frames = []
-    s1_mask = []
-    s1_dates_out = []
-    fetch_errors = 0
-    first_error: str | None = None
+    year = _tile_year(data)
+    if year is None:
+        return {"name": name, "status": "failed", "reason": "no_year"}
 
-    for fi in range(n_frames):
-        date_str = str(dates[fi])[:10] if fi < len(dates) and dates[fi] else ""
-        if not date_str or date_str == "":
-            s1_frames.append(np.zeros((2, h, w), dtype=np.float32))
-            s1_mask.append(0)
-            s1_dates_out.append("")
-            continue
+    (doy_start, doy_end), gs_source = _growing_season_window(data)
+    has_2016 = int(data.get("has_frame_2016", 0)) == 1
 
-        # Search ±3 days for S1 scene
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
-        got_scene = False
-        for offset in [0, -1, 1, -2, 2, -3, 3]:
-            try_date = (dt + timedelta(days=offset)).strftime("%Y-%m-%d")
-            try:
-                result = fetch_s1_scene(
-                    bbox["west"], bbox["south"], bbox["east"], bbox["north"],
-                    date=try_date,
-                    size_px=size_px,
-                    nodata_threshold=0.30,
-                )
-                if result is not None:
-                    sar, orbit = result
-                    # Ensure correct shape
-                    if sar.shape == (2, h, w):
-                        s1_frames.append(sar)
-                    else:
-                        # Resize if needed
-                        from scipy.ndimage import zoom
-                        zoomed = np.stack([
-                            zoom(sar[0], (h / sar.shape[1], w / sar.shape[2]), order=1),
-                            zoom(sar[1], (h / sar.shape[1], w / sar.shape[2]), order=1),
-                        ])
-                        s1_frames.append(zoomed.astype(np.float32))
-                    s1_mask.append(1)
-                    s1_dates_out.append(try_date)
-                    got_scene = True
-                    break
-            except Exception as exc:  # noqa: BLE001 — räknas + rapporteras
-                # 2026-08-03: `continue` utan bokföring dolde en
-                # ModuleNotFoundError (pystac_client saknades i podden) —
-                # varje anrop failade, alla frames nollfylldes och tilen
-                # rapporterades "ok (0/4)" i 4000/h. Skilj fetch-FEL från
-                # äkta scen-frånvaro (None) så systematiska fel syns.
-                fetch_errors += 1
-                if first_error is None:
-                    first_error = f"{type(exc).__name__}: {exc}"
-                continue
+    # Windows the orbit probe / composites cover: label year always; 2016 only
+    # where the optical clearcut anchor exists (so the SAR anchor pairs it).
+    windows = [((doy_start, doy_end), year)]
+    if has_2016:
+        windows.append(((doy_start, doy_end), 2016))
 
-        if not got_scene:
-            s1_frames.append(np.zeros((2, h, w), dtype=np.float32))
-            s1_mask.append(0)
-            s1_dates_out.append("")
+    w0, s0, e0, n0 = bbox["west"], bbox["south"], bbox["east"], bbox["north"]
 
-    if sum(s1_mask) == 0 and fetch_errors > 0:
-        # Alla frames saknas OCH minst ett anrop kraschade — det är ett
-        # miljö-/infra-fel, inte "inga scener fanns". Skriv INGENTING.
+    # --- Pick ONE orbit for the tile (dominant across both windows) ---------
+    try:
+        orbit = probe_orbit_availability(
+            w0, s0, e0, n0, windows=windows,
+        )
+    except Exception as exc:  # noqa: BLE001 — infra vs data distinction below
         return {"name": name, "status": "failed",
-                "reason": f"all_frames_missed_with_{fetch_errors}_fetch_errors "
-                          f"(first: {first_error})"}
+                "reason": f"orbit_probe_error: {type(exc).__name__}: {exc}"}
+    if orbit is None:
+        return {"name": name, "status": "failed",
+                "reason": "no_s1_scene_in_windows"}
 
-    # Stack and save
-    s1_vv_vh = np.concatenate(s1_frames, axis=0)  # (T*2, H, W)
-    s1_temporal_mask = np.array(s1_mask, dtype=np.uint8)
+    # --- Label-year composite (required) ------------------------------------
+    try:
+        primary = fetch_s1_season_composite(
+            w0, s0, e0, n0,
+            doy_window=(doy_start, doy_end), year=year,
+            orbit_direction=orbit, size_px=size_px,
+            max_scenes=MAX_SCENES, output_db=OUTPUT_DB,
+            nodata_threshold=NODATA_THRESHOLD,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"name": name, "status": "failed",
+                "reason": f"fetch_error: {type(exc).__name__}: {exc}"}
+    if primary is None:
+        return {"name": name, "status": "failed",
+                "reason": f"no_composite_{orbit}_{year}"}
 
-    data["s1_vv_vh"] = s1_vv_vh
-    data["s1_temporal_mask"] = s1_temporal_mask
-    data["s1_dates"] = np.array(s1_dates_out)
-    data["has_s1"] = np.int32(1 if sum(s1_mask) > 0 else 0)
+    sar, dates, resolved_orbit = primary
 
-    # Atomic write: compress into <tile>.npz.tmp, fsync, rename.
-    # np.savez_compressed appends ".npz" automatically unless the path
-    # already ends with ".npz", so give it a path without extension and
-    # rename the produced file.
+    # --- 2016 composite (optional; same orbit, same DOY window) -------------
+    sar_2016 = None
+    dates_2016: list[str] = []
+    if has_2016:
+        try:
+            comp16 = fetch_s1_season_composite(
+                w0, s0, e0, n0,
+                doy_window=(doy_start, doy_end), year=2016,
+                orbit_direction=orbit, size_px=size_px,
+                max_scenes=MAX_SCENES, output_db=OUTPUT_DB,
+                nodata_threshold=NODATA_THRESHOLD,
+            )
+        except Exception as exc:  # noqa: BLE001 — 2016 gap must not fail the tile
+            comp16 = None
+            print(f"    [{name}] 2016 composite error "
+                  f"({type(exc).__name__}: {exc}) — writing label-year only")
+        if comp16 is not None:
+            sar_2016, dates_2016, _ = comp16
+
+    # --- Write v2 keys; drop any v1 leftovers -------------------------------
+    for stale in ("s1_temporal_mask",):
+        data.pop(stale, None)
+
+    data["s1_vv_vh"] = sar.astype(np.float32)              # (2, H, W)
+    data["s1_dates"] = np.array(dates)
+    data["s1_orbit"] = np.bytes_(resolved_orbit)
+    data["has_s1"] = np.int32(1)
+    data["s1_enrich_v"] = np.int32(S1_ENRICH_VERSION)
+    if sar_2016 is not None:
+        data["s1_vv_vh_2016"] = sar_2016.astype(np.float32)  # (2, H, W)
+        data["s1_dates_2016"] = np.array(dates_2016)
+    else:
+        # No 2016 composite this pass — don't leave a stale one from a prior run.
+        data.pop("s1_vv_vh_2016", None)
+        data.pop("s1_dates_2016", None)
+
     tmp_path = tile_path + ".tmp.npz"
     try:
-        np.savez_compressed(tmp_path[:-4], **data)  # strips .npz, then re-adds
-        # Best-effort flush before rename. savez_compressed closes the
-        # file before returning; rename itself is atomic on POSIX.
+        np.savez_compressed(tmp_path[:-4], **data)  # strips .npz, re-adds
         os.replace(tmp_path, tile_path)
     except Exception:
-        # Never leave a half-written .tmp.npz behind to confuse the next run.
         try:
             os.unlink(tmp_path)
         except FileNotFoundError:
             pass
         raise
 
-    valid = sum(s1_mask)
-    return {"name": name, "status": "ok", "valid_frames": valid}
+    return {
+        "name": name, "status": "ok",
+        "orbit": resolved_orbit, "gs_source": gs_source,
+        "n_primary": len(dates), "n_2016": len(dates_2016),
+        "has_2016": sar_2016 is not None,
+    }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Enrich tiles with S1 SAR VV/VH")
+    parser = argparse.ArgumentParser(
+        description="Enrich tiles with S1 SAR season composites (v2)")
     parser.add_argument("--data-dir", required=True)
-    parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--skip-existing", action="store_true", default=True)
-    parser.add_argument("--no-skip-existing", dest="skip_existing", action="store_false")
+    parser.add_argument("--no-skip-existing", dest="skip_existing",
+                        action="store_false")
     parser.add_argument("--max-tiles", type=int, default=None)
     parser.add_argument(
-        "--s1-backend", choices=["sh", "stac", "cascade"], default="cascade",
-        help="S1 fetch backend. 'sh' = Sentinel Hub Process API (PU-billed, "
-             "blown the 10k/month free quota), 'stac' = CDSE STAC + direct "
-             "COG + local σ⁰ calibration (OData bandwidth quota), "
-             "'cascade' (default) = CDSE → MPC → AWS fallback chain via "
-             "imint.training.s1_fetch. See docs/training/s1_fetch.md.",
+        "--limit", type=int, default=None,
+        help="Alias for --max-tiles; caps the number of tiles processed "
+             "(use for cluster smoke runs, e.g. --limit 5).",
     )
     args = parser.parse_args()
 
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
-    if args.max_tiles:
-        tiles = tiles[:args.max_tiles]
+    cap = args.limit if args.limit is not None else args.max_tiles
+    if cap:
+        tiles = tiles[:cap]
 
-    # Clean up stale .tmp.npz files from any prior aborted run — never
-    # let half-written archives poison skip_existing or get picked up
-    # as real tiles.
+    # Clean stale .tmp.npz from prior aborted runs.
     stale = glob.glob(os.path.join(args.data_dir, "*.npz.tmp.npz"))
     stale += glob.glob(os.path.join(args.data_dir, "*.tmp.npz"))
     for s in stale:
@@ -257,12 +341,10 @@ def main():
     if stale:
         print(f"  Cleaned {len(stale)} stale .tmp.npz file(s) from prior runs")
 
-    fetch_s1_scene = _resolve_fetch_fn(args.s1_backend)
-
-    print(f"=== S1 SAR Enrichment ===")
+    print("=== S1 SAR season-composite enrichment (v2) ===")
     print(f"  Tiles:   {len(tiles)}")
     print(f"  Workers: {args.workers}")
-    print(f"  Backend: {args.s1_backend}")
+    print(f"  Backend: stac (CDSE STAC + direct COG)")
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     lock = threading.Lock()
@@ -275,36 +357,36 @@ def main():
         nonlocal completed, consecutive_fetch_error_fails
         if abort.is_set():
             return
-        r = enrich_one_tile(
-            path,
-            fetch_s1_scene=fetch_s1_scene,
-            skip_existing=args.skip_existing,
-        )
+        r = enrich_one_tile(path, skip_existing=args.skip_existing)
         with lock:
             completed += 1
-            # Systematiskt miljöfel (t.ex. saknat pystac_client 2026-08-03):
-            # 10 raka fetch-error-fails ⇒ abortera hela körningen högljutt
-            # istället för att nollfylla 7 882 tiles i 4000/h.
-            if "fetch_errors" in r.get("reason", ""):
+            reason = r.get("reason", "")
+            # Systematic infra failure (missing dep, bad creds) aborts loudly
+            # rather than marking thousands of tiles failed at 1000s/h.
+            if "_error" in reason and r.get("status") == "failed":
                 consecutive_fetch_error_fails += 1
                 if consecutive_fetch_error_fails >= 10 and not abort.is_set():
                     abort.set()
-                    print(f"\nABORT: {consecutive_fetch_error_fails} raka tiles "
-                          f"failade med fetch-errors — miljö-/infra-fel, "
-                          f"inte scen-frånvaro. Senaste: {r.get('reason')}",
+                    print(f"\nABORT: {consecutive_fetch_error_fails} consecutive "
+                          f"tiles failed with fetch/infra errors — environment "
+                          f"problem, not scene absence. Last: {reason}",
                           flush=True)
             elif r.get("status") != "skipped":
                 consecutive_fetch_error_fails = 0
-            stats[r.get("status", "failed")] = stats.get(r.get("status", "failed"), 0) + 1
+            stats[r.get("status", "failed")] = \
+                stats.get(r.get("status", "failed"), 0) + 1
             elapsed = time.time() - t0
             rate = completed / elapsed * 3600 if elapsed > 0 else 0
-            valid = r.get("valid_frames", "")
-            reason = r.get("reason", "")
-            reason_str = f" [{reason}]" if r.get("status") == "failed" and reason else ""
+            extra = ""
+            if r.get("status") == "ok":
+                extra = (f" [{r['orbit']} gs={r['gs_source']} "
+                         f"n={r['n_primary']}"
+                         + (f"+2016:{r['n_2016']}" if r["has_2016"] else "")
+                         + "]")
+            elif reason:
+                extra = f" [{reason}]"
             print(f"  [{completed}/{len(tiles)}] {r['name']}: {r['status']}"
-                  f"{f' ({valid}/4 frames)' if valid != '' else ''}"
-                  f"{reason_str}"
-                  f" | {rate:.0f}/h", flush=True)
+                  f"{extra} | {rate:.0f}/h", flush=True)
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futs = {pool.submit(_run, t): t for t in tiles}
@@ -316,11 +398,12 @@ def main():
 
     elapsed = time.time() - t0
     print(f"\n=== Done in {elapsed/60:.1f} min ===")
-    print(f"  OK={stats['ok']}  Skipped={stats['skipped']}  Failed={stats['failed']}")
+    print(f"  OK={stats['ok']}  Skipped={stats['skipped']}  "
+          f"Failed={stats['failed']}")
     if abort.is_set():
         sys.exit(2)
     if stats["failed"] > stats["ok"] + stats["skipped"]:
-        print("FAILED: fler failade än lyckade/skippade — granska innan re-run")
+        print("FAILED: more failed than ok+skipped — review before re-run")
         sys.exit(1)
 
 

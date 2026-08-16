@@ -52,6 +52,7 @@ import os
 import threading
 import urllib.error
 import urllib.request
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,61 @@ import numpy as np
 # downloads go through the authenticated zipper endpoint.
 from .cdse_vpp import _get_token
 from . import s1_shared
+
+# CDSE Keycloak token endpoint (password grant). The zipper/OData download
+# nodes reject the client_credentials service-account token with 401 (noted
+# in k8s/enrich-s1-job.yaml 2026-08-04); the resource-owner password grant
+# against the public client is the account CDSE authorises for downloads.
+_CDSE_KEYCLOAK_TOKEN_URL = (
+    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
+    "protocol/openid-connect/token"
+)
+_pw_token: str | None = None
+_pw_token_expires: float = 0.0
+_pw_token_lock = threading.Lock()
+
+
+def _get_download_token() -> str:
+    """Token for authenticated COG/OData downloads.
+
+    Prefers the resource-owner **password** grant (``CDSE_USER`` +
+    ``CDSE_PASSWORD``, or the ``user``/``password`` keys of the
+    ``cdse-credentials`` secret) — that is the account the download nodes
+    authorise. Falls back to the client-credentials token from
+    :func:`cdse_vpp._get_token` when no password is configured (older setups
+    where the service account did have download rights).
+    """
+    import json
+    import time
+    import urllib.parse
+
+    user = os.environ.get("CDSE_USER") or os.environ.get("CDSE_USERNAME")
+    password = os.environ.get("CDSE_PASSWORD")
+    if not (user and password):
+        # No password grant available → keep the historical behaviour.
+        return _get_token()
+
+    global _pw_token, _pw_token_expires
+    with _pw_token_lock:
+        if _pw_token and time.time() < _pw_token_expires - 60:
+            return _pw_token
+
+    data = urllib.parse.urlencode({
+        "grant_type": "password",
+        "client_id": "cdse-public",
+        "username": user,
+        "password": password,
+    }).encode()
+    req = urllib.request.Request(
+        _CDSE_KEYCLOAK_TOKEN_URL, data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
+        td = json.loads(resp.read())
+    with _pw_token_lock:
+        _pw_token = td["access_token"]
+        _pw_token_expires = time.time() + td.get("expires_in", 300)
+    return _pw_token
 
 # ── Module constants ─────────────────────────────────────────────────────
 
@@ -91,6 +147,25 @@ _product_locks_guard = threading.Lock()
 
 
 # ── Public API ───────────────────────────────────────────────────────────
+
+def _import_stac_client():
+    """Return the pystac-client ``Client`` class, or raise a clear ImportError.
+
+    Kept in one place so the STAC-search functions stay testable: unit tests
+    monkeypatch ``_stac_search_with_backoff`` (which is what actually touches
+    the client), and the mocked path never reaches a real search — but the
+    functions still resolve ``Client`` up front, so this must raise only when
+    pystac-client is genuinely needed and absent.
+    """
+    try:
+        from pystac_client import Client
+        return Client
+    except ImportError as e:
+        raise ImportError(
+            "cdse_s1_stac requires pystac-client. "
+            "Install with: pip install pystac-client"
+        ) from e
+
 
 def fetch_s1_scene(
     west: float,
@@ -217,8 +292,256 @@ def fetch_s1_scene(
     return sar, orbit
 
 
+def fetch_s1_season_composite(
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    *,
+    doy_window: tuple[int, int],
+    year: int,
+    orbit_direction: str,
+    crs: str = "http://www.opengis.net/def/crs/EPSG/0/3006",
+    size_px: int | tuple[int, int] = 256,
+    max_scenes: int = 3,
+    output_db: bool = True,
+    nodata_threshold: float = 0.10,
+) -> tuple[np.ndarray, list[str], str] | None:
+    """Per-orbit **median** VV/VH season composite over ≤``max_scenes`` scenes.
+
+    Searches CDSE STAC for every IW-GRDH Sentinel-1 scene inside the
+    ``doy_window`` of ``year``, keeps only ``orbit_direction`` (never mixes
+    ASC/DESC — their look geometry differs and a mixed median corrupts σ⁰),
+    σ⁰-calibrates each surviving scene (reusing the existing ``s1_shared``
+    calibration + product cache), rejects scenes with >``nodata_threshold``
+    zero fraction, and returns the **per-pixel median** VV/VH over up to
+    ``max_scenes`` scenes spread across the window (not clustered).
+
+    Args:
+        west, south, east, north: Tile bbox in ``crs``.
+        doy_window: ``(doy_start, doy_end)`` growing-season window (inclusive).
+        year: Calendar year the window belongs to (label year, or 2016).
+        orbit_direction: ``"ASCENDING"`` / ``"DESCENDING"`` — the tile's
+            dominant orbit; used for BOTH composites so they stay comparable.
+        crs: OGC CRS URI for the bbox. Default EPSG:3006.
+        size_px: Output H×W.
+        max_scenes: Cap on scenes contributing to the median (speckle sweet
+            spot ≈ 3; the plan's CDSE budget assumes ≤3).
+        output_db: Return ``10·log10(σ⁰)`` per band (default True — dB is what
+            the SAR encoders' normalizers expect).
+        nodata_threshold: Reject a scene when its VV zero fraction exceeds
+            this (swath-edge / partial coverage).
+
+    Returns:
+        ``(sar, contributing_dates, orbit)`` on success:
+
+            * ``sar``: ``(2, H, W)`` float32 median composite, [VV, VH].
+            * ``contributing_dates``: ISO ``YYYY-MM-DD`` of each scene used.
+            * ``orbit``: the resolved orbit direction (== ``orbit_direction``).
+
+        ``None`` when no same-orbit scene survived the window + nodata gate.
+    """
+    from rasterio.warp import transform_bounds
+
+    from .vpp_windows import doy_to_date_str
+
+    h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
+    s1_shared.assert_bbox_size_match(west, south, east, north, h_px, w_px)
+    epsg = s1_shared.crs_uri_to_epsg(crs)
+
+    bbox_4326 = transform_bounds(
+        f"EPSG:{epsg}", "EPSG:4326", west, south, east, north, densify_pts=21,
+    )
+
+    doy_start, doy_end = doy_window
+    date_start = doy_to_date_str(year, max(1, doy_start))
+    date_end = doy_to_date_str(year, min(365, doy_end))
+    dt_from = f"{date_start}T00:00:00Z"
+    # Inclusive of the end day.
+    dt_to = f"{date_end}T23:59:59Z"
+
+    items = _stac_search_with_backoff(
+        None, bbox_4326, dt_from, dt_to, f"{date_start}..{date_end}",
+    )
+    if not items:
+        return None
+
+    # ONE orbit direction only — this is the correctness risk (mixed-orbit
+    # median corrupts backscatter geometry). filter_iw_grdh already drops the
+    # other orbit; assert it below when reading.
+    items = s1_shared.filter_iw_grdh(items, orbit_direction)
+    if not items:
+        return None
+
+    ordered = _select_spread_scenes(items, bbox_4326, max_scenes)
+
+    vv_stack: list[np.ndarray] = []
+    vh_stack: list[np.ndarray] = []
+    used_dates: list[str] = []
+    for item in ordered:
+        obs_orbit = s1_shared.orbit_from_item(item)
+        if obs_orbit and obs_orbit.upper() != orbit_direction.upper():
+            # Defensive: filter_iw_grdh should have removed these already.
+            continue
+        sar = _read_calibrated_scene(item, west, south, east, north, epsg,
+                                     h_px, w_px, output_db=output_db)
+        if sar is None:
+            continue
+        # nodata gate on the raw (pre-dB) zero mask: compute_sigma0 preserves
+        # DN==0 as 0.0, and dB maps 0 → 0.0 too, so a zero VV pixel is nodata
+        # in both spaces.
+        if float((sar[0] == 0).mean()) > nodata_threshold:
+            continue
+        vv_stack.append(sar[0])
+        vh_stack.append(sar[1])
+        dt = s1_shared.item_datetime(item)
+        used_dates.append(dt.strftime("%Y-%m-%d") if dt else "")
+        if len(vv_stack) >= max_scenes:
+            break
+
+    if not vv_stack:
+        return None
+
+    # Per-pixel median, ignoring nodata (0) so a swath-edge pixel present in
+    # only some scenes is not dragged toward 0. A pixel that is nodata in
+    # EVERY contributing scene stays 0 (genuine gap).
+    vv = _nodata_median(np.stack(vv_stack, axis=0))
+    vh = _nodata_median(np.stack(vh_stack, axis=0))
+    composite = np.stack([vv, vh], axis=0).astype(np.float32)
+    return composite, used_dates, orbit_direction.upper()
+
+
+def _select_spread_scenes(
+    items: list[Any],
+    bbox_4326: tuple[float, float, float, float],
+    max_scenes: int,
+) -> list[Any]:
+    """Order candidate scenes so a ≤``max_scenes`` prefix is spread in time.
+
+    Scenes are sorted by acquisition date; then a subset of size
+    ``2*max_scenes`` (to leave slack for nodata rejections) is picked at
+    evenly-spaced temporal positions across the window — median of scenes
+    spread across the season suppresses speckle better than a temporal
+    cluster. Items with the same date are ordered by bbox overlap so the
+    best-covering scene is tried first.
+    """
+    dated = [(s1_shared.item_datetime(it), it) for it in items]
+    dated.sort(
+        key=lambda t: (
+            t[0].timestamp() if t[0] is not None else 0.0,
+            -s1_shared.item_overlap_area(t[1], bbox_4326),
+        )
+    )
+    ordered = [it for _, it in dated]
+    n = len(ordered)
+    take = min(n, max(max_scenes * 2, max_scenes))
+    if n <= take:
+        return ordered
+    # Evenly-spaced indices across the sorted-by-date list.
+    idxs = np.linspace(0, n - 1, take).round().astype(int)
+    seen: set[int] = set()
+    spread = []
+    for i in idxs:
+        if i not in seen:
+            seen.add(int(i))
+            spread.append(ordered[int(i)])
+    return spread
+
+
+def _read_calibrated_scene(
+    item: Any,
+    west: float, south: float, east: float, north: float,
+    epsg: int, h_px: int, w_px: int,
+    *,
+    output_db: bool,
+) -> np.ndarray | None:
+    """Download (cache), window-read, and σ⁰-calibrate one scene → (2,H,W).
+
+    Returns ``None`` on any download / read / calibration failure so the
+    composite loop can skip a bad scene without aborting the whole tile.
+    """
+    product_id = item.id
+    try:
+        vv_path, vh_path, vv_cal_path, vh_cal_path = _ensure_product_cached(item)
+    except Exception as e:
+        print(f"    [STAC S1] {product_id}: download failed: {e}")
+        return None
+    try:
+        vv_dn, vv_win = s1_shared.read_window(
+            vv_path, west, south, east, north, epsg, h_px, w_px)
+        vh_dn, vh_win = s1_shared.read_window(
+            vh_path, west, south, east, north, epsg, h_px, w_px)
+        vv_lut = s1_shared.interp_lut(vv_cal_path, vv_win, product_id, "vv", h_px, w_px)
+        vh_lut = s1_shared.interp_lut(vh_cal_path, vh_win, product_id, "vh", h_px, w_px)
+    except Exception as e:
+        print(f"    [STAC S1] {product_id}: read/calibration failed: {e}")
+        return None
+    return s1_shared.compute_sigma0(vv_dn, vh_dn, vv_lut, vh_lut, output_db=output_db)
+
+
+def _nodata_median(stack: np.ndarray) -> np.ndarray:
+    """Per-pixel median over a ``(N, H, W)`` stack, treating 0 as nodata.
+
+    A pixel present (nonzero) in ≥1 scene → median of its nonzero values.
+    A pixel that is 0 in every scene → 0 (genuine nodata, preserved).
+    """
+    masked = np.where(stack == 0, np.nan, stack)
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        # An all-nodata pixel yields an "All-NaN slice" warning; that pixel is
+        # scrubbed to 0 below (genuine gap), so the warning is expected noise.
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        med = np.nanmedian(masked, axis=0)
+    return np.nan_to_num(med, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+
+
+def probe_orbit_availability(
+    west: float, south: float, east: float, north: float,
+    *,
+    windows: list[tuple[tuple[int, int], int]],
+    crs: str = "http://www.opengis.net/def/crs/EPSG/0/3006",
+) -> str | None:
+    """Return the orbit direction with the most valid passes across windows.
+
+    ``windows`` is a list of ``((doy_start, doy_end), year)`` — the label-year
+    growing season and (optionally) the 2016 season. The tile's dominant
+    orbit is chosen ONCE and reused for both composites so their backscatter
+    is comparable (never ASC-vs-DESC across the pair).
+
+    Returns ``"ASCENDING"`` / ``"DESCENDING"`` or ``None`` if no IW-GRDH
+    scene was found in any window.
+    """
+    from rasterio.warp import transform_bounds
+
+    from .vpp_windows import doy_to_date_str
+
+    epsg = s1_shared.crs_uri_to_epsg(crs)
+    bbox_4326 = transform_bounds(
+        f"EPSG:{epsg}", "EPSG:4326", west, south, east, north, densify_pts=21,
+    )
+
+    counts: dict[str, int] = {"ASCENDING": 0, "DESCENDING": 0}
+    for (doy_start, doy_end), year in windows:
+        date_start = doy_to_date_str(year, max(1, doy_start))
+        date_end = doy_to_date_str(year, min(365, doy_end))
+        items = _stac_search_with_backoff(
+            None, bbox_4326,
+            f"{date_start}T00:00:00Z", f"{date_end}T23:59:59Z",
+            f"{date_start}..{date_end}",
+        )
+        if not items:
+            continue
+        for it in s1_shared.filter_iw_grdh(items, None):
+            orbit = s1_shared.orbit_from_item(it)
+            if orbit in counts:
+                counts[orbit] += 1
+
+    if counts["ASCENDING"] == 0 and counts["DESCENDING"] == 0:
+        return None
+    return max(counts, key=counts.get)
+
+
 def _stac_search_with_backoff(
-    Client: Any,
+    Client: Any | None,
     bbox_4326: tuple[float, float, float, float],
     dt_from: str,
     dt_to: str,
@@ -242,6 +565,8 @@ def _stac_search_with_backoff(
         the next backend).
     """
     import time
+    if Client is None:
+        Client = _import_stac_client()
     delay = base_delay_s
     for attempt in range(max_attempts):
         try:
@@ -332,7 +657,7 @@ def _ensure_product_cached(item: Any) -> tuple[Path, Path, Path, Path]:
         vv_cog_url, vh_cog_url = s1_shared.pick_measurement_urls(item)
         vv_cal_url, vh_cal_url = s1_shared.pick_calibration_urls(item)
 
-        token = _get_token()
+        token = _get_download_token()
 
         if not vv_cog.exists() or vv_cog.stat().st_size == 0:
             _download(vv_cog_url, vv_cog, token)
@@ -369,7 +694,7 @@ def _download(url: str, dest: Path, token: str) -> None:
             last_err = e
             if isinstance(e, urllib.error.HTTPError) and e.code == 401:
                 # Token expired mid-download — refresh once.
-                token = _get_token()
+                token = _get_download_token()
                 req = urllib.request.Request(
                     url,
                     headers={"Authorization": f"Bearer {token}"},
