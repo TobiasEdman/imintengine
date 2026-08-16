@@ -97,7 +97,6 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
 
     ck_cfg = ck.get("config", {})
     num_frames = ck_cfg.get("num_temporal_frames", cfg.num_temporal_frames)
-    n_aux = ck_cfg.get("n_aux_channels", 11)
     # num_classes from the checkpoint (23 for v8b, 28 for the NMD2023 finetune),
     # so the head is built to match the saved weights rather than the default.
     n_classes = ck_cfg.get("num_classes", cfg.num_classes)
@@ -106,6 +105,26 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
     sd = {k.replace("model.", "", 1): v for k, v in
           ck.get("model_state_dict", ck.get("state_dict", {})).items()}
     pos_embed = sd.get("encoder.pos_embed")
+
+    # n_aux_channels: infer from the aux branch's first conv rather than
+    # trusting ck_cfg. The trainer's minimal best_model.pt config omits
+    # n_aux_channels entirely (the clay/croma/terramind runs, and any run
+    # that logged only enable_*_channel flags), so the config default of 11
+    # builds an 11-channel LiDARBranch that CANNOT load a 10-aux checkpoint
+    # (silent gated_fusions / lidar_branch drop under strict=False, which the
+    # mismatch warning below would then flag). The aux branch's first conv is
+    # Conv2d(n_aux, 32, 3): its in-channel dim IS n_aux_channels. Search both
+    # the Prithvi wrapper key (`aux_branch.*` / `lidar_branch.net.0.conv`) and
+    # the ViTUPerNetHead key (`decoder_head.lidar_branch.net.0.conv`).
+    _naux = None
+    for _k in sd:
+        if _k.endswith("lidar_branch.net.0.conv.weight") and sd[_k].dim() == 4:
+            _naux = sd[_k].shape[1]; break
+    n_aux = _naux if _naux is not None else ck_cfg.get("n_aux_channels", 11)
+    if _naux is not None and _naux != ck_cfg.get("n_aux_channels", 11):
+        print(f"  [load_model] n_aux_channels inferred from checkpoint: "
+              f"{_naux} (config default was "
+              f"{ck_cfg.get('n_aux_channels', 11)})")
 
     # Resolve backbone_name. Fallback chain:
     #  (1) ck_cfg["backbone_name"] — set by trainer since registry refactor
@@ -235,6 +254,82 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None):
     return model, epoch, miou, img_size
 
 
+# Families whose forward is routed through imint.fm.forward_router.family_forward
+# (multi-modal / dict / dynamic-embedding signatures that the direct
+# model(img5d, aux=, temporal_coords=, location_coords=) call cannot express).
+# Prithvi/Tessera keep the direct call — byte-unchanged.
+_ROUTED_FAMILIES = ("clay", "croma", "terramind")
+
+# Registry name each routed family emits its per-model tensors under. Mirrors
+# scripts/train_unified.py: model_keys = (registry_name,) when the active
+# backbone is one of the multi-modal members. Used so validation builds the
+# SAME dataset stacks (s2_clay / s2_croma / s2_terramind / s1_vv_vh) the
+# trainer fed, via the SAME UnifiedDataset._build_model_specific_tensors.
+_FAMILY_MODEL_KEY = {
+    "clay": "clay_v1_5",
+    "croma": "croma_base",
+    "terramind": "terramind_v1_base",
+}
+
+
+def _tile_source(tile_path) -> str:
+    """LULC vs crop source string for the dataset's best-frame selector.
+
+    Mirrors the single-frame path's ``stem.startswith("crop_")`` convention:
+    crop_* tiles → "crop" (frame-1 / seasons_valid selection), everything
+    else → "lulc" (peak-summer DOY selection). The routed families read a
+    single best frame, so the source string must match training's choice.
+    """
+    return "crop" if Path(str(tile_path)).stem.startswith("crop_") else "lulc"
+
+
+def _build_routed_batch(data, tile_path, device, img_size, family):
+    """Build the family's model_keys tensors + centre-crop them to img_size.
+
+    Reuses ``UnifiedDataset._build_model_specific_tensors`` (the exact builder
+    the trainer uses) so the emitted stacks — s2_clay / s2_croma /
+    s2_terramind / s1_vv_vh — are bit-identical to training. Then applies the
+    SAME centre-crop the Prithvi/Tessera paths use, so the routed families see
+    inputs cropped identically to the hard-head validation.
+
+    Returns ``(batch, y0, x0, crop_sz)`` where ``batch`` carries (1, C, cs, cs)
+    tensors keyed as ``family_forward`` expects.
+
+    Fail-loud contract (mirrors unified_dataset): CROMA/TerraMind require the
+    v2 season-composite S1 (``s1_enrich_v==2``); a v1 leftover raises inside
+    ``_build_model_specific_tensors`` rather than silently feeding a
+    mis-composited SAR stack. Clay is optical-only and needs no S1.
+    """
+    import torch
+    from imint.training.unified_dataset import UnifiedDataset
+
+    # Bare instance carrying only the state _build_model_specific_tensors
+    # reads: model_keys (+ the lazily-created _band_miss_logged cache). Avoids
+    # UnifiedDataset.__init__'s tile-directory discovery / I/O — we already
+    # hold the loaded npz.
+    builder = object.__new__(UnifiedDataset)
+    builder.model_keys = (_FAMILY_MODEL_KEY[family],)
+    source = _tile_source(tile_path)
+
+    stacks = builder._build_model_specific_tensors(data, source)  # {key: (C,H,W)}
+
+    # Centre-crop every stack to img_size with the SAME offset math the
+    # reflectance path uses (crop_sz = min(img_size, H, W); TL-centred).
+    first = next(iter(stacks.values()))
+    _, h, w = first.shape
+    crop_sz = min(img_size, h, w)
+    y0 = (h - crop_sz) // 2
+    x0 = (w - crop_sz) // 2
+
+    batch = {}
+    for key, arr in stacks.items():
+        cropped = arr[:, y0:y0 + crop_sz, x0:x0 + crop_sz]
+        batch[key] = torch.from_numpy(
+            np.ascontiguousarray(cropped)
+        ).unsqueeze(0).to(device)
+    return batch, y0, x0, crop_sz
+
+
 def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
                             family="prithvi", num_frames=None):
     """Build (img5d, aux, temporal_coords, location_coords, crop meta) for a tile.
@@ -245,12 +340,23 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
     hard head was validated on. Returns a dict of the built tensors plus the
     crop offsets ``(y0, x0, crop_sz)`` and the raw ``data`` handle.
 
-    ``family`` routes the image tensor: ``"tessera"`` reads the pre-baked
-    ``tessera`` embedding (128, H, W) with NO Prithvi normalization (it ships
-    normalized) and NO temporal/location coords (annual, single-frame); any
-    other family reads Sentinel-2 reflectance and z-scores it. The ``img5d``
-    key holds a 5D tensor for Prithvi and the 4D (1, 128, H, W) embedding for
-    tessera — the model's forward consumes each family's native rank.
+    ``family`` routes the image tensor:
+
+      * ``"tessera"`` reads the pre-baked ``tessera`` embedding (128, H, W)
+        with NO Prithvi normalization (it ships normalized) and NO
+        temporal/location coords (annual, single-frame).
+      * ``"clay"`` / ``"croma"`` / ``"terramind"`` build the per-model stacks
+        (s2_clay / s2_croma / s2_terramind / s1_vv_vh) via the dataset's own
+        ``_build_model_specific_tensors`` — the SAME builder the trainer used —
+        and return them under the ``batch`` key for ``family_forward`` routing.
+        These families still receive location coords (Clay uses them; the
+        others ignore them). No ``img5d`` is built for them.
+      * any other family (``"prithvi"``) reads Sentinel-2 reflectance and
+        z-scores it into the 5D Conv3d layout.
+
+    The ``img5d`` key holds a 5D tensor for Prithvi and the 4D (1, 128, H, W)
+    embedding for tessera — the model's forward consumes each family's native
+    rank. Routed families carry ``img5d=None`` and a populated ``batch``.
     """
     import torch
     from imint.training.unified_dataset import (
@@ -261,7 +367,19 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
 
     data = np.load(tile_path, allow_pickle=True)
 
-    if family == "tessera":
+    routed = family in _ROUTED_FAMILIES
+    img5d = None
+    batch = None
+
+    if routed:
+        # Multi-modal / dynamic-embedding families: build the dataset's
+        # per-model stacks and crop them; forward runs via family_forward.
+        batch, y0, x0, crop_sz = _build_routed_batch(
+            data, tile_path, device, img_size, family)
+        spectral = None
+        single_frame = False
+        n_frames = 1
+    elif family == "tessera":
         # Pre-baked (128, H, W) embedding — already normalized on the TESSERA
         # cluster; skip the reflectance z-score entirely.
         emb = np.asarray(data["tessera"], dtype=np.float32)
@@ -318,7 +436,20 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
 
     temporal_coords = None
     location_coords = None
-    if family != "tessera":
+
+    if routed:
+        # Routed families carry no temporal_coords (single-date / annual).
+        # Location coords ARE built — Clay's dynamic embedding uses them
+        # (CROMA/TerraMind ignore them in family_forward). Same SWEREF→WGS84
+        # transform as the Prithvi path so lat/lon are identical.
+        from imint.training.sampler import _sweref99_to_wgs84
+        easting = float(data.get("easting", 500_000))
+        northing = float(data.get("northing", 6_500_000))
+        lat, lon = _sweref99_to_wgs84(easting, northing)
+        location_coords = torch.from_numpy(
+            np.array([[lat, lon]], dtype=np.float32)
+        ).to(device)
+    elif family != "tessera":
         # Prithvi image tensor + TL coords. Tessera already built img5d above
         # and has no per-frame/location coords (annual embedding).
         img = torch.from_numpy(spectral).unsqueeze(0).to(device)
@@ -347,11 +478,42 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
             ).to(device)
 
     return {
-        "img5d": img5d, "aux": aux,
+        "img5d": img5d, "aux": aux, "batch": batch, "family": family,
         "temporal_coords": temporal_coords, "location_coords": location_coords,
         "y0": y0, "x0": x0, "crop_sz": crop_sz, "data": data,
         "aux_names": aux_names,
     }
+
+
+def _forward_from_inputs(model, inp, device, *, return_fractions=False):
+    """Run the model on a built ``_build_inference_inputs`` dict.
+
+    Routes on family: prithvi/tessera call the model directly with the
+    (img5d, aux, temporal_coords, location_coords) signature they were
+    validated on — byte-unchanged. clay/croma/terramind route through
+    ``imint.fm.forward_router.family_forward`` (the SAME router the trainer
+    and evaluate loop use), building the batch dict the router expects from
+    the pre-cropped per-model stacks.
+
+    Returns the model's raw return: ``logits`` or ``(logits, frac_logits)``
+    when ``return_fractions`` is True.
+    """
+    family = inp["family"]
+    if family in _ROUTED_FAMILIES:
+        from imint.fm.forward_router import family_forward
+        return family_forward(
+            model, family, inp["batch"], device,
+            aux=inp["aux"],
+            temporal_coords=inp["temporal_coords"],
+            location_coords=inp["location_coords"],
+            return_fractions=return_fractions,
+        )
+    return model(
+        inp["img5d"], aux=inp["aux"],
+        temporal_coords=inp["temporal_coords"],
+        location_coords=inp["location_coords"],
+        return_fractions=return_fractions,
+    )
 
 
 def run_fraction_inference(model, tile_path: str, device, img_size: int = 224,
@@ -371,12 +533,8 @@ def run_fraction_inference(model, tile_path: str, device, img_size: int = 224,
         tile_path, device, img_size, aux_channel_names, family=family,
         num_frames=getattr(model, "num_frames", None))
     with torch.no_grad():
-        _logits, frac_logits = model(
-            inp["img5d"], aux=inp["aux"],
-            temporal_coords=inp["temporal_coords"],
-            location_coords=inp["location_coords"],
-            return_fractions=True,
-        )
+        _logits, frac_logits = _forward_from_inputs(
+            model, inp, device, return_fractions=True)
         fracs = torch.sigmoid(frac_logits).squeeze(0).cpu().numpy()  # (4, cs, cs)
     return fracs
 
@@ -397,17 +555,11 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
     inp = _build_inference_inputs(
         tile_path, device, img_size, aux_channel_names, family=family,
         num_frames=getattr(model, "num_frames", None))
-    img5d = inp["img5d"]; aux = inp["aux"]
-    temporal_coords = inp["temporal_coords"]; location_coords = inp["location_coords"]
     y0 = inp["y0"]; x0 = inp["x0"]; crop_sz = inp["crop_sz"]
     data = inp["data"]; aux_names = inp["aux_names"]
 
     with torch.no_grad():
-        logits = model(
-            img5d, aux=aux,
-            temporal_coords=temporal_coords,
-            location_coords=location_coords,
-        )
+        logits = _forward_from_inputs(model, inp, device)
         if return_probs:
             import torch.nn.functional as F
             probs = F.softmax(logits, dim=1).squeeze(0).cpu().numpy()  # (C, H, W)
