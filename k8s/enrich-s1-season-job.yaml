@@ -82,6 +82,11 @@ spec:
             # Min seconds between STAC searches, process-global (WAF is per-IP).
             - name: S1_STAC_MIN_INTERVAL_S
               value: "1.5"
+            # LRU cache cap — uncapped the product cache hit 317 GB and
+            # filled the 1.6T PVC mid-run (2026-08-17). ~150 GB keeps strong
+            # scene-sharing while leaving the volume >150 GB of headroom.
+            - name: S1_CACHE_MAX_GB
+              value: "150"
             # Client-credentials pair (STAC search + client-credentials token).
             - name: CDSE_CLIENT_ID
               valueFrom:

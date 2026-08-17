@@ -682,6 +682,48 @@ def _product_lock(product_id: str) -> threading.Lock:
         return lock
 
 
+def _prune_cache_to_cap() -> None:
+    """Evict oldest product dirs until the cache fits ``S1_CACHE_MAX_GB``.
+
+    The cache shares the training PVC: uncapped it grew to 317 GB and filled
+    the 1.6 T volume mid-run (2026-08-17), failing every download with
+    ENOSPC. LRU by directory mtime — cache HITS refresh mtime in
+    ``_ensure_product_cached``, so recently used products survive. Dirs
+    younger than 30 min are never evicted (may be mid-download / in use by a
+    concurrent worker). Prunes to 90 % of cap to avoid thrashing.
+    """
+    import shutil
+    import time
+
+    cap_gb = float(os.environ.get("S1_CACHE_MAX_GB", "150"))
+    cap = cap_gb * 1024**3
+    root = _PRODUCT_CACHE_DIR
+    if not root.is_dir():
+        return
+    dirs = []
+    total = 0
+    now = time.time()
+    for d in root.iterdir():
+        if not d.is_dir():
+            continue
+        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+        dirs.append((d.stat().st_mtime, size, d))
+        total += size
+    if total <= cap:
+        return
+    dirs.sort()  # oldest mtime first
+    target = cap * 0.9
+    for mtime, size, d in dirs:
+        if total <= target:
+            break
+        if now - mtime < 1800:  # in-use safety window
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        total -= size
+        print(f"  [S1 cache] evicted {d.name} ({size / 1024**3:.1f} GB) "
+              f"— cache {total / 1024**3:.0f}/{cap_gb:.0f} GB")
+
+
 def _ensure_product_cached(item: Any) -> tuple[Path, Path, Path, Path]:
     """Download VV/VH COGs + calibration XMLs if missing. Return their paths.
 
@@ -700,7 +742,10 @@ def _ensure_product_cached(item: Any) -> tuple[Path, Path, Path, Path]:
         vh_cal = prod_dir / "calibration_vh.xml"
 
         if all(p.exists() and p.stat().st_size > 0 for p in (vv_cog, vh_cog, vv_cal, vh_cal)):
+            os.utime(prod_dir)  # refresh LRU recency on cache hit
             return vv_cog, vh_cog, vv_cal, vh_cal
+
+        _prune_cache_to_cap()  # make room BEFORE adding a new product
 
         vv_cog_url, vh_cog_url = s1_shared.pick_measurement_urls(item)
         vv_cal_url, vh_cal_url = s1_shared.pick_calibration_urls(item)
