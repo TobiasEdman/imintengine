@@ -621,7 +621,7 @@ def run_fraction_inference(model, tile_path: str, device, img_size: int = 224,
     head (build it with ``enable_tradslag_head=True``).
     """
     import torch
-    if getattr(model, "frac_head", None) is None:
+    if not model_has_frac_head(model):
         raise ValueError("model has no fraction head (enable_tradslag_head=False)")
     family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
     inp = _build_inference_inputs(
