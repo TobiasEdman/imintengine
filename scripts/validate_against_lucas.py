@@ -417,7 +417,7 @@ def make_lucas_frac_predict_fn(checkpoint, device, img_size, aux_channel_names,
     # resolution inference feeds (see load_model docstring / NFI validator).
     model, epoch, miou, native = infcmp.load_model(
         checkpoint, device, backbone_name=backbone_name, img_size=img_size)
-    if getattr(model, "frac_head", None) is None:
+    if not infcmp.model_has_frac_head(model):
         raise ValueError(
             "checkpoint has no fraction head — cannot run L2a. Drop "
             "--fraction (score L2b only) or use a --enable-tradslag-head member."

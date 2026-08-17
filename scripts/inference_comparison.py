@@ -70,6 +70,21 @@ def rgb_to_b64png(rgb: np.ndarray) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
+def model_has_frac_head(model) -> bool:
+    """True if the model carries a Trädslag fraction head, wherever it lives.
+
+    Prithvi/Tessera attach ``frac_head`` on the top-level module; the routed
+    families (clay/croma) nest it inside the ViTUPerNetHead as
+    ``decoder_head.frac_head``. A top-level-only getattr misses the nested one
+    and falsely reports "checkpoint has no fraction head" for a checkpoint
+    that demonstrably carries frac weights.
+    """
+    if getattr(model, "frac_head", None) is not None:
+        return True
+    return getattr(getattr(model, "decoder_head", None),
+                   "frac_head", None) is not None
+
+
 def load_model(ckpt_path: str, device, backbone_name: str | None = None,
                img_size: int | None = None):
     """Load a segmentation model from checkpoint.

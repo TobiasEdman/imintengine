@@ -355,7 +355,7 @@ def make_fraction_predict_fn(
 
     model, epoch, miou, model_img_size = infcmp.load_model(
         checkpoint, device, backbone_name=backbone_name, img_size=img_size)
-    if getattr(model, "frac_head", None) is None:
+    if not infcmp.model_has_frac_head(model):
         raise ValueError(
             "checkpoint has no fraction head — retrain with "
             "--enable-tradslag-head or drop --use-fraction-head"
