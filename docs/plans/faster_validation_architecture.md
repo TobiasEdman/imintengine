@@ -1,6 +1,21 @@
 # Plan — faster, reusable validation/inference architecture
 
-**Status:** IMPLEMENTED 2026-08-13 (bit-parity gate pending) · **Created:** 2026-08-13
+**Status:** ✅ PROVEN — bit-parity gate PASSED 2026-08-17 · **Created:** 2026-08-13
+
+## Gate result (2026-08-17) — exact parity on all three targets
+Cached path vs fused validators, tessera_gated checkpoint, identical inputs:
+NFI forest-type (fraction collapse) **0.5882** = fused 0.588 · LUCAS L2b
+**0.5068** = fused · LUCAS L2a **0.8254** = fused (per-species
+0.8952/0.5061/0.9537 identical to 4 decimals). Float16 frac storage caused
+zero observable deviation. Wall-time: full NFI+LUCAS validation ≈ **35 min**
+(NFI infer 2.5 min + LUCAS infer 26 min + CPU scores ~2 min each) vs ~4 h
+fused; RE-scores cost ~2 min with no GPU. Two gaps found+fixed en route:
+`--allow-missing` for stale truth-index tiles (`1da0f0d`) and the NFI
+fraction-collapse mode in the cached scorer, implemented by EXTRACTING the
+fused collapse into a shared `fracs_to_class_and_probs()` — parity by
+construction (`d35c995`). **The cached path is now the standard validation
+route** (CROMA/TerraMind post-retrain included); the fused `*-validate-*`
+GPU jobs are retired for routine use (kept for spot-audits).
 
 ## Implementation status (2026-08-13)
 - **Shipped:** `scripts/infer_tiles.py` (Stage A), `scripts/score_against_truth.py`
