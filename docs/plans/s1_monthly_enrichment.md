@@ -1,6 +1,20 @@
 # Plan — season-composite S1 (SAR) enrichment, incl. the 2016 clearcut anchor
 
-**Status:** plan · **Created:** 2026-08-14
+**Status:** IMPLEMENTED v3 (PC-RTC) 2026-08-17 · **Created:** 2026-08-14
+
+## PIVOT — 2026-08-17: source switched to Planetary Computer sentinel-1-rtc
+The CDSE-GRD implementation below (v2) is superseded. User decision: since S1
+is being introduced to the models fresh, adopt the better product now —
+**PC `sentinel-1-rtc` (γ⁰, terrain-corrected)** with **windowed COG reads**
+(no product downloads). Same composite semantics (season + 2016 anchor,
+single orbit, median ≤3 scenes), keys now `s1_enrich_v=3`,
+`s1_source="pc-rtc-gamma0"`, **linear γ⁰** stored (fixes a latent CDSE-v2
+double-log: dB was stored AND log10'd again by the model normalizers).
+Measured: ~567 tiles/h (12× CDSE), georegistration verified against NMD
+water labels, 2016 coverage confirmed (collection starts 2014-10).
+Implementation: `imint/training/pc_s1_rtc.py`, `--s1-backend pc-rtc`
+(default); CDSE path kept as fallback. Full run launched 2026-08-17.
+
 **Motivation (user, 2026-08-14):** the current ±3-day S1↔S2 co-dating is the
 wrong constraint for slow-changing land cover. It matches an S1 GRD scene to
 **each S2 frame date within ±3 days**, so only **6,011/7,882** tiles get any
