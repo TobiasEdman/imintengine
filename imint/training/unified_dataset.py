@@ -375,17 +375,18 @@ class UnifiedDataset(Dataset):
         required = set()
         for k in self.model_keys:
             required.update(self._MODEL_REQUIRED_TILE_KEYS.get(k, ()))
-        # SAR models (CROMA/TerraMind) require the v2 season composite; a v1
-        # ±3-day (T*2,H,W) stack under the same `s1_vv_vh` key is a silent
-        # trap. Gate on `s1_enrich_v==2` at index time so v1 leftovers are
+        # SAR models (CROMA/TerraMind) require the v3 RTC γ⁰ season composite;
+        # an older v1 ±3-day (T*2,H,W) stack or a v2 CDSE-dB composite under
+        # the same `s1_vv_vh` key is a silent trap (wrong shape / wrong units).
+        # Gate on `s1_enrich_v==3` at index time so pre-v3 leftovers are
         # dropped here (logged) instead of raising mid-epoch in __getitem__.
-        needs_sar_v2 = bool(
+        needs_sar_v3 = bool(
             {"croma_base", "terramind_v1_base"} & set(self.model_keys)
         )
         if required:
             kept: list[dict] = []
             dropped = 0
-            dropped_v1 = 0
+            dropped_old_s1 = 0
             for e in self._entries:
                 try:
                     with np.load(e["path"], allow_pickle=True) as z:
@@ -393,10 +394,10 @@ class UnifiedDataset(Dataset):
                         if not required.issubset(present):
                             dropped += 1
                             continue
-                        if needs_sar_v2 and int(z["s1_enrich_v"].item()
+                        if needs_sar_v3 and int(z["s1_enrich_v"].item()
                                                 if "s1_enrich_v" in present
-                                                else 0) != 2:
-                            dropped_v1 += 1
+                                                else 0) != 3:
+                            dropped_old_s1 += 1
                             continue
                 except Exception:
                     dropped += 1
@@ -406,10 +407,10 @@ class UnifiedDataset(Dataset):
             logger.info(
                 "UnifiedDataset[%s]: model_keys=%s require tile keys %s — "
                 "kept %d tiles, dropped %d missing a required key, "
-                "dropped %d with s1_enrich_v!=2 (v1 ±3-day S1 — re-run "
-                "enrich_tiles_s1.py)",
+                "dropped %d with s1_enrich_v!=3 (pre-v3 S1 — re-run "
+                "enrich_tiles_s1.py --s1-backend pc-rtc)",
                 split, self.model_keys, sorted(required),
-                len(kept), dropped, dropped_v1,
+                len(kept), dropped, dropped_old_s1,
             )
 
         if not self._entries:
@@ -1129,21 +1130,24 @@ class UnifiedDataset(Dataset):
                 b01=b01_frame, b09=b09_frame,
             ).astype(np.float32)  # (12, H, W)
 
-        # SAR (VV/VH) for CROMA joint + TerraMind S1GRD. v2 layout is a single
-        # per-orbit growing-season median composite (2, H, W) per
-        # scripts/enrich_tiles_s1.py — a direct read, no frame selection. The
-        # old ±3-day (T*2, H, W) stack is a hard break: require s1_enrich_v==2
-        # and fail loud on any v1 leftover rather than silently feeding a
-        # mis-shaped or mis-composited stack to the SAR encoders.
+        # SAR (VV/VH) for CROMA joint + TerraMind S1GRD. v3 layout is a single
+        # per-orbit growing-season median composite (2, H, W) in **linear** γ⁰
+        # (RTC, PC) per scripts/enrich_tiles_s1.py — a direct read, no frame
+        # selection. The normalizer log-transforms internally, so the stored
+        # composite must be linear. Older v1 (±3-day (T*2,H,W)) and v2
+        # (CDSE-dB) layouts are a hard break: require s1_enrich_v==3 and fail
+        # loud rather than feed a mis-shaped or double-logged stack to the
+        # SAR encoders.
         if needs_sar:
             s1_ver = int(data.get("s1_enrich_v", 0))
-            if s1_ver != 2:
+            if s1_ver != 3:
                 raise KeyError(
-                    f"tile requires s1_enrich_v==2 season composite for "
+                    f"tile requires s1_enrich_v==3 RTC γ⁰ season composite for "
                     f"model_keys={sorted(set(self.model_keys) & {'croma_base', 'terramind_v1_base'})}"
                     f" but found s1_enrich_v={s1_ver}. Re-run the S1 season "
-                    f"enrichment job (scripts/enrich_tiles_s1.py / "
-                    f"k8s/enrich-s1-season-job.yaml) over this tile."
+                    f"enrichment job (scripts/enrich_tiles_s1.py "
+                    f"--s1-backend pc-rtc / k8s/enrich-s1-season-job.yaml) "
+                    f"over this tile."
                 )
             s1_comp = data.get("s1_vv_vh", None)
             if s1_comp is None:
@@ -1154,7 +1158,7 @@ class UnifiedDataset(Dataset):
             s1_comp = np.asarray(s1_comp, dtype=np.float32)  # (2, H, W)
             if s1_comp.ndim != 3 or s1_comp.shape[0] != 2:
                 raise ValueError(
-                    f"s1_vv_vh must be (2, H, W) in v2, got {s1_comp.shape}. "
+                    f"s1_vv_vh must be (2, H, W) in v3, got {s1_comp.shape}. "
                     f"Re-run the S1 season enrichment over this tile."
                 )
             # NaN-scrub guard: a fully-nodata pixel is 0 in the composite; any

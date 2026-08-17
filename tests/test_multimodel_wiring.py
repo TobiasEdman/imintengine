@@ -60,17 +60,19 @@ def _write_tile(path, *, with_s1: bool, with_b01_b09: bool = True):
         data["has_b01"] = np.int32(1)
         data["has_b09"] = np.int32(1)
     if with_s1:
-        # v2 layout: a single per-orbit season median composite (2, H, W) +
-        # the version marker. The old (T*2, H, W) ±3-day stack is retired.
+        # v3 layout: a single per-orbit season median composite (2, H, W) in
+        # LINEAR γ⁰ (RTC) + the version marker. Older per-frame / CDSE-dB
+        # stacks are retired.
         data["s1_vv_vh"] = (np.random.rand(2, H, W) * 0.2).astype(np.float32)
         data["s1_orbit"] = np.bytes_("DESCENDING")
+        data["s1_source"] = np.bytes_("pc-rtc-gamma0")
         data["has_s1"] = np.int32(1)
-        data["s1_enrich_v"] = np.int32(2)
+        data["s1_enrich_v"] = np.int32(3)
     np.savez_compressed(str(path), **data)
 
 
 def _write_tile_nan_s1(path):
-    """S1-complete v2 tile whose composite carries some NaN pixels (nodata).
+    """S1-complete v3 tile whose composite carries some NaN pixels (nodata).
 
     Mirrors real tiles where part of the composite is a genuine swath-edge
     gap; the dataset must scrub NaN→0 so the dB normalizer never sees NaN."""
@@ -86,7 +88,8 @@ def _write_tile_nan_s1(path):
         year=np.int32(2022),
         easting=np.float32(500000.0), northing=np.float32(6500000.0),
         s1_vv_vh=s1, s1_orbit=np.bytes_("DESCENDING"),
-        has_s1=np.int32(1), s1_enrich_v=np.int32(2),
+        s1_source=np.bytes_("pc-rtc-gamma0"),
+        has_s1=np.int32(1), s1_enrich_v=np.int32(3),
     )
 
 
@@ -279,7 +282,7 @@ class TestDatasetEmitsModelKeys:
         assert s["s2_clay"].shape == (10, H, W)
 
     def test_s1_nan_frame_scrubbed(self, tmp_path):
-        """A v2 composite carrying NaN nodata pixels must emit a finite SAR
+        """A v3 composite carrying NaN nodata pixels must emit a finite SAR
         tensor (NaN → 0), else the S1 dB normalizer yields a NaN loss."""
         d = tmp_path / "tiles"
         d.mkdir()

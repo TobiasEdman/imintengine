@@ -9,7 +9,7 @@ Covers the pure logic that does NOT need a live CDSE STAC connection:
       and the composite loop refuses a mixed-orbit scene
     * ≤max_scenes cap on the number of contributing scenes
     * v2 key layout written by the composite (shape/dtype/orbit contract)
-    * dataset fail-loud on a v1 tile fed to a SAR model
+    * dataset fail-loud on a pre-v3 tile fed to a SAR model
 
 The download + calibration path is mocked (`_read_calibrated_scene`) so the
 tests run offline; the σ⁰ math itself is exercised by s1_shared and the
@@ -401,19 +401,20 @@ def test_dataset_faildloud_on_v1_sar_read():
         ds._build_model_specific_tensors(data, source="lulc")
 
 
-def test_dataset_reads_v2_composite():
-    """A v2 tile (s1_enrich_v==2, (2,H,W) composite) reads directly."""
+def test_dataset_reads_v3_composite():
+    """A v3 tile (s1_enrich_v==3, (2,H,W) linear-γ⁰ composite) reads directly."""
     from imint.training.unified_dataset import UnifiedDataset
 
     data = {
         "spectral": np.ones((24, 32, 32), dtype=np.float32),
         "temporal_mask": np.ones(4, dtype=np.uint8),
         "doy": np.array([150, 180, 210, 240], dtype=np.int32),
-        "s1_vv_vh": np.full((2, 32, 32), -11.0, dtype=np.float32),
-        "s1_enrich_v": np.int32(2),
+        # Linear γ⁰ (RTC) — the normalizer log-transforms this internally.
+        "s1_vv_vh": np.full((2, 32, 32), 0.05, dtype=np.float32),
+        "s1_enrich_v": np.int32(3),
     }
     ds = UnifiedDataset.__new__(UnifiedDataset)
     ds.model_keys = ("terramind_v1_base",)
     out = ds._build_model_specific_tensors(data, source="lulc")
     assert out["s1_vv_vh"].shape == (2, 32, 32)
-    assert np.allclose(out["s1_vv_vh"], -11.0)
+    assert np.allclose(out["s1_vv_vh"], 0.05)

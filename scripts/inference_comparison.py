@@ -391,9 +391,9 @@ def _build_routed_batch(data, tile_path, device, img_size, family):
     tensors keyed as ``family_forward`` expects.
 
     Fail-loud contract (mirrors unified_dataset): CROMA/TerraMind require the
-    v2 season-composite S1 (``s1_enrich_v==2``); a v1 leftover raises inside
-    ``_build_model_specific_tensors`` rather than silently feeding a
-    mis-composited SAR stack. Clay is optical-only and needs no S1.
+    v3 RTC-γ⁰ season-composite S1 (``s1_enrich_v==3``); a pre-v3 leftover
+    raises inside ``_build_model_specific_tensors`` rather than silently
+    feeding a mis-composited SAR stack. Clay is optical-only and needs no S1.
     """
     import torch
     from imint.training.unified_dataset import UnifiedDataset

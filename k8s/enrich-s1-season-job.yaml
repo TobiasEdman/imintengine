@@ -1,23 +1,27 @@
-# S1 SAR season-composite enrichment (v2) over /data/unified_v2_512.
+# S1 SAR RTC γ⁰ season-composite enrichment (v3) over /data/unified_v2_512.
 #
-# Replaces the ±3-day-per-frame S1 stack with TWO per-orbit median season
-# composites per tile (label-year growing season + 2016 clearcut anchor).
-# See docs/plans/s1_monthly_enrichment.md.
+# Builds TWO per-orbit median season composites per tile (label-year growing
+# season + 2016 clearcut anchor) from Microsoft Planetary Computer's
+# `sentinel-1-rtc` collection. See docs/plans/s1_monthly_enrichment.md.
 #
-# Backend: CDSE STAC + direct-COG + local σ⁰ calibration
-# (imint.training.cdse_s1_stac). Bills OData bandwidth (12 TB/mo) + COG
-# requests (50k/mo) — NOT the shared PU pool. Product COGs are cached on the
-# PVC ($S1_CACHE_DIR) so adjacent tiles reuse scenes (real request count far
-# below the naive 2×tiles×3 estimate).
+# Backend: Planetary Computer STAC + RTC γ⁰ + WINDOWED /vsicurl/ reads
+# (imint.training.pc_s1_rtc). RTC is Radiometrically Terrain Corrected
+# gamma-naught — analysis-ready float32 COGs, no calibration, no product
+# download. Each tile reads ONLY its own window (~MB) instead of the ~2 GB
+# per-product the CDSE-GRD path pulled, so:
+#   * no PVC product cache ($S1_CACHE_* removed — the CDSE path's guard stays
+#     in cdse_s1_stac.py untouched, but nothing here uses it),
+#   * the ~45 tiles/h + PVC-fill failure mode is gone.
+# Stored units: LINEAR γ⁰ (the CROMA/TerraMind normalizers apply 10*log10
+# internally — see pc_s1_rtc.py module docstring).
 #
-# Downloads use the CDSE resource-owner PASSWORD grant (CDSE_USER +
-# CDSE_PASSWORD from the cdse-credentials secret) — the client_credentials
-# service account 401s on the OData download nodes (noted 2026-08-04 in
-# enrich-s1-job.yaml). STAC search stays anonymous.
+# Auth: PC anonymous works (verified 2026-08-17). No CDSE creds needed. If a
+# `pc-subscription` secret with key `PC_SDK_SUBSCRIPTION_KEY` is later added,
+# uncomment the env block below to lift rate limits; the SDK auto-detects it.
 #
-# Smoke: set the command's `--limit 5` to process 5 real tiles as the
-# go/no-go evidence. Remove --limit for the full 7,882-tile run (launched
-# only after a CDSE budget check — do NOT auto-launch full).
+# Smoke: the commented `--limit 5` line runs 5 real tiles as go/no-go
+# evidence. The ACTIVE command below has NO --limit — it is the full run and
+# must only be launched deliberately (do NOT auto-launch).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -47,10 +51,12 @@ spec:
             - |
               set -e
               export PYTHONUNBUFFERED=1
-              echo "=== S1 SAR season-composite enrichment (v2) ==="
+              echo "=== S1 SAR RTC γ⁰ season-composite enrichment (v3) ==="
 
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
-              pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx pystac-client
+              pip install --quiet --no-cache-dir \
+                numpy rasterio requests pyproj pyyaml Pillow httpx \
+                pystac-client planetary-computer
 
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 --branch agent/te/opus/nfi-nmd2023-benchmark \
@@ -59,63 +65,53 @@ spec:
               echo "HEAD: $(git rev-parse HEAD)"
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
 
-              mkdir -p "$S1_CACHE_DIR"
+              # SMOKE (go/no-go): 5 real tiles. Uncomment to smoke, then
+              # re-run without --limit for the full pass.
+              # python scripts/enrich_tiles_s1.py \
+              #   --data-dir /data/unified_v2_512 \
+              #   --s1-backend pc-rtc \
+              #   --workers 8 \
+              #   --skip-existing \
+              #   --limit 5
 
-              # --limit 5  ← SMOKE. Remove for the full run (after CDSE budget check).
-              # --workers 2: CDSE STAC's Cloudflare WAF rate-limits by source
-              # IP (all workers share the pod IP), so search concurrency — not
-              # CPU/mem — is the binding constraint. 2 workers + the process-
-              # global search throttle (S1_STAC_MIN_INTERVAL_S) keeps us under
-              # the WAF's rate instead of bouncing off 429s into multi-minute
-              # backoff sleeps. Downloads (2 GB COGs, cached on the PVC) are
-              # the wall-time cost, not searches.
+              # FULL RUN — no --limit. Windowed reads are network-bound, not
+              # WAF-throttled (PC does not rate-limit like CDSE), so more
+              # workers help; 8 saturates the ~MB/tile streaming without a
+              # product cache to thrash. --skip-existing keys on s1_enrich_v==3.
               python scripts/enrich_tiles_s1.py \
                 --data-dir /data/unified_v2_512 \
-                --workers 2 \
+                --s1-backend pc-rtc \
+                --workers 8 \
                 --skip-existing
 
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
-            - name: S1_CACHE_DIR
-              value: "/data/s1_cache"
-            # Min seconds between STAC searches, process-global (WAF is per-IP).
-            - name: S1_STAC_MIN_INTERVAL_S
-              value: "1.5"
-            # LRU cache cap — uncapped the product cache hit 317 GB and
-            # filled the 1.6T PVC mid-run (2026-08-17). ~150 GB keeps strong
-            # scene-sharing while leaving the volume >150 GB of headroom.
-            - name: S1_CACHE_MAX_GB
-              value: "150"
-            # Client-credentials pair (STAC search + client-credentials token).
-            - name: CDSE_CLIENT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: cdse-credentials
-                  key: client_id
-            - name: CDSE_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: cdse-credentials
-                  key: client_secret
-            # Password grant for the download nodes (see header).
-            - name: CDSE_USER
-              valueFrom:
-                secretKeyRef:
-                  name: cdse-credentials
-                  key: user
-            - name: CDSE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: cdse-credentials
-                  key: password
+            # GDAL /vsicurl tuning for windowed COG reads: merge nearby ranges,
+            # cache the COG header so repeated tiles over the same scene reuse
+            # the block index instead of re-reading it.
+            - name: GDAL_HTTP_MULTIRANGE
+              value: "YES"
+            - name: GDAL_HTTP_MERGE_CONSECUTIVE_RANGES
+              value: "YES"
+            - name: GDAL_DISABLE_READDIR_ON_OPEN
+              value: "EMPTY_DIR"
+            - name: CPL_VSIL_CURL_ALLOWED_EXTENSIONS
+              value: ".tiff,.tif"
+            # PC anonymous access works. If a subscription secret is added
+            # later, uncomment to lift rate limits (SDK auto-detects the env):
+            # - name: PC_SDK_SUBSCRIPTION_KEY
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: pc-subscription
+            #       key: subscription_key
           resources:
             requests:
-              cpu: "4"
-              memory: "24Gi"
+              cpu: "8"
+              memory: "16Gi"
             limits:
-              cpu: "4"
-              memory: "24Gi"
+              cpu: "8"
+              memory: "16Gi"
           volumeMounts:
             - name: training-data
               mountPath: /data

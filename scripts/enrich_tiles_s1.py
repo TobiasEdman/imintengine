@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Add Sentinel-1 SAR (VV/VH) season composites to existing tiles (v2).
+"""Add Sentinel-1 SAR (VV/VH) season composites to existing tiles (v3).
 
 For each tile this builds TWO per-orbit **median season composites** and
-overwrites the old ±3-day-per-frame S1 stack:
+overwrites any older per-frame / v2 S1 stack:
 
     1. Label-year growing season  → ``s1_vv_vh``      (2, H, W)
        — what CROMA / TerraMind consume.
@@ -27,32 +27,45 @@ Orbit consistency (the correctness risk)
     look geometry). The tile's dominant orbit — most valid passes across
     both windows — is chosen ONCE and used for BOTH composites.
 
-Backend
-    Only the CDSE STAC + direct-COG + local-σ⁰ path
-    (``imint.training.cdse_s1_stac``). Bills OData bandwidth (12 TB/mo) +
-    COG requests (50k/mo), NOT the shared PU pool. Requires pystac-client +
-    scipy + rasterio.
+Backends (``--s1-backend``)
+    ``pc-rtc`` (default) — Planetary Computer ``sentinel-1-rtc``: RTC γ⁰,
+        terrain-corrected, analysis-ready COGs, **windowed** ``/vsicurl/``
+        reads (no product download → ~MB/tile, no PVC cache). Stores
+        **linear** γ⁰ (the SAR normalizers log-transform internally). Free,
+        anonymous. ``imint.training.pc_s1_rtc``.
+    ``cdse-stac`` — the legacy CDSE STAC + full-GRD-download + local-σ⁰ path
+        (``imint.training.cdse_s1_stac``), kept as a fallback. σ⁰ on the
+        ellipsoid (no terrain correction), ~2 GB/product cached on the PVC,
+        stores dB. Bills OData bandwidth + COG requests, NOT the PU pool.
+
+Both need pystac-client + rasterio; pc-rtc also needs planetary-computer;
+cdse-stac also needs scipy (calibration LUT) + CDSE creds.
 
 Atomicity
     Writes go to ``<tile>.npz.tmp.npz`` and are atomically renamed on
-    success (unchanged from v1). Stale .tmp files are cleaned on start.
+    success (unchanged). Stale .tmp files are cleaned on start.
 
-Keys written (v2)
-    s1_vv_vh        (2, H, W) float32 — label-year median composite, dB σ⁰
+Keys written (v3)
+    s1_vv_vh        (2, H, W) float32 — label-year median composite
+                      (pc-rtc: LINEAR γ⁰; cdse-stac: dB σ⁰)
     s1_vv_vh_2016   (2, H, W) float32 — 2016 median composite (if has_frame_2016)
     s1_dates        (K,) str  — contributing scene dates, label year
     s1_dates_2016   (K,) str  — contributing scene dates, 2016
     s1_orbit        str        — chosen orbit ("ASCENDING"/"DESCENDING")
+    s1_source       str        — "pc-rtc-gamma0" or "cdse-grd-sigma0"
     has_s1          int32      — 1 if the label-year composite was written
-    s1_enrich_v     int32      — 2 (version marker; --skip-existing keys on ==2)
+    s1_enrich_v     int32      — 3 (version marker; --skip-existing keys on ==3)
 
 Re-enrichment
-    Old v1 tiles are RE-enriched: ``has_s1`` no longer short-circuits;
-    ``--skip-existing`` skips only tiles already at ``s1_enrich_v == 2``.
+    Older tiles (v1 ±3-day, v2 CDSE-dB) are RE-enriched: ``has_s1`` no longer
+    short-circuits; ``--skip-existing`` skips only tiles already at
+    ``s1_enrich_v == 3``. The 5 CDSE-v2 tiles are re-enriched to v3 so the
+    whole set is linear-γ⁰ / RTC-consistent.
 
 Usage:
     python scripts/enrich_tiles_s1.py \\
         --data-dir /data/unified_v2_512 \\
+        --s1-backend pc-rtc \\
         --workers 4 \\
         --skip-existing \\
         --limit 5            # smoke run over the first 5 tiles
@@ -74,11 +87,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # The scope of a "growing season" median composite. Both composites share the
 # tile's dominant orbit; ≤3 scenes spread across the window is the speckle
-# sweet spot (plan §Budget). dB σ⁰ is what the SAR encoders' normalizers want.
+# sweet spot (plan §Budget).
 MAX_SCENES = 3
-OUTPUT_DB = True
 NODATA_THRESHOLD = 0.10
-S1_ENRICH_VERSION = 2
+S1_ENRICH_VERSION = 3
+
+# Per-backend module + stored-units + provenance. pc-rtc stores LINEAR γ⁰
+# (the CROMA/TerraMind normalizers apply 10*log10 internally — storing dB
+# would double-log); cdse-stac keeps its historical dB σ⁰ output. Default is
+# pc-rtc: RTC gamma0, windowed, no product download.
+_BACKENDS = {
+    "pc-rtc": {
+        "module": "imint.training.pc_s1_rtc",
+        "output_db": False,
+        "source": "pc-rtc-gamma0",
+    },
+    "cdse-stac": {
+        "module": "imint.training.cdse_s1_stac",
+        "output_db": True,
+        "source": "cdse-grd-sigma0",
+    },
+}
+_DEFAULT_BACKEND = "pc-rtc"
 
 # Latitude-scaled May–Sep fallback window when VPP phenology is unavailable.
 # Sweden spans ~55.3°N (Smygehuk) to ~69.1°N (Treriksröset). Green-up is later
@@ -174,19 +204,29 @@ def enrich_one_tile(
     tile_path: str,
     *,
     skip_existing: bool = True,
+    backend: str = _DEFAULT_BACKEND,
 ) -> dict:
-    """Build both S1 season composites for one tile .npz (v2).
+    """Build both S1 season composites for one tile .npz (v3).
 
     Tile geometry + label year come from persisted keys (no module-level
     grid constants). Writes atomically via ``<tile>.npz.tmp.npz`` →
     ``os.replace`` so a killed job leaves the original tile intact.
+
+    ``backend`` selects the source module (``pc-rtc`` default → RTC γ⁰
+    windowed reads; ``cdse-stac`` → legacy full-GRD σ⁰). Both expose the same
+    ``probe_orbits_with_items`` / ``fetch_s1_season_composite`` contract.
     """
+    import importlib
+
     from imint.training.tile_config import TileConfig
     from imint.training.tile_bbox import resolve_tile_bbox
-    from imint.training.cdse_s1_stac import (
-        fetch_s1_season_composite,
-        probe_orbits_with_items,
-    )
+
+    cfg = _BACKENDS[backend]
+    mod = importlib.import_module(cfg["module"])
+    fetch_s1_season_composite = mod.fetch_s1_season_composite
+    probe_orbits_with_items = mod.probe_orbits_with_items
+    output_db = cfg["output_db"]
+    s1_source = cfg["source"]
 
     name = Path(tile_path).stem
     try:
@@ -224,12 +264,23 @@ def enrich_one_tile(
 
     w0, s0, e0, n0 = bbox["west"], bbox["south"], bbox["east"], bbox["north"]
 
+    # pc-rtc reuses ONE signed STAC client across the probe + both composites
+    # (connection reuse + consistent SAS signing). cdse-stac takes no client
+    # kwarg, so pass it only when the backend exposes an _open_client.
+    client_kw: dict = {}
+    if hasattr(mod, "_open_client"):
+        try:
+            client_kw["client"] = mod._open_client()
+        except Exception as exc:  # noqa: BLE001
+            return {"name": name, "status": "failed",
+                    "reason": f"client_open_error: {type(exc).__name__}: {exc}"}
+
     # --- Pick ONE orbit for the tile (dominant across both windows) ---------
     # probe_orbits_with_items runs ONE search per window and hands the items
-    # back so the composites don't re-search (halves WAF-limited traffic).
+    # back so the composites don't re-search.
     try:
         orbit, items_by_window = probe_orbits_with_items(
-            w0, s0, e0, n0, windows=windows,
+            w0, s0, e0, n0, windows=windows, **client_kw,
         )
     except Exception as exc:  # noqa: BLE001 — infra vs data distinction below
         return {"name": name, "status": "failed",
@@ -244,9 +295,9 @@ def enrich_one_tile(
             w0, s0, e0, n0,
             doy_window=(doy_start, doy_end), year=year,
             orbit_direction=orbit, size_px=size_px,
-            max_scenes=MAX_SCENES, output_db=OUTPUT_DB,
+            max_scenes=MAX_SCENES, output_db=output_db,
             nodata_threshold=NODATA_THRESHOLD,
-            items=items_by_window.get(0),
+            items=items_by_window.get(0), **client_kw,
         )
     except Exception as exc:  # noqa: BLE001
         return {"name": name, "status": "failed",
@@ -266,9 +317,9 @@ def enrich_one_tile(
                 w0, s0, e0, n0,
                 doy_window=(doy_start, doy_end), year=2016,
                 orbit_direction=orbit, size_px=size_px,
-                max_scenes=MAX_SCENES, output_db=OUTPUT_DB,
+                max_scenes=MAX_SCENES, output_db=output_db,
                 nodata_threshold=NODATA_THRESHOLD,
-                items=items_by_window.get(1),
+                items=items_by_window.get(1), **client_kw,
             )
         except Exception as exc:  # noqa: BLE001 — 2016 gap must not fail the tile
             comp16 = None
@@ -277,13 +328,14 @@ def enrich_one_tile(
         if comp16 is not None:
             sar_2016, dates_2016, _ = comp16
 
-    # --- Write v2 keys; drop any v1 leftovers -------------------------------
+    # --- Write v3 keys; drop any v1/v2 leftovers ----------------------------
     for stale in ("s1_temporal_mask",):
         data.pop(stale, None)
 
     data["s1_vv_vh"] = sar.astype(np.float32)              # (2, H, W)
     data["s1_dates"] = np.array(dates)
     data["s1_orbit"] = np.bytes_(resolved_orbit)
+    data["s1_source"] = np.bytes_(s1_source)
     data["has_s1"] = np.int32(1)
     data["s1_enrich_v"] = np.int32(S1_ENRICH_VERSION)
     if sar_2016 is not None:
@@ -315,8 +367,14 @@ def enrich_one_tile(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Enrich tiles with S1 SAR season composites (v2)")
+        description="Enrich tiles with S1 SAR season composites (v3)")
     parser.add_argument("--data-dir", required=True)
+    parser.add_argument(
+        "--s1-backend", choices=sorted(_BACKENDS), default=_DEFAULT_BACKEND,
+        help="Source backend. 'pc-rtc' (default): Planetary Computer RTC γ⁰, "
+             "windowed reads, linear γ⁰, no download. 'cdse-stac': legacy "
+             "CDSE full-GRD σ⁰ (dB), cached on PVC.",
+    )
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--skip-existing", action="store_true", default=True)
     parser.add_argument("--no-skip-existing", dest="skip_existing",
@@ -345,10 +403,12 @@ def main():
     if stale:
         print(f"  Cleaned {len(stale)} stale .tmp.npz file(s) from prior runs")
 
-    print("=== S1 SAR season-composite enrichment (v2) ===")
+    print("=== S1 SAR season-composite enrichment (v3) ===")
     print(f"  Tiles:   {len(tiles)}")
     print(f"  Workers: {args.workers}")
-    print(f"  Backend: stac (CDSE STAC + direct COG)")
+    print(f"  Backend: {args.s1_backend} "
+          f"({_BACKENDS[args.s1_backend]['module']}, "
+          f"source={_BACKENDS[args.s1_backend]['source']})")
 
     stats = {"ok": 0, "skipped": 0, "failed": 0}
     lock = threading.Lock()
@@ -361,7 +421,8 @@ def main():
         nonlocal completed, consecutive_fetch_error_fails
         if abort.is_set():
             return
-        r = enrich_one_tile(path, skip_existing=args.skip_existing)
+        r = enrich_one_tile(path, skip_existing=args.skip_existing,
+                            backend=args.s1_backend)
         with lock:
             completed += 1
             reason = r.get("reason", "")
