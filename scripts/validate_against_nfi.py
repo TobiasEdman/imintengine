@@ -368,34 +368,48 @@ def make_fraction_predict_fn(
             model, tile_path, device, img_size=img_size,
             aux_channel_names=aux_channel_names,
         )  # (4, cs, cs) in [0,1], order tall/gran/trivial/adel
-        k, cs, _ = fracs.shape
-        # Vectorized collapse over the whole crop.
-        tall, gran, trivial, adel = fracs[0], fracs[1], fracs[2], fracs[3]
-        conifer = tall + gran
-        decid = trivial + adel
-        total = conifer + decid
-        with np.errstate(divide="ignore", invalid="ignore"):
-            conifer_share = np.where(total > 0, conifer / total, 0.0)
-            decid_share = np.where(total > 0, decid / total, 0.0)
-        class_map = np.zeros((cs, cs), dtype=np.int64)  # default non-forest
-        is_forest = total >= forest_floor
-        conif_dom = is_forest & (conifer_share >= dominant_frac)
-        decid_dom = is_forest & (decid_share >= dominant_frac)
-        bland = is_forest & ~conif_dom & ~decid_dom
-        class_map[conif_dom & (tall >= gran)] = TALLSKOG
-        class_map[conif_dom & (tall < gran)] = GRANSKOG
-        class_map[decid_dom] = LOVSKOG
-        class_map[bland] = BLANDSKOG
-        # probs: put the raw fractions on the forest-class channels so
-        # per-class AUROC (which reads P[:, c] for c in 1..4) stays defined.
-        probs = np.zeros((num_classes, cs, cs), dtype=np.float32)
-        probs[TALLSKOG] = tall
-        probs[GRANSKOG] = gran
-        probs[LOVSKOG] = decid          # deciduous total drives "löv" ranking
-        probs[BLANDSKOG] = np.minimum(conifer, decid)  # mixedness proxy
-        return class_map, probs
+        return fracs_to_class_and_probs(
+            fracs, dominant_frac=dominant_frac, forest_floor=forest_floor,
+            num_classes=num_classes)
 
     return predict_fn
+
+
+def fracs_to_class_and_probs(
+    fracs, *, dominant_frac: float = 0.7, forest_floor: float = 0.1,
+    num_classes: int = 28,
+):
+    """Vectorized NFI collapse of the 4 crown-cover fractions.
+
+    Shared by the fused fraction predict_fn above and the cached-path scorer
+    (``score_against_truth.py``) so both modes apply the IDENTICAL rule —
+    extracted verbatim from the fused path (parity by construction).
+    Returns ``(class_map (cs,cs) int64 {0..4}, probs (num_classes,cs,cs))``
+    with raw fractions on the forest channels for per-class AUROC.
+    """
+    k, cs, _ = fracs.shape
+    tall, gran, trivial, adel = fracs[0], fracs[1], fracs[2], fracs[3]
+    conifer = tall + gran
+    decid = trivial + adel
+    total = conifer + decid
+    with np.errstate(divide="ignore", invalid="ignore"):
+        conifer_share = np.where(total > 0, conifer / total, 0.0)
+        decid_share = np.where(total > 0, decid / total, 0.0)
+    class_map = np.zeros((cs, cs), dtype=np.int64)  # default non-forest
+    is_forest = total >= forest_floor
+    conif_dom = is_forest & (conifer_share >= dominant_frac)
+    decid_dom = is_forest & (decid_share >= dominant_frac)
+    bland = is_forest & ~conif_dom & ~decid_dom
+    class_map[conif_dom & (tall >= gran)] = TALLSKOG
+    class_map[conif_dom & (tall < gran)] = GRANSKOG
+    class_map[decid_dom] = LOVSKOG
+    class_map[bland] = BLANDSKOG
+    probs = np.zeros((num_classes, cs, cs), dtype=np.float32)
+    probs[TALLSKOG] = tall
+    probs[GRANSKOG] = gran
+    probs[LOVSKOG] = decid          # deciduous total drives "löv" ranking
+    probs[BLANDSKOG] = np.minimum(conifer, decid)  # mixedness proxy
+    return class_map, probs
 
 
 def crop_offset(tile_h: int, img_size: int) -> int:

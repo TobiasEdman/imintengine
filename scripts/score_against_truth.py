@@ -96,8 +96,22 @@ def score_nfi(args) -> dict:
     index_df["col"] -= off
     print(f"crop offset={off} (tile {tile_h}→{cs}); kept {len(index_df)}/{before}")
 
-    predict_fn = make_cached_predict_fn(
-        args.cache_dir, args.ckpt_sha, want_fracs=False)
+    if args.use_fraction_head:
+        # Fraction-collapse mode: identical rule to the fused validator via
+        # the SHARED van.fracs_to_class_and_probs (parity by construction).
+        base = make_cached_predict_fn(
+            args.cache_dir, args.ckpt_sha, want_fracs=True)
+        print(f"  fraction-head collapse: dominant_frac={args.dominant_frac}, "
+              f"forest_floor={args.forest_floor}")
+
+        def predict_fn(tile_path):
+            _cls, _probs, fracs = base(tile_path)
+            return van.fracs_to_class_and_probs(
+                fracs, dominant_frac=args.dominant_frac,
+                forest_floor=args.forest_floor, num_classes=args.num_classes)
+    else:
+        predict_fn = make_cached_predict_fn(
+            args.cache_dir, args.ckpt_sha, want_fracs=False)
     per_plot = [] if args.dump_per_plot else None
     results = van.score_against_nfi(
         index_df, predict_fn, num_classes=args.num_classes,
@@ -178,6 +192,7 @@ def main() -> None:
     ap.add_argument("--plot-index", default=None,
                     help="(nfi) parquet from nfi_tile_coverage.py")
     ap.add_argument("--dominant-frac", type=float, default=0.7)
+    ap.add_argument("--forest-floor", type=float, default=0.1)
     ap.add_argument("--dump-per-plot", default=None)
     # LUCAS
     ap.add_argument("--lucas-index", default=None,
