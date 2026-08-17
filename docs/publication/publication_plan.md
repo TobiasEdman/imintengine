@@ -81,7 +81,7 @@ spin the dataset out only if reviewers ask to separate it.
 | C3 | Result holds on a 2nd independent truth (LUCAS) | L2b 0.499, L2a 0.809 (10,108 pts) | **done** | `lucas_l2_finding.md` |
 | C4 | Cheap backbone ties the 600M FM | Tessera 0.589 vs Prithvi 0.579, p≈0.88 | **INCONCLUSIVE** — underpowered null; needs TOST on 944+LUCAS | `model_race_standings.json` |
 | C5 | Architectural complexity doesn't pay | gated≈concat; ensemble within noise (p=0.37) | **INCONCLUSIVE** — same; equivalence test required | this session; `ensemble_g1g2_finding.md` |
-| C6 | Patch size (resolution) > model size | resolution spread: Tessera p1 · Clay/CROMA p8 · Prithvi-600M p14 · Prithvi-300M/TerraMind p16 | **partial** | needs Clay/CROMA + 300M/TerraMind (coarse anchors) + a resolution ablation |
+| C6 | ~~Resolution > size~~ → **REFORMULATED (08-17): encoder quality gates; cheap-and-strong (Tessera p1) beats big (600M)** | measured axis: p1 0.589 · p8 (Clay) **0.483** · p14 0.579 · p16 0.558 — Clay breaks the monotone curve | **reframed** | CROMA = second p8 point (pending S1 v2); keep as a *finding* (interior point refutes the naive claim), not a casualty |
 | C7 | Fraction head > hard head on forest type | 57.9 vs 50.2 % | **done** | `tradslag_fraction_finding.md` |
 | C8 | Labels are internally well-founded | LUCAS×LPIS crop agreement 0.81 (excl. pasture) | **done** | `lucas_lpis_crosscheck_finding.md` |
 | C9 | Full model race across 5 FMs | CROMA/Clay/TerraMind vs Prithvi/Tessera | **IN PROGRESS** | training campaign (2026-08-13) |

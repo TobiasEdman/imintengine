@@ -90,7 +90,7 @@ Status as of 2026-08-13 (verified by ml-engineer smoke pass):
 | **Prithvi-600M** | 14 | ✓ | ✓ | ✓ | **0.579** (leader) | — |
 | **Tessera** | 1 | ✓ | ✓ (baked) | ✓ | **0.589** concat / 0.588 gated | 0.507 / 0.825 |
 | **Prithvi-300M** | 16 | ✓ | ✓ (496 crop) | ✓ **field-validated 08-17** (coarse anchor) | **0.558** (913 plots) | 0.438 / 0.746 |
-| Clay | 8 | ✓ | ✓ (glue + weights landed) | ✓ trained (mIoU **0.319** — weak) · field-val running | pending | pending |
+| Clay | 8 | ✓ | ✓ (glue + weights landed) | ✓ **field-validated 08-17** | **0.483** (last) | 0.404 / 0.698 (last) |
 | CROMA | 8 | ✓ | ✓ glue landed | awaits S1 v2 re-enrich → retrain | — | — |
 | TerraMind | 16 | ✓ | ✓ glue landed | awaits S1 v2 re-enrich → retrain | — | — |
 | ~~thor~~ | — | ✗ no model | — | dropped | — | — |
@@ -182,3 +182,16 @@ that NUANCES C6: fine patch alone doesn't win; encoder quality gates it).
 S1 v2 season-composite re-enrichment running (~41–48 tiles/h cold-cache,
 watch rate); validation routing for clay/croma/terramind landed `4b9b785`
 (82 tests). Clay NFI+LUCAS validation launched 08-17.
+
+## Update — 2026-08-17 (Clay verdict: the interior point BREAKS the resolution curve)
+Clay (patch-8) field-validated: **NFI 0.483 · LUCAS-28 0.404 · LUCAS-frac
+0.698** — last on ALL three truths, and **below the patch-16 anchor**
+(300M 0.558). The monotone patch-size story (0.589→0.579→0.558) is refuted
+by its own interior point: **fine patch alone doesn't win — encoder quality
+gates the outcome.** What survives: tiny-but-strong Tessera (p1) beats the
+600M giant ("cheap-and-strong beats big"). C6 is REFORMULATED accordingly in
+`docs/publication/publication_plan.md`. CROMA (p8, different encoder,
++radar) is now the decisive second patch-8 point. Label-ceiling holds for
+every model: even Clay (0.483) beats NMD2023 (0.390) by +0.09.
+Ops note: the S1 v2 enrichment filled the 1.6T PVC (317 GB product cache,
+tile 165/7882) — cache now LRU-capped at 150 GB (`8f8624c`), job relaunched.
