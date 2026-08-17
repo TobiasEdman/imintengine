@@ -1229,6 +1229,33 @@ class LULCTrainer:
             self.config.num_temporal_frames
             if self.config.enable_multitemporal else 1
         )
+        # FULL model-build parameters (2026-08-17). Historically the config
+        # dict was MINIMAL, so every loader had to weight-infer img_size,
+        # patch, aux_fusion, the PSP pool count, etc. — the root cause of the
+        # repeated load_model fixes (ea9e79c, c1ae20c, 9664d6a, 66ebcc7,
+        # d1d0f0a). Persisting the real build args lets a loader reconstruct
+        # the exact model without inference. Purely ADDITIVE: the existing
+        # keys are unchanged and old checkpoints (which lack the new keys)
+        # still weight-infer, so nothing that reads these keys regresses.
+        img_size = self.config.img_size
+        # patch_size + PSP pool sizes are derived at build time from the spec;
+        # recover them from the model's stashed spec so the loader need not
+        # re-derive. Best-effort: fall back gracefully if the spec is absent.
+        patch_size = getattr(
+            getattr(self.model, "fm_spec", None), "patch_size", None
+        )
+        pool_sizes = None
+        if patch_size:
+            try:
+                from ..fm.upernet import get_default_pool_sizes
+                pool_sizes = list(
+                    get_default_pool_sizes(
+                        device=self.device, img_size=img_size,
+                        patch_size=patch_size,
+                    )
+                )
+            except Exception:
+                pool_sizes = None
         checkpoint = {
             "state_dict": state_dict,
             "epoch": epoch,
@@ -1246,6 +1273,16 @@ class LULCTrainer:
                 "enable_multitemporal": self.config.enable_multitemporal,
                 "enable_tradslag_head": self.config.enable_tradslag_head,
                 "num_tradslag": self.config.num_tradslag,
+                # ── Full build params (additive, 2026-08-17) ──────────────
+                "img_size": img_size,
+                "patch_size": patch_size,
+                "pool_sizes": pool_sizes,
+                "aux_fusion": self.config.aux_fusion,
+                "enable_temporal_pooling": self.config.enable_temporal_pooling,
+                "enable_multilevel_aux": self.config.enable_multilevel_aux,
+                # Ordered aux-channel names — the ground truth for which aux
+                # channels (and in what order) the n_aux input conv expects.
+                "enabled_aux_names": list(self.config.enabled_aux_names),
             },
         }
         torch.save(checkpoint, path)

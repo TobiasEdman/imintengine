@@ -220,6 +220,12 @@ def main():
                         help="Enable SLU Markfuktighetskarta soil-moisture "
                              "aux channel (11th aux, appended last). Default "
                              "OFF — keeps the 10-aux path byte-identical.")
+    parser.add_argument("--enable-delta-sar", action="store_true",
+                        help="Enable ΔVV/ΔVH SAR-change aux channels "
+                             "(season γ⁰ − 2016 γ⁰ in dB), computed at read "
+                             "time from the tile's S1 keys. Appended LAST. "
+                             "The 2016 clearcut anchor via the aux path. "
+                             "Default OFF.")
 
     # Temporal
     parser.add_argument("--enable-multitemporal", action="store_true",
@@ -333,6 +339,10 @@ def main():
         # markfukt: 11th aux, flag-gated, default OFF. When on it is
         # appended LAST so the existing 10-aux ordering is untouched.
         enable_markfukt_channel=args.enable_markfukt,
+        # ΔSAR: 2 aux channels (delta_vv, delta_vh), computed at read time
+        # from the tile's S1 keys. Appended AFTER markfukt so prior indices
+        # are untouched. Default OFF.
+        enable_delta_sar_channels=args.enable_delta_sar,
         freeze_spectral=args.freeze_spectral,
         resume_from_checkpoint=args.resume_from,
         warm_start_from_checkpoint=args.warm_start_from,

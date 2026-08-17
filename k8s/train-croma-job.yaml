@@ -8,6 +8,14 @@
 #   Coverage: 6011/7882 tiles have s1_vv_vh (CROMA-complete; the dataset
 #   filters to this subset automatically via model_keys).
 #
+# ΔSAR RETRAIN (v3, 2026-08-17): --enable-delta-sar adds the 2016 clearcut
+#   anchor via 2 computed aux channels (ΔVV/ΔVH dB = season γ⁰ − 2016 γ⁰).
+#   The pretrained SAR encoder is locked to 2-ch input, so the anchor rides
+#   the AUX path, not a third SAR frame. Checkpoints → croma_v3 (the old
+#   croma dir is left intact). A PREFLIGHT fails loud unless ≥95% of
+#   /cephfs/unified_v2_512 tiles have s1_enrich_v==3 (no partial-enrichment
+#   training) AND the ΔSAR code is present in the clone.
+#
 # CROMA is patch_size=8 → 504 crop is OK (504/8=63). H100 has ample memory;
 # the smoke ran at 224px only because the 2080ti (11 GB) OOMs at 504.
 # Weights cached at /data/model_cache/CROMA_base.pt; loader also needs
@@ -23,9 +31,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: train-croma
+  name: train-croma-v3
   namespace: prithvi-training-default
-  labels: { app: unified-training, dataset: "512", purpose: croma }
+  labels: { app: unified-training, dataset: "512", purpose: croma, variant: delta-sar-v3 }
 spec:
   backoffLimit: 1
   ttlSecondsAfterFinished: 172800
@@ -92,6 +100,15 @@ spec:
           src_fr = inspect.getsource(fr)
           if 'family == "croma"' not in src_fr or "optical=" not in src_fr:
               fails.append("forward_router never routes sar/optical into CROMA")
+          # ΔSAR clone-guard: the delta-channel compute + opt-in must be in the
+          # cloned code, else --enable-delta-sar would silently be a no-op.
+          if not hasattr(ud, "compute_delta_sar"):
+              fails.append("dataset missing compute_delta_sar (ΔSAR not in clone)")
+          if "delta_vv" not in inspect.getsource(ud):
+              fails.append("dataset never wires delta_vv/delta_vh aux channels")
+          from imint.training.config import TrainingConfig as _Cfg
+          if "delta_vv" not in _Cfg(enable_delta_sar_channels=True).enabled_aux_names:
+              fails.append("config never appends delta_vv/delta_vh when opted in")
           if fails:
               print("PREFLIGHT FAILED — CROMA training path not wired:")
               for f in fails: print("  -", f)
@@ -99,7 +116,42 @@ spec:
           print("preflight OK")
           PY
 
-          mkdir -p /cephfs/checkpoints/croma
+          # --- PREFLIGHT: fail loud on a PARTIAL S1 v3 enrichment ---
+          # Never train the ΔSAR retrain on a half-enriched dataset: the delta
+          # channels would be zero on every not-yet-v3 tile, poisoning the
+          # anchor. Require >=95% of tiles to carry s1_enrich_v==3.
+          python - <<'PY'
+          import glob, sys
+          import numpy as np
+          roots = ["/cephfs/unified_v2_512/tiles", "/cephfs/unified_v2_512"]
+          tiles = []
+          for r in roots:
+              tiles = sorted(glob.glob(r + "/*.npz"))
+              if tiles:
+                  break
+          if not tiles:
+              print("PREFLIGHT FAILED — no tiles under /cephfs/unified_v2_512"); sys.exit(4)
+          n = len(tiles); v3 = 0; with2016 = 0
+          for p in tiles:
+              try:
+                  with np.load(p, allow_pickle=True) as z:
+                      if "s1_enrich_v" in z.files and int(z["s1_enrich_v"].item()) == 3:
+                          v3 += 1
+                      if "s1_vv_vh_2016" in z.files:
+                          with2016 += 1
+              except Exception:
+                  pass
+          frac = v3 / n
+          print(f"S1 enrichment: {v3}/{n} tiles s1_enrich_v==3 ({frac:.1%}); "
+                f"{with2016}/{n} carry s1_vv_vh_2016 ({with2016/n:.1%})")
+          if frac < 0.95:
+              print(f"PREFLIGHT FAILED — only {frac:.1%} of tiles are s1_enrich_v==3 "
+                    f"(<95%). Wait for enrich-s1-season to finish before training.")
+              sys.exit(5)
+          print("enrichment coverage OK")
+          PY
+
+          mkdir -p /cephfs/checkpoints/croma_v3
           cd /cephfs
           python /workspace/imintengine/scripts/train_unified.py \
             --backbone-name croma_base \
@@ -107,8 +159,9 @@ spec:
             --label-dir /cephfs/nmd2023_distill_labels \
             --frac-dir /cephfs/tradslag_fracs \
             --enable-tradslag-head \
+            --enable-delta-sar \
             --lambda-frac 1.0 \
-            --checkpoint-dir /cephfs/checkpoints/croma \
+            --checkpoint-dir /cephfs/checkpoints/croma_v3 \
             --num-classes 28 \
             --epochs 30 \
             --batch-size 8 \

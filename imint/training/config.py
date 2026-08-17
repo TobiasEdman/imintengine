@@ -171,6 +171,10 @@ class TrainingConfig:
     enable_dem_channel: bool = False                     # Copernicus DEM (terrain elev.)
     enable_vpp_channels: bool = False                    # HR-VPP phenology (5 bands)
     enable_markfukt_channel: bool = False                # SLU Markfuktighetskarta (soil moisture)
+    # ΔSAR: 2 aux channels (delta_vv, delta_vh) computed at read time from the
+    # tile's S1 keys (season γ⁰ − 2016 γ⁰, in dB). Appended LAST so the
+    # existing aux ordering is untouched. Default OFF.
+    enable_delta_sar_channels: bool = False              # ΔVV/ΔVH clearcut change (2016 anchor)
     aux_cache_enabled: bool = True                       # Cache aux tiles as .npy
 
     # Z-score normalization for aux channels: {name: (mean, std)}
@@ -194,6 +198,12 @@ class TrainingConfig:
         # (mean, std) are a broad prior over the [0, 1.01] probability range;
         # refine with compute_aux_stats.py once real-tile stats are gathered.
         "markfukt":   (0.50, 0.25),        # soil-moisture probability, unitless
+        # ΔVV/ΔVH: SAR backscatter change in dB (season γ⁰ − 2016 γ⁰),
+        # computed at read time from s1_vv_vh − s1_vv_vh_2016. Centred on
+        # 0 dB (no change); a clearcut is a sharp −3..−10 dB negative step.
+        # std=4.0 dB → a −8 dB harvest at z≈−2, phenology jitter inside ±0.5 z.
+        "delta_vv":   (0.0, 4.0),          # dB backscatter change, VV
+        "delta_vh":   (0.0, 4.0),          # dB backscatter change, VH
     })
 
     # ── Validation split (latitude-based) ─────────────────────────────────
@@ -260,6 +270,11 @@ class TrainingConfig:
         # cold-starts on checkpoint expansion.
         if self.enable_markfukt_channel:
             names.append("markfukt")
+        # ΔSAR appended LAST (after markfukt) so every prior channel keeps
+        # its index — the two new channels cold-start on a checkpoint
+        # aux-input-conv expansion, like markfukt did.
+        if self.enable_delta_sar_channels:
+            names.extend(["delta_vv", "delta_vh"])
         return tuple(names)
 
     def __post_init__(self) -> None:

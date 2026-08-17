@@ -112,6 +112,16 @@ AUX_NORM = {
     # markfukt: SLU soil-moisture probability, already float32 [0.01, 1.01]
     # in the npz with NaN nodata. See config.aux_norm for provenance.
     "markfukt": (0.50, 0.25),
+    # ΔVV/ΔVH: SAR backscatter change in dB between the growing-season γ⁰
+    # composite (`s1_vv_vh`) and the 2016 γ⁰ composite (`s1_vv_vh_2016`),
+    # computed at read time (not stored). Distribution is centred on 0 dB
+    # (no change) and roughly symmetric; a fresh clearcut collapses volume
+    # scattering, producing a sharp NEGATIVE step of ~−3 to −10 dB (VV) /
+    # ~−2 to −8 dB (VH). std=4.0 dB places a −8 dB harvest at z≈−2 while
+    # keeping ordinary phenological/moisture jitter (±1–2 dB) inside ±0.5 z,
+    # so the neutral zero-change signal normalizes to exactly 0 (mean=0).
+    "delta_vv": (0.0, 4.0),
+    "delta_vh": (0.0, 4.0),
 }
 
 # Channels that need log(1+x) pre-transform before z-score
@@ -127,6 +137,50 @@ AUX_NAN_NODATA_CHANNELS = {"markfukt"}
 # Decode to day-of-year (value % 1000) before z-score; NoData (0) maps to
 # the channel mean so it normalizes to 0 instead of a huge outlier.
 AUX_YYDDD_DATE_CHANNELS = {"vpp_sosd", "vpp_eosd"}
+
+# ΔSAR aux channels are COMPUTED at read time from the tile's S1 keys
+# (`s1_vv_vh` season composite − `s1_vv_vh_2016`), not read from a stored
+# array. They are opt-in via config.enabled_aux_names like every other aux
+# channel, but `_load_aux_channels` routes them through `compute_delta_sar`
+# instead of a direct `data[name]` lookup. Tiles missing the 2016 composite
+# (~10%) emit a zero Δ ("no change signal" — the correct neutral for fusion).
+AUX_COMPUTED_CHANNELS = {"delta_vv", "delta_vh"}
+
+# Floor (linear γ⁰) applied before the 10·log10 so a zero/negative nodata
+# pixel never produces −inf. −40 dB (1e-4 linear) is well below the sensor
+# noise floor, so a genuine low-backscatter pixel is unaffected.
+_S1_LINEAR_FLOOR = 1e-4
+
+
+def compute_delta_sar(data) -> "np.ndarray | None":
+    """Compute the (2, H, W) ΔVV/ΔVH dB-difference stack from S1 keys.
+
+    ΔX = 10·log10(season_X) − 10·log10(2016_X), on the LINEAR γ⁰ composites
+    `s1_vv_vh` (2, H, W) and `s1_vv_vh_2016` (2, H, W). A sharp negative Δ is
+    the clearcut signal: volume scattering collapses when a stand is felled.
+
+    Returns:
+        (2, H, W) float32 [ΔVV, ΔVH] in dB, NaN/inf-scrubbed to 0, OR None
+        when either composite is absent (missing-2016 tile → caller emits
+        zeros = "no change"). Never raises: inputs are floored before log so
+        zero-nodata pixels map to a finite (near-zero after subtraction) Δ.
+    """
+    season = data.get("s1_vv_vh", None)
+    baseline = data.get("s1_vv_vh_2016", None)
+    if season is None or baseline is None:
+        return None
+    season = np.asarray(season, dtype=np.float32)
+    baseline = np.asarray(baseline, dtype=np.float32)
+    if season.shape != baseline.shape or season.ndim != 3 or season.shape[0] != 2:
+        return None
+    # Floor before log: guards linear-γ⁰ zeros (nodata) and any residual
+    # negative/NaN so 10·log10 is always finite. NaN → floor via nan_to_num.
+    s = np.maximum(np.nan_to_num(season, nan=_S1_LINEAR_FLOOR), _S1_LINEAR_FLOOR)
+    b = np.maximum(np.nan_to_num(baseline, nan=_S1_LINEAR_FLOOR), _S1_LINEAR_FLOOR)
+    delta = 10.0 * np.log10(s) - 10.0 * np.log10(b)  # (2, H, W) dB
+    return np.nan_to_num(
+        delta, nan=0.0, posinf=0.0, neginf=0.0,
+    ).astype(np.float32)
 
 
 def normalize_aux_channel(name: str, x):
@@ -1319,9 +1373,31 @@ class UnifiedDataset(Dataset):
         Returns:
             (N, H, W) float32 stacked aux channels, normalized.
         """
+        # ΔSAR channels are computed once (both come from one dB-difference
+        # call) and cached so `delta_vv`/`delta_vh` don't recompute. Missing
+        # 2016 composite → None → each channel emits zeros ("no change").
+        delta_stack: np.ndarray | None = None
+        if AUX_COMPUTED_CHANNELS & set(self.aux_channel_names):
+            delta_stack = compute_delta_sar(data)  # (2, H, W) [ΔVV, ΔVH] or None
+
         aux_arrays: list[np.ndarray] = []
         for ch_name in self.aux_channel_names:
-            if ch_name in data:
+            if ch_name in AUX_COMPUTED_CHANNELS:
+                # Computed at read time from S1 keys (not a stored array).
+                # delta_vv → row 0, delta_vh → row 1. Missing 2016 → zeros
+                # (a zero Δ is the neutral "no change" the fusion expects).
+                if delta_stack is None:
+                    arr = np.zeros((h, w), dtype=np.float32)
+                else:
+                    row = 0 if ch_name == "delta_vv" else 1
+                    arr = delta_stack[row]
+                    if arr.shape != (h, w):
+                        arr = arr[:h, :w]
+                        if arr.shape[0] < h or arr.shape[1] < w:
+                            padded = np.zeros((h, w), dtype=np.float32)
+                            padded[:arr.shape[0], :arr.shape[1]] = arr
+                            arr = padded
+            elif ch_name in data:
                 arr = data[ch_name].astype(np.float32)
                 # Ensure spatial dimensions match
                 if arr.shape != (h, w):
