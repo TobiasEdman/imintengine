@@ -303,7 +303,13 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None,
         # Fraction head: the trainer persists these in the checkpoint config —
         # without threading them the frac_head weights are silently dropped by
         # strict=False and --use-fraction-head cannot run.
-        enable_tradslag_head=ck_cfg.get("enable_tradslag_head", False),
+        # Weights beat config here too: clay's minimal config omits
+        # enable_tradslag_head, so a config-only read builds the head with
+        # frac disabled and the forward refuses return_fractions even though
+        # the checkpoint carries frac_head.* weights. Any frac_head key in
+        # the state_dict IS the flag.
+        enable_tradslag_head=(ck_cfg.get("enable_tradslag_head", False)
+                              or any("frac_head" in k for k in sd)),
         num_tradslag=ck_cfg.get("num_tradslag", 4),
         # Aux fusion ("concat" | "gated"): detect from the weights, not the
         # config. best_model.pt's embedded config is minimal and can omit
