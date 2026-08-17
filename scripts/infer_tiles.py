@@ -84,7 +84,8 @@ def _git_sha() -> str:
         return "unknown"
 
 
-def resolve_tile_list(data_dir: str, tile_list: str | None) -> list[Path]:
+def resolve_tile_list(data_dir: str, tile_list: str | None,
+                      allow_missing: bool = False) -> list[Path]:
     """Resolve the tiles to infer: an explicit list, or all ``*.npz`` in dir.
 
     ``tile_list`` may be a parquet with a ``tile_name`` column or a newline text
@@ -113,9 +114,15 @@ def resolve_tile_list(data_dir: str, tile_list: str | None) -> list[Path]:
         p = data_dir / f"{stem}.npz"
         (tiles if p.exists() else missing).append(p)
     if missing:
-        raise FileNotFoundError(
-            f"{len(missing)} tiles from {tile_list} not under {data_dir}, e.g. "
-            f"{missing[0]}")
+        if allow_missing:
+            # Truth indices can list tiles since removed from the dataset —
+            # the scorers drop those plots/points anyway. Log loudly, skip.
+            print(f"[infer_tiles] WARNING: skipping {len(missing)} tiles from "
+                  f"{tile_list} not under {data_dir}, e.g. {missing[0].name}")
+        else:
+            raise FileNotFoundError(
+                f"{len(missing)} tiles from {tile_list} not under {data_dir}, "
+                f"e.g. {missing[0]} (pass --allow-missing to skip+log)")
     # De-dup preserving order.
     seen, uniq = set(), []
     for p in tiles:
@@ -205,6 +212,7 @@ def _write_manifest(sha_dir: Path, *, checkpoint, ckpt_sha, backbone_name,
 def infer_all(
     *, checkpoint, backbone_name, data_dir, tile_list, img_size, num_classes,
     cache_dir, batch_size, num_workers, device, shard, log_every, produced_at,
+    allow_missing=False,
 ):
     """Load the model ONCE, batch-infer the tile set, write the cache.
 
@@ -220,7 +228,7 @@ def infer_all(
     sha_dir = Path(cache_dir) / sha
     sha_dir.mkdir(parents=True, exist_ok=True)
 
-    tiles = resolve_tile_list(data_dir, tile_list)
+    tiles = resolve_tile_list(data_dir, tile_list, allow_missing=allow_missing)
     if shard is not None:
         i, k = shard
         tiles = tiles[i::k]
@@ -367,6 +375,9 @@ def main() -> None:
                     help="i/K: infer only this shard of the tile list")
     ap.add_argument("--log-every", type=int, default=50,
                     help="log tiles/s + ETA every N written tiles")
+    ap.add_argument("--allow-missing", action="store_true",
+                    help="skip+log tiles in --tile-list absent from --data-dir "
+                         "(truth indices may list removed tiles)")
     ap.add_argument("--produced-at", default=None,
                     help="ISO timestamp for MANIFEST provenance (deterministic; "
                          "no wall-clock read in library code)")
@@ -378,7 +389,8 @@ def main() -> None:
         num_classes=args.num_classes, cache_dir=args.cache_dir,
         batch_size=args.batch_size, num_workers=args.num_workers,
         device=args.device, shard=_parse_shard(args.shard),
-        log_every=args.log_every, produced_at=args.produced_at)
+        log_every=args.log_every, produced_at=args.produced_at,
+        allow_missing=args.allow_missing)
 
 
 if __name__ == "__main__":
