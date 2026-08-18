@@ -1,5 +1,5 @@
 // Scientific-conference oral deck (DES brand): field-calibrated land-cover for Sweden.
-// Writes docs/decks/v8b_nfi_conference.pptx — ENGLISH ONLY. 19-slide conference arc.
+// Writes docs/decks/v8b_nfi_conference.pptx — ENGLISH ONLY. 20-slide conference arc.
 // Brand + helpers mirror docs/decks/build_des_endgame_deck.js (do NOT modify that file).
 // Run: NODE_PATH=$(npm root -g) node docs/decks/build_conference_deck.js
 const pptxgen = require("pptxgenjs");
@@ -69,6 +69,17 @@ const D = {
   h2hLabels:["NFI-209","LUCAS-28","LUCAS-frac"],
   h2hPrithvi:[0.579,0.477,0.784],
   h2hTessera:[0.589,0.499,0.809],
+  // Foundation-model race — resolution ablation (C6). NFI held-out forest-type
+  // OA, all scored by the identical fraction collapse on the same test tiles.
+  // Source: data/distill/model_race_standings.json → fm_race (regenerated
+  // 2026-08-18; tessera/Prithvi-600M reproduce the published 0.589/0.579).
+  // Ordered by ViT patch size — the resolution axis.
+  fmRaceLabels:["Tessera  p1","Clay  p8","Prithvi-600M  p14","Prithvi-300M  p16"],
+  fmRace:[0.589,0.435,0.579,0.545],
+  fmRaceColors:[MINT,CORAL,NMDCOL,NMDCOL],
+  fmTable:[["Tessera","1","frozen 128-d","0.589"],["Clay","8","ViT SSL","0.435"],
+           ["Prithvi-600M","14","600M ViT","0.579"],["Prithvi-300M","16","300M ViT","0.545"],
+           ["CROMA","8","ViT+SAR","pending"],["TerraMind","16","multimodal","pending"]],
   // training-label taxonomy by source [name, id-range, class-count]
   srcGroups:[["NMD land cover","1–10",10],["LPIS crops","11–21",11],["SKS clear-cut","22",1],["NMD2023 add.","23–27",5]],
   // NFI reference forest-type distribution (944 plots, from confusion-matrix support)
@@ -353,6 +364,33 @@ function build(){
   card(p,s,8.2,5.0,4.4,1.45,"Deployment winner: Tessera",
     "Statistical tie on accuracy across three independent truths (NFI McNemar p = 0.88) — Tessera wins decisively on compute.",CORAL,16,13);
   s.addNotes("Now race the two backbones directly on the same field-calibrated target across three independent truths. On NFI-209 forest type Tessera scores 0.589 to Prithvi's 0.579; on the LUCAS 28-class task 0.499 to 0.477; on LUCAS forest fraction 0.809 to 0.784. Tessera is at least as good on all three. But it runs on precomputed 128-dimensional embeddings — no 600-million-parameter forward pass at train or inference time. A statistical tie on accuracy, a decisive win on compute: Tessera is the deployment winner.");
+
+  // =========================================================== S11b — Foundation-model race (C6)
+  s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
+  title(p,s,"The foundation-model race: what gates accuracy?");
+  s.addText("Five geospatial encoders, one field-calibrated target, scored on the same NFI truth — finer resolution alone does not predict the winner.",
+    {x:0.7,y:1.28,w:11.8,h:0.4,fontFace:F,fontSize:14,color:MINT,bold:true,margin:0});
+  s.addChart(p.ChartType.bar,[{name:"NFI held-out forest-type OA",labels:D.fmRaceLabels,values:D.fmRace}],
+    {x:0.5,y:1.95,w:7.45,h:4.3,barDir:"col",
+     chartColors:D.fmRaceColors,chartColorsOpacity:[100,100,100,100],
+     showValue:true,dataLabelPosition:"outEnd",dataLabelFontFace:F,dataLabelFontSize:12,dataLabelColor:WHITE,dataLabelFormatCode:'0.000',
+     showTitle:false,showLegend:false,
+     valAxisMinVal:0.4,valAxisMaxVal:0.62,valAxisMajorUnit:0.05,valAxisLabelColor:MUTED,valAxisLabelFontFace:F,valAxisLabelFontSize:10,valAxisLabelFormatCode:'0.00',
+     catAxisLabelColor:WHITE,catAxisLabelFontFace:F,catAxisLabelFontSize:11.5,
+     valGridLine:{color:GRID,size:1},catGridLine:{style:"none"},barGapWidthPct:55});
+  s.addText("bars ordered by ViT patch size →  finer            coarser",
+    {x:0.5,y:6.28,w:7.45,h:0.3,fontFace:F,fontSize:10,italic:true,color:MUTED,align:"center",margin:0});
+  const rh={fill:{color:HEAD},bold:true,fontFace:F,fontSize:11,align:"center",valign:"middle"};
+  const rtable=[[{text:"Backbone",options:{...rh,color:WHITE,align:"left"}},{text:"Patch",options:{...rh,color:WHITE}},{text:"Encoder",options:{...rh,color:WHITE}},{text:"NFI OA",options:{...rh,color:MINT}}],
+    ...D.fmTable.map((r,i)=>{ const bg=i%2?ROWA:ROWB; const pend=r[3]==="pending";
+      return [{text:r[0],options:{fill:{color:bg},color:WHITE,bold:true,fontFace:F,fontSize:11,align:"left",valign:"middle"}},
+        {text:r[1],options:{fill:{color:bg},color:MUTED,fontFace:F,fontSize:11,align:"center",valign:"middle"}},
+        {text:r[2],options:{fill:{color:bg},color:MUTED,fontFace:F,fontSize:11,align:"center",valign:"middle"}},
+        {text:r[3],options:{fill:{color:pend?bg:WINBG},color:pend?MUTED:MINT,italic:pend,bold:!pend,fontFace:F,fontSize:11,align:"center",valign:"middle"}}];})];
+  s.addTable(rtable,{x:8.2,y:1.95,w:4.4,colW:[1.55,0.7,1.35,0.8],rowH:0.42,border:{type:"solid",color:GRID,pt:1}});
+  card(p,s,8.2,4.98,4.4,1.5,"The reversal: encoder gates resolution",
+    "If finer patches drove accuracy, Clay (p8) would beat both Prithvis (p14/p16). It lands last (0.435). Tessera wins by being p1 AND a strong encoder. CROMA/TerraMind retrain on S1 v3 — pending.",CORAL,15,12);
+  s.addNotes("A five-way foundation-model race on the identical field-calibrated target, all scored the same way on the held-out NFI plots. The intuition going in was 'resolution beats size' — a finer patch should see more detail. The data refutes it: Clay, at patch-8, is finer than either Prithvi (patch-14 and patch-16) yet lands dead last at 0.435, well below Prithvi-600M's 0.579 and Prithvi-300M's 0.545. So patch size alone does not gate accuracy — encoder quality does. Tessera wins not merely because it is effectively patch-1, but because it pairs that with a strong pretrained representation. Two more points, CROMA at patch-8 and TerraMind at patch-16, are retraining on the new S1 data and will complete the curve. This is the model-race result C9 and the reformulated C6.");
 
   // =========================================================== S12 — LUCAS validation
   s=p.addSlide(); s.background={color:BG}; wordmark(p,s);
