@@ -41,7 +41,10 @@ spec:
     metadata:
       labels: { app: unified-training, purpose: croma }
     spec:
-      activeDeadlineSeconds: 43200
+      # 30h — CROMA (patch-8, ~52 min/epoch) needs ~26h for 30 epochs. The
+      # prior 43200 (12h) killed it at epoch 10/30 (DeadlineExceeded, exit 137)
+      # and each Job retry restarted from scratch into the same wall. 2026-08-18.
+      activeDeadlineSeconds: 108000
       restartPolicy: Never
       nodeSelector: { accelerator: nvidia-h100 }
       affinity:
