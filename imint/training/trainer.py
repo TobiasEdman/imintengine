@@ -1193,7 +1193,31 @@ class LULCTrainer:
         """
         print(f"  Resuming from checkpoint: {path}")
         ckpt = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(ckpt["model_state_dict"])
+        model_state = ckpt["model_state_dict"]
+        # CROMA's forward router attaches its deterministic normalizer lazily
+        # on the first forward pass. Its four constant buffers are therefore
+        # present in a saved checkpoint but absent from a freshly rebuilt
+        # model at resume time. Remove only those known runtime buffers; retain
+        # strict loading for every learned parameter and all other buffers.
+        runtime_norm_keys = {
+            f"_norm_croma.{name}"
+            for name in ("s2_mean", "s2_std", "s1_mean", "s1_std")
+        }
+        current_keys = set(self.model.state_dict())
+        migrated = sorted(
+            key for key in runtime_norm_keys
+            if key in model_state and key not in current_keys
+        )
+        if migrated:
+            model_state = {
+                key: value for key, value in model_state.items()
+                if key not in migrated
+            }
+            print(
+                "  Migrated lazy CROMA normalizer buffers: "
+                + ", ".join(migrated)
+            )
+        self.model.load_state_dict(model_state, strict=True)
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         if "training_log" in ckpt:
