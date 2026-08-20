@@ -22,7 +22,9 @@ spec:
   # CLAUDE.md 2026-07-21). Years span 2018-2024 (plot inventory years); the
   # autumn frame reads year-1 internally.
   backoffLimit: 1
-  activeDeadlineSeconds: 172800
+  # Resume scope after two transient upstream failures: 1,198 tiles remain.
+  # At the observed DES rate (~22 tiles/h), allow 72h including setup/QC.
+  activeDeadlineSeconds: 259200
   template:
     metadata:
       labels:
@@ -85,6 +87,7 @@ spec:
                 --mode refetch \
                 --from-json "$MANIFEST" \
                 --output-dir "$OUT" \
+                --claim-dir "$OUT/.claims" \
                 --tile-size-px 512 \
                 --years 2018 2019 2020 2021 2022 2023 2024 \
                 --workers 6 \
