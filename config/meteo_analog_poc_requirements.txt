@@ -1,0 +1,18 @@
+# Exact direct dependencies for the deferred-image POC bootstrap.
+# The job records the fully resolved environment after installation.
+setuptools==80.9.0
+numpy==2.4.6
+scipy==1.17.1
+rasterio==1.4.4
+pyproj==3.7.2
+requests==2.34.2
+Pillow==12.2.0
+matplotlib==3.10.9
+pandas==2.3.3
+openeo==0.50.0
+shapely==2.1.2
+xarray==2025.1.1
+netCDF4==1.7.4
+h5netcdf==1.7.3
+cftime==1.6.5
+scikit-image==0.26.0

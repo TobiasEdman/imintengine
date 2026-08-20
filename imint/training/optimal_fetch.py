@@ -679,6 +679,7 @@ def scl_stack_screen(
     chunk_days: int = 19,
     backend: str = "des",
     cache_dir: str | None = None,
+    require_complete: bool = False,
 ) -> dict[str, float]:
     """Stage 2: openEO-driven AOI cloud-fraction per scene date.
 
@@ -778,9 +779,14 @@ def scl_stack_screen(
                 print(f"  scl_stack chunk {cur}..{cend} failed: {e}")
         cur = cend + timedelta(days=1)
 
-    # Store ONLY complete screens (see cache block above). A partial
-    # screen is still returned — the caller works with what exists — but
-    # the next attempt re-screens rather than trusting storm-blindness.
+    if failed_chunks and require_complete:
+        raise RuntimeError(
+            f"SCL screen incomplete: {failed_chunks} chunk(s) failed for "
+            f"{date_start}..{date_end}"
+        )
+
+    # Store ONLY complete screens (see cache block above). A partial screen is
+    # returned to legacy callers, but strict experiment callers fail above.
     if failed_chunks == 0:
         _SCL_SCREEN_MEMO[key] = dict(out)
         if disk_path:
@@ -996,6 +1002,11 @@ class FetchPlan:
     n_candidates_after: dict[str, int] = field(default_factory=dict)
     elapsed_s: dict[str, float] = field(default_factory=dict)
     notes: dict[str, str] = field(default_factory=dict)
+    scl_gate: dict[str, dict[str, float | bool | None]] = field(
+        default_factory=dict
+    )
+    scl_screen_complete: bool | None = None
+    scl_thresholds: dict[str, float] = field(default_factory=dict)
 
 
 def optimal_fetch_dates(
@@ -1010,6 +1021,7 @@ def optimal_fetch_dates(
     scene_cloud_max: float = DEFAULT_STAC_CLOUD_MAX,
     atmosphere_rules: dict | None = None,
     scl_backend: str = "des",
+    require_complete_scl: bool = False,
 ) -> FetchPlan:
     """Select Sentinel-2 dates worth fetching, given the requested strategy.
 
@@ -1058,8 +1070,18 @@ def optimal_fetch_dates(
     if mode in ("scl_only", "era5_then_scl", "stac_then_scl"):
         t0 = _t.time()
         scl_fracs = scl_stack_screen(
-            bbox_wgs84, date_start, date_end, backend=scl_backend,
+            bbox_wgs84,
+            date_start,
+            date_end,
+            backend=scl_backend,
+            require_complete=require_complete_scl,
         )
+        plan.scl_screen_complete = True
+        plan.scl_thresholds = {
+            "max_aoi_cloud": float(max_aoi_cloud),
+            "max_aoi_snow": float(max_aoi_snow),
+            "min_aoi_coverage": float(min_aoi_coverage),
+        }
         plan.elapsed_s["scl_stack"] = round(_t.time() - t0, 2)
         plan.n_candidates_after["scl_pre_threshold"] = len(scl_fracs)
         plan.notes["scl_backend"] = scl_backend
@@ -1078,6 +1100,21 @@ def optimal_fetch_dates(
         return (cloud <= max_aoi_cloud
                 and (snow is None or snow <= max_aoi_snow)
                 and (cov is None or cov >= min_aoi_coverage))
+
+    if scl_fracs is not None:
+        for observed_date, value in sorted(scl_fracs.items()):
+            if isinstance(value, tuple):
+                cloud, snow, coverage = (value + (None, None))[:3]
+            else:
+                cloud, snow, coverage = value, None, None
+            plan.scl_gate[observed_date] = {
+                "cloud_fraction": float(cloud),
+                "snow_fraction": None if snow is None else float(snow),
+                "coverage_fraction": (
+                    None if coverage is None else float(coverage)
+                ),
+                "accepted": bool(_scl_ok(value)),
+            }
 
     # --- Combine
     if mode == "stac_only":

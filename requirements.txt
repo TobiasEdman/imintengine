@@ -63,6 +63,7 @@ svgpath2mpl>=0.2
 # Shared contracts — 23-class schema, Analyzer base, KG JSON Schema,
 # embedding config. Extracted from this repo in 2026-04 (rollout W3.6).
 des-contracts @ git+https://github.com/TobiasEdman/des-contracts.git@v0.1.0
+space-datalab-metafilter @ git+https://github.com/TobiasEdman/space-datalab-metafilter.git@8045a48a854ee0f7f26c2ce0b7326db3cb41af8a
 
 # HTTP API (W4.1). Optional in dev; required in the deployed Docker
 # image. Pinned tight — fastapi 0.x has occasional breaking minor bumps.

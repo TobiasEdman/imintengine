@@ -602,6 +602,8 @@ def fetch_nmd_label_local(
     bbox_3006: dict,
     tile: "TileConfig",
     nmd_raster: str = "data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif",
+    *,
+    allow_remote_fallback: bool = True,
 ) -> np.ndarray | None:
     """Read NMD 19-class sequential label from local GeoTIFF raster.
 
@@ -618,6 +620,8 @@ def fetch_nmd_label_local(
     tile.assert_bbox_matches(bbox_3006)
 
     if not os.path.exists(nmd_raster):
+        if not allow_remote_fallback:
+            raise FileNotFoundError(nmd_raster)
         return _fetch_nmd_label_remote(bbox_3006, tile)
 
     w = bbox_3006["west"]; s = bbox_3006["south"]
@@ -625,7 +629,11 @@ def fetch_nmd_label_local(
 
     try:
         src = _get_nmd_handle(nmd_raster)
-    except Exception:
+    except Exception as error:
+        if not allow_remote_fallback:
+            raise RuntimeError(
+                f"strict local NMD open failed: {nmd_raster}"
+            ) from error
         return _fetch_nmd_label_remote(bbox_3006, tile)
 
     b = src.bounds
@@ -640,7 +648,11 @@ def fetch_nmd_label_local(
 
     try:
         nmd_raw = src.read(1, window=window)
-    except Exception:
+    except Exception as error:
+        if not allow_remote_fallback:
+            raise RuntimeError(
+                f"strict local NMD read failed: {nmd_raster}"
+            ) from error
         return _fetch_nmd_label_remote(bbox_3006, tile)
 
     from imint.training.class_schema import nmd_raster_to_lulc
