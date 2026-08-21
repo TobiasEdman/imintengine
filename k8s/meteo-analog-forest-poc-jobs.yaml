@@ -1,0 +1,498 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meteo-analog-forest-poc-runner
+  namespace: prithvi-training-default
+  labels:
+    app: imint-experiment
+    purpose: meteo-analog-forest-poc
+immutable: true
+data:
+  bootstrap.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    [[ "$IMINT_GIT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+      echo "IMINT_GIT_SHA must be the tested 40-character commit" >&2
+      exit 2
+    }
+    [[ "$METAFILTER_GIT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+      echo "METAFILTER_GIT_SHA must be a 40-character commit" >&2
+      exit 2
+    }
+    test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.11"
+
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends git > /dev/null 2>&1
+    git clone --filter=blob:none --no-checkout \
+      https://github.com/TobiasEdman/ImintEngine.git /workspace/imintengine
+    git -C /workspace/imintengine fetch --depth 1 origin "$IMINT_GIT_SHA"
+    git -C /workspace/imintengine checkout --detach "$IMINT_GIT_SHA"
+    test "$(git -C /workspace/imintengine rev-parse HEAD)" = "$IMINT_GIT_SHA"
+
+    python3 -m venv /workspace/venv
+    LOCK=/workspace/imintengine/config/meteo_analog_poc_requirements.lock
+    test -s "$LOCK"
+    /workspace/venv/bin/pip install --quiet --no-cache-dir \
+      --require-hashes --only-binary=:all: \
+      --report /workspace/pip-report.json -r "$LOCK"
+    /workspace/venv/bin/pip install --quiet --no-cache-dir --no-deps \
+      --no-build-isolation \
+      "space-datalab-metafilter @ git+https://github.com/TobiasEdman/space-datalab-metafilter.git@${METAFILTER_GIT_SHA}"
+
+    revision=${IMINT_GIT_SHA:0:12}
+    cp /workspace/pip-report.json "/output/.pip-report-${POC_MODE}-${revision}.tmp"
+    mv "/output/.pip-report-${POC_MODE}-${revision}.tmp" \
+      "/output/pip-report-${POC_MODE}-${revision}.json"
+    cp "$LOCK" "/output/.python-lock-${revision}.tmp"
+    mv "/output/.python-lock-${revision}.tmp" \
+      "/output/python-lock-${revision}.txt"
+    /workspace/venv/bin/pip freeze | sort \
+      > "/output/.python-environment-${revision}.tmp"
+    mv "/output/.python-environment-${revision}.tmp" \
+      "/output/python-environment-${revision}.txt"
+
+  run.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH=/workspace/venv/bin:$PATH
+    export PYTHONPATH=/workspace/imintengine
+    cd /workspace/imintengine
+
+    test "$(git rev-parse HEAD)" = "$IMINT_GIT_SHA"
+    test -z "$(git status --porcelain --untracked-files=all)"
+    python -c "import metafilter, rasterio, openeo, pandas, matplotlib; print('IMPORT PREFLIGHT OK')"
+
+    TILES=/workspace/imintengine/config/meteo_analog_forest_tiles.csv
+    NMD=/inputs/nmd/nmd2018bas_ogeneraliserad_v1_1.tif
+    REVISION=${IMINT_GIT_SHA:0:12}
+    SCHEMAS=$(python - <<'PYEOF'
+    from scripts.run_meteo_analog_forest_poc import (
+        DATASET_SCHEMA_VERSION, PLANNING_SCHEMA_VERSION,
+    )
+    print(f"p{PLANNING_SCHEMA_VERSION}-d{DATASET_SCHEMA_VERSION}")
+    PYEOF
+    )
+    mkdir -p "$IMINT_ERA5_CACHE" "$SCL_FRACS_CACHE" "$MPLCONFIGDIR"
+    test -f "$TILES"
+    test -f "$NMD"
+    test -f "$VPP_WEKEO_DIR/index.json"
+
+    case "$POC_MODE" in
+      smoke)
+        RUN_ID="sweden-may-june-smoke-${REVISION}-${SCHEMAS}"
+        TILE_COUNT=1
+        EXPECTED_YEARS=1
+        BOOTSTRAP_SAMPLES=1000
+        candidate_years=(2020)
+        ;;
+      full)
+        RUN_ID="sweden-may-june-analog-${REVISION}-${SCHEMAS}"
+        TILE_COUNT=10
+        EXPECTED_YEARS=5
+        BOOTSTRAP_SAMPLES=10000
+        candidate_years=(2020 2021 2022 2023 2024)
+        ;;
+      *)
+        echo "POC_MODE must be smoke or full" >&2
+        exit 2
+        ;;
+    esac
+    export RUN_ID TILE_COUNT
+
+    python - <<'PYEOF'
+    from pathlib import Path
+    import os
+    import pandas as pd
+
+    selected = pd.read_csv(
+        "/workspace/imintengine/config/meteo_analog_forest_tiles.csv"
+    ).iloc[: int(os.environ["TILE_COUNT"])].reset_index(drop=True)
+    assert len(selected) == int(os.environ["TILE_COUNT"])
+    assert (selected["forest_fraction"] >= 0.80).all()
+    destination = Path("/output") / os.environ["RUN_ID"] / "tiles.csv"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        existing = pd.read_csv(destination)
+        pd.testing.assert_frame_equal(existing, selected, check_dtype=False)
+    else:
+        temporary = destination.with_suffix(".csv.tmp")
+        selected.to_csv(temporary, index=False)
+        temporary.replace(destination)
+    print(f"TILE PREFLIGHT OK: {len(selected)} tiles")
+    PYEOF
+
+    # Read every required VPP/NMD raster before any DES call. The main
+    # container sees these inputs through read-only subPath mounts.
+    python - <<'PYEOF'
+    import json
+    import os
+    from pathlib import Path
+    import numpy as np
+    import pandas as pd
+    from imint.experiments.meteo_analog_forest import forest_mask
+    from scripts.run_meteo_analog_forest_poc import (
+        MIN_COMMON_FOREST_FRACTION,
+        _common_vpp_valid_mask,
+        _minimum_common_forest_pixels,
+        _validate_vpp_payload,
+        _vpp_product_provenance,
+    )
+    from imint.training.tile_config import TileConfig
+    from imint.training.tile_fetch import fetch_nmd_label_local
+    from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+
+    mode = os.environ["POC_MODE"]
+    tile_count = int(os.environ["TILE_COUNT"])
+    years = [2019, 2020] if mode == "smoke" else list(range(2019, 2025))
+    tiles = pd.read_csv(
+        "/workspace/imintengine/config/meteo_analog_forest_tiles.csv"
+    ).iloc[:tile_count]
+    tile_config = TileConfig(size_px=512)
+    coverage = []
+    versions_by_year = {year: set() for year in years}
+    for tile in tiles.itertuples():
+        bbox = tile_config.bbox_from_center(
+            int(tile.easting), int(tile.northing)
+        )
+        nmd = fetch_nmd_label_local(
+            bbox,
+            tile_config,
+            "/inputs/nmd/nmd2018bas_ogeneraliserad_v1_1.tif",
+            allow_remote_fallback=False,
+        )
+        assert nmd is not None and nmd.shape == (512, 512)
+        forest = forest_mask(nmd)
+        assert forest.mean() >= 0.80
+        for year in years:
+            rasters = fetch_vpp_tiles_local(
+                bbox["west"], bbox["south"], bbox["east"], bbox["north"],
+                size_px=512, vpp_cog_dir=Path("/inputs/vpp"), year=year,
+            )
+            _validate_vpp_payload(rasters, year=year, size_px=512)
+            provenance = _vpp_product_provenance(bbox, year)
+            assert len(provenance["versions"]) == 1
+            versions_by_year[year].update(provenance["versions"])
+            vpp_valid = _common_vpp_valid_mask(rasters, rasters)
+            valid_pixels = int((vpp_valid & forest).sum())
+            valid_fraction = float(valid_pixels / forest.sum())
+            assert valid_pixels >= _minimum_common_forest_pixels(512)
+            assert valid_fraction >= MIN_COMMON_FOREST_FRACTION
+            row = {
+                "easting": int(tile.easting),
+                "northing": int(tile.northing),
+                "year": year,
+                "valid_forest_fraction": valid_fraction,
+                "provenance_fingerprint": provenance["fingerprint"],
+                "versions": provenance["versions"],
+                "products": provenance["products"],
+            }
+            for name, values in rasters.items():
+                values = np.asarray(values)
+                assert values.shape == (512, 512)
+                assert np.isfinite(values).all()
+                fraction = float(((values > 0) & forest).sum() / forest.sum())
+                assert fraction >= MIN_COMMON_FOREST_FRACTION
+                row[f"{name}_positive_forest_fraction"] = fraction
+            coverage.append(row)
+    assert all(len(versions) == 1 for versions in versions_by_year.values())
+    payload = {
+        "mode": mode,
+        "versions_by_year": {
+            str(year): sorted(versions)
+            for year, versions in versions_by_year.items()
+        },
+        "tile_years_checked": len(coverage),
+        "coverage": coverage,
+    }
+    destination = Path("/output") / (
+        f"vpp-readback-{mode}-{os.environ['IMINT_GIT_SHA'][:12]}.json"
+    )
+    temporary = destination.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    temporary.replace(destination)
+    print(
+        f"VPP PREFLIGHT OK: {len(coverage)} tile-year combinations; "
+        f"versions={payload['versions_by_year']}"
+    )
+    PYEOF
+
+    echo "=== ${POC_MODE} POC: $(date --iso-8601=seconds) ==="
+    python scripts/run_meteo_analog_forest_poc.py \
+      --inventory "$TILES" \
+      --nmd-raster "$NMD" \
+      --output-dir /output \
+      --reference-year 2019 \
+      --candidate-years "${candidate_years[@]}" \
+      --window 05-15 06-15 \
+      --tiles "$TILE_COUNT" \
+      --size-px 512 \
+      --fetch-source des \
+      --max-aoi-cloud 0.10 \
+      --execute-fetch \
+      --run-id "$RUN_ID"
+    python scripts/analyze_meteo_analog_forest_poc.py \
+      "/output/$RUN_ID" \
+      --expected-tiles "$TILE_COUNT" \
+      --expected-years "$EXPECTED_YEARS" \
+      --bootstrap-samples "$BOOTSTRAP_SAMPLES" \
+      --expected-imint-git-sha "$IMINT_GIT_SHA" \
+      --expected-metafilter-git-sha "$METAFILTER_GIT_SHA"
+    du -sh "/output/$RUN_ID"
+    echo "=== ${POC_MODE} POC verified: $(date --iso-8601=seconds) ==="
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: meteo-analog-forest-poc-smoke
+  namespace: prithvi-training-default
+  labels:
+    app: imint-experiment
+    purpose: meteo-analog-forest-poc
+    phase: smoke
+spec:
+  suspend: true
+  # Launch only after fetch-holdout-val-phasea releases its DES streams.
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600
+  template:
+    metadata:
+      labels:
+        app: imint-experiment
+        purpose: meteo-analog-forest-poc
+        phase: smoke
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      initContainers:
+        - name: prepare-output
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["sh", "-c", "mkdir -p /data/meteo_analog_forest_poc"]
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+        - name: bootstrap
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "/runner/bootstrap.sh"]
+          env:
+            - name: IMINT_GIT_SHA
+              value: "4b27ab190cf60de39711fa558e4123923a1d4595"
+            - name: METAFILTER_GIT_SHA
+              value: "8045a48a854ee0f7f26c2ce0b7326db3cb41af8a"
+            - name: POC_MODE
+              value: smoke
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: runner
+              mountPath: /runner
+              readOnly: true
+            - name: training-data
+              mountPath: /output
+              subPath: meteo_analog_forest_poc
+      containers:
+        - name: poc
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "/runner/run.sh"]
+          env:
+            - name: IMINT_GIT_SHA
+              value: "4b27ab190cf60de39711fa558e4123923a1d4595"
+            - name: METAFILTER_GIT_SHA
+              value: "8045a48a854ee0f7f26c2ce0b7326db3cb41af8a"
+            - name: POC_MODE
+              value: smoke
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: VPP_SOURCE
+              value: wekeo
+            - name: VPP_WEKEO_DIR
+              value: /inputs/vpp
+            - name: IMINT_ERA5_CACHE
+              value: /output/shared-cache/imint-era5
+            - name: SCL_FRACS_CACHE
+              value: /output/shared-cache/scl-fracs
+            - name: MPLCONFIGDIR
+              value: /output/shared-cache/matplotlib
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: runner
+              mountPath: /runner
+              readOnly: true
+            - name: training-data
+              mountPath: /inputs/nmd
+              subPath: nmd
+              readOnly: true
+            - name: training-data
+              mountPath: /inputs/vpp
+              subPath: vpp_wekeo
+              readOnly: true
+            - name: training-data
+              mountPath: /output
+              subPath: meteo_analog_forest_poc
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: workspace
+          emptyDir: {}
+        - name: runner
+          configMap:
+            name: meteo-analog-forest-poc-runner
+            defaultMode: 365
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: meteo-analog-forest-poc-full
+  namespace: prithvi-training-default
+  labels:
+    app: imint-experiment
+    purpose: meteo-analog-forest-poc
+    phase: full
+spec:
+  suspend: true
+  # Unsuspend only after the separate smoke Job has completed and verified.
+  backoffLimit: 0
+  activeDeadlineSeconds: 259200
+  template:
+    metadata:
+      labels:
+        app: imint-experiment
+        purpose: meteo-analog-forest-poc
+        phase: full
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      initContainers:
+        - name: prepare-output
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["sh", "-c", "mkdir -p /data/meteo_analog_forest_poc"]
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+        - name: bootstrap
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "/runner/bootstrap.sh"]
+          env:
+            - name: IMINT_GIT_SHA
+              value: "4b27ab190cf60de39711fa558e4123923a1d4595"
+            - name: METAFILTER_GIT_SHA
+              value: "8045a48a854ee0f7f26c2ce0b7326db3cb41af8a"
+            - name: POC_MODE
+              value: full
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: runner
+              mountPath: /runner
+              readOnly: true
+            - name: training-data
+              mountPath: /output
+              subPath: meteo_analog_forest_poc
+      containers:
+        - name: poc
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "/runner/run.sh"]
+          env:
+            - name: IMINT_GIT_SHA
+              value: "4b27ab190cf60de39711fa558e4123923a1d4595"
+            - name: METAFILTER_GIT_SHA
+              value: "8045a48a854ee0f7f26c2ce0b7326db3cb41af8a"
+            - name: POC_MODE
+              value: full
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: VPP_SOURCE
+              value: wekeo
+            - name: VPP_WEKEO_DIR
+              value: /inputs/vpp
+            - name: IMINT_ERA5_CACHE
+              value: /output/shared-cache/imint-era5
+            - name: SCL_FRACS_CACHE
+              value: /output/shared-cache/scl-fracs
+            - name: MPLCONFIGDIR
+              value: /output/shared-cache/matplotlib
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: runner
+              mountPath: /runner
+              readOnly: true
+            - name: training-data
+              mountPath: /inputs/nmd
+              subPath: nmd
+              readOnly: true
+            - name: training-data
+              mountPath: /inputs/vpp
+              subPath: vpp_wekeo
+              readOnly: true
+            - name: training-data
+              mountPath: /output
+              subPath: meteo_analog_forest_poc
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: workspace
+          emptyDir: {}
+        - name: runner
+          configMap:
+            name: meteo-analog-forest-poc-runner
+            defaultMode: 365
