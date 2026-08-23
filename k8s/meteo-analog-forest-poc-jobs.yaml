@@ -304,7 +304,7 @@ spec:
               memory: 1Gi
           env:
             - name: IMINT_GIT_SHA
-              value: "4b27ab190cf60de39711fa558e4123923a1d4595"
+              value: "2bf5a35e4a4ca14b2b801311fb2e472fbae894db"
             - name: METAFILTER_GIT_SHA
               value: "8045a48a854ee0f7f26c2ce0b7326db3cb41af8a"
             - name: POC_MODE
@@ -326,7 +326,7 @@ spec:
           command: ["bash", "/runner/run.sh"]
           env:
             - name: IMINT_GIT_SHA
-              value: "4b27ab190cf60de39711fa558e4123923a1d4595"
+              value: "2bf5a35e4a4ca14b2b801311fb2e472fbae894db"
             - name: METAFILTER_GIT_SHA
               value: "8045a48a854ee0f7f26c2ce0b7326db3cb41af8a"
             - name: POC_MODE
@@ -446,7 +446,7 @@ spec:
               memory: 1Gi
           env:
             - name: IMINT_GIT_SHA
-              value: "4b27ab190cf60de39711fa558e4123923a1d4595"
+              value: "2bf5a35e4a4ca14b2b801311fb2e472fbae894db"
             - name: METAFILTER_GIT_SHA
               value: "8045a48a854ee0f7f26c2ce0b7326db3cb41af8a"
             - name: POC_MODE
@@ -468,7 +468,7 @@ spec:
           command: ["bash", "/runner/run.sh"]
           env:
             - name: IMINT_GIT_SHA
-              value: "4b27ab190cf60de39711fa558e4123923a1d4595"
+              value: "2bf5a35e4a4ca14b2b801311fb2e472fbae894db"
             - name: METAFILTER_GIT_SHA
               value: "8045a48a854ee0f7f26c2ce0b7326db3cb41af8a"
             - name: POC_MODE
