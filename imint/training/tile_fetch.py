@@ -129,6 +129,54 @@ _CDSE_OPENEO_SEMAPHORE = AdaptiveSemaphore(
 )
 
 
+def infer_tile_year(data: dict) -> int | None:
+    """Canonical label year (**year-0**) of a tile. Single source of truth.
+
+    Priority: ``year`` -> ``lpis_year`` -> **modal** year across ``dates``
+    (ties broken by the most recent).
+
+    The ``dates`` fallback must never take ``dates[0]``. ``dates`` holds the
+    four frames in slot order: slot 0 is autumn of **year-1** (stubble /
+    winter-cereal context); slots 1-3 are the growing season of year-0. QC
+    guarantees >=3/4 growing-season frames, so the modal year is year-0. (The
+    2016 clearcut anchor is stored as ``frame_2016_year``, not in ``dates``,
+    so it cannot skew the mode.)
+
+    ``tessera_year`` is deliberately NOT consulted: it is a *clamped* value
+    (pinned into TESSERA's covered range), so it is not a label year, and
+    reading it lets one enricher's error propagate into another's.
+
+    History: a naive ``dates[0][:4]`` sent LPIS lookups to year-1 and dropped
+    ~1000 crop tiles in the 2026-05-07 run; ``build_labels.py`` was fixed then
+    but ``enrich_tiles_{s1,tessera}.py`` and the refetch paths were not, so
+    every LULC tile got year-1 SAR composites and year-1 TESSERA embeddings.
+    TESSERA embeddings are annual, so for a rotating crop a year-1 embedding
+    describes a *different crop*. Centralised here 2026-08-23 so the rule
+    cannot drift apart again.
+    """
+    from collections import Counter
+
+    for key in ("year", "lpis_year"):
+        v = data.get(key) if hasattr(data, "get") else None
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                continue
+    years: list[int] = []
+    dates = data.get("dates") if hasattr(data, "get") else None
+    if dates is not None:
+        for d in np.asarray(dates).ravel():
+            s = str(d)
+            if len(s) >= 4 and s[:4].isdigit():
+                years.append(int(s[:4]))
+    if not years:
+        return None
+    counts = Counter(years)
+    top = counts.most_common(1)[0][1]
+    return max(y for y, c in counts.items() if c == top)
+
+
 def point_to_bbox_3006(lat: float, lon: float, tile: "TileConfig") -> dict:
     """Convert WGS84 point → tile-sized EPSG:3006 bounding box."""
     from rasterio.crs import CRS

@@ -182,22 +182,11 @@ def _tile_latitude(data: dict) -> float | None:
         return None
 
 
-def _tile_year(data: dict) -> int | None:
-    """Label year of the tile — matches the temporal-matching data rules."""
-    for key in ("tessera_year", "lpis_year", "year"):
-        v = data.get(key)
-        if v is not None:
-            try:
-                return int(v)
-            except (TypeError, ValueError):
-                continue
-    dates = data.get("dates")
-    if dates is not None:
-        for d in np.asarray(dates).ravel():
-            s = str(d)
-            if len(s) >= 4 and s[:4].isdigit():
-                return int(s[:4])
-    return None
+# Year derivation is centralised in imint.training.tile_fetch so the
+# TESSERA enricher, the label builder and this module cannot drift apart.
+from imint.training.tile_fetch import (  # noqa: E402
+    infer_tile_year as _tile_year,
+)
 
 
 def enrich_one_tile(
