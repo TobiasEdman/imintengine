@@ -47,6 +47,7 @@ from imint.training.tile_fetch import (
     bbox_3006_to_wgs84,
     fetch_aux_channels,
     fetch_nmd_label_local,
+    infer_tile_year,
     select_slot_dates,
 )
 from imint.training.fetch_spectral import fetch_tile_spectral, _M2_CAPABLE_BACKENDS
@@ -622,7 +623,12 @@ def fetch_tile(
                 "mask": [int(v) for v in core["temporal_mask"][:4]]}
 
     nmd_label = fetch_nmd_label_local(bbox, tile)
-    aux = fetch_aux_channels(bbox, tile)
+    # VPP phenology must be fetched for THIS tile's year — fetch_vpp_tiles
+    # defaults to 2021, so omitting the year gave every tile 2021 phenology.
+    # Prefer the caller's explicit year; otherwise derive year-0 from the
+    # frames we just fetched (``core`` carries ``dates``).
+    vpp_year = int(loc["year"]) if loc.get("year") else infer_tile_year(core)
+    aux = fetch_aux_channels(bbox, tile, vpp_year=vpp_year)
 
     save = {**core, "source": loc["source"]}
     if nmd_label is not None:

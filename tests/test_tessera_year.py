@@ -104,6 +104,26 @@ def test_s1_prefers_explicit_keys():
     assert _tile_year(_tile(["2021-09-14"], lpis_year=2022)) == 2022
 
 
+def test_backfill_vpp_uses_canonical_year_not_tessera_year():
+    """backfill_vpp consulted tessera_year FIRST — a clamped, enricher-written
+    value that held year-1 — so VPP inherited the wrong season wholesale."""
+    from backfill_vpp import _tile_year as vpp_year
+
+    d = _tile(["2021-09-14", "2022-05-16", "2022-06-25", "2022-08-19"],
+              tessera_year=2021)
+    assert vpp_year(d) == 2022 == _infer_tile_year(d)
+
+
+def test_fetch_aux_channels_accepts_vpp_year():
+    """Regression: fetch_vpp_tiles defaults to year=2021, so fetch_aux_channels
+    must be able to pass the tile's own year through."""
+    import inspect
+
+    from imint.training.tile_fetch import fetch_aux_channels
+
+    assert "vpp_year" in inspect.signature(fetch_aux_channels).parameters
+
+
 def test_skip_comparison_is_clamp_stable():
     """A 2017 tile stores tessera_year=2018; the skip check must compare
     against the clamped value or it re-fetches that tile on every run."""

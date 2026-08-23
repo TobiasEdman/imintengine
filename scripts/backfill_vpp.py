@@ -64,6 +64,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.cdse_vpp import _has_sufficient_coverage, fetch_vpp_tiles
 from imint.training.tile_bbox import resolve_fetch_bbox
+from imint.training.tile_fetch import infer_tile_year
 
 # The five HR-VPP channels stored per tile. ``fetch_vpp_tiles`` returns the
 # bare metric names (sosd, eosd, …); the .npz key is ``vpp_<name>`` — the
@@ -71,9 +72,6 @@ from imint.training.tile_bbox import resolve_fetch_bbox
 _VPP_RAW_NAMES = ("sosd", "eosd", "length", "maxv", "minv")
 _VPP_CHANNEL_NAMES = tuple(f"vpp_{n}" for n in _VPP_RAW_NAMES)
 
-# Year-resolution precedence — mirrors audit_vpp_window_displacement.tile_year_of
-# and fetch_unified_tiles, but with tessera_year first (the SPEC's primary key).
-_YEAR_KEYS = ("tessera_year", "lpis_year", "year")
 
 _KNOWN_EMPTY_SIDECAR = "vpp_known_empty.json"
 
@@ -98,25 +96,22 @@ def _vpp_is_empty(data) -> bool:
 # ── Tile metadata resolution ─────────────────────────────────────────────
 
 def _tile_year(data) -> int | None:
-    """Resolve the tile's VPP product year.
+    """Resolve the tile's VPP product year (**year-0**).
 
-    Precedence: ``tessera_year`` (SPEC primary, LPIS-cross-checked) →
-    ``lpis_year`` → ``year`` → the latest parseable year in ``dates``.
+    Delegates to the canonical ``tile_fetch.infer_tile_year``
+    (``year`` -> ``lpis_year`` -> modal year across ``dates``) so the label
+    builder, both aux enrichers and this backfill cannot drift apart.
+
+    Previously this consulted ``tessera_year`` FIRST. That key is written by
+    the TESSERA enricher and is a *clamped* value, not a label year — and
+    before the year-0 fix it held year-1 for every tile without ``lpis_year``.
+    Reading it here made the VPP backfill inherit that error wholesale, so
+    phenology would have been fetched for the season *before* the labels.
+
     Returns None when nothing is resolvable (caller treats as a hard skip —
     we will not guess a year for a VPP fetch).
     """
-    for key in _YEAR_KEYS:
-        if key in data:
-            try:
-                return int(np.asarray(data[key]).item())
-            except (ValueError, TypeError):
-                pass
-    years = [
-        int(str(s)[:4])
-        for s in np.asarray(data.get("dates", [])).ravel()
-        if len(str(s)) >= 4 and str(s)[:4].isdigit()
-    ]
-    return max(years) if years else None
+    return infer_tile_year(data)
 
 
 # ── Fetch: WEkEO first (PU-free), CDSE fallback ──────────────────────────

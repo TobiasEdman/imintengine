@@ -520,7 +520,8 @@ def select_slot_dates(
     return dates
 
 
-def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig") -> dict[str, np.ndarray]:
+def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig",
+                       vpp_year: int | None = None) -> dict[str, np.ndarray]:
     """Fetch auxiliary channels for a tile: VPP phenology, DEM, SKG forestry
     (height/volume/basal_area/diameter) and SLU markfukt.
 
@@ -534,12 +535,21 @@ def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig") -> dict[str, np.ndar
     _CDSE_SEMAPHORE.acquire()
     try:
         from imint.training.cdse_vpp import fetch_vpp_tiles
+        # Pass the tile's own year. ``fetch_vpp_tiles`` defaults to year=2021,
+        # so omitting it gave EVERY tile 2021 phenology regardless of its
+        # actual year — 5 of the 11 aux channels systematically wrong-year.
+        # Phenology is weather-driven (a warm spring shifts SOSD by weeks), so
+        # a 2018 or 2024 tile carrying 2021 SOSD/EOSD is materially wrong.
+        # ``vpp_year`` is threaded in by the caller; fall back to the module
+        # default only when the caller genuinely has no year.
+        vpp_kwargs = {} if vpp_year is None else {"year": int(vpp_year)}
         vpp = fetch_vpp_tiles(
             west=bbox_3006["west"],
             south=bbox_3006["south"],
             east=bbox_3006["east"],
             north=bbox_3006["north"],
             size_px=tile.size_px,
+            **vpp_kwargs,
         )
         for band in ["sosd", "eosd", "length", "maxv", "minv"]:
             if band in vpp and vpp[band] is not None:
