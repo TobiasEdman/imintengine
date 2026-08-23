@@ -54,12 +54,12 @@ Keys written (v3)
     s1_orbit        str        — chosen orbit ("ASCENDING"/"DESCENDING")
     s1_source       str        — "pc-rtc-gamma0" or "cdse-grd-sigma0"
     has_s1          int32      — 1 if the label-year composite was written
-    s1_enrich_v     int32      — 3 (version marker; --skip-existing keys on ==3)
+    s1_enrich_v     int32      — 4 (version marker; --skip-existing keys on ==4)
 
 Re-enrichment
     Older tiles (v1 ±3-day, v2 CDSE-dB) are RE-enriched: ``has_s1`` no longer
     short-circuits; ``--skip-existing`` skips only tiles already at
-    ``s1_enrich_v == 3``. The 5 CDSE-v2 tiles are re-enriched to v3 so the
+    ``s1_enrich_v == 4``. The 5 CDSE-v2 tiles are re-enriched to v4 so the
     whole set is linear-γ⁰ / RTC-consistent.
 
 Usage:
@@ -90,7 +90,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # sweet spot (plan §Budget).
 MAX_SCENES = 3
 NODATA_THRESHOLD = 0.10
-S1_ENRICH_VERSION = 3
+# 4: composited over the LABEL year (year-0). v3 derived the year from
+# dates[0] — the autumn frame of year-1 — so every tile without lpis_year got
+# a wrong-season composite. The bump is what forces re-enrichment: the skip
+# below keys on this value, so v3 tiles would otherwise be skipped and keep
+# their wrong-year data. The CROMA/TerraMind preflights gate on ==4, which
+# makes the retrains refuse to start until re-enrichment has run.
+S1_ENRICH_VERSION = 4
 
 # Per-backend module + stored-units + provenance. pc-rtc stores LINEAR γ⁰
 # (the CROMA/TerraMind normalizers apply 10*log10 internally — storing dB

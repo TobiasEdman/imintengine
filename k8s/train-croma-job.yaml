@@ -13,7 +13,7 @@
 #   The pretrained SAR encoder is locked to 2-ch input, so the anchor rides
 #   the AUX path, not a third SAR frame. Checkpoints → croma_v3 (the old
 #   croma dir is left intact). A PREFLIGHT fails loud unless ≥95% of
-#   /cephfs/unified_v2_512 tiles have s1_enrich_v==3 (no partial-enrichment
+#   /cephfs/unified_v2_512 tiles have s1_enrich_v==4 (no partial-enrichment
 #   training) AND the ΔSAR code is present in the clone.
 #
 # CROMA is patch_size=8 → 504 crop is OK (504/8=63). H100 has ample memory;
@@ -123,7 +123,7 @@ spec:
           # --- PREFLIGHT: fail loud on a PARTIAL S1 v3 enrichment ---
           # Never train the ΔSAR retrain on a half-enriched dataset: the delta
           # channels would be zero on every not-yet-v3 tile, poisoning the
-          # anchor. Require >=95% of tiles to carry s1_enrich_v==3.
+          # anchor. Require >=95% of tiles to carry s1_enrich_v==4.
           python - <<'PY'
           import glob, sys
           import numpy as np
@@ -139,17 +139,17 @@ spec:
           for p in tiles:
               try:
                   with np.load(p, allow_pickle=True) as z:
-                      if "s1_enrich_v" in z.files and int(z["s1_enrich_v"].item()) == 3:
+                      if "s1_enrich_v" in z.files and int(z["s1_enrich_v"].item()) == 4:
                           v3 += 1
                       if "s1_vv_vh_2016" in z.files:
                           with2016 += 1
               except Exception:
                   pass
           frac = v3 / n
-          print(f"S1 enrichment: {v3}/{n} tiles s1_enrich_v==3 ({frac:.1%}); "
+          print(f"S1 enrichment: {v3}/{n} tiles s1_enrich_v==4 ({frac:.1%}); "
                 f"{with2016}/{n} carry s1_vv_vh_2016 ({with2016/n:.1%})")
           if frac < 0.95:
-              print(f"PREFLIGHT FAILED — only {frac:.1%} of tiles are s1_enrich_v==3 "
+              print(f"PREFLIGHT FAILED — only {frac:.1%} of tiles are s1_enrich_v==4 "
                     f"(<95%). Wait for enrich-s1-season to finish before training.")
               sys.exit(5)
           print("enrichment coverage OK")
