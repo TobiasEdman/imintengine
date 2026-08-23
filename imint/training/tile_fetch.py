@@ -156,15 +156,25 @@ def infer_tile_year(data: dict) -> int | None:
     """
     from collections import Counter
 
+    # Accept dicts and NpzFile alike: NpzFile only became a Mapping (and thus
+    # gained .get) in newer numpy, and several callers pass one directly.
+    def _lookup(key):
+        try:
+            if key in getattr(data, "files", data):
+                return data[key]
+        except (TypeError, KeyError):
+            pass
+        return None
+
     for key in ("year", "lpis_year"):
-        v = data.get(key) if hasattr(data, "get") else None
+        v = _lookup(key)
         if v is not None:
             try:
                 return int(v)
             except (TypeError, ValueError):
                 continue
     years: list[int] = []
-    dates = data.get("dates") if hasattr(data, "get") else None
+    dates = _lookup("dates")
     if dates is not None:
         for d in np.asarray(dates).ravel():
             s = str(d)
@@ -362,8 +372,16 @@ def _fetch_single_scene(
     return None, ""
 
 
-def _get_vpp_doy_windows(bbox_3006: dict, num_growing_frames: int = 3) -> list[tuple[int, int]] | None:
+def _get_vpp_doy_windows(bbox_3006: dict, num_growing_frames: int = 3,
+                         year: int | None = None) -> list[tuple[int, int]] | None:
     """Get VPP-guided growing season DOY windows for a tile.
+
+    ``year`` selects the VPP product year. It matters more here than anywhere
+    else VPP is read: these windows decide WHICH DATES the growing-season
+    spectral frames are fetched from. ``fetch_vpp_tiles`` defaults to 2021, so
+    omitting the year drove frame selection for every tile — of every year —
+    off 2021 phenology. Green-up moves by weeks between years, so that
+    mis-centres the season windows for anything that is not a 2021 tile.
 
     Returns list of (doy_start, doy_end) tuples, or None if VPP fails.
     """
@@ -371,12 +389,14 @@ def _get_vpp_doy_windows(bbox_3006: dict, num_growing_frames: int = 3) -> list[t
         from imint.training.cdse_vpp import fetch_vpp_tiles
         from imint.training.vpp_windows import compute_growing_season_windows
 
+        vpp_kwargs = {} if year is None else {"year": int(year)}
         vpp = fetch_vpp_tiles(
             west=bbox_3006["west"],
             south=bbox_3006["south"],
             east=bbox_3006["east"],
             north=bbox_3006["north"],
             size_px=64,
+            **vpp_kwargs,
         )
         return compute_growing_season_windows(
             vpp["sosd"], vpp["eosd"],

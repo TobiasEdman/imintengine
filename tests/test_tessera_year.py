@@ -130,3 +130,15 @@ def test_skip_comparison_is_clamp_stable():
     want = _infer_tile_year(_tile(["2016-09-14", "2017-06-25"]))
     assert want == 2017
     assert _clamp_year_for_tessera(want, TESSERA_YEARS) == 2018
+
+
+def test_accepts_npzfile_not_just_dict(tmp_path):
+    """Several callers pass np.load(...) directly. NpzFile only became a
+    Mapping (gaining .get) in newer numpy, so the helper must not rely on it."""
+    import numpy as np
+
+    p = tmp_path / "t.npz"
+    np.savez(p, dates=np.array(["2021-09-14", "2022-05-16",
+                                "2022-06-25", "2022-08-19"]))
+    with np.load(p, allow_pickle=True) as z:
+        assert _infer_tile_year(z) == 2022

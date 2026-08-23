@@ -274,7 +274,8 @@ def prefetch_vpp_batch(
         loc, _ = item
         _CDSE_SEMAPHORE.acquire()
         try:
-            windows = _get_vpp_doy_windows(loc["bbox_3006"], num_growing_frames=3)
+            windows = _get_vpp_doy_windows(loc["bbox_3006"], num_growing_frames=3,
+                                           year=loc.get("year"))
             if windows:
                 _CDSE_SEMAPHORE.report_success()
             else:
@@ -569,7 +570,8 @@ def fetch_tile(
         vpp_windows = vpp_cache.get(name)
     else:
         from imint.training.tile_fetch import _get_vpp_doy_windows
-        vpp_windows = _get_vpp_doy_windows(bbox)
+        # Year-matched: these windows pick the growing-season frame dates.
+        vpp_windows = _get_vpp_doy_windows(bbox, year=loc.get("year"))
 
     # 5-slot date selection (0 autumn y-1, 1-3 VPP, 4 = 2016 background).
     # Labelled tiles are strict on their label year. No-year forest/water tiles
@@ -681,17 +683,11 @@ def gen_from_existing(
 
             # Read tile's base year (LPIS/LUCAS survey year)
             tile_year = None
-            if "year" in data:
-                tile_year = int(data["year"])
-            elif "lpis_year" in data:
-                tile_year = int(data["lpis_year"])
-            elif "dates" in data:
-                dates = data["dates"]
-                for d in dates:
-                    d_str = str(d)
-                    if d_str and len(d_str) >= 4:
-                        tile_year = int(d_str[:4])
-                        break
+            # Canonical year-0 resolution. The old dates fallback took the
+            # FIRST date — the autumn frame of year-1 — so a refetch would
+            # have re-fetched spectral for the wrong year, breaking the
+            # temporal-matching rule this path exists to preserve.
+            tile_year = infer_tile_year(data)
 
             has_lpis = "label_mask" in data or "lpis_year" in data
 
@@ -788,25 +784,11 @@ def repair_to_canonical_layout(
     except Exception as e:
         return {"name": name, "status": "error", "reason": f"npz_load: {e!s}"[:200]}
 
-    # Year derivation: tessera_year (LPIS-cross-checked) → lpis_year → year → dates
-    tile_year: int | None = None
-    for key in ("tessera_year", "lpis_year", "year"):
-        if key in old:
-            try:
-                tile_year = int(old[key])
-                break
-            except Exception:
-                pass
-    if tile_year is None:
-        # Last-resort: parse year from first valid date
-        for d in old.get("dates", []):
-            s = str(d)
-            if s and len(s) >= 4:
-                try:
-                    tile_year = int(s[:4])
-                    break
-                except ValueError:
-                    pass
+    # Canonical year-0 resolution. Previously this consulted tessera_year
+    # first (a *clamped* enricher-written value, not a label year) and then
+    # fell back to the FIRST date — the autumn frame of year-1 — so a refetch
+    # could re-fetch spectral for the wrong year entirely.
+    tile_year: int | None = infer_tile_year(old)
     if tile_year is None:
         return {"name": name, "status": "error", "reason": "no_year_field"}
 

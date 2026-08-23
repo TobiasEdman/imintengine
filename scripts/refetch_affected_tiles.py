@@ -37,7 +37,7 @@ from imint.config.env import load_env
 load_env()
 
 from imint.training.tile_bbox import resolve_tile_bbox
-from imint.training.tile_fetch import bbox_3006_to_wgs84
+from imint.training.tile_fetch import bbox_3006_to_wgs84, infer_tile_year
 from imint.training.tile_config import TileConfig
 from scripts.fetch_unified_tiles import repair_to_canonical_layout
 
@@ -159,17 +159,10 @@ def loc_from_existing(name: str, tile: TileConfig, tiles_dir: str) -> dict | Non
         return None
 
     # Read base year
-    tile_year = None
-    if "year" in data.files:
-        tile_year = int(data["year"])
-    elif "lpis_year" in data.files:
-        tile_year = int(data["lpis_year"])
-    elif "dates" in data.files:
-        for d in data["dates"]:
-            d_str = str(d)
-            if d_str and len(d_str) >= 4:
-                tile_year = int(d_str[:4])
-                break
+    # Canonical year-0 resolution — the old dates fallback took the FIRST
+    # date, i.e. the autumn frame of year-1, so a refetch would have pulled
+    # spectral for the wrong year.
+    tile_year = infer_tile_year(data)
 
     has_lpis = "label_mask" in data.files or "lpis_year" in data.files
 

@@ -12,7 +12,8 @@ as a last-resort fallback.
 What it does, per tile:
   1. Skip tiles that already carry non-empty VPP (idempotent / resumable).
   2. Resolve the EPSG:3006 bbox (``bbox_3006`` key) and the tile year
-     (``tessera_year`` primary, then ``lpis_year`` → ``year`` → ``dates``).
+     (canonical ``tile_fetch.infer_tile_year``: ``year`` → ``lpis_year``
+     → modal year across ``dates``).
   3. Fetch the five VPP bands via ``imint.training.cdse_vpp.fetch_vpp_tiles``
      for that bbox + year. Source routing is the function's own
      ``$VPP_SOURCE`` env switch (NOT a kwarg): we force ``wekeo`` first —
