@@ -29,6 +29,9 @@ data:
     git -C /workspace/imintengine fetch --depth 1 origin "$IMINT_GIT_SHA"
     git -C /workspace/imintengine checkout --detach "$IMINT_GIT_SHA"
     test "$(git -C /workspace/imintengine rev-parse HEAD)" = "$IMINT_GIT_SHA"
+    git -C /workspace/imintengine rev-parse HEAD > /workspace/imint-head.sha
+    git -C /workspace/imintengine status --porcelain --untracked-files=all \
+      > /workspace/imint-status.txt
 
     python3 -m venv /workspace/venv
     LOCK=/workspace/imintengine/config/meteo_analog_poc_requirements.lock
@@ -59,8 +62,8 @@ data:
     export PYTHONPATH=/workspace/imintengine
     cd /workspace/imintengine
 
-    test "$(git rev-parse HEAD)" = "$IMINT_GIT_SHA"
-    test -z "$(git status --porcelain --untracked-files=all)"
+    test "$(cat /workspace/imint-head.sha)" = "$IMINT_GIT_SHA"
+    test -z "$(cat /workspace/imint-status.txt)"
     python -c "import metafilter, rasterio, openeo, pandas, matplotlib; print('IMPORT PREFLIGHT OK')"
 
     TILES=/workspace/imintengine/config/meteo_analog_forest_tiles.csv
