@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: backfill-vpp-holdout-y0
+  name: backfill-vpp-holdout-y0b
   namespace: prithvi-training-default
   labels:
     app: dataset-completion
@@ -63,7 +63,7 @@ spec:
                 numpy rasterio pyproj scipy hda 2>&1 | tail -3
 
               mkdir -p /workspace && cd /workspace
-              git clone --depth 1 --branch main \
+              git clone --depth 1 --branch agent/te/opus/nfi-nmd2023-benchmark \
                 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
               export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
@@ -72,6 +72,11 @@ spec:
               # auditable against what was reviewed). See
               # memory/feedback_verify_remote_before_resubmit.
               echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+              grep -q "vpp_year" scripts/backfill_vpp.py || {
+                echo "PREFLIGHT FAILED — clone lacks the year-0 VPP fix"
+                echo "  (no vpp_year stamp => presence-only skip => no-op run)"
+                exit 3; }
+              echo "preflight OK — year-0 VPP fix present"
 
               python3 scripts/backfill_vpp.py \
                 --data-dir /data/holdout_val_512 \
