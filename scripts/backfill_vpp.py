@@ -232,8 +232,16 @@ def backfill_one_tile(
     except Exception as e:  # noqa: BLE001 — a corrupt .npz must not kill the run
         return {"name": name, "status": "failed", "reason": f"load:{type(e).__name__}"}
 
+    # Year-aware skip: VPP being *present* is not enough — it must be present
+    # for the RIGHT year. Tiles written before the year-0 fix carry 2021
+    # phenology (the old fetch-time default) yet look complete to
+    # _vpp_is_empty, so a presence-only check would keep them wrong forever.
+    # A tile with no vpp_year stamp predates the fix, so it is re-fetched.
     if not force and not _vpp_is_empty(data):
-        return {"name": name, "status": "skipped", "reason": "vpp_present"}
+        have = data.get("vpp_year")
+        want = _tile_year(data)
+        if have is not None and want is not None and int(have) == int(want):
+            return {"name": name, "status": "skipped", "reason": "vpp_present"}
 
     # bbox + size via the shared SSOT resolver (extent coupled to the tile's own
     # pixel grid at 10 m GSD) — the ONE place tile-aligned fetch geometry lives.
@@ -263,6 +271,12 @@ def backfill_one_tile(
     # Write the 5 channels under their vpp_<name> keys; preserve everything else.
     for raw_name in _VPP_RAW_NAMES:
         data[f"vpp_{raw_name}"] = np.asarray(bands[raw_name], np.float32)
+    # Stamp WHICH year the phenology came from. Without this marker there was
+    # no way to tell a correctly-dated tile from one carrying the old
+    # fetch-time default of 2021, which is why that bug stayed invisible: the
+    # channels were present and non-zero, so every emptiness check passed.
+    # Also lets a later run skip year-correct tiles instead of needing --force.
+    data["vpp_year"] = np.int32(year)
     try:
         _atomic_savez(tile_path, data)
     except Exception as e:  # noqa: BLE001
