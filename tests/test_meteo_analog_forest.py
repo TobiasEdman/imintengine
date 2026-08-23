@@ -183,6 +183,36 @@ def test_vpp_phase_normalizes_leap_year_doy():
         )
 
 
+def test_vpp_phase_accepts_previous_year_season_start():
+    vpp = {
+        "sosd": np.full((2, 2), 19350),  # 16 Dec 2019 start of the 2020 season
+        "eosd": np.full((2, 2), 20280),
+        "maxv": np.full((2, 2), 1.2),
+        "minv": np.full((2, 2), 0.2),
+    }
+    result = summarize_vpp_phase(vpp, "2020-06-01")
+    assert result["sos_doy_median"] == -15  # 350 - 365, product-year axis
+    assert result["eos_doy_median"] == 279
+    assert result["days_from_sos"] == 152 - (-15)
+    assert result["season_midpoint_proxy_doy"] == (-15 + 279) / 2
+
+
+def test_vpp_phase_rejects_prefix_beyond_season_years():
+    vpp = {
+        "sosd": np.full((2, 2), 18350),  # two years back is not a 2020 season
+        "eosd": np.full((2, 2), 20280),
+        "maxv": np.full((2, 2), 1.2),
+        "minv": np.full((2, 2), 0.2),
+    }
+    with pytest.raises(ValueError, match="allowed season years"):
+        summarize_vpp_phase(vpp, "2020-06-01")
+    with pytest.raises(ValueError, match="allowed season years"):
+        summarize_vpp_phase(
+            {**vpp, "sosd": np.full((2, 2), 20120), "eosd": np.full((2, 2), 19280)},
+            "2020-06-01",
+        )
+
+
 def _valid_fetch_result():
     return {
         "dates": np.array(["2019-06-01", "2020-06-02"]),

@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 
 from metafilter import AnalogMatch, AnalogModel
-from imint.training.vpp_windows import vpp_yyddd_to_doy
 
 
 FOREST_CLASSES = frozenset({1, 2, 3, 4, 5})
@@ -455,14 +454,24 @@ def summarize_vpp_phase(
     """Summarize forest VPP timing; peak date is an explicit midpoint proxy."""
     acquisition = pd.Timestamp(acquisition_date)
     acquisition_doy = _common_year_doy(acquisition.month, acquisition.day)
-    _validate_yyddd_product_year(vpp["sosd"], acquisition.year, "SOSD")
-    _validate_yyddd_product_year(vpp["eosd"], acquisition.year, "EOSD")
+    _validate_yyddd_product_year(
+        vpp["sosd"],
+        acquisition.year,
+        "SOSD",
+        allowed_years=(acquisition.year - 1, acquisition.year),
+    )
+    _validate_yyddd_product_year(
+        vpp["eosd"],
+        acquisition.year,
+        "EOSD",
+        allowed_years=(acquisition.year, acquisition.year + 1),
+    )
     sos_source = _positive_median(vpp["sosd"], mask=mask)
     eos_source = _positive_median(vpp["eosd"], mask=mask)
-    sos_doy = _positive_median(vpp_yyddd_to_doy(vpp["sosd"]), mask=mask)
-    eos_doy = _positive_median(vpp_yyddd_to_doy(vpp["eosd"]), mask=mask)
-    sos = normalize_doy_for_year(sos_doy, acquisition.year)
-    eos = normalize_doy_for_year(eos_doy, acquisition.year)
+    sos_doy = _finite_median(_yyddd_relative_doy(vpp["sosd"], acquisition.year), mask=mask)
+    eos_doy = _finite_median(_yyddd_relative_doy(vpp["eosd"], acquisition.year), mask=mask)
+    sos = _normalize_relative_doy(sos_doy, acquisition.year)
+    eos = _normalize_relative_doy(eos_doy, acquisition.year)
     midpoint = (sos + eos) / 2.0
     return {
         "sos_doy_median": sos,
@@ -479,12 +488,26 @@ def summarize_vpp_phase(
     }
 
 
+def _days_in_year(year: int) -> int:
+    return int(pd.Timestamp(int(year), 12, 31).dayofyear)
+
+
 def _validate_yyddd_product_year(
     values: np.ndarray,
     product_year: int,
     label: str,
+    *,
+    allowed_years: tuple[int, ...] | None = None,
 ) -> None:
-    """Require integral YYDDD values carrying the requested product year."""
+    """Require integral YYDDD values within the allowed season years.
+
+    HR-VPP season events are not confined to the product year: season
+    starts can fall in the previous autumn and season ends can spill
+    into the next winter, and the YYDDD prefix names the year the event
+    actually occurred in.
+    """
+    if allowed_years is None:
+        allowed_years = (int(product_year),)
     array = np.asarray(values, dtype=float)
     valid = array[np.isfinite(array) & (array > 0)]
     if not valid.size:
@@ -493,18 +516,64 @@ def _validate_yyddd_product_year(
     if not np.array_equal(valid, rounded):
         raise ValueError(f"VPP {label} contains non-integral YYDDD values")
     encoded = rounded.astype(np.int64)
-    expected_prefix = int(product_year) - 2000
     prefixes = encoded // 1000
-    if not np.all(prefixes == expected_prefix):
+    allowed_prefixes = sorted(int(year) - 2000 for year in allowed_years)
+    if not np.all(np.isin(prefixes, allowed_prefixes)):
         observed = sorted(set(prefixes.tolist()))
         raise ValueError(
-            f"VPP {label} YYDDD prefix {observed} does not match "
-            f"product year {product_year}"
+            f"VPP {label} YYDDD prefix {observed} is outside the allowed "
+            f"season years {sorted(int(year) for year in allowed_years)} "
+            f"for product year {product_year}"
         )
-    max_doy = 366 if pd.Timestamp(product_year, 12, 31).dayofyear == 366 else 365
     doy = encoded % 1000
-    if not np.all((doy >= 1) & (doy <= max_doy)):
-        raise ValueError(f"VPP {label} contains DOY outside year {product_year}")
+    for year in sorted(int(year) for year in allowed_years):
+        in_year = doy[prefixes == year - 2000]
+        if in_year.size and not np.all((in_year >= 1) & (in_year <= _days_in_year(year))):
+            raise ValueError(f"VPP {label} contains DOY outside year {year}")
+
+
+def _yyddd_relative_doy(values: np.ndarray, product_year: int) -> np.ndarray:
+    """Decode YYDDD onto the product-year DOY axis.
+
+    Events in the previous year map below 1 and events in the next year
+    map above the year length, so day arithmetic against product-year
+    dates stays correct across the season's calendar-year boundary.
+    """
+    array = np.asarray(values, dtype=float)
+    result = np.full(array.shape, np.nan)
+    valid = np.isfinite(array) & (array > 0)
+    encoded = np.rint(array[valid]).astype(np.int64)
+    years = 2000 + encoded // 1000
+    doy = (encoded % 1000).astype(float)
+    doy[years == int(product_year) - 1] -= _days_in_year(int(product_year) - 1)
+    doy[years == int(product_year) + 1] += _days_in_year(int(product_year))
+    result[valid] = doy
+    return result
+
+
+def _finite_median(values: np.ndarray, *, mask: np.ndarray | None = None) -> float:
+    array = np.asarray(values, dtype=float)
+    valid_mask = np.isfinite(array)
+    if mask is not None:
+        if np.asarray(mask).shape != array.shape:
+            raise ValueError("VPP mask shape does not match VPP raster")
+        valid_mask &= np.asarray(mask, dtype=bool)
+    valid = array[valid_mask]
+    if not valid.size:
+        raise ValueError("VPP band has no valid pixels")
+    return float(np.median(valid))
+
+
+def _normalize_relative_doy(day_of_year: float, year: int) -> float:
+    """Normalize a product-year-axis DOY that may extend into adjacent years."""
+    value = float(day_of_year)
+    if value < 1:
+        previous = int(year) - 1
+        return normalize_doy_for_year(value + _days_in_year(previous), previous) - 365
+    days = _days_in_year(int(year))
+    if value > days:
+        return normalize_doy_for_year(value - days, int(year) + 1) + 365
+    return normalize_doy_for_year(value, year)
 
 
 def normalize_doy_for_year(day_of_year: float, year: int) -> float:
