@@ -90,9 +90,10 @@ spec:
               echo "=== after ==="
               df -h /data | tail -1
               echo "=== reclaim complete (DRY_RUN=$DRY_RUN) ==="
+          # iceguard-webhook rejects any pod whose requests != limits.
           resources:
             requests: { cpu: "1", memory: "2Gi" }
-            limits:   { cpu: "2", memory: "4Gi" }
+            limits:   { cpu: "1", memory: "2Gi" }
           volumeMounts:
             - name: training-data
               mountPath: /data
