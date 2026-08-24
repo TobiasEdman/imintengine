@@ -51,12 +51,30 @@ Unified 19-class schema (from unified_schema.py + harvest):
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import random
+import re
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
+from pyproj import Transformer
+
+from .era5_aux import (
+    ERA5_ATMOSPHERE_GRID_DEGREES,
+    ERA5_AUX_NORM,
+    era5_api_cell_coords_match,
+    era5_grid_context,
+    format_era5_cell_id,
+)
+from .tile_bbox import resolve_tile_bbox
+from .tile_config import TileConfig
+from .tile_time import (
+    resolve_growing_cutoff,
+    resolve_tile_year,
+    validate_smoke_temporal_metadata,
+)
 
 try:
     import torch
@@ -71,6 +89,10 @@ from .losses import parcel_area_to_pixel_weights
 from .sampler import _sweref99_to_wgs84
 
 logger = logging.getLogger(__name__)
+
+_SWEREF99_TO_WGS84_EXACT = Transformer.from_crs(
+    "EPSG:3006", "EPSG:4326", always_xy=True,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -122,6 +144,9 @@ AUX_NORM = {
     # so the neutral zero-change signal normalizes to exactly 0 (mean=0).
     "delta_vv": (0.0, 4.0),
     "delta_vh": (0.0, 4.0),
+    # Fixed Sweden priors for a leakage-free smoke test. A production run
+    # should replace these with train-split-only statistics.
+    **ERA5_AUX_NORM,
 }
 
 # Channels that need log(1+x) pre-transform before z-score
@@ -226,6 +251,600 @@ AUX_CHANNEL_NAMES = [
     "height", "volume", "basal_area", "diameter", "dem",
     "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv",
 ]
+
+ERA5_AUX_CHANNELS = frozenset({
+    "era5_t2m_mean", "era5_tp_sum", "era5_swvl1_mean",
+    "era5_ssrd_sum", "era5_gdd",
+})
+
+_ERA5_SMOKE_COHORT_SCHEMA = "era5-smoke-cohort-v4"
+_ERA5_SMOKE_MAX_LABEL = 22
+_ERA5_SMOKE_MODEL_PATCH_PX = 504
+_ERA5_SMOKE_CROP_CLASS_NAMES = {
+    11: "vete",
+    12: "korn",
+    13: "havre",
+    14: "oljeväxter",
+    15: "slåttervall",
+    16: "bete",
+    17: "potatis",
+    18: "sockerbetor",
+    19: "trindsäd",
+    20: "råg",
+    21: "majs",
+}
+
+
+def _split_file_names(path: Path) -> list[str]:
+    names = [line.strip() for line in path.read_text().splitlines() if line.strip()]
+    if not names:
+        raise ValueError(f"Explicit split file is empty: {path}")
+    if len(names) != len(set(names)):
+        raise ValueError(f"Explicit split file contains duplicate tile names: {path}")
+    return names
+
+
+def _label_metadata(label: np.ndarray) -> dict:
+    label = np.asarray(label)
+    if label.ndim != 2 or label.size == 0:
+        raise ValueError(f"label must be a non-empty 2-D array, got {label.shape}")
+    if not np.issubdtype(label.dtype, np.integer):
+        raise ValueError(f"label must have integer dtype, got {label.dtype}")
+    labels, counts = np.unique(label.astype(np.int64, copy=False), return_counts=True)
+    contiguous = np.ascontiguousarray(label)
+    return {
+        "shape": [int(value) for value in label.shape],
+        "dtype": str(label.dtype),
+        "sha256": hashlib.sha256(contiguous.view(np.uint8)).hexdigest(),
+        "min": int(labels[0]),
+        "max": int(labels[-1]),
+        "pixel_counts": {
+            str(int(value)): int(count) for value, count in zip(labels, counts)
+        },
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _support_from_manifest_items(items: list[dict]) -> dict:
+    pixel_counts: dict[int, int] = {}
+    tile_counts: dict[int, int] = {}
+    for item in items:
+        model_label = item.get("model_label")
+        if not isinstance(model_label, dict):
+            raise ValueError("Cohort tile is missing exact model-label support")
+        for raw_label, count in model_label["pixel_counts"].items():
+            label = int(raw_label)
+            pixel_counts[label] = pixel_counts.get(label, 0) + int(count)
+            tile_counts[label] = tile_counts.get(label, 0) + 1
+    observed = sorted(pixel_counts)
+    if not observed:
+        raise ValueError("Cohort manifest contains no label support")
+    return {
+        "observed_labels": observed,
+        "foreground_labels": [label for label in observed if label > 0],
+        "pixel_counts": {str(label): pixel_counts[label] for label in observed},
+        "tile_counts": {str(label): tile_counts[label] for label in observed},
+        "min_label": min(observed),
+        "max_label": max(observed),
+    }
+
+
+def _supported_smoke_crop_classes(
+    support: dict[str, dict],
+    thresholds: dict[str, int],
+) -> list[str]:
+    result: list[str] = []
+    for label, name in _ERA5_SMOKE_CROP_CLASS_NAMES.items():
+        key = str(label)
+        if (
+            int(support["train"]["tile_counts"].get(key, 0))
+            >= thresholds["min_train_tiles"]
+            and int(support["val"]["tile_counts"].get(key, 0))
+            >= thresholds["min_val_tiles"]
+            and int(support["train"]["pixel_counts"].get(key, 0))
+            >= thresholds["min_train_pixels"]
+            and int(support["val"]["pixel_counts"].get(key, 0))
+            >= thresholds["min_val_pixels"]
+        ):
+            result.append(name)
+    return result
+
+
+_SPATIAL_COMPONENT_RE = re.compile(r"^spatial:[0-9a-f]{64}$")
+_SPLIT_COMPONENT_RE = re.compile(r"^split:[0-9a-f]{64}$")
+_BBOX_KEYS = ("west", "south", "east", "north")
+
+
+def _manifest_bbox_values(item: dict) -> tuple[int, int, int, int]:
+    bbox = item.get("bbox_3006")
+    if not isinstance(bbox, dict) or set(bbox) != set(_BBOX_KEYS):
+        raise ValueError(
+            f"Cohort tile {item.get('name')} has invalid exact bbox_3006"
+        )
+    values = tuple(bbox[key] for key in _BBOX_KEYS)
+    if any(type(value) is not int for value in values):
+        raise ValueError(
+            f"Cohort tile {item.get('name')} bbox_3006 must contain integers"
+        )
+    west, south, east, north = values
+    if east <= west or north <= south:
+        raise ValueError(
+            f"Cohort tile {item.get('name')} bbox_3006 has non-positive area"
+        )
+    return west, south, east, north
+
+
+def _bbox_intersection_area(left: dict, right: dict) -> int:
+    left_w, left_s, left_e, left_n = _manifest_bbox_values(left)
+    right_w, right_s, right_e, right_n = _manifest_bbox_values(right)
+    width = max(0, min(left_e, right_e) - max(left_w, right_w))
+    height = max(0, min(left_n, right_n) - max(left_s, right_s))
+    return width * height
+
+
+def _manifest_component_catalog(items: list[dict], field: str) -> list[dict]:
+    by_component: dict[str, list[dict]] = {}
+    for item in items:
+        by_component.setdefault(item[field], []).append(item)
+    result: list[dict] = []
+    for component_id, members in sorted(by_component.items()):
+        boxes = [_manifest_bbox_values(item) for item in members]
+        entry = {
+            "id": component_id,
+            "tiles": sorted(item["name"] for item in members),
+            "bbox_3006": {
+                "west": min(box[0] for box in boxes),
+                "south": min(box[1] for box in boxes),
+                "east": max(box[2] for box in boxes),
+                "north": max(box[3] for box in boxes),
+            },
+            "era5_cells": sorted({item["era5_cell"] for item in members}),
+        }
+        if field == "spatial_component":
+            split_components = {item["split_component"] for item in members}
+            if len(split_components) != 1:
+                raise ValueError(
+                    f"Cohort spatial component {component_id} spans split components"
+                )
+            entry["split_component"] = split_components.pop()
+        else:
+            entry["spatial_components"] = sorted({
+                item["spatial_component"] for item in members
+            })
+        result.append(entry)
+    return result
+
+
+def _validate_spatial_partition(manifest: dict) -> None:
+    """Validate the sealed bbox/component split contract without source I/O."""
+    splits = manifest.get("splits", {})
+    split_items = {
+        split: splits.get(split) if isinstance(splits.get(split), list) else []
+        for split in ("train", "val")
+    }
+    all_items = [*split_items["train"], *split_items["val"]]
+    for item in all_items:
+        spatial_id = item.get("spatial_component")
+        split_id = item.get("split_component")
+        if not isinstance(spatial_id, str) or not _SPATIAL_COMPONENT_RE.fullmatch(
+            spatial_id
+        ):
+            raise ValueError(
+                f"Cohort tile {item.get('name')} has invalid spatial_component"
+            )
+        if not isinstance(split_id, str) or not _SPLIT_COMPONENT_RE.fullmatch(
+            split_id
+        ):
+            raise ValueError(
+                f"Cohort tile {item.get('name')} has invalid split_component"
+            )
+        _manifest_bbox_values(item)
+
+    for left_index, left in enumerate(all_items):
+        for right in all_items[left_index + 1:]:
+            if (
+                left["era5_cell"] == right["era5_cell"]
+                and left["split_component"] != right["split_component"]
+            ):
+                raise ValueError(
+                    "Cohort items in one ERA5 cell have different split components"
+                )
+            if _bbox_intersection_area(left, right) > 0 and not (
+                left["spatial_component"] == right["spatial_component"]
+                and left["split_component"] == right["split_component"]
+            ):
+                raise ValueError(
+                    "Positive-area cohort bbox overlap crosses component identity"
+                )
+
+    component_sets = {
+        field: {
+            split: {item[field] for item in split_items[split]}
+            for split in ("train", "val")
+        }
+        for field in ("spatial_component", "split_component")
+    }
+    for field, by_split in component_sets.items():
+        overlap = by_split["train"] & by_split["val"]
+        if overlap:
+            raise ValueError(
+                f"Cohort {field} identities overlap across train/val: "
+                f"{sorted(overlap)[:3]}"
+            )
+    for train_item in split_items["train"]:
+        for val_item in split_items["val"]:
+            if _bbox_intersection_area(train_item, val_item) > 0:
+                raise ValueError(
+                    "Cohort train/val bbox intersection area must be zero"
+                )
+
+    partition = manifest.get("spatial_partition")
+    if not isinstance(partition, dict):
+        raise ValueError("Cohort lacks a spatial_partition manifest")
+    expected_scalars = {
+        "crs": "EPSG:3006",
+        "bbox_intersection": "positive_area",
+        "component_definition": (
+            "transitive_closure_of_positive_area_bbox_intersections"
+        ),
+        "split_component_definition": (
+            "transitive_closure_of_spatial_components_and_shared_era5_cells"
+        ),
+    }
+    if any(partition.get(key) != value for key, value in expected_scalars.items()):
+        raise ValueError("Cohort spatial_partition definitions are unsupported")
+    for field, key in (
+        ("spatial_component", "spatial_components"),
+        ("split_component", "split_components"),
+    ):
+        expected = {
+            "train": sorted(component_sets[field]["train"]),
+            "val": sorted(component_sets[field]["val"]),
+            "overlap": [],
+        }
+        if partition.get(key) != expected:
+            raise ValueError(f"Cohort {key} manifest is stale or inconsistent")
+    if partition.get("bbox_area_intersections") != []:
+        raise ValueError("Cohort bbox_area_intersections must be empty")
+    expected_catalogs = {
+        "spatial_component_catalog": _manifest_component_catalog(
+            all_items, "spatial_component",
+        ),
+        "split_component_catalog": _manifest_component_catalog(
+            all_items, "split_component",
+        ),
+    }
+    for key, expected in expected_catalogs.items():
+        if partition.get(key) != expected:
+            raise ValueError(f"Cohort {key} is stale or inconsistent")
+
+
+def _load_explicit_split_manifest(
+    split_dir: Path,
+) -> tuple[dict, dict[str, list[str]]]:
+    """Load and structurally validate an ERA5 smoke split bundle."""
+    paths = {
+        split: split_dir / f"split_{split}.txt" for split in ("train", "val")
+    }
+    missing = [
+        str(path)
+        for path in (*paths.values(), split_dir / "manifest.json")
+        if not path.is_file()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            "Explicit split_dir requires split_train.txt, split_val.txt, and "
+            f"manifest.json; missing={missing}"
+        )
+
+    names = {split: _split_file_names(path) for split, path in paths.items()}
+    overlap = set(names["train"]) & set(names["val"])
+    if overlap:
+        raise ValueError(f"Train/val split files overlap: {sorted(overlap)[:3]}")
+
+    manifest_path = split_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(f"Invalid cohort manifest {manifest_path}: {exc}") from exc
+    if manifest.get("schema") != _ERA5_SMOKE_COHORT_SCHEMA:
+        raise ValueError(
+            f"Unsupported cohort schema {manifest.get('schema')!r}; "
+            f"expected {_ERA5_SMOKE_COHORT_SCHEMA!r}"
+        )
+
+    label_schema = manifest.get("label_schema", {})
+    expected_schema = {
+        "num_logits": _ERA5_SMOKE_MAX_LABEL + 1,
+        "min_label": 0,
+        "max_label": _ERA5_SMOKE_MAX_LABEL,
+    }
+    if label_schema != expected_schema:
+        raise ValueError(
+            f"ERA5 smoke requires the 23-logit 0..22 label schema; got {label_schema}"
+        )
+    if manifest.get("model_patch_px") != _ERA5_SMOKE_MODEL_PATCH_PX:
+        raise ValueError(
+            f"ERA5 smoke requires model_patch_px={_ERA5_SMOKE_MODEL_PATCH_PX}"
+        )
+
+    source = manifest.get("source")
+    if not isinstance(source, dict):
+        raise ValueError("Cohort manifest lacks source metadata")
+    bbox_manifest = source.get("bbox_manifest")
+    bbox_manifest_sha256 = source.get("bbox_manifest_sha256")
+    if bbox_manifest is None:
+        if bbox_manifest_sha256 is not None:
+            raise ValueError(
+                "Cohort bbox_manifest_sha256 must be null without a bbox manifest"
+            )
+    elif not (
+        isinstance(bbox_manifest, str)
+        and isinstance(bbox_manifest_sha256, str)
+        and re.fullmatch(r"[0-9a-f]{64}", bbox_manifest_sha256)
+    ):
+        raise ValueError("Cohort bbox manifest path/hash contract is invalid")
+    elif Path(bbox_manifest).is_file() and (
+        _sha256_file(Path(bbox_manifest)) != bbox_manifest_sha256
+    ):
+        raise ValueError("Cohort bbox manifest is stale or has changed")
+
+    for split in ("train", "val"):
+        split_text = paths[split].read_text()
+        expected_hash = hashlib.sha256(split_text.encode()).hexdigest()
+        if manifest.get("split_sha256", {}).get(split) != expected_hash:
+            raise ValueError(f"Stale or partial split_{split}.txt: manifest hash mismatch")
+        if manifest.get("counts", {}).get(split) != len(names[split]):
+            raise ValueError(f"Cohort {split} count does not match split file")
+        items = manifest.get("splits", {}).get(split)
+        if (
+            not isinstance(items, list)
+            or [item.get("name") for item in items] != names[split]
+        ):
+            raise ValueError(f"Cohort {split} tile list does not match split file")
+        for item in items:
+            label = item.get("label", {})
+            if (
+                label.get("min", -1) < 0
+                or label.get("max", _ERA5_SMOKE_MAX_LABEL + 1)
+                > _ERA5_SMOKE_MAX_LABEL
+            ):
+                raise ValueError(
+                    f"Cohort tile {item.get('name')} exceeds label range 0..22"
+                )
+        actual_support = _support_from_manifest_items(items)
+        if manifest.get("label_support", {}).get(split) != actual_support:
+            raise ValueError(f"Cohort {split} label support is stale or inconsistent")
+        if not actual_support["foreground_labels"]:
+            raise ValueError(f"Cohort {split} has no foreground label support")
+
+    train_foreground = set(manifest["label_support"]["train"]["foreground_labels"])
+    val_foreground = set(manifest["label_support"]["val"]["foreground_labels"])
+    unseen_val_labels = val_foreground - train_foreground
+    if unseen_val_labels:
+        raise ValueError(
+            "Validation contains classes absent from training: "
+            f"{sorted(unseen_val_labels)}"
+        )
+    thresholds = manifest.get("crop_support_thresholds")
+    required_threshold_keys = {
+        "min_train_tiles", "min_val_tiles",
+        "min_train_pixels", "min_val_pixels",
+    }
+    if (
+        not isinstance(thresholds, dict)
+        or set(thresholds) != required_threshold_keys
+        or any(not isinstance(value, int) or value <= 0 for value in thresholds.values())
+    ):
+        raise ValueError(f"Invalid crop_support_thresholds: {thresholds}")
+    expected_crop_classes = _supported_smoke_crop_classes(
+        manifest["label_support"], thresholds,
+    )
+    if manifest.get("val_supported_crop_classes") != expected_crop_classes:
+        raise ValueError(
+            "val_supported_crop_classes does not match validation label support"
+        )
+    min_val_crop_classes = manifest.get("min_val_crop_classes")
+    if (
+        not isinstance(min_val_crop_classes, int)
+        or min_val_crop_classes < 5
+        or len(expected_crop_classes) < min_val_crop_classes
+    ):
+        raise ValueError(
+            "validation split does not satisfy min_val_crop_classes >= 5"
+        )
+
+    expected_cell_definition = {
+        "model": "era5",
+        "resolution_degrees": float(ERA5_ATMOSPHERE_GRID_DEGREES),
+        "cell_selection": "nearest",
+        "identity": "verified_response_latitude_longitude",
+    }
+    if manifest.get("era5_cell_definition") != expected_cell_definition:
+        raise ValueError("Cohort ERA5 cell definition is stale or unsupported")
+
+    declared_cells = manifest.get("era5_cells", {})
+    raw_item_cells = {
+        split: {item.get("era5_cell") for item in manifest["splits"][split]}
+        for split in ("train", "val")
+    }
+    if any(None in cells for cells in raw_item_cells.values()):
+        raise ValueError("Cohort manifest has a tile without an ERA5 cell")
+    item_cells = {split: sorted(cells) for split, cells in raw_item_cells.items()}
+    if (
+        declared_cells.get("train") != item_cells["train"]
+        or declared_cells.get("val") != item_cells["val"]
+    ):
+        raise ValueError("Cohort ERA5-cell lists are stale or inconsistent")
+    cell_overlap = set(item_cells["train"]) & set(item_cells["val"])
+    if cell_overlap or declared_cells.get("overlap") != []:
+        raise ValueError(f"ERA5 train/val cells overlap: {sorted(cell_overlap)[:3]}")
+    _validate_spatial_partition(manifest)
+    return manifest, names
+
+
+def _resolve_explicit_cohort_location(
+    *,
+    data: dict,
+    tile_name: str,
+    manifest: dict,
+    manifest_item: dict,
+) -> dict[str, float | str]:
+    """Resolve and attest the location used by a sealed smoke sample.
+
+    The ERA5 cohort builder and sidecar fetcher both use
+    :func:`resolve_tile_bbox`.  The sealed dataset must use that same source
+    for Prithvi's location token; falling back to the historical hard-coded
+    Sweden coordinate would silently give the model weather and location
+    metadata for different places.
+    """
+    source = manifest.get("source")
+    if not isinstance(source, dict):
+        raise ValueError("Cohort manifest lacks location source metadata")
+    bbox_manifest = source.get("bbox_manifest")
+    if bbox_manifest is not None and not isinstance(bbox_manifest, str):
+        raise ValueError("Cohort source bbox_manifest must be a path or null")
+
+    try:
+        size_px = int(np.asarray(data.get("tile_size_px", 512)).item())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Sealed cohort tile {tile_name} has invalid tile_size_px"
+        ) from exc
+    if size_px <= 0:
+        raise ValueError(
+            f"Sealed cohort tile {tile_name} has invalid tile_size_px={size_px}"
+        )
+
+    sealed_bbox_raw = manifest_item.get("bbox_3006")
+    sealed_center_raw = manifest_item.get("location_3006")
+    sealed_wgs84_raw = manifest_item.get("location_wgs84")
+    try:
+        bbox_values = [
+            sealed_bbox_raw[key]
+            for key in ("west", "south", "east", "north")
+        ]
+        center_values = [
+            sealed_center_raw[key] for key in ("easting", "northing")
+        ]
+        if any(type(value) is not int for value in (*bbox_values, *center_values)):
+            raise TypeError("EPSG:3006 coordinates must be exact integers")
+        sealed_bbox = {
+            key: int(sealed_bbox_raw[key])
+            for key in ("west", "south", "east", "north")
+        }
+        easting = float(sealed_center_raw["easting"])
+        northing = float(sealed_center_raw["northing"])
+        sealed_lat = float(sealed_wgs84_raw["lat"])
+        sealed_lon = float(sealed_wgs84_raw["lon"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Cohort exact location metadata is incomplete for {tile_name}"
+        ) from exc
+    if not np.isfinite((easting, northing, sealed_lat, sealed_lon)).all():
+        raise ValueError(
+            f"Cohort exact location metadata is non-finite for {tile_name}"
+        )
+    expected_bbox = TileConfig(size_px=size_px).bbox_from_center(
+        easting, northing,
+    )
+    if sealed_bbox != expected_bbox:
+        raise ValueError(
+            f"Cohort exact bbox/centroid mismatch for {tile_name}: "
+            f"bbox={sealed_bbox}, center={sealed_center_raw}"
+        )
+
+    # Re-resolve when the original source is available and reject any drift,
+    # including a legacy external-manifest edit that stays within one ERA5
+    # cell.  The sealed bbox remains authoritative when that optional source
+    # is not mounted at training time.
+    resolved_bbox = resolve_tile_bbox(
+        name=Path(tile_name).stem,
+        tile=TileConfig(size_px=size_px),
+        npz_data=data,
+        manifest_path=bbox_manifest,
+    )
+    if resolved_bbox is not None and resolved_bbox != sealed_bbox:
+        raise ValueError(
+            f"Cohort location source drift for {tile_name}: "
+            f"sealed_bbox={sealed_bbox}, resolved_bbox={resolved_bbox}"
+        )
+    lon, lat = _SWEREF99_TO_WGS84_EXACT.transform(easting, northing)
+    if not np.isfinite((lat, lon)).all():
+        raise ValueError(
+            f"Sealed cohort tile {tile_name} resolves to invalid WGS84 coordinates"
+        )
+    if not np.allclose(
+        (lat, lon), (sealed_lat, sealed_lon), rtol=0.0, atol=1e-9,
+    ):
+        raise ValueError(
+            f"Cohort exact WGS84 location mismatch for {tile_name}: "
+            f"transformed={(lat, lon)}, manifest={(sealed_lat, sealed_lon)}"
+        )
+
+    grid = era5_grid_context(lat, lon)
+    expected_request = manifest_item.get("era5_request")
+    expected_land = manifest_item.get("era5_land_cell")
+    expected_atmosphere = manifest_item.get("era5_atmosphere_cell")
+    try:
+        request_matches = np.allclose(
+            (grid["request_lat"], grid["request_lon"]),
+            (expected_request["lat"], expected_request["lon"]),
+            rtol=0.0,
+            atol=1e-7,
+        )
+        land_matches = era5_api_cell_coords_match(
+            grid["land_cell"]["lat"],
+            grid["land_cell"]["lon"],
+            expected_land["lat"],
+            expected_land["lon"],
+        )
+        atmosphere_matches = era5_api_cell_coords_match(
+            grid["atmosphere_cell"]["lat"],
+            grid["atmosphere_cell"]["lon"],
+            expected_atmosphere["lat"],
+            expected_atmosphere["lon"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Cohort location metadata is incomplete for {tile_name}"
+        ) from exc
+    expected_cell_id = format_era5_cell_id(
+        grid["atmosphere_cell"]["lat"],
+        grid["atmosphere_cell"]["lon"],
+    )
+    if not (
+        request_matches
+        and land_matches
+        and atmosphere_matches
+        and manifest_item.get("era5_cell") == expected_cell_id
+    ):
+        raise ValueError(
+            f"Cohort location metadata mismatch for {tile_name}: "
+            f"resolved_request=({grid['request_lat']}, {grid['request_lon']}), "
+            f"manifest_request={expected_request}"
+        )
+
+    return {
+        "source": "sealed_cohort_manifest_v4",
+        "bbox_west_3006": float(sealed_bbox["west"]),
+        "bbox_south_3006": float(sealed_bbox["south"]),
+        "bbox_east_3006": float(sealed_bbox["east"]),
+        "bbox_north_3006": float(sealed_bbox["north"]),
+        "easting_3006": easting,
+        "northing_3006": northing,
+        "lat": sealed_lat,
+        "lon": sealed_lon,
+        "era5_request_lat": float(grid["request_lat"]),
+        "era5_request_lon": float(grid["request_lon"]),
+    }
 
 # Forest classes in the unified schema (eligible for harvest override)
 _FOREST_CLASSES = frozenset({1, 2, 3, 4, 5})
@@ -342,6 +961,10 @@ class UnifiedDataset(Dataset):
         aux_channel_names: Sequence[str] | None = None,
         label_dir: str | Path | None = None,
         frac_dir: str | Path | None = None,
+        era5_dir: str | Path | None = None,
+        era5_mode: str = "off",
+        split_dir: str | Path | None = None,
+        limit_tiles: int | None = None,
         backbone_family: str = "prithvi",
     ):
         super().__init__()
@@ -371,6 +994,33 @@ class UnifiedDataset(Dataset):
         # the hard label still supervises them. None → no frac keys emitted
         # (byte-identical legacy path).
         self.frac_dir = Path(frac_dir) if frac_dir is not None else None
+        # Weather lives in non-destructive per-tile sidecars. Missing files
+        # deliberately yield neutral (z=0) values, which is also the A/B
+        # smoke-test baseline while preserving an identical architecture.
+        if era5_mode not in {"off", "control", "treatment"}:
+            raise ValueError(f"Unknown era5_mode: {era5_mode!r}")
+        if era5_mode == "treatment" and era5_dir is None:
+            raise ValueError("era5_mode='treatment' requires era5_dir")
+        if era5_mode != "treatment" and era5_dir is not None:
+            raise ValueError("era5_dir is only valid with era5_mode='treatment'")
+        self.era5_mode = era5_mode
+        self.era5_dir = Path(era5_dir) if era5_dir is not None else None
+        self.split_dir = Path(split_dir) if split_dir is not None else None
+        self._split_manifest: dict | None = None
+        self._explicit_split_names: dict[str, list[str]] | None = None
+        if self.split_dir is not None:
+            if split not in {"train", "val"}:
+                raise FileNotFoundError(
+                    f"Explicit ERA5 smoke cohort has no split_{split}.txt"
+                )
+            if limit_tiles is not None:
+                raise ValueError(
+                    "limit_tiles cannot be combined with an explicit, "
+                    "manifest-validated split_dir"
+                )
+            self._split_manifest, self._explicit_split_names = (
+                _load_explicit_split_manifest(self.split_dir)
+            )
         self.enable_aux = enable_aux
         # Ordered aux-channel list. Defaults to the canonical 10-channel
         # AUX_CHANNEL_NAMES so the historical behaviour is byte-identical;
@@ -467,6 +1117,30 @@ class UnifiedDataset(Dataset):
                 len(kept), dropped, dropped_old_s1,
             )
 
+        # Apply any smoke limit only after label/model eligibility filtering,
+        # so the requested cohort size is real rather than shrinking later.
+        if limit_tiles is not None:
+            if limit_tiles <= 0:
+                raise ValueError("limit_tiles must be positive")
+            self._entries = sorted(
+                self._entries,
+                key=lambda entry: hashlib.md5(entry["name"].encode()).hexdigest(),
+            )[:limit_tiles]
+
+        if self._split_manifest is not None:
+            self._validate_explicit_split_entries(split)
+
+        if self.era5_mode == "treatment":
+            missing_sidecars = [
+                entry["name"] for entry in self._entries
+                if not (self.era5_dir / entry["name"]).is_file()
+            ]
+            if missing_sidecars:
+                raise FileNotFoundError(
+                    f"ERA5 treatment coverage incomplete for split={split}: "
+                    f"{len(missing_sidecars)} missing; first={missing_sidecars[:3]}"
+                )
+
         if not self._entries:
             raise FileNotFoundError(
                 f"No tiles found for split='{split}'. "
@@ -489,6 +1163,81 @@ class UnifiedDataset(Dataset):
     # ------------------------------------------------------------------
     # Tile discovery
     # ------------------------------------------------------------------
+
+    def _validate_explicit_split_entries(self, split: str) -> None:
+        """Fail if selected files or labels drift from the cohort manifest."""
+        if split not in {"train", "val"}:
+            raise FileNotFoundError(
+                f"Explicit ERA5 smoke cohort has no split_{split}.txt"
+            )
+        expected_names = self._explicit_split_names[split]
+        actual_names = [entry["name"] for entry in self._entries]
+        if len(actual_names) != len(set(actual_names)):
+            raise ValueError(
+                f"Explicit cohort split={split} resolves duplicate tile names across data dirs"
+            )
+        if set(actual_names) != set(expected_names):
+            missing = sorted(set(expected_names) - set(actual_names))
+            unexpected = sorted(set(actual_names) - set(expected_names))
+            raise FileNotFoundError(
+                f"Explicit cohort split={split} is partial or stale: "
+                f"missing={missing[:3]}, unexpected={unexpected[:3]}"
+            )
+
+        expected_items = {
+            item["name"]: item for item in self._split_manifest["splits"][split]
+        }
+        for entry in self._entries:
+            label_path = (
+                self.label_dir / entry["name"]
+                if self.label_dir is not None else entry["path"]
+            )
+            try:
+                with np.load(label_path, allow_pickle=False) as label_source:
+                    if "label" not in label_source.files:
+                        raise ValueError("missing label array")
+                    actual_label = _label_metadata(label_source["label"])
+            except (OSError, KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Could not validate cohort label {label_path}: {exc}"
+                ) from exc
+            expected_label = expected_items[entry["name"]].get("label")
+            if actual_label != expected_label:
+                raise ValueError(
+                    f"Cohort label is stale for {entry['name']}: "
+                    f"expected sha256={expected_label.get('sha256') if expected_label else None}, "
+                    f"actual sha256={actual_label['sha256']}"
+                )
+            expected_source_hash = expected_items[entry["name"]].get(
+                "source_npz_sha256"
+            )
+            actual_source_hash = _sha256_file(Path(entry["path"]))
+            if actual_source_hash != expected_source_hash:
+                raise ValueError(
+                    f"Cohort source NPZ is stale for {entry['name']}: "
+                    f"expected sha256={expected_source_hash}, "
+                    f"actual sha256={actual_source_hash}"
+                )
+            try:
+                with np.load(entry["path"], allow_pickle=False) as source_data:
+                    entry["_sealed_location"] = _resolve_explicit_cohort_location(
+                        data=source_data,
+                        tile_name=entry["name"],
+                        manifest=self._split_manifest,
+                        manifest_item=expected_items[entry["name"]],
+                    )
+            except (OSError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Could not validate cohort location for {entry['name']}: {exc}"
+                ) from exc
+            if (
+                actual_label["min"] < 0
+                or actual_label["max"] > _ERA5_SMOKE_MAX_LABEL
+            ):
+                raise ValueError(
+                    f"Cohort label range for {entry['name']} is "
+                    f"{actual_label['min']}..{actual_label['max']}; expected 0..22"
+                )
 
     def _load_tile_list(
         self,
@@ -524,14 +1273,23 @@ class UnifiedDataset(Dataset):
             tiles_dir = data_dir
 
         # Check for a split file
-        split_file = data_dir / f"split_{split}.txt"
+        split_file = (self.split_dir or data_dir) / f"split_{split}.txt"
         if split_file.exists():
             with open(split_file) as f:
-                allowed = {line.strip() for line in f if line.strip()}
-            tile_paths = sorted(
-                p for p in tiles_dir.glob("*.npz")
-                if p.name in allowed
-            )
+                requested_names = [
+                    line.strip() for line in f if line.strip()
+                ]
+            paths_by_name = {
+                path.name: path for path in tiles_dir.glob("*.npz")
+            }
+            # Explicit scientific cohorts bind sample order as well as
+            # membership. Preserve the split ledger exactly so seeded A/B
+            # samplers and the disk-backed preflight see the same sequence.
+            tile_paths = [
+                paths_by_name[name]
+                for name in requested_names
+                if name in paths_by_name
+            ]
         else:
             # Deterministic 90/10 train/val split by MD5 hash of tile name.
             # This ensures consistent splits without needing split files.
@@ -589,7 +1347,12 @@ class UnifiedDataset(Dataset):
                 raise KeyError("missing spectral")
             if required_key is not None and required_key not in data:
                 raise KeyError(f"missing {required_key}")
-        except Exception:
+        except Exception as exc:
+            if self._split_manifest is not None:
+                raise RuntimeError(
+                    f"Explicit cohort tile is unreadable or lacks model input: "
+                    f"{entry['path']}"
+                ) from exc
             if _retries >= 50:
                 raise RuntimeError(f"No valid tiles found after {_retries} retries from idx {idx}")
             alt = (idx + 1) % len(self._entries)
@@ -604,7 +1367,12 @@ class UnifiedDataset(Dataset):
                     self.label_dir / entry["name"], allow_pickle=True
                 )
                 data = _LabelOverlay(data, sidecar)
-            except Exception:
+            except Exception as exc:
+                if self._split_manifest is not None:
+                    raise RuntimeError(
+                        f"Explicit cohort label sidecar is unreadable: "
+                        f"{self.label_dir / entry['name']}"
+                    ) from exc
                 # Sidecar unreadable at read-time (should have been dropped
                 # at construction) — skip to the next tile rather than crash.
                 if _retries >= 50:
@@ -616,6 +1384,11 @@ class UnifiedDataset(Dataset):
                 return self.__getitem__(alt, _retries=_retries + 1)
 
         source = entry["source"]
+        sealed_location = entry.get("_sealed_location")
+        if self._split_manifest is not None and sealed_location is None:
+            raise RuntimeError(
+                f"Explicit cohort tile lacks an attested location: {entry['name']}"
+            )
 
         # --- Image tensor -----------------------------------------------
         # Tessera consumes the pre-baked (128, H, W) annual embedding; every
@@ -626,7 +1399,8 @@ class UnifiedDataset(Dataset):
             doy = None
         elif self.multitemporal:
             image, temporal_mask, doy = self._extract_all_frames(
-                data, source, self.num_temporal_frames
+                data, source, self.num_temporal_frames,
+                strict_smoke=self._split_manifest is not None,
             )
         else:
             if source == "lulc":
@@ -662,7 +1436,16 @@ class UnifiedDataset(Dataset):
         # LPIS area where crop parcel exists, NMD component area everywhere else
         area_map = np.where(lpis_arr > 0, lpis_arr, nmd_arr)
 
-        aux_stack = self._load_aux_channels(data, h, w) if self.enable_aux else None
+        aux_stack = self._load_aux_channels(
+            data,
+            h,
+            w,
+            entry["name"],
+            expected_location=(
+                (sealed_location["lat"], sealed_location["lon"])
+                if sealed_location is not None else None
+            ),
+        ) if self.enable_aux else None
 
         # Fold area_map into aug_stack as channel 0 for spatial consistency
         area_as_channel = area_map[np.newaxis]  # (1, H, W)
@@ -747,7 +1530,13 @@ class UnifiedDataset(Dataset):
         else:
             n_frames = image.shape[0] // N_BANDS
             temporal_coords, location_coords = self._build_coords(
-                data, doy, n_frames,
+                data,
+                doy,
+                n_frames,
+                resolved_location=(
+                    (sealed_location["lat"], sealed_location["lon"])
+                    if sealed_location is not None else None
+                ),
             )
 
         # --- Build output dict ------------------------------------------
@@ -765,6 +1554,20 @@ class UnifiedDataset(Dataset):
                 "source": source,
             },
         }
+        if sealed_location is not None:
+            result["metadata"].update({
+                "location_source": sealed_location["source"],
+                "location_bbox_west_3006": sealed_location["bbox_west_3006"],
+                "location_bbox_south_3006": sealed_location["bbox_south_3006"],
+                "location_bbox_east_3006": sealed_location["bbox_east_3006"],
+                "location_bbox_north_3006": sealed_location["bbox_north_3006"],
+                "location_easting_3006": sealed_location["easting_3006"],
+                "location_northing_3006": sealed_location["northing_3006"],
+                "location_lat": sealed_location["lat"],
+                "location_lon": sealed_location["lon"],
+                "era5_request_lat": sealed_location["era5_request_lat"],
+                "era5_request_lon": sealed_location["era5_request_lon"],
+            })
         if temporal_coords is not None:
             result["temporal_coords"] = temporal_coords
         if location_coords is not None:
@@ -866,6 +1669,8 @@ class UnifiedDataset(Dataset):
         data: dict,
         doy: np.ndarray | None,
         n_frames: int,
+        *,
+        resolved_location: tuple[float, float] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Build Prithvi TL coordinate tensors from tile metadata.
 
@@ -873,16 +1678,9 @@ class UnifiedDataset(Dataset):
             temporal_coords: (T, 2) float32 [year, doy] per frame.
             location_coords: (2,) float32 [lat, lon] in WGS84 degrees.
         """
-        year = int(data.get("year", data.get("lpis_year", 0)))
-        if year == 0:
-            dates = data.get("dates", [])
-            if len(dates) > 0:
-                try:
-                    year = int(str(dates[0])[:4])
-                except (ValueError, IndexError):
-                    year = 2022
-            else:
-                year = 2022
+        year = resolve_tile_year(data)
+        if year is None:
+            raise ValueError("Prithvi coordinates require a resolved tile year")
 
         temporal_coords = np.zeros((n_frames, 2), dtype=np.float32)
         if doy is not None:
@@ -899,9 +1697,17 @@ class UnifiedDataset(Dataset):
             temporal_coords[0, 0] = float(year - 1) if n_frames >= 2 else float(year)
             temporal_coords[1:, 0] = float(year)
 
-        easting = float(data.get("easting", 500_000))
-        northing = float(data.get("northing", 6_500_000))
-        lat, lon = _sweref99_to_wgs84(easting, northing)
+        if resolved_location is None:
+            # Preserve the historical generic-dataset behaviour.  Sealed
+            # smoke samples never enter this branch: construction resolves
+            # and attests their real tile centroid first.
+            easting = float(data.get("easting", 500_000))
+            northing = float(data.get("northing", 6_500_000))
+            lat, lon = _sweref99_to_wgs84(easting, northing)
+        else:
+            lat, lon = (float(value) for value in resolved_location)
+            if not np.isfinite((lat, lon)).all():
+                raise ValueError("Prithvi resolved location must be finite")
         location_coords = np.array([lat, lon], dtype=np.float32)
 
         return (
@@ -1260,6 +2066,7 @@ class UnifiedDataset(Dataset):
         data: np.lib.npyio.NpzFile,
         source: str,
         num_frames: int,
+        strict_smoke: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Extract all temporal frames for multi-temporal training.
 
@@ -1279,6 +2086,19 @@ class UnifiedDataset(Dataset):
         raw = data.get("spectral", data.get("image")).astype(np.float32)
         c, h, w = raw.shape
         tile_frames = c // N_BANDS
+
+        if strict_smoke:
+            if raw.ndim != 3 or c != num_frames * N_BANDS:
+                raise ValueError(
+                    f"Sealed smoke tile must contain exactly {num_frames}x{N_BANDS} "
+                    f"spectral channels, got {raw.shape}"
+                )
+            year = resolve_tile_year(data)
+            if year is None:
+                raise ValueError("Sealed smoke tile lacks a resolved year")
+            validate_smoke_temporal_metadata(
+                data, year, num_frames=num_frames, min_valid_frames=3,
+            )
 
         # Temporal metadata from the 4 base frames in the tile
         tile_mask = data.get("temporal_mask", None)
@@ -1356,6 +2176,9 @@ class UnifiedDataset(Dataset):
         data: np.lib.npyio.NpzFile,
         h: int,
         w: int,
+        tile_name: str,
+        *,
+        expected_location: tuple[float, float] | None = None,
     ) -> np.ndarray:
         """Load, fill, and z-score-normalize the enabled auxiliary channels.
 
@@ -1380,6 +2203,101 @@ class UnifiedDataset(Dataset):
         if AUX_COMPUTED_CHANNELS & set(self.aux_channel_names):
             delta_stack = compute_delta_sar(data)  # (2, H, W) [ΔVV, ΔVH] or None
 
+        era5_data = None
+        if self.era5_mode == "treatment" and ERA5_AUX_CHANNELS & set(self.aux_channel_names):
+            sidecar = self.era5_dir / tile_name
+            if not sidecar.exists():
+                raise FileNotFoundError(f"Missing ERA5 treatment sidecar: {sidecar}")
+            with np.load(sidecar, allow_pickle=False) as loaded:
+                era5_data = {name: loaded[name] for name in loaded.files}
+            required_sidecar_fields = ERA5_AUX_CHANNELS | {
+                "tile_name", "year", "cutoff_date", "lat", "lon",
+                "era5_request_lat", "era5_request_lon",
+                "era5_land_cell_lat", "era5_land_cell_lon",
+                "era5_atmosphere_cell_lat", "era5_atmosphere_cell_lon",
+            }
+            missing = required_sidecar_fields - set(era5_data)
+            if missing:
+                raise ValueError(f"ERA5 sidecar {sidecar} lacks {sorted(missing)}")
+            if str(np.asarray(era5_data.get("tile_name", "")).item()) != tile_name:
+                raise ValueError(f"ERA5 sidecar identity mismatch: {sidecar}")
+            expected_year = resolve_tile_year(data)
+            stored_year = int(np.asarray(era5_data.get("year", -1)).item())
+            if expected_year is None or stored_year != expected_year:
+                raise ValueError(
+                    f"ERA5 year mismatch for {tile_name}: tile={expected_year}, sidecar={stored_year}"
+                )
+            expected_cutoff = resolve_growing_cutoff(data, expected_year)
+            stored_cutoff = str(np.asarray(era5_data.get("cutoff_date", "")).item())
+            if stored_cutoff != expected_cutoff:
+                raise ValueError(
+                    f"ERA5 cutoff mismatch for {tile_name}: tile={expected_cutoff}, "
+                    f"sidecar={stored_cutoff}"
+                )
+            if not all(np.isfinite(float(np.asarray(era5_data[name]).item()))
+                       for name in ERA5_AUX_CHANNELS):
+                raise ValueError(f"ERA5 sidecar {sidecar} contains non-finite values")
+            if not all(
+                np.isfinite(float(np.asarray(era5_data[name]).item()))
+                for name in (
+                    "lat", "lon", "era5_request_lat", "era5_request_lon",
+                    "era5_land_cell_lat", "era5_land_cell_lon",
+                    "era5_atmosphere_cell_lat", "era5_atmosphere_cell_lon",
+                )
+            ):
+                raise ValueError(f"ERA5 sidecar {sidecar} has invalid coordinates")
+            sidecar_lat = float(np.asarray(era5_data["lat"]).item())
+            sidecar_lon = float(np.asarray(era5_data["lon"]).item())
+            if expected_location is not None and not np.allclose(
+                (sidecar_lat, sidecar_lon),
+                expected_location,
+                rtol=0.0,
+                atol=1e-7,
+            ):
+                raise ValueError(
+                    f"ERA5 sidecar location mismatch for {tile_name}: "
+                    f"resolved_tile={expected_location}, "
+                    f"sidecar={(sidecar_lat, sidecar_lon)}"
+                )
+            grid = era5_grid_context(
+                sidecar_lat,
+                sidecar_lon,
+            )
+            stored_grid = {
+                "request_lat": float(np.asarray(era5_data["era5_request_lat"]).item()),
+                "request_lon": float(np.asarray(era5_data["era5_request_lon"]).item()),
+                "land_cell": {
+                    "lat": float(np.asarray(era5_data["era5_land_cell_lat"]).item()),
+                    "lon": float(np.asarray(era5_data["era5_land_cell_lon"]).item()),
+                },
+                "atmosphere_cell": {
+                    "lat": float(np.asarray(era5_data["era5_atmosphere_cell_lat"]).item()),
+                    "lon": float(np.asarray(era5_data["era5_atmosphere_cell_lon"]).item()),
+                },
+            }
+            request_matches = np.allclose(
+                (stored_grid["request_lat"], stored_grid["request_lon"]),
+                (grid["request_lat"], grid["request_lon"]),
+                rtol=0.0,
+                atol=1e-7,
+            )
+            response_cells_match = (
+                era5_api_cell_coords_match(
+                    stored_grid["land_cell"]["lat"],
+                    stored_grid["land_cell"]["lon"],
+                    grid["land_cell"]["lat"],
+                    grid["land_cell"]["lon"],
+                )
+                and era5_api_cell_coords_match(
+                    stored_grid["atmosphere_cell"]["lat"],
+                    stored_grid["atmosphere_cell"]["lon"],
+                    grid["atmosphere_cell"]["lat"],
+                    grid["atmosphere_cell"]["lon"],
+                )
+            )
+            if not request_matches or not response_cells_match:
+                raise ValueError(f"ERA5 sidecar {sidecar} has inconsistent grid cells")
+
         aux_arrays: list[np.ndarray] = []
         for ch_name in self.aux_channel_names:
             if ch_name in AUX_COMPUTED_CHANNELS:
@@ -1397,6 +2315,18 @@ class UnifiedDataset(Dataset):
                             padded = np.zeros((h, w), dtype=np.float32)
                             padded[:arr.shape[0], :arr.shape[1]] = arr
                             arr = padded
+            elif ch_name in ERA5_AUX_CHANNELS:
+                if self.era5_mode == "control":
+                    # The neutral arm is exclusive: source NPZ ERA5 keys are
+                    # deliberately ignored so they cannot contaminate control.
+                    value = AUX_NORM[ch_name][0]
+                elif self.era5_mode == "treatment" and era5_data is not None:
+                    value = float(np.asarray(era5_data[ch_name]).item())
+                else:
+                    raise ValueError(
+                        f"ERA5 channel {ch_name} requires control or treatment mode"
+                    )
+                arr = np.full((h, w), value, dtype=np.float32)
             elif ch_name in data:
                 arr = data[ch_name].astype(np.float32)
                 # Ensure spatial dimensions match
@@ -1412,6 +2342,8 @@ class UnifiedDataset(Dataset):
             else:
                 # Absent channel → all-nodata. NaN sentinel for markfukt
                 # (normalizes to channel mean), 0 for every other channel.
+                # ERA5 absence means neutral after normalization, not a raw
+                # physical zero (which would be an extreme weather signal).
                 fill = (np.nan if ch_name in AUX_NAN_NODATA_CHANNELS
                         else 0.0)
                 arr = np.full((h, w), fill, dtype=np.float32)

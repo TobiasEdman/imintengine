@@ -7,6 +7,7 @@ the existing TASK_HEAD_REGISTRY / load_segmentation_model() pipeline.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -30,6 +31,14 @@ from .dataset import LULCDataset, build_weighted_sampler
 from .evaluate import evaluate_model
 
 
+def _seed_worker(worker_id: int) -> None:
+    """Seed Python and NumPy from PyTorch's deterministic worker seed."""
+    import random
+    worker_seed = torch.initial_seed() % (2**32)
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+
+
 class LULCTrainer:
     """Trains a Prithvi + UPerNet model for multi-class LULC segmentation.
 
@@ -41,9 +50,23 @@ class LULCTrainer:
 
     def __init__(self, config: TrainingConfig):
         self.config = config
+        # A/B experiments rely on identical model initialization, sampling,
+        # and augmentation; only the auxiliary values may differ.
+        import random
+        random.seed(config.seed)
+        np.random.seed(config.seed)
+        torch.manual_seed(config.seed)
+        if config.deterministic:
+            os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+            torch.use_deterministic_algorithms(
+                True, warn_only=config.deterministic_warn_only,
+            )
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(config.seed)
         self.device = self._resolve_device()
         self._setup_cuda_perf_knobs()
         self.model = self._build_model()
+        self._zero_control_era5_columns()
         # Backbone family drives input routing in the train/val loops (4D
         # tessera embedding vs 5D Prithvi Conv3d layout). Read once from the
         # spec stashed on the model rather than branching on tensor shape.
@@ -71,6 +94,7 @@ class LULCTrainer:
             "started_at": None,
             "updated_at": None,
         }
+        self._aux_only_training = False
 
     # ── Model setup ───────────────────────────────────────────────────
 
@@ -99,11 +123,40 @@ class LULCTrainer:
         torch.set_float32_matmul_precision("high")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = not self.config.deterministic
+        torch.backends.cudnn.deterministic = self.config.deterministic
 
     def _count_aux_channels(self) -> int:
         """Count how many auxiliary raster channels are enabled."""
         return len(self.config.enabled_aux_names)
+
+    def _zero_control_era5_columns(self) -> None:
+        """Make a fresh zero-weather control neutral in the paired model."""
+        if self.config.era5_mode != "control":
+            return
+        era5_names = (
+            "era5_t2m_mean", "era5_tp_sum", "era5_swvl1_mean",
+            "era5_ssrd_sum", "era5_gdd",
+        )
+        if tuple(self.config.enabled_aux_names[-5:]) != era5_names:
+            raise ValueError("ERA5 channels must be the trailing five AUX inputs")
+        parameters = dict(self.model.named_parameters())
+        candidates = (
+            "lidar_branch.net.0.conv.weight",
+            "aux_encoder.net.0.conv.weight",
+        )
+        found = False
+        with torch.no_grad():
+            for key in candidates:
+                weight = parameters.get(key)
+                if weight is None:
+                    continue
+                if weight.ndim != 4 or weight.shape[1] < 5:
+                    raise ValueError(f"Invalid ERA5 AUX input weight shape: {key}")
+                weight[:, -5:].zero_()
+                found = True
+        if not found:
+            raise ValueError("Could not locate the ERA5 AUX input convolution")
 
     def _collect_aux(
         self,
@@ -227,16 +280,27 @@ class LULCTrainer:
               f"| Trainable decoder: {trainable_dec:,}")
 
     def _freeze_for_aux_training(self) -> None:
-        """Stage 2: freeze backbone + decoder + head, train only AuxEncoder + aux_fusion."""
+        """Freeze spectral path and train whichever AUX fusion path is active."""
+        aux_modules = ("aux_encoder", "aux_fusion", "lidar_branch", "gated_fusions")
         for name, param in self.model.named_parameters():
-            if "aux_encoder" in name or "aux_fusion" in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
+            param.requires_grad = any(module in name for module in aux_modules)
+        self._aux_only_training = True
 
         trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         frozen = sum(p.numel() for p in self.model.parameters() if not p.requires_grad)
         print(f"  Stage 2 (aux-only): Frozen: {frozen:,} | Trainable (aux): {trainable:,}")
+
+    def _set_aux_only_module_modes(self) -> None:
+        """Keep frozen decoder/head buffers and dropout immutable."""
+        if not self._aux_only_training:
+            return
+        self.model.eval()
+        for name in (
+            "aux_encoder", "aux_fusion", "lidar_branch", "gated_fusions",
+        ):
+            module = getattr(self.model, name, None)
+            if module is not None:
+                module.train()
 
     # ── Training ──────────────────────────────────────────────────────
 
@@ -267,7 +331,12 @@ class LULCTrainer:
 
         # Class weights
         stats_path = Path(cfg.data_dir) / "class_stats.json"
-        if stats_path.exists():
+        split_manifest = getattr(train_dataset, "_split_manifest", None)
+        if split_manifest is not None:
+            raw_counts = split_manifest["label_support"]["train"]["pixel_counts"]
+            class_counts = {int(index): count for index, count in raw_counts.items()}
+            print("  Class weights: using explicit train-cohort support only")
+        elif stats_path.exists():
             with open(stats_path) as f:
                 stats = json.load(f)
 
@@ -288,22 +357,24 @@ class LULCTrainer:
             else:
                 class_counts = {}
 
-            if class_counts:
-                weights = compute_class_weights(
-                    class_counts,
-                    num_classes=cfg.num_classes,
-                    max_weight=cfg.max_class_weight,
-                    ignore_index=cfg.ignore_index,
-                    method=cfg.weighting_method,
-                )
-                weights_tensor = torch.from_numpy(weights).to(self.device)
-                print(f"  Class weights: {weights.round(2).tolist()}")
-            else:
-                weights_tensor = None
-                print("  WARNING: class_stats.json has no counts — using uniform weights")
+        else:
+            class_counts = {}
+            print("  WARNING: No class_stats.json — using uniform weights")
+
+        if class_counts:
+            weights = compute_class_weights(
+                class_counts,
+                num_classes=cfg.num_classes,
+                max_weight=cfg.max_class_weight,
+                ignore_index=cfg.ignore_index,
+                method=cfg.weighting_method,
+            )
+            weights_tensor = torch.from_numpy(weights).to(self.device)
+            print(f"  Class weights: {weights.round(2).tolist()}")
         else:
             weights_tensor = None
-            print("  WARNING: No class_stats.json — using uniform weights")
+            if stats_path.exists() and split_manifest is None:
+                print("  WARNING: class_stats.json has no counts — using uniform weights")
 
         # Loss function
         if cfg.loss_type == "focal_dice":
@@ -408,8 +479,14 @@ class LULCTrainer:
         # DataLoaders
         sampler = build_weighted_sampler(
             train_dataset,
-            class_stats_path=str(stats_path) if stats_path.exists() else None,
+            class_stats_path=(
+                str(stats_path)
+                if split_manifest is None and stats_path.exists()
+                else None
+            ),
         )
+        loader_generator = torch.Generator().manual_seed(cfg.seed)
+        sampler.generator = loader_generator
         train_loader = DataLoader(
             train_dataset,
             batch_size=cfg.batch_size,
@@ -417,12 +494,16 @@ class LULCTrainer:
             num_workers=cfg.num_workers,
             pin_memory=self.device.type == "cuda",
             drop_last=True,
+            generator=loader_generator,
+            worker_init_fn=_seed_worker,
         )
         val_loader = DataLoader(
             val_dataset,
             batch_size=cfg.batch_size,
             shuffle=False,
             num_workers=cfg.num_workers,
+            generator=torch.Generator().manual_seed(cfg.seed + 1),
+            worker_init_fn=_seed_worker,
         )
 
         # Training loop
@@ -497,6 +578,7 @@ class LULCTrainer:
         for epoch in range(start_epoch, cfg.epochs + 1):
             # ── Train epoch ───────────────────────────────────────────
             self.model.train()
+            self._set_aux_only_module_modes()
             # Keep encoder in eval mode (batchnorm/dropout frozen)
             self.model.encoder.eval()
 
@@ -504,10 +586,42 @@ class LULCTrainer:
             epoch_frac_loss = 0.0
             n_frac_batches = 0
             n_batches = 0
+            exposure_digest = hashlib.sha256()
+            train_target_support = torch.zeros(
+                cfg.num_classes, dtype=torch.int64,
+            )
+            train_class_tiles = [set() for _ in range(cfg.num_classes)]
             t0 = time.time()
 
             for batch in train_loader:
-                labels = batch["label"].to(self.device)    # (B, H, W)
+                labels_cpu = batch["label"].contiguous()
+                if cfg.log_training_exposure:
+                    batch_tiles = batch.get("metadata", {}).get("tile")
+                    if (
+                        not isinstance(batch_tiles, (list, tuple))
+                        or len(batch_tiles) != labels_cpu.shape[0]
+                    ):
+                        raise RuntimeError(
+                            "Training exposure ledger lacks batched tile identities"
+                        )
+                    for tile_name, sample_labels in zip(batch_tiles, labels_cpu):
+                        encoded_name = str(tile_name).encode("utf-8")
+                        exposure_digest.update(encoded_name)
+                        exposure_digest.update(b"\0")
+                        exposure_digest.update(
+                            sample_labels.numpy().tobytes(order="C")
+                        )
+                        exposure_digest.update(b"\0")
+                        counts = torch.bincount(
+                            sample_labels.reshape(-1).to(torch.int64),
+                            minlength=cfg.num_classes,
+                        )[:cfg.num_classes]
+                        train_target_support += counts
+                        for class_index in torch.nonzero(
+                            counts, as_tuple=False,
+                        ).flatten().tolist():
+                            train_class_tiles[class_index].add(str(tile_name))
+                labels = labels_cpu.to(self.device)    # (B, H, W)
 
                 # Input tensor construction + per-family forward routing is
                 # centralized in imint.fm.forward_router.family_forward (used
@@ -599,7 +713,34 @@ class LULCTrainer:
                         epoch_frac_loss += float(frac_loss.item())
                         n_frac_batches += 1
                 loss.backward()
+                if cfg.preflight_one_batch:
+                    trainable_gradients = [
+                        parameter.grad
+                        for parameter in self.model.parameters()
+                        if parameter.requires_grad and parameter.grad is not None
+                    ]
+                    if not torch.isfinite(loss):
+                        raise RuntimeError("One-batch preflight produced non-finite loss")
+                    if not trainable_gradients or not all(
+                        torch.isfinite(gradient).all()
+                        for gradient in trainable_gradients
+                    ):
+                        raise RuntimeError(
+                            "One-batch preflight produced missing/non-finite gradients"
+                        )
                 optimizer.step()
+
+                if cfg.preflight_one_batch:
+                    print(
+                        "PREFLIGHT_ONE_BATCH_OK "
+                        f"loss={float(loss.item()):.6f} "
+                        f"grad_tensors={len(trainable_gradients)}"
+                    )
+                    return {
+                        "best_miou": float("nan"),
+                        "best_epoch": 0,
+                        "checkpoint": "preflight-only",
+                    }
 
                 if step >= warmup_steps:
                     scheduler.step()
@@ -654,7 +795,10 @@ class LULCTrainer:
             is_new_best = metric_value > best_metric
             # Serialize confusion matrix for dashboard (only on best epochs)
             cm_data = None
-            if is_new_best and "confusion_matrix" in val_metrics:
+            if (
+                (is_new_best or cfg.log_confusion_every_epoch)
+                and "confusion_matrix" in val_metrics
+            ):
                 cm = val_metrics["confusion_matrix"]
                 cm_data = cm.tolist() if hasattr(cm, 'tolist') else None
 
@@ -672,6 +816,15 @@ class LULCTrainer:
                 "elapsed_s": round(elapsed, 1),
                 "metric_value": round(metric_value, 6),
                 "is_best": is_new_best,
+                **({
+                    "train_exposure_sha256": exposure_digest.hexdigest(),
+                    "train_target_support": train_target_support.tolist(),
+                    "train_class_tiles": {
+                        str(index): sorted(names)
+                        for index, names in enumerate(train_class_tiles)
+                        if names
+                    },
+                } if cfg.log_training_exposure else {}),
                 **({"confusion_matrix": cm_data} if cm_data else {}),
             })
 
@@ -687,11 +840,12 @@ class LULCTrainer:
                     n for n, v in valid_ious.items() if v == 0.0
                 }
                 best_per_class = dict(valid_ious)
-                self._save_checkpoint(
-                    ckpt_dir / "best_model.pt", epoch, val_metrics,
-                )
-                print(f"    ✓ New best model saved "
-                      f"(mIoU={val_miou:.4f}, metric={metric_value:.4f})")
+                if not cfg.fixed_checkpoint_only:
+                    self._save_checkpoint(
+                        ckpt_dir / "best_model.pt", epoch, val_metrics,
+                    )
+                    print(f"    ✓ New best model saved "
+                          f"(mIoU={val_miou:.4f}, metric={metric_value:.4f})")
             else:
                 patience_counter += 1
 
@@ -767,19 +921,22 @@ class LULCTrainer:
                     ckpt_dir / f"epoch_{epoch:03d}.pt", epoch, val_metrics,
                 )
 
-            # ── Save resume checkpoint (every epoch) ──────────────
-            self._save_resume_checkpoint(
-                ckpt_dir / "last_checkpoint.pt",
-                epoch=epoch,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                step=step,
-                best_metric=best_metric,
-                best_miou=best_miou,
-                best_epoch=best_epoch,
-                patience_counter=patience_counter,
-                train_loss_history=train_loss_history,
-            )
+            # Fixed smoke protocols intentionally do not resume: their RNG
+            # ledger would be invalid after a partial restart, and the full
+            # AdamW state is several GiB for a 600M model.
+            if not cfg.fixed_checkpoint_only:
+                self._save_resume_checkpoint(
+                    ckpt_dir / "last_checkpoint.pt",
+                    epoch=epoch,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    step=step,
+                    best_metric=best_metric,
+                    best_miou=best_miou,
+                    best_epoch=best_epoch,
+                    patience_counter=patience_counter,
+                    train_loss_history=train_loss_history,
+                )
 
             # Track train loss convergence
             train_loss_history.append(avg_loss)
@@ -806,10 +963,15 @@ class LULCTrainer:
             self._write_log_file()
 
         print(f"\n  Training complete. Best mIoU={best_miou:.4f} at epoch {best_epoch}")
+        checkpoint = (
+            ckpt_dir / f"epoch_{cfg.epochs:03d}.pt"
+            if cfg.fixed_checkpoint_only
+            else ckpt_dir / "best_model.pt"
+        )
         return {
             "best_miou": best_miou,
             "best_epoch": best_epoch,
-            "checkpoint": str(ckpt_dir / "best_model.pt"),
+            "checkpoint": str(checkpoint),
         }
 
     # ── Training log (JSON for dashboard) ─────────────────────────────
@@ -952,6 +1114,8 @@ class LULCTrainer:
         temporal frames or aux channels than the current config.
         """
         if not isinstance(ckpt, dict) or "config" not in ckpt:
+            if self.config.strict_checkpoint_loading:
+                raise ValueError("Strict checkpoint loading requires semantic config")
             return  # Old checkpoint format, skip validation
 
         ckpt_cfg = ckpt["config"]
@@ -972,6 +1136,22 @@ class LULCTrainer:
         if ckpt_n_aux is not None and ckpt_n_aux != current_n_aux:
             print(f"  ⚠ WARNING: Checkpoint has n_aux_channels="
                   f"{ckpt_n_aux}, current config has {current_n_aux}.")
+        if self.config.strict_checkpoint_loading:
+            expected = {
+                "backbone_name": self._registry_name,
+                "num_classes": self.config.num_classes,
+                "num_temporal_frames": current_frames,
+                "enable_multitemporal": self.config.enable_multitemporal,
+                "n_aux_channels": current_n_aux,
+                "enabled_aux_names": list(self.config.enabled_aux_names),
+            }
+            mismatches = {
+                key: {"expected": value, "actual": ckpt_cfg.get(key)}
+                for key, value in expected.items()
+                if ckpt_cfg.get(key) != value
+            }
+            if mismatches:
+                raise ValueError(f"Strict checkpoint semantic mismatch: {mismatches}")
 
     def _expand_aux_input_conv(self, sd: dict) -> dict:
         """Warm-start expansion of the aux input conv when the checkpoint
@@ -1166,6 +1346,11 @@ class LULCTrainer:
         sd = self._expand_head_output(sd)
 
         missing, unexpected = self.model.load_state_dict(sd, strict=False)
+        if self.config.strict_checkpoint_loading and (missing or unexpected):
+            raise RuntimeError(
+                "Strict checkpoint learned-key mismatch: "
+                f"missing={list(missing)[:10]}, unexpected={list(unexpected)[:10]}"
+            )
         # aux_encoder and aux_fusion are expected to be missing
         real_missing = [k for k in missing
                         if "aux_encoder" not in k and "aux_fusion" not in k]
@@ -1307,6 +1492,7 @@ class LULCTrainer:
                 # Ordered aux-channel names — the ground truth for which aux
                 # channels (and in what order) the n_aux input conv expects.
                 "enabled_aux_names": list(self.config.enabled_aux_names),
+                "era5_mode": self.config.era5_mode,
             },
         }
         torch.save(checkpoint, path)

@@ -81,6 +81,14 @@ def main():
              "dropped at construction. Default None → labels come from the "
              "source tile (legacy, byte-identical).",
     )
+    parser.add_argument(
+        "--era5-dir", type=str, default=None,
+        help="Optional directory with per-tile ERA5-Land .npz sidecars.",
+    )
+    parser.add_argument(
+        "--split-dir", type=str, default=None,
+        help="Optional directory containing persisted split_train.txt and split_val.txt.",
+    )
 
     # Resolution
     parser.add_argument("--patch-size", type=int, default=_defaults.patch_pixels,
@@ -90,11 +98,41 @@ def main():
 
     # Training
     parser.add_argument("--epochs", type=int, default=_defaults.epochs)
+    parser.add_argument("--seed", type=int, default=_defaults.seed)
+    parser.add_argument("--deterministic", action="store_true",
+                        help="Use deterministic CUDA/DataLoader settings for paired experiments.")
+    parser.add_argument(
+        "--deterministic-warn-only", action="store_true",
+        help="Warn instead of aborting for CUDA ops without a deterministic "
+             "implementation; the setting is recorded in run provenance.",
+    )
+    parser.add_argument(
+        "--preflight-one-batch", action="store_true",
+        help="Build the real model/data/loss route, run exactly one optimizer "
+             "step, assert finite loss/gradients, then exit before validation.",
+    )
     parser.add_argument("--batch-size", type=int, default=_defaults.batch_size)
     parser.add_argument("--lr", type=float, default=_defaults.lr)
     parser.add_argument("--weight-decay", type=float, default=_defaults.weight_decay)
     parser.add_argument("--patience", type=int, default=_defaults.early_stopping_patience,
                         help="Early stopping patience")
+    parser.add_argument(
+        "--train-loss-patience", type=int, default=_defaults.train_loss_patience,
+        help="Train-loss convergence window; set above epochs to disable.",
+    )
+    parser.add_argument(
+        "--train-loss-min-delta", type=float, default=_defaults.train_loss_min_delta,
+        help="Train-loss convergence threshold.",
+    )
+    parser.add_argument(
+        "--log-confusion-every-epoch", action="store_true",
+        help="Persist every epoch confusion matrix for fixed-epoch experiments.",
+    )
+    parser.add_argument(
+        "--log-training-exposure", action="store_true",
+        help="Hash and persist the exact sampled tile/random-crop labels for "
+             "paired experiment parity and realized class-support checks.",
+    )
     parser.add_argument("--num-workers", type=int, default=_defaults.num_workers)
 
     # Precision
@@ -147,8 +185,19 @@ def main():
     # Checkpoint
     parser.add_argument("--checkpoint-dir", type=str,
                         default="checkpoints/unified")
+    parser.add_argument(
+        "--strict-checkpoint-loading", action="store_true",
+        help="Fail on semantic or learned-key checkpoint mismatches.",
+    )
     parser.add_argument("--save-every", type=int, default=_defaults.save_every_n_epochs,
                         help="Save checkpoint every N epochs")
+    parser.add_argument(
+        "--fixed-checkpoint-only", action="store_true",
+        help=(
+            "Persist only scheduled epoch_NNN.pt checkpoints; omit "
+            "best_model.pt and optimizer-heavy last_checkpoint.pt."
+        ),
+    )
 
     # Loss
     parser.add_argument("--loss-type", type=str, default=_defaults.loss_type,
@@ -226,6 +275,9 @@ def main():
                              "time from the tile's S1 keys. Appended LAST. "
                              "The 2016 clearcut anchor via the aux path. "
                              "Default OFF.")
+    parser.add_argument("--era5-mode", choices=["off", "control", "treatment"],
+                        default="off", help="Explicit weather arm. control uses neutral "
+                        "channels; treatment requires --era5-dir with validated sidecars.")
 
     # Temporal
     parser.add_argument("--enable-multitemporal", action="store_true",
@@ -305,10 +357,18 @@ def main():
         collapse_max_rewinds=args.collapse_max_rewinds,
         num_classes=args.num_classes,
         epochs=args.epochs,
+        seed=args.seed,
+        deterministic=args.deterministic,
+        deterministic_warn_only=args.deterministic_warn_only,
+        preflight_one_batch=args.preflight_one_batch,
         batch_size=args.batch_size,
         lr=args.lr,
         weight_decay=args.weight_decay,
         early_stopping_patience=args.patience,
+        train_loss_patience=args.train_loss_patience,
+        train_loss_min_delta=args.train_loss_min_delta,
+        log_confusion_every_epoch=args.log_confusion_every_epoch,
+        log_training_exposure=args.log_training_exposure,
         num_workers=args.num_workers,
         decoder_channels=args.decoder_channels,
         dropout=args.dropout,
@@ -317,6 +377,7 @@ def main():
         img_size=args.img_size,
         checkpoint_dir=args.checkpoint_dir,
         save_every_n_epochs=args.save_every,
+        fixed_checkpoint_only=args.fixed_checkpoint_only,
         loss_type=args.loss_type,
         focal_gamma=args.focal_gamma,
         max_class_weight=args.max_class_weight,
@@ -343,7 +404,10 @@ def main():
         # from the tile's S1 keys. Appended AFTER markfukt so prior indices
         # are untouched. Default OFF.
         enable_delta_sar_channels=args.enable_delta_sar,
+        enable_era5_channels=args.era5_mode != "off",
+        era5_mode=args.era5_mode,
         freeze_spectral=args.freeze_spectral,
+        strict_checkpoint_loading=args.strict_checkpoint_loading,
         resume_from_checkpoint=args.resume_from,
         warm_start_from_checkpoint=args.warm_start_from,
         # Trädslag fraction head (multi-task). Off by default.
@@ -401,6 +465,10 @@ def main():
         aux_channel_names=aux_names,
         label_dir=args.label_dir,
         frac_dir=args.frac_dir,
+        era5_dir=args.era5_dir,
+        era5_mode=args.era5_mode,
+        split_dir=args.split_dir,
+        limit_tiles=args.limit_tiles,
         backbone_family=backbone_family,
         model_keys=model_keys,
     )
@@ -415,6 +483,10 @@ def main():
         aux_channel_names=aux_names,
         label_dir=args.label_dir,
         frac_dir=args.frac_dir,
+        era5_dir=args.era5_dir,
+        era5_mode=args.era5_mode,
+        split_dir=args.split_dir,
+        limit_tiles=args.limit_tiles,
         backbone_family=backbone_family,
         model_keys=model_keys,
     )
@@ -474,8 +546,15 @@ def main():
                     split=split_name,
                     patch_size=config.patch_pixels,
                     enable_aux=True,
+                    multitemporal=config.enable_multitemporal,
+                    num_temporal_frames=config.num_temporal_frames,
+                    aux_channel_names=aux_names,
                     label_dir=args.label_dir,
                     frac_dir=args.frac_dir,
+                    era5_dir=args.era5_dir,
+                    era5_mode=args.era5_mode,
+                    split_dir=args.split_dir,
+                    limit_tiles=args.limit_tiles,
                     backbone_family=backbone_family,
                 )
                 print(f"\n  Evaluating on {split_name} ({len(ds)} tiles)...")
