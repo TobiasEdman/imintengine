@@ -1,0 +1,95 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: era5-p600m-treatment-7b5c190221fb
+  namespace: prithvi-training-default
+  labels:
+    app: unified-training
+    purpose: era5-prithvi600m-smoke
+    arm: treatment
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: unified-training
+        purpose: era5-prithvi600m-smoke
+        arm: treatment
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      activeDeadlineSeconds: 43200
+      nodeSelector:
+        accelerator: nvidia-h100
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: trainer
+          image: ghcr.io/tobiasedman/imint-era5-smoke@sha256:95813c0d59b2489da9b2878f7d7d4e4aefa73262c3f86dca9cf516b5fc37506e
+          command: ["/bin/bash", "/patches/run_arm.sh"]
+          env:
+            - name: ARM
+              value: treatment
+            - name: RUN_ID
+              value: era5-p600m-20260821-7b5c190221fb
+            - name: BASE_GIT_SHA
+              value: 602c86dee8d4dbdc191ab2750c261cf86b56ac50
+            - name: CONTAINER_IMAGE
+              value: ghcr.io/tobiasedman/imint-era5-smoke@sha256:95813c0d59b2489da9b2878f7d7d4e4aefa73262c3f86dca9cf516b5fc37506e
+            - name: ALLOW_OPEN_METEO_TILE_METADATA
+              value: "yes"
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CUBLAS_WORKSPACE_CONFIG
+              value: ":4096:8"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: 64Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: 64Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /cephfs
+              readOnly: true
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+            - name: patches
+              mountPath: /patches
+              readOnly: true
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: training-checkpoints
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data
+        - name: patches
+          configMap:
+            name: era5-smoke-code-7b5c190221fb
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
