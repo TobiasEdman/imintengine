@@ -1,0 +1,102 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: reclaim-pvc-space
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: reclaim-pvc-space
+spec:
+  # PVC RECLAIM — /data hit 1.6T / 100% full on 2026-08-24, which silently
+  # broke the TESSERA holdout enrichment: downloads could not be written, so
+  # 588/1463 tiles returned n_used==0 and were reported (misleadingly) as
+  # "no_tessera_tiles_for_year". The zero-length *.npz.tmp.npz files are the
+  # same symptom. No real tile was corrupted — the tmp+os.replace pattern
+  # meant a failed write never reached the rename.
+  #
+  # SET DRY_RUN=0 TO ACTUALLY DELETE. Default 1 = report sizes only.
+  #
+  # What it reclaims, in ascending order of risk:
+  #   1. stale *.npz.tmp.npz   — truncated temps from disk-full writes
+  #   2. /data/s1_cache        ~35G  legacy cdse-stac GRD products; the
+  #                                   pc-rtc backend streams windowed COGs
+  #                                   and never touches this
+  #   3. /data/pred_cache      ~75G  regenerable inference cache
+  #   4. epoch_*.pt            ~tens of G — intermediate epoch snapshots.
+  #                                   KEEPS best_model.pt + last_checkpoint.pt,
+  #                                   which are what resume and inference use
+  #   5. /data/vpp_wekeo      ~292G  WEkEO COG cache. Safe ONLY because both
+  #                                   VPP backfills completed (train
+  #                                   filled=5648, holdout filled=1463) and
+  #                                   the phenology is now baked into the
+  #                                   tiles. Re-downloadable, PU-free (~3.5h)
+  #                                   if a later fetch phase needs it.
+  #
+  # NOTE: this volume is shared with another Claude session. Coordinate before
+  # running with DRY_RUN=0.
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      containers:
+        - name: reclaim
+          image: python:3.11-slim
+          env:
+            - name: DRY_RUN
+              value: "1"          # <-- set to "0" to delete
+          command:
+            - bash
+            - -c
+            - |
+              set -u
+              echo "=== PVC reclaim  (DRY_RUN=$DRY_RUN) ==="
+              df -h /data | tail -1
+              echo ""
+
+              run() {   # run <label> <find-or-du target...>
+                echo "--- $1 ---"
+              }
+
+              size() { du -sh "$1" 2>/dev/null | cut -f1; }
+
+              echo "[1] stale truncated temps"
+              n=$(find /data -name '*.npz.tmp.npz' 2>/dev/null | wc -l)
+              echo "    count=$n"
+              [ "$DRY_RUN" = "0" ] && find /data -name '*.npz.tmp.npz' -delete 2>/dev/null
+
+              echo "[2] /data/s1_cache            $(size /data/s1_cache)"
+              [ "$DRY_RUN" = "0" ] && rm -rf /data/s1_cache
+
+              echo "[3] /data/pred_cache          $(size /data/pred_cache)"
+              [ "$DRY_RUN" = "0" ] && rm -rf /data/pred_cache
+
+              echo "[4] intermediate epoch checkpoints (keeps best_model.pt / last_checkpoint.pt)"
+              find /data/checkpoints -name 'epoch_*.pt' -printf '%s\n' 2>/dev/null \
+                | awk '{s+=$1; n++} END {printf "    files=%d  bytes=%.1fG\n", n, s/1073741824}'
+              echo "    KEEPING:"
+              find /data/checkpoints \( -name 'best_model.pt' -o -name 'last_checkpoint.pt' \) 2>/dev/null | sed 's/^/      /' | head -20
+              [ "$DRY_RUN" = "0" ] && find /data/checkpoints -name 'epoch_*.pt' -delete 2>/dev/null
+
+              echo "[5] /data/vpp_wekeo           $(size /data/vpp_wekeo)"
+              [ "$DRY_RUN" = "0" ] && rm -rf /data/vpp_wekeo
+
+              echo ""
+              echo "=== after ==="
+              df -h /data | tail -1
+              echo "=== reclaim complete (DRY_RUN=$DRY_RUN) ==="
+          resources:
+            requests: { cpu: "1", memory: "2Gi" }
+            limits:   { cpu: "2", memory: "4Gi" }
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
