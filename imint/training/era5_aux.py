@@ -33,7 +33,14 @@ Usage:
 from __future__ import annotations
 
 import os
+import json
+import hashlib
+import tempfile
+import time
 from collections import defaultdict
+from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -469,3 +476,299 @@ ERA5_AUX_NORM = {
     "era5_ssrd_sum": (3500.0, 500.0), # mean MJ/m², std
     "era5_gdd": (1200.0, 400.0),      # mean GDD, std
 }
+
+ERA5_LAND_GRID_DEGREES = Decimal("0.1")
+ERA5_ATMOSPHERE_GRID_DEGREES = Decimal("0.25")
+# Open-Meteo serializes selected grid coordinates as float32-like JSON
+# values (for example 59.300003 for the requested 59.3).  This tolerance is
+# deliberately much smaller than half of the finest consumed ERA5 grid
+# spacing (0.05 degrees), so it absorbs representation noise without accepting
+# a neighbouring cell.
+ERA5_API_CELL_COORD_ATOL_DEGREES = 1e-4
+
+
+def era5_api_cell_coords_match(
+    actual_lat: float,
+    actual_lon: float,
+    expected_lat: float,
+    expected_lon: float,
+) -> bool:
+    """Return whether an API-selected cell matches its canonical grid cell.
+
+    This is only for coordinates returned by Open-Meteo.  Request and source
+    coordinates are identities under our control and must be checked more
+    strictly by their callers.
+    """
+    try:
+        actual = np.asarray((actual_lat, actual_lon), dtype=np.float64)
+        expected = np.asarray((expected_lat, expected_lon), dtype=np.float64)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        np.isfinite(actual).all()
+        and np.isfinite(expected).all()
+        and np.allclose(
+            actual,
+            expected,
+            rtol=0.0,
+            atol=ERA5_API_CELL_COORD_ATOL_DEGREES,
+        )
+    )
+
+
+def _snap_grid(value: float, resolution: Decimal) -> float:
+    """Snap a coordinate with an explicit half-up rule.
+
+    Python's built-in ``round`` uses ties-to-even, which can put points that
+    lie exactly between two reanalysis cells into a different group across
+    implementations.  The smoke cohort and the API request must share this
+    one deterministic rule.
+    """
+    decimal_value = Decimal(str(float(value)))
+    index = (decimal_value / resolution).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP,
+    )
+    return float(index * resolution)
+
+
+def era5_grid_context(lat: float, lon: float) -> dict[str, Any]:
+    """Return the exact requested and model-specific nearest grid cells."""
+    request_lat = _snap_grid(lat, ERA5_LAND_GRID_DEGREES)
+    request_lon = _snap_grid(lon, ERA5_LAND_GRID_DEGREES)
+    atmosphere_lat = _snap_grid(
+        request_lat, ERA5_ATMOSPHERE_GRID_DEGREES,
+    )
+    atmosphere_lon = _snap_grid(
+        request_lon, ERA5_ATMOSPHERE_GRID_DEGREES,
+    )
+    return {
+        "request_lat": request_lat,
+        "request_lon": request_lon,
+        "land_cell": {"lat": request_lat, "lon": request_lon},
+        "atmosphere_cell": {
+            "lat": atmosphere_lat,
+            "lon": atmosphere_lon,
+        },
+    }
+
+
+def era5_atmosphere_cell_id(lat: float, lon: float) -> str:
+    """ID used to group the cohort on the coarsest consumed ERA5 grid."""
+    cell = era5_grid_context(lat, lon)["atmosphere_cell"]
+    return format_era5_cell_id(cell["lat"], cell["lon"])
+
+
+def format_era5_cell_id(lat: float, lon: float) -> str:
+    """Format already-selected response coordinates without re-snapping."""
+    return f"{float(lat):+07.2f},{float(lon):+07.2f}"
+
+
+ERA5_REQUEST_SCHEMA = {
+    "version": 5,
+    "period": ["04-01", "09-30"],
+    "timezone": "GMT",
+    "elevation": "nan",
+    "cell_selection": "nearest",
+    "land_grid_degrees": float(ERA5_LAND_GRID_DEGREES),
+    "atmosphere_grid_degrees": float(ERA5_ATMOSPHERE_GRID_DEGREES),
+    "land_model": "era5_land",
+    "land_daily": ["temperature_2m_mean"],
+    "land_hourly": ["soil_moisture_0_to_7cm"],
+    "atmosphere_model": "era5",
+    "atmosphere_hourly": ["precipitation", "shortwave_radiation"],
+}
+
+
+def _request_with_retry(params: dict) -> dict:
+    import requests
+
+    last_error = None
+    for attempt in range(4):
+        try:
+            response = requests.get(
+                "https://archive-api.open-meteo.com/v1/archive",
+                params=params,
+                timeout=120,
+            )
+            response.raise_for_status()
+            return response.json()
+        except (requests.RequestException, ValueError) as exc:
+            last_error = exc
+            if attempt < 3:
+                time.sleep(2**attempt)
+    raise RuntimeError("ERA5 request failed after 4 attempts") from last_error
+
+
+def _validate_era5_payload(
+    payload: dict,
+    *,
+    year: int,
+    expected_grid: dict[str, Any] | None = None,
+) -> None:
+    if payload.get("schema") != ERA5_REQUEST_SCHEMA:
+        raise ValueError("ERA5 cache schema mismatch")
+    request_grid = payload.get("request")
+    if not isinstance(request_grid, dict):
+        raise ValueError("ERA5 cache is missing its requested grid")
+    if expected_grid is not None and request_grid != expected_grid:
+        raise ValueError("ERA5 cache request grid mismatch")
+    land = payload.get("land", {})
+    atmosphere = payload.get("atmosphere", {})
+    for model_name, response, expected_cell in (
+        ("era5_land", land, request_grid["land_cell"]),
+        ("era5", atmosphere, request_grid["atmosphere_cell"]),
+    ):
+        try:
+            actual_lat = float(response["latitude"])
+            actual_lon = float(response["longitude"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{model_name} response is missing its selected grid cell"
+            ) from exc
+        if not era5_api_cell_coords_match(
+            actual_lat,
+            actual_lon,
+            expected_cell["lat"],
+            expected_cell["lon"],
+        ):
+            raise ValueError(
+                f"{model_name} selected unexpected cell "
+                f"({actual_lat}, {actual_lon}); expected "
+                f"({expected_cell['lat']}, {expected_cell['lon']})"
+            )
+    value_series = (
+        land.get("daily", {}).get("temperature_2m_mean"),
+        land.get("hourly", {}).get("soil_moisture_0_to_7cm"),
+        atmosphere.get("hourly", {}).get("precipitation"),
+        atmosphere.get("hourly", {}).get("shortwave_radiation"),
+    )
+    expected = (183, 4392, 4392, 4392)
+    for values, count in zip(value_series, expected):
+        arr = np.asarray(values if values is not None else [], dtype=np.float64)
+        if arr.size != count or not np.isfinite(arr).all():
+            raise ValueError(
+                f"Incomplete ERA5 series: expected {count} finite values, got {arr.size}"
+            )
+    start = datetime(year, 4, 1)
+    expected_daily = [
+        (start + timedelta(days=index)).strftime("%Y-%m-%d")
+        for index in range(183)
+    ]
+    expected_hourly = [
+        (start + timedelta(hours=index)).strftime("%Y-%m-%dT%H:%M")
+        for index in range(4392)
+    ]
+    time_series = (
+        (land.get("daily", {}).get("time"), expected_daily),
+        (land.get("hourly", {}).get("time"), expected_hourly),
+        (atmosphere.get("hourly", {}).get("time"), expected_hourly),
+    )
+    for values, expected_values in time_series:
+        if values != expected_values:
+            raise ValueError("ERA5 timestamps are incomplete, duplicated, or unordered")
+
+
+def fetch_era5_land_growing_season(
+    lat: float,
+    lon: float,
+    year: int,
+    *,
+    cache_dir: str | Path,
+    cutoff_date: str | None = None,
+) -> dict[str, float]:
+    """Fetch one ERA5-Land Apr-Sep summary and persist the raw response.
+
+    Open-Meteo is used only as a transport for the explicitly selected
+    ``era5_land`` reanalysis. Coordinates are snapped to its native 0.1-degree
+    grid, making the cache reusable by nearby 5.12 km training tiles.
+    """
+    grid = era5_grid_context(lat, lon)
+    lat = grid["request_lat"]
+    lon = grid["request_lon"]
+    cutoff_date = cutoff_date or f"{year}-09-30"
+    if not (f"{year}-04-01" <= cutoff_date <= f"{year}-09-30"):
+        raise ValueError(f"cutoff_date outside growing season: {cutoff_date}")
+    cache_dir = Path(cache_dir)
+    schema_hash = hashlib.sha256(
+        json.dumps(ERA5_REQUEST_SCHEMA, sort_keys=True).encode()
+    ).hexdigest()[:12]
+    cache_path = cache_dir / (
+        f"era5_aux_{schema_hash}_{lat:+06.1f}_{lon:+06.1f}_{year}.json"
+    )
+    payload = None
+    if cache_path.exists():
+        try:
+            payload = json.loads(cache_path.read_text())
+            _validate_era5_payload(
+                payload, year=year, expected_grid=grid,
+            )
+        except (json.JSONDecodeError, ValueError, TypeError):
+            payload = None
+    if payload is None:
+        common = {
+            "latitude": lat,
+            "longitude": lon,
+            "start_date": f"{year}-04-01",
+            "end_date": f"{year}-09-30",
+            "timezone": "GMT",
+            "elevation": "nan",
+            "cell_selection": "nearest",
+        }
+        land = _request_with_retry(
+            {**common,
+                "daily": "temperature_2m_mean",
+                "hourly": "soil_moisture_0_to_7cm",
+                "models": "era5_land",
+            }
+        )
+        atmosphere = _request_with_retry(
+            {**common,
+                "hourly": "precipitation,shortwave_radiation",
+                "models": "era5",
+            }
+        )
+        payload = {
+            "schema": ERA5_REQUEST_SCHEMA,
+            "request": grid,
+            "land": land,
+            "atmosphere": atmosphere,
+        }
+        _validate_era5_payload(payload, year=year, expected_grid=grid)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as handle:
+                json.dump(payload, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, cache_path)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+
+    daily = payload["land"]["daily"]
+    daily_mask = np.asarray(payload["land"]["daily"]["time"]) <= cutoff_date
+    hourly_mask = np.asarray(payload["land"]["hourly"]["time"]) < f"{cutoff_date}T23:59"
+    temps = np.asarray(daily["temperature_2m_mean"], dtype=np.float64)[daily_mask]
+    hourly = payload["atmosphere"]["hourly"]
+    precip = np.asarray(hourly["precipitation"], dtype=np.float64)[hourly_mask]
+    # Hourly W/m2 mean over one hour -> 0.0036 MJ/m2.
+    radiation = (np.asarray(hourly["shortwave_radiation"], dtype=np.float64)[hourly_mask]
+                 * 0.0036)
+    moisture = np.asarray(
+        payload["land"]["hourly"]["soil_moisture_0_to_7cm"], dtype=np.float64,
+    )[hourly_mask]
+    return {
+        "era5_t2m_mean": float(np.nanmean(temps)),
+        "era5_tp_sum": float(np.nansum(precip)),
+        "era5_swvl1_mean": float(np.nanmean(moisture)),
+        "era5_ssrd_sum": float(np.nansum(radiation)),  # API unit: MJ/m2
+        "era5_gdd": float(np.nansum(np.maximum(temps - 5.0, 0.0))),
+        "era5_request_lat": float(grid["request_lat"]),
+        "era5_request_lon": float(grid["request_lon"]),
+        "era5_land_cell_lat": float(payload["land"]["latitude"]),
+        "era5_land_cell_lon": float(payload["land"]["longitude"]),
+        "era5_atmosphere_cell_lat": float(payload["atmosphere"]["latitude"]),
+        "era5_atmosphere_cell_lon": float(payload["atmosphere"]["longitude"]),
+    }
