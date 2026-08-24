@@ -14,6 +14,7 @@ column is filled in when the L2 dumps land (higher-power cross-check).
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -66,8 +67,9 @@ def collapse_hard_28_to_5(model_pred: np.ndarray) -> np.ndarray:
     return np.where(np.isin(model_pred, FOREST), model_pred, 0)
 
 
-def score_209(stem: str, collapse: str, test_tiles: set) -> dict | None:
-    path = Path(f"data/nfi/{stem}_per_plot.parquet")
+def score_209(stem: str, collapse: str, test_tiles: set,
+              dump_dir: str = "data/nfi") -> dict | None:
+    path = Path(dump_dir) / f"{stem}_per_plot.parquet"
     if not path.exists():
         return None
     d = pd.read_parquet(path)
@@ -89,12 +91,24 @@ def score_209(stem: str, collapse: str, test_tiles: set) -> dict | None:
 
 
 def main() -> None:
-    split = json.loads(Path("data/distill/distill_split.json").read_text())
+    # Parameterised so the same scorer serves both truth sets: the original
+    # grouped-tile split, and the off-footprint holdout (which needs
+    # holdout_split.json — no holdoutval_* name appears in distill_split.json,
+    # so scoring it against the default would silently match zero tiles and
+    # report every model as having no data).
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--split-json", default="data/distill/distill_split.json")
+    ap.add_argument("--dump-dir", default="data/nfi",
+                    help="dir holding <stem>_per_plot.parquet")
+    ap.add_argument("--out", default="data/distill/model_race_standings.json")
+    args = ap.parse_args()
+
+    split = json.loads(Path(args.split_json).read_text())
     test_tiles = {str(t) for t in split["test_tiles"]}
 
     rows = []
     for label, stem, backbone, collapse in MODELS:
-        s = score_209(stem, collapse, test_tiles)
+        s = score_209(stem, collapse, test_tiles, args.dump_dir)
         if s is None:
             print(f"  (skip {label}: no dump)")
             continue
@@ -127,7 +141,7 @@ def main() -> None:
             fm_race.append({"backbone": backbone, "patch_size": patch,
                             "nfi_oa": None, "n": None, "status": "pending"})
             continue
-        s = score_209(stem, "fraction", test_tiles)
+        s = score_209(stem, "fraction", test_tiles, args.dump_dir)
         fm_race.append({"backbone": backbone, "patch_size": patch,
                         "nfi_oa": s["oa"] if s else None,
                         "n": s["n"] if s else None,
@@ -139,7 +153,7 @@ def main() -> None:
         n = str(r["n"]) if r["n"] else "—"
         print(f"{r['backbone']:14s} {r['patch_size']:>5d} {oa:>7s} {n:>4s}")
 
-    out = Path("data/distill/model_race_standings.json")
+    out = Path(args.out)
     out.write_text(json.dumps({"nfi_209": rows,
                                "best_per_backbone": best,
                                "fm_race": fm_race,
