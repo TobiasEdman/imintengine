@@ -187,6 +187,67 @@ def infer_tile_year(data: dict) -> int | None:
     return max(y for y, c in counts.items() if c == top)
 
 
+# Atomic tile writes land on a sibling path that *also* ends in ``.npz``, so a
+# bare ``*.npz`` listing picks them up as if they were tiles. Two spellings are
+# in use across the repo: ``savez(tile.npz + ".tmp")`` appends its own suffix
+# and yields ``tile.npz.tmp.npz``, while ``tile[:-4] + ".tmp.npz"`` yields
+# ``tile.tmp.npz``. Both end in ``.tmp.npz``. The VPP backfill uses ``mkstemp``
+# with a ``_tmp`` infix, hence the second entry.
+TILE_TMP_SUFFIXES = (".tmp.npz", ".vpp_tmp.npz")
+
+
+def is_tile_tmp(name: str) -> bool:
+    """True if ``name`` is an in-flight/aborted atomic-write temp, not a tile."""
+    return os.path.basename(name).endswith(TILE_TMP_SUFFIXES)
+
+
+def clean_stale_tile_tmps(data_dir: str) -> list[str]:
+    """Delete leftover ``*.tmp.npz`` from aborted runs; return what was removed.
+
+    Call this *before* :func:`list_tile_paths`, never after: the ordering is
+    the whole point. ``enrich_tiles_s1.py`` cleaned the temps off disk but had
+    already globbed them into its work list, so every one still counted as a
+    tile, failed to open, and inflated ``failed`` — the pod then exited
+    non-zero on a run that had actually succeeded (2026-08-24 holdout leg).
+    """
+    removed: list[str] = []
+    try:
+        entries = list(os.scandir(data_dir))
+    except FileNotFoundError:
+        return removed
+    for entry in entries:
+        if not entry.is_file() or not is_tile_tmp(entry.name):
+            continue
+        try:
+            os.unlink(entry.path)
+        except FileNotFoundError:
+            continue  # a concurrent enricher won the race; nothing to do
+        removed.append(entry.path)
+    return sorted(removed)
+
+
+def list_tile_paths(data_dir: str, *, limit: int | None = None) -> list[str]:
+    """Sorted real tile ``.npz`` paths in ``data_dir``, temps excluded.
+
+    ``limit`` is applied *after* filtering, so ``--limit 5`` always yields five
+    real tiles rather than whatever the glob happened to return first — a
+    smoke run in a directory full of temps would otherwise do no work at all.
+
+    Uses ``scandir`` rather than ``glob`` because ``glob`` interprets ``[`` in
+    a directory name as a character class and would silently return nothing.
+    """
+    try:
+        entries = os.scandir(data_dir)
+    except FileNotFoundError:
+        return []
+    with entries:
+        paths = sorted(
+            e.path for e in entries
+            if e.is_file() and e.name.endswith(".npz") and not is_tile_tmp(e.name)
+        )
+    return paths[:limit] if limit else paths
+
+
 def point_to_bbox_3006(lat: float, lon: float, tile: "TileConfig") -> dict:
     """Convert WGS84 point → tile-sized EPSG:3006 bounding box."""
     from rasterio.crs import CRS

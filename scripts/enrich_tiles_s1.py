@@ -73,7 +73,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import sys
 import threading
@@ -191,7 +190,9 @@ def _tile_latitude(data: dict) -> float | None:
 # Year derivation is centralised in imint.training.tile_fetch so the
 # TESSERA enricher, the label builder and this module cannot drift apart.
 from imint.training.tile_fetch import (  # noqa: E402
+    clean_stale_tile_tmps,
     infer_tile_year as _tile_year,
+    list_tile_paths,
 )
 
 
@@ -382,21 +383,13 @@ def main():
     )
     args = parser.parse_args()
 
-    tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
-    cap = args.limit if args.limit is not None else args.max_tiles
-    if cap:
-        tiles = tiles[:cap]
-
-    # Clean stale .tmp.npz from prior aborted runs.
-    stale = glob.glob(os.path.join(args.data_dir, "*.npz.tmp.npz"))
-    stale += glob.glob(os.path.join(args.data_dir, "*.tmp.npz"))
-    for s in stale:
-        try:
-            os.unlink(s)
-        except FileNotFoundError:
-            pass
+    # Clean before listing: the reverse order left the deleted temps in the
+    # work list, where they failed to open and inflated `failed`.
+    stale = clean_stale_tile_tmps(args.data_dir)
     if stale:
         print(f"  Cleaned {len(stale)} stale .tmp.npz file(s) from prior runs")
+    cap = args.limit if args.limit is not None else args.max_tiles
+    tiles = list_tile_paths(args.data_dir, limit=cap)
 
     print("=== S1 SAR season-composite enrichment (v3) ===")
     print(f"  Tiles:   {len(tiles)}")

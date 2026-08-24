@@ -37,7 +37,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import sys
 import threading
@@ -56,7 +55,9 @@ TESSERA_DIM = 128
 # Year derivation is centralised in imint.training.tile_fetch so the S1
 # enricher, the label builder and this module can never drift apart.
 from imint.training.tile_fetch import (  # noqa: E402
+    clean_stale_tile_tmps,
     infer_tile_year as _infer_tile_year,
+    list_tile_paths,
 )
 
 
@@ -415,9 +416,10 @@ def main():
     )
     args = p.parse_args()
 
-    tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
-    if args.max_tiles:
-        tiles = tiles[:args.max_tiles]
+    stale = clean_stale_tile_tmps(args.data_dir)
+    if stale:
+        print(f"  Cleaned {len(stale)} stale .tmp.npz file(s) from prior runs")
+    tiles = list_tile_paths(args.data_dir, limit=args.max_tiles)
     print(f"=== TESSERA Enrichment ===")
     print(f"  Tiles: {len(tiles)}")
     print(f"  Workers: {args.workers}")
