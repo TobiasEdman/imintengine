@@ -52,6 +52,34 @@ def load_truth(path: Path) -> pd.DataFrame:
                               "year": "Year"})
 
 
+def load_test_tiles(split: str | None) -> set[str]:
+    """Read ``test_tiles`` from a split JSON, treating every degenerate case as
+    fatal.
+
+    A missing split silently disables the leakage guard: ``test_tiles`` stays
+    empty, every point is tagged ``train``, and the held-out scorers then find
+    zero rows without ever erroring. ``data/`` is gitignored, so a pod that
+    clones the repo has no split file at all — precisely the case the old
+    ``.exists()`` check swallowed. Pass ``split=""`` to opt out explicitly.
+    """
+    if not split:
+        return set()
+    path = Path(split)
+    if not path.exists():
+        raise SystemExit(
+            f"--split {split} not found. data/ is gitignored, so a cloned pod "
+            f"must be pointed at a staged copy, e.g. "
+            f"/data/distill/holdout_split.json. Pass --split '' to run without "
+            f"the leakage guard.")
+    payload = json.loads(path.read_text())
+    if "test_tiles" not in payload:
+        raise SystemExit(f"--split {split} has no 'test_tiles' key")
+    test_tiles = {str(t) for t in payload["test_tiles"]}
+    if not test_tiles:
+        raise SystemExit(f"--split {split} lists no test_tiles")
+    return test_tiles
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     src = ap.add_mutually_exclusive_group(required=True)
@@ -63,9 +91,18 @@ def main() -> None:
                     help="infer size_px per tile from bbox_3006")
     ap.add_argument("--truth", default="data/lucas/lucas_truth_sweden.parquet")
     ap.add_argument("--split", default="data/distill/distill_split.json",
-                    help="distill_split.json — its test_tiles tag the held-out points")
+                    help="split JSON whose test_tiles tag the held-out points; "
+                         "use holdout_split.json for the off-footprint set. "
+                         "Missing file or zero matching tiles is fatal — pass "
+                         "--split '' to run without the leakage guard")
     ap.add_argument("--out", default="data/lucas/lucas_tile_index.parquet")
     args = ap.parse_args()
+
+    # Validated before the truth load and the tile scan: an unusable split is
+    # an argument error, and there is no reason to spend minutes of I/O first.
+    test_tiles = load_test_tiles(args.split)
+    if test_tiles:
+        print(f"split:       {len(test_tiles):,} held-out tiles from {args.split}")
 
     truth = load_truth(Path(args.truth))
     # Scorable points only carry the index forward; EXCLUDE (-1) rows are
@@ -91,12 +128,6 @@ def main() -> None:
             sys.exit("no tiles found")
         tiles = _iter_tile_reads(paths)
 
-    test_tiles = set()
-    if args.split and Path(args.split).exists():
-        test_tiles = {str(t) for t in json.loads(Path(args.split).read_text())
-                      .get("test_tiles", [])}
-        print(f"split:       {len(test_tiles):,} held-out tiles from {args.split}")
-
     frames: list[pd.DataFrame] = []
     for name, data in tiles:
         size = _infer_size(data, args.size_px) if args.infer_size else args.size_px
@@ -113,6 +144,14 @@ def main() -> None:
     if len(idx):
         idx["split"] = np.where(idx["tile_name"].astype(str).isin(test_tiles),
                                 "test", "train")
+        # The other half of the same failure: a split file that exists but
+        # names a different tile namespace (holdoutval_* tiles scored against
+        # distill_split.json) matches nothing, so every point falls through to
+        # "train" and is dropped downstream — silently, and with a plausible
+        # index on disk to show for it.
+        if test_tiles and not (idx["split"] == "test").any():
+            sys.exit(f"none of the {idx['tile_name'].nunique():,} co-located tiles "
+                     f"appear in {args.split} — wrong split file for this tile set?")
 
     print("\n=== COVERAGE ===")
     print(f"points co-located:   {len(idx):,}")
