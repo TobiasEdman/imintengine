@@ -1,0 +1,128 @@
+---
+# Read-only proof that the year-0 VPP backfill actually landed on disk.
+#
+# The backfill logs say filled=5648 (train) / 1463 (holdout) on HEAD 26cde1e
+# with "preflight OK — year-0 VPP fix present", but the logs are the *claim*.
+# This job is the *evidence*: it compares each tile's vpp_year stamp
+# (backfill_vpp.py:280) against its canonical year-0 (infer_tile_year).
+#
+# Classification, per backfill_vpp.py semantics:
+#   OK           vpp bands present AND vpp_year == tile year
+#   WRONG-YEAR   vpp bands present AND vpp_year != tile year   <- the bug
+#   UNSTAMPED    vpp bands present but no vpp_year             <- pre-fix tile
+#   NO-VPP       no vpp bands — the known-empty set (line 264-266 returns
+#                before the stamp, so these carry no vpp_year BY DESIGN;
+#                expected ~2234 on train, ~0 on holdout)
+#
+# Deliberately NOT modelled on audit-vpp-coverage-job.yaml: that one os.remove()s
+# /cephfs/vpp_wekeo/VPP_2017_* (destructive, despite "audit" in the name) and
+# divides by len(fs) on the retired 256 dataset, which is now an empty dir ->
+# ZeroDivisionError.
+#
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/audit-vpp-year-job.yaml
+#   kubectl --context icekube -n prithvi-training-default logs -f job/audit-vpp-year
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-vpp-year
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: audit-vpp-year
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+        purpose: audit-vpp-year
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== VPP year-stamp audit — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy
+              git clone --quiet --depth 1 \
+                --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git /w/ie
+              cd /w/ie
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+              python3 - <<'PY'
+              import sys, collections
+              sys.path.insert(0, '/w/ie')
+              import numpy as np
+              from imint.training.tile_fetch import list_tile_paths, infer_tile_year
+
+              VPP = ('vpp_sosd', 'vpp_eosd', 'vpp_length', 'vpp_maxv', 'vpp_minv')
+              # Only these keys are decompressed. Touching the 512x512 spectral
+              # stack for 9,345 tiles would turn a minutes-long audit into hours.
+              META = ('year', 'lpis_year', 'dates')
+
+              for label, d in (('train  ', '/data/unified_v2_512'),
+                               ('holdout', '/data/holdout_val_512')):
+                  paths = list_tile_paths(d, recursive=True)
+                  if not paths:
+                      print(f'=== {label} ({d}) === NO TILES FOUND'); continue
+                  c = collections.Counter()
+                  mism, unstamped = [], []
+                  for p in paths:
+                      try:
+                          z = np.load(p, allow_pickle=True)
+                      except Exception as e:
+                          c['UNREADABLE'] += 1
+                          if len(mism) < 5: mism.append(f'{p}: {type(e).__name__}')
+                          continue
+                      keys = set(z.files)
+                      if not all(b in keys for b in VPP):
+                          c['NO-VPP'] += 1; continue
+                      ty = infer_tile_year({k: z[k] for k in META if k in keys})
+                      vy = int(z['vpp_year']) if 'vpp_year' in keys else None
+                      if vy is None:
+                          c['UNSTAMPED'] += 1
+                          if len(unstamped) < 5: unstamped.append(p.rsplit('/', 1)[-1])
+                      elif ty is None:
+                          c['NO-TILE-YEAR'] += 1
+                      elif vy == ty:
+                          c['OK'] += 1
+                      else:
+                          c['WRONG-YEAR'] += 1
+                          if len(mism) < 10:
+                              mism.append(f'{p.rsplit("/",1)[-1]}: vpp={vy} tile={ty}')
+
+                  n = len(paths)
+                  print(f'\n=== {label} ({d}) ===')
+                  print(f'  tiles            : {n:,}')
+                  for k in ('OK', 'WRONG-YEAR', 'UNSTAMPED', 'NO-VPP',
+                            'NO-TILE-YEAR', 'UNREADABLE'):
+                      if c[k]:
+                          print(f'  {k:16s} : {c[k]:,}  ({c[k]/n*100:.1f}%)')
+                  if mism:
+                      print('  samples:');  [print(f'    {m}') for m in mism]
+                  if unstamped:
+                      print('  unstamped samples:')
+                      [print(f'    {u}') for u in unstamped]
+                  verdict = 'PASS' if not c['WRONG-YEAR'] and not c['UNSTAMPED'] else 'FAIL'
+                  print(f'  VERDICT          : {verdict}')
+              PY
+              echo "=== done ==="
+          resources:
+            requests: {cpu: "2", memory: "6Gi"}
+            limits:   {cpu: "2", memory: "6Gi"}
+          volumeMounts:
+            - {name: data, mountPath: /data, readOnly: true}
+            - {name: work, mountPath: /w}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: work
+          emptyDir: {}

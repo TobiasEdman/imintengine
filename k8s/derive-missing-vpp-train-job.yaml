@@ -1,0 +1,108 @@
+---
+# DIAGNOSTIC — why do 2,234 of the 7,882 training tiles have no VPP?
+#
+# The 2026-08-23 backfill filled 5,648 and catalogued 2,234 as
+# "no_coverage_wekeo_or_cdse". Two readings of that string:
+#   (a) genuine absence — no phenology over water/urban/bare, or
+#   (b) the MGRS×year COG was simply not in the WEkEO cache.
+#
+# Evidence for (b), which this job confirms or refutes:
+#   * The holdout backfill started the SAME SECOND, same HEAD, same cache, and
+#     came back filled=1463 empty=0 — because it had a dedicated 80-MGRS
+#     prefetch (prefetch-vpp-holdout-phaseA-job.yaml). The training cohort
+#     never got one.
+#   * Empties are uniform ~25-30% across every land-cover prefix, including
+#     crop (264/995). Cropland has the strongest phenology there is.
+#   * CDSE rescued 1 tile out of 5,648 — it was not an effective fallback, so
+#     the "_or_cdse" half of the reason string carries no evidentiary weight.
+#   * derive_missing_vpp_mgrs.py's own docstring records the identical incident
+#     on campaign-orphan-512 (2026-07-03): ~44% missing VPP because the COGs
+#     were absent from a cache built for a narrower footprint.
+#
+# Output: the exact (MGRS, year) set to gap-fill, PU-free, plus ready-to-run
+# prefetch commands. Feeds k8s/prefetch-vpp-train-gapfill-job.yaml.
+#
+# NOTE: /data/vpp_wekeo was reclaimed on 2026-08-24, so "already cached" will
+# be 0 and the derived set is the full requirement for the 2,234 empty tiles —
+# NOT a rebuild of the whole 292 G cache (the 5,648 filled tiles carry their
+# VPP inside the .npz and need no COG).
+#
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/derive-missing-vpp-train-job.yaml
+#   kubectl --context icekube -n prithvi-training-default logs -f job/derive-missing-vpp-train
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: derive-missing-vpp-train
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: derive-missing-vpp-train
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 5400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+        purpose: derive-missing-vpp-train
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      containers:
+        - name: derive
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== derive missing VPP (MGRS, year) — training cohort ==="
+              echo "Started: $(date -u)"
+
+              apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+              pip3 install --quiet --no-cache-dir numpy pyproj mgrs rasterio 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --quiet --depth 1 \
+                --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+
+              python3 scripts/derive_missing_vpp_mgrs.py \
+                --data-dir /data/unified_v2_512 \
+                --vpp-cog-dir /data/vpp_wekeo \
+                --output /data/audits/train_512_missing_vpp_mgrs.json
+
+              echo ""
+              echo "=== gap-fill scope (feeds the prefetch job) ==="
+              python3 - <<'PY'
+              import json
+              r = json.load(open('/data/audits/train_512_missing_vpp_mgrs.json'))
+              by_year = r['missing_by_year']
+              cells = sorted({c for v in by_year.values() for c in v})
+              print(f"tiles scanned      : {r['tiles_scanned']:,}")
+              print(f"tiles missing VPP  : {r['tiles_missing_vpp']:,}")
+              print(f"(MGRS, year) pairs : {r['pairs_to_fetch']:,} to fetch, "
+                    f"{r['pairs_already_cached']:,} cached")
+              print(f"distinct MGRS      : {len(cells)}")
+              print(f"years              : {sorted(by_year)}")
+              print()
+              print("MGRS_TILES=" + ",".join(cells))
+              print("YEARS=" + ",".join(sorted(by_year)))
+              PY
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "4", memory: "12Gi"}
+            limits:   {cpu: "4", memory: "12Gi"}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

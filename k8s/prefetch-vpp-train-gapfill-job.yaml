@@ -1,0 +1,148 @@
+---
+# PU-FREE WEkEO HR-VPP gap-fill for the training cohort's 2,234 VPP-less tiles.
+#
+# Reads the (MGRS, year) set derived by derive-missing-vpp-train-job.yaml and
+# downloads exactly those COGs — nothing more. This is NOT a rebuild of the
+# 292 G cache the 2026-08-24 reclaim removed: the 5,648 already-filled tiles
+# carry their VPP inside the .npz and need no COG at all.
+#
+# PU discipline (CLAUDE.md): WEkEO HDA only. Cache gaps are NEVER filled by
+# paying CDSE PU — that is the drain that produced the silent exit-0 in
+# campaign-orphan-512 (2026-06-29). This job touches no CDSE endpoint.
+#
+# Modelled on prefetch-vpp-holdout-phaseA-job.yaml — the run that gave the
+# holdout set 100% VPP coverage (empty=0) while the training cohort, with no
+# equivalent prefetch, came back 28.3% empty from the same backfill.
+#
+# AFTER this completes, re-run the backfill to actually write the channels:
+#   scripts/backfill_vpp.py --data-dir /data/unified_v2_512 --force
+# --force is REQUIRED: the previous run recorded these 2,234 in
+# /data/unified_v2_512/vpp_known_empty.json, and without --force a later run
+# skips them and reports a clean pass while the gap is still there.
+#
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/prefetch-vpp-train-gapfill-job.yaml
+#   kubectl --context icekube -n prithvi-training-default logs -f job/prefetch-vpp-train-gapfill
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prefetch-vpp-train-gapfill
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: prefetch-vpp-train-gapfill
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+        purpose: prefetch-vpp-train-gapfill
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: prefetch
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== WEkEO VPP gap-fill — training cohort ==="
+              echo "Started: $(date -u)"
+
+              REPORT=/data/audits/train_512_missing_vpp_mgrs.json
+              if [ ! -f "$REPORT" ]; then
+                echo "FATAL: $REPORT missing — run derive-missing-vpp-train first." >&2
+                exit 1
+              fi
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin >/dev/null 2>&1
+              pip3 install --quiet --no-cache-dir numpy rasterio pyproj hda 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --quiet --depth 1 \
+                --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+
+              # Scope comes from the derived report, never hand-typed — a
+              # mistyped MGRS list is a silent partial fill that looks complete.
+              eval "$(python3 - <<'PY'
+              import json
+              r = json.load(open('/data/audits/train_512_missing_vpp_mgrs.json'))
+              by_year = r['missing_by_year']
+              cells = sorted({c for v in by_year.values() for c in v})
+              print(f"MGRS_TILES={','.join(cells)}")
+              print(f"YEARS={','.join(sorted(by_year))}")
+              print(f"PAIRS={r['pairs_to_fetch']}")
+              PY
+              )"
+              echo "scope: ${PAIRS} (MGRS, year) pairs"
+              echo "  MGRS : ${MGRS_TILES}"
+              echo "  years: ${YEARS}"
+
+              df -h /data | tail -1
+
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles "${MGRS_TILES}" \
+                --years "${YEARS}" \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "=== cache contents ==="
+              ls /data/vpp_wekeo/ 2>/dev/null | wc -l
+              df -h /data | tail -1
+
+              # Fail loudly here rather than let the backfill discover it: a
+              # readable COG that yields all-zero bands is the exact shape that
+              # made the original gap invisible (_has_sufficient_coverage floor).
+              echo ""
+              echo "=== read-back check ==="
+              python3 - <<'PY'
+              import glob, rasterio
+              from rasterio.warp import transform_bounds
+              from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+              cogs = sorted(glob.glob('/data/vpp_wekeo/VPP_*_SOSD.tif'))
+              assert cogs, 'no SOSD COGs downloaded'
+              cog = cogs[0]
+              year = int(cog.split('VPP_')[1][:4])
+              with rasterio.open(cog) as src:
+                  w, s, e, n = transform_bounds(src.crs, 'EPSG:3006', *src.bounds)
+              cx, cy = (w + e) / 2, (s + n) / 2
+              dx, dy = (e - w) * 0.05, (n - s) * 0.05
+              out = fetch_vpp_tiles_local(cx - dx, cy - dy, cx + dx, cy + dy,
+                                          size_px=64, vpp_cog_dir='/data/vpp_wekeo',
+                                          year=year)
+              nz = sum(1 for v in out.values() if v.max() > 0)
+              assert nz >= 3, f'expected most bands non-zero, got {nz}/5'
+              print(f'READBACK OK  {len(cogs)} SOSD COGs, {nz}/5 bands non-zero')
+              PY
+              echo "=== gap-fill complete: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          envFrom:
+            - secretRef: {name: wekeo-creds}
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits:   {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
