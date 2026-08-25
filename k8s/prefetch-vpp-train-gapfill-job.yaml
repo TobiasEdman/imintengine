@@ -122,23 +122,42 @@ spec:
               echo ""
               echo "=== read-back check ==="
               python3 - <<'PY'
-              import glob, rasterio
+              import glob, numpy as np, rasterio
               from rasterio.warp import transform_bounds
               from imint.training.wekeo_vpp import fetch_vpp_tiles_local
               cogs = sorted(glob.glob('/data/vpp_wekeo/VPP_*_SOSD.tif'))
               assert cogs, 'no SOSD COGs downloaded'
-              cog = cogs[0]
-              year = int(cog.split('VPP_')[1][:4])
-              with rasterio.open(cog) as src:
-                  w, s, e, n = transform_bounds(src.crs, 'EPSG:3006', *src.bounds)
-              cx, cy = (w + e) / 2, (s + n) / 2
-              dx, dy = (e - w) * 0.05, (n - s) * 0.05
-              out = fetch_vpp_tiles_local(cx - dx, cy - dy, cx + dx, cy + dy,
-                                          size_px=64, vpp_cog_dir='/data/vpp_wekeo',
-                                          year=year)
-              nz = sum(1 for v in out.values() if v.max() > 0)
-              assert nz >= 3, f'expected most bands non-zero, got {nz}/5'
-              print(f'READBACK OK  {len(cogs)} SOSD COGs, {nz}/5 bands non-zero')
+              # Locate real data instead of trusting the tile centre, and try
+              # several COGs. The previous version read a 5% box at the centre of
+              # sorted(...)[0] — which is T32VPJ, the SPARSEST tile in the set at
+              # 17.3% valid and coastal, so the sample landed in sea. It reported
+              # 0/5 on a cache later proven good (audit-vpp-cog-validity), i.e. a
+              # false alarm that failed the job and blocked the chain.
+              best = None
+              for cog in cogs[:12]:
+                  year = int(cog.rsplit('/', 1)[-1].split('_')[1])
+                  with rasterio.open(cog) as src:
+                      ov = src.read(1, out_shape=(256, 256))
+                      if not np.count_nonzero(ov):
+                          continue
+                      ys, xs = np.nonzero(ov)
+                      k = len(ys) // 2
+                      x, y = src.xy(ys[k] / 256 * src.height,
+                                    xs[k] / 256 * src.width)
+                      half = 320  # m -> 64 px at 10 m GSD
+                      w, s, e, n = transform_bounds(
+                          src.crs, 'EPSG:3006', x - half, y - half,
+                          x + half, y + half)
+                  out = fetch_vpp_tiles_local(w, s, e, n, size_px=64,
+                                              vpp_cog_dir='/data/vpp_wekeo',
+                                              year=year)
+                  nz = sum(1 for v in out.values() if np.asarray(v).max() > 0)
+                  if nz >= 3:
+                      best = (cog.rsplit('/', 1)[-1], nz)
+                      break
+              assert best, ('no COG of the first 12 yielded >=3 non-zero bands '
+                            'through fetch_vpp_tiles_local')
+              print(f'READBACK OK  {len(cogs)} SOSD COGs; {best[0]} -> {best[1]}/5 bands')
               PY
               echo "=== gap-fill complete: $(date -u) ==="
           env:

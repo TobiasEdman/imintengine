@@ -90,7 +90,25 @@ spec:
                   echo "PREFLIGHT FAILED — no ${Y} COGs; run prefetch-vpp-train-gapfill first"
                   exit 4; }
               done
-              echo "preflight OK — WEkEO cache populated for all three gap years"
+              # Counting files is not enough: WEkEO returns all-zeros outside its
+              # cached footprint, so a present-but-empty COG reads downstream as
+              # "no phenology here" and this job would spend hours re-marking the
+              # same 2,229 tiles empty. Assert the rasters actually carry data.
+              python3 - <<'PY'
+              import glob, sys, numpy as np, rasterio
+              for yr in ('2018', '2021', '2022'):
+                  ok = False
+                  for c in sorted(glob.glob(f'/data/vpp_wekeo/VPP_{yr}_*_SOSD.tif'))[:6]:
+                      with rasterio.open(c) as src:
+                          if np.count_nonzero(src.read(1, out_shape=(256, 256))):
+                              print(f'  cache {yr}: data confirmed in '
+                                    f'{c.rsplit("/", 1)[-1]}')
+                              ok = True
+                              break
+                  if not ok:
+                      sys.exit(f'PREFLIGHT FAILED — {yr} COGs present but all-zero')
+              PY
+              echo "preflight OK — WEkEO cache populated AND non-empty for all three gap years"
 
               BEFORE=$(python3 -c "
               import sys; sys.path[:0]=['/workspace/imintengine','/workspace/imintengine/scripts']
