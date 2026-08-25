@@ -125,16 +125,43 @@ spec:
               print(n)")
               echo "tiles missing VPP BEFORE: ${BEFORE}"
 
+              # Capture rather than let set -e abort: the AFTER count is most
+              # valuable exactly when the run failed, and backfill_vpp now exits
+              # 2 when it had tiles to fill and filled none.
+              set +e
               python3 scripts/backfill_vpp.py \
                 --data-dir /data/unified_v2_512 \
                 --workers 2
+              RC=$?
+              set -e
+
+              AFTER=$(python3 -c "
+              import sys; sys.path[:0]=['/workspace/imintengine','/workspace/imintengine/scripts']
+              import numpy as np
+              from imint.training.tile_fetch import list_tile_paths
+              from backfill_vpp import _vpp_is_empty
+              n=0
+              for p in list_tile_paths('/data/unified_v2_512'):
+                  z=np.load(p, allow_pickle=True)
+                  try:
+                      n += bool(_vpp_is_empty(z))
+                  finally:
+                      z.close()
+              print(n)")
+              echo ""
+              echo "=== effect ==="
+              echo "  tiles missing VPP BEFORE: ${BEFORE}"
+              echo "  tiles missing VPP AFTER : ${AFTER}"
+              echo "  repaired                : $(( BEFORE - AFTER ))"
+              [ "$AFTER" -lt "$BEFORE" ] || echo "  WARNING — no net change; the run had no effect"
 
               echo ""
               echo "=== known-empty catalogue (correct path this time) ==="
               head -c 2000 /data/unified_v2_512/vpp_known_empty.json 2>/dev/null \
                 || echo "(none)"
               echo ""
-              echo "=== backfill complete: $(date -u) ==="
+              echo "=== backfill complete: $(date -u) — exit ${RC} ==="
+              exit "$RC"
           env:
             - name: PYTHONUNBUFFERED
               value: "1"

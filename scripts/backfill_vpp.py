@@ -408,7 +408,28 @@ def main() -> int:
         max_tiles=args.max_tiles,
         force=args.force,
     )
-    return 0 if stats["failed"] == 0 else 1
+    if stats["failed"]:
+        return 1
+
+    # Exit 0 used to mean "nothing raised", which is not the same as "the run
+    # did something". On 2026-08-25 a rerun meant to repair 2,229 VPP-less
+    # tiles returned filled=0 empty=2234 — byte-identical to the run it was
+    # repairing, because a stale bbox-keyed cache short-circuited the fetch
+    # (fixed in 8475b4d) — and exited 0. Every precondition check passed; none
+    # of them asked whether the pass had any effect. A run that found tiles
+    # needing VPP and filled none of them achieved nothing, and that must be
+    # visible to the caller, not just legible in the log.
+    if stats["empty"] and not stats["filled"] and not args.dry_run:
+        print(
+            f"\nFAILED — {stats['empty']} tile(s) still lack VPP and none were "
+            f"filled. The run had work to do and did none of it: suspect a "
+            f"stale {args.cache_dir or '<data-dir>/.vpp_cache'} entry, or a "
+            f"WEkEO cache that does not cover these (MGRS, year) pairs.",
+            flush=True,
+        )
+        return 2
+
+    return 0
 
 
 if __name__ == "__main__":
