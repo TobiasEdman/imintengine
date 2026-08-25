@@ -66,7 +66,11 @@ spec:
               # them fails at "pip3: command not found" under set -e.
               apt-get update -qq && apt-get install -y -qq \
                 git python3 python3-pip libgdal-dev gdal-bin >/dev/null 2>&1
-              pip3 install --quiet --no-cache-dir numpy pyproj mgrs rasterio 2>&1 | tail -2
+              # 'packaging' is an undeclared runtime dep of mgrs (mgrs/core.py
+              # does `import packaging.tags`), so `pip install mgrs` alone
+              # leaves an import that only fails when first called.
+              pip3 install --quiet --no-cache-dir \
+                numpy pyproj mgrs rasterio packaging 2>&1 | tail -2
 
               mkdir -p /workspace && cd /workspace
               git clone --quiet --depth 1 \
@@ -75,6 +79,12 @@ spec:
               cd /workspace/imintengine
               export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
               echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+
+              # Preflight: derive_missing_vpp_mgrs.py imports mgrs lazily inside
+              # mgrs_tiles_for_bbox, so a missing dep surfaces only after the
+              # tile scan is already underway. Fail in seconds instead.
+              python3 -c "import numpy, pyproj, rasterio, mgrs; mgrs.MGRS()" \
+                && echo "preflight OK — numpy/pyproj/rasterio/mgrs importable"
 
               python3 scripts/derive_missing_vpp_mgrs.py \
                 --data-dir /data/unified_v2_512 \

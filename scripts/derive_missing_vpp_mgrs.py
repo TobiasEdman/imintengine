@@ -27,7 +27,10 @@ Usage (one-shot pod, after campaign-orphan-512 is terminal):
         --vpp-cog-dir /data/vpp_wekeo \\
         --output /data/audits/orphan_512_missing_vpp_mgrs.json
 
-Requires: numpy, pyproj, mgrs (pip install mgrs).
+Requires: numpy, pyproj, mgrs, packaging. ``packaging`` is an undeclared
+runtime dep of ``mgrs`` (``mgrs/core.py`` does ``import packaging.tags``), so
+``pip install mgrs`` alone yields an import that fails only when
+``mgrs_tiles_for_bbox`` is first called — i.e. partway through a scan.
 """
 from __future__ import annotations
 
