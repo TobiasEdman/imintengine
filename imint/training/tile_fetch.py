@@ -226,25 +226,40 @@ def clean_stale_tile_tmps(data_dir: str) -> list[str]:
     return sorted(removed)
 
 
-def list_tile_paths(data_dir: str, *, limit: int | None = None) -> list[str]:
+def list_tile_paths(
+    data_dir: str, *, limit: int | None = None, recursive: bool = False,
+) -> list[str]:
     """Sorted real tile ``.npz`` paths in ``data_dir``, temps excluded.
 
     ``limit`` is applied *after* filtering, so ``--limit 5`` always yields five
-    real tiles rather than whatever the glob happened to return first — a
+    real tiles rather than whatever the listing happened to return first — a
     smoke run in a directory full of temps would otherwise do no work at all.
 
-    Uses ``scandir`` rather than ``glob`` because ``glob`` interprets ``[`` in
-    a directory name as a character class and would silently return nothing.
+    ``recursive`` walks subdirectories; the plot-coverage scripts index a tile
+    *tree*, not a flat dir, so a flat listing there would return nothing.
+
+    Uses ``scandir``/``walk`` rather than ``glob`` because ``glob`` interprets
+    ``[`` in a directory name as a character class and would return nothing.
     """
-    try:
-        entries = os.scandir(data_dir)
-    except FileNotFoundError:
-        return []
-    with entries:
-        paths = sorted(
-            e.path for e in entries
-            if e.is_file() and e.name.endswith(".npz") and not is_tile_tmp(e.name)
-        )
+    if recursive:
+        # os.walk on a missing dir yields nothing, so [] falls out naturally.
+        paths = [
+            os.path.join(root, n)
+            for root, _dirs, names in os.walk(data_dir)
+            for n in names
+            if n.endswith(".npz") and not is_tile_tmp(n)
+        ]
+        paths.sort()
+    else:
+        try:
+            entries = os.scandir(data_dir)
+        except FileNotFoundError:
+            return []
+        with entries:
+            paths = sorted(
+                e.path for e in entries
+                if e.is_file() and e.name.endswith(".npz") and not is_tile_tmp(e.name)
+            )
     return paths[:limit] if limit else paths
 
 

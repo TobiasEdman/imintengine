@@ -50,6 +50,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from imint.training.tile_fetch import is_tile_tmp  # noqa: E402
+
 
 def _load_infcmp():
     """Import inference_comparison by path (mirrors the validators' loader)."""
@@ -95,7 +97,7 @@ def resolve_tile_list(data_dir: str, tile_list: str | None,
     """
     data_dir = Path(data_dir)
     if tile_list is None:
-        tiles = sorted(data_dir.glob("*.npz"))
+        tiles = sorted(p for p in data_dir.glob("*.npz") if not is_tile_tmp(p.name))
         if not tiles:
             raise FileNotFoundError(f"no *.npz tiles in {data_dir}")
         return tiles

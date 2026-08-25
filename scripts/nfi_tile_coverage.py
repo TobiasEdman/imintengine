@@ -17,7 +17,6 @@ training track.
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import sys
 from pathlib import Path
@@ -28,6 +27,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.nfi_colocate import colocate_plots
+from imint.training.tile_fetch import list_tile_paths
 from imint.training.slu_nfi import load_nfi_plots
 from imint.training.tile_config import TileConfig
 
@@ -79,7 +79,7 @@ def main() -> None:
     if plots.empty:
         sys.exit("no NFI plots in the requested years")
 
-    paths = sorted(glob.glob(os.path.join(args.tile_dir, "**", "*.npz"), recursive=True))
+    paths = list_tile_paths(args.tile_dir, recursive=True)
     print(f"tiles:     {len(paths):,} under {args.tile_dir}")
     if not paths:
         sys.exit("no tiles found")

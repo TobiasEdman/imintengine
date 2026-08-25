@@ -20,7 +20,6 @@ Run locally for a correctness proof on the sample tiles; run on the cluster
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 import sys
@@ -32,6 +31,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.nfi_colocate import colocate_plots  # noqa: E402
+from imint.training.tile_fetch import list_tile_paths  # noqa: E402
 from imint.training.tile_config import TileConfig  # noqa: E402
 
 # The metadata keys colocate_plots reads — same set nfi_tile_coverage scans.
@@ -84,8 +84,7 @@ def main() -> None:
         n_tiles = len(man)
         print(f"tiles:       {n_tiles:,} from manifest {args.manifest}")
     else:
-        paths = sorted(glob.glob(os.path.join(args.tile_dir, "**", "*.npz"),
-                                 recursive=True))
+        paths = list_tile_paths(args.tile_dir, recursive=True)
         n_tiles = len(paths)
         print(f"tiles:       {n_tiles:,} under {args.tile_dir}")
         if not paths:

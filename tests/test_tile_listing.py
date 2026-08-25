@@ -97,7 +97,27 @@ def test_clean_is_idempotent_and_survives_a_lost_race(tmp_path):
 def test_missing_dir_is_empty_not_fatal(tmp_path):
     missing = str(tmp_path / "nope")
     assert list_tile_paths(missing) == []
+    assert list_tile_paths(missing, recursive=True) == []
     assert clean_stale_tile_tmps(missing) == []
+
+
+def test_recursive_walks_subdirs_and_still_excludes_temps(tmp_path):
+    """nfi/lucas index a tile *tree*, so the flat listing would find nothing.
+
+    Their globs were recursive, which also meant they pulled temps out of
+    subdirectories — phantom rows in the plot index the race is scored on.
+    """
+    sub = tmp_path / "2024"
+    sub.mkdir()
+    _touch(sub / "nested_real.npz", 32)
+    _touch(sub / "nested_tile.tmp.npz")
+    _touch(tmp_path / "top_real.npz", 32)
+
+    assert list_tile_paths(str(tmp_path), recursive=True) == sorted(
+        [str(sub / "nested_real.npz"), str(tmp_path / "top_real.npz")]
+    )
+    # Non-recursive must not reach into the subdir.
+    assert list_tile_paths(str(tmp_path)) == [str(tmp_path / "top_real.npz")]
 
 
 def test_subdirectories_are_not_listed(tmp_path):
