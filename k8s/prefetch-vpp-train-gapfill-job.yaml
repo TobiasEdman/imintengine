@@ -15,10 +15,18 @@
 # equivalent prefetch, came back 28.3% empty from the same backfill.
 #
 # AFTER this completes, re-run the backfill to actually write the channels:
-#   scripts/backfill_vpp.py --data-dir /data/unified_v2_512 --force
-# --force is REQUIRED: the previous run recorded these 2,234 in
-# /data/unified_v2_512/vpp_known_empty.json, and without --force a later run
-# skips them and reports a clean pass while the gap is still there.
+#   scripts/backfill_vpp.py --data-dir /data/unified_v2_512 --workers 2
+#
+# Do NOT pass --force. backfill_vpp.py:241 only skips a tile when its VPP is
+# already PRESENT and year-correct:
+#     if not force and not _vpp_is_empty(data): ...
+# The 2,234 gap tiles are empty, so a plain re-run retries exactly them and
+# skips the 5,648 that are already right. --force would re-fetch all 7,886 —
+# ~11 h of redundant work rewriting good data.
+#
+# vpp_known_empty.json does NOT gate this: it is write-only. _load_known_empty
+# is called once (backfill_vpp.py:371) purely to merge before saving, and is
+# never consulted to skip a tile. It is a catalogue, not a skip-list.
 #
 #   kubectl --context icekube -n prithvi-training-default create -f k8s/prefetch-vpp-train-gapfill-job.yaml
 #   kubectl --context icekube -n prithvi-training-default logs -f job/prefetch-vpp-train-gapfill
