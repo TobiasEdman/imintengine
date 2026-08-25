@@ -123,7 +123,20 @@ def fetch_vpp_tiles(
 
     # Check cache
     if cache_dir is not None:
-        cache_key = f"vpp_{int(west)}_{int(south)}_{int(east)}_{int(north)}.npz"
+        # The year MUST be in the key. Without it the same bbox collides across
+        # years, and — because this check precedes source selection — a cached
+        # miss outlives the condition that caused it. Both bit us on 2026-08-25:
+        # the 2026-08-23 run cached CDSE's empty result for 2,234 tiles (the
+        # wekeo path raises rather than caching zeros, but the CDSE fallback has
+        # no coverage guard and falls through to the write below), so a rerun
+        # against a freshly gap-filled COG cache returned that emptiness without
+        # reading a single new COG — filled=0, byte-identical to the run it was
+        # meant to repair, in 73 min instead of 394. Same family as the
+        # year-0 bug in 72d4fd1: a year that was never threaded through.
+        cache_key = (
+            f"vpp_{int(year)}_{int(west)}_{int(south)}_"
+            f"{int(east)}_{int(north)}.npz"
+        )
         cache_path = cache_dir / cache_key
         if cache_path.exists():
             try:
