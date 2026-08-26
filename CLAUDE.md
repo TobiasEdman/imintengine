@@ -361,5 +361,5 @@ Utan verifieringsartefakt: ingen commit. Se `~/.claude/CLAUDE.md` §6 + agentic_
 
 Shared policy lives in `AGENTS.md`. Claude-specific hooks may enforce it but
 must not weaken or duplicate that policy. Use a Claude worktree for every
-writing session and the vendor-neutral `agentic-task` CLI for path claims.
+writing session and the vendor-neutral `agentic-task` CLI for task claims.
 <!-- agentic-task:coordination:end -->

@@ -1,22 +1,22 @@
 {
   "artifacts": [
     {
-      "after_sha256": "6a972b4d17c99d9f2a999bf773df7498172ca3794a1a6f36a7cfdb7bf69e7682",
+      "after_sha256": "2227020115140d1ba55980fc711667f6a191028223efef0c5f96076cebcca7b2",
       "before_sha256": null,
       "kind": "file",
       "owned": true,
       "path": "AGENTS.md"
     },
     {
-      "after_sha256": "07f521a9bc860ff91a4f3d9f17585f627baea2795c40474aa56c97f2e71e7b2e",
+      "after_sha256": "ecb7f4cbe3bfe5ce3913db353e5183ab8e6854c2ff1492a263ee86658b9616e6",
       "before_sha256": "9c4205ff01a5863968581ccc337217170fd46a3b02f64b86dcc212e7ea9c3487",
-      "fragment": "\n<!-- agentic-task:coordination:start -->\n## Cross-runtime coordination mechanics\n\nShared policy lives in `AGENTS.md`. Claude-specific hooks may enforce it but\nmust not weaken or duplicate that policy. Use a Claude worktree for every\nwriting session and the vendor-neutral `agentic-task` CLI for path claims.\n<!-- agentic-task:coordination:end -->\n",
+      "fragment": "\n<!-- agentic-task:coordination:start -->\n## Cross-runtime coordination mechanics\n\nShared policy lives in `AGENTS.md`. Claude-specific hooks may enforce it but\nmust not weaken or duplicate that policy. Use a Claude worktree for every\nwriting session and the vendor-neutral `agentic-task` CLI for task claims.\n<!-- agentic-task:coordination:end -->\n",
       "kind": "block",
       "owned": false,
       "path": "CLAUDE.md"
     },
     {
-      "after_sha256": "a746f158a6d68672b83fb77701307b16b5746247a7b7678dd796bf9035ccacb3",
+      "after_sha256": "6838c4f7586b753a9161fa880d8c87167502bdbcfa12d5db626a155c721a1d85",
       "before_resource": "agents-readme-legacy-v2.md",
       "before_sha256": "a24b9a1ca78aa2d37a2ca1ebe0269fe576727b4cddd526c9c0dd1de27e25f0d2",
       "kind": "replace",
@@ -24,9 +24,10 @@
       "path": ".agents/README.md"
     },
     {
-      "after_sha256": "3e0c5f42d05e87decc36fa234336f3c8d161489f09c818cb9bcd865d14f17894",
+      "after_sha256": "3979a5a7446596622ec7a8f2824b433aaee568ea8e08245c91e3a192fe06481f",
+      "before_resource": "schema-installer-v1.json",
       "before_sha256": "3e0c5f42d05e87decc36fa234336f3c8d161489f09c818cb9bcd865d14f17894",
-      "kind": "file",
+      "kind": "replace",
       "owned": false,
       "path": ".agents/schema.json"
     },
@@ -39,7 +40,7 @@
     }
   ],
   "created_directories": [],
-  "installer_version": "1",
+  "installer_version": "2",
   "profile": "coordination",
   "schema_version": "1"
 }
