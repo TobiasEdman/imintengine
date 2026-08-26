@@ -599,6 +599,25 @@ def _request_with_retry(params: dict) -> dict:
     raise RuntimeError("ERA5 request failed after 4 attempts") from last_error
 
 
+def _land_series_all_finite(land: dict) -> bool:
+    """True if ERA5-Land returned usable (finite) values for both its series.
+
+    ERA5-Land is a land-only product: over sea and large lakes it returns a
+    correctly-sized series of NaNs rather than an error, and the request's
+    ``cell_selection="nearest"`` snaps to the nearest GRID cell, not the
+    nearest LAND cell. Size alone therefore cannot distinguish coverage from
+    absence — which is why the caller must test finiteness before accepting.
+    """
+    for values in (
+        land.get("daily", {}).get("temperature_2m_mean"),
+        land.get("hourly", {}).get("soil_moisture_0_to_7cm"),
+    ):
+        arr = np.asarray(values if values is not None else [], dtype=np.float64)
+        if arr.size == 0 or not np.isfinite(arr).all():
+            return False
+    return True
+
+
 def _validate_era5_payload(
     payload: dict,
     *,
@@ -646,8 +665,14 @@ def _validate_era5_payload(
     for values, count in zip(value_series, expected):
         arr = np.asarray(values if values is not None else [], dtype=np.float64)
         if arr.size != count or not np.isfinite(arr).all():
+            # Report WHICH term failed. Testing size-or-finiteness while
+            # printing only size produced "expected 183 finite values, got 183"
+            # on 2026-08-26 and cost a debugging round-trip: the length was
+            # right and the values were NaN, which the message could not say.
+            n_bad = int((~np.isfinite(arr)).sum()) if arr.size else 0
             raise ValueError(
-                f"Incomplete ERA5 series: expected {count} finite values, got {arr.size}"
+                f"Incomplete ERA5 series: expected {count} finite values, "
+                f"got size={arr.size} with {n_bad} non-finite"
             )
     start = datetime(year, 4, 1)
     expected_daily = [
@@ -727,10 +752,26 @@ def fetch_era5_land_growing_season(
                 "models": "era5",
             }
         )
+        # ERA5-Land has no ocean coverage, so a cell over sea or a large lake
+        # comes back full-length and all-NaN. Fall back to the plain ERA5
+        # reanalysis, which does cover water. Record WHICH model supplied the
+        # values: this deliberately mixes two products, and a mix that is not
+        # recorded is indistinguishable from one that never happened.
+        land_model = "era5_land"
+        if not _land_series_all_finite(land):
+            land = _request_with_retry(
+                {**common,
+                    "daily": "temperature_2m_mean",
+                    "hourly": "soil_moisture_0_to_7cm",
+                    "models": "era5",
+                }
+            )
+            land_model = "era5"
         payload = {
             "schema": ERA5_REQUEST_SCHEMA,
             "request": grid,
             "land": land,
+            "land_model": land_model,
             "atmosphere": atmosphere,
         }
         _validate_era5_payload(payload, year=year, expected_grid=grid)
