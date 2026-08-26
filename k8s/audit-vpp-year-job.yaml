@@ -69,7 +69,15 @@ spec:
 
               for label, d in (('train  ', '/data/unified_v2_512'),
                                ('holdout', '/data/holdout_val_512')):
-                  paths = list_tile_paths(d, recursive=True)
+                  # NON-recursive, matching derive_missing_vpp_mgrs.py and
+                  # backfill_vpp.py. recursive=True swept subdirectories holding
+                  # unrelated tile sets and reported train=18,075 against a
+                  # 7,882-tile cohort, turning a clean result into a FAIL: the
+                  # audit must scan the same population as the jobs it audits.
+                  paths = list_tile_paths(d)
+                  sub = len(list_tile_paths(d, recursive=True)) - len(paths)
+                  if sub:
+                      print(f'  (ignoring {sub:,} tile(s) in subdirectories)')
                   if not paths:
                       print(f'=== {label} ({d}) === NO TILES FOUND'); continue
                   c = collections.Counter()
