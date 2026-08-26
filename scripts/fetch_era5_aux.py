@@ -55,13 +55,27 @@ def _grid_matches(actual: dict, expected: dict) -> bool:
         for a, b in request_pairs
     ):
         return False
+    # The land series may legitimately be served by either product. ERA5-Land
+    # has no ocean coverage, so a coastal or marine cell falls back to the plain
+    # ERA5 reanalysis (98f2dbb), which is a 0.25 deg grid rather than 0.1 deg —
+    # a different cell centre by construction. The expected land_cell is derived
+    # from era5_grid_context at COHORT-BUILD time, before any fetch, so it can
+    # never know which product a cell will end up using. Accept either, and note
+    # what this gives up: the check no longer pins WHICH product served a cell.
+    # payload["land_model"] in the cache records that; this only gates geometry.
+    land_ok = era5_api_cell_coords_match(
+        actual["land_cell"]["lat"],
+        actual["land_cell"]["lon"],
+        expected["land_cell"]["lat"],
+        expected["land_cell"]["lon"],
+    ) or era5_api_cell_coords_match(
+        actual["land_cell"]["lat"],
+        actual["land_cell"]["lon"],
+        expected["atmosphere_cell"]["lat"],
+        expected["atmosphere_cell"]["lon"],
+    )
     return (
-        era5_api_cell_coords_match(
-            actual["land_cell"]["lat"],
-            actual["land_cell"]["lon"],
-            expected["land_cell"]["lat"],
-            expected["land_cell"]["lon"],
-        )
+        land_ok
         and era5_api_cell_coords_match(
             actual["atmosphere_cell"]["lat"],
             actual["atmosphere_cell"]["lon"],
