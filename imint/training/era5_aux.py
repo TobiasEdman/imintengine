@@ -633,8 +633,19 @@ def _validate_era5_payload(
         raise ValueError("ERA5 cache request grid mismatch")
     land = payload.get("land", {})
     atmosphere = payload.get("atmosphere", {})
+    # ERA5-Land is a 0.1 deg grid, ERA5 a 0.25 deg one, so a land series served
+    # by the ERA5 fallback legitimately lands on a different cell centre and
+    # must be checked against atmosphere_cell. Validating it against land_cell
+    # rejected the fallback outright: "era5_land selected unexpected cell
+    # (55.75, 14.25); expected (55.8, 14.2)" at cell 25/384 on 2026-08-26.
+    # Defaults to era5_land so pre-fallback cache entries still validate.
+    land_model = payload.get("land_model", "era5_land")
+    land_cell = (
+        request_grid["land_cell"] if land_model == "era5_land"
+        else request_grid["atmosphere_cell"]
+    )
     for model_name, response, expected_cell in (
-        ("era5_land", land, request_grid["land_cell"]),
+        (land_model, land, land_cell),
         ("era5", atmosphere, request_grid["atmosphere_cell"]),
     ):
         try:
