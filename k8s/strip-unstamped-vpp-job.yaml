@@ -1,0 +1,87 @@
+---
+# Strip unverifiable-year VPP from the 75 unstamped training tiles.
+#
+# The 2026-08-26 audit: {2018: 41, 2021: 7, 2022: 27}. 68 of 75 carry 2021
+# phenology on non-2021 tiles because pre-72d4fd1 code hardcoded year=2021, and
+# no stamp exists to reveal it. Every existing guard passes them: _vpp_is_empty
+# sees five populated channels, and backfill_vpp cannot repair them because a
+# failed fetch returns before writing (:264-266), leaving the stale bands.
+#
+# They are also invisible to the repair path — derive_missing_vpp_mgrs.py:115
+# skips tiles where _vpp_is_empty is False, so these never contributed their
+# (MGRS, year) pairs to the WEkEO gap-fill. That is WHY the backfill kept
+# reporting "no coverage" for them: nobody ever fetched their COGs.
+#
+# Stripping the bands makes them empty to both tools, so the normal chain works:
+#   1. THIS JOB                      bands removed -> tiles read as empty
+#   2. derive-missing-vpp-train      now includes them; emits their pairs
+#   3. prefetch-vpp-train-gapfill    PU-free WEkEO fetch of any missing COGs
+#   4. backfill-vpp-train-gapfill    refills WITH a vpp_year stamp
+#
+# All 75 are stripped, not just the 68 wrong ones. The 7 genuine 2021 tiles hold
+# correct values but unverifiable provenance, and "correct but unverifiable" is
+# the exact state that hid this for three days. They will be refetched and
+# stamped identically. Residual risk: if a refetch finds no coverage those 7
+# become honestly empty rather than quietly right — an acceptable trade, and
+# --keep-correct-2021 spares them if we decide otherwise.
+#
+# Nothing is fabricated or zero-filled: keys are deleted, writes are atomic
+# (temp + os.replace), so an interrupted run cannot half-write a tile.
+#
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/strip-unstamped-vpp-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: strip-unstamped-vpp
+  namespace: prithvi-training-default
+  labels: {app: dataset-completion, purpose: strip-unstamped-vpp}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 5400
+  template:
+    metadata:
+      labels: {app: dataset-completion, purpose: strip-unstamped-vpp}
+    spec:
+      restartPolicy: Never
+      imagePullSecrets: [{name: ghcr-push}]
+      containers:
+        - name: strip
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin >/dev/null 2>&1
+              pip3 install --quiet --no-cache-dir numpy rasterio pyproj 2>&1 | tail -2
+              mkdir -p /workspace && cd /workspace
+              git clone --quiet --depth 1 \
+                --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+
+              echo ""
+              echo "=== DRY RUN (report only) ==="
+              python3 scripts/strip_unstamped_vpp.py --data-dir /data/unified_v2_512
+
+              echo ""
+              echo "=== APPLY ==="
+              python3 scripts/strip_unstamped_vpp.py --data-dir /data/unified_v2_512 --apply
+
+              echo ""
+              echo "=== verify: nothing unstamped remains ==="
+              python3 scripts/strip_unstamped_vpp.py --data-dir /data/unified_v2_512 \
+                | head -4
+              echo "=== done: $(date -u) ==="
+          resources:
+            requests: {cpu: "4", memory: "12Gi"}
+            limits:   {cpu: "4", memory: "12Gi"}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs}
