@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: era5-p600m-control-22c89b41c5c1
+  name: era5-p600m-control-d7222a0a32c4
   namespace: prithvi-training-default
   labels:
     app: unified-training
@@ -38,13 +38,13 @@ spec:
               # validate_existing_cohort refused it — correctly.
               # Bundle: 98f2dbb changed era5_aux.py (ERA5-Land has no water
               # coverage, cell 25/384 came back all-NaN), and era5_aux.py is
-              # hash-verified, so the suffix moved 7b5c190221fb -> 22c89b41c5c1.
+              # hash-verified, so the suffix moved 7b5c190221fb -> d7222a0a32c4.
               # Both arms must therefore re-run under this RUN_ID; the earlier
               # control seeds 41/42/43 (median 0.2920) live under the old one.
               # build_cohort.py is byte-identical across the two bundles, so the
               # cohort must reproduce cohort_sha256 e9b45d03... — if it does
               # NOT, stop: the arms are no longer paired on identical tiles.
-              value: era5-p600m-20260826-22c89b41c5c1
+              value: era5-p600m-20260826-d7222a0a32c4
             - name: BASE_GIT_SHA
               value: 602c86dee8d4dbdc191ab2750c261cf86b56ac50
             - name: CONTAINER_IMAGE
@@ -98,7 +98,7 @@ spec:
             claimName: training-data
         - name: patches
           configMap:
-            name: era5-smoke-code-22c89b41c5c1
+            name: era5-smoke-code-d7222a0a32c4
         - name: dshm
           emptyDir:
             medium: Memory
