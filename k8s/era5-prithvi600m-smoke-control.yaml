@@ -32,7 +32,13 @@ spec:
             - name: ARM
               value: control
             - name: RUN_ID
-              value: era5-p600m-20260821-7b5c190221fb
+              # New cohort epoch. The 2026-08-21 cohort was sealed against tiles
+              # the VPP gap-fill has since rewritten (2,147 of them), so
+              # validate_existing_cohort refused it — correctly. Same code
+              # bundle (suffix unchanged), new data epoch, fresh cohort built
+              # with --seed 20260821 so sampling stays reproducible. The old
+              # RUN_ID's directory is left untouched as a record.
+              value: era5-p600m-20260826-7b5c190221fb
             - name: BASE_GIT_SHA
               value: 602c86dee8d4dbdc191ab2750c261cf86b56ac50
             - name: CONTAINER_IMAGE

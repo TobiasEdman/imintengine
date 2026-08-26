@@ -109,7 +109,14 @@ def _verify_job_manifest(
 ) -> None:
     """Validate the immutable launch contract for one ERA5 smoke-test arm."""
     suffix = bundle_sha256[:12]
-    expected_run_id = f"era5-p600m-20260821-{suffix}"
+    # The load-bearing invariant is the bundle coupling: RUN_ID must end in this
+    # bundle's hash, so a run can never be attributed to code it did not use.
+    # The date was pinned to 20260821 as well, which left no way to express
+    # "same code, new data epoch" — and that case is real: on 2026-08-26 the VPP
+    # gap-fill rewrote 2,147 tiles, so the sealed cohort legitimately no longer
+    # described them and validate_existing_cohort refused it (correctly). Let
+    # the date vary as a cohort-epoch marker; keep the hash exact.
+    run_id_re = re.compile(rf"^era5-p600m-\d{{8}}-{re.escape(suffix)}$")
     expected_job_name = f"era5-p600m-{arm}-{suffix}"
     if job.get("metadata", {}).get("name") != expected_job_name:
         raise ValueError(f"{source} does not use job name {expected_job_name}")
@@ -137,8 +144,11 @@ def _verify_job_manifest(
         raise ValueError(f"{source} does not use immutable BASE_GIT_SHA={BASE_GIT_SHA}")
     if environment.get("ARM") != arm:
         raise ValueError(f"{source} does not declare ARM={arm}")
-    if environment.get("RUN_ID") != expected_run_id:
-        raise ValueError(f"{source} does not use RUN_ID={expected_run_id}")
+    run_id = environment.get("RUN_ID", "")
+    if run_id_re.fullmatch(run_id) is None:
+        raise ValueError(
+            f"{source} RUN_ID={run_id!r} must match era5-p600m-<YYYYMMDD>-{suffix}"
+        )
 
     pull_secrets = pod_spec.get("imagePullSecrets", [])
     if {item.get("name") for item in pull_secrets} != {IMAGE_PULL_SECRET}:
