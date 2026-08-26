@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: era5-p600m-treatment-7b5c190221fb
+  name: era5-p600m-treatment-a3fe2d1f29e9
   namespace: prithvi-training-default
   labels:
     app: unified-training
@@ -35,7 +35,7 @@ spec:
               # Must match the control arm exactly: control builds the cohort
               # under this RUN_ID and treatment validates that same directory.
               # See the control manifest for why the epoch moved to 20260826.
-              value: era5-p600m-20260826-7b5c190221fb
+              value: era5-p600m-20260826-a3fe2d1f29e9
             - name: BASE_GIT_SHA
               value: 602c86dee8d4dbdc191ab2750c261cf86b56ac50
             - name: CONTAINER_IMAGE
@@ -91,7 +91,7 @@ spec:
             claimName: training-data
         - name: patches
           configMap:
-            name: era5-smoke-code-7b5c190221fb
+            name: era5-smoke-code-a3fe2d1f29e9
         - name: dshm
           emptyDir:
             medium: Memory
