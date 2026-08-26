@@ -1,0 +1,119 @@
+---
+# Can the ERA5 smoke resolve a CROP effect at all?
+#
+# The smoke's decision metric is macro mIoU over 23 classes, but ERA5's
+# hypothesised benefit is cereal discrimination — vete(11) / korn(12) /
+# havre(13). Five weather channels could sharpen those three while moving macro
+# mIoU by less than the 0.0043 control seed spread, so a macro null would not be
+# a null on the actual hypothesis. And `sockerbetor` sitting at 0.0000 every
+# epoch says the 128-tile val split is thin on rare crops.
+#
+# build_era5_smoke_cohort.py already records pixel_counts per tile and in
+# aggregate, so this only READS the sealed cohort manifest — no recomputation,
+# nothing written. If the cereal classes carry too few val pixels, a null result
+# is uninformative rather than evidence of absence, and we should know that
+# BEFORE the treatment number lands and starts anchoring opinions.
+#
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/audit-era5-cohort-classes-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-era5-cohort-classes
+  namespace: prithvi-training-default
+  labels: {app: ensemble-prep, purpose: audit-era5-cohort-classes}
+spec:
+  backoffLimit: 0
+  # 900s was too tight: the first run hit DeadlineExceeded and the pod was
+  # deleted before it logged anything, so the failure taught us nothing. The
+  # checkpoints PVC is contended while a training arm writes to it, so budget
+  # for a slow mount rather than for the work, which is a single JSON read.
+  activeDeadlineSeconds: 2700
+  template:
+    metadata:
+      labels: {app: ensemble-prep, purpose: audit-era5-cohort-classes}
+    spec:
+      restartPolicy: Never
+      # training-checkpoints is ReadWriteOnce, so it can only attach to ONE
+      # node. The ERA5 arms pin themselves to p02r08srv01, which means that is
+      # where the volume lives; a pod scheduled anywhere else hangs in
+      # ContainerCreating with a Multi-Attach error until its deadline expires,
+      # which is exactly how the first attempt burned 26 minutes silently.
+      # readOnly on the mount does NOT relax this — RWO is enforced per node.
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              python3 - <<'PY'
+              import glob, json, os
+
+              # 23-class unified schema (CLAUDE.md). Crops are 11-21.
+              NAMES = {
+                  0:"bakgrund",1:"tallskog",2:"granskog",3:"lovskog",4:"blandskog",
+                  5:"sumpskog",6:"tillf_ej_skog",7:"vatmark",8:"oppen_mark",
+                  9:"bebyggelse",10:"vatten",11:"vete",12:"korn",13:"havre",
+                  14:"oljevaxter",15:"slattervall",16:"bete",17:"potatis",
+                  18:"sockerbetor",19:"trindsad",20:"rag",21:"majs",22:"hygge",
+              }
+              CEREALS = (11, 12, 13)   # the classes ERA5 is meant to separate
+              CROPS = tuple(range(11, 22))
+
+              roots = sorted(glob.glob(
+                  '/checkpoints/era5_smoke_prithvi600m/*/cohort'))
+              if not roots:
+                  raise SystemExit('no cohort dir found under '
+                                   '/checkpoints/era5_smoke_prithvi600m/*/cohort')
+              for root in roots:
+                  js = sorted(glob.glob(os.path.join(root, '*.json')))
+                  print(f'=== {root} ===')
+                  print(f'  json files: {[os.path.basename(j) for j in js]}')
+                  for j in js:
+                      try:
+                          d = json.load(open(j))
+                      except Exception as e:
+                          print(f'  {os.path.basename(j)}: unreadable ({e})')
+                          continue
+                      # Find any split carrying an aggregate pixel_counts block.
+                      for split in ('val', 'train'):
+                          blk = d.get(split)
+                          if not isinstance(blk, dict):
+                              continue
+                          pc = blk.get('pixel_counts')
+                          if not isinstance(pc, dict):
+                              continue
+                          total = sum(int(v) for v in pc.values())
+                          ntiles = blk.get('n_tiles') or blk.get('count') or '?'
+                          print(f'\n  --- {os.path.basename(j)} [{split}] '
+                                f'tiles={ntiles} total_px={total:,} ---')
+                          rows = sorted(((int(k), int(v)) for k, v in pc.items()),
+                                        key=lambda kv: -kv[1])
+                          for cls, n in rows:
+                              tag = ''
+                              if cls in CEREALS: tag = '  <== CEREAL'
+                              elif cls in CROPS: tag = '  <-- crop'
+                              print(f'    {cls:2d} {NAMES.get(cls,"?"):14s} '
+                                    f'{n:12,}  {n/total*100:6.3f}%{tag}')
+                          missing = [c for c in CROPS if str(c) not in pc]
+                          cer = sum(int(pc.get(str(c), 0)) for c in CEREALS)
+                          crp = sum(int(pc.get(str(c), 0)) for c in CROPS)
+                          print(f'    cereals 11-13 : {cer:,} px '
+                                f'({cer/total*100:.3f}% of split)')
+                          print(f'    all crops 11-21: {crp:,} px '
+                                f'({crp/total*100:.3f}% of split)')
+                          if missing:
+                              print(f'    ABSENT from split entirely: '
+                                    f'{[(c, NAMES[c]) for c in missing]}')
+              PY
+          resources:
+            requests: {cpu: "1", memory: "2Gi"}
+            limits:   {cpu: "1", memory: "2Gi"}
+          volumeMounts:
+            - {name: checkpoints, mountPath: /checkpoints, readOnly: true}
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}
