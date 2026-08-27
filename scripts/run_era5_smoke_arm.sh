@@ -80,10 +80,18 @@ if [ "$ARM" = control ]; then
   else
     COHORT_STAGING="$ROOT/.cohort-$POD_UID"
     test ! -e "$COHORT_STAGING"
+    # --prefer-cereal-tiles: uniform sampling gave vete 13 of 128 val tiles
+    #   (cereals 0.62% of val pixels) — too thin to resolve the crop effect
+    #   ERA5 exists to test.
+    # --era5-land-probe-cache: drop cells ERA5-Land does not cover, so the
+    #   cohort never needs the 0.25 deg fallback that six grid validators
+    #   reject. Shares $ERA5_CACHE, so probing pre-warms the real fetch.
     python scripts/build_era5_smoke_cohort.py \
       --tile-dir "$TILE_DIR" --output-dir "$COHORT_STAGING" \
       --train-tiles 256 --val-tiles 128 --seed 20260821 \
       --max-label 22 --min-val-crop-classes 5 \
+      --prefer-cereal-tiles \
+      --era5-land-probe-cache "$ERA5_CACHE" \
       --manifest-path "$TILE_MANIFEST"
     python scripts/build_era5_smoke_cohort.py \
       --tile-dir "$TILE_DIR" --output-dir "$COHORT_STAGING" \

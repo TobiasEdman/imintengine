@@ -45,6 +45,14 @@ spec:
               # cohort must reproduce cohort_sha256 e9b45d03... — if it does
               # NOT, stop: the arms are no longer paired on identical tiles.
               value: era5-p600m-20260826-d7222a0a32c4
+            # The control arm now reaches Open-Meteo too. It does not fetch
+            # ERA5 features, but the cohort build probes ERA5-Land coverage for
+            # its candidates (--era5-land-probe-cache), which discloses the same
+            # tile coordinates the treatment arm discloses. That disclosure is
+            # what this flag governs, so control must declare it rather than
+            # inherit an exemption it no longer qualifies for.
+            - name: ALLOW_OPEN_METEO_TILE_METADATA
+              value: "yes"
             - name: BASE_GIT_SHA
               value: 602c86dee8d4dbdc191ab2750c261cf86b56ac50
             - name: CONTAINER_IMAGE
