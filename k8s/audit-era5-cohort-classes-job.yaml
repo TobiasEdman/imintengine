@@ -78,14 +78,33 @@ spec:
                       except Exception as e:
                           print(f'  {os.path.basename(j)}: unreadable ({e})')
                           continue
-                      # Find any split carrying an aggregate pixel_counts block.
+                      # build_era5_smoke_cohort.py:641 stores this as
+                      # manifest["label_support"][split], NOT manifest[split].
+                      # Guessing the nesting cost a wasted run, so fall back to
+                      # a recursive search rather than assume a third time.
+                      def _find(node, split):
+                          if isinstance(node, dict):
+                              sup = node.get('label_support')
+                              if isinstance(sup, dict) and isinstance(
+                                      sup.get(split), dict):
+                                  return sup[split]
+                              if isinstance(node.get(split), dict) and \
+                                      'pixel_counts' in node[split]:
+                                  return node[split]
+                              for v in node.values():
+                                  r = _find(v, split)
+                                  if r:
+                                      return r
+                          return None
+
                       for split in ('val', 'train'):
-                          blk = d.get(split)
+                          blk = _find(d, split)
                           if not isinstance(blk, dict):
                               continue
                           pc = blk.get('pixel_counts')
                           if not isinstance(pc, dict):
                               continue
+                          tc = blk.get('tile_counts', {})
                           total = sum(int(v) for v in pc.values())
                           ntiles = blk.get('n_tiles') or blk.get('count') or '?'
                           print(f'\n  --- {os.path.basename(j)} [{split}] '
@@ -96,8 +115,14 @@ spec:
                               tag = ''
                               if cls in CEREALS: tag = '  <== CEREAL'
                               elif cls in CROPS: tag = '  <-- crop'
+                              # tile_counts matters as much as pixels: a class
+                              # concentrated in 1-2 tiles cannot support a
+                              # per-class IoU conclusion however many pixels it
+                              # has, because one tile's outcome dominates it.
+                              nt = tc.get(str(cls), '?')
                               print(f'    {cls:2d} {NAMES.get(cls,"?"):14s} '
-                                    f'{n:12,}  {n/total*100:6.3f}%{tag}')
+                                    f'{n:12,}  {n/total*100:6.3f}%  '
+                                    f'in {nt} tiles{tag}')
                           missing = [c for c in CROPS if str(c) not in pc]
                           cer = sum(int(pc.get(str(c), 0)) for c in CEREALS)
                           crp = sum(int(pc.get(str(c), 0)) for c in CROPS)

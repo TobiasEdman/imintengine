@@ -82,6 +82,14 @@ spec:
                       print(f'=== {label} ({d}) === NO TILES FOUND'); continue
                   c = collections.Counter()
                   mism, unstamped = [], []
+                  # Tile-year histogram for the UNSTAMPED set. These carry VPP
+                  # bands with no vpp_year, so the year is unknowable from the
+                  # tile — but pre-fix code defaulted to 2021 (72d4fd1). If they
+                  # ARE 2021 tiles the default was accidentally right and there
+                  # is nothing to fix; if they span other years the phenology is
+                  # silently wrong. That distinction decides whether to strip
+                  # the bands, so measure it rather than assume.
+                  unstamped_years = collections.Counter()
                   for p in paths:
                       try:
                           z = np.load(p, allow_pickle=True)
@@ -96,6 +104,7 @@ spec:
                       vy = int(z['vpp_year']) if 'vpp_year' in keys else None
                       if vy is None:
                           c['UNSTAMPED'] += 1
+                          unstamped_years[ty] += 1
                           if len(unstamped) < 5: unstamped.append(p.rsplit('/', 1)[-1])
                       elif ty is None:
                           c['NO-TILE-YEAR'] += 1
@@ -118,6 +127,17 @@ spec:
                   if unstamped:
                       print('  unstamped samples:')
                       [print(f'    {u}') for u in unstamped]
+                      hist = dict(sorted(unstamped_years.items(),
+                                         key=lambda kv: (kv[0] is None, kv[0])))
+                      print(f'  unstamped tile-year histogram: {hist}')
+                      only21 = set(unstamped_years) == {2021}
+                      print('  => ' + (
+                          'all 2021: the pre-fix default was correct for these; '
+                          'they lack only the stamp, the values are right'
+                          if only21 else
+                          'spans years other than 2021: pre-fix code defaulted to '
+                          '2021 phenology, so these carry WRONG-YEAR values that '
+                          'no emptiness check can see'))
                   verdict = 'PASS' if not c['WRONG-YEAR'] and not c['UNSTAMPED'] else 'FAIL'
                   print(f'  VERDICT          : {verdict}')
               PY
