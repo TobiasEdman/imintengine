@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: era5-p600m-control-c06beb0d953d
+  name: era5-p600m-control-2202d142db81
   namespace: prithvi-training-default
   labels:
     app: unified-training
@@ -32,7 +32,7 @@ spec:
             - name: ARM
               value: control
             - name: RUN_ID
-              # New cohort epoch AND new code bundle (7b5c19 -> c06beb0d953d
+              # New cohort epoch AND new code bundle (7b5c19 -> 2202d142db81
               # via a3fe2d1f -> 22c89b41 -> d7222a0a).
               #
               # This cohort is DELIBERATELY DIFFERENT from every earlier one:
@@ -52,7 +52,7 @@ spec:
               #     tiles the uniform draw gave them; if they do not, the
               #     ranking did not take effect and the crop question is still
               #     unanswerable.
-              value: era5-p600m-20260826-c06beb0d953d
+              value: era5-p600m-20260826-2202d142db81
             # The control arm now reaches Open-Meteo too. It does not fetch
             # ERA5 features, but the cohort build probes ERA5-Land coverage for
             # its candidates (--era5-land-probe-cache), which discloses the same
@@ -114,7 +114,7 @@ spec:
             claimName: training-data
         - name: patches
           configMap:
-            name: era5-smoke-code-c06beb0d953d
+            name: era5-smoke-code-2202d142db81
         - name: dshm
           emptyDir:
             medium: Memory
