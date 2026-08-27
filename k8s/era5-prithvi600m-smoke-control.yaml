@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: era5-p600m-control-d7222a0a32c4
+  name: era5-p600m-control-93bf2c0b4e55
   namespace: prithvi-training-default
   labels:
     app: unified-training
@@ -32,19 +32,28 @@ spec:
             - name: ARM
               value: control
             - name: RUN_ID
-              # New cohort epoch AND new code bundle.
-              # Epoch: the 2026-08-21 cohort was sealed against tiles the VPP
-              # gap-fill has since rewritten (2,147 of them), so
-              # validate_existing_cohort refused it — correctly.
-              # Bundle: 98f2dbb changed era5_aux.py (ERA5-Land has no water
-              # coverage, cell 25/384 came back all-NaN), and era5_aux.py is
-              # hash-verified, so the suffix moved 7b5c190221fb -> d7222a0a32c4.
-              # Both arms must therefore re-run under this RUN_ID; the earlier
-              # control seeds 41/42/43 (median 0.2920) live under the old one.
-              # build_cohort.py is byte-identical across the two bundles, so the
-              # cohort must reproduce cohort_sha256 e9b45d03... — if it does
-              # NOT, stop: the arms are no longer paired on identical tiles.
-              value: era5-p600m-20260826-d7222a0a32c4
+              # New cohort epoch AND new code bundle (7b5c19 -> 93bf2c0b4e55
+              # via a3fe2d1f -> 22c89b41 -> d7222a0a).
+              #
+              # This cohort is DELIBERATELY DIFFERENT from every earlier one:
+              # build_cohort.py now ranks cereal-bearing tiles first
+              # (--prefer-cereal-tiles) and drops cells ERA5-Land does not cover
+              # (--era5-land-probe-cache). So cohort_sha256 MUST NOT reproduce
+              # e9b45d03... — a changed hash is the point, not a warning sign.
+              # Earlier manifests said the opposite; that instruction applied
+              # when only the bundle changed and the selection did not.
+              #
+              # Consequences to expect, and to check rather than assume:
+              #   * control's mIoU will NOT be 0.2920 — that baseline belongs to
+              #     the old uniform cohort. The new run establishes its own, and
+              #     only the treatment-vs-control delta on THIS cohort is
+              #     meaningful. Do not compare across cohorts.
+              #   * vete/korn/havre should hold far more than the 13/30/19 val
+              #     tiles the uniform draw gave them; if they do not, the
+              #     ranking did not take effect and the crop question is still
+              #     unanswerable.
+              value: era5-p600m-20260826-93bf2c0b4e55
+              value: era5-p600m-20260826-93bf2c0b4e55
             # The control arm now reaches Open-Meteo too. It does not fetch
             # ERA5 features, but the cohort build probes ERA5-Land coverage for
             # its candidates (--era5-land-probe-cache), which discloses the same
@@ -106,7 +115,7 @@ spec:
             claimName: training-data
         - name: patches
           configMap:
-            name: era5-smoke-code-d7222a0a32c4
+            name: era5-smoke-code-93bf2c0b4e55
         - name: dshm
           emptyDir:
             medium: Memory
