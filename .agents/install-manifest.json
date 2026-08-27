@@ -1,22 +1,22 @@
 {
   "artifacts": [
     {
-      "after_sha256": "2227020115140d1ba55980fc711667f6a191028223efef0c5f96076cebcca7b2",
+      "after_sha256": "635c5ff84077a44f82c8a780e76d3edfaf0395b89d79901b717f1aa4d76cddc2",
       "before_sha256": null,
       "kind": "file",
       "owned": true,
       "path": "AGENTS.md"
     },
     {
-      "after_sha256": "ecb7f4cbe3bfe5ce3913db353e5183ab8e6854c2ff1492a263ee86658b9616e6",
+      "after_sha256": "fd02a428107a97a31eecc5ce43eec928bdcac2e235b8e8c375a11dab45481d9e",
       "before_sha256": "9c4205ff01a5863968581ccc337217170fd46a3b02f64b86dcc212e7ea9c3487",
-      "fragment": "\n<!-- agentic-task:coordination:start -->\n## Cross-runtime coordination mechanics\n\nShared policy lives in `AGENTS.md`. Claude-specific hooks may enforce it but\nmust not weaken or duplicate that policy. Use a Claude worktree for every\nwriting session and the vendor-neutral `agentic-task` CLI for task claims.\n<!-- agentic-task:coordination:end -->\n",
+      "fragment": "\n<!-- agentic-task:coordination:start -->\n## Cross-runtime coordination mechanics\n\nShared policy lives in `AGENTS.md`. Claude-specific hooks may enforce it but\nmust not weaken or duplicate that policy. Use a Claude worktree for every\nwriting session and the vendor-neutral `agentic-task` CLI for task claims.\nUse `~/.agents/bin/agentic-continuity` for personal checkpoints, live messages,\nand active-job locks; commit only validated task-scoped `.agents/handoffs/`\nrecords for another machine.\n<!-- agentic-task:coordination:end -->\n",
       "kind": "block",
       "owned": false,
       "path": "CLAUDE.md"
     },
     {
-      "after_sha256": "6838c4f7586b753a9161fa880d8c87167502bdbcfa12d5db626a155c721a1d85",
+      "after_sha256": "59ef92bba167614695916aa46c252194d39e6c869f250907ee01673bbc852068",
       "before_resource": "agents-readme-legacy-v2.md",
       "before_sha256": "a24b9a1ca78aa2d37a2ca1ebe0269fe576727b4cddd526c9c0dd1de27e25f0d2",
       "kind": "replace",
@@ -37,10 +37,26 @@
       "kind": "file",
       "owned": false,
       "path": ".agents/tasks/.gitkeep"
+    },
+    {
+      "after_sha256": "4b04d30517d769c67039b2ae006dc9ec16c2dc186334f6525a8ce946f115eb43",
+      "before_sha256": null,
+      "kind": "file",
+      "owned": true,
+      "path": ".agents/handoff-schema.json"
+    },
+    {
+      "after_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "before_sha256": null,
+      "kind": "file",
+      "owned": true,
+      "path": ".agents/handoffs/.gitkeep"
     }
   ],
-  "created_directories": [],
-  "installer_version": "2",
+  "created_directories": [
+    ".agents/handoffs"
+  ],
+  "installer_version": "3",
   "profile": "coordination",
   "schema_version": "1"
 }
