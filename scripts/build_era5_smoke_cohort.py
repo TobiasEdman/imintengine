@@ -669,8 +669,26 @@ def build_cohort(
     val = sorted(val_pool, key=_rank)[:take_val]
 
     if era5_land_probe_cache is not None:
+        n_train_cand, n_val_cand = len(train), len(val)
         train = _era5_land_covered(train, era5_land_probe_cache)[:train_tiles]
         val = _era5_land_covered(val, era5_land_probe_cache)[:val_tiles]
+        # Over-selection only helps where the pool has slack. train_pool has
+        # thousands spare; val_pool is constrained by spatial disjointness to
+        # roughly the requested size, so a single exclusion can make the count
+        # unreachable. Say that plainly — the generic "insufficient compatible
+        # tiles" error below blames pool construction and sent the reader
+        # looking in the wrong place.
+        for label, got, want, cand in (("train", len(train), train_tiles, n_train_cand),
+                                       ("val", len(val), val_tiles, n_val_cand)):
+            if got < want:
+                raise ValueError(
+                    f"ERA5-Land probe left too few {label} tiles: {got} of "
+                    f"{want} wanted, from {cand} candidates "
+                    f"(oversample={oversample}). The {label} pool cannot "
+                    f"absorb the ~9% of cells ERA5-Land does not cover — "
+                    f"lower --{label}-tiles or raise --oversample if the pool "
+                    f"has room."
+                )
     if len(train) != train_tiles or len(val) != val_tiles:
         raise ValueError(
             "insufficient compatible, spatial/ERA5-disjoint tiles: "
