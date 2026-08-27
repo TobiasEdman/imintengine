@@ -9,7 +9,13 @@ metadata:
     arm: treatment
 spec:
   backoffLimit: 0
-  ttlSecondsAfterFinished: 172800
+  # 2h, not 48h. A finished pod keeps its nvidia.com/gpu request
+  # counted against the PROJECT quota for the whole TTL, so a long
+  # retention is a reservation, not a log-retention policy. Eight
+  # finished arms at 48h took the entire H100 quota (8/8) on
+  # 2026-08-27 and blocked the project ~5h. scripts/reap_gpu_jobs.py
+  # is the active sweep; this is the passive floor.
+  ttlSecondsAfterFinished: 7200
   template:
     metadata:
       labels:
