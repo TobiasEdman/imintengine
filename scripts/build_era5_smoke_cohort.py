@@ -625,10 +625,19 @@ def build_cohort(
             skipped.append({"name": path.name, "reason": str(exc)})
 
     split_components = _bind_components(candidates)
+    # _validation_component_ids sizes the val pool to the number requested, so
+    # the pool never has slack to over-select from — lowering --val-tiles just
+    # shrinks the pool and the ERA5-Land loss recurs at the same ratio. Inflate
+    # the POOL target instead when probing, so the ~9% of cells ERA5-Land does
+    # not cover can be dropped and still leave val_tiles behind. train_pool has
+    # thousands spare, so taking more components for val costs it nothing.
+    val_pool_target = val_tiles
+    if era5_land_probe_cache is not None:
+        val_pool_target = int(val_tiles * oversample) + 1
     val_component_ids = _validation_component_ids(
         split_components,
         train_tiles=train_tiles,
-        val_tiles=val_tiles,
+        val_tiles=val_pool_target,
         seed=seed,
     )
     train_pool = [

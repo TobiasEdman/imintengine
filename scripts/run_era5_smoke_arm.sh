@@ -80,11 +80,10 @@ if [ "$ARM" = control ]; then
   else
     COHORT_STAGING="$ROOT/.cohort-$POD_UID"
     test ! -e "$COHORT_STAGING"
-    # --val-tiles 112, not 128: val_pool is capped at exactly 128 by spatial
-    #   disjointness, so it has NO slack to over-select from. The ERA5-Land
-    #   probe drops ~9% of candidates, which made 128 unreachable and failed
-    #   the build. 112 leaves margin for the exclusions. train_pool has ~6,900
-    #   spare, so 256 stays.
+    # val stays at 128: the builder now inflates the val POOL by --oversample
+    #   when probing, so the ~9% ERA5-Land loss is absorbed without shrinking
+    #   the validation set. Lowering --val-tiles was the wrong lever — the pool
+    #   is sized to the request, so it shrank in step and the loss recurred.
     # --prefer-cereal-tiles: uniform sampling gave vete 13 of 128 val tiles
     #   (cereals 0.62% of val pixels) — too thin to resolve the crop effect
     #   ERA5 exists to test.
@@ -93,7 +92,7 @@ if [ "$ARM" = control ]; then
     #   reject. Shares $ERA5_CACHE, so probing pre-warms the real fetch.
     python scripts/build_era5_smoke_cohort.py \
       --tile-dir "$TILE_DIR" --output-dir "$COHORT_STAGING" \
-      --train-tiles 256 --val-tiles 112 --seed 20260821 \
+      --train-tiles 256 --val-tiles 128 --seed 20260821 \
       --max-label 22 --min-val-crop-classes 5 \
       --prefer-cereal-tiles \
       --era5-land-probe-cache "$ERA5_CACHE" \
