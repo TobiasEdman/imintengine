@@ -37,7 +37,10 @@ TERMINAL = ("Succeeded", "Failed")
 
 
 def _kubectl(args: list[str], context: str, namespace: str) -> str:
-    cmd = ["kubectl", "--context", context, "-n", namespace, *args]
+    # In-cluster there is no kubeconfig context — kubectl uses the pod's
+    # ServiceAccount. Pass --context "" (or omit it) when running as a CronJob.
+    cmd = ["kubectl", *(["--context", context] if context else []),
+           "-n", namespace, *args]
     out = subprocess.run(cmd, capture_output=True, text=True)
     if out.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd)}: {out.stderr.strip()[:200]}")
