@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -26,6 +27,7 @@ from imint.training.era5_aux import (
     ERA5_ATMOSPHERE_GRID_DEGREES,
     era5_atmosphere_cell_id,
     era5_grid_context,
+    fetch_era5_land_growing_season,
 )
 
 COHORT_SCHEMA = "era5-smoke-cohort-v4"
@@ -173,6 +175,45 @@ def _tile_metadata(
         "label": label_meta,
         "model_label": model_label_meta,
     }
+
+
+_CEREAL_CLASSES = (11, 12, 13)   # vete / korn / havre — what ERA5 is meant to separate
+
+
+def _era5_land_covered(items: list[dict], cache_dir: Path) -> list[dict]:
+    """Keep only items whose cell ERA5-Land actually covers, order preserved.
+
+    A cell over sea or a large lake gets served by the plain ERA5 reanalysis
+    instead, on a 0.25 deg grid rather than 0.1 deg. Detect that by comparing
+    the cell the fetch actually returned against the ERA5-Land cell
+    ``era5_grid_context`` predicts: if they match, ERA5-Land served it.
+
+    The fetch is cached, so this pre-warms exactly the entries the real fetch
+    will need — the probe costs nothing beyond the first call per cell.
+    """
+    kept: list[dict] = []
+    for item in items:
+        lat = item["era5_request"]["lat"]
+        lon = item["era5_request"]["lon"]
+        expected = era5_grid_context(lat, lon)["land_cell"]
+        try:
+            w = fetch_era5_land_growing_season(
+                lat, lon, int(item["year"]), cache_dir=cache_dir,
+                cutoff_date=item["cutoff_date"],
+            )
+        except Exception as exc:  # noqa: BLE001 — an unreachable cell is excluded, not fatal
+            print(f"  probe: {item['name']} excluded ({type(exc).__name__}: "
+                  f"{str(exc)[:70]})", flush=True)
+            continue
+        served = (float(w["era5_land_cell_lat"]), float(w["era5_land_cell_lon"]))
+        if math.isclose(served[0], expected["lat"], abs_tol=1e-4) and \
+           math.isclose(served[1], expected["lon"], abs_tol=1e-4):
+            kept.append(item)
+        else:
+            print(f"  probe: {item['name']} excluded — ERA5-Land gap, served "
+                  f"from {served} not ({expected['lat']}, {expected['lon']})",
+                  flush=True)
+    return kept
 
 
 def _support(items: list[dict]) -> dict:
@@ -541,6 +582,9 @@ def build_cohort(
     min_crop_val_pixels: int = DEFAULT_MIN_CROP_VAL_PIXELS,
     label_dir: Path | None = None,
     manifest_path: str | None = None,
+    prefer_cereal_tiles: bool = False,
+    era5_land_probe_cache: Path | None = None,
+    oversample: float = 1.25,
 ) -> tuple[dict, str, str]:
     """Select a deterministic cohort and return its manifest and split text."""
     if train_tiles <= 0 or val_tiles <= 0:
@@ -599,8 +643,34 @@ def build_cohort(
         if component_id in val_component_ids
         for item in items
     ]
-    train = sorted(train_pool, key=lambda item: _stable(item["name"], seed))[:train_tiles]
-    val = sorted(val_pool, key=lambda item: _stable(item["name"], seed))[:val_tiles]
+    # Uniform hash-order put vete in 13 of 128 val tiles and cereals at 0.62% of
+    # val pixels (audit 2026-08-26), which cannot resolve a per-class effect —
+    # one tile's outcome dominates the IoU. Rank cereal-bearing tiles first and
+    # keep the hash tie-break, so selection stays deterministic and seed-stable.
+    def _rank(item: dict):
+        if not prefer_cereal_tiles:
+            return (0, _stable(item["name"], seed))
+        counts = item["model_label"]["pixel_counts"]
+        cereal_px = sum(int(counts.get(str(c), 0)) for c in _CEREAL_CLASSES)
+        return (0 if cereal_px else 1, _stable(item["name"], seed))
+
+    # ERA5-Land has no ocean coverage, so ~9% of cells fall back to the 0.25 deg
+    # ERA5 grid — a different cell centre that six separate validators reject
+    # (2026-08-26). Rather than teach every one of them to tolerate it, exclude
+    # those cells here: over-select, probe, and keep the first N that ERA5-Land
+    # actually covers. Probing writes through the shared fetch cache, so the
+    # real fetch later reuses it and nothing is thrown away.
+    take_train, take_val = train_tiles, val_tiles
+    if era5_land_probe_cache is not None:
+        take_train = int(train_tiles * oversample) + 1
+        take_val = int(val_tiles * oversample) + 1
+
+    train = sorted(train_pool, key=_rank)[:take_train]
+    val = sorted(val_pool, key=_rank)[:take_val]
+
+    if era5_land_probe_cache is not None:
+        train = _era5_land_covered(train, era5_land_probe_cache)[:train_tiles]
+        val = _era5_land_covered(val, era5_land_probe_cache)[:val_tiles]
     if len(train) != train_tiles or len(val) != val_tiles:
         raise ValueError(
             "insufficient compatible, spatial/ERA5-disjoint tiles: "
@@ -918,6 +988,23 @@ def main() -> None:
     parser.add_argument("--max-label", type=int, default=DEFAULT_MAX_LABEL)
     parser.add_argument("--min-val-crop-classes", type=int, default=5)
     parser.add_argument(
+        "--prefer-cereal-tiles", action="store_true",
+        help="Rank tiles containing vete/korn/havre ahead of the rest. Uniform "
+             "sampling put vete in 13 of 128 val tiles (cereals 0.62%% of val "
+             "pixels), too thin for a per-class conclusion.",
+    )
+    parser.add_argument(
+        "--era5-land-probe-cache", type=Path, default=None,
+        help="Probe ERA5-Land coverage for over-selected candidates and drop "
+             "cells it does not cover, so the cohort never needs the 0.25 deg "
+             "ERA5 fallback that six grid validators reject. Writes through "
+             "this fetch cache, which the real fetch then reuses.",
+    )
+    parser.add_argument(
+        "--oversample", type=float, default=1.25,
+        help="Candidate multiplier when probing (~9%% of cells fall back).",
+    )
+    parser.add_argument(
         "--min-crop-train-tiles", type=int,
         default=DEFAULT_MIN_CROP_TRAIN_TILES,
     )
@@ -973,6 +1060,9 @@ def main() -> None:
         min_crop_val_pixels=args.min_crop_val_pixels,
         label_dir=args.label_dir,
         manifest_path=args.manifest_path,
+        prefer_cereal_tiles=args.prefer_cereal_tiles,
+        era5_land_probe_cache=args.era5_land_probe_cache,
+        oversample=args.oversample,
     )
     write_cohort(args.output_dir, manifest, train_text, val_text)
     print(json.dumps({
