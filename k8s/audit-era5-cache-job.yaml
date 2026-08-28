@@ -1,0 +1,78 @@
+---
+# What ERA5 payloads are actually cached, and how much of the new cohort's
+# fetch is already paid for?
+#
+# The d7222a0a32c4 treatment run sealed 384 sidecars, and the raw payloads live
+# in the shared ERA5_CACHE keyed by cell+year rather than by cohort — so any
+# cell the new cereal-weighted cohort shares with the old one is already warm.
+# That claim was made from job logs and code paths, not from listing the
+# directory. This lists it.
+#
+# Read-only. Node-pinned: training-checkpoints is ReadWriteOnce and lives on
+# whichever node the ERA5 arms run on.
+#
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/audit-era5-cache-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-era5-cache
+  namespace: prithvi-training-default
+  labels: {app: ensemble-prep, purpose: audit-era5-cache}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels: {app: ensemble-prep, purpose: audit-era5-cache}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              python3 - <<'PY'
+              import glob, os, json, collections
+
+              cache = '/checkpoints/cache/era5_smoke_v5'
+              print(f'=== payload cache: {cache} ===')
+              if not os.path.isdir(cache):
+                  print('  DOES NOT EXIST — every cell will be fetched fresh')
+              else:
+                  files = glob.glob(os.path.join(cache, '**', '*'), recursive=True)
+                  files = [f for f in files if os.path.isfile(f)]
+                  total = sum(os.path.getsize(f) for f in files)
+                  print(f'  entries : {len(files):,}')
+                  print(f'  size    : {total/1e6:.1f} MB')
+                  by_ext = collections.Counter(
+                      os.path.splitext(f)[1] or '(none)' for f in files)
+                  print(f'  by ext  : {dict(by_ext.most_common(5))}')
+                  for f in sorted(files)[:5]:
+                      print(f'    {os.path.basename(f)}')
+
+              print('\n=== sealed sidecar sets per RUN_ID ===')
+              for d in sorted(glob.glob(
+                      '/checkpoints/era5_smoke_prithvi600m/*/era5')):
+                  n = len(glob.glob(os.path.join(d, '*.npz')))
+                  cov = os.path.join(d, 'coverage.json')
+                  status = '-'
+                  if os.path.isfile(cov):
+                      try:
+                          status = json.load(open(cov)).get('status', '?')
+                      except Exception:
+                          status = 'unreadable'
+                  print(f'  {d.split("/")[-2]:34s} sidecars={n:4d}  coverage={status}')
+              PY
+          resources:
+            requests: {cpu: "1", memory: "2Gi"}
+            limits:   {cpu: "1", memory: "2Gi"}
+          volumeMounts:
+            - {name: checkpoints, mountPath: /checkpoints, readOnly: true}
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}
