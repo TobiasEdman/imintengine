@@ -121,11 +121,28 @@ distillation passes (GPU, ~1 h each) instead of one — about +6 h of GPU across
 the campaign, and six sidecar sets on the PVC instead of one. Worth checking
 free space before rung 3 starts.
 
-**What it costs scientifically:** rung 3 is no longer comparable *across*
-backbones as "the same refinement" — each column got a different teacher. The
-`3 − 2` delta stays a valid within-column measurement (does self-distillation
-help *this* model?), but a claim like "CROMA distils better than Clay" would
-confound refinement quality with rung-2 quality. Report it as within-column.
+**Where the cross-backbone claim lives (decided 2026-08-29).** The raw `3 − 2`
+delta cannot carry "CROMA distils better than Clay" — each column has a
+different teacher (its own rung 2), so teacher level and refinement gain are
+entangled: a weaker rung 2 leaves more headroom, a stronger one feeds the head
+better features. But the claim *is* supportable one level down, where the
+experiment is naturally controlled:
+
+**Distillability = the distill head's held-out OOF forest-type accuracy,**
+measured per backbone under a pinned protocol. Every head is the same small
+MLP trained on that backbone's 256-dim pre-classifier features at the **same
+NFI plots, same grouped-by-tile split (same seed and test-frac), same head
+architecture and hyperparameters** — the feature extractor is the only varying
+factor, which makes head OOF a controlled cross-backbone comparison of whose
+features are the better substrate for field truth. It costs no extra GPU;
+`train_distill_head.py` produces it as a by-product for every column.
+
+The ladder therefore reports **five quantities per column**: the four rung
+scores plus distillability (between rungs 2 and 3). Cross-backbone claims about
+distillation cite the head OOF; the end-to-end `3 − 2` delta remains
+within-column. **Protocol pinning is mandatory** — one backbone getting a tuned
+head silently converts a controlled comparison into a hyperparameter lottery.
+Reference point: the 600M head's historical OOF was 0.637 vs NMD2023's 0.493.
 
 ## Cost
 

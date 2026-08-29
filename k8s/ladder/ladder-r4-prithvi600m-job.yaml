@@ -106,18 +106,12 @@ spec:
           volumeMounts:
             - name: cephfs
               mountPath: /cephfs
-            - name: training-data
-              mountPath: /data
-              readOnly: true
             - name: dshm
               mountPath: /dev/shm
       volumes:
         - name: cephfs
           persistentVolumeClaim:
             claimName: training-data-cephfs
-        - name: training-data
-          persistentVolumeClaim:
-            claimName: training-data
         - name: dshm
           emptyDir:
             medium: Memory

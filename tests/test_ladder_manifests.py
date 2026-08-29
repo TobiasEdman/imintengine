@@ -105,6 +105,19 @@ def test_identity_and_isolated_outputs(model, rung, path):
     assert f"/cephfs/checkpoints/ladder/{model}_r{rung}" in _flag_args(doc)
 
 
+@pytest.mark.parametrize("model,rung,path", list(_manifests()),
+                         ids=lambda v: v if isinstance(v, (str, int)) else "")
+def test_no_rwo_pvc_mounts(model, rung, path):
+    """RWO volumes node-pin the pod behind the dashboard's Multi-Attach lock.
+
+    Ladder jobs must be schedulable on any GPU node: cephfs (RWX) only.
+    """
+    spec = yaml.safe_load(path.read_text())["spec"]["template"]["spec"]
+    claims = {v["persistentVolumeClaim"]["claimName"]
+              for v in spec.get("volumes", []) if "persistentVolumeClaim" in v}
+    assert claims <= {"training-data-cephfs"}, f"RWO PVC leaked: {claims}"
+
+
 def test_manifests_match_generator():
     """Committed manifests are regenerable — no hand-edits."""
     r = subprocess.run([sys.executable, "scripts/gen_ladder_manifests.py", "--check"],
