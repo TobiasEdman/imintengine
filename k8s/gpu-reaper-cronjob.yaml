@@ -98,7 +98,7 @@ spec:
                     "https://dl.k8s.io/release/${KV}/bin/linux/amd64/kubectl"
                   chmod +x /usr/local/bin/kubectl
                   git clone --quiet --depth 1 \
-                    --branch agent/te/fable/version-cluster-manifests \
+                    --branch agent/te/opus/nfi-nmd2023-benchmark \
                     https://github.com/TobiasEdman/ImintEngine.git /w
                   cd /w
                   echo "CLONED HEAD: $(git rev-parse --short HEAD)"
