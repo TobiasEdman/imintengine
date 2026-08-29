@@ -62,6 +62,7 @@ spec:
               python /workspace/imintengine/scripts/train_unified.py \
                 --backbone-name prithvi_600m \
                 --data-dirs /cephfs/unified_v2_512 \
+                --cohort-dir /cephfs/nmd2023_labels \
                 --checkpoint-dir /cephfs/checkpoints/ladder/prithvi600m_r1 \
                 --num-classes 23 \
                 --enable-multitemporal \

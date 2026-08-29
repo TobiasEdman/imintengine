@@ -154,7 +154,7 @@ spec:
           python /workspace/imintengine/scripts/train_unified.py \
             --backbone-name terramind_v1_base \
             --data-dirs /cephfs/unified_v2_512 \
-            --label-dir /cephfs/nmd2023_distill_labels \
+            --label-dir /cephfs/distill/terramind_r2 \
             --enable-tradslag-head \
             --enable-delta-sar \
             --lambda-frac 1.0 \

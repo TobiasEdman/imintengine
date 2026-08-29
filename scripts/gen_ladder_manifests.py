@@ -45,12 +45,22 @@ BASES = {
     "clay": "k8s/train-clay-job.yaml",
 }
 
+# The cohort gate. Every rung trains on exactly the tiles that have an NMD2023
+# sidecar (~94.5% coverage), so rung 1 — which reads the in-tile 23-class label
+# and would otherwise see a superset — cannot mix a cohort change into its
+# delta. Rungs 2-4 land on this set anyway via --label-dir; passing it as
+# --cohort-dir on rung 1 makes all four identical by construction.
+COHORT_DIR = "/cephfs/nmd2023_labels"
+
 # rung → (slug, label-dir or None, num-classes, frac head?)
+# Rung 3/4's label dir is per-backbone: each model distils ITS OWN rung-2
+# features (user, 2026-08-29 — "that distinguish them more"), so the sidecars
+# live in a model-scoped directory rather than one shared pool.
 RUNGS = {
     1: ("nmd2018", None, 23, False),
-    2: ("nmd2023", "/cephfs/nmd2023_labels", 28, False),
-    3: ("nfi", "/cephfs/nmd2023_distill_labels", 28, False),
-    4: ("tradslag", "/cephfs/nmd2023_distill_labels", 28, True),
+    2: ("nmd2023", COHORT_DIR, 28, False),
+    3: ("nfi", "/cephfs/distill/{model}_r2", 28, False),
+    4: ("tradslag", "/cephfs/distill/{model}_r2", 28, True),
 }
 
 EPOCHS = 30  # fixed across the ladder: see the doc's "Controls"
@@ -107,6 +117,7 @@ def _ensure_flag_after(text: str, anchor: str, flag: str, value: str) -> str:
 
 def render(model: str, rung: int, base_text: str) -> str:
     slug, label_dir, num_classes, with_frac = RUNGS[rung]
+    label_dir = label_dir.format(model=model) if label_dir else None
     job = f"ladder-r{rung}-{model}"
     out = base_text
 
@@ -115,6 +126,10 @@ def render(model: str, rung: int, base_text: str) -> str:
         out = _drop_flag(out, "label-dir")
     else:
         out = _ensure_flag_after(out, "data-dirs", "label-dir", label_dir)
+    # Cohort held constant across all rungs. Rungs 2-4 already land on the
+    # sidecar set via --label-dir; rung 1 needs the explicit gate.
+    if label_dir is None:
+        out = _ensure_flag_after(out, "data-dirs", "cohort-dir", COHORT_DIR)
     if with_frac:
         out = _ensure_flag_after(out, "label-dir", "frac-dir",
                                  "/cephfs/tradslag_fracs")

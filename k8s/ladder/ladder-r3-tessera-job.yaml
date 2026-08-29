@@ -89,7 +89,7 @@ spec:
               python /workspace/imintengine/scripts/train_unified.py \
                 --backbone-name tessera_v1 \
                 --data-dirs /cephfs/unified_v2_512 \
-                --label-dir /cephfs/nmd2023_distill_labels \
+                --label-dir /cephfs/distill/tessera_r2 \
                 --enable-tradslag-head \
                 --aux-fusion gated \
                 --lambda-frac 1.0 \
