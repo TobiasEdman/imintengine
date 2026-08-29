@@ -105,6 +105,7 @@ spec:
           python /workspace/imintengine/scripts/train_unified.py \
             --backbone-name clay_v1_5 \
             --data-dirs /cephfs/unified_v2_512 \
+            --enable-markfukt \
             --label-dir /cephfs/distill/clay_r2 \
             --enable-tradslag-head \
             --lambda-frac 1.0 \

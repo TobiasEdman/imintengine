@@ -65,6 +65,16 @@ RUNGS = {
 
 EPOCHS = 30  # fixed across the ladder: see the doc's "Controls"
 
+# The SLU Markfuktighetskarta soil-moisture aux (11th channel) is opt-in in
+# the trainer, so every ladder run must ask for it explicitly. It is on
+# because the only matched pre-ladder pair measured it as worth ~+0.018 mIoU
+# — v8b_markfukt (on, 15 epochs) 0.5527 vs unified_v8b_full7882_e20 (off, 20
+# epochs) 0.5352, i.e. better on five FEWER epochs — roughly four times the
+# VPP-repair effect. A ladder run at the handicapped 10-aux config would
+# still isolate label source, but its winning cell would not be a model
+# worth shipping. [user-stated 2026-08-29]
+ENABLE_MARKFUKT = True
+
 _FLAG_LINE = r"^(?P<indent>\s*)--{flag}[ =][^\n]*?(?P<cont>\s*\\)?$"
 
 # The base manifests use both YAML label styles — flow (`labels: {a: b}`) and
@@ -102,6 +112,18 @@ def _set_flag(text: str, flag: str, value: str) -> str:
     return pattern.sub(lambda _: repl, text, count=1)
 
 
+def _ensure_bool_flag(text: str, anchor: str, flag: str) -> str:
+    """Insert a valueless store_true flag after the anchor if absent."""
+    if re.search(rf"^\s*--{re.escape(flag)}\b", text, re.M):
+        return text
+    pattern = re.compile(_FLAG_LINE.format(flag=re.escape(anchor)), re.M)
+    m = pattern.search(text)
+    if not m:
+        raise ValueError(f"anchor --{anchor} not found; cannot insert --{flag}")
+    line = f"{m.group('indent')}--{flag}{m.group('cont') or ''}"
+    return text[:m.end()] + "\n" + line + text[m.end():]
+
+
 def _ensure_flag_after(text: str, anchor: str, flag: str, value: str) -> str:
     """Insert `--flag value` right after the anchor flag if absent."""
     if re.search(_FLAG_LINE.format(flag=re.escape(flag)), text, re.M):
@@ -136,6 +158,8 @@ def render(model: str, rung: int, base_text: str) -> str:
     else:
         out = _drop_flag(out, "frac-dir")
     out = _set_flag(out, "num-classes", str(num_classes))
+    if ENABLE_MARKFUKT:
+        out = _ensure_bool_flag(out, "data-dirs", "enable-markfukt")
 
     # Controls: cold start, fixed epochs. The base manifests carry prose
     # describing the warm-start we just removed ("Continue from the 0.478

@@ -159,6 +159,7 @@ spec:
           python /workspace/imintengine/scripts/train_unified.py \
             --backbone-name croma_base \
             --data-dirs /cephfs/unified_v2_512 \
+            --enable-markfukt \
             --cohort-dir /cephfs/nmd2023_labels \
             --enable-tradslag-head \
             --enable-delta-sar \
