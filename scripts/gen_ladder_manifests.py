@@ -155,6 +155,17 @@ def render(model: str, rung: int, base_text: str) -> str:
                  rf"\1rm -f /cephfs/checkpoints/ladder/{model}_r{rung}/*.pt.tmp",
                  out, flags=re.M)
 
+    # Strip vestigial RWO PVC mounts (training-data, training-checkpoints).
+    # Ladder checkpoints live on cephfs (RWX); the RWO volumes only supplied
+    # the /data weight cache, and an RWO volume held by the dashboard on
+    # p02r08srv01 Multi-Attach-blocks any ladder pod scheduled elsewhere
+    # (ladder-r1-prithvi600m sat in ContainerCreating exactly this way).
+    # Weights fall back to the HF download path the manifests already handle.
+    for vol in ("training-data", "training-checkpoints"):
+        out = re.sub(
+            rf"^\s*- name: {vol}\n(?:\s+(?:mountPath|readOnly|persistentVolumeClaim|claimName):[^\n]*\n)+",
+            "", out, flags=re.M)
+
     # Identity: name + selectable labels (by rung, by model, or both).
     out = re.sub(r"^  name: \S+$", f"  name: {job}", out, count=1, flags=re.M)
     out = _set_labels(out, rung, model)
