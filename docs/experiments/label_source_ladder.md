@@ -46,6 +46,13 @@ straight. Rungs 3 and 4 are the two **refinements** we add on top. Reading rung
 
 ### Controls
 
+- **One cohort, all rungs** (decided 2026-08-29). Every rung trains on exactly
+  the tiles that have an NMD2023 sidecar (~94.5% coverage). Rungs 2–4 land
+  there anyway via `--label-dir`; rung 1 reads the in-tile label and would
+  otherwise see the full superset, so it carries an explicit
+  `--cohort-dir /cephfs/nmd2023_labels` gate. The gate filters the tile set
+  without becoming a label source. Without it, `rung 2 − rung 1` would mix a
+  label change with a cohort change.
 - **Cold start everywhere.** `--warm-start-from` is dropped on every rung,
   including Prithvi-600M. The existing `v8b-nmd2023-long` result (0.4892) is
   *not* a rung-2 cell: it warm-starts from an earlier NMD2023 checkpoint, so it
@@ -90,23 +97,35 @@ The known result is that a rung-1 student (0.463) beats its own teacher
 ladder asks whether that survives a better teacher, and whether the NFI head
 pushes past NMD2023's own 0.493.
 
-## Ordering dependency — rung 3 cannot start early
+## Rung 3 is self-distillation — six chains, not one
 
-The rung-3/4 labels in `/cephfs/nmd2023_distill_labels` are produced by
-`distill_forest_labels.py` **from a rung-2 checkpoint** — it hooks that model's
-256-dim pre-classifier features. The sidecars currently on disk came from the
-*old, pre-phenology-repair* `v8b_nmd2023_long`, so they distil a teacher that no
-longer exists.
+**Decided 2026-08-29: each backbone distils its own rung-2 features** ("that
+distinguish them more"). Rung 3 therefore measures *this backbone's* capacity to
+refine *its own* learned representation with NFI field truth — a per-model
+property that separates the field further — rather than one shared teacher's
+signal replayed into six students.
 
-**Hard order:** rung 2 completes → regenerate the distill head
-(`train_distill_head.py`) and sidecars (`distill-forest-labels-job.yaml`) from
-the new rung-2 checkpoint → rungs 3 and 4 may start.
+The consequence is a **per-column dependency chain**, not a global barrier:
 
-Open question to settle before rung 3: **which** rung-2 checkpoint is the
-teacher — Prithvi-600M (highest capacity, the historical choice) or each
-backbone distilling from itself? Self-distillation would make rung 3 a
-per-model result rather than a shared-teacher one. Recommendation: one shared
-600M teacher, so rung 3 measures *the same* refinement for every backbone.
+    r2(X) ─→ train_distill_head(X) ─→ distill_forest_labels(X) ─→ r3(X), r4(X)
+
+Column X can be walking rung 3 while column Y is still on rung 2. Each model's
+sidecars live in `/cephfs/distill/<model>_r2/`, so no column can read another's.
+
+The existing `/cephfs/nmd2023_distill_labels` is **retired for ladder purposes**
+— it distils the pre-phenology-repair `v8b_nmd2023_long`, a teacher that no
+longer exists. Nothing in `k8s/ladder/` points at it.
+
+**Cost of the decision:** six distill-head trainings (CPU, cheap) and six dense
+distillation passes (GPU, ~1 h each) instead of one — about +6 h of GPU across
+the campaign, and six sidecar sets on the PVC instead of one. Worth checking
+free space before rung 3 starts.
+
+**What it costs scientifically:** rung 3 is no longer comparable *across*
+backbones as "the same refinement" — each column got a different teacher. The
+`3 − 2` delta stays a valid within-column measurement (does self-distillation
+help *this* model?), but a claim like "CROMA distils better than Clay" would
+confound refinement quality with rung-2 quality. Report it as within-column.
 
 ## Cost
 
@@ -121,9 +140,12 @@ GPUs are not the constraint — 6 of 8 H100 would suffice; memory quota is.
 
 1. **Rungs 1 and 2 interleaved** (12 runs). No data dependencies; both teachers
    already exist on the PVC. Pack by memory, largest first.
-2. **Regenerate the distill head + sidecars** from the chosen rung-2 checkpoint.
-   Verify sidecar count matches the tile count before proceeding.
-3. **Rungs 3 and 4 interleaved** (12 runs).
+2. **Per column, as its rung 2 lands:** train that backbone's distill head
+   (`train_distill_head.py`), then its dense sidecars
+   (`distill_forest_labels.py` → `/cephfs/distill/<model>_r2/`). Verify the
+   sidecar count matches the cohort count before that column proceeds.
+3. **Rungs 3 and 4 for that column** (12 runs total across the six columns).
+   Columns advance independently — no global barrier.
 4. **Score every checkpoint** through the cached two-stage eval
    (`infer_tiles.py` → `score_against_truth.py`), then
    `model_race_standings.py` for the NFI ranking and the LUCAS cross-check.
@@ -143,12 +165,6 @@ non-ladder checkpoint dirs.
 
 ## Risks
 
-- **Rung 1 tile coverage.** The in-tile 23-class labels exist for every tile by
-  construction; the NMD2023 sidecars cover ~94.5% (basskikt v2.1 coverage). Rung
-  1 therefore trains on a *superset* of rungs 2–4. Either accept it and report
-  the counts, or restrict all rungs to the sidecar-covered intersection. **This
-  needs a decision before launch** — recommendation: restrict, so the ladder
-  varies one thing.
 - **CROMA/TerraMind SAR subset.** Both require `s1_vv_vh` (~6011/7882 tiles),
   so their columns are a smaller cohort than the other four at every rung.
   Comparable down a column, not across.

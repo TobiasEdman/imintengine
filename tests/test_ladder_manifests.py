@@ -17,7 +17,9 @@ import pytest
 yaml = pytest.importorskip("yaml")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.gen_ladder_manifests import BASES, EPOCHS, OUT_DIR, RUNGS  # noqa: E402
+from scripts.gen_ladder_manifests import (  # noqa: E402
+    BASES, COHORT_DIR, EPOCHS, OUT_DIR, RUNGS,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -48,9 +50,37 @@ def test_rung_encodes_its_label_source(model, rung, path):
     if label_dir is None:
         assert "--label-dir" not in args, "rung 1 must use the in-tile label"
     else:
-        assert f"--label-dir {label_dir}" in args
+        assert f"--label-dir {label_dir.format(model=model)}" in args
     assert ("--frac-dir" in args) is with_frac
     assert f"--num-classes {num_classes}" in args
+
+
+@pytest.mark.parametrize("model,rung,path", list(_manifests()),
+                         ids=lambda v: v if isinstance(v, (str, int)) else "")
+def test_cohort_is_identical_across_rungs(model, rung, path):
+    """All four rungs must train on the same tiles, or a delta is confounded.
+
+    Rungs 2-4 land on the NMD2023 sidecar set via --label-dir. Rung 1 reads
+    the in-tile label and would otherwise see the full superset, so it must
+    carry the explicit --cohort-dir gate.
+    """
+    args = _flag_args(yaml.safe_load(path.read_text()))
+    if rung == 1:
+        assert f"--cohort-dir {COHORT_DIR}" in args, "rung 1 cohort not pinned"
+    else:
+        assert f"--label-dir" in args
+
+
+@pytest.mark.parametrize("model", sorted(BASES))
+def test_rung3_and_4_self_distil(model):
+    """Rung 3/4 read THIS backbone's own distillation, not a shared pool."""
+    for rung in (3, 4):
+        path = OUT_DIR / f"ladder-r{rung}-{model}-job.yaml"
+        args = _flag_args(yaml.safe_load(path.read_text()))
+        assert f"--label-dir /cephfs/distill/{model}_r2" in args
+        for other in BASES:
+            if other != model:
+                assert f"/cephfs/distill/{other}_r2" not in args
 
 
 @pytest.mark.parametrize("model,rung,path", list(_manifests()),

@@ -961,6 +961,7 @@ class UnifiedDataset(Dataset):
         model_keys: tuple[str, ...] = (),
         aux_channel_names: Sequence[str] | None = None,
         label_dir: str | Path | None = None,
+        cohort_dir: str | Path | None = None,
         frac_dir: str | Path | None = None,
         era5_dir: str | Path | None = None,
         era5_mode: str = "off",
@@ -988,6 +989,11 @@ class UnifiedDataset(Dataset):
         # <label_dir>/<tile_name>.npz per tile; spectral/aux/temporal/coords
         # still come from the source tile. None → byte-identical legacy path.
         self.label_dir = Path(label_dir) if label_dir is not None else None
+        # Optional cohort gate: restrict the tile set to names present in this
+        # directory WITHOUT reading labels from it. Lets two runs on different
+        # label sources train on an identical tile set — see the gate loop
+        # below. None → no cohort restriction.
+        self.cohort_dir = Path(cohort_dir) if cohort_dir is not None else None
         # Optional Trädslag fraction sidecar directory. When set, each sample
         # carries `frac` (K,H,W) target crown-cover in [0,1] and `frac_mask`
         # (H,W) — 1 where supervision applies. Tiles without a frac sidecar
@@ -1054,22 +1060,28 @@ class UnifiedDataset(Dataset):
         self._load_tile_list(lulc_dir, "lulc", split)
         self._load_tile_list(crop_dir, "crop", split)
 
-        # Drop tiles whose label sidecar is missing so training never crashes
-        # mid-epoch on an absent sidecar. Done at construction; logged.
-        if self.label_dir is not None:
-            kept: list[dict] = []
-            dropped = 0
-            for e in self._entries:
-                if (self.label_dir / e["name"]).exists():
-                    kept.append(e)
-                else:
-                    dropped += 1
-            self._entries = kept
+        # Restrict the tile set. Two independent gates, both applied at
+        # construction and logged:
+        #
+        #   label_dir  — a missing sidecar would crash mid-epoch, so drop it.
+        #   cohort_dir — hold the COHORT constant across runs that read
+        #                DIFFERENT label sources. The label-source ladder
+        #                (docs/experiments/label_source_ladder.md) needs this:
+        #                rung 1 reads the in-tile 23-class label, but must see
+        #                exactly the tiles rungs 2-4 can see, or a rung delta
+        #                would mix a label change with a cohort change. The
+        #                NMD2023 sidecars cover ~94.5% of tiles, so without
+        #                this gate rung 1 trains on a superset.
+        for gate, reason in ((self.label_dir, "missing sidecar"),
+                             (self.cohort_dir, "outside cohort")):
+            if gate is None:
+                continue
+            kept = [e for e in self._entries if (gate / e["name"]).exists()]
             logger.info(
-                "UnifiedDataset[%s]: label_dir=%s — kept %d tiles, "
-                "dropped %d with missing sidecar",
-                split, self.label_dir, len(kept), dropped,
+                "UnifiedDataset[%s]: gate=%s — kept %d tiles, dropped %d (%s)",
+                split, gate, len(kept), len(self._entries) - len(kept), reason,
             )
+            self._entries = kept
 
         # Drop tiles that lack a required key for the active backbone so
         # __getitem__ never KeyErrors mid-epoch. The constraining key is

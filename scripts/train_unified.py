@@ -82,6 +82,15 @@ def main():
              "source tile (legacy, byte-identical).",
     )
     parser.add_argument(
+        "--cohort-dir", type=str, default=None,
+        help="Optional cohort gate: restrict training to tiles that have an "
+             "entry in this directory, WITHOUT reading labels from it. Holds "
+             "the tile set constant across runs that use different label "
+             "sources — the label-source ladder passes the NMD2023 sidecar "
+             "dir here on its rung-1 (in-tile label) runs so all rungs share "
+             "one cohort. Default None → no restriction.",
+    )
+    parser.add_argument(
         "--era5-dir", type=str, default=None,
         help="Optional directory with per-tile ERA5-Land .npz sidecars.",
     )
@@ -464,6 +473,7 @@ def main():
         num_temporal_frames=config.num_temporal_frames,
         aux_channel_names=aux_names,
         label_dir=args.label_dir,
+        cohort_dir=args.cohort_dir,
         frac_dir=args.frac_dir,
         era5_dir=args.era5_dir,
         era5_mode=args.era5_mode,
@@ -482,6 +492,7 @@ def main():
         num_temporal_frames=config.num_temporal_frames,
         aux_channel_names=aux_names,
         label_dir=args.label_dir,
+        cohort_dir=args.cohort_dir,
         frac_dir=args.frac_dir,
         era5_dir=args.era5_dir,
         era5_mode=args.era5_mode,
@@ -550,6 +561,8 @@ def main():
                     num_temporal_frames=config.num_temporal_frames,
                     aux_channel_names=aux_names,
                     label_dir=args.label_dir,
+                    cohort_dir=args.cohort_dir,
+        cohort_dir=args.cohort_dir,
                     frac_dir=args.frac_dir,
                     era5_dir=args.era5_dir,
                     era5_mode=args.era5_mode,
