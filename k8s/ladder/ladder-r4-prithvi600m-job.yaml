@@ -62,6 +62,7 @@ spec:
               python /workspace/imintengine/scripts/train_unified.py \
                 --backbone-name prithvi_600m \
                 --data-dirs /cephfs/unified_v2_512 \
+                --enable-markfukt \
                 --label-dir /cephfs/distill/prithvi600m_r2 \
                 --frac-dir /cephfs/tradslag_fracs \
                 --checkpoint-dir /cephfs/checkpoints/ladder/prithvi600m_r4 \

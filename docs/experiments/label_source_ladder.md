@@ -58,6 +58,16 @@ straight. Rungs 3 and 4 are the two **refinements** we add on top. Reading rung
   no-op in practice — kept as by-construction protection in case the sidecar
   set ever shrinks. Verified in-run: rung-1 600M logs `Train: 7057, Val: 825`
   = 7,882.
+- **Soil moisture ON everywhere** (decided 2026-08-29). `--enable-markfukt`
+  (SLU Markfuktighetskarta, the 11th aux) is opt-in in the trainer and was
+  absent from all six base manifests, so the first launch trained a 10-aux
+  model. The only matched pre-ladder pair puts it at **~+0.018 mIoU** —
+  `v8b_markfukt` (on, 15 epochs) 0.5527 vs `unified_v8b_full7882_e20` (off,
+  20 epochs) 0.5352, i.e. better on five *fewer* epochs, which makes the
+  estimate conservative. That is ~4× the VPP-repair effect. Holding it off
+  would still isolate label source, but every cell would be a model not worth
+  shipping. Note the channel has genuine SLU coverage gaps on some tiles;
+  that is real nodata, not a fetch bug.
 - **Cold start everywhere.** `--warm-start-from` is dropped on every rung,
   including Prithvi-600M. The existing `v8b-nmd2023-long` result (0.4892) is
   *not* a rung-2 cell: it warm-starts from an earlier NMD2023 checkpoint, so it

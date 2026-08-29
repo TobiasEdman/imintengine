@@ -154,6 +154,7 @@ spec:
           python /workspace/imintengine/scripts/train_unified.py \
             --backbone-name terramind_v1_base \
             --data-dirs /cephfs/unified_v2_512 \
+            --enable-markfukt \
             --label-dir /cephfs/distill/terramind_r2 \
             --frac-dir /cephfs/tradslag_fracs \
             --enable-tradslag-head \

@@ -18,7 +18,7 @@ yaml = pytest.importorskip("yaml")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.gen_ladder_manifests import (  # noqa: E402
-    BASES, COHORT_DIR, EPOCHS, OUT_DIR, RUNGS,
+    BASES, COHORT_DIR, ENABLE_MARKFUKT, EPOCHS, OUT_DIR, RUNGS,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -90,6 +90,10 @@ def test_controls_are_held_constant(model, rung, path):
     args = _flag_args(doc)
     assert "--warm-start-from" not in args, "every rung must cold-start"
     assert f"--epochs {EPOCHS}" in args, "epochs must not vary across the ladder"
+    # markfukt is opt-in in the trainer; a manifest that silently drops it
+    # trains an 11th-aux-less model and is not comparable to the rest.
+    assert ("--enable-markfukt" in args) is ENABLE_MARKFUKT, \
+        "soil-moisture aux must be uniform across the ladder"
 
 
 @pytest.mark.parametrize("model,rung,path", list(_manifests()),
