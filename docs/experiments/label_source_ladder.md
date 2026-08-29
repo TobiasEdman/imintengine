@@ -47,12 +47,17 @@ straight. Rungs 3 and 4 are the two **refinements** we add on top. Reading rung
 ### Controls
 
 - **One cohort, all rungs** (decided 2026-08-29). Every rung trains on exactly
-  the tiles that have an NMD2023 sidecar (~94.5% coverage). Rungs 2–4 land
-  there anyway via `--label-dir`; rung 1 reads the in-tile label and would
-  otherwise see the full superset, so it carries an explicit
-  `--cohort-dir /cephfs/nmd2023_labels` gate. The gate filters the tile set
-  without becoming a label source. Without it, `rung 2 − rung 1` would mix a
-  label change with a cohort change.
+  the tiles that have an NMD2023 sidecar. Rungs 2–4 land there anyway via
+  `--label-dir`; rung 1 reads the in-tile label and would otherwise be free to
+  diverge, so it carries an explicit `--cohort-dir /cephfs/nmd2023_labels`
+  gate. The gate filters the tile set without becoming a label source.
+  **Measured at launch (2026-08-29):** the sidecar dir holds 7,882/7,882 tiles
+  — the label builder wrote a sidecar for every tile (the ~94.5% figure was
+  the NMD2023 *raster's* geographic coverage, with outside pixels
+  background-filled). The cohort is therefore the full set and the gate is a
+  no-op in practice — kept as by-construction protection in case the sidecar
+  set ever shrinks. Verified in-run: rung-1 600M logs `Train: 7057, Val: 825`
+  = 7,882.
 - **Cold start everywhere.** `--warm-start-from` is dropped on every rung,
   including Prithvi-600M. The existing `v8b-nmd2023-long` result (0.4892) is
   *not* a rung-2 cell: it warm-starts from an earlier NMD2023 checkpoint, so it
