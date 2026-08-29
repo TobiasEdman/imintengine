@@ -97,6 +97,21 @@ def test_successful_archive_then_delete_and_run_report(monkeypatch, tmp_path):
     assert "deleted train-x" in reports[0].read_text()
 
 
+def test_job_scope_excludes_other_due_jobs(monkeypatch, tmp_path):
+    """--job restricts deletion to exactly the named Jobs."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(reap, "_kubectl", _fake_kubectl_factory(calls))
+    other = {"job": "train-other", "pod": "train-other-zzz99", "phase": "Failed",
+             "gpus": 1, "age_min": 500.0}
+    monkeypatch.setattr(reap, "collect", lambda *a: ([dict(DUE[0]), other], [], 2))
+    monkeypatch.setattr("sys.argv", ["reap_gpu_jobs.py", "--apply",
+                                     "--grace-minutes", "0",
+                                     "--job", "train-x",
+                                     "--archive-dir", str(tmp_path / "archive")])
+    assert reap.main() == 0
+    assert _deletes(calls) == [["delete", "job", "train-x", "--wait=false"]]
+
+
 def test_dry_run_touches_nothing(monkeypatch, tmp_path):
     calls = _run_main(monkeypatch, tmp_path, apply=False)
     assert _deletes(calls) == []
