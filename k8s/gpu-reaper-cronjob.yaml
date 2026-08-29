@@ -34,6 +34,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "events"]
     verbs: ["get", "list"]
+  # pods/log: the reaper must archive a job's logs BEFORE deleting it —
+  # deletion cascades to pods and destroyed the only failure evidence twice
+  # (ERA5 control 2026-08-27, wave-1 retrain 2026-08-29).
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "delete"]
@@ -92,7 +98,7 @@ spec:
                     "https://dl.k8s.io/release/${KV}/bin/linux/amd64/kubectl"
                   chmod +x /usr/local/bin/kubectl
                   git clone --quiet --depth 1 \
-                    --branch agent/te/opus/nfi-nmd2023-benchmark \
+                    --branch agent/te/fable/version-cluster-manifests \
                     https://github.com/TobiasEdman/ImintEngine.git /w
                   cd /w
                   echo "CLONED HEAD: $(git rev-parse --short HEAD)"
@@ -100,12 +106,21 @@ spec:
                   # 60 min grace: long enough that a just-finished run's logs are
                   # still readable, short enough that a slot is never idle for a
                   # shift. --apply, because a report nobody reads is what let the
-                  # 132 h squatter survive.
+                  # 132 h squatter survive. Every deletion archives the job's
+                  # logs/spec/events to --archive-dir FIRST and is refused if
+                  # that fails; the run report is written there too, because
+                  # this pod's own 30 min TTL destroys its stdout.
                   python3 scripts/reap_gpu_jobs.py \
                     --context "" \
                     --namespace prithvi-training-default \
                     --grace-minutes 60 \
+                    --archive-dir /cephfs/ops/reaper_archive \
                     --apply
               resources:
                 requests: {cpu: "200m", memory: "256Mi"}
                 limits:   {cpu: "200m", memory: "256Mi"}
+              volumeMounts:
+                - { name: cephfs, mountPath: /cephfs }
+          volumes:
+            - name: cephfs
+              persistentVolumeClaim: { claimName: training-data-cephfs }
