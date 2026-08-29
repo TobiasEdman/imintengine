@@ -89,13 +89,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # sweet spot (plan §Budget).
 MAX_SCENES = 3
 NODATA_THRESHOLD = 0.10
-# 4: composited over the LABEL year (year-0). v3 derived the year from
-# dates[0] — the autumn frame of year-1 — so every tile without lpis_year got
-# a wrong-season composite. The bump is what forces re-enrichment: the skip
-# below keys on this value, so v3 tiles would otherwise be skipped and keep
-# their wrong-year data. The CROMA/TerraMind preflights gate on ==4, which
-# makes the retrains refuse to start until re-enrichment has run.
-S1_ENRICH_VERSION = 4
+# The version marker is shared with the UnifiedDataset gate — bump it in
+# imint/training/s1_enrichment.py (version history documented there). The
+# skip below keys on this value, so older tiles are re-enriched rather than
+# kept, and the CROMA/TerraMind dataset gate refuses tiles that predate it.
+from imint.training.s1_enrichment import S1_ENRICH_VERSION
 
 # Per-backend module + stored-units + provenance. pc-rtc stores LINEAR γ⁰
 # (the CROMA/TerraMind normalizers apply 10*log10 internally — storing dB

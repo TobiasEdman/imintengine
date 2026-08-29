@@ -68,6 +68,7 @@ from .era5_aux import (
     era5_grid_context,
     format_era5_cell_id,
 )
+from .s1_enrichment import S1_ENRICH_VERSION
 from .tile_bbox import resolve_tile_bbox
 from .tile_config import TileConfig
 from .tile_time import (
@@ -1079,12 +1080,13 @@ class UnifiedDataset(Dataset):
         required = set()
         for k in self.model_keys:
             required.update(self._MODEL_REQUIRED_TILE_KEYS.get(k, ()))
-        # SAR models (CROMA/TerraMind) require the v3 RTC γ⁰ season composite;
-        # an older v1 ±3-day (T*2,H,W) stack or a v2 CDSE-dB composite under
-        # the same `s1_vv_vh` key is a silent trap (wrong shape / wrong units).
-        # Gate on `s1_enrich_v==3` at index time so pre-v3 leftovers are
-        # dropped here (logged) instead of raising mid-epoch in __getitem__.
-        needs_sar_v3 = bool(
+        # SAR models (CROMA/TerraMind) require the CURRENT RTC γ⁰ season
+        # composite; anything older under the same `s1_vv_vh` key is a silent
+        # trap (v1/v2: wrong shape / wrong units; v3: wrong composite year —
+        # see imint/training/s1_enrichment.py). Gate on the shared version at
+        # index time so stale tiles are dropped here (logged) instead of
+        # raising mid-epoch in __getitem__.
+        needs_sar_gate = bool(
             {"croma_base", "terramind_v1_base"} & set(self.model_keys)
         )
         if required:
@@ -1098,9 +1100,9 @@ class UnifiedDataset(Dataset):
                         if not required.issubset(present):
                             dropped += 1
                             continue
-                        if needs_sar_v3 and int(z["s1_enrich_v"].item()
-                                                if "s1_enrich_v" in present
-                                                else 0) != 3:
+                        if needs_sar_gate and int(z["s1_enrich_v"].item()
+                                                  if "s1_enrich_v" in present
+                                                  else 0) != S1_ENRICH_VERSION:
                             dropped_old_s1 += 1
                             continue
                 except Exception:
@@ -1111,10 +1113,10 @@ class UnifiedDataset(Dataset):
             logger.info(
                 "UnifiedDataset[%s]: model_keys=%s require tile keys %s — "
                 "kept %d tiles, dropped %d missing a required key, "
-                "dropped %d with s1_enrich_v!=3 (pre-v3 S1 — re-run "
+                "dropped %d with s1_enrich_v!=%d (stale S1 — re-run "
                 "enrich_tiles_s1.py --s1-backend pc-rtc)",
                 split, self.model_keys, sorted(required),
-                len(kept), dropped, dropped_old_s1,
+                len(kept), dropped, dropped_old_s1, S1_ENRICH_VERSION,
             )
 
         # Apply any smoke limit only after label/model eligibility filtering,
@@ -1990,19 +1992,20 @@ class UnifiedDataset(Dataset):
                 b01=b01_frame, b09=b09_frame,
             ).astype(np.float32)  # (12, H, W)
 
-        # SAR (VV/VH) for CROMA joint + TerraMind S1GRD. v3 layout is a single
-        # per-orbit growing-season median composite (2, H, W) in **linear** γ⁰
-        # (RTC, PC) per scripts/enrich_tiles_s1.py — a direct read, no frame
-        # selection. The normalizer log-transforms internally, so the stored
-        # composite must be linear. Older v1 (±3-day (T*2,H,W)) and v2
-        # (CDSE-dB) layouts are a hard break: require s1_enrich_v==3 and fail
-        # loud rather than feed a mis-shaped or double-logged stack to the
-        # SAR encoders.
+        # SAR (VV/VH) for CROMA joint + TerraMind S1GRD. Current layout is a
+        # single per-orbit growing-season median composite (2, H, W) in
+        # **linear** γ⁰ (RTC, PC) per scripts/enrich_tiles_s1.py — a direct
+        # read, no frame selection. The normalizer log-transforms internally,
+        # so the stored composite must be linear. Older stamps are a hard
+        # break (v1/v2: shape/units, v3: wrong composite year — see
+        # imint/training/s1_enrichment.py); fail loud rather than feed a
+        # mis-shaped, double-logged, or wrong-season stack to the SAR
+        # encoders.
         if needs_sar:
             s1_ver = int(data.get("s1_enrich_v", 0))
-            if s1_ver != 3:
+            if s1_ver != S1_ENRICH_VERSION:
                 raise KeyError(
-                    f"tile requires s1_enrich_v==3 RTC γ⁰ season composite for "
+                    f"tile requires s1_enrich_v=={S1_ENRICH_VERSION} RTC γ⁰ season composite for "
                     f"model_keys={sorted(set(self.model_keys) & {'croma_base', 'terramind_v1_base'})}"
                     f" but found s1_enrich_v={s1_ver}. Re-run the S1 season "
                     f"enrichment job (scripts/enrich_tiles_s1.py "
