@@ -25,6 +25,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+from imint.training.s1_enrichment import S1_ENRICH_VERSION
 from imint.training.unified_dataset import UnifiedDataset
 from imint.fm.forward_router import family_forward
 
@@ -67,7 +68,7 @@ def _write_tile(path, *, with_s1: bool, with_b01_b09: bool = True):
         data["s1_orbit"] = np.bytes_("DESCENDING")
         data["s1_source"] = np.bytes_("pc-rtc-gamma0")
         data["has_s1"] = np.int32(1)
-        data["s1_enrich_v"] = np.int32(3)
+        data["s1_enrich_v"] = np.int32(S1_ENRICH_VERSION)
     np.savez_compressed(str(path), **data)
 
 
@@ -89,7 +90,7 @@ def _write_tile_nan_s1(path):
         easting=np.float32(500000.0), northing=np.float32(6500000.0),
         s1_vv_vh=s1, s1_orbit=np.bytes_("DESCENDING"),
         s1_source=np.bytes_("pc-rtc-gamma0"),
-        has_s1=np.int32(1), s1_enrich_v=np.int32(3),
+        has_s1=np.int32(1), s1_enrich_v=np.int32(S1_ENRICH_VERSION),
     )
 
 

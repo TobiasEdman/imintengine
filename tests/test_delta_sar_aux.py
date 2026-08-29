@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 
 from imint.training.config import TrainingConfig
+from imint.training.s1_enrichment import S1_ENRICH_VERSION
 from imint.training.unified_dataset import (
     AUX_NORM,
     UnifiedDataset,
@@ -146,7 +147,7 @@ def _write_tile(path, *, with_2016: bool, harvest: bool = False):
         doy=np.array([260, 130, 190, 220], dtype=np.float32),
         year=np.int32(2022),
         easting=np.float32(500000.0), northing=np.float32(6500000.0),
-        s1_vv_vh=season, s1_enrich_v=np.int32(3),
+        s1_vv_vh=season, s1_enrich_v=np.int32(S1_ENRICH_VERSION),
         s1_orbit=np.bytes_("DESCENDING"), s1_source=np.bytes_("pc-rtc-gamma0"),
     )
     if with_2016:

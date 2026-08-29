@@ -24,6 +24,7 @@ import pytest
 
 from imint.training import cdse_s1_stac as stac
 from imint.training import s1_shared
+from imint.training.s1_enrichment import S1_ENRICH_VERSION
 
 
 # ── Fake STAC item ────────────────────────────────────────────────────────
@@ -401,8 +402,8 @@ def test_dataset_faildloud_on_v1_sar_read():
         ds._build_model_specific_tensors(data, source="lulc")
 
 
-def test_dataset_reads_v3_composite():
-    """A v3 tile (s1_enrich_v==3, (2,H,W) linear-γ⁰ composite) reads directly."""
+def test_dataset_reads_current_composite():
+    """A current-version tile ((2,H,W) linear-γ⁰ composite) reads directly."""
     from imint.training.unified_dataset import UnifiedDataset
 
     data = {
@@ -411,7 +412,7 @@ def test_dataset_reads_v3_composite():
         "doy": np.array([150, 180, 210, 240], dtype=np.int32),
         # Linear γ⁰ (RTC) — the normalizer log-transforms this internally.
         "s1_vv_vh": np.full((2, 32, 32), 0.05, dtype=np.float32),
-        "s1_enrich_v": np.int32(3),
+        "s1_enrich_v": np.int32(S1_ENRICH_VERSION),
     }
     ds = UnifiedDataset.__new__(UnifiedDataset)
     ds.model_keys = ("terramind_v1_base",)

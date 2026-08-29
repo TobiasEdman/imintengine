@@ -32,6 +32,7 @@ import json
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 TERMINAL = ("Succeeded", "Failed")
 
@@ -116,6 +117,51 @@ def collect(context: str, namespace: str, selector: str | None) -> tuple[list, l
     return reapable, stuck, held
 
 
+def archive_evidence(job: str, context: str, namespace: str, root: Path) -> Path | None:
+    """Persist everything the cluster still knows about *job*, before deletion.
+
+    Returns the archive directory on success, None on ANY failure — and the
+    caller must then leave the Job alone. Deleting a Job cascades to its pods
+    and their logs. Twice that cascade destroyed the only evidence of why a
+    run ended: the ERA5 control's per-class IoU (2026-08-27) and the wave-1
+    train-prithvi300m/train-croma-v3 failures (2026-08-29), where nothing
+    remained but old checkpoint mtimes. Deletion without archived evidence is
+    therefore forbidden, not merely discouraged.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    dest = root / f"{job}-{stamp}"
+    try:
+        dest.mkdir(parents=True, exist_ok=False)
+        (dest / "job.yaml").write_text(
+            _kubectl(["get", "job", job, "-o", "yaml"], context, namespace))
+        pods = json.loads(_kubectl(
+            ["get", "pods", "-l", f"job-name={job}", "-o", "json"],
+            context, namespace))["items"]
+        (dest / "pods.json").write_text(json.dumps(pods, indent=1))
+        events = [_kubectl(
+            ["get", "events", "--field-selector", f"involvedObject.name={job}"],
+            context, namespace)]
+        for p in pods:
+            name = p["metadata"]["name"]
+            (dest / f"{name}.log").write_text(_kubectl(
+                ["logs", name, "--all-containers", "--timestamps"],
+                context, namespace))
+            try:
+                (dest / f"{name}.previous.log").write_text(_kubectl(
+                    ["logs", name, "--all-containers", "--previous"],
+                    context, namespace))
+            except RuntimeError:
+                pass  # no restarted container — the normal case
+            events.append(_kubectl(
+                ["get", "events", "--field-selector", f"involvedObject.name={name}"],
+                context, namespace))
+        (dest / "events.txt").write_text("\n".join(events))
+        return dest
+    except (RuntimeError, OSError) as exc:  # noqa: BLE001 — any miss forbids deletion
+        print(f"  EVIDENCE ARCHIVE FAILED for {job}: {exc}")
+        return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--context", default="icekube")
@@ -123,6 +169,9 @@ def main() -> int:
     ap.add_argument("--selector", default=None, help="label selector to scope the sweep")
     ap.add_argument("--grace-minutes", type=float, default=30.0,
                     help="leave finished jobs alone this long so logs stay readable")
+    ap.add_argument("--archive-dir", type=Path, default=Path("/cephfs/ops/reaper_archive"),
+                    help="evidence archive root; no delete ever happens without a "
+                         "successful archive here")
     ap.add_argument("--apply", action="store_true", help="actually delete (default: report)")
     args = ap.parse_args()
 
@@ -149,15 +198,42 @@ def main() -> int:
         return 0
 
     freed = 0
+    report = [f"reap run {datetime.now(timezone.utc).isoformat()} — "
+              f"{len(due)} due, {held} GPU slot(s) held by finished jobs"]
     for r in due:
+        dest = archive_evidence(r["job"], args.context, args.namespace,
+                                args.archive_dir)
+        if dest is None:
+            msg = (f"SKIPPED {r['job']} ({r['phase']}) — refusing to delete "
+                   f"without archived evidence")
+            print(f"  {msg}")
+            report.append(msg)
+            continue
         try:
             _kubectl(["delete", "job", r["job"], "--wait=false"],
                      args.context, args.namespace)
             freed += r["gpus"]
-            print(f"  deleted {r['job']}")
+            msg = f"deleted {r['job']} ({r['phase']}) — evidence in {dest}"
+            print(f"  {msg}")
+            report.append(msg)
         except RuntimeError as exc:  # noqa: BLE001 — one failure must not stop the sweep
-            print(f"  FAILED {r['job']}: {exc}")
+            msg = f"DELETE FAILED {r['job']}: {exc}"
+            print(f"  {msg}")
+            report.append(msg)
     print(f"\nfreed {freed} GPU slot(s)")
+    report.append(f"freed {freed} GPU slot(s)")
+
+    # The reaper's own pod TTLs away 30 min after it runs, taking this stdout
+    # with it — which is how the overnight sweeps of 2026-08-29 left no record
+    # of WHAT they deleted. The run report therefore lives on the PVC too.
+    try:
+        runs = args.archive_dir / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        (runs / f"{stamp}.txt").write_text("\n".join(report) + "\n")
+    except OSError as exc:
+        print(f"run-report write failed (deletions above were still "
+              f"individually archived): {exc}")
     return 0
 
 

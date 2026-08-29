@@ -1,0 +1,99 @@
+---
+# How many of the 384 ERA5 cells were served by the ERA5 fallback?
+#
+# ERA5-Land has no ocean coverage, so coastal/marine cells fall back to the
+# plain ERA5 reanalysis (98f2dbb). That fallback is what has broken five
+# separate grid validators in a row. The decision now is whether to keep
+# relaxing those checks — including one in unified_dataset.py, which every
+# model's training path uses — or to rebuild the cohort without the affected
+# cells, which touches no sealed code at all.
+#
+# That choice turns on a number nobody has measured: how many cells fell back,
+# and how many of those are CROP tiles. Both observed failures were
+# crop_havre_* on the southern coast, and havre already appears in only 19 of
+# 128 val tiles — so dropping fallback cells could strip a meaningful share of
+# the cereal signal the whole ERA5 question is about.
+#
+# A sidecar fell back iff its recorded land cell equals the ERA5 0.25 deg
+# atmosphere cell rather than the ERA5-Land 0.1 deg cell. Both are stored in
+# the sidecar, so this is a pure read of files already on disk.
+#
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/audit-era5-fallback-count-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-era5-fallback-count
+  namespace: prithvi-training-default
+  labels: {app: ensemble-prep, purpose: audit-era5-fallback-count}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 2700
+  template:
+    metadata:
+      labels: {app: ensemble-prep, purpose: audit-era5-fallback-count}
+    spec:
+      restartPolicy: Never
+      # training-checkpoints is ReadWriteOnce — must land on the node already
+      # holding it, or the pod hangs in ContainerCreating until its deadline.
+      nodeSelector:
+        kubernetes.io/hostname: p02r08srv01
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              pip install --quiet --no-cache-dir numpy 2>&1 | tail -1
+              python3 - <<'PY'
+              import glob, os, collections, numpy as np
+
+              root = ('/checkpoints/era5_smoke_prithvi600m/'
+                      'era5-p600m-20260826-d7222a0a32c4/era5')
+              files = sorted(glob.glob(os.path.join(root, '*.npz')))
+              print(f'sidecars: {len(files)}')
+              if not files:
+                  raise SystemExit('no sidecars found at ' + root)
+
+              fell_back, native, odd = [], [], []
+              for f in files:
+                  with np.load(f, allow_pickle=False) as d:
+                      try:
+                          ll = (round(float(d['era5_land_cell_lat']), 4),
+                                round(float(d['era5_land_cell_lon']), 4))
+                          aa = (round(float(d['era5_atmosphere_cell_lat']), 4),
+                                round(float(d['era5_atmosphere_cell_lon']), 4))
+                      except KeyError:
+                          odd.append(f); continue
+                  (fell_back if ll == aa else native).append(os.path.basename(f))
+
+              n = len(files)
+              print(f'  served by ERA5-Land (0.1 deg) : {len(native):4d}  '
+                    f'{len(native)/n*100:5.1f}%')
+              print(f'  served by ERA5 fallback       : {len(fell_back):4d}  '
+                    f'{len(fell_back)/n*100:5.1f}%')
+              if odd:
+                  print(f'  missing cell keys            : {len(odd)}')
+
+              # Which tile TYPES would be lost if fallback cells were dropped?
+              # crop_<class>_<e>_<n> keeps its class; everything else keys on
+              # its leading token (tile_/urban_/holdoutval_/numeric).
+              print('\nfallback cells by tile kind:')
+              for k, v in collections.Counter(
+                      (x.split('_')[0] + ('_' + x.split('_')[1]
+                       if x.startswith('crop_') else ''))
+                      for x in fell_back).most_common():
+                  print(f'    {k:22s} {v}')
+              print('\nsample fallback tiles:')
+              for x in fell_back[:12]:
+                  print(f'    {x}')
+              PY
+          resources:
+            requests: {cpu: "1", memory: "4Gi"}
+            limits:   {cpu: "1", memory: "4Gi"}
+          volumeMounts:
+            - {name: checkpoints, mountPath: /checkpoints, readOnly: true}
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim: {claimName: training-checkpoints}
