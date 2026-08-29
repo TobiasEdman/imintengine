@@ -562,7 +562,6 @@ def main():
                     aux_channel_names=aux_names,
                     label_dir=args.label_dir,
                     cohort_dir=args.cohort_dir,
-        cohort_dir=args.cohort_dir,
                     frac_dir=args.frac_dir,
                     era5_dir=args.era5_dir,
                     era5_mode=args.era5_mode,
