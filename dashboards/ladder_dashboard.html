@@ -28,6 +28,8 @@ thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color
 .pill.absent { background:#1f2937; color:#9ca3af; }
 .metric { font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; margin:3px 0 1px; }
 .metric.none { color:#4b5563; font-size:15px; font-weight:500; }
+.now { font-size:11.5px; color:#9ca3af; font-variant-numeric:tabular-nums; margin-bottom:2px; }
+.now .stat { color:#d1d5db; font-weight:600; }
 .meta { font-size:11px; color:#6b7280; font-variant-numeric:tabular-nums; }
 .bar { height:3px; background:#1f2937; border-radius:2px; margin-top:6px; overflow:hidden; }
 .bar > div { height:100%; background:#2563eb; }
@@ -129,6 +131,12 @@ function curve(log) {
                             .filter(p => typeof p.y === "number");
 }
 
+/** Most recent epoch's val mIoU — where the run is NOW, not its peak. */
+function latest(log) {
+  const c = curve(log);
+  return c.length ? c[c.length-1].y : null;
+}
+
 function sparkline(log, color) {
   const pts = curve(log);
   if (pts.length < 2) return "";
@@ -154,9 +162,18 @@ function renderMatrix() {
       const best = (log && typeof log.best_metric === "number" && log.best_metric > 0)
                     ? log.best_metric : null;
       const strokeC = st==="completed" ? "#4ade80" : st==="failed" ? "#f87171" : "#60a5fa";
+      const now = latest(log);
+      // "now" is the current epoch's val mIoU; best is the peak so far. On a
+      // healthy run they converge — a now well below best means the curve has
+      // turned over (overfitting / LR too high), which the peak alone hides.
+      const nowLine = now===null ? "" :
+        `<div class="now">now <span class="stat">${now.toFixed(4)}</span>` +
+        (best!==null && now < best - 0.0005
+          ? ` <span class="down">▼${(best-now).toFixed(4)}</span>` : "") + `</div>`;
       h += `<td><div class="cell ${st}">
               <span class="pill ${st}">${st==="absent"?"not started":st}</span>
               <div class="metric ${best===null?"none":""}">${best===null?"—":best.toFixed(4)}</div>
+              ${nowLine}
               <div class="meta">${st==="absent" ? "queued"
                    : `epoch ${done}/${TOTAL_EPOCHS}${log?.best_epoch?` · best @${log.best_epoch}`:""}`}</div>
               ${st==="absent" ? "" : `<div class="bar"><div style="width:${Math.min(100,done/TOTAL_EPOCHS*100)}%"></div></div>`}
@@ -245,6 +262,7 @@ function renderH2H() {
 
   const rows = [
     ["best mIoU", la?.best_metric, lb?.best_metric, true],
+    ["now mIoU", latest(la), latest(lb), true],
     ["best epoch", la?.best_epoch, lb?.best_epoch, false],
     ["epochs done", la?.epochs?.length, lb?.epochs?.length, false],
     ["status", la?.status, lb?.status, false],
