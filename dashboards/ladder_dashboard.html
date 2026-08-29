@@ -126,11 +126,14 @@ function state(log) {
   return "running";
 }
 
-// Two writers produce training_log.json with different key names — the
-// trainer's own log uses {best_metric, epochs[].metric_value} while the
-// live-progress log uses {best_miou, epochs[].val_miou}. Whichever wrote
-// last is what we get, so read both rather than render a live run as
-// "not started" (which is exactly what a one-schema reader did).
+// One writer, two shapes. trainer.py writes {best_metric, best_epoch,
+// config, epochs[].metric_value}; the dashboard SERVER then rewrites it at
+// request time via its normalize() (see k8s/training-dashboard-server.yaml)
+// into the legacy shape {best_miou, epochs[].val_miou, epochs[].total} that
+// the older dashboards expect, dropping best_epoch and config. So the same
+// file reads differently over HTTP than on disk — reading only the on-disk
+// shape rendered every live run as a blank cell. Values are preserved by the
+// translation; only the names change.
 function curve(log) {
   return (log?.epochs || [])
     .map(e => ({x:e.epoch, y: e.metric_value ?? e.val_miou}))
