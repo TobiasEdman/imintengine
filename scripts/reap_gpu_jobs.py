@@ -167,6 +167,10 @@ def main() -> int:
     ap.add_argument("--context", default="icekube")
     ap.add_argument("--namespace", default="prithvi-training-default")
     ap.add_argument("--selector", default=None, help="label selector to scope the sweep")
+    ap.add_argument("--job", action="append", default=None, metavar="NAME",
+                    help="restrict the sweep to exactly these Job names "
+                         "(repeatable); anything else is reported but never "
+                         "deleted")
     ap.add_argument("--grace-minutes", type=float, default=30.0,
                     help="leave finished jobs alone this long so logs stay readable")
     ap.add_argument("--archive-dir", type=Path, default=Path("/cephfs/ops/reaper_archive"),
@@ -192,6 +196,13 @@ def main() -> int:
             print(f"         {s['why']}")
 
     due = [r for r in reapable if r["age_min"] >= args.grace_minutes]
+    if args.job is not None:
+        allowed = set(args.job)
+        excluded = [r["job"] for r in due if r["job"] not in allowed]
+        if excluded:
+            print(f"\n--job scope excludes {len(excluded)} otherwise-due job(s): "
+                  f"{', '.join(sorted(excluded))}")
+        due = [r for r in due if r["job"] in allowed]
     if not args.apply:
         print(f"\nDRY RUN — {len(due)} job(s) would be deleted, freeing "
               f"{sum(r['gpus'] for r in due)} GPU slot(s). Re-run with --apply.")
