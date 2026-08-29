@@ -126,9 +126,36 @@ function state(log) {
   return "running";
 }
 
+// Two writers produce training_log.json with different key names — the
+// trainer's own log uses {best_metric, epochs[].metric_value} while the
+// live-progress log uses {best_miou, epochs[].val_miou}. Whichever wrote
+// last is what we get, so read both rather than render a live run as
+// "not started" (which is exactly what a one-schema reader did).
 function curve(log) {
-  return (log?.epochs || []).map(e => ({x:e.epoch, y:e.metric_value}))
-                            .filter(p => typeof p.y === "number");
+  return (log?.epochs || [])
+    .map(e => ({x:e.epoch, y: e.metric_value ?? e.val_miou}))
+    .filter(p => typeof p.y === "number" && typeof p.x === "number");
+}
+
+function bestOf(log) {
+  const v = log?.best_metric ?? log?.best_miou;
+  if (typeof v === "number" && v > 0) return v;
+  const c = curve(log);
+  return c.length ? Math.max(...c.map(p=>p.y)) : null;
+}
+
+function bestEpochOf(log) {
+  if (typeof log?.best_epoch === "number") return log.best_epoch;
+  const c = curve(log);
+  if (!c.length) return null;
+  return c.reduce((a,b) => b.y > a.y ? b : a).x;
+}
+
+/** Total epochs this run targets; the live log carries it per epoch. */
+function totalOf(log) {
+  const eps = log?.epochs || [];
+  const t = eps.length ? eps[eps.length-1].total : null;
+  return typeof t === "number" && t > 0 ? t : TOTAL_EPOCHS;
 }
 
 /** Most recent epoch's val mIoU — where the run is NOW, not its peak. */
@@ -159,8 +186,9 @@ function renderMatrix() {
     for (const m of MODELS) {
       const log = DATA[key(m,r.n)], st = state(log);
       const done = log?.epochs?.length || 0;
-      const best = (log && typeof log.best_metric === "number" && log.best_metric > 0)
-                    ? log.best_metric : null;
+      const best = bestOf(log);
+      const total = totalOf(log);
+      const bestEp = bestEpochOf(log);
       const strokeC = st==="completed" ? "#4ade80" : st==="failed" ? "#f87171" : "#60a5fa";
       const now = latest(log);
       // "now" is the current epoch's val mIoU; best is the peak so far. On a
@@ -175,8 +203,8 @@ function renderMatrix() {
               <div class="metric ${best===null?"none":""}">${best===null?"—":best.toFixed(4)}</div>
               ${nowLine}
               <div class="meta">${st==="absent" ? "queued"
-                   : `epoch ${done}/${TOTAL_EPOCHS}${log?.best_epoch?` · best @${log.best_epoch}`:""}`}</div>
-              ${st==="absent" ? "" : `<div class="bar"><div style="width:${Math.min(100,done/TOTAL_EPOCHS*100)}%"></div></div>`}
+                   : `epoch ${done}/${total}${bestEp?` · best @${bestEp}`:""}`}</div>
+              ${st==="absent" ? "" : `<div class="bar"><div style="width:${Math.min(100,done/total*100)}%"></div></div>`}
               ${sparkline(log, strokeC)}
             </div></td>`;
     }
@@ -193,8 +221,8 @@ function renderDeltas() {
     const cross = (lo===1) ? "¹" : "";
     h += `<tr><td class="rung-label">r${hi} − r${lo}${cross}</td>`;
     for (const m of MODELS) {
-      const a = DATA[key(m,hi)]?.best_metric, b = DATA[key(m,lo)]?.best_metric;
-      if (typeof a !== "number" || typeof b !== "number" || a<=0 || b<=0) {
+      const a = bestOf(DATA[key(m,hi)]), b = bestOf(DATA[key(m,lo)]);
+      if (a===null || b===null) {
         h += `<td class="delta flat">—</td>`;
       } else {
         const d = a-b, cls = d>0.0005 ? "up" : d<-0.0005 ? "down" : "flat";
@@ -261,9 +289,9 @@ function renderH2H() {
   svg.innerHTML = g;
 
   const rows = [
-    ["best mIoU", la?.best_metric, lb?.best_metric, true],
+    ["best mIoU", bestOf(la), bestOf(lb), true],
     ["now mIoU", latest(la), latest(lb), true],
-    ["best epoch", la?.best_epoch, lb?.best_epoch, false],
+    ["best epoch", bestEpochOf(la), bestEpochOf(lb), false],
     ["epochs done", la?.epochs?.length, lb?.epochs?.length, false],
     ["status", la?.status, lb?.status, false],
   ];
@@ -276,9 +304,9 @@ function renderH2H() {
   }
   document.getElementById("h2hTable").innerHTML = h + "</tbody>";
 
-  const va = la?.best_metric, vb = lb?.best_metric;
+  const va = bestOf(la), vb = bestOf(lb);
   const el = document.getElementById("h2hVerdict");
-  if (typeof va === "number" && typeof vb === "number" && va>0 && vb>0) {
+  if (va!==null && vb!==null) {
     const d = va-vb;
     const rungA = ka.split("_r")[1], rungB = kb.split("_r")[1];
     const mixed = (rungA==="1") !== (rungB==="1");
