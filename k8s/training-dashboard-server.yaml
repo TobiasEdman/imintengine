@@ -59,7 +59,12 @@ spec:
 
               echo "Cloning ImintEngine for dashboard HTML..."
               mkdir -p /workspace && cd /workspace
-              git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
+              # Pinned to the benchmark branch — the same branch every
+              # in-cluster job clones. The default branch does not carry
+              # the ladder dashboard.
+              git clone --depth 1 \
+                --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
 
               echo "Composing /www tree..."
               mkdir -p /www/300m /www/600m
@@ -78,6 +83,17 @@ spec:
               # the link is dangling and /compare/ returns 404 until
               # the inference job lands its index.html + prediction JSONs.
               ln -sfn /checkpoints/compare /www/compare
+
+              # /ladder — the label-source ladder matrix (6 backbones x 4
+              # rungs) + head-to-head. Reads every cell's live
+              # training_log.json through one symlink to the ladder
+              # checkpoint root on cephfs (RWX, so no node-pin needed);
+              # cells whose run has not started 404 and render as
+              # "not started". docs/experiments/label_source_ladder.md
+              mkdir -p /www/ladder
+              cp /workspace/imintengine/dashboards/ladder_dashboard.html \
+                 /www/ladder/index.html
+              ln -sfn /cephfs/checkpoints/ladder /www/ladder/data
 
               # Patch 1: null-safe tile-count cells (avoids TypeError when
               # train_tiles/val_tiles missing from the new schema).
