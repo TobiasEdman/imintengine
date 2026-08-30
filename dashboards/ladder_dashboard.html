@@ -121,8 +121,15 @@ async function loadAll() {
 function state(log) {
   if (!log) return "absent";
   if (log.status === "completed") return "completed";
-  if (log.status === "running") return "running";
-  if (log.status === "stopped") return "failed";
+  // "stopped" is the trainer's early-stop label, not a failure — and it also
+  // fires on a run that reached its final epoch (tessera_r1 logged all 30 and
+  // wrote every checkpoint, yet reported "stopped"). Treat a run that reached
+  // its epoch target as completed; only a genuinely short one is flagged.
+  if (log.status === "stopped") {
+    const eps = log.epochs || [];
+    const last = eps.length ? eps[eps.length-1].epoch : 0;
+    return last >= totalOf(log) ? "completed" : "failed";
+  }
   return "running";
 }
 
