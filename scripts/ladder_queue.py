@@ -38,7 +38,12 @@ from pathlib import Path
 # Largest-first within each rung: 80 Gi backbones before 48 Gi ones.
 MODEL_ORDER = ["prithvi600m", "prithvi300m", "tessera", "croma", "terramind", "clay"]
 RUNGS = (1, 2)
-MARGIN_GI = 3  # leave headroom; the quota is shared with ad-hoc ops jobs
+# Headroom against the standing services drifting. Kept small: the quota is
+# 250Gi and the biggest job wants 80, so an over-large margin strands an 80Gi
+# slot that is arithmetically free (a 3Gi margin blocked exactly that for an
+# hour on 2026-08-30).
+MARGIN_GI = 1
+LADDER_ROOT = Path("/cephfs/checkpoints/ladder")
 
 
 def _kubectl(args: list[str], namespace: str) -> str:
@@ -85,6 +90,34 @@ def job_exists(name: str, namespace: str) -> bool:
         return False
 
 
+def already_trained(ladder_root: Path, rung: int, model: str) -> bool:
+    """Has this cell already produced a finished run?
+
+    Job existence alone is NOT the answer: gpu-reaper archives and deletes a
+    Job an hour after it finishes, so a completed run looks pending to a
+    `kubectl get job` check. Without this the queue resubmits work that is
+    already done — on 2026-08-30 both tessera_r1 (0.5654, 30/30) and
+    prithvi600m_r1 had finished and been reaped, and the queue had them
+    queued for resubmission.
+
+    The durable record is the checkpoint dir, which the reaper never touches.
+    A run counts as done when the trainer says `completed`, or when it logged
+    its target epoch — "stopped" is the early-stop label and fires even on a
+    run that reached the end.
+    """
+    log = ladder_root / f"{model}_r{rung}" / "training_log.json"
+    try:
+        d = json.loads(log.read_text())
+    except (OSError, ValueError):
+        return False
+    if d.get("status") == "completed":
+        return True
+    epochs = d.get("epochs") or []
+    target = (d.get("config") or {}).get("epochs")
+    last = epochs[-1].get("epoch", 0) if epochs else 0
+    return bool(target and last >= target)
+
+
 def free_gi(namespace: str, quota: str) -> float:
     raw = json.loads(_kubectl(["get", "resourcequota", quota, "-o", "json"], namespace))
     used = _to_gi(raw["status"]["used"]["requests.memory"])
@@ -99,13 +132,19 @@ def main() -> int:
     ap.add_argument("--repo", type=Path, default=Path("/w"))
     ap.add_argument("--cronjob", default="ladder-queue",
                     help="suspend this CronJob once every job is submitted")
+    ap.add_argument("--ladder-root", type=Path, default=LADDER_ROOT,
+                    help="checkpoint root; a finished run here counts as done "
+                         "even after the reaper has deleted its Job")
     ap.add_argument("--log", type=Path, default=Path("/cephfs/ops/ladder_queue.log"))
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    pending = [(r, m) for r in RUNGS for m in MODEL_ORDER
-               if not job_exists(f"ladder-r{r}-{m}", args.namespace)]
+    pending = [
+        (r, m) for r in RUNGS for m in MODEL_ORDER
+        if not job_exists(f"ladder-r{r}-{m}", args.namespace)
+        and not already_trained(args.ladder_root, r, m)
+    ]
 
     if not pending:
         line = f"{stamp} DONE — all {len(RUNGS)*len(MODEL_ORDER)} rung-1/2 jobs submitted"
@@ -131,7 +170,8 @@ def main() -> int:
             continue
         need = requested_gi(path)
         if free < need + MARGIN_GI:
-            print(f"  stop: {name} needs {need:.0f}Gi, {free:.0f}Gi free")
+            print(f"  stop: {name} needs {need:.1f}Gi (+{MARGIN_GI} margin), "
+                  f"{free:.1f}Gi free")
             break
         if args.dry_run:
             print(f"  would submit {name} ({need:.0f}Gi)")
@@ -145,7 +185,7 @@ def main() -> int:
         submitted.append(name)
         free -= need
 
-    line = (f"{stamp} free={free:.0f}Gi pending={len(pending)} "
+    line = (f"{stamp} free={free:.1f}Gi pending={len(pending)} "
             f"submitted={submitted or '[]'}")
     print(line)
     if not args.dry_run:
