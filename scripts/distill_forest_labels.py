@@ -226,7 +226,14 @@ def main() -> None:
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu")
 
-    model, epoch, miou, model_img_size = infcmp.load_model(args.checkpoint, device)
+    # img_size must reach load_model, not just run_inference: clay and croma
+    # carry no pos_embed and omit img_size from their minimal config, so
+    # without it the backbone is BUILT at 224 — wrong grid_size, wrong PSP
+    # pool count — and then fed 504px tiles. Prithvi recovers its size from
+    # pos_embed and is unaffected, which is why this survived the
+    # Prithvi-only era. Same call shape as infer_tiles.py.
+    model, epoch, miou, model_img_size = infcmp.load_model(
+        args.checkpoint, device, img_size=args.img_size)
     print(f"[load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size}")
     if model_img_size != args.img_size:
         print(f"  WARN: --img-size {args.img_size} != model native "
