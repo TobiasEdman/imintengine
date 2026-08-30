@@ -1,0 +1,120 @@
+---
+# Automatic submitter for the label-source ladder (rungs 1-2).
+#
+# Why in-cluster rather than laptop-side: a scheduled task on the workstation
+# missed every slot it was given on 2026-08-29 (its first run stalled on an
+# unapproved tool prompt), so 80 Gi sat idle overnight and each gap surfaced
+# only when a human asked for status. A CronJob has no such dependency — it
+# runs whether anyone is logged in or not.
+#
+# Scope: rungs 1 and 2 only. Rungs 3-4 consume per-backbone distillation
+# sidecars that do not exist until that column's rung 2 finishes.
+#
+# Self-terminating: once all 12 jobs exist the script patches this CronJob to
+# suspend=true, so it cannot outlive its purpose (CLAUDE.md §8 — no orphans).
+#
+#   kubectl -n prithvi-training-default apply -f k8s/ladder-queue-cronjob.yaml
+#   kubectl -n prithvi-training-default create job --from=cronjob/ladder-queue ladder-queue-manual
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ladder-queue
+  namespace: prithvi-training-default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ladder-queue
+  namespace: prithvi-training-default
+rules:
+  # create: submit the next ladder job. get/list: see what already exists, so
+  # a run is idempotent and never double-submits. No delete — this thing must
+  # never be able to remove a training run.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create"]
+  # Read the quota to know what fits. Submitting past the cap creates a Job
+  # with no pod that reads 0/1 for ever.
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
+  # patch: suspend itself when the queue is drained.
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ladder-queue
+  namespace: prithvi-training-default
+subjects:
+  - kind: ServiceAccount
+    name: ladder-queue
+    namespace: prithvi-training-default
+roleRef:
+  kind: Role
+  name: ladder-queue
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ladder-queue
+  namespace: prithvi-training-default
+  labels: {app: ops, purpose: ladder-queue}
+spec:
+  # Every 10 min at an off-minute. A ladder run is hours long, so the only
+  # cost of a short period is a cheap no-op; the benefit is that a freed slot
+  # is never idle for more than ten minutes.
+  schedule: "3,13,23,33,43,53 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 1800
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels: {app: ops, purpose: ladder-queue}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: ladder-queue
+          containers:
+            - name: queue
+              image: python:3.11-slim
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  export PYTHONUNBUFFERED=1
+                  apt-get update -qq && apt-get install -y -qq curl git >/dev/null 2>&1
+                  pip install --quiet pyyaml
+                  curl -sSLo /usr/local/bin/kubectl \
+                    "https://dl.k8s.io/release/v1.28.15/bin/linux/amd64/kubectl"
+                  chmod +x /usr/local/bin/kubectl
+                  # The manifests it submits come from the same branch every
+                  # other in-cluster job clones, so a regenerated manifest is
+                  # picked up on the next tick with no redeploy.
+                  git clone --quiet --depth 1 \
+                    --branch agent/te/opus/nfi-nmd2023-benchmark \
+                    https://github.com/TobiasEdman/ImintEngine.git /w
+                  cd /w
+                  echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+                  python3 scripts/ladder_queue.py \
+                    --namespace prithvi-training-default \
+                    --repo /w \
+                    --cronjob ladder-queue \
+                    --log /cephfs/ops/ladder_queue.log
+              resources:
+                requests: {cpu: "200m", memory: "256Mi"}
+                limits:   {cpu: "200m", memory: "256Mi"}
+              volumeMounts:
+                - {name: cephfs, mountPath: /cephfs}
+          volumes:
+            - name: cephfs
+              persistentVolumeClaim: {claimName: training-data-cephfs}
