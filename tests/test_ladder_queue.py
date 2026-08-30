@@ -6,6 +6,7 @@ like a healthy run to anything polling .status.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -111,3 +112,46 @@ def test_log_is_written_to_the_pvc(monkeypatch, tmp_path):
                         ["ladder_queue.py", "--repo", str(REPO), "--log", str(log)])
     assert lq.main() == 0
     assert log.exists() and "pending=12" in log.read_text()
+
+
+def _log(tmp_path, model, rung, *, status, last_epoch, target=30):
+    d = tmp_path / f"{model}_r{rung}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "training_log.json").write_text(json.dumps({
+        "status": status,
+        "config": {"epochs": target},
+        "epochs": [{"epoch": e} for e in range(1, last_epoch + 1)],
+    }))
+    return tmp_path
+
+
+def test_reaped_completed_run_is_not_resubmitted(tmp_path):
+    """gpu-reaper deletes finished Jobs — the checkpoint dir is the record.
+
+    tessera_r1 finished 30/30 with status "stopped" (the early-stop label)
+    and was reaped; a job-existence check alone had it queued for a redo.
+    """
+    _log(tmp_path, "tessera", 1, status="stopped", last_epoch=30)
+    assert lq.already_trained(tmp_path, 1, "tessera") is True
+
+
+def test_completed_status_counts_as_done(tmp_path):
+    _log(tmp_path, "clay", 2, status="completed", last_epoch=12)
+    assert lq.already_trained(tmp_path, 2, "clay") is True
+
+
+def test_partial_run_is_not_done(tmp_path):
+    """A run killed halfway must still be resubmittable."""
+    _log(tmp_path, "croma", 1, status="stopped", last_epoch=7)
+    assert lq.already_trained(tmp_path, 1, "croma") is False
+
+
+def test_missing_dir_is_not_done(tmp_path):
+    assert lq.already_trained(tmp_path, 1, "terramind") is False
+
+
+def test_margin_allows_an_80gi_job_into_83gi(monkeypatch, tmp_path, capsys):
+    """A 3Gi margin stranded an arithmetically-free 80Gi slot for an hour."""
+    monkeypatch.setattr(lq, "already_trained", lambda *a: False)
+    _run(monkeypatch, tmp_path, free=83.1, existing=set())
+    assert "would submit ladder-r1-prithvi600m" in capsys.readouterr().out
