@@ -247,6 +247,10 @@ def test_pinned_subset_is_canonical_and_fails_loud(tmp_path: Path) -> None:
     and a hard SystemExit if extraction dropped ANY pinned plot."""
     np = pytest.importorskip("numpy")
     pd = pytest.importorskip("pandas")
+    # The subprocess (same interpreter) trains the real MLP head — CI's
+    # test env has no sklearn, which made the happy path exit 1 there
+    # while passing locally. Skip cleanly where the dep is absent.
+    pytest.importorskip("sklearn")
     import json as _json
     import subprocess
     import sys
