@@ -348,7 +348,8 @@ def test_pinned_builder_fails_on_unreadable_tile(tmp_path: Path) -> None:
 
     tiles = tmp_path / "tiles"
     tiles.mkdir()
-    np.savez(tiles / "t1.npz", spectral=np.zeros(1), s1_vv_vh=np.zeros(1))
+    np.savez(tiles / "t1.npz", spectral=np.zeros(1), s1_vv_vh=np.zeros(1),
+             s1_enrich_v=np.int32(4))
     (tiles / "t2.npz").write_bytes(b"corrupt")
 
     idx = tmp_path / "index.parquet"
@@ -399,7 +400,8 @@ def test_pinned_builder_respects_crop_window(tmp_path: Path) -> None:
 
     tiles = tmp_path / "tiles"
     tiles.mkdir()
-    np.savez(tiles / "t1.npz", spectral=np.zeros(1), s1_vv_vh=np.zeros(1))
+    np.savez(tiles / "t1.npz", spectral=np.zeros(1), s1_vv_vh=np.zeros(1),
+             s1_enrich_v=np.int32(4))   # version gate: unstamped = excluded
 
     idx = tmp_path / "index.parquet"
     pd.DataFrame({
@@ -505,3 +507,26 @@ def test_distill_installs_backbone_deps(model: str, needle: str) -> None:
     training manifests carry these installs; the distill jobs must too."""
     assert needle in _distill_manifest(model), (
         f"{model}: distill manifest missing backbone dep '{needle}'")
+
+
+def test_version_gate_excludes_stale_enrichment(tmp_path: Path) -> None:
+    """Key PRESENCE is not qualification: the dataset gates SAR on
+    s1_enrich_v == 4, so a tile with old-version s1_vv_vh was never seen
+    by SAR training and kills extract/dense at forward time — terramind's
+    third submission died on exactly one such tile. The pinned builder
+    and the dense filter must both apply the version requirement."""
+    np = pytest.importorskip("numpy")
+    bps = _load_script("build_pinned_plot_set")
+
+    ok = tmp_path / "ok.npz"
+    np.savez(ok, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(4))
+    stale = tmp_path / "stale.npz"
+    np.savez(stale, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(0))
+    unstamped = tmp_path / "unstamped.npz"
+    np.savez(unstamped, s1_vv_vh=np.zeros(1))
+
+    assert bps.npz_version_ok(ok, ("s1_vv_vh",)) is True
+    assert bps.npz_version_ok(stale, ("s1_vv_vh",)) is False
+    assert bps.npz_version_ok(unstamped, ("s1_vv_vh",)) is False
+    # keys without a version requirement pass vacuously
+    assert bps.npz_version_ok(stale, ("spectral",)) is True

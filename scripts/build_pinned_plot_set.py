@@ -47,6 +47,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # (prithvi, tessera, clay) build from spectral/b08/rededge, present on
 # all tiles. Extend this list if a future column adds a modality.
 REQUIRED_KEYS = ("s1_vv_vh",)
+# Presence is NOT sufficient: the dataset gates SAR on the enrichment
+# VERSION (s1_enrich_v == 4, RTC γ⁰ season composite — f221f0c), so a
+# tile with an old-version s1_vv_vh was never seen by SAR training and
+# crashes extract/dense at forward time. Terramind's third submission
+# died on exactly one such tile (47023938, v=0). key -> (version_key,
+# required_value); checked wherever REQUIRED_KEYS is.
+VERSION_REQUIREMENTS = {"s1_vv_vh": ("s1_enrich_v", 4)}
+
+
+def npz_version_ok(path: Path, keys: tuple[str, ...]) -> bool:
+    """True iff every required key's version stamp matches. Reads only
+    the scalar stamps (lazy npz), not the arrays."""
+    need = [VERSION_REQUIREMENTS[k] for k in keys if k in VERSION_REQUIREMENTS]
+    if not need:
+        return True
+    try:
+        with np.load(path) as z:
+            for vkey, want in need:
+                if vkey not in z.files or int(z[vkey]) != want:
+                    return False
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return False
+    return True
 
 
 def _crop_offset(tile_h: int, img_size: int) -> int:
@@ -135,7 +158,8 @@ def main() -> None:
         if names is None:
             unreadable.append(name)
             continue
-        if all(k in names for k in REQUIRED_KEYS):
+        if all(k in names for k in REQUIRED_KEYS) and npz_version_ok(
+                path, REQUIRED_KEYS):
             qualifying.add(name)
 
     # An unreadable tile is a PVC problem, not a cohort property. Folding it

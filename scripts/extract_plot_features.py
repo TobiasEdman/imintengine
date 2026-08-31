@@ -170,6 +170,11 @@ def main() -> None:
     ap.add_argument("--out", required=True, help="output parquet path")
     ap.add_argument("--dominant-frac", type=float, default=0.7,
                     help="conifer/deciduous dominance threshold for NFI truth")
+    ap.add_argument("--truth-col", default=None,
+                    help="take truth directly from this index column "
+                         "(e.g. unified_class for the LUCAS crop index) "
+                         "instead of deriving NFI forest class from volume "
+                         "columns")
     ap.add_argument("--backbone-name", default=None,
                     help="registry backbone for load_model; without it a "
                          "checkpoint lacking backbone_name silently "
@@ -283,15 +288,22 @@ def main() -> None:
         vecs = _sample_feature(feat_map, rows, cols, cs)  # (N, 256)
 
         for (_, r), vec in zip(grp.iterrows(), vecs):
-            nc = derive_nfi_forest_class(r, dominant_frac=args.dominant_frac)
             rec = {
                 "TractID": r.get("TractID"),
                 "PlotID": r.get("PlotID"),
+                "point_id": r.get("point_id"),
                 "Easting": r.get("Easting"),
                 "Northing": r.get("Northing"),
                 "tile_name": str(tile_name),
-                "nfi_forest": int(nc) if nc is not None else -1,
             }
+            if args.truth_col:
+                # Generic truth passthrough (LUCAS crop mode): the index
+                # already carries the class; NFI volume-derivation would
+                # be meaningless on these rows.
+                rec[args.truth_col] = int(r[args.truth_col])
+            else:
+                nc = derive_nfi_forest_class(r, dominant_frac=args.dominant_frac)
+                rec["nfi_forest"] = int(nc) if nc is not None else -1
             rec.update(dict(zip(feat_cols, vec.tolist())))
             records.append(rec)
 

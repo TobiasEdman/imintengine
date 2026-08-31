@@ -55,7 +55,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from build_pinned_plot_set import npz_key_names
+from build_pinned_plot_set import npz_key_names, npz_version_ok
 from extract_plot_features import register_preclassifier_hook
 
 FOREST_CLASSES = frozenset({1, 2, 3, 4})  # tall, gran, löv, bland
@@ -332,7 +332,8 @@ def main() -> None:
             names = npz_key_names(Path(t))
             if names is None:
                 unreadable.append(os.path.basename(t))
-            elif all(k in names for k in args.require_npz_key):
+            elif all(k in names for k in args.require_npz_key) and \
+                    npz_version_ok(Path(t), tuple(args.require_npz_key)):
                 kept.append(t)
         tiles = kept
         print(f"require {args.require_npz_key}: {len(tiles)}/{before} tiles"
