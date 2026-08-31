@@ -38,6 +38,19 @@ from pathlib import Path
 # Largest-first within each rung: 80 Gi backbones before 48 Gi ones.
 MODEL_ORDER = ["prithvi600m", "prithvi300m", "tessera", "croma", "terramind", "clay"]
 RUNGS = (1, 2)
+# Rungs 3/4 are DISTILL-GATED: a column joins their queue only when its
+# distill job has written the _GATE_OK marker (state on disk, never job
+# existence — the reaper deletes finished Jobs). Both consume the same
+# sidecars and neither warm-starts from the other, so they queue together
+# the moment the gate opens; CROMA trails naturally because its gate
+# lands last. [user-stated 2026-08-31: croma sist i egen fil, övriga
+# två-och-två]
+GATED_RUNGS = (3, 4)
+DISTILL_ROOT = Path("/cephfs/distill")
+
+
+def distill_gate_open(distill_root: Path, model: str) -> bool:
+    return (distill_root / f"{model}_r2" / "_GATE_OK").exists()
 # Headroom against the standing services drifting. Kept small: the quota is
 # 250Gi and the biggest job wants 80, so an over-large margin strands an 80Gi
 # slot that is arithmetically free (a 3Gi margin blocked exactly that for an
@@ -132,6 +145,9 @@ def main() -> int:
     ap.add_argument("--repo", type=Path, default=Path("/w"))
     ap.add_argument("--cronjob", default="ladder-queue",
                     help="suspend this CronJob once every job is submitted")
+    ap.add_argument("--distill-root", type=Path, default=DISTILL_ROOT,
+                    help="distill sidecar root; <model>_r2/_GATE_OK unlocks "
+                         "that column's rungs 3/4")
     ap.add_argument("--ladder-root", type=Path, default=LADDER_ROOT,
                     help="checkpoint root; a finished run here counts as done "
                          "even after the reaper has deleted its Job")
@@ -145,9 +161,21 @@ def main() -> int:
         if not job_exists(f"ladder-r{r}-{m}", args.namespace)
         and not already_trained(args.ladder_root, r, m)
     ]
+    gate_locked = 0
+    for r in GATED_RUNGS:
+        for m in MODEL_ORDER:
+            if job_exists(f"ladder-r{r}-{m}", args.namespace) or                     already_trained(args.ladder_root, r, m):
+                continue
+            if distill_gate_open(args.distill_root, m):
+                pending.append((r, m))
+            else:
+                gate_locked += 1
+    if gate_locked:
+        print(f"  {gate_locked} rung-3/4 cells await their distill gate")
 
-    if not pending:
-        line = f"{stamp} DONE — all {len(RUNGS)*len(MODEL_ORDER)} rung-1/2 jobs submitted"
+    if not pending and not gate_locked:
+        n_total = (len(RUNGS) + len(GATED_RUNGS)) * len(MODEL_ORDER)
+        line = f"{stamp} DONE — all {n_total} ladder jobs submitted"
         print(line)
         if not args.dry_run:
             try:

@@ -191,7 +191,12 @@ spec:
                 --device cuda
 
               echo ""
-              echo "=== distill stage complete for {model} — rungs 3/4 may start ==="
+              # The queue's signal: state on DISK, never job existence (the
+              # reaper deletes finished Jobs — the exact interaction that
+              # bit rung-1 resubmission). set -e means reaching this line
+              # proves all four steps INCLUDING the cohort gate passed.
+              touch "$OUT/_GATE_OK"
+              echo "=== distill stage complete for {model} — rungs 3/4 unlocked ==="
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
