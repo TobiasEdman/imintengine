@@ -63,7 +63,7 @@ spec:
               # in-cluster job clones. The default branch does not carry
               # the ladder dashboard.
               git clone --depth 1 \
-                --branch agent/te/opus/nfi-nmd2023-benchmark \
+                --branch main \
                 https://github.com/TobiasEdman/ImintEngine.git imintengine
 
               echo "Composing /www tree..."

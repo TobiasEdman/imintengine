@@ -46,24 +46,10 @@ KNOWN_PIN_BREAKS = {
 # an exit condition is a pin nobody will ever remove — the deployed
 # artifact tracks a branch nobody rebases and CI never builds. Key:
 # manifest filename → (branch, why, what un-pins it).
-DECLARED_NON_MAIN_PINS = {
-    "training-dashboard-server.yaml": (
-        "agent/te/opus/nfi-nmd2023-benchmark",
-        "dashboards/ladder_dashboard.html is not on main yet (PR #27)",
-        "repoint to main once #27 merges",
-    ),
-    "gpu-reaper-cronjob.yaml": (
-        "agent/te/opus/nfi-nmd2023-benchmark",
-        "scripts/reap_gpu_jobs.py is not on main yet (PR #27)",
-        "repoint to main once #27 merges",
-    ),
-    "ladder-queue-cronjob.yaml": (
-        "agent/te/opus/nfi-nmd2023-benchmark",
-        "scripts/ladder_queue.py is not on main yet (PR #27)",
-        "repoint to main once #27 merges",
-    ),
+DECLARED_NON_MAIN_PINS: dict[str, tuple[str, str, str]] = {
+    # EMPTY since PR #27 merged (2026-08-31): every long-lived workload
+    # clones main. A new entry here needs a reason and an exit condition.
 }
-
 
 def _longlived_manifests():
     for f in sorted((REPO / "k8s").glob("*.yaml")):

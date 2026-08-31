@@ -135,7 +135,7 @@ spec:
                 pandas pyarrow rasterio pyproj
 
               mkdir -p /workspace && cd /workspace
-              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              BRANCH=main
               git clone --depth 1 --branch "$BRANCH" \\
                 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
@@ -242,7 +242,7 @@ spec:
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
               pip install --quiet --no-cache-dir numpy pandas pyarrow
               mkdir -p /workspace && cd /workspace
-              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              BRANCH=main
               git clone --depth 1 --branch "$BRANCH" \\
                 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine

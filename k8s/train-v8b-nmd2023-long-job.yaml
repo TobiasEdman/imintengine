@@ -45,7 +45,7 @@ spec:
               rm -f /cephfs/checkpoints/v8b_nmd2023_long/*.pt.tmp 2>/dev/null || true
 
               mkdir -p /workspace && cd /workspace
-              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              BRANCH=main
               git clone --depth 1 --branch "$BRANCH" \
                 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
