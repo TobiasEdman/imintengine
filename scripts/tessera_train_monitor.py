@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Live campaign dashboard — tessera training progress + ensemble state.
+"""Live tessera training monitor — training progress + ensemble state.
+
+Renamed from campaign_dashboard.py 2026-08-31: that name belonged to the
+retired fetch-era campaign monitor (1118 lines, --recoreg-dir/--watch
+interface) whose k8s Deployment cloned main and read the OLD interface —
+reusing its filename was what made commit 33d44dd's replacement
+invisible. One name, one tool.
 
 A dependency-free (stdlib only) HTTP server that:
   * polls ``kubectl logs`` for the tessera training job and parses the
@@ -14,7 +20,7 @@ every few seconds never hammers the API server. Every kubectl failure
 degrades to a labelled "unavailable" tile rather than crashing the page.
 
 Usage:
-    python3 scripts/campaign_dashboard.py --port 8097
+    python3 scripts/tessera_train_monitor.py --port 8097
     # then open http://localhost:8097
 """
 from __future__ import annotations
