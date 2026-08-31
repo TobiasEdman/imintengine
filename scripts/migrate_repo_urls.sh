@@ -19,7 +19,7 @@
 #   3. Update local remote:
 #        git remote set-url origin https://github.com/<new-org>/<name>.git
 #   4. Rollout-restart long-lived deployments that clone at pod start
-#      (campaign-dashboard) at a convenient time; one-shot Jobs pick the
+#      (training-dashboard) at a convenient time; one-shot Jobs pick the
 #      new URL up automatically at next submit.
 set -euo pipefail
 

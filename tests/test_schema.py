@@ -297,3 +297,22 @@ def test_get_class_weights_cap():
     weights = get_class_weights(counts, max_weight=10.0)
     assert weights[1] <= 10.0
     assert weights[2] <= 10.0
+
+
+def test_unified_palette_json_matches_schema():
+    """scripts/unified_palette.json must stay in sync with the canonical
+    schema — slim pods (tile previews, monitors) read the JSON because they
+    have no imint/ install, so a schema change must regenerate it. Moved
+    here 2026-08-31 from the retired tests/test_campaign_dashboard.py: the
+    invariant is the schema's, not any dashboard's.
+    """
+    import json
+    from pathlib import Path
+    from imint.training.unified_schema import (
+        NUM_UNIFIED_CLASSES, UNIFIED_CLASS_NAMES, UNIFIED_COLOR_LIST)
+    p = Path(__file__).resolve().parents[1] / "scripts" / "unified_palette.json"
+    pal = json.loads(p.read_text(encoding="utf-8"))
+    assert pal["num_classes"] == NUM_UNIFIED_CLASSES
+    assert pal["names"] == [str(n) for n in UNIFIED_CLASS_NAMES]
+    assert [tuple(c) for c in pal["colors"]] == \
+        [tuple(int(x) for x in rgb) for rgb in UNIFIED_COLOR_LIST]

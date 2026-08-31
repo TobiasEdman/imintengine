@@ -15,9 +15,9 @@ restores them by COPYING those fields from the same-named ORIGINAL
 This is valid because re-coreg keeps the canonical bbox/grid — M1 grid-snaps every
 frame's transform onto the NMD 10 m lattice, M2 sub-pixel-shifts frames to the M1
 anchor, M3 absolute is OFF — so the tile's bbox/centre is unchanged and the
-original land-cover label still aligns pixel-for-pixel. The dashboard's
-``campaign_dashboard.build_label`` already renders the original label over the
-``_recoreg`` anchor and it lines up; this script makes that alignment a persisted
+original land-cover label still aligns pixel-for-pixel. The retired
+fetch-era dashboard rendered the original label over the ``_recoreg`` anchor
+at request time and it lined up; this script makes that alignment a persisted
 field rather than a render-time cross-dir read.
 
 Idempotent + resumable:
@@ -75,8 +75,8 @@ def restore_one(recoreg_path: str, orig_dir: str, *, dry_run: bool = False) -> d
         return {"name": name, "status": "error",
                 "reason": f"recoreg_load: {type(exc).__name__}: {str(exc)[:140]}"}
 
-    # Cross-dir read of the original label fields (same pattern as
-    # campaign_dashboard.build_label): membership-check on .files, then load.
+    # Cross-dir read of the original label fields: membership-check on
+    # .files, then load.
     orig_path = os.path.join(orig_dir, f"{name}.npz")
     if not os.path.exists(orig_path):
         return {"name": name, "status": "orig_missing", "reason": "no_orig_file"}
