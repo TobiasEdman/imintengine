@@ -214,6 +214,11 @@ def main() -> None:
     ap.add_argument("--img-size", type=int, default=504)
     ap.add_argument("--device", default=None)
     ap.add_argument("--limit", type=int, default=None, help="smoke: first N tiles")
+    ap.add_argument("--require-npz-key", action="append", default=[],
+                    help="skip tiles whose npz lacks this key (repeatable). "
+                         "SAR backbones (croma/terramind) pass s1_vv_vh so "
+                         "the pass covers exactly their trainable cohort "
+                         "instead of crashing on the first optical-only tile")
     args = ap.parse_args()
 
     import torch
@@ -243,18 +248,44 @@ def main() -> None:
 
     os.makedirs(args.out_dir, exist_ok=True)
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
+    if args.require_npz_key:
+        # Cheap zip-directory membership test — no arrays are loaded. This
+        # defines the column's cohort (e.g. the ~6011-tile SAR subset for
+        # croma/terramind) rather than discovering it via a KeyError
+        # mid-run.
+        import zipfile
+
+        def _has_keys(path: str) -> bool:
+            try:
+                with zipfile.ZipFile(path) as zf:
+                    names = set(zf.namelist())
+            except (OSError, zipfile.BadZipFile):
+                return False
+            return all(f"{k}.npy" in names for k in args.require_npz_key)
+
+        before = len(tiles)
+        tiles = [t for t in tiles if _has_keys(t)]
+        print(f"require {args.require_npz_key}: {len(tiles)}/{before} tiles")
     if args.limit:
         tiles = tiles[:args.limit]
     print(f"tiles: {len(tiles)}  →  out {args.out_dir}\n")
 
     counts = {"ok": 0, "exists": 0, "no_sidecar": 0, "no_feature": 0,
-              "shape_mismatch": 0}
+              "shape_mismatch": 0, "error": 0}
     fracs: list[float] = []
     total_hist = {c: 0 for c in (0, 1, 2, 3, 4)}
 
     for i, tp in enumerate(tiles):
-        res = process_tile(tp, model, head, device, args.img_size,
-                           args.label_dir, args.out_dir, infcmp, store)
+        # One corrupt tile must not kill an hours-long pass: completed
+        # sidecars persist and the "exists" skip makes reruns idempotent,
+        # so contain the failure, keep going, and fail the JOB at the end.
+        try:
+            res = process_tile(tp, model, head, device, args.img_size,
+                               args.label_dir, args.out_dir, infcmp, store)
+        except Exception as exc:  # noqa: BLE001 — summarized + fatal below
+            res = {"status": "error", "name": os.path.basename(tp)}
+            print(f"  [{i+1}/{len(tiles)}] ERROR {res['name']}: "
+                  f"{type(exc).__name__}: {exc}")
         counts[res["status"]] = counts.get(res["status"], 0) + 1
         if res["status"] == "ok":
             fracs.append(res["frac_over"])
@@ -284,6 +315,22 @@ def main() -> None:
     for c in (0, 1, 2, 3, 4):
         print(f"    {c} {names[c]:<11}: {total_hist[c]:>12,} "
               f"({100*total_hist[c]/tot:.1f}%)")
+
+    # The ladder gate (label_source_ladder.md, execution order step 2):
+    # a column may proceed to rungs 3/4 only when its sidecar count matches
+    # its cohort count. ok+exists is exactly that; anything else means a
+    # tile this column trains on has no distilled sidecar. Exit non-zero so
+    # the k8s Job goes red instead of a short set silently shrinking the
+    # rung-3 training set.
+    covered = counts["ok"] + counts["exists"]
+    if covered != len(tiles):
+        raise SystemExit(
+            f"sidecar gate FAILED: {covered}/{len(tiles)} cohort tiles "
+            f"covered (no_sidecar={counts['no_sidecar']} "
+            f"no_feature={counts['no_feature']} "
+            f"shape_mismatch={counts['shape_mismatch']} "
+            f"error={counts['error']}). Rungs 3/4 must not start.")
+    print(f"\n  sidecar gate OK: {covered}/{len(tiles)} cohort tiles covered")
 
 
 if __name__ == "__main__":
