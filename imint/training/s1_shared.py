@@ -103,15 +103,40 @@ def orbit_from_item(item: Any) -> str | None:
 
 def pick_best_item(items: list[Any], bbox_4326: tuple[float, float, float, float]) -> Any:
     """Pick the item whose bbox overlaps the request bbox most."""
-    def overlap_area(it: Any) -> float:
-        b = it.bbox
-        if not b:
-            return 0.0
-        w = max(0.0, min(b[2], bbox_4326[2]) - max(b[0], bbox_4326[0]))
-        h = max(0.0, min(b[3], bbox_4326[3]) - max(b[1], bbox_4326[1]))
-        return w * h
+    return max(items, key=lambda it: item_overlap_area(it, bbox_4326))
 
-    return max(items, key=overlap_area)
+
+def item_overlap_area(item: Any, bbox_4326: tuple[float, float, float, float]) -> float:
+    """Bbox-overlap area (deg²) between a STAC item and the request bbox."""
+    b = item.bbox
+    if not b:
+        return 0.0
+    w = max(0.0, min(b[2], bbox_4326[2]) - max(b[0], bbox_4326[0]))
+    h = max(0.0, min(b[3], bbox_4326[3]) - max(b[1], bbox_4326[1]))
+    return w * h
+
+
+def item_datetime(item: Any):
+    """Best-effort acquisition ``datetime`` for a STAC item (None on failure).
+
+    Prefers ``item.datetime`` (pystac parses it), falls back to the
+    ``datetime`` / ``start_datetime`` property strings. Used to spread the
+    season-composite scenes across the window and to group items by orbit.
+    """
+    from datetime import datetime as _dt
+
+    dt = getattr(item, "datetime", None)
+    if dt is not None:
+        return dt
+    p = item.properties or {}
+    for key in ("datetime", "start_datetime", "end_datetime"):
+        v = p.get(key)
+        if v:
+            try:
+                return _dt.fromisoformat(str(v).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+    return None
 
 
 # ── Asset URL extraction ──────────────────────────────────────────────────

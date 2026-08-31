@@ -1,0 +1,117 @@
+{
+  "n_plots": 944,
+  "n_forest": 884,
+  "n_mature": 298,
+  "forest_type_accuracy": 0.4321266968325792,
+  "confusion_nfi_x_pred": {
+    "tallskog": {
+      "tallskog": 164,
+      "granskog": 50,
+      "lövskog": 20,
+      "blandskog": 34,
+      "class_5": 52,
+      "class_6": 28,
+      "class_7": 5,
+      "class_8": 9,
+      "class_9": 2,
+      "class_22": 8
+    },
+    "granskog": {
+      "tallskog": 20,
+      "granskog": 116,
+      "lövskog": 4,
+      "blandskog": 50,
+      "class_5": 14,
+      "class_6": 32,
+      "class_7": 5,
+      "class_8": 4,
+      "class_22": 2
+    },
+    "lövskog": {
+      "tallskog": 6,
+      "granskog": 2,
+      "lövskog": 54,
+      "blandskog": 21,
+      "class_5": 8,
+      "class_6": 22,
+      "class_7": 6,
+      "class_8": 4,
+      "class_9": 1,
+      "class_11": 1,
+      "class_22": 8
+    },
+    "blandskog": {
+      "tallskog": 11,
+      "granskog": 18,
+      "lövskog": 6,
+      "blandskog": 48,
+      "class_5": 18,
+      "class_6": 23,
+      "class_7": 4,
+      "class_8": 2,
+      "class_12": 1,
+      "class_22": 1
+    }
+  },
+  "per_class_auroc": {
+    "tallskog": {
+      "auroc": 0.807,
+      "aupr": 0.7348
+    },
+    "granskog": {
+      "auroc": 0.7861,
+      "aupr": 0.6156
+    },
+    "lövskog": {
+      "auroc": 0.6993,
+      "aupr": 0.5147
+    },
+    "blandskog": {
+      "auroc": 0.7021,
+      "aupr": 0.2775
+    }
+  },
+  "accuracy_suite": {
+    "n_plots_all": 944,
+    "overall_accuracy_5class": 0.4661,
+    "cohen_kappa": 0.3389,
+    "per_class": {
+      "tallskog": {
+        "users_accuracy": 0.8159,
+        "producers_accuracy": 0.4409,
+        "f1": 0.5724,
+        "support": 372
+      },
+      "granskog": {
+        "users_accuracy": 0.6237,
+        "producers_accuracy": 0.4696,
+        "f1": 0.5358,
+        "support": 247
+      },
+      "lövskog": {
+        "users_accuracy": 0.6279,
+        "producers_accuracy": 0.406,
+        "f1": 0.4932,
+        "support": 133
+      },
+      "blandskog": {
+        "users_accuracy": 0.3137,
+        "producers_accuracy": 0.3636,
+        "f1": 0.3368,
+        "support": 132
+      },
+      "annat (icke-skog)": {
+        "users_accuracy": 0.1824,
+        "producers_accuracy": 0.9667,
+        "f1": 0.3069,
+        "support": 60
+      }
+    }
+  },
+  "_meta": {
+    "checkpoint": "/data/checkpoints/v8b_markfukt/best_model.pt",
+    "img_size": 504,
+    "plots_in_crop": 944,
+    "plots_total": 973
+  }
+}

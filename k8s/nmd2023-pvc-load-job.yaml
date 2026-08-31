@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nmd2023-pvc-load
+  namespace: prithvi-training-default
+  labels:
+    app: ops
+    purpose: nmd2023-pvc-load
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ops
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: load
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              mkdir -p /data/nmd2023 && cd /data/nmd2023
+              if [ -f NMD2023bas_v2_1.tif ]; then
+                echo "NMD2023 raster already on PVC"; ls -la; exit 0
+              fi
+              apt-get update -qq && apt-get install -y -qq curl unzip > /dev/null 2>&1
+              echo "downloading NMD2023 v2.1 zip ($(date))..."
+              curl -sSL -o nmd.zip \
+                "https://geodata.naturvardsverket.se/nedladdning/marktacke/NMD2023/Basskikt_v2_x/NMD2023_basskikt_v2_1.zip"
+              echo "unzipping raster + world file ($(date))..."
+              unzip -o -j nmd.zip \
+                "NMD2023_basskikt_v2_1/NMD2023bas_v2_1.tif" \
+                "NMD2023_basskikt_v2_1/NMD2023bas_v2_1.tfw" \
+                "NMD2023_basskikt_v2_1/NMD2023bas_v2_1.tif.aux.xml"
+              rm -f nmd.zip
+              echo "=== done ($(date)) ==="; ls -la /data/nmd2023/; df -h /data | tail -1
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

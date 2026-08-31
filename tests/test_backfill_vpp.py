@@ -52,7 +52,8 @@ def _base_tile() -> dict:
     return {
         "spectral": np.ones((6, H, W), np.float32),
         "bbox_3006": np.array([600000.0, 6500000.0, 600080.0, 6500080.0]),
-        "tessera_year": np.int32(2021),
+        "year": np.int32(2021),          # canonical year-0 — infer_tile_year
+        "tessera_year": np.int32(2021),  # kept: real tiles carry both
         "label": np.full((H, W), 7, np.uint8),   # a field that must survive
     }
 
@@ -74,6 +75,11 @@ def recoreg_dir(tmp_path: Path) -> Path:
     has = _base_tile()
     for k in _RAW:
         has[f"vpp_{k}"] = np.full((H, W), 123.0, np.float32)
+    # The year-aware skip (backfill_one_tile) trusts present VPP only when
+    # it is stamped for the right year; an unstamped tile predates the
+    # year-0 fix and is deliberately re-fetched. Real filled tiles carry
+    # the stamp — the fixture must too.
+    has["vpp_year"] = np.int32(2021)
     _write(d / "tile_700000_6600000.npz", has)
 
     # (3) all-zero-VPP: channels present but identically zero → counts as empty.
@@ -100,9 +106,14 @@ def test_vpp_is_empty_detects_absent_and_allzero():
 
 
 def test_tile_year_precedence():
-    assert bf._tile_year({"tessera_year": np.int32(2021),
+    """Canonical order (tile_fetch.infer_tile_year): year -> lpis_year ->
+    modal dates. tessera_year is DELIBERATELY not consulted — it is a
+    clamped value, not a label year (see infer_tile_year's docstring);
+    this test once asserted the opposite against a long-gone local impl."""
+    assert bf._tile_year({"year": np.int32(2021),
                           "lpis_year": np.int32(2019)}) == 2021
     assert bf._tile_year({"lpis_year": np.int32(2019)}) == 2019
+    assert bf._tile_year({"tessera_year": np.int32(2021)}) is None
     assert bf._tile_year({"year": np.int32(2020)}) == 2020
     assert bf._tile_year({"dates": np.array(["2022-06-01", "2022-08-15"])}) == 2022
     assert bf._tile_year({"spectral": np.ones((6, H, W))}) is None
@@ -137,7 +148,7 @@ def test_enumeration_targets_only_empty_tiles(recoreg_dir, monkeypatch):
     def _fake_fetch(west, south, east, north, *, size_px, year, cache_dir):
         fetched_bboxes.append((west, south, east, north))
         assert size_px == (H, W)        # size derived from the spectral cube
-        assert year == 2021             # from tessera_year
+        assert year == 2021             # from canonical year field
         return _covered()
 
     monkeypatch.setattr(bf, "fetch_vpp_tiles", _fake_fetch)
@@ -149,8 +160,10 @@ def test_enumeration_targets_only_empty_tiles(recoreg_dir, monkeypatch):
     assert stats["skipped"] == 1
     assert stats["empty"] == 0 and stats["failed"] == 0
     assert len(fetched_bboxes) == 2
-    # The has-VPP tile's bbox (700000/6600000) was never fetched.
-    assert (700000.0, 6600000.0, 700080.0, 6600080.0) not in fetched_bboxes
+    # The has-VPP tile's bbox was never fetched. Bboxes are CENTERED on
+    # the tile since the shared resolve_fetch_bbox (f822117): centre
+    # (700000, 6600000) ± half the 8-px/10-m extent.
+    assert (699960, 6599960, 700040, 6600040) not in fetched_bboxes
 
 
 # ── write + read-back, with field preservation ───────────────────────────

@@ -1,0 +1,82 @@
+{
+  "n_plots_compared": 41458,
+  "n_plots_total": 43892,
+  "nmd2023_coverage_frac": 0.9445,
+  "restricted_to_model_plots": false,
+  "sources": {
+    "NMD2023_v2.1": {
+      "n_plots_all": 41458,
+      "overall_accuracy_5class": 0.4486,
+      "cohen_kappa": 0.3071,
+      "per_class": {
+        "tallskog": {
+          "users_accuracy": 0.8067,
+          "producers_accuracy": 0.4908,
+          "f1": 0.6103,
+          "support": 17530
+        },
+        "granskog": {
+          "users_accuracy": 0.6997,
+          "producers_accuracy": 0.3982,
+          "f1": 0.5076,
+          "support": 11257
+        },
+        "lövskog": {
+          "users_accuracy": 0.2634,
+          "producers_accuracy": 0.4745,
+          "f1": 0.3388,
+          "support": 4936
+        },
+        "blandskog": {
+          "users_accuracy": 0.3356,
+          "producers_accuracy": 0.2412,
+          "f1": 0.2807,
+          "support": 5431
+        },
+        "annat (icke-skog)": {
+          "users_accuracy": 0.1603,
+          "producers_accuracy": 0.8064,
+          "f1": 0.2674,
+          "support": 2304
+        }
+      }
+    },
+    "NMD2018_v1.1": {
+      "n_plots_all": 41458,
+      "overall_accuracy_5class": 0.4046,
+      "cohen_kappa": 0.2508,
+      "per_class": {
+        "tallskog": {
+          "users_accuracy": 0.7115,
+          "producers_accuracy": 0.4535,
+          "f1": 0.5539,
+          "support": 17530
+        },
+        "granskog": {
+          "users_accuracy": 0.6268,
+          "producers_accuracy": 0.3584,
+          "f1": 0.456,
+          "support": 11257
+        },
+        "lövskog": {
+          "users_accuracy": 0.2701,
+          "producers_accuracy": 0.3535,
+          "f1": 0.3062,
+          "support": 4936
+        },
+        "blandskog": {
+          "users_accuracy": 0.3103,
+          "producers_accuracy": 0.2294,
+          "f1": 0.2638,
+          "support": 5431
+        },
+        "annat (icke-skog)": {
+          "users_accuracy": 0.1346,
+          "producers_accuracy": 0.7812,
+          "f1": 0.2297,
+          "support": 2304
+        }
+      }
+    }
+  }
+}

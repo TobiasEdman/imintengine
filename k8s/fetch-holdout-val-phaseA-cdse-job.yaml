@@ -1,0 +1,99 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fetch-holdout-val-phasea-cdse
+  namespace: prithvi-training-default
+  labels: { app: ensemble-prep, purpose: fetch-holdout-val-phasea-cdse }
+spec:
+  # Parallel CDSE-openEO leg for the same Phase-A manifest/output as the DES
+  # leg. Both use the fetcher's O_EXCL claim directory, so each tile is owned
+  # by exactly one worker and completed files remain idempotently resume-safe.
+  # CDSE openEO is single-flight per account: keep --workers 1.
+  backoffLimit: 1
+  activeDeadlineSeconds: 259200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: ensemble-prep, purpose: fetch-holdout-val-phasea-cdse }
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: fetch
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== holdout Phase A: CDSE-openEO parallel leg ==="
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely xarray netCDF4 h5netcdf
+
+              git clone --depth 1 --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git /workspace/imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+              git grep -q '_bands_groups_for_source("cdse-openeo")' \
+                imint/training/openeo_tile_graph.py
+              cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
+
+              OUT=/data/holdout_val_512
+              MANIFEST=/data/audits/holdout_val_phaseA.json
+              echo "Staged already: $(ls "$OUT"/*.npz 2>/dev/null | wc -l)"
+              python scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json "$MANIFEST" \
+                --output-dir "$OUT" \
+                --claim-dir "$OUT/.claims" \
+                --claim-stale-h 6 \
+                --tile-size-px 512 \
+                --years 2018 2019 2020 2021 2022 2023 2024 \
+                --workers 1 \
+                --fetch-sources cdse-openeo \
+                --scl-backend cdse \
+                --no-pre2018
+              echo "=== CDSE Phase-A leg complete: $(date) ==="
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: VPP_SOURCE, value: "wekeo" }
+            - { name: VPP_WEKEO_DIR, value: "/data/vpp_wekeo" }
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef: { name: cdse-credentials, key: client_id }
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: cdse-credentials, key: client_secret }
+            # Retained for shared fetch helpers; this leg performs both spectral
+            # fetching and SCL scene screening through CDSE.
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef: { name: des-credentials, key: user }
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: des-credentials, key: password }
+          envFrom:
+            - secretRef: { name: wekeo-creds }
+          resources:
+            requests: { cpu: "4", memory: "16Gi" }
+            limits: { cpu: "4", memory: "16Gi" }
+          volumeMounts:
+            - { name: training-data, mountPath: /data }
+            - { name: skg-endpoints, mountPath: /etc/skg, readOnly: true }
+      volumes:
+        - name: training-data
+          persistentVolumeClaim: { claimName: training-data-cephfs }
+        - name: skg-endpoints
+          secret: { secretName: skg-endpoints }

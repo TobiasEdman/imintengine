@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: probe-cdse-holdout-credits
+  namespace: prithvi-training-default
+  labels: { app: ensemble-prep, purpose: probe-cdse-holdout-credits }
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: ensemble-prep, purpose: probe-cdse-holdout-credits }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: probe
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+              pip install --quiet --no-cache-dir requests openeo
+              git clone --depth 1 --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git /workspace/imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine
+              python - <<'PY'
+              import json
+              from imint.fetch import _connect_cdse
+
+              conn = _connect_cdse()
+              account = conn.describe_account()
+              print("CDSE_ACCOUNT=" + json.dumps(account, sort_keys=True, default=str))
+              PY
+          env:
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef: { name: cdse-credentials, key: client_id }
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: cdse-credentials, key: client_secret }
+          resources:
+            requests: { cpu: "1", memory: "1Gi" }
+            limits: { cpu: "1", memory: "1Gi" }

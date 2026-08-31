@@ -1,0 +1,98 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-holdout-tessera-y0
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: enrich-holdout-tessera-y0
+spec:
+  # Stage 4 of the independent-validation pipeline
+  # (docs/plans/independent_holdout_validation.md): add TESSERA 128-d per-pixel
+  # embeddings to the Phase A holdout-val tiles. REQUIRED for the Tessera model
+  # (it consumes precomputed embeddings, not raw spectral). Mirrors
+  # enrich-tessera-512-retry, only --data-dir changed to /data/holdout_val_512 (HOLDOUT).
+  # geotessera fetches embeddings globally at 10 m; new off-footprint locations
+  # download fresh into the LRU-bounded cache (reuses /data/tessera_cache).
+  # PREREQ: fetch-holdout-val-phasea Complete. Independent of enrich-holdout-s1
+  # (may run in parallel).
+  backoffLimit: 1
+  activeDeadlineSeconds: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: enricher
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== TESSERA 128-d embedding enrichment — holdout-val Phase A ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj pyyaml geotessera
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "HEAD: $(git rev-parse --short HEAD)"
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+
+              python scripts/enrich_tiles_tessera.py \
+                --data-dir /data/holdout_val_512 \
+                --embeddings-dir /data/tessera_cache/embeddings \
+                --registry-cache-dir /data/tessera_cache/registry \
+                --workers 4 \
+                --cache-soft-gb 20 \
+                --skip-existing
+
+              echo ""
+              echo "=== TESSERA coverage audit ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              outs = sorted(glob.glob("/data/holdout_val_512/*.npz"))
+              emb = 0
+              for p in outs:
+                  d = np.load(p, allow_pickle=True)
+                  if "tessera" in d.files and np.isfinite(d["tessera"]).any() \
+                          and float(np.abs(d["tessera"]).max()) > 0:
+                      emb += 1
+              print(f"tessera embeddings present: {emb}/{len(outs)} tiles")
+              PYEOF
+              echo "=== TESSERA enrich complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "24Gi"
+            limits:
+              cpu: "8"
+              memory: "24Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: holdout-sen2cor-handoff
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: holdout-sen2cor-handoff
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 259200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+        purpose: holdout-sen2cor-handoff
+    spec:
+      restartPolicy: Never
+      serviceAccountName: campaign-orchestrator
+      containers:
+        - name: handoff
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq curl >/dev/null 2>&1
+              curl -sSLo /usr/local/bin/kubectl \
+                https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl
+              chmod +x /usr/local/bin/kubectl
+              jobs="fetch-holdout-val-phasea fetch-holdout-val-phasea-cdse"
+              while true; do
+                waiting=0
+                for job in $jobs; do
+                  complete=$(kubectl -n prithvi-training-default get job "$job" \
+                    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}')
+                  failed=$(kubectl -n prithvi-training-default get job "$job" \
+                    -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}')
+                  if [ "$complete" != "True" ] && [ "$failed" != "True" ]; then
+                    waiting=1
+                  fi
+                done
+                if [ "$waiting" -eq 0 ]; then
+                  kubectl -n prithvi-training-default apply -f /handoff/backfill.yaml
+                  echo "Sen2Cor backfill submitted after both spectral jobs became terminal"
+                  exit 0
+                fi
+                echo "Spectral jobs still active; checking again in 10 minutes"
+                sleep 600
+              done
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { cpu: "250m", memory: "256Mi" }
+          volumeMounts:
+            - { name: backfill-manifest, mountPath: /handoff, readOnly: true }
+      volumes:
+        - name: backfill-manifest
+          configMap:
+            name: holdout-sen2cor-backfill-manifest
+            items:
+              - { key: backfill.yaml, path: backfill.yaml }

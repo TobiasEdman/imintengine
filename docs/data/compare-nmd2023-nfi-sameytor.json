@@ -1,0 +1,119 @@
+{
+  "n_plots_compared": 912,
+  "n_plots_total": 944,
+  "nmd2023_coverage_frac": 0.9661,
+  "restricted_to_model_plots": true,
+  "sources": {
+    "NMD2023_v2.1": {
+      "n_plots_all": 912,
+      "overall_accuracy_5class": 0.4934,
+      "cohen_kappa": 0.3657,
+      "per_class": {
+        "tallskog": {
+          "users_accuracy": 0.8186,
+          "producers_accuracy": 0.4848,
+          "f1": 0.609,
+          "support": 363
+        },
+        "granskog": {
+          "users_accuracy": 0.7628,
+          "producers_accuracy": 0.5,
+          "f1": 0.6041,
+          "support": 238
+        },
+        "lövskog": {
+          "users_accuracy": 0.3235,
+          "producers_accuracy": 0.5455,
+          "f1": 0.4062,
+          "support": 121
+        },
+        "blandskog": {
+          "users_accuracy": 0.3491,
+          "producers_accuracy": 0.2846,
+          "f1": 0.3136,
+          "support": 130
+        },
+        "annat (icke-skog)": {
+          "users_accuracy": 0.2251,
+          "producers_accuracy": 0.8667,
+          "f1": 0.3574,
+          "support": 60
+        }
+      }
+    },
+    "NMD2018_v1.1": {
+      "n_plots_all": 912,
+      "overall_accuracy_5class": 0.4057,
+      "cohen_kappa": 0.257,
+      "per_class": {
+        "tallskog": {
+          "users_accuracy": 0.713,
+          "producers_accuracy": 0.438,
+          "f1": 0.5427,
+          "support": 363
+        },
+        "granskog": {
+          "users_accuracy": 0.5912,
+          "producers_accuracy": 0.395,
+          "f1": 0.4736,
+          "support": 238
+        },
+        "lövskog": {
+          "users_accuracy": 0.2981,
+          "producers_accuracy": 0.3967,
+          "f1": 0.3404,
+          "support": 121
+        },
+        "blandskog": {
+          "users_accuracy": 0.3793,
+          "producers_accuracy": 0.2538,
+          "f1": 0.3041,
+          "support": 130
+        },
+        "annat (icke-skog)": {
+          "users_accuracy": 0.1277,
+          "producers_accuracy": 0.6,
+          "f1": 0.2105,
+          "support": 60
+        }
+      }
+    },
+    "v8b": {
+      "n_plots_all": 912,
+      "overall_accuracy_5class": 0.4627,
+      "cohen_kappa": 0.3347,
+      "per_class": {
+        "tallskog": {
+          "users_accuracy": 0.8131,
+          "producers_accuracy": 0.4435,
+          "f1": 0.574,
+          "support": 363
+        },
+        "granskog": {
+          "users_accuracy": 0.6608,
+          "producers_accuracy": 0.4748,
+          "f1": 0.5526,
+          "support": 238
+        },
+        "lövskog": {
+          "users_accuracy": 0.5972,
+          "producers_accuracy": 0.3554,
+          "f1": 0.4456,
+          "support": 121
+        },
+        "blandskog": {
+          "users_accuracy": 0.3133,
+          "producers_accuracy": 0.3615,
+          "f1": 0.3357,
+          "support": 130
+        },
+        "annat (icke-skog)": {
+          "users_accuracy": 0.1807,
+          "producers_accuracy": 0.9667,
+          "f1": 0.3045,
+          "support": 60
+        }
+      }
+    }
+  }
+}

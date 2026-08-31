@@ -44,6 +44,8 @@ class CromaSegmentationModel(nn.Module):
         modality: str = "joint",
         n_aux_channels: int = 0,
         dropout: float = 0.1,
+        enable_tradslag_head: bool = False,
+        num_tradslag: int = 4,
     ):
         super().__init__()
         self.encoder = encoder
@@ -53,6 +55,8 @@ class CromaSegmentationModel(nn.Module):
         self.embed_dim = embed_dim
         self.modality = modality
         self.n_aux_channels = n_aux_channels
+        self.enable_tradslag_head = enable_tradslag_head
+        self.num_tradslag = num_tradslag
 
         grid = img_size // patch_size
         if grid * patch_size != img_size:
@@ -67,37 +71,24 @@ class CromaSegmentationModel(nn.Module):
                 f"modality={modality!r}; must be 'joint', 'optical', or 'sar'."
             )
 
-        # Progressive upsample
-        c1 = embed_dim
-        c2 = embed_dim // 2
-        c3 = embed_dim // 4
-        c4 = embed_dim // 8
-
-        self.up1 = nn.Sequential(
-            nn.ConvTranspose2d(c1, c2, kernel_size=2, stride=2),
-            nn.BatchNorm2d(c2), nn.GELU(),
+        # Multi-level UPerNet head (fairness parity with Prithvi). CROMA's
+        # cross_encoder (joint SAR-optical) exposes a 6-block ModuleList
+        # (``cross_encoder.layers``), so we hook 4 evenly-spaced blocks and
+        # feed the SAME UPerNet decoder Prithvi uses — not a linear probe.
+        from imint.fm.upernet import ViTUPerNetHead, get_default_pool_sizes
+        pool_sizes = get_default_pool_sizes(
+            device=None, img_size=img_size, patch_size=patch_size,
         )
-        self.up2 = nn.Sequential(
-            nn.ConvTranspose2d(c2, c3, kernel_size=2, stride=2),
-            nn.BatchNorm2d(c3), nn.GELU(),
+        self.decoder_head = ViTUPerNetHead(
+            embed_dim=embed_dim,
+            num_classes=num_classes,
+            decoder_channels=256,
+            dropout=dropout,
+            n_aux_channels=n_aux_channels,
+            pool_sizes=pool_sizes,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
-        self.smooth = nn.Sequential(
-            nn.Conv2d(c3, c4, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(c4), nn.GELU(),
-        )
-
-        if n_aux_channels > 0:
-            self.aux_proj = nn.Sequential(
-                nn.Conv2d(n_aux_channels, c4, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(c4), nn.GELU(),
-            )
-            classifier_in = c4 * 2
-        else:
-            self.aux_proj = None
-            classifier_in = c4
-
-        self.dropout = nn.Dropout2d(dropout)
-        self.classifier = nn.Conv2d(classifier_in, num_classes, kernel_size=1)
 
     def _pick_encoding(self, enc_dict: dict) -> torch.Tensor:
         """Select the token sequence per ``self.modality``, with a
@@ -142,7 +133,8 @@ class CromaSegmentationModel(nn.Module):
         optical: torch.Tensor | None = None,
         aux: torch.Tensor | None = None,
         output_size: tuple[int, int] | None = None,
-    ) -> torch.Tensor:
+        return_fractions: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
         """Per-pixel class logits from CROMA encodings.
 
         Args:
@@ -154,9 +146,15 @@ class CromaSegmentationModel(nn.Module):
             aux: Optional (B, n_aux, Ho, Wo) at the desired output res.
             output_size: Optional (H, W) for the output logits. Defaults
                 to the input sar/optical tensor's (H, W).
+            return_fractions: When True AND the fraction head is enabled,
+                also return the (B, num_tradslag, Ho, Wo) fraction logits
+                computed from the SAME feature that feeds the classifier.
+                Head disabled → second element is ``None``. Default False →
+                logits only (byte-identical to the pre-frac signature).
 
         Returns:
-            (B, num_classes, Ho, Wo) logits.
+            (B, num_classes, Ho, Wo) logits, or ``(logits, frac_logits)``
+            when ``return_fractions`` is True.
         """
         if self.modality in ("joint", "sar") and sar is None:
             raise ValueError(f"CROMA modality={self.modality!r} requires 'sar'.")
@@ -167,25 +165,59 @@ class CromaSegmentationModel(nn.Module):
         if output_size is None:
             output_size = tuple(ref.shape[-2:])
 
-        enc = self.encoder(SAR_images=sar, optical_images=optical)
-        tokens = self._pick_encoding(enc)
-        feat = self._tokens_to_spatial(tokens)  # (B, D, grid, grid)
-
-        feat = self.up1(feat)
-        feat = self.up2(feat)
-        feat = self.smooth(feat)
-
-        feat = F.interpolate(
-            feat, size=output_size, mode="bilinear", align_corners=True,
+        # Collect 4 evenly-spaced multi-level features from the joint stream.
+        # CROMA's cross_encoder (SAR↔optical fusion) is a 6-block ModuleList
+        # at ``cross_encoder.layers``; we hook it, run the encoder once, and
+        # feed the 4 captured block token-sequences into the UPerNet head.
+        # Fake encoders (tests) with no cross_encoder fall back to replicating
+        # the single joint encoding to 4 levels.
+        block_tokens = self._extract_multi_level(sar, optical)
+        feats = [self._tokens_to_spatial(t) for t in block_tokens]  # 4× (B,D,g,g)
+        return self.decoder_head(
+            feats, output_size=output_size, aux=aux,
+            return_fractions=return_fractions,
         )
 
-        if self.aux_proj is not None and aux is not None:
-            if aux.shape[-2:] != output_size:
-                aux = F.interpolate(
-                    aux, size=output_size, mode="bilinear", align_corners=True,
-                )
-            aux_feat = self.aux_proj(aux)
-            feat = torch.cat([feat, aux_feat], dim=1)
+    def _extract_multi_level(
+        self, sar: torch.Tensor | None, optical: torch.Tensor | None,
+    ) -> list[torch.Tensor]:
+        """Return 4 evenly-spaced (B, N, D) block token-sequences.
 
-        feat = self.dropout(feat)
-        return self.classifier(feat)
+        Hooks the joint cross-attention stream (``cross_encoder.layers``) so
+        the multi-level features carry fused SAR+optical at increasing depth —
+        the same information the linear probe's ``joint_encodings`` used, but
+        at 4 depths for the UPerNet pyramid. Falls back to the final joint
+        encoding replicated ×4 when no hookable block list is present.
+        """
+        layers = None
+        cross = getattr(self.encoder, "cross_encoder", None)
+        if cross is not None and hasattr(cross, "layers"):
+            layers = cross.layers
+
+        if layers is not None and len(layers) >= 4:
+            L = len(layers)
+            idxs = [L // 4 - 1, L // 2 - 1, 3 * L // 4 - 1, L - 1]
+            idxs = [max(0, i) for i in idxs]
+            captured: dict[int, torch.Tensor] = {}
+            handles = []
+
+            def mk(slot):
+                def hook(mod, inp, out):
+                    t = out[0] if isinstance(out, (tuple, list)) else out
+                    captured[slot] = t
+                return hook
+
+            for slot, i in enumerate(idxs):
+                handles.append(layers[i].register_forward_hook(mk(slot)))
+            try:
+                _ = self.encoder(SAR_images=sar, optical_images=optical)
+            finally:
+                for h in handles:
+                    h.remove()
+            if len(captured) == 4:
+                return [captured[s] for s in range(4)]
+
+        # Fallback: single final joint encoding → 4 levels.
+        enc = self.encoder(SAR_images=sar, optical_images=optical)
+        tokens = self._pick_encoding(enc)
+        return [tokens, tokens, tokens, tokens]

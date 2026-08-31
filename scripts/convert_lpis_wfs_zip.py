@@ -44,39 +44,86 @@ def _axes_ok(bounds) -> bool:
             and n_lo < bounds[1] < n_hi and n_lo < bounds[3] < n_hi)
 
 
-def convert(zip_path: str, ref_parquet: str, out_path: str,
-            layer: str = "arslager_skiftePolygon") -> int:
-    """Convert; returns the parcel count. Raises on any sanity failure."""
-    import geopandas as gpd
+def _ensure_en_axes(gdf):
+    """Return ``gdf`` with GIS-conventional (Easting, Northing) geometry.
+
+    No-op if already (E, N); swaps the (N, E) WFS-official order otherwise;
+    raises if the bounds still don't read as Swedish 3006 after a swap (guards
+    against double-swapping already-correct data)."""
     import shapely
+
+    b = gdf.total_bounds
+    print(f"  total_bounds: {b}")
+    if _axes_ok(b):
+        return gdf
+    print("  axes SWAPPED (WFS official N,E order) — swapping to (E,N)")
+    gdf = gdf.copy()
+    gdf["geometry"] = shapely.transform(gdf.geometry.values, lambda c: c[:, ::-1])
+    b = gdf.total_bounds
+    print(f"  total_bounds after swap: {b}")
+    if not _axes_ok(b):
+        raise SystemExit(f"axes still wrong after swap: {b}")
+    return gdf
+
+
+def fix_parquet_axes(path: str, *, backup: bool = True) -> str:
+    """Idempotently correct an existing GeoParquet's axis order in place.
+
+    For parquets written before the converter existed (the March local
+    LPIS files predate d368dc2). Reads, bounds-gates, and — only if swapped —
+    backs the original up to ``<path>.bak`` (never overwriting an existing
+    backup) and rewrites with (E, N) geometry. Returns a one-word status:
+    ``"ok"`` (already correct, untouched) or ``"fixed"``.
+    """
+    import geopandas as gpd
+
+    gdf = gpd.read_parquet(path)
+    if _axes_ok(gdf.total_bounds):
+        print(f"{path}: axes already OK — untouched")
+        return "ok"
+    if backup:
+        from pathlib import Path
+        bak = Path(f"{path}.bak")
+        if not bak.exists():
+            gpd.read_parquet(path).to_parquet(bak, index=False)
+            print(f"  backed up original → {bak}")
+    gdf = _ensure_en_axes(gdf)
+    gdf.to_parquet(path, index=False)
+    chk = gpd.read_parquet(path)
+    if len(chk) != len(gdf) or not _axes_ok(chk.total_bounds):
+        raise SystemExit(f"readback mismatch after fix: {len(chk)} rows, "
+                         f"bounds {chk.total_bounds}")
+    print(f"{path}: FIXED ({len(chk)} parcels, axes OK)")
+    return "fixed"
+
+
+def convert(zip_path: str, ref_parquet: str | None, out_path: str,
+            layer: str = "arslager_skiftePolygon") -> int:
+    """Convert; returns the parcel count. Raises on any sanity failure.
+
+    ``ref_parquet`` cross-checks schema + CRS against a known-good year; pass
+    ``None`` to skip that check (bootstrap on a fresh machine with no parquet
+    yet — the axis bounds-gate + readback assert still run)."""
+    import geopandas as gpd
 
     print(f"reading {zip_path} (layer {layer})...")
     gdf = gpd.read_file(f"zip://{zip_path}", layer=layer)
     print(f"  {len(gdf)} parcels, crs={gdf.crs}")
 
-    b = gdf.total_bounds
-    print(f"  total_bounds: {b}")
-    if not _axes_ok(b):
-        # WFS official (N, E) order — swap to GIS-conventional (E, N).
-        print("  axes SWAPPED in source (WFS official N,E order) — swapping")
-        gdf["geometry"] = shapely.transform(
-            gdf.geometry.values, lambda c: c[:, ::-1])
-        b = gdf.total_bounds
-        print(f"  total_bounds after swap: {b}")
-    if not _axes_ok(b):
-        raise SystemExit(f"axes still wrong after swap: {b}")
+    gdf = _ensure_en_axes(gdf)
 
-    ref = gpd.read_parquet(ref_parquet)
-    missing = set(ref.columns) - set(gdf.columns)
-    if missing:
-        raise SystemExit(f"schema mismatch — source saknar kolumner: {missing}")
-    # pyproj equality, NOT str() — the projjson representation of 3006
-    # differs textually from "EPSG:3006" while being the same CRS, and a
-    # str-triggered to_crs is a numeric no-op that does NOT fix the swap.
-    if gdf.crs != ref.crs:
-        raise SystemExit(f"CRS mismatch per pyproj: {gdf.crs} vs {ref.crs}")
+    if ref_parquet:
+        ref = gpd.read_parquet(ref_parquet)
+        missing = set(ref.columns) - set(gdf.columns)
+        if missing:
+            raise SystemExit(f"schema mismatch — source saknar kolumner: {missing}")
+        # pyproj equality, NOT str() — the projjson representation of 3006
+        # differs textually from "EPSG:3006" while being the same CRS, and a
+        # str-triggered to_crs is a numeric no-op that does NOT fix the swap.
+        if gdf.crs != ref.crs:
+            raise SystemExit(f"CRS mismatch per pyproj: {gdf.crs} vs {ref.crs}")
+        gdf = gdf[list(ref.columns)]
 
-    gdf = gdf[list(ref.columns)]
     gdf.to_parquet(out_path, index=False)
 
     chk = gpd.read_parquet(out_path)
@@ -89,13 +136,28 @@ def convert(zip_path: str, ref_parquet: str, out_path: str,
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--zip", required=True, help="SJV WFS shape-zip path")
-    p.add_argument("--ref-parquet", required=True,
-                   help="known-good parquet from another year (schema + CRS ref)")
-    p.add_argument("--out", required=True, help="output GeoParquet path")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--zip", help="SJV WFS shape-zip path (fresh conversion)")
+    src.add_argument("--fix-parquet", nargs="+",
+                     help="existing parquet(s) to correct in place (idempotent, "
+                     "backs up to .bak). For pre-converter local files.")
+    p.add_argument("--ref-parquet",
+                   help="known-good parquet from another year (schema + CRS ref); "
+                   "required with --zip")
+    p.add_argument("--out", help="output GeoParquet path; required with --zip")
     p.add_argument("--layer", default="arslager_skiftePolygon",
                    help="zip layer (the zip also holds an *_NULL layer)")
     a = p.parse_args()
+
+    if a.fix_parquet:
+        stats = {f: fix_parquet_axes(f) for f in a.fix_parquet}
+        n_fixed = sum(v == "fixed" for v in stats.values())
+        print(f"\n{n_fixed}/{len(stats)} parquet(s) fixed, "
+              f"{len(stats) - n_fixed} already OK")
+        return
+
+    if not (a.ref_parquet and a.out):
+        raise SystemExit("--zip requires --ref-parquet and --out")
     convert(a.zip, a.ref_parquet, a.out, layer=a.layer)
     print("NEXT: python scripts/preprocess_sks_lpis_spatial.py "
           "--lpis-dir <dir> för _spatial-varianten")

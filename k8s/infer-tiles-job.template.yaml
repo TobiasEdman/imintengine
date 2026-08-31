@@ -1,0 +1,110 @@
+# Stage A — GPU, batched, cached inference (scripts/infer_tiles.py).
+# Produces a per-tile prediction cache ONCE per checkpoint under
+# <CACHE_DIR>/<ckpt_sha>/; every truth source then scores from it on CPU
+# (score-truth-job.template.yaml). Placeholders substituted at launch:
+#   __MEMBER__    job-name suffix / log stem
+#   __CKPT__      checkpoint dir under /data/checkpoints (best_model.pt inside)
+#   __BACKBONE__  registry backbone name (prithvi_600m | tessera_v1)
+#   __TILE_LIST__ tile-list arg, e.g. "--tile-list /data/lucas/lucas_tiles.txt"
+#                 or empty to infer ALL *.npz in --data-dir
+#   __SHARD__     "--shard i/K" for map/reduce across GPUs, or empty
+# Mirrors nfi-validate-tessera-job.yaml (image, 2080ti node, PVC, iceguard
+# requests==limits). Do NOT apply raw.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: infer-tiles-__MEMBER__
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: infer-tiles
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: infer
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== Stage A infer_tiles — __MEMBER__ (batched, cached) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
+                pandas pyarrow rasterio pyproj
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              grep -q 'return_fractions=True' scripts/infer_tiles.py \
+                || { echo "FATAL: infer_tiles.py missing/old on clone"; exit 1; }
+              [ -f /data/checkpoints/__CKPT__/best_model.pt ] \
+                || { echo "FATAL: checkpoint __CKPT__ not found"; exit 1; }
+
+              python3 scripts/infer_tiles.py \
+                --checkpoint /data/checkpoints/__CKPT__/best_model.pt \
+                --backbone-name __BACKBONE__ \
+                --data-dir /data/unified_v2_512 \
+                __TILE_LIST__ \
+                --img-size 504 --num-classes 28 \
+                --cache-dir /data/pred_cache \
+                --batch-size 8 --num-workers 2 \
+                --device cuda __SHARD__ \
+                --produced-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+              echo ""; echo "=== cache manifest ==="
+              SHA=$(python3 -c "import hashlib;h=hashlib.sha256(open('/data/checkpoints/__CKPT__/best_model.pt','rb').read()).hexdigest()[:16];print(h)")
+              cat /data/pred_cache/$SHA/MANIFEST.json
+              echo ""; echo "=== Done: $(date) — ckpt_sha=$SHA ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            # DataLoader workers pass batch tensors through /dev/shm; the
+            # container default (64Mi) overflows on 130 MB tessera tiles
+            # ("Bus error … out of shared memory"). Give it a real shm.
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi

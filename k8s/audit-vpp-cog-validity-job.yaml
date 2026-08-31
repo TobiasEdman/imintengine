@@ -1,0 +1,82 @@
+---
+# Is the freshly-downloaded WEkEO cache actually usable?
+#
+# prefetch-vpp-train-gapfill run 2 downloaded 745 COGs successfully and then
+# failed its own read-back assertion ("got 0/5 bands non-zero"). That check
+# samples ONE COG at a 5% box around its centre and routes through
+# fetch_vpp_tiles_local, so it cannot distinguish:
+#   (a) the COGs are empty                      -> the download is worthless
+#   (b) the check is wrong                      -> the cache is fine
+#
+# This job reads the rasters DIRECTLY with rasterio, no windowing layer, across
+# several tiles and all three years, and reports each one's non-zero fraction.
+# Read-only: /data mounted readOnly, no writes anywhere.
+#
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/audit-vpp-cog-validity-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-vpp-cog-validity
+  namespace: prithvi-training-default
+  labels: {app: ensemble-prep, purpose: audit-vpp-cog-validity}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels: {app: ensemble-prep, purpose: audit-vpp-cog-validity}
+    spec:
+      restartPolicy: Never
+      imagePullSecrets: [{name: ghcr-push}]
+      containers:
+        - name: audit
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin >/dev/null 2>&1
+              pip3 install --quiet --no-cache-dir numpy rasterio 2>&1 | tail -2
+              python3 - <<'PY'
+              import glob, collections, numpy as np, rasterio
+
+              allc = sorted(glob.glob('/data/vpp_wekeo/VPP_*.tif'))
+              print(f'total COGs on disk: {len(allc)}')
+              by_year = collections.Counter(c.split('VPP_')[1][:4] for c in allc)
+              by_band = collections.Counter(c.rsplit('_', 1)[1][:-4] for c in allc)
+              print(f'  by year: {dict(sorted(by_year.items()))}')
+              print(f'  by band: {dict(sorted(by_band.items()))}')
+
+              # Sample SOSD across every year, several tiles each. Read the full
+              # raster and report valid fraction — no bbox, no window, no
+              # fetch_vpp_tiles_local. If these are non-zero the data is fine and
+              # the prefetch read-back assertion is what is broken.
+              print('\nper-COG valid fraction (full raster, direct read):')
+              bad = 0
+              for yr in sorted(by_year):
+                  sample = sorted(glob.glob(f'/data/vpp_wekeo/VPP_{yr}_*_SOSD.tif'))[:4]
+                  for c in sample:
+                      with rasterio.open(c) as src:
+                          a = src.read(1)
+                          nod = src.nodata
+                      valid = np.count_nonzero(a != 0) / a.size * 100
+                      notnod = (np.count_nonzero(a != nod) / a.size * 100
+                                if nod is not None else float('nan'))
+                      flag = '' if valid > 1 else '   <-- EMPTY'
+                      bad += valid <= 1
+                      print(f'  {c.rsplit("/",1)[-1][:46]:46s} '
+                            f'shape={a.shape} nodata={nod} '
+                            f'non-zero={valid:5.1f}% not-nodata={notnod:5.1f}%{flag}')
+              print(f'\nverdict: {"COGs are EMPTY — download is not usable" if bad else "COGs carry data — the prefetch read-back check is the bug"}')
+              PY
+          resources:
+            requests: {cpu: "2", memory: "8Gi"}
+            limits:   {cpu: "2", memory: "8Gi"}
+          volumeMounts:
+            - {name: data, mountPath: /data, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs}

@@ -7,6 +7,7 @@ the existing TASK_HEAD_REGISTRY / load_segmentation_model() pipeline.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -30,6 +31,14 @@ from .dataset import LULCDataset, build_weighted_sampler
 from .evaluate import evaluate_model
 
 
+def _seed_worker(worker_id: int) -> None:
+    """Seed Python and NumPy from PyTorch's deterministic worker seed."""
+    import random
+    worker_seed = torch.initial_seed() % (2**32)
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+
+
 class LULCTrainer:
     """Trains a Prithvi + UPerNet model for multi-class LULC segmentation.
 
@@ -41,9 +50,27 @@ class LULCTrainer:
 
     def __init__(self, config: TrainingConfig):
         self.config = config
+        # A/B experiments rely on identical model initialization, sampling,
+        # and augmentation; only the auxiliary values may differ.
+        import random
+        random.seed(config.seed)
+        np.random.seed(config.seed)
+        torch.manual_seed(config.seed)
+        if config.deterministic:
+            os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+            torch.use_deterministic_algorithms(
+                True, warn_only=config.deterministic_warn_only,
+            )
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(config.seed)
         self.device = self._resolve_device()
         self._setup_cuda_perf_knobs()
         self.model = self._build_model()
+        self._zero_control_era5_columns()
+        # Backbone family drives input routing in the train/val loops (4D
+        # tessera embedding vs 5D Prithvi Conv3d layout). Read once from the
+        # spec stashed on the model rather than branching on tensor shape.
+        self._model_family = self.model.fm_spec.family
         self._freeze_backbone()
         self.model.to(self.device)
         # BF16 autocast on CUDA only. H100/A100 have hardware BF16; no
@@ -67,6 +94,7 @@ class LULCTrainer:
             "started_at": None,
             "updated_at": None,
         }
+        self._aux_only_training = False
 
     # ── Model setup ───────────────────────────────────────────────────
 
@@ -95,11 +123,40 @@ class LULCTrainer:
         torch.set_float32_matmul_precision("high")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = not self.config.deterministic
+        torch.backends.cudnn.deterministic = self.config.deterministic
 
     def _count_aux_channels(self) -> int:
         """Count how many auxiliary raster channels are enabled."""
         return len(self.config.enabled_aux_names)
+
+    def _zero_control_era5_columns(self) -> None:
+        """Make a fresh zero-weather control neutral in the paired model."""
+        if self.config.era5_mode != "control":
+            return
+        era5_names = (
+            "era5_t2m_mean", "era5_tp_sum", "era5_swvl1_mean",
+            "era5_ssrd_sum", "era5_gdd",
+        )
+        if tuple(self.config.enabled_aux_names[-5:]) != era5_names:
+            raise ValueError("ERA5 channels must be the trailing five AUX inputs")
+        parameters = dict(self.model.named_parameters())
+        candidates = (
+            "lidar_branch.net.0.conv.weight",
+            "aux_encoder.net.0.conv.weight",
+        )
+        found = False
+        with torch.no_grad():
+            for key in candidates:
+                weight = parameters.get(key)
+                if weight is None:
+                    continue
+                if weight.ndim != 4 or weight.shape[1] < 5:
+                    raise ValueError(f"Invalid ERA5 AUX input weight shape: {key}")
+                weight[:, -5:].zero_()
+                found = True
+        if not found:
+            raise ValueError("Could not locate the ERA5 AUX input convolution")
 
     def _collect_aux(
         self,
@@ -135,6 +192,10 @@ class LULCTrainer:
         registry_name = resolve_backbone_name(
             self.config.backbone_name, self.config.backbone,
         )
+        # Stash the resolved backbone so the checkpoint config records it
+        # (load_model needs it for non-Prithvi families that have no
+        # pos_embed to infer from).
+        self._registry_name = registry_name
 
         num_frames = (
             self.config.num_temporal_frames
@@ -170,6 +231,9 @@ class LULCTrainer:
             n_aux_channels=n_aux,
             enable_temporal_pooling=self.config.enable_temporal_pooling,
             enable_multilevel_aux=self.config.enable_multilevel_aux,
+            enable_tradslag_head=self.config.enable_tradslag_head,
+            num_tradslag=self.config.num_tradslag,
+            aux_fusion=self.config.aux_fusion,
             device=self.device,
         )
 
@@ -216,16 +280,27 @@ class LULCTrainer:
               f"| Trainable decoder: {trainable_dec:,}")
 
     def _freeze_for_aux_training(self) -> None:
-        """Stage 2: freeze backbone + decoder + head, train only AuxEncoder + aux_fusion."""
+        """Freeze spectral path and train whichever AUX fusion path is active."""
+        aux_modules = ("aux_encoder", "aux_fusion", "lidar_branch", "gated_fusions")
         for name, param in self.model.named_parameters():
-            if "aux_encoder" in name or "aux_fusion" in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
+            param.requires_grad = any(module in name for module in aux_modules)
+        self._aux_only_training = True
 
         trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         frozen = sum(p.numel() for p in self.model.parameters() if not p.requires_grad)
         print(f"  Stage 2 (aux-only): Frozen: {frozen:,} | Trainable (aux): {trainable:,}")
+
+    def _set_aux_only_module_modes(self) -> None:
+        """Keep frozen decoder/head buffers and dropout immutable."""
+        if not self._aux_only_training:
+            return
+        self.model.eval()
+        for name in (
+            "aux_encoder", "aux_fusion", "lidar_branch", "gated_fusions",
+        ):
+            module = getattr(self.model, name, None)
+            if module is not None:
+                module.train()
 
     # ── Training ──────────────────────────────────────────────────────
 
@@ -256,7 +331,12 @@ class LULCTrainer:
 
         # Class weights
         stats_path = Path(cfg.data_dir) / "class_stats.json"
-        if stats_path.exists():
+        split_manifest = getattr(train_dataset, "_split_manifest", None)
+        if split_manifest is not None:
+            raw_counts = split_manifest["label_support"]["train"]["pixel_counts"]
+            class_counts = {int(index): count for index, count in raw_counts.items()}
+            print("  Class weights: using explicit train-cohort support only")
+        elif stats_path.exists():
             with open(stats_path) as f:
                 stats = json.load(f)
 
@@ -277,22 +357,24 @@ class LULCTrainer:
             else:
                 class_counts = {}
 
-            if class_counts:
-                weights = compute_class_weights(
-                    class_counts,
-                    num_classes=cfg.num_classes,
-                    max_weight=cfg.max_class_weight,
-                    ignore_index=cfg.ignore_index,
-                    method=cfg.weighting_method,
-                )
-                weights_tensor = torch.from_numpy(weights).to(self.device)
-                print(f"  Class weights: {weights.round(2).tolist()}")
-            else:
-                weights_tensor = None
-                print("  WARNING: class_stats.json has no counts — using uniform weights")
+        else:
+            class_counts = {}
+            print("  WARNING: No class_stats.json — using uniform weights")
+
+        if class_counts:
+            weights = compute_class_weights(
+                class_counts,
+                num_classes=cfg.num_classes,
+                max_weight=cfg.max_class_weight,
+                ignore_index=cfg.ignore_index,
+                method=cfg.weighting_method,
+            )
+            weights_tensor = torch.from_numpy(weights).to(self.device)
+            print(f"  Class weights: {weights.round(2).tolist()}")
         else:
             weights_tensor = None
-            print("  WARNING: No class_stats.json — using uniform weights")
+            if stats_path.exists() and split_manifest is None:
+                print("  WARNING: class_stats.json has no counts — using uniform weights")
 
         # Loss function
         if cfg.loss_type == "focal_dice":
@@ -331,6 +413,15 @@ class LULCTrainer:
                 ignore_index=cfg.ignore_index,
             )
             print(f"  Loss: CrossEntropy")
+
+        # Trädslag fraction head: masked-L1 auxiliary loss (multi-task).
+        frac_criterion = None
+        if cfg.enable_tradslag_head:
+            from .losses import FractionLoss
+            frac_criterion = FractionLoss(loss_type=cfg.frac_loss_type)
+            print(f"  Trädslag head: ENABLED "
+                  f"(K={cfg.num_tradslag}, λ_frac={cfg.lambda_frac}, "
+                  f"loss={cfg.frac_loss_type})")
 
         if cfg.enable_area_weighting and cfg.loss_type != "cross_entropy":
             print(f"  Area weighting: enabled  "
@@ -388,8 +479,14 @@ class LULCTrainer:
         # DataLoaders
         sampler = build_weighted_sampler(
             train_dataset,
-            class_stats_path=str(stats_path) if stats_path.exists() else None,
+            class_stats_path=(
+                str(stats_path)
+                if split_manifest is None and stats_path.exists()
+                else None
+            ),
         )
+        loader_generator = torch.Generator().manual_seed(cfg.seed)
+        sampler.generator = loader_generator
         train_loader = DataLoader(
             train_dataset,
             batch_size=cfg.batch_size,
@@ -397,12 +494,16 @@ class LULCTrainer:
             num_workers=cfg.num_workers,
             pin_memory=self.device.type == "cuda",
             drop_last=True,
+            generator=loader_generator,
+            worker_init_fn=_seed_worker,
         )
         val_loader = DataLoader(
             val_dataset,
             batch_size=cfg.batch_size,
             shuffle=False,
             num_workers=cfg.num_workers,
+            generator=torch.Generator().manual_seed(cfg.seed + 1),
+            worker_init_fn=_seed_worker,
         )
 
         # Training loop
@@ -424,11 +525,28 @@ class LULCTrainer:
               f"lr={cfg.lr}, device={self.device}")
         print(f"{'='*60}\n")
 
+        # ── Warm-start finetune ───────────────────────────────────
+        # Load model weights from a best_model.pt and start a fresh
+        # schedule (no optimizer/epoch resume, nothing frozen). Expands
+        # the aux input conv on a channel-count mismatch (e.g. v8b 10 → 11
+        # aux with markfukt). Takes precedence over resume when both set.
+        if cfg.warm_start_from_checkpoint:
+            warm_path = Path(cfg.warm_start_from_checkpoint)
+            if not warm_path.exists():
+                raise FileNotFoundError(
+                    f"warm_start_from_checkpoint not found: {warm_path}"
+                )
+            print(f"  Warm-start finetune from: {warm_path}")
+            self._load_spectral_checkpoint(warm_path)
+            self._init_training_log()
+            # Fall through to the normal training loop with start_epoch=1,
+            # a fresh optimizer, and every parameter trainable.
+
         # ── Resume from checkpoint ────────────────────────────────
         resume_path = None
-        if cfg.resume_from_checkpoint:
+        if cfg.resume_from_checkpoint and not cfg.warm_start_from_checkpoint:
             resume_path = Path(cfg.resume_from_checkpoint)
-        else:
+        elif not cfg.warm_start_from_checkpoint:
             auto_path = ckpt_dir / "last_checkpoint.pt"
             if auto_path.exists():
                 resume_path = auto_path
@@ -450,7 +568,9 @@ class LULCTrainer:
                 best_epoch = state["best_epoch"]
                 patience_counter = state["patience_counter"]
                 train_loss_history = state.get("train_loss_history", [])
-        else:
+        elif not cfg.warm_start_from_checkpoint:
+            # Fresh run (no resume, no warm-start). Warm-start already
+            # loaded weights + init'd the log above, so skip here.
             if cfg.freeze_spectral:
                 self._freeze_for_aux_training()
             self._init_training_log()
@@ -458,26 +578,58 @@ class LULCTrainer:
         for epoch in range(start_epoch, cfg.epochs + 1):
             # ── Train epoch ───────────────────────────────────────────
             self.model.train()
+            self._set_aux_only_module_modes()
             # Keep encoder in eval mode (batchnorm/dropout frozen)
             self.model.encoder.eval()
 
             epoch_loss = 0.0
+            epoch_frac_loss = 0.0
+            n_frac_batches = 0
             n_batches = 0
+            exposure_digest = hashlib.sha256()
+            train_target_support = torch.zeros(
+                cfg.num_classes, dtype=torch.int64,
+            )
+            train_class_tiles = [set() for _ in range(cfg.num_classes)]
             t0 = time.time()
 
             for batch in train_loader:
-                images = batch["spectral"].to(self.device)
-                labels = batch["label"].to(self.device)    # (B, H, W)
+                labels_cpu = batch["label"].contiguous()
+                if cfg.log_training_exposure:
+                    batch_tiles = batch.get("metadata", {}).get("tile")
+                    if (
+                        not isinstance(batch_tiles, (list, tuple))
+                        or len(batch_tiles) != labels_cpu.shape[0]
+                    ):
+                        raise RuntimeError(
+                            "Training exposure ledger lacks batched tile identities"
+                        )
+                    for tile_name, sample_labels in zip(batch_tiles, labels_cpu):
+                        encoded_name = str(tile_name).encode("utf-8")
+                        exposure_digest.update(encoded_name)
+                        exposure_digest.update(b"\0")
+                        exposure_digest.update(
+                            sample_labels.numpy().tobytes(order="C")
+                        )
+                        exposure_digest.update(b"\0")
+                        counts = torch.bincount(
+                            sample_labels.reshape(-1).to(torch.int64),
+                            minlength=cfg.num_classes,
+                        )[:cfg.num_classes]
+                        train_target_support += counts
+                        for class_index in torch.nonzero(
+                            counts, as_tuple=False,
+                        ).flatten().tolist():
+                            train_class_tiles[class_index].add(str(tile_name))
+                labels = labels_cpu.to(self.device)    # (B, H, W)
 
-                # Reshape to 5D for Prithvi Conv3d: (B, C=6, T, H, W)
-                B, CT, H, W = images.shape
-                if CT > 6:
-                    # Multitemporal: (B, T*6, H, W) → (B, 6, T, H, W)
-                    T = CT // 6
-                    images_5d = images.view(B, T, 6, H, W).permute(0, 2, 1, 3, 4)
-                else:
-                    # Single-date: (B, 6, H, W) → (B, 6, 1, H, W)
-                    images_5d = images.unsqueeze(2)
+                # Input tensor construction + per-family forward routing is
+                # centralized in imint.fm.forward_router.family_forward (used
+                # by both the train loop and evaluate_model, so the routing
+                # never drifts between them). Prithvi → 5D Conv3d stack;
+                # tessera → 4D embedding; croma/clay/terramind → their raw
+                # per-model stacks + family normalizer. Routed on family, not
+                # on tensor shape. fm_spec is stashed on the model at build.
 
                 # Collect auxiliary channels (height/volume/etc.)
                 aux = self._collect_aux(batch, self.device)
@@ -514,22 +666,81 @@ class LULCTrainer:
                 # runs in FP32 (standard PyTorch AMP pattern). No
                 # GradScaler for BF16 — full FP32 exponent range is
                 # preserved so gradients can't underflow.
+                # Fraction targets (only present when the frac head is on and
+                # a frac_dir was supplied to the dataset).
+                frac_target = None
+                frac_mask = None
+                if frac_criterion is not None:
+                    ft = batch.get("frac")
+                    fm = batch.get("frac_mask")
+                    if ft is not None and fm is not None:
+                        frac_target = ft.to(self.device)   # (B, K, H, W) in [0,1]
+                        frac_mask = fm.to(self.device)     # (B, H, W) {0,1}
+
                 with torch.autocast(
                     device_type=self.device.type,
                     dtype=self._amp_dtype,
                     enabled=self._amp_enabled,
                 ):
-                    logits = self.model(
-                        images_5d, aux=aux,
+                    want_frac = frac_criterion is not None
+                    from ..fm.forward_router import family_forward
+                    out = family_forward(
+                        self.model, self._model_family, batch, self.device,
+                        aux=aux,
                         temporal_coords=temporal_coords,
                         location_coords=location_coords,
-                    ).contiguous()
+                        return_fractions=want_frac,
+                    )
+                    if want_frac:
+                        logits, frac_logits = out
+                    else:
+                        logits, frac_logits = out, None
+                    logits = logits.contiguous()
                     if pixel_weight is not None:
                         loss = criterion(logits, labels, pixel_weight=pixel_weight)
                     else:
                         loss = criterion(logits, labels)
+
+                    # Multi-task: L_total = L_hard + λ_frac · L_frac. Masked
+                    # where a pixel is unreliable OR carries no signal; a batch
+                    # with no frac supervision contributes a differentiable 0.
+                    if (frac_criterion is not None and frac_logits is not None
+                            and frac_target is not None):
+                        frac_loss = frac_criterion(
+                            frac_logits, frac_target, frac_mask,
+                        )
+                        loss = loss + cfg.lambda_frac * frac_loss
+                        epoch_frac_loss += float(frac_loss.item())
+                        n_frac_batches += 1
                 loss.backward()
+                if cfg.preflight_one_batch:
+                    trainable_gradients = [
+                        parameter.grad
+                        for parameter in self.model.parameters()
+                        if parameter.requires_grad and parameter.grad is not None
+                    ]
+                    if not torch.isfinite(loss):
+                        raise RuntimeError("One-batch preflight produced non-finite loss")
+                    if not trainable_gradients or not all(
+                        torch.isfinite(gradient).all()
+                        for gradient in trainable_gradients
+                    ):
+                        raise RuntimeError(
+                            "One-batch preflight produced missing/non-finite gradients"
+                        )
                 optimizer.step()
+
+                if cfg.preflight_one_batch:
+                    print(
+                        "PREFLIGHT_ONE_BATCH_OK "
+                        f"loss={float(loss.item()):.6f} "
+                        f"grad_tensors={len(trainable_gradients)}"
+                    )
+                    return {
+                        "best_miou": float("nan"),
+                        "best_epoch": 0,
+                        "checkpoint": "preflight-only",
+                    }
 
                 if step >= warmup_steps:
                     scheduler.step()
@@ -539,6 +750,8 @@ class LULCTrainer:
                 step += 1
 
             avg_loss = epoch_loss / max(n_batches, 1)
+            avg_frac_loss = (epoch_frac_loss / n_frac_batches
+                             if n_frac_batches else None)
             elapsed = time.time() - t0
 
             # ── Validate ──────────────────────────────────────────────
@@ -559,8 +772,10 @@ class LULCTrainer:
                 worst_iou = 0.0
 
             lr_now = optimizer.param_groups[0]["lr"]
+            frac_str = (f" | L_frac={avg_frac_loss:.4f}"
+                        if avg_frac_loss is not None else "")
             print(f"  Epoch {epoch:3d}/{cfg.epochs} | "
-                  f"loss={avg_loss:.4f} | val_mIoU={val_miou:.4f} | "
+                  f"loss={avg_loss:.4f}{frac_str} | val_mIoU={val_miou:.4f} | "
                   f"worst={worst_iou:.4f} ({worst_class}) | "
                   f"lr={lr_now:.2e} | {elapsed:.0f}s")
 
@@ -580,13 +795,18 @@ class LULCTrainer:
             is_new_best = metric_value > best_metric
             # Serialize confusion matrix for dashboard (only on best epochs)
             cm_data = None
-            if is_new_best and "confusion_matrix" in val_metrics:
+            if (
+                (is_new_best or cfg.log_confusion_every_epoch)
+                and "confusion_matrix" in val_metrics
+            ):
                 cm = val_metrics["confusion_matrix"]
                 cm_data = cm.tolist() if hasattr(cm, 'tolist') else None
 
             self._update_training_log({
                 "epoch": epoch,
                 "train_loss": round(avg_loss, 6),
+                **({"train_frac_loss": round(avg_frac_loss, 6)}
+                   if avg_frac_loss is not None else {}),
                 "val_miou": round(val_miou, 6),
                 "per_class_iou": {k: round(v, 6) for k, v in per_class.items()
                                   if not math.isnan(v)},
@@ -596,6 +816,15 @@ class LULCTrainer:
                 "elapsed_s": round(elapsed, 1),
                 "metric_value": round(metric_value, 6),
                 "is_best": is_new_best,
+                **({
+                    "train_exposure_sha256": exposure_digest.hexdigest(),
+                    "train_target_support": train_target_support.tolist(),
+                    "train_class_tiles": {
+                        str(index): sorted(names)
+                        for index, names in enumerate(train_class_tiles)
+                        if names
+                    },
+                } if cfg.log_training_exposure else {}),
                 **({"confusion_matrix": cm_data} if cm_data else {}),
             })
 
@@ -611,11 +840,12 @@ class LULCTrainer:
                     n for n, v in valid_ious.items() if v == 0.0
                 }
                 best_per_class = dict(valid_ious)
-                self._save_checkpoint(
-                    ckpt_dir / "best_model.pt", epoch, val_metrics,
-                )
-                print(f"    ✓ New best model saved "
-                      f"(mIoU={val_miou:.4f}, metric={metric_value:.4f})")
+                if not cfg.fixed_checkpoint_only:
+                    self._save_checkpoint(
+                        ckpt_dir / "best_model.pt", epoch, val_metrics,
+                    )
+                    print(f"    ✓ New best model saved "
+                          f"(mIoU={val_miou:.4f}, metric={metric_value:.4f})")
             else:
                 patience_counter += 1
 
@@ -691,19 +921,22 @@ class LULCTrainer:
                     ckpt_dir / f"epoch_{epoch:03d}.pt", epoch, val_metrics,
                 )
 
-            # ── Save resume checkpoint (every epoch) ──────────────
-            self._save_resume_checkpoint(
-                ckpt_dir / "last_checkpoint.pt",
-                epoch=epoch,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                step=step,
-                best_metric=best_metric,
-                best_miou=best_miou,
-                best_epoch=best_epoch,
-                patience_counter=patience_counter,
-                train_loss_history=train_loss_history,
-            )
+            # Fixed smoke protocols intentionally do not resume: their RNG
+            # ledger would be invalid after a partial restart, and the full
+            # AdamW state is several GiB for a 600M model.
+            if not cfg.fixed_checkpoint_only:
+                self._save_resume_checkpoint(
+                    ckpt_dir / "last_checkpoint.pt",
+                    epoch=epoch,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    step=step,
+                    best_metric=best_metric,
+                    best_miou=best_miou,
+                    best_epoch=best_epoch,
+                    patience_counter=patience_counter,
+                    train_loss_history=train_loss_history,
+                )
 
             # Track train loss convergence
             train_loss_history.append(avg_loss)
@@ -730,10 +963,15 @@ class LULCTrainer:
             self._write_log_file()
 
         print(f"\n  Training complete. Best mIoU={best_miou:.4f} at epoch {best_epoch}")
+        checkpoint = (
+            ckpt_dir / f"epoch_{cfg.epochs:03d}.pt"
+            if cfg.fixed_checkpoint_only
+            else ckpt_dir / "best_model.pt"
+        )
         return {
             "best_miou": best_miou,
             "best_epoch": best_epoch,
-            "checkpoint": str(ckpt_dir / "best_model.pt"),
+            "checkpoint": str(checkpoint),
         }
 
     # ── Training log (JSON for dashboard) ─────────────────────────────
@@ -876,6 +1114,8 @@ class LULCTrainer:
         temporal frames or aux channels than the current config.
         """
         if not isinstance(ckpt, dict) or "config" not in ckpt:
+            if self.config.strict_checkpoint_loading:
+                raise ValueError("Strict checkpoint loading requires semantic config")
             return  # Old checkpoint format, skip validation
 
         ckpt_cfg = ckpt["config"]
@@ -896,6 +1136,169 @@ class LULCTrainer:
         if ckpt_n_aux is not None and ckpt_n_aux != current_n_aux:
             print(f"  ⚠ WARNING: Checkpoint has n_aux_channels="
                   f"{ckpt_n_aux}, current config has {current_n_aux}.")
+        if self.config.strict_checkpoint_loading:
+            expected = {
+                "backbone_name": self._registry_name,
+                "num_classes": self.config.num_classes,
+                "num_temporal_frames": current_frames,
+                "enable_multitemporal": self.config.enable_multitemporal,
+                "n_aux_channels": current_n_aux,
+                "enabled_aux_names": list(self.config.enabled_aux_names),
+            }
+            mismatches = {
+                key: {"expected": value, "actual": ckpt_cfg.get(key)}
+                for key, value in expected.items()
+                if ckpt_cfg.get(key) != value
+            }
+            if mismatches:
+                raise ValueError(f"Strict checkpoint semantic mismatch: {mismatches}")
+
+    def _expand_aux_input_conv(self, sd: dict) -> dict:
+        """Warm-start expansion of the aux input conv when the checkpoint
+        has fewer aux channels than the current model (e.g. 10 → 11 after
+        enabling markfukt).
+
+        The auxiliary branch's first conv (``lidar_branch.net.0.conv`` for
+        multilevel-aux, ``aux_encoder.net.0.conv`` for legacy late fusion)
+        has weight shape ``(out, in_aux, kH, kW)``. When ``in_aux`` grows,
+        the overlapping channels are copied from the checkpoint and the new
+        trailing channel(s) are zero-initialized (cold start) so the model
+        starts identical to the checkpoint on the existing channels and
+        learns the new channel's contribution from scratch.
+
+        Operates on a *copy* of the given state dict and returns it; other
+        tensors are untouched. Only fires on a genuine channel-count
+        mismatch and logs exactly what it did.
+
+        Args:
+            sd: Incoming (prefix-stripped) checkpoint state dict.
+
+        Returns:
+            The state dict with the aux input-conv weight expanded in place
+            (new copy); unchanged if no expansion is needed.
+        """
+        import torch
+
+        model_sd = self.model.state_dict()
+        # The one weight whose in-channels == number of aux channels.
+        candidates = [
+            "lidar_branch.net.0.conv.weight",
+            "aux_encoder.net.0.conv.weight",
+        ]
+        out = dict(sd)
+        for key in candidates:
+            if key not in out or key not in model_sd:
+                continue
+            ckpt_w = out[key]
+            model_w = model_sd[key]
+            # Shape: (out_ch, in_aux, kH, kW). Expand along dim=1 only.
+            if ckpt_w.shape == model_w.shape:
+                continue
+            if (ckpt_w.dim() != 4 or model_w.dim() != 4
+                    or ckpt_w.shape[0] != model_w.shape[0]
+                    or ckpt_w.shape[2:] != model_w.shape[2:]):
+                # Non-channel mismatch — leave it for load_state_dict to
+                # surface rather than silently reshaping something else.
+                continue
+            ckpt_in = ckpt_w.shape[1]
+            model_in = model_w.shape[1]
+            if model_in <= ckpt_in:
+                continue  # only ever expand, never truncate silently
+            expanded = torch.zeros_like(model_w)
+            expanded[:, :ckpt_in] = ckpt_w
+            out[key] = expanded
+            print(
+                f"  ↑ Expanded aux input conv '{key}': "
+                f"{ckpt_in} → {model_in} in-channels "
+                f"(copied {ckpt_in}, zero-init {model_in - ckpt_in} new)"
+            )
+        return out
+
+    def _expand_head_output(self, sd: dict) -> dict:
+        """Warm-start expansion of the segmentation head's final classifier
+        along the OUTPUT dim when the checkpoint has fewer classes than the
+        current model (e.g. v8b's 23 classes → 28 for the NMD2023 finetune).
+
+        The classifier is the ``Conv2d(decoder_channels, num_classes, 1)`` at
+        ``head.head.2`` (see ``imint.fm.upernet.SegmentationHead``), with
+        weight shape ``(num_classes, C, 1, 1)`` and bias ``(num_classes,)``.
+        The overlapping leading rows are copied from the checkpoint
+        (warm-start of the existing classes) and the new trailing rows are
+        zero-initialized (cold start), so the model reproduces the checkpoint
+        on the shared classes and learns the new classes from scratch.
+
+        Without this, ``load_state_dict(strict=False)`` would silently drop the
+        shape-mismatched head, leaving ALL rows — including the 23 existing
+        classes — at random init and destroying the warm-start.
+
+        Operates on a *copy* of ``sd`` and returns it. Only fires on a genuine
+        out-dim increase; never truncates; logs exactly what it did. The layer
+        is located dynamically as the tensor whose out-dim equals num_classes,
+        so it stays correct if the head key layout changes.
+
+        Args:
+            sd: Incoming (prefix-stripped) checkpoint state dict.
+
+        Returns:
+            The state dict with the head weight+bias expanded (new copy);
+            unchanged if no expansion is needed.
+        """
+        import torch
+
+        model_sd = self.model.state_dict()
+        num_classes = self.config.num_classes
+
+        # Locate the classifier weight: the 4-D conv weight under the head
+        # whose out-dim == num_classes in the MODEL, with a matching bias.
+        weight_key = None
+        for key, model_w in model_sd.items():
+            if (".head." in key and key.endswith(".weight")
+                    and model_w.dim() == 4
+                    and model_w.shape[0] == num_classes):
+                weight_key = key
+                break
+        if weight_key is None:
+            return sd  # no head classifier found — nothing to expand
+
+        bias_key = weight_key[: -len("weight")] + "bias"
+        out = dict(sd)
+
+        model_w = model_sd[weight_key]
+        ckpt_w = out.get(weight_key)
+        if ckpt_w is None:
+            return out  # head absent from checkpoint — leave to load_state_dict
+
+        # Only expand on a genuine out-dim increase with otherwise-matching
+        # shape. Anything else is left for load_state_dict to surface.
+        if (ckpt_w.dim() != 4
+                or ckpt_w.shape[1:] != model_w.shape[1:]
+                or model_w.shape[0] <= ckpt_w.shape[0]):
+            return out
+
+        ckpt_cls = ckpt_w.shape[0]
+        model_cls = model_w.shape[0]
+        expanded_w = torch.zeros_like(model_w)
+        expanded_w[:ckpt_cls] = ckpt_w
+        out[weight_key] = expanded_w
+
+        msg_bias = ""
+        if bias_key in out and bias_key in model_sd:
+            ckpt_b = out[bias_key]
+            model_b = model_sd[bias_key]
+            if (ckpt_b.dim() == 1 and model_b.dim() == 1
+                    and ckpt_b.shape[0] == ckpt_cls
+                    and model_b.shape[0] == model_cls):
+                expanded_b = torch.zeros_like(model_b)
+                expanded_b[:ckpt_cls] = ckpt_b
+                out[bias_key] = expanded_b
+                msg_bias = " + bias"
+
+        print(
+            f"  ↑ Expanded seg head '{weight_key}'{msg_bias}: "
+            f"{ckpt_cls} → {model_cls} classes "
+            f"(warm-start {ckpt_cls}, zero-init {model_cls - ckpt_cls} new)"
+        )
+        return out
 
     def _load_spectral_checkpoint(self, path: Path) -> None:
         """Load spectral-only checkpoint for stage-2 aux training.
@@ -928,7 +1331,26 @@ class LULCTrainer:
             key = k[len("model."):] if k.startswith("model.") else k
             sd[key] = v
 
+        # Warm-start expansion: if the checkpoint has fewer aux channels
+        # than the current model (e.g. v8b's 10 aux → 11 with markfukt),
+        # pad the aux input conv so overlapping channels warm-start and the
+        # new channel cold-starts. No-op on a channel-count match.
+        sd = self._expand_aux_input_conv(sd)
+
+        # Warm-start expansion: if the checkpoint has fewer classes than the
+        # current model (e.g. v8b's 23 classes → 28 for the NMD2023 finetune),
+        # expand the seg head's final classifier along the output dim so the
+        # 23 existing classes warm-start and the 5 new classes cold-start.
+        # Without this, strict=False silently drops the mismatched head and
+        # ALL 28 rows would be random. No-op on a class-count match.
+        sd = self._expand_head_output(sd)
+
         missing, unexpected = self.model.load_state_dict(sd, strict=False)
+        if self.config.strict_checkpoint_loading and (missing or unexpected):
+            raise RuntimeError(
+                "Strict checkpoint learned-key mismatch: "
+                f"missing={list(missing)[:10]}, unexpected={list(unexpected)[:10]}"
+            )
         # aux_encoder and aux_fusion are expected to be missing
         real_missing = [k for k in missing
                         if "aux_encoder" not in k and "aux_fusion" not in k]
@@ -956,7 +1378,31 @@ class LULCTrainer:
         """
         print(f"  Resuming from checkpoint: {path}")
         ckpt = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(ckpt["model_state_dict"])
+        model_state = ckpt["model_state_dict"]
+        # CROMA's forward router attaches its deterministic normalizer lazily
+        # on the first forward pass. Its four constant buffers are therefore
+        # present in a saved checkpoint but absent from a freshly rebuilt
+        # model at resume time. Remove only those known runtime buffers; retain
+        # strict loading for every learned parameter and all other buffers.
+        runtime_norm_keys = {
+            f"_norm_croma.{name}"
+            for name in ("s2_mean", "s2_std", "s1_mean", "s1_std")
+        }
+        current_keys = set(self.model.state_dict())
+        migrated = sorted(
+            key for key in runtime_norm_keys
+            if key in model_state and key not in current_keys
+        )
+        if migrated:
+            model_state = {
+                key: value for key, value in model_state.items()
+                if key not in migrated
+            }
+            print(
+                "  Migrated lazy CROMA normalizer buffers: "
+                + ", ".join(migrated)
+            )
+        self.model.load_state_dict(model_state, strict=True)
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         if "training_log" in ckpt:
@@ -992,12 +1438,40 @@ class LULCTrainer:
             self.config.num_temporal_frames
             if self.config.enable_multitemporal else 1
         )
+        # FULL model-build parameters (2026-08-17). Historically the config
+        # dict was MINIMAL, so every loader had to weight-infer img_size,
+        # patch, aux_fusion, the PSP pool count, etc. — the root cause of the
+        # repeated load_model fixes (ea9e79c, c1ae20c, 9664d6a, 66ebcc7,
+        # d1d0f0a). Persisting the real build args lets a loader reconstruct
+        # the exact model without inference. Purely ADDITIVE: the existing
+        # keys are unchanged and old checkpoints (which lack the new keys)
+        # still weight-infer, so nothing that reads these keys regresses.
+        img_size = self.config.img_size
+        # patch_size + PSP pool sizes are derived at build time from the spec;
+        # recover them from the model's stashed spec so the loader need not
+        # re-derive. Best-effort: fall back gracefully if the spec is absent.
+        patch_size = getattr(
+            getattr(self.model, "fm_spec", None), "patch_size", None
+        )
+        pool_sizes = None
+        if patch_size:
+            try:
+                from ..fm.upernet import get_default_pool_sizes
+                pool_sizes = list(
+                    get_default_pool_sizes(
+                        device=self.device, img_size=img_size,
+                        patch_size=patch_size,
+                    )
+                )
+            except Exception:
+                pool_sizes = None
         checkpoint = {
             "state_dict": state_dict,
             "epoch": epoch,
             "metrics": {k: v for k, v in metrics.items()
                         if k != "confusion_matrix"},
             "config": {
+                "backbone_name": self._registry_name,
                 "num_classes": self.config.num_classes,
                 "decoder_type": self.config.decoder_type,
                 "decoder_channels": self.config.decoder_channels,
@@ -1006,6 +1480,19 @@ class LULCTrainer:
                 "n_aux_channels": self._count_aux_channels(),
                 "num_temporal_frames": num_frames,
                 "enable_multitemporal": self.config.enable_multitemporal,
+                "enable_tradslag_head": self.config.enable_tradslag_head,
+                "num_tradslag": self.config.num_tradslag,
+                # ── Full build params (additive, 2026-08-17) ──────────────
+                "img_size": img_size,
+                "patch_size": patch_size,
+                "pool_sizes": pool_sizes,
+                "aux_fusion": self.config.aux_fusion,
+                "enable_temporal_pooling": self.config.enable_temporal_pooling,
+                "enable_multilevel_aux": self.config.enable_multilevel_aux,
+                # Ordered aux-channel names — the ground truth for which aux
+                # channels (and in what order) the n_aux input conv expects.
+                "enabled_aux_names": list(self.config.enabled_aux_names),
+                "era5_mode": self.config.era5_mode,
             },
         }
         torch.save(checkpoint, path)

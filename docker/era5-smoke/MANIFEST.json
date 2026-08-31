@@ -1,0 +1,12 @@
+{
+  "schema": "imint-pipeline-image-v1",
+  "image": "ghcr.io/tobiasedman/imint-era5-smoke:20260821-f6a2609d0061",
+  "image_digest": "sha256:95813c0d59b2489da9b2878f7d7d4e4aefa73262c3f86dca9cf516b5fc37506e",
+  "build_context_sha256": "f6a2609d00619537b420e30b2f8d00c94a1419b838b3e2b163e4a5d195c9825f",
+  "base_image": "python@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
+  "base_git_sha": "602c86dee8d4dbdc191ab2750c261cf86b56ac50",
+  "base_archive_sha256": "85976165d13f07c0654e37be5f05be76926cc1a623bea11275a079a0ef7b5db1",
+  "purpose": "Pinned CUDA/PyTorch runtime for the Prithvi-600M ERA5 smoke experiment",
+  "smoke_test": "python /patches/runtime_smoke.py --cuda",
+  "produced_at": "2026-08-21T15:55:38Z"
+}

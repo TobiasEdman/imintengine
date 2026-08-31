@@ -62,15 +62,18 @@ class TestCromaSegmentationForward:
         assert out.shape == (2, 23, 120, 120)
 
     def test_optical_only(self):
+        # B=2: the UPerNet head uses BatchNorm (PSP pool_size=1 → 1×1 maps),
+        # which needs >1 sample in train mode. Training uses B=8; B=1 only
+        # occurs at eval (BN running stats). Test the realistic path.
         enc = _FakeCromaEncoder(embed_dim=768, has_joint=False)
         model = CromaSegmentationModel(
             encoder=enc, num_classes=23,
             img_size=120, patch_size=8, embed_dim=768,
             modality="optical",
         )
-        opt = torch.randn(1, 12, 120, 120)
+        opt = torch.randn(2, 12, 120, 120)
         out = model(sar=None, optical=opt)
-        assert out.shape == (1, 23, 120, 120)
+        assert out.shape == (2, 23, 120, 120)
 
     def test_sar_only(self):
         enc = _FakeCromaEncoder(embed_dim=768, has_joint=False)
@@ -79,9 +82,9 @@ class TestCromaSegmentationForward:
             img_size=120, patch_size=8, embed_dim=768,
             modality="sar",
         )
-        sar = torch.randn(1, 2, 120, 120)
+        sar = torch.randn(2, 2, 120, 120)
         out = model(sar=sar, optical=None)
-        assert out.shape == (1, 23, 120, 120)
+        assert out.shape == (2, 23, 120, 120)
 
     def test_joint_fallback_to_optical(self):
         """If encoder doesn't return joint_encodings but we asked for
@@ -92,10 +95,10 @@ class TestCromaSegmentationForward:
             img_size=120, patch_size=8, embed_dim=768,
             modality="joint",
         )
-        sar = torch.randn(1, 2, 120, 120)
-        opt = torch.randn(1, 12, 120, 120)
+        sar = torch.randn(2, 2, 120, 120)
+        opt = torch.randn(2, 12, 120, 120)
         out = model(sar=sar, optical=opt)
-        assert out.shape == (1, 23, 120, 120)
+        assert out.shape == (2, 23, 120, 120)
 
     def test_joint_requires_both(self):
         enc = _FakeCromaEncoder(embed_dim=768)
@@ -105,7 +108,7 @@ class TestCromaSegmentationForward:
             modality="joint",
         )
         with pytest.raises(ValueError, match="sar"):
-            model(sar=None, optical=torch.randn(1, 12, 120, 120))
+            model(sar=None, optical=torch.randn(2, 12, 120, 120))
 
     def test_output_size_arg_resizes(self):
         enc = _FakeCromaEncoder(embed_dim=768)
@@ -114,10 +117,10 @@ class TestCromaSegmentationForward:
             img_size=120, patch_size=8, embed_dim=768,
             modality="joint",
         )
-        sar = torch.randn(1, 2, 120, 120)
-        opt = torch.randn(1, 12, 120, 120)
+        sar = torch.randn(2, 2, 120, 120)
+        opt = torch.randn(2, 12, 120, 120)
         out = model(sar=sar, optical=opt, output_size=(512, 512))
-        assert out.shape == (1, 23, 512, 512)
+        assert out.shape == (2, 23, 512, 512)
 
     def test_aux_channels(self):
         enc = _FakeCromaEncoder(embed_dim=768)
@@ -126,11 +129,11 @@ class TestCromaSegmentationForward:
             img_size=120, patch_size=8, embed_dim=768,
             modality="joint", n_aux_channels=5,
         )
-        sar = torch.randn(1, 2, 120, 120)
-        opt = torch.randn(1, 12, 120, 120)
-        aux = torch.randn(1, 5, 120, 120)
+        sar = torch.randn(2, 2, 120, 120)
+        opt = torch.randn(2, 12, 120, 120)
+        aux = torch.randn(2, 5, 120, 120)
         out = model(sar=sar, optical=opt, aux=aux)
-        assert out.shape == (1, 23, 120, 120)
+        assert out.shape == (2, 23, 120, 120)
 
     def test_indivisible_img_size_raises(self):
         enc = _FakeCromaEncoder(embed_dim=768)

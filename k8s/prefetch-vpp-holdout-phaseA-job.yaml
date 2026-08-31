@@ -1,0 +1,106 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prefetch-vpp-holdout-phasea
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: prefetch-vpp-holdout-phasea
+spec:
+  backoffLimit: 0
+  # PU-FREE WEkEO HR-VPP prefetch for the off-footprint independent-validation
+  # Phase A tiles (docs/plans/independent_holdout_validation.md). Populates the
+  # /data/vpp_wekeo cache for the 80 MGRS 100km tiles that the Phase A spectral
+  # fetch (holdout_val_phaseA.json, 1650 tiles at off-footprint NFI+LUCAS plots)
+  # will read with VPP_SOURCE=wekeo. Runs BEFORE the spectral fetch so the
+  # cache-only VPP router never falls through to CDSE PU (CLAUDE.md rule).
+  # 80 MGRS × 7 years (2018-2024) — a superset of the 384 (mgrs,year) units
+  # Phase A actually needs; over-fetch is PU-free WEkEO download.
+  activeDeadlineSeconds: 21600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: prefetch
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== WEkEO VPP prefetch — holdout-val Phase A ==="
+              echo "Started: $(date)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj hda 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles 32VPK,32VPL,32VPM,33UVB,33UVC,33VUC,33VUD,33VUE,33VUF,33VUG,33VUH,33VUJ,33VUK,33VUL,33VVC,33VVD,33VVE,33VVF,33VVG,33VVH,33VVJ,33VVK,33VVL,33VWC,33VWD,33VWE,33VWF,33VWG,33VWH,33VWJ,33VWK,33VWL,33VXD,33VXF,33VXG,33VXH,33VXJ,33VXK,33VXL,33WVM,33WVN,33WVP,33WWM,33WWN,33WWP,33WWQ,33WWR,33WXM,33WXN,33WXP,33WXQ,33WXR,34VCJ,34VCK,34VCL,34VCM,34VCQ,34VCR,34VDR,34WCA,34WCS,34WCT,34WCU,34WCV,34WDA,34WDB,34WDR,34WDS,34WDT,34WDU,34WDV,34WEA,34WEB,34WES,34WET,34WEU,34WEV,34WFA,34WFU,34WFV \
+                --years 2018,2019,2020,2021,2022,2023,2024 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "=== cache contents ==="
+              ls /data/vpp_wekeo/ 2>&1 | wc -l
+
+              echo ""
+              echo "=== read-back check (year 2022) ==="
+              python3 -c "
+              import glob, rasterio
+              from rasterio.warp import transform_bounds
+              from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+              cog = sorted(glob.glob('/data/vpp_wekeo/VPP_*2022*_SOSD.tif'))[0]
+              with rasterio.open(cog) as src:
+                  w, s, e, n = transform_bounds(src.crs, 'EPSG:3006', *src.bounds)
+              cx, cy = (w + e) / 2, (s + n) / 2
+              dx, dy = (e - w) * 0.05, (n - s) * 0.05
+              bbox = (cx - dx, cy - dy, cx + dx, cy + dy)
+              out = fetch_vpp_tiles_local(*bbox, size_px=64, vpp_cog_dir='/data/vpp_wekeo', year=2022)
+              nonzero = sum(1 for v in out.values() if v.max() > 0)
+              assert nonzero >= 3, f'expected most bands non-zero, got {nonzero}/5'
+              print('READBACK OK', nonzero, '/5 bands non-zero')
+              "
+              echo "=== prefetch complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

@@ -1,0 +1,121 @@
+# S1 SAR RTC γ⁰ season-composite enrichment (v3) over /data/unified_v2_512.
+#
+# Builds TWO per-orbit median season composites per tile (label-year growing
+# season + 2016 clearcut anchor) from Microsoft Planetary Computer's
+# `sentinel-1-rtc` collection. See docs/plans/s1_monthly_enrichment.md.
+#
+# Backend: Planetary Computer STAC + RTC γ⁰ + WINDOWED /vsicurl/ reads
+# (imint.training.pc_s1_rtc). RTC is Radiometrically Terrain Corrected
+# gamma-naught — analysis-ready float32 COGs, no calibration, no product
+# download. Each tile reads ONLY its own window (~MB) instead of the ~2 GB
+# per-product the CDSE-GRD path pulled, so:
+#   * no PVC product cache ($S1_CACHE_* removed — the CDSE path's guard stays
+#     in cdse_s1_stac.py untouched, but nothing here uses it),
+#   * the ~45 tiles/h + PVC-fill failure mode is gone.
+# Stored units: LINEAR γ⁰ (the CROMA/TerraMind normalizers apply 10*log10
+# internally — see pc_s1_rtc.py module docstring).
+#
+# Auth: PC anonymous works (verified 2026-08-17). No CDSE creds needed. If a
+# `pc-subscription` secret with key `PC_SDK_SUBSCRIPTION_KEY` is later added,
+# uncomment the env block below to lift rate limits; the SDK auto-detects it.
+#
+# Smoke: the commented `--limit 5` line runs 5 real tiles as go/no-go
+# evidence. The ACTIVE command below has NO --limit — it is the full run and
+# must only be launched deliberately (do NOT auto-launch).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-s1-season
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 172800  # 48h
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # srv04/srv06 = runc pod-sandbox bug + observed OOM host
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: enricher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== S1 SAR RTC γ⁰ season-composite enrichment (v3) ==="
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy rasterio requests pyproj pyyaml Pillow httpx \
+                pystac-client planetary-computer
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "HEAD: $(git rev-parse HEAD)"
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              # SMOKE (go/no-go): 5 real tiles. Uncomment to smoke, then
+              # re-run without --limit for the full pass.
+              # python scripts/enrich_tiles_s1.py \
+              #   --data-dir /data/unified_v2_512 \
+              #   --s1-backend pc-rtc \
+              #   --workers 8 \
+              #   --skip-existing \
+              #   --limit 5
+
+              # FULL RUN — no --limit. Windowed reads are network-bound, not
+              # WAF-throttled (PC does not rate-limit like CDSE), so more
+              # workers help; 8 saturates the ~MB/tile streaming without a
+              # product cache to thrash. --skip-existing keys on s1_enrich_v==3.
+              python scripts/enrich_tiles_s1.py \
+                --data-dir /data/unified_v2_512 \
+                --s1-backend pc-rtc \
+                --workers 8 \
+                --skip-existing
+
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # GDAL /vsicurl tuning for windowed COG reads: merge nearby ranges,
+            # cache the COG header so repeated tiles over the same scene reuse
+            # the block index instead of re-reading it.
+            - name: GDAL_HTTP_MULTIRANGE
+              value: "YES"
+            - name: GDAL_HTTP_MERGE_CONSECUTIVE_RANGES
+              value: "YES"
+            - name: GDAL_DISABLE_READDIR_ON_OPEN
+              value: "EMPTY_DIR"
+            - name: CPL_VSIL_CURL_ALLOWED_EXTENSIONS
+              value: ".tiff,.tif"
+            # PC anonymous access works. If a subscription secret is added
+            # later, uncomment to lift rate limits (SDK auto-detects the env):
+            # - name: PC_SDK_SUBSCRIPTION_KEY
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: pc-subscription
+            #       key: subscription_key
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

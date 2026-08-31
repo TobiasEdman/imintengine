@@ -116,28 +116,109 @@ def load_clay(
                 break
 
     if pretrained and checkpoint_path is None:
-        # Try downloading from HuggingFace Hub
+        # Try downloading from HuggingFace Hub. The checkpoint lives under
+        # the ``v1.5/`` subdirectory in the repo — filename ``clay-v1.5.ckpt``
+        # at the repo root 404s (that stale path is what left the
+        # ``.no_exist`` marker in /cephfs/model_cache/hf). Verified live:
+        #   made-with-clay/Clay :: v1.5/clay-v1.5.ckpt  (5.16 GB, HTTP 200).
         try:
             from huggingface_hub import hf_hub_download
             checkpoint_path = hf_hub_download(
                 "made-with-clay/Clay",
-                "clay-v1.5.ckpt",
+                "v1.5/clay-v1.5.ckpt",
             )
         except Exception as e:
             raise FileNotFoundError(
                 "No Clay v1.5 checkpoint found. Either:\n"
-                "  - Download clay-v1.5.ckpt from https://huggingface.co/made-with-clay/Clay\n"
+                "  - Download v1.5/clay-v1.5.ckpt from "
+                "https://huggingface.co/made-with-clay/Clay\n"
                 "    and place it at /data/model_cache/clay-v1.5.ckpt\n"
                 "  - Or pass checkpoint_path= explicitly."
             ) from e
 
+    # ClayMAEModule.load_from_checkpoint restores hparams that include a
+    # `metadata_path` pointing at ``configs/metadata.yaml`` — a path RELATIVE
+    # to the Clay repo working directory. The pip package does NOT bundle that
+    # yaml, so restoring it verbatim raises FileNotFoundError unless CWD
+    # happens to be the repo. Resolve a real path (or materialize the yaml
+    # from our transcribed band metadata) and override the hparam.
+    metadata_path = _resolve_clay_metadata_path()
+    # mask_ratio=0 is MANDATORY for dense feature extraction: Clay's MAE
+    # Encoder.forward masks out ~75% of patches by default (returns only the
+    # unmasked subset + CLS, e.g. 197 of 785 tokens at 224px/patch8), which
+    # cannot be reshaped to a spatial grid for segmentation. Zeroing it makes
+    # the encoder return ALL patch tokens.
     module = ClayMAEModule.load_from_checkpoint(
-        checkpoint_path, strict=False,
+        checkpoint_path, strict=False, metadata_path=metadata_path,
+        mask_ratio=0.0,
     )
     module.eval()
+    clay = module.model
+    # Belt-and-suspenders: force mask_ratio=0 on both the wrapper and the
+    # encoder in case the hparam override above is ignored by a given
+    # checkpoint's saved config.
+    for obj in (clay, getattr(clay, "encoder", None)):
+        if obj is not None and hasattr(obj, "mask_ratio"):
+            obj.mask_ratio = 0.0
     # Return the encoder (what we actually use for feature extraction);
     # the full module also contains the decoder we don't need.
-    return module.model
+    return clay
+
+
+def _resolve_clay_metadata_path() -> str:
+    """Return an on-disk path to Clay's ``configs/metadata.yaml``.
+
+    ClayMAEModule needs this file for per-sensor band statistics. The pip
+    package (git+Clay-foundation/model) does NOT ship it, and the checkpoint
+    hparams reference it by a repo-relative path. Search the obvious local
+    locations; if none exist, download it once from the Clay-foundation
+    GitHub repo (HF's model repo does not host it) into a stable cache path.
+
+    Returns:
+        Absolute path to a readable metadata.yaml.
+
+    Raises:
+        FileNotFoundError: if it cannot be located or downloaded.
+    """
+    candidates = [
+        "configs/metadata.yaml",  # CWD == clay repo (rare)
+        "/data/model_cache/clay_metadata.yaml",
+        os.path.expanduser("~/.cache/clay/metadata.yaml"),
+    ]
+    # Alongside the installed claymodel package, if the wheel bundled it.
+    try:
+        import claymodel
+        pkg_dir = os.path.dirname(claymodel.__file__)
+        candidates.append(os.path.join(pkg_dir, "configs", "metadata.yaml"))
+        candidates.append(os.path.join(os.path.dirname(pkg_dir), "configs",
+                                       "metadata.yaml"))
+    except Exception:
+        pass
+
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+
+    # Download once from GitHub (HTTP 200 verified: Clay-foundation/model).
+    url = ("https://raw.githubusercontent.com/Clay-foundation/model/"
+           "main/configs/metadata.yaml")
+    dst = "/data/model_cache/clay_metadata.yaml"
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+    except Exception:
+        dst = os.path.expanduser("~/.cache/clay/metadata.yaml")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+    try:
+        import urllib.request
+        tmp = dst + ".tmp"
+        urllib.request.urlretrieve(url, tmp)
+        os.replace(tmp, dst)
+        return dst
+    except Exception as e:
+        raise FileNotFoundError(
+            "Clay's configs/metadata.yaml could not be located locally or "
+            f"downloaded from {url}. Place it at {dst} manually."
+        ) from e
 
 
 def build_s2_clay_tensor(

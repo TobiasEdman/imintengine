@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from .era5_aux import ERA5_AUX_NORM
+
 
 @dataclass
 class TrainingConfig:
@@ -112,12 +114,18 @@ class TrainingConfig:
     batch_size: int = 8
     num_workers: int = 4
     epochs: int = 50
+    seed: int = 42
+    deterministic: bool = False
+    deterministic_warn_only: bool = False
+    preflight_one_batch: bool = False
     lr: float = 1e-4
     weight_decay: float = 0.35                    # Prithvi multi-crop segmentation standard
     warmup_fraction: float = 0.05
     early_stopping_patience: int = 15                  # Epochs without val improvement
     train_loss_min_delta: float = 0.005                # Stop if train loss change < this
     train_loss_patience: int = 5                       # over this many epochs
+    log_confusion_every_epoch: bool = False
+    log_training_exposure: bool = False
     max_class_weight: float = 5.0
     weighting_method: str = "sqrt"                    # "inverse", "sqrt", "effective_number"
     device: str | None = None                          # Auto-detect
@@ -125,12 +133,25 @@ class TrainingConfig:
     # ── Architecture v5 ──────────────────────────────────────────────────
     enable_temporal_pooling: bool = True                # Mean+max temporal pooling
     enable_multilevel_aux: bool = True                  # Gated LiDAR fusion per FPN level
+    # Tessera-only aux fusion mode: "concat" (default, historical) or
+    # "gated" (GatedFusion residual gate). Ignored by non-tessera families.
+    aux_fusion: str = "concat"                          # "concat" | "gated"
 
     # ── Loss ───────────────────────────────────────────────────────────
     loss_type: str = "focal_dice"                      # "cross_entropy", "focal", "focal_dice"
     focal_gamma: float = 2.0                           # Focal loss focusing parameter
     label_smoothing: float = 0.05                     # 0.0 = disabled
     lovasz_weight: float = 0.0                        # 0.0 = disabled, 0.3 = recommended
+
+    # ── Trädslag fraction head (multi-task, continuous crown-cover) ──────
+    # When enabled, a parallel Conv2d(decoder_channels, 4, 1) fraction head is
+    # added on the same decoder feature that feeds the classifier, supervised
+    # by NMD2023 Trädslag crown-cover targets (masked L1). Off by default →
+    # existing paths byte-identical (no head, no loss term, no frac keys).
+    enable_tradslag_head: bool = False
+    num_tradslag: int = 4                              # tall/gran/trivial/adel
+    lambda_frac: float = 1.0                           # weight on L_frac
+    frac_loss_type: str = "l1"                         # "l1" | "smooth_l1"
 
     # ── Rare class handling ────────────────────────────────────────────
     rare_class_threshold: float = 0.02                 # Classes < 2% are "rare"
@@ -157,6 +178,13 @@ class TrainingConfig:
     enable_diameter_channel: bool = False                # Medeldiameter (Dgv), cm
     enable_dem_channel: bool = False                     # Copernicus DEM (terrain elev.)
     enable_vpp_channels: bool = False                    # HR-VPP phenology (5 bands)
+    enable_markfukt_channel: bool = False                # SLU Markfuktighetskarta (soil moisture)
+    # ΔSAR: 2 aux channels (delta_vv, delta_vh) computed at read time from the
+    # tile's S1 keys (season γ⁰ − 2016 γ⁰, in dB). Appended LAST so the
+    # existing aux ordering is untouched. Default OFF.
+    enable_delta_sar_channels: bool = False              # ΔVV/ΔVH clearcut change (2016 anchor)
+    enable_era5_channels: bool = False                    # ERA5-Land growing-season context
+    era5_mode: str = "off"                                # off | control | treatment
     aux_cache_enabled: bool = True                       # Cache aux tiles as .npy
 
     # Z-score normalization for aux channels: {name: (mean, std)}
@@ -173,6 +201,20 @@ class TrainingConfig:
         "vpp_length": (141.61, 41.39),     # days, season length
         "vpp_maxv":   (0.88, 0.57),        # PPI unitless, max vegetation index
         "vpp_minv":   (0.04, 0.05),        # PPI unitless, min vegetation index
+        # markfukt: SLU Markfuktighetskarta soil-moisture probability. In the
+        # npz it is already float32 in [0.01, 1.00] (raw code/100) with 1.01 =
+        # saturated water and NaN = nodata (see tile_fetch.py L546). NaN is
+        # filled with the channel's finite mean before z-score in the loader.
+        # (mean, std) are a broad prior over the [0, 1.01] probability range;
+        # refine with compute_aux_stats.py once real-tile stats are gathered.
+        "markfukt":   (0.50, 0.25),        # soil-moisture probability, unitless
+        # ΔVV/ΔVH: SAR backscatter change in dB (season γ⁰ − 2016 γ⁰),
+        # computed at read time from s1_vv_vh − s1_vv_vh_2016. Centred on
+        # 0 dB (no change); a clearcut is a sharp −3..−10 dB negative step.
+        # std=4.0 dB → a −8 dB harvest at z≈−2, phenology jitter inside ±0.5 z.
+        "delta_vv":   (0.0, 4.0),          # dB backscatter change, VV
+        "delta_vh":   (0.0, 4.0),          # dB backscatter change, VH
+        **ERA5_AUX_NORM,
     })
 
     # ── Validation split (latitude-based) ─────────────────────────────────
@@ -188,8 +230,20 @@ class TrainingConfig:
     # ── Checkpoint ────────────────────────────────────────────────────────
     checkpoint_dir: str = "checkpoints/lulc"
     save_every_n_epochs: int = 5
+    # Fixed-protocol experiments can omit redundant best/resume snapshots and
+    # persist only the explicitly scheduled epoch_NNN.pt artifact.
+    fixed_checkpoint_only: bool = False
     resume_from_checkpoint: str | None = None     # Path to last_checkpoint.pt
     freeze_spectral: bool = False                  # Stage 2: freeze backbone+decoder, train only aux
+    strict_checkpoint_loading: bool = False
+    # Warm-start finetune: load model weights from a best_model.pt (no
+    # optimizer/epoch resume, nothing frozen) and start a fresh schedule.
+    # Used to finetune an existing checkpoint into a new architecture — e.g.
+    # expanding v8b's 10-aux input to 11 aux (markfukt) via
+    # _expand_aux_input_conv. Distinct from resume_from_checkpoint (which
+    # restores full training state) and freeze_spectral (which freezes all
+    # but the aux branch).
+    warm_start_from_checkpoint: str | None = None
 
     # ── Prithvi normalization (from config.json, DN-scale) ────────────────
     prithvi_mean: list[float] = field(
@@ -224,6 +278,22 @@ class TrainingConfig:
             names.extend([
                 "vpp_sosd", "vpp_eosd", "vpp_length",
                 "vpp_maxv", "vpp_minv",
+            ])
+        # markfukt is appended LAST (after vpp) so the existing 10-aux
+        # ordering is untouched — the warm-started channels keep their
+        # index and the new markfukt channel is the trailing one that
+        # cold-starts on checkpoint expansion.
+        if self.enable_markfukt_channel:
+            names.append("markfukt")
+        # ΔSAR appended LAST (after markfukt) so every prior channel keeps
+        # its index — the two new channels cold-start on a checkpoint
+        # aux-input-conv expansion, like markfukt did.
+        if self.enable_delta_sar_channels:
+            names.extend(["delta_vv", "delta_vh"])
+        if self.enable_era5_channels:
+            names.extend([
+                "era5_t2m_mean", "era5_tp_sum", "era5_swvl1_mean",
+                "era5_ssrd_sum", "era5_gdd",
             ])
         return tuple(names)
 

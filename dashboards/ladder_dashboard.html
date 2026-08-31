@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Label-source ladder — 6 backbones × 4 rungs</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0b0e17; color:#e5e7eb; font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; padding:22px; }
+h1 { font-size:19px; font-weight:650; letter-spacing:-.01em; }
+h2 { font-size:14px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.06em; margin-bottom:10px; }
+.sub { color:#6b7280; font-size:12.5px; margin-top:3px; }
+.panel { background:#111827; border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:18px; }
+table { border-collapse:collapse; width:100%; }
+th,td { padding:7px 8px; text-align:left; vertical-align:top; }
+thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#9ca3af; border-bottom:1px solid #1f2937; white-space:nowrap; }
+.rung-label { white-space:nowrap; color:#d1d5db; font-weight:600; font-size:12.5px; border-right:1px solid #1f2937; }
+.rung-label small { display:block; color:#6b7280; font-weight:400; font-size:11px; }
+.cell { background:#0f1622; border:1px solid #1f2937; border-radius:7px; padding:8px 9px; min-width:132px; }
+.cell.running { border-color:#2563eb; }
+.cell.completed { border-color:#15803d; }
+.cell.failed { border-color:#b91c1c; }
+.cell.absent { opacity:.45; }
+.pill { display:inline-block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; padding:1px 6px; border-radius:20px; }
+.pill.running { background:#1e3a8a; color:#93c5fd; }
+.pill.completed { background:#14532d; color:#86efac; }
+.pill.failed { background:#7f1d1d; color:#fca5a5; }
+.pill.absent { background:#1f2937; color:#9ca3af; }
+.metric { font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; margin:3px 0 1px; }
+.metric.none { color:#4b5563; font-size:15px; font-weight:500; }
+.now { font-size:11.5px; color:#9ca3af; font-variant-numeric:tabular-nums; margin-bottom:2px; }
+.now .stat { color:#d1d5db; font-weight:600; }
+.meta { font-size:11px; color:#6b7280; font-variant-numeric:tabular-nums; }
+.bar { height:3px; background:#1f2937; border-radius:2px; margin-top:6px; overflow:hidden; }
+.bar > div { height:100%; background:#2563eb; }
+.cell.completed .bar > div { background:#16a34a; }
+.delta { font-size:11.5px; font-variant-numeric:tabular-nums; }
+.up { color:#4ade80; } .down { color:#f87171; } .flat { color:#6b7280; }
+select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-radius:6px; padding:5px 8px; font:inherit; font-size:12.5px; }
+.h2h { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
+.h2h-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+.legend { display:flex; gap:14px; font-size:11.5px; color:#9ca3af; margin-top:8px; flex-wrap:wrap; }
+.legend .tog { cursor:pointer; user-select:none; }
+.legend .tog:hover { color:#e5e7eb; }
+.swatch { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:middle; }
+.warn { background:#1c1917; border-left:3px solid #b45309; padding:9px 12px; border-radius:0 6px 6px 0; font-size:12.5px; color:#d6d3d1; margin-bottom:18px; }
+.warn b { color:#fbbf24; }
+.stat { font-variant-numeric:tabular-nums; }
+.foot { color:#4b5563; font-size:11.5px; margin-top:4px; }
+</style>
+</head>
+<body>
+
+<h1>Label-source ladder</h1>
+<div class="sub">6 backbones × 4 rungs — only the label source varies. Cold start, 30 epochs, one cohort.
+  <span id="updated"></span></div>
+
+<div class="warn" style="margin-top:16px">
+  <b>Rung 1 is 23-class; rungs 2–4 are 28-class.</b> Their mIoU values use different class
+  vocabularies and are <b>not</b> directly comparable — the vertical deltas below are shown for
+  progress tracking only. The ladder's real comparison is NFI held-out forest-type accuracy
+  (28→5 collapse), scored separately by <span class="stat">model_race_standings.py</span>.
+</div>
+
+<div class="panel">
+  <h2>Matrix — best val mIoU per cell</h2>
+  <table id="matrix"></table>
+  <div class="legend">
+    <span><span class="swatch" style="background:#2563eb"></span>running</span>
+    <span><span class="swatch" style="background:#16a34a"></span>completed</span>
+    <span><span class="swatch" style="background:#b91c1c"></span>failed</span>
+    <span><span class="swatch" style="background:#374151"></span>not started</span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Rung contributions — within column only</h2>
+  <table id="deltas"></table>
+  <div class="foot">Each column's step-ups. 2−1 crosses the 23→28-class boundary (marked ¹) and is not a like-for-like delta.</div>
+</div>
+
+<div class="panel">
+  <h2>Distillability — head OOF on the pinned NFI plot set</h2>
+  <table id="distill"></table>
+  <div class="foot">The ladder's ONE cross-backbone number: a pinned-protocol MLP head reads each
+    column's frozen rung-2 features and predicts field-inventoried forest type; 5-fold out-of-fold
+    accuracy on the shared plot set. Baseline 0.493 = NMD2023 itself at the same plots.
+    <span id="parity"></span></div>
+</div>
+
+<div class="panel">
+  <h2>All runs — every curve on one axis</h2>
+  <div class="h2h-controls">
+    <select id="rungFilter">
+      <option value="all">All rungs</option>
+      <option value="1">Rung 1 — NMD2018 (23-class)</option>
+      <option value="2">Rung 2 — NMD2023 (28-class)</option>
+      <option value="3">Rung 3 — +NFI (28-class)</option>
+      <option value="4">Rung 4 — +Trädslag (28-class)</option>
+    </select>
+    <span id="allVerdict" style="font-size:12.5px"></span>
+  </div>
+  <svg id="chartAll" viewBox="0 0 980 340" style="width:100%;height:auto"></svg>
+  <div id="allLegend" class="legend"></div>
+  <div class="foot">Colour = backbone, line style = rung (r1 dashed, r2 solid, r3 dotted, r4 dash-dot).
+    Click a legend entry to hide that run.</div>
+</div>
+
+<div class="panel">
+  <h2>Head to head</h2>
+  <div class="h2h-controls">
+    <select id="selA"></select>
+    <span style="color:#6b7280">vs</span>
+    <select id="selB"></select>
+    <span id="h2hVerdict" style="margin-left:8px;font-size:12.5px"></span>
+  </div>
+  <div class="h2h">
+    <div style="flex:1;min-width:340px"><svg id="chart" viewBox="0 0 640 260" style="width:100%;height:auto"></svg></div>
+    <div style="min-width:230px"><table id="h2hTable"></table></div>
+  </div>
+</div>
+
+<script>
+const MODELS = ["prithvi600m","prithvi300m","croma","terramind","tessera","clay"];
+const LABELS = {prithvi600m:"Prithvi-600M",prithvi300m:"Prithvi-300M",croma:"CROMA",
+                terramind:"TerraMind",tessera:"Tessera",clay:"Clay"};
+const RUNGS = [
+  {n:1,name:"NMD2018",note:"in-tile, 23-class"},
+  {n:2,name:"NMD2023",note:"sidecar, 28-class"},
+  {n:3,name:"+NFI",note:"self-distilled"},
+  {n:4,name:"+Trädslag",note:"fraction head"},
+];
+const TOTAL_EPOCHS = 30;
+const COLORS = ["#60a5fa","#f472b6"];
+
+// All-runs chart: colour carries the BACKBONE and dash pattern the RUNG, so all
+// 24 curves stay separable on one axis without a 24-entry colour ramp — and so
+// the eye groups by column (the thing being compared) rather than by rung.
+const MODEL_COLORS = {prithvi600m:"#60a5fa", prithvi300m:"#a78bfa", croma:"#f472b6",
+                      terramind:"#fbbf24", tessera:"#4ade80", clay:"#22d3ee"};
+const RUNG_DASH = {1:"5,4", 2:"", 3:"1,3", 4:"9,3,2,3"};
+
+let DATA = {};   // "model_rN" -> log | null
+let DSTL = {};   // model -> distillability json | null
+// nfi_head_cv.py BASELINES: NMD2023's own 5-class field accuracy at the
+// same plots — the number a column's features must beat to claim the
+// model knows more forest type than the map it was trained on.
+const NMD2023_BASELINE = 0.493;
+const hidden = new Set();   // legend-toggled run keys, excluded from the chart
+
+const key = (m,n) => `${m}_r${n}`;
+const fmt = v => (v===null||v===undefined) ? "—" : v.toFixed(4);
+
+async function loadAll() {
+  await Promise.all(MODELS.flatMap(m => RUNGS.map(async r => {
+    const k = key(m,r.n);
+    try {
+      const res = await fetch(`data/${k}/training_log.json?t=${Date.now()}`);
+      DATA[k] = res.ok ? await res.json() : null;
+    } catch { DATA[k] = null; }
+  })).concat(MODELS.map(async m => {
+    // Distill-stage output (served via the /www/ladder/distill symlink);
+    // 404 until that column's distill job has passed its OOF step.
+    try {
+      const res = await fetch(`distill/${m}_r2_distillability.json?t=${Date.now()}`);
+      DSTL[m] = res.ok ? await res.json() : null;
+    } catch { DSTL[m] = null; }
+  })));
+}
+
+function state(log) {
+  if (!log) return "absent";
+  if (log.status === "completed") return "completed";
+  // "stopped" is the trainer's early-stop label, not a failure — and it also
+  // fires on a run that reached its final epoch (tessera_r1 logged all 30 and
+  // wrote every checkpoint, yet reported "stopped"). Treat a run that reached
+  // its epoch target as completed; only a genuinely short one is flagged.
+  if (log.status === "stopped") {
+    const eps = log.epochs || [];
+    const last = eps.length ? eps[eps.length-1].epoch : 0;
+    return last >= totalOf(log) ? "completed" : "failed";
+  }
+  return "running";
+}
+
+// One writer, two shapes. trainer.py writes {best_metric, best_epoch,
+// config, epochs[].metric_value}; the dashboard SERVER then rewrites it at
+// request time via its normalize() (see k8s/training-dashboard-server.yaml)
+// into the legacy shape {best_miou, epochs[].val_miou, epochs[].total} that
+// the older dashboards expect, dropping best_epoch and config. So the same
+// file reads differently over HTTP than on disk — reading only the on-disk
+// shape rendered every live run as a blank cell. Values are preserved by the
+// translation; only the names change.
+function curve(log) {
+  return (log?.epochs || [])
+    .map(e => ({x:e.epoch, y: e.metric_value ?? e.val_miou}))
+    .filter(p => typeof p.y === "number" && typeof p.x === "number");
+}
+
+function bestOf(log) {
+  const v = log?.best_metric ?? log?.best_miou;
+  if (typeof v === "number" && v > 0) return v;
+  const c = curve(log);
+  return c.length ? Math.max(...c.map(p=>p.y)) : null;
+}
+
+function bestEpochOf(log) {
+  if (typeof log?.best_epoch === "number") return log.best_epoch;
+  const c = curve(log);
+  if (!c.length) return null;
+  return c.reduce((a,b) => b.y > a.y ? b : a).x;
+}
+
+/** Total epochs this run targets; the live log carries it per epoch. */
+function totalOf(log) {
+  const eps = log?.epochs || [];
+  const t = eps.length ? eps[eps.length-1].total : null;
+  return typeof t === "number" && t > 0 ? t : TOTAL_EPOCHS;
+}
+
+/** Most recent epoch's val mIoU — where the run is NOW, not its peak. */
+function latest(log) {
+  const c = curve(log);
+  return c.length ? c[c.length-1].y : null;
+}
+
+function sparkline(log, color) {
+  const pts = curve(log);
+  if (pts.length < 2) return "";
+  const ys = pts.map(p=>p.y), lo = Math.min(...ys), hi = Math.max(...ys), span = (hi-lo)||1;
+  const d = pts.map((p,i) => {
+    const x = (i/(pts.length-1))*100;
+    const y = 22 - ((p.y-lo)/span)*20;
+    return `${i?"L":"M"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return `<svg viewBox="0 0 100 24" preserveAspectRatio="none" style="width:100%;height:22px;margin-top:5px">
+            <path d="${d}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
+}
+
+function renderMatrix() {
+  const t = document.getElementById("matrix");
+  let h = "<thead><tr><th>Rung</th>" +
+          MODELS.map(m=>`<th>${LABELS[m]}</th>`).join("") + "</tr></thead><tbody>";
+  for (const r of RUNGS) {
+    h += `<tr><td class="rung-label">${r.n}. ${r.name}<small>${r.note}</small></td>`;
+    for (const m of MODELS) {
+      const log = DATA[key(m,r.n)], st = state(log);
+      const done = log?.epochs?.length || 0;
+      const best = bestOf(log);
+      const total = totalOf(log);
+      const bestEp = bestEpochOf(log);
+      const strokeC = st==="completed" ? "#4ade80" : st==="failed" ? "#f87171" : "#60a5fa";
+      const now = latest(log);
+      // "now" is the current epoch's val mIoU; best is the peak so far. On a
+      // healthy run they converge — a now well below best means the curve has
+      // turned over (overfitting / LR too high), which the peak alone hides.
+      const nowLine = now===null ? "" :
+        `<div class="now">now <span class="stat">${now.toFixed(4)}</span>` +
+        (best!==null && now < best - 0.0005
+          ? ` <span class="down">▼${(best-now).toFixed(4)}</span>` : "") + `</div>`;
+      h += `<td><div class="cell ${st}">
+              <span class="pill ${st}">${st==="absent"?"not started":st}</span>
+              <div class="metric ${best===null?"none":""}">${best===null?"—":best.toFixed(4)}</div>
+              ${nowLine}
+              <div class="meta">${st==="absent" ? "queued"
+                   : `epoch ${done}/${total}${bestEp?` · best @${bestEp}`:""}`}</div>
+              ${st==="absent" ? "" : `<div class="bar"><div style="width:${Math.min(100,done/total*100)}%"></div></div>`}
+              ${sparkline(log, strokeC)}
+            </div></td>`;
+    }
+    h += "</tr>";
+  }
+  t.innerHTML = h + "</tbody>";
+}
+
+function renderDeltas() {
+  const steps = [[2,1],[3,2],[4,3]];
+  let h = "<thead><tr><th>Step</th>" + MODELS.map(m=>`<th>${LABELS[m]}</th>`).join("") +
+          "</tr></thead><tbody>";
+  for (const [hi,lo] of steps) {
+    const cross = (lo===1) ? "¹" : "";
+    h += `<tr><td class="rung-label">r${hi} − r${lo}${cross}</td>`;
+    for (const m of MODELS) {
+      const a = bestOf(DATA[key(m,hi)]), b = bestOf(DATA[key(m,lo)]);
+      if (a===null || b===null) {
+        h += `<td class="delta flat">—</td>`;
+      } else {
+        const d = a-b, cls = d>0.0005 ? "up" : d<-0.0005 ? "down" : "flat";
+        h += `<td class="delta ${cls}">${d>0?"+":""}${d.toFixed(4)}</td>`;
+      }
+    }
+    h += "</tr>";
+  }
+  document.getElementById("deltas").innerHTML = h + "</tbody>";
+}
+
+function options() {
+  return MODELS.flatMap(m => RUNGS.map(r => ({
+    k: key(m,r.n),
+    label: `${LABELS[m]} · r${r.n} ${r.name}`,
+    live: !!DATA[key(m,r.n)],
+  })));
+}
+
+function fillSelects() {
+  const opts = options();
+  for (const [id, dflt] of [["selA",0],["selB",1]]) {
+    const s = document.getElementById(id);
+    if (s.dataset.touched) continue;
+    const live = opts.filter(o=>o.live);
+    s.innerHTML = opts.map(o =>
+      `<option value="${o.k}"${o.live?"":" disabled"}>${o.label}${o.live?"":" (not started)"}</option>`
+    ).join("");
+    if (live[dflt]) s.value = live[dflt].k;
+    else if (live[0]) s.value = live[0].k;
+    s.onchange = () => { s.dataset.touched = "1"; renderH2H(); };
+  }
+}
+
+function renderDistill() {
+  const rows = [
+    ["OOF accuracy", d => d.heads?.mlp?.overall_accuracy_5class, true],
+    ["kappa",        d => d.heads?.mlp?.cohen_kappa, false],
+    ["Δ NMD2023",    d => {
+      const v = d.heads?.mlp?.overall_accuracy_5class;
+      return typeof v === "number" ? v - NMD2023_BASELINE : undefined;
+    }, false],
+  ];
+  let h = "<thead><tr><th></th>" + MODELS.map(m=>`<th>${LABELS[m]}</th>`).join("")
+        + "</tr></thead><tbody>";
+  // Best OOF among landed columns gets the highlight — this is the ladder's
+  // actual cross-backbone ranking, unlike the mIoU matrix above.
+  const landed = MODELS.filter(m => DSTL[m]);
+  const best = Math.max(...landed.map(m => DSTL[m].heads?.mlp?.overall_accuracy_5class ?? -1));
+  for (const [name, get, isAcc] of rows) {
+    h += `<tr><td class="rung-label">${name}</td>`;
+    for (const m of MODELS) {
+      const d = DSTL[m];
+      const v = d ? get(d) : undefined;
+      if (typeof v !== "number") { h += `<td class="delta flat">—</td>`; continue; }
+      if (name === "Δ NMD2023") {
+        const cls = v > 0 ? "up" : v < 0 ? "down" : "flat";
+        h += `<td class="delta ${cls}">${v>0?"+":""}${v.toFixed(3)}</td>`;
+      } else {
+        const lead = isAcc && v === best && landed.length > 1;
+        h += `<td class="stat"${lead ? ' style="color:#4ade80;font-weight:700"' : ""}>${v.toFixed(4)}</td>`;
+      }
+    }
+    h += "</tr>";
+  }
+  document.getElementById("distill").innerHTML = h + "</tbody>";
+
+  // Protocol parity: the cross-backbone claim is valid ONLY while every
+  // landed column scored the identical truth vector (same plots, same y,
+  // therefore same folds). The y-hash travels in each JSON's _meta.
+  const el = document.getElementById("parity");
+  const hashes = landed.map(m => DSTL[m]._meta?.y_sha256).filter(Boolean);
+  if (hashes.length < 2) { el.textContent = ""; return; }
+  const uniq = new Set(hashes);
+  el.innerHTML = uniq.size === 1
+    ? ` <span class="up">· protocol parity ✓ — ${hashes.length}/${MODELS.length} columns, identical y-hash</span>`
+    : ` <span class="down">· PARITY BROKEN — ${uniq.size} different y-hashes across columns; cross-column comparison invalid</span>`;
+}
+
+/** Runs matching the rung filter that have at least one epoch on disk. */
+function runsFor(filter) {
+  return MODELS.flatMap(m => RUNGS
+    .filter(r => filter === "all" || r.n === +filter)
+    .map(r => ({m, n:r.n, k:key(m,r.n)})))
+    .filter(o => DATA[o.k] && curve(DATA[o.k]).length);
+}
+
+function toggleRun(k) {
+  hidden.has(k) ? hidden.delete(k) : hidden.add(k);
+  renderAll();
+}
+
+function renderAll() {
+  const filter = document.getElementById("rungFilter").value;
+  const legend = runsFor(filter);
+  const runs = legend.filter(o => !hidden.has(o.k));
+  const svg = document.getElementById("chartAll");
+  const W=980, H=340, P={l:52,r:104,t:14,b:30};
+
+  // Legend lists every run with data, including hidden ones — otherwise a
+  // toggled-off run would have no way back.
+  document.getElementById("allLegend").innerHTML = legend.map(o => {
+    const b = bestOf(DATA[o.k]), off = hidden.has(o.k);
+    return `<span class="tog" onclick="toggleRun('${o.k}')" style="opacity:${off ? .35 : 1}">
+              <span class="swatch" style="background:${MODEL_COLORS[o.m]}"></span>${LABELS[o.m]}${filter==="all" ? ` r${o.n}` : ""}
+              <span class="stat" style="color:#6b7280;margin-left:4px">${b===null ? "—" : b.toFixed(4)}</span>
+            </span>`;
+  }).join("");
+
+  const verdict = document.getElementById("allVerdict");
+  if (!runs.length) {
+    svg.innerHTML = `<text x="20" y="30" fill="#6b7280" font-size="13">no epochs yet</text>`;
+    verdict.textContent = "";
+    return;
+  }
+
+  // Same guard the head-to-head carries: rung 1 scores 23 classes and rungs
+  // 2-4 score 28, so a curve sitting higher on this axis is not automatically
+  // the better model. Filtering to one rung removes the caveat entirely.
+  const shown = new Set(runs.map(o => o.n));
+  const mixed = shown.has(1) && [...shown].some(n => n > 1);
+  verdict.innerHTML = mixed
+    ? `<span style="color:#fbbf24">· 23-class (r1) and 28-class (r2–4) on one axis — vertical position is not like-for-like</span>`
+    : `<span style="color:#6b7280">· ${runs.length} run${runs.length===1?"":"s"}, one class vocabulary — directly comparable</span>`;
+
+  const pts = runs.map(o => curve(DATA[o.k]));
+  const flat = pts.flat();
+  const ys = flat.map(p => p.y), lo = Math.min(...ys), hi = Math.max(...ys);
+  const pad = (hi-lo)*0.1 || 0.01, yLo = lo-pad, yHi = hi+pad;
+  const maxEp = Math.max(...runs.map(o => totalOf(DATA[o.k])), ...flat.map(p => p.x));
+  const X = e => P.l + ((e-1)/((maxEp-1)||1))*(W-P.l-P.r);
+  const Y = v => H-P.b - ((v-yLo)/((yHi-yLo)||1))*(H-P.t-P.b);
+
+  let g = "";
+  for (let i=0;i<=5;i++) {
+    const v = yLo + (i/5)*(yHi-yLo), y = Y(v);
+    g += `<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="#1f2937"/>
+          <text x="${P.l-7}" y="${y+4}" fill="#6b7280" font-size="10" text-anchor="end">${v.toFixed(3)}</text>`;
+  }
+  for (let e=1;e<=maxEp;e+=Math.ceil(maxEp/8)) {
+    g += `<text x="${X(e)}" y="${H-8}" fill="#6b7280" font-size="10" text-anchor="middle">${e}</text>`;
+  }
+
+  const ends = [];
+  runs.forEach((o,i) => {
+    const c = pts[i], last = c[c.length-1];
+    const d = c.map((p,j) => `${j?"L":"M"}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
+    const dash = RUNG_DASH[o.n] ? ` stroke-dasharray="${RUNG_DASH[o.n]}"` : "";
+    g += `<path d="${d}" fill="none" stroke="${MODEL_COLORS[o.m]}" stroke-width="1.8"${dash}/>`;
+    g += `<circle cx="${X(last.x).toFixed(1)}" cy="${Y(last.y).toFixed(1)}" r="2.6" fill="${MODEL_COLORS[o.m]}"/>`;
+    ends.push({y:Y(last.y), o});
+  });
+
+  // Nudge end labels apart: several backbones finish within a few thousandths
+  // of each other, which stacks their labels into an unreadable blur.
+  ends.sort((a,b) => a.y - b.y);
+  for (let i=1;i<ends.length;i++) {
+    if (ends[i].y - ends[i-1].y < 11) ends[i].y = ends[i-1].y + 11;
+  }
+  // The nudge is down-only; at 24 curves the stack can walk off the plot.
+  // Shift the whole stack back up if it overflowed, then clamp the top.
+  const overflow = ends.length ? ends[ends.length-1].y - (H - P.b - 2) : 0;
+  if (overflow > 0) for (const e of ends) e.y = Math.max(P.t + 8, e.y - overflow);
+  for (const e of ends) {
+    g += `<text x="${W-P.r+6}" y="${(e.y+3.5).toFixed(1)}" fill="${MODEL_COLORS[e.o.m]}" font-size="10.5">`
+       + `${LABELS[e.o.m]}${filter==="all" ? ` r${e.o.n}` : ""}</text>`;
+  }
+  svg.innerHTML = g;
+}
+
+function renderH2H() {
+  const ka = document.getElementById("selA").value, kb = document.getElementById("selB").value;
+  const la = DATA[ka], lb = DATA[kb];
+  const series = [curve(la), curve(lb)];
+  const svg = document.getElementById("chart");
+  const W=640, H=260, P={l:48,r:12,t:12,b:28};
+  const all = series.flat();
+  if (!all.length) { svg.innerHTML = `<text x="20" y="30" fill="#6b7280" font-size="13">no epochs yet</text>`; return; }
+  const ys = all.map(p=>p.y), lo = Math.min(...ys), hi = Math.max(...ys);
+  const pad = (hi-lo)*0.12 || 0.01, yLo = lo-pad, yHi = hi+pad;
+  const X = e => P.l + ((e-1)/(TOTAL_EPOCHS-1))*(W-P.l-P.r);
+  const Y = v => H-P.b - ((v-yLo)/(yHi-yLo))*(H-P.t-P.b);
+
+  let g = "";
+  for (let i=0;i<=4;i++) {
+    const v = yLo + (i/4)*(yHi-yLo), y = Y(v);
+    g += `<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="#1f2937"/>
+          <text x="${P.l-7}" y="${y+4}" fill="#6b7280" font-size="10" text-anchor="end">${v.toFixed(3)}</text>`;
+  }
+  for (let e=1;e<=TOTAL_EPOCHS;e+=Math.ceil(TOTAL_EPOCHS/6)) {
+    g += `<text x="${X(e)}" y="${H-8}" fill="#6b7280" font-size="10" text-anchor="middle">${e}</text>`;
+  }
+  series.forEach((pts,i) => {
+    if (!pts.length) return;
+    const d = pts.map((p,j)=>`${j?"L":"M"}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
+    g += `<path d="${d}" fill="none" stroke="${COLORS[i]}" stroke-width="2"/>`;
+    const last = pts[pts.length-1];
+    g += `<circle cx="${X(last.x).toFixed(1)}" cy="${Y(last.y).toFixed(1)}" r="3" fill="${COLORS[i]}"/>`;
+  });
+  svg.innerHTML = g;
+
+  const rows = [
+    ["best mIoU", bestOf(la), bestOf(lb), true],
+    ["now mIoU", latest(la), latest(lb), true],
+    ["best epoch", bestEpochOf(la), bestEpochOf(lb), false],
+    ["epochs done", la?.epochs?.length, lb?.epochs?.length, false],
+    ["status", la?.status, lb?.status, false],
+  ];
+  let h = `<thead><tr><th></th>
+             <th><span class="swatch" style="background:${COLORS[0]}"></span>A</th>
+             <th><span class="swatch" style="background:${COLORS[1]}"></span>B</th></tr></thead><tbody>`;
+  for (const [name,a,b,num] of rows) {
+    const f = v => v===undefined||v===null ? "—" : (num && typeof v==="number" ? v.toFixed(4) : v);
+    h += `<tr><td class="meta">${name}</td><td class="stat">${f(a)}</td><td class="stat">${f(b)}</td></tr>`;
+  }
+  document.getElementById("h2hTable").innerHTML = h + "</tbody>";
+
+  const va = bestOf(la), vb = bestOf(lb);
+  const el = document.getElementById("h2hVerdict");
+  if (va!==null && vb!==null) {
+    const d = va-vb;
+    const rungA = ka.split("_r")[1], rungB = kb.split("_r")[1];
+    const mixed = (rungA==="1") !== (rungB==="1");
+    el.innerHTML = `<span class="${d>0?"up":d<0?"down":"flat"}">A ${d>0?"leads":"trails"} by ${Math.abs(d).toFixed(4)}</span>` +
+      (mixed ? ` <span style="color:#fbbf24">· 23-class vs 28-class, not comparable</span>` : "");
+  } else el.textContent = "";
+}
+
+async function tick() {
+  await loadAll();
+  renderMatrix(); renderDeltas(); renderDistill(); renderAll(); fillSelects(); renderH2H();
+  document.getElementById("updated").textContent =
+    "· refreshed " + new Date().toLocaleTimeString();
+}
+document.getElementById("rungFilter").onchange = renderAll;
+tick();
+setInterval(tick, 30000);
+</script>
+</body>
+</html>

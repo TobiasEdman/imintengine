@@ -21,10 +21,134 @@ References:
 """
 from __future__ import annotations
 
+import math
+from functools import lru_cache
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+def _strict_determinism_enabled() -> bool:
+    """Return True only when nondeterministic kernels must abort."""
+    return (
+        torch.are_deterministic_algorithms_enabled()
+        and not torch.is_deterministic_algorithms_warn_only_enabled()
+    )
+
+
+@lru_cache(maxsize=128)
+def _linear_weight_matrix(
+    input_size: int,
+    output_size: int,
+    align_corners: bool,
+) -> torch.Tensor:
+    """CPU interpolation matrix matching 1-D PyTorch linear sampling."""
+    if input_size <= 0 or output_size <= 0:
+        raise ValueError("Interpolation sizes must be positive")
+    weights = torch.zeros((output_size, input_size), dtype=torch.float32)
+    if input_size == 1:
+        weights[:, 0] = 1.0
+        return weights
+    for output_index in range(output_size):
+        if align_corners:
+            source = (
+                output_index * (input_size - 1) / (output_size - 1)
+                if output_size > 1 else 0.0
+            )
+        else:
+            source = max(
+                (output_index + 0.5) * input_size / output_size - 0.5,
+                0.0,
+            )
+        lower = min(math.floor(source), input_size - 1)
+        upper = min(lower + 1, input_size - 1)
+        upper_weight = source - lower if upper != lower else 0.0
+        weights[output_index, lower] += 1.0 - upper_weight
+        weights[output_index, upper] += upper_weight
+    return weights
+
+
+@lru_cache(maxsize=128)
+def _adaptive_average_weight_matrix(
+    input_size: int,
+    output_size: int,
+) -> torch.Tensor:
+    """CPU matrix matching AdaptiveAvgPool's variable-width bins."""
+    if input_size <= 0 or output_size <= 0:
+        raise ValueError("Pooling sizes must be positive")
+    weights = torch.zeros((output_size, input_size), dtype=torch.float32)
+    for output_index in range(output_size):
+        start = math.floor(output_index * input_size / output_size)
+        end = math.ceil((output_index + 1) * input_size / output_size)
+        weights[output_index, start:end] = 1.0 / (end - start)
+    return weights
+
+
+def _separable_matrix_resample(
+    x: torch.Tensor,
+    height_weights: torch.Tensor,
+    width_weights: torch.Tensor,
+) -> torch.Tensor:
+    """Apply a separable spatial transform using deterministic matmuls."""
+    height_weights = height_weights.to(device=x.device, dtype=x.dtype)
+    width_weights = width_weights.to(device=x.device, dtype=x.dtype)
+    return torch.matmul(
+        torch.matmul(height_weights, x),
+        width_weights.transpose(0, 1),
+    )
+
+
+def _resize_bilinear(
+    x: torch.Tensor,
+    size: tuple[int, int],
+    *,
+    align_corners: bool,
+) -> torch.Tensor:
+    """Bilinear resize with a strict-deterministic CUDA backward path.
+
+    PyTorch 2.6 has no deterministic CUDA backward kernel for
+    ``F.interpolate(..., mode='bilinear')``.  Under strict experiment mode,
+    the same bilinear weights are therefore applied as two dense matrix
+    multiplications; CUBLAS determinism is enforced by the runner.
+    """
+    output_h, output_w = (int(size[0]), int(size[1]))
+    if x.shape[-2:] == (output_h, output_w):
+        return x
+    if not _strict_determinism_enabled():
+        return F.interpolate(
+            x, size=(output_h, output_w), mode="bilinear",
+            align_corners=align_corners,
+        )
+    height_weights = _linear_weight_matrix(
+        x.shape[-2], output_h, align_corners,
+    )
+    width_weights = _linear_weight_matrix(
+        x.shape[-1], output_w, align_corners,
+    )
+    return _separable_matrix_resample(x, height_weights, width_weights)
+
+
+class DeterministicAdaptiveAvgPool2d(nn.Module):
+    """Adaptive average pooling without CUDA atomic-add backward in strict mode."""
+
+    def __init__(self, output_size: int | tuple[int, int]):
+        super().__init__()
+        self.output_size = output_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not _strict_determinism_enabled():
+            return F.adaptive_avg_pool2d(x, self.output_size)
+        if isinstance(self.output_size, int):
+            output_h = output_w = self.output_size
+        else:
+            output_h, output_w = self.output_size
+        return _separable_matrix_resample(
+            x,
+            _adaptive_average_weight_matrix(x.shape[-2], int(output_h)),
+            _adaptive_average_weight_matrix(x.shape[-1], int(output_w)),
+        )
 
 
 def get_default_pool_sizes(
@@ -117,7 +241,7 @@ class TerraTorchUperNetDecoder(nn.Module):
         self.psp_modules = nn.ModuleList()
         for pool_size in pool_sizes:
             self.psp_modules.append(nn.Sequential(
-                nn.AdaptiveAvgPool2d(pool_size),
+                DeterministicAdaptiveAvgPool2d(pool_size),
                 ConvBnRelu(in_channels[-1], decoder_channels, kernel=1, padding=0),
             ))
 
@@ -160,8 +284,8 @@ class TerraTorchUperNetDecoder(nn.Module):
         psp_outs = [deepest]
         for psp_module in self.psp_modules:
             pooled = psp_module(deepest)
-            pooled = F.interpolate(
-                pooled, size=(h, w), mode="bilinear", align_corners=True,
+            pooled = _resize_bilinear(
+                pooled, (h, w), align_corners=True,
             ).contiguous()
             psp_outs.append(pooled)
         psp_out = self.bottleneck(torch.cat(psp_outs, dim=1))
@@ -171,9 +295,8 @@ class TerraTorchUperNetDecoder(nn.Module):
         for i in range(self.num_levels - 2, -1, -1):
             lateral = self.lateral_convs[i](features[i])
             target_h, target_w = lateral.shape[2:]
-            upsampled = F.interpolate(
-                fpn_outs[0], size=(target_h, target_w),
-                mode="bilinear", align_corners=True,
+            upsampled = _resize_bilinear(
+                fpn_outs[0], (target_h, target_w), align_corners=True,
             ).contiguous()
             fpn_out = self.fpn_convs[i](lateral + upsampled)
             fpn_outs.insert(0, fpn_out)
@@ -183,9 +306,8 @@ class TerraTorchUperNetDecoder(nn.Module):
         resized = []
         for out in fpn_outs:
             if out.shape[2:] != (target_h, target_w):
-                out = F.interpolate(
-                    out, size=(target_h, target_w),
-                    mode="bilinear", align_corners=True,
+                out = _resize_bilinear(
+                    out, (target_h, target_w), align_corners=True,
                 ).contiguous()
             resized.append(out)
 
@@ -366,12 +488,16 @@ class PrithviSegmentationModel(nn.Module):
         pool_sizes: tuple[int, ...] | None = None,
         enable_temporal_pooling: bool = True,
         enable_multilevel_aux: bool = True,
+        enable_tradslag_head: bool = False,
+        num_tradslag: int = 4,
     ):
         super().__init__()
         self.feature_indices = list(feature_indices)
         self.n_aux_channels = n_aux_channels
         self.enable_temporal_pooling = enable_temporal_pooling
         self.enable_multilevel_aux = enable_multilevel_aux
+        self.enable_tradslag_head = enable_tradslag_head
+        self.num_tradslag = num_tradslag
 
         # Get the ViT encoder from PrithviMAE if needed
         if hasattr(encoder, "encoder"):
@@ -425,7 +551,7 @@ class PrithviSegmentationModel(nn.Module):
         self.decoder.psp_modules = nn.ModuleList()
         for pool_size in pool_sizes:
             self.decoder.psp_modules.append(nn.Sequential(
-                nn.AdaptiveAvgPool2d(pool_size),
+                DeterministicAdaptiveAvgPool2d(pool_size),
                 ConvBnRelu(scale_channels[-1], decoder_channels, kernel=1, padding=0),
             ))
 
@@ -454,6 +580,16 @@ class PrithviSegmentationModel(nn.Module):
 
         # Segmentation head
         self.head = SegmentationHead(decoder_channels, num_classes, dropout)
+
+        # Optional Trädslag fraction head: a parallel Conv2d on the SAME
+        # decoder_channels-dim feature that feeds the classifier. Outputs
+        # num_tradslag continuous crown-cover logits (sigmoid at use-time).
+        # Flag-gated so the default path is byte-identical (attribute absent
+        # from the module → no new parameters, no state-dict keys).
+        if enable_tradslag_head:
+            self.frac_head = nn.Conv2d(decoder_channels, num_tradslag, 1)
+        else:
+            self.frac_head = None
 
         # Auxiliary fusion: mid-level (gated per FPN level) or legacy late fusion
         if n_aux_channels > 0 and enable_multilevel_aux:
@@ -540,16 +676,16 @@ class PrithviSegmentationModel(nn.Module):
         psp_outs = [deepest]
         for psp_module in self.decoder.psp_modules:
             pooled = psp_module(deepest)
-            pooled = F.interpolate(
-                pooled, size=(h, w), mode="bilinear", align_corners=True,
+            pooled = _resize_bilinear(
+                pooled, (h, w), align_corners=True,
             ).contiguous()
             psp_outs.append(pooled)
         psp_out = self.decoder.bottleneck(torch.cat(psp_outs, dim=1))
 
         # Mid-level aux fusion at PSP level (level 3)
         if self.gated_fusions is not None and aux_feat is not None:
-            aux_resized = F.interpolate(
-                aux_feat, size=(h, w), mode="bilinear", align_corners=True,
+            aux_resized = _resize_bilinear(
+                aux_feat, (h, w), align_corners=True,
             ).contiguous()
             psp_out = self.gated_fusions[-1](psp_out, aux_resized)
 
@@ -559,17 +695,15 @@ class PrithviSegmentationModel(nn.Module):
         for i in range(n - 2, -1, -1):
             lateral = self.decoder.lateral_convs[i](features[i])
             target_h, target_w = lateral.shape[2:]
-            upsampled = F.interpolate(
-                fpn_outs[0], size=(target_h, target_w),
-                mode="bilinear", align_corners=True,
+            upsampled = _resize_bilinear(
+                fpn_outs[0], (target_h, target_w), align_corners=True,
             ).contiguous()
             fpn_out = self.decoder.fpn_convs[i](lateral + upsampled)
 
             # Mid-level aux fusion at this FPN level
             if self.gated_fusions is not None and aux_feat is not None:
-                aux_resized = F.interpolate(
-                    aux_feat, size=(target_h, target_w),
-                    mode="bilinear", align_corners=True,
+                aux_resized = _resize_bilinear(
+                    aux_feat, (target_h, target_w), align_corners=True,
                 ).contiguous()
                 fpn_out = self.gated_fusions[i](fpn_out, aux_resized)
 
@@ -580,9 +714,8 @@ class PrithviSegmentationModel(nn.Module):
         resized = []
         for out in fpn_outs:
             if out.shape[2:] != (target_h, target_w):
-                out = F.interpolate(
-                    out, size=(target_h, target_w),
-                    mode="bilinear", align_corners=True,
+                out = _resize_bilinear(
+                    out, (target_h, target_w), align_corners=True,
                 ).contiguous()
             resized.append(out)
 
@@ -594,7 +727,8 @@ class PrithviSegmentationModel(nn.Module):
         aux: torch.Tensor | None = None,
         temporal_coords: torch.Tensor | None = None,
         location_coords: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        return_fractions: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Full forward pass: encoder → temporal pool → scale → UperNet → head.
 
         Args:
@@ -603,9 +737,16 @@ class PrithviSegmentationModel(nn.Module):
                 (e.g. height, volume, basal area).
             temporal_coords: Optional (B, T, 2) float32 [year, doy] per frame.
             location_coords: Optional (B, 2) float32 [lat, lon] in WGS84.
+            return_fractions: When True AND the fraction head is enabled,
+                also return the (B, num_tradslag, H, W) fraction logits
+                computed from the SAME decoded feature that feeds the
+                classifier. When the head is disabled the second element is
+                ``None``. Default False → returns logits only (byte-identical
+                to the pre-fraction-head signature for existing callers).
 
         Returns:
-            (B, num_classes, H, W) logits at input resolution.
+            ``(B, num_classes, H, W)`` logits at input resolution, or
+            ``(logits, frac_logits)`` when ``return_fractions`` is True.
         """
         if x.dim() == 4:
             input_h, input_w = x.shape[2:]
@@ -623,26 +764,56 @@ class PrithviSegmentationModel(nn.Module):
         # Legacy late fusion
         elif self.aux_encoder is not None and aux is not None:
             decoded = self._decode(features)
-            decoded = F.interpolate(
-                decoded, size=(input_h, input_w),
-                mode="bilinear", align_corners=True,
+            decoded = _resize_bilinear(
+                decoded, (input_h, input_w), align_corners=True,
             ).contiguous()
             aux_enc = self.aux_encoder(aux)
             decoded = self.aux_fusion(
                 torch.cat([decoded, aux_enc], dim=1))
             logits = self.head(decoded)
-            return logits
+            # In legacy late fusion `decoded` is already at input resolution,
+            # so the head output needs no upsample — and neither does the
+            # fraction head sharing the same feature.
+            return self._maybe_with_fractions(
+                logits, decoded, input_h, input_w, return_fractions,
+            )
         else:
             decoded = self._decode(features)
 
         # Final head + upsample to input resolution
         logits = self.head(decoded)
         if logits.shape[2:] != (input_h, input_w):
-            logits = F.interpolate(
-                logits, size=(input_h, input_w),
-                mode="bilinear", align_corners=True,
+            logits = _resize_bilinear(
+                logits, (input_h, input_w), align_corners=True,
             )
-        return logits
+        return self._maybe_with_fractions(
+            logits, decoded, input_h, input_w, return_fractions,
+        )
+
+    def _maybe_with_fractions(
+        self,
+        logits: torch.Tensor,
+        decoded: torch.Tensor,
+        input_h: int,
+        input_w: int,
+        return_fractions: bool,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
+        """Attach the fraction-head output to the return, upsampled to match.
+
+        The fraction head runs on the same ``decoded`` feature as the
+        classifier and is upsampled to input resolution the same way, so its
+        spatial grid always aligns pixel-for-pixel with ``logits``.
+        """
+        if not return_fractions:
+            return logits
+        if self.frac_head is None:
+            return logits, None
+        frac_logits = self.frac_head(decoded)
+        if frac_logits.shape[2:] != (input_h, input_w):
+            frac_logits = _resize_bilinear(
+                frac_logits, (input_h, input_w), align_corners=True,
+            )
+        return logits, frac_logits
 
 
 # ── UNet decoder (BurnScars checkpoint) ──────────────────────────────────────
@@ -678,8 +849,9 @@ class UNetDecoderBlock(nn.Module):
     def forward(self, x: torch.Tensor,
                 skip: torch.Tensor | None = None) -> torch.Tensor:
         if skip is not None:
-            x = F.interpolate(x, size=skip.shape[2:],
-                              mode="bilinear", align_corners=True).contiguous()
+            x = _resize_bilinear(
+                x, skip.shape[2:], align_corners=True,
+            ).contiguous()
             x = torch.cat([x, skip], dim=1)
         x = self.conv1(x.contiguous())
         x = self.conv2(x)
@@ -849,11 +1021,206 @@ class PrithviUNetSegmentationModel(nn.Module):
         logits = self.head(decoded)
 
         if logits.shape[2:] != (input_h, input_w):
-            logits = F.interpolate(
-                logits, size=(input_h, input_w),
-                mode="bilinear", align_corners=True,
+            logits = _resize_bilinear(
+                logits, (input_h, input_w), align_corners=True,
             )
         return logits
+
+
+# ── Reusable ViT UPerNet head (CROMA / Clay / TerraMind) ─────────────────────
+
+
+class ViTUPerNetHead(nn.Module):
+    """Multi-level UPerNet decoder + dual seg/frac head for ViT encoders.
+
+    This is the exact head class ``PrithviSegmentationModel`` uses, factored
+    out so the single-date ViT backbones (CROMA / Clay / TerraMind) get the
+    SAME multi-level decoder rather than a bare linear probe — the fairness
+    fix for the multi-FM comparison. It consumes 4 same-spatial-scale ViT
+    feature maps (from 4 evenly-spaced transformer blocks), builds a spatial
+    pyramid via fpn1/fpn2 scale modules, runs PSP+FPN UPerNet fusion, then a
+    classifier (+ optional parallel Trädslag fraction head) on the SAME fused
+    feature. Optional aux channels fuse mid-level via the proven GatedFusion.
+
+    Why this is fair and not "UPerNet reflexively for all": these encoders
+    expose hookable intermediate transformer blocks (CROMA s2_encoder: 12,
+    Clay: 24, TerraMind: 12), so multi-level features genuinely exist — the
+    strongest head their structure supports. Tessera, by contrast, is a
+    pre-baked per-pixel embedding with NO transformer blocks to hook, so its
+    shallow 2-conv head is the correct head for it (and it leads the race),
+    not a handicap. Head = strongest head the encoder's features support.
+
+    Args:
+        embed_dim: Per-block token embedding dim (D).
+        num_classes: Segmentation classes.
+        decoder_channels: UPerNet internal channels (default 256).
+        dropout: Head dropout.
+        n_aux_channels: Aux raster channels (0 = none).
+        pool_sizes: PSP pool sizes (sized for the feature-map resolution).
+        enable_tradslag_head / num_tradslag: parallel fraction head.
+    """
+
+    def __init__(
+        self,
+        embed_dim: int,
+        num_classes: int,
+        decoder_channels: int = 256,
+        dropout: float = 0.1,
+        n_aux_channels: int = 0,
+        pool_sizes: tuple[int, ...] | None = None,
+        enable_tradslag_head: bool = False,
+        num_tradslag: int = 4,
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.n_aux_channels = n_aux_channels
+        self.enable_tradslag_head = enable_tradslag_head
+
+        feature_dim = embed_dim
+        self.decoder = nn.Module()
+        # Scale modules: build a spatial pyramid from same-scale ViT features
+        # (identical to PrithviSegmentationModel).
+        self.decoder.fpn1 = nn.Sequential(
+            nn.ConvTranspose2d(feature_dim, feature_dim // 2, kernel_size=2, stride=2),
+            nn.BatchNorm2d(feature_dim // 2),
+            nn.GELU(),
+            nn.ConvTranspose2d(feature_dim // 2, feature_dim // 4, kernel_size=2, stride=2),
+        )
+        self.decoder.fpn2 = nn.Sequential(
+            nn.ConvTranspose2d(feature_dim, feature_dim // 2, kernel_size=2, stride=2),
+        )
+        scale_channels = [
+            feature_dim // 4,   # after fpn1
+            feature_dim // 2,   # after fpn2
+            feature_dim,        # pass-through
+            feature_dim,        # deepest → PSP
+        ]
+
+        if pool_sizes is None:
+            pool_sizes = (1, 2, 3, 6)
+        self.decoder.psp_modules = nn.ModuleList()
+        for pool_size in pool_sizes:
+            self.decoder.psp_modules.append(nn.Sequential(
+                DeterministicAdaptiveAvgPool2d(pool_size),
+                ConvBnRelu(scale_channels[-1], decoder_channels, kernel=1, padding=0),
+            ))
+        psp_concat_ch = scale_channels[-1] + decoder_channels * len(pool_sizes)
+        self.decoder.bottleneck = ConvBnRelu(psp_concat_ch, decoder_channels)
+
+        self.decoder.lateral_convs = nn.ModuleList()
+        for i in range(len(scale_channels) - 1):
+            self.decoder.lateral_convs.append(
+                ConvBnRelu(scale_channels[i], decoder_channels, kernel=1, padding=0)
+            )
+        self.decoder.fpn_convs = nn.ModuleList()
+        for i in range(len(scale_channels) - 1):
+            self.decoder.fpn_convs.append(
+                ConvBnRelu(decoder_channels, decoder_channels)
+            )
+        self.decoder.fpn_bottleneck = ConvBnRelu(
+            decoder_channels * len(scale_channels), decoder_channels,
+        )
+
+        self.head = SegmentationHead(decoder_channels, num_classes, dropout)
+        if enable_tradslag_head:
+            self.frac_head = nn.Conv2d(decoder_channels, num_tradslag, 1)
+        else:
+            self.frac_head = None
+
+        # Mid-level gated aux fusion (same as Prithvi's multilevel-aux path).
+        if n_aux_channels > 0:
+            self.lidar_branch = LiDARBranch(n_aux_channels, out_channels=64)
+            self.gated_fusions = nn.ModuleList([
+                GatedFusion(decoder_channels, 64) for _ in range(len(scale_channels))
+            ])
+        else:
+            self.lidar_branch = None
+            self.gated_fusions = None
+
+    def _scale(self, feats: list[torch.Tensor]) -> list[torch.Tensor]:
+        """4× (B, D, gh, gw) → pyramid [fpn1, fpn2, passthrough, passthrough]."""
+        return [
+            self.decoder.fpn1(feats[0]),
+            self.decoder.fpn2(feats[1]),
+            feats[2],
+            feats[3],
+        ]
+
+    def _decode(self, features, aux_feat=None):
+        deepest = features[-1]
+        h, w = deepest.shape[2:]
+        psp_outs = [deepest]
+        for psp_module in self.decoder.psp_modules:
+            pooled = psp_module(deepest)
+            pooled = _resize_bilinear(
+                pooled, (h, w), align_corners=True,
+            ).contiguous()
+            psp_outs.append(pooled)
+        psp_out = self.decoder.bottleneck(torch.cat(psp_outs, dim=1))
+        if self.gated_fusions is not None and aux_feat is not None:
+            ar = _resize_bilinear(
+                aux_feat, (h, w), align_corners=True,
+            ).contiguous()
+            psp_out = self.gated_fusions[-1](psp_out, ar)
+        n = len(features)
+        fpn_outs = [psp_out]
+        for i in range(n - 2, -1, -1):
+            lateral = self.decoder.lateral_convs[i](features[i])
+            th, tw = lateral.shape[2:]
+            ups = _resize_bilinear(
+                fpn_outs[0], (th, tw), align_corners=True,
+            ).contiguous()
+            fpn_out = self.decoder.fpn_convs[i](lateral + ups)
+            if self.gated_fusions is not None and aux_feat is not None:
+                ar = _resize_bilinear(
+                    aux_feat, (th, tw), align_corners=True,
+                ).contiguous()
+                fpn_out = self.gated_fusions[i](fpn_out, ar)
+            fpn_outs.insert(0, fpn_out)
+        th, tw = fpn_outs[0].shape[2:]
+        resized = []
+        for out in fpn_outs:
+            if out.shape[2:] != (th, tw):
+                out = _resize_bilinear(
+                    out, (th, tw), align_corners=True,
+                ).contiguous()
+            resized.append(out)
+        return self.decoder.fpn_bottleneck(torch.cat(resized, dim=1))
+
+    def forward(
+        self,
+        feats: list[torch.Tensor],
+        output_size: tuple[int, int],
+        aux: torch.Tensor | None = None,
+        return_fractions: bool = False,
+    ):
+        """Decode 4 ViT feature maps → logits at ``output_size``.
+
+        Args:
+            feats: 4× (B, D, gh, gw) same-scale ViT block features.
+            output_size: (H, W) to upsample logits to (input resolution).
+            aux: optional (B, n_aux, H, W) channels for mid-level fusion.
+            return_fractions: also return frac logits when the head is on.
+        """
+        scaled = self._scale(feats)
+        aux_feat = self.lidar_branch(aux) if (
+            self.lidar_branch is not None and aux is not None) else None
+        decoded = self._decode(scaled, aux_feat=aux_feat)
+        logits = self.head(decoded)
+        if logits.shape[2:] != output_size:
+            logits = _resize_bilinear(
+                logits, output_size, align_corners=True,
+            )
+        if not return_fractions:
+            return logits
+        if self.frac_head is None:
+            return logits, None
+        frac = self.frac_head(decoded)
+        if frac.shape[2:] != output_size:
+            frac = _resize_bilinear(
+                frac, output_size, align_corners=True,
+            )
+        return logits, frac
 
 
 # ── Foundation model segmentation factory (registry-aware) ───────────────────
@@ -875,6 +1242,9 @@ def build_segmentation_from_spec(
     n_aux_channels: int = 0,
     enable_temporal_pooling: bool = True,
     enable_multilevel_aux: bool = True,
+    enable_tradslag_head: bool = False,
+    num_tradslag: int = 4,
+    aux_fusion: str = "concat",
     device: str | torch.device | None = None,
 ):
     """Build a segmentation model from a ModelSpec + encoder.
@@ -896,6 +1266,8 @@ def build_segmentation_from_spec(
         n_aux_channels: Auxiliary raster channels (DEM, VPP, etc.).
         enable_temporal_pooling: Use mean+max over temporal frames.
         enable_multilevel_aux: Use gated mid-level aux fusion.
+        aux_fusion: Tessera-only aux fusion mode ("concat" | "gated");
+            ignored by all other families.
         device: Used to pick MPS-safe pool sizes.
 
     Returns:
@@ -916,6 +1288,8 @@ def build_segmentation_from_spec(
             pool_sizes=pool_sizes,
             enable_temporal_pooling=enable_temporal_pooling,
             enable_multilevel_aux=enable_multilevel_aux,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
 
     if spec.family == "terramind":
@@ -931,6 +1305,8 @@ def build_segmentation_from_spec(
             patch_size=spec.patch_size,
             n_aux_channels=n_aux_channels,
             dropout=dropout,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
 
     if spec.family == "clay":
@@ -946,6 +1322,8 @@ def build_segmentation_from_spec(
             embed_dim=spec.embed_dim,
             n_aux_channels=n_aux_channels,
             dropout=dropout,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
 
     if spec.family == "croma":
@@ -959,6 +1337,8 @@ def build_segmentation_from_spec(
             modality="joint",
             n_aux_channels=n_aux_channels,
             dropout=dropout,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
 
     if spec.family == "tessera":
@@ -971,6 +1351,9 @@ def build_segmentation_from_spec(
             embed_dim=spec.embed_dim,
             n_aux_channels=n_aux_channels,
             dropout=dropout,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
+            aux_fusion=aux_fusion,
         )
 
     raise NotImplementedError(

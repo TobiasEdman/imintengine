@@ -1,0 +1,82 @@
+{
+  "n_plots_compared": 949,
+  "n_plots_total": 982,
+  "nmd2023_coverage_frac": 0.9664,
+  "restricted_to_model_plots": false,
+  "sources": {
+    "NMD2023_v2.1": {
+      "n_plots_all": 949,
+      "overall_accuracy_5class": 0.4921,
+      "cohen_kappa": 0.3637,
+      "per_class": {
+        "tallskog": {
+          "users_accuracy": 0.8194,
+          "producers_accuracy": 0.4895,
+          "f1": 0.6129,
+          "support": 380
+        },
+        "granskog": {
+          "users_accuracy": 0.7547,
+          "producers_accuracy": 0.4959,
+          "f1": 0.5985,
+          "support": 242
+        },
+        "lövskog": {
+          "users_accuracy": 0.3271,
+          "producers_accuracy": 0.5512,
+          "f1": 0.4106,
+          "support": 127
+        },
+        "blandskog": {
+          "users_accuracy": 0.3486,
+          "producers_accuracy": 0.2734,
+          "f1": 0.3065,
+          "support": 139
+        },
+        "annat (icke-skog)": {
+          "users_accuracy": 0.2208,
+          "producers_accuracy": 0.8689,
+          "f1": 0.3522,
+          "support": 61
+        }
+      }
+    },
+    "NMD2018_v1.1": {
+      "n_plots_all": 949,
+      "overall_accuracy_5class": 0.3983,
+      "cohen_kappa": 0.249,
+      "per_class": {
+        "tallskog": {
+          "users_accuracy": 0.7143,
+          "producers_accuracy": 0.4342,
+          "f1": 0.5401,
+          "support": 380
+        },
+        "granskog": {
+          "users_accuracy": 0.5793,
+          "producers_accuracy": 0.3926,
+          "f1": 0.468,
+          "support": 242
+        },
+        "lövskog": {
+          "users_accuracy": 0.2934,
+          "producers_accuracy": 0.3858,
+          "f1": 0.3333,
+          "support": 127
+        },
+        "blandskog": {
+          "users_accuracy": 0.3793,
+          "producers_accuracy": 0.2374,
+          "f1": 0.292,
+          "support": 139
+        },
+        "annat (icke-skog)": {
+          "users_accuracy": 0.12,
+          "producers_accuracy": 0.5902,
+          "f1": 0.1994,
+          "support": 61
+        }
+      }
+    }
+  }
+}

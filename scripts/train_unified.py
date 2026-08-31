@@ -72,6 +72,32 @@ def main():
         "--limit-tiles", type=int, default=None,
         help="Limit total tiles loaded (for quick local testing)",
     )
+    parser.add_argument(
+        "--label-dir", type=str, default=None,
+        help="Optional non-destructive label sidecar directory. When set, "
+             "the label + area-weighting rasters are read from "
+             "<label-dir>/<tile>.npz per tile (spectral/aux/temporal/coords "
+             "still come from the source tile). Tiles without a sidecar are "
+             "dropped at construction. Default None → labels come from the "
+             "source tile (legacy, byte-identical).",
+    )
+    parser.add_argument(
+        "--cohort-dir", type=str, default=None,
+        help="Optional cohort gate: restrict training to tiles that have an "
+             "entry in this directory, WITHOUT reading labels from it. Holds "
+             "the tile set constant across runs that use different label "
+             "sources — the label-source ladder passes the NMD2023 sidecar "
+             "dir here on its rung-1 (in-tile label) runs so all rungs share "
+             "one cohort. Default None → no restriction.",
+    )
+    parser.add_argument(
+        "--era5-dir", type=str, default=None,
+        help="Optional directory with per-tile ERA5-Land .npz sidecars.",
+    )
+    parser.add_argument(
+        "--split-dir", type=str, default=None,
+        help="Optional directory containing persisted split_train.txt and split_val.txt.",
+    )
 
     # Resolution
     parser.add_argument("--patch-size", type=int, default=_defaults.patch_pixels,
@@ -81,11 +107,41 @@ def main():
 
     # Training
     parser.add_argument("--epochs", type=int, default=_defaults.epochs)
+    parser.add_argument("--seed", type=int, default=_defaults.seed)
+    parser.add_argument("--deterministic", action="store_true",
+                        help="Use deterministic CUDA/DataLoader settings for paired experiments.")
+    parser.add_argument(
+        "--deterministic-warn-only", action="store_true",
+        help="Warn instead of aborting for CUDA ops without a deterministic "
+             "implementation; the setting is recorded in run provenance.",
+    )
+    parser.add_argument(
+        "--preflight-one-batch", action="store_true",
+        help="Build the real model/data/loss route, run exactly one optimizer "
+             "step, assert finite loss/gradients, then exit before validation.",
+    )
     parser.add_argument("--batch-size", type=int, default=_defaults.batch_size)
     parser.add_argument("--lr", type=float, default=_defaults.lr)
     parser.add_argument("--weight-decay", type=float, default=_defaults.weight_decay)
     parser.add_argument("--patience", type=int, default=_defaults.early_stopping_patience,
                         help="Early stopping patience")
+    parser.add_argument(
+        "--train-loss-patience", type=int, default=_defaults.train_loss_patience,
+        help="Train-loss convergence window; set above epochs to disable.",
+    )
+    parser.add_argument(
+        "--train-loss-min-delta", type=float, default=_defaults.train_loss_min_delta,
+        help="Train-loss convergence threshold.",
+    )
+    parser.add_argument(
+        "--log-confusion-every-epoch", action="store_true",
+        help="Persist every epoch confusion matrix for fixed-epoch experiments.",
+    )
+    parser.add_argument(
+        "--log-training-exposure", action="store_true",
+        help="Hash and persist the exact sampled tile/random-crop labels for "
+             "paired experiment parity and realized class-support checks.",
+    )
     parser.add_argument("--num-workers", type=int, default=_defaults.num_workers)
 
     # Precision
@@ -138,8 +194,19 @@ def main():
     # Checkpoint
     parser.add_argument("--checkpoint-dir", type=str,
                         default="checkpoints/unified")
+    parser.add_argument(
+        "--strict-checkpoint-loading", action="store_true",
+        help="Fail on semantic or learned-key checkpoint mismatches.",
+    )
     parser.add_argument("--save-every", type=int, default=_defaults.save_every_n_epochs,
                         help="Save checkpoint every N epochs")
+    parser.add_argument(
+        "--fixed-checkpoint-only", action="store_true",
+        help=(
+            "Persist only scheduled epoch_NNN.pt checkpoints; omit "
+            "best_model.pt and optimizer-heavy last_checkpoint.pt."
+        ),
+    )
 
     # Loss
     parser.add_argument("--loss-type", type=str, default=_defaults.loss_type,
@@ -156,6 +223,34 @@ def main():
                         help="Label smoothing for focal loss (0.0 = disabled)")
     parser.add_argument("--lovasz-weight", type=float, default=_defaults.lovasz_weight,
                         help="Lovász-softmax loss weight (0.0 = disabled, 0.3 = recommended)")
+
+    # Trädslag fraction head (multi-task continuous crown-cover supervision)
+    parser.add_argument("--enable-tradslag-head", action="store_true",
+                        help="Add a parallel fraction head (Conv2d→4) on the "
+                             "decoder feature, supervised by NMD2023 Trädslag "
+                             "crown-cover targets (masked L1, multi-task). "
+                             "Default OFF → existing paths byte-identical.")
+    parser.add_argument("--frac-dir", type=str, default=None,
+                        help="Trädslag fraction sidecar directory "
+                             "(<frac-dir>/<tile>.npz with keys frac/"
+                             "frac_unreliable). Required for the frac loss to "
+                             "supervise; tiles without a sidecar train on hard "
+                             "labels only.")
+    parser.add_argument("--lambda-frac", type=float, default=_defaults.lambda_frac,
+                        help="Weight on the fraction loss: "
+                             "L = L_hard + lambda_frac * L_frac (default 1.0)")
+    parser.add_argument("--frac-loss-type", type=str,
+                        default=_defaults.frac_loss_type,
+                        choices=["l1", "smooth_l1"],
+                        help="Fraction regression loss (default l1)")
+    parser.add_argument("--aux-fusion", type=str,
+                        default=_defaults.aux_fusion,
+                        choices=["concat", "gated"],
+                        help="Tessera-only aux fusion mode: 'concat' "
+                             "(default, historical) projects aux and "
+                             "concatenates with the smoothed embedding; "
+                             "'gated' fuses via the GatedFusion residual gate "
+                             "(same-channel). Ignored by non-tessera families.")
 
     # Early stopping metric
     parser.add_argument("--early-stop-metric", type=str,
@@ -179,6 +274,19 @@ def main():
                         help="Disable HR-VPP phenology aux channels (sosd, eosd)")
     parser.add_argument("--disable-all-aux", action="store_true",
                         help="Disable all auxiliary channels")
+    parser.add_argument("--enable-markfukt", action="store_true",
+                        help="Enable SLU Markfuktighetskarta soil-moisture "
+                             "aux channel (11th aux, appended last). Default "
+                             "OFF — keeps the 10-aux path byte-identical.")
+    parser.add_argument("--enable-delta-sar", action="store_true",
+                        help="Enable ΔVV/ΔVH SAR-change aux channels "
+                             "(season γ⁰ − 2016 γ⁰ in dB), computed at read "
+                             "time from the tile's S1 keys. Appended LAST. "
+                             "The 2016 clearcut anchor via the aux path. "
+                             "Default OFF.")
+    parser.add_argument("--era5-mode", choices=["off", "control", "treatment"],
+                        default="off", help="Explicit weather arm. control uses neutral "
+                        "channels; treatment requires --era5-dir with validated sidecars.")
 
     # Temporal
     parser.add_argument("--enable-multitemporal", action="store_true",
@@ -191,6 +299,12 @@ def main():
                         help="Stage 2: freeze backbone+decoder, train only AuxEncoder")
     parser.add_argument("--resume-from", type=str, default=None,
                         help="Path to checkpoint to load (spectral model for stage 2)")
+    parser.add_argument("--warm-start-from", type=str, default=None,
+                        help="Finetune: warm-start model weights from a "
+                             "best_model.pt (no optimizer/epoch resume, "
+                             "nothing frozen). Expands the aux input conv on "
+                             "a channel-count mismatch (e.g. 10 → 11 aux with "
+                             "--enable-markfukt).")
 
     # Dashboard
     parser.add_argument("--dashboard", action="store_true",
@@ -252,10 +366,18 @@ def main():
         collapse_max_rewinds=args.collapse_max_rewinds,
         num_classes=args.num_classes,
         epochs=args.epochs,
+        seed=args.seed,
+        deterministic=args.deterministic,
+        deterministic_warn_only=args.deterministic_warn_only,
+        preflight_one_batch=args.preflight_one_batch,
         batch_size=args.batch_size,
         lr=args.lr,
         weight_decay=args.weight_decay,
         early_stopping_patience=args.patience,
+        train_loss_patience=args.train_loss_patience,
+        train_loss_min_delta=args.train_loss_min_delta,
+        log_confusion_every_epoch=args.log_confusion_every_epoch,
+        log_training_exposure=args.log_training_exposure,
         num_workers=args.num_workers,
         decoder_channels=args.decoder_channels,
         dropout=args.dropout,
@@ -264,6 +386,7 @@ def main():
         img_size=args.img_size,
         checkpoint_dir=args.checkpoint_dir,
         save_every_n_epochs=args.save_every,
+        fixed_checkpoint_only=args.fixed_checkpoint_only,
         loss_type=args.loss_type,
         focal_gamma=args.focal_gamma,
         max_class_weight=args.max_class_weight,
@@ -283,8 +406,25 @@ def main():
         enable_diameter_channel=True,
         enable_dem_channel=True,
         enable_vpp_channels=True,
+        # markfukt: 11th aux, flag-gated, default OFF. When on it is
+        # appended LAST so the existing 10-aux ordering is untouched.
+        enable_markfukt_channel=args.enable_markfukt,
+        # ΔSAR: 2 aux channels (delta_vv, delta_vh), computed at read time
+        # from the tile's S1 keys. Appended AFTER markfukt so prior indices
+        # are untouched. Default OFF.
+        enable_delta_sar_channels=args.enable_delta_sar,
+        enable_era5_channels=args.era5_mode != "off",
+        era5_mode=args.era5_mode,
         freeze_spectral=args.freeze_spectral,
+        strict_checkpoint_loading=args.strict_checkpoint_loading,
         resume_from_checkpoint=args.resume_from,
+        warm_start_from_checkpoint=args.warm_start_from,
+        # Trädslag fraction head (multi-task). Off by default.
+        enable_tradslag_head=args.enable_tradslag_head,
+        lambda_frac=args.lambda_frac,
+        frac_loss_type=args.frac_loss_type,
+        # Tessera-only aux fusion mode ("concat" default | "gated").
+        aux_fusion=args.aux_fusion,
     )
 
     # ── Load datasets ─────────────────────────────────────────────
@@ -300,6 +440,29 @@ def main():
     lulc_dir = data_dirs[0] if len(data_dirs) > 0 else None
     crop_dir = data_dirs[1] if len(data_dirs) > 1 else None
 
+    # Resolve the backbone family so the dataset reads the right image key
+    # (Prithvi → `spectral` reflectance; tessera → pre-baked `tessera`
+    # embedding). Explicit routing on family, never on tile shape.
+    from imint.fm.registry import MODEL_CONFIGS, resolve_backbone_name
+    registry_name = resolve_backbone_name(config.backbone_name, config.backbone)
+    backbone_family = MODEL_CONFIGS[registry_name].family
+
+    # Per-model input tensors: the dataset only builds the Clay/CROMA/TerraMind
+    # stacks (s2_clay / s2_croma / s2_terramind / s1_vv_vh) when the active
+    # backbone's registry key is in model_keys. Prithvi/Tessera need no extra
+    # keys (empty tuple → historical byte-identical behaviour). The dataset
+    # also uses model_keys to filter its tile index to tiles that carry every
+    # required key for the backbone (e.g. SAR is on ~6011/7882 tiles).
+    from imint.training.unified_dataset import UnifiedDataset as _UD
+    model_keys = (
+        (registry_name,) if registry_name in _UD._SUPPORTED_MODEL_KEYS else ()
+    )
+    if model_keys:
+        print(f"  Model-specific dataset keys: {model_keys}")
+
+    # Honour the config's enabled aux set (adds markfukt when the flag is
+    # on; otherwise identical to the canonical 10-channel list).
+    aux_names = config.enabled_aux_names
     train_dataset = UnifiedDataset(
         lulc_dir=lulc_dir,
         crop_dir=crop_dir,
@@ -308,6 +471,16 @@ def main():
         enable_aux=True,
         multitemporal=config.enable_multitemporal,
         num_temporal_frames=config.num_temporal_frames,
+        aux_channel_names=aux_names,
+        label_dir=args.label_dir,
+        cohort_dir=args.cohort_dir,
+        frac_dir=args.frac_dir,
+        era5_dir=args.era5_dir,
+        era5_mode=args.era5_mode,
+        split_dir=args.split_dir,
+        limit_tiles=args.limit_tiles,
+        backbone_family=backbone_family,
+        model_keys=model_keys,
     )
     val_dataset = UnifiedDataset(
         lulc_dir=lulc_dir,
@@ -317,15 +490,32 @@ def main():
         enable_aux=True,
         multitemporal=config.enable_multitemporal,
         num_temporal_frames=config.num_temporal_frames,
+        aux_channel_names=aux_names,
+        label_dir=args.label_dir,
+        cohort_dir=args.cohort_dir,
+        frac_dir=args.frac_dir,
+        era5_dir=args.era5_dir,
+        era5_mode=args.era5_mode,
+        split_dir=args.split_dir,
+        limit_tiles=args.limit_tiles,
+        backbone_family=backbone_family,
+        model_keys=model_keys,
     )
     print(f"  Train: {len(train_dataset)} tiles, Val: {len(val_dataset)} tiles")
 
     # Print aux channel summary
-    aux_names = config.enabled_aux_names
     print(f"  Aux channels ({len(aux_names)}): {', '.join(aux_names)}")
 
     if args.evaluate_only:
-        # Evaluate-only mode
+        # Evaluate-only mode. Prithvi-only: the model rebuild below is a
+        # hardcoded single-date Prithvi head, so other families would be
+        # silently mis-evaluated — refuse loudly instead.
+        if backbone_family != "prithvi":
+            raise SystemExit(
+                f"--evaluate-only rebuilds a Prithvi model; backbone family "
+                f"{backbone_family!r} is not supported here. Use "
+                f"scripts/inference_comparison.py for non-Prithvi checkpoints."
+            )
         checkpoint_path = args.checkpoint or str(
             Path(config.checkpoint_dir) / "best_model.pt"
         )
@@ -367,6 +557,17 @@ def main():
                     split=split_name,
                     patch_size=config.patch_pixels,
                     enable_aux=True,
+                    multitemporal=config.enable_multitemporal,
+                    num_temporal_frames=config.num_temporal_frames,
+                    aux_channel_names=aux_names,
+                    label_dir=args.label_dir,
+                    cohort_dir=args.cohort_dir,
+                    frac_dir=args.frac_dir,
+                    era5_dir=args.era5_dir,
+                    era5_mode=args.era5_mode,
+                    split_dir=args.split_dir,
+                    limit_tiles=args.limit_tiles,
+                    backbone_family=backbone_family,
                 )
                 print(f"\n  Evaluating on {split_name} ({len(ds)} tiles)...")
                 metrics = evaluate_model(model, ds, config, device)

@@ -1,0 +1,126 @@
+---
+# Hourly sweep: delete finished GPU jobs, surface ones that never scheduled.
+#
+# Why this exists (2026-08-27): eight finished ERA5 arms, each done in ~135 min
+# but retained for a 48 h ttlSecondsAfterFinished, accumulated until the project
+# hit `nvidia-h100 quota: 8, used: 8`. Every H100 in the project was blocked for
+# ~5 h by pods that had finished hours earlier — and the blocked job reported
+# 0/1 the whole time, which is indistinguishable from running. The first manual
+# sweep then found holdout-sen2cor-backfill still holding a slot 132 h after
+# succeeding, from a session nobody was watching any more.
+#
+# The TTL is the passive floor; this is the active control. Manual discipline is
+# neither, which is how a 5.5-day squatter survived.
+#
+# RBAC is deliberately minimal: list pods/events, and list+delete Jobs, in this
+# namespace only. The script additionally refuses to touch anything whose pod is
+# not in a terminal phase, so Running and Pending work is structurally safe and
+# a Deployment (e.g. the vllm-mistral chatbot) cannot match at all.
+#
+#   kubectl --context icekube -n prithvi-training-default apply -f k8s/gpu-reaper-cronjob.yaml
+#   kubectl --context icekube -n prithvi-training-default create job --from=cronjob/gpu-reaper gpu-reaper-manual
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gpu-reaper
+  namespace: prithvi-training-default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gpu-reaper
+  namespace: prithvi-training-default
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["get", "list"]
+  # pods/log: the reaper must archive a job's logs BEFORE deleting it —
+  # deletion cascades to pods and destroyed the only failure evidence twice
+  # (ERA5 control 2026-08-27, wave-1 retrain 2026-08-29).
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gpu-reaper
+  namespace: prithvi-training-default
+subjects:
+  - kind: ServiceAccount
+    name: gpu-reaper
+    namespace: prithvi-training-default
+roleRef:
+  kind: Role
+  name: gpu-reaper
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gpu-reaper
+  namespace: prithvi-training-default
+  labels: {app: ops, purpose: gpu-reaper}
+spec:
+  # :17 rather than :00 — every scheduled thing in the world fires on the hour.
+  schedule: "17 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      # The reaper must never become the thing it reaps.
+      ttlSecondsAfterFinished: 1800
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels: {app: ops, purpose: gpu-reaper}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: gpu-reaper
+          containers:
+            - name: reaper
+              image: python:3.11-slim
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  export PYTHONUNBUFFERED=1
+                  apt-get update -qq && apt-get install -y -qq curl git >/dev/null 2>&1
+                  KV=v1.28.15
+                  curl -sSLo /usr/local/bin/kubectl \
+                    "https://dl.k8s.io/release/${KV}/bin/linux/amd64/kubectl"
+                  chmod +x /usr/local/bin/kubectl
+                  git clone --quiet --depth 1 \
+                    --branch agent/te/opus/nfi-nmd2023-benchmark \
+                    https://github.com/TobiasEdman/ImintEngine.git /w
+                  cd /w
+                  echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+                  # --context "" so kubectl uses the pod ServiceAccount.
+                  # 60 min grace: long enough that a just-finished run's logs are
+                  # still readable, short enough that a slot is never idle for a
+                  # shift. --apply, because a report nobody reads is what let the
+                  # 132 h squatter survive. Every deletion archives the job's
+                  # logs/spec/events to --archive-dir FIRST and is refused if
+                  # that fails; the run report is written there too, because
+                  # this pod's own 30 min TTL destroys its stdout.
+                  python3 scripts/reap_gpu_jobs.py \
+                    --context "" \
+                    --namespace prithvi-training-default \
+                    --grace-minutes 60 \
+                    --archive-dir /cephfs/ops/reaper_archive \
+                    --apply
+              resources:
+                requests: {cpu: "200m", memory: "256Mi"}
+                limits:   {cpu: "200m", memory: "256Mi"}
+              volumeMounts:
+                - { name: cephfs, mountPath: /cephfs }
+          volumes:
+            - name: cephfs
+              persistentVolumeClaim: { claimName: training-data-cephfs }

@@ -1,0 +1,166 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: '{"apiVersion":"batch/v1","kind":"Job","metadata":{"annotations":{},"labels":{"app":"imint-experiment","phase":"full","purpose":"meteo-analog-forest-poc"},"name":"meteo-analog-forest-poc-full","namespace":"prithvi-training-default"},"spec":{"activeDeadlineSeconds":259200,"backoffLimit":0,"suspend":true,"template":{"metadata":{"labels":{"app":"imint-experiment","phase":"full","purpose":"meteo-analog-forest-poc"}},"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"kubernetes.io/hostname","operator":"NotIn","values":["p02r09srv04","p02r09srv06"]}]}]}}},"automountServiceAccountToken":false,"containers":[{"command":["bash","/runner/run.sh"],"env":[{"name":"IMINT_GIT_SHA","value":"2bf5a35e4a4ca14b2b801311fb2e472fbae894db"},{"name":"METAFILTER_GIT_SHA","value":"b42a9fb8ed6b63cde28823e8f226b9a9949a3033"},{"name":"POC_MODE","value":"full"},{"name":"PYTHONDONTWRITEBYTECODE","value":"1"},{"name":"VPP_SOURCE","value":"wekeo"},{"name":"VPP_WEKEO_DIR","value":"/inputs/vpp"},{"name":"IMINT_ERA5_CACHE","value":"/output/shared-cache/imint-era5"},{"name":"SCL_FRACS_CACHE","value":"/output/shared-cache/scl-fracs"},{"name":"MPLCONFIGDIR","value":"/output/shared-cache/matplotlib"},{"name":"DES_USER","valueFrom":{"secretKeyRef":{"key":"user","name":"des-credentials"}}},{"name":"DES_PASSWORD","valueFrom":{"secretKeyRef":{"key":"password","name":"des-credentials"}}}],"image":"python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2","name":"poc","resources":{"limits":{"cpu":"4","memory":"16Gi"},"requests":{"cpu":"4","memory":"16Gi"}},"volumeMounts":[{"mountPath":"/workspace","name":"workspace"},{"mountPath":"/runner","name":"runner","readOnly":true},{"mountPath":"/inputs/nmd","name":"training-data","readOnly":true,"subPath":"nmd"},{"mountPath":"/inputs/vpp","name":"training-data","readOnly":true,"subPath":"vpp_wekeo"},{"mountPath":"/output","name":"training-data","subPath":"meteo_analog_forest_poc"}]}],"enableServiceLinks":false,"initContainers":[{"command":["sh","-c","mkdir
+      -p /data/meteo_analog_forest_poc"],"image":"python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2","name":"prepare-output","resources":{"limits":{"cpu":"1","memory":"1Gi"},"requests":{"cpu":"250m","memory":"512Mi"}},"volumeMounts":[{"mountPath":"/data","name":"training-data"}]},{"command":["bash","/runner/bootstrap.sh"],"env":[{"name":"IMINT_GIT_SHA","value":"2bf5a35e4a4ca14b2b801311fb2e472fbae894db"},{"name":"METAFILTER_GIT_SHA","value":"b42a9fb8ed6b63cde28823e8f226b9a9949a3033"},{"name":"POC_MODE","value":"full"},{"name":"PYTHONDONTWRITEBYTECODE","value":"1"}],"image":"python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2","name":"bootstrap","resources":{"limits":{"cpu":"1","memory":"1Gi"},"requests":{"cpu":"250m","memory":"512Mi"}},"volumeMounts":[{"mountPath":"/workspace","name":"workspace"},{"mountPath":"/runner","name":"runner","readOnly":true},{"mountPath":"/output","name":"training-data","subPath":"meteo_analog_forest_poc"}]}],"restartPolicy":"Never","volumes":[{"name":"training-data","persistentVolumeClaim":{"claimName":"training-data-cephfs"}},{"emptyDir":{},"name":"workspace"},{"configMap":{"defaultMode":365,"name":"meteo-analog-forest-poc-runner"},"name":"runner"}]}}}}
+
+      '
+  labels:
+    app: imint-experiment
+    phase: full
+    purpose: meteo-analog-forest-poc
+  name: meteo-analog-forest-poc-full
+  namespace: prithvi-training-default
+spec:
+  activeDeadlineSeconds: 259200
+  backoffLimit: 0
+  completionMode: NonIndexed
+  completions: 1
+  parallelism: 1
+  template:
+    metadata: {}
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - p02r09srv04
+                - p02r09srv06
+      automountServiceAccountToken: false
+      containers:
+      - command:
+        - bash
+        - /runner/run.sh
+        env:
+        - name: IMINT_GIT_SHA
+          value: 2bf5a35e4a4ca14b2b801311fb2e472fbae894db
+        - name: METAFILTER_GIT_SHA
+          value: b42a9fb8ed6b63cde28823e8f226b9a9949a3033
+        - name: POC_MODE
+          value: full
+        - name: PYTHONDONTWRITEBYTECODE
+          value: '1'
+        - name: VPP_SOURCE
+          value: wekeo
+        - name: VPP_WEKEO_DIR
+          value: /inputs/vpp
+        - name: IMINT_ERA5_CACHE
+          value: /output/shared-cache/imint-era5
+        - name: SCL_FRACS_CACHE
+          value: /output/shared-cache/scl-fracs
+        - name: MPLCONFIGDIR
+          value: /output/shared-cache/matplotlib
+        - name: DES_USER
+          valueFrom:
+            secretKeyRef:
+              key: user
+              name: des-credentials
+        - name: DES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: des-credentials
+        image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+        imagePullPolicy: IfNotPresent
+        name: poc
+        resources:
+          limits:
+            cpu: '4'
+            memory: 16Gi
+          requests:
+            cpu: '4'
+            memory: 16Gi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /workspace
+          name: workspace
+        - mountPath: /runner
+          name: runner
+          readOnly: true
+        - mountPath: /inputs/nmd
+          name: training-data
+          readOnly: true
+          subPath: nmd
+        - mountPath: /inputs/vpp
+          name: training-data
+          readOnly: true
+          subPath: vpp_wekeo
+        - mountPath: /output
+          name: training-data
+          subPath: meteo_analog_forest_poc
+      dnsPolicy: ClusterFirst
+      enableServiceLinks: false
+      initContainers:
+      - command:
+        - sh
+        - -c
+        - mkdir -p /data/meteo_analog_forest_poc
+        image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+        imagePullPolicy: IfNotPresent
+        name: prepare-output
+        resources:
+          limits:
+            cpu: '1'
+            memory: 1Gi
+          requests:
+            cpu: 250m
+            memory: 512Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /data
+          name: training-data
+      - command:
+        - bash
+        - /runner/bootstrap.sh
+        env:
+        - name: IMINT_GIT_SHA
+          value: 2bf5a35e4a4ca14b2b801311fb2e472fbae894db
+        - name: METAFILTER_GIT_SHA
+          value: b42a9fb8ed6b63cde28823e8f226b9a9949a3033
+        - name: POC_MODE
+          value: full
+        - name: PYTHONDONTWRITEBYTECODE
+          value: '1'
+        image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+        imagePullPolicy: IfNotPresent
+        name: bootstrap
+        resources:
+          limits:
+            cpu: '1'
+            memory: 1Gi
+          requests:
+            cpu: 250m
+            memory: 512Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /workspace
+          name: workspace
+        - mountPath: /runner
+          name: runner
+          readOnly: true
+        - mountPath: /output
+          name: training-data
+          subPath: meteo_analog_forest_poc
+      restartPolicy: Never
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: training-data
+        persistentVolumeClaim:
+          claimName: training-data-cephfs
+      - emptyDir: {}
+        name: workspace
+      - configMap:
+          defaultMode: 365
+          name: meteo-analog-forest-poc-runner
+        name: runner
+  suspend: true

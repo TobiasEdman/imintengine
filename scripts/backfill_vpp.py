@@ -12,7 +12,8 @@ as a last-resort fallback.
 What it does, per tile:
   1. Skip tiles that already carry non-empty VPP (idempotent / resumable).
   2. Resolve the EPSG:3006 bbox (``bbox_3006`` key) and the tile year
-     (``tessera_year`` primary, then ``lpis_year`` → ``year`` → ``dates``).
+     (canonical ``tile_fetch.infer_tile_year``: ``year`` → ``lpis_year``
+     → modal year across ``dates``).
   3. Fetch the five VPP bands via ``imint.training.cdse_vpp.fetch_vpp_tiles``
      for that bbox + year. Source routing is the function's own
      ``$VPP_SOURCE`` env switch (NOT a kwarg): we force ``wekeo`` first —
@@ -64,6 +65,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.cdse_vpp import _has_sufficient_coverage, fetch_vpp_tiles
 from imint.training.tile_bbox import resolve_fetch_bbox
+from imint.training.tile_fetch import infer_tile_year
 
 # The five HR-VPP channels stored per tile. ``fetch_vpp_tiles`` returns the
 # bare metric names (sosd, eosd, …); the .npz key is ``vpp_<name>`` — the
@@ -71,9 +73,6 @@ from imint.training.tile_bbox import resolve_fetch_bbox
 _VPP_RAW_NAMES = ("sosd", "eosd", "length", "maxv", "minv")
 _VPP_CHANNEL_NAMES = tuple(f"vpp_{n}" for n in _VPP_RAW_NAMES)
 
-# Year-resolution precedence — mirrors audit_vpp_window_displacement.tile_year_of
-# and fetch_unified_tiles, but with tessera_year first (the SPEC's primary key).
-_YEAR_KEYS = ("tessera_year", "lpis_year", "year")
 
 _KNOWN_EMPTY_SIDECAR = "vpp_known_empty.json"
 
@@ -98,25 +97,22 @@ def _vpp_is_empty(data) -> bool:
 # ── Tile metadata resolution ─────────────────────────────────────────────
 
 def _tile_year(data) -> int | None:
-    """Resolve the tile's VPP product year.
+    """Resolve the tile's VPP product year (**year-0**).
 
-    Precedence: ``tessera_year`` (SPEC primary, LPIS-cross-checked) →
-    ``lpis_year`` → ``year`` → the latest parseable year in ``dates``.
+    Delegates to the canonical ``tile_fetch.infer_tile_year``
+    (``year`` -> ``lpis_year`` -> modal year across ``dates``) so the label
+    builder, both aux enrichers and this backfill cannot drift apart.
+
+    Previously this consulted ``tessera_year`` FIRST. That key is written by
+    the TESSERA enricher and is a *clamped* value, not a label year — and
+    before the year-0 fix it held year-1 for every tile without ``lpis_year``.
+    Reading it here made the VPP backfill inherit that error wholesale, so
+    phenology would have been fetched for the season *before* the labels.
+
     Returns None when nothing is resolvable (caller treats as a hard skip —
     we will not guess a year for a VPP fetch).
     """
-    for key in _YEAR_KEYS:
-        if key in data:
-            try:
-                return int(np.asarray(data[key]).item())
-            except (ValueError, TypeError):
-                pass
-    years = [
-        int(str(s)[:4])
-        for s in np.asarray(data.get("dates", [])).ravel()
-        if len(str(s)) >= 4 and str(s)[:4].isdigit()
-    ]
-    return max(years) if years else None
+    return infer_tile_year(data)
 
 
 # ── Fetch: WEkEO first (PU-free), CDSE fallback ──────────────────────────
@@ -237,8 +233,16 @@ def backfill_one_tile(
     except Exception as e:  # noqa: BLE001 — a corrupt .npz must not kill the run
         return {"name": name, "status": "failed", "reason": f"load:{type(e).__name__}"}
 
+    # Year-aware skip: VPP being *present* is not enough — it must be present
+    # for the RIGHT year. Tiles written before the year-0 fix carry 2021
+    # phenology (the old fetch-time default) yet look complete to
+    # _vpp_is_empty, so a presence-only check would keep them wrong forever.
+    # A tile with no vpp_year stamp predates the fix, so it is re-fetched.
     if not force and not _vpp_is_empty(data):
-        return {"name": name, "status": "skipped", "reason": "vpp_present"}
+        have = data.get("vpp_year")
+        want = _tile_year(data)
+        if have is not None and want is not None and int(have) == int(want):
+            return {"name": name, "status": "skipped", "reason": "vpp_present"}
 
     # bbox + size via the shared SSOT resolver (extent coupled to the tile's own
     # pixel grid at 10 m GSD) — the ONE place tile-aligned fetch geometry lives.
@@ -268,6 +272,12 @@ def backfill_one_tile(
     # Write the 5 channels under their vpp_<name> keys; preserve everything else.
     for raw_name in _VPP_RAW_NAMES:
         data[f"vpp_{raw_name}"] = np.asarray(bands[raw_name], np.float32)
+    # Stamp WHICH year the phenology came from. Without this marker there was
+    # no way to tell a correctly-dated tile from one carrying the old
+    # fetch-time default of 2021, which is why that bug stayed invisible: the
+    # channels were present and non-zero, so every emptiness check passed.
+    # Also lets a later run skip year-correct tiles instead of needing --force.
+    data["vpp_year"] = np.int32(year)
     try:
         _atomic_savez(tile_path, data)
     except Exception as e:  # noqa: BLE001
@@ -398,7 +408,28 @@ def main() -> int:
         max_tiles=args.max_tiles,
         force=args.force,
     )
-    return 0 if stats["failed"] == 0 else 1
+    if stats["failed"]:
+        return 1
+
+    # Exit 0 used to mean "nothing raised", which is not the same as "the run
+    # did something". On 2026-08-25 a rerun meant to repair 2,229 VPP-less
+    # tiles returned filled=0 empty=2234 — byte-identical to the run it was
+    # repairing, because a stale bbox-keyed cache short-circuited the fetch
+    # (fixed in 8475b4d) — and exited 0. Every precondition check passed; none
+    # of them asked whether the pass had any effect. A run that found tiles
+    # needing VPP and filled none of them achieved nothing, and that must be
+    # visible to the caller, not just legible in the log.
+    if stats["empty"] and not stats["filled"] and not args.dry_run:
+        print(
+            f"\nFAILED — {stats['empty']} tile(s) still lack VPP and none were "
+            f"filled. The run had work to do and did none of it: suspect a "
+            f"stale {args.cache_dir or '<data-dir>/.vpp_cache'} entry, or a "
+            f"WEkEO cache that does not cover these (MGRS, year) pairs.",
+            flush=True,
+        )
+        return 2
+
+    return 0
 
 
 if __name__ == "__main__":

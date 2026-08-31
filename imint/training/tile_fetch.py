@@ -129,6 +129,140 @@ _CDSE_OPENEO_SEMAPHORE = AdaptiveSemaphore(
 )
 
 
+def infer_tile_year(data: dict) -> int | None:
+    """Canonical label year (**year-0**) of a tile. Single source of truth.
+
+    Priority: ``year`` -> ``lpis_year`` -> **modal** year across ``dates``
+    (ties broken by the most recent).
+
+    The ``dates`` fallback must never take ``dates[0]``. ``dates`` holds the
+    four frames in slot order: slot 0 is autumn of **year-1** (stubble /
+    winter-cereal context); slots 1-3 are the growing season of year-0. QC
+    guarantees >=3/4 growing-season frames, so the modal year is year-0. (The
+    2016 clearcut anchor is stored as ``frame_2016_year``, not in ``dates``,
+    so it cannot skew the mode.)
+
+    ``tessera_year`` is deliberately NOT consulted: it is a *clamped* value
+    (pinned into TESSERA's covered range), so it is not a label year, and
+    reading it lets one enricher's error propagate into another's.
+
+    History: a naive ``dates[0][:4]`` sent LPIS lookups to year-1 and dropped
+    ~1000 crop tiles in the 2026-05-07 run; ``build_labels.py`` was fixed then
+    but ``enrich_tiles_{s1,tessera}.py`` and the refetch paths were not, so
+    every LULC tile got year-1 SAR composites and year-1 TESSERA embeddings.
+    TESSERA embeddings are annual, so for a rotating crop a year-1 embedding
+    describes a *different crop*. Centralised here 2026-08-23 so the rule
+    cannot drift apart again.
+    """
+    from collections import Counter
+
+    # Accept dicts and NpzFile alike: NpzFile only became a Mapping (and thus
+    # gained .get) in newer numpy, and several callers pass one directly.
+    def _lookup(key):
+        try:
+            if key in getattr(data, "files", data):
+                return data[key]
+        except (TypeError, KeyError):
+            pass
+        return None
+
+    for key in ("year", "lpis_year"):
+        v = _lookup(key)
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                continue
+    years: list[int] = []
+    dates = _lookup("dates")
+    if dates is not None:
+        for d in np.asarray(dates).ravel():
+            s = str(d)
+            if len(s) >= 4 and s[:4].isdigit():
+                years.append(int(s[:4]))
+    if not years:
+        return None
+    counts = Counter(years)
+    top = counts.most_common(1)[0][1]
+    return max(y for y, c in counts.items() if c == top)
+
+
+# Atomic tile writes land on a sibling path that *also* ends in ``.npz``, so a
+# bare ``*.npz`` listing picks them up as if they were tiles. Two spellings are
+# in use across the repo: ``savez(tile.npz + ".tmp")`` appends its own suffix
+# and yields ``tile.npz.tmp.npz``, while ``tile[:-4] + ".tmp.npz"`` yields
+# ``tile.tmp.npz``. Both end in ``.tmp.npz``. The VPP backfill uses ``mkstemp``
+# with a ``_tmp`` infix, hence the second entry.
+TILE_TMP_SUFFIXES = (".tmp.npz", ".vpp_tmp.npz")
+
+
+def is_tile_tmp(name: str) -> bool:
+    """True if ``name`` is an in-flight/aborted atomic-write temp, not a tile."""
+    return os.path.basename(name).endswith(TILE_TMP_SUFFIXES)
+
+
+def clean_stale_tile_tmps(data_dir: str) -> list[str]:
+    """Delete leftover ``*.tmp.npz`` from aborted runs; return what was removed.
+
+    Call this *before* :func:`list_tile_paths`, never after: the ordering is
+    the whole point. ``enrich_tiles_s1.py`` cleaned the temps off disk but had
+    already globbed them into its work list, so every one still counted as a
+    tile, failed to open, and inflated ``failed`` — the pod then exited
+    non-zero on a run that had actually succeeded (2026-08-24 holdout leg).
+    """
+    removed: list[str] = []
+    try:
+        entries = list(os.scandir(data_dir))
+    except FileNotFoundError:
+        return removed
+    for entry in entries:
+        if not entry.is_file() or not is_tile_tmp(entry.name):
+            continue
+        try:
+            os.unlink(entry.path)
+        except FileNotFoundError:
+            continue  # a concurrent enricher won the race; nothing to do
+        removed.append(entry.path)
+    return sorted(removed)
+
+
+def list_tile_paths(
+    data_dir: str, *, limit: int | None = None, recursive: bool = False,
+) -> list[str]:
+    """Sorted real tile ``.npz`` paths in ``data_dir``, temps excluded.
+
+    ``limit`` is applied *after* filtering, so ``--limit 5`` always yields five
+    real tiles rather than whatever the listing happened to return first — a
+    smoke run in a directory full of temps would otherwise do no work at all.
+
+    ``recursive`` walks subdirectories; the plot-coverage scripts index a tile
+    *tree*, not a flat dir, so a flat listing there would return nothing.
+
+    Uses ``scandir``/``walk`` rather than ``glob`` because ``glob`` interprets
+    ``[`` in a directory name as a character class and would return nothing.
+    """
+    if recursive:
+        # os.walk on a missing dir yields nothing, so [] falls out naturally.
+        paths = [
+            os.path.join(root, n)
+            for root, _dirs, names in os.walk(data_dir)
+            for n in names
+            if n.endswith(".npz") and not is_tile_tmp(n)
+        ]
+        paths.sort()
+    else:
+        try:
+            entries = os.scandir(data_dir)
+        except FileNotFoundError:
+            return []
+        with entries:
+            paths = sorted(
+                e.path for e in entries
+                if e.is_file() and e.name.endswith(".npz") and not is_tile_tmp(e.name)
+            )
+    return paths[:limit] if limit else paths
+
+
 def point_to_bbox_3006(lat: float, lon: float, tile: "TileConfig") -> dict:
     """Convert WGS84 point → tile-sized EPSG:3006 bounding box."""
     from rasterio.crs import CRS
@@ -314,8 +448,16 @@ def _fetch_single_scene(
     return None, ""
 
 
-def _get_vpp_doy_windows(bbox_3006: dict, num_growing_frames: int = 3) -> list[tuple[int, int]] | None:
+def _get_vpp_doy_windows(bbox_3006: dict, num_growing_frames: int = 3,
+                         year: int | None = None) -> list[tuple[int, int]] | None:
     """Get VPP-guided growing season DOY windows for a tile.
+
+    ``year`` selects the VPP product year. It matters more here than anywhere
+    else VPP is read: these windows decide WHICH DATES the growing-season
+    spectral frames are fetched from. ``fetch_vpp_tiles`` defaults to 2021, so
+    omitting the year drove frame selection for every tile — of every year —
+    off 2021 phenology. Green-up moves by weeks between years, so that
+    mis-centres the season windows for anything that is not a 2021 tile.
 
     Returns list of (doy_start, doy_end) tuples, or None if VPP fails.
     """
@@ -323,12 +465,14 @@ def _get_vpp_doy_windows(bbox_3006: dict, num_growing_frames: int = 3) -> list[t
         from imint.training.cdse_vpp import fetch_vpp_tiles
         from imint.training.vpp_windows import compute_growing_season_windows
 
+        vpp_kwargs = {} if year is None else {"year": int(year)}
         vpp = fetch_vpp_tiles(
             west=bbox_3006["west"],
             south=bbox_3006["south"],
             east=bbox_3006["east"],
             north=bbox_3006["north"],
             size_px=64,
+            **vpp_kwargs,
         )
         return compute_growing_season_windows(
             vpp["sosd"], vpp["eosd"],
@@ -472,7 +616,8 @@ def select_slot_dates(
     return dates
 
 
-def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig") -> dict[str, np.ndarray]:
+def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig",
+                       vpp_year: int | None = None) -> dict[str, np.ndarray]:
     """Fetch auxiliary channels for a tile: VPP phenology, DEM, SKG forestry
     (height/volume/basal_area/diameter) and SLU markfukt.
 
@@ -486,12 +631,21 @@ def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig") -> dict[str, np.ndar
     _CDSE_SEMAPHORE.acquire()
     try:
         from imint.training.cdse_vpp import fetch_vpp_tiles
+        # Pass the tile's own year. ``fetch_vpp_tiles`` defaults to year=2021,
+        # so omitting it gave EVERY tile 2021 phenology regardless of its
+        # actual year — 5 of the 11 aux channels systematically wrong-year.
+        # Phenology is weather-driven (a warm spring shifts SOSD by weeks), so
+        # a 2018 or 2024 tile carrying 2021 SOSD/EOSD is materially wrong.
+        # ``vpp_year`` is threaded in by the caller; fall back to the module
+        # default only when the caller genuinely has no year.
+        vpp_kwargs = {} if vpp_year is None else {"year": int(vpp_year)}
         vpp = fetch_vpp_tiles(
             west=bbox_3006["west"],
             south=bbox_3006["south"],
             east=bbox_3006["east"],
             north=bbox_3006["north"],
             size_px=tile.size_px,
+            **vpp_kwargs,
         )
         for band in ["sosd", "eosd", "length", "maxv", "minv"]:
             if band in vpp and vpp[band] is not None:
@@ -602,23 +756,30 @@ def fetch_nmd_label_local(
     bbox_3006: dict,
     tile: "TileConfig",
     nmd_raster: str = "data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif",
+    *,
+    raw: bool = False,
 ) -> np.ndarray | None:
-    """Read NMD 19-class sequential label from local GeoTIFF raster.
+    """Read an NMD label from a local GeoTIFF raster.
 
     Args:
         bbox_3006: Tile bounding box in SWEREF99 TM.
         tile: Tile geometry — used to size the output raster.
         nmd_raster: Path to NMD GeoTIFF.
+        raw: if True, return the raw raster codes as uint16 without the
+            NMD2018 19-class mapping (used for the NMD2023 base, whose 4-digit
+            codes must go through ``nmd2023_to_unified``). No remote fallback in
+            raw mode — NMD2023 is local-only.
 
-    Returns (H, W) uint8 with indices 0-19, or None if unavailable.
-    Falls back to openEO remote fetch if the local raster is missing.
+    Returns (H, W) uint8 indices 0-19 (default), or uint16 raw codes (raw=True),
+    or None if unavailable. Falls back to openEO remote fetch only when the local
+    raster is missing and raw=False.
 
     Thread-safe: each calling thread gets its own rasterio handle.
     """
     tile.assert_bbox_matches(bbox_3006)
 
     if not os.path.exists(nmd_raster):
-        return _fetch_nmd_label_remote(bbox_3006, tile)
+        return None if raw else _fetch_nmd_label_remote(bbox_3006, tile)
 
     w = bbox_3006["west"]; s = bbox_3006["south"]
     e = bbox_3006["east"]; n = bbox_3006["north"]
@@ -626,7 +787,7 @@ def fetch_nmd_label_local(
     try:
         src = _get_nmd_handle(nmd_raster)
     except Exception:
-        return _fetch_nmd_label_remote(bbox_3006, tile)
+        return None if raw else _fetch_nmd_label_remote(bbox_3006, tile)
 
     b = src.bounds
     if w < b.left or e > b.right or s < b.bottom or n > b.top:
@@ -641,8 +802,10 @@ def fetch_nmd_label_local(
     try:
         nmd_raw = src.read(1, window=window)
     except Exception:
-        return _fetch_nmd_label_remote(bbox_3006, tile)
+        return None if raw else _fetch_nmd_label_remote(bbox_3006, tile)
 
+    if raw:
+        return nmd_raw.astype(np.uint16)
     from imint.training.class_schema import nmd_raster_to_lulc
     return nmd_raster_to_lulc(nmd_raw).astype(np.uint8)
 

@@ -1,0 +1,151 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inventory-holdout-readonly
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: inventory-holdout-readonly
+spec:
+  # READ-ONLY inventory after a multi-day gap with a concurrent (Codex)
+  # session on the same PVC. Answers three questions before any further
+  # job is submitted:
+  #   1. Did train-croma-v3 finish? (ckpt dir + training_log)
+  #   2. What did holdout-sen2cor-{handoff,backfill} add to the holdout
+  #      tiles? (frame_2016 coverage)
+  #   3. What enrichment is still missing? (s1_enrich_v==3, tessera)
+  # Writes NOTHING. Every open() is a read; no npz is rewritten.
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: inventory
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              pip install --quiet --no-cache-dir numpy 2>&1 | tail -1
+
+              echo "=============================================="
+              echo " 1. CHECKPOINT DIRS (croma_v3 / terramind_v3)"
+              echo "=============================================="
+              for d in croma_v3 terramind_v3; do
+                echo "--- /data/checkpoints/$d ---"
+                ls -la "/data/checkpoints/$d" 2>/dev/null || echo "  (absent)"
+              done
+
+              echo ""
+              echo "=============================================="
+              echo " 2. TRAINING LOGS — last epoch reached"
+              echo "=============================================="
+              python3 - <<'PYEOF'
+              import json, os
+              for name in ("croma_v3", "terramind_v3"):
+                  p = f"/data/checkpoints/{name}/training_log.json"
+                  if not os.path.exists(p):
+                      print(f"{name}: no training_log.json")
+                      continue
+                  try:
+                      d = json.load(open(p))
+                  except Exception as e:
+                      print(f"{name}: unreadable ({e})")
+                      continue
+                  rows = d if isinstance(d, list) else d.get("epochs", d)
+                  if isinstance(rows, list) and rows:
+                      last = rows[-1]
+                      ep = last.get("epoch", "?")
+                      miou = last.get("val_mIoU", last.get("val_miou", "?"))
+                      best = max((r.get("val_mIoU", r.get("val_miou", 0)) or 0)
+                                 for r in rows if isinstance(r, dict))
+                      print(f"{name}: {len(rows)} epochs logged | last epoch={ep} "
+                            f"val_mIoU={miou} | best={best:.4f}")
+                  else:
+                      print(f"{name}: log keys={list(d)[:8] if isinstance(d, dict) else type(d)}")
+              PYEOF
+
+              echo ""
+              echo "=============================================="
+              echo " 3. HOLDOUT TILES — enrichment coverage"
+              echo "=============================================="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              tiles = sorted(glob.glob("/data/holdout_val_512/*.npz"))
+              print(f"tiles: {len(tiles)}")
+              if not tiles:
+                  raise SystemExit(0)
+              n_bg = n_s1v3 = n_s1any = n_tess = 0
+              aux_full = 0
+              AUX = ["vpp_sosd","vpp_eosd","vpp_length","vpp_maxv","vpp_minv",
+                     "dem","height","volume","basal_area","diameter","markfukt"]
+              masks = {}
+              for p in tiles:
+                  d = np.load(p, allow_pickle=True)
+                  f = set(d.files)
+                  if int(d.get("has_frame_2016", 0)):
+                      n_bg += 1
+                  v = int(d["s1_enrich_v"]) if "s1_enrich_v" in f else 0
+                  if v == 3:
+                      n_s1v3 += 1
+                  if v:
+                      n_s1any += 1
+                  if "tessera" in f:
+                      n_tess += 1
+                  if sum(1 for k in AUX if k in f) == 11:
+                      aux_full += 1
+                  m = tuple(int(x) for x in d["temporal_mask"][:4])
+                  masks[m] = masks.get(m, 0) + 1
+              n = len(tiles)
+              def pct(x): return f"{x}/{n} ({100*x/n:.1f}%)"
+              print(f"  aux 11/11        : {pct(aux_full)}")
+              print(f"  frame_2016 (bg)  : {pct(n_bg)}   <- sen2cor backfill")
+              print(f"  s1_enrich_v==3   : {pct(n_s1v3)}  <- needed: CROMA/TerraMind")
+              print(f"  s1 any version   : {pct(n_s1any)}")
+              print(f"  tessera embedding: {pct(n_tess)}  <- needed: Tessera model")
+              print("  temporal_mask distribution:")
+              for m, c in sorted(masks.items(), key=lambda kv: -kv[1])[:6]:
+                  print(f"    {m}: {c}")
+              PYEOF
+
+              echo ""
+              echo "=============================================="
+              echo " 4. STAGING DIRS — what else exists"
+              echo "=============================================="
+              du -sh /data/holdout_val_512 2>/dev/null || true
+              ls -d /data/holdout* 2>/dev/null || true
+              echo "=== inventory complete (read-only) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

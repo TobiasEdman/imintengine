@@ -79,3 +79,23 @@ def test_score_against_nfi_forest_type():
     # tallskog prob is highest at the one true tallskog plot → perfect ranking:
     assert res["per_class_auroc"]["tallskog"]["auroc"] == pytest.approx(1.0)
     assert "granskog" in res["per_class_auroc"]  # 1 positive, 4 negatives → defined
+
+
+def test_per_plot_sink():
+    """--dump-per-plot: one record per scored plot, identifiers + truth + pred."""
+    idx = _index()
+    idx["TractID"] = [10, 10, 11, 11, 12]
+    idx["PlotID"] = [1, 2, 1, 2, 3]
+    idx["Easting"] = [400000.0, 400010.0, 500000.0, 500010.0, 600000.0]
+    idx["Northing"] = [6300000.0, 6300010.0, 6400000.0, 6400010.0, 6500000.0]
+    sink: list = []
+    van.score_against_nfi(idx, _mock_predict, num_classes=23, per_plot_sink=sink)
+    assert len(sink) == 5
+    df = pd.DataFrame(sink)
+    # identifiers carried through for the downstream re-join / NMD sampling:
+    assert list(df["TractID"]) == [10, 10, 11, 11, 12]
+    assert set(["PlotID", "Easting", "Northing", "nfi_forest", "model_pred"]) <= set(df.columns)
+    # NFI forest truth: tallskog(1), granskog(2), lövskog(3), blandskog(4), treeless(-1)
+    assert list(df["nfi_forest"]) == [1, 2, 3, 4, -1]
+    # model prediction sampled from the mock class_map (7 = non-forest at the treeless plot)
+    assert list(df["model_pred"]) == [1, 1, 3, 4, 7]

@@ -1,0 +1,188 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fetch-holdout-val-phasea
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: fetch-holdout-val-phasea
+spec:
+  # Phase A of the off-footprint independent-validation fetch
+  # (docs/plans/independent_holdout_validation.md). 1,650 tiles at NFI+LUCAS
+  # plots OUTSIDE the training footprint → clean, powered held-out validation
+  # by inference only (no retraining). Reads
+  # /data/audits/holdout_val_phaseA.json, writes /data/holdout_val_512 —
+  # NEVER touches unified_v2_512 training tiles.
+  #
+  # PREREQ: prefetch-vpp-holdout-phasea (WEkEO VPP cache for the 80 MGRS tiles)
+  # MUST be Complete first — else VPP_SOURCE=wekeo cache-miss raises per tile.
+  #
+  # des-only, VPP_SOURCE=wekeo (mandatory — no CDSE PU drain). --workers set to
+  # the CURRENT DES allotment (confirm live `DES: permits=N` in the log; ≤6 per
+  # CLAUDE.md 2026-07-21). Years span 2018-2024 (plot inventory years); the
+  # autumn frame reads year-1 internally.
+  backoffLimit: 1
+  # Resume scope after two transient upstream failures: 1,198 tiles remain.
+  # At the observed DES rate (~22 tiles/h), allow 72h including setup/QC.
+  activeDeadlineSeconds: 259200
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: fetch
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== holdout-val Phase A: des-only fetch → /data/holdout_val_512 ==="
+              echo "Started: $(date)"
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)  $(git log --oneline -1)"
+
+              # SKG forestry endpoints (height ImageServer + Skogliga grunddata)
+              # — REQUIRED for the 4 forestry aux channels, else they silently
+              # skip-fail (skip-on-fail in fetch_aux_channels). Same secret the
+              # training/enrich jobs mount.
+              cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
+              echo "SKG endpoints: $(grep -c url /workspace/imintengine/.skg_endpoints) url(s) configured"
+
+              OUT=/data/holdout_val_512
+              MANIFEST=/data/audits/holdout_val_phaseA.json
+              mkdir -p "$OUT"
+              echo ""
+              python3 -c "
+              import json
+              d = json.load(open('$MANIFEST'))
+              import collections
+              print(f'  {len(d)} Phase A tiles | by year: {dict(collections.Counter(t[\"year\"] for t in d))}')"
+              echo ""
+              echo "=== fetch des-only → $OUT ==="
+              python3 scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json "$MANIFEST" \
+                --output-dir "$OUT" \
+                --claim-dir "$OUT/.claims" \
+                --tile-size-px 512 \
+                --years 2018 2019 2020 2021 2022 2023 2024 \
+                --workers 6 \
+                --fetch-sources des \
+                --no-pre2018
+
+              echo ""
+              echo "=== layout + AUX-COMPLETENESS audit (all tiles) ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              # The 11 non-DES aux channels that must be present + non-degenerate.
+              AUX = ["vpp_sosd","vpp_eosd","vpp_length","vpp_maxv","vpp_minv",
+                     "dem","height","volume","basal_area","diameter","markfukt"]
+              outs = sorted(glob.glob("/data/holdout_val_512/*.npz"))
+              print(f"holdout-val tiles: {len(outs)}")
+              miss = {k: 0 for k in AUX}; empty = {k: 0 for k in AUX}; bad = []
+              for p in outs:
+                  d = np.load(p, allow_pickle=True)
+                  assert d["spectral"].shape == (24, 512, 512), (p, d["spectral"].shape)
+                  for k in AUX:
+                      if k not in d.files:
+                          miss[k] += 1
+                      else:
+                          v = d[k]
+                          # markfukt legitimately has NaN gaps (SLU coverage) —
+                          # count all-NaN/all-zero as empty, not partial NaN.
+                          finite = v[np.isfinite(v)]
+                          if finite.size == 0 or float(np.nanmax(np.abs(v))) == 0.0:
+                              empty[k] += 1
+                  present = sum(1 for k in AUX if k in d.files)
+                  if present < 10:  # markfukt may be a real gap; <10 is a fetch miss
+                      bad.append((p.split("/")[-1], present))
+              print("per-channel MISSING / EMPTY across all tiles:")
+              for k in AUX:
+                  flag = "  <-- CHECK" if (miss[k] or empty[k]) else ""
+                  print(f"  {k:12s} missing={miss[k]:4d}  empty={empty[k]:4d}{flag}")
+              if bad:
+                  print(f"\nTILES WITH <10/11 AUX ({len(bad)}) — NOT usable for inference:")
+                  for name, n in bad[:20]:
+                      print(f"  {name}: {n}/11 aux")
+                  print("  ^ these must be refetched before scoring (aux webservice miss)")
+              else:
+                  print("\nAUX OK — every tile has >=10/11 aux (markfukt gaps allowed)")
+              PYEOF
+              echo "=== Phase A fetch complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: VPP_SOURCE
+              value: "wekeo"
+            - name: VPP_WEKEO_DIR
+              value: "/data/vpp_wekeo"
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_id
+                  optional: true
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cdse-credentials
+                  key: client_secret
+                  optional: true
+            - name: DES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: user
+                  optional: true
+            - name: DES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: des-credentials
+                  key: password
+                  optional: true
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+            - name: skg-endpoints
+              mountPath: /etc/skg
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints

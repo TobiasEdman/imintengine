@@ -1,0 +1,100 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enrich-holdout-s1
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: enrich-holdout-s1
+spec:
+  # Stage 3 of the independent-validation pipeline
+  # (docs/plans/independent_holdout_validation.md): add S1 γ⁰ ΔVV/ΔVH SAR-change
+  # channels (s1_enrich_v==3) to the Phase A holdout-val tiles. REQUIRED for
+  # CROMA/TerraMind v3 inference (commit 0091835). Mirrors enrich-s1-season
+  # exactly, only --data-dir changed to /data/holdout_val_512. PU-free: PC-RTC
+  # windowed COG reads, no product download, no CDSE.
+  # PREREQ: fetch-holdout-val-phasea Complete (tiles must exist).
+  backoffLimit: 1
+  activeDeadlineSeconds: 86400
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: enricher
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== S1 SAR RTC γ⁰ enrichment (v3) — holdout-val Phase A ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir \
+                numpy rasterio requests pyproj pyyaml Pillow httpx \
+                pystac-client planetary-computer
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "HEAD: $(git rev-parse --short HEAD)"
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+
+              python scripts/enrich_tiles_s1.py \
+                --data-dir /data/holdout_val_512 \
+                --s1-backend pc-rtc \
+                --workers 8 \
+                --skip-existing
+
+              echo ""
+              echo "=== S1 coverage audit ==="
+              python3 - <<'PYEOF'
+              import glob, numpy as np
+              outs = sorted(glob.glob("/data/holdout_val_512/*.npz"))
+              v3 = 0
+              for p in outs:
+                  d = np.load(p, allow_pickle=True)
+                  if int(d.get("s1_enrich_v", 0)) == 3:
+                      v3 += 1
+              print(f"s1_enrich_v==3: {v3}/{len(outs)} tiles")
+              PYEOF
+              echo "=== S1 enrich complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: GDAL_HTTP_MULTIRANGE
+              value: "YES"
+            - name: GDAL_HTTP_MERGE_CONSECUTIVE_RANGES
+              value: "YES"
+            - name: GDAL_DISABLE_READDIR_ON_OPEN
+              value: "EMPTY_DIR"
+            - name: CPL_VSIL_CURL_ALLOWED_EXTENSIONS
+              value: ".tiff,.tif"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

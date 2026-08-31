@@ -27,7 +27,10 @@ Usage (one-shot pod, after campaign-orphan-512 is terminal):
         --vpp-cog-dir /data/vpp_wekeo \\
         --output /data/audits/orphan_512_missing_vpp_mgrs.json
 
-Requires: numpy, pyproj, mgrs (pip install mgrs).
+Requires: numpy, pyproj, mgrs, packaging. ``packaging`` is an undeclared
+runtime dep of ``mgrs`` (``mgrs/core.py`` does ``import packaging.tags``), so
+``pip install mgrs`` alone yields an import that fails only when
+``mgrs_tiles_for_bbox`` is first called — i.e. partway through a scan.
 """
 from __future__ import annotations
 
@@ -47,6 +50,7 @@ sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 
 from backfill_vpp import _tile_year, _vpp_is_empty  # noqa: E402
 from imint.training.tile_bbox import resolve_fetch_bbox  # noqa: E402
+from imint.training.tile_fetch import list_tile_paths  # noqa: E402
 from imint.training.wekeo_vpp import _parse_vpp_filename  # noqa: E402
 
 # All five HR-VPP metrics must be cached for a (MGRS, year) to count as
@@ -99,7 +103,10 @@ def cached_pairs(vpp_cog_dir: str) -> set[tuple[str, int]]:
 
 def derive(data_dir: str, vpp_cog_dir: str) -> dict:
     """Scan ``data_dir`` and return the gap-fill report dict."""
-    paths = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
+    # list_tile_paths, not a bare *.npz glob: atomic-write temps land on sibling
+    # paths that also end in .npz, so a glob counts them as tiles and inflates
+    # both tiles_scanned and the derived (MGRS, year) set with phantom entries.
+    paths = list_tile_paths(data_dir)
     needed: dict[tuple[str, int], set[str]] = defaultdict(set)  # pair → tiles
     skipped: dict[str, list[str]] = defaultdict(list)
     n_missing = 0

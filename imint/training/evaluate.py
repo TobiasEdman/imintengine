@@ -115,20 +115,24 @@ def evaluate_model(
     # Use canonical aux channel names from config
     aux_names = config.enabled_aux_names if hasattr(config, 'enabled_aux_names') else ()
 
+    # Route the model input on backbone family (never on channel count):
+    # tessera consumes the 4D (1, 128, H, W) embedding as-is; Prithvi needs
+    # the 5D Conv3d layout. fm_spec is stashed on the model at build time.
+    family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
+
+    from imint.fm.forward_router import family_forward
+
     for i in range(n_samples):
         sample = dataset[i]
-        image = sample["spectral"].unsqueeze(0).to(device)
         label = sample["label"].numpy()                    # (H, W)
 
-        # Reshape to 5D for Prithvi Conv3d: (1, C=6, T, H, W)
-        CT = image.shape[1]
-        if CT > 6:
-            # Multitemporal: (1, T*6, H, W) → (1, 6, T, H, W)
-            T = CT // 6
-            image_5d = image.view(1, T, 6, image.shape[2], image.shape[3]).permute(0, 2, 1, 3, 4)
-        else:
-            # Single-date: (1, 6, H, W) → (1, 6, 1, H, W)
-            image_5d = image.unsqueeze(2)
+        # Add a batch dim of 1 to every tensor value so family_forward (which
+        # expects batched tensors) can consume the sample directly. Non-tensor
+        # values (e.g. metadata dict) are passed through untouched.
+        batch = {
+            k: (v.unsqueeze(0) if isinstance(v, torch.Tensor) else v)
+            for k, v in sample.items()
+        }
 
         # Collect auxiliary channels if present
         aux_parts = []
@@ -145,8 +149,9 @@ def evaluate_model(
         if location_coords is not None:
             location_coords = location_coords.unsqueeze(0).to(device)
 
-        logits = model(
-            image_5d, aux=aux,
+        logits = family_forward(
+            model, family, batch, device,
+            aux=aux,
             temporal_coords=temporal_coords,
             location_coords=location_coords,
         ).contiguous()  # (1, C, H, W)

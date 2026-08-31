@@ -1,0 +1,9 @@
+einops==0.8.2
+huggingface_hub==0.30.2
+numpy==2.2.4
+psutil==7.0.0
+pyproj==3.7.1
+requests==2.32.3
+scikit-learn==1.6.1
+scipy==1.15.2
+timm==1.0.15

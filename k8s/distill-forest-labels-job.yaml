@@ -1,0 +1,94 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: distill-forest-labels
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: distill-forest-labels
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-h100
+      containers:
+        - name: validate
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== NFI validation — dense NFI-head distillation pseudo-labels ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
+                pandas pyarrow rasterio pyproj
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+
+              grep -q 'head_predict_dense\|def main' scripts/distill_forest_labels.py \
+                || { echo "FATAL: distill script missing on clone"; exit 1; }
+              [ -f data/distill/distill_head.npz ] || { echo "FATAL: head npz missing on clone"; exit 1; }
+              echo "=== smoke: 5 tiles ==="
+              python3 scripts/distill_forest_labels.py \
+                --checkpoint /data/checkpoints/v8b_nmd2023_long/best_model.pt \
+                --head data/distill/distill_head.npz \
+                --data-dir /data/unified_v2_512 \
+                --label-dir /data/nmd2023_labels \
+                --out-dir /data/nmd2023_distill_labels \
+                --img-size 504 --device cuda --limit 5
+              N=$(ls /data/nmd2023_distill_labels/*.npz 2>/dev/null | wc -l)
+              echo "smoke sidecars: $N"; [ "$N" -ge 1 ] || { echo "FATAL: smoke produced no sidecars"; exit 1; }
+              echo "=== full pass (skip-existing) ==="
+              python3 scripts/distill_forest_labels.py \
+                --checkpoint /data/checkpoints/v8b_nmd2023_long/best_model.pt \
+                --head data/distill/distill_head.npz \
+                --data-dir /data/unified_v2_512 \
+                --label-dir /data/nmd2023_labels \
+                --out-dir /data/nmd2023_distill_labels \
+                --img-size 504 --device cuda
+
+              echo "distill sidecars total: $(ls /data/nmd2023_distill_labels/*.npz | wc -l)"
+              echo ""; echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

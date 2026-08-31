@@ -1,0 +1,112 @@
+# LUCAS L2 field validation — Clay v1.5 ensemble member (28-class, frac head).
+#
+# Mirrors k8s/lucas-validate-job.template.yaml (tessera/prithvi members) but
+# routes a Clay checkpoint through validate_against_lucas.py →
+# inference_comparison. Same routed-family support as nfi-validate-clay.yaml:
+# _build_inference_inputs builds the s2_clay stack via
+# UnifiedDataset._build_model_specific_tensors and forwards through
+# imint.fm.forward_router.family_forward (bit-parity with training).
+#
+# --auto-fraction lets the validator use the frac head when present (the Clay
+# checkpoint has one). Clay is optical-only — no S1 dependency.
+#
+# Author-only: do NOT apply until the branch is pushed. Launch command is in
+# the session hand-off.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lucas-validate-clay
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: lucas-validate
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800   # 8h — ~4303 tiles, Clay ViT-L is heavier
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: validate
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== LUCAS L2 validation — Clay v1.5 member (28-class) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
+                pandas pyarrow rasterio pyproj
+              # Clay v1.5 encoder architecture lives in the claymodel package.
+              pip install --quiet --no-cache-dir \
+                "git+https://github.com/Clay-foundation/model.git"
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+
+              grep -q '_ROUTED_FAMILIES' scripts/inference_comparison.py \
+                || { echo "FATAL: routed-family inference missing on clone"; exit 1; }
+              grep -q 'assert_crop_year_match' scripts/validate_against_lucas.py \
+                || { echo "FATAL: LUCAS validator missing on clone"; exit 1; }
+              [ -f /data/checkpoints/clay/best_model.pt ] \
+                || { echo "FATAL: clay checkpoint not found"; exit 1; }
+              [ -f /data/model_cache/clay-v1.5.ckpt ] \
+                || { echo "FATAL: clay base weights not at /data/model_cache"; exit 1; }
+              [ -f /data/lucas/lucas_tile_index.parquet ] \
+                || { echo "FATAL: LUCAS index not on PVC"; exit 1; }
+
+              python3 scripts/validate_against_lucas.py \
+                --checkpoint /data/checkpoints/clay/best_model.pt \
+                --backbone-name clay_v1_5 \
+                --img-size 504 --num-classes 28 \
+                --data-dir /data/unified_v2_512 \
+                --lucas-index /data/lucas/lucas_tile_index.parquet \
+                --min-support 20 --auto-fraction \
+                --device cuda \
+                --out /data/nfi_eval/lucas-validation-clay.json \
+                --dump-per-point /data/nfi_eval/lucas-per-point-clay.parquet
+
+              echo ""; echo "=== summary ==="
+              python3 -c "import json;d=json.load(open('/data/nfi_eval/lucas-validation-clay.json'));print(json.dumps({k:v for k,v in d.items() if not k.startswith('_')},indent=1)[:1500])"
+              echo ""; echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

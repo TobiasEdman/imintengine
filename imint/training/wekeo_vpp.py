@@ -96,6 +96,7 @@ def prefetch_vpp_cogs(
     types = product_types or list(_VPP_PRODUCT_TYPES)
     years_set = {int(y) for y in years}
     index = _load_index(dest)
+    missing: list[str] = []
 
     for tile in tile_ids:
         # Fresh hda client per tile — WEkEO access tokens are short-lived;
@@ -106,7 +107,7 @@ def prefetch_vpp_cogs(
             try:
                 _prefetch_one_tile(
                     _hda_client(), tile, types, years_set,
-                    season, dest, index,
+                    season, dest, index, missing,
                 )
                 break
             except requests.exceptions.HTTPError as exc:
@@ -115,6 +116,16 @@ def prefetch_vpp_cogs(
                     continue  # token expired — fresh client, redo tile
                 raise
         _save_index(dest, index)
+
+    # Fail loud, but only after every other product has had its chance. A
+    # silently-short cache is the failure this whole campaign exists to repair:
+    # WEkEO returns all-zeros outside its cached footprint, so a missing COG
+    # reads downstream as "no phenology here" rather than as an error.
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} VPP product(s) reported a successful download but "
+            f"produced no file; cache is incomplete: {sorted(missing)}"
+        )
 
     return index
 
@@ -212,11 +223,18 @@ def _prefetch_one_tile(
     season: int,
     dest: Path,
     index: dict[str, dict],
+    missing: list[str],
 ) -> None:
     """Search + download every wanted VPP COG for one MGRS tile.
 
-    Mutates ``index`` in place. Idempotent — COGs already on disk are
-    not re-downloaded.
+    Mutates ``index`` and ``missing`` in place. Idempotent — COGs already on
+    disk are not re-downloaded.
+
+    A product whose download reports success without producing the predicted
+    path is appended to ``missing`` and skipped, not raised on: the caller
+    reports the full list at the end. Failing at the first one discards every
+    remaining download in the run (2026-08-25: one absent T34VCK/2022/MAXV
+    killed a queue of 87 pairs after 53 COGs).
     """
     for ptype in types:
         matches = client.search({
@@ -236,6 +254,13 @@ def _prefetch_one_tile(
             target = dest / fname
             if not target.exists():
                 result.download(str(dest))
+            # hda can return from download() without having written the path
+            # _result_filename predicts. Verify before opening: _cog_bounds_4326
+            # would otherwise raise RasterioIOError straight through the caller's
+            # 401-only retry and abort the whole run.
+            if not target.exists():
+                missing.append(fname)
+                continue
             if fname not in index:
                 index[fname] = {
                     **meta, "bounds_4326": _cog_bounds_4326(target),

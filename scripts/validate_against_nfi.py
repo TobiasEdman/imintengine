@@ -138,10 +138,57 @@ def derive_nfi_forest_class(row, *, dominant_frac: float = 0.7) -> int | None:
     return BLANDSKOG
 
 
+def collapse_fractions_to_nfi_class(
+    tall: float, gran: float, trivial: float, adel: float,
+    *, dominant_frac: float = 0.7, forest_floor: float = 0.1,
+) -> int:
+    """Collapse 4 predicted crown-cover fractions with the NFI dominance rule.
+
+    This is the fraction-head analogue of ``derive_nfi_forest_class``: instead
+    of argmaxing the 28-class hard head, we take the fraction head's per-species
+    crown-cover (each in [0, 1], from sigmoid) at a plot pixel and apply the
+    SAME dominance logic the NFI truth uses — collapse-rule alignment is the
+    whole point of the experiment.
+
+        conifer = tall + gran
+        decid   = trivial + adel
+        total   = conifer + decid
+        total < forest_floor            → 0  (non-forest)
+        conifer/total ≥ dominant_frac   → 1 tall  if tall ≥ gran else 2 gran
+        decid/total   ≥ dominant_frac   → 3 löv
+        otherwise                       → 4 bland
+
+    Args:
+        tall, gran, trivial, adel: predicted crown-cover fractions in [0, 1].
+        dominant_frac: one-side dominance threshold (matches NFI's 0.7).
+        forest_floor: minimum summed crown-cover to count as forest at all;
+            below it the pixel collapses to non-forest (0).
+
+    Returns:
+        Unified forest class in {0, 1, 2, 3, 4}.
+    """
+    conifer = float(tall) + float(gran)
+    decid = float(trivial) + float(adel)
+    total = conifer + decid
+    if total < forest_floor:
+        return NONFOREST
+    if conifer / total >= dominant_frac:
+        return TALLSKOG if tall >= gran else GRANSKOG
+    if decid / total >= dominant_frac:
+        return LOVSKOG
+    return BLANDSKOG
+
+
 def nfi_is_mature(row) -> int:
     """1 if the plot is final-felling-age (NFI Maturityclass ≥ 41), else 0."""
     m = row.get("Maturityclass")
     return int(m is not None and not pd.isna(m) and float(m) >= MATURE_FROM_CLASS)
+
+
+# Plot identifiers carried into a per-plot dump when requested. TractID+PlotID
+# uniquely key an NFI plot, so a downstream consumer can re-join to the full
+# nfi_plots table for coordinates even if Easting/Northing are absent here.
+_PER_PLOT_ID_COLS = ("TractID", "PlotID", "Year", "Easting", "Northing")
 
 
 def score_against_nfi(
@@ -150,6 +197,7 @@ def score_against_nfi(
     *,
     num_classes: int = 23,
     dominant_frac: float = 0.7,
+    per_plot_sink: list | None = None,
 ) -> dict:
     """Sample predictions at plot pixels and score forest-type agreement.
 
@@ -160,6 +208,10 @@ def score_against_nfi(
             Called once per tile.
         num_classes: softmax width (23 for the unified schema).
         dominant_frac: conifer/deciduous dominance threshold.
+        per_plot_sink: if given, one dict per scored plot is appended
+            (identifiers + NFI forest truth + model prediction). Enables an
+            external same-plots comparison (e.g. NMD2023/NMD2018 sampled at the
+            identical coordinates) without re-running inference.
 
     Returns:
         A JSON-able dict: plot counts, forest-type overall accuracy, the
@@ -176,10 +228,23 @@ def score_against_nfi(
         class_map, probs = predict_fn(tile_path)
         for _, r in grp.iterrows():
             rr, cc = int(r["row"]), int(r["col"])
-            pred_class.append(int(class_map[rr, cc]))
-            nfi_class.append(derive_nfi_forest_class(r, dominant_frac=dominant_frac))
+            pc = int(class_map[rr, cc])
+            nc = derive_nfi_forest_class(r, dominant_frac=dominant_frac)
+            pred_class.append(pc)
+            nfi_class.append(nc)
             mature.append(nfi_is_mature(r))
             probs_at_plot.append(np.asarray(probs[:, rr, cc], dtype=np.float64))
+            if per_plot_sink is not None:
+                rec = {k: r[k] for k in _PER_PLOT_ID_COLS if k in r}
+                rec.update(tile_name=str(tile_name),
+                           nfi_forest=int(nc) if nc is not None else -1,
+                           model_pred=pc)
+                # Channels 1-4 of the prob vector: softmax probs in hard mode,
+                # RAW crown-cover fractions in --use-fraction-head mode — the
+                # latter is what lets collapse thresholds (forest_floor /
+                # dominant_frac) be calibrated offline from the dump.
+                rec.update({f"p{k}": float(probs[k, rr, cc]) for k in (1, 2, 3, 4)})
+                per_plot_sink.append(rec)
 
     pred = np.array(pred_class)
     truth = np.array([c if c is not None else -1 for c in nfi_class])
@@ -220,7 +285,8 @@ def score_against_nfi(
     }
 
 
-def make_model_predict_fn(checkpoint: str, device, img_size: int):
+def make_model_predict_fn(checkpoint: str, device, img_size: int,
+                          aux_channel_names=None, backbone_name=None):
     """Real ``predict_fn`` for a UNIFIED-format checkpoint (v8+, 10-aux).
 
     Reuses ``inference_comparison.{load_model, run_inference}`` — the same
@@ -246,16 +312,104 @@ def make_model_predict_fn(checkpoint: str, device, img_size: int):
     infcmp = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(infcmp)
 
-    model, epoch, miou, model_img_size = infcmp.load_model(checkpoint, device)
+    # Thread the runtime img_size so the FM families (clay/croma — no
+    # pos_embed, minimal config) build their head at the EXACT resolution
+    # inference feeds (grid_size + PSP pool count), not a 224 default.
+    model, epoch, miou, model_img_size = infcmp.load_model(
+        checkpoint, device, backbone_name=backbone_name, img_size=img_size)
     print(f"  [load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size}")
 
     def predict_fn(tile_path):
         probs, _raw_spectral, _raw_aux = infcmp.run_inference(
             model, tile_path, device, img_size=img_size, return_probs=True,
+            aux_channel_names=aux_channel_names,
         )  # probs: (C, cs, cs)
         return probs.argmax(0).astype(np.int64), probs
 
     return predict_fn
+
+
+def make_fraction_predict_fn(
+    checkpoint: str, device, img_size: int, aux_channel_names=None,
+    *, dominant_frac: float = 0.7, forest_floor: float = 0.1,
+    num_classes: int = 28, backbone_name=None,
+):
+    """``predict_fn`` that collapses the FRACTION HEAD with the NFI rule.
+
+    Instead of argmaxing the 28-class hard head, this runs the fraction head,
+    takes its 4 sigmoid crown-cover maps, and applies
+    ``collapse_fractions_to_nfi_class`` per pixel → a {0..4} class map. The
+    returned ``probs`` array is num_classes-wide but only channels 1-4 are
+    populated (with the tall/gran/(trivial+adel löv) fractions) so the existing
+    per-class AUROC over FOREST_CLASSES still resolves; every other channel is
+    left at 0. ``predict_fn(tile_path) -> (class_map (cs,cs), probs (C,cs,cs))``
+    in CROP coordinates (same centre-crop as the hard path).
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_infcmp", str(Path(__file__).resolve().parent / "inference_comparison.py"),
+    )
+    infcmp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(infcmp)
+
+    model, epoch, miou, model_img_size = infcmp.load_model(
+        checkpoint, device, backbone_name=backbone_name, img_size=img_size)
+    if not infcmp.model_has_frac_head(model):
+        raise ValueError(
+            "checkpoint has no fraction head — retrain with "
+            "--enable-tradslag-head or drop --use-fraction-head"
+        )
+    print(f"  [load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size} "
+          f"(fraction-head mode)")
+
+    def predict_fn(tile_path):
+        fracs = infcmp.run_fraction_inference(
+            model, tile_path, device, img_size=img_size,
+            aux_channel_names=aux_channel_names,
+        )  # (4, cs, cs) in [0,1], order tall/gran/trivial/adel
+        return fracs_to_class_and_probs(
+            fracs, dominant_frac=dominant_frac, forest_floor=forest_floor,
+            num_classes=num_classes)
+
+    return predict_fn
+
+
+def fracs_to_class_and_probs(
+    fracs, *, dominant_frac: float = 0.7, forest_floor: float = 0.1,
+    num_classes: int = 28,
+):
+    """Vectorized NFI collapse of the 4 crown-cover fractions.
+
+    Shared by the fused fraction predict_fn above and the cached-path scorer
+    (``score_against_truth.py``) so both modes apply the IDENTICAL rule —
+    extracted verbatim from the fused path (parity by construction).
+    Returns ``(class_map (cs,cs) int64 {0..4}, probs (num_classes,cs,cs))``
+    with raw fractions on the forest channels for per-class AUROC.
+    """
+    k, cs, _ = fracs.shape
+    tall, gran, trivial, adel = fracs[0], fracs[1], fracs[2], fracs[3]
+    conifer = tall + gran
+    decid = trivial + adel
+    total = conifer + decid
+    with np.errstate(divide="ignore", invalid="ignore"):
+        conifer_share = np.where(total > 0, conifer / total, 0.0)
+        decid_share = np.where(total > 0, decid / total, 0.0)
+    class_map = np.zeros((cs, cs), dtype=np.int64)  # default non-forest
+    is_forest = total >= forest_floor
+    conif_dom = is_forest & (conifer_share >= dominant_frac)
+    decid_dom = is_forest & (decid_share >= dominant_frac)
+    bland = is_forest & ~conif_dom & ~decid_dom
+    class_map[conif_dom & (tall >= gran)] = TALLSKOG
+    class_map[conif_dom & (tall < gran)] = GRANSKOG
+    class_map[decid_dom] = LOVSKOG
+    class_map[bland] = BLANDSKOG
+    probs = np.zeros((num_classes, cs, cs), dtype=np.float32)
+    probs[TALLSKOG] = tall
+    probs[GRANSKOG] = gran
+    probs[LOVSKOG] = decid          # deciduous total drives "löv" ranking
+    probs[BLANDSKOG] = np.minimum(conifer, decid)  # mixedness proxy
+    return class_map, probs
 
 
 def crop_offset(tile_h: int, img_size: int) -> int:
@@ -269,9 +423,32 @@ def main() -> None:
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--plot-index", required=True, help="parquet from nfi_tile_coverage.py")
     ap.add_argument("--out", default="docs/data/nfi-validation.json")
+    ap.add_argument("--dump-per-plot", default=None,
+                    help="parquet path: one row per scored plot (identifiers + "
+                         "NFI forest truth + model prediction) for an external "
+                         "same-plots comparison")
     ap.add_argument("--img-size", type=int, default=504,
                     help="inference crop (504 = 600M patch-14 on 512 tiles)")
     ap.add_argument("--num-classes", type=int, default=23)
+    ap.add_argument("--backbone-name", default=None,
+                    help="override the checkpoint's backbone (required for "
+                    "non-Prithvi families, e.g. tessera_v1, whose minimal "
+                    "config omits backbone_name and has no pos_embed to infer)")
+    ap.add_argument("--use-fraction-head", action="store_true",
+                    help="Collapse the Trädslag fraction head with the NFI "
+                         "dominance rule instead of argmaxing the class head. "
+                         "Requires a checkpoint trained with "
+                         "--enable-tradslag-head.")
+    ap.add_argument("--forest-floor", type=float, default=0.1,
+                    help="Min summed crown-cover to count as forest in the "
+                         "fraction-head collapse (below → non-forest). "
+                         "Default 0.1.")
+    ap.add_argument("--dominant-frac", type=float, default=0.7,
+                    help="One-side dominance threshold for the collapse rule "
+                         "(matches NFI's 0.7).")
+    ap.add_argument("--enable-markfukt", action="store_true",
+                    help="feed markfukt as the 11th aux (for a wetness-aux "
+                         "checkpoint); appends it to the canonical 10")
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 
@@ -312,9 +489,29 @@ def main() -> None:
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
-    predict_fn = make_model_predict_fn(args.checkpoint, device, args.img_size)
+    aux_names = None
+    if args.enable_markfukt:
+        from imint.training.unified_dataset import AUX_CHANNEL_NAMES
+        aux_names = list(AUX_CHANNEL_NAMES) + ["markfukt"]
+        print(f"  markfukt enabled → {len(aux_names)} aux channels")
+    if args.use_fraction_head:
+        predict_fn = make_fraction_predict_fn(
+            args.checkpoint, device, args.img_size,
+            aux_channel_names=aux_names,
+            dominant_frac=args.dominant_frac, forest_floor=args.forest_floor,
+            num_classes=args.num_classes, backbone_name=args.backbone_name,
+        )
+        print(f"  fraction-head collapse: dominant_frac={args.dominant_frac}, "
+              f"forest_floor={args.forest_floor}")
+    else:
+        predict_fn = make_model_predict_fn(args.checkpoint, device, args.img_size,
+                                           aux_channel_names=aux_names,
+                                           backbone_name=args.backbone_name)
 
-    results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes)
+    per_plot: list | None = [] if args.dump_per_plot else None
+    results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes,
+                                dominant_frac=args.dominant_frac,
+                                per_plot_sink=per_plot)
     results["_meta"] = {
         "checkpoint": args.checkpoint, "img_size": args.img_size,
         "plots_in_crop": len(index_df), "plots_total": before,
@@ -325,6 +522,12 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2, ensure_ascii=False))
     print(f"\nwrote {out}")
+
+    if args.dump_per_plot:
+        pp = Path(args.dump_per_plot)
+        pp.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(per_plot).to_parquet(pp, index=False)
+        print(f"wrote {pp} ({len(per_plot)} plots)")
 
 
 if __name__ == "__main__":

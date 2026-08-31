@@ -21,6 +21,9 @@ from imint.training.unified_schema import (
     _NMD19_TO_UNIFIED,
     HARVEST_CLASS,
     nmd19_to_unified,
+    nmd2023_to_unified,
+    NMD2023_TO_UNIFIED,
+    merge_all_2023,
     merge_nmd_sjv,
     merge_all,
     get_class_weights,
@@ -30,7 +33,56 @@ from imint.training.unified_schema import (
 # ── 1. Schema identity ─────────────────────────────────────────────────────────
 
 def test_num_classes():
-    assert NUM_UNIFIED_CLASSES == 23, "Schema must have exactly 23 classes"
+    assert NUM_UNIFIED_CLASSES == 28, "Schema must have exactly 28 classes"
+
+
+def test_nmd2023_mapping():
+    """NMD2023 raw codes → unified: forest consistent with 2018, new classes 23-28."""
+    # Forest fastmark resolves identically to the NMD2018 chain.
+    for code, want in [(111, 1), (112, 2), (113, 3), (114, 4), (118, 6)]:
+        assert nmd2023_to_unified(np.array([code]))[0] == want, code
+    # Forest wetland → sumpskog (5).
+    assert (nmd2023_to_unified(np.array([121, 124, 128])) == 5).all()
+    # NMD2023-new classes.
+    assert nmd2023_to_unified(np.array([54]))[0] == 23    # torvtäkt
+    assert (nmd2023_to_unified(np.array([421, 4212])) == 24).all()  # busk (+moisture collapsed)
+    assert (nmd2023_to_unified(np.array([422, 4223])) == 25).all()  # ris
+    assert (nmd2023_to_unified(np.array([423, 4231])) == 26).all()  # gräs
+    assert nmd2023_to_unified(np.array([411]))[0] == 27  # bar mark
+    assert (nmd2023_to_unified(np.array([412, 413])) == 8).all()  # glaciär/snöfält → öppen mark (no own class)
+    # Låg fjällskog: fastmark → lövskog, våtmark → sumpskog.
+    assert nmd2023_to_unified(np.array([43]))[0] == 3
+    assert (nmd2023_to_unified(np.array([23, 230])) == 5).all()
+    # No-data (0) and unmapped/out-of-range → background (0).
+    assert nmd2023_to_unified(np.array([0, 999, 99999]))[0:3].tolist() == [0, 0, 0]
+    # Every mapped target is a valid unified class.
+    assert all(0 <= v < NUM_UNIFIED_CLASSES for v in NMD2023_TO_UNIFIED.values())
+    # dtype/shape preserved.
+    out = nmd2023_to_unified(np.array([[111, 54], [411, 0]], dtype=np.uint16))
+    assert out.shape == (2, 2) and out.dtype == np.uint8
+
+
+def test_merge_all_2023():
+    """NMD2023 base + LPIS + SKS overlays, same priority as merge_all."""
+    # row0: tallskog, åker, bar mark, torvtäkt ; row1: busk, granskog, åker, våtmark
+    raw = np.array([[111, 3, 411, 54],
+                    [421, 112, 3, 200]], dtype=np.uint16)
+    lpis = np.zeros((2, 4), dtype=np.uint16)
+    lpis[0, 1] = 4     # SJV 4 (höstvete) on an åker pixel → vete (11)
+    lpis[0, 0] = 4     # vete code on a FOREST pixel → must NOT override (gate)
+    harvest = np.zeros((2, 4), dtype=np.uint8)
+    harvest[1, 1] = 1  # clearcut on granskog → hygge (22)
+    harvest[0, 2] = 1  # clearcut on bar mark (non-forest) → must NOT apply
+    out = merge_all_2023(raw, lpis, harvest)
+    assert out[0, 0] == 1      # tallskog kept (LPIS gate blocks forest override)
+    assert out[0, 1] == 11     # åker + LPIS vete → vete
+    assert out[0, 2] == 27     # bar mark (harvest ignored on non-forest)
+    assert out[0, 3] == 23     # torvtäkt
+    assert out[1, 0] == 24     # buskdominerad
+    assert out[1, 1] == 22     # granskog + clearcut → hygge
+    assert out[1, 2] == 0      # åker without LPIS → background
+    assert out[1, 3] == 7      # öppen våtmark → våtmark
+    assert out.dtype == np.uint8 and int(out.max()) <= 27
 
 
 def test_class_21_is_majs():
@@ -245,3 +297,22 @@ def test_get_class_weights_cap():
     weights = get_class_weights(counts, max_weight=10.0)
     assert weights[1] <= 10.0
     assert weights[2] <= 10.0
+
+
+def test_unified_palette_json_matches_schema():
+    """scripts/unified_palette.json must stay in sync with the canonical
+    schema — slim pods (tile previews, monitors) read the JSON because they
+    have no imint/ install, so a schema change must regenerate it. Moved
+    here 2026-08-31 from the retired tests/test_campaign_dashboard.py: the
+    invariant is the schema's, not any dashboard's.
+    """
+    import json
+    from pathlib import Path
+    from imint.training.unified_schema import (
+        NUM_UNIFIED_CLASSES, UNIFIED_CLASS_NAMES, UNIFIED_COLOR_LIST)
+    p = Path(__file__).resolve().parents[1] / "scripts" / "unified_palette.json"
+    pal = json.loads(p.read_text(encoding="utf-8"))
+    assert pal["num_classes"] == NUM_UNIFIED_CLASSES
+    assert pal["names"] == [str(n) for n in UNIFIED_CLASS_NAMES]
+    assert [tuple(c) for c in pal["colors"]] == \
+        [tuple(int(x) for x in rgb) for rgb in UNIFIED_COLOR_LIST]

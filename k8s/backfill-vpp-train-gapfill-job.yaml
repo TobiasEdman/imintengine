@@ -1,0 +1,195 @@
+---
+# STEP 3 of the VPP gap-fill arc. Writes the five vpp_* channels into the
+# 2,229 training tiles that came back empty on 2026-08-23, now that
+# prefetch-vpp-train-gapfill has put their 87 (MGRS, year) COGs in the cache.
+#
+# NO --force. backfill_vpp.py:241 skips a tile only when its VPP is already
+# PRESENT and year-correct:
+#     if not force and not _vpp_is_empty(data): ...
+# The gap tiles are empty, so a plain run retries exactly them and leaves the
+# 5,648 already-correct tiles untouched. --force would re-fetch all 7,886
+# (~11 h) and rewrite good data. vpp_known_empty.json does not gate this — it
+# is write-only (_load_known_empty is called once, at :371, to merge before
+# saving), a catalogue rather than a skip-list.
+#
+# Two fixes over backfill-vpp-train-y0b-job.yaml, which this is otherwise
+# modelled on:
+#   * its known-empty cat pointed at /data/unified_v2_512_recoreg/, a path that
+#     does not exist for this dataset, so it always printed "(none)" and the
+#     operator never saw the catalogue that was the whole point of the run;
+#   * it had no check that the WEkEO cache was actually populated, which is
+#     precisely how the 2026-08-23 run spent 6.6 h re-cataloguing 2,234 tiles
+#     as empty instead of failing fast.
+#
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/backfill-vpp-train-gapfill-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backfill-vpp-train-gapfill
+  namespace: prithvi-training-default
+  labels:
+    app: dataset-completion
+    purpose: backfill-vpp-train-gapfill
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800   # 8 h — 2,229 tiles at WEkEO-cache read speed
+  template:
+    metadata:
+      labels:
+        app: dataset-completion
+        purpose: backfill-vpp-train-gapfill
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation
+                  # (cgroup/runc bug, 2026-05-{12,17}). Exclude both.
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: backfill
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== VPP backfill — gap-fill pass ==="
+              echo "Started: $(date -u)"
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj scipy hda 2>&1 | tail -3
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED HEAD: $(git rev-parse --short HEAD)"
+
+              grep -q "vpp_year" scripts/backfill_vpp.py || {
+                echo "PREFLIGHT FAILED — clone lacks the year-0 VPP fix"; exit 3; }
+              echo "preflight OK — year-0 VPP fix present"
+
+              # Cache preflight. Without this the run degrades to a 6 h no-op
+              # that just re-catalogues every tile as empty — the exact shape
+              # of the 2026-08-23 failure this job exists to repair.
+              for Y in 2018 2021 2022; do
+                N=$(ls /data/vpp_wekeo/VPP_${Y}_*_SOSD.tif 2>/dev/null | wc -l)
+                echo "  cache ${Y}: ${N} SOSD COGs"
+                [ "$N" -gt 0 ] || {
+                  echo "PREFLIGHT FAILED — no ${Y} COGs; run prefetch-vpp-train-gapfill first"
+                  exit 4; }
+              done
+              # Counting files is not enough: WEkEO returns all-zeros outside its
+              # cached footprint, so a present-but-empty COG reads downstream as
+              # "no phenology here" and this job would spend hours re-marking the
+              # same 2,229 tiles empty. Assert the rasters actually carry data.
+              python3 - <<'PY'
+              import glob, sys, numpy as np, rasterio
+              for yr in ('2018', '2021', '2022'):
+                  ok = False
+                  for c in sorted(glob.glob(f'/data/vpp_wekeo/VPP_{yr}_*_SOSD.tif'))[:6]:
+                      with rasterio.open(c) as src:
+                          if np.count_nonzero(src.read(1, out_shape=(256, 256))):
+                              print(f'  cache {yr}: data confirmed in '
+                                    f'{c.rsplit("/", 1)[-1]}')
+                              ok = True
+                              break
+                  if not ok:
+                      sys.exit(f'PREFLIGHT FAILED — {yr} COGs present but all-zero')
+              PY
+              echo "preflight OK — WEkEO cache populated AND non-empty for all three gap years"
+
+              BEFORE=$(python3 -c "
+              import sys; sys.path[:0]=['/workspace/imintengine','/workspace/imintengine/scripts']
+              import numpy as np
+              from imint.training.tile_fetch import list_tile_paths
+              from backfill_vpp import _vpp_is_empty
+              n=0
+              for p in list_tile_paths('/data/unified_v2_512'):
+                  z=np.load(p, allow_pickle=True)
+                  try:
+                      n += bool(_vpp_is_empty(z))
+                  finally:
+                      z.close()
+              print(n)")
+              echo "tiles missing VPP BEFORE: ${BEFORE}"
+
+              # Capture rather than let set -e abort: the AFTER count is most
+              # valuable exactly when the run failed, and backfill_vpp now exits
+              # 2 when it had tiles to fill and filled none.
+              set +e
+              python3 scripts/backfill_vpp.py \
+                --data-dir /data/unified_v2_512 \
+                --workers 2
+              RC=$?
+              set -e
+
+              AFTER=$(python3 -c "
+              import sys; sys.path[:0]=['/workspace/imintengine','/workspace/imintengine/scripts']
+              import numpy as np
+              from imint.training.tile_fetch import list_tile_paths
+              from backfill_vpp import _vpp_is_empty
+              n=0
+              for p in list_tile_paths('/data/unified_v2_512'):
+                  z=np.load(p, allow_pickle=True)
+                  try:
+                      n += bool(_vpp_is_empty(z))
+                  finally:
+                      z.close()
+              print(n)")
+              echo ""
+              echo "=== effect ==="
+              echo "  tiles missing VPP BEFORE: ${BEFORE}"
+              echo "  tiles missing VPP AFTER : ${AFTER}"
+              echo "  repaired                : $(( BEFORE - AFTER ))"
+              [ "$AFTER" -lt "$BEFORE" ] || echo "  WARNING — no net change; the run had no effect"
+
+              echo ""
+              echo "=== known-empty catalogue (correct path this time) ==="
+              head -c 2000 /data/unified_v2_512/vpp_known_empty.json 2>/dev/null \
+                || echo "(none)"
+              echo ""
+              echo "=== backfill complete: $(date -u) — exit ${RC} ==="
+              exit "$RC"
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: VPP_WEKEO_DIR
+              value: "/data/vpp_wekeo"
+            # Pin WEkEO as the default for any path that reads the env directly;
+            # backfill_vpp also forces it per-call.
+            - name: VPP_SOURCE
+              value: "wekeo"
+            # CDSE fallback kept as-is from the proven y0b job (optional, so an
+            # absent secret is not fatal). It rescued 1 tile in 5,648 on
+            # 2026-08-23, so the run summary's cdse= count is worth reading: a
+            # non-trivial number means PU was spent on a cache that should now
+            # make CDSE unnecessary.
+            - name: CDSE_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}
+            - name: CDSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}
+          envFrom:
+            - secretRef: {name: wekeo-creds}
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits:   {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

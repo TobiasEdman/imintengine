@@ -71,6 +71,8 @@ class ClaySegmentationModel(nn.Module):
         embed_dim: int = 1024,
         n_aux_channels: int = 0,
         dropout: float = 0.1,
+        enable_tradslag_head: bool = False,
+        num_tradslag: int = 4,
     ):
         super().__init__()
         self.encoder = encoder
@@ -79,6 +81,8 @@ class ClaySegmentationModel(nn.Module):
         self.patch_size = patch_size
         self.embed_dim = embed_dim
         self.n_aux_channels = n_aux_channels
+        self.enable_tradslag_head = enable_tradslag_head
+        self.num_tradslag = num_tradslag
 
         grid = img_size // patch_size
         if grid * patch_size != img_size:
@@ -88,86 +92,173 @@ class ClaySegmentationModel(nn.Module):
         self.grid_size = grid
         self.expected_n_patches = grid * grid  # 32×32 = 1024 at native
 
-        # Progressive up-sampling (token spatial map → input resolution)
-        c1 = embed_dim
-        c2 = embed_dim // 2
-        c3 = embed_dim // 4
-        c4 = embed_dim // 8
-
-        self.up1 = nn.Sequential(
-            nn.ConvTranspose2d(c1, c2, kernel_size=2, stride=2),
-            nn.BatchNorm2d(c2), nn.GELU(),
+        # Multi-level UPerNet head (fairness parity with Prithvi). Clay's
+        # encoder.transformer.layers is a 24-block ModuleList, so we hook 4
+        # evenly-spaced blocks and feed the SAME UPerNet decoder Prithvi uses
+        # — not a linear probe.
+        from imint.fm.upernet import ViTUPerNetHead, get_default_pool_sizes
+        pool_sizes = get_default_pool_sizes(
+            device=None, img_size=img_size, patch_size=patch_size,
         )
-        self.up2 = nn.Sequential(
-            nn.ConvTranspose2d(c2, c3, kernel_size=2, stride=2),
-            nn.BatchNorm2d(c3), nn.GELU(),
+        self.decoder_head = ViTUPerNetHead(
+            embed_dim=embed_dim,
+            num_classes=num_classes,
+            decoder_channels=256,
+            dropout=dropout,
+            n_aux_channels=n_aux_channels,
+            pool_sizes=pool_sizes,
+            enable_tradslag_head=enable_tradslag_head,
+            num_tradslag=num_tradslag,
         )
-        self.smooth = nn.Sequential(
-            nn.Conv2d(c3, c4, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(c4), nn.GELU(),
-        )
-
-        if n_aux_channels > 0:
-            self.aux_proj = nn.Sequential(
-                nn.Conv2d(n_aux_channels, c4, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm2d(c4), nn.GELU(),
-            )
-            classifier_in = c4 * 2
-        else:
-            self.aux_proj = None
-            classifier_in = c4
-
-        self.dropout = nn.Dropout2d(dropout)
-        self.classifier = nn.Conv2d(classifier_in, num_classes, kernel_size=1)
 
     def _extract_tokens(
         self,
         chips: torch.Tensor,
         timestamps: torch.Tensor,
         wavelengths: torch.Tensor,
-    ) -> torch.Tensor:
-        """Return the pre-pool token sequence (B, N+1, D).
+    ) -> list[torch.Tensor]:
+        """Return 4 evenly-spaced (B, 1+L, D) block token-sequences.
 
-        Clay's ``encoder.forward`` pools and returns (B, D). We hook the
-        final transformer block's output to grab the un-pooled tokens.
+        Clay v1.5's real ``Encoder.forward(datacube)`` takes a dict and
+        returns a tuple whose first element is the encoded patch sequence
+        ``(B, 1+L, D)`` (CLS + all patch tokens). It must be loaded with
+        ``mask_ratio=0`` (see load_clay) so ALL patches are returned; the
+        default MAE mask drops ~75%, which cannot be reshaped to a grid.
+        We hook 4 evenly-spaced blocks of ``encoder.transformer.layers``
+        (24-block ModuleList) for the multi-level UPerNet head.
+
+        A fake encoder in tests may instead expose a ``.blocks`` ModuleList
+        and a positional ``forward(chips, timestamps, wavelengths)``. The
+        real-vs-fake path is chosen by whether the encoder accepts a
+        datacube dict (has a DynamicEmbedding-style ``patch_embedding``).
         """
-        captured: dict[str, torch.Tensor] = {}
+        # load_clay returns the ClayMAE wrapper; the datacube-forward
+        # Encoder is at ``.encoder``. Unwrap it (a bare Encoder is used
+        # directly). Fake test encoders expose neither and fall through to
+        # the .blocks hook path below.
+        real_enc = self.encoder
+        if not (hasattr(real_enc, "patch_embedding")
+                or hasattr(real_enc, "transformer")):
+            inner = getattr(real_enc, "encoder", None)
+            if inner is not None and (
+                hasattr(inner, "patch_embedding")
+                or hasattr(inner, "transformer")
+            ):
+                real_enc = inner
 
-        # Identify the last transformer block. Clay MAE ViT structures
-        # vary across versions; try the common attribute names.
+        # Real Clay encoder path: build the datacube dict.
+        if hasattr(real_enc, "patch_embedding") or hasattr(
+            real_enc, "transformer"
+        ):
+            # Clay's Encoder.add_encodings builds an 8-dim metadata vector
+            # from ``hstack((time, latlon))`` and concatenates it onto a
+            # positional encoding of dim ``self.dim - 8``. That arithmetic
+            # requires time and latlon to be 4-wide EACH (total 8) — a 2+2
+            # split yields dim-4 metadata and a 1020≠1024 mismatch (observed).
+            # Clay's convention: time=[week_sin,week_cos,hour_sin,hour_cos],
+            # latlon=[lat_sin,lat_cos,lon_sin,lon_cos]. We derive sin/cos from
+            # the (B,4)=[week,hour,lat,lon] timestamps; unknown → zeros, which
+            # Clay tolerates (metadata is additive, not gating).
+            B = chips.shape[0]
+            week = timestamps[:, 0]
+            hour = timestamps[:, 1]
+            lat = timestamps[:, 2]
+            lon = timestamps[:, 3]
+            time = torch.stack([
+                torch.sin(week), torch.cos(week),
+                torch.sin(hour), torch.cos(hour),
+            ], dim=1)                                       # (B, 4)
+            latlon = torch.stack([
+                torch.sin(lat), torch.cos(lat),
+                torch.sin(lon), torch.cos(lon),
+            ], dim=1)                                       # (B, 4)
+            gsd = torch.tensor(10.0, device=chips.device)  # Sentinel-2 10 m
+            datacube = {
+                "pixels": chips,
+                "time": time,
+                "latlon": latlon,
+                "waves": wavelengths[0] if wavelengths.dim() == 2 else wavelengths,
+                "gsd": gsd,
+            }
+            # Hook 4 evenly-spaced transformer blocks for the multi-level
+            # UPerNet head (transformer.layers is a 24-block ModuleList).
+            tr = getattr(real_enc, "transformer", None)
+            layers = getattr(tr, "layers", None) if tr is not None else None
+            if layers is not None and len(layers) >= 4:
+                levels = self._hook_and_run(
+                    layers, lambda: real_enc(datacube),
+                )
+                if levels is not None:
+                    return levels
+            # Fallback: single final encoding → 4 levels.
+            out = real_enc(datacube)
+            tokens = out[0] if isinstance(out, (tuple, list)) else out
+            return [tokens, tokens, tokens, tokens]
+
+        # Fake-encoder fallback (tests): hook .blocks/.layers if present.
         blocks = None
-        for attr in ("blocks", "transformer", "layers"):
+        for attr in ("blocks", "layers"):
             if hasattr(self.encoder, attr):
                 blocks = getattr(self.encoder, attr)
                 break
         if blocks is None:
             raise AttributeError(
-                "Clay encoder has no .blocks/.transformer/.layers — "
-                "cannot hook final transformer block. Inspect the "
-                "encoder structure with print(encoder) and wire the "
-                "correct attribute."
+                "Clay encoder exposes neither a datacube forward "
+                "(patch_embedding/transformer) nor a hookable .blocks/"
+                ".layers ModuleList. Inspect the encoder structure."
             )
-
-        last_block = blocks[-1]
+        if len(blocks) >= 4:
+            levels = self._hook_and_run(
+                blocks, lambda: self.encoder(chips, timestamps, wavelengths),
+                no_grad=True,
+            )
+            if levels is not None:
+                return levels
+        # Single-block fake → replicate its output ×4.
+        captured: dict[str, torch.Tensor] = {}
 
         def hook(module, inputs, output):
-            # Some blocks return (tokens,) tuple; normalize to tensor
-            t = output[0] if isinstance(output, tuple) else output
-            captured["tokens"] = t
+            captured["t"] = output[0] if isinstance(output, tuple) else output
 
-        handle = last_block.register_forward_hook(hook)
+        h = blocks[-1].register_forward_hook(hook)
         try:
             with torch.no_grad():
                 _ = self.encoder(chips, timestamps, wavelengths)
         finally:
-            handle.remove()
+            h.remove()
+        if "t" not in captured:
+            raise RuntimeError("Clay hook captured no tokens.")
+        t = captured["t"]
+        return [t, t, t, t]
 
-        if "tokens" not in captured:
-            raise RuntimeError(
-                "Forward hook did not capture tokens from Clay's last "
-                "transformer block. Encoder internals may have changed."
-            )
-        return captured["tokens"]
+    def _hook_and_run(self, layers, run_fn, no_grad: bool = False):
+        """Hook 4 evenly-spaced blocks in ``layers``, run ``run_fn`` once,
+        return the 4 captured (B, N, D) token-sequences (or None on miss)."""
+        L = len(layers)
+        idxs = [L // 4 - 1, L // 2 - 1, 3 * L // 4 - 1, L - 1]
+        idxs = [max(0, i) for i in idxs]
+        captured: dict[int, torch.Tensor] = {}
+        handles = []
+
+        def mk(slot):
+            def hook(mod, inp, out):
+                captured[slot] = out[0] if isinstance(out, (tuple, list)) else out
+            return hook
+
+        for slot, i in enumerate(idxs):
+            handles.append(layers[i].register_forward_hook(mk(slot)))
+        try:
+            if no_grad:
+                with torch.no_grad():
+                    _ = run_fn()
+            else:
+                _ = run_fn()
+        finally:
+            for h in handles:
+                h.remove()
+        if len(captured) == 4:
+            return [captured[s] for s in range(4)]
+        return None
 
     def _tokens_to_spatial(self, tokens: torch.Tensor) -> torch.Tensor:
         """(B, N+1, D) or (B, N, D) → (B, D, grid, grid)."""
@@ -196,7 +287,8 @@ class ClaySegmentationModel(nn.Module):
         timestamps: torch.Tensor,
         wavelengths: torch.Tensor,
         aux: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        return_fractions: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
         """Per-pixel class logits from Clay encoder features.
 
         Args:
@@ -209,27 +301,20 @@ class ClaySegmentationModel(nn.Module):
             wavelengths: (B, n_bands) tensor of per-band central
                 wavelength in nanometers.
             aux: Optional (B, n_aux, H, W) auxiliary raster channels.
+            return_fractions: When True AND the fraction head is enabled,
+                also return the (B, num_tradslag, H, W) fraction logits from
+                the SAME feature that feeds the classifier. Head disabled →
+                second element is ``None``. Default False → logits only.
 
         Returns:
-            (B, num_classes, H, W) logits at input resolution.
+            (B, num_classes, H, W) logits, or ``(logits, frac_logits)`` when
+            ``return_fractions`` is True.
         """
         input_h, input_w = chips.shape[-2:]
 
-        tokens = self._extract_tokens(chips, timestamps, wavelengths)
-        feat = self._tokens_to_spatial(tokens)  # (B, D, grid, grid)
-
-        feat = self.up1(feat)
-        feat = self.up2(feat)
-        feat = self.smooth(feat)
-
-        feat = F.interpolate(
-            feat, size=(input_h, input_w), mode="bilinear", align_corners=True,
+        block_tokens = self._extract_tokens(chips, timestamps, wavelengths)
+        feats = [self._tokens_to_spatial(t) for t in block_tokens]  # 4× (B,D,g,g)
+        return self.decoder_head(
+            feats, output_size=(input_h, input_w), aux=aux,
+            return_fractions=return_fractions,
         )
-
-        if self.aux_proj is not None and aux is not None:
-            aux_feat = self.aux_proj(aux)
-            feat = torch.cat([feat, aux_feat], dim=1)
-
-        feat = self.dropout(feat)
-        logits = self.classifier(feat)
-        return logits

@@ -25,7 +25,7 @@ import numpy as np
 
 # ── Unified Class Schema ──────────────────────────────────────────────────────
 
-NUM_UNIFIED_CLASSES = 23
+NUM_UNIFIED_CLASSES = 28
 
 UNIFIED_CLASSES = {
     0: "bakgrund",          # ignore_index
@@ -57,6 +57,18 @@ UNIFIED_CLASSES = {
     21: "majs",             # SJV 9 — C4 photosynthesis, spectrally distinct
     # SKS harvest (22)
     22: "hygge",            # SKS utförda avverkningar (harvested forest)
+    # NMD2023-only fine classes (23-28) — see nmd2023_to_unified().
+    # Only produced when labels are built from the NMD2023 base raster; the
+    # NMD2018 base cannot code these (docs/experiments/nmd2023_label_source_retrain.md).
+    23: "torvtäkt",         # NMD2023 54 — active peat extraction
+    24: "buskdominerad mark",   # NMD2023 421/42xx — shrub-dominated open land
+    25: "risdominerad mark",    # NMD2023 422/42xx — dwarf-shrub-dominated
+    26: "gräsdominerad mark",   # NMD2023 423/42xx — grass-dominated
+    27: "öppen mark utan vegetation",  # NMD2023 411 — bare ground/rock
+    # NOTE: NMD2023 glaciär (412) + snöfält (413) → öppen mark (8). A dedicated
+    # snö/is class had 0 pixel support under the pure-NMD2023 southern coverage
+    # (glaciers/permanent snow are in the far-northern fjäll v2.1 doesn't cover),
+    # so it is not carried. Re-introduce if northern coverage is added later.
 }
 
 UNIFIED_CLASS_NAMES = [UNIFIED_CLASSES[i] for i in range(NUM_UNIFIED_CLASSES)]
@@ -87,6 +99,11 @@ UNIFIED_COLORS = {
     20: (190, 150, 80),     # råg — wheat/tan
     21: (220, 200,   0),    # majs — corn yellow  #dcc800
     22: (0, 206, 209),      # hygge — turquoise
+    23: (140, 25, 100),     # torvtäkt — dark magenta (NMD2023 palette #8c1964)
+    24: (171, 200, 166),    # buskdominerad — sage green
+    25: (205, 170, 102),    # risdominerad — tan-brown
+    26: (255, 210, 126),    # gräsdominerad — light amber
+    27: (224, 224, 224),    # öppen mark utan vegetation — light grey
 }
 
 
@@ -117,6 +134,62 @@ _NMD19_TO_UNIFIED[16] = 9    # developed_infrastructure → bebyggelse
 _NMD19_TO_UNIFIED[17] = 9    # developed_roads → bebyggelse
 _NMD19_TO_UNIFIED[18] = 10   # water_lakes → vatten
 _NMD19_TO_UNIFIED[19] = 10   # water_sea → vatten
+
+# ── NMD2023 raw code → Unified mapping (direct, uint16) ───────────────────────
+# NMD2023 basskikt v2.1 codes differ from NMD2018 for open land (4-digit codes
+# > 255) and add fine classes, so it cannot reuse the uint8 nmd_raster_to_lulc
+# LUT. Forest codes 111-128 are IDENTICAL to NMD2018 and map to the SAME unified
+# classes (so a model finetuned from v8b keeps a consistent forest label space);
+# only the NMD2023-new detail (23-28) is introduced. 113 barrblandskog follows
+# the existing NMD2018 grouping (→ lövskog) for consistency, not correctness.
+# Codes from the shipped legend data/nmd2023/sidecar/NMD2023bas_v2_1.qml.
+NMD2023_TO_UNIFIED: dict[int, int] = {
+    # Skogsmark på fastmark — same targets as the NMD2018 chain
+    111: 1, 112: 2, 113: 3, 114: 4, 115: 3, 116: 3, 117: 3, 118: 6,
+    # Skogsmark på våtmark → sumpskog (5)
+    121: 5, 122: 5, 123: 5, 124: 5, 125: 5, 126: 5, 127: 5, 128: 5,
+    # Låg fjällskog (NMD2023-new base class; mountain birch)
+    43: 3,           # på fastmark → lövskog
+    23: 5, 230: 5,   # på våtmark / övrig våtmark → sumpskog
+    # Åkermark → background (LPIS overrides on parcels)
+    3: 0,
+    # Öppen våtmark (finindelad) → våtmark (7)
+    200: 7, 211: 7, 212: 7, 213: 7, 214: 7, 215: 7, 216: 7, 217: 7, 218: 7,
+    221: 7, 222: 7, 223: 7, 224: 7, 225: 7, 226: 7, 227: 7, 228: 7,
+    # Anlagd och bebyggd mark
+    51: 9, 52: 9, 53: 9,
+    54: 23,          # torvtäkt → egen klass 23
+    # Vatten
+    61: 10, 62: 10,
+    # Öppen fastmark — structure broken out, moisture level (4-digit) collapsed
+    411: 27,                                   # utan vegetation (bar) → 27
+    412: 8, 413: 8,                            # glaciär + snöfält → öppen mark (rare/northern; no own class)
+    421: 24, 4211: 24, 4212: 24, 4213: 24,     # buskdominerad → 24
+    422: 25, 4221: 25, 4222: 25, 4223: 25,     # risdominerad → 25
+    423: 26, 4231: 26, 4232: 26, 4233: 26,     # gräsdominerad → 26
+}
+
+_NMD2023_LUT_SIZE = max(NMD2023_TO_UNIFIED) + 1
+_NMD2023_TO_UNIFIED = np.zeros(_NMD2023_LUT_SIZE, dtype=np.uint8)
+for _code, _uni in NMD2023_TO_UNIFIED.items():
+    _NMD2023_TO_UNIFIED[_code] = _uni
+
+
+def nmd2023_to_unified(nmd_raw: np.ndarray) -> np.ndarray:
+    """Map raw NMD2023 basskikt v2.1 codes (uint16) → unified classes (0-28).
+
+    Direct raw→unified (no 19-class intermediate): NMD2023's 4-digit open-land
+    codes exceed uint8, and it carries fine classes (23-28) the NMD2018 chain
+    has no codes for. Forest codes 111-128 resolve to the SAME unified classes
+    as NMD2018 so a model finetuned from v8b keeps a consistent forest label
+    space. Unmapped / out-of-range codes → 0 (background), which is also what a
+    no-data pixel (raster 0, outside NMD2023's rolling extent) resolves to.
+    """
+    raw = np.asarray(nmd_raw)
+    out = np.zeros(raw.shape, dtype=np.uint8)
+    in_range = (raw >= 0) & (raw < _NMD2023_LUT_SIZE)
+    out[in_range] = _NMD2023_TO_UNIFIED[raw[in_range].astype(np.int64)]
+    return out
 
 # ── SJV grödkod → Unified class mapping ──────────────────────────────────────
 # Direct mapping from SJV crop codes (grdkod_mar) to unified class.
@@ -264,6 +337,62 @@ def merge_all(
     _NMD_FOREST = np.array([1, 2, 3, 4, 5, 6], dtype=np.uint8)
     where_forest = np.isin(nmd_base, _NMD_FOREST)
 
+    if harvest_mask is not None and where_forest.any():
+        unified[(harvest_mask > 0) & where_forest] = HARVEST_CLASS
+
+    return unified
+
+
+# Raw NMD2023 codes eligible for an LPIS crop override: åkermark + öppen
+# fastmark (bare + shrub/dwarf-shrub/grass). Mirrors merge_all's {12,13,14}
+# (cropland + open_bare + open_veg) gate in NMD2018 raw space. Glacier/snow
+# (412/413) and öppen våtmark are excluded — no farm parcels there.
+_NMD2023_AGRI_RAW = np.array(
+    [3, 411, 421, 422, 423, 4211, 4212, 4213, 4221, 4222, 4223, 4231, 4232, 4233],
+    dtype=np.uint16,
+)
+
+
+def merge_all_2023(
+    nmd2023_raw: np.ndarray,
+    lpis_mask: np.ndarray | None = None,
+    harvest_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Merge raw NMD2023 codes + LPIS + SKS harvest into the unified 29-class label.
+
+    Same priority and gating as ``merge_all`` (LPIS > SKS > NMD), but the base
+    comes from ``nmd2023_to_unified`` (0-28) instead of the NMD2018 19-class
+    chain, and the LPIS eligibility gate is expressed in raw NMD2023 codes
+    (``_NMD2023_AGRI_RAW``). Forest classes 1-6 stay SKS-clearcut-eligible.
+
+    Args:
+        nmd2023_raw: (H, W) uint16 raw NMD2023 basskikt v2.1 codes.
+        lpis_mask: (H, W) uint16 raw SJV grödkoder (0 = no parcel), or None.
+        harvest_mask: (H, W) uint8 binary SKS harvest mask (0/1), or None.
+
+    Returns:
+        (H, W) uint8, unified class indices (0-28).
+    """
+    raw = np.asarray(nmd2023_raw, dtype=np.uint16)
+    unified = nmd2023_to_unified(raw)
+    nmd_base = unified.copy()   # forest gate reference — never modified
+
+    # Step 2: LPIS crops — gate on raw NMD2023 agri/open codes.
+    where_agri = np.isin(raw, _NMD2023_AGRI_RAW)
+    if lpis_mask is not None and where_agri.any():
+        sjv_codes = np.asarray(lpis_mask, dtype=np.uint16)
+        has_parcel = (sjv_codes > 0) & where_agri
+        if has_parcel.any():
+            sjv_mapped = np.isin(sjv_codes, list(SJV_TO_UNIFIED.keys()))
+            for sjv_code, unified_class in SJV_TO_UNIFIED.items():
+                mask = (sjv_codes == sjv_code) & where_agri
+                if mask.any():
+                    unified[mask] = unified_class
+            unified[has_parcel & ~sjv_mapped] = _SJV_DEFAULT
+
+    # Step 3: SKS harvest — only where NMD says forest (unified 1–6).
+    _NMD_FOREST = np.array([1, 2, 3, 4, 5, 6], dtype=np.uint8)
+    where_forest = np.isin(nmd_base, _NMD_FOREST)
     if harvest_mask is not None and where_forest.any():
         unified[(harvest_mask > 0) & where_forest] = HARVEST_CLASS
 

@@ -1,0 +1,85 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: holdout-sen2cor-backfill
+  namespace: prithvi-training-default
+  labels:
+    app: ensemble-prep
+    purpose: holdout-sen2cor-backfill
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 172800
+  template:
+    metadata:
+      labels:
+        app: ensemble-prep
+        purpose: holdout-sen2cor-backfill
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values: ["NVIDIA-GeForce-RTX-2080-Ti"]
+      containers:
+        - name: pipeline
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin >/dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow pystac-client openeo torch
+
+              git clone --depth 1 --branch agent/te/opus/nfi-nmd2023-benchmark \
+                https://github.com/TobiasEdman/ImintEngine.git /workspace/imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine
+              DATA=/data/holdout_val_512
+
+              echo "=== holdout frame_2016 L1C -> Sen2Cor ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir "$DATA" --target frame_2016 \
+                --year 2016 --fallback-year 2015 --workers 16 \
+                --out /data/debug/holdout_sen2cor_frame2016_plan.json
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/holdout_sen2cor_frame2016_plan.json \
+                --data-dir "$DATA" --safe-cache /data/sen2cor_cache \
+                --cot-max 8.0 --workers 4 --device cuda
+
+              echo "=== holdout 2018 slot:0 autumn-2017 repair ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir "$DATA" --target slot:0 \
+                --year 2017 --workers 16 \
+                --out /data/debug/holdout_sen2cor_slot0_2017_plan.json
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan /data/debug/holdout_sen2cor_slot0_2017_plan.json \
+                --data-dir "$DATA" --safe-cache /data/sen2cor_cache \
+                --target slot:0 --cot-max 10.0 --workers 4 --device cuda
+              echo "=== holdout Sen2Cor backfill complete: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: CDSE_USER
+              valueFrom:
+                secretKeyRef: { name: cdse-credentials, key: user, optional: true }
+            - name: CDSE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: cdse-credentials, key: password, optional: true }
+          resources:
+            requests: { cpu: "24", memory: "64Gi" }
+            limits: { cpu: "24", memory: "64Gi", nvidia.com/gpu: "1" }
+          volumeMounts:
+            - { name: training-data, mountPath: /data }
+      volumes:
+        - name: training-data
+          persistentVolumeClaim: { claimName: training-data-cephfs }

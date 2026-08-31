@@ -37,7 +37,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import sys
 import threading
@@ -53,29 +52,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 TESSERA_DIM = 128
 
 
-def _infer_tile_year(data: dict) -> int | None:
-    """Pick the year matching this tile's label data.
+# Year derivation is centralised in imint.training.tile_fetch so the S1
+# enricher, the label builder and this module can never drift apart.
+from imint.training.tile_fetch import (  # noqa: E402
+    clean_stale_tile_tmps,
+    infer_tile_year as _infer_tile_year,
+    list_tile_paths,
+)
 
-    Priority: ``year`` key → ``lpis_year`` → first valid date → None.
-    """
-    if "year" in data:
-        try:
-            return int(data["year"])
-        except Exception:
-            pass
-    if "lpis_year" in data:
-        try:
-            return int(data["lpis_year"])
-        except Exception:
-            pass
-    for d in data.get("dates", []):
-        s = str(d)
-        if s and len(s) >= 4:
-            try:
-                return int(s[:4])
-            except ValueError:
-                continue
-    return None
+
+# Years with tested TESSERA coverage. Module-level so the enrich path and the
+# year-aware skip clamp identically — comparing a raw year against a stored
+# (clamped) one would re-fetch out-of-range tiles on every run.
+TESSERA_YEARS = (2018, 2019, 2020, 2021, 2022, 2023, 2024)
 
 
 def _clamp_year_for_tessera(year: int, available_years: tuple[int, ...]) -> int:
@@ -216,8 +205,16 @@ def enrich_one_tile(tile_path: str, gt, skip_existing: bool = True) -> dict:
     except Exception as e:
         return {"name": name, "status": "failed", "reason": str(e)[:120]}
 
+    # Year-aware skip: an existing embedding is only valid if it was fetched
+    # for the year this tile's truth refers to. Tiles enriched before the
+    # year-0 fix carry a year-1 embedding and MUST be re-fetched; a
+    # has_tessera-only check would silently keep the wrong year forever.
     if skip_existing and int(data.get("has_tessera", 0)) == 1:
-        return {"name": name, "status": "skipped"}
+        want = _infer_tile_year(data)
+        have = data.get("tessera_year")
+        if want is not None and have is not None and \
+                int(have) == _clamp_year_for_tessera(int(want), TESSERA_YEARS):
+            return {"name": name, "status": "skipped"}
 
     spectral = data.get("spectral")
     if spectral is None:
@@ -236,8 +233,7 @@ def enrich_one_tile(tile_path: str, gt, skip_existing: bool = True) -> dict:
     if year is None:
         return {"name": name, "status": "failed", "reason": "no_year"}
 
-    tessera_years = (2018, 2019, 2020, 2021, 2022, 2023, 2024)
-    tessera_year = _clamp_year_for_tessera(year, tessera_years)
+    tessera_year = _clamp_year_for_tessera(year, TESSERA_YEARS)
 
     try:
         emb, n_used = _fetch_tessera_for_tile(
@@ -420,9 +416,10 @@ def main():
     )
     args = p.parse_args()
 
-    tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
-    if args.max_tiles:
-        tiles = tiles[:args.max_tiles]
+    stale = clean_stale_tile_tmps(args.data_dir)
+    if stale:
+        print(f"  Cleaned {len(stale)} stale .tmp.npz file(s) from prior runs")
+    tiles = list_tile_paths(args.data_dir, limit=args.max_tiles)
     print(f"=== TESSERA Enrichment ===")
     print(f"  Tiles: {len(tiles)}")
     print(f"  Workers: {args.workers}")
