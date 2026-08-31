@@ -80,6 +80,15 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
 </div>
 
 <div class="panel">
+  <h2>Distillability — head OOF on the pinned NFI plot set</h2>
+  <table id="distill"></table>
+  <div class="foot">The ladder's ONE cross-backbone number: a pinned-protocol MLP head reads each
+    column's frozen rung-2 features and predicts field-inventoried forest type; 5-fold out-of-fold
+    accuracy on the shared plot set. Baseline 0.493 = NMD2023 itself at the same plots.
+    <span id="parity"></span></div>
+</div>
+
+<div class="panel">
   <h2>All runs — every curve on one axis</h2>
   <div class="h2h-controls">
     <select id="rungFilter">
@@ -132,6 +141,11 @@ const MODEL_COLORS = {prithvi600m:"#60a5fa", prithvi300m:"#a78bfa", croma:"#f472
 const RUNG_DASH = {1:"5,4", 2:"", 3:"1,3", 4:"9,3,2,3"};
 
 let DATA = {};   // "model_rN" -> log | null
+let DSTL = {};   // model -> distillability json | null
+// nfi_head_cv.py BASELINES: NMD2023's own 5-class field accuracy at the
+// same plots — the number a column's features must beat to claim the
+// model knows more forest type than the map it was trained on.
+const NMD2023_BASELINE = 0.493;
 const hidden = new Set();   // legend-toggled run keys, excluded from the chart
 
 const key = (m,n) => `${m}_r${n}`;
@@ -144,6 +158,13 @@ async function loadAll() {
       const res = await fetch(`data/${k}/training_log.json?t=${Date.now()}`);
       DATA[k] = res.ok ? await res.json() : null;
     } catch { DATA[k] = null; }
+  })).concat(MODELS.map(async m => {
+    // Distill-stage output (served via the /www/ladder/distill symlink);
+    // 404 until that column's distill job has passed its OOF step.
+    try {
+      const res = await fetch(`distill/${m}_r2_distillability.json?t=${Date.now()}`);
+      DSTL[m] = res.ok ? await res.json() : null;
+    } catch { DSTL[m] = null; }
   })));
 }
 
@@ -294,6 +315,51 @@ function fillSelects() {
     else if (live[0]) s.value = live[0].k;
     s.onchange = () => { s.dataset.touched = "1"; renderH2H(); };
   }
+}
+
+function renderDistill() {
+  const rows = [
+    ["OOF accuracy", d => d.heads?.mlp?.overall_accuracy_5class, true],
+    ["kappa",        d => d.heads?.mlp?.cohen_kappa, false],
+    ["Δ NMD2023",    d => {
+      const v = d.heads?.mlp?.overall_accuracy_5class;
+      return typeof v === "number" ? v - NMD2023_BASELINE : undefined;
+    }, false],
+  ];
+  let h = "<thead><tr><th></th>" + MODELS.map(m=>`<th>${LABELS[m]}</th>`).join("")
+        + "</tr></thead><tbody>";
+  // Best OOF among landed columns gets the highlight — this is the ladder's
+  // actual cross-backbone ranking, unlike the mIoU matrix above.
+  const landed = MODELS.filter(m => DSTL[m]);
+  const best = Math.max(...landed.map(m => DSTL[m].heads?.mlp?.overall_accuracy_5class ?? -1));
+  for (const [name, get, isAcc] of rows) {
+    h += `<tr><td class="rung-label">${name}</td>`;
+    for (const m of MODELS) {
+      const d = DSTL[m];
+      const v = d ? get(d) : undefined;
+      if (typeof v !== "number") { h += `<td class="delta flat">—</td>`; continue; }
+      if (name === "Δ NMD2023") {
+        const cls = v > 0 ? "up" : v < 0 ? "down" : "flat";
+        h += `<td class="delta ${cls}">${v>0?"+":""}${v.toFixed(3)}</td>`;
+      } else {
+        const lead = isAcc && v === best && landed.length > 1;
+        h += `<td class="stat"${lead ? ' style="color:#4ade80;font-weight:700"' : ""}>${v.toFixed(4)}</td>`;
+      }
+    }
+    h += "</tr>";
+  }
+  document.getElementById("distill").innerHTML = h + "</tbody>";
+
+  // Protocol parity: the cross-backbone claim is valid ONLY while every
+  // landed column scored the identical truth vector (same plots, same y,
+  // therefore same folds). The y-hash travels in each JSON's _meta.
+  const el = document.getElementById("parity");
+  const hashes = landed.map(m => DSTL[m]._meta?.y_sha256).filter(Boolean);
+  if (hashes.length < 2) { el.textContent = ""; return; }
+  const uniq = new Set(hashes);
+  el.innerHTML = uniq.size === 1
+    ? ` <span class="up">· protocol parity ✓ — ${hashes.length}/${MODELS.length} columns, identical y-hash</span>`
+    : ` <span class="down">· PARITY BROKEN — ${uniq.size} different y-hashes across columns; cross-column comparison invalid</span>`;
 }
 
 /** Runs matching the rung filter that have at least one epoch on disk. */
@@ -447,7 +513,7 @@ function renderH2H() {
 
 async function tick() {
   await loadAll();
-  renderMatrix(); renderDeltas(); renderAll(); fillSelects(); renderH2H();
+  renderMatrix(); renderDeltas(); renderDistill(); renderAll(); fillSelects(); renderH2H();
   document.getElementById("updated").textContent =
     "· refreshed " + new Date().toLocaleTimeString();
 }
