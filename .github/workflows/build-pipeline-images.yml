@@ -137,7 +137,14 @@ jobs:
             ${{ matrix.context }}
           case "${{ matrix.image }}" in
             cloud-models)
-              docker run --rm smoke-${{ matrix.image }}:test python -c "import torch, s2cloudless; print('torch', torch.__version__)"
+              # --entrypoint krävs: imagen har ENTRYPOINT satt, så bara
+              # "python -c ..." skulle bli ARGUMENT till driver-skriptet.
+              docker run --rm --entrypoint python smoke-${{ matrix.image }}:test -c "import torch, s2cloudless; print('torch', torch.__version__)"
+              # ...och entrypoint-filen måste finnas och kompilera (den
+              # COPY:ades aldrig in före 2026-08-31 — byggena var gröna
+              # medan varje docker run var död). Ingen --help: drivern
+              # läser /work/in villkorslöst, så det vore en riktig körning.
+              docker run --rm --entrypoint python smoke-${{ matrix.image }}:test -c "import py_compile; py_compile.compile('/opt/runner/run_cloud_models.py', doraise=True); print('driver ok')"
               ;;
             c2rcc-snap)
               # Verifiera SNAP 13 + c2rcc.msi-operator. Smoke-test ENBART av
