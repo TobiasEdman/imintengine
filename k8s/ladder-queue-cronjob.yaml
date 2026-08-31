@@ -101,7 +101,7 @@ spec:
                   # other in-cluster job clones, so a regenerated manifest is
                   # picked up on the next tick with no redeploy.
                   git clone --quiet --depth 1 \
-                    --branch agent/te/opus/nfi-nmd2023-benchmark \
+                    --branch main \
                     https://github.com/TobiasEdman/ImintEngine.git /w
                   cd /w
                   echo "CLONED HEAD: $(git rev-parse --short HEAD)"
