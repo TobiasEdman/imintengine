@@ -120,18 +120,17 @@ def test_distill_manifests_are_generated_and_current() -> None:
     assert res.returncode == 0, f"stale generated manifests:\n{res.stdout}"
 
 
-@pytest.mark.parametrize("model", MODELS)
-@pytest.mark.parametrize("step", ["extract_plot_features.py",
-                                  "distill_forest_labels.py"])
-def test_distill_gpu_steps_enable_markfukt(model: str, step: str) -> None:
-    """The rung-2 checkpoints are 11-aux models; --enable-markfukt is a
-    store_true, so its ABSENCE is silent on the extract (wrong features)
-    and fatal-per-tile on the dense pass (input conv rejects 10-aux).
-    BOTH GPU steps must carry it — the dense pass originally didn't."""
-    text = _distill_manifest(model)
-    seg = text.split(step)[1].split("echo")[0]
-    assert "--enable-markfukt" in seg, (
-        f"{model}: {step} step missing --enable-markfukt")
+@pytest.mark.parametrize("script", ["extract_plot_features.py",
+                                    "distill_forest_labels.py"])
+def test_distill_scripts_read_aux_from_checkpoint(script: str) -> None:
+    """Aux channel sets are PER-COLUMN model properties (terramind's r2
+    carries 13: the usual 11 plus delta_vv/delta_vh ΔSAR) — rebuilding
+    them from CLI flags is how terramind's extract died on a 13-vs-11
+    conv mismatch. Both GPU scripts must read enabled_aux_names from the
+    checkpoint's saved config; the flag is only a pre-config fallback."""
+    src = (ROOT / "scripts" / script).read_text()
+    assert "enabled_aux_names" in src, (
+        f"{script}: does not read the checkpoint's enabled_aux_names")
 
 
 @pytest.mark.parametrize("model", MODELS)
