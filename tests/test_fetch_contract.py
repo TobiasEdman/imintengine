@@ -239,7 +239,10 @@ class TestBackfillVppForce:
         np.savez(npz,
                  spectral=np.zeros((6, 4, 4), np.float32),
                  bbox_3006=np.array([0, 0, 40, 40], np.int32),
-                 tessera_year=np.int32(2020),
+                 year=np.int32(2021),       # canonical year-0; tessera_year
+                 tessera_year=np.int32(2020),  # alone is deliberately ignored
+                 vpp_year=np.int32(2021),   # year-aware skip: unstamped
+                 # present-VPP is deliberately re-fetched (pre-year-0 tiles)
                  **{f"vpp_{n}": ones for n in
                     ("sosd", "eosd", "length", "maxv", "minv")})
         return npz

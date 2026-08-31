@@ -214,5 +214,5 @@ class TestFallbackWiring:
         with tempfile.TemporaryDirectory() as d:
             monkeypatch.setenv("VPP_SOURCE", "wekeo")
             monkeypatch.setenv("VPP_WEKEO_DIR", d)  # empty — no index.json
-            with pytest.raises(RuntimeError, match="no WEkEO cache"):
+            with pytest.raises(RuntimeError, match="no covering WEkEO cache"):
                 cdse_vpp.fetch_vpp_tiles(0.0, 0.0, 1.0, 1.0, size_px=32)

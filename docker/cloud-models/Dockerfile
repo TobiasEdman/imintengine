@@ -34,4 +34,8 @@ RUN pip install \
         scipy
 
 WORKDIR /opt/runner
+# The driver the ENTRYPOINT names — never copied in before 2026-08-31,
+# so every `docker run` of this image died with "can't open file"
+# (caught by the CI smoke-test, red on every run of this workflow).
+COPY run_cloud_models.py /opt/runner/run_cloud_models.py
 ENTRYPOINT ["python", "/opt/runner/run_cloud_models.py"]
