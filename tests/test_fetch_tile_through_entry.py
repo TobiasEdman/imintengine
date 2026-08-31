@@ -156,7 +156,7 @@ class TestFetchTileThroughEntry:
         monkeypatch.setattr(fut, "fetch_nmd_label_local",
                             lambda bbox, tile: np.zeros((8, 8), np.uint8))
         monkeypatch.setattr(fut, "fetch_aux_channels",
-                            lambda bbox, tile: {"dem": np.zeros((8, 8), np.float32)})
+                            lambda bbox, tile, **k: {"dem": np.zeros((8, 8), np.float32)})
 
     def test_saves_split_layout(self, tmp_path, monkeypatch):
         tile = TileConfig(size_px=512)
@@ -260,7 +260,7 @@ class TestFetchTileThroughEntry:
         r = fut.fetch_tile(self._loc(tile, year=2022), ["2022"], str(tmp_path),
                            tile, vpp_cache={"tile_test": _VPP})
         assert r["status"] == "failed"
-        assert r["reason"] == "no_scenes"
+        assert r["reason"] == "no_scenes"   # zero slots at all — pre-screen path
         assert not (tmp_path / "tile_test.npz").exists()
 
     def test_all_temporal_frames_empty_fails(self, tmp_path, monkeypatch):
@@ -276,7 +276,7 @@ class TestFetchTileThroughEntry:
         r = fut.fetch_tile(self._loc(tile, year=2022), ["2022"], str(tmp_path),
                            tile, vpp_cache={"tile_test": _VPP})
         assert r["status"] == "failed"
-        assert r["reason"] == "no_scenes"
+        assert r["reason"] == "no_dates_slots_[1, 2, 3]"  # 1b1a196: slot-screen early-exit names the empty slots
         assert not (tmp_path / "tile_test.npz").exists()
 
 
