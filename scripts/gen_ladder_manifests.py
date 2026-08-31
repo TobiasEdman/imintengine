@@ -71,12 +71,15 @@ RUNGS = {
 # garbage. sar_cohort marks the two columns whose trainable tiles are the
 # s1_vv_vh subset; their dense pass pre-filters to exactly that cohort.
 DISTILL = {
-    "prithvi300m": {"img_size": 496, "sar_cohort": False},
-    "prithvi600m": {"img_size": 504, "sar_cohort": False},
-    "croma": {"img_size": 504, "sar_cohort": True},
-    "terramind": {"img_size": 496, "sar_cohort": True},
-    "tessera": {"img_size": 504, "sar_cohort": False},
-    "clay": {"img_size": 504, "sar_cohort": False},
+    "prithvi300m": {"img_size": 496, "backbone": "prithvi_300m",
+                    "sar_cohort": False},
+    "prithvi600m": {"img_size": 504, "backbone": "prithvi_600m",
+                    "sar_cohort": False},
+    "croma": {"img_size": 504, "backbone": "croma_base", "sar_cohort": True},
+    "terramind": {"img_size": 496, "backbone": "terramind_v1_base",
+                  "sar_cohort": True},
+    "tessera": {"img_size": 504, "backbone": "tessera_v1", "sar_cohort": False},
+    "clay": {"img_size": 504, "backbone": "clay_v1_5", "sar_cohort": False},
 }
 
 # One Job per column, three script steps + the distillability OOF, all
@@ -94,7 +97,11 @@ metadata:
   labels: {{ app: unified-training, purpose: ladder-distill, model: {model} }}
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 43200
+  # Budget: dense pass = 7882 tiles (optical) x 1-5 s/tile on a 2080ti
+  # (forward + cephfs np.load + 256-ch upsample + per-pixel matmul)
+  # = 2.2-11 h, plus extract (~0.5 h) and CPU steps. 24 h leaves ~2x
+  # headroom over the pessimistic end; the deadline only caps runaway.
+  activeDeadlineSeconds: 86400
   ttlSecondsAfterFinished: 172800
   template:
     metadata:
@@ -140,6 +147,7 @@ spec:
                 --checkpoint "$CKPT" \\
                 --plot-index /cephfs/nfi/nfi_index_unified_v2_512.parquet \\
                 --img-size {img_size} \\
+                --backbone-name {backbone} \\
                 --enable-markfukt \\
                 --out /cephfs/distill/heads/{model}_r2_plot_features.parquet \\
                 --device cuda
@@ -166,7 +174,9 @@ spec:
                 --data-dir /cephfs/unified_v2_512 \\
                 --label-dir /cephfs/nmd2023_labels \\
                 --out-dir "$OUT" \\
-                --img-size {img_size} \\{sar_filter}
+                --img-size {img_size} \\
+                --backbone-name {backbone} \\
+                --enable-markfukt \\{sar_filter}
                 --device cuda
 
               echo ""
@@ -247,7 +257,8 @@ def render_distill(model: str) -> str:
         f"# Plan: docs/experiments/ladder_distill_stage.md\n"
     )
     return header + DISTILL_TEMPLATE.format(
-        model=model, img_size=cfg["img_size"], sar_filter=sar_filter)
+        model=model, img_size=cfg["img_size"], backbone=cfg["backbone"],
+        sar_filter=sar_filter)
 
 EPOCHS = 30  # fixed across the ladder: see the doc's "Controls"
 

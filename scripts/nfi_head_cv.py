@@ -24,6 +24,7 @@ fixed baselines NMD2023=0.493 and v8b=0.465.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -160,6 +161,12 @@ def main() -> None:
             "features": args.features, "n_plots": n, "folds": args.folds,
             "seed": SEED, "class_support": class_counts, "baselines": BASELINES,
             "pinned_plots": pinned_meta,
+            # Fold identity across columns rests on y being identical
+            # (StratifiedKFold depends only on (n, y)). Nothing else
+            # cross-checks that — comparing this hash between two columns'
+            # outputs makes any divergence (NaN handling, a dominant-frac
+            # override) detectable instead of silent.
+            "y_sha256": hashlib.sha256(y.tobytes()).hexdigest()[:16],
         },
         "heads": {},
     }

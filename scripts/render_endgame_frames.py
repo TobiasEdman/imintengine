@@ -61,8 +61,12 @@ def main() -> None:
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu")
 
+    # img_size must reach load_model too: clay/croma carry no pos_embed and
+    # otherwise get BUILT at a 224 grid while run_inference feeds --img-size
+    # tiles (the mirror of the omission fixed in the distill scripts).
     model, epoch, miou, _ = infcmp.load_model(
-        args.checkpoint, device, backbone_name=args.backbone_name)
+        args.checkpoint, device, backbone_name=args.backbone_name,
+        img_size=args.img_size)
     print(f"[load_model] epoch={epoch} mIoU={miou}")
     pred = infcmp.run_inference(model, args.tile, device, img_size=args.img_size)
     pred = np.asarray(pred)

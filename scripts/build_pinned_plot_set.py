@@ -43,19 +43,25 @@ import pandas as pd
 REQUIRED_KEYS = ("s1_vv_vh",)
 
 
-def npz_has_keys(path: Path, keys: tuple[str, ...]) -> bool:
-    """Membership test on the npz's zip directory — no array is loaded.
+def npz_key_names(path: Path) -> set[str] | None:
+    """Array names in the npz's zip directory — no array is loaded.
 
-    An unreadable tile counts as not qualifying rather than raising: the
-    pinned set must under-claim, never over-claim, because a pinned plot
-    that later fails extraction aborts that column's distillability run.
+    Returns ``None`` for an unreadable file so callers can tell "readable
+    but lacks the key" from "cannot be read at all". The two must not be
+    conflated: the first legitimately shrinks a SAR cohort, the second is
+    a PVC problem that silently degrading the pinned set would hide.
     """
     try:
         with zipfile.ZipFile(path) as zf:
-            names = set(zf.namelist())
+            return {n[:-4] for n in zf.namelist() if n.endswith(".npy")}
     except (OSError, zipfile.BadZipFile):
-        return False
-    return all(f"{k}.npy" in names for k in keys)
+        return None
+
+
+def npz_has_keys(path: Path, keys: tuple[str, ...]) -> bool:
+    """True iff the npz is readable and carries every key."""
+    names = npz_key_names(path)
+    return names is not None and all(k in names for k in keys)
 
 
 def main() -> None:
@@ -81,13 +87,30 @@ def main() -> None:
     tiles = sorted(df["tile_name"].unique().tolist())
     qualifying: set[str] = set()
     missing_file = 0
+    unreadable: list[str] = []
     for name in tiles:
         path = data_dir / f"{name}.npz"
         if not path.exists():
             missing_file += 1
             continue
-        if npz_has_keys(path, REQUIRED_KEYS):
+        names = npz_key_names(path)
+        if names is None:
+            unreadable.append(name)
+            continue
+        if all(k in names for k in REQUIRED_KEYS):
             qualifying.add(name)
+
+    # An unreadable tile is a PVC problem, not a cohort property. Folding it
+    # into the SAR-less remainder would shrink the pinned set silently —
+    # every column would then compute an internally consistent
+    # "controlled" distillability number over a degraded population, which
+    # is worse than no number. Fail; rerun after the tiles are fixed.
+    if unreadable:
+        raise SystemExit(
+            f"{len(unreadable)}/{len(tiles)} indexed tiles are unreadable "
+            f"(first: {unreadable[:10]}). The pinned set must not be built "
+            f"on a degraded PVC — fix or exclude these from the plot index "
+            f"first.")
 
     kept = df[df["tile_name"].isin(qualifying)]
     # Canonical order — every consumer sorts the same way, so the fold
@@ -107,6 +130,7 @@ def main() -> None:
         "n_tiles_indexed": len(tiles),
         "n_tiles_qualifying": len(qualifying),
         "n_tiles_missing_file": missing_file,
+        "n_tiles_unreadable": 0,  # nonzero aborts above; recorded as attestation
         "n_plots_indexed": int(len(df)),
         "n_plots_pinned": len(plots),
         "plots": plots,

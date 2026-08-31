@@ -376,6 +376,10 @@ function renderAll() {
   for (let i=1;i<ends.length;i++) {
     if (ends[i].y - ends[i-1].y < 11) ends[i].y = ends[i-1].y + 11;
   }
+  // The nudge is down-only; at 24 curves the stack can walk off the plot.
+  // Shift the whole stack back up if it overflowed, then clamp the top.
+  const overflow = ends.length ? ends[ends.length-1].y - (H - P.b - 2) : 0;
+  if (overflow > 0) for (const e of ends) e.y = Math.max(P.t + 8, e.y - overflow);
   for (const e of ends) {
     g += `<text x="${W-P.r+6}" y="${(e.y+3.5).toFixed(1)}" fill="${MODEL_COLORS[e.o.m]}" font-size="10.5">`
        + `${LABELS[e.o.m]}${filter==="all" ? ` r${e.o.n}` : ""}</text>`;
