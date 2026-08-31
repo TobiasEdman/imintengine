@@ -276,3 +276,51 @@ def test_pipeline_images_have_run_script() -> None:
         f"{missing}. Lägg till minst en av: run.sh, Makefile, README.md, "
         f"eller en *.py-fil med entry-point."
     )
+
+
+def test_no_nfi_plot_coordinates_tracked() -> None:
+    """NFI plot coordinates must NEVER enter this (public) repo.
+
+    Riksskogstaxeringen permanent-plot locations are protected under SLU's
+    data terms — publishing them would breach the agreement, and a public
+    git history cannot be unpublished. `.gitignore` covers `data/nfi/`,
+    but `git add -f` bypasses ignores and other data/ subdirs are already
+    force-added, so the ignore is convention; THIS test is the guard.
+
+    Two rings: nothing under data/nfi/ may be tracked, and no tracked
+    parquet anywhere may carry NFI plot-coordinate columns.
+    """
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files"],
+        capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+
+    under_nfi = [f for f in tracked if f.startswith("data/nfi/")]
+    assert not under_nfi, (
+        f"PROTECTED NFI data tracked in a public repo: {under_nfi}. "
+        f"Remove immediately (git rm --cached) and scrub history before "
+        f"the next push."
+    )
+
+    pd = pytest.importorskip("pandas")
+    coord_cols = {"Easting", "Northing"}
+    offenders: list[str] = []
+    for f in tracked:
+        if not f.endswith(".parquet"):
+            continue
+        path = REPO / f
+        if not path.exists():
+            continue
+        try:
+            cols = set(pd.read_parquet(path).columns)
+        except Exception:
+            continue  # unreadable parquet is another test's problem
+        if coord_cols <= cols and {"TractID", "PlotID"} & cols:
+            offenders.append(f)
+    assert not offenders, (
+        f"Tracked parquet(s) carry NFI plot coordinates "
+        f"(Easting/Northing + plot ids): {offenders}. These are protected "
+        f"under SLU terms and the repo is public."
+    )

@@ -28,13 +28,21 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 # Every script that loads a checkpoint and then runs inference at a chosen
-# --img-size. infer_tiles.py is the reference call shape; the two distill
-# scripts are the ones that were missing it.
+# --img-size. infer_tiles.py is the reference call shape. The two distill
+# scripts originally lacked img_size; render_endgame_frames.py had the
+# MIRROR bug (backbone_name but no img_size). Review 2026-08-31 raised the
+# bar to BOTH kwargs: img_size because clay/croma carry no pos_embed and
+# otherwise get built at a 224 grid; backbone_name because
+# checkpoint-only resolution silently defaults to prithvi_300m when the
+# saved config lacks the field (pre-2026-08-24 trainer) — working by
+# accident of checkpoint recency is not a contract.
 SCRIPTS_REQUIRING_IMG_SIZE = [
     "extract_plot_features.py",
     "distill_forest_labels.py",
     "infer_tiles.py",
+    "render_endgame_frames.py",
 ]
+REQUIRED_LOAD_MODEL_KWARGS = ("img_size", "backbone_name")
 
 
 def _load_model_calls(path: Path) -> list[ast.Call]:
@@ -58,11 +66,13 @@ def test_load_model_receives_img_size(script: str) -> None:
 
     for call in calls:
         kwargs = {kw.arg for kw in call.keywords if kw.arg}
-        assert "img_size" in kwargs, (
-            f"{script}:{call.lineno} calls load_model without img_size. "
-            f"Clay and CROMA will be built at a 224 grid and then fed "
-            f"full-size tiles, silently. Pass img_size=args.img_size."
-        )
+        for req in REQUIRED_LOAD_MODEL_KWARGS:
+            assert req in kwargs, (
+                f"{script}:{call.lineno} calls load_model without {req}. "
+                f"img_size: clay/croma get built at a 224 grid and fed "
+                f"full-size tiles. backbone_name: a checkpoint lacking the "
+                f"field silently resolves to prithvi_300m."
+            )
 
 
 @pytest.mark.parametrize("script", ["extract_plot_features.py",
@@ -111,14 +121,34 @@ def test_distill_manifests_are_generated_and_current() -> None:
 
 
 @pytest.mark.parametrize("model", MODELS)
-def test_distill_extract_enables_markfukt(model: str) -> None:
+@pytest.mark.parametrize("step", ["extract_plot_features.py",
+                                  "distill_forest_labels.py"])
+def test_distill_gpu_steps_enable_markfukt(model: str, step: str) -> None:
     """The rung-2 checkpoints are 11-aux models; --enable-markfukt is a
-    store_true, so its ABSENCE is silent and would extract features from a
-    differently-shaped input. Load-bearing for every column."""
+    store_true, so its ABSENCE is silent on the extract (wrong features)
+    and fatal-per-tile on the dense pass (input conv rejects 10-aux).
+    BOTH GPU steps must carry it — the dense pass originally didn't."""
     text = _distill_manifest(model)
-    extract = text.split("extract_plot_features.py")[1].split("echo")[0]
-    assert "--enable-markfukt" in extract, (
-        f"{model}: extract step missing --enable-markfukt")
+    seg = text.split(step)[1].split("echo")[0]
+    assert "--enable-markfukt" in seg, (
+        f"{model}: {step} step missing --enable-markfukt")
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_distill_gpu_steps_pin_backbone_name(model: str) -> None:
+    """Both GPU steps must pass the column's registry backbone; without it
+    load_model falls back to the checkpoint config, which defaults to
+    prithvi_300m when the field is absent."""
+    expected = {
+        "prithvi300m": "prithvi_300m", "prithvi600m": "prithvi_600m",
+        "croma": "croma_base", "terramind": "terramind_v1_base",
+        "tessera": "tessera_v1", "clay": "clay_v1_5",
+    }[model]
+    text = _distill_manifest(model)
+    for step in ("extract_plot_features.py", "distill_forest_labels.py"):
+        seg = text.split(step)[1].split("echo")[0]
+        assert f"--backbone-name {expected}" in seg, (
+            f"{model}: {step} missing --backbone-name {expected}")
 
 
 @pytest.mark.parametrize("model", MODELS)
@@ -272,3 +302,63 @@ def test_dense_pass_has_a_cohort_gate() -> None:
     short set silently shrinks the rung-3 training set."""
     src = (ROOT / "scripts" / "distill_forest_labels.py").read_text()
     assert "sidecar gate" in src and "SystemExit" in src
+
+
+def test_sidecar_provenance_detects_stale_head(tmp_path: Path) -> None:
+    """Resume-after-abort with a retrained head must REWRITE, not skip.
+
+    The exists-check originally keyed on file presence alone, so a rerun
+    counted an earlier head's sidecars as done and rungs 3/4 trained on a
+    silent mix of two heads' labels. sidecar_is_current is the fix: only
+    a matching head_sha stamp counts as done; no stamp (pre-provenance
+    file) or a different stamp is stale.
+    """
+    np = pytest.importorskip("numpy")
+    dfl = _load_script("distill_forest_labels")
+
+    current = tmp_path / "current.npz"
+    np.savez(current, label=np.zeros((2, 2)), head_sha=np.str_("abc123"))
+    stale = tmp_path / "stale.npz"
+    np.savez(stale, label=np.zeros((2, 2)), head_sha=np.str_("OLDHEAD"))
+    unstamped = tmp_path / "unstamped.npz"
+    np.savez(unstamped, label=np.zeros((2, 2)))
+    corrupt = tmp_path / "corrupt.npz"
+    corrupt.write_bytes(b"not a zip")
+
+    assert dfl.sidecar_is_current(str(current), "abc123") is True
+    assert dfl.sidecar_is_current(str(stale), "abc123") is False
+    assert dfl.sidecar_is_current(str(unstamped), "abc123") is False
+    assert dfl.sidecar_is_current(str(corrupt), "abc123") is False
+
+
+def test_pinned_builder_fails_on_unreadable_tile(tmp_path: Path) -> None:
+    """An unreadable tile is a PVC problem, not a cohort property.
+
+    Folding it into the SAR-less remainder would shrink the pinned set
+    silently — six columns would then agree on a distillability number
+    computed over a degraded population. The builder must abort instead.
+    """
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    import subprocess
+    import sys
+
+    tiles = tmp_path / "tiles"
+    tiles.mkdir()
+    np.savez(tiles / "t1.npz", spectral=np.zeros(1), s1_vv_vh=np.zeros(1))
+    (tiles / "t2.npz").write_bytes(b"corrupt")
+
+    idx = tmp_path / "index.parquet"
+    pd.DataFrame({
+        "tile_name": ["t1", "t2"], "TractID": [1, 1], "PlotID": [1, 2],
+    }).to_parquet(idx)
+
+    res = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "build_pinned_plot_set.py"),
+         "--plot-index", str(idx), "--data-dir", str(tiles),
+         "--out", str(tmp_path / "pinned.json")],
+        capture_output=True, text=True)
+    assert res.returncode != 0, "unreadable tile must abort the builder"
+    assert "unreadable" in (res.stdout + res.stderr).lower()
+    assert not (tmp_path / "pinned.json").exists(), (
+        "no pinned set may be written on a degraded PVC")

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import importlib.util
 import os
 import sys
@@ -48,8 +49,13 @@ from pathlib import Path
 
 import numpy as np
 
+# Repo root for imint.*, own dir for sibling scripts. The second insert is
+# what direct execution gets for free (sys.path[0] = script dir) but an
+# importlib load — the test suite — does not.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from build_pinned_plot_set import npz_key_names
 from extract_plot_features import register_preclassifier_hook
 
 FOREST_CLASSES = frozenset({1, 2, 3, 4})  # tall, gran, löv, bland
@@ -73,7 +79,14 @@ def _load_inference_comparison():
 
 
 def load_head(head_path: str) -> dict:
-    """Load the exported distillation head npz into a plain dict of arrays."""
+    """Load the exported distillation head npz into a plain dict of arrays.
+
+    ``head_sha`` (hash of the npz bytes) travels with the dict and is
+    stamped into every sidecar this head produces — the resume path skips
+    an existing sidecar only when its stamp matches. Without it,
+    resume-after-abort with a retrained head silently mixes two heads'
+    labels into the rung-3/4 training target.
+    """
     z = np.load(head_path)
     head = {
         "mean_": z["mean_"].astype(np.float32),
@@ -85,7 +98,23 @@ def load_head(head_path: str) -> dict:
         "classes_": z["classes_"].astype(np.int64),
     }
     assert head["W1"].shape[0] == head["mean_"].shape[0], "head/scaler dim mismatch"
+    head["head_sha"] = hashlib.sha256(
+        Path(head_path).read_bytes()).hexdigest()[:16]
     return head
+
+
+def sidecar_is_current(out_path: str, head_sha: str) -> bool:
+    """True iff an existing sidecar was written by THIS head.
+
+    A sidecar without a stamp (pre-provenance era) or with a different
+    stamp is stale and must be rewritten, not counted as done. Unreadable
+    counts as stale — the rewrite is atomic either way.
+    """
+    try:
+        with np.load(out_path) as z:
+            return "head_sha" in z.files and str(z["head_sha"]) == head_sha
+    except (OSError, ValueError):
+        return False
 
 
 def head_predict_dense(feat_hwc: np.ndarray, head: dict) -> np.ndarray:
@@ -154,20 +183,26 @@ def _atomic_savez(out_path: str, payload: dict) -> None:
 
 
 def process_tile(tile_path: str, model, head: dict, device, img_size: int,
-                 label_dir: str, out_dir: str, infcmp, store) -> dict:
+                 label_dir: str, out_dir: str, infcmp, store,
+                 aux_channel_names=None) -> dict:
     """Distill one tile. Returns a status dict (skip reasons logged by caller)."""
     name = os.path.basename(tile_path).replace(".npz", "")
     out_path = os.path.join(out_dir, name + ".npz")
     if os.path.exists(out_path):
-        return {"name": name, "status": "exists"}
+        if sidecar_is_current(out_path, head["head_sha"]):
+            return {"name": name, "status": "exists"}
+        print(f"    stale sidecar {name} (head changed) — rewriting")
 
     sidecar_path = os.path.join(label_dir, name + ".npz")
     if not os.path.exists(sidecar_path):
         return {"name": name, "status": "no_sidecar"}
 
-    # Forward the tile; the hook captures the 256-ch pre-classifier feature map.
+    # Forward the tile; the hook captures the 256-ch pre-classifier feature
+    # map. aux_channel_names must match the checkpoint's aux count — an
+    # 11-aux (markfukt) model fed the default 10-aux input dies on the
+    # input conv.
     infcmp.run_inference(model, tile_path, device, img_size=img_size,
-                         return_probs=True)
+                         return_probs=True, aux_channel_names=aux_channel_names)
     feat_map = store["feat"]
     if feat_map is None:
         return {"name": name, "status": "no_feature"}
@@ -188,17 +223,18 @@ def process_tile(tile_path: str, model, head: dict, device, img_size: int,
 
     new_label, n_over, n_forest = apply_override(orig_label, head_pred, off, crop_sz)
 
-    # Copy every original sidecar key, replace only `label`.
+    # Copy every original sidecar key, replace only `label`; stamp which
+    # head produced this file so a resume can tell current from stale.
     payload = {k: sidecar[k] for k in _SIDECAR_KEYS if k in sidecar}
     payload["label"] = new_label
+    payload["head_sha"] = np.str_(head["head_sha"])
     _atomic_savez(out_path, payload)
 
-    pred_win = head_pred
     return {
         "name": name, "status": "ok",
         "n_over": n_over, "n_forest": n_forest,
         "frac_over": (n_over / n_forest) if n_forest else 0.0,
-        "pred_hist": {int(c): int((pred_win == c).sum())
+        "pred_hist": {int(c): int((head_pred == c).sum())
                       for c in (0, 1, 2, 3, 4)},
     }
 
@@ -212,6 +248,16 @@ def main() -> None:
     ap.add_argument("--label-dir", required=True, help="NMD2023 label sidecars")
     ap.add_argument("--out-dir", required=True, help="distilled sidecar out dir")
     ap.add_argument("--img-size", type=int, default=504)
+    ap.add_argument("--backbone-name", default=None,
+                    help="registry backbone for load_model. Without it, "
+                         "resolution falls back to the checkpoint config; a "
+                         "checkpoint lacking backbone_name (pre-2026-08-24 "
+                         "trainer) silently defaults to prithvi_300m — the "
+                         "wrong backbone entirely for clay/croma")
+    ap.add_argument("--enable-markfukt", action="store_true",
+                    help="forward with the 11th (SLU soil moisture) aux — "
+                         "REQUIRED for checkpoints trained with it; the "
+                         "input conv otherwise rejects the 10-aux tensor")
     ap.add_argument("--device", default=None)
     ap.add_argument("--limit", type=int, default=None, help="smoke: first N tiles")
     ap.add_argument("--require-npz-key", action="append", default=[],
@@ -231,14 +277,17 @@ def main() -> None:
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu")
 
-    # img_size must reach load_model, not just run_inference: clay and croma
-    # carry no pos_embed and omit img_size from their minimal config, so
-    # without it the backbone is BUILT at 224 — wrong grid_size, wrong PSP
-    # pool count — and then fed 504px tiles. Prithvi recovers its size from
-    # pos_embed and is unaffected, which is why this survived the
-    # Prithvi-only era. Same call shape as infer_tiles.py.
+    # BOTH kwargs must reach load_model — the full call shape of
+    # infer_tiles.py:243. img_size: clay/croma carry no pos_embed, so
+    # without it the backbone is BUILT at a 224 grid and then fed 504px
+    # tiles. backbone_name: without it, resolution falls back to the
+    # checkpoint config, and a checkpoint that lacks the field
+    # (pre-2026-08-24 trainer) silently defaults to prithvi_300m — the
+    # wrong backbone entirely. Relying on checkpoint recency is an
+    # accident, not a contract.
     model, epoch, miou, model_img_size = infcmp.load_model(
-        args.checkpoint, device, img_size=args.img_size)
+        args.checkpoint, device, backbone_name=args.backbone_name,
+        img_size=args.img_size)
     print(f"[load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size}")
     if model_img_size != args.img_size:
         print(f"  WARN: --img-size {args.img_size} != model native "
@@ -246,26 +295,33 @@ def main() -> None:
 
     store = register_preclassifier_hook(model)
 
+    aux_names = None
+    if args.enable_markfukt:
+        from imint.training.unified_dataset import AUX_CHANNEL_NAMES
+        aux_names = list(AUX_CHANNEL_NAMES) + ["markfukt"]
+        print(f"markfukt enabled → {len(aux_names)} aux channels")
+
     os.makedirs(args.out_dir, exist_ok=True)
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
+    unreadable: list[str] = []
     if args.require_npz_key:
-        # Cheap zip-directory membership test — no arrays are loaded. This
-        # defines the column's cohort (e.g. the ~6011-tile SAR subset for
-        # croma/terramind) rather than discovering it via a KeyError
-        # mid-run.
-        import zipfile
-
-        def _has_keys(path: str) -> bool:
-            try:
-                with zipfile.ZipFile(path) as zf:
-                    names = set(zf.namelist())
-            except (OSError, zipfile.BadZipFile):
-                return False
-            return all(f"{k}.npy" in names for k in args.require_npz_key)
-
+        # Cheap zip-directory probe (shared with build_pinned_plot_set —
+        # one implementation, not two drifting copies). This defines the
+        # column's cohort (e.g. the ~6011-tile SAR subset) rather than
+        # discovering it via a KeyError mid-run. Unreadable is NOT
+        # "lacks the key": it drops from the cohort here but is carried
+        # to the final gate, so a degraded PVC cannot pass silently.
         before = len(tiles)
-        tiles = [t for t in tiles if _has_keys(t)]
-        print(f"require {args.require_npz_key}: {len(tiles)}/{before} tiles")
+        kept: list[str] = []
+        for t in tiles:
+            names = npz_key_names(Path(t))
+            if names is None:
+                unreadable.append(os.path.basename(t))
+            elif all(k in names for k in args.require_npz_key):
+                kept.append(t)
+        tiles = kept
+        print(f"require {args.require_npz_key}: {len(tiles)}/{before} tiles"
+              + (f" ({len(unreadable)} UNREADABLE)" if unreadable else ""))
     if args.limit:
         tiles = tiles[:args.limit]
     print(f"tiles: {len(tiles)}  →  out {args.out_dir}\n")
@@ -281,7 +337,8 @@ def main() -> None:
         # so contain the failure, keep going, and fail the JOB at the end.
         try:
             res = process_tile(tp, model, head, device, args.img_size,
-                               args.label_dir, args.out_dir, infcmp, store)
+                               args.label_dir, args.out_dir, infcmp, store,
+                               aux_channel_names=aux_names)
         except Exception as exc:  # noqa: BLE001 — summarized + fatal below
             res = {"status": "error", "name": os.path.basename(tp)}
             print(f"  [{i+1}/{len(tiles)}] ERROR {res['name']}: "
@@ -323,13 +380,14 @@ def main() -> None:
     # the k8s Job goes red instead of a short set silently shrinking the
     # rung-3 training set.
     covered = counts["ok"] + counts["exists"]
-    if covered != len(tiles):
+    if covered != len(tiles) or unreadable:
         raise SystemExit(
             f"sidecar gate FAILED: {covered}/{len(tiles)} cohort tiles "
             f"covered (no_sidecar={counts['no_sidecar']} "
             f"no_feature={counts['no_feature']} "
             f"shape_mismatch={counts['shape_mismatch']} "
-            f"error={counts['error']}). Rungs 3/4 must not start.")
+            f"error={counts['error']} unreadable={len(unreadable)}). "
+            f"Rungs 3/4 must not start.")
     print(f"\n  sidecar gate OK: {covered}/{len(tiles)} cohort tiles covered")
 
 
