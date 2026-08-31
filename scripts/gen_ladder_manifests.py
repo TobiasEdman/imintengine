@@ -75,11 +75,18 @@ DISTILL = {
                     "sar_cohort": False},
     "prithvi600m": {"img_size": 504, "backbone": "prithvi_600m",
                     "sar_cohort": False},
-    "croma": {"img_size": 504, "backbone": "croma_base", "sar_cohort": True},
+    "croma": {"img_size": 504, "backbone": "croma_base", "sar_cohort": True,
+              "extra_setup": (
+                  "git clone --depth 1 https://github.com/antofuller/CROMA "
+                  "/workspace/CROMA && pip install --quiet --no-cache-dir "
+                  "-e /workspace/CROMA || true")},
     "terramind": {"img_size": 496, "backbone": "terramind_v1_base",
-                  "sar_cohort": True},
+                  "sar_cohort": True,
+                  "extra_setup": "pip install --quiet --no-cache-dir terratorch"},
     "tessera": {"img_size": 504, "backbone": "tessera_v1", "sar_cohort": False},
-    "clay": {"img_size": 504, "backbone": "clay_v1_5", "sar_cohort": False},
+    "clay": {"img_size": 504, "backbone": "clay_v1_5", "sar_cohort": False,
+             "extra_setup": ("pip install --quiet --no-cache-dir "
+                             "\"git+https://github.com/Clay-foundation/model.git\"")},
 }
 
 # One Job per column, three script steps + the distillability OOF, all
@@ -134,6 +141,10 @@ spec:
               cd /workspace/imintengine
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
               echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              # Per-column backbone deps — the r2 checkpoints cannot even
+              # LOAD without them (terramind: terratorch ImportError killed
+              # the first submission; croma/clay: their loader packages).
+              {extra_setup}
 
               CKPT=/cephfs/checkpoints/ladder/{model}_r2/best_model.pt
               PIN=/cephfs/distill/pinned_plots.json
@@ -265,7 +276,8 @@ def render_distill(model: str) -> str:
     )
     return header + DISTILL_TEMPLATE.format(
         model=model, img_size=cfg["img_size"], backbone=cfg["backbone"],
-        sar_filter=sar_filter)
+        sar_filter=sar_filter,
+        extra_setup=cfg.get("extra_setup", "true  # no extra deps"))
 
 EPOCHS = 30  # fixed across the ladder: see the doc's "Controls"
 

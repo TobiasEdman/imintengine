@@ -41,8 +41,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from validate_against_nfi import accuracy_suite
 
 SEED = 42
-N_FEATURES = 256
-FEATURE_COLS = [f"f{i:03d}" for i in range(N_FEATURES)]
+def feature_cols(df) -> list[str]:
+    """The fNNN columns actually present — the backbone's native feature
+    width (256 for UPerNet families, 128 for tessera) travels with the
+    parquet; a constant here would reject or truncate non-256 columns."""
+    import re
+    cols = sorted(c for c in df.columns if re.fullmatch(r"f\d{3}", c))
+    if not cols:
+        raise SystemExit("no fNNN feature columns in the parquet")
+    return cols
 
 # Fixed reference baselines (seg-model overall_accuracy_5class at these plots).
 BASELINES = {"NMD2023": 0.493, "v8b": 0.465}
@@ -114,10 +121,7 @@ def main() -> None:
     from sklearn.preprocessing import StandardScaler
 
     df = pd.read_parquet(args.features)
-    missing = [c for c in FEATURE_COLS if c not in df.columns]
-    if missing:
-        raise SystemExit(f"features parquet missing {len(missing)} feature cols "
-                         f"(first: {missing[:3]})")
+    FEATURE_COLS = feature_cols(df)
 
     X = df[FEATURE_COLS].to_numpy(dtype=np.float32)
     y = df["nfi_forest"].to_numpy(dtype=np.int64)
@@ -193,7 +197,7 @@ def main() -> None:
         classes_=classes_,
         # provenance
         seed=np.int64(args.seed), n_train_plots=np.int64(len(tr)),
-        hidden=np.int64(128), n_features=np.int64(N_FEATURES),
+        hidden=np.int64(128), n_features=np.int64(len(FEATURE_COLS)),
     )
     print(f"  wrote head → {out_head} "
           f"({out_head.stat().st_size / 1024:.1f} KB)")

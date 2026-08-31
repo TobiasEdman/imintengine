@@ -177,6 +177,19 @@ the **sidecar gate**: `ok + exists == cohort` or exit non-zero, which
 is the plan's "verify the sidecar count matches the cohort count
 before that column proceeds" made mechanical.
 
+**Protocol clarification (2026-08-31, after tessera's first submission):**
+the feature WIDTH is a backbone property, not a protocol constant —
+tessera's classifier reads 128-dim (`final_in = hidden // 2`, verified in
+the r2 checkpoint: `model.classifier.weight (28, 128, 1, 1)`), the UPerNet
+families 256. The pinned protocol therefore fixes the head RECIPE
+(MLP(128,), max_iter, seed, folds, plots, y) on each column's NATIVE
+width, and the width is recorded via the parquet's column count and the
+head npz's `n_features`. Distillability compares "whose representation is
+the better substrate", and dimensionality is part of the representation.
+`find_classifier` locates the class-projection conv per family and
+refuses ambiguity; per-column loader deps (terratorch, CROMA, Clay) ride
+the generated manifests.
+
 **Not resolved here:** the manifests clone the benchmark branch, so
 nothing can be submitted until this work is pushed and merged there.
 Submission order: `distill-pinned-plots` once, then `distill-<model>`

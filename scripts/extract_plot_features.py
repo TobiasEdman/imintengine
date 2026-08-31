@@ -44,7 +44,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from validate_against_nfi import crop_offset, derive_nfi_forest_class
 
-N_FEATURES = 256  # channels feeding head.head.2 (decoder fpn_bottleneck output)
+# Feature width is the classifier's in_channels — a BACKBONE property
+# (256 for the UPerNet families, 128 for tessera), read from the model at
+# runtime and carried by the parquet's column count. Never a constant.
 
 
 def _load_inference_comparison():
@@ -77,12 +79,7 @@ def register_preclassifier_hook(model) -> dict:
     time (see ``_sample_feature``).
     """
     store: dict = {"feat": None}
-
-    classifier = model.head.head[2]
-    if not isinstance(classifier, __import__("torch").nn.Conv2d):
-        raise TypeError(
-            f"expected head.head[2] to be Conv2d, got {type(classifier)!r}"
-        )
+    classifier = find_classifier(model)
 
     def hook(_module, inputs, _output):
         # inputs is a tuple; inputs[0] is the (B, 256, H, W) feature map.
@@ -91,8 +88,53 @@ def register_preclassifier_hook(model) -> dict:
 
     handle = classifier.register_forward_hook(hook)
     store["handle"] = handle
+    store["n_features"] = int(classifier.in_channels)
     return store
 
+
+def find_classifier(model):
+    """The final per-pixel class-projection Conv2d, across all six families.
+
+    The hook predates the multi-backbone ladder and hardcoded Prithvi's
+    ``head.head[2]``. Known per-family paths are tried first so a family
+    refactor fails loudly HERE; then a structural fallback.
+
+    NOTE the in_channels is NOT always 256: tessera's is 128
+    (final_in = hidden // 2). The feature dim is a property of the
+    backbone's head and travels with the export — consumers read the
+    width from the data, never from a constant.
+    """
+    import torch.nn as nn
+
+    # Tessera: its own small head ends in self.classifier.
+    mod = getattr(model, "classifier", None)
+    if isinstance(mod, nn.Conv2d):
+        return mod
+    # Prithvi: model.head.head[2]; croma/terramind/clay wrap the shared
+    # UPerNet as model.decoder_head -> .head.head[2].
+    for holder_name in ("head", "decoder_head"):
+        holder = getattr(model, holder_name, None)
+        for seq in (getattr(holder, "head", None),
+                    getattr(getattr(holder, "head", None), "head", None)):
+            try:
+                m = seq[2]
+            except (TypeError, IndexError, KeyError):
+                continue
+            if isinstance(m, nn.Conv2d):
+                return m
+    # Structural fallback: among 1x1 convs the class projection has the
+    # UNIQUE maximal out_channels (frac/binary heads carry 4/1). Guessing
+    # between ambiguous candidates would silently hook the wrong feature.
+    convs = [m for m in model.modules()
+             if isinstance(m, nn.Conv2d) and m.kernel_size == (1, 1)]
+    if convs:
+        top = max(c.out_channels for c in convs)
+        winners = [c for c in convs if c.out_channels == top]
+        if len(winners) == 1:
+            return winners[0]
+    raise TypeError(
+        f"cannot locate the classifier Conv2d on {type(model).__name__}; "
+        f"1x1 convs seen: {[(c.in_channels, c.out_channels) for c in convs]}")
 
 def _sample_feature(feat_map, rows, cols, crop_sz: int) -> np.ndarray:
     """Sample (N, 256) vectors at input-resolution (row,col) from (1,256,h,w).
@@ -203,7 +245,9 @@ def main() -> None:
 
     store = register_preclassifier_hook(model)
 
-    feat_cols = [f"f{i:03d}" for i in range(N_FEATURES)]
+    n_features = store["n_features"]
+    print(f"  classifier in_channels = {n_features} (native feature width)")
+    feat_cols = [f"f{i:03d}" for i in range(n_features)]
     records: list[dict] = []
 
     for tile_name, grp in index_df.groupby("tile_name", sort=False):
@@ -247,7 +291,7 @@ def main() -> None:
     out_df.to_parquet(out, index=False)
 
     n_by_class = out_df["nfi_forest"].value_counts().sort_index().to_dict()
-    print(f"\nwrote {out} — {len(out_df)} plots × {N_FEATURES} features")
+    print(f"\nwrote {out} — {len(out_df)} plots × {n_features} features")
     print(f"  nfi_forest distribution (−1=treeless): {n_by_class}")
 
 
