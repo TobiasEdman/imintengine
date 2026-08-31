@@ -189,6 +189,10 @@ def test_load_dumps_reproduces_standings_fraction_oa():
     """The fixed harness must reproduce the published fraction OA exactly."""
     import json
     from race_rigor_stats import load_dumps
+    for req in ("data/distill/distill_split.json",
+                "data/nfi/tessera_frac_per_plot.parquet"):
+        if not Path(req).exists():
+            pytest.skip(f"local-data test: {req} absent (gitignored, not in CI)")
     split = json.loads(Path("data/distill/distill_split.json").read_text())
     keep = {str(t) for t in split["test_tiles"]}
     d = load_dumps("data/nfi/tessera_frac_per_plot.parquet", keep_tiles=keep)

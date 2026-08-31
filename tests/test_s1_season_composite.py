@@ -369,7 +369,9 @@ def test_growing_season_prefers_vpp():
 
 def test_tile_year_priority():
     from scripts import enrich_tiles_s1 as enrich
-    assert enrich._tile_year({"lpis_year": 2022, "year": 2020}) == 2022
+    # Canonical order (year-0 arc, 871060e/0857c47): year first — it IS
+    # year-0 — then lpis_year, then modal dates.
+    assert enrich._tile_year({"lpis_year": 2022, "year": 2020}) == 2020
     assert enrich._tile_year({"year": 2019}) == 2019
     assert enrich._tile_year({"dates": np.array(["2021-06-01", ""])}) == 2021
     assert enrich._tile_year({}) is None
