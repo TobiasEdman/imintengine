@@ -63,6 +63,192 @@ RUNGS = {
     4: ("tradslag", "/cephfs/distill/{model}_r2", 28, True),
 }
 
+# Per-column regime for the distillation stage (between rungs 2 and 3).
+# img_size follows the column's training crop — it is part of the backbone's
+# regime, and after the load_model img_size fix (tests/
+# test_distill_stage_wiring.py) it also decides the grid the backbone is
+# BUILT at, which for clay/croma is the difference between features and
+# garbage. sar_cohort marks the two columns whose trainable tiles are the
+# s1_vv_vh subset; their dense pass pre-filters to exactly that cohort.
+DISTILL = {
+    "prithvi300m": {"img_size": 496, "sar_cohort": False},
+    "prithvi600m": {"img_size": 504, "sar_cohort": False},
+    "croma": {"img_size": 504, "sar_cohort": True},
+    "terramind": {"img_size": 496, "sar_cohort": True},
+    "tessera": {"img_size": 504, "sar_cohort": False},
+    "clay": {"img_size": 504, "sar_cohort": False},
+}
+
+# One Job per column, three script steps + the distillability OOF, all
+# reading/writing the shared cephfs PVC. Runs on the 2080ti pool so the
+# distill stage NEVER competes with the H100 memory quota the ladder
+# trainings are packed against. The protocol constants (folds, head, seed,
+# test-frac) are pinned HERE, once, for all six columns — that uniformity
+# IS the distillability experiment; see docs/experiments/
+# ladder_distill_stage.md.
+DISTILL_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-distill-{model}
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-distill, model: {model} }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-distill, model: {model} }}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: distill
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== ladder distill stage — {model} ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \\
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \\
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \\
+                pandas pyarrow rasterio pyproj
+
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \\
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+
+              CKPT=/cephfs/checkpoints/ladder/{model}_r2/best_model.pt
+              PIN=/cephfs/distill/pinned_plots.json
+              OUT=/cephfs/distill/{model}_r2
+              test -f "$CKPT" || {{ echo "FATAL: no rung-2 checkpoint at $CKPT"; exit 1; }}
+              test -f "$PIN"  || {{ echo "FATAL: no pinned plot set at $PIN — run k8s/ladder/distill-pinned-plots-job.yaml first"; exit 1; }}
+              mkdir -p "$OUT" /cephfs/distill/heads
+
+              echo "=== 1/4 extract plot features (rung-2 checkpoint, 11 aux) ==="
+              python3 scripts/extract_plot_features.py \\
+                --checkpoint "$CKPT" \\
+                --plot-index /cephfs/nfi/nfi_index_unified_v2_512.parquet \\
+                --img-size {img_size} \\
+                --enable-markfukt \\
+                --out /cephfs/distill/heads/{model}_r2_plot_features.parquet \\
+                --device cuda
+
+              echo "=== 2/4 distillability — pinned-protocol OOF (the cross-backbone number) ==="
+              python3 scripts/nfi_head_cv.py \\
+                --features /cephfs/distill/heads/{model}_r2_plot_features.parquet \\
+                --folds 5 \\
+                --heads mlp \\
+                --pinned-plots "$PIN" \\
+                --out /cephfs/distill/heads/{model}_r2_distillability.json
+
+              echo "=== 3/4 deployable head (grouped-by-tile split, full plot set) ==="
+              python3 scripts/train_distill_head.py \\
+                --features /cephfs/distill/heads/{model}_r2_plot_features.parquet \\
+                --test-frac 0.2 --seed 42 \\
+                --out-head /cephfs/distill/heads/{model}_r2_head.npz \\
+                --out-split /cephfs/distill/heads/{model}_r2_split.json
+
+              echo "=== 4/4 dense sidecars + cohort gate ==="
+              python3 scripts/distill_forest_labels.py \\
+                --checkpoint "$CKPT" \\
+                --head /cephfs/distill/heads/{model}_r2_head.npz \\
+                --data-dir /cephfs/unified_v2_512 \\
+                --label-dir /cephfs/nmd2023_labels \\
+                --out-dir "$OUT" \\
+                --img-size {img_size} \\{sar_filter}
+                --device cuda
+
+              echo ""
+              echo "=== distill stage complete for {model} — rungs 3/4 may start ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef: {{ name: hf-token, key: token, optional: true }}
+          resources:
+            requests: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+            limits: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+          volumeMounts:
+            - {{ name: cephfs, mountPath: /cephfs }}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+"""
+
+PINNED_PLOTS_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-distill-pinned-plots
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-distill, model: shared }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-distill, model: shared }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: pin
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy pandas pyarrow
+              mkdir -p /workspace && cd /workspace
+              BRANCH=agent/te/opus/nfi-nmd2023-benchmark
+              git clone --depth 1 --branch "$BRANCH" \\
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              python3 scripts/build_pinned_plot_set.py \\
+                --plot-index /cephfs/nfi/nfi_index_unified_v2_512.parquet \\
+                --data-dir /cephfs/unified_v2_512 \\
+                --out /cephfs/distill/pinned_plots.json
+          resources:
+            requests: {{ cpu: "2", memory: "8Gi" }}
+            limits: {{ cpu: "2", memory: "8Gi" }}
+          volumeMounts:
+            - {{ name: cephfs, mountPath: /cephfs }}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+"""
+
+
+def render_distill(model: str) -> str:
+    cfg = DISTILL[model]
+    sar_filter = ("\n                --require-npz-key s1_vv_vh \\"
+                  if cfg["sar_cohort"] else "")
+    header = (
+        f"# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        f"# Distill stage for {model}: r2 checkpoint → plot features →\n"
+        f"# pinned-protocol distillability OOF → deployable head → dense\n"
+        f"# sidecars in /cephfs/distill/{model}_r2 (consumed by rungs 3/4).\n"
+        f"# Prereq: ladder-distill-pinned-plots (once, shared).\n"
+        f"# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + DISTILL_TEMPLATE.format(
+        model=model, img_size=cfg["img_size"], sar_filter=sar_filter)
+
 EPOCHS = 30  # fixed across the ladder: see the doc's "Controls"
 
 # The SLU Markfuktighetskarta soil-moisture aux (11th channel) is opt-in in
@@ -209,29 +395,39 @@ def main() -> int:
                     help="verify the committed manifests match this generator")
     args = ap.parse_args()
 
-    stale: list[str] = []
+    outputs: dict[Path, str] = {}
     for model, base_rel in BASES.items():
         base_text = (REPO / base_rel).read_text()
         for rung in RUNGS:
-            text = render(model, rung, base_text)
             dest = OUT_DIR / f"ladder-r{rung}-{model}-job.yaml"
-            if args.check:
-                if not dest.exists() or dest.read_text() != text:
-                    stale.append(str(dest.relative_to(REPO)))
-                continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(text)
-            print(f"  wrote {dest.relative_to(REPO)}")
+            outputs[dest] = render(model, rung, base_text)
+        outputs[OUT_DIR / f"distill-{model}-job.yaml"] = render_distill(model)
+    outputs[OUT_DIR / "distill-pinned-plots-job.yaml"] = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Pins the shared NFI plot set every column's distillability OOF\n"
+        "# scores. Run ONCE before any distill-<model> job.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+        + PINNED_PLOTS_TEMPLATE.format())
+
+    stale: list[str] = []
+    for dest, text in outputs.items():
+        if args.check:
+            if not dest.exists() or dest.read_text() != text:
+                stale.append(str(dest.relative_to(REPO)))
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text)
+        print(f"  wrote {dest.relative_to(REPO)}")
 
     if args.check:
         if stale:
             print(f"STALE ({len(stale)}): " + ", ".join(stale))
             print("Re-run: python scripts/gen_ladder_manifests.py")
             return 1
-        print(f"all {len(BASES) * len(RUNGS)} ladder manifests up to date")
+        print(f"all {len(outputs)} ladder manifests up to date")
         return 0
 
-    print(f"\n{len(BASES) * len(RUNGS)} manifests in {OUT_DIR.relative_to(REPO)}")
+    print(f"\n{len(outputs)} manifests in {OUT_DIR.relative_to(REPO)}")
     return 0
 
 

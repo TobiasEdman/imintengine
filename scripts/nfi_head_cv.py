@@ -95,6 +95,11 @@ def main() -> None:
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--heads", default="logreg,mlp",
                     help="comma-separated: logreg,mlp")
+    ap.add_argument("--pinned-plots", default=None,
+                    help="pinned_plots.json from build_pinned_plot_set.py; "
+                         "restricts scoring to the shared cross-backbone plot "
+                         "set, in canonical order (the ladder's "
+                         "distillability protocol)")
     ap.add_argument("--out", required=True, help="output JSON path")
     args = ap.parse_args()
 
@@ -103,6 +108,34 @@ def main() -> None:
     if missing:
         raise SystemExit(f"features parquet missing {len(missing)} feature cols "
                          f"(first: {missing[:3]})")
+
+    pinned_meta = None
+    if args.pinned_plots:
+        # Distillability is the ladder's only cross-backbone number, and
+        # StratifiedKFold's folds depend only on (n, y) — so the comparison
+        # is controlled iff every column scores the SAME plots in the SAME
+        # order. Subset to the pinned set, sort canonically, and fail loudly
+        # on ANY missing plot: a silent partial subset would produce a
+        # different fold assignment and quietly break the experiment.
+        pinned = json.loads(Path(args.pinned_plots).read_text())
+        key = ["tile_name", "TractID", "PlotID"]
+        want = pd.DataFrame(pinned["plots"])[key]
+        got = df.merge(want, on=key, how="inner")
+        if len(got) != len(want):
+            have = set(map(tuple, got[key].itertuples(index=False)))
+            lost = [p for p in map(tuple, want.itertuples(index=False))
+                    if p not in have]
+            raise SystemExit(
+                f"features parquet covers {len(got)}/{len(want)} pinned "
+                f"plots — extraction dropped {len(lost)} "
+                f"(first: {lost[:3]}). Distillability MUST score the full "
+                f"pinned set; fix the extract, do not subset further.")
+        df = got.sort_values(key).reset_index(drop=True)
+        pinned_meta = {"path": args.pinned_plots,
+                       "n_plots": len(df),
+                       "required_keys": pinned.get("required_keys")}
+        print(f"pinned to {len(df)} shared plots "
+              f"({args.pinned_plots})")
 
     X = df[FEATURE_COLS].to_numpy(dtype=np.float32)
     # Truth → 5-class suite space: -1 (treeless) → 0 (non-forest).
@@ -126,6 +159,7 @@ def main() -> None:
         "_meta": {
             "features": args.features, "n_plots": n, "folds": args.folds,
             "seed": SEED, "class_support": class_counts, "baselines": BASELINES,
+            "pinned_plots": pinned_meta,
         },
         "heads": {},
     }

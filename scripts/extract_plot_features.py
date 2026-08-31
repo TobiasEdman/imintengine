@@ -177,7 +177,15 @@ def main() -> None:
         aux_names = list(AUX_CHANNEL_NAMES) + ["markfukt"]
         print(f"  markfukt enabled → {len(aux_names)} aux channels")
 
-    model, epoch, miou, model_img_size = infcmp.load_model(args.checkpoint, device)
+    # img_size must reach load_model, not just run_inference: clay and croma
+    # carry no pos_embed and omit img_size from their minimal config, so
+    # without it the backbone is BUILT at 224 — wrong grid_size, wrong PSP
+    # pool count — while run_inference then feeds it 504px tiles. The 256-dim
+    # features this script exists to capture would be taken off a
+    # wrongly-shaped head. Prithvi recovers its size from pos_embed, which is
+    # why this survived the Prithvi-only era. Same call shape as infer_tiles.py.
+    model, epoch, miou, model_img_size = infcmp.load_model(
+        args.checkpoint, device, img_size=args.img_size)
     print(f"  [load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size}")
 
     store = register_preclassifier_hook(model)
