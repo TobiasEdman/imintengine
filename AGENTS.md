@@ -20,3 +20,15 @@ outside this block remain authoritative.
   and running-code locks use the shared local `~/.agents/continuity/` store
   through runtime adapters, not vendor stores.
 <!-- agentic-task:coordination:end -->
+
+## Repository instructions — single source
+
+Read [`CLAUDE.md`](CLAUDE.md) in this directory. It is the one canonical
+instruction file for every runtime working in this repo — schema, data
+rules, coregistration, pipeline conventions, review standard.
+
+Do NOT create a vendor-swapped copy of it here. A find/replace clone of
+CLAUDE.md lived at this path until 2026-08-31; it drifted the moment its
+source changed and the swap had already corrupted its own cross-references
+(`~/.claude/CLAUDE.md` became a nonexistent `~/.Claude Code/AGENTS.md`).
+One source, referenced — never cloned.
