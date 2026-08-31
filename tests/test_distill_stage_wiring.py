@@ -351,7 +351,9 @@ def test_pinned_builder_fails_on_unreadable_tile(tmp_path: Path) -> None:
     idx = tmp_path / "index.parquet"
     pd.DataFrame({
         "tile_name": ["t1", "t2"], "TractID": [1, 1], "PlotID": [1, 2],
-    }).to_parquet(idx)
+        "row": [100, 100], "col": [100, 100],   # in-window; crop filter
+    }).to_parquet(idx)                          # must not mask the abort
+
 
     res = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "build_pinned_plot_set.py"),
@@ -373,3 +375,57 @@ def test_distill_mounts_both_pvc_paths(model: str) -> None:
     text = _distill_manifest(model)
     assert "mountPath: /cephfs" in text and "mountPath: /data" in text, (
         f"{model}: distill job must mount the PVC at BOTH /cephfs and /data")
+
+
+def test_pinned_builder_respects_crop_window(tmp_path: Path) -> None:
+    """A pinned plot must survive EVERY column's border crop.
+
+    Each column's extract crops 512 -> its img_size and drops border
+    plots; the crop differs per column (496 vs 504), so without this
+    filter the pinned set contains plots some columns can never score.
+    First cluster submission failed exactly so: 600m covered 935/964
+    pinned plots, 300m 904/964, and the exact-match guard refused both.
+    The window is [8, 504) — from the tightest img_size (496) in the
+    generator's DISTILL table.
+    """
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    import json as _json
+    import subprocess
+    import sys
+
+    tiles = tmp_path / "tiles"
+    tiles.mkdir()
+    np.savez(tiles / "t1.npz", spectral=np.zeros(1), s1_vv_vh=np.zeros(1))
+
+    idx = tmp_path / "index.parquet"
+    pd.DataFrame({
+        "tile_name": ["t1"] * 4, "TractID": [1] * 4,
+        "PlotID": [1, 2, 3, 4],
+        # in-window / left-border / bottom-border / exactly-on-edge
+        "row": [100, 3, 100, 8], "col": [100, 100, 505, 503],
+    }).to_parquet(idx)
+
+    res = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "build_pinned_plot_set.py"),
+         "--plot-index", str(idx), "--data-dir", str(tiles),
+         "--out", str(tmp_path / "pinned.json")],
+        capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    got = _json.loads((tmp_path / "pinned.json").read_text())
+    kept = {p["PlotID"] for p in got["plots"]}
+    assert kept == {1, 4}, (
+        f"expected only in-window plots (1) and edge-inclusive (4), "
+        f"got {kept} — window must be [8, 504) on both axes")
+
+
+def test_crop_offset_parity() -> None:
+    """The builder inlines crop arithmetic (its CPU pod cannot afford
+    validate_against_nfi's import chain). The two implementations must
+    never diverge — a drifted offset shifts the pinned window and every
+    column silently scores a different plot set."""
+    bps = _load_script("build_pinned_plot_set")
+    van = _load_script("validate_against_nfi")
+    for img in (224, 496, 504, 512, 600):
+        assert bps._crop_offset(512, img) == van.crop_offset(512, img), (
+            f"crop offset diverged at img_size={img}")

@@ -30,17 +30,33 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import zipfile
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+# Own dir for sibling-script imports (gen_ladder_manifests, validate_
+# against_nfi) — what direct execution gets for free but importlib loads
+# (the test suite) do not.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 # Keys a tile must carry for EVERY ladder column to forward it.
 # croma_base + terramind_v1_base require SAR; the optical-only families
 # (prithvi, tessera, clay) build from spectral/b08/rededge, present on
 # all tiles. Extend this list if a future column adds a modality.
 REQUIRED_KEYS = ("s1_vv_vh",)
+
+
+def _crop_offset(tile_h: int, img_size: int) -> int:
+    """Centre-crop top-left offset — MUST equal
+    ``validate_against_nfi.crop_offset`` (pinned by
+    ``test_crop_offset_parity``). Inlined rather than imported: that
+    module pulls in ``imint.eval.metrics`` and its heavy dependencies,
+    which this script's CPU pod deliberately does not install.
+    """
+    return (tile_h - min(img_size, tile_h)) // 2
 
 
 def npz_key_names(path: Path) -> set[str] | None:
@@ -74,9 +90,31 @@ def main() -> None:
     args = ap.parse_args()
 
     df = pd.read_parquet(args.plot_index)
-    for col in ("tile_name", "TractID", "PlotID"):
+    for col in ("tile_name", "TractID", "PlotID", "row", "col"):
         if col not in df.columns:
             raise SystemExit(f"plot index missing column {col!r}")
+
+    # Crop-window intersection. Each column's extract crops the 512 tile
+    # to ITS img_size and border-drops plots outside the window — and the
+    # crop differs per column (496 for prithvi300m/terramind, 504 for the
+    # rest), so the drop set differs too. A pinned plot must survive
+    # EVERY column's crop, i.e. sit inside the tightest window. Derived
+    # from the generator's DISTILL table so a changed column regime
+    # re-tightens this automatically. First submission failed exactly
+    # here: 600m covered 935/964 pinned, 300m 904/964 — the exact-match
+    # guard refused both, as designed.
+    from gen_ladder_manifests import DISTILL
+
+    min_img = min(cfg["img_size"] for cfg in DISTILL.values())
+    off = _crop_offset(512, min_img)
+    in_window = (
+        (df["row"] >= off) & (df["row"] < off + min_img)
+        & (df["col"] >= off) & (df["col"] < off + min_img)
+    )
+    border_dropped = int((~in_window).sum())
+    df = df[in_window]
+    print(f"crop window [{off}, {off + min_img}) from tightest img_size "
+          f"{min_img}: {border_dropped} border plots excluded")
     dupes = df.groupby(["tile_name", "TractID", "PlotID"]).size()
     if (dupes > 1).any():
         raise SystemExit(
