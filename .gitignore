@@ -124,3 +124,5 @@ k8s/lpis-viz-server.yaml
 # Tooling caches
 .claude/
 scripts/verify_fetch_refactor.py
+# Office lock files (created while a document is open; junk in git)
+~$*

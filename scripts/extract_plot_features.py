@@ -148,6 +148,14 @@ def main() -> None:
     # Drop plots whose tile no longer exists on disk (stale index rows) — same
     # guard as validate_against_nfi.main so one missing tile can't abort.
     exists = index_df["tile_path"].map(os.path.exists)
+    if not exists.any():
+        # Every path missing is not "the dataset shrank" — it is a mount
+        # mismatch: the index stores absolute paths (e.g. /data/…) from
+        # the environment that built it. Name the first path so the next
+        # mis-mounted pod diagnoses itself in one line, not a traceback.
+        raise SystemExit(
+            f"0 of {len(index_df)} indexed tile paths exist — mount "
+            f"mismatch? First expected: {index_df['tile_path'].iloc[0]}")
     if not exists.all():
         gone = int((~exists).sum())
         print(f"dropping {gone} plots on tiles no longer in the dataset "
