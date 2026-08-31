@@ -433,3 +433,76 @@ def test_crop_offset_parity() -> None:
     for img in (224, 496, 504, 512, 600):
         assert bps._crop_offset(512, img) == van.crop_offset(512, img), (
             f"crop offset diverged at img_size={img}")
+
+
+class _Conv:  # noqa: D401 — minimal stand-ins; torch optional in CI
+    pass
+
+
+def test_find_classifier_across_families() -> None:
+    """The hook must locate the class-projection conv on every family's
+    structure — Prithvi's head.head[2], tessera's self.classifier,
+    the UPerNet wrappers' decoder_head.head.head[2] — and refuse to
+    guess between ambiguous 1x1 convs (frac/binary heads are 1x1 too;
+    hooking the wrong one silently exports the wrong feature). First
+    cluster submission of tessera died exactly on the hardcoded path."""
+    torch = pytest.importorskip("torch")
+    nn = torch.nn
+    epf = _load_script("extract_plot_features")
+
+    class Tessera(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.classifier = nn.Conv2d(128, 28, 1)
+            self.frac_head = nn.Conv2d(128, 4, 1)
+
+    class Prithvi(nn.Module):
+        def __init__(self):
+            super().__init__()
+            inner = nn.Sequential(nn.Identity(), nn.Dropout2d(0.1),
+                                  nn.Conv2d(256, 28, 1))
+            self.head = nn.Module()
+            self.head.head = inner
+
+    class UPerWrapped(nn.Module):
+        def __init__(self):
+            super().__init__()
+            seg = nn.Module()
+            seg.head = nn.Sequential(nn.Identity(), nn.Dropout2d(0.1),
+                                     nn.Conv2d(256, 28, 1))
+            self.decoder_head = nn.Module()
+            self.decoder_head.head = seg
+
+    assert epf.find_classifier(Tessera()).in_channels == 128
+    assert epf.find_classifier(Prithvi()).in_channels == 256
+    assert epf.find_classifier(UPerWrapped()).in_channels == 256
+
+    class Unknown(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.blob = nn.Sequential(nn.Conv2d(64, 28, 1), nn.Conv2d(64, 4, 1))
+
+    # unique-max fallback: 28 dwarfs 4 → found structurally
+    assert epf.find_classifier(Unknown()).out_channels == 28
+
+    class Ambiguous(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.a = nn.Conv2d(64, 28, 1)
+            self.b = nn.Conv2d(96, 28, 1)
+
+    with pytest.raises(TypeError, match="cannot locate"):
+        epf.find_classifier(Ambiguous())
+
+
+@pytest.mark.parametrize("model,needle", [
+    ("terramind", "terratorch"),
+    ("clay", "Clay-foundation/model"),
+    ("croma", "antofuller/CROMA"),
+])
+def test_distill_installs_backbone_deps(model: str, needle: str) -> None:
+    """The r2 checkpoints cannot even LOAD without their loader packages —
+    terramind's first submission died on ImportError: terratorch. The
+    training manifests carry these installs; the distill jobs must too."""
+    assert needle in _distill_manifest(model), (
+        f"{model}: distill manifest missing backbone dep '{needle}'")

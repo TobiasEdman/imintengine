@@ -49,6 +49,10 @@ spec:
               cd /workspace/imintengine
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
               echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              # Per-column backbone deps — the r2 checkpoints cannot even
+              # LOAD without them (terramind: terratorch ImportError killed
+              # the first submission; croma/clay: their loader packages).
+              pip install --quiet --no-cache-dir "git+https://github.com/Clay-foundation/model.git"
 
               CKPT=/cephfs/checkpoints/ladder/clay_r2/best_model.pt
               PIN=/cephfs/distill/pinned_plots.json
