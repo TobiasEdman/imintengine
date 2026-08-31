@@ -6,6 +6,11 @@ outputs/*
 !outputs/showcase/**
 data/
 !docs/data/
+# NFI (Riksskogstaxeringen) plot coordinates are protected under SLU data
+# terms — never track, never `git add -f`. The repo is PUBLIC; a committed
+# coordinate file cannot be unpublished. Enforced by
+# tests/test_repo_hygiene.py::test_no_nfi_plot_coordinates_tracked.
+data/nfi/
 *.npy
 *.tif
 *.geotiff
