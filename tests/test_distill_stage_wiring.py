@@ -362,3 +362,14 @@ def test_pinned_builder_fails_on_unreadable_tile(tmp_path: Path) -> None:
     assert "unreadable" in (res.stdout + res.stderr).lower()
     assert not (tmp_path / "pinned.json").exists(), (
         "no pinned set may be written on a degraded PVC")
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_distill_mounts_both_pvc_paths(model: str) -> None:
+    """The NFI plot index stores absolute /data/ tile paths (written by
+    the nfi-* jobs, which mount the PVC there); the ladder convention is
+    /cephfs. A distill pod with only one mount drops every plot as "no
+    longer in the dataset" — the first submission died exactly so."""
+    text = _distill_manifest(model)
+    assert "mountPath: /cephfs" in text and "mountPath: /data" in text, (
+        f"{model}: distill job must mount the PVC at BOTH /cephfs and /data")

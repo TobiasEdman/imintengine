@@ -192,6 +192,13 @@ spec:
             limits: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
           volumeMounts:
             - {{ name: cephfs, mountPath: /cephfs }}
+            # Same PVC, second mount point. The NFI plot index stores
+            # ABSOLUTE tile paths under /data/ (written by the nfi-* jobs,
+            # which mount there); with only /cephfs mounted the extract
+            # step drops all 982 plots as "no longer in the dataset" and
+            # dies — the first distill submission failed exactly so
+            # (reaper archive 20260831T0920Z).
+            - {{ name: cephfs, mountPath: /data }}
       volumes:
         - name: cephfs
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
