@@ -660,6 +660,10 @@ class TestRenderSjokortPng:
         """Should render empty chart (no matching features) to PNG."""
         if not self._has_geopandas():
             pytest.skip("geopandas not available")
+        # render_sjokort_png also imports svgpath2mpl at call time; an env
+        # with geopandas but not svgpath2mpl (observed locally) passed the
+        # guard and died on ModuleNotFoundError instead of skipping.
+        pytest.importorskip("svgpath2mpl")
 
         from imint.fetch import render_sjokort_png
 
