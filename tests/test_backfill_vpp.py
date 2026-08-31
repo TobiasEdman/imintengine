@@ -120,9 +120,23 @@ def test_tile_year_precedence():
 
 
 def test_tile_bbox_3006_roundtrip():
-    d = {"bbox_3006": np.array([1.0, 2.0, 3.0, 4.0])}
-    assert bf._tile_bbox_3006(d) == (1.0, 2.0, 3.0, 4.0)
-    assert bf._tile_bbox_3006({"spectral": np.ones((6, H, W))}) is None
+    """Bbox resolution goes through the ONE shared resolver (f822117);
+    the private _tile_bbox_3006 helper this test once called was retired
+    by that consolidation. The resolver deliberately does NOT round-trip
+    raw corners: it preserves the CENTER and rebuilds the extent from the
+    tile's own pixel grid — decoupled extent/pixels was the 256/512
+    aux-misalignment the consolidation exists to prevent."""
+    from imint.training.tile_bbox import resolve_fetch_bbox
+    d = {"bbox_3006": np.array([0.0, 0.0, 100.0, 100.0]),
+         "spectral": np.ones((6, H, W), np.float32)}
+    bbox, size = resolve_fetch_bbox(name="tile_x", npz_data=d)
+    assert size == H
+    assert (bbox["west"] + bbox["east"]) / 2 == 50      # center preserved
+    assert (bbox["south"] + bbox["north"]) / 2 == 50
+    assert bbox["east"] - bbox["west"] == H * 10        # extent == grid @10m
+    bbox2, _ = resolve_fetch_bbox(
+        name="unresolvable", npz_data={"spectral": np.ones((6, H, W))})
+    assert bbox2 is None
 
 
 # ── enumeration: only the empty tiles get fetched ────────────────────────

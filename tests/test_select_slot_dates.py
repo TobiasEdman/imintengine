@@ -75,10 +75,14 @@ def test_slot_with_no_clean_date_is_omitted(monkeypatch):
     assert set(dates) == {1, 2, 3, 4}
 
 
-def test_no_vpp_windows_still_does_autumn_and_background(monkeypatch):
+def test_no_vpp_windows_dooms_the_tile(monkeypatch):
+    """1b1a196: growing-season slots are screened FIRST and a tile with no
+    VPP windows is doomed — fetching autumn + background for it is the
+    exact waste the early-exit eliminates. This test once asserted the
+    pre-1b1a196 contract ({0, 4}); the empty dict IS the intended answer."""
     _patch_ofd(monkeypatch)
     dates = tf.select_slot_dates(_COORDS, tile_year=2022, vpp_windows=None)
-    assert set(dates) == {0, 4}            # no growing slots, but autumn + 2016 bg
+    assert dates == {}
 
 
 def test_vpp_capped_at_three_slots(monkeypatch):
