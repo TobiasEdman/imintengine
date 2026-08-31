@@ -295,11 +295,26 @@ def main() -> None:
 
     store = register_preclassifier_hook(model)
 
-    aux_names = None
-    if args.enable_markfukt:
+    # The checkpoint KNOWS its aux set — reconstructing it from flags is
+    # how terramind died: its r2 trained with 13 aux (the usual 11 plus
+    # delta_vv/delta_vh ΔSAR), while --enable-markfukt rebuilt 11 and the
+    # lidar_branch conv rejected the tensor. The saved config is the
+    # single source of truth; the flag survives only as a fallback for
+    # pre-config-era checkpoints.
+    import torch as _torch
+    _cfg = _torch.load(args.checkpoint, map_location="cpu",
+                       weights_only=False).get("config", {})
+    aux_names = _cfg.get("enabled_aux_names")
+    if aux_names:
+        aux_names = list(aux_names)
+        print(f"  aux from checkpoint config: {len(aux_names)} channels "
+              f"({aux_names[-3:]}...)")
+    elif args.enable_markfukt:
         from imint.training.unified_dataset import AUX_CHANNEL_NAMES
         aux_names = list(AUX_CHANNEL_NAMES) + ["markfukt"]
-        print(f"markfukt enabled → {len(aux_names)} aux channels")
+        print(f"  aux fallback (no config in ckpt): {len(aux_names)}")
+    else:
+        aux_names = None
 
     os.makedirs(args.out_dir, exist_ok=True)
     tiles = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
