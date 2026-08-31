@@ -103,6 +103,9 @@ def main() -> None:
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--heads", default="logreg,mlp",
                     help="comma-separated: logreg,mlp")
+    ap.add_argument("--truth-col", default="nfi_forest",
+                    help="truth column in the features parquet; "
+                         "unified_class for the LUCAS crop head")
     ap.add_argument("--pinned-plots", default=None,
                     help="pinned_plots.json from build_pinned_plot_set.py; "
                          "restricts scoring to the shared cross-backbone plot "
@@ -123,7 +126,7 @@ def main() -> None:
         # on ANY missing plot: a silent partial subset would produce a
         # different fold assignment and quietly break the experiment.
         pinned = json.loads(Path(args.pinned_plots).read_text())
-        key = ["tile_name", "TractID", "PlotID"]
+        key = pinned.get("key_cols", ["tile_name", "TractID", "PlotID"])
         want = pd.DataFrame(pinned["plots"])[key]
         got = df.merge(want, on=key, how="inner")
         if len(got) != len(want):
@@ -143,9 +146,10 @@ def main() -> None:
               f"({args.pinned_plots})")
 
     X = df[FEATURE_COLS].to_numpy(dtype=np.float32)
-    # Truth → 5-class suite space: -1 (treeless) → 0 (non-forest).
-    y = df["nfi_forest"].to_numpy(dtype=np.int64)
-    y = np.where(y == -1, 0, y)
+    y = df[args.truth_col].to_numpy(dtype=np.int64)
+    if args.truth_col == "nfi_forest":
+        # NFI 5-class suite space: -1 (treeless) → 0 (non-forest).
+        y = np.where(y == -1, 0, y)
 
     n = len(y)
     class_counts = {int(c): int((y == c).sum()) for c in sorted(np.unique(y))}
