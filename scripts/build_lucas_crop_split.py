@@ -35,8 +35,12 @@ Outputs (PVC):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+import socket
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -54,6 +58,29 @@ MIN_HOLDOUT_PER_CLASS = 5
 
 INDEX_NAME = "lucas_crop_distill_index.parquet"
 SPLIT_NAME = "lucas_crop_split.json"
+MANIFEST_NAME = "lucas_crop_split.MANIFEST.json"
+LOCK_NAME = ".lucas_crop_split.lock"
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _publish(tmp_payload_writer, dest: Path) -> str:
+    """Write via a pid-suffixed temp file + atomic rename; return sha256.
+
+    No reader can ever observe a half-written artifact, and two writers
+    cannot interleave into one file.
+    """
+    tmp = dest.with_name(f"{dest.name}.tmp{os.getpid()}")
+    tmp_payload_writer(tmp)
+    digest = _sha256(tmp)
+    os.replace(tmp, dest)
+    return digest
 
 
 def required_npz_keys() -> tuple[str, ...]:
@@ -78,22 +105,59 @@ def tile_qualifies(path: Path, keys: tuple[str, ...]) -> bool | None:
     return all(k in names for k in keys) and npz_version_ok(path, keys)
 
 
-def freeze_state(out_dir: Path) -> str:
-    """'frozen' | 'partial' | 'absent'. The persisted split is AUTHORITATIVE.
+def freeze_state(out_dir: Path) -> tuple[str, str]:
+    """('frozen'|'corrupt'|'partial'|'absent', detail). Split is AUTHORITATIVE.
 
     The k8s Job is deletable state (TTL 48 h) but the split must be frozen
     ONCE: a re-run after the PVC changed would move previously trained
     tiles into holdout and silently burn the holdout's never-trained-on
-    property. A partial pair means an interrupted freeze — neither side
-    is trustworthy.
+    property.
+
+    The MANIFEST is the integrity-bearing commit marker, published LAST:
+    its presence claims a completed freeze and it binds both artifacts by
+    content hash. Existence checks alone accepted a mixed pair from two
+    racing builders — and a truncated parquet — as 'frozen'.
     """
-    have_index = (out_dir / INDEX_NAME).exists()
-    have_split = (out_dir / SPLIT_NAME).exists()
-    if have_index and have_split:
-        return "frozen"
-    if have_index or have_split:
-        return "partial"
-    return "absent"
+    manifest_p = out_dir / MANIFEST_NAME
+    if manifest_p.exists():
+        try:
+            m = json.loads(manifest_p.read_text())
+            artifacts = m["artifacts"]
+        except (ValueError, KeyError, OSError) as exc:
+            return "corrupt", f"unreadable {MANIFEST_NAME}: {exc}"
+        for name in (INDEX_NAME, SPLIT_NAME):
+            p = out_dir / name
+            if name not in artifacts:
+                return "corrupt", f"{MANIFEST_NAME} lacks a hash for {name}"
+            if not p.exists():
+                return "corrupt", f"{name} missing but {MANIFEST_NAME} claims it"
+            got = _sha256(p)
+            if got != artifacts[name]:
+                return "corrupt", (f"{name} sha256 {got[:12]}… does not match "
+                                   f"{MANIFEST_NAME} ({artifacts[name][:12]}…)")
+        return "frozen", f"validated against {MANIFEST_NAME}"
+    if (out_dir / INDEX_NAME).exists() or (out_dir / SPLIT_NAME).exists():
+        return "partial", "artifact(s) present without a manifest — interrupted freeze"
+    return "absent", ""
+
+
+def acquire_lock(out_dir: Path) -> Path:
+    """Exclusive cross-process lock (O_EXCL) — two racing builders must
+    never both reach the publish step; the loser dies here, loudly."""
+    lock = out_dir / LOCK_NAME
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise SystemExit(
+            f"freeze lock {lock} exists — another builder is running, or a "
+            f"crashed one left it behind. Recovery: verify no "
+            f"ladder-lucas-crop-split pod is active, then delete the lock "
+            f"and re-run.")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps({"pid": os.getpid(),
+                             "host": socket.gethostname(),
+                             "started": datetime.now(timezone.utc).isoformat()}))
+    return lock
 
 
 def main() -> None:
@@ -103,25 +167,49 @@ def main() -> None:
     ap.add_argument("--data-dir", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--seed", type=int, default=SEED)
+    ap.add_argument("--git-sha", default=None,
+                    help="full commit SHA of the producing checkout; "
+                         "recorded in the MANIFEST (the k8s job passes it)")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
-    state = freeze_state(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _guard(out_dir)
+    lock = acquire_lock(out_dir)
+    try:
+        # Authoritative re-check UNDER the lock: the pre-lock guard is
+        # advisory only — a racing builder may have published between the
+        # check and the lock acquisition.
+        _guard(out_dir)
+        _build(args, out_dir)
+    finally:
+        lock.unlink()
+
+
+def _guard(out_dir: Path) -> None:
+    state, detail = freeze_state(out_dir)
     if state == "frozen":
         # Idempotent no-op, exit 0: a re-applied Job must not fail, and it
         # must NOT re-freeze. Re-freezing is a deliberate manual act.
-        print(f"split already frozen in {out_dir} ({INDEX_NAME} + "
-              f"{SPLIT_NAME}) — refusing to overwrite. To re-freeze "
-              f"deliberately: verify nothing has trained on the current "
-              f"split, then delete BOTH files and re-run.")
-        return
+        print(f"split already frozen in {out_dir} ({detail}) — refusing to "
+              f"overwrite. To re-freeze deliberately: verify nothing has "
+              f"trained on the current split, then delete {INDEX_NAME}, "
+              f"{SPLIT_NAME} and {MANIFEST_NAME}, and re-run.")
+        raise SystemExit(0)
+    if state == "corrupt":
+        raise SystemExit(
+            f"CORRUPT freeze in {out_dir}: {detail}. The artifacts do not "
+            f"match their commit marker — do NOT train on them. Recovery: "
+            f"confirm nothing has trained on this split, delete "
+            f"{INDEX_NAME}, {SPLIT_NAME} and {MANIFEST_NAME}, re-run.")
     if state == "partial":
         raise SystemExit(
-            f"PARTIAL split state in {out_dir}: exactly one of {INDEX_NAME}/"
-            f"{SPLIT_NAME} exists — an interrupted freeze; neither side is "
+            f"PARTIAL freeze in {out_dir}: {detail}; neither side is "
             f"trustworthy. Recovery: confirm nothing has trained on it, "
-            f"delete the surviving file, re-run.")
+            f"delete the surviving file(s), re-run.")
 
+
+def _build(args, out_dir: Path) -> None:
     from gen_ladder_manifests import DISTILL
 
     df = pd.read_parquet(args.lucas_index)
@@ -202,11 +290,8 @@ def main() -> None:
     print("holdout class support:",
           hold["unified_class"].value_counts().sort_index().to_dict())
 
-    out_dir.mkdir(parents=True, exist_ok=True)
     dist = dist.sort_values(["tile_name", "point_id"]).reset_index(drop=True)
-    dist.to_parquet(out_dir / INDEX_NAME)
-
-    (out_dir / SPLIT_NAME).write_text(json.dumps({
+    split_doc = {
         "seed": args.seed, "trial_offset": trial,
         "holdout_frac": HOLDOUT_FRAC,
         "min_holdout_per_class": MIN_HOLDOUT_PER_CLASS,
@@ -223,8 +308,27 @@ def main() -> None:
             {"tile_name": str(t), "point_id": int(p)}
             for t, p in dist[["tile_name", "point_id"]].itertuples(index=False)
         ],
-    }, indent=1))
-    print(f"wrote {out_dir}/{INDEX_NAME} + {SPLIT_NAME}")
+    }
+
+    # Publish order is load-bearing: artifacts first (each atomically),
+    # the hash-bearing MANIFEST last. A crash at any point leaves either
+    # 'absent' or 'partial' — never a state that validates as frozen.
+    hashes = {
+        INDEX_NAME: _publish(lambda p: dist.to_parquet(p), out_dir / INDEX_NAME),
+        SPLIT_NAME: _publish(
+            lambda p: p.write_text(json.dumps(split_doc, indent=1)),
+            out_dir / SPLIT_NAME),
+    }
+    _publish(lambda p: p.write_text(json.dumps({
+        "git_sha": args.git_sha,
+        "produced_at": datetime.now(timezone.utc).isoformat(),
+        "run_args": {"lucas_index": args.lucas_index,
+                     "data_dir": args.data_dir, "seed": args.seed},
+        "artifacts": hashes,
+        "n_distill": int(len(dist)),
+        "n_holdout": int(len(hold)),
+    }, indent=1)), out_dir / MANIFEST_NAME)
+    print(f"wrote {out_dir}/{INDEX_NAME} + {SPLIT_NAME} + {MANIFEST_NAME}")
 
 
 if __name__ == "__main__":

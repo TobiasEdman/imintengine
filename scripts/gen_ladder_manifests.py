@@ -286,7 +286,12 @@ spec:
                 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
-              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              # Own line, not inside an echo: under set -e a failed
+              # substitution here kills the run instead of being masked.
+              HEAD_SHA=$(git rev-parse HEAD)
+              echo "CLONED $BRANCH HEAD: $HEAD_SHA"
+              mkdir -p /cephfs/ops
+              trap 'echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ladder-crop-distill-{model} HEAD=$HEAD_SHA FAIL" >> /cephfs/ops/crop_distill.log' ERR
               # Per-column backbone deps — the r2 checkpoints cannot even
               # LOAD without them.
               {extra_setup}
@@ -323,10 +328,12 @@ spec:
               # human reads these numbers [user-stated 2026-08-31 —
               # distillability before retraining]. A gate marker would let
               # the queue auto-train a rung the decision has not approved.
-              # Evidence outlives the Job TTL: the artifacts live on the
-              # PVC and this line records which commit produced them.
-              mkdir -p /cephfs/ops
-              echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ladder-crop-distill-{model} HEAD=$(git rev-parse --short HEAD) OK" \
+              # Evidence outlives the Job TTL: the append-only record
+              # binds THIS run's outputs by content hash, so a later
+              # overwrite of the fixed paths cannot ride an old OK line.
+              OOF_SHA=$(sha256sum /cephfs/distill/heads/{model}_r2_crop_distillability.json | cut -d" " -f1)
+              FEAT_SHA=$(sha256sum /cephfs/distill/heads/{model}_r2_crop_features.parquet | cut -d" " -f1)
+              echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ladder-crop-distill-{model} HEAD=$HEAD_SHA oof_sha256=$OOF_SHA features_sha256=$FEAT_SHA OK" \\
                 >> /cephfs/ops/crop_distill.log
               echo "=== crop-distill complete for {model} — numbers ready for the R5 decision ==="
           env:
@@ -380,11 +387,23 @@ spec:
               git clone --depth 1 --branch "$BRANCH" \\
                 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
-              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              # Own line, not inside an echo: under set -e a failed
+              # substitution here kills the run instead of being masked.
+              HEAD_SHA=$(git rev-parse HEAD)
+              echo "CLONED $BRANCH HEAD: $HEAD_SHA"
+              mkdir -p /cephfs/ops
+              trap 'echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ladder-lucas-crop-split HEAD=$HEAD_SHA FAIL" >> /cephfs/ops/crop_distill.log' ERR
               python3 scripts/build_lucas_crop_split.py \\
                 --lucas-index /cephfs/lucas/lucas_tile_index.parquet \\
                 --data-dir /cephfs/unified_v2_512 \\
-                --out-dir /cephfs/distill
+                --out-dir /cephfs/distill \\
+                --git-sha "$HEAD_SHA"
+              # Evidence outlives the Job TTL: the MANIFEST (published
+              # LAST by the builder) binds both artifacts to this commit
+              # by content hash; this append-only line is the run record.
+              MANIFEST_SHA=$(sha256sum /cephfs/distill/lucas_crop_split.MANIFEST.json | cut -d" " -f1)
+              echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ladder-lucas-crop-split HEAD=$HEAD_SHA manifest_sha256=$MANIFEST_SHA OK" \\
+                >> /cephfs/ops/crop_distill.log
           resources:
             requests: {{ cpu: "2", memory: "8Gi" }}
             limits: {{ cpu: "2", memory: "8Gi" }}

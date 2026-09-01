@@ -289,7 +289,7 @@ def _write_lucas_fixture(tmp_path, n_tiles=10, with_tessera=True):
     return index, data_dir
 
 
-def _run_split_builder(monkeypatch, index, data_dir, out_dir):
+def _run_split_builder(monkeypatch, index, data_dir, out_dir, *extra):
     import build_lucas_crop_split as blcs
 
     monkeypatch.setattr(sys, "argv", [
@@ -297,8 +297,14 @@ def _run_split_builder(monkeypatch, index, data_dir, out_dir):
         "--lucas-index", str(index),
         "--data-dir", str(data_dir),
         "--out-dir", str(out_dir),
+        *extra,
     ])
-    blcs.main()
+    try:
+        blcs.main()
+    except SystemExit as exc:
+        # exit 0 is the frozen no-op path; anything else propagates
+        if exc.code not in (None, 0):
+            raise
 
 
 def test_frozen_split_is_immutable(monkeypatch, tmp_path, capsys):
@@ -309,9 +315,16 @@ def test_frozen_split_is_immutable(monkeypatch, tmp_path, capsys):
 
     index, data_dir = _write_lucas_fixture(tmp_path)
     out_dir = tmp_path / "out"
-    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+    _run_split_builder(monkeypatch, index, data_dir, out_dir,
+                       "--git-sha", "a" * 40)
     frozen_index = (out_dir / "lucas_crop_distill_index.parquet").read_bytes()
     frozen_split = (out_dir / "lucas_crop_split.json").read_bytes()
+    manifest = _json.loads(
+        (out_dir / "lucas_crop_split.MANIFEST.json").read_text())
+    assert manifest["git_sha"] == "a" * 40
+    assert set(manifest["artifacts"]) == {
+        "lucas_crop_distill_index.parquet", "lucas_crop_split.json"}
+    assert (out_dir / ".lucas_crop_split.lock").exists() is False
 
     # a new tile lands on the PVC; the re-run must ignore it entirely
     np.savez(data_dir / "tile99.npz", s1_vv_vh=np.zeros(1),
@@ -325,16 +338,50 @@ def test_frozen_split_is_immutable(monkeypatch, tmp_path, capsys):
     assert set(d["required_keys"]) >= {"s1_vv_vh", "tessera"}
 
 
-def test_partial_split_pair_is_rejected(monkeypatch, tmp_path):
-    """An interrupted freeze leaves one file — neither side trustworthy.
-    The builder must refuse with an explicit recovery path, not rebuild."""
+def test_corrupt_freeze_is_rejected(monkeypatch, tmp_path):
+    """A manifest whose artifacts are missing or hash-mismatched is a
+    corrupt freeze: hard refusal with recovery — NEVER accepted as frozen
+    (the pre-manifest check accepted a truncated parquet)."""
     index, data_dir = _write_lucas_fixture(tmp_path)
     out_dir = tmp_path / "out"
     _run_split_builder(monkeypatch, index, data_dir, out_dir)
 
-    (out_dir / "lucas_crop_split.json").unlink()
+    split_p = out_dir / "lucas_crop_split.json"
+    original = split_p.read_bytes()
+    split_p.write_bytes(original[: len(original) // 2])  # truncation
+    with pytest.raises(SystemExit, match="CORRUPT"):
+        _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+    split_p.write_bytes(original)
+    (out_dir / "lucas_crop_distill_index.parquet").unlink()  # missing artifact
+    with pytest.raises(SystemExit, match="CORRUPT"):
+        _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+
+def test_partial_freeze_is_rejected(monkeypatch, tmp_path):
+    """Artifacts without the commit marker = interrupted freeze — neither
+    side trustworthy; refuse with an explicit recovery path, not rebuild."""
+    index, data_dir = _write_lucas_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+    (out_dir / "lucas_crop_split.MANIFEST.json").unlink()
     with pytest.raises(SystemExit, match="PARTIAL"):
         _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+
+def test_freeze_lock_excludes_concurrent_builders(monkeypatch, tmp_path):
+    """Two racing builders must never both publish: the loser dies on the
+    O_EXCL lock, loudly, before any artifact is written."""
+    index, data_dir = _write_lucas_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / ".lucas_crop_split.lock").write_text("{}")  # holder alive
+
+    with pytest.raises(SystemExit, match="freeze lock"):
+        _run_split_builder(monkeypatch, index, data_dir, out_dir)
+    assert not (out_dir / "lucas_crop_split.MANIFEST.json").exists()
+    assert not (out_dir / "lucas_crop_distill_index.parquet").exists()
 
 
 def test_unqualified_tile_is_excluded_from_the_freeze(monkeypatch, tmp_path):
