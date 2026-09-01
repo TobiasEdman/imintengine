@@ -81,7 +81,8 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
 
 <div class="panel">
   <h2>Distillability — head OOF on the pinned NFI plot set</h2>
-  <table id="distill"></table>
+  <table id="stage"></table>
+  <table id="distill" style="margin-top:10px"></table>
   <div class="foot">The ladder's ONE cross-backbone number: a pinned-protocol MLP head reads each
     column's frozen rung-2 features and predicts field-inventoried forest type; 5-fold out-of-fold
     accuracy on the shared plot set. Baseline 0.493 = NMD2023 itself at the same plots.
@@ -142,6 +143,7 @@ const RUNG_DASH = {1:"5,4", 2:"", 3:"1,3", 4:"9,3,2,3"};
 
 let DATA = {};   // "model_rN" -> log | null
 let DSTL = {};   // model -> distillability json | null
+let STAGE = {};  // model -> {gate:bool, feats:bool} — distill-stage probes
 // nfi_head_cv.py BASELINES: NMD2023's own 5-class field accuracy at the
 // same plots — the number a column's features must beat to claim the
 // model knows more forest type than the map it was trained on.
@@ -159,10 +161,21 @@ async function loadAll() {
       DATA[k] = res.ok ? await res.json() : null;
     } catch { DATA[k] = null; }
   })).concat(MODELS.map(async m => {
+    // Stage probes are HEAD requests — existence, not content. The gate
+    // marker is the queue's own unlock signal, so the row shows exactly
+    // what the automation sees.
+    const head = async url => {
+      try { return (await fetch(url, {method: "HEAD"})).ok } catch { return false }
+    };
+    STAGE[m] = {
+      gate:  await head(`distill/${m}_r2/_GATE_OK?t=${Date.now()}`),
+      feats: await head(`distill/heads/${m}_r2_plot_features.parquet?t=${Date.now()}`),
+    };
+  })).concat(MODELS.map(async m => {
     // Distill-stage output (served via the /www/ladder/distill symlink);
     // 404 until that column's distill job has passed its OOF step.
     try {
-      const res = await fetch(`distill/${m}_r2_distillability.json?t=${Date.now()}`);
+      const res = await fetch(`distill/heads/${m}_r2_distillability.json?t=${Date.now()}`);
       DSTL[m] = res.ok ? await res.json() : null;
     } catch { DSTL[m] = null; }
   })));
@@ -317,7 +330,34 @@ function fillSelects() {
   }
 }
 
+function stageOf(m) {
+  // Ordered by pipeline position; first match wins. The gate marker is
+  // written by the distill job AFTER its cohort gate passes and is the
+  // exact signal the ladder queue unlocks rungs 3/4 on.
+  const r2 = state(DATA[key(m, 2)]);
+  const st = STAGE[m] || {};
+  if (st.gate) return {label: "gate OK — r3/r4 unlocked", cls: "completed"};
+  if (DSTL[m]) return {label: "dense sidecars running", cls: "running"};
+  if (st.feats) return {label: "head/OOF running", cls: "running"};
+  if (r2 === "completed") return {label: "awaiting distill job", cls: "absent"};
+  if (r2 === "running") return {label: "awaiting rung 2", cls: "absent"};
+  return {label: "—", cls: "absent"};
+}
+
+function renderStage() {
+  let h = "<thead><tr><th>Stage</th>" +
+          MODELS.map(m => `<th>${LABELS[m]}</th>`).join("") + "</tr></thead><tbody>";
+  h += `<tr><td class="rung-label">distill<small>r2 → sidecars</small></td>`;
+  for (const m of MODELS) {
+    const s = stageOf(m);
+    h += `<td><span class="pill ${s.cls}">${s.label}</span></td>`;
+  }
+  h += "</tr>";
+  document.getElementById("stage").innerHTML = h + "</tbody>";
+}
+
 function renderDistill() {
+  renderStage();
   const rows = [
     ["OOF accuracy", d => d.heads?.mlp?.overall_accuracy_5class, true],
     ["kappa",        d => d.heads?.mlp?.cohen_kappa, false],
