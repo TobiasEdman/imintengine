@@ -195,3 +195,41 @@ nothing can be submitted until this work is pushed and merged there.
 Submission order: `distill-pinned-plots` once, then `distill-<model>`
 as each column's rung 2 lands. The ladder queue does NOT submit these
 (by design, it only feeds rungs 1–2).
+
+## The LUCAS crop-distill stage (added 2026-09-01) — the R5 evidence pass
+
+**R5 = R4 + LUCAS crop type** [user-stated 2026-08-31], and **distillability
+comes before any retraining** — so before a rung 5 exists, every column gets
+a crop-distillability number the same way it got its NFI one. Same recipe,
+different truth: LUCAS crop points (unified classes 11–21) instead of NFI
+forest plots.
+
+Two-step per column (`k8s/ladder/crop-distill-<model>-job.yaml`, generated):
+
+| step | script | crop-specific args |
+|---|---|---|
+| 1 | `extract_plot_features.py` | `--plot-index /cephfs/distill/lucas_crop_distill_index.parquet --truth-col unified_class` |
+| 2 | `nfi_head_cv.py` | `--truth-col unified_class --pinned-plots /cephfs/distill/lucas_crop_split.json` |
+
+Shared prereq (once): `k8s/ladder/lucas-crop-split-job.yaml` runs
+`build_lucas_crop_split.py` — the grouped-by-tile 70/30 freeze that keeps a
+LUCAS holdout **never trained on** (the prior 71-point freeze is forced into
+holdout). Only the 70 % distill side is ever extracted or scored here.
+
+**Deliberately absent:** `_GATE_OK` and any queue rung. The NFI distill
+stage gates rungs 3/4 because their existence was already decided; rung 5's
+existence is exactly what these numbers decide. A gate marker here would
+let `ladder_queue.py` auto-train a rung the decision has not approved.
+Rung-5 manifests, dense crop sidecars (`train_distill_head` +
+`distill_forest_labels` are still NFI-hard-coded), and queue wiring are
+built only after the crop-OOF table is read.
+
+Two generalization holes found and fixed on the way in (both had tests
+added, `tests/test_crop_distill_wiring.py`):
+- `extract_plot_features.py` handed `from_records` a hard-coded NFI column
+  list, silently dropping `point_id` and the generic truth column — the
+  LUCAS parquet would have carried features but neither pin key nor labels.
+- `nfi_head_cv.py` scored every truth space through `accuracy_suite`, which
+  collapses ids outside {1,2,3,4} to 0 — crop truth would have scored a
+  meaningless 1.0. Generic truth now scores in its own label space
+  (`generic_accuracy_suite`), NFI baselines stay NFI-only.

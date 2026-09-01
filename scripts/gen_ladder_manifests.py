@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Generate the label-source ladder manifests (6 backbones × 4 rungs).
+"""Generate the label-source ladder manifests (6 backbones × 4 rungs),
+plus the distill stage (NFI) and the LUCAS crop-distill stage per column.
 
 See docs/experiments/label_source_ladder.md. Every rung is the same trainer on
 the same tiles with the same per-backbone regime; ONLY the label flags change,
@@ -95,6 +96,16 @@ DISTILL = {
              "extra_setup": ("pip install --quiet --no-cache-dir "
                              "\"git+https://github.com/Clay-foundation/model.git\"")},
 }
+
+# LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
+# features at the frozen LUCAS crop distill points, score the pinned-
+# protocol crop OOF. The numbers decide WHETHER a rung 5 exists
+# [user-stated 2026-08-31: distillability before any retraining], so this
+# stage deliberately writes NO _GATE_OK and no queue rung consumes it —
+# rung 5 must not auto-train off these files before the numbers are read.
+CROP_TRUTH_COL = "unified_class"
+CROP_INDEX = "/cephfs/distill/lucas_crop_distill_index.parquet"
+CROP_SPLIT = "/cephfs/distill/lucas_crop_split.json"
 
 # One Job per column, three script steps + the distillability OOF, all
 # reading/writing the shared cephfs PVC. Runs on the 2080ti pool so the
@@ -227,6 +238,152 @@ spec:
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
 """
 
+CROP_DISTILL_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-crop-distill-{model}
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-distill, model: {model} }}
+spec:
+  backoffLimit: 0
+  # Budget: extract forwards ~1.5k tiles (the LUCAS distill side) once
+  # each at 1-5 s/tile on a 2080ti = 0.5-2 h; the OOF is CPU-minutes.
+  # 12 h caps runaway only.
+  activeDeadlineSeconds: 43200
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-distill, model: {model} }}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: crop-distill
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== LUCAS crop-distill stage — {model} ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \\
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \\
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \\
+                pandas pyarrow rasterio pyproj
+              mkdir -p /workspace && cd /workspace
+              BRANCH=main
+              git clone --depth 1 --branch "$BRANCH" \\
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              # Per-column backbone deps — the r2 checkpoints cannot even
+              # LOAD without them.
+              {extra_setup}
+
+              CKPT=/cephfs/checkpoints/ladder/{model}_r2/best_model.pt
+              INDEX={crop_index}
+              SPLIT={crop_split}
+              test -f "$CKPT"  || {{ echo "FATAL: no rung-2 checkpoint at $CKPT"; exit 1; }}
+              test -f "$INDEX" || {{ echo "FATAL: no LUCAS crop index at $INDEX — run k8s/ladder/lucas-crop-split-job.yaml first"; exit 1; }}
+              test -f "$SPLIT" || {{ echo "FATAL: no LUCAS crop split at $SPLIT — run k8s/ladder/lucas-crop-split-job.yaml first"; exit 1; }}
+              mkdir -p /cephfs/distill/heads
+
+              echo "=== 1/2 extract crop-point features (rung-2 checkpoint) ==="
+              python3 scripts/extract_plot_features.py \\
+                --checkpoint "$CKPT" \\
+                --plot-index "$INDEX" \\
+                --truth-col {truth_col} \\
+                --img-size {img_size} \\
+                --backbone-name {backbone} \\
+                --enable-markfukt \\
+                --out /cephfs/distill/heads/{model}_r2_crop_features.parquet \\
+                --device cuda
+
+              echo "=== 2/2 crop distillability — pinned-protocol OOF (the R5 evidence) ==="
+              python3 scripts/nfi_head_cv.py \\
+                --features /cephfs/distill/heads/{model}_r2_crop_features.parquet \\
+                --folds 5 \\
+                --heads mlp \\
+                --truth-col {truth_col} \\
+                --pinned-plots "$SPLIT" \\
+                --out /cephfs/distill/heads/{model}_r2_crop_distillability.json
+
+              # NO _GATE_OK here, on purpose: rung 5 does not exist until a
+              # human reads these numbers [user-stated 2026-08-31 —
+              # distillability before retraining]. A gate marker would let
+              # the queue auto-train a rung the decision has not approved.
+              echo "=== crop-distill complete for {model} — numbers ready for the R5 decision ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef: {{ name: hf-token, key: token, optional: true }}
+          resources:
+            requests: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+            limits: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+          volumeMounts:
+            - {{ name: cephfs, mountPath: /cephfs }}
+            # Same PVC, second mount point: the LUCAS index inherits the L1
+            # index's ABSOLUTE /data/… tile paths (same trap as the NFI
+            # index — reaper archive 20260831T0920Z).
+            - {{ name: cephfs, mountPath: /data }}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+"""
+
+LUCAS_SPLIT_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-lucas-crop-split
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-distill, model: shared }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-distill, model: shared }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: split
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy pandas pyarrow
+              mkdir -p /workspace && cd /workspace
+              BRANCH=main
+              git clone --depth 1 --branch "$BRANCH" \\
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              python3 scripts/build_lucas_crop_split.py \\
+                --lucas-index /cephfs/lucas/lucas_tile_index.parquet \\
+                --data-dir /cephfs/unified_v2_512 \\
+                --out-dir /cephfs/distill
+          resources:
+            requests: {{ cpu: "2", memory: "8Gi" }}
+            limits: {{ cpu: "2", memory: "8Gi" }}
+          volumeMounts:
+            - {{ name: cephfs, mountPath: /cephfs }}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+"""
+
 PINNED_PLOTS_TEMPLATE = """apiVersion: batch/v1
 kind: Job
 metadata:
@@ -290,6 +447,23 @@ def render_distill(model: str) -> str:
     return header + DISTILL_TEMPLATE.format(
         model=model, img_size=cfg["img_size"], backbone=cfg["backbone"],
         sar_filter=sar_filter,
+        extra_setup=cfg.get("extra_setup", "true  # no extra deps"))
+
+
+def render_crop_distill(model: str) -> str:
+    cfg = DISTILL[model]
+    header = (
+        f"# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        f"# LUCAS crop-distill stage for {model}: r2 checkpoint → features at\n"
+        f"# the frozen LUCAS crop distill points → pinned-protocol crop OOF\n"
+        f"# ({model}_r2_crop_distillability.json). Evidence for the R5\n"
+        f"# decision — writes NO gate, feeds NO queue rung.\n"
+        f"# Prereq: ladder-lucas-crop-split (once, shared).\n"
+        f"# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_DISTILL_TEMPLATE.format(
+        model=model, img_size=cfg["img_size"], backbone=cfg["backbone"],
+        truth_col=CROP_TRUTH_COL, crop_index=CROP_INDEX, crop_split=CROP_SPLIT,
         extra_setup=cfg.get("extra_setup", "true  # no extra deps"))
 
 EPOCHS = 30  # fixed across the ladder: see the doc's "Controls"
@@ -445,6 +619,15 @@ def main() -> int:
             dest = OUT_DIR / f"ladder-r{rung}-{model}-job.yaml"
             outputs[dest] = render(model, rung, base_text)
         outputs[OUT_DIR / f"distill-{model}-job.yaml"] = render_distill(model)
+        outputs[OUT_DIR / f"crop-distill-{model}-job.yaml"] = (
+            render_crop_distill(model))
+    outputs[OUT_DIR / "lucas-crop-split-job.yaml"] = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Freezes the LUCAS crop 70/30 distill/holdout split ONCE, before\n"
+        "# any crop training touches LUCAS (grouped by tile; prior 71-point\n"
+        "# freeze forced into holdout). Run before any crop-distill-<model>.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+        + LUCAS_SPLIT_TEMPLATE.format())
     outputs[OUT_DIR / "distill-pinned-plots-job.yaml"] = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         "# Pins the shared NFI plot set every column's distillability OOF\n"

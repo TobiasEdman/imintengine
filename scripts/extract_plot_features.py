@@ -158,6 +158,29 @@ def _sample_feature(feat_map, rows, cols, crop_sz: int) -> np.ndarray:
     return fm[:, r, c].T.astype(np.float32)  # (N, 256)
 
 
+def output_columns(truth_col: str | None, feat_cols: list[str]) -> list[str]:
+    """Column order for the features parquet — the truth col follows the mode.
+
+    The record dicts carry point_id and (in generic-truth mode) the truth
+    column itself; a hard-coded NFI column list handed to ``from_records``
+    silently DROPS both, leaving a LUCAS crop parquet with neither its pin
+    key (tile_name, point_id) nor its labels.
+    """
+    return (["TractID", "PlotID", "point_id", "Easting", "Northing",
+             "tile_name", truth_col or "nfi_forest"] + feat_cols)
+
+
+def truth_summary(out_df: pd.DataFrame, truth_col: str | None) -> tuple[str, dict]:
+    """Class distribution of the ACTIVE truth column.
+
+    Must follow the mode exactly like ``output_columns`` does — a
+    hard-coded ``nfi_forest`` here crashed the whole crop-distill Job
+    (backoffLimit 0) after the parquet was already on disk.
+    """
+    name = truth_col or "nfi_forest"
+    return name, out_df[name].value_counts().sort_index().to_dict()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -309,17 +332,16 @@ def main() -> None:
 
     store["handle"].remove()
 
-    out_df = pd.DataFrame.from_records(records, columns=(
-        ["TractID", "PlotID", "Easting", "Northing", "tile_name", "nfi_forest"]
-        + feat_cols
-    ))
+    out_df = pd.DataFrame.from_records(
+        records, columns=output_columns(args.truth_col, feat_cols))
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_parquet(out, index=False)
 
-    n_by_class = out_df["nfi_forest"].value_counts().sort_index().to_dict()
+    truth_name, n_by_class = truth_summary(out_df, args.truth_col)
+    note = "" if args.truth_col else " (−1=treeless)"
     print(f"\nwrote {out} — {len(out_df)} plots × {n_features} features")
-    print(f"  nfi_forest distribution (−1=treeless): {n_by_class}")
+    print(f"  {truth_name} distribution{note}: {n_by_class}")
 
 
 if __name__ == "__main__":
