@@ -96,6 +96,7 @@ spec:
                 --img-size 504 \
                 --backbone-name tessera_v1 \
                 --enable-markfukt \
+                --require-npz-key tessera \
                 --device cuda
 
               echo ""
