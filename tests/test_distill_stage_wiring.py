@@ -103,7 +103,11 @@ MODELS = ["prithvi300m", "prithvi600m", "croma", "terramind", "tessera",
           "clay"]
 EXPECTED_IMG = {"prithvi300m": 496, "prithvi600m": 504, "croma": 504,
                 "terramind": 496, "tessera": 504, "clay": 504}
-SAR_MODELS = {"croma", "terramind"}
+# Per-column dense-cohort keys: SAR needs s1_vv_vh; tessera needs its
+# precomputed embedding (training drops embedding-less tiles at index
+# construction — the dense pass must walk the same 7874-tile cohort).
+REQUIRED_DENSE_KEYS = {"croma": "s1_vv_vh", "terramind": "s1_vv_vh",
+                       "tessera": "tessera"}
 
 
 def _distill_manifest(model: str) -> str:
@@ -177,16 +181,22 @@ def test_distill_protocol_is_pinned_and_uniform(model: str) -> None:
 
 
 @pytest.mark.parametrize("model", MODELS)
-def test_distill_sar_cohort_filter(model: str) -> None:
-    """CROMA/TerraMind forward only s1_vv_vh tiles; without the filter the
-    dense pass crashes hours in on the first optical-only tile. The other
-    four must NOT carry it — it would silently shrink their cohort."""
+def test_distill_dense_cohort_filter(model: str) -> None:
+    """Each column's dense pass must walk exactly the cohort its training
+    saw: SAR columns filter on s1_vv_vh, tessera on its embedding key
+    (8 embedding-less tiles failed its first dense pass — correctly
+    refused by the gate, but for a cohort nobody trains on). Columns
+    without a requirement must carry NO filter — it would silently
+    shrink their cohort."""
     text = _distill_manifest(model)
     dense = text.split("distill_forest_labels.py")[1]
-    has = "--require-npz-key s1_vv_vh" in dense
-    assert has == (model in SAR_MODELS), (
-        f"{model}: sar filter {'present' if has else 'absent'}, "
-        f"expected the opposite")
+    want = REQUIRED_DENSE_KEYS.get(model)
+    if want:
+        assert f"--require-npz-key {want}" in dense, (
+            f"{model}: dense step missing --require-npz-key {want}")
+    else:
+        assert "--require-npz-key" not in dense, (
+            f"{model}: unexpected cohort filter")
 
 
 @pytest.mark.parametrize("model", MODELS)
