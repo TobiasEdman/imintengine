@@ -27,7 +27,7 @@ spec:
         accelerator: nvidia-gtx-2080ti
       containers:
         - name: crop-distill
-          image: python:3.11-slim
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
           command:
             - bash
             - -c
@@ -84,6 +84,10 @@ spec:
               # human reads these numbers [user-stated 2026-08-31 —
               # distillability before retraining]. A gate marker would let
               # the queue auto-train a rung the decision has not approved.
+              # Evidence outlives the Job TTL: the artifacts live on the
+              # PVC and this line records which commit produced them.
+              mkdir -p /cephfs/ops
+              echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ladder-crop-distill-prithvi600m HEAD=$(git rev-parse --short HEAD) OK"                 >> /cephfs/ops/crop_distill.log
               echo "=== crop-distill complete for prithvi600m — numbers ready for the R5 decision ==="
           env:
             - name: PYTHONUNBUFFERED

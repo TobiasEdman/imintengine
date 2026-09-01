@@ -52,6 +52,49 @@ SEED = 42
 HOLDOUT_FRAC = 0.30
 MIN_HOLDOUT_PER_CLASS = 5
 
+INDEX_NAME = "lucas_crop_distill_index.parquet"
+SPLIT_NAME = "lucas_crop_split.json"
+
+
+def required_npz_keys() -> tuple[str, ...]:
+    """The TRUE six-column input intersection, derived — never hand-listed.
+
+    REQUIRED_KEYS is the SAR base, but a column may filter on more:
+    tessera's dataset drops embedding-less tiles at init. A split frozen
+    on a subset strands the stricter column — its extract drops the
+    unqualified tiles' points and the pinned-OOF merge aborts the Job.
+    """
+    from gen_ladder_manifests import DISTILL
+
+    extra = {k for cfg in DISTILL.values() for k in cfg.get("require_keys", ())}
+    return tuple(sorted(set(REQUIRED_KEYS) | extra))
+
+
+def tile_qualifies(path: Path, keys: tuple[str, ...]) -> bool | None:
+    """True/False qualification; None = unreadable (caller must abort)."""
+    names = npz_key_names(path)
+    if names is None:
+        return None
+    return all(k in names for k in keys) and npz_version_ok(path, keys)
+
+
+def freeze_state(out_dir: Path) -> str:
+    """'frozen' | 'partial' | 'absent'. The persisted split is AUTHORITATIVE.
+
+    The k8s Job is deletable state (TTL 48 h) but the split must be frozen
+    ONCE: a re-run after the PVC changed would move previously trained
+    tiles into holdout and silently burn the holdout's never-trained-on
+    property. A partial pair means an interrupted freeze — neither side
+    is trustworthy.
+    """
+    have_index = (out_dir / INDEX_NAME).exists()
+    have_split = (out_dir / SPLIT_NAME).exists()
+    if have_index and have_split:
+        return "frozen"
+    if have_index or have_split:
+        return "partial"
+    return "absent"
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(
@@ -61,6 +104,23 @@ def main() -> None:
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args()
+
+    out_dir = Path(args.out_dir)
+    state = freeze_state(out_dir)
+    if state == "frozen":
+        # Idempotent no-op, exit 0: a re-applied Job must not fail, and it
+        # must NOT re-freeze. Re-freezing is a deliberate manual act.
+        print(f"split already frozen in {out_dir} ({INDEX_NAME} + "
+              f"{SPLIT_NAME}) — refusing to overwrite. To re-freeze "
+              f"deliberately: verify nothing has trained on the current "
+              f"split, then delete BOTH files and re-run.")
+        return
+    if state == "partial":
+        raise SystemExit(
+            f"PARTIAL split state in {out_dir}: exactly one of {INDEX_NAME}/"
+            f"{SPLIT_NAME} exists — an interrupted freeze; neither side is "
+            f"trustworthy. Recovery: confirm nothing has trained on it, "
+            f"delete the surviving file, re-run.")
 
     from gen_ladder_manifests import DISTILL
 
@@ -78,7 +138,10 @@ def main() -> None:
           f"{int((~in_win).sum())} border points excluded")
     crops = crops[in_win]
 
-    # SAR-cohort tile qualification (unreadable aborts, as in the NFI set).
+    # Tile qualification on the FULL six-column intersection (unreadable
+    # aborts, as in the NFI set). REQUIRED_KEYS alone strands tessera.
+    req_keys = required_npz_keys()
+    print(f"qualifying on npz keys: {req_keys}")
     data_dir = Path(args.data_dir)
     qual: dict[str, bool] = {}
     unreadable: list[str] = []
@@ -87,18 +150,17 @@ def main() -> None:
         if not p.exists():
             qual[name] = False
             continue
-        names = npz_key_names(p)
-        if names is None:
+        ok = tile_qualifies(p, req_keys)
+        if ok is None:
             unreadable.append(name)
         else:
-            qual[name] = (all(k in names for k in REQUIRED_KEYS)
-                          and npz_version_ok(p, REQUIRED_KEYS))
+            qual[name] = ok
     if unreadable:
         raise SystemExit(
             f"{len(unreadable)} unreadable tiles (first {unreadable[:5]}) — "
             f"no split is frozen on a degraded PVC.")
     crops = crops[crops["tile_name"].map(qual).fillna(False)]
-    print(f"after SAR/window/existence pinning: {len(crops)} points on "
+    print(f"after key/window/existence pinning: {len(crops)} points on "
           f"{crops['tile_name'].nunique()} tiles")
 
     # The L1 index's own 'test' side is an earlier freeze — its tiles go
@@ -140,16 +202,15 @@ def main() -> None:
     print("holdout class support:",
           hold["unified_class"].value_counts().sort_index().to_dict())
 
-    out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dist = dist.sort_values(["tile_name", "point_id"]).reset_index(drop=True)
-    dist.to_parquet(out_dir / "lucas_crop_distill_index.parquet")
+    dist.to_parquet(out_dir / INDEX_NAME)
 
-    (out_dir / "lucas_crop_split.json").write_text(json.dumps({
+    (out_dir / SPLIT_NAME).write_text(json.dumps({
         "seed": args.seed, "trial_offset": trial,
         "holdout_frac": HOLDOUT_FRAC,
         "min_holdout_per_class": MIN_HOLDOUT_PER_CLASS,
-        "required_keys": list(REQUIRED_KEYS),
+        "required_keys": list(req_keys),
         "crop_window": [off, off + min_img],
         "key_cols": ["tile_name", "point_id"],
         "truth_col": "unified_class",
@@ -163,8 +224,7 @@ def main() -> None:
             for t, p in dist[["tile_name", "point_id"]].itertuples(index=False)
         ],
     }, indent=1))
-    print(f"wrote {out_dir}/lucas_crop_distill_index.parquet + "
-          f"lucas_crop_split.json")
+    print(f"wrote {out_dir}/{INDEX_NAME} + {SPLIT_NAME}")
 
 
 if __name__ == "__main__":

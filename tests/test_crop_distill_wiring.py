@@ -205,3 +205,149 @@ def test_generic_suite_perfect_prediction():
     suite = generic_accuracy_suite(y, y.copy())
     assert suite["overall_accuracy"] == 1.0
     assert suite["cohen_kappa"] == 1.0
+
+
+# --- Codex re-review findings (2026-09-01) ------------------------------
+
+
+TEMPLATE_MANIFESTS = sorted(
+    [OUT_DIR / f"crop-distill-{m}-job.yaml" for m in MODELS]
+    + [OUT_DIR / f"distill-{m}-job.yaml" for m in MODELS]
+    + [OUT_DIR / "lucas-crop-split-job.yaml",
+       OUT_DIR / "distill-pinned-plots-job.yaml"])
+
+
+@pytest.mark.parametrize("path", TEMPLATE_MANIFESTS, ids=lambda p: p.name)
+def test_cpu_job_images_are_digest_pinned(path):
+    """Zero-tolerance rule: a mutable tag can be repointed under the
+    pipeline's feet. Every generated template job pins by digest."""
+    from scripts.gen_ladder_manifests import PYTHON_IMAGE
+
+    doc = yaml.safe_load(path.read_text())
+    image = doc["spec"]["template"]["spec"]["containers"][0]["image"]
+    assert image == PYTHON_IMAGE
+    assert "@sha256:" in image
+
+
+def test_split_qualifies_on_the_true_six_column_intersection():
+    """REQUIRED_KEYS alone (s1_vv_vh) strands tessera: its dataset drops
+    embedding-less tiles at init, so a frozen tile without the tessera
+    key would abort crop-distill-tessera at the pinned-OOF merge."""
+    from build_lucas_crop_split import required_npz_keys, tile_qualifies
+
+    keys = required_npz_keys()
+    assert "s1_vv_vh" in keys
+    assert "tessera" in keys
+
+
+def test_missing_tessera_tile_does_not_qualify(tmp_path):
+    from build_lucas_crop_split import required_npz_keys, tile_qualifies
+
+    keys = required_npz_keys()
+    full = tmp_path / "full.npz"
+    np.savez(full, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(4),
+             tessera=np.zeros(1))
+    no_tess = tmp_path / "no_tess.npz"
+    np.savez(no_tess, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(4))
+    stale_sar = tmp_path / "stale_sar.npz"
+    np.savez(stale_sar, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(0),
+             tessera=np.zeros(1))
+
+    assert tile_qualifies(full, keys) is True
+    assert tile_qualifies(no_tess, keys) is False
+    assert tile_qualifies(stale_sar, keys) is False
+
+
+def _write_lucas_fixture(tmp_path, n_tiles=10, with_tessera=True):
+    """A minimal PVC: n_tiles qualified npz tiles + an index parquet with
+    all 11 crop classes × 5 points per tile, inside the crop window."""
+    import pandas as pd
+
+    data_dir = tmp_path / "tiles"
+    data_dir.mkdir(exist_ok=True)
+    rows = []
+    for t in range(n_tiles):
+        name = f"tile{t:02d}"
+        kw = {"s1_vv_vh": np.zeros(1), "s1_enrich_v": np.int32(4)}
+        if with_tessera or t != 0:  # tile00 optionally lacks the embedding
+            kw["tessera"] = np.zeros(1)
+        np.savez(data_dir / f"{name}.npz", **kw)
+        pid = 0
+        for cls in range(11, 22):
+            for k in range(5):
+                rows.append({
+                    "tile_name": name,
+                    "tile_path": str(data_dir / f"{name}.npz"),
+                    "row": 10 + pid, "col": 10 + pid,
+                    "unified_class": cls,
+                    "point_id": t * 1000 + pid,
+                    "split": "train",
+                })
+                pid += 1
+    index = tmp_path / "lucas_tile_index.parquet"
+    pd.DataFrame(rows).to_parquet(index)
+    return index, data_dir
+
+
+def _run_split_builder(monkeypatch, index, data_dir, out_dir):
+    import build_lucas_crop_split as blcs
+
+    monkeypatch.setattr(sys, "argv", [
+        "build_lucas_crop_split.py",
+        "--lucas-index", str(index),
+        "--data-dir", str(data_dir),
+        "--out-dir", str(out_dir),
+    ])
+    blcs.main()
+
+
+def test_frozen_split_is_immutable(monkeypatch, tmp_path, capsys):
+    """Blocker 3: a re-run (e.g. the k8s Job re-applied after its TTL
+    removed the Job object) must be a no-op — never a re-freeze. Adding
+    a source tile before the re-run must not move the holdout."""
+    import json as _json
+
+    index, data_dir = _write_lucas_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+    frozen_index = (out_dir / "lucas_crop_distill_index.parquet").read_bytes()
+    frozen_split = (out_dir / "lucas_crop_split.json").read_bytes()
+
+    # a new tile lands on the PVC; the re-run must ignore it entirely
+    np.savez(data_dir / "tile99.npz", s1_vv_vh=np.zeros(1),
+             s1_enrich_v=np.int32(4), tessera=np.zeros(1))
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+    assert "refusing to overwrite" in capsys.readouterr().out
+    assert (out_dir / "lucas_crop_distill_index.parquet").read_bytes() == frozen_index
+    assert (out_dir / "lucas_crop_split.json").read_bytes() == frozen_split
+
+    d = _json.loads(frozen_split)
+    assert set(d["required_keys"]) >= {"s1_vv_vh", "tessera"}
+
+
+def test_partial_split_pair_is_rejected(monkeypatch, tmp_path):
+    """An interrupted freeze leaves one file — neither side trustworthy.
+    The builder must refuse with an explicit recovery path, not rebuild."""
+    index, data_dir = _write_lucas_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+    (out_dir / "lucas_crop_split.json").unlink()
+    with pytest.raises(SystemExit, match="PARTIAL"):
+        _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+
+def test_unqualified_tile_is_excluded_from_the_freeze(monkeypatch, tmp_path):
+    """End-to-end blocker-2 check: a tile missing the tessera embedding
+    must appear on NEITHER side of the frozen split."""
+    import json as _json
+    import pandas as pd
+
+    index, data_dir = _write_lucas_fixture(tmp_path, with_tessera=False)
+    out_dir = tmp_path / "out"
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+    dist = pd.read_parquet(out_dir / "lucas_crop_distill_index.parquet")
+    split = _json.loads((out_dir / "lucas_crop_split.json").read_text())
+    assert "tile00" not in set(dist["tile_name"])
+    assert "tile00" not in set(split["holdout_tiles"])
