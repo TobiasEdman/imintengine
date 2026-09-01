@@ -94,10 +94,12 @@ spec:
               cp /workspace/imintengine/dashboards/ladder_dashboard.html \
                  /www/ladder/index.html
               ln -sfn /cephfs/checkpoints/ladder /www/ladder/data
-              # Distill-stage outputs (per-column distillability OOF).
-              # Dangling until the first distill job writes heads/ — the
-              # panel renders such cells as "—", same posture as /compare.
-              ln -sfn /cephfs/distill/heads /www/ladder/distill
+              # Distill-stage outputs: the ROOT, not just heads/ — the
+              # stage row probes <model>_r2/_GATE_OK (queue-unlock marker)
+              # and heads/*.parquet with HEAD requests, and the panel
+              # reads heads/*_distillability.json. Dangling until the
+              # first distill job runs — cells render "—"/waiting.
+              ln -sfn /cephfs/distill /www/ladder/distill
 
               # Patch 1: null-safe tile-count cells (avoids TypeError when
               # train_tiles/val_tiles missing from the new schema).
