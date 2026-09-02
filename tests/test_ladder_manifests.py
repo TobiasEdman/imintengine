@@ -18,7 +18,12 @@ yaml = pytest.importorskip("yaml")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.gen_ladder_manifests import (  # noqa: E402
-    BASES, COHORT_DIR, ENABLE_MARKFUKT, EPOCHS, OUT_DIR, RUNGS,
+    BASES,
+    COHORT_DIR,
+    ENABLE_MARKFUKT,
+    EPOCHS,
+    OUT_DIR,
+    RUNGS,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -122,11 +127,20 @@ def test_no_rwo_pvc_mounts(model, rung, path):
     assert claims <= {"training-data-cephfs"}, f"RWO PVC leaked: {claims}"
 
 
-def test_manifests_match_generator():
-    """Committed manifests are regenerable — no hand-edits."""
-    r = subprocess.run([sys.executable, "scripts/gen_ladder_manifests.py", "--check"],
-                       cwd=REPO, capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
+def test_non_crop_manifests_match_generator():
+    """Anchor-independent manifests stay regenerable during crop bootstrap."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/gen_ladder_manifests.py",
+            "--non-crop-only",
+            "--check",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_every_cell_of_the_matrix_exists():

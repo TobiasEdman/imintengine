@@ -481,9 +481,11 @@ run in parallel with the freeze:
    full payload-A SHA, the repository claim, and GitHub's OIDC issuer. A
    feature-branch build and a later `main` rebuild intentionally have different
    identities; never loosen this to a repository-prefix match. Generate/check
-   only the producer phase:
+   the anchor-independent manifests while A is gated, then only the producer
+   phase after A's source and image identities are pinned:
 
    ```bash
+   python scripts/gen_ladder_manifests.py --non-crop-only --check
    python scripts/gen_ladder_manifests.py --crop-bootstrap-only
    python scripts/gen_ladder_manifests.py --crop-bootstrap-only --check
    ```

@@ -16,7 +16,7 @@ Capture one create-only directory per Pod UID:
 docs/evidence/crop-distill/<pod-uid>/
   completion.json       # exact canonical bytes decoded from the Pod marker
   completion.sha256     # lowercase SHA-256 of completion.json plus newline
-  capture.json          # deterministic Pod, Job, container, and image binding
+  capture.json          # deterministic Pod, authority, process, and image binding
 ```
 
 The capture helper accepts a Kubernetes Pod JSON document and the target
@@ -30,20 +30,40 @@ CROP_DISTILL_TERMINAL_EVIDENCE_V1 <lowercase-sha256> <strict-base64-canonical-js
 It then fails closed unless all of the following agree:
 
 - the marker hash, decoded canonical bytes, and completed terminal record;
+- the exact completion-v1 shape, including the allowed model, model-specific
+  UID, shared GID, runtime source identity, checkpoint protocol, frozen-split
+  identity, and kind-specific artifact paths and digests;
 - the requested namespace, Pod name, Job name, Pod UID, controller reference,
   and Kubernetes Job label;
 - the record kind and its one permitted container name (`crop-distill` or
   `split`);
-- the Pod's digest-pinned `.spec.containers[].image`, the runtime-observed
-  `.status.containerStatuses[].imageID`, and the exact image digest in the
-  completion record; and
+- the exact Pod/container process-security contract: the protocol UID/GID,
+  `RuntimeDefault` seccomp, no supplemental groups, non-root execution,
+  read-only root filesystem, no privilege escalation, and all capabilities
+  dropped;
+- one target container only, no init/ephemeral containers or sidecars, no host
+  namespaces or service-account token, `restartPolicy: Never`, zero restarts,
+  and no prior target-container state;
+- the target container's unique literal `CROP_DISTILL_SOURCE_GIT_SHA` and
+  `CROP_DISTILL_IMAGE`, the runtime source/image in the completion record, and
+  the Pod's exact (not merely same-digest) `.spec.containers[].image`;
+- for crop consumers, the unique, literal, nonzero
+  `CROP_DISTILL_SPLIT_MANIFEST_SHA256` and the consumed private split snapshot;
+  the split producer must not carry this prior-split anchor;
+- `POD_UID` is populated only through a `metadata.uid` Downward API fieldRef;
+- the runtime-observed `.status.containerStatuses[].imageID` and the exact
+  image digest in the completion record; and
 - Pod phase `Succeeded` and target-container exit code `0`.
 
 Common ICE/containerd forms such as `containerd://sha256:<digest>` and
 `docker-pullable://<repository>@sha256:<digest>` are normalized before the
 digest comparison. Mutable tags, missing entries, duplicate target entries,
-and conflicting identities are refused. The output has no local path or wall
-clock field, so identical evidence produces byte-identical `capture.json`.
+same-digest repository substitutions, incomplete completion records, and
+conflicting identities are refused. Capture schema v2 persists the literal
+Pod authorization environment plus Pod/container process identities, so the
+same semantic checks run again during offline verification. The output has no
+local path or wall clock field, so identical evidence produces byte-identical
+`capture.json`.
 
 ## Exact live capture
 
@@ -129,7 +149,11 @@ finish and before the PR is accepted.
 This archive records what the Kubernetes API and container runtime reported;
 it does **not** enforce image admission. In particular, the helper is not an
 admission webhook and does not prevent a workload from being submitted with a
-different image. Digest-pinned manifests, signature verification, source SHA,
-split-manifest SHA, and checkpoint identities remain the authorization
-boundary. A missing bundle or any capture/verification mismatch blocks rollout
-acceptance.
+different image. It preserves and cross-checks the Pod's literal authorization
+inputs; it does not independently establish that the Pod spec was admitted
+from a reviewed Git commit. Container command/arguments and volume definitions
+remain part of that reviewed-manifest/admission boundary rather than this
+runtime capture schema. Digest-pinned manifests, signature verification,
+source SHA, split-manifest SHA, and checkpoint identities remain the
+authorization boundary. A missing bundle or any capture/verification mismatch
+blocks rollout acceptance.

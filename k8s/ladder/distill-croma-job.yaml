@@ -68,6 +68,7 @@ spec:
                 --img-size 504 \
                 --backbone-name croma_base \
                 --enable-markfukt \
+                --require-npz-key s1_vv_vh \
                 --out /cephfs/distill/heads/croma_r2_plot_features.parquet \
                 --device cuda
 
@@ -113,8 +114,14 @@ spec:
               valueFrom:
                 secretKeyRef: { name: hf-token, key: token, optional: true }
           resources:
-            requests: { cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }
-            limits: { cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
           volumeMounts:
             - { name: cephfs, mountPath: /cephfs }
             # Same PVC, second mount point. The NFI plot index stores
