@@ -381,6 +381,106 @@ spec:
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
 """
 
+# Per-stage source anchor [agreed with Codex 2026-09-02]: the job runs
+# EXACTLY this commit — the one whose payload (ladder_inference_matrix.py)
+# was reviewed. A payload change requires a deliberate constant bump in a
+# reviewed commit; ordinary generator/docs changes never move the anchor.
+INFERENCE_MATRIX_SOURCE_GIT_SHA = "32f081c83b127013d6943f47e69d7f89c1503794"
+
+
+def _require_full_sha(sha: str, name: str) -> str:
+    """Fail-CLOSED at render time — a test-only guard lets a zero or
+    abbreviated SHA reach the cluster from any path that skips pytest."""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha) or sha == "0" * 40:
+        raise ValueError(f"{name} must be a full lowercase 40-hex commit "
+                         f"SHA, got {sha!r}")
+    return sha
+
+INFERENCE_MATRIX_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-inference-matrix
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-inference-matrix, model: shared }}
+spec:
+  backoffLimit: 0
+  # Budget: <=24 cells x (model load + 10 tile forwards) on a 2080ti,
+  # dominated by per-cell model loads (HF weight downloads on first run).
+  # 6 h caps runaway only; idempotent skip makes re-runs minutes.
+  activeDeadlineSeconds: 21600
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-inference-matrix, model: shared }}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: inference-matrix
+          image: {python_image}
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== ladder inference matrix — all completed cells ==="
+              RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$
+              mkdir -p /cephfs/ops
+              trap 'rc=$?; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run=$RUN_ID job=ladder-inference-matrix HEAD=${{HEAD_SHA:-unknown}} ${{ARTIFACTS:-artifacts=none}} rc=$rc status=$([ "$rc" -eq 0 ] && echo OK || echo FAIL)" >> /cephfs/ops/crop_distill.log' EXIT
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch torchvision \\
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \\
+                timm einops Pillow scipy huggingface_hub rasterio pyproj \\
+                {scoring_pins} {sklearn_pin}
+              # BAKED source anchor: the payload commit whose script was
+              # reviewed. No runtime resolution of any mutable ref — a
+              # re-run months from now executes byte-identical code, and
+              # the run record can never claim code the pod did not run.
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              HEAD_SHA={source_sha}
+              git fetch -q --depth 1 origin "$HEAD_SHA"
+              git checkout -q "$HEAD_SHA"
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "PINNED SOURCE: $HEAD_SHA"
+              # ONE pod loads every backbone family, so it needs the union
+              # of the per-column loader deps.
+              {extra_setup_all}
+              mkdir -p /cephfs/ops/deps
+              pip freeze > /cephfs/ops/deps/ladder-inference-matrix-$RUN_ID.txt
+
+              python3 scripts/ladder_inference_matrix.py \\
+                --holdout-dir /cephfs/holdout_val_512 \\
+                --checkpoint-root /cephfs/checkpoints/ladder \\
+                --out-dir /cephfs/ladder_inference \\
+                --git-sha "$HEAD_SHA" \\
+                --device cuda
+
+              MATRIX_SHA=$(sha256sum /cephfs/ladder_inference/matrix.json | cut -d" " -f1)
+              echo "$MATRIX_SHA" | grep -qE "^[0-9a-f]{{64}}$"
+              ARTIFACTS="matrix_sha256=$MATRIX_SHA"
+              echo "=== inference matrix complete ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef: {{ name: hf-token, key: token, optional: true }}
+          resources:
+            requests: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+            limits: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+          volumeMounts:
+            - {{ name: cephfs, mountPath: /cephfs }}
+            - {{ name: cephfs, mountPath: /data }}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+"""
+
 LUCAS_SPLIT_TEMPLATE = """apiVersion: batch/v1
 kind: Job
 metadata:
@@ -688,6 +788,19 @@ def main() -> int:
         outputs[OUT_DIR / f"distill-{model}-job.yaml"] = render_distill(model)
         outputs[OUT_DIR / f"crop-distill-{model}-job.yaml"] = (
             render_crop_distill(model))
+    outputs[OUT_DIR / "inference-matrix-job.yaml"] = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Renders the dashboard's inference matrix: K frozen spread holdout\n"
+        "# tiles × every completed ladder cell. Idempotent per checkpoint\n"
+        "# (sha-keyed) — resubmit after new rungs finish to fill new rows.\n"
+        + INFERENCE_MATRIX_TEMPLATE.format(
+            python_image=PYTHON_IMAGE, scoring_pins=SCORING_PINS,
+            sklearn_pin=SKLEARN_PIN,
+            source_sha=_require_full_sha(INFERENCE_MATRIX_SOURCE_GIT_SHA,
+                                         "INFERENCE_MATRIX_SOURCE_GIT_SHA"),
+            extra_setup_all="\n              ".join(
+                cfg["extra_setup"] for cfg in DISTILL.values()
+                if "extra_setup" in cfg)))
     outputs[OUT_DIR / "lucas-crop-split-job.yaml"] = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         "# Freezes the LUCAS crop 70/30 distill/holdout split ONCE, before\n"
