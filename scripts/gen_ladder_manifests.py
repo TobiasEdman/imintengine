@@ -381,6 +381,12 @@ spec:
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
 """
 
+# Per-stage source anchor [agreed with Codex 2026-09-02]: the job runs
+# EXACTLY this commit — the one whose payload (ladder_inference_matrix.py)
+# was reviewed. A payload change requires a deliberate constant bump in a
+# reviewed commit; ordinary generator/docs changes never move the anchor.
+INFERENCE_MATRIX_SOURCE_GIT_SHA = "32f081c83b127013d6943f47e69d7f89c1503794"
+
 INFERENCE_MATRIX_TEMPLATE = """apiVersion: batch/v1
 kind: Job
 metadata:
@@ -420,14 +426,18 @@ spec:
               pip install --quiet --no-cache-dir \\
                 timm einops Pillow scipy huggingface_hub rasterio pyproj \\
                 {scoring_pins} {sklearn_pin}
+              # BAKED source anchor: the payload commit whose script was
+              # reviewed. No runtime resolution of any mutable ref — a
+              # re-run months from now executes byte-identical code, and
+              # the run record can never claim code the pod did not run.
               mkdir -p /workspace && cd /workspace
-              BRANCH=main
-              git clone --depth 1 --branch "$BRANCH" \\
-                https://github.com/TobiasEdman/ImintEngine.git imintengine
-              cd /workspace/imintengine
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              HEAD_SHA={source_sha}
+              git fetch -q --depth 1 origin "$HEAD_SHA"
+              git checkout -q "$HEAD_SHA"
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
-              HEAD_SHA=$(git rev-parse HEAD)
-              echo "CLONED $BRANCH HEAD: $HEAD_SHA"
+              echo "PINNED SOURCE: $HEAD_SHA"
               # ONE pod loads every backbone family, so it needs the union
               # of the per-column loader deps.
               {extra_setup_all}
@@ -777,6 +787,7 @@ def main() -> int:
         + INFERENCE_MATRIX_TEMPLATE.format(
             python_image=PYTHON_IMAGE, scoring_pins=SCORING_PINS,
             sklearn_pin=SKLEARN_PIN,
+            source_sha=INFERENCE_MATRIX_SOURCE_GIT_SHA,
             extra_setup_all="\n              ".join(
                 cfg["extra_setup"] for cfg in DISTILL.values()
                 if "extra_setup" in cfg)))

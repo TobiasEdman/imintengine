@@ -91,6 +91,17 @@ def test_job_follows_ladder_conventions():
     assert "set -euo pipefail" in text
     assert "numpy==" in text and "pip freeze > /cephfs/ops/deps/" in text
     assert "run=$RUN_ID" in text
+    # BAKED per-stage source anchor [Codex-agreed 2026-09-02]: no runtime
+    # resolution of any mutable ref — the job fetches exactly the reviewed
+    # payload commit, so staggered re-runs cannot run different code.
+    from scripts.gen_ladder_manifests import INFERENCE_MATRIX_SOURCE_GIT_SHA
+
+    import re
+    assert re.fullmatch(r"[0-9a-f]{40}", INFERENCE_MATRIX_SOURCE_GIT_SHA)
+    assert f"HEAD_SHA={INFERENCE_MATRIX_SOURCE_GIT_SHA}" in text
+    assert 'git checkout -q "$HEAD_SHA"' in text
+    assert "BRANCH=main" not in text
+    assert "ls-remote" not in text, "no mutable-ref resolution at runtime"
     # no gate: the matrix is display, it must never unlock a rung
     writes_gate = [ln for ln in text.splitlines()
                    if "_GATE_OK" in ln and not ln.strip().startswith("#")]

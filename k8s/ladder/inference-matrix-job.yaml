@@ -41,14 +41,18 @@ spec:
               pip install --quiet --no-cache-dir \
                 timm einops Pillow scipy huggingface_hub rasterio pyproj \
                 numpy==1.26.4 pandas==2.2.2 pyarrow==17.0.0 scikit-learn==1.5.1
+              # BAKED source anchor: the payload commit whose script was
+              # reviewed. No runtime resolution of any mutable ref — a
+              # re-run months from now executes byte-identical code, and
+              # the run record can never claim code the pod did not run.
               mkdir -p /workspace && cd /workspace
-              BRANCH=main
-              git clone --depth 1 --branch "$BRANCH" \
-                https://github.com/TobiasEdman/ImintEngine.git imintengine
-              cd /workspace/imintengine
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              HEAD_SHA=32f081c83b127013d6943f47e69d7f89c1503794
+              git fetch -q --depth 1 origin "$HEAD_SHA"
+              git checkout -q "$HEAD_SHA"
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
-              HEAD_SHA=$(git rev-parse HEAD)
-              echo "CLONED $BRANCH HEAD: $HEAD_SHA"
+              echo "PINNED SOURCE: $HEAD_SHA"
               # ONE pod loads every backbone family, so it needs the union
               # of the per-column loader deps.
               git clone --depth 1 https://github.com/antofuller/CROMA /workspace/CROMA && pip install --quiet --no-cache-dir -e /workspace/CROMA || true
