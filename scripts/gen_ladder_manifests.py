@@ -30,6 +30,18 @@ import re
 import sys
 from pathlib import Path
 
+if __package__:
+    from . import crop_distill_protocol as crop_protocol
+else:
+    import crop_distill_protocol as crop_protocol
+
+CROP_MODELS = crop_protocol.CROP_MODELS
+CROP_MODEL_UIDS = crop_protocol.CROP_MODEL_UIDS
+PROTOCOL_CROP_INDEX = crop_protocol.CROP_INDEX
+PROTOCOL_CROP_SPLIT = crop_protocol.CROP_SPLIT
+PROTOCOL_CROP_SPLIT_MANIFEST = crop_protocol.CROP_SPLIT_MANIFEST
+TRUTH_COLUMN = crop_protocol.TRUTH_COLUMN
+
 REPO = Path(__file__).resolve().parents[1]
 OUT_DIR = REPO / "k8s" / "ladder"
 
@@ -71,30 +83,34 @@ RUNGS = {
 # BUILT at, which for clay/croma is the difference between features and
 # garbage. sar_cohort marks the two columns whose trainable tiles are the
 # s1_vv_vh subset; their dense pass pre-filters to exactly that cohort.
+_LEGACY_DISTILL_SETUP = {
+    "croma": (
+        "git clone --depth 1 https://github.com/antofuller/CROMA "
+        "/workspace/CROMA && pip install --quiet --no-cache-dir "
+        "-e /workspace/CROMA || true"
+    ),
+    "terramind": "pip install --quiet --no-cache-dir terratorch",
+    "clay": (
+        "pip install --quiet --no-cache-dir "
+        "\"git+https://github.com/Clay-foundation/model.git\""
+    ),
+}
 DISTILL = {
-    "prithvi300m": {"img_size": 496, "backbone": "prithvi_300m"},
-    "prithvi600m": {"img_size": 504, "backbone": "prithvi_600m"},
-    "croma": {"img_size": 504, "backbone": "croma_base",
-              "require_keys": ("s1_vv_vh",),
-              "extra_setup": (
-                  "git clone --depth 1 https://github.com/antofuller/CROMA "
-                  "/workspace/CROMA && pip install --quiet --no-cache-dir "
-                  "-e /workspace/CROMA || true")},
-    "terramind": {"img_size": 496, "backbone": "terramind_v1_base",
-                  "require_keys": ("s1_vv_vh",),
-                  "extra_setup": "pip install --quiet --no-cache-dir terratorch"},
-    "tessera": {"img_size": 504, "backbone": "tessera_v1",
-                # The dense pass must mirror the TRAINING cohort: the
-                # dataset drops tessera-embedding-less tiles at index
-                # construction (unified_dataset._MODEL_REQUIRED_TILE_KEYS
-                # + the runtime required_key skip), so training ran on
-                # 7874 tiles while the unfiltered dense pass walked 7882
-                # and its cohort gate refused on the 8 stragglers —
-                # correctly, but for a cohort nobody trains on.
-                "require_keys": ("tessera",)},
-    "clay": {"img_size": 504, "backbone": "clay_v1_5",
-             "extra_setup": ("pip install --quiet --no-cache-dir "
-                             "\"git+https://github.com/Clay-foundation/model.git\"")},
+    model: {
+        "img_size": protocol.img_size,
+        "backbone": protocol.backbone,
+        **(
+            {"require_keys": protocol.required_npz_keys}
+            if protocol.required_npz_keys
+            else {}
+        ),
+        **(
+            {"extra_setup": _LEGACY_DISTILL_SETUP[model]}
+            if model in _LEGACY_DISTILL_SETUP
+            else {}
+        ),
+    }
+    for model, protocol in CROP_MODELS.items()
 }
 
 # LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
@@ -103,9 +119,80 @@ DISTILL = {
 # [user-stated 2026-08-31: distillability before any retraining], so this
 # stage deliberately writes NO _GATE_OK and no queue rung consumes it —
 # rung 5 must not auto-train off these files before the numbers are read.
-CROP_TRUTH_COL = "unified_class"
-CROP_INDEX = "/cephfs/distill/lucas_crop_distill_index.parquet"
-CROP_SPLIT = "/cephfs/distill/lucas_crop_split.json"
+CROP_TRUTH_COL = TRUTH_COLUMN
+CROP_INDEX = str(PROTOCOL_CROP_INDEX)
+CROP_SPLIT = str(PROTOCOL_CROP_SPLIT)
+CROP_SPLIT_MANIFEST = str(PROTOCOL_CROP_SPLIT_MANIFEST)
+
+# Three-commit bootstrap for immutable Pod code. Commit A contains every file
+# executed inside the storage-prep/split/crop Jobs and builds the image. Commit
+# B embeds A's exact source SHA and signed image digest and authorizes only the
+# two producer Jobs. Commit C pins the externally verified split-manifest hash
+# and authorizes the crop consumers. These identities are deliberately crop-
+# stage-specific: PRs for another stage must never move the source anchor.
+#
+# Replaced with the real Commit-A identities before generator output is
+# committed. The impossible all-zero sentinels make an accidental partial
+# bootstrap fail tests and deployment review loudly.
+CROP_DISTILL_SOURCE_GIT_SHA = "0" * 40
+CROP_DISTILL_IMAGE = (
+    "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "0" * 64
+)
+CROP_DISTILL_SPLIT_MANIFEST_SHA256 = "0" * 64
+_CROP_DISTILL_IMAGE_RE = re.compile(
+    r"^ghcr\.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+    r"(?P<digest>[0-9a-f]{64})$"
+)
+
+
+def _validate_crop_distill_runtime_identity() -> None:
+    """Refuse to render a Job against an unpinned source or image."""
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", CROP_DISTILL_SOURCE_GIT_SHA) is None
+        or CROP_DISTILL_SOURCE_GIT_SHA == "0" * 40
+    ):
+        raise ValueError(
+            "CROP_DISTILL_SOURCE_GIT_SHA must be one nonzero, lowercase, "
+            "full 40-hex commit"
+        )
+    image_match = _CROP_DISTILL_IMAGE_RE.fullmatch(CROP_DISTILL_IMAGE)
+    if image_match is None or image_match.group("digest") == "0" * 64:
+        raise ValueError(
+            "CROP_DISTILL_IMAGE must be "
+            "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+            "<64 lowercase nonzero hex>"
+        )
+
+
+def _validate_crop_distill_identity() -> None:
+    """Refuse crop consumers until Git pins the frozen split manifest."""
+    _validate_crop_distill_runtime_identity()
+    if (
+        re.fullmatch(
+            r"[0-9a-f]{64}", CROP_DISTILL_SPLIT_MANIFEST_SHA256
+        )
+        is None
+        or CROP_DISTILL_SPLIT_MANIFEST_SHA256 == "0" * 64
+    ):
+        raise ValueError(
+            "CROP_DISTILL_SPLIT_MANIFEST_SHA256 must be one nonzero, "
+            "lowercase, full 64-hex digest from the reviewed split freeze"
+        )
+    try:
+        crop_protocol.validate_model_uid_map(CROP_MODEL_UIDS)
+    except ValueError as exc:
+        raise ValueError(f"CROP_MODEL_UIDS invalid: {exc}") from exc
+
+# Exact byte identities measured on the ladder PVC.  The extractor hashes and
+# deserializes each checkpoint through one descriptor; terminal provenance
+# binds that authenticated expected identity without reopening 2.7 GB files.
+CROP_CHECKPOINTS = {
+    model: {
+        "size": protocol.checkpoint_size,
+        "sha256": protocol.checkpoint_sha256,
+    }
+    for model, protocol in CROP_MODELS.items()
+}
 
 # Digest-pinned, never a mutable tag (repo zero-tolerance rule: a tag can
 # be repointed under the pipeline's feet). Manifest-list digest for
@@ -113,12 +200,9 @@ CROP_SPLIT = "/cephfs/distill/lucas_crop_split.json"
 PYTHON_IMAGE = ("python:3.11-slim@sha256:"
                 "d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0")
 
-# Deps that DETERMINE the numbers are pinned: numpy drives the split
-# builder's RNG, scikit-learn the fold assignment, pandas/pyarrow the
-# parquet round-trip. Six columns running weeks apart must score with
-# the same math. The model-loading stack (torch/timm/backbone loaders)
-# stays unpinned but every run snapshots `pip freeze` to the PVC, so
-# cross-column dep drift is auditable rather than invisible.
+# Deps for the legacy NFI-distill/pinned-plots Jobs. The LUCAS crop stage uses
+# CROP_DISTILL_IMAGE instead: its complete model-loading stack is hash-locked
+# and baked once, so staggered columns cannot drift at all.
 SCORING_PINS = "numpy==1.26.4 pandas==2.2.2 pyarrow==17.0.0"
 SKLEARN_PIN = "scikit-learn==1.5.1"
 
@@ -192,7 +276,7 @@ spec:
                 --plot-index /cephfs/nfi/nfi_index_unified_v2_512.parquet \\
                 --img-size {img_size} \\
                 --backbone-name {backbone} \\
-                --enable-markfukt \\
+                --enable-markfukt \\{extract_filter}
                 --out /cephfs/distill/heads/{model}_r2_plot_features.parquet \\
                 --device cuda
 
@@ -237,8 +321,14 @@ spec:
               valueFrom:
                 secretKeyRef: {{ name: hf-token, key: token, optional: true }}
           resources:
-            requests: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
-            limits: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
           volumeMounts:
             - {{ name: cephfs, mountPath: /cephfs }}
             # Same PVC, second mount point. The NFI plot index stores
@@ -261,124 +351,176 @@ metadata:
   labels: {{ app: unified-training, purpose: ladder-crop-distill, model: {model} }}
 spec:
   backoffLimit: 0
-  # Budget: extract forwards ~1.5k tiles (the LUCAS distill side) once
-  # each at 1-5 s/tile on a 2080ti = 0.5-2 h; the OOF is CPU-minutes.
-  # 12 h caps runaway only.
   activeDeadlineSeconds: 43200
   ttlSecondsAfterFinished: 172800
   template:
     metadata:
       labels: {{ app: unified-training, purpose: ladder-crop-distill, model: {model} }}
     spec:
+      automountServiceAccountToken: false
       restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {run_uid}
+        runAsGroup: 2000
+        seccompProfile: {{ type: RuntimeDefault }}
       nodeSelector:
         accelerator: nvidia-gtx-2080ti
       containers:
         - name: crop-distill
-          image: {python_image}
+          image: {crop_image}
+          imagePullPolicy: IfNotPresent
           command:
-            - bash
-            - -c
-            - |
-              set -euo pipefail
-              export PYTHONUNBUFFERED=1
-              echo "=== LUCAS crop-distill stage — {model} ==="
-              # One terminal record per attempt, installed BEFORE the
-              # first thing that can fail. EXIT (not ERR): explicit
-              # `exit 1` paths bypass ERR, and the trap must observe
-              # early failures too — HEAD/artifacts default to unknown.
-              RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$
-              mkdir -p /cephfs/ops
-              trap 'rc=$?; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run=$RUN_ID job=ladder-crop-distill-{model} HEAD=${{HEAD_SHA:-unknown}} ${{ARTIFACTS:-artifacts=none}} rc=$rc status=$([ "$rc" -eq 0 ] && echo OK || echo FAIL)" >> /cephfs/ops/crop_distill.log' EXIT
-              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              pip install --quiet --no-cache-dir torch torchvision \\
-                --index-url https://download.pytorch.org/whl/cu121
-              pip install --quiet --no-cache-dir \\
-                timm einops Pillow scipy huggingface_hub rasterio pyproj \\
-                {scoring_pins} {sklearn_pin}
-              mkdir -p /workspace && cd /workspace
-              BRANCH=main
-              git clone --depth 1 --branch "$BRANCH" \\
-                https://github.com/TobiasEdman/ImintEngine.git imintengine
-              cd /workspace/imintengine
-              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
-              # Own line, not inside an echo: under set -e a failed
-              # substitution here kills the run instead of being masked.
-              HEAD_SHA=$(git rev-parse HEAD)
-              echo "CLONED $BRANCH HEAD: $HEAD_SHA"
-              # Per-column backbone deps — the r2 checkpoints cannot even
-              # LOAD without them.
-              {extra_setup}
-              # Dep snapshot — makes cross-column drift auditable.
-              mkdir -p /cephfs/ops/deps
-              pip freeze > /cephfs/ops/deps/ladder-crop-distill-{model}-$RUN_ID.txt
-
-              CKPT=/cephfs/checkpoints/ladder/{model}_r2/best_model.pt
-              INDEX={crop_index}
-              SPLIT={crop_split}
-              test -f "$CKPT"  || {{ echo "FATAL: no rung-2 checkpoint at $CKPT"; exit 1; }}
-              echo "=== 0/2 verify the frozen split (marker + cross-artifact consistency) ==="
-              # Existence tests are not enough: a consumer must never
-              # read a publish window or a crash-left pair. --verify
-              # validates the MANIFEST hashes AND JSON<->parquet key
-              # equality, and exits non-zero on anything less.
-              python3 scripts/build_lucas_crop_split.py --verify --out-dir /cephfs/distill
-              mkdir -p /cephfs/distill/heads
-
-              echo "=== 1/2 extract crop-point features (rung-2 checkpoint) ==="
-              python3 scripts/extract_plot_features.py \\
-                --checkpoint "$CKPT" \\
-                --plot-index "$INDEX" \\
-                --truth-col {truth_col} \\
-                --img-size {img_size} \\
-                --backbone-name {backbone} \\
-                --enable-markfukt \\
-                --out /cephfs/distill/heads/{model}_r2_crop_features.parquet \\
-                --device cuda
-
-              echo "=== 2/2 crop distillability — pinned-protocol OOF (the R5 evidence) ==="
-              python3 scripts/nfi_head_cv.py \\
-                --features /cephfs/distill/heads/{model}_r2_crop_features.parquet \\
-                --folds 5 \\
-                --heads mlp \\
-                --truth-col {truth_col} \\
-                --group-col tile_name \\
-                --git-sha "$HEAD_SHA" \\
-                --pinned-plots "$SPLIT" \\
-                --out /cephfs/distill/heads/{model}_r2_crop_distillability.json
-
-              # NO _GATE_OK here, on purpose: rung 5 does not exist until a
-              # human reads these numbers [user-stated 2026-08-31 —
-              # distillability before retraining]. A gate marker would let
-              # the queue auto-train a rung the decision has not approved.
-              # Evidence: hashes bind THIS run's outputs into the EXIT
-              # record, so a later overwrite of the fixed paths cannot
-              # ride an old OK line. pipefail makes a failed sha256sum
-              # fatal; the greps reject anything but a full 64-hex digest.
-              OOF_SHA=$(sha256sum /cephfs/distill/heads/{model}_r2_crop_distillability.json | cut -d" " -f1)
-              FEAT_SHA=$(sha256sum /cephfs/distill/heads/{model}_r2_crop_features.parquet | cut -d" " -f1)
-              echo "$OOF_SHA"  | grep -qE "^[0-9a-f]{{64}}$"
-              echo "$FEAT_SHA" | grep -qE "^[0-9a-f]{{64}}$"
-              ARTIFACTS="oof_sha256=$OOF_SHA features_sha256=$FEAT_SHA"
-              echo "=== crop-distill complete for {model} — numbers ready for the R5 decision ==="
+            - /usr/local/bin/python
+          args:
+            - /opt/imintengine/scripts/run_crop_distill_job.py
+            - --model
+            - {model}
           env:
-            - name: PYTHONUNBUFFERED
-              value: "1"
-            - name: HUGGING_FACE_HUB_TOKEN
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{crop_image}"
+            - name: CROP_DISTILL_SPLIT_MANIFEST_SHA256
+              value: "{split_manifest_sha256}"
+            - name: HOME
+              value: /work/home
+            - name: TMPDIR
+              value: /work/tmp
+            - name: POD_UID
               valueFrom:
-                secretKeyRef: {{ name: hf-token, key: token, optional: true }}
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {{ drop: ["ALL"] }}
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: {run_uid}
+            runAsGroup: 2000
           resources:
-            requests: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
-            limits: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+            requests: {{ cpu: "4", memory: "24Gi", ephemeral-storage: "8Gi", nvidia.com/gpu: "1" }}
+            limits: {{ cpu: "4", memory: "24Gi", ephemeral-storage: "8Gi", nvidia.com/gpu: "1" }}
           volumeMounts:
-            - {{ name: cephfs, mountPath: /cephfs }}
-            # Same PVC, second mount point: the LUCAS index inherits the L1
-            # index's ABSOLUTE /data/… tile paths (same trap as the NFI
-            # index — reaper archive 20260831T0920Z).
-            - {{ name: cephfs, mountPath: /data }}
+            - name: tiles
+              mountPath: /cephfs/unified_v2_512
+              subPath: unified_v2_512
+              readOnly: true
+            - name: checkpoint
+              mountPath: /cephfs/checkpoints/ladder/{model}_r2
+              subPath: checkpoints/ladder/{model}_r2
+              readOnly: true
+            - name: split
+              mountPath: /cephfs/distill/crop_split
+              subPath: distill/crop_split/crop_consumer
+              readOnly: true
+            - name: heads
+              mountPath: /cephfs/crop-heads
+              subPath: {head_subpath}
+            - name: records
+              mountPath: /cephfs/crop-records
+              subPath: {record_subpath}
+            - name: work
+              mountPath: /work
       volumes:
-        - name: cephfs
+        - name: tiles
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: checkpoint
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: split
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: heads
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: records
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: work
+          emptyDir:
+            sizeLimit: 8Gi
+"""
+
+CROP_STORAGE_PREP_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-crop-distill-storage-prep
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-distill-storage }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-distill-storage }}
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 2000
+        seccompProfile: {{ type: RuntimeDefault }}
+      containers:
+        - name: storage-prep
+          image: {crop_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/python
+          args:
+            - /opt/imintengine/scripts/prepare_crop_distill_storage.py
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{crop_image}"
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "500m", memory: "256Mi" }}
+            limits: {{ cpu: "500m", memory: "256Mi" }}
+          volumeMounts:
+            - name: distill
+              mountPath: /cephfs/distill
+              subPath: distill
+            - name: ops
+              mountPath: /cephfs/ops
+              subPath: ops
+      volumes:
+        - name: distill
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: ops
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+"""
+
+CROP_DENY_EGRESS_TEMPLATE = """apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ladder-crop-distill-deny-egress
+  namespace: prithvi-training-default
+  labels: { app: unified-training, purpose: ladder-crop-distill-security }
+spec:
+  podSelector:
+    matchExpressions:
+      - key: purpose
+        operator: In
+        values:
+          - ladder-crop-distill
+          - ladder-crop-distill-storage
+  policyTypes:
+    - Egress
+  egress: []
 """
 
 LUCAS_SPLIT_TEMPLATE = """apiVersion: batch/v1
@@ -395,57 +537,74 @@ spec:
     metadata:
       labels: {{ app: unified-training, purpose: ladder-crop-distill, model: shared }}
     spec:
+      automountServiceAccountToken: false
       restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile: {{ type: RuntimeDefault }}
       containers:
         - name: split
-          image: {python_image}
+          image: {crop_image}
+          imagePullPolicy: IfNotPresent
           command:
-            - bash
-            - -c
-            - |
-              set -euo pipefail
-              export PYTHONUNBUFFERED=1
-              # One terminal record per attempt, installed BEFORE the
-              # first thing that can fail (EXIT, not ERR — see the
-              # crop-distill template).
-              RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$
-              mkdir -p /cephfs/ops
-              trap 'rc=$?; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run=$RUN_ID job=ladder-lucas-crop-split HEAD=${{HEAD_SHA:-unknown}} ${{ARTIFACTS:-artifacts=none}} rc=$rc status=$([ "$rc" -eq 0 ] && echo OK || echo FAIL)" >> /cephfs/ops/crop_distill.log' EXIT
-              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              # PINNED: numpy drives the freeze's RNG — an unpinned bump
-              # must never be able to move a would-be holdout.
-              pip install --quiet --no-cache-dir {scoring_pins}
-              mkdir -p /cephfs/ops/deps
-              pip freeze > /cephfs/ops/deps/ladder-lucas-crop-split-$RUN_ID.txt
-              mkdir -p /workspace && cd /workspace
-              BRANCH=main
-              git clone --depth 1 --branch "$BRANCH" \\
-                https://github.com/TobiasEdman/ImintEngine.git imintengine
-              cd /workspace/imintengine
-              # Own line, not inside an echo: under set -e a failed
-              # substitution here kills the run instead of being masked.
-              HEAD_SHA=$(git rev-parse HEAD)
-              echo "CLONED $BRANCH HEAD: $HEAD_SHA"
-              python3 scripts/build_lucas_crop_split.py \\
-                --lucas-index /cephfs/lucas/lucas_tile_index.parquet \\
-                --data-dir /cephfs/unified_v2_512 \\
-                --out-dir /cephfs/distill \\
-                --git-sha "$HEAD_SHA"
-              # Evidence: the MANIFEST (published LAST by the builder)
-              # binds both artifacts by content hash; its own hash goes
-              # into the EXIT record. pipefail makes a failed sha256sum
-              # fatal; the grep rejects a partial digest.
-              MANIFEST_SHA=$(sha256sum /cephfs/distill/lucas_crop_split.MANIFEST.json | cut -d" " -f1)
-              echo "$MANIFEST_SHA" | grep -qE "^[0-9a-f]{{64}}$"
-              ARTIFACTS="manifest_sha256=$MANIFEST_SHA"
+            - /usr/local/bin/python
+          args:
+            - /opt/imintengine/scripts/run_lucas_crop_split_job.py
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{crop_image}"
+            - name: HOME
+              value: /work/home
+            - name: TMPDIR
+              value: /work/tmp
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {{ drop: ["ALL"] }}
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 2000
+            runAsGroup: 2000
           resources:
             requests: {{ cpu: "2", memory: "8Gi" }}
             limits: {{ cpu: "2", memory: "8Gi" }}
           volumeMounts:
-            - {{ name: cephfs, mountPath: /cephfs }}
+            - name: tiles
+              mountPath: /cephfs/unified_v2_512
+              subPath: unified_v2_512
+              readOnly: true
+            - name: lucas
+              mountPath: /cephfs/lucas
+              subPath: lucas
+              readOnly: true
+            - name: distill
+              mountPath: /cephfs/distill/crop_split
+              subPath: distill/crop_split
+            - name: ops
+              mountPath: /cephfs/ops/crop-distill
+              subPath: ops/crop-distill/split
+            - name: work
+              mountPath: /work
       volumes:
-        - name: cephfs
+        - name: tiles
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: lucas
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: distill
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: ops
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: work
+          emptyDir: {{}}
 """
 
 PINNED_PLOTS_TEMPLATE = """apiVersion: batch/v1
@@ -510,13 +669,15 @@ def render_distill(model: str) -> str:
     )
     return header + DISTILL_TEMPLATE.format(
         model=model, img_size=cfg["img_size"], backbone=cfg["backbone"],
-        sar_filter=sar_filter,
+        extract_filter=sar_filter, sar_filter=sar_filter,
         extra_setup=cfg.get("extra_setup", "true  # no extra deps"),
         python_image=PYTHON_IMAGE)
 
 
 def render_crop_distill(model: str) -> str:
-    cfg = DISTILL[model]
+    _validate_crop_distill_identity()
+    if model not in CROP_MODELS:
+        raise ValueError(f"unknown crop-distill model: {model}")
     header = (
         f"# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         f"# LUCAS crop-distill stage for {model}: r2 checkpoint → features at\n"
@@ -527,11 +688,59 @@ def render_crop_distill(model: str) -> str:
         f"# Plan: docs/experiments/ladder_distill_stage.md\n"
     )
     return header + CROP_DISTILL_TEMPLATE.format(
-        model=model, img_size=cfg["img_size"], backbone=cfg["backbone"],
-        truth_col=CROP_TRUTH_COL, crop_index=CROP_INDEX, crop_split=CROP_SPLIT,
-        extra_setup=cfg.get("extra_setup", "true  # no extra deps"),
-        python_image=PYTHON_IMAGE, scoring_pins=SCORING_PINS,
-        sklearn_pin=SKLEARN_PIN)
+        model=model,
+        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
+        crop_image=CROP_DISTILL_IMAGE,
+        split_manifest_sha256=CROP_DISTILL_SPLIT_MANIFEST_SHA256,
+        run_uid=CROP_MODEL_UIDS[model],
+        head_subpath=crop_protocol.crop_head_backing_dir(model).relative_to(
+            crop_protocol.PVC_ROOT
+        ),
+        record_subpath=crop_protocol.crop_record_backing_dir(model).relative_to(
+            crop_protocol.PVC_ROOT
+        ),
+    )
+
+
+def render_crop_storage_prep() -> str:
+    _validate_crop_distill_runtime_identity()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# One-shot least-privilege migration: prepares crop_split plus\n"
+        "# isolated per-model head/record directories and the split record\n"
+        "# directory. Run before split; broad PVC roots stay unchanged.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_STORAGE_PREP_TEMPLATE.format(
+        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
+        crop_image=CROP_DISTILL_IMAGE,
+    )
+
+
+def render_crop_deny_egress() -> str:
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Crop-distill runtime Pods require no network after image pull.\n"
+        "# This policy selects producer, consumer, and storage-prep Pods.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_DENY_EGRESS_TEMPLATE
+
+
+def render_lucas_crop_split() -> str:
+    _validate_crop_distill_runtime_identity()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Freezes the LUCAS crop 70/30 distill/holdout split ONCE, before\n"
+        "# any crop training touches LUCAS (grouped by tile; prior 71-point\n"
+        "# freeze forced into holdout). Run before any crop-distill-<model>.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + LUCAS_SPLIT_TEMPLATE.format(
+        crop_image=CROP_DISTILL_IMAGE,
+        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
+    )
+
 
 EPOCHS = 30  # fixed across the ladder: see the doc's "Controls"
 
@@ -677,31 +886,71 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--check", action="store_true",
                     help="verify the committed manifests match this generator")
+    ap.add_argument(
+        "--crop-bootstrap-only",
+        action="store_true",
+        help=(
+            "write/check only storage-prep and split producer manifests; "
+            "permitted before the producer has created the digest that "
+            "authorizes crop consumers"
+        ),
+    )
     args = ap.parse_args()
 
+    try:
+        if args.crop_bootstrap_only:
+            _validate_crop_distill_runtime_identity()
+        else:
+            _validate_crop_distill_identity()
+    except ValueError as exc:
+        print(f"REFUSING crop-distill manifest generation: {exc}", file=sys.stderr)
+        return 2
+
     outputs: dict[Path, str] = {}
-    for model, base_rel in BASES.items():
-        base_text = (REPO / base_rel).read_text()
-        for rung in RUNGS:
-            dest = OUT_DIR / f"ladder-r{rung}-{model}-job.yaml"
-            outputs[dest] = render(model, rung, base_text)
-        outputs[OUT_DIR / f"distill-{model}-job.yaml"] = render_distill(model)
-        outputs[OUT_DIR / f"crop-distill-{model}-job.yaml"] = (
-            render_crop_distill(model))
-    outputs[OUT_DIR / "lucas-crop-split-job.yaml"] = (
-        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
-        "# Freezes the LUCAS crop 70/30 distill/holdout split ONCE, before\n"
-        "# any crop training touches LUCAS (grouped by tile; prior 71-point\n"
-        "# freeze forced into holdout). Run before any crop-distill-<model>.\n"
-        "# Plan: docs/experiments/ladder_distill_stage.md\n"
-        + LUCAS_SPLIT_TEMPLATE.format(python_image=PYTHON_IMAGE,
-                                      scoring_pins=SCORING_PINS))
-    outputs[OUT_DIR / "distill-pinned-plots-job.yaml"] = (
-        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
-        "# Pins the shared NFI plot set every column's distillability OOF\n"
-        "# scores. Run ONCE before any distill-<model> job.\n"
-        "# Plan: docs/experiments/ladder_distill_stage.md\n"
-        + PINNED_PLOTS_TEMPLATE.format(python_image=PYTHON_IMAGE))
+    outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
+        render_crop_deny_egress()
+    )
+    outputs[OUT_DIR / "lucas-crop-split-job.yaml"] = render_lucas_crop_split()
+    outputs[OUT_DIR / "crop-distill-storage-prep-job.yaml"] = (
+        render_crop_storage_prep()
+    )
+    if not args.crop_bootstrap_only:
+        for model, base_rel in BASES.items():
+            base_text = (REPO / base_rel).read_text()
+            for rung in RUNGS:
+                dest = OUT_DIR / f"ladder-r{rung}-{model}-job.yaml"
+                outputs[dest] = render(model, rung, base_text)
+            outputs[OUT_DIR / f"distill-{model}-job.yaml"] = render_distill(
+                model
+            )
+            outputs[OUT_DIR / f"crop-distill-{model}-job.yaml"] = (
+                render_crop_distill(model)
+            )
+        outputs[OUT_DIR / "distill-pinned-plots-job.yaml"] = (
+            "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+            "# Pins the shared NFI plot set every column's distillability OOF\n"
+            "# scores. Run ONCE before any distill-<model> job.\n"
+            "# Plan: docs/experiments/ladder_distill_stage.md\n"
+            + PINNED_PLOTS_TEMPLATE.format(python_image=PYTHON_IMAGE)
+        )
+
+    if args.crop_bootstrap_only:
+        consumer_paths = [
+            OUT_DIR / f"crop-distill-{model}-job.yaml"
+            for model in CROP_MODELS
+        ]
+        present_consumers = [
+            str(path.relative_to(REPO))
+            for path in consumer_paths
+            if path.exists()
+        ]
+        if present_consumers:
+            print(
+                "REFUSING crop bootstrap while stale consumer manifests "
+                "exist: " + ", ".join(present_consumers),
+                file=sys.stderr,
+            )
+            return 2
 
     stale: list[str] = []
     for dest, text in outputs.items():

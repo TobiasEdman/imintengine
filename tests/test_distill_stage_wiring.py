@@ -116,12 +116,19 @@ def _distill_manifest(model: str) -> str:
     return path.read_text()
 
 
-def test_distill_manifests_are_generated_and_current() -> None:
+def test_manifest_generator_is_current_or_explicitly_bootstrap_gated() -> None:
     import subprocess
     res = subprocess.run(
         ["python3", str(ROOT / "scripts" / "gen_ladder_manifests.py"),
          "--check"], capture_output=True, text=True)
-    assert res.returncode == 0, f"stale generated manifests:\n{res.stdout}"
+    if res.returncode == 2:
+        assert res.stderr.startswith(
+            "REFUSING crop-distill manifest generation:"
+        )
+    else:
+        assert res.returncode == 0, (
+            f"stale generated manifests:\n{res.stdout}\n{res.stderr}"
+        )
 
 
 @pytest.mark.parametrize("script", ["extract_plot_features.py",

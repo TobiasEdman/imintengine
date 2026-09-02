@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 
-
 # CROMA's 12-band S2 order (B10 excluded — atmospheric, not in L2A).
 CROMA_S2_BAND_ORDER: tuple[str, ...] = (
     "B01",  # 443nm coastal aerosol — 60m native
@@ -95,7 +94,70 @@ def load_croma(
             "  export PYTHONPATH=/workspace/CROMA:$PYTHONPATH"
         ) from e
 
-    # Resolve checkpoint
+    # Upstream PretrainedCROMA has no uninitialized mode: its constructor
+    # calls ``torch.load(pretrained_path)`` for every encoder, including when
+    # the path is an empty string.  ImintEngine checkpoint reconstruction does
+    # not need those upstream weights first; the rung checkpoint contains the
+    # complete CROMA encoder and is loaded immediately afterwards.  Build the
+    # exact upstream module graph without the eager loads while preserving all
+    # state-dict key names.  The runtime image pins the upstream source commit,
+    # and the constructor-shape test protects this compatibility shim.
+    if not pretrained:
+        from torch import nn
+        from use_croma import BaseTransformerCrossAttn, ViT, get_2dalibi
+
+        model = PretrainedCROMA.__new__(PretrainedCROMA)
+        nn.Module.__init__(model)
+        if variant == "base":
+            model.encoder_dim = 768
+            model.encoder_depth = 12
+        else:
+            model.encoder_dim = 1024
+            model.encoder_depth = 24
+        model.num_heads = 16
+        model.patch_size = 8
+        model.modality = modality
+        model.num_patches = (img_size // model.patch_size) ** 2
+        model.s1_channels = 2
+        model.s2_channels = 12
+        model.attn_bias = get_2dalibi(
+            num_heads=model.num_heads,
+            num_patches=model.num_patches,
+        )
+        if modality in ("SAR", "both"):
+            model.s1_encoder = ViT(
+                dim=model.encoder_dim,
+                depth=model.encoder_depth // 2,
+                in_channels=model.s1_channels,
+            )
+            model.GAP_FFN_s1 = nn.Sequential(
+                nn.LayerNorm(model.encoder_dim),
+                nn.Linear(model.encoder_dim, 4 * model.encoder_dim),
+                nn.GELU(),
+                nn.Linear(4 * model.encoder_dim, model.encoder_dim),
+            )
+        if modality in ("optical", "both"):
+            model.s2_encoder = ViT(
+                dim=model.encoder_dim,
+                depth=model.encoder_depth,
+                in_channels=model.s2_channels,
+            )
+            model.GAP_FFN_s2 = nn.Sequential(
+                nn.LayerNorm(model.encoder_dim),
+                nn.Linear(model.encoder_dim, 4 * model.encoder_dim),
+                nn.GELU(),
+                nn.Linear(4 * model.encoder_dim, model.encoder_dim),
+            )
+        if modality == "both":
+            model.cross_encoder = BaseTransformerCrossAttn(
+                dim=model.encoder_dim,
+                depth=model.encoder_depth // 2,
+                num_heads=model.num_heads,
+            )
+        model.eval()
+        return model
+
+    # Resolve checkpoint for an explicit upstream-pretrained load.
     if checkpoint_path is None:
         filename = f"CROMA_{variant}.pt"
         for candidate in (
@@ -108,7 +170,7 @@ def load_croma(
                 checkpoint_path = candidate
                 break
 
-    if pretrained and checkpoint_path is None:
+    if checkpoint_path is None:
         try:
             from huggingface_hub import hf_hub_download
             checkpoint_path = hf_hub_download(

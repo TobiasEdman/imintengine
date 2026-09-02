@@ -17,9 +17,10 @@ ghcr.io/<owner>/imint-<image>:<branch-slug>         # på feature-branch
 ghcr.io/<owner>/imint-<image>:latest                # bara på main
 ```
 
-Plus cosign-signaturer för alla pushade tags. Signaturerna binder
-imagen till **just denna workflow-run** via Sigstore Fulcio-certifikat
-— det går inte att efter-signera retroaktivt.
+Plus cosign-signaturer för alla pushade tags. Signaturerna verifieras mot den
+exakta workflow-filen och refen, käll-SHA:n, repository-claimen och GitHub OIDC-
+utfärdaren. Crop-image-digesten publiceras som hand-off-artifact först efter att
+den kontrollen har passerat.
 
 ### Multi-arch-stöd per image
 
@@ -33,14 +34,20 @@ imagen till **just denna workflow-run** via Sigstore Fulcio-certifikat
 Lokal körning (Mac, k8s, vad som helst):
 
 ```bash
-# Verifiera att imagen är signerad av denna workflow innan pull
-cosign verify ghcr.io/tobiasedman/imint-c2rcc-snap:latest \
-  --certificate-identity-regexp "^https://github.com/TobiasEdman/imintengine/" \
+# Bind verifieringen till den granskade källcommitten och den faktiska ref
+# där workflowen byggde den. Byt refs/heads/main mot bygggrenens ref när det
+# är en feature-branch-build; lossa aldrig identitetsmatchningen.
+EXPECTED_SOURCE_SHA=<40-character-source-commit>
+WORKFLOW_REF='TobiasEdman/ImintEngine/.github/workflows/build-pipeline-images.yml@refs/heads/main'
+cosign verify ghcr.io/tobiasedman/imint-c2rcc-snap@sha256:<digest> \
+  --certificate-identity "https://github.com/${WORKFLOW_REF}" \
+  --certificate-github-workflow-sha "$EXPECTED_SOURCE_SHA" \
+  --certificate-github-workflow-repository TobiasEdman/ImintEngine \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 # Om verifieringen passar, pulla och kör
-docker pull ghcr.io/tobiasedman/imint-c2rcc-snap:latest
-docker run --rm ghcr.io/tobiasedman/imint-c2rcc-snap:latest /usr/local/snap/bin/gpt -h
+docker pull ghcr.io/tobiasedman/imint-c2rcc-snap@sha256:<digest>
+docker run --rm ghcr.io/tobiasedman/imint-c2rcc-snap@sha256:<digest> /usr/local/snap/bin/gpt -h
 ```
 
 ### Pinna till digest istället för tag
@@ -80,6 +87,12 @@ PR-builds skippar push och signering — bara smoke-test körs. Detta
 verifierar att Dockerfile bygger utan att förorena GHCR med varje
 work-in-progress-commit.
 
+PR-jobbet har endast `contents: read`. Det separata publish-jobbet körs aldrig
+för en `pull_request` och höjer bara till `packages: write` för GHCR samt
+`id-token: write` för cosign. BuildKit bäddar in OCI-provenance och SBOM i den
+pushade imagen; workflowen använder ingen GitHub artifact-attestation-action
+och begär därför inte `attestations: write`.
+
 ### Felscenarier
 
 | Scenario | Vad workflowen gör |
@@ -93,7 +106,7 @@ work-in-progress-commit.
 
 Keyless-signering via OIDC eliminerar nyckelhantering helt. Fördelar:
 - Ingen privat nyckel att leak:a, rotera, eller dela med team
-- Signaturen binder till en specifik workflow-run-URL — auditable
+- Signaturen binds till exakt workflow-fil/ref, käll-SHA och repository
 - Sigstore Rekor (transparency log) ger bevis på vem signerade när
 
 Nackdelen: kort cert-livstid (15 min) → signatur kräver verifiering mot
