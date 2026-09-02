@@ -450,12 +450,12 @@ metadata:
   labels: {{ app: unified-training, purpose: ladder-crop-distill-storage }}
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 600
   ttlSecondsAfterFinished: 172800
   template:
     metadata:
       labels: {{ app: unified-training, purpose: ladder-crop-distill-storage }}
     spec:
+      activeDeadlineSeconds: 600
       automountServiceAccountToken: false
       restartPolicy: Never
       imagePullSecrets:
@@ -493,16 +493,14 @@ spec:
             requests: {{ cpu: "500m", memory: "256Mi" }}
             limits: {{ cpu: "500m", memory: "256Mi" }}
           volumeMounts:
-            - name: distill
+            - name: training-data-cephfs
               mountPath: /cephfs/distill
               subPath: distill
-            - name: ops
+            - name: training-data-cephfs
               mountPath: /cephfs/ops
               subPath: ops
       volumes:
-        - name: distill
-          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
-        - name: ops
+        - name: training-data-cephfs
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
 """
 

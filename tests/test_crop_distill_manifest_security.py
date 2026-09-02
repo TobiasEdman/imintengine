@@ -241,16 +241,39 @@ def test_storage_prep_is_the_only_root_job_and_has_one_capability(render_identit
     )
     assert container["volumeMounts"] == [
         {
-            "name": "distill",
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/distill",
             "subPath": "distill",
         },
         {
-            "name": "ops",
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/ops",
             "subPath": "ops",
         },
     ]
+
+
+def test_storage_prep_uses_one_pvc_volume_and_pod_scoped_deadline(
+    render_identity,
+):
+    document = yaml.safe_load(manifests.render_crop_storage_prep())
+    job_spec = document["spec"]
+    pod = job_spec["template"]["spec"]
+
+    assert "activeDeadlineSeconds" not in job_spec
+    assert pod["activeDeadlineSeconds"] == 600
+    assert pod["volumes"] == [
+        {
+            "name": "training-data-cephfs",
+            "persistentVolumeClaim": {"claimName": "training-data-cephfs"},
+        }
+    ]
+    mounts = pod["containers"][0]["volumeMounts"]
+    assert [mount["name"] for mount in mounts] == [
+        "training-data-cephfs",
+        "training-data-cephfs",
+    ]
+    assert [mount["subPath"] for mount in mounts] == ["distill", "ops"]
 
 
 def test_crop_runtime_network_policy_denies_all_egress():
