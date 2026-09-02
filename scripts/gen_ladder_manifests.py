@@ -387,6 +387,15 @@ spec:
 # reviewed commit; ordinary generator/docs changes never move the anchor.
 INFERENCE_MATRIX_SOURCE_GIT_SHA = "32f081c83b127013d6943f47e69d7f89c1503794"
 
+
+def _require_full_sha(sha: str, name: str) -> str:
+    """Fail-CLOSED at render time — a test-only guard lets a zero or
+    abbreviated SHA reach the cluster from any path that skips pytest."""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha) or sha == "0" * 40:
+        raise ValueError(f"{name} must be a full lowercase 40-hex commit "
+                         f"SHA, got {sha!r}")
+    return sha
+
 INFERENCE_MATRIX_TEMPLATE = """apiVersion: batch/v1
 kind: Job
 metadata:
@@ -787,7 +796,8 @@ def main() -> int:
         + INFERENCE_MATRIX_TEMPLATE.format(
             python_image=PYTHON_IMAGE, scoring_pins=SCORING_PINS,
             sklearn_pin=SKLEARN_PIN,
-            source_sha=INFERENCE_MATRIX_SOURCE_GIT_SHA,
+            source_sha=_require_full_sha(INFERENCE_MATRIX_SOURCE_GIT_SHA,
+                                         "INFERENCE_MATRIX_SOURCE_GIT_SHA"),
             extra_setup_all="\n              ".join(
                 cfg["extra_setup"] for cfg in DISTILL.values()
                 if "extra_setup" in cfg)))

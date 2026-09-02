@@ -124,6 +124,21 @@ def test_job_freezes_and_renders_via_the_script():
     assert '--git-sha "$HEAD_SHA"' in text
 
 
+@pytest.mark.parametrize("bad", [
+    "0" * 40,                                     # zero sentinel
+    "32f081c",                                    # abbreviated
+    "32F081C83B127013D6943F47E69D7F89C1503794",   # uppercase
+    "main",                                       # mutable ref
+])
+def test_generator_is_fail_closed_on_bad_source_sha(bad):
+    """Test-visible constants are not enough: any render path that skips
+    pytest must ALSO refuse a zero/abbreviated/uppercase/mutable anchor."""
+    from scripts.gen_ladder_manifests import _require_full_sha
+
+    with pytest.raises(ValueError, match="40-hex"):
+        _require_full_sha(bad, "INFERENCE_MATRIX_SOURCE_GIT_SHA")
+
+
 def test_dashboard_serves_and_renders_the_matrix():
     """Wiring pins: the server symlinks the PVC dir, the dashboard fetches
     matrix.json and renders the panel LAST."""
