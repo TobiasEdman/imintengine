@@ -135,10 +135,52 @@ def freeze_state(out_dir: Path) -> tuple[str, str]:
             if got != artifacts[name]:
                 return "corrupt", (f"{name} sha256 {got[:12]}… does not match "
                                    f"{MANIFEST_NAME} ({artifacts[name][:12]}…)")
+        problem = _validate_frozen_semantics(out_dir, m)
+        if problem:
+            return "corrupt", problem
         return "frozen", f"validated against {MANIFEST_NAME}"
     if (out_dir / INDEX_NAME).exists() or (out_dir / SPLIT_NAME).exists():
         return "partial", "artifact(s) present without a manifest — interrupted freeze"
     return "absent", ""
+
+
+def _validate_frozen_semantics(out_dir: Path, manifest: dict) -> str | None:
+    """Cross-artifact consistency — hashes alone only bind BYTES to the
+    marker. An attacker-free but corrupted freeze (tampered parquet with a
+    refreshed marker hash, a schema drift, a duplicate key) passes the
+    hash check while the JSON and parquet disagree on which plots exist.
+    Returns a problem description, or None if consistent.
+    """
+    split = json.loads((out_dir / SPLIT_NAME).read_text())
+    for field in ("key_cols", "plots", "n_distill", "n_holdout",
+                  "holdout_tiles", "required_keys", "truth_col"):
+        if field not in split:
+            return f"{SPLIT_NAME} lacks required field '{field}'"
+    if split["key_cols"] != ["tile_name", "point_id"]:
+        return f"unexpected key_cols {split['key_cols']}"
+    plots = split["plots"]
+    if not plots:
+        return f"{SPLIT_NAME} has an empty plot list"
+    json_keys = {(str(p["tile_name"]), int(p["point_id"])) for p in plots}
+    if len(json_keys) != len(plots):
+        return f"duplicate plot keys in {SPLIT_NAME}"
+    if split["n_distill"] != len(plots):
+        return (f"{SPLIT_NAME} n_distill={split['n_distill']} "
+                f"!= len(plots)={len(plots)}")
+    if manifest.get("n_distill") != len(plots):
+        return (f"{MANIFEST_NAME} n_distill={manifest.get('n_distill')} "
+                f"!= {SPLIT_NAME} plots={len(plots)}")
+    df = pd.read_parquet(out_dir / INDEX_NAME,
+                         columns=["tile_name", "point_id"])
+    pq_keys = {(str(t), int(p))
+               for t, p in df.itertuples(index=False)}
+    if len(pq_keys) != len(df):
+        return f"duplicate keys in {INDEX_NAME}"
+    if pq_keys != json_keys:
+        return (f"key sets disagree: {SPLIT_NAME} has {len(json_keys)}, "
+                f"{INDEX_NAME} has {len(pq_keys)} "
+                f"({len(json_keys ^ pq_keys)} differing)")
+    return None
 
 
 def acquire_lock(out_dir: Path) -> Path:
@@ -163,9 +205,15 @@ def acquire_lock(out_dir: Path) -> Path:
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--lucas-index", required=True)
-    ap.add_argument("--data-dir", required=True)
+    ap.add_argument("--lucas-index", help="required to build")
+    ap.add_argument("--data-dir", help="required to build")
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--verify", action="store_true",
+                    help="validate an existing freeze (hashes + cross-"
+                         "artifact consistency) and exit — 0 iff frozen-"
+                         "valid. Consumers run this BEFORE extraction so "
+                         "they can never read a publish window or a "
+                         "crash-left pair.")
     ap.add_argument("--seed", type=int, default=SEED)
     ap.add_argument("--git-sha", default=None,
                     help="full commit SHA of the producing checkout; "
@@ -173,6 +221,15 @@ def main() -> None:
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
+    if args.verify:
+        state, detail = freeze_state(out_dir)
+        if state == "frozen":
+            print(f"freeze VALID: {detail}")
+            return
+        raise SystemExit(f"freeze INVALID ({state}): {detail}")
+    if not args.lucas_index or not args.data_dir:
+        ap.error("--lucas-index and --data-dir are required to build")
+
     out_dir.mkdir(parents=True, exist_ok=True)
     _guard(out_dir)
     lock = acquire_lock(out_dir)

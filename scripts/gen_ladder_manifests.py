@@ -271,9 +271,16 @@ spec:
             - bash
             - -c
             - |
-              set -e
+              set -euo pipefail
               export PYTHONUNBUFFERED=1
               echo "=== LUCAS crop-distill stage — {model} ==="
+              # One terminal record per attempt, installed BEFORE the
+              # first thing that can fail. EXIT (not ERR): explicit
+              # `exit 1` paths bypass ERR, and the trap must observe
+              # early failures too — HEAD/artifacts default to unknown.
+              RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$
+              mkdir -p /cephfs/ops
+              trap 'rc=$?; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run=$RUN_ID job=ladder-crop-distill-{model} HEAD=${{HEAD_SHA:-unknown}} ${{ARTIFACTS:-artifacts=none}} rc=$rc status=$([ "$rc" -eq 0 ] && echo OK || echo FAIL)" >> /cephfs/ops/crop_distill.log' EXIT
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
               pip install --quiet --no-cache-dir torch torchvision \\
                 --index-url https://download.pytorch.org/whl/cu121
@@ -290,8 +297,6 @@ spec:
               # substitution here kills the run instead of being masked.
               HEAD_SHA=$(git rev-parse HEAD)
               echo "CLONED $BRANCH HEAD: $HEAD_SHA"
-              mkdir -p /cephfs/ops
-              trap 'echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ladder-crop-distill-{model} HEAD=$HEAD_SHA FAIL" >> /cephfs/ops/crop_distill.log' ERR
               # Per-column backbone deps — the r2 checkpoints cannot even
               # LOAD without them.
               {extra_setup}
@@ -300,8 +305,12 @@ spec:
               INDEX={crop_index}
               SPLIT={crop_split}
               test -f "$CKPT"  || {{ echo "FATAL: no rung-2 checkpoint at $CKPT"; exit 1; }}
-              test -f "$INDEX" || {{ echo "FATAL: no LUCAS crop index at $INDEX — run k8s/ladder/lucas-crop-split-job.yaml first"; exit 1; }}
-              test -f "$SPLIT" || {{ echo "FATAL: no LUCAS crop split at $SPLIT — run k8s/ladder/lucas-crop-split-job.yaml first"; exit 1; }}
+              echo "=== 0/2 verify the frozen split (marker + cross-artifact consistency) ==="
+              # Existence tests are not enough: a consumer must never
+              # read a publish window or a crash-left pair. --verify
+              # validates the MANIFEST hashes AND JSON<->parquet key
+              # equality, and exits non-zero on anything less.
+              python3 scripts/build_lucas_crop_split.py --verify --out-dir /cephfs/distill
               mkdir -p /cephfs/distill/heads
 
               echo "=== 1/2 extract crop-point features (rung-2 checkpoint) ==="
@@ -328,13 +337,15 @@ spec:
               # human reads these numbers [user-stated 2026-08-31 —
               # distillability before retraining]. A gate marker would let
               # the queue auto-train a rung the decision has not approved.
-              # Evidence outlives the Job TTL: the append-only record
-              # binds THIS run's outputs by content hash, so a later
-              # overwrite of the fixed paths cannot ride an old OK line.
+              # Evidence: hashes bind THIS run's outputs into the EXIT
+              # record, so a later overwrite of the fixed paths cannot
+              # ride an old OK line. pipefail makes a failed sha256sum
+              # fatal; the greps reject anything but a full 64-hex digest.
               OOF_SHA=$(sha256sum /cephfs/distill/heads/{model}_r2_crop_distillability.json | cut -d" " -f1)
               FEAT_SHA=$(sha256sum /cephfs/distill/heads/{model}_r2_crop_features.parquet | cut -d" " -f1)
-              echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ladder-crop-distill-{model} HEAD=$HEAD_SHA oof_sha256=$OOF_SHA features_sha256=$FEAT_SHA OK" \\
-                >> /cephfs/ops/crop_distill.log
+              echo "$OOF_SHA"  | grep -qE "^[0-9a-f]{{64}}$"
+              echo "$FEAT_SHA" | grep -qE "^[0-9a-f]{{64}}$"
+              ARTIFACTS="oof_sha256=$OOF_SHA features_sha256=$FEAT_SHA"
               echo "=== crop-distill complete for {model} — numbers ready for the R5 decision ==="
           env:
             - name: PYTHONUNBUFFERED
@@ -378,8 +389,14 @@ spec:
             - bash
             - -c
             - |
-              set -e
+              set -euo pipefail
               export PYTHONUNBUFFERED=1
+              # One terminal record per attempt, installed BEFORE the
+              # first thing that can fail (EXIT, not ERR — see the
+              # crop-distill template).
+              RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$
+              mkdir -p /cephfs/ops
+              trap 'rc=$?; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run=$RUN_ID job=ladder-lucas-crop-split HEAD=${{HEAD_SHA:-unknown}} ${{ARTIFACTS:-artifacts=none}} rc=$rc status=$([ "$rc" -eq 0 ] && echo OK || echo FAIL)" >> /cephfs/ops/crop_distill.log' EXIT
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
               pip install --quiet --no-cache-dir numpy pandas pyarrow
               mkdir -p /workspace && cd /workspace
@@ -391,19 +408,18 @@ spec:
               # substitution here kills the run instead of being masked.
               HEAD_SHA=$(git rev-parse HEAD)
               echo "CLONED $BRANCH HEAD: $HEAD_SHA"
-              mkdir -p /cephfs/ops
-              trap 'echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ladder-lucas-crop-split HEAD=$HEAD_SHA FAIL" >> /cephfs/ops/crop_distill.log' ERR
               python3 scripts/build_lucas_crop_split.py \\
                 --lucas-index /cephfs/lucas/lucas_tile_index.parquet \\
                 --data-dir /cephfs/unified_v2_512 \\
                 --out-dir /cephfs/distill \\
                 --git-sha "$HEAD_SHA"
-              # Evidence outlives the Job TTL: the MANIFEST (published
-              # LAST by the builder) binds both artifacts to this commit
-              # by content hash; this append-only line is the run record.
+              # Evidence: the MANIFEST (published LAST by the builder)
+              # binds both artifacts by content hash; its own hash goes
+              # into the EXIT record. pipefail makes a failed sha256sum
+              # fatal; the grep rejects a partial digest.
               MANIFEST_SHA=$(sha256sum /cephfs/distill/lucas_crop_split.MANIFEST.json | cut -d" " -f1)
-              echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ladder-lucas-crop-split HEAD=$HEAD_SHA manifest_sha256=$MANIFEST_SHA OK" \\
-                >> /cephfs/ops/crop_distill.log
+              echo "$MANIFEST_SHA" | grep -qE "^[0-9a-f]{{64}}$"
+              ARTIFACTS="manifest_sha256=$MANIFEST_SHA"
           resources:
             requests: {{ cpu: "2", memory: "8Gi" }}
             limits: {{ cpu: "2", memory: "8Gi" }}

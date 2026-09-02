@@ -370,6 +370,76 @@ def test_partial_freeze_is_rejected(monkeypatch, tmp_path):
         _run_split_builder(monkeypatch, index, data_dir, out_dir)
 
 
+def test_hash_refresh_cannot_hide_key_disagreement(monkeypatch, tmp_path):
+    """Codex repro: drop one parquet row AND refresh the marker hash —
+    byte-integrity then passes while JSON and parquet disagree on which
+    plots exist. Semantic validation must catch it: CORRUPT, and
+    --verify must exit non-zero on the same state."""
+    import hashlib
+    import json as _json
+    import pandas as pd
+
+    index, data_dir = _write_lucas_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+    idx_p = out_dir / "lucas_crop_distill_index.parquet"
+    man_p = out_dir / "lucas_crop_split.MANIFEST.json"
+    df = pd.read_parquet(idx_p)
+    df.iloc[:-1].to_parquet(idx_p)  # one row gone
+    m = _json.loads(man_p.read_text())
+    m["artifacts"]["lucas_crop_distill_index.parquet"] = hashlib.sha256(
+        idx_p.read_bytes()).hexdigest()  # refreshed marker hash
+    man_p.write_text(_json.dumps(m, indent=1))
+
+    with pytest.raises(SystemExit, match="key sets disagree"):
+        _run_split_builder(monkeypatch, index, data_dir, out_dir)
+    with pytest.raises(SystemExit, match="INVALID"):
+        _run_split_builder(monkeypatch, index, data_dir, out_dir, "--verify")
+
+
+def test_verify_mode_accepts_a_valid_freeze(monkeypatch, tmp_path, capsys):
+    """--verify is the consumers' gate (crop-distill runs it before
+    extraction): exit 0 + VALID on a healthy freeze, non-zero otherwise."""
+    index, data_dir = _write_lucas_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+    _run_split_builder(monkeypatch, index, data_dir, out_dir, "--verify")
+    assert "freeze VALID" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit, match="INVALID"):
+        _run_split_builder(monkeypatch, index, data_dir,
+                           tmp_path / "empty", "--verify")
+
+
+@pytest.mark.parametrize("path", [
+    "lucas-crop-split-job.yaml", "crop-distill-tessera-job.yaml"],
+    ids=lambda v: v)
+def test_job_scripts_are_failure_sensitive(path):
+    """Blocker 3 + warning: pipefail (a dead sha256sum piped through cut
+    yielded an empty digest logged as OK), 64-hex digest guards, and a
+    terminal EXIT record installed before the first fallible command."""
+    text = _job_text(OUT_DIR / path)
+    lines = text.splitlines()
+    assert "set -euo pipefail" in text
+    assert "' ERR" not in text, "ERR traps miss explicit exit paths"
+    assert 'grep -qE "^[0-9a-f]{64}$"' in text
+    trap_at = next(i for i, l in enumerate(lines) if l.strip().startswith("trap"))
+    clone_at = next(i for i, l in enumerate(lines) if "git clone" in l)
+    assert trap_at < clone_at, "EXIT record must observe clone failures"
+    assert "run=$RUN_ID" in text
+
+
+def test_crop_consumer_verifies_the_freeze_before_extraction():
+    """Blocker 2: existence tests admit a publish window or crash-left
+    pair; the consumer must run the builder's own --verify gate first."""
+    text = _job_text(OUT_DIR / "crop-distill-tessera-job.yaml")
+    verify_at = text.index("build_lucas_crop_split.py --verify")
+    extract_at = text.index("extract_plot_features.py")
+    assert verify_at < extract_at
+
+
 def test_freeze_lock_excludes_concurrent_builders(monkeypatch, tmp_path):
     """Two racing builders must never both publish: the loser dies on the
     O_EXCL lock, loudly, before any artifact is written."""
