@@ -34,7 +34,11 @@ spec:
               mkdir -p /cephfs/ops
               trap 'rc=$?; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run=$RUN_ID job=ladder-lucas-crop-split HEAD=${HEAD_SHA:-unknown} ${ARTIFACTS:-artifacts=none} rc=$rc status=$([ "$rc" -eq 0 ] && echo OK || echo FAIL)" >> /cephfs/ops/crop_distill.log' EXIT
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              pip install --quiet --no-cache-dir numpy pandas pyarrow
+              # PINNED: numpy drives the freeze's RNG — an unpinned bump
+              # must never be able to move a would-be holdout.
+              pip install --quiet --no-cache-dir numpy==1.26.4 pandas==2.2.2 pyarrow==17.0.0
+              mkdir -p /cephfs/ops/deps
+              pip freeze > /cephfs/ops/deps/ladder-lucas-crop-split-$RUN_ID.txt
               mkdir -p /workspace && cd /workspace
               BRANCH=main
               git clone --depth 1 --branch "$BRANCH" \

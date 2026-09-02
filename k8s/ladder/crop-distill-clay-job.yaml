@@ -46,8 +46,8 @@ spec:
               pip install --quiet --no-cache-dir torch torchvision \
                 --index-url https://download.pytorch.org/whl/cu121
               pip install --quiet --no-cache-dir \
-                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
-                pandas pyarrow rasterio pyproj
+                timm einops Pillow scipy huggingface_hub rasterio pyproj \
+                numpy==1.26.4 pandas==2.2.2 pyarrow==17.0.0 scikit-learn==1.5.1
               mkdir -p /workspace && cd /workspace
               BRANCH=main
               git clone --depth 1 --branch "$BRANCH" \
@@ -61,6 +61,9 @@ spec:
               # Per-column backbone deps — the r2 checkpoints cannot even
               # LOAD without them.
               pip install --quiet --no-cache-dir "git+https://github.com/Clay-foundation/model.git"
+              # Dep snapshot — makes cross-column drift auditable.
+              mkdir -p /cephfs/ops/deps
+              pip freeze > /cephfs/ops/deps/ladder-crop-distill-clay-$RUN_ID.txt
 
               CKPT=/cephfs/checkpoints/ladder/clay_r2/best_model.pt
               INDEX=/cephfs/distill/lucas_crop_distill_index.parquet
@@ -91,6 +94,8 @@ spec:
                 --folds 5 \
                 --heads mlp \
                 --truth-col unified_class \
+                --group-col tile_name \
+                --git-sha "$HEAD_SHA" \
                 --pinned-plots "$SPLIT" \
                 --out /cephfs/distill/heads/clay_r2_crop_distillability.json
 

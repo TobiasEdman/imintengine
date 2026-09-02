@@ -258,9 +258,11 @@ def test_missing_tessera_tile_does_not_qualify(tmp_path):
     assert tile_qualifies(stale_sar, keys) is False
 
 
-def _write_lucas_fixture(tmp_path, n_tiles=10, with_tessera=True):
+def _write_lucas_fixture(tmp_path, n_tiles=10, with_tessera=True,
+                         forced_tiles=()):
     """A minimal PVC: n_tiles qualified npz tiles + an index parquet with
-    all 11 crop classes × 5 points per tile, inside the crop window."""
+    all 11 crop classes × 5 points per tile, inside the crop window.
+    ``forced_tiles`` get split='test' (the prior 71-point freeze)."""
     import pandas as pd
 
     data_dir = tmp_path / "tiles"
@@ -281,7 +283,7 @@ def _write_lucas_fixture(tmp_path, n_tiles=10, with_tessera=True):
                     "row": 10 + pid, "col": 10 + pid,
                     "unified_class": cls,
                     "point_id": t * 1000 + pid,
-                    "split": "train",
+                    "split": "test" if name in forced_tiles else "train",
                 })
                 pid += 1
     index = tmp_path / "lucas_tile_index.parquet"
@@ -438,6 +440,107 @@ def test_crop_consumer_verifies_the_freeze_before_extraction():
     verify_at = text.index("build_lucas_crop_split.py --verify")
     extract_at = text.index("extract_plot_features.py")
     assert verify_at < extract_at
+
+
+def test_grouped_folds_never_split_a_tile(tmp_path):
+    """Round 4: LUCAS crop points cluster ~1.75/tile; point-level folds
+    leak same-tile context train→test. Grouped folds must keep every
+    group wholly on one side, while still predicting every point once."""
+    from nfi_head_cv import make_folds
+
+    rng = np.random.default_rng(0)
+    groups = np.repeat(np.arange(40), 3)          # 40 tiles × 3 points
+    y = rng.integers(11, 14, size=len(groups))
+    folds = make_folds(y, 5, groups)
+    covered = np.zeros(len(y), dtype=int)
+    for tr, te in folds:
+        covered[te] += 1
+        assert not (set(groups[tr]) & set(groups[te])), "tile straddles folds"
+    assert (covered == 1).all(), "every point must be OOF-predicted once"
+
+
+def test_crop_oof_is_group_folded_and_sha_stamped():
+    """The manifests must actually request grouped folds + provenance."""
+    text = _job_text(_crop_path("tessera"))
+    assert "--group-col tile_name" in text
+    assert '--git-sha "$HEAD_SHA"' in text
+
+
+@pytest.mark.parametrize("path", [
+    "lucas-crop-split-job.yaml", "crop-distill-tessera-job.yaml"],
+    ids=lambda v: v)
+def test_scoring_deps_are_pinned_and_snapshotted(path):
+    """Round 4: the deps that determine the numbers (RNG, folds, parquet)
+    are version-pinned, and every run snapshots pip freeze to the PVC so
+    cross-column drift in the unpinned stack is auditable."""
+    text = _job_text(OUT_DIR / path)
+    assert "numpy==" in text
+    assert "pip freeze > /cephfs/ops/deps/" in text
+    if path.startswith("crop-distill"):
+        assert "scikit-learn==" in text
+
+
+def test_schema_reduced_parquet_is_corrupt(monkeypatch, tmp_path):
+    """Codex round-4 repro: a parquet reduced to the key columns stays
+    hash-consistent after a marker refresh but is unconsumable — the
+    verifier must require the full extract schema."""
+    import hashlib
+    import json as _json
+    import pandas as pd
+
+    index, data_dir = _write_lucas_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+    idx_p = out_dir / "lucas_crop_distill_index.parquet"
+    man_p = out_dir / "lucas_crop_split.MANIFEST.json"
+    pd.read_parquet(idx_p)[["tile_name", "point_id"]].to_parquet(idx_p)
+    m = _json.loads(man_p.read_text())
+    m["artifacts"]["lucas_crop_distill_index.parquet"] = hashlib.sha256(
+        idx_p.read_bytes()).hexdigest()
+    man_p.write_text(_json.dumps(m, indent=1))
+
+    with pytest.raises(SystemExit, match="lacks extract columns"):
+        _run_split_builder(monkeypatch, index, data_dir, out_dir, "--verify")
+
+
+def test_manifest_split_holdout_count_mismatch_is_corrupt(monkeypatch, tmp_path):
+    import hashlib
+    import json as _json
+
+    index, data_dir = _write_lucas_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+    split_p = out_dir / "lucas_crop_split.json"
+    man_p = out_dir / "lucas_crop_split.MANIFEST.json"
+    s = _json.loads(split_p.read_text())
+    s["n_holdout"] += 1
+    split_p.write_text(_json.dumps(s, indent=1))
+    m = _json.loads(man_p.read_text())
+    m["artifacts"]["lucas_crop_split.json"] = hashlib.sha256(
+        split_p.read_bytes()).hexdigest()
+    man_p.write_text(_json.dumps(m, indent=1))
+
+    with pytest.raises(SystemExit, match="n_holdout"):
+        _run_split_builder(monkeypatch, index, data_dir, out_dir, "--verify")
+
+
+def test_holdout_fraction_counts_forced_tiles(monkeypatch, tmp_path):
+    """Round 4: the 30% target is of ALL qualified tiles — computing it on
+    the forced-reduced pool undershot by FRAC × n_forced."""
+    import json as _json
+
+    index, data_dir = _write_lucas_fixture(tmp_path, n_tiles=10,
+                                           forced_tiles=("tile09",))
+    out_dir = tmp_path / "out"
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+    split = _json.loads((out_dir / "lucas_crop_split.json").read_text())
+    # 10 qualified tiles → round(3.0) = 3 holdout INCLUDING the forced one.
+    assert len(split["holdout_tiles"]) == 3
+    assert "tile09" in split["holdout_tiles"]
+    assert split["forced_holdout_tiles_from_prior_split"] == ["tile09"]
 
 
 def test_freeze_lock_excludes_concurrent_builders(monkeypatch, tmp_path):

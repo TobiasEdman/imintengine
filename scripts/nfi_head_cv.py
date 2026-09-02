@@ -119,20 +119,40 @@ def build_head(name: str):
     raise ValueError(f"unknown head {name!r} (known: logreg, mlp)")
 
 
-def oof_predict(X: np.ndarray, y: np.ndarray, head_name: str, folds: int) -> np.ndarray:
-    """StratifiedKFold out-of-fold predictions — one prediction per plot.
+def make_folds(y: np.ndarray, folds: int, groups: np.ndarray | None = None):
+    """Fold index pairs: stratified, and GROUP-disjoint when groups are given.
+
+    Grouped mode exists for the LUCAS crop truth: points cluster ~1.75 per
+    tile and same-tile points share spatial context, so point-level folds
+    leak that context from train to test and inflate the OOF. With groups,
+    StratifiedGroupKFold keeps every tile wholly on one side of each fold.
+    NFI stays point-level — its plots are ~1 per tile, and regrouping would
+    silently change the published table's fold assignment.
+    """
+    from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
+
+    X_dummy = np.zeros((len(y), 1))
+    if groups is None:
+        skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=SEED)
+        return list(skf.split(X_dummy, y))
+    sgk = StratifiedGroupKFold(n_splits=folds, shuffle=True, random_state=SEED)
+    return list(sgk.split(X_dummy, y, groups=groups))
+
+
+def oof_predict(X: np.ndarray, y: np.ndarray, head_name: str, folds: int,
+                groups: np.ndarray | None = None) -> np.ndarray:
+    """Out-of-fold predictions — one prediction per plot.
 
     Standardization is fit on the TRAIN folds only and applied to the held-out
     fold, so no held-out statistic leaks into training. Each plot is predicted
-    exactly once, by a model that never saw it.
+    exactly once, by a model that never saw it (nor, in grouped mode, any
+    point from its tile).
     """
-    from sklearn.model_selection import StratifiedKFold
     from sklearn.preprocessing import StandardScaler
 
-    skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=SEED)
     oof = np.full(len(y), -99, dtype=np.int64)
 
-    for tr, te in skf.split(X, y):
+    for tr, te in make_folds(y, folds, groups):
         scaler = StandardScaler().fit(X[tr])
         clf = build_head(head_name)
         clf.fit(scaler.transform(X[tr]), y[tr])
@@ -162,6 +182,13 @@ def main() -> None:
                          "restricts scoring to the shared cross-backbone plot "
                          "set, in canonical order (the ladder's "
                          "distillability protocol)")
+    ap.add_argument("--group-col", default=None,
+                    help="fold-group column (e.g. tile_name for LUCAS crop): "
+                         "folds become group-disjoint so same-tile points "
+                         "never straddle train/test")
+    ap.add_argument("--git-sha", default=None,
+                    help="producing commit, recorded in _meta so cross-column "
+                         "outputs are comparable-by-construction or visibly not")
     ap.add_argument("--out", required=True, help="output JSON path")
     args = ap.parse_args()
 
@@ -203,6 +230,15 @@ def main() -> None:
         # NFI 5-class suite space: -1 (treeless) → 0 (non-forest).
         y = np.where(y == -1, 0, y)
 
+    groups = None
+    if args.group_col:
+        if args.group_col not in df.columns:
+            raise SystemExit(f"--group-col {args.group_col} not in the "
+                             f"features parquet")
+        groups = df[args.group_col].to_numpy()
+        print(f"grouped folds on '{args.group_col}': "
+              f"{len(np.unique(groups))} groups / {len(groups)} points")
+
     n = len(y)
     class_counts = {int(c): int((y == c).sum()) for c in sorted(np.unique(y))}
     print(f"{n} plots, {X.shape[1]} features; class support {class_counts}")
@@ -225,9 +261,12 @@ def main() -> None:
             # carried into the JSON as if they were.
             "baselines": BASELINES if nfi_mode else None,
             "truth_col": args.truth_col,
+            "group_col": args.group_col,
+            "git_sha": args.git_sha,
             "pinned_plots": pinned_meta,
             # Fold identity across columns rests on y being identical
-            # (StratifiedKFold depends only on (n, y)). Nothing else
+            # (folds depend only on (n, y) — plus groups in grouped mode,
+            # and groups follow from the pinned canonical order). Nothing else
             # cross-checks that — comparing this hash between two columns'
             # outputs makes any divergence (NaN handling, a dominant-frac
             # override) detectable instead of silent.
@@ -240,7 +279,7 @@ def main() -> None:
     print(f"\n{'head':<10} {'overall':>8} {'kappa':>8}{delta_hdr}")
     print("-" * 48)
     for head_name in heads:
-        oof = oof_predict(X, y, head_name, args.folds)
+        oof = oof_predict(X, y, head_name, args.folds, groups)
         if nfi_mode:
             suite = accuracy_suite(y, oof)
             overall = suite["overall_accuracy_5class"]

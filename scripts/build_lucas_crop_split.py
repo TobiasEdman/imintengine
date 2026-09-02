@@ -60,6 +60,10 @@ INDEX_NAME = "lucas_crop_distill_index.parquet"
 SPLIT_NAME = "lucas_crop_split.json"
 MANIFEST_NAME = "lucas_crop_split.MANIFEST.json"
 LOCK_NAME = ".lucas_crop_split.lock"
+# What extract_plot_features actually reads from the index — the frozen
+# parquet must carry every one of these to be consumable.
+EXTRACT_COLUMNS = ("tile_name", "tile_path", "row", "col",
+                   "unified_class", "point_id")
 
 
 def _sha256(path: Path) -> str:
@@ -170,10 +174,18 @@ def _validate_frozen_semantics(out_dir: Path, manifest: dict) -> str | None:
     if manifest.get("n_distill") != len(plots):
         return (f"{MANIFEST_NAME} n_distill={manifest.get('n_distill')} "
                 f"!= {SPLIT_NAME} plots={len(plots)}")
-    df = pd.read_parquet(out_dir / INDEX_NAME,
-                         columns=["tile_name", "point_id"])
+    if manifest.get("n_holdout") != split["n_holdout"]:
+        return (f"{MANIFEST_NAME} n_holdout={manifest.get('n_holdout')} "
+                f"!= {SPLIT_NAME} n_holdout={split['n_holdout']}")
+    df = pd.read_parquet(out_dir / INDEX_NAME)
+    # The index must be EXTRACT-READY, not merely keyed: a hash-consistent
+    # parquet reduced to the key columns would freeze fine and then kill
+    # every crop-distill job at extraction (Codex round 4).
+    missing_cols = [c for c in EXTRACT_COLUMNS if c not in df.columns]
+    if missing_cols:
+        return f"{INDEX_NAME} lacks extract columns {missing_cols}"
     pq_keys = {(str(t), int(p))
-               for t, p in df.itertuples(index=False)}
+               for t, p in df[["tile_name", "point_id"]].itertuples(index=False)}
     if len(pq_keys) != len(df):
         return f"duplicate keys in {INDEX_NAME}"
     if pq_keys != json_keys:
@@ -312,15 +324,19 @@ def _build(args, out_dir: Path) -> None:
     # to OUR holdout unconditionally.
     forced_holdout = set(df.loc[df.get("split", "") == "test", "tile_name"])
 
+    forced_present = forced_holdout & set(crops["tile_name"])
     tiles = np.array(sorted(set(crops["tile_name"]) - forced_holdout))
+    # The holdout fraction is of ALL qualified tiles — forced ones included.
+    # Computing it on the already-forced-reduced pool undershot the target
+    # by HOLDOUT_FRAC × n_forced tiles (Codex round 4).
+    n_total = len(tiles) + len(forced_present)
+    n_hold = max(0, int(round(n_total * HOLDOUT_FRAC)) - len(forced_present))
     rng_base = args.seed
     best = None
     for trial in range(50):
         rng = np.random.default_rng(rng_base + trial)
-        n_hold = max(1, int(round(len(tiles) * HOLDOUT_FRAC))
-                     - len(forced_holdout & set(crops["tile_name"])))
         hold_tiles = set(rng.choice(tiles, size=n_hold, replace=False))
-        hold_tiles |= (forced_holdout & set(crops["tile_name"]))
+        hold_tiles |= forced_present
         hold = crops[crops["tile_name"].isin(hold_tiles)]
         support = hold["unified_class"].value_counts()
         cover = sum(1 for c in CROP_CLASSES
