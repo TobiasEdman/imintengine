@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 from pathlib import Path, PurePosixPath
 from types import ModuleType
@@ -135,15 +136,38 @@ def extract_archive(
 
 
 def _load_provenance_module(source_root: Path) -> ModuleType:
+    protocol_path = source_root / "scripts" / "crop_distill_protocol.py"
     module_path = source_root / "scripts" / "crop_distill_provenance.py"
-    spec = importlib.util.spec_from_file_location(
-        "crop_distill_provenance", module_path
-    )
-    if spec is None or spec.loader is None:
-        raise ValueError(f"cannot import provenance helper: {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    previous_protocol = sys.modules.pop("crop_distill_protocol", None)
+    previous_provenance = sys.modules.pop("crop_distill_provenance", None)
+    try:
+        protocol_spec = importlib.util.spec_from_file_location(
+            "crop_distill_protocol", protocol_path
+        )
+        if protocol_spec is None or protocol_spec.loader is None:
+            raise ValueError(f"cannot import protocol helper: {protocol_path}")
+        protocol = importlib.util.module_from_spec(protocol_spec)
+        sys.modules["crop_distill_protocol"] = protocol
+        protocol_spec.loader.exec_module(protocol)
+
+        spec = importlib.util.spec_from_file_location(
+            "crop_distill_provenance", module_path
+        )
+        if spec is None or spec.loader is None:
+            raise ValueError(f"cannot import provenance helper: {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["crop_distill_provenance"] = module
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        if previous_protocol is None:
+            sys.modules.pop("crop_distill_protocol", None)
+        else:
+            sys.modules["crop_distill_protocol"] = previous_protocol
+        if previous_provenance is None:
+            sys.modules.pop("crop_distill_provenance", None)
+        else:
+            sys.modules["crop_distill_provenance"] = previous_provenance
 
 
 def _file_identity(path: Path) -> dict[str, Any]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -122,6 +123,23 @@ def test_scoring_dependency_audit_ignores_model_source_metadata():
 
     assert "PYTHONPATH= /opt/venvs/scoring/bin/python -m pip check" in dockerfile
     assert "PYTHONPATH= /opt/venvs/scoring/bin/python -m pip freeze --all" in dockerfile
+
+
+def test_build_sealer_loads_exact_sibling_provenance_module():
+    helper_path = REPO / "docker" / "ladder-crop-distill" / "prepare_runtime.py"
+    spec = importlib.util.spec_from_file_location(
+        "crop_distill_prepare_runtime_test", helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    provenance = helper._load_provenance_module(REPO)
+
+    assert Path(provenance.__file__).resolve() == (
+        REPO / "scripts" / "crop_distill_provenance.py"
+    ).resolve()
+    assert provenance.model_protocol("croma").backbone == "croma_base"
 
 
 def test_storage_prep_smoke_uses_exact_linux_security_boundary():
