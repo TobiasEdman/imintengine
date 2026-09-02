@@ -726,39 +726,39 @@ def test_rendered_crop_job_is_shell_free_and_declarative(render_identity, model)
 @pytest.mark.parametrize("model", protocol.MODEL_KEYS)
 def test_crop_mounts_are_minimal_subpath_projections(render_identity, model):
     _pod, container = _container(manifests.render_crop_distill(model))
-    mounts = {item["name"]: item for item in container["volumeMounts"]}
-    assert mounts == {
-        "tiles": {
-            "name": "tiles",
+    mounts = container["volumeMounts"]
+    assert mounts == [
+        {
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/unified_v2_512",
             "subPath": "unified_v2_512",
             "readOnly": True,
         },
-        "checkpoint": {
-            "name": "checkpoint",
+        {
+            "name": "training-data-cephfs",
             "mountPath": f"/cephfs/checkpoints/ladder/{model}_r2",
             "subPath": f"checkpoints/ladder/{model}_r2",
             "readOnly": True,
         },
-        "split": {
-            "name": "split",
+        {
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/distill/crop_split",
             "subPath": "distill/crop_split/crop_consumer",
             "readOnly": True,
         },
-        "heads": {
-            "name": "heads",
+        {
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/crop-heads",
             "subPath": f"distill/crop_heads/{model}_r2_crop_runs",
         },
-        "records": {
-            "name": "records",
+        {
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/crop-records",
             "subPath": f"ops/crop-distill/{model}",
         },
-        "work": {"name": "work", "mountPath": "/work"},
-    }
-    assert all(item["mountPath"] != "/cephfs" for item in mounts.values())
+        {"name": "work", "mountPath": "/work"},
+    ]
+    assert all(item["mountPath"] != "/cephfs" for item in mounts)
 
 
 def test_rendered_split_job_only_invokes_the_baked_entrypoint(render_identity):
@@ -768,37 +768,36 @@ def test_rendered_split_job_only_invokes_the_baked_entrypoint(render_identity):
     assert container["args"] == ["/opt/imintengine/scripts/run_lucas_crop_split_job.py"]
     assert container["volumeMounts"] == [
         {
-            "name": "tiles",
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/unified_v2_512",
             "subPath": "unified_v2_512",
             "readOnly": True,
         },
         {
-            "name": "lucas",
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/lucas",
             "subPath": "lucas",
             "readOnly": True,
         },
         {
-            "name": "distill",
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/distill/crop_split",
             "subPath": "distill/crop_split",
         },
         {
-            "name": "ops",
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/ops/crop-distill",
             "subPath": "ops/crop-distill/split",
         },
         {"name": "work", "mountPath": "/work"},
     ]
-    assert {volume["name"] for volume in pod["volumes"]} == {
-        "tiles",
-        "lucas",
-        "distill",
-        "ops",
-        "work",
-    }
-    assert pod["volumes"][-1] == {"name": "work", "emptyDir": {}}
+    assert pod["volumes"] == [
+        {
+            "name": "training-data-cephfs",
+            "persistentVolumeClaim": {"claimName": "training-data-cephfs"},
+        },
+        {"name": "work", "emptyDir": {}},
+    ]
     lowered = text.lower()
     for forbidden in (
         "bash",

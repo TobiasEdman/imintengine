@@ -179,35 +179,40 @@ def test_crop_stage_never_touches_h100_quota(model):
 @pytest.mark.parametrize("model", MODELS)
 def test_crop_stage_mounts_only_protocol_subpaths(model):
     """Crop pods cannot see the PVC root or the held-back partition."""
-    mounts = {
-        item["name"]: item for item in _container(_crop_path(model))["volumeMounts"]
-    }
-    assert mounts == {
-        "tiles": {
-            "name": "tiles", "mountPath": "/cephfs/unified_v2_512",
-            "subPath": "unified_v2_512", "readOnly": True,
+    mounts = _container(_crop_path(model))["volumeMounts"]
+    assert mounts == [
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/unified_v2_512",
+            "subPath": "unified_v2_512",
+            "readOnly": True,
         },
-        "checkpoint": {
-            "name": "checkpoint",
+        {
+            "name": "training-data-cephfs",
             "mountPath": f"/cephfs/checkpoints/ladder/{model}_r2",
-            "subPath": f"checkpoints/ladder/{model}_r2", "readOnly": True,
+            "subPath": f"checkpoints/ladder/{model}_r2",
+            "readOnly": True,
         },
-        "split": {
-            "name": "split", "mountPath": "/cephfs/distill/crop_split",
-            "subPath": "distill/crop_split/crop_consumer", "readOnly": True,
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/distill/crop_split",
+            "subPath": "distill/crop_split/crop_consumer",
+            "readOnly": True,
         },
-        "heads": {
-            "name": "heads", "mountPath": "/cephfs/crop-heads",
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/crop-heads",
             "subPath": f"distill/crop_heads/{model}_r2_crop_runs",
         },
-        "records": {
-            "name": "records", "mountPath": "/cephfs/crop-records",
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/crop-records",
             "subPath": f"ops/crop-distill/{model}",
         },
-        "work": {"name": "work", "mountPath": "/work"},
-    }
+        {"name": "work", "mountPath": "/work"},
+    ]
     assert all(mount["mountPath"] not in {"/cephfs", "/data"}
-               for mount in mounts.values())
+               for mount in mounts)
 
 
 @pytest.mark.parametrize("model", MODELS)
@@ -237,27 +242,33 @@ def test_split_job_freezes_the_canonical_split():
     c = doc["spec"]["template"]["spec"]["containers"][0]
     assert "nvidia.com/gpu" not in c["resources"]["requests"], \
         "the split is CPU work; a GPU request wastes a 2080ti slot"
-    mounts = {item["name"]: item for item in container["volumeMounts"]}
-    assert mounts == {
-        "tiles": {
-            "name": "tiles", "mountPath": "/cephfs/unified_v2_512",
-            "subPath": "unified_v2_512", "readOnly": True,
+    mounts = container["volumeMounts"]
+    assert mounts == [
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/unified_v2_512",
+            "subPath": "unified_v2_512",
+            "readOnly": True,
         },
-        "lucas": {
-            "name": "lucas", "mountPath": "/cephfs/lucas",
-            "subPath": "lucas", "readOnly": True,
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/lucas",
+            "subPath": "lucas",
+            "readOnly": True,
         },
-        "distill": {
-            "name": "distill", "mountPath": "/cephfs/distill/crop_split",
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/distill/crop_split",
             "subPath": "distill/crop_split",
         },
-        "ops": {
-            "name": "ops", "mountPath": "/cephfs/ops/crop-distill",
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/ops/crop-distill",
             "subPath": "ops/crop-distill/split",
         },
-        "work": {"name": "work", "mountPath": "/work"},
-    }
-    assert all(mount["mountPath"] != "/cephfs" for mount in mounts.values())
+        {"name": "work", "mountPath": "/work"},
+    ]
+    assert all(mount["mountPath"] != "/cephfs" for mount in mounts)
 
 
 @pytest.mark.parametrize("model", MODELS)

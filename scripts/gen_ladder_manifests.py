@@ -353,12 +353,12 @@ metadata:
   labels: {{ app: unified-training, purpose: ladder-crop-distill, model: {model} }}
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 43200
   ttlSecondsAfterFinished: 172800
   template:
     metadata:
       labels: {{ app: unified-training, purpose: ladder-crop-distill, model: {model} }}
     spec:
+      activeDeadlineSeconds: 43200
       automountServiceAccountToken: false
       restartPolicy: Never
       imagePullSecrets:
@@ -406,36 +406,28 @@ spec:
             requests: {{ cpu: "4", memory: "24Gi", ephemeral-storage: "8Gi", nvidia.com/gpu: "1" }}
             limits: {{ cpu: "4", memory: "24Gi", ephemeral-storage: "8Gi", nvidia.com/gpu: "1" }}
           volumeMounts:
-            - name: tiles
+            - name: training-data-cephfs
               mountPath: /cephfs/unified_v2_512
               subPath: unified_v2_512
               readOnly: true
-            - name: checkpoint
+            - name: training-data-cephfs
               mountPath: /cephfs/checkpoints/ladder/{model}_r2
               subPath: checkpoints/ladder/{model}_r2
               readOnly: true
-            - name: split
+            - name: training-data-cephfs
               mountPath: /cephfs/distill/crop_split
               subPath: distill/crop_split/crop_consumer
               readOnly: true
-            - name: heads
+            - name: training-data-cephfs
               mountPath: /cephfs/crop-heads
               subPath: {head_subpath}
-            - name: records
+            - name: training-data-cephfs
               mountPath: /cephfs/crop-records
               subPath: {record_subpath}
             - name: work
               mountPath: /work
       volumes:
-        - name: tiles
-          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
-        - name: checkpoint
-          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
-        - name: split
-          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
-        - name: heads
-          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
-        - name: records
+        - name: training-data-cephfs
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
         - name: work
           emptyDir:
@@ -531,12 +523,12 @@ metadata:
   labels: {{ app: unified-training, purpose: ladder-crop-distill, model: shared }}
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 3600
   ttlSecondsAfterFinished: 172800
   template:
     metadata:
       labels: {{ app: unified-training, purpose: ladder-crop-distill, model: shared }}
     spec:
+      activeDeadlineSeconds: 3600
       automountServiceAccountToken: false
       restartPolicy: Never
       imagePullSecrets:
@@ -578,30 +570,24 @@ spec:
             requests: {{ cpu: "2", memory: "8Gi" }}
             limits: {{ cpu: "2", memory: "8Gi" }}
           volumeMounts:
-            - name: tiles
+            - name: training-data-cephfs
               mountPath: /cephfs/unified_v2_512
               subPath: unified_v2_512
               readOnly: true
-            - name: lucas
+            - name: training-data-cephfs
               mountPath: /cephfs/lucas
               subPath: lucas
               readOnly: true
-            - name: distill
+            - name: training-data-cephfs
               mountPath: /cephfs/distill/crop_split
               subPath: distill/crop_split
-            - name: ops
+            - name: training-data-cephfs
               mountPath: /cephfs/ops/crop-distill
               subPath: ops/crop-distill/split
             - name: work
               mountPath: /work
       volumes:
-        - name: tiles
-          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
-        - name: lucas
-          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
-        - name: distill
-          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
-        - name: ops
+        - name: training-data-cephfs
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
         - name: work
           emptyDir: {{}}

@@ -51,6 +51,24 @@ def _assert_ice_resources(container: dict) -> None:
     assert container["resources"]["requests"] == container["resources"]["limits"]
 
 
+def _mounts_by_path(container: dict) -> dict[str, dict]:
+    mounts = container["volumeMounts"]
+    by_path = {mount["mountPath"]: mount for mount in mounts}
+    assert len(by_path) == len(mounts)
+    return by_path
+
+
+def _assert_no_duplicate_pvc_claims(document: dict) -> None:
+    pod = document["spec"]["template"]["spec"]
+    claims = [
+        volume["persistentVolumeClaim"]["claimName"]
+        for volume in pod["volumes"]
+        if "persistentVolumeClaim" in volume
+    ]
+    assert claims
+    assert len(claims) == len(set(claims)), claims
+
+
 def test_crop_render_requires_external_split_authority(monkeypatch):
     monkeypatch.setattr(manifests, "CROP_DISTILL_SOURCE_GIT_SHA", SOURCE_SHA)
     monkeypatch.setattr(manifests, "CROP_DISTILL_IMAGE", IMAGE_REF)
@@ -87,16 +105,16 @@ def test_crop_job_is_nonroot_and_receives_reviewed_split_digest(render_identity)
 
     env = {item["name"]: item for item in container["env"]}
     assert env["CROP_DISTILL_SPLIT_MANIFEST_SHA256"]["value"] == SPLIT_SHA
-    mounts = {item["name"]: item for item in container["volumeMounts"]}
-    assert mounts["split"] == {
-        "name": "split",
+    mounts = _mounts_by_path(container)
+    assert mounts["/cephfs/distill/crop_split"] == {
+        "name": "training-data-cephfs",
         "mountPath": "/cephfs/distill/crop_split",
         "subPath": "distill/crop_split/crop_consumer",
         "readOnly": True,
     }
-    assert mounts["tiles"]["readOnly"] is True
-    assert mounts["checkpoint"]["readOnly"] is True
-    assert mounts["work"]["mountPath"] == "/work"
+    assert mounts["/cephfs/unified_v2_512"]["readOnly"] is True
+    assert mounts["/cephfs/checkpoints/ladder/croma_r2"]["readOnly"] is True
+    assert mounts["/work"] == {"name": "work", "mountPath": "/work"}
     assert container["resources"]["requests"]["ephemeral-storage"] == "8Gi"
     assert container["resources"]["limits"]["ephemeral-storage"] == "8Gi"
     work_volume = next(
@@ -113,32 +131,38 @@ def test_split_job_is_nonroot_and_has_only_required_pvc_subpaths(render_identity
     assert pod["securityContext"]["runAsNonRoot"] is True
     assert pod["securityContext"]["runAsUser"] == 2000
     assert pod["securityContext"]["runAsGroup"] == 2000
-    mounts = {item["name"]: item for item in container["volumeMounts"]}
-    assert mounts == {
-        "tiles": {
-            "name": "tiles",
+    assert container["volumeMounts"] == [
+        {
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/unified_v2_512",
             "subPath": "unified_v2_512",
             "readOnly": True,
         },
-        "lucas": {
-            "name": "lucas",
+        {
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/lucas",
             "subPath": "lucas",
             "readOnly": True,
         },
-        "distill": {
-            "name": "distill",
+        {
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/distill/crop_split",
             "subPath": "distill/crop_split",
         },
-        "ops": {
-            "name": "ops",
+        {
+            "name": "training-data-cephfs",
             "mountPath": "/cephfs/ops/crop-distill",
             "subPath": "ops/crop-distill/split",
         },
-        "work": {"name": "work", "mountPath": "/work"},
-    }
+        {"name": "work", "mountPath": "/work"},
+    ]
+    assert pod["volumes"] == [
+        {
+            "name": "training-data-cephfs",
+            "persistentVolumeClaim": {"claimName": "training-data-cephfs"},
+        },
+        {"name": "work", "emptyDir": {}},
+    ]
 
 
 def test_crop_columns_have_distinct_fixed_uids():
@@ -152,15 +176,14 @@ def test_crop_columns_have_distinct_fixed_uids():
 @pytest.mark.parametrize("model", manifests.CROP_MODELS)
 def test_crop_mounts_only_its_preowned_output_directories(render_identity, model):
     pod, container = _pod_and_container(manifests.render_crop_distill(model))
-    mounts = {item["name"]: item for item in container["volumeMounts"]}
+    mounts = _mounts_by_path(container)
+    heads = mounts["/cephfs/crop-heads"]
+    records = mounts["/cephfs/crop-records"]
 
-    assert mounts["heads"]["subPath"] == (
-        f"distill/crop_heads/{model}_r2_crop_runs"
-    )
-    assert mounts["records"]["subPath"] == f"ops/crop-distill/{model}"
+    assert heads["subPath"] == f"distill/crop_heads/{model}_r2_crop_runs"
+    assert records["subPath"] == f"ops/crop-distill/{model}"
     assert all(
-        other not in mounts["heads"]["subPath"]
-        and other not in mounts["records"]["subPath"]
+        other not in heads["subPath"] and other not in records["subPath"]
         for other in manifests.CROP_MODELS
         if other != model
     )
@@ -253,15 +276,10 @@ def test_storage_prep_is_the_only_root_job_and_has_one_capability(render_identit
     ]
 
 
-def test_storage_prep_uses_one_pvc_volume_and_pod_scoped_deadline(
-    render_identity,
-):
+def test_storage_prep_uses_one_pvc_volume(render_identity):
     document = yaml.safe_load(manifests.render_crop_storage_prep())
-    job_spec = document["spec"]
-    pod = job_spec["template"]["spec"]
+    pod = document["spec"]["template"]["spec"]
 
-    assert "activeDeadlineSeconds" not in job_spec
-    assert pod["activeDeadlineSeconds"] == 600
     assert pod["volumes"] == [
         {
             "name": "training-data-cephfs",
@@ -274,6 +292,30 @@ def test_storage_prep_uses_one_pvc_volume_and_pod_scoped_deadline(
         "training-data-cephfs",
     ]
     assert [mount["subPath"] for mount in mounts] == ["distill", "ops"]
+
+
+def test_crop_jobs_use_unique_pvcs_and_pod_scoped_deadlines(render_identity):
+    jobs = [
+        ("storage-prep", manifests.render_crop_storage_prep(), 600),
+        ("split", manifests.render_lucas_crop_split(), 3600),
+        *[
+            (model, manifests.render_crop_distill(model), 43200)
+            for model in manifests.CROP_MODELS
+        ],
+    ]
+    assert {name for name, _, _ in jobs} == {
+        "storage-prep",
+        "split",
+        *manifests.CROP_MODELS,
+    }
+
+    for _, text, deadline in jobs:
+        document = yaml.safe_load(text)
+        job_spec = document["spec"]
+        pod = job_spec["template"]["spec"]
+        assert "activeDeadlineSeconds" not in job_spec
+        assert pod["activeDeadlineSeconds"] == deadline
+        _assert_no_duplicate_pvc_claims(document)
 
 
 def test_crop_runtime_network_policy_denies_all_egress():
