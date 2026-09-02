@@ -115,6 +115,15 @@ def test_publish_smokes_exact_pushed_digest_before_signing():
     assert "docker pull" not in pr_build
 
 
+def test_scoring_dependency_audit_ignores_model_source_metadata():
+    dockerfile = (REPO / "docker" / "ladder-crop-distill" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "PYTHONPATH= /opt/venvs/scoring/bin/python -m pip check" in dockerfile
+    assert "PYTHONPATH= /opt/venvs/scoring/bin/python -m pip freeze --all" in dockerfile
+
+
 def test_storage_prep_smoke_uses_exact_linux_security_boundary():
     text = WORKFLOW.read_text(encoding="utf-8")
     pr_build = _job_blocks(text)["pr_build"]

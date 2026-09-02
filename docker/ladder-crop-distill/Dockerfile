@@ -94,12 +94,15 @@ RUN python -m venv /opt/venvs/model \
       > /opt/provenance/model-pip-freeze.txt \
     && rm /tmp/model-pip-freeze.unsorted
 
+# The image-level PYTHONPATH exposes /opt/clay's source metadata. Clear it for
+# scoring-environment audits so pip does not mistake that model-only source
+# tree for a distribution installed in the scoring venv.
 RUN python -m venv /opt/venvs/scoring \
     && /opt/venvs/scoring/bin/python -m pip install \
       --require-hashes --no-build-isolation \
       -r /opt/provenance/scoring-requirements.lock \
-    && /opt/venvs/scoring/bin/python -m pip check \
-    && /opt/venvs/scoring/bin/python -m pip freeze --all \
+    && PYTHONPATH= /opt/venvs/scoring/bin/python -m pip check \
+    && PYTHONPATH= /opt/venvs/scoring/bin/python -m pip freeze --all \
       > /tmp/scoring-pip-freeze.unsorted \
     && LC_ALL=C sort /tmp/scoring-pip-freeze.unsorted \
       > /opt/provenance/scoring-pip-freeze.txt \
