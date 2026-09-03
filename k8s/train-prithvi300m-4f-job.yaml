@@ -1,0 +1,118 @@
+# Prithvi-EO-2.0 300M — 4-FRAME variant (temporal-frame ablation).
+#
+# Byte-identical training regime to train-prithvi300m-job.yaml EXCEPT the two
+# multitemporal flags: --enable-multitemporal --num-temporal-frames 4. That
+# single-axis difference is deliberate — it turns the ladder's accidental
+# single-frame prithvi300m into a controlled 1-frame-vs-4-frame comparison on
+# the SAME backbone, so a delta attributes purely to temporal frames.
+#
+# prithvi_300m is native_num_frames=(1,2,3,4) (imint/fm/registry.py) so 4 is
+# admissible; the unified_v2_512 tiles carry 4 frames (autumn + 3 VPP season)
+# and prithvi600m already trains 4-frame on them. Token count 4x961=3844
+# (patch-16, img 496) < 600m's 4x1296=5184, and 600m runs batch 8 on an 80Gi
+# H100 — so batch 8 is kept UNCHANGED to preserve the clean ablation.
+#
+# CROP / IMG SIZE = 496 (NOT 504): Prithvi-300M is patch_size=16; 496/16 = 31
+# (integer grid), 504/16 = 31.5 (build raises). Same as the 1-frame base.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-prithvi300m-4f
+  namespace: prithvi-training-default
+  labels: { app: unified-training, dataset: "512", purpose: prithvi300m4f }
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: unified-training, purpose: prithvi300m4f }
+    spec:
+      activeDeadlineSeconds: 43200
+      restartPolicy: Never
+      nodeSelector: { accelerator: nvidia-h100 }
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - { key: kubernetes.io/hostname, operator: NotIn, values: ["p02r08srv02"] }
+      containers:
+      - name: trainer
+        image: python:3.11-slim
+        env:
+        - { name: PYTHONUNBUFFERED, value: "1" }
+        - { name: HF_HOME, value: "/cephfs/model_cache/hf" }
+        command: ["/bin/bash","-c"]
+        args:
+        - |
+          set -e
+          export PYTHONUNBUFFERED=1
+          echo "=== Prithvi-300M 4-FRAME member — distill labels + frac head (28-class) — $(date) ==="
+          T=$(ls /cephfs/unified_v2_512/*.npz 2>/dev/null | wc -l)
+          D=$(ls /cephfs/nmd2023_distill_labels/*.npz 2>/dev/null | wc -l)
+          F=$(ls /cephfs/tradslag_fracs/*.npz 2>/dev/null | wc -l)
+          echo "Tiles: $T | distill sidecars: $D | frac sidecars: $F"
+          [ "$T" -lt 100 ] && { echo "ERROR: too few tiles"; exit 1; } || true
+          [ "$D" -lt 100 ] && { echo "FATAL: distill labels missing"; exit 1; } || true
+          [ "$F" -lt 100 ] && { echo "FATAL: frac sidecars missing"; exit 1; } || true
+
+          apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+          pip install --quiet --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
+          pip install --quiet --no-cache-dir timm numpy scipy scikit-learn huggingface_hub
+
+          mkdir -p /cephfs/checkpoints/prithvi_300m_4f_512
+          rm -f /cephfs/checkpoints/prithvi_300m_4f_512/*.pt.tmp 2>/dev/null || true
+
+          mkdir -p /workspace && cd /workspace
+          BRANCH=main
+          git clone --depth 1 --branch "$BRANCH" \
+            https://github.com/TobiasEdman/ImintEngine.git imintengine
+          cd /workspace/imintengine
+          pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+          echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+          grep -q 'enable-tradslag-head' scripts/train_unified.py \
+            || { echo "FATAL: tradslag flags missing on clone"; exit 1; }
+          cd /cephfs
+
+          # Prithvi-300M patch-16 → img/patch 496. Encoder present: freeze +
+          # unfreeze last 6 blocks. 4-FRAME multitemporal — the ONE axis that
+          # differs from train-prithvi300m-job.yaml.
+          python /workspace/imintengine/scripts/train_unified.py \
+            --backbone-name prithvi_300m \
+            --data-dirs /cephfs/unified_v2_512 \
+            --label-dir /cephfs/nmd2023_distill_labels \
+            --frac-dir /cephfs/tradslag_fracs \
+            --enable-tradslag-head \
+            --enable-multitemporal \
+            --num-temporal-frames 4 \
+            --lambda-frac 1.0 \
+            --checkpoint-dir /cephfs/checkpoints/prithvi_300m_4f_512 \
+            --num-classes 28 \
+            --epochs 30 \
+            --batch-size 8 \
+            --lr 1e-4 \
+            --weight-decay 0.35 \
+            --loss-type focal_dice \
+            --focal-gamma 2.0 \
+            --patch-size 496 \
+            --img-size 496 \
+            --weighting-method sqrt \
+            --label-smoothing 0.05 \
+            --lovasz-weight 0.3 \
+            --unfreeze-layers 6 \
+            --backbone-lr-factor 0.1 \
+            --patience 20 \
+            --num-workers 16 \
+            --device cuda
+          echo "=== Done: $(date) ==="
+        volumeMounts:
+        - { mountPath: /cephfs, name: cephfs }
+        - { mountPath: /dev/shm, name: dshm }
+        resources:
+          requests: { cpu: "16", memory: "80Gi", nvidia.com/gpu: "1" }
+          limits:   { cpu: "16", memory: "80Gi", nvidia.com/gpu: "1" }
+      volumes:
+      - name: cephfs
+        persistentVolumeClaim: { claimName: training-data-cephfs }
+      - name: dshm
+        emptyDir: { medium: Memory, sizeLimit: "32Gi" }
