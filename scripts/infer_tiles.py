@@ -246,7 +246,27 @@ def infer_all(
     print(f"  loaded epoch={epoch} ckpt_mIoU={miou} native_img={native} "
           f"family={family}")
 
-    ds = TileInferenceDataset(tiles, family, img_size, None)
+    # The checkpoint KNOWS its aux set — reconstructing it from defaults is
+    # how the ladder eval died on its first run: every ladder model is
+    # 11-aux (markfukt on) and terramind is 13-aux (ΔSAR), while a None
+    # here builds the canonical 10 and the aux_proj conv rejects the
+    # tensor at the first forward. Same rule as extract_plot_features.
+    try:
+        ck_cfg = torch.load(checkpoint, map_location="cpu",
+                            weights_only=False).get("config", {}) or {}
+    except Exception:
+        # This is an OPPORTUNISTIC config read — load_model above is the
+        # authoritative loader and has already accepted the checkpoint
+        # (tests monkeypatch it with non-torch fixtures). Unreadable here
+        # ⇒ pre-config era ⇒ canonical aux fallback, as before.
+        ck_cfg = {}
+    aux_names = ck_cfg.get("enabled_aux_names")
+    aux_names = list(aux_names) if aux_names else None
+    if aux_names:
+        print(f"  aux from checkpoint config: {len(aux_names)} channels "
+              f"({aux_names[-3:]}...)")
+
+    ds = TileInferenceDataset(tiles, family, img_size, aux_names)
 
     # Group tiles by crop size so a batch collates cleanly. Odd-sized tiles are
     # inferred at batch=1 rather than being mis-cropped or padded.

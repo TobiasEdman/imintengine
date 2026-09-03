@@ -125,13 +125,16 @@ def test_distill_manifests_are_generated_and_current() -> None:
 
 
 @pytest.mark.parametrize("script", ["extract_plot_features.py",
-                                    "distill_forest_labels.py"])
+                                    "distill_forest_labels.py",
+                                    "infer_tiles.py"])
 def test_distill_scripts_read_aux_from_checkpoint(script: str) -> None:
     """Aux channel sets are PER-COLUMN model properties (terramind's r2
     carries 13: the usual 11 plus delta_vv/delta_vh ΔSAR) — rebuilding
     them from CLI flags is how terramind's extract died on a 13-vs-11
-    conv mismatch. Both GPU scripts must read enabled_aux_names from the
-    checkpoint's saved config; the flag is only a pre-config fallback."""
+    conv mismatch, and a hardcoded None in infer_tiles killed the first
+    ladder-eval wave the same way (11-aux tessera vs canonical 10). Every
+    GPU script must read enabled_aux_names from the checkpoint's saved
+    config; flags/defaults are only a pre-config fallback."""
     src = (ROOT / "scripts" / script).read_text()
     assert "enabled_aux_names" in src, (
         f"{script}: does not read the checkpoint's enabled_aux_names")
