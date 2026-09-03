@@ -111,6 +111,11 @@ CONSUMER_ARTIFACT_NAMES = (INDEX_NAME, SPLIT_NAME, MANIFEST_NAME)
 # parquet must carry every one of these to be consumable.
 EXTRACT_COLUMNS = ("tile_name", "tile_path", "row", "col",
                    "unified_class", "point_id")
+# The canonical LUCAS coverage producer does not persist a path.  Paths in the
+# frozen extract indices are derived from the trusted --data-dir only after a
+# tile has passed qualification, so accepting one from the source is neither
+# necessary nor an identity control.
+SOURCE_COLUMNS = ("tile_name", "row", "col", "unified_class", "point_id")
 KEY_DIGEST_FORMAT = "sha256-jsonl-v1"
 TILE_INVENTORY_FORMAT = "sha256-tile-bytes-jsonl-v1"
 KEY_DIGEST_FIELDS = (
@@ -859,7 +864,7 @@ def _validate_index_frame(
 def _prepare_source_crop_rows(
     source: pd.DataFrame, *, label: str = "source LUCAS index",
 ) -> tuple[pd.DataFrame | None, str | None]:
-    missing_cols = [column for column in EXTRACT_COLUMNS
+    missing_cols = [column for column in SOURCE_COLUMNS
                     if column not in source.columns]
     if missing_cols:
         return None, f"{label} lacks required columns {missing_cols}"

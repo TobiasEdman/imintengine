@@ -812,7 +812,6 @@ def _write_lucas_fixture(tmp_path, n_tiles=10, with_tessera=True,
                     continue
                 rows.append({
                     "tile_name": name,
-                    "tile_path": str(data_dir / f"{name}.npz"),
                     "row": 10 + pid, "col": 10 + pid,
                     "unified_class": cls,
                     "point_id": str(t * 1000 + pid),
@@ -826,7 +825,6 @@ def _write_lucas_fixture(tmp_path, n_tiles=10, with_tessera=True,
     for prior_idx, name in enumerate(remaining_prior_tiles[:23]):
         rows.append({
             "tile_name": name,
-            "tile_path": str(data_dir / f"{name}.npz"),
             "row": 10,
             "col": 10,
             "unified_class": 1,  # prior identity, outside crop domain
@@ -1261,6 +1259,28 @@ def test_unqualified_tile_is_excluded_from_the_freeze(monkeypatch, tmp_path):
     split = _json.loads((out_dir / "lucas_crop_split.json").read_text())
     assert "tile00" not in set(dist["tile_name"])
     assert "tile00" not in set(split["holdout_tiles"])
+
+
+def test_split_derives_paths_for_producer_shaped_source(monkeypatch, tmp_path):
+    """The canonical LUCAS producer omits tile_path; the freeze owns it."""
+    import pandas as pd
+
+    index, data_dir = _write_lucas_fixture(tmp_path, n_tiles=4)
+    source = pd.read_parquet(index)
+    assert "tile_path" not in source.columns
+
+    out_dir = tmp_path / "out"
+    _run_split_builder(monkeypatch, index, data_dir, out_dir)
+
+    for name in (
+        "lucas_crop_distill_index.parquet",
+        "lucas_crop_validator_holdout_index.parquet",
+    ):
+        frozen = pd.read_parquet(out_dir / name)
+        assert set(frozen["tile_path"]) == {
+            str(data_dir.resolve() / f"{tile_name}.npz")
+            for tile_name in set(frozen["tile_name"])
+        }
 
 
 def test_split_persists_complete_partition_and_normalizes_paths(
