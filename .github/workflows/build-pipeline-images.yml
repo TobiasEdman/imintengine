@@ -318,7 +318,7 @@ jobs:
                 --source-git-sha "$SOURCE_GIT_SHA" \
                 --image-ref "${IMAGE}@${DIGEST}" \
                 --runtime-manifest /opt/provenance/runtime.json
-              # Exercise the only UID-0 component with the exact capability
+              # Exercise the storage-prep UID-0 role with the exact capability
               # and read-only-root constraints emitted by its Kubernetes Job.
               # The entrypoint self-verifies owner, group, mode, and inode.
               docker run --rm --pull never --platform linux/amd64 \

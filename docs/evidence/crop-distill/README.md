@@ -1,159 +1,232 @@
 # Crop-distill evidence archive
 
-This directory is the durable, off-PVC evidence target for the LUCAS
-crop-distill rollout. Kubernetes Pods are removed by the Job TTL, and the log
-reaper writes back to the same RWX trust domain as the workload. Neither is a
-durable review artifact by itself.
+This directory is the status index and runbook for the LUCAS crop-distill
+rollout. It is not evidence that a live Job succeeded. No successful
+storage-prep, source-access PLAN/APPLY, split, or crop-consumer bundle has been
+captured for the reviewed image yet.
 
-No live-run evidence exists yet. This README is an operating procedure, not
-proof that a Job ran.
+Kubernetes Pod objects disappear after the Job TTL. Workload records on the
+RWX PVC share the workload trust domain. Acceptance therefore requires an
+external, create-only bundle captured while the exact Pod UID still exists,
+followed by offline verification against the reviewed Git pins.
 
-## Bundle contract
+## Rollout status
 
-Capture one create-only directory per Pod UID:
+| event | result | identity |
+|---|---|---|
+| split attempt 2 | failed closed: UID/GID 2000 could not read 1,966 of 2,074 post-window candidates; no split frozen | Pod UID `b9fbbdae-1a11-4160-9b5b-3762dee95ddf`; failure-record SHA-256 `a13b74a8df5ed5600f9d2b7961c9944c44886cb3c094dbefb4dc22fce4bf6aac` |
+| `DAC_READ_SEARCH` canary | rejected by PodSecurity admission; no Pod or data mutation | admission result only |
+| `DAC_OVERRIDE` alternative | rejected in review as an unnecessarily broad bypass | design decision only |
+| reviewed-image storage prep | not run | no completion bundle |
+| source-access PLAN/APPLY | not run | PLAN/APPLY Git anchors remain pending sentinels |
+| split attempt 3 and crop consumers | not run | blocked on verified PLAN/APPLY evidence |
+
+Attempt 2 used source
+`ba6a99aa8662d6af9ba6fb3d08398d505ef8c483` and an older image whose digest
+ended `a487ead664aa...`. That image does not contain the reviewed PLAN/APPLY and
+capture controls and must not be reused. The table above is a ledger entry,
+not a substitute for its external failure evidence.
+
+## Canonical bundle
+
+`scripts/capture_crop_distill_evidence.py` supports five strict evidence kinds:
+
+| kind | marker | immutable workload record |
+|---|---|---|
+| `storage-prep` | `CROP_DISTILL_STORAGE_PREP_COMPLETION_V1` | `/cephfs/ops/crop-distill/storage-prep/<pod-uid>/completion.json` |
+| `source-access-plan` | `CROP_SOURCE_ACCESS_PLAN_V1` | `/cephfs/ops/crop-distill/source-access/plan/<pod-uid>/plan.json` |
+| `source-access-apply` | `CROP_SOURCE_ACCESS_COMPLETION_V1` | `/cephfs/ops/crop-distill/source-access/apply/<pod-uid>/completion.json` |
+| `split` | `CROP_DISTILL_TERMINAL_EVIDENCE_V1` | marker payload written under the split record root |
+| `crop` | `CROP_DISTILL_TERMINAL_EVIDENCE_V1` | marker payload written under the model record root |
+
+Each new bundle contains exactly six files:
 
 ```text
-docs/evidence/crop-distill/<pod-uid>/
-  completion.json       # exact canonical bytes decoded from the Pod marker
-  completion.sha256     # lowercase SHA-256 of completion.json plus newline
-  capture.json          # deterministic Pod, authority, process, and image binding
+<absolute-off-PVC-bundle>/
+  completion.json | plan.json  # exact canonical workload-record bytes
+  completion.sha256 | plan.sha256
+  marker.txt                    # exact accepted stdout marker line
+  pod.json                      # exact Kubernetes API Pod observation
+  pod.sha256
+  capture.json                  # canonical external binding and normalized Pod
 ```
 
-The capture helper accepts a Kubernetes Pod JSON document and the target
-container's complete Pod log. It requires exactly one terminal line with this
-contract:
+`capture.json` hashes both raw `pod.json` and the canonical, per-kind normalized
+Pod observation. It also hashes the marker and record, records the exact Pod
+UID, and records the capture process's kernel effective UID/GID. The capture
+process must be outside the workload and must not have the workload UID/GID.
+This identity model distinguishes the observer from the workload; it is not a
+cryptographic operator signature or proof of a human identity.
 
-```text
-CROP_DISTILL_TERMINAL_EVIDENCE_V1 <lowercase-sha256> <strict-base64-canonical-json>
+The bundle deliberately has no capture timestamp or local output path, so the
+same inputs produce the same canonical `capture.json`. Bundle creation is
+create-only and refuses an existing output directory.
+
+## Two-phase PLAN/APPLY authority
+
+The output of a workload cannot contain a hash of Pod JSON fetched after that
+workload terminated. The external bundle supplies the non-circular binding:
+it contains and hashes both the exact workload marker/record bytes and the API
+Pod observation, including the Pod UID and runtime `imageID`.
+
+PLAN and APPLY each require two distinct phases:
+
+1. Live capture validates the current, pre-existing Git authority and derives
+   the new output identity from the marker, PVC record, and API Pod. PLAN uses
+   the Git-pinned source/image/index. APPLY additionally requires the
+   Git-pinned PLAN SHA-256 and PLAN Pod UID.
+2. Review pins the newly captured record SHA-256 and Pod UID in
+   `scripts/gen_ladder_manifests.py`. The normal `verify` subcommand then
+   requires the restricted bundle to equal those current Git pins. Only this
+   post-pin offline verification authorizes a downstream phase.
+
+Consequently, the `capture` subcommand performs a complete semantic check but
+does not pretend that its newly observed output was already Git-authorized.
+Commit C must pin the exact verified PLAN record SHA-256 and PLAN Pod UID before
+APPLY is rendered. Commit D must pin the exact verified APPLY completion
+SHA-256 and completion Pod UID before split is rendered. The split receives
+and checks both Git-pinned SHA-256/Pod UID pairs before it reads the source
+cohort. Its terminal record must then contain exactly this immutable object:
+
+```json
+{
+  "source_access": {
+    "plan": {"sha256": "<git-pinned-plan-sha256>", "pod_uid": "<plan-pod-uid>"},
+    "completion": {"sha256": "<git-pinned-apply-sha256>", "pod_uid": "<apply-pod-uid>"}
+  }
+}
 ```
 
-It then fails closed unless all of the following agree:
+Capture metadata never authorizes an alternate anchor. Offline verification
+re-derives expectations from the current Git constants and the immutable
+workload record.
 
-- the marker hash, decoded canonical bytes, and completed terminal record;
-- the exact completion-v1 shape, including the allowed model, model-specific
-  UID, shared GID, runtime source identity, checkpoint protocol, frozen-split
-  identity, and kind-specific artifact paths and digests;
-- the requested namespace, Pod name, Job name, Pod UID, controller reference,
-  and Kubernetes Job label;
-- the record kind and its one permitted container name (`crop-distill` or
-  `split`);
-- the exact Pod/container process-security contract: the protocol UID/GID,
-  `RuntimeDefault` seccomp, no supplemental groups, non-root execution,
-  read-only root filesystem, no privilege escalation, and all capabilities
-  dropped;
-- one target container only, no init/ephemeral containers or sidecars, no host
-  namespaces or service-account token, `restartPolicy: Never`, zero restarts,
-  and no prior target-container state;
-- the target container's unique literal `CROP_DISTILL_SOURCE_GIT_SHA` and
-  `CROP_DISTILL_IMAGE`, the runtime source/image in the completion record, and
-  the Pod's exact (not merely same-digest) `.spec.containers[].image`;
-- for crop consumers, the unique, literal, nonzero
-  `CROP_DISTILL_SPLIT_MANIFEST_SHA256` and the consumed private split snapshot;
-  the split producer must not carry this prior-split anchor;
-- `POD_UID` is populated only through a `metadata.uid` Downward API fieldRef;
-- the runtime-observed `.status.containerStatuses[].imageID` and the exact
-  image digest in the completion record; and
-- Pod phase `Succeeded` and target-container exit code `0`.
+## Live capture procedure
 
-Common ICE/containerd forms such as `containerd://sha256:<digest>` and
-`docker-pullable://<repository>@sha256:<digest>` are normalized before the
-digest comparison. Mutable tags, missing entries, duplicate target entries,
-same-digest repository substitutions, incomplete completion records, and
-conflicting identities are refused. Capture schema v2 persists the literal
-Pod authorization environment plus Pod/container process identities, so the
-same semantic checks run again during offline verification. The output has no
-local path or wall clock field, so identical evidence produces byte-identical
-`capture.json`.
-
-## Exact live capture
-
-Run this after the Job has succeeded and before its Pod expires. First choose
-the single Pod returned for the Job; do not capture if the selector returns
-zero or multiple Pods.
-
-For a crop consumer:
+Run capture before the Pod TTL removes the object. Select exactly one Pod for
+the Job and retain the API response and log in a mode-0700 scratch directory.
+Do not continue if the selector returns zero or multiple Pods.
 
 ```bash
 NAMESPACE=prithvi-training-default
-JOB=ladder-crop-distill-croma
-CONTAINER=crop-distill
+KIND=source-access-plan
+JOB=ladder-crop-source-access-plan
+CONTAINER=source-access-plan
+POD=REPLACE_WITH_EXACT_POD_NAME
+BUNDLE_ROOT=/absolute/path/to/access-controlled/crop-distill-evidence
 
-kubectl -n "$NAMESPACE" get pods \
-  -l "batch.kubernetes.io/job-name=$JOB" \
-  -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,PHASE:.status.phase'
-
-POD=ladder-crop-distill-croma-REPLACE_WITH_ACTUAL_SUFFIX
 SCRATCH=$(mktemp -d)
 chmod 700 "$SCRATCH"
 kubectl -n "$NAMESPACE" get pod "$POD" -o json >"$SCRATCH/pod.json"
 kubectl -n "$NAMESPACE" logs "$POD" -c "$CONTAINER" >"$SCRATCH/pod.log"
-POD_UID=$(jq -r '.metadata.uid' "$SCRATCH/pod.json")
-
-python scripts/capture_crop_distill_evidence.py capture \
-  --pod-json "$SCRATCH/pod.json" \
-  --pod-log "$SCRATCH/pod.log" \
-  --container "$CONTAINER" \
-  --expected-namespace "$NAMESPACE" \
-  --expected-pod "$POD" \
-  --expected-job "$JOB" \
-  --out-dir "docs/evidence/crop-distill/$POD_UID"
-
-python scripts/capture_crop_distill_evidence.py verify \
-  --bundle-dir "docs/evidence/crop-distill/$POD_UID"
+POD_UID=$(jq -er '.metadata.uid' "$SCRATCH/pod.json")
 ```
 
-Repeat that procedure for each of the six crop Jobs. Change `JOB` to the exact
-model Job name and keep `CONTAINER=crop-distill`.
-
-For the split producer, use:
+For `storage-prep`, `source-access-plan`, and `source-access-apply`, copy the
+exact per-Pod record through the approved read-only operator path to
+`$SCRATCH/record.json`. Do not reconstruct it from stdout. Then capture:
 
 ```bash
-NAMESPACE=prithvi-training-default
-JOB=ladder-lucas-crop-split
-CONTAINER=split
-
-kubectl -n "$NAMESPACE" get pods \
-  -l "batch.kubernetes.io/job-name=$JOB" \
-  -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,PHASE:.status.phase'
-
-POD=ladder-lucas-crop-split-REPLACE_WITH_ACTUAL_SUFFIX
-SCRATCH=$(mktemp -d)
-chmod 700 "$SCRATCH"
-kubectl -n "$NAMESPACE" get pod "$POD" -o json >"$SCRATCH/pod.json"
-kubectl -n "$NAMESPACE" logs "$POD" -c "$CONTAINER" >"$SCRATCH/pod.log"
-POD_UID=$(jq -r '.metadata.uid' "$SCRATCH/pod.json")
-
 python scripts/capture_crop_distill_evidence.py capture \
+  --evidence-kind "$KIND" \
   --pod-json "$SCRATCH/pod.json" \
   --pod-log "$SCRATCH/pod.log" \
+  --record-file "$SCRATCH/record.json" \
   --container "$CONTAINER" \
   --expected-namespace "$NAMESPACE" \
   --expected-pod "$POD" \
   --expected-job "$JOB" \
-  --out-dir "docs/evidence/crop-distill/$POD_UID"
-
-python scripts/capture_crop_distill_evidence.py verify \
-  --bundle-dir "docs/evidence/crop-distill/$POD_UID"
+  --out-dir "$BUNDLE_ROOT/$POD_UID"
 ```
 
-Keep the scratch directory until the bundle has passed offline verification
-and been reviewed. Delete it only after the committed bundle preserves the
-evidence.
+For `split` and `crop`, omit `--record-file`; their accepted terminal marker
+already carries the exact bytes written to the immutable per-Pod record. Use
+`KIND=split`, `JOB=ladder-lucas-crop-split`, `CONTAINER=split` for the split.
+For a crop consumer, use `KIND=crop`, the exact
+`JOB=ladder-crop-distill-<model>`, and `CONTAINER=crop-distill`.
 
-The split producer's bundle belongs in consumer-authorization commit C. Each
-crop consumer bundle belongs in the evidence-only commit after all six runs
-finish and before the PR is accepted.
+After the new PLAN or APPLY identity has been reviewed and pinned in Git, run
+strict offline verification from that reviewed checkout:
 
-## Security boundary
+```bash
+python scripts/capture_crop_distill_evidence.py verify \
+  --bundle-dir "$BUNDLE_ROOT/$POD_UID"
+```
 
-This archive records what the Kubernetes API and container runtime reported;
-it does **not** enforce image admission. In particular, the helper is not an
-admission webhook and does not prevent a workload from being submitted with a
-different image. It preserves and cross-checks the Pod's literal authorization
-inputs; it does not independently establish that the Pod spec was admitted
-from a reviewed Git commit. Container command/arguments and volume definitions
-remain part of that reviewed-manifest/admission boundary rather than this
-runtime capture schema. Digest-pinned manifests, signature verification,
-source SHA, split-manifest SHA, and checkpoint identities remain the
-authorization boundary. A missing bundle or any capture/verification mismatch
-blocks rollout acceptance.
+Keep the scratch inputs until the restricted bundle has been copied, verified,
+backed up, and reviewed. Never delete the only copy of a workload record or
+bundle.
+
+## Machine-verifiable acceptance boundary
+
+Capture and offline verification both reject a missing field, extra reviewed
+surface, or conflicting identity. They validate:
+
+- exactly one Pod container and one matching container status, with no init or
+  ephemeral containers/statuses;
+- the exact Job owner, full reviewed label set, namespace, Pod name, Pod UID,
+  non-empty `nodeName`, successful Pod phase, zero restarts, exit code zero,
+  immutable spec/status image, and runtime `imageID` digest;
+- exact command, arguments, complete literal environment with no extra entry,
+  the sole `POD_UID` Downward-API reference, and no `envFrom`;
+- `automountServiceAccountToken: false`, the exact default service account,
+  no host namespaces, no interactive input, and only the reviewed kubelet-only
+  image-pull secret;
+- exact PVC/emptyDir/ConfigMap volumes, volume mounts, subPaths, read-only
+  flags, resources, and no volume devices; `hostPath`, Secret, projected
+  service-account-token, and extra PVC sources are refused;
+- exact Pod/container UID/GID, `RuntimeDefault` seccomp, read-only root
+  filesystem, no privilege escalation, and `drop: [ALL]`;
+- storage prep as root with only `CHOWN,FOWNER` and only its exact RW
+  `/cephfs/distill` and `/cephfs/ops` subPaths; its completion also binds the
+  precreated, empty, unaliased backing lock
+  `/cephfs/ops/crop-distill/source-access/locks/dataset.lock` as
+  `root:2000 0660` while the lock directory remains `root:2000 0750`;
+- source-access PLAN as root with no added capabilities and the dataset subPath
+  read-only;
+- source-access APPLY as root with only `CHOWN,FOWNER`, the exact
+  `unified_v2_512` dataset subPath RW, and its reviewed PLAN record read-only;
+- split/crop as their protocol UID/GID with no added capabilities, including
+  the split's verified source-access record and freeze/lock mounts. PLAN,
+  APPLY, and split see that same backing inode only through the narrow runtime
+  projection `/cephfs/source-access-lock/dataset.lock`; and
+- marker SHA-256/base64/canonical JSON, exact marker-to-PVC byte equality for
+  prep/PLAN/APPLY, the canonical stdout-marker line ending, record
+  schema/cardinality/runtime identity, raw Pod SHA-256, normalized Pod
+  SHA-256, and current Git authority.
+
+PLAN requires the pinned 468,614-byte source index with SHA-256
+`e3bb505c4de469d0436e0e91de27327f063083199c8ddc781ec6eaf7d42e9a41`,
+3,587 crop rows, 2,074 sorted unique candidates, 1,966 reviewed repairs, and
+108 no-ops. APPLY verifies all 2,074 before/after records: content hash, size,
+device/inode, and mtime remain unchanged; repaired files finish as
+`root:2000 0640`; and the action counts match the PLAN.
+
+## Restricted evidence and receipts
+
+The complete PLAN and APPLY records enumerate all 2,074 source files and their
+filesystem identities. The immutable workload records remain on their narrow
+PVC record subPaths; external copies, full bundles, and raw scratch inputs are
+restricted operational evidence. Store those external artifacts outside Git
+and outside `/cephfs` in the access-controlled evidence location, with an
+independent backup. Do not commit the inventory to this directory, paste it
+into a PR, or publish it in CI logs.
+
+After restricted review, a small receipt may be committed here. The receipt
+may contain the canonical `capture.json` (subject to node-name disclosure
+review) or a separately reviewed projection containing only the schema,
+evidence kind, record SHA-256, Pod UID, raw/normalized Pod hashes, and applicable
+Git pins. A receipt is an index to the restricted bundle, not independently
+verifiable evidence; reviewers with access must run the strict verifier on the
+full bundle.
+
+## Security limitation
+
+This control records and verifies what the Kubernetes API, container runtime,
+workload marker, and PVC record reported. It is not an admission webhook, does
+not sign the evidence, and does not itself enforce the deny-egress
+NetworkPolicy or external freeze watchdog. Digest-pinned manifests, reviewed
+Git constants, cluster admission, the shared cooperating-producer lock, the
+external watchdog lease, and restricted evidence custody remain separate
+parts of the authorization boundary. Any missing bundle, pin, or verification
+mismatch blocks rollout acceptance.

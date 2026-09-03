@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 import os
 import stat
 import sys
@@ -14,6 +17,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts"))
 
 from scripts import crop_distill_protocol as protocol
+from scripts import crop_distill_provenance as provenance
 from scripts import prepare_crop_distill_storage as storage_prep
 from scripts.crop_distill_protocol import RuntimeIdentity, StorageTarget
 
@@ -22,11 +26,19 @@ IMAGE_REF = "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "b" * 64
 POD_UID = "storage-prep-pod"
 
 
-def _local_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+def _local_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Exercise real fd chmod/chown while retaining the current host owner."""
     real_gid = os.getgid()
     monkeypatch.setattr(storage_prep, "STORAGE_GID", real_gid)
+    monkeypatch.setattr(storage_prep, "DATASET_LOCK_UID", os.getuid())
     monkeypatch.setattr(storage_prep, "FROZEN_SPLIT_MODE", 0o550)
+    lock_root = tmp_path / "source-access-lock"
+    lock_root.mkdir()
+    monkeypatch.setattr(
+        storage_prep,
+        "SOURCE_ACCESS_LOCK_BACKING_FILE",
+        lock_root / "dataset.lock",
+    )
     monkeypatch.setattr(storage_prep.os, "geteuid", lambda: 0)
     monkeypatch.setattr(storage_prep.os, "getegid", lambda: real_gid)
     monkeypatch.setattr(
@@ -61,7 +73,7 @@ def _local_target(
 
 
 def test_prepare_storage_changes_only_baked_roots(monkeypatch, tmp_path):
-    _local_identity(monkeypatch)
+    _local_identity(monkeypatch, tmp_path)
     distill = tmp_path / "distill"
     ops = tmp_path / "ops"
     distill.mkdir()
@@ -79,8 +91,29 @@ def test_prepare_storage_changes_only_baked_roots(monkeypatch, tmp_path):
 
     result = storage_prep.prepare_storage()
 
-    assert result["schema"] == "imint-crop-distill-storage-prep-v2"
+    assert result["schema"] == storage_prep.STORAGE_PREP_COMPLETION_SCHEMA
+    assert result["pod_uid"] == POD_UID
+    assert result["status"] == "completed"
+    assert result["process_identity"] == {
+        "effective_uid": 0,
+        "effective_gid": os.getgid(),
+    }
     assert result["runtime"] == {"verification": "verified"}
+    assert result["dataset_lock"] == {
+        "path": str(storage_prep.SOURCE_ACCESS_LOCK_BACKING_FILE),
+        "uid": os.getuid(),
+        "gid": os.getgid(),
+        "mode": "0660",
+        "device": result["dataset_lock"]["device"],
+        "inode": result["dataset_lock"]["inode"],
+        "size_bytes": 0,
+        "nlink": 1,
+        "state": "ready",
+    }
+    assert (
+        stat.S_IMODE(storage_prep.SOURCE_ACCESS_LOCK_BACKING_FILE.stat().st_mode)
+        == 0o660
+    )
     assert {item["path"] for item in result["targets"]} == {
         str(crop_split),
         str(heads),
@@ -93,8 +126,61 @@ def test_prepare_storage_changes_only_baked_roots(monkeypatch, tmp_path):
     assert stat.S_IMODE(untouched.stat().st_mode) == 0o755
 
 
+def test_storage_prep_publishes_marker_for_exact_immutable_record(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    record_root = tmp_path / "storage-prep-records"
+    monkeypatch.setattr(storage_prep, "STORAGE_PREP_RECORD_DIR", record_root)
+    record = {
+        "schema": storage_prep.STORAGE_PREP_COMPLETION_SCHEMA,
+        "pod_uid": POD_UID,
+        "status": "completed",
+        "process_identity": {
+            "effective_uid": 0,
+            "effective_gid": protocol.STORAGE_GID,
+        },
+        "preserved_frozen_mode": "0550",
+        "runtime": {"verification": "verified"},
+        "targets": [],
+        "dataset_lock": {
+            "path": str(protocol.SOURCE_ACCESS_LOCK_BACKING_FILE),
+            "uid": 0,
+            "gid": protocol.STORAGE_GID,
+            "mode": "0660",
+            "device": 1,
+            "inode": 1,
+            "size_bytes": 0,
+            "nlink": 1,
+            "state": "ready",
+        },
+    }
+    monkeypatch.setattr(storage_prep, "prepare_storage", lambda _env: record)
+
+    assert storage_prep.main([], environ={}) == 0
+
+    marker_line, summary_line = capsys.readouterr().out.splitlines()
+    prefix, digest, encoded = marker_line.split(" ")
+    payload = base64.b64decode(encoded, validate=True)
+    record_path = record_root / POD_UID / "completion.json"
+    summary = json.loads(summary_line)
+    assert prefix == storage_prep.STORAGE_PREP_COMPLETION_MARKER
+    assert payload == record_path.read_bytes()
+    assert hashlib.sha256(payload).hexdigest() == digest
+    assert summary["record"] == str(record_path)
+    assert summary["record_sha256"] == digest
+    assert json.loads(payload) == record
+    assert stat.S_IMODE(record_path.stat().st_mode) == 0o444
+
+    with pytest.raises(provenance.ProvenanceError, match="refusing to overwrite"):
+        storage_prep.publish_completion(
+            {**json.loads(payload), "status": "different"}
+        )
+
+
 def test_prepare_storage_is_idempotent(monkeypatch, tmp_path):
-    _local_identity(monkeypatch)
+    _local_identity(monkeypatch, tmp_path)
     parent = tmp_path / "distill"
     parent.mkdir()
     target = parent / "crop_split"
@@ -109,7 +195,7 @@ def test_prepare_storage_is_idempotent(monkeypatch, tmp_path):
 
 
 def test_prepare_storage_preserves_locked_frozen_split(monkeypatch, tmp_path):
-    _local_identity(monkeypatch)
+    _local_identity(monkeypatch, tmp_path)
     parent = tmp_path / "distill"
     parent.mkdir()
     target = parent / "crop_split"
@@ -129,7 +215,7 @@ def test_prepare_storage_preserves_locked_frozen_split(monkeypatch, tmp_path):
 
 
 def test_prepare_storage_rejects_symlink_target(monkeypatch, tmp_path):
-    _local_identity(monkeypatch)
+    _local_identity(monkeypatch, tmp_path)
     parent = tmp_path / "distill"
     parent.mkdir()
     real = tmp_path / "real"
@@ -144,6 +230,32 @@ def test_prepare_storage_rejects_symlink_target(monkeypatch, tmp_path):
         storage_prep.prepare_storage()
 
     assert stat.S_IMODE(real.stat().st_mode) == 0o755
+
+
+@pytest.mark.parametrize("attack", ["symlink", "hardlink", "nonempty"])
+def test_prepare_storage_rejects_aliased_or_nonempty_dataset_lock(
+    monkeypatch,
+    tmp_path,
+    attack,
+):
+    _local_identity(monkeypatch, tmp_path)
+    monkeypatch.setattr(storage_prep, "STORAGE_TARGETS", ())
+    lock = storage_prep.SOURCE_ACCESS_LOCK_BACKING_FILE
+    victim = tmp_path / "victim-lock"
+    victim.write_bytes(b"x" if attack == "nonempty" else b"")
+    if attack == "symlink":
+        lock.symlink_to(victim)
+    elif attack == "hardlink":
+        lock.hardlink_to(victim)
+    else:
+        lock.write_bytes(b"unexpected")
+
+    with pytest.raises(
+        storage_prep.StoragePrepError,
+        match="securely create/open|empty, unaliased",
+    ):
+        storage_prep.prepare_storage()
+    assert victim.read_bytes() == (b"x" if attack == "nonempty" else b"")
 
 
 def test_storage_prep_accepts_no_path_or_identity_arguments():
@@ -180,6 +292,14 @@ def test_production_split_storage_identity_is_dedicated_setgid_and_sticky():
     assert protocol.STORAGE_GID == 2000
     assert protocol.STORAGE_MODE == 0o3770
     assert protocol.FROZEN_SPLIT_MODE == 0o550
+    assert protocol.SOURCE_ACCESS_LOCK_MODE == 0o660
+    assert (
+        protocol.SOURCE_ACCESS_LOCK_BACKING_FILE
+        == protocol.SOURCE_ACCESS_LOCK_BACKING_DIR / "dataset.lock"
+    )
+    assert protocol.SOURCE_ACCESS_LOCK_FILE == Path(
+        "/cephfs/source-access-lock/dataset.lock"
+    )
 
 
 def test_production_storage_layout_preowns_isolated_model_directories():
@@ -189,6 +309,10 @@ def test_production_storage_layout_preowns_isolated_model_directories():
         protocol.CROP_HEADS_BACKING_ROOT,
         protocol.CROP_RECORDS_BACKING_ROOT,
         protocol.SPLIT_RECORD_BACKING_DIR,
+        protocol.SOURCE_ACCESS_BACKING_ROOT,
+        protocol.SOURCE_ACCESS_PLAN_BACKING_DIR,
+        protocol.SOURCE_ACCESS_APPLY_BACKING_DIR,
+        protocol.SOURCE_ACCESS_LOCK_BACKING_DIR,
     }
     expected_paths.update(
         protocol.crop_head_backing_dir(model) for model in protocol.MODEL_KEYS
@@ -196,7 +320,7 @@ def test_production_storage_layout_preowns_isolated_model_directories():
     expected_paths.update(
         protocol.crop_record_backing_dir(model) for model in protocol.MODEL_KEYS
     )
-    assert len(protocol.STORAGE_TARGETS) == len(expected_paths) == 16
+    assert len(protocol.STORAGE_TARGETS) == len(expected_paths) == 20
     assert set(targets) == expected_paths
 
     split = targets[protocol.DISTILL_DIR]
@@ -219,6 +343,14 @@ def test_production_storage_layout_preowns_isolated_model_directories():
         2000,
         0o750,
     )
+    for path in (
+        protocol.SOURCE_ACCESS_BACKING_ROOT,
+        protocol.SOURCE_ACCESS_PLAN_BACKING_DIR,
+        protocol.SOURCE_ACCESS_APPLY_BACKING_DIR,
+        protocol.SOURCE_ACCESS_LOCK_BACKING_DIR,
+    ):
+        target = targets[path]
+        assert (target.uid, target.gid, target.mode) == (0, 2000, 0o750)
     for model, uid in protocol.CROP_MODEL_UIDS.items():
         head = targets[protocol.crop_head_backing_dir(model)]
         record = targets[protocol.crop_record_backing_dir(model)]
@@ -227,7 +359,7 @@ def test_production_storage_layout_preowns_isolated_model_directories():
 
 
 def test_storage_prep_rejects_name_squatted_child(monkeypatch, tmp_path):
-    _local_identity(monkeypatch)
+    _local_identity(monkeypatch, tmp_path)
     parent = tmp_path / "crop_heads"
     parent.mkdir()
     squatted = parent / "clay_r2_crop_runs"

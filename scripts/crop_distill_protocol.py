@@ -45,6 +45,39 @@ CROP_HEADS_BACKING_ROOT = Path("/cephfs/distill/crop_heads")
 CROP_RECORDS_BACKING_ROOT = Path("/cephfs/ops/crop-distill")
 SPLIT_RECORD_BACKING_DIR = CROP_RECORDS_BACKING_ROOT / "split"
 
+# Source-access repair is a separate, reviewed producer phase.  Kubernetes
+# maps these narrow runtime paths to the corresponding backing subpaths; the
+# plan never receives a writable tile mount. Apply receives the exact
+# ``unified_v2_512`` dataset subPath (never the PVC root) because Kubernetes
+# cannot express a dynamic 2,074-file mount set; the payload itself opens only
+# hash-bound plan targets through a no-follow directory descriptor.
+SOURCE_ACCESS_BACKING_ROOT = CROP_RECORDS_BACKING_ROOT / "source-access"
+SOURCE_ACCESS_PLAN_BACKING_DIR = SOURCE_ACCESS_BACKING_ROOT / "plan"
+SOURCE_ACCESS_APPLY_BACKING_DIR = SOURCE_ACCESS_BACKING_ROOT / "apply"
+SOURCE_ACCESS_LOCK_BACKING_DIR = SOURCE_ACCESS_BACKING_ROOT / "locks"
+SOURCE_ACCESS_LOCK_BACKING_FILE = SOURCE_ACCESS_LOCK_BACKING_DIR / "dataset.lock"
+SOURCE_ACCESS_PLAN_RECORD_DIR = Path("/cephfs/source-access-plan-records")
+SOURCE_ACCESS_APPLY_RECORD_DIR = Path("/cephfs/source-access-apply-records")
+SOURCE_ACCESS_PLAN_INPUT = Path("/cephfs/source-access-plan/plan.json")
+SOURCE_ACCESS_COMPLETION_INPUT = Path(
+    "/cephfs/source-access-completion/completion.json"
+)
+SOURCE_ACCESS_INDEX_INPUT = Path("/cephfs/lucas/lucas_tile_index.parquet")
+SOURCE_ACCESS_LOCK_FILE = Path("/cephfs/source-access-lock/dataset.lock")
+SOURCE_ACCESS_LOCK_MODE = 0o660
+
+SOURCE_ACCESS_TARGET_UID = 0
+SOURCE_ACCESS_TARGET_GID = 2000
+SOURCE_ACCESS_TARGET_MODE = 0o640
+SOURCE_ACCESS_INDEX_SIZE = 468_614
+SOURCE_ACCESS_INDEX_SHA256 = (
+    "e3bb505c4de469d0436e0e91de27327f063083199c8ddc781ec6eaf7d42e9a41"
+)
+SOURCE_ACCESS_EXPECTED_CROP_ROWS = 3_587
+SOURCE_ACCESS_EXPECTED_CANDIDATES = 2_074
+SOURCE_ACCESS_EXPECTED_REPAIRS = 1_966
+SOURCE_ACCESS_EXPECTED_NOOPS = 108
+
 STORAGE_UID = 2000
 STORAGE_GID = 2000
 STORAGE_MODE = 0o3770
@@ -277,6 +310,30 @@ STORAGE_TARGETS = (
         STORAGE_GID,
         STORAGE_LEAF_MODE,
     ),
+    StorageTarget(
+        SOURCE_ACCESS_BACKING_ROOT,
+        SOURCE_ACCESS_TARGET_UID,
+        SOURCE_ACCESS_TARGET_GID,
+        STORAGE_PARENT_MODE,
+    ),
+    StorageTarget(
+        SOURCE_ACCESS_PLAN_BACKING_DIR,
+        SOURCE_ACCESS_TARGET_UID,
+        SOURCE_ACCESS_TARGET_GID,
+        STORAGE_LEAF_MODE,
+    ),
+    StorageTarget(
+        SOURCE_ACCESS_APPLY_BACKING_DIR,
+        SOURCE_ACCESS_TARGET_UID,
+        SOURCE_ACCESS_TARGET_GID,
+        STORAGE_LEAF_MODE,
+    ),
+    StorageTarget(
+        SOURCE_ACCESS_LOCK_BACKING_DIR,
+        SOURCE_ACCESS_TARGET_UID,
+        SOURCE_ACCESS_TARGET_GID,
+        STORAGE_LEAF_MODE,
+    ),
     *(
         StorageTarget(
             crop_head_backing_dir(model),
@@ -362,4 +419,20 @@ def require_split_manifest_sha256(value: str) -> str:
             "CROP_DISTILL_SPLIT_MANIFEST_SHA256 must be one nonzero "
             "lowercase 64-hex digest"
         )
+    return value
+
+
+def require_source_access_sha256(value: str, label: str) -> str:
+    """Validate one Git-reviewed source-access trust anchor."""
+    if _SHA256_RE.fullmatch(value) is None or value == "0" * 64:
+        raise ValueError(
+            f"{label} must be one nonzero lowercase 64-hex digest"
+        )
+    return value
+
+
+def require_source_access_run_id(value: str, label: str) -> str:
+    """Validate a reviewed Pod UID used in one immutable evidence subPath."""
+    if _POD_UID_RE.fullmatch(value) is None:
+        raise ValueError(f"{label} contains unsafe path characters")
     return value

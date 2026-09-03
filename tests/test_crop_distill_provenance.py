@@ -15,6 +15,10 @@ from scripts import crop_distill_provenance as provenance
 
 SOURCE_GIT_SHA = "1" * 40
 IMAGE_REF = f"ghcr.io/example/crop@sha256:{'2' * 64}"
+SOURCE_ACCESS_PLAN_SHA256 = "3" * 64
+SOURCE_ACCESS_PLAN_POD_UID = "source-access-plan-pod"
+SOURCE_ACCESS_COMPLETION_SHA256 = "4" * 64
+SOURCE_ACCESS_COMPLETION_POD_UID = "source-access-completion-pod"
 _CHECKPOINT_PAYLOAD = b"checkpoint"
 
 
@@ -355,6 +359,10 @@ def _split_args(
         "--runtime-manifest", str(runtime["manifest"]),
         "--split-manifest", str(bundle["manifest"]),
         "--split-sha256", str(bundle["manifest_sha256"]),
+        "--source-access-plan-sha256", SOURCE_ACCESS_PLAN_SHA256,
+        "--source-access-plan-pod-uid", SOURCE_ACCESS_PLAN_POD_UID,
+        "--source-access-completion-sha256", SOURCE_ACCESS_COMPLETION_SHA256,
+        "--source-access-completion-pod-uid", SOURCE_ACCESS_COMPLETION_POD_UID,
         "--artifact", f"index={bundle['index']}",
         "--artifact", f"validator_holdout={bundle['validator_holdout']}",
         "--artifact", f"split={bundle['split']}",
@@ -696,6 +704,39 @@ def test_completed_split_records_all_four_outputs(tmp_path, runtime):
         "index", "validator_holdout", "split", "manifest",
     }
     assert result["checkpoint"] is None
+    assert result["source_access"] == {
+        "plan": {
+            "sha256": SOURCE_ACCESS_PLAN_SHA256,
+            "pod_uid": SOURCE_ACCESS_PLAN_POD_UID,
+        },
+        "completion": {
+            "sha256": SOURCE_ACCESS_COMPLETION_SHA256,
+            "pod_uid": SOURCE_ACCESS_COMPLETION_POD_UID,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("source_access_plan_sha256", None, "requires the PLAN and APPLY"),
+        ("source_access_plan_sha256", "0" * 64, "must be nonzero"),
+        ("source_access_plan_pod_uid", "../unsafe", "must contain only"),
+        ("source_access_completion_sha256", "not-a-hash", "64 lowercase hex"),
+        ("source_access_completion_pod_uid", "", "must contain only"),
+    ],
+)
+def test_completed_split_rejects_invalid_source_access_authority(
+    runtime,
+    field,
+    value,
+    match,
+):
+    args, _ = _split_args(runtime, pod_uid=f"pod-invalid-{field}")
+    setattr(args, field, value)
+
+    with pytest.raises(provenance.ProvenanceError, match=match):
+        provenance.finalize(args)
 
 
 @pytest.mark.parametrize(
@@ -1017,6 +1058,41 @@ def test_terminal_record_rejects_preexisting_hardlink(tmp_path):
     with pytest.raises(provenance.ProvenanceError, match="exactly one hard link"):
         provenance.write_once_bytes(target, b"evidence\n")
     assert victim.read_bytes() == b"evidence\n"
+
+
+def test_terminal_record_recovers_crash_after_link_before_temp_unlink(
+    tmp_path,
+    monkeypatch,
+):
+    record_dir = tmp_path / "records"
+    target = record_dir / "completion.json"
+    payload = b"immutable terminal evidence\n"
+    real_unlink = provenance.os.unlink
+
+    def interrupt_temp_unlink(path, *args, **kwargs):
+        if str(path).startswith(".completion.json.") and str(path).endswith(
+            ".create"
+        ):
+            raise OSError("simulated process death after publication")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(provenance.os, "unlink", interrupt_temp_unlink)
+    with pytest.raises(OSError, match="simulated process death"):
+        provenance.write_once_bytes(target, payload)
+
+    assert target.read_bytes() == payload
+    assert target.stat().st_nlink == 2
+    stale = list(record_dir.glob(".completion.json.*.create"))
+    assert len(stale) == 1
+
+    monkeypatch.setattr(provenance.os, "unlink", real_unlink)
+    provenance.write_once_bytes(target, payload)
+
+    assert target.read_bytes() == payload
+    assert target.stat().st_nlink == 1
+    assert list(record_dir.glob(".completion.json.*.create")) == []
+    with pytest.raises(provenance.ProvenanceError, match="refusing to overwrite"):
+        provenance.write_once_bytes(target, b"different\n")
 
 
 def test_terminal_evidence_round_trips_exact_on_disk_bytes(

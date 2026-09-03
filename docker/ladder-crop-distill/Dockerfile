@@ -142,8 +142,8 @@ RUN python /tmp/prepare_runtime.py seal \
 ENV PIP_NO_INDEX=1
 
 WORKDIR /opt/imintengine
-# Split and crop consumers run as this fixed unprivileged identity.  A
-# separate one-shot storage-prep Job overrides only UID (not GID) to migrate
-# three exact 0755 root:root PVC children before any data work begins.
+# Split and crop consumers run as this fixed unprivileged identity. The
+# reviewed storage-prep and source-access Jobs override it with their explicit
+# UID/GID and capability sets; Kubernetes manifests remain the role boundary.
 USER 2000:2000
 CMD ["/usr/local/bin/python", "-c", "import json; print(json.dumps(json.load(open('/opt/provenance/runtime.json')), indent=2, sort_keys=True))"]

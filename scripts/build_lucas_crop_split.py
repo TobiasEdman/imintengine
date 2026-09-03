@@ -2136,6 +2136,8 @@ def main() -> None:
     ap.add_argument("--expected-git-sha", default=None,
                     help="optional lowercase 40-hex source anchor required "
                          "when verifying or re-entering a freeze")
+    ap.add_argument("--expected-source-index-sha256", default=None)
+    ap.add_argument("--expected-source-index-size", type=int, default=None)
     args = ap.parse_args()
 
     out_dir = _absolute_path(Path(args.out_dir))
@@ -2146,6 +2148,20 @@ def main() -> None:
         ap.error("--expected-git-sha must be exactly 40 lowercase hex characters")
     if args.seed != SEED:
         ap.error(f"--seed is protocol-pinned to {SEED}")
+    if (args.expected_source_index_sha256 is None) != (
+        args.expected_source_index_size is None
+    ):
+        ap.error("source-index SHA256 and size must be supplied together")
+    if (
+        args.expected_source_index_sha256 is not None
+        and not _is_lower_hex(args.expected_source_index_sha256, 64)
+    ):
+        ap.error("--expected-source-index-sha256 must be 64 lowercase hex")
+    if (
+        args.expected_source_index_size is not None
+        and args.expected_source_index_size <= 0
+    ):
+        ap.error("--expected-source-index-size must be positive")
     if args.verify or args.verify_consumer:
         state, detail = freeze_state(
             out_dir,
@@ -2232,6 +2248,16 @@ def _build(args, out_dir: Path) -> None:
     except OSError as exc:
         raise SystemExit(f"cannot inspect source LUCAS index: {exc}") from exc
     source_sha = _sha256_bytes(source_bytes)
+    if (
+        args.expected_source_index_sha256 is not None
+        and (
+            source_sha != args.expected_source_index_sha256
+            or len(source_bytes) != args.expected_source_index_size
+        )
+    ):
+        raise SystemExit(
+            "source LUCAS index differs from reviewed SHA256/size authority"
+        )
     df = pd.read_parquet(io.BytesIO(source_bytes))
     prior_identity, problem = _source_prior_test_identity(df)
     if problem:

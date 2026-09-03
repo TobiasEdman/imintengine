@@ -18,6 +18,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from atomic_npz import exclusive_dataset_lock
 from crop_distill_protocol import (
     BASE_PYTHON,
     DATA_DIR,
@@ -28,6 +29,11 @@ from crop_distill_protocol import (
     RUNTIME_MANIFEST,
     SCORING_PYTHON,
     SOURCE_ROOT,
+    SOURCE_ACCESS_COMPLETION_INPUT,
+    SOURCE_ACCESS_INDEX_SHA256,
+    SOURCE_ACCESS_INDEX_SIZE,
+    SOURCE_ACCESS_LOCK_FILE,
+    SOURCE_ACCESS_LOCK_MODE,
     STORAGE_GID,
     STORAGE_UID,
     SPLIT_RECORD_DIR,
@@ -35,8 +41,18 @@ from crop_distill_protocol import (
     WORK_ROOT,
     RuntimeIdentity,
     require_process_identity,
+    require_source_access_run_id,
+    require_source_access_sha256,
     runtime_claims,
     runtime_identity,
+)
+from crop_distill_provenance import verify_runtime
+from crop_source_access import (
+    FREEZE_LEASE_PATH,
+    require_fresh_freeze_lease,
+    runtime_binding,
+    verify_completion as verify_source_access_completion,
+    verify_live_completion_cohort,
 )
 
 DISTILL_INDEX = DISTILL_DIR / "lucas_crop_distill_index.parquet"
@@ -78,6 +94,11 @@ class LucasCropSplitJob:
     def __init__(self, identity: RuntimeIdentity) -> None:
         self.identity = identity
         self.failure_stage = "bootstrap"
+        self.source_access_plan_sha256 = "<missing>"
+        self.source_access_plan_pod_uid = "<missing>"
+        self.source_access_completion_sha256 = "<missing>"
+        self.source_access_completion_pod_uid = "<missing>"
+        self.freeze_lease_path = FREEZE_LEASE_PATH
 
     def _run(self, stage: str, command: Sequence[object]) -> None:
         self.failure_stage = stage
@@ -107,7 +128,7 @@ class LucasCropSplitJob:
 
     def _provenance_base(self, *, status: str, exit_code: int) -> list[str]:
         diagnostic = status == "failed"
-        return [
+        command = [
             str(BASE_PYTHON),
             str(PROVENANCE_SCRIPT),
             "finalize",
@@ -127,6 +148,20 @@ class LucasCropSplitJob:
             str(exit_code),
             *self._runtime_args(diagnostic=diagnostic),
         ]
+        if status == "completed":
+            command.extend(
+                [
+                    "--source-access-plan-sha256",
+                    self.source_access_plan_sha256,
+                    "--source-access-plan-pod-uid",
+                    self.source_access_plan_pod_uid,
+                    "--source-access-completion-sha256",
+                    self.source_access_completion_sha256,
+                    "--source-access-completion-pod-uid",
+                    self.source_access_completion_pod_uid,
+                ]
+            )
+        return command
 
     def _prepare_directories(self) -> None:
         self.failure_stage = "prepare-output"
@@ -142,6 +177,18 @@ class LucasCropSplitJob:
 
     def execute(self) -> None:
         self._prepare_directories()
+        self.failure_stage = "acquire-source-access-lock"
+        with exclusive_dataset_lock(
+            SOURCE_ACCESS_LOCK_FILE,
+            create=False,
+            expected_uid=0,
+            expected_gid=STORAGE_GID,
+            expected_mode=SOURCE_ACCESS_LOCK_MODE,
+        ):
+            self._execute_locked()
+
+    def _execute_locked(self) -> None:
+        """Hold the cooperating-producer exclusion lock through publication."""
         self._run(
             "verify-runtime",
             [
@@ -150,6 +197,50 @@ class LucasCropSplitJob:
                 "verify-runtime",
                 *self._runtime_args(),
             ],
+        )
+        verified_runtime = verify_runtime(
+            RUNTIME_MANIFEST,
+            source_git_sha=self.identity.source_git_sha,
+            image_ref=self.identity.image_ref,
+        )
+        self.failure_stage = "require-freeze-lease-before-source-read"
+        require_fresh_freeze_lease(
+            self.freeze_lease_path,
+            expected_phase="split",
+        )
+        self.failure_stage = "verify-source-access-completion"
+        completion = verify_source_access_completion(
+            SOURCE_ACCESS_COMPLETION_INPUT,
+            expected_sha256=self.source_access_completion_sha256,
+            expected_source_git_sha=self.identity.source_git_sha,
+            expected_image_ref=self.identity.image_ref,
+            expected_completion_pod_uid=self.source_access_completion_pod_uid,
+            expected_plan_sha256=self.source_access_plan_sha256,
+            expected_runtime_binding=runtime_binding(
+                self.identity, verified_runtime
+            ),
+        )
+        plan = completion["plan"]
+        if plan != {
+            "pod_uid": self.source_access_plan_pod_uid,
+            "sha256": self.source_access_plan_sha256,
+        }:
+            raise RuntimeError(
+                "verified source-access completion differs from the Git-pinned "
+                "PLAN SHA256/Pod UID authority"
+            )
+        print(
+            "[verify-source-access-completion] "
+            f"files={completion['summary']['files']} "
+            f"sha256={self.source_access_completion_sha256}",
+            flush=True,
+        )
+        self.failure_stage = "verify-live-source-cohort-before-freeze"
+        verify_live_completion_cohort(completion, data_dir=DATA_DIR)
+        self.failure_stage = "refresh-freeze-lease-before-freeze"
+        require_fresh_freeze_lease(
+            self.freeze_lease_path,
+            expected_phase="split",
         )
         self._run(
             "freeze-split",
@@ -164,7 +255,16 @@ class LucasCropSplitJob:
                 DISTILL_DIR,
                 "--git-sha",
                 self.identity.source_git_sha,
+                "--expected-source-index-sha256",
+                SOURCE_ACCESS_INDEX_SHA256,
+                "--expected-source-index-size",
+                SOURCE_ACCESS_INDEX_SIZE,
             ],
+        )
+        self.failure_stage = "refresh-freeze-lease-after-freeze"
+        require_fresh_freeze_lease(
+            self.freeze_lease_path,
+            expected_phase="split",
         )
         self._run(
             "verify-split",
@@ -182,6 +282,13 @@ class LucasCropSplitJob:
         _ensure_real_directory(consumer_dir, create=False)
         _set_directory_mode(consumer_dir, 0o550)
         _set_directory_mode(DISTILL_DIR, 0o550)
+        self.failure_stage = "verify-live-source-cohort-before-completion"
+        verify_live_completion_cohort(completion, data_dir=DATA_DIR)
+        self.failure_stage = "require-freeze-lease-before-completion"
+        require_fresh_freeze_lease(
+            self.freeze_lease_path,
+            expected_phase="split",
+        )
         self.failure_stage = "bind-split-manifest"
         manifest_sha = sha256_file(SPLIT_MANIFEST)
         self._run(
@@ -331,6 +438,30 @@ def main(
         build_parser().parse_args(argv)
         job.failure_stage = "validate-runtime-environment"
         job.identity = runtime_identity(environment)
+        job.source_access_plan_sha256 = require_source_access_sha256(
+            environment.get("CROP_SOURCE_ACCESS_PLAN_SHA256", ""),
+            "CROP_SOURCE_ACCESS_PLAN_SHA256",
+        )
+        job.source_access_plan_pod_uid = require_source_access_run_id(
+            environment.get("CROP_SOURCE_ACCESS_PLAN_POD_UID", ""),
+            "CROP_SOURCE_ACCESS_PLAN_POD_UID",
+        )
+        job.source_access_completion_sha256 = require_source_access_sha256(
+            environment.get("CROP_SOURCE_ACCESS_COMPLETION_SHA256", ""),
+            "CROP_SOURCE_ACCESS_COMPLETION_SHA256",
+        )
+        job.source_access_completion_pod_uid = require_source_access_run_id(
+            environment.get("CROP_SOURCE_ACCESS_COMPLETION_POD_UID", ""),
+            "CROP_SOURCE_ACCESS_COMPLETION_POD_UID",
+        )
+        raw_freeze_lease_path = environment.get(
+            "CROP_SOURCE_FREEZE_LEASE_PATH", ""
+        )
+        if raw_freeze_lease_path != str(FREEZE_LEASE_PATH):
+            raise JobArgumentError(
+                "CROP_SOURCE_FREEZE_LEASE_PATH must equal the baked lease path"
+            )
+        job.freeze_lease_path = Path(raw_freeze_lease_path)
         job.failure_stage = "validate-process-identity"
         require_process_identity(
             STORAGE_UID,

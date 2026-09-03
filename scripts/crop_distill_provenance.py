@@ -75,6 +75,7 @@ _COMPLETION_RECORD_FIELDS = {
     "process_identity",
     "terminal",
     "runtime",
+    "source_access",
     "split_manifest",
     "checkpoint",
     "artifacts",
@@ -1049,12 +1050,67 @@ def _validate_completion_authority(
         )
 
 
+def _source_access_authority(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Return the exact upstream repair authority for a completed split.
+
+    Crop workers are authorized by the frozen split manifest instead.  Failed
+    records remain diagnostic-only and deliberately do not turn partially
+    parsed environment claims into trusted source-access evidence.
+    """
+    values = (
+        args.source_access_plan_sha256,
+        args.source_access_plan_pod_uid,
+        args.source_access_completion_sha256,
+        args.source_access_completion_pod_uid,
+    )
+    if args.status != "completed":
+        return None
+    if args.kind == "crop":
+        if any(value is not None for value in values):
+            raise ProvenanceError(
+                "completed crop record cannot claim source-access authority"
+            )
+        return None
+    if any(value is None for value in values):
+        raise ProvenanceError(
+            "completed split record requires the PLAN and APPLY SHA256/Pod UID "
+            "source-access authority"
+        )
+    plan_sha256 = _require_hex64(
+        args.source_access_plan_sha256,
+        "source-access PLAN SHA256",
+    )
+    completion_sha256 = _require_hex64(
+        args.source_access_completion_sha256,
+        "source-access APPLY completion SHA256",
+    )
+    if plan_sha256 == "0" * 64 or completion_sha256 == "0" * 64:
+        raise ProvenanceError("source-access authority digests must be nonzero")
+    return {
+        "plan": {
+            "sha256": plan_sha256,
+            "pod_uid": _require_safe_id(
+                args.source_access_plan_pod_uid,
+                "source-access PLAN Pod UID",
+            ),
+        },
+        "completion": {
+            "sha256": completion_sha256,
+            "pod_uid": _require_safe_id(
+                args.source_access_completion_pod_uid,
+                "source-access APPLY completion Pod UID",
+            ),
+        },
+    }
+
+
 def _validate_terminal_args(
     args: argparse.Namespace,
     artifacts: dict[str, Path],
     artifact_sizes: dict[str, int],
     artifact_hashes: dict[str, str],
 ) -> None:
+    _source_access_authority(args)
     if args.status == "completed":
         if args.exit_code != 0:
             raise ProvenanceError("completed status requires exit-code 0")
@@ -1109,6 +1165,65 @@ def _validate_terminal_args(
             raise ProvenanceError("failure-stage contains invalid characters")
 
 
+def _recover_linked_temporary(
+    parent_fd: int,
+    *,
+    target_name: str,
+    payload: bytes,
+) -> bool:
+    """Remove only stale publication links to an already-complete target.
+
+    ``write_once_bytes`` publishes with ``link(temp, target)``.  A process
+    death after that atomic link but before ``unlink(temp)`` leaves the target
+    valid but with link count two.  The next identical publication may safely
+    finish only that interrupted cleanup.  Extra links that are not matching
+    private publication temporaries remain a hard failure.
+    """
+    target_fd: int | None = None
+    try:
+        try:
+            target_fd = os.open(target_name, _READ_FLAGS, dir_fd=parent_fd)
+        except OSError:
+            return False
+        before = os.fstat(target_fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink < 2:
+            return False
+        blocks: list[bytes] = []
+        while True:
+            block = os.read(target_fd, _COPY_BLOCK_SIZE)
+            if not block:
+                break
+            blocks.append(block)
+        after = os.fstat(target_fd)
+        if not _same_file(before, after) or b"".join(blocks) != payload:
+            return False
+
+        prefix = f".{target_name}."
+        suffix = ".create"
+        linked_temporaries: list[str] = []
+        for name in os.listdir(parent_fd):
+            if not (name.startswith(prefix) and name.endswith(suffix)):
+                continue
+            try:
+                identity = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except OSError:
+                return False
+            if (
+                stat.S_ISREG(identity.st_mode)
+                and identity.st_dev == before.st_dev
+                and identity.st_ino == before.st_ino
+            ):
+                linked_temporaries.append(name)
+        if before.st_nlink != 1 + len(linked_temporaries):
+            return False
+        for name in sorted(linked_temporaries):
+            os.unlink(name, dir_fd=parent_fd)
+        return True
+    finally:
+        if target_fd is not None:
+            os.close(target_fd)
+
+
 def write_once_bytes(path: Path, payload: bytes) -> None:
     """Create a group-readable record through a safe per-run directory."""
     parent_fd = _open_directory(path.parent, create=True, create_mode=0o750)
@@ -1159,6 +1274,11 @@ def write_once_bytes(path: Path, payload: bytes) -> None:
                 follow_symlinks=False,
             )
         except FileExistsError:
+            _recover_linked_temporary(
+                parent_fd,
+                target_name=path.name,
+                payload=payload,
+            )
             try:
                 existing, _ = _read_regular_at(
                     parent_fd,
@@ -1227,6 +1347,7 @@ def finalize(args: argparse.Namespace) -> dict[str, Any]:
     _validate_terminal_args(
         args, artifacts, artifact_sizes, artifact_hashes
     )
+    source_access = _source_access_authority(args)
 
     if args.status == "failed":
         # A terminal failure record is diagnostic evidence, not completion
@@ -1298,6 +1419,7 @@ def finalize(args: argparse.Namespace) -> dict[str, Any]:
             "failure_stage": args.failure_stage,
         },
         "runtime": runtime,
+        "source_access": source_access,
         "split_manifest": split,
         "checkpoint": checkpoint,
         "artifacts": output_identities,
@@ -1404,6 +1526,10 @@ def build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--failure-stage")
     complete.add_argument("--split-manifest", type=Path)
     complete.add_argument("--split-sha256")
+    complete.add_argument("--source-access-plan-sha256")
+    complete.add_argument("--source-access-plan-pod-uid")
+    complete.add_argument("--source-access-completion-sha256")
+    complete.add_argument("--source-access-completion-pod-uid")
     complete.add_argument("--checkpoint", type=Path)
     complete.add_argument("--checkpoint-sha256")
     complete.add_argument("--checkpoint-size", type=int)

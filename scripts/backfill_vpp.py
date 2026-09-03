@@ -53,7 +53,6 @@ import glob
 import json
 import os
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -66,6 +65,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from imint.training.cdse_vpp import _has_sufficient_coverage, fetch_vpp_tiles
 from imint.training.tile_bbox import resolve_fetch_bbox
 from imint.training.tile_fetch import infer_tile_year
+from scripts.atomic_npz import (
+    FileIdentity,
+    capture_npz,
+    default_dataset_lock,
+    durable_atomic_savez,
+    exclusive_dataset_lock,
+)
 
 # The five HR-VPP channels stored per tile. ``fetch_vpp_tiles`` returns the
 # bare metric names (sosd, eosd, …); the .npz key is ``vpp_<name>`` — the
@@ -184,27 +190,26 @@ def _fetch_vpp_wekeo_then_cdse(
 
 # ── Atomic write (temp in same dir + os.replace) ─────────────────────────
 
-def _atomic_savez(dest: str, data: dict) -> None:
+def _atomic_savez(
+    dest: str,
+    data: dict,
+    *,
+    expected: FileIdentity | None = None,
+) -> None:
     """Write ``data`` to ``dest`` atomically (temp in same dir + os.replace).
 
     A file handle (not a path) is passed to savez_compressed so numpy does not
     append a second ``.npz`` to the temp name. Same pattern as
     scripts/fill_tiles_l2a.py — an interrupted/evicted pod can never leave a
     half-written .npz (the BadZipFile failure mode of plain savez).
+
+    Replacements retain the destination's owner, group, and permission bits. ``fchown``
+    deliberately runs before ``fchmod`` because ownership changes may clear
+    set-ID bits. If either metadata operation fails, the temporary file is
+    removed and the original is left untouched. A new destination keeps
+    ``mkstemp``'s secure ``0600`` default and the filesystem-selected group.
     """
-    dest_dir = os.path.dirname(dest) or "."
-    os.makedirs(dest_dir, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=dest_dir, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            np.savez_compressed(fh, **data)
-        os.replace(tmp, dest)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    durable_atomic_savez(dest, data, expected=expected)
 
 
 # ── Per-tile worker ──────────────────────────────────────────────────────
@@ -215,6 +220,8 @@ def backfill_one_tile(
     cache_dir: Path | None,
     dry_run: bool = False,
     force: bool = False,
+    dataset_lock: str | None = None,
+    _lock_held: bool = False,
 ) -> dict:
     """Backfill VPP into one tile. Returns a status dict (never raises).
 
@@ -227,9 +234,25 @@ def backfill_one_tile(
     re-fetched and overwritten (corrects already-stored-but-wrong VPP, e.g. the
     256/512 aux-misalignment).
     """
+    if not dry_run and not _lock_held:
+        lock_path = (
+            Path(dataset_lock)
+            if dataset_lock is not None
+            else default_dataset_lock(Path(tile_path).parent)
+        )
+        with exclusive_dataset_lock(lock_path):
+            return backfill_one_tile(
+                tile_path,
+                cache_dir=cache_dir,
+                dry_run=dry_run,
+                force=force,
+                dataset_lock=dataset_lock,
+                _lock_held=True,
+            )
+
     name = Path(tile_path).stem
     try:
-        data = dict(np.load(tile_path, allow_pickle=True))
+        data, initial_identity = capture_npz(tile_path)
     except Exception as e:  # noqa: BLE001 — a corrupt .npz must not kill the run
         return {"name": name, "status": "failed", "reason": f"load:{type(e).__name__}"}
 
@@ -279,7 +302,7 @@ def backfill_one_tile(
     # Also lets a later run skip year-correct tiles instead of needing --force.
     data["vpp_year"] = np.int32(year)
     try:
-        _atomic_savez(tile_path, data)
+        _atomic_savez(tile_path, data, expected=initial_identity)
     except Exception as e:  # noqa: BLE001
         return {"name": name, "status": "failed", "reason": f"write:{type(e).__name__}:{e}"}
 
@@ -309,7 +332,7 @@ def _save_known_empty(path: Path, mapping: dict[str, str]) -> None:
 
 # ── Driver ───────────────────────────────────────────────────────────────
 
-def run(
+def _run_under_dataset_lock(
     data_dir: str,
     *,
     workers: int = 2,
@@ -342,7 +365,13 @@ def run(
 
     def _run_one(path: str) -> None:
         nonlocal done
-        r = backfill_one_tile(path, cache_dir=cdir, dry_run=dry_run, force=force)
+        r = backfill_one_tile(
+            path,
+            cache_dir=cdir,
+            dry_run=dry_run,
+            force=force,
+            _lock_held=True,
+        )
         with lock:
             done += 1
             stats[r["status"]] = stats.get(r["status"], 0) + 1
@@ -381,6 +410,38 @@ def run(
     return stats
 
 
+def run(
+    data_dir: str,
+    *,
+    workers: int = 2,
+    dry_run: bool = False,
+    cache_dir: str | None = None,
+    max_tiles: int | None = None,
+    force: bool = False,
+    dataset_lock: str | None = None,
+) -> dict:
+    """Backfill VPP while excluding source-access plan/apply operations.
+
+    The default lock resolves inside the same PVC root as ``data_dir``.  The
+    source-access Jobs mount that exact backing file, so a future VPP rewrite
+    cannot race the inventory or its metadata-only repair.
+    """
+    lock_path = (
+        Path(dataset_lock)
+        if dataset_lock is not None
+        else default_dataset_lock(data_dir)
+    )
+    with exclusive_dataset_lock(lock_path):
+        return _run_under_dataset_lock(
+            data_dir,
+            workers=workers,
+            dry_run=dry_run,
+            cache_dir=cache_dir,
+            max_tiles=max_tiles,
+            force=force,
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Backfill HR-VPP phenology into _recoreg tiles via WEkEO "
@@ -398,6 +459,14 @@ def main() -> int:
     ap.add_argument("--force", action="store_true",
                     help="Re-fetch and OVERWRITE VPP even if already present "
                          "(corrects wrong-grid VPP). Atomic per-tile.")
+    ap.add_argument(
+        "--dataset-lock",
+        default=None,
+        help=(
+            "Shared source-access lock (default: "
+            "<data-dir-parent>/ops/crop-distill/source-access/locks/dataset.lock)"
+        ),
+    )
     args = ap.parse_args()
 
     stats = run(
@@ -407,6 +476,7 @@ def main() -> int:
         cache_dir=args.cache_dir,
         max_tiles=args.max_tiles,
         force=args.force,
+        dataset_lock=args.dataset_lock,
     )
     if stats["failed"]:
         return 1

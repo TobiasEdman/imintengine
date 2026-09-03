@@ -50,6 +50,10 @@ FIXTURE_CROP_IMAGE = (
     "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "b" * 64
 )
 FIXTURE_SPLIT_MANIFEST_SHA256 = "c" * 64
+FIXTURE_PLAN_SHA256 = "d" * 64
+FIXTURE_PLAN_POD_UID = "plan-pod-uid"
+FIXTURE_COMPLETION_SHA256 = "e" * 64
+FIXTURE_COMPLETION_POD_UID = "apply-pod-uid"
 CANONICAL_PRIOR_CROP_TILE = "45024074"
 RUNTIME_IDENTITY = crop_protocol.RuntimeIdentity(
     FIXTURE_GIT_SHA, FIXTURE_CROP_IMAGE, "pod-uid-123"
@@ -61,6 +65,14 @@ def _use_complete_crop_runtime_identity(monkeypatch):
     """Unit tests render in memory before Commit A supplies real identities."""
     monkeypatch.setattr(glm, "CROP_DISTILL_SOURCE_GIT_SHA", FIXTURE_GIT_SHA)
     monkeypatch.setattr(glm, "CROP_DISTILL_IMAGE", FIXTURE_CROP_IMAGE)
+    monkeypatch.setattr(glm, "CROP_SOURCE_ACCESS_PLAN_SHA256", FIXTURE_PLAN_SHA256)
+    monkeypatch.setattr(glm, "CROP_SOURCE_ACCESS_PLAN_POD_UID", FIXTURE_PLAN_POD_UID)
+    monkeypatch.setattr(
+        glm, "CROP_SOURCE_ACCESS_COMPLETION_SHA256", FIXTURE_COMPLETION_SHA256
+    )
+    monkeypatch.setattr(
+        glm, "CROP_SOURCE_ACCESS_COMPLETION_POD_UID", FIXTURE_COMPLETION_POD_UID
+    )
     monkeypatch.setattr(
         glm,
         "CROP_DISTILL_SPLIT_MANIFEST_SHA256",
@@ -266,7 +278,26 @@ def test_split_job_freezes_the_canonical_split():
             "mountPath": "/cephfs/ops/crop-distill",
             "subPath": "ops/crop-distill/split",
         },
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/source-access-completion/completion.json",
+            "subPath": (
+                "ops/crop-distill/source-access/apply/"
+                f"{FIXTURE_COMPLETION_POD_UID}/completion.json"
+            ),
+            "readOnly": True,
+        },
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/source-access-lock",
+            "subPath": "ops/crop-distill/source-access/locks",
+        },
         {"name": "work", "mountPath": "/work"},
+        {
+            "name": "crop-source-freeze-lease",
+            "mountPath": "/var/run/crop-source-freeze",
+            "readOnly": True,
+        },
     ]
     assert all(mount["mountPath"] != "/cephfs" for mount in mounts)
 
@@ -343,6 +374,14 @@ def test_crop_jobs_use_one_pinned_offline_runtime(path):
     }
     if is_crop:
         expected_env.add("CROP_DISTILL_SPLIT_MANIFEST_SHA256")
+    else:
+        expected_env.update({
+            "CROP_SOURCE_ACCESS_PLAN_SHA256",
+            "CROP_SOURCE_ACCESS_PLAN_POD_UID",
+            "CROP_SOURCE_ACCESS_COMPLETION_SHA256",
+            "CROP_SOURCE_ACCESS_COMPLETION_POD_UID",
+            "CROP_SOURCE_FREEZE_LEASE_PATH",
+        })
     assert set(env) == expected_env
     assert env["CROP_DISTILL_IMAGE"]["value"] == glm.CROP_DISTILL_IMAGE
     assert env["CROP_DISTILL_SOURCE_GIT_SHA"]["value"] == (
@@ -353,6 +392,22 @@ def test_crop_jobs_use_one_pinned_offline_runtime(path):
     if is_crop:
         assert env["CROP_DISTILL_SPLIT_MANIFEST_SHA256"]["value"] == (
             glm.CROP_DISTILL_SPLIT_MANIFEST_SHA256
+        )
+    else:
+        assert env["CROP_SOURCE_ACCESS_PLAN_SHA256"]["value"] == (
+            FIXTURE_PLAN_SHA256
+        )
+        assert env["CROP_SOURCE_ACCESS_PLAN_POD_UID"]["value"] == (
+            FIXTURE_PLAN_POD_UID
+        )
+        assert env["CROP_SOURCE_ACCESS_COMPLETION_SHA256"]["value"] == (
+            FIXTURE_COMPLETION_SHA256
+        )
+        assert env["CROP_SOURCE_ACCESS_COMPLETION_POD_UID"]["value"] == (
+            FIXTURE_COMPLETION_POD_UID
+        )
+        assert env["CROP_SOURCE_FREEZE_LEASE_PATH"]["value"] == (
+            "/var/run/crop-source-freeze/lease.json"
         )
     assert env["POD_UID"]["valueFrom"]["fieldRef"]["fieldPath"] == (
         "metadata.uid"
@@ -418,7 +473,7 @@ def test_only_crop_consumers_require_the_frozen_split_digest(monkeypatch):
 def test_crop_bootstrap_cli_emits_only_split_producers(
     monkeypatch, tmp_path, capsys,
 ):
-    """Commit B may generate producer YAML before the split digest exists."""
+    """The first phase emits only prep, deny-egress, and read-only PLAN."""
     output_dir = tmp_path / "generated"
     monkeypatch.setattr(glm, "REPO", tmp_path)
     monkeypatch.setattr(glm, "OUT_DIR", output_dir)
@@ -433,7 +488,7 @@ def test_crop_bootstrap_cli_emits_only_split_producers(
     assert {path.name for path in output_dir.iterdir()} == {
         "crop-distill-deny-egress.yaml",
         "crop-distill-storage-prep-job.yaml",
-        "lucas-crop-split-job.yaml",
+        "crop-source-access-plan-job.yaml",
     }
     assert (output_dir / "crop-distill-deny-egress.yaml").read_text() == (
         render_crop_deny_egress()
@@ -441,9 +496,9 @@ def test_crop_bootstrap_cli_emits_only_split_producers(
     assert (output_dir / "crop-distill-storage-prep-job.yaml").read_text() == (
         render_crop_storage_prep()
     )
-    assert (output_dir / "lucas-crop-split-job.yaml").read_text() == (
-        render_lucas_crop_split()
-    )
+    assert "ladder-crop-source-access-plan" in (
+        output_dir / "crop-source-access-plan-job.yaml"
+    ).read_text()
     assert all(
         not (output_dir / f"crop-distill-{model}-job.yaml").exists()
         for model in MODELS
@@ -470,7 +525,26 @@ def test_crop_bootstrap_cli_emits_only_split_producers(
         ["gen_ladder_manifests.py", "--crop-bootstrap-only"],
     )
     assert glm.main() == 2
+    assert "stale downstream manifests exist" in capsys.readouterr().err
+
+
+def test_crop_split_phase_refuses_stale_consumer_manifest(
+    monkeypatch, tmp_path, capsys,
+):
+    output_dir = tmp_path / "generated"
+    output_dir.mkdir()
+    stale = output_dir / "crop-distill-clay-job.yaml"
+    stale.write_text("obsolete consumer")
+    monkeypatch.setattr(glm, "REPO", tmp_path)
+    monkeypatch.setattr(glm, "OUT_DIR", output_dir)
+    monkeypatch.setattr(
+        sys, "argv", ["gen_ladder_manifests.py", "--crop-split-only"]
+    )
+
+    assert glm.main() == 2
     assert "stale consumer manifests exist" in capsys.readouterr().err
+    assert stale.read_text() == "obsolete consumer"
+    assert not (output_dir / "lucas-crop-split-job.yaml").exists()
 
 
 def test_full_generator_refuses_zero_split_digest(
@@ -611,12 +685,14 @@ def test_crop_jobs_use_the_baked_interpreters(path):
         assert "MODEL_PYTHON" in source and "EXTRACT_SCRIPT" in source
         assert "SCORING_PYTHON" in source and "SCORE_SCRIPT" in source
     else:
-        source = inspect.getsource(split_entrypoint.LucasCropSplitJob.execute)
+        source = inspect.getsource(
+            split_entrypoint.LucasCropSplitJob._execute_locked
+        )
         assert "SCORING_PYTHON" in source and "SPLIT_SCRIPT" in source
 
 
 def test_split_completion_binds_exactly_four_split_artifacts():
-    source = inspect.getsource(split_entrypoint.LucasCropSplitJob.execute)
+    source = inspect.getsource(split_entrypoint.LucasCropSplitJob._execute_locked)
     assert "--verify-consumer" not in source
     assert '"--verify"' in source
     expected = {
@@ -914,6 +990,27 @@ def test_frozen_split_is_immutable(monkeypatch, tmp_path, capsys):
     assert set(d["required_keys"]) >= {"s1_vv_vh", "tessera"}
 
 
+def test_split_build_refuses_live_index_outside_reviewed_authority(
+    monkeypatch, tmp_path,
+):
+    index, data_dir = _write_lucas_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(SystemExit, match="reviewed SHA256/size authority"):
+        _run_split_builder(
+            monkeypatch,
+            index,
+            data_dir,
+            out_dir,
+            "--expected-source-index-sha256",
+            "f" * 64,
+            "--expected-source-index-size",
+            str(index.stat().st_size),
+        )
+
+    assert not (out_dir / "lucas_crop_split.MANIFEST.json").exists()
+
+
 def test_corrupt_freeze_is_rejected(monkeypatch, tmp_path):
     """A manifest whose artifacts are missing or hash-mismatched is a
     corrupt freeze: hard refusal with recovery — NEVER accepted as frozen
@@ -1154,7 +1251,9 @@ def test_scoring_deps_are_pinned_and_snapshotted(path):
         assert "MODEL_PYTHON" in source and "EXTRACT_SCRIPT" in source
         assert "SCORING_PYTHON" in source and "SCORE_SCRIPT" in source
     else:
-        source = inspect.getsource(split_entrypoint.LucasCropSplitJob.execute)
+        source = inspect.getsource(
+            split_entrypoint.LucasCropSplitJob._execute_locked
+        )
         assert crop_protocol.SCORING_PYTHON == Path(
             "/opt/venvs/scoring/bin/python"
         )

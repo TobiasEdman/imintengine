@@ -9,6 +9,7 @@ import py_compile
 import stat
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,10 @@ import scripts.run_lucas_crop_split_job as split_job
 SOURCE_SHA = "a" * 40
 IMAGE_REF = "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "b" * 64
 SPLIT_SHA256 = "c" * 64
+PLAN_SHA256 = "d" * 64
+PLAN_POD_UID = "plan-pod-uid"
+COMPLETION_SHA256 = "e" * 64
+COMPLETION_POD_UID = "apply-pod-uid"
 IDENTITY = protocol.RuntimeIdentity(SOURCE_SHA, IMAGE_REF, "pod-uid-123")
 
 EXPECTED_MODELS = {
@@ -82,6 +87,14 @@ def render_identity(monkeypatch):
     """Render B manifests in memory while their real A identities are pending."""
     monkeypatch.setattr(manifests, "CROP_DISTILL_SOURCE_GIT_SHA", SOURCE_SHA)
     monkeypatch.setattr(manifests, "CROP_DISTILL_IMAGE", IMAGE_REF)
+    monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_SHA256", PLAN_SHA256)
+    monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_POD_UID", PLAN_POD_UID)
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_ACCESS_COMPLETION_SHA256", COMPLETION_SHA256
+    )
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_ACCESS_COMPLETION_POD_UID", COMPLETION_POD_UID
+    )
     monkeypatch.setattr(
         manifests,
         "CROP_DISTILL_SPLIT_MANIFEST_SHA256",
@@ -356,7 +369,14 @@ def test_split_main_rejects_manifest_uid_drift_before_execute(monkeypatch):
         lambda self, code: published.append((self.failure_stage, code)),
     )
 
-    assert split_job.main([], environ={}) == 1
+    environment = {
+        "CROP_SOURCE_ACCESS_PLAN_SHA256": PLAN_SHA256,
+        "CROP_SOURCE_ACCESS_PLAN_POD_UID": PLAN_POD_UID,
+        "CROP_SOURCE_ACCESS_COMPLETION_SHA256": COMPLETION_SHA256,
+        "CROP_SOURCE_ACCESS_COMPLETION_POD_UID": COMPLETION_POD_UID,
+        "CROP_SOURCE_FREEZE_LEASE_PATH": str(split_job.FREEZE_LEASE_PATH),
+    }
+    assert split_job.main([], environ=environment) == 1
     assert published == [("validate-process-identity", 1)]
 
 
@@ -599,15 +619,89 @@ def test_split_failure_bounds_and_quotes_untrusted_identity_claims():
 
 def test_split_entrypoint_has_one_fixed_build_and_full_verify(monkeypatch):
     calls: list[tuple[str, list[str]]] = []
+    lease_checks: list[tuple[Path, str]] = []
+    live_checks: list[dict] = []
+    events: list[str] = []
+    lock_held = False
     job = split_job.LucasCropSplitJob(IDENTITY)
-    monkeypatch.setattr(job, "_prepare_directories", lambda: None)
+
+    def prepare() -> None:
+        assert not lock_held
+        events.append("prepare")
+
+    @contextmanager
+    def dataset_lock(path, **kwargs):
+        nonlocal lock_held
+        assert path == protocol.SOURCE_ACCESS_LOCK_FILE
+        assert kwargs == {
+            "create": False,
+            "expected_uid": 0,
+            "expected_gid": protocol.STORAGE_GID,
+            "expected_mode": protocol.SOURCE_ACCESS_LOCK_MODE,
+        }
+        assert not lock_held
+        lock_held = True
+        events.append("lock-enter")
+        try:
+            yield
+        finally:
+            events.append("lock-exit")
+            lock_held = False
+
+    monkeypatch.setattr(job, "_prepare_directories", prepare)
+    monkeypatch.setattr(split_job, "exclusive_dataset_lock", dataset_lock)
     monkeypatch.setattr(split_job, "sha256_file", lambda _path: "c" * 64)
     monkeypatch.setattr(
         split_job, "_ensure_real_directory", lambda _path, *, create: None
     )
     monkeypatch.setattr(split_job, "_set_directory_mode", lambda *_args: None)
+    job.source_access_plan_sha256 = PLAN_SHA256
+    job.source_access_plan_pod_uid = PLAN_POD_UID
+    job.source_access_completion_sha256 = COMPLETION_SHA256
+    job.source_access_completion_pod_uid = COMPLETION_POD_UID
+    monkeypatch.setattr(
+        split_job,
+        "verify_source_access_completion",
+        lambda *_args, **_kwargs: (
+            events.append("verify-source-access"),
+            {
+                "plan": {"pod_uid": PLAN_POD_UID, "sha256": PLAN_SHA256},
+                "summary": {
+                    "files": protocol.SOURCE_ACCESS_EXPECTED_CANDIDATES
+                },
+            },
+        )[1],
+    )
+    monkeypatch.setattr(
+        split_job,
+        "require_fresh_freeze_lease",
+        lambda path, *, expected_phase: (
+            pytest.fail("lease check escaped source-access lock")
+            if not lock_held
+            else lease_checks.append((path, expected_phase))
+        ),
+    )
+    monkeypatch.setattr(
+        split_job,
+        "verify_live_completion_cohort",
+        lambda completion, *, data_dir: (
+            pytest.fail("live cohort scan escaped source-access lock")
+            if not lock_held
+            else live_checks.append(completion)
+        ),
+    )
+    monkeypatch.setattr(
+        split_job,
+        "verify_runtime",
+        lambda *_args, **_kwargs: {
+            "runtime_manifest": {"sha256": "f" * 64},
+            "source": {"payload_sha256": "1" * 64},
+        },
+    )
 
     def record(stage, command):
+        assert lock_held
+        events.append(stage)
         calls.append((stage, [str(value) for value in command]))
 
     monkeypatch.setattr(job, "_run", record)
@@ -618,16 +712,93 @@ def test_split_entrypoint_has_one_fixed_build_and_full_verify(monkeypatch):
         "verify-split",
         "publish-completion",
     ]
+    assert lease_checks == [
+        (split_job.FREEZE_LEASE_PATH, "split"),
+        (split_job.FREEZE_LEASE_PATH, "split"),
+        (split_job.FREEZE_LEASE_PATH, "split"),
+        (split_job.FREEZE_LEASE_PATH, "split"),
+    ]
+    assert len(live_checks) == 2
+    assert live_checks[0] is live_checks[1]
+    assert events[0:2] == ["prepare", "lock-enter"]
+    assert events[-2:] == ["publish-completion", "lock-exit"]
     freeze = calls[1][1]
     assert _option_value(freeze, "--lucas-index") == str(protocol.LUCAS_SOURCE_INDEX)
     assert _option_value(freeze, "--data-dir") == str(protocol.DATA_DIR)
     assert _option_value(freeze, "--out-dir") == str(protocol.DISTILL_DIR)
+    assert _option_value(freeze, "--expected-source-index-sha256") == (
+        protocol.SOURCE_ACCESS_INDEX_SHA256
+    )
+    assert int(_option_value(freeze, "--expected-source-index-size")) == (
+        protocol.SOURCE_ACCESS_INDEX_SIZE
+    )
     verify = calls[2][1]
     assert "--verify" in verify
     assert "--verify-consumer" not in verify
     completion = calls[3][1]
     assert completion.count("--artifact") == 4
     assert _option_value(completion, "--status") == "completed"
+    assert _option_value(completion, "--source-access-plan-sha256") == PLAN_SHA256
+    assert _option_value(completion, "--source-access-plan-pod-uid") == PLAN_POD_UID
+    assert (
+        _option_value(completion, "--source-access-completion-sha256")
+        == COMPLETION_SHA256
+    )
+    assert (
+        _option_value(completion, "--source-access-completion-pod-uid")
+        == COMPLETION_POD_UID
+    )
+
+
+def test_split_rejects_completion_with_alternate_plan_pod_uid(monkeypatch):
+    job = split_job.LucasCropSplitJob(IDENTITY)
+    job.source_access_plan_sha256 = PLAN_SHA256
+    job.source_access_plan_pod_uid = PLAN_POD_UID
+    job.source_access_completion_sha256 = COMPLETION_SHA256
+    job.source_access_completion_pod_uid = COMPLETION_POD_UID
+
+    monkeypatch.setattr(job, "_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        split_job,
+        "verify_runtime",
+        lambda *_args, **_kwargs: {
+            "runtime_manifest": {"sha256": "f" * 64},
+            "source": {"payload_sha256": "1" * 64},
+        },
+    )
+    monkeypatch.setattr(
+        split_job,
+        "require_fresh_freeze_lease",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def alternate_completion(*_args, **kwargs):
+        assert kwargs["expected_plan_sha256"] == PLAN_SHA256
+        return {
+            "plan": {
+                "pod_uid": "alternate-valid-plan-pod-uid",
+                "sha256": PLAN_SHA256,
+            },
+            "summary": {
+                "files": protocol.SOURCE_ACCESS_EXPECTED_CANDIDATES,
+            },
+        }
+
+    monkeypatch.setattr(
+        split_job,
+        "verify_source_access_completion",
+        alternate_completion,
+    )
+    monkeypatch.setattr(
+        split_job,
+        "verify_live_completion_cohort",
+        lambda *_args, **_kwargs: pytest.fail(
+            "alternate PLAN UID reached the live source cohort"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Git-pinned PLAN SHA256/Pod UID"):
+        job._execute_locked()
 
 
 def test_split_entrypoint_accepts_no_behavioural_arguments():
@@ -789,7 +960,26 @@ def test_rendered_split_job_only_invokes_the_baked_entrypoint(render_identity):
             "mountPath": "/cephfs/ops/crop-distill",
             "subPath": "ops/crop-distill/split",
         },
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/source-access-completion/completion.json",
+            "subPath": (
+                "ops/crop-distill/source-access/apply/"
+                f"{COMPLETION_POD_UID}/completion.json"
+            ),
+            "readOnly": True,
+        },
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/source-access-lock",
+            "subPath": "ops/crop-distill/source-access/locks",
+        },
         {"name": "work", "mountPath": "/work"},
+        {
+            "name": "crop-source-freeze-lease",
+            "mountPath": "/var/run/crop-source-freeze",
+            "readOnly": True,
+        },
     ]
     assert pod["volumes"] == [
         {
@@ -797,6 +987,14 @@ def test_rendered_split_job_only_invokes_the_baked_entrypoint(render_identity):
             "persistentVolumeClaim": {"claimName": "training-data-cephfs"},
         },
         {"name": "work", "emptyDir": {}},
+        {
+            "name": "crop-source-freeze-lease",
+            "configMap": {
+                "name": "crop-source-freeze-lease",
+                "optional": False,
+                "items": [{"key": "lease.json", "path": "lease.json"}],
+            },
+        },
     ]
     lowered = text.lower()
     for forbidden in (

@@ -14,16 +14,29 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts"))
 
 from scripts import gen_ladder_manifests as manifests
+from scripts import crop_source_freeze as source_freeze
 
 SOURCE_SHA = "a" * 40
 IMAGE_REF = "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "b" * 64
 SPLIT_SHA = "c" * 64
+PLAN_SHA = "d" * 64
+PLAN_POD_UID = "plan-pod-uid"
+COMPLETION_SHA = "e" * 64
+COMPLETION_POD_UID = "apply-pod-uid"
 
 
 @pytest.fixture
 def render_identity(monkeypatch):
     monkeypatch.setattr(manifests, "CROP_DISTILL_SOURCE_GIT_SHA", SOURCE_SHA)
     monkeypatch.setattr(manifests, "CROP_DISTILL_IMAGE", IMAGE_REF)
+    monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_SHA256", PLAN_SHA)
+    monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_POD_UID", PLAN_POD_UID)
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_ACCESS_COMPLETION_SHA256", COMPLETION_SHA
+    )
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_ACCESS_COMPLETION_POD_UID", COMPLETION_POD_UID
+    )
     monkeypatch.setattr(
         manifests,
         "CROP_DISTILL_SPLIT_MANIFEST_SHA256",
@@ -69,9 +82,46 @@ def _assert_no_duplicate_pvc_claims(document: dict) -> None:
     assert len(claims) == len(set(claims)), claims
 
 
+def _assert_live_freeze_lease(pod: dict, container: dict) -> None:
+    env = {entry["name"]: entry for entry in container["env"]}
+    assert env["CROP_SOURCE_FREEZE_LEASE_PATH"]["value"] == (
+        "/var/run/crop-source-freeze/lease.json"
+    )
+    mount = next(
+        item
+        for item in container["volumeMounts"]
+        if item["name"] == "crop-source-freeze-lease"
+    )
+    assert mount == {
+        "name": "crop-source-freeze-lease",
+        "mountPath": "/var/run/crop-source-freeze",
+        "readOnly": True,
+    }
+    assert "subPath" not in mount
+    volume = next(
+        item for item in pod["volumes"] if item["name"] == "crop-source-freeze-lease"
+    )
+    assert volume == {
+        "name": "crop-source-freeze-lease",
+        "configMap": {
+            "name": "crop-source-freeze-lease",
+            "optional": False,
+            "items": [{"key": "lease.json", "path": "lease.json"}],
+        },
+    }
+
+
 def test_crop_render_requires_external_split_authority(monkeypatch):
     monkeypatch.setattr(manifests, "CROP_DISTILL_SOURCE_GIT_SHA", SOURCE_SHA)
     monkeypatch.setattr(manifests, "CROP_DISTILL_IMAGE", IMAGE_REF)
+    monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_SHA256", PLAN_SHA)
+    monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_POD_UID", PLAN_POD_UID)
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_ACCESS_COMPLETION_SHA256", COMPLETION_SHA
+    )
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_ACCESS_COMPLETION_POD_UID", COMPLETION_POD_UID
+    )
     monkeypatch.setattr(
         manifests,
         "CROP_DISTILL_SPLIT_MANIFEST_SHA256",
@@ -81,9 +131,23 @@ def test_crop_render_requires_external_split_authority(monkeypatch):
     with pytest.raises(ValueError, match="split freeze"):
         manifests.render_crop_distill("clay")
 
-    # The producer must remain renderable before the digest it creates exists.
+    # Upstream phases remain renderable before the split digest exists.
     manifests.render_lucas_crop_split()
     manifests.render_crop_storage_prep()
+
+
+def test_split_render_requires_git_pinned_plan_pod_uid(
+    render_identity,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        manifests,
+        "CROP_SOURCE_ACCESS_PLAN_POD_UID",
+        "<pending>",
+    )
+
+    with pytest.raises(ValueError, match="CROP_SOURCE_ACCESS_PLAN_POD_UID"):
+        manifests.render_lucas_crop_split()
 
 
 def test_crop_job_is_nonroot_and_receives_reviewed_split_digest(render_identity):
@@ -131,6 +195,10 @@ def test_split_job_is_nonroot_and_has_only_required_pvc_subpaths(render_identity
     assert pod["securityContext"]["runAsNonRoot"] is True
     assert pod["securityContext"]["runAsUser"] == 2000
     assert pod["securityContext"]["runAsGroup"] == 2000
+    env = {item["name"]: item for item in container["env"]}
+    assert env["CROP_SOURCE_ACCESS_PLAN_SHA256"]["value"] == PLAN_SHA
+    assert env["CROP_SOURCE_ACCESS_PLAN_POD_UID"]["value"] == PLAN_POD_UID
+    _assert_live_freeze_lease(pod, container)
     assert container["volumeMounts"] == [
         {
             "name": "training-data-cephfs",
@@ -154,7 +222,26 @@ def test_split_job_is_nonroot_and_has_only_required_pvc_subpaths(render_identity
             "mountPath": "/cephfs/ops/crop-distill",
             "subPath": "ops/crop-distill/split",
         },
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/source-access-completion/completion.json",
+            "subPath": (
+                "ops/crop-distill/source-access/apply/"
+                f"{COMPLETION_POD_UID}/completion.json"
+            ),
+            "readOnly": True,
+        },
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/cephfs/source-access-lock",
+            "subPath": "ops/crop-distill/source-access/locks",
+        },
         {"name": "work", "mountPath": "/work"},
+        {
+            "name": "crop-source-freeze-lease",
+            "mountPath": "/var/run/crop-source-freeze",
+            "readOnly": True,
+        },
     ]
     assert pod["volumes"] == [
         {
@@ -162,6 +249,14 @@ def test_split_job_is_nonroot_and_has_only_required_pvc_subpaths(render_identity
             "persistentVolumeClaim": {"claimName": "training-data-cephfs"},
         },
         {"name": "work", "emptyDir": {}},
+        {
+            "name": "crop-source-freeze-lease",
+            "configMap": {
+                "name": "crop-source-freeze-lease",
+                "optional": False,
+                "items": [{"key": "lease.json", "path": "lease.json"}],
+            },
+        },
     ]
 
 
@@ -235,7 +330,7 @@ def test_bootstrap_refuses_preexisting_consumer_manifest(
     )
 
     assert manifests.main() == 2
-    assert "stale consumer manifests" in capsys.readouterr().err
+    assert "stale downstream manifests" in capsys.readouterr().err
     assert stale.read_text() == "stale runnable consumer\n"
     assert not (output_dir / "lucas-crop-split-job.yaml").exists()
 
@@ -297,6 +392,8 @@ def test_storage_prep_uses_one_pvc_volume(render_identity):
 def test_crop_jobs_use_unique_pvcs_and_pod_scoped_deadlines(render_identity):
     jobs = [
         ("storage-prep", manifests.render_crop_storage_prep(), 600),
+        ("source-plan", manifests.render_crop_source_access_plan(), 7200),
+        ("source-apply", manifests.render_crop_source_access_apply(), 7200),
         ("split", manifests.render_lucas_crop_split(), 3600),
         *[
             (model, manifests.render_crop_distill(model), 43200)
@@ -305,6 +402,8 @@ def test_crop_jobs_use_unique_pvcs_and_pod_scoped_deadlines(render_identity):
     ]
     assert {name for name, _, _ in jobs} == {
         "storage-prep",
+        "source-plan",
+        "source-apply",
         "split",
         *manifests.CROP_MODELS,
     }
@@ -316,6 +415,15 @@ def test_crop_jobs_use_unique_pvcs_and_pod_scoped_deadlines(render_identity):
         assert "activeDeadlineSeconds" not in job_spec
         assert pod["activeDeadlineSeconds"] == deadline
         _assert_no_duplicate_pvc_claims(document)
+
+    source_phase_deadlines = [deadline for name, _, deadline in jobs if name in {
+        "source-plan",
+        "source-apply",
+        "split",
+    }]
+    assert source_freeze.PHASE_REQUEST_SECONDS >= (
+        max(source_phase_deadlines) + source_freeze.LEASE_SECONDS
+    )
 
 
 def test_crop_runtime_network_policy_denies_all_egress():
@@ -331,6 +439,8 @@ def test_crop_runtime_network_policy_denies_all_egress():
                     "values": [
                         "ladder-crop-distill",
                         "ladder-crop-distill-storage",
+                        "ladder-crop-source-access-plan",
+                        "ladder-crop-source-access-apply",
                     ],
                 }
             ]
@@ -338,3 +448,37 @@ def test_crop_runtime_network_policy_denies_all_egress():
         "policyTypes": ["Egress"],
         "egress": [],
     }
+
+
+def test_source_access_plan_is_root_read_only_and_drop_all(render_identity):
+    pod, container = _pod_and_container(manifests.render_crop_source_access_plan())
+    _assert_common_hardening(pod, container)
+    assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+    assert pod["securityContext"]["runAsUser"] == 0
+    _assert_live_freeze_lease(pod, container)
+    mounts = _mounts_by_path(container)
+    assert mounts["/cephfs/unified_v2_512"]["readOnly"] is True
+    assert mounts["/cephfs/lucas/lucas_tile_index.parquet"]["readOnly"] is True
+    assert all(mount["mountPath"] != "/cephfs" for mount in container["volumeMounts"])
+
+
+def test_source_access_apply_has_exact_caps_and_dataset_subpath(render_identity):
+    pod, container = _pod_and_container(manifests.render_crop_source_access_apply())
+    _assert_common_hardening(pod, container)
+    assert container["securityContext"]["capabilities"] == {
+        "drop": ["ALL"],
+        "add": ["CHOWN", "FOWNER"],
+    }
+    assert pod["securityContext"]["runAsUser"] == 0
+    _assert_live_freeze_lease(pod, container)
+    mounts = _mounts_by_path(container)
+    dataset = mounts["/cephfs/unified_v2_512"]
+    assert dataset == {
+        "name": "training-data-cephfs",
+        "mountPath": "/cephfs/unified_v2_512",
+        "subPath": "unified_v2_512",
+    }
+    plan = mounts["/cephfs/source-access-plan/plan.json"]
+    assert plan["subPath"].endswith(f"/{PLAN_POD_UID}/plan.json")
+    assert plan["readOnly"] is True
+    assert all(mount["mountPath"] != "/cephfs" for mount in container["volumeMounts"])

@@ -101,12 +101,15 @@ cosign verify ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:<digest> \
 ref. A later rebuild on `main` therefore has a different expected identity and
 source SHA; never replace this exact check with a repository-prefix regexp.
 
-Deployment has three reviewed commits. Payload A builds the image. Producer B
-pins A plus its signed image digest and generates the deny-egress policy plus
-only the storage-prep and split Jobs with
-`gen_ladder_manifests.py --crop-bootstrap-only`. After one
-verified freeze, consumer C pins its manifest SHA-256 in Git and generates the
-six crop Jobs. Crop rendering deliberately fails before that final pin.
+Deployment has five reviewed commits. Payload A builds the image. Runtime-pin
+B pins A plus its signed image digest; `--crop-bootstrap-only` then generates
+only deny-egress, storage-prep, and the read-only source-access PLAN. Plan
+authority C pins the reviewed PLAN Pod UID and SHA-256 and
+`--crop-apply-only` generates only the metadata repair. Completion authority D
+pins the reviewed APPLY Pod UID and completion SHA-256, after which
+`--crop-split-only` generates split attempt 3. Consumer authorization E pins
+the verified split-manifest SHA-256 and generates the six crop Jobs. Each
+downstream renderer fails before its upstream authority is nonzero and pinned.
 
 ## Runtime verification
 
@@ -131,20 +134,27 @@ run wrappers; duplicating their protocol in a `run.sh` would create two sources
 of truth. Model extraction must invoke the model interpreter, while split and
 head scoring must invoke the scoring interpreter listed above.
 
-Before the split, a no-argument storage-prep entrypoint first authenticates
-the baked runtime against A and the reviewed image digest, then prepares only
-16 baked targets. `/cephfs/distill/crop_split` is UID/GID 2000 mode `03770`
-until frozen to `0550`; `/cephfs/distill/crop_heads` and
+Before PLAN, a no-argument storage-prep entrypoint authenticates the baked
+runtime against A and the reviewed image digest, then prepares exactly 20
+baked targets. `/cephfs/distill/crop_split` is UID/GID 2000 mode `03770` until
+frozen to `0550`; `/cephfs/distill/crop_heads` and
 `/cephfs/ops/crop-distill` are root:GID-2000 mode-`0750` parents; and
 `/cephfs/ops/crop-distill/split` is the UID/GID-2000 mode-`0750` split-record
-leaf. Each of the six model UIDs 2001–2006 owns a mode-`0750` head leaf at
+leaf. The root:GID-2000 mode-`0750` source-access root and its `plan`, `apply`,
+and `locks` leaves hold immutable per-Pod evidence and the cooperative lock.
+Each of the six model UIDs 2001–2006 owns a mode-`0750` head leaf at
 `/cephfs/distill/crop_heads/<model>_r2_crop_runs` and evidence leaf at
 `/cephfs/ops/crop-distill/<model>`, all with GID 2000. The root-owned parents
-prevent models from creating or replacing sibling leaves. Storage prep is the
-only root process, parses no data, has no service-account token or writable
-rootfs, and drops all capabilities except `CHOWN` and `FOWNER`. Routine prep
-preserves a completed split's `0550` lock. An empty-egress `NetworkPolicy`
-covers prep, split, and crop Pods.
+prevent models from creating or replacing sibling leaves.
+
+Storage prep runs UID 0:GID 2000 with exactly `CHOWN,FOWNER`; it parses no
+data and preserves a completed split's `0550` lock. PLAN runs UID 0 read-only
+with all capabilities dropped. APPLY runs UID 0:GID 2000 with exactly
+`CHOWN,FOWNER`, opens dataset files without a data-write handle, and may
+change only the PLAN-authorized metadata. Split and crop consumers remain
+non-root and drop all capabilities. Every role has a read-only rootfs, no
+service-account token, and no runtime egress. The empty-egress
+`NetworkPolicy` selects storage-prep, PLAN, APPLY, split, and crop Pods.
 
 The model→UID map is baked into the image. Each split/crop entrypoint validates
 its effective UID/GID before PVC work, and terminal evidence records the

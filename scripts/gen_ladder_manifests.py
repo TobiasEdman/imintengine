@@ -125,21 +125,24 @@ CROP_INDEX = str(PROTOCOL_CROP_INDEX)
 CROP_SPLIT = str(PROTOCOL_CROP_SPLIT)
 CROP_SPLIT_MANIFEST = str(PROTOCOL_CROP_SPLIT_MANIFEST)
 
-# Three-commit bootstrap for immutable Pod code. Commit A contains every file
-# executed inside the storage-prep/split/crop Jobs and builds the image. Commit
-# B embeds A's exact source SHA and signed image digest and authorizes only the
-# two producer Jobs. Commit C pins the externally verified split-manifest hash
-# and authorizes the crop consumers. These identities are deliberately crop-
-# stage-specific: PRs for another stage must never move the source anchor.
+# Multi-phase bootstrap for immutable Pod code. Payload commit A builds the
+# image. Later reviewed commits pin A/image, then the read-only source-access
+# plan, the metadata-only apply completion, and finally the frozen split. Each
+# downstream renderer refuses until its immediate upstream evidence is pinned.
 #
 # Replaced with the real Commit-A identities before generator output is
 # committed. The impossible all-zero sentinels make an accidental partial
 # bootstrap fail tests and deployment review loudly.
-CROP_DISTILL_SOURCE_GIT_SHA = "ba6a99aa8662d6af9ba6fb3d08398d505ef8c483"
+CROP_DISTILL_SOURCE_GIT_SHA = "0" * 40
 CROP_DISTILL_IMAGE = (
     "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
-    "a487ead664aa834e46a6b84584309ca48bce98dc7acb10ec750e84b3bbb58503"
+    + "0" * 64
 )
+CROP_SOURCE_ACCESS_INDEX_SHA256 = crop_protocol.SOURCE_ACCESS_INDEX_SHA256
+CROP_SOURCE_ACCESS_PLAN_SHA256 = "0" * 64
+CROP_SOURCE_ACCESS_PLAN_POD_UID = "<pending>"
+CROP_SOURCE_ACCESS_COMPLETION_SHA256 = "0" * 64
+CROP_SOURCE_ACCESS_COMPLETION_POD_UID = "<pending>"
 CROP_DISTILL_SPLIT_MANIFEST_SHA256 = "0" * 64
 _CROP_DISTILL_IMAGE_RE = re.compile(
     r"^ghcr\.io/tobiasedman/imint-ladder-crop-distill@sha256:"
@@ -166,9 +169,42 @@ def _validate_crop_distill_runtime_identity() -> None:
         )
 
 
+def _validate_crop_source_index_identity() -> None:
+    if CROP_SOURCE_ACCESS_INDEX_SHA256 != crop_protocol.SOURCE_ACCESS_INDEX_SHA256:
+        raise ValueError(
+            "CROP_SOURCE_ACCESS_INDEX_SHA256 must equal the baked producer-index "
+            "authority"
+        )
+
+
+def _validate_source_access_plan_authority() -> None:
+    _validate_crop_distill_runtime_identity()
+    _validate_crop_source_index_identity()
+    crop_protocol.require_source_access_sha256(
+        CROP_SOURCE_ACCESS_PLAN_SHA256,
+        "CROP_SOURCE_ACCESS_PLAN_SHA256",
+    )
+    crop_protocol.require_source_access_run_id(
+        CROP_SOURCE_ACCESS_PLAN_POD_UID,
+        "CROP_SOURCE_ACCESS_PLAN_POD_UID",
+    )
+
+
+def _validate_source_access_completion_authority() -> None:
+    _validate_source_access_plan_authority()
+    crop_protocol.require_source_access_sha256(
+        CROP_SOURCE_ACCESS_COMPLETION_SHA256,
+        "CROP_SOURCE_ACCESS_COMPLETION_SHA256",
+    )
+    crop_protocol.require_source_access_run_id(
+        CROP_SOURCE_ACCESS_COMPLETION_POD_UID,
+        "CROP_SOURCE_ACCESS_COMPLETION_POD_UID",
+    )
+
+
 def _validate_crop_distill_identity() -> None:
     """Refuse crop consumers until Git pins the frozen split manifest."""
-    _validate_crop_distill_runtime_identity()
+    _validate_source_access_completion_authority()
     if (
         re.fullmatch(
             r"[0-9a-f]{64}", CROP_DISTILL_SPLIT_MANIFEST_SHA256
@@ -496,6 +532,181 @@ spec:
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
 """
 
+CROP_SOURCE_ACCESS_PLAN_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-crop-source-access-plan
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-access-plan }}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-source-access-plan }}
+    spec:
+      activeDeadlineSeconds: 7200
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 2000
+        seccompProfile: {{ type: RuntimeDefault }}
+      containers:
+        - name: source-access-plan
+          image: {crop_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/venvs/scoring/bin/python
+          args:
+            - /opt/imintengine/scripts/crop_source_access.py
+            - plan
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{crop_image}"
+            - name: CROP_SOURCE_ACCESS_INDEX_SHA256
+              value: "{source_index_sha256}"
+            - name: CROP_SOURCE_FREEZE_LEASE_PATH
+              value: /var/run/crop-source-freeze/lease.json
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {{ drop: ["ALL"] }}
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "2", memory: "4Gi" }}
+            limits: {{ cpu: "2", memory: "4Gi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /cephfs/unified_v2_512
+              subPath: unified_v2_512
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/lucas/lucas_tile_index.parquet
+              subPath: lucas/lucas_tile_index.parquet
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-plan-records
+              subPath: ops/crop-distill/source-access/plan
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-lock
+              subPath: ops/crop-distill/source-access/locks
+            - name: crop-source-freeze-lease
+              mountPath: /var/run/crop-source-freeze
+              readOnly: true
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: crop-source-freeze-lease
+          configMap:
+            name: crop-source-freeze-lease
+            optional: false
+            items:
+              - key: lease.json
+                path: lease.json
+"""
+
+CROP_SOURCE_ACCESS_APPLY_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-crop-source-access-apply
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-access-apply }}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-source-access-apply }}
+    spec:
+      activeDeadlineSeconds: 7200
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 2000
+        seccompProfile: {{ type: RuntimeDefault }}
+      containers:
+        - name: source-access-apply
+          image: {crop_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/venvs/scoring/bin/python
+          args:
+            - /opt/imintengine/scripts/crop_source_access.py
+            - apply
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{crop_image}"
+            - name: CROP_SOURCE_ACCESS_INDEX_SHA256
+              value: "{source_index_sha256}"
+            - name: CROP_SOURCE_ACCESS_PLAN_SHA256
+              value: "{plan_sha256}"
+            - name: CROP_SOURCE_ACCESS_PLAN_POD_UID
+              value: "{plan_pod_uid}"
+            - name: CROP_SOURCE_FREEZE_LEASE_PATH
+              value: /var/run/crop-source-freeze/lease.json
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "2", memory: "4Gi" }}
+            limits: {{ cpu: "2", memory: "4Gi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /cephfs/unified_v2_512
+              subPath: unified_v2_512
+            - name: training-data-cephfs
+              mountPath: /cephfs/lucas/lucas_tile_index.parquet
+              subPath: lucas/lucas_tile_index.parquet
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-plan/plan.json
+              subPath: ops/crop-distill/source-access/plan/{plan_pod_uid}/plan.json
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-apply-records
+              subPath: ops/crop-distill/source-access/apply
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-lock
+              subPath: ops/crop-distill/source-access/locks
+            - name: crop-source-freeze-lease
+              mountPath: /var/run/crop-source-freeze
+              readOnly: true
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: crop-source-freeze-lease
+          configMap:
+            name: crop-source-freeze-lease
+            optional: false
+            items:
+              - key: lease.json
+                path: lease.json
+"""
+
 CROP_DENY_EGRESS_TEMPLATE = """apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -510,6 +721,8 @@ spec:
         values:
           - ladder-crop-distill
           - ladder-crop-distill-storage
+          - ladder-crop-source-access-plan
+          - ladder-crop-source-access-apply
   policyTypes:
     - Egress
   egress: []
@@ -551,6 +764,16 @@ spec:
               value: "{source_git_sha}"
             - name: CROP_DISTILL_IMAGE
               value: "{crop_image}"
+            - name: CROP_SOURCE_ACCESS_PLAN_SHA256
+              value: "{source_access_plan_sha256}"
+            - name: CROP_SOURCE_ACCESS_PLAN_POD_UID
+              value: "{source_access_plan_pod_uid}"
+            - name: CROP_SOURCE_ACCESS_COMPLETION_SHA256
+              value: "{source_access_completion_sha256}"
+            - name: CROP_SOURCE_ACCESS_COMPLETION_POD_UID
+              value: "{source_access_completion_pod_uid}"
+            - name: CROP_SOURCE_FREEZE_LEASE_PATH
+              value: /var/run/crop-source-freeze/lease.json
             - name: HOME
               value: /work/home
             - name: TMPDIR
@@ -584,13 +807,30 @@ spec:
             - name: training-data-cephfs
               mountPath: /cephfs/ops/crop-distill
               subPath: ops/crop-distill/split
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-completion/completion.json
+              subPath: ops/crop-distill/source-access/apply/{source_access_completion_pod_uid}/completion.json
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-lock
+              subPath: ops/crop-distill/source-access/locks
             - name: work
               mountPath: /work
+            - name: crop-source-freeze-lease
+              mountPath: /var/run/crop-source-freeze
+              readOnly: true
       volumes:
         - name: training-data-cephfs
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
         - name: work
           emptyDir: {{}}
+        - name: crop-source-freeze-lease
+          configMap:
+            name: crop-source-freeze-lease
+            optional: false
+            items:
+              - key: lease.json
+                path: lease.json
 """
 
 PINNED_PLOTS_TEMPLATE = """apiVersion: batch/v1
@@ -694,7 +934,8 @@ def render_crop_storage_prep() -> str:
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         "# One-shot least-privilege migration: prepares crop_split plus\n"
         "# isolated per-model head/record directories and the split record\n"
-        "# directory. Run before split; broad PVC roots stay unchanged.\n"
+        "# directory plus isolated source-access evidence/lock roots. Run\n"
+        "# before PLAN; broad PVC roots stay unchanged.\n"
         "# Plan: docs/experiments/ladder_distill_stage.md\n"
     )
     return header + CROP_STORAGE_PREP_TEMPLATE.format(
@@ -703,28 +944,70 @@ def render_crop_storage_prep() -> str:
     )
 
 
+def render_crop_source_access_plan() -> str:
+    _validate_crop_distill_runtime_identity()
+    _validate_crop_source_index_identity()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Read-only PLAN: derives the exact post-window 2,074 LUCAS tile\n"
+        "# candidates and publishes a canonical, immutable inventory.\n"
+        "# This Job cannot change source-tile bytes or metadata.\n"
+        "# Requires a fresh plan-phase crop-source-freeze watchdog lease.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_SOURCE_ACCESS_PLAN_TEMPLATE.format(
+        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
+        crop_image=CROP_DISTILL_IMAGE,
+        source_index_sha256=CROP_SOURCE_ACCESS_INDEX_SHA256,
+    )
+
+
+def render_crop_source_access_apply() -> str:
+    _validate_source_access_plan_authority()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Metadata-only APPLY: consumes the reviewed PLAN hash and changes\n"
+        "# only its root:root 0600 candidates to root:2000 0640. The RW\n"
+        "# source mount is the unified_v2_512 dataset subPath, not PVC root.\n"
+        "# Requires a fresh apply-phase crop-source-freeze watchdog lease.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_SOURCE_ACCESS_APPLY_TEMPLATE.format(
+        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
+        crop_image=CROP_DISTILL_IMAGE,
+        source_index_sha256=CROP_SOURCE_ACCESS_INDEX_SHA256,
+        plan_sha256=CROP_SOURCE_ACCESS_PLAN_SHA256,
+        plan_pod_uid=CROP_SOURCE_ACCESS_PLAN_POD_UID,
+    )
+
+
 def render_crop_deny_egress() -> str:
     header = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         "# Crop-distill runtime Pods require no network after image pull.\n"
-        "# This policy selects producer, consumer, and storage-prep Pods.\n"
+        "# This policy selects source-access, producer, consumer, and prep Pods.\n"
         "# Plan: docs/experiments/ladder_distill_stage.md\n"
     )
     return header + CROP_DENY_EGRESS_TEMPLATE
 
 
 def render_lucas_crop_split() -> str:
-    _validate_crop_distill_runtime_identity()
+    _validate_source_access_completion_authority()
     header = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         "# Freezes the LUCAS crop 70/30 distill/holdout split ONCE, before\n"
         "# any crop training touches LUCAS (grouped by tile; prior 71-point\n"
         "# freeze forced into holdout). Run before any crop-distill-<model>.\n"
+        "# Requires a fresh split-phase crop-source-freeze watchdog lease.\n"
         "# Plan: docs/experiments/ladder_distill_stage.md\n"
     )
     return header + LUCAS_SPLIT_TEMPLATE.format(
         crop_image=CROP_DISTILL_IMAGE,
         source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
+        source_access_plan_sha256=CROP_SOURCE_ACCESS_PLAN_SHA256,
+        source_access_plan_pod_uid=CROP_SOURCE_ACCESS_PLAN_POD_UID,
+        source_access_completion_sha256=CROP_SOURCE_ACCESS_COMPLETION_SHA256,
+        source_access_completion_pod_uid=CROP_SOURCE_ACCESS_COMPLETION_POD_UID,
     )
 
 
@@ -903,10 +1186,19 @@ def main() -> int:
         "--crop-bootstrap-only",
         action="store_true",
         help=(
-            "write/check only storage-prep and split producer manifests; "
-            "permitted before the producer has created the digest that "
-            "authorizes crop consumers"
+            "write/check only storage-prep and read-only source-access PLAN "
+            "manifests (legacy name for the first crop bootstrap phase)"
         ),
+    )
+    phase.add_argument(
+        "--crop-apply-only",
+        action="store_true",
+        help="write/check only the hash-bound source-access APPLY manifest",
+    )
+    phase.add_argument(
+        "--crop-split-only",
+        action="store_true",
+        help="write/check only the completion-gated LUCAS split manifest",
     )
     phase.add_argument(
         "--non-crop-only",
@@ -922,6 +1214,11 @@ def main() -> int:
         try:
             if args.crop_bootstrap_only:
                 _validate_crop_distill_runtime_identity()
+                _validate_crop_source_index_identity()
+            elif args.crop_apply_only:
+                _validate_source_access_plan_authority()
+            elif args.crop_split_only:
+                _validate_source_access_completion_authority()
             else:
                 _validate_crop_distill_identity()
         except ValueError as exc:
@@ -934,15 +1231,48 @@ def main() -> int:
     outputs: dict[Path, str] = {}
     if args.non_crop_only:
         outputs.update(render_non_crop_outputs())
+    elif args.crop_bootstrap_only:
+        outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
+            render_crop_deny_egress()
+        )
+        outputs[OUT_DIR / "crop-distill-storage-prep-job.yaml"] = (
+            render_crop_storage_prep()
+        )
+        outputs[OUT_DIR / "crop-source-access-plan-job.yaml"] = (
+            render_crop_source_access_plan()
+        )
+    elif args.crop_apply_only:
+        outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
+            render_crop_deny_egress()
+        )
+        outputs[OUT_DIR / "crop-source-access-apply-job.yaml"] = (
+            render_crop_source_access_apply()
+        )
+    elif args.crop_split_only:
+        outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
+            render_crop_deny_egress()
+        )
+        outputs[OUT_DIR / "lucas-crop-split-job.yaml"] = render_lucas_crop_split()
     else:
         outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
             render_crop_deny_egress()
+        )
+        outputs[OUT_DIR / "crop-source-access-plan-job.yaml"] = (
+            render_crop_source_access_plan()
+        )
+        outputs[OUT_DIR / "crop-source-access-apply-job.yaml"] = (
+            render_crop_source_access_apply()
         )
         outputs[OUT_DIR / "lucas-crop-split-job.yaml"] = render_lucas_crop_split()
         outputs[OUT_DIR / "crop-distill-storage-prep-job.yaml"] = (
             render_crop_storage_prep()
         )
-    if not (args.crop_bootstrap_only or args.non_crop_only):
+    if not (
+        args.crop_bootstrap_only
+        or args.crop_apply_only
+        or args.crop_split_only
+        or args.non_crop_only
+    ):
         outputs.update(render_non_crop_outputs())
         for model in BASES:
             outputs[OUT_DIR / f"crop-distill-{model}-job.yaml"] = (
@@ -950,6 +1280,27 @@ def main() -> int:
             )
 
     if args.crop_bootstrap_only:
+        downstream_paths = [
+            OUT_DIR / "crop-source-access-apply-job.yaml",
+            OUT_DIR / "lucas-crop-split-job.yaml",
+            *[
+                OUT_DIR / f"crop-distill-{model}-job.yaml"
+                for model in CROP_MODELS
+            ],
+        ]
+        present_downstream = [
+            str(path.relative_to(REPO))
+            for path in downstream_paths
+            if path.exists()
+        ]
+        if present_downstream:
+            print(
+                "REFUSING crop PLAN bootstrap while stale downstream manifests "
+                "exist: " + ", ".join(present_downstream),
+                file=sys.stderr,
+            )
+            return 2
+    elif args.crop_split_only:
         consumer_paths = [
             OUT_DIR / f"crop-distill-{model}-job.yaml"
             for model in CROP_MODELS
@@ -961,8 +1312,28 @@ def main() -> int:
         ]
         if present_consumers:
             print(
-                "REFUSING crop bootstrap while stale consumer manifests "
-                "exist: " + ", ".join(present_consumers),
+                "REFUSING crop split while stale consumer manifests exist: "
+                + ", ".join(present_consumers),
+                file=sys.stderr,
+            )
+            return 2
+    elif args.crop_apply_only:
+        downstream_paths = [
+            OUT_DIR / "lucas-crop-split-job.yaml",
+            *[
+                OUT_DIR / f"crop-distill-{model}-job.yaml"
+                for model in CROP_MODELS
+            ],
+        ]
+        present_downstream = [
+            str(path.relative_to(REPO))
+            for path in downstream_paths
+            if path.exists()
+        ]
+        if present_downstream:
+            print(
+                "REFUSING crop APPLY while stale downstream manifests exist: "
+                + ", ".join(present_downstream),
                 file=sys.stderr,
             )
             return 2

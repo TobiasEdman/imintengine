@@ -139,17 +139,24 @@ def test_manifest_generator_is_current_or_explicitly_bootstrap_gated() -> None:
     split_zero = (
         ladder_generator.CROP_DISTILL_SPLIT_MANIFEST_SHA256 == "0" * 64
     )
+    plan_zero = ladder_generator.CROP_SOURCE_ACCESS_PLAN_SHA256 == "0" * 64
+    completion_zero = (
+        ladder_generator.CROP_SOURCE_ACCESS_COMPLETION_SHA256 == "0" * 64
+    )
     bootstrap_paths = {
-        ladder_generator.OUT_DIR / "crop-distill-deny-egress.yaml",
         ladder_generator.OUT_DIR / "crop-distill-storage-prep-job.yaml",
-        ladder_generator.OUT_DIR / "lucas-crop-split-job.yaml",
+        ladder_generator.OUT_DIR / "crop-source-access-plan-job.yaml",
     }
+    apply_path = ladder_generator.OUT_DIR / "crop-source-access-apply-job.yaml"
+    split_path = ladder_generator.OUT_DIR / "lucas-crop-split-job.yaml"
     consumer_paths = {
         ladder_generator.OUT_DIR / f"crop-distill-{model}-job.yaml"
         for model in ladder_generator.CROP_MODELS
     }
 
-    if source_zero and image_zero and split_zero:
+    assert run("--non-crop-only").returncode == 0
+
+    if source_zero and image_zero and plan_zero and completion_zero and split_zero:
         assert ordinary.returncode == 2
         assert ordinary.stderr.startswith(
             "REFUSING crop-distill manifest generation:"
@@ -160,13 +167,30 @@ def test_manifest_generator_is_current_or_explicitly_bootstrap_gated() -> None:
         bootstrap = run("--crop-bootstrap-only")
         assert bootstrap.returncode == 2
         assert not any(path.exists() for path in bootstrap_paths | consumer_paths)
-    elif not source_zero and not image_zero and split_zero:
+        assert not apply_path.exists()
+        assert not split_path.exists()
+    elif not source_zero and not image_zero and plan_zero and completion_zero and split_zero:
         assert ordinary.returncode == 2
-        assert "CROP_DISTILL_SPLIT_MANIFEST_SHA256" in ordinary.stderr
+        assert "CROP_SOURCE_ACCESS_PLAN_SHA256" in ordinary.stderr
         bootstrap = run("--crop-bootstrap-only")
         assert bootstrap.returncode == 0, bootstrap.stdout + bootstrap.stderr
+        assert all(path.exists() for path in bootstrap_paths)
+        assert not apply_path.exists()
+        assert not split_path.exists()
         assert not any(path.exists() for path in consumer_paths)
-    elif not source_zero and not image_zero and not split_zero:
+    elif not source_zero and not image_zero and not plan_zero and completion_zero and split_zero:
+        assert ordinary.returncode == 2
+        assert "CROP_SOURCE_ACCESS_COMPLETION_SHA256" in ordinary.stderr
+        assert run("--crop-apply-only").returncode == 0
+        assert not split_path.exists()
+        assert not any(path.exists() for path in consumer_paths)
+    elif not source_zero and not image_zero and not plan_zero and not completion_zero and split_zero:
+        assert ordinary.returncode == 2
+        assert "CROP_DISTILL_SPLIT_MANIFEST_SHA256" in ordinary.stderr
+        assert run("--crop-split-only").returncode == 0
+        assert split_path.exists()
+        assert not any(path.exists() for path in consumer_paths)
+    elif all((not source_zero, not image_zero, not plan_zero, not completion_zero, not split_zero)):
         assert ordinary.returncode == 0, ordinary.stdout + ordinary.stderr
     else:
         pytest.fail("crop-distill identity constants are in a partial phase state")

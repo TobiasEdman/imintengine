@@ -142,9 +142,11 @@ def smoke_scoring() -> None:
     source_root = Path("/opt/imintengine")
     sys.path.insert(0, str(source_root / "scripts"))
     for relative in (
+        "scripts/atomic_npz.py",
         "scripts/build_lucas_crop_split.py",
         "scripts/crop_distill_protocol.py",
         "scripts/crop_distill_provenance.py",
+        "scripts/crop_source_access.py",
         "scripts/nfi_head_cv.py",
         "scripts/run_lucas_crop_split_job.py",
         "scripts/validate_against_nfi.py",
