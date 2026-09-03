@@ -28,7 +28,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: split
-          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:5d4ecf421953db7aff32a3e3a0f2451706a956368ddf7ab747af716218c1c572
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:a487ead664aa834e46a6b84584309ca48bce98dc7acb10ec750e84b3bbb58503
           imagePullPolicy: IfNotPresent
           command:
             - /usr/local/bin/python
@@ -36,9 +36,9 @@ spec:
             - /opt/imintengine/scripts/run_lucas_crop_split_job.py
           env:
             - name: CROP_DISTILL_SOURCE_GIT_SHA
-              value: "3f0fae93cd0fa8570cb848dd3ce5daedf34d0486"
+              value: "ba6a99aa8662d6af9ba6fb3d08398d505ef8c483"
             - name: CROP_DISTILL_IMAGE
-              value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:5d4ecf421953db7aff32a3e3a0f2451706a956368ddf7ab747af716218c1c572"
+              value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:a487ead664aa834e46a6b84584309ca48bce98dc7acb10ec750e84b3bbb58503"
             - name: HOME
               value: /work/home
             - name: TMPDIR
