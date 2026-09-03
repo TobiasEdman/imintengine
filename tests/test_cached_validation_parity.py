@@ -161,6 +161,37 @@ def test_stage_a_idempotent_skip(tiles, cache_dir_tmp, checkpoint):
     assert n_written2 == 0 and n_skipped2 == 3
 
 
+def test_dataset_threads_model_num_frames(tiles):
+    """infer_tiles must pass the model's frame count into
+    _build_inference_inputs. A single-frame ladder checkpoint (num_frames=1)
+    left unthreaded (None) takes the 4-frame branch, and the model's
+    single-frame temporal_encoding then rejects the 4x token grid (15376 vs
+    3844) — the failure that killed the first ladder-eval wave. Prove the
+    dataset forwards num_frames verbatim, independent of family routing."""
+    import unittest.mock as mock
+
+    captured = {}
+
+    class _CapInfcmp:
+        def _build_inference_inputs(self, tile_path, device, img_size,
+                                    aux_names, family="prithvi",
+                                    num_frames=None):
+            captured["num_frames"] = num_frames
+            return {"img5d": torch.zeros(1, 1, 4, 4),
+                    "aux": torch.zeros(1, 1, 4, 4), "crop_sz": 4,
+                    "temporal_coords": None, "location_coords": None}
+
+    tile = sorted(tiles.glob("*.npz"))[0]
+    with mock.patch.object(infer_tiles, "_load_infcmp",
+                           return_value=_CapInfcmp()):
+        ds = infer_tiles.TileInferenceDataset(
+            [str(tile)], "prithvi", TILE, None, num_frames=1)
+        _ = ds[0]
+    assert captured["num_frames"] == 1, (
+        "dataset dropped num_frames — 1-frame checkpoints will crash at "
+        "temporal_encoding")
+
+
 def _direct_probs(model, tile_path, device):
     """DIRECT softmax the fused NFI path produces — via the SAME preprocessing.
 

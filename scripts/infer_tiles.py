@@ -143,13 +143,21 @@ class TileInferenceDataset:
     any odd-sized tile rather than mis-cropping.
     """
 
-    def __init__(self, tile_paths, device_family, img_size, aux_channel_names):
+    def __init__(self, tile_paths, device_family, img_size, aux_channel_names,
+                 num_frames=None):
         import torch  # noqa: F401  (import guarded to keep module import light)
         self._torch = __import__("torch")
         self.tile_paths = [str(p) for p in tile_paths]
         self.family = device_family
         self.img_size = img_size
         self.aux_channel_names = aux_channel_names
+        # The model's frame count MUST reach _build_inference_inputs, exactly
+        # as run_inference threads it. A single-frame checkpoint (Prithvi
+        # ladder: num_temporal_frames=1) with num_frames=None here defaults to
+        # the 4-frame branch, building 4x temporal_coords the model's
+        # single-frame temporal_encoding cannot add (15376 vs 3844) — the
+        # first ladder-eval wave died exactly so.
+        self.num_frames = num_frames
         self._infcmp = _load_infcmp()
 
     def __len__(self):
@@ -161,7 +169,8 @@ class TileInferenceDataset:
         # tensors are moved to the GPU in the main loop after collation.
         inp = self._infcmp._build_inference_inputs(
             tile_path, self._torch.device("cpu"), self.img_size,
-            self.aux_channel_names, family=self.family)
+            self.aux_channel_names, family=self.family,
+            num_frames=self.num_frames)
         item = {
             "img5d": inp["img5d"].squeeze(0),   # drop the (1, …) batch dim
             "aux": inp["aux"].squeeze(0),
@@ -266,7 +275,14 @@ def infer_all(
         print(f"  aux from checkpoint config: {len(aux_names)} channels "
               f"({aux_names[-3:]}...)")
 
-    ds = TileInferenceDataset(tiles, family, img_size, aux_names)
+    # load_model stamps the model with its trained frame count (single-frame
+    # ladder columns = 1, Prithvi-600M = 4). Thread it exactly as
+    # run_inference does — without it the dataset defaults to the 4-frame
+    # branch and a 1-frame model's temporal_encoding rejects the 4x token
+    # grid (15376 vs 3844), which killed the first ladder-eval wave.
+    model_num_frames = getattr(model, "num_frames", None)
+    ds = TileInferenceDataset(tiles, family, img_size, aux_names,
+                              num_frames=model_num_frames)
 
     # Group tiles by crop size so a batch collates cleanly. Odd-sized tiles are
     # inferred at batch=1 rather than being mis-cropped or padded.
