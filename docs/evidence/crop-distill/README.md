@@ -1,9 +1,10 @@
 # Crop-distill evidence archive
 
 This directory is the status index and runbook for the LUCAS crop-distill
-rollout. It is not evidence that a live Job succeeded. No successful
-storage-prep, source-access PLAN/APPLY, split, or crop-consumer bundle has been
-captured for the reviewed image yet.
+rollout. It is not evidence that a live Job succeeded. Successful
+storage-prep and source-access PLAN/APPLY bundles have been captured for the
+reviewed image and strictly verified against their current Git pins. Split
+attempt 3 and the six crop-consumer bundles remain pending.
 
 Kubernetes Pod objects disappear after the Job TTL. Workload records on the
 RWX PVC share the workload trust domain. Acceptance therefore requires an
@@ -17,9 +18,10 @@ followed by offline verification against the reviewed Git pins.
 | split attempt 2 | failed closed: UID/GID 2000 could not read 1,966 of 2,074 post-window candidates; no split frozen | Pod UID `b9fbbdae-1a11-4160-9b5b-3762dee95ddf`; failure-record SHA-256 `a13b74a8df5ed5600f9d2b7961c9944c44886cb3c094dbefb4dc22fce4bf6aac` |
 | `DAC_READ_SEARCH` canary | rejected by PodSecurity admission; no Pod or data mutation | admission result only |
 | `DAC_OVERRIDE` alternative | rejected in review as an unnecessarily broad bypass | design decision only |
-| reviewed-image storage prep | not run | no completion bundle |
-| source-access PLAN/APPLY | not run | PLAN/APPLY Git anchors remain pending sentinels |
-| split attempt 3 and crop consumers | not run | blocked on verified PLAN/APPLY evidence |
+| reviewed-image storage prep | succeeded; strict external bundle verified | Pod UID `341b211f-9ff1-4a33-83ea-b01eeae1ec50`; completion SHA-256 `40aba25cbf58c38c190700515c26562462227e387260e9a53c4b8ace1706689a` |
+| source-access PLAN | succeeded; 2,074 candidates, 1,966 repairs, 108 no-ops; strict external bundle verified | Pod UID `fe949aaa-8191-4c03-8989-2b3516a2e2a7`; PLAN SHA-256 `d8cdd10b8e9e2668aadafec1aef1a87f5067c2f414e9453e4ce33c196bc04e98` |
+| source-access APPLY | succeeded; 1,966 repaired and 108 unchanged; SHA-256, size, device/inode, link count, and mtime unchanged for all 2,074 files; strict external bundle verified | Pod UID `2d193bf7-2217-4878-b2e5-f1367e7137b3`; completion SHA-256 `4cbce71f3224c4e6170b2113c774104ab96a6ef14b4e67d51ab0ddf03354aa97` |
+| split attempt 3 and crop consumers | not run | split manifest authorized by the verified PLAN/APPLY pins; exact-SHA review and a fresh split-phase freeze remain required |
 
 Attempt 2 used source
 `ba6a99aa8662d6af9ba6fb3d08398d505ef8c483` and an older image whose digest
