@@ -260,20 +260,24 @@ def infer_all(
     # 11-aux (markfukt on) and terramind is 13-aux (ΔSAR), while a None
     # here builds the canonical 10 and the aux_proj conv rejects the
     # tensor at the first forward. Same rule as extract_plot_features.
-    try:
-        ck_cfg = torch.load(checkpoint, map_location="cpu",
-                            weights_only=False).get("config", {}) or {}
-    except Exception:
-        # This is an OPPORTUNISTIC config read — load_model above is the
-        # authoritative loader and has already accepted the checkpoint
-        # (tests monkeypatch it with non-torch fixtures). Unreadable here
-        # ⇒ pre-config era ⇒ canonical aux fallback, as before.
-        ck_cfg = {}
-    aux_names = ck_cfg.get("enabled_aux_names")
+    # load_model already read the config and derived the aux count from the
+    # aux conv's in-channel dim, so read both off the model rather than
+    # re-opening the checkpoint (a second torch.load peaks at ~2x its size).
+    aux_names = getattr(model, "ck_cfg", {}).get("enabled_aux_names")
     aux_names = list(aux_names) if aux_names else None
+    n_aux = getattr(model, "n_aux_channels", None)
     if aux_names:
+        # The count is authoritative (read off the conv); the names are what
+        # the trainer recorded. A disagreement means the config does not
+        # describe this checkpoint, and feeding it would build a stack of the
+        # right depth from the wrong channels — right shape, wrong content,
+        # no exception. Refuse instead.
+        if n_aux is not None and len(aux_names) != n_aux:
+            raise ValueError(
+                f"{checkpoint}: config lists {len(aux_names)} aux names "
+                f"{aux_names} but the aux conv takes {n_aux} channels")
         print(f"  aux from checkpoint config: {len(aux_names)} channels "
-              f"({aux_names[-3:]}...)")
+              f"{aux_names}")
 
     # load_model stamps the model with its trained frame count (single-frame
     # ladder columns = 1, Prithvi-600M = 4). Thread it exactly as
