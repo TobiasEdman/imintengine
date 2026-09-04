@@ -830,6 +830,37 @@ def test_capture_accepts_docker_pullable_status_image_id(tmp_path: Path) -> None
     )
 
 
+def test_capture_accepts_immutable_runtime_status_image_digest(
+    tmp_path: Path,
+) -> None:
+    runtime_config_digest = "7" * 64
+    pod = _pod()
+    pod["status"]["containerStatuses"][0]["image"] = (
+        f"sha256:{runtime_config_digest}"
+    )
+
+    evidence.main(_capture_args(tmp_path, pod=pod))
+
+    capture = evidence.verify_bundle(tmp_path / "bundle")
+    status = capture["observed_pod"]["normalized"]["status"][
+        "container_statuses"
+    ][0]
+    assert status["image"] == f"sha256:{runtime_config_digest}"
+    assert status["image_digest"] == DIGEST
+
+
+def test_capture_rejects_mutable_runtime_status_image(tmp_path: Path) -> None:
+    pod = _pod()
+    pod["status"]["containerStatuses"][0]["image"] = (
+        "ghcr.io/example/crop:latest"
+    )
+
+    with pytest.raises(SystemExit, match="Pod status image must be an immutable"):
+        evidence.main(_capture_args(tmp_path, pod=pod))
+
+    assert not (tmp_path / "bundle").exists()
+
+
 def test_capture_binds_split_job_and_container(tmp_path: Path) -> None:
     evidence.main(_capture_args(tmp_path, kind="split"))
 
@@ -1211,7 +1242,7 @@ def test_capture_rejects_digest_mismatch(tmp_path: Path, source: str) -> None:
             f"containerd://sha256:{OTHER_DIGEST}"
         )
 
-    with pytest.raises(SystemExit, match="Pod spec/status image|Pod status imageID"):
+    with pytest.raises(SystemExit, match="Pod spec image|Pod status imageID"):
         evidence.main(_capture_args(tmp_path, pod=pod))
     assert not (tmp_path / "bundle").exists()
 

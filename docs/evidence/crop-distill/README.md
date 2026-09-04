@@ -177,6 +177,9 @@ surface, or conflicting identity. They validate:
   service-account-token, and extra PVC sources are refused;
 - exact Pod/container UID/GID, `RuntimeDefault` seccomp, read-only root
   filesystem, no privilege escalation, and `drop: [ALL]`;
+- the exact Git-pinned spec image, an immutable runtime-reported status image,
+  and an `imageID` digest equal to the signed manifest digest; the status image
+  may be a CRI-local config digest and is recorded without conflating the two;
 - storage prep as root with only `CHOWN,FOWNER` and only its exact RW
   `/cephfs/distill` and `/cephfs/ops` subPaths; its completion also binds the
   precreated, empty, unaliased backing lock

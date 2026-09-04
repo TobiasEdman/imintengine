@@ -1656,8 +1656,16 @@ def normalize_observed_pod(
     if _require_object(node_selector, "Pod nodeSelector") != contract["node_selector"]:
         raise EvidenceCaptureError("Pod nodeSelector differs from the reviewed contract")
 
-    if container.get("image") != contract["image_ref"] or container_status.get("image") != contract["image_ref"]:
-        raise EvidenceCaptureError("Pod spec/status image differs from Git authority")
+    if container.get("image") != contract["image_ref"]:
+        raise EvidenceCaptureError("Pod spec image differs from Git authority")
+    status_image = _require_string(
+        container_status.get("image"),
+        "Pod status image",
+    )
+    # CRI implementations may report an immutable local config digest here
+    # rather than repeating the manifest-digest ref requested in Pod spec.
+    # imageID below remains the authoritative runtime-to-manifest binding.
+    normalize_image_digest(status_image, "Pod status image")
     if container.get("imagePullPolicy") != "IfNotPresent":
         raise EvidenceCaptureError("target container imagePullPolicy is unexpected")
     if container.get("command") != contract["command"] or container.get("args") != contract["args"]:
@@ -1746,7 +1754,7 @@ def normalize_observed_pod(
         },
         "status": {
             "container_statuses": [{
-                "image": contract["image_ref"],
+                "image": status_image,
                 "image_digest": image_digest,
                 "image_id": image_id,
                 "last_state": {},
