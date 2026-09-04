@@ -394,7 +394,7 @@ def test_crop_jobs_use_unique_pvcs_and_pod_scoped_deadlines(render_identity):
         ("storage-prep", manifests.render_crop_storage_prep(), 600),
         ("source-plan", manifests.render_crop_source_access_plan(), 7200),
         ("source-apply", manifests.render_crop_source_access_apply(), 7200),
-        ("split", manifests.render_lucas_crop_split(), 7200),
+        ("split", manifests.render_lucas_crop_split(), 21600),
         *[
             (model, manifests.render_crop_distill(model), 43200)
             for model in manifests.CROP_MODELS

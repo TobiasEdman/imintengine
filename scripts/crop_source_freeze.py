@@ -54,11 +54,12 @@ LEASE_SECONDS = 180
 DEFAULT_INTERVAL_SECONDS = 15.0
 KUBECTL_READ_ATTEMPTS = 8
 KUBECTL_READ_RETRY_BASE_SECONDS = 1.0
-# PLAN, APPLY, and split have activeDeadlineSeconds=7200. A gate request
-# lives just long enough for the longest deadline plus the maximum
+# Split has a data-derived activeDeadlineSeconds=21600; PLAN and APPLY remain
+# at 7200. A gate request lives just long enough for the longest deadline plus
+# the maximum
 # projected-ConfigMap lease lag, never indefinitely if the gate process or
 # operator host dies after arming a phase.
-PHASE_REQUEST_SECONDS = 7500
+PHASE_REQUEST_SECONDS = 21900
 LEASE_FIELDS = frozenset({
     "schema",
     "run_id",

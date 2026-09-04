@@ -23,7 +23,9 @@ followed by offline verification against the reviewed Git pins.
 | source-access APPLY | succeeded; 1,966 repaired and 108 unchanged; SHA-256, size, device/inode, link count, and mtime unchanged for all 2,074 files; strict external bundle verified | Pod UID `2d193bf7-2217-4878-b2e5-f1367e7137b3`; completion SHA-256 `4cbce71f3224c4e6170b2113c774104ab96a6ef14b4e67d51ab0ddf03354aa97` |
 | split attempt 3 | failed closed before source read/write: the manifest selected provenance-only base Python, which has no NumPy | Job UID `366cb6ef-1bce-4bc0-8896-4dba26312f7a`; Pod UID `6feb4ccd-04df-47f4-a785-496a0f1e076a`; no completion record |
 | corrected split retry | failed closed at the reviewed 3,600-second Pod deadline while repeated full-cohort verification was still making progress; no completion record | Job UID `3bdf0294-7264-4900-a0e5-bddc01e3e68d`; Pod UID `447d167f-85b6-4b0d-8e5a-bc66857760ba`; `DeadlineExceeded`, exit 137, zero restarts |
-| split retry 2 and crop consumers | not run | blocked on review of the 7,200-second split deadline and explicit cleanup of the uncommitted partial freeze |
+| split subset smoke attempt 1 | failed closed before tile reads because the probe compared a pre-window crop count with the post-window PLAN count; all PVC mounts were read-only | Job UID `4ea9d5fe-7dac-4be4-8563-0a8c9ca469bd`; Pod UID `b06a9ae4-fae8-4980-a236-d5898b93803a`; exit 1, zero restarts |
+| corrected split subset smoke | succeeded read-only: 16 of 16 deterministic samples qualified; 1,771,912,469 bytes exercised through the production capture path in 8,628,106,202 ns | Job UID `84f81a9f-02d4-4b76-9777-bbb50be3556a`; Pod UID `320696fa-ce9f-4c50-b7e2-c348102bce03`; 205,365,166 bytes/s, exit 0, zero restarts |
+| split retry 2 and crop consumers | not run | blocked on final review of the data-derived 21,600-second split deadline and explicit cleanup of the uncommitted partial freeze |
 
 Attempt 2 used source
 `ba6a99aa8662d6af9ba6fb3d08398d505ef8c483` and an older image whose digest

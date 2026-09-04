@@ -745,7 +745,7 @@ spec:
     metadata:
       labels: {{ app: unified-training, purpose: ladder-crop-distill, model: shared }}
     spec:
-      activeDeadlineSeconds: 7200
+      activeDeadlineSeconds: 21600
       automountServiceAccountToken: false
       restartPolicy: Never
       imagePullSecrets:

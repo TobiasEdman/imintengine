@@ -653,8 +653,9 @@ stop condition is fail-closed.
    claimed away. The watchdog refreshes a phase-bound ConfigMap lease with a
    maximum 180-second lifetime (long enough for kubelet projected-ConfigMap
    lag). Every non-idle phase request has a random 256-bit request ID and an
-   absolute 7,500-second expiry, covering the source-phase 7,200-second
-   active deadline plus projection lag. A heartbeat must echo that exact request ID
+   absolute 21,900-second expiry, covering the data-derived 21,600-second
+   split deadline plus projection lag (PLAN and APPLY remain at 7,200 seconds).
+   A heartbeat must echo that exact request ID
    after a fresh scan. Thus a gate process that dies after changing phase
    cannot leave APPLY or split armed indefinitely; expiry makes the watchdog
    rescan with idle policy and fail the lease closed. Exact restore may consume
@@ -710,11 +711,22 @@ stop condition is fail-closed.
    artifacts and the immutable split record. Also compare normalized
    observed-71-key digest to
    `7808d10432ae8ddfc40623c03e33e4eeb1b9cc8cbc94afc5b11184e9632ace86`.
-   The Pod-scoped active deadline is 7,200 seconds. The original 3,600-second
-   deadline was observed to terminate a healthy, progressing full-cohort
-   verification before it could publish terminal evidence; 7,200 seconds
-   remains below the 7,500-second phase-request lifetime after accounting for
-   the 180-second lease allowance enforced by the manifest tests.
+   The Pod-scoped active deadline is 21,600 seconds. The original
+   3,600-second deadline terminated a healthy, progressing full-cohort
+   verification after about 523 GB of cumulative reads. The verified PLAN
+   totals 225,658,470,857 source bytes; the code path has six full-cohort byte
+   passes, for a conservative 1,353,950,825,142-byte workload. At the observed
+   throughput that projects to about 9,320 seconds. Twice that projection is
+   about 18,639 seconds, so the rounded six-hour deadline provides more than the
+   required 2x margin. The 21,900-second phase request leaves 300 seconds over
+   the Pod deadline, exceeding the 180-second lease allowance enforced by the
+   manifest tests. The reviewed deterministic live subset smoke then exercised
+   1,771,912,469 bytes through the production capture/hash/NPZ-decode path in
+   8,628,106,202 ns, or 205,365,166 bytes/s when rounded down. Because that is
+   faster than the full attempt's observed rate, the slower full-attempt rate
+   remains the conservative deadline input. The smoke also verified the
+   interpreter, mounts, identity, pins, lease, crop-window counts, and 16 of 16
+   qualifying samples without another full-cohort pass.
 
 7. Only after split evidence is captured off PVC may the freeze end. Use the
    protocol's restore, never blind patches:

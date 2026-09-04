@@ -1321,7 +1321,7 @@ def _workload_contract(subject: Mapping[str, Any]) -> dict[str, Any]:
         volumes.append({"name": "work", "type": "emptyDir", "size_limit": None})
         volumes.append(_freeze_lease_volume())
         resources = {"requests": {"cpu": "2", "memory": "8Gi"}, "limits": {"cpu": "2", "memory": "8Gi"}}
-        deadline = 7200
+        deadline = 21600
     elif kind == "storage-prep":
         command = [str(BASE_PYTHON)]
         args = ["/opt/imintengine/scripts/prepare_crop_distill_storage.py"]
