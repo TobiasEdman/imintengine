@@ -33,6 +33,15 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+if __package__:
+    from .crop_distill_provenance import (
+        canonical_json_bytes as workload_canonical_json_bytes,
+    )
+else:
+    from crop_distill_provenance import (
+        canonical_json_bytes as workload_canonical_json_bytes,
+    )
+
 FREEZE_SCHEMA = "imint-crop-source-freeze-state-v1"
 LEASE_SCHEMA = "imint-crop-source-freeze-lease-v1"
 PHASE_STATE_SCHEMA = "imint-crop-source-freeze-phase-v1"
@@ -43,6 +52,8 @@ NAMESPACE = "prithvi-training-default"
 CONTEXT = "icekube"
 LEASE_SECONDS = 180
 DEFAULT_INTERVAL_SECONDS = 15.0
+KUBECTL_READ_ATTEMPTS = 8
+KUBECTL_READ_RETRY_BASE_SECONDS = 1.0
 # PLAN and APPLY have activeDeadlineSeconds=7200 (split is 3600). A gate
 # request lives just long enough for the longest deadline plus the maximum
 # projected-ConfigMap lease lag, never indefinitely if the gate process or
@@ -94,6 +105,16 @@ class FreezeError(RuntimeError):
 
 class CoordinationBusy(FreezeError):
     """Another local protocol actor currently owns a nonblocking lock."""
+
+
+_TRANSIENT_KUBECTL_READ_ERRORS = (
+    "connection reset by peer",
+    "network is unreachable",
+    "unable to connect to the server",
+    "unexpected error when reading response body",
+    "tls handshake timeout",
+    "i/o timeout",
+)
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -606,17 +627,29 @@ class Kubectl:
             self.namespace,
             *args,
         ]
-        result = subprocess.run(
-            command,
-            input=stdin,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
+        attempts = KUBECTL_READ_ATTEMPTS if args and args[0] == "get" else 1
+        for attempt in range(attempts):
+            result = subprocess.run(
+                command,
+                input=stdin,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            stderr = result.stderr.decode("utf-8", "replace")
+            retryable = any(
+                marker in stderr.lower()
+                for marker in _TRANSIENT_KUBECTL_READ_ERRORS
+            )
+            if result.returncode == 0 or not retryable or attempt + 1 == attempts:
+                break
+            time.sleep(
+                min(KUBECTL_READ_RETRY_BASE_SECONDS * (2**attempt), 5.0)
+            )
         if result.returncode != 0:
             raise FreezeError(
                 f"kubectl {' '.join(args)} failed: "
-                f"{result.stderr.decode('utf-8', 'replace').strip()}"
+                f"{stderr.strip()}"
             )
         try:
             value = json.loads(result.stdout)
@@ -634,12 +667,18 @@ class Kubectl:
         return self._run(args)
 
     def create(self, value: Mapping[str, Any]) -> dict[str, Any]:
-        return self._run(["create", "-f", "-", "-o", "json"], stdin=canonical_json_bytes(value))
+        return self._run(
+            ["create", "--validate=false", "-f", "-", "-o", "json"],
+            stdin=canonical_json_bytes(value),
+        )
 
     def replace(self, value: Mapping[str, Any]) -> dict[str, Any]:
         # The caller passes the exact object returned by GET, including its
         # resourceVersion.  Kubernetes rejects an intervening update.
-        return self._run(["replace", "-f", "-", "-o", "json"], stdin=canonical_json_bytes(value))
+        return self._run(
+            ["replace", "--validate=false", "-f", "-", "-o", "json"],
+            stdin=canonical_json_bytes(value),
+        )
 
     def inventory(self) -> list[dict[str, Any]]:
         result = self.get(",".join(RESOURCE_TYPES))
@@ -987,7 +1026,9 @@ def _lease_configmap(
                 "purpose": "crop-source-freeze-lease",
             },
         },
-        "data": {"lease.json": canonical_json_bytes(lease).decode("utf-8")},
+        "data": {
+            "lease.json": workload_canonical_json_bytes(lease).decode("utf-8")
+        },
     }
 
 

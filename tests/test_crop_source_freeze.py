@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import copy
+import json
+import subprocess
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from scripts import crop_source_freeze as freeze
+from scripts import crop_source_access as access
 
 
 def _pod_spec(
@@ -447,6 +451,159 @@ def test_hold_captures_prior_suspend_shape_and_cas_suspends(tmp_path):
     assert client.calls.index(("create-configmap", freeze.LEASE_CONFIGMAP)) < (
         client.calls.index(("replace-cronjob", "ladder-queue"))
     )
+
+
+def test_freeze_lease_bytes_are_accepted_by_source_access(tmp_path):
+    lease = freeze._lease_record(
+        run_id="producer-consumer-contract",
+        phase="plan",
+        sequence=7,
+        snapshot_sha256="a" * 64,
+        controller_snapshot_sha256="b" * 64,
+        now_ns=1_000_000_000,
+    )
+    lease_path = tmp_path / "lease.json"
+    lease_path.write_text(
+        freeze._lease_configmap(lease)["data"]["lease.json"],
+        encoding="utf-8",
+    )
+
+    accepted = access.require_fresh_freeze_lease(
+        lease_path,
+        expected_phase="plan",
+        now_ns=2_000_000_000,
+    )
+
+    assert accepted == lease
+
+
+def test_kubectl_retries_only_transient_reads(monkeypatch):
+    responses = iter([
+        SimpleNamespace(
+            returncode=1,
+            stdout=b"",
+            stderr=b"read: connection reset by peer",
+        ),
+        SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"kind": "Pod"}).encode("utf-8"),
+            stderr=b"",
+        ),
+    ])
+    calls = []
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return next(responses)
+
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+    monkeypatch.setattr(freeze.time, "sleep", sleeps.append)
+
+    result = freeze.Kubectl(context="icekube", namespace="ns").get(
+        "pods,jobs"
+    )
+
+    assert result == {"kind": "Pod"}
+    assert len(calls) == 2
+    assert sleeps == [freeze.KUBECTL_READ_RETRY_BASE_SECONDS]
+
+
+def test_kubectl_permanent_read_failure_stops_without_retry(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=b"",
+            stderr=b'Error from server (Forbidden): pods is forbidden',
+        )
+
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+    monkeypatch.setattr(freeze.time, "sleep", sleeps.append)
+
+    with pytest.raises(freeze.FreezeError, match="Forbidden"):
+        freeze.Kubectl(context="icekube", namespace="ns").get("pods")
+
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_kubectl_exhausted_transient_reads_fail_closed(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=b"",
+            stderr=b"read: connection reset by peer",
+        )
+
+    monkeypatch.setattr(freeze, "KUBECTL_READ_ATTEMPTS", 3)
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+    monkeypatch.setattr(freeze.time, "sleep", sleeps.append)
+
+    with pytest.raises(freeze.FreezeError, match="connection reset"):
+        freeze.Kubectl(context="icekube", namespace="ns").get("pods")
+
+    assert len(calls) == 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_kubectl_writes_disable_client_openapi_validation(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=b'{"kind":"ConfigMap"}',
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+    client = freeze.Kubectl(context="icekube", namespace="ns")
+
+    client.create({"kind": "ConfigMap"})
+    client.replace({"kind": "ConfigMap"})
+
+    assert calls[0][0][5:7] == ["create", "--validate=false"]
+    assert calls[1][0][5:7] == ["replace", "--validate=false"]
+
+
+@pytest.mark.parametrize("operation", ["create", "replace"])
+def test_kubectl_never_retries_ambiguous_write_failure(
+    monkeypatch,
+    operation,
+):
+    calls = []
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=b"",
+            stderr=b"read: connection reset by peer",
+        )
+
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+    monkeypatch.setattr(freeze.time, "sleep", sleeps.append)
+    client = freeze.Kubectl(context="icekube", namespace="ns")
+
+    with pytest.raises(freeze.FreezeError, match="connection reset"):
+        getattr(client, operation)({"kind": "ConfigMap"})
+
+    assert len(calls) == 1
+    assert sleeps == []
 
 
 def test_restore_cannot_enter_while_live_hold_is_initializing(tmp_path):
