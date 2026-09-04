@@ -653,7 +653,7 @@ stop condition is fail-closed.
    claimed away. The watchdog refreshes a phase-bound ConfigMap lease with a
    maximum 180-second lifetime (long enough for kubelet projected-ConfigMap
    lag). Every non-idle phase request has a random 256-bit request ID and an
-   absolute 7,500-second expiry, covering the longest PLAN/APPLY 7,200-second
+   absolute 7,500-second expiry, covering the source-phase 7,200-second
    active deadline plus projection lag. A heartbeat must echo that exact request ID
    after a fresh scan. Thus a gate process that dies after changing phase
    cannot leave APPLY or split armed indefinitely; expiry makes the watchdog
@@ -710,6 +710,11 @@ stop condition is fail-closed.
    artifacts and the immutable split record. Also compare normalized
    observed-71-key digest to
    `7808d10432ae8ddfc40623c03e33e4eeb1b9cc8cbc94afc5b11184e9632ace86`.
+   The Pod-scoped active deadline is 7,200 seconds. The original 3,600-second
+   deadline was observed to terminate a healthy, progressing full-cohort
+   verification before it could publish terminal evidence; 7,200 seconds
+   remains below the 7,500-second phase-request lifetime after accounting for
+   the 180-second lease allowance enforced by the manifest tests.
 
 7. Only after split evidence is captured off PVC may the freeze end. Use the
    protocol's restore, never blind patches:
