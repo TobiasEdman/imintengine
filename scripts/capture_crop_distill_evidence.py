@@ -1306,7 +1306,7 @@ def _workload_contract(subject: Mapping[str, Any]) -> dict[str, Any]:
                 "TMPDIR": "/work/tmp",
             }
         )
-        command = [str(BASE_PYTHON)]
+        command = [str(SCORING_PYTHON)]
         args = ["/opt/imintengine/scripts/run_lucas_crop_split_job.py"]
         mounts = [
             _mount("training-data-cephfs", str(DATA_DIR), "unified_v2_512", True),

@@ -868,6 +868,7 @@ def test_capture_binds_split_job_and_container(tmp_path: Path) -> None:
     assert capture["workload_record"]["kind"] == "split"
     container = capture["observed_pod"]["normalized"]["spec"]["containers"][0]
     assert container["name"] == "split"
+    assert container["command"] == [str(evidence.SCORING_PYTHON)]
     assert container["environment"]["literal"] == {
         "CROP_DISTILL_IMAGE": IMAGE,
         "CROP_DISTILL_SOURCE_GIT_SHA": SOURCE_GIT_SHA,

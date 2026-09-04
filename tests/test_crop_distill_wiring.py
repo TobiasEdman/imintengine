@@ -241,7 +241,7 @@ def test_crop_stage_uses_only_baked_dependencies(model):
 def test_split_job_freezes_the_canonical_split():
     path = OUT_DIR / "lucas-crop-split-job.yaml"
     container = _container(path)
-    assert container["command"] == ["/usr/local/bin/python"]
+    assert container["command"] == ["/opt/venvs/scoring/bin/python"]
     assert container["args"] == [
         "/opt/imintengine/scripts/run_lucas_crop_split_job.py"
     ]
@@ -358,7 +358,12 @@ def test_crop_jobs_use_one_pinned_offline_runtime(path):
         else {"name": "work", "emptyDir": {}}
     )
     assert volumes["work"] == expected_work
-    assert container["command"] == ["/usr/local/bin/python"]
+    expected_python = (
+        "/usr/local/bin/python"
+        if is_crop
+        else "/opt/venvs/scoring/bin/python"
+    )
+    assert container["command"] == [expected_python]
     if is_crop:
         assert model is not None
         assert container["args"] == [
@@ -568,7 +573,12 @@ def test_full_generator_refuses_zero_split_digest(
 )
 def test_generated_crop_job_has_no_inline_shell(path):
     container = _container(path)
-    assert container["command"] == ["/usr/local/bin/python"]
+    expected_python = (
+        "/usr/local/bin/python"
+        if path.name.startswith("crop-distill-")
+        else "/opt/venvs/scoring/bin/python"
+    )
+    assert container["command"] == [expected_python]
     assert len(container["args"]) in {1, 3}
     text = _manifest_text(path).lower()
     for token in ("bash", "sh -c", "set -e", "trap ", "|", "&&"):
@@ -676,7 +686,12 @@ def test_crop_completion_binds_all_inputs_and_outputs(model):
     ids=lambda path: path.name,
 )
 def test_crop_jobs_use_the_baked_interpreters(path):
-    assert _container(path)["command"] == [str(crop_protocol.BASE_PYTHON)]
+    expected_python = (
+        crop_protocol.BASE_PYTHON
+        if path.name.startswith("crop-distill-")
+        else crop_protocol.SCORING_PYTHON
+    )
+    assert _container(path)["command"] == [str(expected_python)]
     assert crop_protocol.BASE_PYTHON == Path("/usr/local/bin/python")
     assert crop_protocol.SCORING_PYTHON == Path("/opt/venvs/scoring/bin/python")
     if path.name.startswith("crop-distill-"):

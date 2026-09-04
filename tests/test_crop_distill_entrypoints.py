@@ -935,7 +935,7 @@ def test_crop_mounts_are_minimal_subpath_projections(render_identity, model):
 def test_rendered_split_job_only_invokes_the_baked_entrypoint(render_identity):
     text = manifests.render_lucas_crop_split()
     pod, container = _container(text)
-    assert container["command"] == ["/usr/local/bin/python"]
+    assert container["command"] == ["/opt/venvs/scoring/bin/python"]
     assert container["args"] == ["/opt/imintengine/scripts/run_lucas_crop_split_job.py"]
     assert container["volumeMounts"] == [
         {

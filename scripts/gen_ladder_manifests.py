@@ -760,7 +760,7 @@ spec:
           image: {crop_image}
           imagePullPolicy: IfNotPresent
           command:
-            - /usr/local/bin/python
+            - /opt/venvs/scoring/bin/python
           args:
             - /opt/imintengine/scripts/run_lucas_crop_split_job.py
           env:

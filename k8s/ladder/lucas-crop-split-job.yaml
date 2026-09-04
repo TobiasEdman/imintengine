@@ -32,7 +32,7 @@ spec:
           image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:7c4fe00f9df2a28caaf05f006f2c567ffb912d514bff13289ef6ec3dd039ba7c
           imagePullPolicy: IfNotPresent
           command:
-            - /usr/local/bin/python
+            - /opt/venvs/scoring/bin/python
           args:
             - /opt/imintengine/scripts/run_lucas_crop_split_job.py
           env:
