@@ -343,6 +343,12 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None,
     # checkpoints (e.g. Prithvi-300M) instead of feeding the full 4-frame
     # stack (which 4x:es the token grid and breaks the pos_embed add).
     model.num_frames = num_frames
+    # Stash the checkpoint config and the conv-derived aux count so callers
+    # read the trained aux set from here instead of re-opening the file with
+    # a second torch.load (peak memory ≈ 2x the checkpoint) or, worse,
+    # rebuilding the list from CLI flags.
+    model.ck_cfg = ck_cfg
+    model.n_aux_channels = n_aux
 
     epoch = ck.get("epoch", "?")
     miou = ck.get("metrics", {}).get("miou", "?")
@@ -457,6 +463,8 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
     from imint.training.unified_dataset import (
         PRITHVI_MEAN, PRITHVI_STD, N_BANDS,
         AUX_CHANNEL_NAMES, normalize_aux_channel,
+        AUX_COMPUTED_CHANNELS, AUX_NAN_NODATA_CHANNELS, ERA5_AUX_CHANNELS,
+        compute_delta_sar,
     )
     aux_names = aux_channel_names if aux_channel_names is not None else AUX_CHANNEL_NAMES
 
@@ -516,18 +524,53 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
         x0 = (w - crop_sz) // 2
         spectral = spectral[:, y0:y0+crop_sz, x0:x0+crop_sz]
 
-    # Aux channels
-    aux_list = []
-    for ch_name in aux_names:
-        if ch_name in data:
-            arr = data[ch_name].astype(np.float32)
-            arr = arr[y0:y0+crop_sz, x0:x0+crop_sz]
-            arr = normalize_aux_channel(ch_name, arr)
-            aux_list.append(arr[np.newaxis])
-        else:
-            aux_list.append(np.zeros((1, crop_sz, crop_sz), dtype=np.float32))
+    # Aux channels — mirrors UnifiedDataset._load_aux_channels branch for
+    # branch. Three cases the old "in data else zeros" form got wrong, each
+    # silently (right channel count, wrong content, no exception):
+    #   * ΔSAR is COMPUTED from the S1 keys and is never a stored array, so
+    #     the else-branch fired on every tile and fed constant zero.
+    #   * an absent stored channel uses training's NaN sentinel for
+    #     AUX_NAN_NODATA_CHANNELS (normalizes to the channel mean), not a
+    #     raw physical zero.
+    #   * the else-branch skipped normalize_aux_channel entirely, so even a
+    #     legitimately-zero channel landed on a different scale than training.
+    delta_stack = (compute_delta_sar(data)
+                   if AUX_COMPUTED_CHANNELS & set(aux_names) else None)
 
-    aux = torch.from_numpy(np.concatenate(aux_list, axis=0)).unsqueeze(0).to(device)
+    def _fit(arr, fill):
+        """Crop to the window, padding with `fill` if the source is smaller."""
+        arr = arr[y0:y0+crop_sz, x0:x0+crop_sz]
+        if arr.shape != (crop_sz, crop_sz):
+            padded = np.full((crop_sz, crop_sz), fill, dtype=np.float32)
+            padded[:arr.shape[0], :arr.shape[1]] = arr
+            arr = padded
+        return arr
+
+    aux_arrays = []
+    for ch_name in aux_names:
+        if ch_name in AUX_COMPUTED_CHANNELS:
+            # Missing 2016 composite → zeros is training's neutral "no
+            # change", not a fallback: a zero dB difference IS the signal.
+            if delta_stack is None:
+                arr = np.zeros((crop_sz, crop_sz), dtype=np.float32)
+            else:
+                arr = _fit(delta_stack[0 if ch_name == "delta_vv" else 1], 0.0)
+        elif ch_name in ERA5_AUX_CHANNELS:
+            raise ValueError(
+                f"{tile_path}: checkpoint requires ERA5 channel {ch_name!r}. "
+                "Training reads it from a per-tile sidecar under an explicit "
+                "control/treatment mode; inference carries no such mode, so "
+                "the value cannot be reconstructed. Refusing to substitute."
+            )
+        elif ch_name in data:
+            fill = np.nan if ch_name in AUX_NAN_NODATA_CHANNELS else 0.0
+            arr = _fit(data[ch_name].astype(np.float32), fill)
+        else:
+            fill = np.nan if ch_name in AUX_NAN_NODATA_CHANNELS else 0.0
+            arr = np.full((crop_sz, crop_sz), fill, dtype=np.float32)
+        aux_arrays.append(normalize_aux_channel(ch_name, arr))
+
+    aux = torch.from_numpy(np.stack(aux_arrays, axis=0)).unsqueeze(0).to(device)
 
     temporal_coords = None
     location_coords = None
@@ -641,12 +684,26 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
     Returns (H, W) prediction, or ((C, H, W) softmax, (B, H, W) spectral_raw, (N, H, W) aux)
     when return_probs=True (for superpixel refinement).
 
-    ``aux_channel_names`` overrides the aux stack (default: the canonical 10).
-    Pass the 11-channel list (…+"markfukt") for a wetness-aux checkpoint so the
-    fed aux count matches the model's input embedding.
+    ``aux_channel_names`` overrides the aux stack. When it is None the set is
+    taken from the checkpoint (``model.ck_cfg["enabled_aux_names"]``, stamped
+    by ``load_model``) and only falls back to the canonical 10 for a
+    pre-config-era checkpoint that records no set. Deriving it from CLI flags
+    at the call site is what fed a 10-channel stack to the 11-aux ladder
+    columns and a 13-aux terramind; the checkpoint is the only thing that
+    actually knows.
     """
     import torch
     family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
+    if aux_channel_names is None:
+        recorded = getattr(model, "ck_cfg", {}).get("enabled_aux_names")
+        if recorded:
+            aux_channel_names = list(recorded)
+            n_aux = getattr(model, "n_aux_channels", None)
+            if n_aux is not None and len(aux_channel_names) != n_aux:
+                raise ValueError(
+                    f"checkpoint config lists {len(aux_channel_names)} aux "
+                    f"names {aux_channel_names} but its aux conv takes "
+                    f"{n_aux} channels")
     inp = _build_inference_inputs(
         tile_path, device, img_size, aux_channel_names, family=family,
         num_frames=getattr(model, "num_frames", None))
