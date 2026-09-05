@@ -145,6 +145,14 @@ CROP_SOURCE_ACCESS_IMAGE = (
     "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
     "7c4fe00f9df2a28caaf05f006f2c567ffb912d514bff13289ef6ec3dd039ba7c"
 )
+CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA = (
+    "760eec58838de10586aa8151fb3ad07d07f40adb"
+)
+CROP_SOURCE_FREEZE_OPERATOR_IMAGE = (
+    "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+    "5e8548af0b359276c2dc411f61695d3c8c46c9d41ac22cf4fe74d2adf88db6a5"
+)
+CROP_SOURCE_FREEZE_OPERATOR_RUN_ID = "lucas-crop-attempt-14-verify"
 CROP_DISTILL_SPLIT_SOURCE_GIT_SHA = (
     "c6ad69242e7239662461bf7ff0b6bcd4d072509a"
 )
@@ -203,6 +211,15 @@ def _validate_source_access_runtime_identity() -> None:
         CROP_SOURCE_ACCESS_IMAGE,
         source_label="CROP_SOURCE_ACCESS_SOURCE_GIT_SHA",
         image_label="CROP_SOURCE_ACCESS_IMAGE",
+    )
+
+
+def _validate_freeze_operator_runtime_identity() -> None:
+    _validate_runtime_identity(
+        CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA,
+        CROP_SOURCE_FREEZE_OPERATOR_IMAGE,
+        source_label="CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA",
+        image_label="CROP_SOURCE_FREEZE_OPERATOR_IMAGE",
     )
 
 
@@ -755,6 +772,161 @@ spec:
                 path: lease.json
 """
 
+CROP_SOURCE_FREEZE_OPERATOR_TEMPLATE = """apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ladder-crop-source-freeze-operator
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ladder-crop-source-freeze-operator
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "replicationcontrollers"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["crop-source-freeze-lease"]
+    verbs: ["get", "update"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    resourceNames: ["ladder-queue", "gpu-reaper", "campaign-orchestrator"]
+    verbs: ["update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ladder-crop-source-freeze-operator
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
+subjects:
+  - kind: ServiceAccount
+    name: ladder-crop-source-freeze-operator
+    namespace: prithvi-training-default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ladder-crop-source-freeze-operator
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-crop-source-freeze-operator
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
+    spec:
+      activeDeadlineSeconds: 43200
+      automountServiceAccountToken: true
+      serviceAccountName: ladder-crop-source-freeze-operator
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        seccompProfile: {{ type: RuntimeDefault }}
+      initContainers:
+        - name: prepare-state
+          image: {operator_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/python
+          args:
+            - /opt/imintengine/scripts/crop_source_freeze_operator.py
+            - prepare
+            - --state-parent
+            - /state-parent
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{operator_source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{operator_image}"
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "500m", memory: "256Mi" }}
+            limits: {{ cpu: "500m", memory: "256Mi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /state-parent
+              subPath: ops/crop-distill/source-access
+      containers:
+        - name: freeze-operator
+          image: {operator_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/python
+          args:
+            - /opt/imintengine/scripts/crop_source_freeze_operator.py
+            - serve
+            - --state-dir
+            - /state
+            - --run-id
+            - {run_id}
+            - --namespace
+            - prithvi-training-default
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{operator_source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{operator_image}"
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {{ drop: ["ALL"] }}
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 2000
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "500m", memory: "256Mi" }}
+            limits: {{ cpu: "500m", memory: "256Mi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /state
+              subPath: ops/crop-distill/source-access/crop-source-freeze
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+"""
+
 CROP_DENY_EGRESS_TEMPLATE = """apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -1037,6 +1209,23 @@ def render_crop_source_access_apply() -> str:
     )
 
 
+def render_crop_source_freeze_operator() -> str:
+    _validate_freeze_operator_runtime_identity()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# ICE-resident watchdog for the LUCAS split verification run. It\n"
+        "# owns only one restricted durable state subPath and the narrow\n"
+        "# Kubernetes reads/CAS updates required by the freeze protocol.\n"
+        "# It intentionally retains API egress and has no TTL.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_SOURCE_FREEZE_OPERATOR_TEMPLATE.format(
+        operator_image=CROP_SOURCE_FREEZE_OPERATOR_IMAGE,
+        operator_source_git_sha=CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA,
+        run_id=CROP_SOURCE_FREEZE_OPERATOR_RUN_ID,
+    )
+
+
 def render_crop_deny_egress() -> str:
     header = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
@@ -1248,6 +1437,11 @@ def main() -> int:
                     help="verify the committed manifests match this generator")
     phase = ap.add_mutually_exclusive_group()
     phase.add_argument(
+        "--crop-operator-only",
+        action="store_true",
+        help="write/check only the digest-pinned in-cluster freeze operator",
+    )
+    phase.add_argument(
         "--crop-bootstrap-only",
         action="store_true",
         help=(
@@ -1277,7 +1471,9 @@ def main() -> int:
 
     if not args.non_crop_only:
         try:
-            if args.crop_bootstrap_only:
+            if args.crop_operator_only:
+                _validate_freeze_operator_runtime_identity()
+            elif args.crop_bootstrap_only:
                 _validate_source_access_runtime_identity()
                 _validate_crop_source_index_identity()
             elif args.crop_apply_only:
@@ -1298,6 +1494,10 @@ def main() -> int:
     outputs: dict[Path, str] = {}
     if args.non_crop_only:
         outputs.update(render_non_crop_outputs())
+    elif args.crop_operator_only:
+        outputs[OUT_DIR / "crop-source-freeze-operator-job.yaml"] = (
+            render_crop_source_freeze_operator()
+        )
     elif args.crop_bootstrap_only:
         outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
             render_crop_deny_egress()
@@ -1321,6 +1521,9 @@ def main() -> int:
         )
         outputs[OUT_DIR / "lucas-crop-split-job.yaml"] = render_lucas_crop_split()
     else:
+        outputs[OUT_DIR / "crop-source-freeze-operator-job.yaml"] = (
+            render_crop_source_freeze_operator()
+        )
         outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
             render_crop_deny_egress()
         )
@@ -1335,7 +1538,8 @@ def main() -> int:
             render_crop_storage_prep()
         )
     if not (
-        args.crop_bootstrap_only
+        args.crop_operator_only
+        or args.crop_bootstrap_only
         or args.crop_apply_only
         or args.crop_split_only
         or args.non_crop_only

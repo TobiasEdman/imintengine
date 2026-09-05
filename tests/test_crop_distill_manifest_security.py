@@ -34,6 +34,12 @@ def render_identity(monkeypatch):
     )
     monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_IMAGE", IMAGE_REF)
     monkeypatch.setattr(
+        manifests, "CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA", SOURCE_SHA
+    )
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_FREEZE_OPERATOR_IMAGE", IMAGE_REF
+    )
+    monkeypatch.setattr(
         manifests, "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA", SOURCE_SHA
     )
     monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_SHA256", PLAN_SHA)
@@ -55,6 +61,13 @@ def _pod_and_container(text: str) -> tuple[dict, dict]:
     document = yaml.safe_load(text)
     pod = document["spec"]["template"]["spec"]
     return pod, pod["containers"][0]
+
+
+def _operator_documents(text: str) -> dict[str, dict]:
+    documents = list(yaml.safe_load_all(text))
+    by_kind = {document["kind"]: document for document in documents}
+    assert len(documents) == len(by_kind) == 4
+    return by_kind
 
 
 def _assert_common_hardening(pod: dict, container: dict) -> None:
@@ -463,6 +476,207 @@ def test_crop_runtime_network_policy_denies_all_egress():
         "policyTypes": ["Egress"],
         "egress": [],
     }
+
+
+def test_freeze_operator_has_narrow_resumable_ice_authority(render_identity):
+    documents = _operator_documents(
+        manifests.render_crop_source_freeze_operator()
+    )
+    account = documents["ServiceAccount"]
+    role = documents["Role"]
+    binding = documents["RoleBinding"]
+    job = documents["Job"]
+
+    assert account["automountServiceAccountToken"] is True
+    assert binding["subjects"] == [
+        {
+            "kind": "ServiceAccount",
+            "name": "ladder-crop-source-freeze-operator",
+            "namespace": "prithvi-training-default",
+        }
+    ]
+    assert binding["roleRef"] == {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "ladder-crop-source-freeze-operator",
+    }
+    assert role["rules"] == [
+        {
+            "apiGroups": [""],
+            "resources": ["pods", "replicationcontrollers"],
+            "verbs": ["get", "list"],
+        },
+        {
+            "apiGroups": [""],
+            "resources": ["configmaps"],
+            "resourceNames": ["crop-source-freeze-lease"],
+            "verbs": ["get", "update"],
+        },
+        {
+            "apiGroups": ["batch"],
+            "resources": ["jobs", "cronjobs"],
+            "verbs": ["get", "list"],
+        },
+        {
+            "apiGroups": ["batch"],
+            "resources": ["cronjobs"],
+            "resourceNames": [
+                "ladder-queue",
+                "gpu-reaper",
+                "campaign-orchestrator",
+            ],
+            "verbs": ["update"],
+        },
+        {
+            "apiGroups": ["apps"],
+            "resources": [
+                "deployments",
+                "statefulsets",
+                "daemonsets",
+                "replicasets",
+            ],
+            "verbs": ["get", "list"],
+        },
+    ]
+    assert all(
+        verb not in {"delete", "patch"}
+        for rule in role["rules"]
+        for verb in rule["verbs"]
+    )
+    assert all(
+        not ("configmaps" in rule["resources"] and "create" in rule["verbs"])
+        for rule in role["rules"]
+    )
+
+    job_spec = job["spec"]
+    pod = job_spec["template"]["spec"]
+    assert "ttlSecondsAfterFinished" not in job_spec
+    assert job_spec["backoffLimit"] == 6
+    assert pod["activeDeadlineSeconds"] == 43200
+    assert pod["automountServiceAccountToken"] is True
+    assert pod["serviceAccountName"] == "ladder-crop-source-freeze-operator"
+    assert pod["restartPolicy"] == "OnFailure"
+    assert pod["securityContext"] == {
+        "seccompProfile": {"type": "RuntimeDefault"}
+    }
+    assert pod["imagePullSecrets"] == [{"name": "ghcr-push"}]
+
+    prepare = pod["initContainers"][0]
+    operator = pod["containers"][0]
+    assert prepare["image"] == IMAGE_REF == operator["image"]
+    assert prepare["command"] == ["/usr/local/bin/python"]
+    assert prepare["args"] == [
+        "/opt/imintengine/scripts/crop_source_freeze_operator.py",
+        "prepare",
+        "--state-parent",
+        "/state-parent",
+    ]
+    for container in (prepare, operator):
+        env = {item["name"]: item for item in container["env"]}
+        assert env["CROP_DISTILL_SOURCE_GIT_SHA"]["value"] == SOURCE_SHA
+        assert env["CROP_DISTILL_IMAGE"]["value"] == IMAGE_REF
+        assert env["POD_UID"]["valueFrom"]["fieldRef"]["fieldPath"] == (
+            "metadata.uid"
+        )
+        assert "CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA" not in env
+        assert "CROP_SOURCE_FREEZE_OPERATOR_IMAGE" not in env
+    assert prepare["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {
+            "drop": ["ALL"],
+            "add": ["CHOWN", "FOWNER"],
+        },
+        "readOnlyRootFilesystem": True,
+        "runAsUser": 0,
+        "runAsGroup": 2000,
+    }
+    assert operator["command"] == ["/usr/local/bin/python"]
+    assert operator["args"] == [
+        "/opt/imintengine/scripts/crop_source_freeze_operator.py",
+        "serve",
+        "--state-dir",
+        "/state",
+        "--run-id",
+        manifests.CROP_SOURCE_FREEZE_OPERATOR_RUN_ID,
+        "--namespace",
+        "prithvi-training-default",
+    ]
+    assert operator["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+        "readOnlyRootFilesystem": True,
+        "runAsNonRoot": True,
+        "runAsUser": 2000,
+        "runAsGroup": 2000,
+    }
+    for container in (prepare, operator):
+        _assert_ice_resources(container)
+
+    assert prepare["volumeMounts"] == [
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/state-parent",
+            "subPath": "ops/crop-distill/source-access",
+        }
+    ]
+    assert operator["volumeMounts"] == [
+        {
+            "name": "training-data-cephfs",
+            "mountPath": "/state",
+            "subPath": (
+                "ops/crop-distill/source-access/crop-source-freeze"
+            ),
+        },
+        {"name": "tmp", "mountPath": "/tmp"},
+    ]
+    assert pod["volumes"] == [
+        {
+            "name": "training-data-cephfs",
+            "persistentVolumeClaim": {"claimName": "training-data-cephfs"},
+        },
+        {"name": "tmp", "emptyDir": {"sizeLimit": "128Mi"}},
+    ]
+
+
+def test_freeze_operator_refuses_unpublished_image(render_identity, monkeypatch):
+    monkeypatch.setattr(
+        manifests,
+        "CROP_SOURCE_FREEZE_OPERATOR_IMAGE",
+        "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "0" * 64,
+    )
+
+    with pytest.raises(ValueError, match="CROP_SOURCE_FREEZE_OPERATOR_IMAGE"):
+        manifests.render_crop_source_freeze_operator()
+
+
+def test_operator_only_writes_no_other_manifest(
+    render_identity,
+    monkeypatch,
+    tmp_path,
+):
+    output_dir = tmp_path / "k8s" / "ladder"
+    monkeypatch.setattr(manifests, "REPO", tmp_path)
+    monkeypatch.setattr(manifests, "OUT_DIR", output_dir)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["gen_ladder_manifests.py", "--crop-operator-only"],
+    )
+
+    assert manifests.main() == 0
+    assert [path.name for path in output_dir.iterdir()] == [
+        "crop-source-freeze-operator-job.yaml"
+    ]
+
+
+def test_committed_operator_manifest_is_current(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["gen_ladder_manifests.py", "--crop-operator-only", "--check"],
+    )
+
+    assert manifests.main() == 0
 
 
 def test_source_access_plan_is_root_read_only_and_drop_all(render_identity):
