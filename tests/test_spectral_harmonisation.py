@@ -16,6 +16,8 @@ call, so it is deterministic (seeded RNG) and CI-safe:
 from __future__ import annotations
 
 import importlib.util
+import os
+import stat
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +40,47 @@ _TARGET_BOUNDS = {
     "west": _TW, "south": _TN - _SZ * _PX, "east": _TW + _SZ * _PX, "north": _TN,
 }
 _SRC_CRS = CRS.from_epsg(3006)
+
+
+def test_fill_atomic_save_preserves_existing_group_and_mode(tmp_path):
+    destination = tmp_path / "tile.npz"
+    np.savez_compressed(destination, before=np.arange(3))
+    destination.chmod(0o640)
+    original = destination.stat()
+
+    fill._atomic_savez(str(destination), {"after": np.arange(4)})
+
+    identity = destination.stat()
+    assert (identity.st_uid, identity.st_gid) == (original.st_uid, original.st_gid)
+    assert stat.S_IMODE(identity.st_mode) == 0o640
+    with np.load(destination) as payload:
+        np.testing.assert_array_equal(payload["after"], np.arange(4))
+
+
+def test_in_place_fill_refuses_tile_replaced_during_fetch(tmp_path, monkeypatch):
+    destination = tmp_path / "tile.npz"
+    initial = {
+        "spectral": np.full((6, 2, 2), 0.2, np.float32),
+        "bbox_3006": np.array([0.0, 0.0, 20.0, 20.0]),
+        "dates": np.array(["2022-06-01"]),
+    }
+    np.savez_compressed(destination, **initial)
+
+    def replace_during_fetch(*_args, **_kwargs):
+        intruder = tmp_path / "intruder.npz"
+        np.savez_compressed(intruder, concurrent_writer=np.int32(1))
+        os.replace(intruder, destination)
+        fresh = np.full((len(fill.ALL_BANDS), 2, 2), 0.05, np.float32)
+        return {0: (fresh, None)}
+
+    monkeypatch.setattr(fill, "fetch_tile_at_specific_dates", replace_during_fetch)
+
+    result = fill.fill_one_tile(str(destination), skip_existing=False)
+
+    assert result["status"] == "failed"
+    assert "destination changed since initial read" in result["reason"]
+    with np.load(destination) as payload:
+        assert int(payload["concurrent_writer"]) == 1
 
 
 def _raw513():

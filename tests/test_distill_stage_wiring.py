@@ -21,11 +21,15 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts import gen_ladder_manifests as ladder_generator  # noqa: E402
 
 # Every script that loads a checkpoint and then runs inference at a chosen
 # --img-size. infer_tiles.py is the reference call shape. The two distill
@@ -116,12 +120,91 @@ def _distill_manifest(model: str) -> str:
     return path.read_text()
 
 
-def test_distill_manifests_are_generated_and_current() -> None:
-    import subprocess
-    res = subprocess.run(
-        ["python3", str(ROOT / "scripts" / "gen_ladder_manifests.py"),
-         "--check"], capture_output=True, text=True)
-    assert res.returncode == 0, f"stale generated manifests:\n{res.stdout}"
+def test_manifest_generator_is_current_or_explicitly_bootstrap_gated() -> None:
+    generator = ROOT / "scripts" / "gen_ladder_manifests.py"
+
+    def run(*extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(generator), *extra, "--check"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+    ordinary = run()
+    source_zero = ladder_generator.CROP_DISTILL_SOURCE_GIT_SHA == "0" * 40
+    image_zero = ladder_generator.CROP_DISTILL_IMAGE == (
+        "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "0" * 64
+    )
+    split_zero = (
+        ladder_generator.CROP_DISTILL_SPLIT_MANIFEST_SHA256 == "0" * 64
+    )
+    plan_zero = ladder_generator.CROP_SOURCE_ACCESS_PLAN_SHA256 == "0" * 64
+    completion_zero = (
+        ladder_generator.CROP_SOURCE_ACCESS_COMPLETION_SHA256 == "0" * 64
+    )
+    bootstrap_paths = {
+        ladder_generator.OUT_DIR / "crop-distill-storage-prep-job.yaml",
+        ladder_generator.OUT_DIR / "crop-source-access-plan-job.yaml",
+    }
+    apply_path = ladder_generator.OUT_DIR / "crop-source-access-apply-job.yaml"
+    split_path = ladder_generator.OUT_DIR / "lucas-crop-split-job.yaml"
+    consumer_paths = {
+        ladder_generator.OUT_DIR / f"crop-distill-{model}-job.yaml"
+        for model in ladder_generator.CROP_MODELS
+    }
+
+    assert run("--non-crop-only").returncode == 0
+
+    if source_zero and image_zero and plan_zero and completion_zero and split_zero:
+        assert ordinary.returncode == 2
+        assert ordinary.stderr.startswith(
+            "REFUSING crop-distill manifest generation:"
+        )
+        assert "CROP_DISTILL_SOURCE_GIT_SHA" in ordinary.stderr or (
+            "CROP_DISTILL_IMAGE" in ordinary.stderr
+        )
+        bootstrap = run("--crop-bootstrap-only")
+        assert bootstrap.returncode == 2
+        assert not any(path.exists() for path in bootstrap_paths | consumer_paths)
+        assert not apply_path.exists()
+        assert not split_path.exists()
+    elif source_zero and image_zero and not plan_zero and not completion_zero and split_zero:
+        # A verifier-only repair is built and signed before its new runtime
+        # identity can be pinned. Historical PLAN/APPLY authority remains
+        # intact, while no split or consumer can run from the pending payload.
+        assert ordinary.returncode == 2
+        assert "CROP_DISTILL_SOURCE_GIT_SHA" in ordinary.stderr or (
+            "CROP_DISTILL_IMAGE" in ordinary.stderr
+        )
+        assert run("--crop-split-only").returncode == 2
+        assert not split_path.exists()
+        assert not any(path.exists() for path in consumer_paths)
+    elif not source_zero and not image_zero and plan_zero and completion_zero and split_zero:
+        assert ordinary.returncode == 2
+        assert "CROP_SOURCE_ACCESS_PLAN_SHA256" in ordinary.stderr
+        bootstrap = run("--crop-bootstrap-only")
+        assert bootstrap.returncode == 0, bootstrap.stdout + bootstrap.stderr
+        assert all(path.exists() for path in bootstrap_paths)
+        assert not apply_path.exists()
+        assert not split_path.exists()
+        assert not any(path.exists() for path in consumer_paths)
+    elif not source_zero and not image_zero and not plan_zero and completion_zero and split_zero:
+        assert ordinary.returncode == 2
+        assert "CROP_SOURCE_ACCESS_COMPLETION_SHA256" in ordinary.stderr
+        assert run("--crop-apply-only").returncode == 0
+        assert not split_path.exists()
+        assert not any(path.exists() for path in consumer_paths)
+    elif not source_zero and not image_zero and not plan_zero and not completion_zero and split_zero:
+        assert ordinary.returncode == 2
+        assert "CROP_DISTILL_SPLIT_MANIFEST_SHA256" in ordinary.stderr
+        assert run("--crop-split-only").returncode == 0
+        assert split_path.exists()
+        assert not any(path.exists() for path in consumer_paths)
+    elif all((not source_zero, not image_zero, not plan_zero, not completion_zero, not split_zero)):
+        assert ordinary.returncode == 0, ordinary.stdout + ordinary.stderr
+    else:
+        pytest.fail("crop-distill identity constants are in a partial phase state")
 
 
 @pytest.mark.parametrize("script", ["extract_plot_features.py",
