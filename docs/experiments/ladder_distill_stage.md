@@ -254,12 +254,30 @@ PR #37's inference-matrix payload has its own source constant and must never
 bump the crop anchor. Ordinary generator or documentation edits also leave
 the crop anchor untouched.
 
-This is a one-way freeze. If any Pod-executed crop payload needs a bug fix
-after commit A, the recovery procedure restarts all reviewed phases:
-review a new complete payload A, build and verify its image, authorize and run
-one new PLAN and APPLY, run one new split, then pin that new manifest. Do
-not silently move an existing source/image/split tuple, and do not treat an
-unrelated manifest/docs change as a reason to move the anchor.
+This is a one-way freeze. A producer or protocol change after commit A restarts
+all reviewed phases: review and build a complete new payload, then run and pin
+a new PLAN, APPLY, and split. A verifier-only repair may reuse already-reviewed
+evidence only when independent byte/metadata checks prove that the source data
+and frozen artifacts are unchanged. That recovery has three explicit Git
+authorities instead of silently moving one tuple:
+
+- `CROP_DISTILL_SOURCE_GIT_SHA` plus `CROP_DISTILL_IMAGE` identify the current
+  verifier/consumer runtime;
+- `CROP_SOURCE_ACCESS_SOURCE_GIT_SHA` plus `CROP_SOURCE_ACCESS_IMAGE` identify
+  the historical runtime recorded by the exact-hash APPLY completion; and
+- `CROP_DISTILL_SPLIT_SOURCE_GIT_SHA` identifies the runtime that created the
+  immutable split.
+
+When the split authority differs from the current runtime, the split entrypoint
+uses one full verification-only pass. A missing or corrupt freeze therefore
+fails; it can never rebuild bytes while claiming the historical SHA. Crop consumers
+likewise verify the input split against its historical authority while their
+new outputs remain bound to the current signed runtime. Do not use this narrow
+recovery for producer changes or infer any authority from mutable PVC state.
+The verifier-repair payload commit resets only the current runtime source/image
+to zero sentinels and removes runnable split/consumer manifests. Its following
+runtime-pin commit supplies the newly signed identity and regenerates them;
+historical PLAN/APPLY and split authorities never move during that interval.
 
 ### Least-privilege PVC preparation
 

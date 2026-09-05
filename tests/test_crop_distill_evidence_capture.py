@@ -18,6 +18,13 @@ DIGEST = "a" * 64
 OTHER_DIGEST = "b" * 64
 IMAGE = f"ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:{DIGEST}"
 SOURCE_GIT_SHA = "1" * 40
+SOURCE_ACCESS_DIGEST = "7" * 64
+SOURCE_ACCESS_IMAGE = (
+    "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+    f"{SOURCE_ACCESS_DIGEST}"
+)
+SOURCE_ACCESS_SOURCE_GIT_SHA = "5" * 40
+SPLIT_SOURCE_GIT_SHA = "6" * 40
 SPLIT_MANIFEST_SHA256 = "2" * 64
 SOURCE_ACCESS_PLAN_SHA256 = "3" * 64
 SOURCE_ACCESS_PLAN_POD_UID = "source-access-plan-pod-uid"
@@ -38,6 +45,9 @@ def git_authority(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda: {
             "source_git_sha": SOURCE_GIT_SHA,
             "image_ref": IMAGE,
+            "source_access_source_git_sha": SOURCE_ACCESS_SOURCE_GIT_SHA,
+            "source_access_image_ref": SOURCE_ACCESS_IMAGE,
+            "split_source_git_sha": SPLIT_SOURCE_GIT_SHA,
             "source_index_sha256": evidence.SOURCE_ACCESS_INDEX_SHA256,
             "plan_sha256": SOURCE_ACCESS_PLAN_SHA256,
             "plan_pod_uid": SOURCE_ACCESS_PLAN_POD_UID,
@@ -77,7 +87,12 @@ def _tree_identity(
     }
 
 
-def _runtime() -> dict[str, object]:
+def _runtime(
+    *,
+    source_git_sha: str = SOURCE_GIT_SHA,
+    image_ref: str = IMAGE,
+    image_digest: str = DIGEST,
+) -> dict[str, object]:
     return {
         "base_image": evidence.BASE_IMAGE,
         "base_python": _python_identity(evidence.BASE_PYTHON),
@@ -115,11 +130,11 @@ def _runtime() -> dict[str, object]:
                 marker="8",
             ),
         },
-        "image": {"digest": DIGEST, "ref": IMAGE},
+        "image": {"digest": image_digest, "ref": image_ref},
         "model_resolution": evidence.MODEL_RESOLUTION,
         "runtime_manifest": _file_identity(evidence.RUNTIME_MANIFEST, "9"),
         "source": _tree_identity(
-            git_sha=SOURCE_GIT_SHA,
+            git_sha=source_git_sha,
             archive_sha256="c" * 64,
             marker="d",
         ),
@@ -154,7 +169,7 @@ def _split_manifest(kind: str) -> dict[str, object]:
     return {
         "counts": {"n_distill": 80, "n_holdout": 20, "n_qualified": 100},
         "declared_artifacts": declared,
-        "git_sha": SOURCE_GIT_SHA,
+        "git_sha": SPLIT_SOURCE_GIT_SHA,
         "immutable_digests": immutable_digests,
         "path": str(root / evidence.CROP_SPLIT_MANIFEST.name),
         "sha256": SPLIT_MANIFEST_SHA256,
@@ -262,16 +277,23 @@ def _marker(record: dict[str, object] | None = None) -> tuple[bytes, bytes]:
 def _pod(
     *,
     kind: str = "crop",
-    spec_image: str = IMAGE,
-    image_id: str = f"containerd://sha256:{DIGEST}",
+    spec_image: str | None = None,
+    image_id: str | None = None,
     subject: Mapping[str, object] | None = None,
     pod_name: str | None = None,
 ) -> dict[str, object]:
     if subject is None:
-        subject = evidence._validate_completion_record(_record(kind=kind))
+        subject = evidence._validate_completion_record(
+            _record(kind=kind),
+            split_source_git_sha=SPLIT_SOURCE_GIT_SHA,
+        )
     else:
         kind = str(subject["kind"])
     contract = evidence._workload_contract(subject)
+    if spec_image is None:
+        spec_image = str(contract["image_ref"])
+    if image_id is None:
+        image_id = f"containerd://sha256:{subject['digest']}"
     container = str(contract["container"])
     job = str(contract["job"])
     if pod_name is None:
@@ -416,8 +438,8 @@ def _pod(
 
 def _source_runtime() -> dict[str, str]:
     return {
-        "source_git_sha": SOURCE_GIT_SHA,
-        "image_ref": IMAGE,
+        "source_git_sha": SOURCE_ACCESS_SOURCE_GIT_SHA,
+        "image_ref": SOURCE_ACCESS_IMAGE,
         "runtime_manifest_sha256": "5" * 64,
         "source_payload_sha256": "6" * 64,
     }
@@ -591,7 +613,11 @@ def _storage_prep_record() -> dict[str, object]:
             "effective_gid": evidence.STORAGE_GID,
         },
         "preserved_frozen_mode": format(evidence.FROZEN_SPLIT_MODE, "04o"),
-        "runtime": _runtime(),
+        "runtime": _runtime(
+            source_git_sha=SOURCE_ACCESS_SOURCE_GIT_SHA,
+            image_ref=SOURCE_ACCESS_IMAGE,
+            image_digest=SOURCE_ACCESS_DIGEST,
+        ),
         "targets": targets,
         "dataset_lock": {
             "path": str(evidence.SOURCE_ACCESS_LOCK_BACKING_FILE),
@@ -614,10 +640,10 @@ def _source_subject(
     is_plan = kind == "source-access-plan"
     return {
         "container": "source-access-plan" if is_plan else "source-access-apply",
-        "digest": DIGEST,
+        "digest": SOURCE_ACCESS_DIGEST,
         "effective_gid": evidence.STORAGE_GID,
         "effective_uid": 0,
-        "image_ref": IMAGE,
+        "image_ref": SOURCE_ACCESS_IMAGE,
         "job": (
             "ladder-crop-source-access-plan"
             if is_plan
@@ -628,7 +654,7 @@ def _source_subject(
         "plan": None if is_plan else record["plan"],
         "pod_uid": record["pod_uid"],
         "record_schema": record["schema"],
-        "source_git_sha": SOURCE_GIT_SHA,
+        "source_git_sha": SOURCE_ACCESS_SOURCE_GIT_SHA,
     }
 
 
@@ -804,9 +830,16 @@ def test_capture_writes_deterministic_verified_bundle_for_containerd(
         "CROP_DISTILL_IMAGE": IMAGE,
         "CROP_DISTILL_SOURCE_GIT_SHA": SOURCE_GIT_SHA,
         "CROP_DISTILL_SPLIT_MANIFEST_SHA256": SPLIT_MANIFEST_SHA256,
+        "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA": SPLIT_SOURCE_GIT_SHA,
         "HOME": "/work/home",
         "TMPDIR": "/work/tmp",
     }
+    split_mount = next(
+        mount
+        for mount in container["volume_mounts"]
+        if mount["mount_path"] == "/cephfs/distill/crop_split"
+    )
+    assert split_mount["read_only"] is True
     assert normalized["status"]["container_statuses"][0]["image_digest"] == DIGEST
     assert capture["observed_pod"]["raw"]["sha256"] == hashlib.sha256(
         (bundle / "pod.json").read_bytes()
@@ -872,6 +905,9 @@ def test_capture_binds_split_job_and_container(tmp_path: Path) -> None:
     assert container["environment"]["literal"] == {
         "CROP_DISTILL_IMAGE": IMAGE,
         "CROP_DISTILL_SOURCE_GIT_SHA": SOURCE_GIT_SHA,
+        "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA": SPLIT_SOURCE_GIT_SHA,
+        "CROP_SOURCE_ACCESS_IMAGE": SOURCE_ACCESS_IMAGE,
+        "CROP_SOURCE_ACCESS_SOURCE_GIT_SHA": SOURCE_ACCESS_SOURCE_GIT_SHA,
         "CROP_SOURCE_FREEZE_LEASE_PATH": "/var/run/crop-source-freeze/lease.json",
         "CROP_SOURCE_ACCESS_COMPLETION_POD_UID": SOURCE_ACCESS_COMPLETION_POD_UID,
         "CROP_SOURCE_ACCESS_COMPLETION_SHA256": SOURCE_ACCESS_COMPLETION_SHA256,
@@ -1663,7 +1699,10 @@ def test_split_bundle_rejects_internally_consistent_alternate_valid_anchors(
         },
     }
     subject = {
-        **evidence._validate_completion_record(record),
+        **evidence._validate_completion_record(
+            record,
+            split_source_git_sha=SPLIT_SOURCE_GIT_SHA,
+        ),
         "record_schema": evidence.COMPLETION_SCHEMA,
     }
     pod = _pod(kind="split", subject=subject)

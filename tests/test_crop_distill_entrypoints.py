@@ -29,6 +29,10 @@ import scripts.run_lucas_crop_split_job as split_job
 
 SOURCE_SHA = "a" * 40
 IMAGE_REF = "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "b" * 64
+HISTORICAL_SOURCE_SHA = "f" * 40
+HISTORICAL_IMAGE_REF = (
+    "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "e" * 64
+)
 SPLIT_SHA256 = "c" * 64
 PLAN_SHA256 = "d" * 64
 PLAN_POD_UID = "plan-pod-uid"
@@ -87,6 +91,13 @@ def render_identity(monkeypatch):
     """Render B manifests in memory while their real A identities are pending."""
     monkeypatch.setattr(manifests, "CROP_DISTILL_SOURCE_GIT_SHA", SOURCE_SHA)
     monkeypatch.setattr(manifests, "CROP_DISTILL_IMAGE", IMAGE_REF)
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_ACCESS_SOURCE_GIT_SHA", SOURCE_SHA
+    )
+    monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_IMAGE", IMAGE_REF)
+    monkeypatch.setattr(
+        manifests, "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA", SOURCE_SHA
+    )
     monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_SHA256", PLAN_SHA256)
     monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_POD_UID", PLAN_POD_UID)
     monkeypatch.setattr(
@@ -209,7 +220,12 @@ def test_runtime_identity_requires_only_exact_manifest_values():
 @pytest.mark.parametrize("model", protocol.MODEL_KEYS)
 def test_crop_entrypoint_builds_the_entire_baked_protocol(monkeypatch, model):
     calls: list[tuple[str, list[str]]] = []
-    job = crop_job.CropDistillJob(model, IDENTITY, SPLIT_SHA256)
+    job = crop_job.CropDistillJob(
+        model,
+        IDENTITY,
+        SPLIT_SHA256,
+        HISTORICAL_SOURCE_SHA,
+    )
     snapshot = crop_job.CropSplitSnapshot(
         root=job.snapshot_dir,
         index=job.snapshot_dir / protocol.CROP_INDEX.name,
@@ -247,6 +263,9 @@ def test_crop_entrypoint_builds_the_entire_baked_protocol(monkeypatch, model):
         "score-oof",
         "publish-completion",
     ]
+    assert _option_value(calls[1][1], "--expected-git-sha") == (
+        HISTORICAL_SOURCE_SHA
+    )
     extract = calls[2][1]
     cfg = protocol.CROP_MODELS[model]
     assert extract[:2] == [str(protocol.MODEL_PYTHON), str(protocol.EXTRACT_SCRIPT)]
@@ -278,6 +297,9 @@ def test_crop_entrypoint_builds_the_entire_baked_protocol(monkeypatch, model):
     assert _option_value(completion, "--status") == "completed"
     assert _option_value(completion, "--checkpoint-sha256") == (cfg.checkpoint_sha256)
     assert _option_value(completion, "--split-sha256") == SPLIT_SHA256
+    assert _option_value(completion, "--split-source-git-sha") == (
+        HISTORICAL_SOURCE_SHA
+    )
     assert _option_value(completion, "--split-manifest") == str(snapshot.manifest)
     assert completion.count("--artifact-size") == 2
     assert completion.count("--artifact-sha256") == 2
@@ -301,7 +323,8 @@ def test_crop_entrypoint_preserves_the_failing_stage_and_exit(monkeypatch):
         "publish_failure",
         lambda _self, exit_code: published.append(exit_code),
     )
-    assert crop_job.main(["--model", "clay"], environ={}) == 23
+    environment = {"CROP_DISTILL_SPLIT_SOURCE_GIT_SHA": SOURCE_SHA}
+    assert crop_job.main(["--model", "clay"], environ=environment) == 23
     assert published == [23]
 
 
@@ -343,7 +366,8 @@ def test_crop_main_rejects_manifest_uid_drift_before_execute(monkeypatch):
         lambda self, code: published.append((self.failure_stage, code)),
     )
 
-    assert crop_job.main(["--model", "clay"], environ={}) == 1
+    environment = {"CROP_DISTILL_SPLIT_SOURCE_GIT_SHA": SOURCE_SHA}
+    assert crop_job.main(["--model", "clay"], environ=environment) == 1
     assert published == [("validate-process-identity", 1)]
 
 
@@ -374,6 +398,9 @@ def test_split_main_rejects_manifest_uid_drift_before_execute(monkeypatch):
         "CROP_SOURCE_ACCESS_PLAN_POD_UID": PLAN_POD_UID,
         "CROP_SOURCE_ACCESS_COMPLETION_SHA256": COMPLETION_SHA256,
         "CROP_SOURCE_ACCESS_COMPLETION_POD_UID": COMPLETION_POD_UID,
+        "CROP_SOURCE_ACCESS_SOURCE_GIT_SHA": SOURCE_SHA,
+        "CROP_SOURCE_ACCESS_IMAGE": IMAGE_REF,
+        "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA": SOURCE_SHA,
         "CROP_SOURCE_FREEZE_LEASE_PATH": str(split_job.FREEZE_LEASE_PATH),
     }
     assert split_job.main([], environ=environment) == 1
@@ -559,7 +586,12 @@ def test_failure_provenance_bounds_raw_environment_claims():
     job = crop_job.CropDistillJob("clay", claims, "bad-split\n" + "z" * 5000)
     command = job._provenance_base(status="failed", exit_code=1)
 
-    for option in ("--source-git-sha", "--image-ref", "--split-sha256"):
+    for option in (
+        "--source-git-sha",
+        "--image-ref",
+        "--split-sha256",
+        "--split-source-git-sha",
+    ):
         value = _option_value(command, option)
         assert "\n" not in value
         assert len(value) <= 1024
@@ -574,10 +606,12 @@ def test_failure_provenance_preserves_dash_prefixed_claims_as_values():
     assert "--source-git-sha=--help" in command
     assert "--image-ref=--status=completed" in command
     assert "--split-sha256=--artifact=/attacker" in command
+    assert "--split-source-git-sha=--help" in command
     parsed = provenance.build_parser().parse_args(command[2:])
     assert parsed.source_git_sha == "--help"
     assert parsed.image_ref == "--status=completed"
     assert parsed.split_sha256 == "--artifact=/attacker"
+    assert parsed.split_source_git_sha == "--help"
 
 
 def test_invalid_source_claim_is_published_when_pod_uid_is_safe(monkeypatch):
@@ -608,13 +642,21 @@ def test_split_failure_bounds_and_quotes_untrusted_identity_claims():
 
     source = next(value for value in command if value.startswith("--source-git-sha="))
     image = next(value for value in command if value.startswith("--image-ref="))
+    split_source = next(
+        value
+        for value in command
+        if value.startswith("--split-source-git-sha=")
+    )
     assert source.startswith("--source-git-sha=--help ")
     assert image.startswith("--image-ref=--status=completed ")
+    assert split_source.startswith("--split-source-git-sha=--help ")
     assert len(source.removeprefix("--source-git-sha=")) <= 1024
     assert len(image.removeprefix("--image-ref=")) <= 1024
+    assert len(split_source.removeprefix("--split-source-git-sha=")) <= 1024
     parsed = provenance.build_parser().parse_args(command[2:])
     assert parsed.source_git_sha.startswith("--help ")
     assert parsed.image_ref.startswith("--status=completed ")
+    assert parsed.split_source_git_sha.startswith("--help ")
 
 
 def test_split_entrypoint_has_one_fixed_build_and_full_verify(monkeypatch):
@@ -741,6 +783,7 @@ def test_split_entrypoint_has_one_fixed_build_and_full_verify(monkeypatch):
     completion = calls[3][1]
     assert completion.count("--artifact") == 4
     assert _option_value(completion, "--status") == "completed"
+    assert _option_value(completion, "--split-source-git-sha") == SOURCE_SHA
     assert _option_value(completion, "--source-access-plan-sha256") == PLAN_SHA256
     assert _option_value(completion, "--source-access-plan-pod-uid") == PLAN_POD_UID
     assert (
@@ -751,6 +794,88 @@ def test_split_entrypoint_has_one_fixed_build_and_full_verify(monkeypatch):
         _option_value(completion, "--source-access-completion-pod-uid")
         == COMPLETION_POD_UID
     )
+
+
+def test_split_repair_runtime_only_verifies_historical_freeze(monkeypatch):
+    calls: list[tuple[str, list[str]]] = []
+    completion_kwargs: list[dict] = []
+    mode_changes: list[tuple[Path, int]] = []
+    job = split_job.LucasCropSplitJob(IDENTITY)
+    job.source_access_plan_sha256 = PLAN_SHA256
+    job.source_access_plan_pod_uid = PLAN_POD_UID
+    job.source_access_completion_sha256 = COMPLETION_SHA256
+    job.source_access_completion_pod_uid = COMPLETION_POD_UID
+    job.source_access_source_git_sha = HISTORICAL_SOURCE_SHA
+    job.source_access_image_ref = HISTORICAL_IMAGE_REF
+    job.frozen_split_source_git_sha = HISTORICAL_SOURCE_SHA
+
+    monkeypatch.setattr(
+        job,
+        "_run",
+        lambda stage, command: calls.append(
+            (stage, [str(value) for value in command])
+        ),
+    )
+    monkeypatch.setattr(split_job, "verify_runtime", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        split_job,
+        "require_fresh_freeze_lease",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def verify_completion(*_args, **kwargs):
+        completion_kwargs.append(kwargs)
+        return {
+            "plan": {"pod_uid": PLAN_POD_UID, "sha256": PLAN_SHA256},
+            "summary": {"files": protocol.SOURCE_ACCESS_EXPECTED_CANDIDATES},
+        }
+
+    monkeypatch.setattr(
+        split_job,
+        "verify_source_access_completion",
+        verify_completion,
+    )
+    monkeypatch.setattr(
+        split_job,
+        "verify_live_completion_cohort",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        split_job, "_ensure_real_directory", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        split_job,
+        "_set_directory_mode",
+        lambda path, mode: mode_changes.append((path, mode)),
+    )
+    monkeypatch.setattr(split_job, "sha256_file", lambda _path: "c" * 64)
+
+    job._execute_locked()
+
+    assert completion_kwargs == [
+        {
+            "expected_sha256": COMPLETION_SHA256,
+            "expected_source_git_sha": HISTORICAL_SOURCE_SHA,
+            "expected_image_ref": HISTORICAL_IMAGE_REF,
+            "expected_completion_pod_uid": COMPLETION_POD_UID,
+            "expected_plan_sha256": PLAN_SHA256,
+        }
+    ]
+    assert [stage for stage, _ in calls] == [
+        "verify-runtime",
+        "verify-existing-split",
+        "publish-completion",
+    ]
+    historical_verify = calls[1][1]
+    assert "--verify" in historical_verify
+    assert "--git-sha" not in historical_verify
+    assert _option_value(historical_verify, "--expected-git-sha") == (
+        HISTORICAL_SOURCE_SHA
+    )
+    assert _option_value(calls[2][1], "--split-source-git-sha") == (
+        HISTORICAL_SOURCE_SHA
+    )
+    assert mode_changes == []
 
 
 def test_split_rejects_completion_with_alternate_plan_pod_uid(monkeypatch):
@@ -864,6 +989,7 @@ def test_rendered_crop_job_is_shell_free_and_declarative(render_identity, model)
         "CROP_DISTILL_SOURCE_GIT_SHA",
         "CROP_DISTILL_IMAGE",
         "CROP_DISTILL_SPLIT_MANIFEST_SHA256",
+        "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA",
         "HOME",
         "TMPDIR",
         "POD_UID",
@@ -871,6 +997,7 @@ def test_rendered_crop_job_is_shell_free_and_declarative(render_identity, model)
     assert env["CROP_DISTILL_SOURCE_GIT_SHA"]["value"] == SOURCE_SHA
     assert env["CROP_DISTILL_IMAGE"]["value"] == IMAGE_REF
     assert env["CROP_DISTILL_SPLIT_MANIFEST_SHA256"]["value"] == (SPLIT_SHA256)
+    assert env["CROP_DISTILL_SPLIT_SOURCE_GIT_SHA"]["value"] == SOURCE_SHA
     assert env["HOME"]["value"] == "/work/home"
     assert env["TMPDIR"]["value"] == "/work/tmp"
     assert env["POD_UID"]["valueFrom"]["fieldRef"]["fieldPath"] == ("metadata.uid")
@@ -957,6 +1084,7 @@ def test_rendered_split_job_only_invokes_the_baked_entrypoint(render_identity):
             "name": "training-data-cephfs",
             "mountPath": "/cephfs/distill/crop_split",
             "subPath": "distill/crop_split",
+            "readOnly": False,
         },
         {
             "name": "training-data-cephfs",

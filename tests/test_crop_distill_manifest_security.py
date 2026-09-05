@@ -29,6 +29,13 @@ COMPLETION_POD_UID = "apply-pod-uid"
 def render_identity(monkeypatch):
     monkeypatch.setattr(manifests, "CROP_DISTILL_SOURCE_GIT_SHA", SOURCE_SHA)
     monkeypatch.setattr(manifests, "CROP_DISTILL_IMAGE", IMAGE_REF)
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_ACCESS_SOURCE_GIT_SHA", SOURCE_SHA
+    )
+    monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_IMAGE", IMAGE_REF)
+    monkeypatch.setattr(
+        manifests, "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA", SOURCE_SHA
+    )
     monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_SHA256", PLAN_SHA)
     monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_POD_UID", PLAN_POD_UID)
     monkeypatch.setattr(
@@ -114,6 +121,13 @@ def _assert_live_freeze_lease(pod: dict, container: dict) -> None:
 def test_crop_render_requires_external_split_authority(monkeypatch):
     monkeypatch.setattr(manifests, "CROP_DISTILL_SOURCE_GIT_SHA", SOURCE_SHA)
     monkeypatch.setattr(manifests, "CROP_DISTILL_IMAGE", IMAGE_REF)
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_ACCESS_SOURCE_GIT_SHA", SOURCE_SHA
+    )
+    monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_IMAGE", IMAGE_REF)
+    monkeypatch.setattr(
+        manifests, "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA", SOURCE_SHA
+    )
     monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_SHA256", PLAN_SHA)
     monkeypatch.setattr(manifests, "CROP_SOURCE_ACCESS_PLAN_POD_UID", PLAN_POD_UID)
     monkeypatch.setattr(
@@ -216,6 +230,7 @@ def test_split_job_is_nonroot_and_has_only_required_pvc_subpaths(render_identity
             "name": "training-data-cephfs",
             "mountPath": "/cephfs/distill/crop_split",
             "subPath": "distill/crop_split",
+            "readOnly": False,
         },
         {
             "name": "training-data-cephfs",

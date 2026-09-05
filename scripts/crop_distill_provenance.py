@@ -716,7 +716,7 @@ def _verify_split_manifest(
     path: Path,
     *,
     expected_sha256: str,
-    source_git_sha: str,
+    split_source_git_sha: str,
     kind: str,
 ) -> dict[str, Any]:
     identity, manifest_payload = _regular_file_payload_identity(
@@ -730,9 +730,9 @@ def _verify_split_manifest(
     manifest_git_sha = _require_hex40(
         manifest.get("git_sha"), "frozen split manifest git_sha"
     )
-    if manifest_git_sha != source_git_sha:
+    if manifest_git_sha != split_source_git_sha:
         raise ProvenanceError(
-            "frozen split manifest git_sha does not match the runtime source"
+            "frozen split manifest git_sha does not match the split source"
         )
 
     artifacts = manifest.get("artifacts")
@@ -868,7 +868,10 @@ def _parse_artifact_hashes(values: Iterable[str]) -> dict[str, str]:
     return hashes
 
 
-def _optional_split(args: argparse.Namespace, source_git_sha: str) -> dict[str, Any] | None:
+def _optional_split(
+    args: argparse.Namespace,
+    split_source_git_sha: str,
+) -> dict[str, Any] | None:
     if (args.split_manifest is None) != (args.split_sha256 is None):
         raise ProvenanceError(
             "split-manifest and split-sha256 must be supplied together"
@@ -878,7 +881,7 @@ def _optional_split(args: argparse.Namespace, source_git_sha: str) -> dict[str, 
     return _verify_split_manifest(
         args.split_manifest,
         expected_sha256=args.split_sha256,
-        source_git_sha=source_git_sha,
+        split_source_git_sha=split_source_git_sha,
         kind=args.kind,
     )
 
@@ -1118,6 +1121,8 @@ def _validate_terminal_args(
             raise ProvenanceError("completed status cannot have a failure-stage")
         if args.split_manifest is None:
             raise ProvenanceError("completed status requires a frozen split manifest")
+        if args.split_source_git_sha is None:
+            raise ProvenanceError("completed status requires --split-source-git-sha")
         if args.kind == "crop":
             if args.checkpoint is None:
                 raise ProvenanceError("completed crop record requires a checkpoint")
@@ -1385,12 +1390,11 @@ def finalize(args: argparse.Namespace) -> dict[str, Any]:
             image_ref=args.image_ref,
         )
         runtime = {"verification": "verified", **runtime_identity}
-        # A successful runtime verification guarantees this is exact lower-
-        # case 40-hex; retain the local value for split/source binding below.
-        source_git_sha = _require_hex40(
-            args.source_git_sha, "source-git-sha"
+        split_source_git_sha = _require_hex40(
+            args.split_source_git_sha,
+            "split-source-git-sha",
         )
-        split = _optional_split(args, source_git_sha)
+        split = _optional_split(args, split_source_git_sha)
         checkpoint = _optional_checkpoint(args)
         output_identities = {
             name: _regular_file_identity(
@@ -1526,6 +1530,7 @@ def build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--failure-stage")
     complete.add_argument("--split-manifest", type=Path)
     complete.add_argument("--split-sha256")
+    complete.add_argument("--split-source-git-sha")
     complete.add_argument("--source-access-plan-sha256")
     complete.add_argument("--source-access-plan-pod-uid")
     complete.add_argument("--source-access-completion-sha256")

@@ -133,10 +133,20 @@ CROP_SPLIT_MANIFEST = str(PROTOCOL_CROP_SPLIT_MANIFEST)
 # Replaced with the real Commit-A identities before generator output is
 # committed. The impossible all-zero sentinels make an accidental partial
 # bootstrap fail tests and deployment review loudly.
-CROP_DISTILL_SOURCE_GIT_SHA = "c6ad69242e7239662461bf7ff0b6bcd4d072509a"
+CROP_DISTILL_SOURCE_GIT_SHA = "0" * 40
 CROP_DISTILL_IMAGE = (
     "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+    + "0" * 64
+)
+CROP_SOURCE_ACCESS_SOURCE_GIT_SHA = (
+    "c6ad69242e7239662461bf7ff0b6bcd4d072509a"
+)
+CROP_SOURCE_ACCESS_IMAGE = (
+    "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
     "7c4fe00f9df2a28caaf05f006f2c567ffb912d514bff13289ef6ec3dd039ba7c"
+)
+CROP_DISTILL_SPLIT_SOURCE_GIT_SHA = (
+    "c6ad69242e7239662461bf7ff0b6bcd4d072509a"
 )
 CROP_SOURCE_ACCESS_INDEX_SHA256 = crop_protocol.SOURCE_ACCESS_INDEX_SHA256
 CROP_SOURCE_ACCESS_PLAN_SHA256 = (
@@ -154,23 +164,53 @@ _CROP_DISTILL_IMAGE_RE = re.compile(
 )
 
 
-def _validate_crop_distill_runtime_identity() -> None:
+def _validate_runtime_identity(
+    source_git_sha: str,
+    image: str,
+    *,
+    source_label: str,
+    image_label: str,
+) -> None:
     """Refuse to render a Job against an unpinned source or image."""
     if (
-        re.fullmatch(r"[0-9a-f]{40}", CROP_DISTILL_SOURCE_GIT_SHA) is None
-        or CROP_DISTILL_SOURCE_GIT_SHA == "0" * 40
+        re.fullmatch(r"[0-9a-f]{40}", source_git_sha) is None
+        or source_git_sha == "0" * 40
     ):
         raise ValueError(
-            "CROP_DISTILL_SOURCE_GIT_SHA must be one nonzero, lowercase, "
-            "full 40-hex commit"
+            f"{source_label} must be one nonzero, lowercase, full 40-hex commit"
         )
-    image_match = _CROP_DISTILL_IMAGE_RE.fullmatch(CROP_DISTILL_IMAGE)
+    image_match = _CROP_DISTILL_IMAGE_RE.fullmatch(image)
     if image_match is None or image_match.group("digest") == "0" * 64:
         raise ValueError(
-            "CROP_DISTILL_IMAGE must be "
+            f"{image_label} must be "
             "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
             "<64 lowercase nonzero hex>"
         )
+
+
+def _validate_crop_distill_runtime_identity() -> None:
+    _validate_runtime_identity(
+        CROP_DISTILL_SOURCE_GIT_SHA,
+        CROP_DISTILL_IMAGE,
+        source_label="CROP_DISTILL_SOURCE_GIT_SHA",
+        image_label="CROP_DISTILL_IMAGE",
+    )
+
+
+def _validate_source_access_runtime_identity() -> None:
+    _validate_runtime_identity(
+        CROP_SOURCE_ACCESS_SOURCE_GIT_SHA,
+        CROP_SOURCE_ACCESS_IMAGE,
+        source_label="CROP_SOURCE_ACCESS_SOURCE_GIT_SHA",
+        image_label="CROP_SOURCE_ACCESS_IMAGE",
+    )
+
+
+def _validate_split_source_authority() -> None:
+    crop_protocol.require_source_git_sha(
+        CROP_DISTILL_SPLIT_SOURCE_GIT_SHA,
+        "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA",
+    )
 
 
 def _validate_crop_source_index_identity() -> None:
@@ -182,7 +222,7 @@ def _validate_crop_source_index_identity() -> None:
 
 
 def _validate_source_access_plan_authority() -> None:
-    _validate_crop_distill_runtime_identity()
+    _validate_source_access_runtime_identity()
     _validate_crop_source_index_identity()
     crop_protocol.require_source_access_sha256(
         CROP_SOURCE_ACCESS_PLAN_SHA256,
@@ -208,7 +248,9 @@ def _validate_source_access_completion_authority() -> None:
 
 def _validate_crop_distill_identity() -> None:
     """Refuse crop consumers until Git pins the frozen split manifest."""
+    _validate_crop_distill_runtime_identity()
     _validate_source_access_completion_authority()
+    _validate_split_source_authority()
     if (
         re.fullmatch(
             r"[0-9a-f]{64}", CROP_DISTILL_SPLIT_MANIFEST_SHA256
@@ -427,6 +469,8 @@ spec:
               value: "{crop_image}"
             - name: CROP_DISTILL_SPLIT_MANIFEST_SHA256
               value: "{split_manifest_sha256}"
+            - name: CROP_DISTILL_SPLIT_SOURCE_GIT_SHA
+              value: "{split_source_git_sha}"
             - name: HOME
               value: /work/home
             - name: TMPDIR
@@ -776,6 +820,12 @@ spec:
               value: "{source_access_completion_sha256}"
             - name: CROP_SOURCE_ACCESS_COMPLETION_POD_UID
               value: "{source_access_completion_pod_uid}"
+            - name: CROP_SOURCE_ACCESS_SOURCE_GIT_SHA
+              value: "{source_access_source_git_sha}"
+            - name: CROP_SOURCE_ACCESS_IMAGE
+              value: "{source_access_image}"
+            - name: CROP_DISTILL_SPLIT_SOURCE_GIT_SHA
+              value: "{split_source_git_sha}"
             - name: CROP_SOURCE_FREEZE_LEASE_PATH
               value: /var/run/crop-source-freeze/lease.json
             - name: HOME
@@ -808,6 +858,7 @@ spec:
             - name: training-data-cephfs
               mountPath: /cephfs/distill/crop_split
               subPath: distill/crop_split
+              readOnly: {split_read_only}
             - name: training-data-cephfs
               mountPath: /cephfs/ops/crop-distill
               subPath: ops/crop-distill/split
@@ -922,6 +973,7 @@ def render_crop_distill(model: str) -> str:
         source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
         crop_image=CROP_DISTILL_IMAGE,
         split_manifest_sha256=CROP_DISTILL_SPLIT_MANIFEST_SHA256,
+        split_source_git_sha=CROP_DISTILL_SPLIT_SOURCE_GIT_SHA,
         run_uid=CROP_MODEL_UIDS[model],
         head_subpath=crop_protocol.crop_head_backing_dir(model).relative_to(
             crop_protocol.PVC_ROOT
@@ -933,7 +985,7 @@ def render_crop_distill(model: str) -> str:
 
 
 def render_crop_storage_prep() -> str:
-    _validate_crop_distill_runtime_identity()
+    _validate_source_access_runtime_identity()
     header = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         "# One-shot least-privilege migration: prepares crop_split plus\n"
@@ -943,13 +995,13 @@ def render_crop_storage_prep() -> str:
         "# Plan: docs/experiments/ladder_distill_stage.md\n"
     )
     return header + CROP_STORAGE_PREP_TEMPLATE.format(
-        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
-        crop_image=CROP_DISTILL_IMAGE,
+        source_git_sha=CROP_SOURCE_ACCESS_SOURCE_GIT_SHA,
+        crop_image=CROP_SOURCE_ACCESS_IMAGE,
     )
 
 
 def render_crop_source_access_plan() -> str:
-    _validate_crop_distill_runtime_identity()
+    _validate_source_access_runtime_identity()
     _validate_crop_source_index_identity()
     header = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
@@ -960,8 +1012,8 @@ def render_crop_source_access_plan() -> str:
         "# Plan: docs/experiments/ladder_distill_stage.md\n"
     )
     return header + CROP_SOURCE_ACCESS_PLAN_TEMPLATE.format(
-        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
-        crop_image=CROP_DISTILL_IMAGE,
+        source_git_sha=CROP_SOURCE_ACCESS_SOURCE_GIT_SHA,
+        crop_image=CROP_SOURCE_ACCESS_IMAGE,
         source_index_sha256=CROP_SOURCE_ACCESS_INDEX_SHA256,
     )
 
@@ -977,8 +1029,8 @@ def render_crop_source_access_apply() -> str:
         "# Plan: docs/experiments/ladder_distill_stage.md\n"
     )
     return header + CROP_SOURCE_ACCESS_APPLY_TEMPLATE.format(
-        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
-        crop_image=CROP_DISTILL_IMAGE,
+        source_git_sha=CROP_SOURCE_ACCESS_SOURCE_GIT_SHA,
+        crop_image=CROP_SOURCE_ACCESS_IMAGE,
         source_index_sha256=CROP_SOURCE_ACCESS_INDEX_SHA256,
         plan_sha256=CROP_SOURCE_ACCESS_PLAN_SHA256,
         plan_pod_uid=CROP_SOURCE_ACCESS_PLAN_POD_UID,
@@ -996,7 +1048,9 @@ def render_crop_deny_egress() -> str:
 
 
 def render_lucas_crop_split() -> str:
+    _validate_crop_distill_runtime_identity()
     _validate_source_access_completion_authority()
+    _validate_split_source_authority()
     header = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         "# Freezes the LUCAS crop 70/30 distill/holdout split ONCE, before\n"
@@ -1012,6 +1066,13 @@ def render_lucas_crop_split() -> str:
         source_access_plan_pod_uid=CROP_SOURCE_ACCESS_PLAN_POD_UID,
         source_access_completion_sha256=CROP_SOURCE_ACCESS_COMPLETION_SHA256,
         source_access_completion_pod_uid=CROP_SOURCE_ACCESS_COMPLETION_POD_UID,
+        source_access_source_git_sha=CROP_SOURCE_ACCESS_SOURCE_GIT_SHA,
+        source_access_image=CROP_SOURCE_ACCESS_IMAGE,
+        split_source_git_sha=CROP_DISTILL_SPLIT_SOURCE_GIT_SHA,
+        split_read_only=str(
+            CROP_DISTILL_SPLIT_SOURCE_GIT_SHA
+            != CROP_DISTILL_SOURCE_GIT_SHA
+        ).lower(),
     )
 
 
@@ -1217,12 +1278,14 @@ def main() -> int:
     if not args.non_crop_only:
         try:
             if args.crop_bootstrap_only:
-                _validate_crop_distill_runtime_identity()
+                _validate_source_access_runtime_identity()
                 _validate_crop_source_index_identity()
             elif args.crop_apply_only:
                 _validate_source_access_plan_authority()
             elif args.crop_split_only:
+                _validate_crop_distill_runtime_identity()
                 _validate_source_access_completion_authority()
+                _validate_split_source_authority()
             else:
                 _validate_crop_distill_identity()
         except ValueError as exc:

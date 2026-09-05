@@ -14,6 +14,7 @@ import pytest
 from scripts import crop_distill_provenance as provenance
 
 SOURCE_GIT_SHA = "1" * 40
+HISTORICAL_SPLIT_SOURCE_GIT_SHA = "a" * 40
 IMAGE_REF = f"ghcr.io/example/crop@sha256:{'2' * 64}"
 SOURCE_ACCESS_PLAN_SHA256 = "3" * 64
 SOURCE_ACCESS_PLAN_POD_UID = "source-access-plan-pod"
@@ -215,7 +216,11 @@ def runtime(tmp_path: Path) -> dict[str, Path | str]:
     }
 
 
-def _split_bundle(tmp_path: Path) -> dict[str, Path | str]:
+def _split_bundle(
+    tmp_path: Path,
+    *,
+    split_source_git_sha: str = SOURCE_GIT_SHA,
+) -> dict[str, Path | str]:
     index = _write(tmp_path / "lucas_crop_distill_index.parquet", b"parquet")
     validator_holdout = _write(
         tmp_path / "lucas_crop_validator_holdout_index.parquet", b"holdout"
@@ -240,7 +245,7 @@ def _split_bundle(tmp_path: Path) -> dict[str, Path | str]:
     }))
     manifest = tmp_path / "lucas_crop_split.MANIFEST.json"
     manifest.write_bytes(provenance.canonical_json_bytes({
-        "git_sha": SOURCE_GIT_SHA,
+        "git_sha": split_source_git_sha,
         "artifacts": {
             index.name: _sha(index),
             validator_holdout.name: _sha(validator_holdout),
@@ -265,10 +270,12 @@ def _crop_args(
     runtime: dict[str, Path | str],
     *,
     pod_uid: str = "pod-123",
+    split_source_git_sha: str = SOURCE_GIT_SHA,
 ) -> tuple[object, dict[str, Path | str]]:
     model = "croma"
     bundle = _split_bundle(
-        provenance.WORK_ROOT / pod_uid / "split"
+        provenance.WORK_ROOT / pod_uid / "split",
+        split_source_git_sha=split_source_git_sha,
     )
     checkpoint = _write(
         provenance.model_protocol(model).checkpoint_path,
@@ -297,6 +304,7 @@ def _crop_args(
         "--runtime-manifest", str(runtime["manifest"]),
         "--split-manifest", str(bundle["manifest"]),
         "--split-sha256", str(bundle["manifest_sha256"]),
+        "--split-source-git-sha", split_source_git_sha,
         "--checkpoint", str(checkpoint),
         "--checkpoint-sha256", _sha(checkpoint),
         "--checkpoint-size", str(checkpoint.stat().st_size),
@@ -344,8 +352,12 @@ def _split_args(
     runtime: dict[str, Path | str],
     *,
     pod_uid: str,
+    split_source_git_sha: str = SOURCE_GIT_SHA,
 ) -> tuple[object, dict[str, Path | str]]:
-    bundle = _split_bundle(provenance.DISTILL_DIR)
+    bundle = _split_bundle(
+        provenance.DISTILL_DIR,
+        split_source_git_sha=split_source_git_sha,
+    )
     args = provenance.build_parser().parse_args([
         "finalize",
         "--kind", "split",
@@ -359,6 +371,7 @@ def _split_args(
         "--runtime-manifest", str(runtime["manifest"]),
         "--split-manifest", str(bundle["manifest"]),
         "--split-sha256", str(bundle["manifest_sha256"]),
+        "--split-source-git-sha", split_source_git_sha,
         "--source-access-plan-sha256", SOURCE_ACCESS_PLAN_SHA256,
         "--source-access-plan-pod-uid", SOURCE_ACCESS_PLAN_POD_UID,
         "--source-access-completion-sha256", SOURCE_ACCESS_COMPLETION_SHA256,
@@ -544,6 +557,58 @@ def test_split_manifest_hash_and_source_are_verified(
         args.split_sha256,
     )
     with pytest.raises(provenance.ProvenanceError, match="does not match"):
+        provenance.finalize(args)
+
+
+@pytest.mark.parametrize("kind", ["crop", "split"])
+def test_completion_accepts_historical_split_source(
+    tmp_path,
+    runtime,
+    monkeypatch,
+    kind,
+):
+    if kind == "crop":
+        args, _ = _crop_args(
+            tmp_path,
+            runtime,
+            split_source_git_sha=HISTORICAL_SPLIT_SOURCE_GIT_SHA,
+        )
+        monkeypatch.setenv(
+            "CROP_DISTILL_SPLIT_MANIFEST_SHA256",
+            args.split_sha256,
+        )
+    else:
+        args, _ = _split_args(
+            runtime,
+            pod_uid="pod-historical-split",
+            split_source_git_sha=HISTORICAL_SPLIT_SOURCE_GIT_SHA,
+        )
+
+    result = provenance.finalize(args)
+
+    assert result["runtime"]["source"]["git_sha"] == SOURCE_GIT_SHA
+    assert result["split_manifest"]["git_sha"] == (
+        HISTORICAL_SPLIT_SOURCE_GIT_SHA
+    )
+
+
+def test_completion_rejects_wrong_historical_split_source(
+    tmp_path,
+    runtime,
+    monkeypatch,
+):
+    args, _ = _crop_args(
+        tmp_path,
+        runtime,
+        split_source_git_sha=HISTORICAL_SPLIT_SOURCE_GIT_SHA,
+    )
+    monkeypatch.setenv(
+        "CROP_DISTILL_SPLIT_MANIFEST_SHA256",
+        args.split_sha256,
+    )
+    args.split_source_git_sha = "b" * 40
+
+    with pytest.raises(provenance.ProvenanceError, match="split source"):
         provenance.finalize(args)
 
 

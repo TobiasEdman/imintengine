@@ -169,6 +169,17 @@ def test_manifest_generator_is_current_or_explicitly_bootstrap_gated() -> None:
         assert not any(path.exists() for path in bootstrap_paths | consumer_paths)
         assert not apply_path.exists()
         assert not split_path.exists()
+    elif source_zero and image_zero and not plan_zero and not completion_zero and split_zero:
+        # A verifier-only repair is built and signed before its new runtime
+        # identity can be pinned. Historical PLAN/APPLY authority remains
+        # intact, while no split or consumer can run from the pending payload.
+        assert ordinary.returncode == 2
+        assert "CROP_DISTILL_SOURCE_GIT_SHA" in ordinary.stderr or (
+            "CROP_DISTILL_IMAGE" in ordinary.stderr
+        )
+        assert run("--crop-split-only").returncode == 2
+        assert not split_path.exists()
+        assert not any(path.exists() for path in consumer_paths)
     elif not source_zero and not image_zero and plan_zero and completion_zero and split_zero:
         assert ordinary.returncode == 2
         assert "CROP_SOURCE_ACCESS_PLAN_SHA256" in ordinary.stderr

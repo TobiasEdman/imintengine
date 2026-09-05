@@ -230,6 +230,9 @@ _SOURCE_ACCESS_PLAN_ENV = "CROP_SOURCE_ACCESS_PLAN_SHA256"
 _SOURCE_ACCESS_PLAN_POD_ENV = "CROP_SOURCE_ACCESS_PLAN_POD_UID"
 _SOURCE_ACCESS_COMPLETION_ENV = "CROP_SOURCE_ACCESS_COMPLETION_SHA256"
 _SOURCE_ACCESS_COMPLETION_POD_ENV = "CROP_SOURCE_ACCESS_COMPLETION_POD_UID"
+_SOURCE_ACCESS_SOURCE_ENV = "CROP_SOURCE_ACCESS_SOURCE_GIT_SHA"
+_SOURCE_ACCESS_IMAGE_ENV = "CROP_SOURCE_ACCESS_IMAGE"
+_SPLIT_SOURCE_ENV = "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA"
 _FREEZE_LEASE_ENV = "CROP_SOURCE_FREEZE_LEASE_PATH"
 _POD_UID_ENV = "POD_UID"
 _MAX_POD_JSON_BYTES = 8 * 1024 * 1024
@@ -251,6 +254,11 @@ def _git_authority() -> dict[str, str]:
     return {
         "source_git_sha": manifests.CROP_DISTILL_SOURCE_GIT_SHA,
         "image_ref": manifests.CROP_DISTILL_IMAGE,
+        "source_access_source_git_sha": (
+            manifests.CROP_SOURCE_ACCESS_SOURCE_GIT_SHA
+        ),
+        "source_access_image_ref": manifests.CROP_SOURCE_ACCESS_IMAGE,
+        "split_source_git_sha": manifests.CROP_DISTILL_SPLIT_SOURCE_GIT_SHA,
         "source_index_sha256": manifests.CROP_SOURCE_ACCESS_INDEX_SHA256,
         "plan_sha256": manifests.CROP_SOURCE_ACCESS_PLAN_SHA256,
         "plan_pod_uid": manifests.CROP_SOURCE_ACCESS_PLAN_POD_UID,
@@ -266,19 +274,48 @@ def _validated_git_authority(
     require_current_output_anchor: bool = True,
 ) -> dict[str, str]:
     authority = _git_authority()
-    _require_hex40(
-        authority.get("source_git_sha"),
-        "Git-pinned crop-distill source SHA",
-        nonzero=True,
-    )
-    image_ref = _require_string(
-        authority.get("image_ref"), "Git-pinned crop-distill image"
-    )
-    match = _CROP_IMAGE_REF.fullmatch(image_ref)
-    if match is None or match.group(1) == "0" * 64:
-        raise EvidenceCaptureError(
-            "Git-pinned crop-distill image must be one nonzero immutable digest"
+    source_access_kinds = {
+        "storage-prep",
+        "source-access-plan",
+        "source-access-apply",
+    }
+    identity_pairs = [("source_git_sha", "image_ref", "crop-distill")]
+    if evidence_kind in source_access_kinds | {"split"}:
+        identity_pairs.append(
+            (
+                "source_access_source_git_sha",
+                "source_access_image_ref",
+                "source-access",
+            )
         )
+    if evidence_kind in source_access_kinds:
+        identity_pairs.pop(0)
+    for source_name, image_name, label in identity_pairs:
+        _require_hex40(
+            authority.get(source_name),
+            f"Git-pinned {label} source SHA",
+            nonzero=True,
+        )
+        image_ref = _require_string(
+            authority.get(image_name), f"Git-pinned {label} image"
+        )
+        match = _CROP_IMAGE_REF.fullmatch(image_ref)
+        if match is None or match.group(1) == "0" * 64:
+            raise EvidenceCaptureError(
+                f"Git-pinned {label} image must be one nonzero immutable digest"
+            )
+    if evidence_kind in {"split", "crop"}:
+        _require_hex40(
+            authority.get("split_source_git_sha"),
+            "Git-pinned frozen split source SHA",
+            nonzero=True,
+        )
+    if evidence_kind in source_access_kinds:
+        authority = {
+            **authority,
+            "source_git_sha": authority["source_access_source_git_sha"],
+            "image_ref": authority["source_access_image_ref"],
+        }
     if authority.get("source_index_sha256") != SOURCE_ACCESS_INDEX_SHA256:
         raise EvidenceCaptureError(
             "Git-pinned source-access index SHA256 differs from the protocol"
@@ -562,7 +599,7 @@ def _validate_split_manifest(
     *,
     kind: str,
     pod_uid: str,
-    source_git_sha: str,
+    expected_git_sha: str,
 ) -> dict[str, Any]:
     split = _require_exact_keys(
         value,
@@ -588,9 +625,10 @@ def _validate_split_manifest(
     split_sha256 = _require_hex64(
         identity["sha256"], "completion split_manifest sha256", nonzero=True
     )
-    if split.get("git_sha") != source_git_sha:
+    if split.get("git_sha") != expected_git_sha:
         raise EvidenceCaptureError(
-            "completion split_manifest git_sha must match runtime source"
+            "completion split_manifest git_sha must match the Git-pinned "
+            "split source"
         )
 
     counts = _require_exact_keys(
@@ -775,7 +813,11 @@ def extract_terminal_record(pod_log: bytes) -> tuple[bytes, str, dict[str, Any]]
     return payload, actual_sha256, record
 
 
-def _validate_completion_record(record: dict[str, Any]) -> dict[str, Any]:
+def _validate_completion_record(
+    record: dict[str, Any],
+    *,
+    split_source_git_sha: str,
+) -> dict[str, Any]:
     _require_exact_keys(record, _COMPLETION_FIELDS, "completion record")
     if record.get("schema") != COMPLETION_SCHEMA:
         raise EvidenceCaptureError("unexpected terminal completion schema")
@@ -867,7 +909,7 @@ def _validate_completion_record(record: dict[str, Any]) -> dict[str, Any]:
         record.get("split_manifest"),
         kind=kind,
         pod_uid=pod_uid,
-        source_git_sha=runtime["source_git_sha"],
+        expected_git_sha=split_source_git_sha,
     )
 
     checkpoint = record.get("checkpoint")
@@ -1192,7 +1234,10 @@ def _validate_workload_record(
     require_current_output_anchor: bool = True,
 ) -> dict[str, Any]:
     if evidence_kind in {"crop", "split"}:
-        completion = _validate_completion_record(record)
+        completion = _validate_completion_record(
+            record,
+            split_source_git_sha=authority["split_source_git_sha"],
+        )
         if completion["kind"] != evidence_kind:
             raise EvidenceCaptureError("record kind disagrees with capture kind")
         if (
@@ -1265,6 +1310,7 @@ def _workload_contract(subject: Mapping[str, Any]) -> dict[str, Any]:
     image = str(subject["image_ref"])
     pod_uid = str(subject["pod_uid"])
     literal_env: dict[str, str] = {_SOURCE_ENV: source, _IMAGE_ENV: image}
+    authority = _validated_git_authority(kind, require_current_output_anchor=False)
     volumes = [_pvc_volume()]
     node_selector: dict[str, str] = {}
     if kind == "crop":
@@ -1272,6 +1318,7 @@ def _workload_contract(subject: Mapping[str, Any]) -> dict[str, Any]:
         literal_env.update(
             {
                 _SPLIT_ENV: str(subject["split_manifest_sha256"]),
+                _SPLIT_SOURCE_ENV: authority["split_source_git_sha"],
                 "HOME": "/work/home",
                 "TMPDIR": "/work/tmp",
             }
@@ -1301,6 +1348,11 @@ def _workload_contract(subject: Mapping[str, Any]) -> dict[str, Any]:
                 _SOURCE_ACCESS_PLAN_POD_ENV: source_access["plan"]["pod_uid"],
                 _SOURCE_ACCESS_COMPLETION_ENV: source_access["completion"]["sha256"],
                 _SOURCE_ACCESS_COMPLETION_POD_ENV: source_access["completion"]["pod_uid"],
+                _SOURCE_ACCESS_SOURCE_ENV: authority[
+                    "source_access_source_git_sha"
+                ],
+                _SOURCE_ACCESS_IMAGE_ENV: authority["source_access_image_ref"],
+                _SPLIT_SOURCE_ENV: authority["split_source_git_sha"],
                 _FREEZE_LEASE_ENV: "/var/run/crop-source-freeze/lease.json",
                 "HOME": "/work/home",
                 "TMPDIR": "/work/tmp",
@@ -1311,7 +1363,12 @@ def _workload_contract(subject: Mapping[str, Any]) -> dict[str, Any]:
         mounts = [
             _mount("training-data-cephfs", str(DATA_DIR), "unified_v2_512", True),
             _mount("training-data-cephfs", "/cephfs/lucas", "lucas", True),
-            _mount("training-data-cephfs", str(DISTILL_DIR), "distill/crop_split", False),
+            _mount(
+                "training-data-cephfs",
+                str(DISTILL_DIR),
+                "distill/crop_split",
+                authority["split_source_git_sha"] != source,
+            ),
             _mount("training-data-cephfs", "/cephfs/ops/crop-distill", "ops/crop-distill/split", False),
             _mount("training-data-cephfs", "/cephfs/source-access-completion/completion.json", f"ops/crop-distill/source-access/apply/{source_access['completion']['pod_uid']}/completion.json", True),
             _mount("training-data-cephfs", "/cephfs/source-access-lock", "ops/crop-distill/source-access/locks", False),
@@ -1863,12 +1920,18 @@ def _authority_projection(kind: str, authority: Mapping[str, str]) -> dict[str, 
             "sha256": authority["plan_sha256"],
         }
     if kind == "split":
+        projection["source_access_runtime"] = {
+            "image_ref": authority["source_access_image_ref"],
+            "source_git_sha": authority["source_access_source_git_sha"],
+        }
+        projection["split_source_git_sha"] = authority["split_source_git_sha"]
         projection["completion"] = {
             "pod_uid": authority["completion_pod_uid"],
             "sha256": authority["completion_sha256"],
         }
     if kind == "crop":
         projection["split_manifest_sha256"] = authority["split_manifest_sha256"]
+        projection["split_source_git_sha"] = authority["split_source_git_sha"]
     return projection
 
 

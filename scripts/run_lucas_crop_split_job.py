@@ -40,7 +40,9 @@ from crop_distill_protocol import (
     SPLIT_SCRIPT,
     WORK_ROOT,
     RuntimeIdentity,
+    require_image_ref,
     require_process_identity,
+    require_source_git_sha,
     require_source_access_run_id,
     require_source_access_sha256,
     runtime_claims,
@@ -50,7 +52,6 @@ from crop_distill_provenance import verify_runtime
 from crop_source_access import (
     FREEZE_LEASE_PATH,
     require_fresh_freeze_lease,
-    runtime_binding,
     verify_completion as verify_source_access_completion,
     verify_live_completion_cohort,
 )
@@ -98,6 +99,9 @@ class LucasCropSplitJob:
         self.source_access_plan_pod_uid = "<missing>"
         self.source_access_completion_sha256 = "<missing>"
         self.source_access_completion_pod_uid = "<missing>"
+        self.source_access_source_git_sha = identity.source_git_sha
+        self.source_access_image_ref = identity.image_ref
+        self.frozen_split_source_git_sha = identity.source_git_sha
         self.freeze_lease_path = FREEZE_LEASE_PATH
 
     def _run(self, stage: str, command: Sequence[object]) -> None:
@@ -128,6 +132,19 @@ class LucasCropSplitJob:
 
     def _provenance_base(self, *, status: str, exit_code: int) -> list[str]:
         diagnostic = status == "failed"
+        if diagnostic:
+            split_source_args = [
+                "--split-source-git-sha="
+                + _bounded_claim(
+                    self.frozen_split_source_git_sha,
+                    "split-source-git-sha",
+                )
+            ]
+        else:
+            split_source_args = [
+                "--split-source-git-sha",
+                self.frozen_split_source_git_sha,
+            ]
         command = [
             str(BASE_PYTHON),
             str(PROVENANCE_SCRIPT),
@@ -146,6 +163,7 @@ class LucasCropSplitJob:
             status,
             "--exit-code",
             str(exit_code),
+            *split_source_args,
             *self._runtime_args(diagnostic=diagnostic),
         ]
         if status == "completed":
@@ -198,7 +216,7 @@ class LucasCropSplitJob:
                 *self._runtime_args(),
             ],
         )
-        verified_runtime = verify_runtime(
+        verify_runtime(
             RUNTIME_MANIFEST,
             source_git_sha=self.identity.source_git_sha,
             image_ref=self.identity.image_ref,
@@ -209,16 +227,16 @@ class LucasCropSplitJob:
             expected_phase="split",
         )
         self.failure_stage = "verify-source-access-completion"
+        # The exact completion digest authenticates its full historical
+        # runtime binding.  Compare its human-reviewable source/image claims
+        # to their own Git pins, not to this verifier's newer runtime.
         completion = verify_source_access_completion(
             SOURCE_ACCESS_COMPLETION_INPUT,
             expected_sha256=self.source_access_completion_sha256,
-            expected_source_git_sha=self.identity.source_git_sha,
-            expected_image_ref=self.identity.image_ref,
+            expected_source_git_sha=self.source_access_source_git_sha,
+            expected_image_ref=self.source_access_image_ref,
             expected_completion_pod_uid=self.source_access_completion_pod_uid,
             expected_plan_sha256=self.source_access_plan_sha256,
-            expected_runtime_binding=runtime_binding(
-                self.identity, verified_runtime
-            ),
         )
         plan = completion["plan"]
         if plan != {
@@ -246,46 +264,69 @@ class LucasCropSplitJob:
             self.freeze_lease_path,
             expected_phase="split",
         )
-        self._run(
-            "freeze-split",
-            [
-                SCORING_PYTHON,
-                SPLIT_SCRIPT,
-                "--lucas-index",
-                LUCAS_SOURCE_INDEX,
-                "--data-dir",
-                DATA_DIR,
-                "--out-dir",
-                DISTILL_DIR,
-                "--git-sha",
-                self.identity.source_git_sha,
-                "--expected-source-index-sha256",
-                SOURCE_ACCESS_INDEX_SHA256,
-                "--expected-source-index-size",
-                SOURCE_ACCESS_INDEX_SIZE,
-            ],
+        current_runtime_freeze = (
+            self.frozen_split_source_git_sha == self.identity.source_git_sha
         )
+        if current_runtime_freeze:
+            self._run(
+                "freeze-split",
+                [
+                    SCORING_PYTHON,
+                    SPLIT_SCRIPT,
+                    "--lucas-index",
+                    LUCAS_SOURCE_INDEX,
+                    "--data-dir",
+                    DATA_DIR,
+                    "--out-dir",
+                    DISTILL_DIR,
+                    "--git-sha",
+                    self.identity.source_git_sha,
+                    "--expected-source-index-sha256",
+                    SOURCE_ACCESS_INDEX_SHA256,
+                    "--expected-source-index-size",
+                    SOURCE_ACCESS_INDEX_SIZE,
+                ],
+            )
+        else:
+            # A repaired verifier may attest a freeze made by an earlier
+            # immutable runtime.  Verification-only mode preserves that
+            # provenance and refuses to rebuild missing/corrupt artifacts
+            # while claiming the historical source SHA.
+            self._run(
+                "verify-existing-split",
+                [
+                    SCORING_PYTHON,
+                    SPLIT_SCRIPT,
+                    "--verify",
+                    "--out-dir",
+                    DISTILL_DIR,
+                    "--expected-git-sha",
+                    self.frozen_split_source_git_sha,
+                ],
+            )
         self.failure_stage = "refresh-freeze-lease-after-freeze"
         require_fresh_freeze_lease(
             self.freeze_lease_path,
             expected_phase="split",
         )
-        self._run(
-            "verify-split",
-            [
-                SCORING_PYTHON,
-                SPLIT_SCRIPT,
-                "--verify",
-                "--out-dir",
-                DISTILL_DIR,
-                "--expected-git-sha",
-                self.identity.source_git_sha,
-            ],
-        )
+        if current_runtime_freeze:
+            self._run(
+                "verify-split",
+                [
+                    SCORING_PYTHON,
+                    SPLIT_SCRIPT,
+                    "--verify",
+                    "--out-dir",
+                    DISTILL_DIR,
+                    "--expected-git-sha",
+                    self.frozen_split_source_git_sha,
+                ],
+            )
         consumer_dir = DISTILL_DIR / "crop_consumer"
         _ensure_real_directory(consumer_dir, create=False)
-        _set_directory_mode(consumer_dir, 0o550)
-        _set_directory_mode(DISTILL_DIR, 0o550)
+        if current_runtime_freeze:
+            _set_directory_mode(consumer_dir, 0o550)
+            _set_directory_mode(DISTILL_DIR, 0o550)
         self.failure_stage = "verify-live-source-cohort-before-completion"
         verify_live_completion_cohort(
             completion,
@@ -461,6 +502,18 @@ def main(
         job.source_access_completion_pod_uid = require_source_access_run_id(
             environment.get("CROP_SOURCE_ACCESS_COMPLETION_POD_UID", ""),
             "CROP_SOURCE_ACCESS_COMPLETION_POD_UID",
+        )
+        job.source_access_source_git_sha = require_source_git_sha(
+            environment.get("CROP_SOURCE_ACCESS_SOURCE_GIT_SHA", ""),
+            "CROP_SOURCE_ACCESS_SOURCE_GIT_SHA",
+        )
+        job.source_access_image_ref = require_image_ref(
+            environment.get("CROP_SOURCE_ACCESS_IMAGE", ""),
+            "CROP_SOURCE_ACCESS_IMAGE",
+        )
+        job.frozen_split_source_git_sha = require_source_git_sha(
+            environment.get("CROP_DISTILL_SPLIT_SOURCE_GIT_SHA", ""),
+            "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA",
         )
         raw_freeze_lease_path = environment.get(
             "CROP_SOURCE_FREEZE_LEASE_PATH", ""

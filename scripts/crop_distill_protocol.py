@@ -374,17 +374,30 @@ def require_process_identity(
 def runtime_identity(environ: Mapping[str, str]) -> RuntimeIdentity:
     """Read and validate the required identity/Downward-API environment."""
     identity = runtime_claims(environ)
-    source_git_sha = identity.source_git_sha
-    image_ref = identity.image_ref
-    if _SOURCE_SHA_RE.fullmatch(source_git_sha) is None or source_git_sha == "0" * 40:
-        raise ValueError(
-            "CROP_DISTILL_SOURCE_GIT_SHA must be one nonzero lowercase 40-hex SHA"
-        )
-    if _IMAGE_RE.fullmatch(image_ref) is None or image_ref.endswith("0" * 64):
-        raise ValueError(
-            "CROP_DISTILL_IMAGE must be the immutable crop-distill image digest"
-        )
+    require_source_git_sha(
+        identity.source_git_sha,
+        "CROP_DISTILL_SOURCE_GIT_SHA",
+    )
+    require_image_ref(identity.image_ref, "CROP_DISTILL_IMAGE")
     return identity
+
+
+def require_source_git_sha(value: str, label: str) -> str:
+    """Validate one Git-reviewed source commit identity."""
+    if _SOURCE_SHA_RE.fullmatch(value) is None or value == "0" * 40:
+        raise ValueError(
+            f"{label} must be one nonzero lowercase 40-hex SHA"
+        )
+    return value
+
+
+def require_image_ref(value: str, label: str) -> str:
+    """Validate one immutable crop-distill image identity."""
+    if _IMAGE_RE.fullmatch(value) is None or value.endswith("0" * 64):
+        raise ValueError(
+            f"{label} must be the immutable crop-distill image digest"
+        )
+    return value
 
 
 def runtime_claims(environ: Mapping[str, str]) -> RuntimeIdentity:

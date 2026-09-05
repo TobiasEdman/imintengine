@@ -53,6 +53,7 @@ from crop_distill_protocol import (
     model_protocol,
     model_process_uid,
     require_process_identity,
+    require_source_git_sha,
     require_split_manifest_sha256,
     runtime_claims,
     runtime_identity,
@@ -530,11 +531,17 @@ class CropDistillJob:
         model: str,
         identity: RuntimeIdentity,
         split_manifest_sha256: str,
+        split_source_git_sha: str | None = None,
     ) -> None:
         self.model = model
         self.protocol: CropModelProtocol = model_protocol(model)
         self.identity = identity
         self.split_manifest_sha256 = split_manifest_sha256
+        self.split_source_git_sha = (
+            identity.source_git_sha
+            if split_source_git_sha is None
+            else split_source_git_sha
+        )
         self.job_name = f"ladder-crop-distill-{model}"
         self.failure_stage = "bootstrap"
         self.work_dir = WORK_ROOT / identity.pod_uid
@@ -583,11 +590,24 @@ class CropDistillJob:
     def _provenance_base(self, *, status: str, exit_code: int) -> list[str]:
         diagnostic = status == "failed"
         split_sha256 = self.split_manifest_sha256
+        split_source_git_sha = self.split_source_git_sha
         if diagnostic:
             split_sha256 = _bounded_claim(split_sha256, "split-manifest-sha256")
-            split_args = [f"--split-sha256={split_sha256}"]
+            split_source_git_sha = _bounded_claim(
+                split_source_git_sha,
+                "split-source-git-sha",
+            )
+            split_args = [
+                f"--split-sha256={split_sha256}",
+                f"--split-source-git-sha={split_source_git_sha}",
+            ]
         else:
-            split_args = ["--split-sha256", split_sha256]
+            split_args = [
+                "--split-sha256",
+                split_sha256,
+                "--split-source-git-sha",
+                split_source_git_sha,
+            ]
         return [
             str(BASE_PYTHON),
             str(PROVENANCE_SCRIPT),
@@ -654,7 +674,7 @@ class CropDistillJob:
                 "--out-dir",
                 snapshot.root,
                 "--expected-git-sha",
-                self.identity.source_git_sha,
+                self.split_source_git_sha,
             ],
         )
         self._prepare_output_dir()
@@ -826,12 +846,21 @@ def main(
     environment = os.environ if environ is None else environ
     claims = runtime_claims(environment)
     raw_split_sha256 = split_manifest_claim(environment)
+    raw_split_source_git_sha = environment.get(
+        "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA",
+        "",
+    )
     try:
         args = build_parser().parse_args(argv)
     except JobArgumentError as exc:
         print(f"FATAL [parse-arguments] JobArgumentError: {exc}", file=sys.stderr)
         return _publish_argument_failure(claims, raw_split_sha256, str(exc))
-    job = CropDistillJob(args.model, claims, raw_split_sha256)
+    job = CropDistillJob(
+        args.model,
+        claims,
+        raw_split_sha256,
+        raw_split_source_git_sha,
+    )
     # This is the job boundary: every unexpected runtime failure must reach
     # immutable terminal provenance rather than escape unrecorded.
     try:
@@ -839,6 +868,10 @@ def main(
         job.identity = runtime_identity(environment)
         job.failure_stage = "validate-split-manifest-environment"
         job.split_manifest_sha256 = require_split_manifest_sha256(raw_split_sha256)
+        job.split_source_git_sha = require_source_git_sha(
+            raw_split_source_git_sha,
+            "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA",
+        )
         job.failure_stage = "validate-process-identity"
         require_process_identity(
             model_process_uid(args.model),

@@ -65,6 +65,13 @@ def _use_complete_crop_runtime_identity(monkeypatch):
     """Unit tests render in memory before Commit A supplies real identities."""
     monkeypatch.setattr(glm, "CROP_DISTILL_SOURCE_GIT_SHA", FIXTURE_GIT_SHA)
     monkeypatch.setattr(glm, "CROP_DISTILL_IMAGE", FIXTURE_CROP_IMAGE)
+    monkeypatch.setattr(
+        glm, "CROP_SOURCE_ACCESS_SOURCE_GIT_SHA", FIXTURE_GIT_SHA
+    )
+    monkeypatch.setattr(glm, "CROP_SOURCE_ACCESS_IMAGE", FIXTURE_CROP_IMAGE)
+    monkeypatch.setattr(
+        glm, "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA", FIXTURE_GIT_SHA
+    )
     monkeypatch.setattr(glm, "CROP_SOURCE_ACCESS_PLAN_SHA256", FIXTURE_PLAN_SHA256)
     monkeypatch.setattr(glm, "CROP_SOURCE_ACCESS_PLAN_POD_UID", FIXTURE_PLAN_POD_UID)
     monkeypatch.setattr(
@@ -272,6 +279,7 @@ def test_split_job_freezes_the_canonical_split():
             "name": "training-data-cephfs",
             "mountPath": "/cephfs/distill/crop_split",
             "subPath": "distill/crop_split",
+            "readOnly": False,
         },
         {
             "name": "training-data-cephfs",
@@ -300,6 +308,25 @@ def test_split_job_freezes_the_canonical_split():
         },
     ]
     assert all(mount["mountPath"] != "/cephfs" for mount in mounts)
+
+
+def test_historical_split_repair_mounts_freeze_read_only(monkeypatch):
+    monkeypatch.setattr(
+        glm,
+        "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA",
+        "f" * 40,
+    )
+
+    container = yaml.safe_load(render_lucas_crop_split())["spec"]["template"][
+        "spec"
+    ]["containers"][0]
+    split_mount = next(
+        mount
+        for mount in container["volumeMounts"]
+        if mount["mountPath"] == "/cephfs/distill/crop_split"
+    )
+
+    assert split_mount["readOnly"] is True
 
 
 @pytest.mark.parametrize("model", MODELS)
@@ -378,13 +405,19 @@ def test_crop_jobs_use_one_pinned_offline_runtime(path):
         "TMPDIR", "POD_UID",
     }
     if is_crop:
-        expected_env.add("CROP_DISTILL_SPLIT_MANIFEST_SHA256")
+        expected_env.update({
+            "CROP_DISTILL_SPLIT_MANIFEST_SHA256",
+            "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA",
+        })
     else:
         expected_env.update({
             "CROP_SOURCE_ACCESS_PLAN_SHA256",
             "CROP_SOURCE_ACCESS_PLAN_POD_UID",
             "CROP_SOURCE_ACCESS_COMPLETION_SHA256",
             "CROP_SOURCE_ACCESS_COMPLETION_POD_UID",
+            "CROP_SOURCE_ACCESS_SOURCE_GIT_SHA",
+            "CROP_SOURCE_ACCESS_IMAGE",
+            "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA",
             "CROP_SOURCE_FREEZE_LEASE_PATH",
         })
     assert set(env) == expected_env
@@ -398,6 +431,9 @@ def test_crop_jobs_use_one_pinned_offline_runtime(path):
         assert env["CROP_DISTILL_SPLIT_MANIFEST_SHA256"]["value"] == (
             glm.CROP_DISTILL_SPLIT_MANIFEST_SHA256
         )
+        assert env["CROP_DISTILL_SPLIT_SOURCE_GIT_SHA"]["value"] == (
+            glm.CROP_DISTILL_SPLIT_SOURCE_GIT_SHA
+        )
     else:
         assert env["CROP_SOURCE_ACCESS_PLAN_SHA256"]["value"] == (
             FIXTURE_PLAN_SHA256
@@ -410,6 +446,13 @@ def test_crop_jobs_use_one_pinned_offline_runtime(path):
         )
         assert env["CROP_SOURCE_ACCESS_COMPLETION_POD_UID"]["value"] == (
             FIXTURE_COMPLETION_POD_UID
+        )
+        assert env["CROP_SOURCE_ACCESS_SOURCE_GIT_SHA"]["value"] == (
+            FIXTURE_GIT_SHA
+        )
+        assert env["CROP_SOURCE_ACCESS_IMAGE"]["value"] == FIXTURE_CROP_IMAGE
+        assert env["CROP_DISTILL_SPLIT_SOURCE_GIT_SHA"]["value"] == (
+            FIXTURE_GIT_SHA
         )
         assert env["CROP_SOURCE_FREEZE_LEASE_PATH"]["value"] == (
             "/var/run/crop-source-freeze/lease.json"
