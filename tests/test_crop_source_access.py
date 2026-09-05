@@ -293,6 +293,110 @@ def test_apply_refuses_bytes_changed_after_plan(tmp_path, monkeypatch):
         access.apply_plan_record(plan, data_dir=data)
 
 
+def test_plan_continuity_ignores_cross_pod_device_number():
+    planned = {
+        "dev": 220,
+        "inode": 10,
+        "size": 20,
+        "mtime_ns": 30,
+        "sha256": "a" * 64,
+        "nlink": 1,
+    }
+    current = {**planned, "dev": 1_048_824}
+
+    assert access._matches_plan_bytes(current, planned)
+
+    for field in ("inode", "size", "mtime_ns", "sha256", "nlink"):
+        changed = dict(current)
+        changed[field] = (
+            "b" * 64 if field == "sha256" else int(current[field]) + 1
+        )
+        assert not access._matches_plan_bytes(changed, planned)
+
+
+def _completion_with_identity(identity):
+    return {"files": [{"tile_name": "tile", "after": identity}]}
+
+
+def _tile_identity(data: Path):
+    tile = data / "tile.npz"
+    tile.write_bytes(b"payload")
+    directory_fd = access._open_directory_tree(data)
+    fd = access._open_regular_at(directory_fd, tile.name)
+    try:
+        return access._identity(fd)
+    finally:
+        os.close(fd)
+        os.close(directory_fd)
+
+
+def test_live_completion_cross_pod_ignores_device_number(
+    tmp_path, monkeypatch,
+):
+    data = tmp_path / "tiles"
+    data.mkdir()
+    identity = _tile_identity(data)
+    expected = {**identity, "dev": int(identity["dev"]) + 1}
+    monkeypatch.setattr(access, "SOURCE_ACCESS_EXPECTED_CANDIDATES", 1)
+
+    access.verify_live_completion_cohort(
+        _completion_with_identity(expected),
+        data_dir=data,
+        cross_pod=True,
+    )
+
+
+def test_apply_publication_keeps_same_process_device_check(
+    tmp_path, monkeypatch,
+):
+    data = tmp_path / "tiles"
+    data.mkdir()
+    identity = _tile_identity(data)
+    expected = {**identity, "dev": int(identity["dev"]) + 1}
+    completion = _completion_with_identity(expected)
+    output = tmp_path / "completion.json"
+    monkeypatch.setattr(access, "SOURCE_ACCESS_EXPECTED_CANDIDATES", 1)
+
+    with pytest.raises(
+        access.SourceAccessError,
+        match="differs from completion after-state: tile",
+    ):
+        access.publish_completion(completion, output, data_dir=data)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "field",
+    sorted(access._CROSS_POD_IDENTITY_FIELDS),
+)
+def test_live_completion_cross_pod_rejects_other_identity_drift(
+    tmp_path, monkeypatch, field,
+):
+    data = tmp_path / "tiles"
+    data.mkdir()
+    identity = _tile_identity(data)
+    expected = {**identity, "dev": int(identity["dev"]) + 1}
+    value = expected[field]
+    if isinstance(value, str):
+        expected[field] = "b" * 64 if field == "sha256" else "0601"
+    else:
+        expected[field] = int(value) + 1
+    completion = _completion_with_identity(expected)
+    monkeypatch.setattr(access, "SOURCE_ACCESS_EXPECTED_CANDIDATES", 1)
+
+    expected_error = (
+        "malformed expected identity"
+        if field == "nlink"
+        else "differs from completion after-state: tile"
+    )
+    with pytest.raises(access.SourceAccessError, match=expected_error):
+        access.verify_live_completion_cohort(
+            completion,
+            data_dir=data,
+            cross_pod=True,
+        )
+
+
 def test_apply_preflights_all_files_before_first_metadata_change(
     tmp_path, monkeypatch,
 ):

@@ -236,7 +236,11 @@ class LucasCropSplitJob:
             flush=True,
         )
         self.failure_stage = "verify-live-source-cohort-before-freeze"
-        verify_live_completion_cohort(completion, data_dir=DATA_DIR)
+        verify_live_completion_cohort(
+            completion,
+            data_dir=DATA_DIR,
+            cross_pod=True,
+        )
         self.failure_stage = "refresh-freeze-lease-before-freeze"
         require_fresh_freeze_lease(
             self.freeze_lease_path,
@@ -283,7 +287,11 @@ class LucasCropSplitJob:
         _set_directory_mode(consumer_dir, 0o550)
         _set_directory_mode(DISTILL_DIR, 0o550)
         self.failure_stage = "verify-live-source-cohort-before-completion"
-        verify_live_completion_cohort(completion, data_dir=DATA_DIR)
+        verify_live_completion_cohort(
+            completion,
+            data_dir=DATA_DIR,
+            cross_pod=True,
+        )
         self.failure_stage = "require-freeze-lease-before-completion"
         require_fresh_freeze_lease(
             self.freeze_lease_path,

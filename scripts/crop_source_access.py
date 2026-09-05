@@ -110,6 +110,10 @@ PLAN_ACTIONS = frozenset(
 _IDENTITY_FIELDS = frozenset(
     {"dev", "inode", "size", "mtime_ns", "ctime_ns", "uid", "gid", "mode", "nlink", "sha256"}
 )
+_CROSS_POD_IDENTITY_FIELDS = _IDENTITY_FIELDS - {"dev"}
+_PLAN_BYTE_FIELDS = frozenset(
+    {"inode", "size", "mtime_ns", "sha256", "nlink"}
+)
 
 _READ_SIZE = 1 << 20
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
@@ -634,7 +638,23 @@ def load_plan(
 def _matches_plan_bytes(current: Mapping[str, object], planned: Mapping[str, object]) -> bool:
     return all(
         current.get(key) == planned.get(key)
-        for key in ("dev", "inode", "size", "mtime_ns", "sha256", "nlink")
+        for key in _PLAN_BYTE_FIELDS
+    )
+
+
+def _matches_cross_pod_identity(
+    current: Mapping[str, object], expected: Mapping[str, object]
+) -> bool:
+    """Compare stable identity fields across separate PVC mount instances.
+
+    ``st_dev`` identifies the mount instance inside one mount namespace.  It
+    remains useful for same-process TOCTOU checks, but is not portable between
+    Kubernetes Pods mounting the same PVC and therefore cannot authenticate a
+    cross-Pod file identity.
+    """
+    return all(
+        current.get(key) == expected.get(key)
+        for key in _CROSS_POD_IDENTITY_FIELDS
     )
 
 
@@ -829,7 +849,10 @@ def apply_plan_record(
 
 
 def verify_live_completion_cohort(
-    completion: Mapping[str, object], *, data_dir: Path = DATA_DIR
+    completion: Mapping[str, object],
+    *,
+    data_dir: Path = DATA_DIR,
+    cross_pod: bool = False,
 ) -> None:
     """Re-hash the complete live cohort against completion ``after`` records.
 
@@ -869,7 +892,12 @@ def verify_live_completion_cohort(
                 _path_matches_fd(data_fd, file_name, os.fstat(fd))
             finally:
                 os.close(fd)
-            if current != after:
+            matches = (
+                _matches_cross_pod_identity(current, after)
+                if cross_pod
+                else current == after
+            )
+            if not matches:
                 raise SourceAccessError(
                     f"live source tile differs from completion after-state: {tile_name}"
                 )
@@ -1189,10 +1217,7 @@ def run_apply(environ: Mapping[str, str]) -> dict[str, object]:
             raise SourceAccessError("source index changed after plan")
         planned_index = plan["source_index"]
         assert isinstance(planned_index, dict)
-        if any(
-            index_identity.get(key) != planned_index.get(key)
-            for key in ("dev", "inode", "size", "mtime_ns", "sha256", "nlink")
-        ):
+        if not _matches_cross_pod_identity(index_identity, planned_index):
             raise SourceAccessError("source index identity differs from plan")
         names, crop_rows, crop_window = derive_crop_window_candidates(index_payload)
         plan_files = plan["files"]
