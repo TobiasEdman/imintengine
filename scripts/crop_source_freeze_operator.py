@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import errno
 import hashlib
+import json
 import os
+import secrets
 import signal
 import stat
 import sys
@@ -27,10 +29,223 @@ OPERATOR_UID = 2000
 OPERATOR_GID = 2000
 STATE_MODE = 0o700
 STATE_SUBDIR = "crop-source-freeze"
+IN_CLUSTER_KUBECONFIG = Path("/tmp/crop-source-freeze-kubeconfig")
+SERVICE_ACCOUNT_ROOT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
+
+
+def _in_cluster_kubeconfig_bytes() -> bytes:
+    return (
+        json.dumps(
+            {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "clusters": [{
+                    "name": "in-cluster",
+                    "cluster": {
+                        "server": "https://kubernetes.default.svc",
+                        "certificate-authority": str(
+                            SERVICE_ACCOUNT_ROOT / "ca.crt"
+                        ),
+                    },
+                }],
+                "contexts": [{
+                    "name": "in-cluster",
+                    "context": {
+                        "cluster": "in-cluster",
+                        "user": "operator",
+                        "namespace": freeze.NAMESPACE,
+                    },
+                }],
+                "current-context": "in-cluster",
+                "users": [{
+                    "name": "operator",
+                    "user": {
+                        "tokenFile": str(SERVICE_ACCOUNT_ROOT / "token"),
+                    },
+                }],
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
 
 
 class OperatorError(RuntimeError):
     """The in-cluster operator cannot preserve the freeze contract."""
+
+
+def _install_in_cluster_kubeconfig(
+    path: Path = IN_CLUSTER_KUBECONFIG,
+) -> Path:
+    """Atomically install config that follows the rotating token file."""
+    payload = _in_cluster_kubeconfig_bytes()
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY
+    directory_flags |= getattr(os, "O_CLOEXEC", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_fd = os.open(path.parent, directory_flags)
+    except OSError as exc:
+        raise OperatorError("in-cluster kubeconfig parent is unavailable") from exc
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    temporary_name = (
+        f".{path.name}.{os.getpid()}.{secrets.token_hex(12)}.create"
+    )
+    temporary_created = False
+    try:
+        try:
+            fd = os.open(
+                temporary_name,
+                flags,
+                0o600,
+                dir_fd=parent_fd,
+            )
+            temporary_created = True
+            try:
+                os.fchmod(fd, 0o600)
+                remaining = memoryview(payload)
+                while remaining:
+                    written = os.write(fd, remaining)
+                    if written <= 0:
+                        raise OperatorError(
+                            "in-cluster kubeconfig write did not progress"
+                        )
+                    remaining = remaining[written:]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+            try:
+                os.link(
+                    temporary_name,
+                    path.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileExistsError:
+                pass
+        finally:
+            if temporary_created:
+                try:
+                    os.unlink(temporary_name, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
+                os.fsync(parent_fd)
+
+        # A process can die after the no-replace link succeeds but before its
+        # private temporary name is removed.  Remove only matching private
+        # names that are hard links to the exact final inode; unrelated links
+        # remain a fail-closed identity error below.
+        try:
+            published = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError:
+            published = None
+        recover_published_link = False
+        if (
+            published is not None
+            and stat.S_ISREG(published.st_mode)
+            and published.st_nlink > 1
+            and published.st_uid == os.geteuid()
+            and published.st_gid == os.getegid()
+            and stat.S_IMODE(published.st_mode) == 0o600
+            and published.st_size == len(payload)
+        ):
+            recovery_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            recovery_flags |= getattr(os, "O_NOFOLLOW", 0)
+            recovery_fd = os.open(
+                path.name,
+                recovery_flags,
+                dir_fd=parent_fd,
+            )
+            try:
+                recovery_before = os.fstat(recovery_fd)
+                recovery_bytes = os.read(recovery_fd, len(payload) + 1)
+                recovery_after = os.fstat(recovery_fd)
+            finally:
+                os.close(recovery_fd)
+            recover_published_link = (
+                recovery_bytes == payload
+                and recovery_before.st_dev == published.st_dev
+                and recovery_before.st_ino == published.st_ino
+                and recovery_after.st_dev == published.st_dev
+                and recovery_after.st_ino == published.st_ino
+                and recovery_after.st_nlink == published.st_nlink
+            )
+        if recover_published_link:
+            prefix = f".{path.name}."
+            for entry_name in os.listdir(parent_fd):
+                if not entry_name.startswith(prefix) or not entry_name.endswith(
+                    ".create"
+                ):
+                    continue
+                try:
+                    candidate = os.stat(
+                        entry_name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except OSError:
+                    continue
+                if (
+                    candidate.st_dev == published.st_dev
+                    and candidate.st_ino == published.st_ino
+                ):
+                    os.unlink(entry_name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
+
+        read_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        read_flags |= getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path.name, read_flags, dir_fd=parent_fd)
+        except OSError as exc:
+            raise OperatorError("in-cluster kubeconfig is unavailable") from exc
+        try:
+            before = os.fstat(fd)
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                observed = stream.read(len(payload) + 1)
+            after = os.fstat(fd)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent_fd)
+    identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_nlink,
+        before.st_size,
+        before.st_uid,
+        before.st_gid,
+    )
+    if (
+        identity
+        != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_nlink,
+            after.st_size,
+            after.st_uid,
+            after.st_gid,
+        )
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_uid != os.geteuid()
+        or before.st_gid != os.getegid()
+        or stat.S_IMODE(before.st_mode) != 0o600
+        or observed != payload
+    ):
+        raise OperatorError("in-cluster kubeconfig identity or bytes differ")
+    os.environ["KUBECONFIG"] = str(path)
+    return path
 
 
 def _verify_runtime_identity(
@@ -376,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if os.geteuid() != OPERATOR_UID or os.getegid() != OPERATOR_GID:
                 raise OperatorError("operator requires UID 2000:GID 2000")
+            _install_in_cluster_kubeconfig()
             serve(
                 freeze.Kubectl(context="", namespace=args.namespace),
                 state_dir=args.state_dir,

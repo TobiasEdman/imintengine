@@ -28,10 +28,12 @@ import stat
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 if __package__:
     from .crop_distill_provenance import (
@@ -104,6 +106,26 @@ RESOURCE_TYPES = (
     "replicasets",
     "replicationcontrollers",
 )
+_RESOURCE_API_PREFIX = {
+    "pods": "/api/v1",
+    "jobs": "/apis/batch/v1",
+    "cronjobs": "/apis/batch/v1",
+    "deployments": "/apis/apps/v1",
+    "statefulsets": "/apis/apps/v1",
+    "daemonsets": "/apis/apps/v1",
+    "replicasets": "/apis/apps/v1",
+    "replicationcontrollers": "/api/v1",
+}
+_RESOURCE_LIST_KIND = {
+    "pods": "PodList",
+    "jobs": "JobList",
+    "cronjobs": "CronJobList",
+    "deployments": "DeploymentList",
+    "statefulsets": "StatefulSetList",
+    "daemonsets": "DaemonSetList",
+    "replicasets": "ReplicaSetList",
+    "replicationcontrollers": "ReplicationControllerList",
+}
 PHASE_JOB = {
     "idle": None,
     "plan": ("ladder-crop-source-access-plan", "ladder-crop-source-access-plan"),
@@ -741,11 +763,44 @@ class Kubectl:
         )
 
     def inventory(self) -> list[dict[str, Any]]:
-        result = self.get(",".join(RESOURCE_TYPES))
-        items = result.get("items")
-        if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
-            raise FreezeError("cluster inventory is not a Kubernetes List")
-        return items
+        namespace = quote(self.namespace, safe="")
+
+        def fetch(resource: str) -> dict[str, Any]:
+            prefix = _RESOURCE_API_PREFIX[resource]
+            path = f"{prefix}/namespaces/{namespace}/{resource}"
+            return self._run(["get", f"--raw={path}"])
+
+        # A combined ``kubectl get pods,jobs,...`` performs discovery and the
+        # eight list calls serially inside one 12-second process budget.  ICE
+        # needs longer than that even when every individual API call is well
+        # within its bound.  Fixed raw endpoints remove discovery; parallel
+        # execution keeps the whole inventory as one bounded read batch for
+        # the lease-safety calculation above.
+        with ThreadPoolExecutor(max_workers=len(RESOURCE_TYPES)) as executor:
+            futures = {
+                resource: executor.submit(fetch, resource)
+                for resource in RESOURCE_TYPES
+            }
+            results = {
+                resource: futures[resource].result()
+                for resource in RESOURCE_TYPES
+            }
+
+        inventory: list[dict[str, Any]] = []
+        for resource in RESOURCE_TYPES:
+            result = results[resource]
+            items = result.get("items")
+            if (
+                result.get("kind") != _RESOURCE_LIST_KIND[resource]
+                or not isinstance(items, list)
+                or not all(isinstance(item, dict) for item in items)
+            ):
+                raise FreezeError(
+                    f"cluster {resource} inventory is not the expected "
+                    f"Kubernetes {_RESOURCE_LIST_KIND[resource]}"
+                )
+            inventory.extend(items)
+        return inventory
 
 
 def _metadata(value: Mapping[str, Any]) -> Mapping[str, Any]:

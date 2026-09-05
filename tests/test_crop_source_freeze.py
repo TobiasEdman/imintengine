@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import subprocess
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -585,6 +586,55 @@ def test_kubectl_omits_context_inside_cluster(monkeypatch):
         "-o",
         "json",
     ]
+
+
+def test_inventory_uses_parallel_fixed_raw_endpoints(monkeypatch):
+    client = freeze.Kubectl(context="", namespace="ns/with space")
+    barrier = threading.Barrier(len(freeze.RESOURCE_TYPES))
+    calls = []
+    lock = threading.Lock()
+
+    def fake_run(args):
+        assert args[0] == "get"
+        assert args[1].startswith("--raw=")
+        resource = args[1].rsplit("/", 1)[-1]
+        with lock:
+            calls.append(args[1])
+        barrier.wait(timeout=2)
+        return {
+            "kind": freeze._RESOURCE_LIST_KIND[resource],
+            "items": [{"kind": resource}],
+        }
+
+    monkeypatch.setattr(client, "_run", fake_run)
+
+    inventory = client.inventory()
+
+    assert [item["kind"] for item in inventory] == list(
+        freeze.RESOURCE_TYPES
+    )
+    assert len(calls) == len(freeze.RESOURCE_TYPES)
+    assert all("/namespaces/ns%2Fwith%20space/" in call for call in calls)
+
+
+def test_inventory_rejects_wrong_raw_list_kind(monkeypatch):
+    client = freeze.Kubectl(context="", namespace="ns")
+
+    def fake_run(args):
+        resource = args[1].rsplit("/", 1)[-1]
+        return {
+            "kind": (
+                "WrongList"
+                if resource == "jobs"
+                else freeze._RESOURCE_LIST_KIND[resource]
+            ),
+            "items": [],
+        }
+
+    monkeypatch.setattr(client, "_run", fake_run)
+
+    with pytest.raises(freeze.FreezeError, match="jobs inventory"):
+        client.inventory()
 
 
 def test_kubectl_retries_one_timed_out_read(monkeypatch):

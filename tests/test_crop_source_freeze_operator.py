@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 from pathlib import Path
@@ -91,6 +92,152 @@ def test_serve_refuses_unverified_runtime_before_hold(tmp_path, monkeypatch):
     ) == 1
 
     assert clients == []
+
+
+def test_in_cluster_kubeconfig_is_exact_and_retry_safe(tmp_path, monkeypatch):
+    path = tmp_path / "operator-kubeconfig"
+    monkeypatch.delenv("KUBECONFIG", raising=False)
+
+    assert operator._install_in_cluster_kubeconfig(path) == path
+    first = path.stat(follow_symlinks=False)
+    config = json.loads(path.read_bytes())
+
+    assert stat.S_IMODE(first.st_mode) == 0o600
+    assert config["clusters"][0]["cluster"] == {
+        "certificate-authority": str(
+            operator.SERVICE_ACCOUNT_ROOT / "ca.crt"
+        ),
+        "server": "https://kubernetes.default.svc",
+    }
+    assert config["users"][0]["user"] == {
+        "tokenFile": str(operator.SERVICE_ACCOUNT_ROOT / "token")
+    }
+    assert os.environ["KUBECONFIG"] == str(path)
+
+    assert operator._install_in_cluster_kubeconfig(path) == path
+    second = path.stat(follow_symlinks=False)
+    assert (second.st_dev, second.st_ino) == (first.st_dev, first.st_ino)
+
+
+def test_in_cluster_kubeconfig_recovers_interrupted_publish(tmp_path):
+    path = tmp_path / "operator-kubeconfig"
+    temporary = tmp_path / f".{path.name}.123.deadbeef.create"
+    temporary.write_bytes(operator._in_cluster_kubeconfig_bytes())
+    temporary.chmod(0o600)
+    os.link(temporary, path)
+
+    assert path.stat().st_nlink == 2
+    assert operator._install_in_cluster_kubeconfig(path) == path
+
+    assert not temporary.exists()
+    assert path.stat().st_nlink == 1
+
+
+def test_in_cluster_kubeconfig_ignores_partial_orphan(tmp_path):
+    path = tmp_path / "operator-kubeconfig"
+    orphan = tmp_path / f".{path.name}.123.deadbeef.create"
+    orphan.write_bytes(b"partial")
+    orphan.chmod(0o600)
+
+    assert operator._install_in_cluster_kubeconfig(path) == path
+
+    assert path.read_bytes() == operator._in_cluster_kubeconfig_bytes()
+    assert orphan.read_bytes() == b"partial"
+
+
+@pytest.mark.parametrize("contents", [b"wrong\n", b"wrong" * 1000])
+def test_in_cluster_kubeconfig_refuses_existing_byte_drift(tmp_path, contents):
+    path = tmp_path / "operator-kubeconfig"
+    path.write_bytes(contents)
+    path.chmod(0o600)
+
+    with pytest.raises(operator.OperatorError, match="bytes differ"):
+        operator._install_in_cluster_kubeconfig(path)
+
+
+def test_in_cluster_kubeconfig_refuses_symlink(tmp_path):
+    path = tmp_path / "operator-kubeconfig"
+    target = tmp_path / "target"
+    target.write_bytes(operator._in_cluster_kubeconfig_bytes())
+    target.chmod(0o600)
+    path.symlink_to(target)
+
+    with pytest.raises(operator.OperatorError, match="unavailable"):
+        operator._install_in_cluster_kubeconfig(path)
+
+
+def test_in_cluster_kubeconfig_refuses_hard_link(tmp_path):
+    path = tmp_path / "operator-kubeconfig"
+    path.write_bytes(operator._in_cluster_kubeconfig_bytes())
+    path.chmod(0o600)
+    os.link(path, tmp_path / "unrelated-link")
+
+    with pytest.raises(operator.OperatorError, match="identity or bytes differ"):
+        operator._install_in_cluster_kubeconfig(path)
+
+
+def test_in_cluster_kubeconfig_refuses_wrong_mode(tmp_path):
+    path = tmp_path / "operator-kubeconfig"
+    path.write_bytes(operator._in_cluster_kubeconfig_bytes())
+    path.chmod(0o640)
+
+    with pytest.raises(operator.OperatorError, match="identity or bytes differ"):
+        operator._install_in_cluster_kubeconfig(path)
+
+
+@pytest.mark.parametrize("identity", ["uid", "gid"])
+def test_in_cluster_kubeconfig_refuses_wrong_owner(tmp_path, monkeypatch, identity):
+    path = tmp_path / "operator-kubeconfig"
+    path.write_bytes(operator._in_cluster_kubeconfig_bytes())
+    path.chmod(0o600)
+    getter = "geteuid" if identity == "uid" else "getegid"
+    actual = getattr(os, getter)()
+    monkeypatch.setattr(operator.os, getter, lambda: actual + 1)
+
+    with pytest.raises(operator.OperatorError, match="identity or bytes differ"):
+        operator._install_in_cluster_kubeconfig(path)
+
+
+def test_main_installs_kubeconfig_before_creating_client(
+    tmp_path,
+    monkeypatch,
+):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(mode=operator.STATE_MODE)
+    events = []
+    client = object()
+
+    monkeypatch.setattr(operator.os, "geteuid", lambda: operator.OPERATOR_UID)
+    monkeypatch.setattr(operator.os, "getegid", lambda: operator.OPERATOR_GID)
+    monkeypatch.setattr(
+        operator,
+        "_install_in_cluster_kubeconfig",
+        lambda: events.append("kubeconfig"),
+    )
+
+    def make_client(*, context, namespace):
+        events.append(("client", context, namespace))
+        return client
+
+    def fake_serve(actual_client, **kwargs):
+        events.append(("serve", actual_client, kwargs["run_id"]))
+
+    monkeypatch.setattr(operator.freeze, "Kubectl", make_client)
+    monkeypatch.setattr(operator, "serve", fake_serve)
+
+    assert operator.main([
+        "serve",
+        "--state-dir",
+        str(state_dir),
+        "--run-id",
+        "attempt-14",
+    ]) == 0
+
+    assert events == [
+        "kubeconfig",
+        ("client", "", operator.freeze.NAMESPACE),
+        ("serve", client, "attempt-14"),
+    ]
 
 
 def test_prepare_state_root_is_exact_and_idempotent(tmp_path):
