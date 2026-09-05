@@ -207,10 +207,12 @@ jobs:
                 --read-only \
                 --network none \
                 --tmpfs /state-parent:rw,nosuid,nodev,noexec,size=1m \
-                --entrypoint python \
+                --entrypoint /bin/sh \
                 smoke-${{ matrix.image }}:test \
-                /opt/imintengine/scripts/crop_source_freeze_operator.py \
-                prepare --state-parent /state-parent
+                -ec 'python /opt/imintengine/scripts/crop_source_freeze_operator.py \
+                       prepare --state-parent /state-parent && \
+                     python /opt/imintengine/scripts/crop_source_freeze_operator.py \
+                       prepare --state-parent /state-parent'
               ;;
           esac
 
@@ -371,10 +373,12 @@ jobs:
                 --read-only \
                 --network none \
                 --tmpfs /state-parent:rw,nosuid,nodev,noexec,size=1m \
-                --entrypoint python \
+                --entrypoint /bin/sh \
                 "${IMAGE}@${DIGEST}" \
-                /opt/imintengine/scripts/crop_source_freeze_operator.py \
-                prepare --state-parent /state-parent
+                -ec 'python /opt/imintengine/scripts/crop_source_freeze_operator.py \
+                       prepare --state-parent /state-parent && \
+                     python /opt/imintengine/scripts/crop_source_freeze_operator.py \
+                       prepare --state-parent /state-parent'
               ;;
           esac
 

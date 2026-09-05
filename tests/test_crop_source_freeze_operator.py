@@ -114,6 +114,50 @@ def test_prepare_state_root_is_exact_and_idempotent(tmp_path):
     assert (second.st_dev, second.st_ino) == (first.st_dev, first.st_ino)
 
 
+@pytest.mark.skipif(not hasattr(os, "O_PATH"), reason="Linux O_PATH semantics")
+def test_prepare_state_root_reopens_owned_0700_without_read_access(
+    tmp_path,
+    monkeypatch,
+):
+    target = tmp_path / operator.STATE_SUBDIR
+    target.mkdir(mode=operator.STATE_MODE)
+    real_open = os.open
+    child_flags = []
+
+    def require_path_only(path, flags, *args, **kwargs):
+        if path == operator.STATE_SUBDIR:
+            child_flags.append(flags)
+            if not flags & os.O_PATH:
+                raise PermissionError("simulated dropped DAC override")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(operator.os, "open", require_path_only)
+
+    assert operator.prepare_state_root(
+        tmp_path,
+        uid=os.geteuid(),
+        gid=os.getegid(),
+    ) == target
+    assert child_flags == [
+        os.O_PATH
+        | os.O_DIRECTORY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    ]
+
+
+def test_prepare_state_root_refuses_owned_permission_drift(tmp_path):
+    target = tmp_path / operator.STATE_SUBDIR
+    target.mkdir(mode=0o750)
+
+    with pytest.raises(operator.OperatorError, match="ownership or permissions"):
+        operator.prepare_state_root(
+            tmp_path,
+            uid=os.geteuid(),
+            gid=os.getegid(),
+        )
+
+
 def test_prepare_state_root_rejects_symlink(tmp_path):
     real = tmp_path / "real"
     real.mkdir()
@@ -453,8 +497,8 @@ def test_pr_and_publish_images_smoke_operator_runtime():
     assert workflow.count("version --client=true --output=json") == 2
     assert workflow.count(
         "/opt/imintengine/scripts/crop_source_freeze_operator.py"
-    ) == 2
-    assert workflow.count("prepare --state-parent /state-parent") == 2
+    ) == 4
+    assert workflow.count("prepare --state-parent /state-parent") == 4
     assert workflow.count(
         "--tmpfs /state-parent:rw,nosuid,nodev,noexec,size=1m"
     ) == 2

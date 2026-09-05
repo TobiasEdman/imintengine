@@ -73,7 +73,43 @@ def prepare_state_root(
         except FileNotFoundError:
             os.mkdir(STATE_SUBDIR, mode=STATE_MODE, dir_fd=parent_fd)
             before = os.stat(STATE_SUBDIR, dir_fd=parent_fd, follow_symlinks=False)
-        if not stat.S_ISDIR(before.st_mode) or before.st_uid not in {0, uid}:
+        if not stat.S_ISDIR(before.st_mode):
+            raise OperatorError("state root has an unexpected type or owner")
+
+        # A prior operator attempt leaves the durable directory correctly owned
+        # by the unprivileged process and deliberately inaccessible to UID 0
+        # after the init container drops DAC_OVERRIDE.  Linux O_PATH lets the
+        # init container bind and verify that existing inode without acquiring
+        # read or write authority over its contents.
+        if before.st_uid == uid:
+            if (
+                before.st_gid != gid
+                or stat.S_IMODE(before.st_mode) != STATE_MODE
+            ):
+                raise OperatorError(
+                    "existing state root has unexpected ownership or permissions"
+                )
+            flags = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY
+            flags |= getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            child_fd = os.open(STATE_SUBDIR, flags, dir_fd=parent_fd)
+            opened = os.fstat(child_fd)
+            if (
+                opened.st_dev != before.st_dev
+                or opened.st_ino != before.st_ino
+                or not stat.S_ISDIR(opened.st_mode)
+                or opened.st_uid != uid
+                or opened.st_gid != gid
+                or stat.S_IMODE(opened.st_mode) != STATE_MODE
+            ):
+                raise OperatorError("state root changed while opening")
+            return parent / STATE_SUBDIR
+
+        if (
+            before.st_uid != 0
+            or before.st_gid != gid
+            or stat.S_IMODE(before.st_mode) != STATE_MODE
+        ):
             raise OperatorError("state root has an unexpected type or owner")
 
         flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
