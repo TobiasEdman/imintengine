@@ -61,6 +61,15 @@ RUN echo "38abe0e710a07688e9c149d74536e67cfee0364bdb64dd6d644c32a1cfad389f  /tmp
     && dpkg --install /tmp/libexpat1.deb /tmp/libgomp1.deb \
     && rm /tmp/libexpat1.deb /tmp/libgomp1.deb
 
+# The crop-source freeze operator runs inside ICE and therefore needs the
+# Kubernetes client in the same source-sealed image as its watchdog code.
+# Pin and verify the official amd64 binary; runtime network installs are
+# forbidden and would sever the image/source attestation.
+ADD https://dl.k8s.io/release/v1.28.15/bin/linux/amd64/kubectl /tmp/kubectl
+RUN echo "1f7651ad0b50ef4561aa82e77f3ad06599b5e6b0b2a5fb6c4f474d95a77e41c5  /tmp/kubectl" | sha256sum --check --strict \
+    && install -o root -g root -m 0755 /tmp/kubectl /usr/local/bin/kubectl \
+    && rm /tmp/kubectl
+
 # Only the selected runtime code and the exact model source trees enter the
 # final image; docs, tracked showcase assets, data, and the codeload archives
 # remain behind in the disposable stage.

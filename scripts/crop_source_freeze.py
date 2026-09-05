@@ -643,8 +643,7 @@ class Kubectl:
     def _run(self, args: Sequence[str], *, stdin: bytes | None = None) -> dict[str, Any]:
         command = [
             "kubectl",
-            "--context",
-            self.context,
+            *(["--context", self.context] if self.context else []),
             f"--request-timeout={KUBECTL_REQUEST_TIMEOUT_SECONDS}s",
             "-n",
             self.namespace,
@@ -1373,6 +1372,7 @@ def _watch_owned(
     run_dir: Path,
     interval_seconds: float,
     once: bool = False,
+    fail_on_signal: bool = False,
 ) -> int:
     _verify_hold_record_hashes(run_dir)
     held = _held_map(run_dir)
@@ -1602,6 +1602,8 @@ def _watch_owned(
                     },
                 )
             time.sleep(interval_seconds)
+        if fail_on_signal:
+            raise FreezeError("watchdog interrupted by signal")
     except BaseException as exc:
         if not (run_dir / "watchdog-stopped.json").exists():
             failed = _lease_record(
@@ -1667,6 +1669,7 @@ def watch(
     run_dir: Path,
     interval_seconds: float,
     once: bool = False,
+    fail_on_signal: bool = False,
 ) -> int:
     """Run exactly one watchdog and refuse after restoration has begun."""
     if not 0 < interval_seconds <= DEFAULT_INTERVAL_SECONDS:
@@ -1684,6 +1687,7 @@ def watch(
             run_dir=run_dir,
             interval_seconds=interval_seconds,
             once=once,
+            fail_on_signal=fail_on_signal,
         )
 
 

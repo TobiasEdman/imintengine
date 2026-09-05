@@ -192,6 +192,22 @@ jobs:
                 --entrypoint python \
                 smoke-${{ matrix.image }}:test \
                 /opt/imintengine/scripts/prepare_crop_distill_storage.py
+              docker run --rm --entrypoint kubectl \
+                smoke-${{ matrix.image }}:test \
+                version --client=true --output=json
+              docker run --rm \
+                --user 0:2000 \
+                --cap-drop ALL \
+                --cap-add CHOWN \
+                --cap-add FOWNER \
+                --security-opt no-new-privileges \
+                --read-only \
+                --network none \
+                --tmpfs /state-parent:rw,nosuid,nodev,noexec,size=1m \
+                --entrypoint python \
+                smoke-${{ matrix.image }}:test \
+                /opt/imintengine/scripts/crop_source_freeze_operator.py \
+                prepare --state-parent /state-parent
               ;;
           esac
 
@@ -337,6 +353,22 @@ jobs:
                 --entrypoint python \
                 "${IMAGE}@${DIGEST}" \
                 /opt/imintengine/scripts/prepare_crop_distill_storage.py
+              docker run --rm --pull never --platform linux/amd64 \
+                --entrypoint kubectl "${IMAGE}@${DIGEST}" \
+                version --client=true --output=json
+              docker run --rm --pull never --platform linux/amd64 \
+                --user 0:2000 \
+                --cap-drop ALL \
+                --cap-add CHOWN \
+                --cap-add FOWNER \
+                --security-opt no-new-privileges \
+                --read-only \
+                --network none \
+                --tmpfs /state-parent:rw,nosuid,nodev,noexec,size=1m \
+                --entrypoint python \
+                "${IMAGE}@${DIGEST}" \
+                /opt/imintengine/scripts/crop_source_freeze_operator.py \
+                prepare --state-parent /state-parent
               ;;
           esac
 

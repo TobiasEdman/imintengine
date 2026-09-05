@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import subprocess
 import time
 from contextlib import contextmanager
@@ -14,6 +15,7 @@ import pytest
 
 from scripts import crop_source_freeze as freeze
 from scripts import crop_source_access as access
+from scripts import crop_source_freeze_operator as operator
 
 
 def _pod_spec(
@@ -555,6 +557,34 @@ def test_kubectl_bounds_server_request_and_client_process(monkeypatch):
         "json",
     ]
     assert calls[0][1]["timeout"] == freeze.KUBECTL_PROCESS_TIMEOUT_SECONDS
+
+
+def test_kubectl_omits_context_inside_cluster(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=b'{"kind":"Pod"}',
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+
+    freeze.Kubectl(context="", namespace="ns").get("pods")
+
+    assert calls[0][0] == [
+        "kubectl",
+        f"--request-timeout={freeze.KUBECTL_REQUEST_TIMEOUT_SECONDS}s",
+        "-n",
+        "ns",
+        "get",
+        "pods",
+        "-o",
+        "json",
+    ]
 
 
 def test_kubectl_retries_one_timed_out_read(monkeypatch):
@@ -1108,6 +1138,98 @@ def test_watch_once_closes_lease_without_granting_restore_authority(tmp_path):
         freeze.restore(client, run_dir=run_dir, timeout_seconds=0.01)
     for name in freeze.SUSPEND_CONTROLLERS:
         assert client.objects[name]["spec"]["suspend"] is True
+
+
+def test_operator_signal_fails_lease_for_durable_recovery(tmp_path, monkeypatch):
+    client = _FakeClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id="operator-signal")
+    handlers = {}
+
+    def capture_handler(signum, handler):
+        handlers[signum] = handler
+
+    def interrupt_watchdog(_seconds):
+        handlers[freeze.signal.SIGTERM](freeze.signal.SIGTERM, None)
+
+    monkeypatch.setattr(freeze.signal, "signal", capture_handler)
+    monkeypatch.setattr(freeze.time, "sleep", interrupt_watchdog)
+
+    with pytest.raises(freeze.FreezeError, match="interrupted by signal"):
+        freeze.watch(
+            client,
+            run_dir=run_dir,
+            interval_seconds=0.01,
+            fail_on_signal=True,
+        )
+
+    lease = freeze._live_lease(client, run_id=run_dir.name)
+    assert lease["status"] == "failed"
+    assert lease["valid_until_unix_ns"] == lease["heartbeat_unix_ns"]
+    assert not (run_dir / "watchdog-stopped.json").exists()
+    assert list(run_dir.glob("watchdog-failed-*.json"))
+
+
+def test_operator_keeps_partial_hold_recoverable_after_signal(
+    tmp_path,
+    monkeypatch,
+):
+    client = _FakeClient()
+    state_dir = tmp_path / "operator-state"
+    state_dir.mkdir(mode=operator.STATE_MODE)
+    handlers = {}
+    real_replace = client.replace
+    interrupted = False
+
+    monkeypatch.setattr(
+        operator.signal,
+        "signal",
+        lambda signum, handler: handlers.__setitem__(signum, handler),
+    )
+
+    def interrupt_after_first_controller_cas(value):
+        nonlocal interrupted
+        result = real_replace(value)
+        if value.get("kind") == "CronJob" and not interrupted:
+            interrupted = True
+            handlers[operator.signal.SIGTERM](operator.signal.SIGTERM, None)
+        return result
+
+    client.replace = interrupt_after_first_controller_cas
+
+    def restore_while_operator_is_exec_capable(
+        actual_client,
+        *,
+        run_dir,
+        poll_seconds,
+    ):
+        del poll_seconds
+        assert actual_client is client
+        assert not (run_dir / "hold-complete.json").exists()
+        assert freeze._live_lease(client, run_id=run_dir.name)["status"] == "failed"
+        freeze.restore(client, run_dir=run_dir, timeout_seconds=0.01)
+
+    monkeypatch.setattr(
+        operator,
+        "_wait_for_exact_restore",
+        restore_while_operator_is_exec_capable,
+    )
+
+    operator.serve(
+        client,
+        state_dir=state_dir,
+        run_id="partial-hold",
+        interval_seconds=0.01,
+        uid=os.geteuid(),
+        gid=os.getegid(),
+    )
+
+    run_dir = state_dir / "partial-hold"
+    assert interrupted is True
+    assert freeze._live_lease(client, run_id=run_dir.name)["status"] == "released"
+    assert not (run_dir / "hold-complete.json").exists()
+    assert (run_dir / "controllers-restored.json").exists()
+    assert "suspend" not in client.objects["ladder-queue"]["spec"]
+    assert "suspend" not in client.objects["gpu-reaper"]["spec"]
 
 
 def test_watchdog_owner_is_singleton(tmp_path):
