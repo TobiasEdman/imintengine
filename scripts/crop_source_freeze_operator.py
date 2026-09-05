@@ -11,11 +11,16 @@ import signal
 import stat
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 if __package__:
+    from . import crop_distill_protocol as protocol
+    from . import crop_distill_provenance as provenance
     from . import crop_source_freeze as freeze
 else:
+    import crop_distill_protocol as protocol
+    import crop_distill_provenance as provenance
     import crop_source_freeze as freeze
 
 OPERATOR_UID = 2000
@@ -26,6 +31,22 @@ STATE_SUBDIR = "crop-source-freeze"
 
 class OperatorError(RuntimeError):
     """The in-cluster operator cannot preserve the freeze contract."""
+
+
+def _verify_runtime_identity(
+    environ: Mapping[str, str] | None = None,
+) -> None:
+    """Bind this process to the baked source before any privileged mutation."""
+    claims = os.environ if environ is None else environ
+    try:
+        identity = protocol.runtime_identity(claims)
+        provenance.verify_runtime(
+            protocol.RUNTIME_MANIFEST,
+            source_git_sha=identity.source_git_sha,
+            image_ref=identity.image_ref,
+        )
+    except (OSError, ValueError, provenance.ProvenanceError) as exc:
+        raise OperatorError(f"runtime identity is not verified: {exc}") from exc
 
 
 def _open_directory(path: Path) -> int:
@@ -310,6 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        _verify_runtime_identity()
         if args.command == "prepare":
             if os.geteuid() != 0 or os.getegid() != OPERATOR_GID:
                 raise OperatorError("state preparation requires UID 0:GID 2000")

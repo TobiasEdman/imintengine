@@ -11,6 +11,88 @@ import pytest
 from scripts import crop_source_freeze_operator as operator
 
 
+@pytest.fixture(autouse=True)
+def verified_runtime(monkeypatch):
+    monkeypatch.setenv("CROP_DISTILL_SOURCE_GIT_SHA", "a" * 40)
+    monkeypatch.setenv(
+        "CROP_DISTILL_IMAGE",
+        "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "b" * 64,
+    )
+    monkeypatch.setenv("POD_UID", "freeze-operator-test")
+    monkeypatch.setattr(
+        operator.provenance,
+        "verify_runtime",
+        lambda *_args, **_kwargs: {},
+    )
+
+
+def test_runtime_identity_binds_baked_source_and_image(monkeypatch):
+    calls = []
+
+    def verify(runtime_manifest, *, source_git_sha, image_ref):
+        calls.append((runtime_manifest, source_git_sha, image_ref))
+        return {}
+
+    monkeypatch.setattr(operator.provenance, "verify_runtime", verify)
+
+    operator._verify_runtime_identity()
+
+    assert calls == [
+        (
+            operator.protocol.RUNTIME_MANIFEST,
+            "a" * 40,
+            (
+                "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+                + "b" * 64
+            ),
+        )
+    ]
+
+
+def test_prepare_refuses_unverified_runtime_before_state_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    def reject(*_args, **_kwargs):
+        raise operator.provenance.ProvenanceError("wrong baked source")
+
+    monkeypatch.setattr(operator.provenance, "verify_runtime", reject)
+
+    assert operator.main(
+        ["prepare", "--state-parent", str(tmp_path)]
+    ) == 1
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_serve_refuses_unverified_runtime_before_hold(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(mode=operator.STATE_MODE)
+    clients = []
+
+    def reject(*_args, **_kwargs):
+        raise operator.provenance.ProvenanceError("wrong baked source")
+
+    monkeypatch.setattr(operator.provenance, "verify_runtime", reject)
+    monkeypatch.setattr(
+        operator.freeze,
+        "Kubectl",
+        lambda *_args, **_kwargs: clients.append(True),
+    )
+
+    assert operator.main(
+        [
+            "serve",
+            "--state-dir",
+            str(state_dir),
+            "--run-id",
+            "attempt-14",
+        ]
+    ) == 1
+
+    assert clients == []
+
+
 def test_prepare_state_root_is_exact_and_idempotent(tmp_path):
     target = operator.prepare_state_root(
         tmp_path,
@@ -376,3 +458,4 @@ def test_pr_and_publish_images_smoke_operator_runtime():
     assert workflow.count(
         "--tmpfs /state-parent:rw,nosuid,nodev,noexec,size=1m"
     ) == 2
+    assert workflow.count("--env POD_UID=freeze-operator-smoke") == 2

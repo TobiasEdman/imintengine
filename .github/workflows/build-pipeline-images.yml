@@ -197,6 +197,9 @@ jobs:
                 version --client=true --output=json
               docker run --rm \
                 --user 0:2000 \
+                --env CROP_DISTILL_SOURCE_GIT_SHA="$SOURCE_GIT_SHA" \
+                --env CROP_DISTILL_IMAGE="$PR_IMAGE_REF" \
+                --env POD_UID=freeze-operator-smoke \
                 --cap-drop ALL \
                 --cap-add CHOWN \
                 --cap-add FOWNER \
@@ -358,6 +361,9 @@ jobs:
                 version --client=true --output=json
               docker run --rm --pull never --platform linux/amd64 \
                 --user 0:2000 \
+                --env CROP_DISTILL_SOURCE_GIT_SHA="$SOURCE_GIT_SHA" \
+                --env CROP_DISTILL_IMAGE="${IMAGE}@${DIGEST}" \
+                --env POD_UID=freeze-operator-smoke \
                 --cap-drop ALL \
                 --cap-add CHOWN \
                 --cap-add FOWNER \

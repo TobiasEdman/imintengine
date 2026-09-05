@@ -462,6 +462,28 @@ def _sha256_path(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _verified_held_record(run_dir: Path) -> dict[str, Any]:
+    """Return held authority only when the protected lease can bind before."""
+    state = _read_json(run_dir / "controllers-held.json")
+    if set(state) != {
+        "schema",
+        "run_id",
+        "controllers_before_sha256",
+        "controllers",
+    } or (
+        state.get("schema") != FREEZE_SCHEMA
+        or state.get("run_id") != run_dir.name
+    ):
+        raise FreezeError("held-controller record is malformed")
+    try:
+        before_sha = _sha256_path(run_dir / "controllers-before.json")
+    except OSError as exc:
+        raise FreezeError("controller-before authority is unavailable") from exc
+    if state.get("controllers_before_sha256") != before_sha:
+        raise FreezeError("held-controller record does not bind controller-before")
+    return state
+
+
 def _verify_hold_record_hashes(run_dir: Path) -> dict[str, Any]:
     complete = _read_json(run_dir / "hold-complete.json")
     if set(complete) != {
@@ -487,6 +509,7 @@ def _verify_hold_record_hashes(run_dir: Path) -> dict[str, Any]:
             raise FreezeError(f"hold authority is unavailable: {path}") from exc
         if complete.get(field) != actual:
             raise FreezeError(f"hold authority hash mismatch: {path}")
+    _verified_held_record(run_dir)
     return complete
 
 
@@ -994,7 +1017,7 @@ def _controller_record(value: Mapping[str, Any]) -> dict[str, object]:
 
 
 def _held_map(run_dir: Path) -> dict[str, Mapping[str, Any]]:
-    state = _read_json(run_dir / "controllers-held.json")
+    state = _verified_held_record(run_dir)
     controllers = state.get("controllers")
     if not isinstance(controllers, list):
         raise FreezeError("held-controller record is malformed")
@@ -1099,6 +1122,22 @@ def _replace_lease(client: Kubectl, lease: Mapping[str, object]) -> dict[str, An
     return _cas_replace_lease(client, live, lease)
 
 
+def _replace_held_bound_lease(
+    client: Kubectl,
+    lease: Mapping[str, object],
+    *,
+    controller_snapshot_sha256: str,
+) -> dict[str, Any]:
+    """CAS-replace a post-hold lease without changing its controller anchor."""
+    if lease.get("controller_snapshot_sha256") != controller_snapshot_sha256:
+        raise FreezeError("replacement lease changes the held-controller anchor")
+    live = client.get("configmap", LEASE_CONFIGMAP)
+    prior = _prior_lease(live, run_id=lease.get("run_id"))
+    if prior.get("controller_snapshot_sha256") != controller_snapshot_sha256:
+        raise FreezeError("live lease does not bind the held-controller record")
+    return _cas_replace_lease(client, live, lease)
+
+
 def _publish_held_lease(
     client: Kubectl,
     lease: Mapping[str, object],
@@ -1128,6 +1167,11 @@ def _publish_held_lease(
             raise FreezeError(
                 "watchdog scan exhausted its lease publication budget"
             )
+        if (
+            prior.get("controller_snapshot_sha256")
+            != lease.get("controller_snapshot_sha256")
+        ):
+            raise FreezeError("live lease does not bind the held-controller record")
     published = dict(lease)
     published["heartbeat_unix_ns"] = now
     published["valid_until_unix_ns"] = now + LEASE_SECONDS * 1_000_000_000
@@ -1280,7 +1324,12 @@ def hold(client: Kubectl, *, state_dir: Path, run_id: str) -> Path:
                 )
         held_sha = write_once_json(
             run_dir / "controllers-held.json",
-            {"schema": FREEZE_SCHEMA, "run_id": run_id, "controllers": held_records},
+            {
+                "schema": FREEZE_SCHEMA,
+                "run_id": run_id,
+                "controllers_before_sha256": before_sha,
+                "controllers": held_records,
+            },
         )
         held = {str(entry["name"]): entry["object"] for entry in held_records}
         items = client.inventory()
@@ -1471,7 +1520,11 @@ def _watch_owned(
                     closed["valid_until_unix_ns"] = closed[
                         "heartbeat_unix_ns"
                     ]
-                    _replace_lease(client, closed)
+                    _replace_held_bound_lease(
+                        client,
+                        closed,
+                        controller_snapshot_sha256=controller_sha,
+                    )
                     write_once_json(
                         run_dir / "watchdog-stopped.json",
                         {
@@ -1511,7 +1564,11 @@ def _watch_owned(
                             failed["valid_until_unix_ns"] = failed[
                                 "heartbeat_unix_ns"
                             ]
-                            _replace_lease(client, failed)
+                            _replace_held_bound_lease(
+                                client,
+                                failed,
+                                controller_snapshot_sha256=controller_sha,
+                            )
                             write_once_json(
                                 run_dir / "watchdog-stopped.json",
                                 {
@@ -1554,7 +1611,11 @@ def _watch_owned(
                     failed["valid_until_unix_ns"] = failed[
                         "heartbeat_unix_ns"
                     ]
-                    _replace_lease(client, failed)
+                    _replace_held_bound_lease(
+                        client,
+                        failed,
+                        controller_snapshot_sha256=controller_sha,
+                    )
                     continue
                 if once:
                     # Smoke scans never publish a held heartbeat that a
@@ -1570,7 +1631,11 @@ def _watch_owned(
                     closed["valid_until_unix_ns"] = closed[
                         "heartbeat_unix_ns"
                     ]
-                    _replace_lease(client, closed)
+                    _replace_held_bound_lease(
+                        client,
+                        closed,
+                        controller_snapshot_sha256=controller_sha,
+                    )
                     write_once_json(
                         run_dir / "watchdog-interrupted" / f"{time.time_ns()}.json",
                         {
@@ -1616,7 +1681,11 @@ def _watch_owned(
             )
             failed["valid_until_unix_ns"] = failed["heartbeat_unix_ns"]
             try:
-                _replace_lease(client, failed)
+                _replace_held_bound_lease(
+                    client,
+                    failed,
+                    controller_snapshot_sha256=controller_sha,
+                )
             except Exception:
                 pass
         write_once_json(
@@ -1650,7 +1719,11 @@ def _watch_owned(
             status="closed",
         )
         closed["valid_until_unix_ns"] = closed["heartbeat_unix_ns"]
-        _replace_lease(client, closed)
+        _replace_held_bound_lease(
+            client,
+            closed,
+            controller_snapshot_sha256=controller_sha,
+        )
     write_once_json(
         run_dir / "watchdog-interrupted" / f"{time.time_ns()}.json",
         {
@@ -1931,6 +2004,10 @@ def _recover_failed_lease_for_restore(
         ):
             raise FreezeError("watchdog lease is not expired and failed")
 
+        held_sha = _sha256_path(run_dir / "controllers-held.json")
+        if live.get("controller_snapshot_sha256") != held_sha:
+            raise FreezeError("failed lease does not bind the held-controller record")
+
         held = _held_map(run_dir)
         controllers = _validate_held_controllers(client, held)
         items = client.inventory()
@@ -1991,12 +2068,17 @@ def _recover_failed_lease_for_restore(
                 phase="idle",
                 sequence=sequence,
                 snapshot_sha256=snapshot_sha,
-                controller_snapshot_sha256=_sha256_path(
-                    run_dir / "controllers-held.json"
-                ),
+                controller_snapshot_sha256=held_sha,
                 status="closed",
             )
             closed["valid_until_unix_ns"] = closed["heartbeat_unix_ns"]
+            if (
+                current_lease.get("controller_snapshot_sha256")
+                != held_sha
+            ):
+                raise FreezeError(
+                    "failed lease does not bind the held-controller record"
+                )
             _cas_replace_lease(client, raw_live, closed)
             write_once_json(
                 run_dir / "watchdog-stopped.json",

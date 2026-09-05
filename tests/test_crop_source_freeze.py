@@ -848,6 +848,10 @@ def test_watchdog_heartbeat_budget_matches_actual_operations(tmp_path):
 def test_held_lease_timestamp_is_sampled_after_cas_read(tmp_path, monkeypatch):
     client = _FakeClient()
     freeze.hold(client, state_dir=tmp_path, run_id="late-timestamp")
+    controller_sha = freeze._live_lease(
+        client,
+        run_id="late-timestamp",
+    )["controller_snapshot_sha256"]
     clock = [1_000_000_000]
     real_get = client.get
 
@@ -863,7 +867,7 @@ def test_held_lease_timestamp_is_sampled_after_cas_read(tmp_path, monkeypatch):
         phase="idle",
         sequence=1,
         snapshot_sha256="a" * 64,
-        controller_snapshot_sha256="b" * 64,
+        controller_snapshot_sha256=controller_sha,
     )
 
     published = freeze._publish_held_lease(
@@ -1533,6 +1537,96 @@ def test_watch_rejects_tampered_immutable_hold_authority(tmp_path):
             interval_seconds=0.01,
             once=True,
         )
+
+
+def test_watch_rejects_rewritten_before_and_completion_authority(tmp_path):
+    client = _FakeClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id="forged-before")
+    before_path = run_dir / "controllers-before.json"
+    before = freeze._read_json(before_path)
+    before["controllers"][0]["object"]["spec"]["schedule"] = "0 0 1 1 *"
+    freeze.replace_json(before_path, before)
+
+    complete_path = run_dir / "hold-complete.json"
+    complete = freeze._read_json(complete_path)
+    complete["controllers_before_sha256"] = freeze._sha256_path(before_path)
+    freeze.replace_json(complete_path, complete)
+
+    with pytest.raises(
+        freeze.FreezeError,
+        match="held-controller record does not bind controller-before",
+    ):
+        freeze.watch(
+            client,
+            run_dir=run_dir,
+            interval_seconds=0.01,
+            once=True,
+        )
+
+
+def test_watch_refuses_fully_rewritten_pvc_authority_and_preserves_anchor(
+    tmp_path,
+):
+    client = _FakeClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id="forged-authority")
+    original_lease = freeze._live_lease(client, run_id=run_dir.name)
+
+    before_path = run_dir / "controllers-before.json"
+    before = freeze._read_json(before_path)
+    before["controllers"][0]["object"]["spec"]["schedule"] = "0 0 1 1 *"
+    freeze.replace_json(before_path, before)
+
+    held_path = run_dir / "controllers-held.json"
+    held = freeze._read_json(held_path)
+    held["controllers_before_sha256"] = freeze._sha256_path(before_path)
+    freeze.replace_json(held_path, held)
+
+    complete_path = run_dir / "hold-complete.json"
+    complete = freeze._read_json(complete_path)
+    complete["controllers_before_sha256"] = freeze._sha256_path(before_path)
+    complete["controllers_held_sha256"] = freeze._sha256_path(held_path)
+    freeze.replace_json(complete_path, complete)
+
+    with pytest.raises(
+        freeze.FreezeError,
+        match="live lease does not bind the held-controller record",
+    ):
+        freeze.watch(
+            client,
+            run_dir=run_dir,
+            interval_seconds=0.01,
+            once=True,
+        )
+
+    assert freeze._live_lease(client, run_id=run_dir.name) == original_lease
+
+
+def test_failed_recovery_refuses_fully_rewritten_pvc_authority(tmp_path):
+    client = _FakeClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id="forged-recovery")
+    _mark_watchdog_failed(client, run_dir)
+
+    before_path = run_dir / "controllers-before.json"
+    before = freeze._read_json(before_path)
+    before["controllers"][0]["object"]["spec"]["schedule"] = "0 0 1 1 *"
+    freeze.replace_json(before_path, before)
+
+    held_path = run_dir / "controllers-held.json"
+    held = freeze._read_json(held_path)
+    held["controllers_before_sha256"] = freeze._sha256_path(before_path)
+    freeze.replace_json(held_path, held)
+
+    complete_path = run_dir / "hold-complete.json"
+    complete = freeze._read_json(complete_path)
+    complete["controllers_before_sha256"] = freeze._sha256_path(before_path)
+    complete["controllers_held_sha256"] = freeze._sha256_path(held_path)
+    freeze.replace_json(complete_path, complete)
+
+    with pytest.raises(
+        freeze.FreezeError,
+        match="failed lease does not bind the held-controller record",
+    ):
+        freeze.restore(client, run_dir=run_dir, timeout_seconds=0.01)
 
 
 def test_live_lease_rejects_truncated_schema(tmp_path):
