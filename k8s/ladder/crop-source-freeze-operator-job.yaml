@@ -74,7 +74,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       initContainers:
         - name: prepare-state
-          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:5e8548af0b359276c2dc411f61695d3c8c46c9d41ac22cf4fe74d2adf88db6a5
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:006b8435004fb572df6632c844a551ba2deaf1e0c3c11235021231f9e98e4326
           imagePullPolicy: IfNotPresent
           command:
             - /usr/local/bin/python
@@ -85,9 +85,9 @@ spec:
             - /state-parent
           env:
             - name: CROP_DISTILL_SOURCE_GIT_SHA
-              value: "760eec58838de10586aa8151fb3ad07d07f40adb"
+              value: "c7218e511b00dd66026fc29867814542a2cfff87"
             - name: CROP_DISTILL_IMAGE
-              value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:5e8548af0b359276c2dc411f61695d3c8c46c9d41ac22cf4fe74d2adf88db6a5"
+              value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:006b8435004fb572df6632c844a551ba2deaf1e0c3c11235021231f9e98e4326"
             - name: POD_UID
               valueFrom:
                 fieldRef:
@@ -109,7 +109,7 @@ spec:
               subPath: ops/crop-distill/source-access
       containers:
         - name: freeze-operator
-          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:5e8548af0b359276c2dc411f61695d3c8c46c9d41ac22cf4fe74d2adf88db6a5
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:006b8435004fb572df6632c844a551ba2deaf1e0c3c11235021231f9e98e4326
           imagePullPolicy: IfNotPresent
           command:
             - /usr/local/bin/python
@@ -124,9 +124,9 @@ spec:
             - prithvi-training-default
           env:
             - name: CROP_DISTILL_SOURCE_GIT_SHA
-              value: "760eec58838de10586aa8151fb3ad07d07f40adb"
+              value: "c7218e511b00dd66026fc29867814542a2cfff87"
             - name: CROP_DISTILL_IMAGE
-              value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:5e8548af0b359276c2dc411f61695d3c8c46c9d41ac22cf4fe74d2adf88db6a5"
+              value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:006b8435004fb572df6632c844a551ba2deaf1e0c3c11235021231f9e98e4326"
             - name: POD_UID
               valueFrom:
                 fieldRef:
