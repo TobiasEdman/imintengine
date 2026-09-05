@@ -487,7 +487,7 @@ def test_freeze_operator_has_narrow_resumable_ice_authority(render_identity):
     binding = documents["RoleBinding"]
     job = documents["Job"]
 
-    assert account["automountServiceAccountToken"] is True
+    assert account["automountServiceAccountToken"] is False
     assert binding["subjects"] == [
         {
             "kind": "ServiceAccount",
@@ -553,7 +553,7 @@ def test_freeze_operator_has_narrow_resumable_ice_authority(render_identity):
     assert "ttlSecondsAfterFinished" not in job_spec
     assert job_spec["backoffLimit"] == 6
     assert pod["activeDeadlineSeconds"] == 43200
-    assert pod["automountServiceAccountToken"] is True
+    assert pod["automountServiceAccountToken"] is False
     assert pod["serviceAccountName"] == "ladder-crop-source-freeze-operator"
     assert pod["restartPolicy"] == "OnFailure"
     assert pod["securityContext"] == {
@@ -628,6 +628,11 @@ def test_freeze_operator_has_narrow_resumable_ice_authority(render_identity):
             ),
         },
         {"name": "tmp", "mountPath": "/tmp"},
+        {
+            "name": "kube-api-access",
+            "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+            "readOnly": True,
+        },
     ]
     assert pod["volumes"] == [
         {
@@ -635,6 +640,39 @@ def test_freeze_operator_has_narrow_resumable_ice_authority(render_identity):
             "persistentVolumeClaim": {"claimName": "training-data-cephfs"},
         },
         {"name": "tmp", "emptyDir": {"sizeLimit": "128Mi"}},
+        {
+            "name": "kube-api-access",
+            "projected": {
+                "defaultMode": 420,
+                "sources": [
+                    {
+                        "serviceAccountToken": {
+                            "expirationSeconds": 3600,
+                            "path": "token",
+                        }
+                    },
+                    {
+                        "configMap": {
+                            "name": "kube-root-ca.crt",
+                            "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                        }
+                    },
+                    {
+                        "downwardAPI": {
+                            "items": [
+                                {
+                                    "path": "namespace",
+                                    "fieldRef": {
+                                        "apiVersion": "v1",
+                                        "fieldPath": "metadata.namespace",
+                                    },
+                                }
+                            ]
+                        }
+                    },
+                ],
+            },
+        },
     ]
 
 

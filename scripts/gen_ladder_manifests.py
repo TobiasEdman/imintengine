@@ -778,7 +778,7 @@ metadata:
   name: ladder-crop-source-freeze-operator
   namespace: prithvi-training-default
   labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
-automountServiceAccountToken: true
+automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -833,7 +833,7 @@ spec:
       labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
     spec:
       activeDeadlineSeconds: 43200
-      automountServiceAccountToken: true
+      automountServiceAccountToken: false
       serviceAccountName: ladder-crop-source-freeze-operator
       restartPolicy: OnFailure
       imagePullSecrets:
@@ -919,12 +919,33 @@ spec:
               subPath: ops/crop-distill/source-access/crop-source-freeze
             - name: tmp
               mountPath: /tmp
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
       volumes:
         - name: training-data-cephfs
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
         - name: tmp
           emptyDir:
             sizeLimit: 128Mi
+        - name: kube-api-access
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  expirationSeconds: 3600
+                  path: token
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
 """
 
 CROP_DENY_EGRESS_TEMPLATE = """apiVersion: networking.k8s.io/v1
