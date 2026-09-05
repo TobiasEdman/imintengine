@@ -681,14 +681,17 @@ def test_split_entrypoint_has_one_fixed_build_and_full_verify(monkeypatch):
             else lease_checks.append((path, expected_phase))
         ),
     )
+
+    def verify_live(completion, *, data_dir, cross_pod):
+        assert lock_held, "live cohort scan escaped source-access lock"
+        assert data_dir == protocol.DATA_DIR
+        assert cross_pod is True
+        live_checks.append(completion)
+
     monkeypatch.setattr(
         split_job,
         "verify_live_completion_cohort",
-        lambda completion, *, data_dir: (
-            pytest.fail("live cohort scan escaped source-access lock")
-            if not lock_held
-            else live_checks.append(completion)
-        ),
+        verify_live,
     )
     monkeypatch.setattr(
         split_job,
