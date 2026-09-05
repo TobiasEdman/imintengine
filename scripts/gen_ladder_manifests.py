@@ -133,10 +133,10 @@ CROP_SPLIT_MANIFEST = str(PROTOCOL_CROP_SPLIT_MANIFEST)
 # Replaced with the real Commit-A identities before generator output is
 # committed. The impossible all-zero sentinels make an accidental partial
 # bootstrap fail tests and deployment review loudly.
-CROP_DISTILL_SOURCE_GIT_SHA = "0" * 40
+CROP_DISTILL_SOURCE_GIT_SHA = "7a68d9d4ce690b2a42ec50912dc676376652b2e3"
 CROP_DISTILL_IMAGE = (
     "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
-    + "0" * 64
+    "39a3126ecf4f119f0763be745a45abc86231398ca01cef35c08b3dd630ddb745"
 )
 CROP_SOURCE_ACCESS_SOURCE_GIT_SHA = (
     "c6ad69242e7239662461bf7ff0b6bcd4d072509a"

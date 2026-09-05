@@ -278,6 +278,11 @@ The verifier-repair payload commit resets only the current runtime source/image
 to zero sentinels and removes runnable split/consumer manifests. Its following
 runtime-pin commit supplies the newly signed identity and regenerates them;
 historical PLAN/APPLY and split authorities never move during that interval.
+For this verifier-only recovery, the frozen split manifest therefore keeps
+`git_sha=c6ad69242e7239662461bf7ff0b6bcd4d072509a`: that is the immutable
+artifact's producer/source authority. The terminal verification record instead
+binds its observed Pod and runtime to the newly signed verifier image. The new
+Pod attests `VERIFIED`/`PUBLISHED`; it does not relabel itself as `PRODUCED`.
 
 ### Least-privilege PVC preparation
 
