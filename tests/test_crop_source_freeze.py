@@ -427,6 +427,23 @@ def _request_clean_restore_stop(client: _FakeClient, run_dir: Path) -> None:
     ) == 0
 
 
+def _mark_watchdog_failed(
+    client: _FakeClient,
+    run_dir: Path,
+    *,
+    phase: str = "split",
+) -> None:
+    freeze.replace_json(
+        run_dir / "phase.json",
+        freeze._new_phase_state(run_id=run_dir.name, phase=phase),
+    )
+    failed = freeze._live_lease(client, run_id=run_dir.name)
+    failed["phase"] = "idle"
+    failed["status"] = "failed"
+    failed["valid_until_unix_ns"] = failed["heartbeat_unix_ns"]
+    freeze._replace_lease(client, failed)
+
+
 def test_hold_captures_prior_suspend_shape_and_cas_suspends(tmp_path):
     client = _FakeClient()
 
@@ -1153,6 +1170,163 @@ def test_restore_holds_phase_owner_for_its_entire_operation(tmp_path, monkeypatc
     monkeypatch.setattr(freeze, "_restore_owned", assert_gate_excluded)
 
     freeze.restore(client, run_dir=run_dir, timeout_seconds=0.01)
+
+
+def test_restore_recovers_expired_failed_watchdog_with_clean_idle_scan(tmp_path):
+    client = _FakeClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id="failed-watchdog")
+    _mark_watchdog_failed(client, run_dir)
+
+    freeze.restore(client, run_dir=run_dir, timeout_seconds=0.01)
+
+    stopped = freeze._read_json(run_dir / "watchdog-stopped.json")
+    snapshot = freeze._read_json(
+        run_dir / "snapshots" / f"{stopped['sequence']:08d}.json"
+    )
+    assert stopped["reason"] == "restore-requested-clean-idle-scan"
+    assert snapshot["phase"] == "idle"
+    assert snapshot["violations"] == []
+    assert freeze._read_json(run_dir / "phase.json")["phase"] == "idle"
+    assert "suspend" not in client.objects["ladder-queue"]["spec"]
+    assert "suspend" not in client.objects["gpu-reaper"]["spec"]
+    assert client.objects["campaign-orchestrator"]["spec"]["suspend"] is True
+    assert freeze._live_lease(client, run_id=run_dir.name)["status"] == "released"
+
+
+def test_failed_watchdog_recovery_reuses_checked_lease_for_close_cas(
+    tmp_path,
+    monkeypatch,
+):
+    client = _FakeClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id="recovery-race")
+    _mark_watchdog_failed(client, run_dir)
+    original_get = client.get
+    configmap_gets = 0
+
+    def mutate_on_unchecked_fourth_get(resource, name=None):
+        nonlocal configmap_gets
+        if resource == "configmap":
+            configmap_gets += 1
+            if configmap_gets == 4:
+                assert client.configmap is not None
+                changed = json.loads(client.configmap["data"]["lease.json"])
+                changed["sequence"] += 1
+                client.configmap = {
+                    **client.configmap,
+                    "metadata": {
+                        **client.configmap["metadata"],
+                        "resourceVersion": str(
+                            int(client.configmap["metadata"]["resourceVersion"])
+                            + 1
+                        ),
+                    },
+                    "data": {
+                        "lease.json": freeze.workload_canonical_json_bytes(
+                            changed
+                        ).decode("utf-8")
+                    },
+                }
+        return original_get(resource, name)
+
+    monkeypatch.setattr(client, "get", mutate_on_unchecked_fourth_get)
+    failed = freeze._live_lease(client, run_id=run_dir.name)
+    freeze._recover_failed_lease_for_restore(
+        client,
+        run_dir=run_dir,
+        lease=failed,
+    )
+
+    assert configmap_gets == 3
+    assert client.configmap is not None
+    live = json.loads(client.configmap["data"]["lease.json"])
+    assert live["status"] == "closed"
+    assert (run_dir / "watchdog-stopped.json").exists()
+    for name in freeze.SUSPEND_CONTROLLERS:
+        assert client.objects[name]["spec"]["suspend"] is True
+
+
+def test_failed_watchdog_restore_refuses_source_rw_overlap(tmp_path):
+    client = _FakeClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id="recovery-rw")
+    _mark_watchdog_failed(client, run_dir)
+    writer = _pod(
+        "unrelated-writer",
+        "other",
+        "unrelated-job",
+        "unrelated-job-uid",
+        pod_spec=_pod_spec(),
+    )
+    original_inventory = client.inventory
+    client.inventory = lambda: [*original_inventory(), writer]
+
+    with pytest.raises(freeze.FreezeError, match="source-RW overlap"):
+        freeze.restore(client, run_dir=run_dir, timeout_seconds=0.01)
+
+    assert not (run_dir / "stop-requested.json").exists()
+    assert not (run_dir / "watchdog-stopped.json").exists()
+    assert freeze._live_lease(client, run_id=run_dir.name)["status"] == "failed"
+    for name in freeze.SUSPEND_CONTROLLERS:
+        assert client.objects[name]["spec"]["suspend"] is True
+
+
+@pytest.mark.parametrize("kind", ["Job", "Pod"])
+def test_failed_watchdog_restore_refuses_active_phase_workload(tmp_path, kind):
+    client = _FakeClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id=f"active-{kind}")
+    _mark_watchdog_failed(client, run_dir)
+    split_job = _job(
+        "ladder-lucas-crop-split",
+        "ladder-lucas-crop-split",
+        pod_spec=_pod_spec(read_only=True),
+    )
+    split_pod = _pod(
+        "split-pod",
+        "ladder-lucas-crop-split",
+        "ladder-lucas-crop-split",
+        "job-uid",
+        pod_spec=_pod_spec(read_only=True),
+    )
+    original_inventory = client.inventory
+    active = split_job if kind == "Job" else split_pod
+    client.inventory = lambda: [*original_inventory(), active]
+
+    with pytest.raises(freeze.FreezeError, match=f"{kind}/"):
+        freeze.restore(client, run_dir=run_dir, timeout_seconds=0.01)
+
+    assert not (run_dir / "stop-requested.json").exists()
+    assert not (run_dir / "watchdog-stopped.json").exists()
+    assert freeze._live_lease(client, run_id=run_dir.name)["status"] == "failed"
+    for name in freeze.SUSPEND_CONTROLLERS:
+        assert client.objects[name]["spec"]["suspend"] is True
+
+
+def test_failed_watchdog_restore_resumes_after_closed_lease_crash(
+    tmp_path,
+    monkeypatch,
+):
+    client = _FakeClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id="partial-recovery")
+    _mark_watchdog_failed(client, run_dir)
+    real_write_once = freeze.write_once_json
+
+    def crash_before_stopped(path, value):
+        if path.name == "watchdog-stopped.json":
+            raise OSError("simulated stop-record crash")
+        return real_write_once(path, value)
+
+    monkeypatch.setattr(freeze, "write_once_json", crash_before_stopped)
+    with pytest.raises(OSError, match="stop-record crash"):
+        freeze.restore(client, run_dir=run_dir, timeout_seconds=0.01)
+
+    assert freeze._live_lease(client, run_id=run_dir.name)["status"] == "closed"
+    assert freeze._read_json(run_dir / "phase.json")["phase"] == "idle"
+    assert not (run_dir / "watchdog-stopped.json").exists()
+
+    monkeypatch.setattr(freeze, "write_once_json", real_write_once)
+    freeze.restore(client, run_dir=run_dir, timeout_seconds=0.01)
+
+    assert freeze._live_lease(client, run_id=run_dir.name)["status"] == "released"
+    assert (run_dir / "watchdog-stopped.json").exists()
 
 
 def test_expired_phase_request_fails_closed(tmp_path):

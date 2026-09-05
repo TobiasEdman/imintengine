@@ -1842,6 +1842,171 @@ def _expected_held_spec(
     return expected
 
 
+def _active_phase_workloads(
+    items: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Name nonterminal phase Jobs/Pods that forbid failed-lease recovery."""
+    phase_jobs = {
+        binding[0] for binding in PHASE_JOB.values() if binding is not None
+    }
+    active: list[str] = []
+    for item in items:
+        kind = _kind(item)
+        name = str(_metadata(item).get("name", "<unnamed>"))
+        if (
+            kind == "Job"
+            and name in phase_jobs
+            and not _terminal_job(item)
+        ):
+            active.append(f"Job/{name}")
+        elif kind == "Pod" and not _terminal_pod(item):
+            owner = _owner_job_uid(item)
+            if owner is not None and owner[0] in phase_jobs:
+                active.append(f"Pod/{name}")
+    return sorted(active)
+
+
+def _recover_failed_lease_for_restore(
+    client: Kubectl,
+    *,
+    run_dir: Path,
+    lease: Mapping[str, Any],
+) -> None:
+    """Close an expired failed lease after a new clean idle scan.
+
+    This path is available only while restore owns the long phase lock and
+    this function owns the watchdog lock. It never renews a held lease.
+    """
+    with _watchdog_owner(run_dir):
+        if (run_dir / "watchdog-stopped.json").exists():
+            return
+        live = _live_lease(client, run_id=run_dir.name)
+        if live != lease:
+            raise FreezeError("failed watchdog lease changed before recovery")
+
+        stop_path = run_dir / "stop-requested.json"
+        expected_stop = {"schema": FREEZE_SCHEMA, "run_id": run_dir.name}
+
+        if live.get("status") == "closed":
+            if not stop_path.exists() or _read_json(stop_path) != expected_stop:
+                raise FreezeError("closed lease lacks failed-recovery request")
+            phase_state = _read_json(run_dir / "phase.json")
+            if _validate_phase_state(phase_state, run_id=run_dir.name) != "idle":
+                raise FreezeError("partial failed recovery phase is not idle")
+            sequence = int(live.get("sequence", -1))
+            _verify_clean_idle_snapshot(
+                run_dir,
+                sequence=sequence,
+                expected_sha256=live.get("snapshot_sha256"),
+            )
+            if (
+                live.get("controller_snapshot_sha256")
+                != _sha256_path(run_dir / "controllers-held.json")
+                or live.get("valid_until_unix_ns")
+                != live.get("heartbeat_unix_ns")
+            ):
+                raise FreezeError("partial failed recovery lease is malformed")
+            write_once_json(
+                run_dir / "watchdog-stopped.json",
+                {
+                    "schema": FREEZE_SCHEMA,
+                    "run_id": run_dir.name,
+                    "sequence": sequence,
+                    "reason": "restore-requested-clean-idle-scan",
+                    "phase_request_id": phase_state["request_id"],
+                    "snapshot_sha256": live["snapshot_sha256"],
+                },
+            )
+            return
+
+        if (
+            live.get("status") != "failed"
+            or live.get("valid_until_unix_ns")
+            != live.get("heartbeat_unix_ns")
+            or int(live.get("valid_until_unix_ns", 0)) > time.time_ns()
+        ):
+            raise FreezeError("watchdog lease is not expired and failed")
+
+        held = _held_map(run_dir)
+        controllers = _validate_held_controllers(client, held)
+        items = client.inventory()
+        active = _active_phase_workloads(items)
+        if active:
+            raise FreezeError(
+                "failed-lease restore requires terminal phase workloads: "
+                + ", ".join(active)
+            )
+        violations = find_rw_overlap_violations(
+            items,
+            phase="idle",
+            held_controllers=held,
+        )
+        if violations:
+            raise FreezeError(
+                "failed-lease restore found source-RW overlap; "
+                "see restricted snapshot after the workload becomes terminal"
+            )
+
+        existing_sequences = [
+            int(path.stem)
+            for path in (run_dir / "snapshots").glob("[0-9]*.json")
+            if path.stem.isdigit()
+        ]
+        sequence = max(existing_sequences, default=0) + 1
+        snapshot = _snapshot(
+            run_id=run_dir.name,
+            phase="idle",
+            sequence=sequence,
+            controllers=controllers,
+            items=items,
+            violations=violations,
+        )
+        snapshot_sha = write_once_json(
+            run_dir / "snapshots" / f"{sequence:08d}.json",
+            snapshot,
+        )
+        if stop_path.exists():
+            if _read_json(stop_path) != expected_stop:
+                raise FreezeError("watchdog stop request is malformed")
+        else:
+            write_once_json(stop_path, expected_stop)
+
+        with _phase_publication_owner(run_dir):
+            raw_live = client.get("configmap", LEASE_CONFIGMAP)
+            current_lease = _prior_lease(raw_live, run_id=run_dir.name)
+            if (
+                set(current_lease) != LEASE_FIELDS
+                or current_lease.get("schema") != LEASE_SCHEMA
+                or current_lease != live
+            ):
+                raise FreezeError("failed watchdog lease changed during recovery")
+            idle_phase = _new_phase_state(run_id=run_dir.name, phase="idle")
+            replace_json(run_dir / "phase.json", idle_phase)
+            closed = _lease_record(
+                run_id=run_dir.name,
+                phase="idle",
+                sequence=sequence,
+                snapshot_sha256=snapshot_sha,
+                controller_snapshot_sha256=_sha256_path(
+                    run_dir / "controllers-held.json"
+                ),
+                status="closed",
+            )
+            closed["valid_until_unix_ns"] = closed["heartbeat_unix_ns"]
+            _cas_replace_lease(client, raw_live, closed)
+            write_once_json(
+                run_dir / "watchdog-stopped.json",
+                {
+                    "schema": FREEZE_SCHEMA,
+                    "run_id": run_dir.name,
+                    "sequence": sequence,
+                    "reason": "restore-requested-clean-idle-scan",
+                    "phase_request_id": idle_phase["request_id"],
+                    "snapshot_sha256": snapshot_sha,
+                },
+            )
+
+
 def _restore_owned(
     client: Kubectl,
     *,
@@ -1865,23 +2030,37 @@ def _restore_owned(
         _verify_hold_record_hashes(run_dir)
     stopped_path = run_dir / "watchdog-stopped.json"
     if completed_hold and not stopped_path.exists():
-        _gate_phase_owned(
-            client,
-            run_dir=run_dir,
-            phase="idle",
-            timeout_seconds=timeout_seconds,
+        live_before_stop = _live_lease(client, run_id=run_dir.name)
+        partial_failed_recovery = (
+            live_before_stop.get("status") == "closed"
+            and (run_dir / "stop-requested.json").exists()
         )
-        stop_path = run_dir / "stop-requested.json"
-        if not stop_path.exists():
-            write_once_json(
-                stop_path,
-                {"schema": FREEZE_SCHEMA, "run_id": run_dir.name},
+        if live_before_stop.get("status") == "failed" or partial_failed_recovery:
+            _recover_failed_lease_for_restore(
+                client,
+                run_dir=run_dir,
+                lease=live_before_stop,
             )
-        deadline = time.monotonic() + timeout_seconds
-        while time.monotonic() < deadline and not stopped_path.exists():
-            time.sleep(0.25)
-        if not stopped_path.exists():
-            raise FreezeError("watchdog did not fail-close its lease before restore")
+        else:
+            _gate_phase_owned(
+                client,
+                run_dir=run_dir,
+                phase="idle",
+                timeout_seconds=timeout_seconds,
+            )
+            stop_path = run_dir / "stop-requested.json"
+            if not stop_path.exists():
+                write_once_json(
+                    stop_path,
+                    {"schema": FREEZE_SCHEMA, "run_id": run_dir.name},
+                )
+            deadline = time.monotonic() + timeout_seconds
+            while time.monotonic() < deadline and not stopped_path.exists():
+                time.sleep(0.25)
+            if not stopped_path.exists():
+                raise FreezeError(
+                    "watchdog did not fail-close its lease before restore"
+                )
 
     lease = _live_lease(client, run_id=run_dir.name)
     if completed_hold and lease.get("status") == "failed":

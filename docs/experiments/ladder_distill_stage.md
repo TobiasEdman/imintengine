@@ -777,7 +777,14 @@ stop condition is fail-closed.
    After a completed hold, restore first gates an idle/zero-overlap scan,
    fail-closes the lease and waits for watchdog shutdown. For an interrupted
    hold it instead consumes only the expired `initializing`/`failed` lease and
-   immutable before record. Its full preflight accepts each CronJob only in
+   immutable before record. If a completed hold's watchdog has already
+   fail-closed an expired lease, restore itself owns both the phase and
+   watchdog locks, requires every phase Job/Pod to be terminal, verifies the
+   exact held controllers, performs a new idle zero-overlap scan, and publishes
+   only a closed lease plus the same strictly verified stop marker. It never
+   resurrects a held phase lease. A crash after that closed-lease CAS but
+   before the local stop record is resumable from the exact bound snapshot.
+   Its full preflight accepts each CronJob only in
    the exact held or exact prior state, so a crash or later CAS failure can be
    retried without overwriting drift. Each CAS restore puts back the recorded
    prior suspend field, including absence versus explicit false, and records
