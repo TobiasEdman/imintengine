@@ -675,7 +675,21 @@ stop condition is fail-closed.
    or mutation between 15-second polls. The residual is explicit and cannot be
    claimed away. The watchdog refreshes a phase-bound ConfigMap lease with a
    maximum 180-second lifetime (long enough for kubelet projected-ConfigMap
-   lag). Every non-idle phase request has a random 256-bit request ID and an
+   lag). Every `kubectl` call has a 10-second API request timeout and a
+   12-second client-process timeout. Reads may make at most two attempts with
+   one second of backoff; create and replace are never retried because their
+   mutation result is ambiguous after a client timeout. A normal heartbeat
+   performs five reads and one write. Including the preceding publication
+   write, its bounded external-I/O, retry, backoff, and 15-second interval path
+   is 164 seconds, below the unchanged 180-second lease. The interval cannot be
+   configured above 15 seconds. Held-lease timestamps are sampled only after
+   the publication CAS read, and publication refuses unless the preceding
+   lease remains fresh for the full 12-second write timeout plus a four-second
+   safety margin. An exhausted whole-scan budget therefore fails closed instead
+   of renewing an aged lease. This prevents a live but stuck operator client
+   from silently outliving its own lease without widening the residual race
+   window. Every non-idle phase request has a
+   random 256-bit request ID and an
    absolute 21,900-second expiry, covering the data-derived 21,600-second
    split deadline plus projection lag (PLAN and APPLY remain at 7,200 seconds).
    A heartbeat must echo that exact request ID

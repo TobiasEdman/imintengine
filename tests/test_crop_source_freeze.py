@@ -509,6 +509,114 @@ def test_kubectl_retries_only_transient_reads(monkeypatch):
     assert sleeps == [freeze.KUBECTL_READ_RETRY_BASE_SECONDS]
 
 
+def test_kubectl_bounds_server_request_and_client_process(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=b'{"kind":"Pod"}',
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+
+    freeze.Kubectl(context="icekube", namespace="ns").get("pods")
+
+    assert calls[0][0] == [
+        "kubectl",
+        "--context",
+        "icekube",
+        f"--request-timeout={freeze.KUBECTL_REQUEST_TIMEOUT_SECONDS}s",
+        "-n",
+        "ns",
+        "get",
+        "pods",
+        "-o",
+        "json",
+    ]
+    assert calls[0][1]["timeout"] == freeze.KUBECTL_PROCESS_TIMEOUT_SECONDS
+
+
+def test_kubectl_retries_one_timed_out_read(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=b'{"kind":"Pod"}',
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+    monkeypatch.setattr(freeze.time, "sleep", sleeps.append)
+
+    result = freeze.Kubectl(context="icekube", namespace="ns").get("pods")
+
+    assert result == {"kind": "Pod"}
+    assert len(calls) == 2
+    assert sleeps == [freeze.KUBECTL_READ_RETRY_BASE_SECONDS]
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        b"Error from server (Timeout): context deadline exceeded",
+        b"request did not complete within requested timeout",
+    ],
+)
+def test_kubectl_retries_api_request_timeout_for_reads(monkeypatch, stderr):
+    responses = iter([
+        subprocess.CompletedProcess([], 1, stdout=b"", stderr=stderr),
+        subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=b'{"kind":"Pod"}',
+            stderr=b"",
+        ),
+    ])
+    calls = []
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return next(responses)
+
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+    monkeypatch.setattr(freeze.time, "sleep", sleeps.append)
+
+    result = freeze.Kubectl(context="icekube", namespace="ns").get("pods")
+
+    assert result == {"kind": "Pod"}
+    assert len(calls) == 2
+    assert sleeps == [freeze.KUBECTL_READ_RETRY_BASE_SECONDS]
+
+
+def test_kubectl_exhausted_timed_out_reads_fail_closed(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+    monkeypatch.setattr(freeze.time, "sleep", sleeps.append)
+
+    with pytest.raises(freeze.FreezeError, match="timed out after 12s"):
+        freeze.Kubectl(context="icekube", namespace="ns").get("pods")
+
+    assert len(calls) == freeze.KUBECTL_READ_ATTEMPTS
+    assert sleeps == [freeze.KUBECTL_READ_RETRY_BASE_SECONDS]
+
+
 def test_kubectl_permanent_read_failure_stops_without_retry(monkeypatch):
     calls = []
     sleeps = []
@@ -574,8 +682,16 @@ def test_kubectl_writes_disable_client_openapi_validation(monkeypatch):
     client.create({"kind": "ConfigMap"})
     client.replace({"kind": "ConfigMap"})
 
-    assert calls[0][0][5:7] == ["create", "--validate=false"]
-    assert calls[1][0][5:7] == ["replace", "--validate=false"]
+    create_index = calls[0][0].index("create")
+    replace_index = calls[1][0].index("replace")
+    assert calls[0][0][create_index : create_index + 2] == [
+        "create",
+        "--validate=false",
+    ]
+    assert calls[1][0][replace_index : replace_index + 2] == [
+        "replace",
+        "--validate=false",
+    ]
 
 
 @pytest.mark.parametrize("operation", ["create", "replace"])
@@ -604,6 +720,154 @@ def test_kubectl_never_retries_ambiguous_write_failure(
 
     assert len(calls) == 1
     assert sleeps == []
+
+
+@pytest.mark.parametrize("operation", ["create", "replace"])
+def test_kubectl_never_retries_timed_out_write(monkeypatch, operation):
+    calls = []
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(freeze.subprocess, "run", fake_run)
+    monkeypatch.setattr(freeze.time, "sleep", sleeps.append)
+    client = freeze.Kubectl(context="icekube", namespace="ns")
+
+    with pytest.raises(freeze.FreezeError, match="timed out after 12s"):
+        getattr(client, operation)({"kind": "ConfigMap"})
+
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_watchdog_external_io_budget_fits_lease():
+    expected = (
+        freeze.WATCHDOG_READS_PER_HEARTBEAT
+        * (
+            freeze.KUBECTL_READ_ATTEMPTS
+            * freeze.KUBECTL_PROCESS_TIMEOUT_SECONDS
+            + freeze.KUBECTL_READ_RETRY_BASE_SECONDS
+        )
+        + freeze.WATCHDOG_WRITES_PER_HEARTBEAT
+        * freeze.KUBECTL_PROCESS_TIMEOUT_SECONDS
+        + freeze.KUBECTL_PROCESS_TIMEOUT_SECONDS
+        + freeze.DEFAULT_INTERVAL_SECONDS
+    )
+
+    assert freeze.WATCHDOG_READS_PER_HEARTBEAT == 5
+    assert freeze.WATCHDOG_WRITES_PER_HEARTBEAT == 1
+    assert freeze.WATCHDOG_PUBLICATION_SAFETY_SECONDS == 4
+    assert freeze.WATCHDOG_EXTERNAL_IO_BUDGET_SECONDS == expected == 164
+    assert freeze.WATCHDOG_EXTERNAL_IO_BUDGET_SECONDS < freeze.LEASE_SECONDS
+
+
+def test_watchdog_heartbeat_budget_matches_actual_operations(tmp_path):
+    class CountingClient(_FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.reads = 0
+            self.writes = 0
+
+        def get(self, resource, name=None):
+            self.reads += 1
+            return super().get(resource, name)
+
+        def inventory(self):
+            self.reads += 1
+            return super().inventory()
+
+        def replace(self, value):
+            self.writes += 1
+            return super().replace(value)
+
+    client = CountingClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id="count-heartbeat")
+    client.reads = 0
+    client.writes = 0
+
+    assert freeze.watch(
+        client,
+        run_dir=run_dir,
+        interval_seconds=freeze.DEFAULT_INTERVAL_SECONDS,
+        once=True,
+    ) == 0
+
+    assert client.reads == freeze.WATCHDOG_READS_PER_HEARTBEAT
+    assert client.writes == freeze.WATCHDOG_WRITES_PER_HEARTBEAT
+
+
+def test_held_lease_timestamp_is_sampled_after_cas_read(tmp_path, monkeypatch):
+    client = _FakeClient()
+    freeze.hold(client, state_dir=tmp_path, run_id="late-timestamp")
+    clock = [1_000_000_000]
+    real_get = client.get
+
+    def advancing_get(resource, name=None):
+        value = real_get(resource, name)
+        clock[0] = 2_000_000_000
+        return value
+
+    client.get = advancing_get
+    monkeypatch.setattr(freeze.time, "time_ns", lambda: clock[0])
+    candidate = freeze._lease_record(
+        run_id="late-timestamp",
+        phase="idle",
+        sequence=1,
+        snapshot_sha256="a" * 64,
+        controller_snapshot_sha256="b" * 64,
+    )
+
+    published = freeze._publish_held_lease(
+        client,
+        candidate,
+        require_fresh_prior=True,
+    )
+
+    live = json.loads(client.configmap["data"]["lease.json"])
+    assert published["heartbeat_unix_ns"] == 2_000_000_000
+    assert live == published
+    assert live["valid_until_unix_ns"] == (
+        2_000_000_000 + freeze.LEASE_SECONDS * 1_000_000_000
+    )
+
+
+def test_exhausted_scan_budget_fails_closed_without_held_heartbeat(tmp_path):
+    client = _FakeClient()
+    run_dir = freeze.hold(client, state_dir=tmp_path, run_id="stale-scan")
+    prior = json.loads(client.configmap["data"]["lease.json"])
+    prior["valid_until_unix_ns"] = time.time_ns() + (
+        freeze.KUBECTL_PROCESS_TIMEOUT_SECONDS
+        + freeze.WATCHDOG_PUBLICATION_SAFETY_SECONDS
+        - 1
+    ) * 1_000_000_000
+    client.configmap["data"]["lease.json"] = (
+        freeze.workload_canonical_json_bytes(prior).decode("utf-8")
+    )
+
+    with pytest.raises(freeze.FreezeError, match="exhausted"):
+        freeze.watch(
+            client,
+            run_dir=run_dir,
+            interval_seconds=freeze.DEFAULT_INTERVAL_SECONDS,
+        )
+
+    live = json.loads(client.configmap["data"]["lease.json"])
+    assert live["status"] == "failed"
+    assert live["valid_until_unix_ns"] == live["heartbeat_unix_ns"]
+    assert not (run_dir / "heartbeat.json").exists()
+
+
+@pytest.mark.parametrize("interval", [0, -1, 15.000001, float("inf"), float("nan")])
+def test_watchdog_rejects_interval_outside_budget(tmp_path, interval):
+    with pytest.raises(freeze.FreezeError, match="at most 15 seconds"):
+        freeze.watch(
+            _FakeClient(),
+            run_dir=tmp_path / "unused",
+            interval_seconds=interval,
+            once=True,
+        )
 
 
 def test_restore_cannot_enter_while_live_hold_is_initializing(tmp_path):

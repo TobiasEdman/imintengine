@@ -52,8 +52,27 @@ NAMESPACE = "prithvi-training-default"
 CONTEXT = "icekube"
 LEASE_SECONDS = 180
 DEFAULT_INTERVAL_SECONDS = 15.0
-KUBECTL_READ_ATTEMPTS = 8
+KUBECTL_READ_ATTEMPTS = 2
 KUBECTL_READ_RETRY_BASE_SECONDS = 1.0
+KUBECTL_REQUEST_TIMEOUT_SECONDS = 10
+KUBECTL_PROCESS_TIMEOUT_SECONDS = 12
+WATCHDOG_READS_PER_HEARTBEAT = 5
+WATCHDOG_WRITES_PER_HEARTBEAT = 1
+WATCHDOG_PUBLICATION_SAFETY_SECONDS = 4
+WATCHDOG_EXTERNAL_IO_BUDGET_SECONDS = (
+    WATCHDOG_READS_PER_HEARTBEAT
+    * (
+        KUBECTL_READ_ATTEMPTS * KUBECTL_PROCESS_TIMEOUT_SECONDS
+        + KUBECTL_READ_RETRY_BASE_SECONDS
+    )
+    # The preceding heartbeat's write consumes lease life before it becomes
+    # visible, and the next write must finish before that prior lease expires.
+    + (WATCHDOG_WRITES_PER_HEARTBEAT + 1)
+    * KUBECTL_PROCESS_TIMEOUT_SECONDS
+    + DEFAULT_INTERVAL_SECONDS
+)
+if WATCHDOG_EXTERNAL_IO_BUDGET_SECONDS >= LEASE_SECONDS:
+    raise RuntimeError("watchdog external I/O budget must remain below its lease")
 # Split has a data-derived activeDeadlineSeconds=21600; PLAN and APPLY remain
 # at 7200. A gate request lives just long enough for the longest deadline plus
 # the maximum
@@ -110,7 +129,9 @@ class CoordinationBusy(FreezeError):
 
 _TRANSIENT_KUBECTL_READ_ERRORS = (
     "connection reset by peer",
+    "context deadline exceeded",
     "network is unreachable",
+    "request did not complete within requested timeout",
     "unable to connect to the server",
     "unexpected error when reading response body",
     "tls handshake timeout",
@@ -624,30 +645,46 @@ class Kubectl:
             "kubectl",
             "--context",
             self.context,
+            f"--request-timeout={KUBECTL_REQUEST_TIMEOUT_SECONDS}s",
             "-n",
             self.namespace,
             *args,
         ]
         attempts = KUBECTL_READ_ATTEMPTS if args and args[0] == "get" else 1
+        result: subprocess.CompletedProcess[bytes] | None = None
+        stderr = ""
         for attempt in range(attempts):
-            result = subprocess.run(
-                command,
-                input=stdin,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
-            stderr = result.stderr.decode("utf-8", "replace")
-            retryable = any(
-                marker in stderr.lower()
-                for marker in _TRANSIENT_KUBECTL_READ_ERRORS
-            )
-            if result.returncode == 0 or not retryable or attempt + 1 == attempts:
+            try:
+                result = subprocess.run(
+                    command,
+                    input=stdin,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    timeout=KUBECTL_PROCESS_TIMEOUT_SECONDS,
+                )
+                stderr = result.stderr.decode("utf-8", "replace")
+                retryable = any(
+                    marker in stderr.lower()
+                    for marker in _TRANSIENT_KUBECTL_READ_ERRORS
+                )
+            except subprocess.TimeoutExpired:
+                result = None
+                stderr = (
+                    "client process timed out after "
+                    f"{KUBECTL_PROCESS_TIMEOUT_SECONDS}s"
+                )
+                retryable = bool(args and args[0] == "get")
+            if (
+                (result is not None and result.returncode == 0)
+                or not retryable
+                or attempt + 1 == attempts
+            ):
                 break
             time.sleep(
                 min(KUBECTL_READ_RETRY_BASE_SECONDS * (2**attempt), 5.0)
             )
-        if result.returncode != 0:
+        if result is None or result.returncode != 0:
             raise FreezeError(
                 f"kubectl {' '.join(args)} failed: "
                 f"{stderr.strip()}"
@@ -1033,19 +1070,70 @@ def _lease_configmap(
     }
 
 
-def _replace_lease(client: Kubectl, lease: Mapping[str, object]) -> dict[str, Any]:
-    live = client.get("configmap", LEASE_CONFIGMAP)
+def _prior_lease(
+    live: Mapping[str, Any], *, run_id: object
+) -> dict[str, Any]:
     try:
         prior = json.loads(live.get("data", {}).get("lease.json", ""))
     except (TypeError, json.JSONDecodeError) as exc:
         raise FreezeError("live freeze lease is malformed") from exc
-    if not isinstance(prior, dict) or prior.get("run_id") != lease.get("run_id"):
+    if not isinstance(prior, dict) or prior.get("run_id") != run_id:
         raise FreezeError("live freeze lease belongs to another run")
+    return prior
+
+
+def _cas_replace_lease(
+    client: Kubectl,
+    live: Mapping[str, Any],
+    lease: Mapping[str, object],
+) -> dict[str, Any]:
     replacement = _lease_configmap(lease, namespace=client.namespace)
     replacement["metadata"]["resourceVersion"] = _metadata(live).get(
         "resourceVersion"
     )
     return client.replace(replacement)
+
+
+def _replace_lease(client: Kubectl, lease: Mapping[str, object]) -> dict[str, Any]:
+    live = client.get("configmap", LEASE_CONFIGMAP)
+    _prior_lease(live, run_id=lease.get("run_id"))
+    return _cas_replace_lease(client, live, lease)
+
+
+def _publish_held_lease(
+    client: Kubectl,
+    lease: Mapping[str, object],
+    *,
+    require_fresh_prior: bool,
+) -> dict[str, Any]:
+    """CAS-publish one held lease without renewing across a stale scan."""
+    if lease.get("status") != "held":
+        raise FreezeError("only held leases may use heartbeat publication")
+    live = client.get("configmap", LEASE_CONFIGMAP)
+    prior = _prior_lease(live, run_id=lease.get("run_id"))
+    now = time.time_ns()
+    if require_fresh_prior:
+        if (
+            set(prior) != LEASE_FIELDS
+            or prior.get("schema") != LEASE_SCHEMA
+            or prior.get("status") != "held"
+        ):
+            raise FreezeError("prior watchdog lease is not a valid held lease")
+        required_remaining_ns = (
+            KUBECTL_PROCESS_TIMEOUT_SECONDS
+            + WATCHDOG_PUBLICATION_SAFETY_SECONDS
+        ) * 1_000_000_000
+        if int(prior.get("valid_until_unix_ns", 0)) <= (
+            now + required_remaining_ns
+        ):
+            raise FreezeError(
+                "watchdog scan exhausted its lease publication budget"
+            )
+    published = dict(lease)
+    published["heartbeat_unix_ns"] = now
+    published["valid_until_unix_ns"] = now + LEASE_SECONDS * 1_000_000_000
+    _cas_replace_lease(client, live, published)
+    return published
 
 
 def _install_initial_lease(
@@ -1230,7 +1318,11 @@ def hold(client: Kubectl, *, state_dir: Path, run_id: str) -> Path:
             snapshot_sha256=snapshot_sha,
             controller_snapshot_sha256=held_sha,
         )
-        _replace_lease(client, lease)
+        _publish_held_lease(
+            client,
+            lease,
+            require_fresh_prior=False,
+        )
         write_once_json(
             run_dir / "hold-complete.json",
             {
@@ -1496,7 +1588,11 @@ def _watch_owned(
                     snapshot_sha256=snapshot_sha,
                     controller_snapshot_sha256=controller_sha,
                 )
-                _replace_lease(client, lease)
+                lease = _publish_held_lease(
+                    client,
+                    lease,
+                    require_fresh_prior=True,
+                )
                 replace_json(
                     run_dir / "heartbeat.json",
                     {
@@ -1573,6 +1669,11 @@ def watch(
     once: bool = False,
 ) -> int:
     """Run exactly one watchdog and refuse after restoration has begun."""
+    if not 0 < interval_seconds <= DEFAULT_INTERVAL_SECONDS:
+        raise FreezeError(
+            "watchdog interval must be greater than zero and at most "
+            f"{DEFAULT_INTERVAL_SECONDS:g} seconds"
+        )
     with _watchdog_owner(run_dir):
         if (run_dir / "restore-in-progress.json").exists():
             raise FreezeError("restore has begun; watchdog cannot restart")
