@@ -126,6 +126,16 @@ _RESOURCE_LIST_KIND = {
     "replicasets": "ReplicaSetList",
     "replicationcontrollers": "ReplicationControllerList",
 }
+_RESOURCE_API_VERSION = {
+    "pods": "v1",
+    "jobs": "batch/v1",
+    "cronjobs": "batch/v1",
+    "deployments": "apps/v1",
+    "statefulsets": "apps/v1",
+    "daemonsets": "apps/v1",
+    "replicasets": "apps/v1",
+    "replicationcontrollers": "v1",
+}
 PHASE_JOB = {
     "idle": None,
     "plan": ("ladder-crop-source-access-plan", "ladder-crop-source-access-plan"),
@@ -790,16 +800,41 @@ class Kubectl:
         for resource in RESOURCE_TYPES:
             result = results[resource]
             items = result.get("items")
+            list_kind = result.get("kind")
+            api_version = result.get("apiVersion")
+            expected_list_kind = _RESOURCE_LIST_KIND[resource]
+            expected_api_version = _RESOURCE_API_VERSION[resource]
             if (
-                result.get("kind") != _RESOURCE_LIST_KIND[resource]
+                list_kind != expected_list_kind
+                or not isinstance(list_kind, str)
+                or not list_kind.endswith("List")
+                or api_version != expected_api_version
                 or not isinstance(items, list)
                 or not all(isinstance(item, dict) for item in items)
             ):
                 raise FreezeError(
                     f"cluster {resource} inventory is not the expected "
-                    f"Kubernetes {_RESOURCE_LIST_KIND[resource]}"
+                    f"Kubernetes {expected_list_kind}"
                 )
-            inventory.extend(items)
+            item_kind = list_kind.removesuffix("List")
+            for item in items:
+                if "kind" in item and item.get("kind") != item_kind:
+                    raise FreezeError(
+                        f"cluster {resource} item kind contradicts its "
+                        f"{expected_list_kind} envelope"
+                    )
+                if (
+                    "apiVersion" in item
+                    and item.get("apiVersion") != expected_api_version
+                ):
+                    raise FreezeError(
+                        f"cluster {resource} item apiVersion contradicts its "
+                        f"{expected_list_kind} envelope"
+                    )
+                normalised = dict(item)
+                normalised["apiVersion"] = expected_api_version
+                normalised["kind"] = item_kind
+                inventory.append(normalised)
         return inventory
 
 

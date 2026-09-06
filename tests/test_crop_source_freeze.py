@@ -602,17 +602,22 @@ def test_inventory_uses_parallel_fixed_raw_endpoints(monkeypatch):
             calls.append(args[1])
         barrier.wait(timeout=2)
         return {
+            "apiVersion": freeze._RESOURCE_API_VERSION[resource],
             "kind": freeze._RESOURCE_LIST_KIND[resource],
-            "items": [{"kind": resource}],
+            "items": [{"metadata": {"name": resource}}],
         }
 
     monkeypatch.setattr(client, "_run", fake_run)
 
     inventory = client.inventory()
 
-    assert [item["kind"] for item in inventory] == list(
-        freeze.RESOURCE_TYPES
-    )
+    assert [(item["kind"], item["apiVersion"]) for item in inventory] == [
+        (
+            freeze._RESOURCE_LIST_KIND[resource].removesuffix("List"),
+            freeze._RESOURCE_API_VERSION[resource],
+        )
+        for resource in freeze.RESOURCE_TYPES
+    ]
     assert len(calls) == len(freeze.RESOURCE_TYPES)
     assert all("/namespaces/ns%2Fwith%20space/" in call for call in calls)
 
@@ -623,6 +628,7 @@ def test_inventory_rejects_wrong_raw_list_kind(monkeypatch):
     def fake_run(args):
         resource = args[1].rsplit("/", 1)[-1]
         return {
+            "apiVersion": freeze._RESOURCE_API_VERSION[resource],
             "kind": (
                 "WrongList"
                 if resource == "jobs"
@@ -630,6 +636,86 @@ def test_inventory_rejects_wrong_raw_list_kind(monkeypatch):
             ),
             "items": [],
         }
+
+    monkeypatch.setattr(client, "_run", fake_run)
+
+    with pytest.raises(freeze.FreezeError, match="jobs inventory"):
+        client.inventory()
+
+
+def test_raw_inventory_restores_item_identity_before_terminal_filter(monkeypatch):
+    client = freeze.Kubectl(context="", namespace="ns")
+    terminal = _job("finished", "other")
+    terminal["status"] = {
+        "conditions": [{"type": "Complete", "status": "True"}]
+    }
+    terminal.pop("apiVersion")
+    terminal.pop("kind")
+
+    def fake_run(args):
+        resource = args[1].rsplit("/", 1)[-1]
+        return {
+            "apiVersion": freeze._RESOURCE_API_VERSION[resource],
+            "kind": freeze._RESOURCE_LIST_KIND[resource],
+            "items": [terminal] if resource == "jobs" else [],
+        }
+
+    monkeypatch.setattr(client, "_run", fake_run)
+
+    inventory = client.inventory()
+    violations = freeze.find_rw_overlap_violations(
+        inventory,
+        phase="idle",
+        held_controllers={},
+    )
+
+    assert inventory[0]["kind"] == "Job"
+    assert inventory[0]["apiVersion"] == "batch/v1"
+    assert violations == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("kind", "Pod", "item kind contradicts"),
+        ("apiVersion", "v1", "item apiVersion contradicts"),
+    ],
+)
+def test_raw_inventory_rejects_item_identity_contradicting_envelope(
+    monkeypatch,
+    field,
+    value,
+    message,
+):
+    client = freeze.Kubectl(context="", namespace="ns")
+
+    def fake_run(args):
+        resource = args[1].rsplit("/", 1)[-1]
+        return {
+            "apiVersion": freeze._RESOURCE_API_VERSION[resource],
+            "kind": freeze._RESOURCE_LIST_KIND[resource],
+            "items": [{field: value}] if resource == "jobs" else [],
+        }
+
+    monkeypatch.setattr(client, "_run", fake_run)
+
+    with pytest.raises(freeze.FreezeError, match=message):
+        client.inventory()
+
+
+def test_raw_inventory_rejects_missing_envelope_api_version(monkeypatch):
+    client = freeze.Kubectl(context="", namespace="ns")
+
+    def fake_run(args):
+        resource = args[1].rsplit("/", 1)[-1]
+        result = {
+            "apiVersion": freeze._RESOURCE_API_VERSION[resource],
+            "kind": freeze._RESOURCE_LIST_KIND[resource],
+            "items": [],
+        }
+        if resource == "jobs":
+            result.pop("apiVersion")
+        return result
 
     monkeypatch.setattr(client, "_run", fake_run)
 
