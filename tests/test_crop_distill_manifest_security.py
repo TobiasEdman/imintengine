@@ -680,16 +680,16 @@ def test_freeze_operator_has_narrow_resumable_ice_authority(render_identity):
 
 def test_freeze_recovery_is_one_shot_exact_restore_only(render_identity):
     assert manifests.CROP_SOURCE_FREEZE_OPERATOR_RUN_ID == (
-        "lucas-crop-attempt-15-verify"
+        "lucas-crop-attempt-16-verify"
     )
     assert manifests.CROP_SOURCE_FREEZE_RECOVERY_RUN_ID == (
-        "lucas-crop-attempt-14-verify"
+        "lucas-crop-attempt-15-verify"
     )
     job = yaml.safe_load(manifests.render_crop_source_freeze_recovery())
     assert job["apiVersion"] == "batch/v1"
     assert job["kind"] == "Job"
     assert job["metadata"]["name"] == (
-        "ladder-crop-source-freeze-recovery-attempt-14"
+        "ladder-crop-source-freeze-recovery-attempt-15"
     )
     assert job["metadata"]["namespace"] == "prithvi-training-default"
 
@@ -718,7 +718,7 @@ def test_freeze_recovery_is_one_shot_exact_restore_only(render_identity):
     assert '.startswith(' in recovery_code
     assert '== "ladder-crop-source-freeze-operator"' in recovery_code
     assert "freeze.restore(" in recovery_code
-    assert 'run_dir=Path("/state") / "lucas-crop-attempt-14-verify"' in (
+    assert 'run_dir=Path("/state") / "lucas-crop-attempt-15-verify"' in (
         recovery_code
     )
     assert all(
@@ -805,7 +805,7 @@ def test_freeze_recovery_executes_guard_and_exact_restore(
     restore_call = calls[4]
     assert restore_call[0] == "restore"
     assert restore_call[2:] == (
-        Path("/state/lucas-crop-attempt-14-verify"),
+        Path("/state/lucas-crop-attempt-15-verify"),
         60.0,
     )
 

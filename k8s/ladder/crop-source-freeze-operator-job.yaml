@@ -119,7 +119,7 @@ spec:
             - --state-dir
             - /state
             - --run-id
-            - lucas-crop-attempt-15-verify
+            - lucas-crop-attempt-16-verify
             - --namespace
             - prithvi-training-default
           env:
