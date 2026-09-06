@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -676,6 +678,203 @@ def test_freeze_operator_has_narrow_resumable_ice_authority(render_identity):
     ]
 
 
+def test_freeze_recovery_is_one_shot_exact_restore_only(render_identity):
+    assert manifests.CROP_SOURCE_FREEZE_OPERATOR_RUN_ID == (
+        "lucas-crop-attempt-15-verify"
+    )
+    assert manifests.CROP_SOURCE_FREEZE_RECOVERY_RUN_ID == (
+        "lucas-crop-attempt-14-verify"
+    )
+    job = yaml.safe_load(manifests.render_crop_source_freeze_recovery())
+    assert job["apiVersion"] == "batch/v1"
+    assert job["kind"] == "Job"
+    assert job["metadata"]["name"] == (
+        "ladder-crop-source-freeze-recovery-attempt-14"
+    )
+    assert job["metadata"]["namespace"] == "prithvi-training-default"
+
+    job_spec = job["spec"]
+    pod = job_spec["template"]["spec"]
+    assert job_spec["backoffLimit"] == 0
+    assert "ttlSecondsAfterFinished" not in job_spec
+    assert pod["activeDeadlineSeconds"] == 900
+    assert pod["automountServiceAccountToken"] is False
+    assert pod["serviceAccountName"] == "ladder-crop-source-freeze-operator"
+    assert pod["restartPolicy"] == "Never"
+
+    container = pod["containers"][0]
+    assert container["name"] == "exact-restore"
+    assert container["image"] == IMAGE_REF
+    assert container["command"] == ["/usr/local/bin/python"]
+    assert container["args"][0] == "-c"
+    recovery_code = container["args"][1]
+    assert "(os.geteuid(), os.getegid()) != (2000, 2000)" in recovery_code
+    assert "operator._verify_runtime_identity()" in recovery_code
+    assert "operator._require_state_root(Path(\"/state\"))" in recovery_code
+    assert "operator._install_in_cluster_kubeconfig()" in recovery_code
+    assert "old_operator_objects" in recovery_code
+    assert 'labels.get("job-name")' in recovery_code
+    assert 'reference.get("controller") is True' in recovery_code
+    assert '.startswith(' in recovery_code
+    assert '== "ladder-crop-source-freeze-operator"' in recovery_code
+    assert "freeze.restore(" in recovery_code
+    assert 'run_dir=Path("/state") / "lucas-crop-attempt-14-verify"' in (
+        recovery_code
+    )
+    assert all(
+        forbidden not in recovery_code
+        for forbidden in ("freeze.hold(", "freeze.watch(", "freeze.gate_phase(")
+    )
+
+    env = {item["name"]: item for item in container["env"]}
+    assert env["CROP_DISTILL_SOURCE_GIT_SHA"]["value"] == SOURCE_SHA
+    assert env["CROP_DISTILL_IMAGE"]["value"] == IMAGE_REF
+    assert env["POD_UID"]["valueFrom"]["fieldRef"]["fieldPath"] == (
+        "metadata.uid"
+    )
+    assert container["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+        "readOnlyRootFilesystem": True,
+        "runAsNonRoot": True,
+        "runAsUser": 2000,
+        "runAsGroup": 2000,
+    }
+    _assert_ice_resources(container)
+    mounts = _mounts_by_path(container)
+    assert mounts["/state"]["subPath"] == (
+        "ops/crop-distill/source-access/crop-source-freeze"
+    )
+    assert mounts["/var/run/secrets/kubernetes.io/serviceaccount"][
+        "readOnly"
+    ] is True
+    projected = next(
+        volume["projected"]
+        for volume in pod["volumes"]
+        if volume["name"] == "kube-api-access"
+    )
+    token = projected["sources"][0]["serviceAccountToken"]
+    assert token == {"expirationSeconds": 600, "path": "token"}
+
+
+def test_freeze_recovery_executes_guard_and_exact_restore(
+    render_identity,
+    monkeypatch,
+):
+    recovery_code = yaml.safe_load(
+        manifests.render_crop_source_freeze_recovery()
+    )["spec"]["template"]["spec"]["containers"][0]["args"][1]
+    calls = []
+
+    class FakeKubectl:
+        def __init__(self, *, context, namespace):
+            calls.append(("client", context, namespace))
+
+        def inventory(self):
+            return []
+
+    fake_freeze = types.SimpleNamespace(
+        Kubectl=FakeKubectl,
+        restore=lambda client, *, run_dir, timeout_seconds: calls.append(
+            ("restore", client, run_dir, timeout_seconds)
+        ),
+    )
+    fake_operator = types.SimpleNamespace(
+        _verify_runtime_identity=lambda: calls.append(("identity",)),
+        _require_state_root=lambda path: calls.append(("state", path)),
+        _install_in_cluster_kubeconfig=lambda: calls.append(("kubeconfig",)),
+    )
+    monkeypatch.setitem(sys.modules, "crop_source_freeze", fake_freeze)
+    monkeypatch.setitem(
+        sys.modules,
+        "crop_source_freeze_operator",
+        fake_operator,
+    )
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(os, "geteuid", lambda: 2000)
+    monkeypatch.setattr(os, "getegid", lambda: 2000)
+
+    exec(compile(recovery_code, "<freeze-recovery>", "exec"), {})
+
+    assert calls[0:4] == [
+        ("identity",),
+        ("state", Path("/state")),
+        ("kubeconfig",),
+        ("client", "", "prithvi-training-default"),
+    ]
+    restore_call = calls[4]
+    assert restore_call[0] == "restore"
+    assert restore_call[2:] == (
+        Path("/state/lucas-crop-attempt-14-verify"),
+        60.0,
+    )
+
+
+def test_freeze_recovery_refuses_old_owner_reference(
+    render_identity,
+    monkeypatch,
+):
+    recovery_code = yaml.safe_load(
+        manifests.render_crop_source_freeze_recovery()
+    )["spec"]["template"]["spec"]["containers"][0]["args"][1]
+    restored = []
+
+    class FakeKubectl:
+        def __init__(self, **_kwargs):
+            pass
+
+        def inventory(self):
+            return [{
+                "kind": "Pod",
+                "metadata": {
+                    "name": "renamed-pod",
+                    "labels": {},
+                    "ownerReferences": [{
+                        "kind": "Job",
+                        "name": "ladder-crop-source-freeze-operator",
+                        "controller": True,
+                    }],
+                },
+            }]
+
+    fake_freeze = types.SimpleNamespace(
+        Kubectl=FakeKubectl,
+        restore=lambda *_args, **_kwargs: restored.append(True),
+    )
+    fake_operator = types.SimpleNamespace(
+        _verify_runtime_identity=lambda: None,
+        _require_state_root=lambda _path: None,
+        _install_in_cluster_kubeconfig=lambda: None,
+    )
+    monkeypatch.setitem(sys.modules, "crop_source_freeze", fake_freeze)
+    monkeypatch.setitem(
+        sys.modules,
+        "crop_source_freeze_operator",
+        fake_operator,
+    )
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(os, "geteuid", lambda: 2000)
+    monkeypatch.setattr(os, "getegid", lambda: 2000)
+
+    with pytest.raises(RuntimeError, match="old freeze operator still exists"):
+        exec(compile(recovery_code, "<freeze-recovery>", "exec"), {})
+    assert restored == []
+
+
+def test_freeze_recovery_refuses_wrong_runtime_identity(
+    render_identity,
+    monkeypatch,
+):
+    recovery_code = yaml.safe_load(
+        manifests.render_crop_source_freeze_recovery()
+    )["spec"]["template"]["spec"]["containers"][0]["args"][1]
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(os, "getegid", lambda: 2000)
+
+    with pytest.raises(RuntimeError, match="recovery requires UID:GID 2000:2000"):
+        exec(compile(recovery_code, "<freeze-recovery>", "exec"), {})
+
+
 def test_freeze_operator_refuses_unpublished_image(render_identity, monkeypatch):
     monkeypatch.setattr(
         manifests,
@@ -707,11 +906,41 @@ def test_operator_only_writes_no_other_manifest(
     ]
 
 
+def test_recovery_only_writes_no_other_manifest(
+    render_identity,
+    monkeypatch,
+    tmp_path,
+):
+    output_dir = tmp_path / "k8s" / "ladder"
+    monkeypatch.setattr(manifests, "REPO", tmp_path)
+    monkeypatch.setattr(manifests, "OUT_DIR", output_dir)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["gen_ladder_manifests.py", "--crop-recovery-only"],
+    )
+
+    assert manifests.main() == 0
+    assert [path.name for path in output_dir.iterdir()] == [
+        "crop-source-freeze-recovery-job.yaml"
+    ]
+
+
 def test_committed_operator_manifest_is_current(monkeypatch):
     monkeypatch.setattr(
         sys,
         "argv",
         ["gen_ladder_manifests.py", "--crop-operator-only", "--check"],
+    )
+
+    assert manifests.main() == 0
+
+
+def test_committed_recovery_manifest_is_current(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["gen_ladder_manifests.py", "--crop-recovery-only", "--check"],
     )
 
     assert manifests.main() == 0

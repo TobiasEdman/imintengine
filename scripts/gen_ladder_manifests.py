@@ -146,13 +146,17 @@ CROP_SOURCE_ACCESS_IMAGE = (
     "7c4fe00f9df2a28caaf05f006f2c567ffb912d514bff13289ef6ec3dd039ba7c"
 )
 CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA = (
-    "fe22f20bc6f11a3ffc85aeb4a889231dce340a29"
+    "e2d9fd79c2e279c74872d7cc59b2dc695a8b4a07"
 )
 CROP_SOURCE_FREEZE_OPERATOR_IMAGE = (
     "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
-    "53f8cae932e0db6d6857f70f73a97111d9add2b3bd28aa533600f7e5906ae086"
+    "d7f8889bef45ce73b36d1ed7be2db6a6739ddb7f265b2564b2d26b3e09024164"
 )
-CROP_SOURCE_FREEZE_OPERATOR_RUN_ID = "lucas-crop-attempt-14-verify"
+CROP_SOURCE_FREEZE_OPERATOR_RUN_ID = "lucas-crop-attempt-15-verify"
+CROP_SOURCE_FREEZE_RECOVERY_RUN_ID = "lucas-crop-attempt-14-verify"
+CROP_SOURCE_FREEZE_RECOVERY_JOB_NAME = (
+    "ladder-crop-source-freeze-recovery-attempt-14"
+)
 CROP_DISTILL_SPLIT_SOURCE_GIT_SHA = (
     "c6ad69242e7239662461bf7ff0b6bcd4d072509a"
 )
@@ -948,6 +952,145 @@ spec:
                         fieldPath: metadata.namespace
 """
 
+CROP_SOURCE_FREEZE_RECOVERY_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {job_name}
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-recovery }}
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-recovery }}
+    spec:
+      activeDeadlineSeconds: 900
+      automountServiceAccountToken: false
+      serviceAccountName: ladder-crop-source-freeze-operator
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        seccompProfile: {{ type: RuntimeDefault }}
+      containers:
+        - name: exact-restore
+          image: {operator_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/python
+          args:
+            - -c
+            - |
+              from pathlib import Path
+              import os
+              import sys
+              sys.path.insert(0, "/opt/imintengine/scripts")
+              import crop_source_freeze as freeze
+              import crop_source_freeze_operator as operator
+              if (os.geteuid(), os.getegid()) != (2000, 2000):
+                  raise RuntimeError("recovery requires UID:GID 2000:2000")
+              operator._verify_runtime_identity()
+              operator._require_state_root(Path("/state"))
+              operator._install_in_cluster_kubeconfig()
+              client = freeze.Kubectl(
+                  context="", namespace="prithvi-training-default"
+              )
+              old_operator_objects = []
+              for item in client.inventory():
+                  metadata = item.get("metadata", {{}})
+                  labels = metadata.get("labels", {{}})
+                  owner_references = metadata.get("ownerReferences", [])
+                  is_old_job = (
+                      item.get("kind") == "Job"
+                      and metadata.get("name")
+                      == "ladder-crop-source-freeze-operator"
+                  )
+                  is_old_pod = item.get("kind") == "Pod" and (
+                      metadata.get("name", "").startswith(
+                          "ladder-crop-source-freeze-operator-"
+                      )
+                      or labels.get("job-name")
+                      == "ladder-crop-source-freeze-operator"
+                      or any(
+                          reference.get("kind") == "Job"
+                          and reference.get("name")
+                          == "ladder-crop-source-freeze-operator"
+                          and reference.get("controller") is True
+                          for reference in owner_references
+                      )
+                  )
+                  if is_old_job or is_old_pod:
+                      old_operator_objects.append(
+                          f"{{item.get('kind')}}/{{metadata.get('name')}}"
+                      )
+              if old_operator_objects:
+                  raise RuntimeError(
+                      "old freeze operator still exists: "
+                      + ", ".join(sorted(old_operator_objects))
+                  )
+              freeze.restore(
+                  client,
+                  run_dir=Path("/state") / "{run_id}",
+                  timeout_seconds=60.0,
+              )
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{operator_source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{operator_image}"
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {{ drop: ["ALL"] }}
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 2000
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "500m", memory: "256Mi" }}
+            limits: {{ cpu: "500m", memory: "256Mi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /state
+              subPath: ops/crop-distill/source-access/crop-source-freeze
+            - name: tmp
+              mountPath: /tmp
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: kube-api-access
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  expirationSeconds: 600
+                  path: token
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
+"""
+
 CROP_DENY_EGRESS_TEMPLATE = """apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -1247,6 +1390,23 @@ def render_crop_source_freeze_operator() -> str:
     )
 
 
+def render_crop_source_freeze_recovery() -> str:
+    _validate_freeze_operator_runtime_identity()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# One-shot exact restoration of the interrupted attempt-14 freeze.\n"
+        "# It reuses the reviewed operator image and existing narrow RBAC,\n"
+        "# but cannot acquire a new hold or launch a split workload.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_SOURCE_FREEZE_RECOVERY_TEMPLATE.format(
+        job_name=CROP_SOURCE_FREEZE_RECOVERY_JOB_NAME,
+        operator_image=CROP_SOURCE_FREEZE_OPERATOR_IMAGE,
+        operator_source_git_sha=CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA,
+        run_id=CROP_SOURCE_FREEZE_RECOVERY_RUN_ID,
+    )
+
+
 def render_crop_deny_egress() -> str:
     header = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
@@ -1463,6 +1623,11 @@ def main() -> int:
         help="write/check only the digest-pinned in-cluster freeze operator",
     )
     phase.add_argument(
+        "--crop-recovery-only",
+        action="store_true",
+        help="write/check only the one-shot exact freeze recovery Job",
+    )
+    phase.add_argument(
         "--crop-bootstrap-only",
         action="store_true",
         help=(
@@ -1492,7 +1657,7 @@ def main() -> int:
 
     if not args.non_crop_only:
         try:
-            if args.crop_operator_only:
+            if args.crop_operator_only or args.crop_recovery_only:
                 _validate_freeze_operator_runtime_identity()
             elif args.crop_bootstrap_only:
                 _validate_source_access_runtime_identity()
@@ -1518,6 +1683,10 @@ def main() -> int:
     elif args.crop_operator_only:
         outputs[OUT_DIR / "crop-source-freeze-operator-job.yaml"] = (
             render_crop_source_freeze_operator()
+        )
+    elif args.crop_recovery_only:
+        outputs[OUT_DIR / "crop-source-freeze-recovery-job.yaml"] = (
+            render_crop_source_freeze_recovery()
         )
     elif args.crop_bootstrap_only:
         outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
@@ -1560,6 +1729,7 @@ def main() -> int:
         )
     if not (
         args.crop_operator_only
+        or args.crop_recovery_only
         or args.crop_bootstrap_only
         or args.crop_apply_only
         or args.crop_split_only
