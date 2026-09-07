@@ -1,6 +1,7 @@
 """Checkpoint descriptor integrity tests that do not require a Torch install."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import inspect
@@ -30,6 +31,21 @@ def _identity(path: Path) -> tuple[int, str]:
     return len(payload), hashlib.sha256(payload).hexdigest()
 
 
+def _stub_serialization(module: types.ModuleType) -> None:
+    """Model the safe_globals surface the loader uses: a context manager
+    taking a non-empty allowlist. The stub verifies shape, not membership —
+    membership is covered by the real-torch numpy-scalar test."""
+    serialization = types.ModuleType("torch.serialization")
+
+    @contextlib.contextmanager
+    def safe_globals(allowlist):
+        assert isinstance(allowlist, list) and allowlist
+        yield
+
+    serialization.safe_globals = safe_globals
+    module.serialization = serialization
+
+
 def _fake_torch(monkeypatch: pytest.MonkeyPatch, expected: bytes):
     module = types.ModuleType("torch")
     calls: list[dict] = []
@@ -41,6 +57,7 @@ def _fake_torch(monkeypatch: pytest.MonkeyPatch, expected: bytes):
         return {"payload": source.read()}
 
     module.load = load
+    _stub_serialization(module)
     monkeypatch.setitem(sys.modules, "torch", module)
     return calls
 
@@ -81,6 +98,7 @@ def test_shared_checkpoint_mutation_before_load_cannot_change_private_bytes(
         return {"payload": source.read()}
 
     module.load = load
+    _stub_serialization(module)
     monkeypatch.setitem(sys.modules, "torch", module)
 
     loaded = inference._load_checkpoint_for_inference(
