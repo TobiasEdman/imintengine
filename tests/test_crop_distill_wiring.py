@@ -44,7 +44,11 @@ from scripts.gen_ladder_manifests import (  # noqa: E402
     render_lucas_crop_split,
 )
 
-MODELS = sorted(DISTILL)
+# Crop columns come from the crop protocol, not the ladder's DISTILL map:
+# DISTILL also carries ladder/NFI-only columns (prithvi300m4f, issue #39)
+# that deliberately have no crop consumer. The exclusion is asserted
+# positively in test_frame_ablation_column_is_not_crop_rendered.
+MODELS = sorted(crop_protocol.CROP_MODELS)
 FIXTURE_GIT_SHA = "a" * 40
 FIXTURE_CROP_IMAGE = (
     "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "b" * 64
@@ -135,6 +139,18 @@ def test_crop_renderers_cover_every_column_without_committed_manifests():
     assert yaml.safe_load(render_lucas_crop_split())["kind"] == "Job"
     assert yaml.safe_load(render_crop_storage_prep())["kind"] == "Job"
     assert yaml.safe_load(render_crop_deny_egress())["kind"] == "NetworkPolicy"
+
+
+def test_frame_ablation_column_is_not_crop_rendered():
+    """prithvi300m4f is ladder/NFI-only (issue #39): no crop UID slot, no
+    crop consumer. The exclusion is an invariant, not a coverage gap — the
+    column must exist in DISTILL, be absent from the crop protocol, refuse
+    to crop-render, and have no committed crop manifest."""
+    assert "prithvi300m4f" in DISTILL
+    assert "prithvi300m4f" not in crop_protocol.CROP_MODELS
+    with pytest.raises(ValueError, match="unknown crop-distill model"):
+        render_crop_distill("prithvi300m4f")
+    assert not _crop_path("prithvi300m4f").exists()
 
 
 @pytest.mark.parametrize("model", MODELS)
