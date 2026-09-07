@@ -173,3 +173,122 @@ eliminerar *tyst* fel: efter dem vet en avsändare alltid om ett meddelande
 är levererat, och inget försvinner. Latensen kvarstår tills P1-2 finns,
 men den blir då **synlig och korrekt attribuerad** i stället för att
 feltolkas som utebliven granskning.
+
+---
+
+# Tillägg — människa↔agent-dialogen
+
+**Datum:** 2026-09-07. **Föranlett av:** Tobias fråga *"har ni tittat på
+våra sessioner och dialoger också?"* (05:57Z), understödd av Codex
+addendum samma minut. **Granskat transkript:** exakt en fil,
+`~/.claude/projects/-Users-tobiasedman-Developer-ImintEngine/`
+`4f34d985-bf1e-4233-94b4-b71f1985f35d.jsonl` — Claude-sessionen som körde
+hela #36-rolloutgranskningen 2026-09-02→09-07, 131 användarturer.
+Codex-sidans människodialog är **inte** granskad; den ligger utanför min
+åtkomst och måste mätas av Codex själv för att bilden ska bli hel.
+
+## Varför den ursprungliga analysen var otillräcklig
+
+Grundanalysen mätte bara agent↔agent-kön och drog slutsatsen att ingen
+runtime tar emot något medan den är inaktiv. Men om ingen agent pollar,
+så är **människan den faktiska transporten** — och då är varje uppmätt
+"glapp" i själva verket *tiden tills Tobias puffade mottagaren*. Att
+utelämna människodialogen var att mäta symptomet och hoppa över
+mekanismen. Tobias fråga var alltså en korrekt granskningsanmärkning på
+mitt eget arbete, inte en utvidgning av scopet.
+
+## Mätning
+
+| kategori | turer | andel |
+|---|---|---|
+| **Transport** (relä av Codex-text, *"har Codex läst X?"*) | 32 | 24,4 % |
+| **Status/ETA-pollning** | 18 | 13,7 % |
+| Avbrott + *"Try again"* | 27 | 20,6 % |
+| Skill/system | 6 | 4,6 % |
+| **Faktisk styrning och arbete** | 48 | **36,6 %** |
+
+- Transport + status = **50 turer, 38,2 %** av allt Tobias skrev
+- Inklusive avbrott: **58,8 % overhead**
+- 18 mänskliga frånvaroluckor > 2 h, totalt **112,8 h = 85 % av
+  sessionens väggklocka**
+
+## Fynd 7 — människan är transporten, och är borta 85 % av tiden (P0)
+
+Ingen runtime pollar när den är inaktiv (fynd 1). Leveransen sker alltså
+i praktiken när Tobias är närvarande. Han är frånvarande 85 % av
+väggklockan.
+
+Det förklarar diskrepansen i grunddatan som annars ser konstig ut:
+**medianlatens 7,7 min mot medel 80 min.** När båda parter är vakna är
+kanalen snabb. När människan kliver undan stannar den helt. Det är inte
+två olika beteenden hos agenterna utan ett beteende hos systemet, sett
+under två olika förutsättningar.
+
+**Konsekvens för prioritering:** en schemalagd idle-vaktare stod som P1-2
+i grundrapporten. Den bedömningen var fel. Om människan är den enda
+transporten och är borta 85 % av tiden är idle-vaktaren **P0**, inte P1 —
+den är skillnaden mellan en kanal som fungerar och en som fungerar bara
+när någon står bredvid.
+
+## Fynd 8 — människan tvingades bli kvittensmekanismen (P0)
+
+Eftersom ingen ACK finns (fynd 3) är Tobias den enda part som kan
+observera båda sidor. Frasen *"kolla om Codex har läst X"* förekommer
+ordagrant sex gånger i transkriptet, och varje gång fungerade den som en
+manuell read-receipt.
+
+Det är samma sak som fynd 3, sett från andra hållet: den saknade
+tekniska funktionen har inte försvunnit, den har flyttats till en person.
+
+## Fynd 9 — dialogen var systemets felupptäckt
+
+Fyra gånger avslöjade en enkel människofråga ett falskt påstående om delat
+tillstånd som ingen agent hade upptäckt:
+
+| tur | frågan | vad den avslöjade |
+|---|---|---|
+| 104 | *"Codex påstår att den inte har pass"* | mitt PASS låg redan i kön |
+| 110 | relä: *"Claude har ännu inte svarat"* | mitt BLOCK låg redan i kön |
+| 125 | relä: *"Enda blockeraren är Claudes review"* | mitt PASS låg redan i kön |
+| 130 | *"har ni tittat på våra dialoger också?"* | min egen analys var för snävt avgränsad |
+
+Att en människa är bra på att upptäcka fel är inget problem. Att han är
+den *enda* mekanismen som gör det, för en klass av fel som är triviell att
+detektera automatiskt, är det.
+
+## Fynd 10 — min egen andel av friktionen (P1)
+
+27 av 131 turer (20,6 %) är avbrott eller *"Try again"*. Det är inte
+Codex fel och inte kanalens: användaren avbröt **mig** i var femte tur.
+
+Rimliga tolkningar, som jag inte kan avgöra mellan utan att fråga: svaren
+var för långa, jag fortsatte arbeta när ett kort besked räckte, eller jag
+började agera innan riktningen var bekräftad. Oavsett vilket är det ett
+mätbart mått på att min utdata inte matchade vad som efterfrågades, och
+det hör hemma i samma rapport som kritiken mot Codex.
+
+## Åtgärder — tillägg och omprioritering
+
+**P0-5 (uppgraderad från P1-2). Schemalagd idle-vaktare.** Motivet är inte
+längre bekvämlighet utan att människan annars *är* transporten under 85 %
+av tiden.
+*Acceptanstest:* med båda sessionerna inaktiva och ingen människa
+närvarande ytas ett meddelande postat vid T senast T+N.
+
+**P1-4. Frågbar statusyta.** 18 turer var *"status?"* eller *"eta"*. En
+enda kommando- eller filbaserad yta som svarar *vad väntar på vem, sedan
+när* eliminerar den kategorin.
+*Acceptanstest:* `agentic-continuity status --repo X` svarar med
+väntande-på-part och ålder utan att en agent behöver köras.
+
+**P2-2. Mät Codex människodialog.** Denna rapport täcker en sida. Codex
+bör köra samma klassificering på sitt eget transkript; utan det är
+relätalen ensidiga.
+
+## Vad tillägget ändrar i slutsatsen
+
+Grundrapporten sade att P0-1 (TTL) och P0-3 (ACK) eliminerar *tyst* fel
+medan latensen kvarstår. Det står fast. Men latensen är inte en olägenhet
+som kan vänta till P1 — den bärs idag av en människa, till en mätbar
+kostnad av 38 % av hans turer i den här sessionen. Idle-vaktaren är
+därför en P0-åtgärd, och statusytan är det som gör att han slipper fråga.
