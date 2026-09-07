@@ -32,7 +32,7 @@ spec:
         accelerator: nvidia-gtx-2080ti
       containers:
         - name: crop-distill
-          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:39a3126ecf4f119f0763be745a45abc86231398ca01cef35c08b3dd630ddb745
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:dba3a47b2936a8b4f64bbaacc1e2bbaa4ddc4f57802077f7c6c576f63de996cf
           imagePullPolicy: IfNotPresent
           command:
             - /usr/local/bin/python
@@ -42,9 +42,9 @@ spec:
             - terramind
           env:
             - name: CROP_DISTILL_SOURCE_GIT_SHA
-              value: "7a68d9d4ce690b2a42ec50912dc676376652b2e3"
+              value: "1fd08fad9ba9ab599415230938e6fade357cd5eb"
             - name: CROP_DISTILL_IMAGE
-              value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:39a3126ecf4f119f0763be745a45abc86231398ca01cef35c08b3dd630ddb745"
+              value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:dba3a47b2936a8b4f64bbaacc1e2bbaa4ddc4f57802077f7c6c576f63de996cf"
             - name: CROP_DISTILL_SPLIT_MANIFEST_SHA256
               value: "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed"
             - name: CROP_DISTILL_SPLIT_SOURCE_GIT_SHA
