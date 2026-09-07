@@ -166,6 +166,25 @@ def _copy_and_hash_open_file(source: BinaryIO, destination: BinaryIO) -> tuple[i
     return total, digest.hexdigest()
 
 
+def _numpy_metric_safe_globals() -> list:
+    """Exactly the numpy globals a metrics-bearing checkpoint pickles.
+
+    Training saves scalar metrics (epoch, mIoU) as numpy scalars; unpickling
+    them needs numpy's scalar reconstructor plus the dtype classes. All are
+    pure data carriers with no code-execution surface, so allowlisting them
+    keeps the fail-closed ``weights_only=True`` posture for everything else.
+    ``np._core`` is numpy>=2; ``np.core`` is the 1.x spelling.
+    """
+    import numpy as np
+
+    core = getattr(np, "_core", None) or np.core
+    dtype_classes = [
+        cls for cls in vars(np.dtypes).values()
+        if isinstance(cls, type) and issubclass(cls, np.dtype)
+    ]
+    return [core.multiarray.scalar, np.dtype, *dtype_classes]
+
+
 def _load_checkpoint_for_inference(
     checkpoint_path: str | Path,
     *,
@@ -231,11 +250,14 @@ def _load_checkpoint_for_inference(
                 )
             private_checkpoint.flush()
             private_checkpoint.seek(0)
-            payload = torch.load(
-                private_checkpoint,
-                map_location=map_location,
-                weights_only=True,
-            )
+            with torch.serialization.safe_globals(
+                _numpy_metric_safe_globals()
+            ):
+                payload = torch.load(
+                    private_checkpoint,
+                    map_location=map_location,
+                    weights_only=True,
+                )
             return payload
     except OSError as exc:
         raise CheckpointIdentityError(

@@ -100,6 +100,10 @@ spec:
               # reads heads/*_distillability.json. Dangling until the
               # first distill job runs — cells render "—"/waiting.
               ln -sfn /cephfs/distill /www/ladder/distill
+              # Inference matrix: PNGs + matrix.json written by the
+              # ladder-inference-matrix job. Dangling until its first run —
+              # the panel renders an awaiting-state.
+              ln -sfn /cephfs/ladder_inference /www/ladder/inference
 
               # Patch 1: null-safe tile-count cells (avoids TypeError when
               # train_tiles/val_tiles missing from the new schema).

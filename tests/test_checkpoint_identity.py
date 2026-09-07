@@ -104,6 +104,33 @@ def test_checkpoint_rejects_size_digest_and_partial_identity(tmp_path: Path) -> 
         )
 
 
+def test_checkpoint_with_numpy_scalar_metrics_loads(tmp_path: Path) -> None:
+    """Training checkpoints pickle metrics as numpy scalars; the narrow
+    allowlist must admit them without widening beyond numpy data types.
+    Regression: all six crop-distill jobs failed at extract-features on
+    ``numpy._core.multiarray.scalar`` (2026-09-07)."""
+    np = pytest.importorskip("numpy")
+    checkpoint = tmp_path / "checkpoint.pt"
+    torch.save(
+        {
+            "epoch": np.int64(30),
+            "best_miou": np.float64(0.7123),
+            "model_state_dict": {"w": torch.zeros(2)},
+        },
+        checkpoint,
+    )
+    size, sha256 = _identity(checkpoint)
+
+    payload = inference._load_checkpoint_for_inference(
+        checkpoint,
+        expected_size=size,
+        expected_sha256=sha256,
+    )
+
+    assert int(payload["epoch"]) == 30
+    assert float(payload["best_miou"]) == pytest.approx(0.7123)
+
+
 def test_checkpoint_never_falls_back_to_unsafe_pickle(tmp_path: Path) -> None:
     marker = tmp_path / "pickle-executed"
 
