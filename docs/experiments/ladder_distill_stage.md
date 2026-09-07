@@ -249,6 +249,13 @@ The stage is bootstrapped in this fixed order:
    Full generation rejects a zero, malformed, or abbreviated source, image,
    PLAN, completion, or split identity. Review E before any crop Job runs.
 
+   Commit E pins the attempt-16 verified manifest digest
+   `0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed`.
+   The verifier observed 3,555 qualified plots split into 2,491 distill and
+   1,064 holdout rows, then the external operator restored the held freeze
+   exactly. The generated crop Jobs remain unlaunched pending their separate
+   reviewed rollout.
+
 `CROP_DISTILL_SOURCE_GIT_SHA` is owned by this crop stage. In particular,
 PR #37's inference-matrix payload has its own source constant and must never
 bump the crop anchor. Ordinary generator or documentation edits also leave
