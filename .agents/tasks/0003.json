@@ -2,9 +2,12 @@
   "id": "0003",
   "subject": "Pin rebuilt crop-distill runtime and relaunch consumers",
   "description": "Pin the signed crop-distill image built from main@1fd08fad after the safe-loader fix, regenerate the six consumer manifests, obtain exact-SHA cross-review, relaunch all six evidence consumers, and verify they pass the early phase without mutating the frozen split.",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/codex/crop-image-pin",
   "created_at": "2026-09-07T17:53:11Z",
-  "updated_at": "2026-09-07T17:53:11Z"
+  "updated_at": "2026-09-07T17:54:25Z",
+  "claimed_by": "te-codex",
+  "runtime": "codex",
+  "claimed_at": "2026-09-07T17:54:25Z"
 }
