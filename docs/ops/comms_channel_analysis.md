@@ -184,8 +184,11 @@ addendum samma minut. **Granskat transkript:** exakt en fil,
 `~/.claude/projects/-Users-tobiasedman-Developer-ImintEngine/`
 `4f34d985-bf1e-4233-94b4-b71f1985f35d.jsonl` — Claude-sessionen som körde
 hela #36-rolloutgranskningen 2026-09-02→09-07, 131 användarturer.
-Codex-sidans människodialog är **inte** granskad; den ligger utanför min
-åtkomst och måste mätas av Codex själv för att bilden ska bli hel.
+Codex-sidans människodialog **är** granskad, se nedan. En tidigare version
+av detta stycke påstod att den låg utanför min åtkomst. **Det var fel och
+ej kontrollerat innan det skrevs** — 648 filer under `~/.codex` nämner
+ImintEngine och är läsbara. Rättat 2026-09-07 efter att Tobias frågade
+varför Codex kan läsa våra transkript men inte tvärtom.
 
 ## Varför den ursprungliga analysen var otillräcklig
 
@@ -281,9 +284,14 @@ när* eliminerar den kategorin.
 *Acceptanstest:* `agentic-continuity status --repo X` svarar med
 väntande-på-part och ålder utan att en agent behöver köras.
 
-**P2-2. Mät Codex människodialog.** Denna rapport täcker en sida. Codex
-bör köra samma klassificering på sitt eget transkript; utan det är
-relätalen ensidiga.
+**P2-2. Åtgärda import-asymmetrin.** Codex har
+`~/.codex/external_agent_session_imports.json`, som pekar in i
+`~/.claude/projects/` — alltså en inbyggd väg att importera Claude-sessioner.
+Någon motsvarighet finns inte i `~/.claude`. Codex ser människodialogen med
+Claude *by design*; Claude ser Codex bara genom att aktivt leta. Det gör
+lägesbilderna osymmetriska på ett sätt ingen av parterna annonserar.
+*Acceptanstest:* båda runtimes kan lista motpartens sessioner för ett givet
+repo via ett dokumenterat kommando, eller ingen kan det.
 
 ## Vad tillägget ändrar i slutsatsen
 
@@ -292,3 +300,33 @@ medan latensen kvarstår. Det står fast. Men latensen är inte en olägenhet
 som kan vänta till P1 — den bärs idag av en människa, till en mätbar
 kostnad av 38 % av hans turer i den här sessionen. Idle-vaktaren är
 därför en P0-åtgärd, och statusytan är det som gör att han slipper fråga.
+
+
+## Tillägg 2 — Codex-sidans människodialog (mätt 2026-09-07)
+
+**Granskat:** 156 Codex-sessionsfiler under `~/.codex/sessions/2026/09/{02..07}`
+som nämner ImintEngine.
+
+**Filtrering, som är avgörande för att talen ska betyda något:** de
+filerna innehåller 1 948 poster med `role: user`, men bara **397** är
+äkta människoturer. Resten är harness-injektioner — AGENTS.md-dumpar,
+approval-prompter, återinmatad agenthistorik. En okritisk körning ger
+"35 % relä", vilket är rent nonsens. Talen nedan bygger på de 397.
+
+| | Claude-sidan | Codex-sidan |
+|---|---|---|
+| äkta människoturer | 131 | 397 |
+| nämner motparten / relä | 32 (24 %) | 38 (10 %) |
+| status/ETA | 18 (14 %) | 58 (15 %) |
+| **union** | **50 (38 %)** | **71 (18 %)** |
+
+**Förbehåll:** Claude-sidan är klassificerad tur för tur manuellt,
+Codex-sidan med nyckelord. Procentsatserna är därför inte strikt
+jämförbara. Det som håller är storleksordningen och summan: **~121 turer
+av mänsklig relä- och statusbörda** över båda sidorna under sex dygn.
+
+**Observation utöver talen:** Codex-loggen innehåller upprepade identiska
+turer (*"granska #36 igen"*, *"vi pausar målet"*) inom samma minut, vilket
+tyder på att en och samma människotur fanns ut till flera parallella
+Codex-sessioner. Det inflaterar dess turräkning och är ytterligare ett skäl
+att inte jämföra procenten rakt av.
