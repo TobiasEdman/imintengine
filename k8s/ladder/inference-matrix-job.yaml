@@ -48,16 +48,16 @@ spec:
               mkdir -p /workspace && cd /workspace
               git init -q imintengine && cd imintengine
               git remote add origin https://github.com/TobiasEdman/ImintEngine.git
-              HEAD_SHA=32f081c83b127013d6943f47e69d7f89c1503794
+              HEAD_SHA=4b93c2e22da2d1c8f0faee0fa664c0968b5065b2
               git fetch -q --depth 1 origin "$HEAD_SHA"
               git checkout -q "$HEAD_SHA"
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
               echo "PINNED SOURCE: $HEAD_SHA"
               # ONE pod loads every backbone family, so it needs the union
               # of the per-column loader deps.
+              pip install --quiet --no-cache-dir "git+https://github.com/Clay-foundation/model.git"
               git clone --depth 1 https://github.com/antofuller/CROMA /workspace/CROMA && pip install --quiet --no-cache-dir -e /workspace/CROMA || true
               pip install --quiet --no-cache-dir terratorch
-              pip install --quiet --no-cache-dir "git+https://github.com/Clay-foundation/model.git"
               mkdir -p /cephfs/ops/deps
               pip freeze > /cephfs/ops/deps/ladder-inference-matrix-$RUN_ID.txt
 
