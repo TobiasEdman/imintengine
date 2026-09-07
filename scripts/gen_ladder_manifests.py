@@ -52,8 +52,11 @@ OUT_DIR = REPO / "k8s" / "ladder"
 # stripped below so the ladder cold-starts like every other column.
 BASES = {
     "prithvi300m": "k8s/train-prithvi300m-job.yaml",
-    # Temporal-frame ablation arm (issue #39): byte-identical regime to
-    # prithvi300m except --enable-multitemporal --num-temporal-frames 4.
+    # Temporal-frame comparison arm (issue #39): same training flags as
+    # prithvi300m except --enable-multitemporal --num-temporal-frames 4,
+    # but PINNED runtime identity (digest image + baked source SHA) where
+    # the archived 1f arm ran an earlier one — an exploratory historical
+    # comparison, not a runtime-identical controlled ablation (PR #42).
     "prithvi300m4f": "k8s/train-prithvi300m-4f-job.yaml",
     "prithvi600m": "k8s/train-v8b-nmd2023-long-job.yaml",
     "croma": "k8s/train-croma-job.yaml",

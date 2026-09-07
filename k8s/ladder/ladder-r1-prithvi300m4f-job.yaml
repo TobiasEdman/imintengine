@@ -2,13 +2,15 @@
 # Ladder rung 1 (nmd2018) for prithvi300m4f. Edit the base manifest
 # (k8s/train-prithvi300m-4f-job.yaml) or the generator, then regenerate.
 # Plan: docs/experiments/label_source_ladder.md
-# Prithvi-EO-2.0 300M — 4-FRAME variant (temporal-frame ablation).
+# Prithvi-EO-2.0 300M — 4-FRAME variant (temporal-frame comparison).
 #
-# Byte-identical training regime to train-prithvi300m-job.yaml EXCEPT the two
-# multitemporal flags: --enable-multitemporal --num-temporal-frames 4. That
-# single-axis difference is deliberate — it turns the ladder's accidental
-# single-frame prithvi300m into a controlled 1-frame-vs-4-frame comparison on
-# the SAME backbone, so a delta attributes purely to temporal frames.
+# Same training FLAGS as train-prithvi300m-job.yaml except the two
+# multitemporal flags: --enable-multitemporal --num-temporal-frames 4.
+# NOTE ON THE CLAIM (PR #42 review): the archived 1-frame cells ran an
+# earlier runtime identity (source ceb821f, image digest 6d85378d) while
+# this job pins the current one — so 4f-vs-1f is an EXPLORATORY HISTORICAL
+# comparison, not a runtime-identical controlled ablation. A paired pinned
+# rerun of both arms upgrades it later (separate cost approval).
 #
 # prithvi_300m is native_num_frames=(1,2,3,4) (imint/fm/registry.py) so 4 is
 # admissible; the unified_v2_512 tiles carry 4 frames (autumn + 3 VPP season)
@@ -42,14 +44,14 @@ spec:
               - { key: kubernetes.io/hostname, operator: NotIn, values: ["p02r08srv02"] }
       containers:
       - name: trainer
-        image: python:3.11-slim
+        image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
         env:
         - { name: PYTHONUNBUFFERED, value: "1" }
         - { name: HF_HOME, value: "/cephfs/model_cache/hf" }
         command: ["/bin/bash","-c"]
         args:
         - |
-          set -e
+          set -euo pipefail
           export PYTHONUNBUFFERED=1
           echo "=== Prithvi-300M 4-FRAME member — distill labels + frac head (28-class) — $(date) ==="
           T=$(ls /cephfs/unified_v2_512/*.npz 2>/dev/null | wc -l)
@@ -61,16 +63,23 @@ spec:
           [ "$F" -lt 100 ] && { echo "FATAL: frac sidecars missing"; exit 1; } || true
           apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
           pip install --quiet --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
-          pip install --quiet --no-cache-dir timm numpy scipy scikit-learn huggingface_hub
+          pip install --quiet --no-cache-dir timm numpy==1.26.4 scipy scikit-learn huggingface_hub
           mkdir -p /cephfs/checkpoints/ladder/prithvi300m4f_r1
           rm -f /cephfs/checkpoints/ladder/prithvi300m4f_r1/*.pt.tmp 2>/dev/null || true
+          # BAKED source anchor: no runtime resolution of any mutable ref.
+          # Re-pin deliberately per re-run; a re-run months from now must
+          # execute byte-identical training code.
+          HEAD_SHA=1fd08fad9ba9ab599415230938e6fade357cd5eb
           mkdir -p /workspace && cd /workspace
-          BRANCH=main
-          git clone --depth 1 --branch "$BRANCH" \
-            https://github.com/TobiasEdman/ImintEngine.git imintengine
-          cd /workspace/imintengine
+          git init -q imintengine && cd imintengine
+          git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+          git fetch -q --depth 1 origin "$HEAD_SHA"
+          git checkout -q "$HEAD_SHA"
           pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
-          echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+          echo "PINNED SOURCE: $HEAD_SHA"
+          # Durable runtime-identity record for the run.
+          mkdir -p /cephfs/ops/deps
+          pip freeze > "/cephfs/ops/deps/train-prithvi300m-4f-$(date -u +%Y%m%dT%H%M%SZ).txt"
           grep -q 'enable-tradslag-head' scripts/train_unified.py \
             || { echo "FATAL: tradslag flags missing on clone"; exit 1; }
           cd /cephfs

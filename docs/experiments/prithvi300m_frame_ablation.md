@@ -1,7 +1,8 @@
 # Prithvi-300M temporal-frame ablation (1-frame vs 4-frame)
 
-**Status:** base manifest committed; generator/queue/dashboard wiring + cluster
-run PENDING (gated behind PR #36 — see Sequencing). **Created:** 2026-09-03.
+**Status:** wiring in PR #42; #36 merged 2026-09-07 so both sequencing gates
+are CLEARED — training starts automatically via ladder-queue when #42 merges.
+**Created:** 2026-09-03. **Claim revised 2026-09-07:** see "What this measures".
 
 ## Why
 
@@ -11,9 +12,19 @@ the two using different base manifests. `prithvi_300m` is
 `native_num_frames=(1,2,3,4)` (`imint/fm/registry.py`), so 4 frames is
 admissible; the tiles carry 4 (autumn + 3 VPP season). Rather than *replace*
 the 1-frame column (losing the data point), we **add** a 4-frame column so the
-pair becomes a controlled ablation: identical backbone, identical
-hyperparameters, ONLY `--enable-multitemporal --num-temporal-frames 4` differs
-→ a delta attributes purely to temporal frames. [user-stated 2026-09-03]
+pair shares backbone, hyperparameters and training flags, with ONLY
+`--enable-multitemporal --num-temporal-frames 4` differing at the flag level.
+[user-stated 2026-09-03]
+
+## What this measures (revised 2026-09-07, PR #42 review)
+
+The archived 1-frame cells ran an earlier runtime identity (source
+`ceb821f`, image digest `6d85378d`); the 4f jobs pin the current one
+(digest-pinned image, baked source SHA, dep-freeze record). The 4f−1f
+delta is therefore an **exploratory historical comparison** — flags are
+matched, runtime identity is not — NOT a runtime-identical controlled
+ablation. Upgrading it requires a paired pinned rerun of BOTH arms
+(4 + 4 H100 jobs, separate cost approval via Codex).
 
 The other four ladder backbones (tessera/clay/croma/terramind) are
 `native_num_frames=(1,)` — architecturally single-date/annual, so their
@@ -26,7 +37,7 @@ Base: `k8s/train-prithvi300m-4f-job.yaml` (committed) — byte-identical to
 kept unchanged (300m 4-frame = 3844 tokens < 600m 4-frame = 5184, which runs
 batch 8 on 80Gi) so the ablation stays clean.
 
-## Wiring (apply AFTER #36 merges — rebase onto main first)
+## Wiring (landed in PR #42)
 
 `gen_ladder_manifests.py` is HOT in #36; editing it in parallel conflicts on
 the crux file. Do all of the below on a branch rebased onto post-#36 main:
@@ -39,8 +50,9 @@ the crux file. Do all of the below on a branch rebased onto post-#36 main:
    stage's per-model UID map (2001-2006, from #36) has no 7th slot; the frame
    ablation needs only ladder r1-r4 + NFI distill, not crop/LUCAS. Extend the
    UID map to 2007 only if a crop column is later justified.
-4. `ladder_queue.py` MODEL_ORDER: append `prithvi300m4f` (48Gi-class, place
-   after the 80Gi backbones).
+4. `ladder_queue.py` MODEL_ORDER: `prithvi300m4f` after its 1f sibling.
+   (The base manifest requests **80Gi**, same as 1f — the 48Gi guess in
+   earlier drafts was wrong; the manifest is ground truth.)
 5. `dashboards/ladder_dashboard.html` MODELS + LABELS: add `prithvi300m4f`
    ("Prithvi-300M ·4f") — fold into #37 or a follow-up.
 6. Tests: `test_ladder_manifests` matrix count updates 24→28 (+4 rungs);
@@ -48,9 +60,9 @@ the crux file. Do all of the below on a branch rebased onto post-#36 main:
 
 ## Sequencing / constraints
 
-- **Cluster run gated behind #36 apply-window**: prithvi300m4f r1-r4 are
-  full-PVC-RW H100 jobs — exactly the class barred during Codex's apply window.
-  Launch only after #36 apply + split-3 + restore.
+- ~~Cluster run gated behind #36 apply-window~~ — CLEARED 2026-09-07:
+  #36 merged, split verified (attempt-17), restore complete. H100 cost
+  approved by Tobias 2026-09-07 ("H100 är OK", via Codex).
 - **Cost:** 4 rungs × ~a few h H100 + 1 distill (2080ti). Confirm scope with
   user — full r1-r4 vs. a minimal r1+r2+distill first cut.
 - **eval:** the frame-ablation checkpoints, once trained, get NFI+LUCAS eval via
