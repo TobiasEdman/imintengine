@@ -62,27 +62,36 @@ spec:
           [ "$D" -lt 100 ] && { echo "FATAL: distill labels missing"; exit 1; } || true
           [ "$F" -lt 100 ] && { echo "FATAL: frac sidecars missing"; exit 1; } || true
           apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-          # PINNED dependency lock (PR #42 review): the FULL resolved set
-          # for linux/py3.11/cu121, installed --no-deps so nothing resolves
-          # at run time — all 4f jobs (rungs + distill) share this exact
-          # lock. Regenerate with pip install --dry-run --report on the
-          # same platform when bumping any pin; keep the generator's
-          # _DISTILL_DEPS_PINNED in sync (test-enforced).
-          pip install --quiet --no-cache-dir --no-deps torch==2.5.1 torchvision==0.20.1 \
+          # PINNED dependency lock (PR #42 review): the COMPLETE resolver
+          # closure from k8s/prithvi300m4f-deps.lock (58 pkgs incl. the
+          # Linux-marker nvidia/triton deps a mac-side resolution missed),
+          # installed --no-deps so nothing resolves at run time. All 4f
+          # jobs share this exact lock; base + generator + lockfile are
+          # three test-enforced identical copies.
+          pip install --quiet --no-cache-dir --no-deps torch==2.5.1+cu121 torchvision==0.20.1+cu121 \
             --index-url https://download.pytorch.org/whl/cu121
           pip install --quiet --no-cache-dir --no-deps \
-            Jinja2==3.1.6 MarkupSafe==3.0.3 PyYAML==6.0.2 affine==3.0.1 \
-            attrs==26.1.0 certifi==2026.7.22 charset-normalizer==3.5.1 \
-            click-plugins==1.1.1.2 click==8.5.0 cligj==0.7.2 cloudpickle==3.1.2 \
-            einops==0.8.0 filelock==3.32.5 fsspec==2026.7.0 \
-            huggingface-hub==0.26.2 idna==3.19 joblib==1.6.0 mpmath==1.3.0 \
-            networkx==3.6.1 numpy==1.26.4 packaging==26.3 pandas==2.2.2 \
-            pillow==10.4.0 pyarrow==17.0.0 pyparsing==3.3.2 pyproj==3.6.1 \
-            python-dateutil==2.9.0.post0 pytz==2026.3.post1 rasterio==1.3.11 \
+            affine==3.0.1 attrs==26.1.0 certifi==2026.7.22 \
+            charset-normalizer==3.5.1 click==8.5.0 click-plugins==1.1.1.2 \
+            cligj==0.7.2 cloudpickle==3.1.2 einops==0.8.0 filelock==3.32.5 \
+            fsspec==2026.7.0 huggingface-hub==0.26.2 idna==3.19 \
+            jinja2==3.1.6 joblib==1.6.0 markupsafe==3.0.3 mpmath==1.3.0 \
+            networkx==3.6.1 numpy==1.26.4 nvidia-cublas-cu12==12.1.3.1 \
+            nvidia-cuda-cupti-cu12==12.1.105 \
+            nvidia-cuda-nvrtc-cu12==12.1.105 \
+            nvidia-cuda-runtime-cu12==12.1.105 nvidia-cudnn-cu12==9.1.0.70 \
+            nvidia-cufft-cu12==11.0.2.54 nvidia-curand-cu12==10.3.2.106 \
+            nvidia-cusolver-cu12==11.4.5.107 \
+            nvidia-cusparse-cu12==12.1.0.106 nvidia-nccl-cu12==2.21.5 \
+            nvidia-nvjitlink-cu12==12.9.86 nvidia-nvtx-cu12==12.1.105 \
+            packaging==26.3 pandas==2.2.2 pillow==10.4.0 pyarrow==17.0.0 \
+            pyparsing==3.3.2 pyproj==3.6.1 python-dateutil==2.9.0.post0 \
+            pytz==2026.3.post1 pyyaml==6.0.2 rasterio==1.3.11 \
             requests==2.34.2 safetensors==0.8.0 scikit-learn==1.5.1 \
             scipy==1.13.1 setuptools==84.0.0 six==1.17.0 snuggs==1.4.7 \
             sympy==1.13.1 threadpoolctl==3.6.0 timm==1.0.11 tqdm==4.70.0 \
-            typing_extensions==4.16.0 tzdata==2026.3 urllib3==2.7.0
+            triton==3.1.0 typing-extensions==4.16.0 tzdata==2026.3 \
+            urllib3==2.7.0
           mkdir -p /cephfs/checkpoints/ladder/prithvi300m4f_r1
           rm -f /cephfs/checkpoints/ladder/prithvi300m4f_r1/*.pt.tmp 2>/dev/null || true
           # BAKED source anchor: no runtime resolution of any mutable ref.
