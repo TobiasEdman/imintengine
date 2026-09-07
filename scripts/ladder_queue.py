@@ -36,7 +36,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Largest-first within each rung: 80 Gi backbones before 48 Gi ones.
-MODEL_ORDER = ["prithvi600m", "prithvi300m", "tessera", "croma", "terramind", "clay"]
+# prithvi300m4f (issue #39, temporal-frame ablation) is 80 Gi like its
+# 1-frame sibling and queues right after it.
+MODEL_ORDER = ["prithvi600m", "prithvi300m", "prithvi300m4f", "tessera",
+               "croma", "terramind", "clay"]
 RUNGS = (1, 2)
 # Rungs 3/4 are DISTILL-GATED: a column joins their queue only when its
 # distill job has written the _GATE_OK marker (state on disk, never job

@@ -52,6 +52,9 @@ OUT_DIR = REPO / "k8s" / "ladder"
 # stripped below so the ladder cold-starts like every other column.
 BASES = {
     "prithvi300m": "k8s/train-prithvi300m-job.yaml",
+    # Temporal-frame ablation arm (issue #39): byte-identical regime to
+    # prithvi300m except --enable-multitemporal --num-temporal-frames 4.
+    "prithvi300m4f": "k8s/train-prithvi300m-4f-job.yaml",
     "prithvi600m": "k8s/train-v8b-nmd2023-long-job.yaml",
     "croma": "k8s/train-croma-job.yaml",
     "terramind": "k8s/train-terramind-job.yaml",
@@ -117,6 +120,11 @@ DISTILL = {
     }
     for model, protocol in CROP_MODELS.items()
 }
+# Temporal-frame ablation column (issue #39): ladder rungs + NFI distill
+# only. Deliberately NOT in CROP_MODELS — the crop stage's per-model UID
+# map (2001-2006) has no slot for it, and the ablation needs no crop/LUCAS
+# pass. Extend the UID map first if a crop column is ever justified.
+DISTILL["prithvi300m4f"] = {"img_size": 496, "backbone": "prithvi_300m"}
 
 # LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
 # features at the frozen LUCAS crop distill points, score the pinned-
@@ -1855,7 +1863,9 @@ def main() -> int:
         or args.non_crop_only
     ):
         outputs.update(render_non_crop_outputs())
-        for model in BASES:
+        # Crop consumers are defined by the crop protocol, not the training
+        # bases: prithvi300m4f (issue #39) is a ladder/distill-only column.
+        for model in CROP_MODELS:
             outputs[OUT_DIR / f"crop-distill-{model}-job.yaml"] = (
                 render_crop_distill(model)
             )

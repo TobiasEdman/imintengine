@@ -141,8 +141,9 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
 </div>
 
 <script>
-const MODELS = ["prithvi600m","prithvi300m","croma","terramind","tessera","clay"];
-const LABELS = {prithvi600m:"Prithvi-600M",prithvi300m:"Prithvi-300M",croma:"CROMA",
+const MODELS = ["prithvi600m","prithvi300m","prithvi300m4f","croma","terramind","tessera","clay"];
+const LABELS = {prithvi600m:"Prithvi-600M",prithvi300m:"Prithvi-300M",
+                prithvi300m4f:"Prithvi-300M ·4f",croma:"CROMA",
                 terramind:"TerraMind",tessera:"Tessera",clay:"Clay"};
 const RUNGS = [
   {n:1,name:"NMD2018",note:"in-tile, 23-class"},
@@ -154,9 +155,10 @@ const TOTAL_EPOCHS = 30;
 const COLORS = ["#60a5fa","#f472b6"];
 
 // All-runs chart: colour carries the BACKBONE and dash pattern the RUNG, so all
-// 24 curves stay separable on one axis without a 24-entry colour ramp — and so
+// 28 curves stay separable on one axis without a 28-entry colour ramp — and so
 // the eye groups by column (the thing being compared) rather than by rung.
-const MODEL_COLORS = {prithvi600m:"#60a5fa", prithvi300m:"#a78bfa", croma:"#f472b6",
+const MODEL_COLORS = {prithvi600m:"#60a5fa", prithvi300m:"#a78bfa",
+                      prithvi300m4f:"#c4b5fd", croma:"#f472b6",
                       terramind:"#fbbf24", tessera:"#4ade80", clay:"#22d3ee"};
 const RUNG_DASH = {1:"5,4", 2:"", 3:"1,3", 4:"9,3,2,3"};
 

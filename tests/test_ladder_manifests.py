@@ -145,4 +145,4 @@ def test_non_crop_manifests_match_generator():
 
 def test_every_cell_of_the_matrix_exists():
     found = {(m, r) for m, r, p in _manifests() if p.exists()}
-    assert len(found) == len(BASES) * len(RUNGS) == 24
+    assert len(found) == len(BASES) * len(RUNGS) == 28
