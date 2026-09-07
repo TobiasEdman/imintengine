@@ -1,0 +1,99 @@
+---
+# Job: build NMD2023-based unified labels (28-class, sidecar) for the
+# HOLDOUT set, NON-DESTRUCTIVELY. The inference matrix' truth28 panel
+# shows rungs 2-4's training truth, and /data/nmd2023_labels only covers
+# the 7,882 training tiles — holdout tiles have no sidecars until this
+# runs. Same mechanics as build-labels-nmd2023-job.yaml, pointed at
+# /data/holdout_val_512; sidecars land in the same name-keyed dir (no
+# consumer globs it for anything but tile-name lookups).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-labels-holdout-nmd2023
+  namespace: prithvi-training-default
+  labels:
+    app: ops
+    purpose: build-labels-holdout-nmd2023
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400   # 4 h cap; holdout is ~1/5 of the training set
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ops
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: builder
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== Build NMD2023 holdout sidecars — $(date) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
+
+              # PINNED source: post-#41 main. No mutable refs — the flags
+              # this job needs are proven present at this exact commit.
+              HEAD_SHA=8ff35c4bfa83d62a3c1fd2b883488f5a68a3d5c9
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$HEAD_SHA"
+              git checkout -q "$HEAD_SHA"
+              echo "PINNED SOURCE: $HEAD_SHA"
+              grep -q 'label-out-dir' scripts/build_labels.py \
+                && grep -q 'nmd-version' scripts/build_labels.py \
+                || { echo "FATAL: NMD2023 flags missing at pin"; exit 1; }
+
+              N_HOLD=$(ls /data/holdout_val_512/*.npz | wc -l)
+              echo "Inventory: holdout=$N_HOLD | NMD2023=$(ls -lh /data/nmd2023/NMD2023bas_v2_1.tif | awk '{print $5}') | LPIS=$(ls /data/lpis/*.parquet | wc -l) | SKS=$(ls /data/sks/*.parquet | wc -l)"
+
+              python scripts/build_labels.py \
+                --data-dir     /data/holdout_val_512 \
+                --nmd-raster   /data/nmd2023/NMD2023bas_v2_1.tif \
+                --nmd-version  2023 \
+                --lpis-dir     /data/lpis \
+                --sks-dir      /data/sks \
+                --label-out-dir /data/nmd2023_labels \
+                --workers 16
+
+              echo ""
+              echo "=== QC: holdout sidecar coverage + class sanity ==="
+              python3 - <<'PY'
+              import glob, numpy as np
+              hold = sorted(glob.glob("/data/holdout_val_512/*.npz"))
+              side = {f.rsplit("/", 1)[1] for f in
+                      glob.glob("/data/nmd2023_labels/holdoutval_*.npz")}
+              missing = [h for h in hold
+                         if h.rsplit("/", 1)[1] not in side]
+              print(f"holdout tiles: {len(hold)}, sidecars: {len(side)}, "
+                    f"missing: {len(missing)}")
+              assert not missing, f"missing sidecars: {missing[:5]}"
+              sample = np.load(sorted(glob.glob(
+                  "/data/nmd2023_labels/holdoutval_*.npz"))[0])["label"]
+              assert sample.max() <= 27, f"label out of range: {sample.max()}"
+              print("sample max class:", sample.max())
+              PY
+              echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "96Gi"
+            limits:
+              cpu: "16"
+              memory: "96Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
