@@ -44,8 +44,10 @@ alltså bara när mottagaren **på eget initiativ** startar en session eller
 
 En agent som väntar på sin användare kör inga verktyg och tar därför emot
 ingenting. Den kan sitta i timmar med olästa meddelanden. Det förklarar
-varje observerat glapp, inklusive de tre dyraste i den här kampanjen
-(15:06→17:30, 17:47→20:58, 22:48→04:46).
+varje observerat glapp där mottagaren verkligen var inaktiv.
+
+**Rättelse 2026-09-07:** en tidigare version listade 22:48→04:46 som ett
+sådant glapp. Det var fel — se fynd 11.
 
 **Följd:** "väckningsrader" väcker ingenting. De föreföll fungera för att
 mottagaren råkade bli aktiv strax efter — inte på grund av meddelandet.
@@ -74,10 +76,15 @@ Det finns ingen read-receipt tillbaka till avsändaren. En avsändare som
 inte får svar kan inte avgöra om meddelandet är oläst, läst-men-obesvarat,
 eller utgånget.
 
-Det är exakt vad som hände 2026-09-07: Codex rapporterade sig blockerad på
-"Claudes exakt-SHA-review" klockan då mitt PASS på `d81e0c2` redan låg i
-kön sedan 04:46:42Z. Slutsatsen "obesvarat" drogs ur **frånvaro av svar**,
-vilket är det enda observerbara.
+Det är exakt vad som hände 2026-09-07, och marginalen gör poängen skarpare
+än den först såg ut: Codex läste kön **04:46:33**. Mitt PASS på `d81e0c2`
+landade **04:46:42** — nio sekunder senare. Dess statusrapport skrevs från
+en ögonblicksbild tagen innan mitt meddelande fanns.
+
+Utan kvittens, och utan en koherent ögonblicksbild över inbox och GitHub,
+räcker alltså **nio sekunder** för att producera en självsäkert felaktig
+lägesrapport. Det är inte slarv från någon part; det är en TOCTOU-lucka i
+protokollet.
 
 ## Fynd 4 — Codex läs-tillstånd är dött (P0)
 
@@ -112,6 +119,30 @@ tvingades granskningstext trunkeras minst fem gånger, i flera fall genom
 att korta ned just den bevisföring som motiverade ett PASS eller BLOCK.
 Ett granskningsprotokoll som bygger på exakt-SHA-bevis bör inte ha en
 transportgräns som beskär beviset.
+
+## Fynd 11 — jag gjorde exakt samma felslut som jag kritiserade (P0)
+
+Jag rapporterade att Codex "inte pollat på sex timmar", grundat på att dess
+senaste **meddelande** var 22:48:49Z. Codex korsgranskade och visade att det
+var fel: den läste kön 22 gånger i det fönstret.
+
+Jag har verifierat korrigeringen självständigt — 33 inbox-relaterade poster
+i dess sessionsloggar mellan 22:00 och 05:00, med en läsning 04:46:33.
+**Codex har rätt och jag hade fel.**
+
+Felslutet är värt att skriva ut, för det är samma som fynd 3: jag drog
+slutsatsen *"läser inte"* ur *"skriver inte"*, precis som Codex drog
+slutsatsen *"obesvarat"* ur *"inget svar"*. Båda parter inferrerade från
+det enda observerbara, och båda hamnade fel — i motsatt riktning, samma
+dygn, om samma nio sekunder.
+
+Det är det starkaste argumentet i rapporten för P0-3. En kanal där
+**båda** parter drar felaktiga slutsatser om varandra, oberoende av
+varandra, saknar inte omdöme utan ett observerbart tillstånd.
+
+Notera att fynd 4 står kvar oförändrat: läs-*tillståndet* bokförs
+fortfarande inte. Det var korrekt observerat. Felet var slutsatsen jag drog
+av det — att en obokförd läsning betyder en utebliven läsning.
 
 ## Åtgärder
 
@@ -330,3 +361,21 @@ turer (*"granska #36 igen"*, *"vi pausar målet"*) inom samma minut, vilket
 tyder på att en och samma människotur fanns ut till flera parallella
 Codex-sessioner. Det inflaterar dess turräkning och är ytterligare ett skäl
 att inte jämföra procenten rakt av.
+
+
+## Codex korsgranskning (2026-09-07 06:46Z)
+
+Codex körde samma analys på båda parters transkript och rapporterade:
+53 av 84 Codex-turer (63 %) och 50 av 98 Claude-turer (51 %) var status
+eller transport, samt att granskarsvar kom 1 m 37 s till 2 m 58 s efter
+Tobias prompter — *"showing Tobias acted as scheduler"*.
+
+Dess siffror skiljer sig från mina (22 % respektive 19 %) eftersom
+fönstren och filtren skiljer sig: mina täcker 09-02..09-07 med
+harness-filtrering över 460 respektive 312 turer, dess ett smalare
+rolloutfönster. **Slutsatsen är densamma i båda mätningarna och det är
+den som betyder något:** människan bär schemaläggningen.
+
+Gemensamma P0 som båda analyserna landar i: utrullad väckning, koherent
+ögonblicksbild över inbox/GitHub/ICE, explicita ACK-tillstånd, och ett
+tvåvägs-canary utan människa i loopen.
