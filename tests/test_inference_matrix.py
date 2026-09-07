@@ -79,6 +79,48 @@ def test_summer_rgb_is_uint8_image():
     assert rgb.shape == (16, 16, 3) and rgb.dtype == np.uint8
 
 
+def _write_holdout_npz(holdout: "Path", name: str) -> None:
+    spectral = np.random.default_rng(1).random((24, 8, 8)).astype(np.float32)
+    label = np.zeros((8, 8), dtype=np.uint8)
+    np.savez(holdout / f"{name}.npz", spectral=spectral, label=label)
+
+
+def test_render_shared_writes_both_truth_panels(tmp_path):
+    """Two training vocabularies → two truth panels: the in-tile 23-class
+    label (rung 1) and the NMD2023 sidecar's 28-class label (rungs 2-4)."""
+    from ladder_inference_matrix import render_shared
+
+    holdout = tmp_path / "holdout"
+    sidecars = tmp_path / "nmd2023_labels"
+    out = tmp_path / "out"
+    holdout.mkdir(), sidecars.mkdir()
+    _write_holdout_npz(holdout, "holdoutval_1_1_2022")
+    label28 = np.full((8, 8), 25, dtype=np.uint8)   # NMD2023-only class
+    np.savez(sidecars / "holdoutval_1_1_2022.npz", label=label28)
+
+    tiles = [{"name": "holdoutval_1_1_2022"}]
+    render_shared(tiles, holdout, out, sidecars)
+
+    for panel in ("_rgb", "_truth", "_truth28"):
+        assert (out / panel / "holdoutval_1_1_2022.png").exists(), panel
+
+
+def test_render_shared_fails_closed_on_missing_sidecar(tmp_path):
+    """A truth28 panel without its sidecar would misrepresent what rungs
+    2-4 trained on — refuse loudly, pointing at the build job."""
+    from ladder_inference_matrix import render_shared
+
+    holdout = tmp_path / "holdout"
+    out = tmp_path / "out"
+    holdout.mkdir()
+    _write_holdout_npz(holdout, "holdoutval_2_2_2022")
+
+    with pytest.raises(FileNotFoundError, match="build-labels-holdout-nmd2023"):
+        render_shared([{"name": "holdoutval_2_2_2022"}], holdout, out,
+                      tmp_path / "no_sidecars")
+    assert not (out / "_truth28").exists()
+
+
 def test_job_follows_ladder_conventions():
     doc = yaml.safe_load(JOB.read_text())
     spec = doc["spec"]["template"]["spec"]

@@ -171,16 +171,39 @@ def _save_png(arr: np.ndarray, path: Path) -> None:
     Image.fromarray(arr).save(path)
 
 
-def render_shared(tiles: list[dict], holdout_dir: Path, out_dir: Path) -> None:
-    """RGB + in-tile truth panels, once per tile (idempotent)."""
+def render_shared(tiles: list[dict], holdout_dir: Path, out_dir: Path,
+                  nmd2023_label_dir: Path) -> None:
+    """RGB + both training-truth panels, once per tile (idempotent).
+
+    Two truths because the ladder trains against two vocabularies:
+    ``_truth`` is the in-tile 23-class unified label (rung 1's target,
+    NMD2018 base + LPIS + SKS) and ``_truth28`` is the NMD2023 sidecar's
+    28-class unified label (rungs 2-4's target). Both use UNIFIED_COLORS —
+    the 23-class values are a subset of 0-27, so shared classes keep
+    identical colours across the panels.
+
+    A missing sidecar is a broken precondition, not a skippable gap: the
+    panel claims to show what rungs 2-4 trained on, so rendering without
+    it would misrepresent the matrix. Build sidecars for the holdout set
+    first (k8s/build-labels-holdout-nmd2023-job.yaml).
+    """
     for t in tiles:
         rgb_p = out_dir / "_rgb" / f"{t['name']}.png"
         truth_p = out_dir / "_truth" / f"{t['name']}.png"
-        if rgb_p.exists() and truth_p.exists():
+        truth28_p = out_dir / "_truth28" / f"{t['name']}.png"
+        if rgb_p.exists() and truth_p.exists() and truth28_p.exists():
             continue
+        sidecar = nmd2023_label_dir / f"{t['name']}.npz"
+        if not sidecar.exists():
+            raise FileNotFoundError(
+                f"NMD2023 sidecar missing for frozen tile {t['name']}: "
+                f"{sidecar} — run k8s/build-labels-holdout-nmd2023-job.yaml "
+                f"before the matrix job")
         with np.load(holdout_dir / f"{t['name']}.npz", allow_pickle=False) as z:
             _save_png(summer_rgb(z["spectral"]), rgb_p)
             _save_png(colorize(z["label"]), truth_p)
+        with np.load(sidecar, allow_pickle=False) as z:
+            _save_png(colorize(z["label"]), truth28_p)
         print(f"  shared panels: {t['name']}")
 
 
@@ -238,6 +261,9 @@ def main() -> None:
     ap.add_argument("--k", type=int, default=K_DEFAULT)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--git-sha", default=None)
+    ap.add_argument("--nmd2023-label-dir", default="/cephfs/nmd2023_labels",
+                    help="sidecar dir with 28-class unified labels "
+                         "(rungs 2-4's training truth) for the truth28 panel")
     args = ap.parse_args()
 
     holdout = Path(args.holdout_dir)
@@ -245,7 +271,7 @@ def main() -> None:
     out_dir = Path(args.out_dir)
 
     tiles = freeze_tiles(holdout, out_dir, args.k, args.git_sha)
-    render_shared(tiles, holdout, out_dir)
+    render_shared(tiles, holdout, out_dir, Path(args.nmd2023_label_dir))
 
     cells: dict[str, dict] = {}
     for model in DISTILL:
