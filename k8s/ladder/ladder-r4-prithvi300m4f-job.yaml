@@ -16,7 +16,7 @@
 # admissible; the unified_v2_512 tiles carry 4 frames (autumn + 3 VPP season)
 # and prithvi600m already trains 4-frame on them. Token count 4x961=3844
 # (patch-16, img 496) < 600m's 4x1296=5184, and 600m runs batch 8 on an 80Gi
-# H100 — so batch 8 is kept UNCHANGED to preserve the clean ablation.
+# H100 — so batch 8 is kept unchanged, matching the 1f arm's flags.
 #
 # CROP / IMG SIZE = 496 (NOT 504): Prithvi-300M is patch_size=16; 496/16 = 31
 # (integer grid), 504/16 = 31.5 (build raises). Same as the 1-frame base.
@@ -62,8 +62,12 @@ spec:
           [ "$D" -lt 100 ] && { echo "FATAL: distill labels missing"; exit 1; } || true
           [ "$F" -lt 100 ] && { echo "FATAL: frac sidecars missing"; exit 1; } || true
           apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-          pip install --quiet --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
-          pip install --quiet --no-cache-dir timm numpy==1.26.4 scipy scikit-learn huggingface_hub
+          # PINNED top-level deps (PR #42 review). Transitives still resolve
+          # at install time and are captured by the pip-freeze record below —
+          # a full transitive lock would need a resolved-platform lockfile,
+          # which the repo does not carry yet.
+          pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+          pip install --quiet --no-cache-dir timm==1.0.11 einops==0.8.0 numpy==1.26.4 scipy==1.13.1 scikit-learn==1.5.1 huggingface_hub==0.26.2 pyproj==3.6.1 Pillow==10.4.0 pyyaml==6.0.2
           mkdir -p /cephfs/checkpoints/ladder/prithvi300m4f_r4
           rm -f /cephfs/checkpoints/ladder/prithvi300m4f_r4/*.pt.tmp 2>/dev/null || true
           # BAKED source anchor: no runtime resolution of any mutable ref.
@@ -75,7 +79,10 @@ spec:
           git remote add origin https://github.com/TobiasEdman/ImintEngine.git
           git fetch -q --depth 1 origin "$HEAD_SHA"
           git checkout -q "$HEAD_SHA"
-          pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+          # --no-deps: the import surface is covered by the pinned installs
+          # above; live resolution of install_requires would re-mutate the
+          # environment this job exists to pin.
+          pip install --no-cache-dir --no-deps -e .
           echo "PINNED SOURCE: $HEAD_SHA"
           # Durable runtime-identity record for the run.
           mkdir -p /cephfs/ops/deps
@@ -84,8 +91,9 @@ spec:
             || { echo "FATAL: tradslag flags missing on clone"; exit 1; }
           cd /cephfs
           # Prithvi-300M patch-16 → img/patch 496. Encoder present: freeze +
-          # unfreeze last 6 blocks. 4-FRAME multitemporal — the ONE axis that
-          # differs from train-prithvi300m-job.yaml.
+          # unfreeze last 6 blocks. 4-FRAME multitemporal — the flag-level
+          # difference vs train-prithvi300m-job.yaml (runtime identity also
+          # differs; see the claim note in the header).
           python /workspace/imintengine/scripts/train_unified.py \
             --backbone-name prithvi_300m \
             --data-dirs /cephfs/unified_v2_512 \

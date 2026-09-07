@@ -36,19 +36,23 @@ spec:
               export PYTHONUNBUFFERED=1
               echo "=== ladder distill stage — prithvi300m4f ==="
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              pip install --quiet --no-cache-dir torch torchvision \
+              pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
                 --index-url https://download.pytorch.org/whl/cu121
               pip install --quiet --no-cache-dir \
-                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
-                pandas pyarrow rasterio pyproj
+                timm==1.0.11 einops==0.8.0 numpy==1.26.4 Pillow==10.4.0 \
+                scipy==1.13.1 scikit-learn==1.5.1 huggingface_hub==0.26.2 \
+                pandas==2.2.2 pyarrow==17.0.0 rasterio==1.3.11 pyproj==3.6.1
 
               mkdir -p /workspace && cd /workspace
-              BRANCH=main
-              git clone --depth 1 --branch "$BRANCH" \
-                https://github.com/TobiasEdman/ImintEngine.git imintengine
-              cd /workspace/imintengine
+              HEAD_SHA=1fd08fad9ba9ab599415230938e6fade357cd5eb
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$HEAD_SHA"
+              git checkout -q "$HEAD_SHA"
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
-              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              echo "PINNED SOURCE: $HEAD_SHA"
+              mkdir -p /cephfs/ops/deps
+              pip freeze > /cephfs/ops/deps/ladder-distill-prithvi300m4f-$(date -u +%Y%m%dT%H%M%SZ).txt
               # Per-column backbone deps — the r2 checkpoints cannot even
               # LOAD without them (terramind: terratorch ImportError killed
               # the first submission; croma/clay: their loader packages).

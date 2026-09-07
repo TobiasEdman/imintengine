@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the label-source ladder manifests (6 backbones × 4 rungs),
+"""Generate the label-source ladder manifests (7 backbones × 4 rungs),
 plus the distill stage (NFI) and the LUCAS crop-distill stage per column.
 
 See docs/experiments/label_source_ladder.md. Every rung is the same trainer on
@@ -11,9 +11,9 @@ so a rung-to-rung delta attributes to exactly one thing:
     rung 3 nfi        + NFI-distilled forest type  (--label-dir …_distill_…)
     rung 4 tradslag   + Trädslag fraction head     (+ --frac-dir)
 
-Hand-writing 24 near-identical manifests invites exactly the drift this
+Hand-writing 28 near-identical manifests invites exactly the drift this
 experiment cannot tolerate (one stray --epochs and a rung delta becomes an
-early-stopping artefact). So they are generated from the six existing
+early-stopping artefact). So they are generated from the per-column
 per-backbone yamls, which stay the single source of each backbone's regime —
 crop size, aux fusion, ΔSAR, model-specific preflights and all.
 
@@ -128,6 +128,9 @@ DISTILL = {
 # map (2001-2006) has no slot for it, and the ablation needs no crop/LUCAS
 # pass. Extend the UID map first if a crop column is ever justified.
 DISTILL["prithvi300m4f"] = {"img_size": 496, "backbone": "prithvi_300m"}
+# 4f runs with pinned source identity (PR #42): the same commit the 4f
+# training base bakes. Re-pin deliberately when re-running the column.
+PRITHVI300M4F_SOURCE_GIT_SHA = "1fd08fad9ba9ab599415230938e6fade357cd5eb"
 
 # LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
 # features at the frozen LUCAS crop distill points, score the pinned-
@@ -367,19 +370,10 @@ spec:
               export PYTHONUNBUFFERED=1
               echo "=== ladder distill stage — {model} ==="
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              pip install --quiet --no-cache-dir torch torchvision \\
-                --index-url https://download.pytorch.org/whl/cu121
-              pip install --quiet --no-cache-dir \\
-                timm einops numpy Pillow scipy scikit-learn huggingface_hub \\
-                pandas pyarrow rasterio pyproj
+              {dep_install}
 
               mkdir -p /workspace && cd /workspace
-              BRANCH=main
-              git clone --depth 1 --branch "$BRANCH" \\
-                https://github.com/TobiasEdman/ImintEngine.git imintengine
-              cd /workspace/imintengine
-              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
-              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              {source_setup}
               # Per-column backbone deps — the r2 checkpoints cannot even
               # LOAD without them (terramind: terratorch ImportError killed
               # the first submission; croma/clay: their loader packages).
@@ -1388,11 +1382,49 @@ spec:
 """
 
 
+# The six legacy distill columns keep their historical (mutable) setup —
+# re-pinning them retroactively would falsify already-produced OOF
+# provenance. The 4f column pins source + top-level deps (PR #42 review);
+# transitives are captured by its pip-freeze record.
+_DISTILL_DEPS_LEGACY = """pip install --quiet --no-cache-dir torch torchvision \\
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \\
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \\
+                pandas pyarrow rasterio pyproj"""
+_DISTILL_DEPS_PINNED = """pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 \\
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \\
+                timm==1.0.11 einops==0.8.0 numpy==1.26.4 Pillow==10.4.0 \\
+                scipy==1.13.1 scikit-learn==1.5.1 huggingface_hub==0.26.2 \\
+                pandas==2.2.2 pyarrow==17.0.0 rasterio==1.3.11 pyproj==3.6.1"""
+_DISTILL_SOURCE_LEGACY = """BRANCH=main
+              git clone --depth 1 --branch "$BRANCH" \\
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)\""""
+
+
+def _distill_source_pinned(model: str) -> str:
+    sha = _require_full_sha(PRITHVI300M4F_SOURCE_GIT_SHA,
+                            "PRITHVI300M4F_SOURCE_GIT_SHA")
+    return f"""HEAD_SHA={sha}
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$HEAD_SHA"
+              git checkout -q "$HEAD_SHA"
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "PINNED SOURCE: $HEAD_SHA"
+              mkdir -p /cephfs/ops/deps
+              pip freeze > /cephfs/ops/deps/ladder-distill-{model}-$(date -u +%Y%m%dT%H%M%SZ).txt"""
+
+
 def render_distill(model: str) -> str:
     cfg = DISTILL[model]
     keys = cfg.get("require_keys", ())
     sar_filter = "".join(
         f"\n                --require-npz-key {k} \\" for k in keys)
+    pinned = model == "prithvi300m4f"
     header = (
         f"# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         f"# Distill stage for {model}: r2 checkpoint → plot features →\n"
@@ -1405,6 +1437,9 @@ def render_distill(model: str) -> str:
         model=model, img_size=cfg["img_size"], backbone=cfg["backbone"],
         extract_filter=sar_filter, sar_filter=sar_filter,
         extra_setup=cfg.get("extra_setup", "true  # no extra deps"),
+        dep_install=_DISTILL_DEPS_PINNED if pinned else _DISTILL_DEPS_LEGACY,
+        source_setup=(_distill_source_pinned(model) if pinned
+                      else _DISTILL_SOURCE_LEGACY),
         python_image=PYTHON_IMAGE)
 
 
