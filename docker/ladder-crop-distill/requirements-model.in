@@ -1,0 +1,36 @@
+# Model/extraction environment for the crop-distill runtime.
+#
+# The run did not log its installed TerraTorch version.  Python 3.11, the
+# 2026-08-31T07:47:18Z installation timestamp, and official dependency
+# metadata constrain the resolver to TerraTorch 1.2.11 + TorchGeo 0.8.1:
+# 1.2.12 and newer require TorchGeo 0.9.0, which requires Python >=3.12.
+# TerraTorch 1.2.11 still requires NumPy >=2.2, so model execution remains
+# isolated from the NumPy 1.26 scoring environment.
+#
+# Exact CPython 3.11 / linux-x86_64 CUDA 12.1 wheels. Direct URLs prevent
+# pip/uv index ordering from resolving a CPU wheel or a different platform.
+torch @ https://download-r2.pytorch.org/whl/cu121/torch-2.5.1%2Bcu121-cp311-cp311-linux_x86_64.whl#sha256=c8ab8c92eab928a93c483f83ca8c63f13dafc10fc93ad90ed2dcb7c82ea50410
+torchvision @ https://download-r2.pytorch.org/whl/cu121/torchvision-0.20.1%2Bcu121-cp311-cp311-linux_x86_64.whl#sha256=237609a3551c2b68f32bcd3f3875dca93836010d83922ef2f3bd3a7540caee58
+terratorch==1.2.11
+torchgeo==0.8.1
+numpy>=2.2
+pandas==2.2.2
+pyarrow==17.0.0
+timm==1.0.15
+einops==0.7.0
+Pillow==11.2.1
+huggingface-hub==0.30.2
+rasterio==1.4.3
+pyproj==3.7.1
+
+# Clay 1.5 runtime dependencies. The package itself is installed with
+# --no-deps from the verified exact Git archive in the Dockerfile.
+geopandas
+jsonargparse[signatures]>=4.27.7
+lightning>=2.0.0
+matplotlib
+python-box
+scikit-image
+scikit-learn
+vit-pytorch
+wandb

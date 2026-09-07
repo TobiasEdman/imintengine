@@ -16,12 +16,15 @@ every path is exercised without any network / cluster / CDSE PU spend:
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 import scripts.backfill_vpp as bf
+import scripts.strip_unstamped_vpp as strip_vpp
 
 H = W = 8
 _RAW = ("sosd", "eosd", "length", "maxv", "minv")
@@ -60,6 +63,283 @@ def _base_tile() -> dict:
 
 def _write(path: Path, data: dict) -> None:
     np.savez_compressed(path, **data)
+
+
+# ── atomic replacement metadata ────────────────────────────────────────
+
+def test_atomic_savez_preserves_existing_group_and_mode(tmp_path, monkeypatch):
+    """A rewritten tile stays group-readable and remains a valid NPZ."""
+    destination = tmp_path / "tile.npz"
+    _write(destination, {"before": np.arange(3)})
+    destination.chmod(0o640)
+    original = destination.stat()
+
+    calls: list[tuple[str, int, int] | tuple[str, int]] = []
+    real_fchown = os.fchown
+    real_fchmod = os.fchmod
+    real_replace = os.replace
+
+    def tracked_fchown(fd: int, uid: int, gid: int) -> None:
+        calls.append(("fchown", uid, gid))
+        real_fchown(fd, uid, gid)
+
+    def tracked_fchmod(fd: int, mode: int) -> None:
+        calls.append(("fchmod", mode))
+        real_fchmod(fd, mode)
+
+    def tracked_replace(source, target, **kwargs) -> None:
+        calls.append(("replace", 0))
+        real_replace(source, target, **kwargs)
+
+    monkeypatch.setattr(bf.os, "fchown", tracked_fchown)
+    monkeypatch.setattr(bf.os, "fchmod", tracked_fchmod)
+    monkeypatch.setattr(bf.os, "replace", tracked_replace)
+
+    bf._atomic_savez(str(destination), {"after": np.arange(4)})
+
+    replaced = destination.stat()
+    assert (replaced.st_uid, replaced.st_gid) == (original.st_uid, original.st_gid)
+    assert stat.S_IMODE(replaced.st_mode) == 0o640
+    assert calls == [
+        ("fchown", original.st_uid, original.st_gid),
+        ("fchmod", 0o640),
+        ("replace", 0),
+    ]
+    with np.load(destination) as payload:
+        np.testing.assert_array_equal(payload["after"], np.arange(4))
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() != 0,
+    reason="numeric root:2000 ownership requires a root POSIX test runner",
+)
+def test_atomic_savez_preserves_root_group_2000(tmp_path):
+    """Exercise the production root:2000 0640 metadata contract when possible."""
+    destination = tmp_path / "tile.npz"
+    _write(destination, {"before": np.arange(2)})
+    try:
+        os.chown(destination, 0, 2000)
+    except OSError as exc:
+        pytest.skip(f"filesystem cannot represent numeric gid 2000: {exc}")
+    destination.chmod(0o640)
+
+    bf._atomic_savez(str(destination), {"after": np.arange(5)})
+
+    replaced = destination.stat()
+    assert (replaced.st_uid, replaced.st_gid) == (0, 2000)
+    assert stat.S_IMODE(replaced.st_mode) == 0o640
+    with np.load(destination) as payload:
+        np.testing.assert_array_equal(payload["after"], np.arange(5))
+
+
+def test_atomic_savez_new_destination_uses_secure_mode(tmp_path):
+    """The create path retains mkstemp's private 0600 default."""
+    destination = tmp_path / "new-tile.npz"
+
+    bf._atomic_savez(str(destination), {"value": np.arange(4)})
+
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    with np.load(destination) as payload:
+        np.testing.assert_array_equal(payload["value"], np.arange(4))
+
+
+def test_atomic_savez_new_destination_never_overwrites_concurrent_create(
+    tmp_path,
+    monkeypatch,
+):
+    destination = tmp_path / "new-tile.npz"
+    real_link = os.link
+
+    def create_intruder_before_link(source, target, **kwargs):
+        _write(destination, {"intruder": np.arange(2)})
+        real_link(source, target, **kwargs)
+
+    monkeypatch.setattr(bf.os, "link", create_intruder_before_link)
+
+    with pytest.raises(FileExistsError):
+        bf._atomic_savez(str(destination), {"ours": np.arange(4)})
+
+    with np.load(destination) as payload:
+        np.testing.assert_array_equal(payload["intruder"], np.arange(2))
+        assert "ours" not in payload.files
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+@pytest.mark.parametrize("failed_operation", ["fchown", "fchmod"])
+def test_atomic_savez_metadata_failure_leaves_original(
+    tmp_path, monkeypatch, failed_operation,
+):
+    """Metadata failures happen before publish and leave no temporary file."""
+    destination = tmp_path / "tile.npz"
+    _write(destination, {"original": np.arange(3)})
+    destination.chmod(0o640)
+    original_bytes = destination.read_bytes()
+
+    def fail_metadata(*_args) -> None:
+        raise PermissionError(f"simulated {failed_operation} failure")
+
+    def reject_replace(*_args) -> None:
+        pytest.fail("os.replace must not run after a metadata failure")
+
+    monkeypatch.setattr(bf.os, failed_operation, fail_metadata)
+    monkeypatch.setattr(bf.os, "replace", reject_replace)
+
+    with pytest.raises(PermissionError, match=failed_operation):
+        bf._atomic_savez(str(destination), {"replacement": np.arange(6)})
+
+    assert destination.read_bytes() == original_bytes
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_savez_fsyncs_payload_metadata_and_parent_directory(
+    tmp_path, monkeypatch,
+):
+    destination = tmp_path / "tile.npz"
+    _write(destination, {"original": np.arange(3)})
+    destination.chmod(0o640)
+    calls: list[str] = []
+    real_fsync = os.fsync
+
+    def tracked_fsync(fd: int) -> None:
+        kind = "directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"
+        calls.append(kind)
+        real_fsync(fd)
+
+    monkeypatch.setattr(bf.os, "fsync", tracked_fsync)
+
+    bf._atomic_savez(str(destination), {"replacement": np.arange(5)})
+
+    assert calls == ["file", "file", "directory"]
+
+
+def test_atomic_savez_replace_failure_keeps_original_and_cleans_temp(
+    tmp_path, monkeypatch,
+):
+    destination = tmp_path / "tile.npz"
+    _write(destination, {"original": np.arange(3)})
+    original = destination.read_bytes()
+
+    def fail_replace(*_args, **_kwargs) -> None:
+        raise OSError("simulated rename failure")
+
+    monkeypatch.setattr(bf.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="rename failure"):
+        bf._atomic_savez(str(destination), {"replacement": np.arange(5)})
+
+    assert destination.read_bytes() == original
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_savez_refuses_symlink_destination(tmp_path):
+    target = tmp_path / "target.npz"
+    destination = tmp_path / "tile.npz"
+    _write(target, {"original": np.arange(3)})
+    original = target.read_bytes()
+    destination.symlink_to(target)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        bf._atomic_savez(str(destination), {"replacement": np.arange(6)})
+
+    assert destination.is_symlink()
+    assert target.read_bytes() == original
+
+
+def test_atomic_savez_refuses_destination_swap_before_replace(
+    tmp_path, monkeypatch,
+):
+    destination = tmp_path / "tile.npz"
+    displaced = tmp_path / "displaced.npz"
+    _write(destination, {"original": np.arange(3)})
+    destination.chmod(0o640)
+    original = destination.read_bytes()
+    real_fchmod = os.fchmod
+
+    def swap_after_metadata(fd: int, mode: int) -> None:
+        real_fchmod(fd, mode)
+        destination.rename(displaced)
+        _write(destination, {"intruder": np.arange(2)})
+
+    monkeypatch.setattr(bf.os, "fchmod", swap_after_metadata)
+
+    with pytest.raises(RuntimeError, match="destination .*identity changed"):
+        bf._atomic_savez(str(destination), {"replacement": np.arange(6)})
+
+    assert displaced.read_bytes() == original
+    with np.load(destination) as payload:
+        np.testing.assert_array_equal(payload["intruder"], np.arange(2))
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_backfill_refuses_lost_update_when_tile_is_replaced_during_fetch(
+    tmp_path, monkeypatch,
+):
+    """Initial fd/hash authority, not a late re-open, controls publication."""
+    data_dir = tmp_path / "unified_v2_512"
+    data_dir.mkdir()
+    destination = data_dir / "tile_600000_6500000.npz"
+    _write(destination, _base_tile())
+
+    def replace_during_fetch(*_args, **_kwargs):
+        intruder = data_dir / "intruder.npz"
+        concurrent = _base_tile()
+        concurrent["concurrent_writer"] = np.int32(1)
+        _write(intruder, concurrent)
+        os.replace(intruder, destination)
+        return _covered()
+
+    monkeypatch.setattr(bf, "fetch_vpp_tiles", replace_during_fetch)
+
+    result = bf.backfill_one_tile(str(destination), cache_dir=None)
+
+    assert result["status"] == "failed"
+    assert "destination changed since initial read" in result["reason"]
+    with np.load(destination) as payload:
+        assert int(payload["concurrent_writer"]) == 1
+        assert "vpp_year" not in payload.files
+
+
+def test_strip_passes_initial_identity_and_refuses_concurrent_replace(
+    tmp_path, monkeypatch,
+):
+    data_dir = tmp_path / "unified_v2_512"
+    data_dir.mkdir()
+    destination = data_dir / "tile.npz"
+    original = _base_tile()
+    for key in _RAW:
+        original[f"vpp_{key}"] = np.ones((H, W), np.float32)
+    _write(destination, original)
+    real_atomic_savez = strip_vpp._atomic_savez
+
+    def replace_before_publish(path, data, *, expected):
+        assert expected.sha256
+        intruder = data_dir / "intruder.npz"
+        _write(intruder, {"concurrent_writer": np.int32(1)})
+        os.replace(intruder, destination)
+        real_atomic_savez(path, data, expected=expected)
+
+    monkeypatch.setattr(strip_vpp, "_atomic_savez", replace_before_publish)
+
+    with pytest.raises(RuntimeError, match="changed since initial read"):
+        strip_vpp.strip(str(destination))
+
+    with np.load(destination) as payload:
+        assert int(payload["concurrent_writer"]) == 1
+
+
+def test_strip_revalidates_unstamped_semantics_on_captured_snapshot(tmp_path):
+    data_dir = tmp_path / "unified_v2_512"
+    data_dir.mkdir()
+    destination = data_dir / "tile.npz"
+    stamped = _base_tile()
+    for key in _RAW:
+        stamped[f"vpp_{key}"] = np.ones((H, W), np.float32)
+    stamped["vpp_year"] = np.int32(2021)
+    _write(destination, stamped)
+    before = destination.read_bytes()
+
+    assert strip_vpp.strip(str(destination)) is False
+    assert destination.read_bytes() == before
 
 
 @pytest.fixture

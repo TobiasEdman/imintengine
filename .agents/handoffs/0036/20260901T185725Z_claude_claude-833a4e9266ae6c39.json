@@ -1,0 +1,46 @@
+{
+  "active_goal": "Second-opinion review of PR #36 (LUCAS crop-distill evidence stage), branch agent/te/claude/lucas-r5-manifests -> main. Approve on GitHub or post findings as PR review comments.",
+  "active_rules": [
+    "R5 = R4 + LUCAS; distillability before retraining; croma last in its own file [user-stated 2026-08-31]",
+    "Branch of main -> PR; Tobias merges [established]",
+    "State on disk, never job existence; the crop stage must never write _GATE_OK [user-stated flow, test-pinned]",
+    "Never delete cluster jobs without archived evidence [user-stated 2026-08-29]"
+  ],
+  "blockers": [],
+  "changed_paths": [
+    "scripts/gen_ladder_manifests.py",
+    "scripts/extract_plot_features.py",
+    "scripts/nfi_head_cv.py",
+    "k8s/ladder/lucas-crop-split-job.yaml",
+    "k8s/ladder/crop-distill-clay-job.yaml",
+    "k8s/ladder/crop-distill-croma-job.yaml",
+    "k8s/ladder/crop-distill-prithvi300m-job.yaml",
+    "k8s/ladder/crop-distill-prithvi600m-job.yaml",
+    "k8s/ladder/crop-distill-terramind-job.yaml",
+    "k8s/ladder/crop-distill-tessera-job.yaml",
+    "tests/test_crop_distill_wiring.py",
+    "docs/experiments/ladder_distill_stage.md"
+  ],
+  "commit": "a496a66091b691151ddbbfcdd27cd33c8434822a",
+  "created_at": "2026-09-01T18:57:25Z",
+  "current_state": "PR #36 open at https://github.com/TobiasEdman/imintengine/pull/36, CI pending. One commit: gen_ladder_manifests.py gains LUCAS_SPLIT_TEMPLATE (one-shot 70/30 LUCAS crop split freeze via build_lucas_crop_split.py) + CROP_DISTILL_TEMPLATE (per-backbone: extract_plot_features --truth-col unified_class at frozen LUCAS points, then nfi_head_cv pinned-protocol crop OOF). Deliberately NO _GATE_OK and no queue rung: the OOF numbers are the input to the human R5 decision, nothing may auto-train rung 5. Three same-class generalization bugs fixed: from_records dropped point_id+truth col in crop mode; post-write summary hard-coded out_df['nfi_forest'] (KeyError after parquet write, Job fail at backoffLimit 0); accuracy_suite collapsed ids outside {1..4} to 0 so crop truth scored a meaningless 1.0 -> new generic_accuracy_suite scores in the truth's own space. Claude savant-review already ran and its findings are fixed; this handoff asks for an independent Codex pass, focus: generic_accuracy_suite math, NFI-mode backward compatibility (train_distill_head reads df['nfi_forest']; nfi_head_cv merges on key_cols), template consistency with DISTILL_TEMPLATE, test quality in tests/test_crop_distill_wiring.py.",
+  "next_steps": [
+    "Review the PR diff (12 files, one commit) against repo standard CLAUDE.md 'Kodgranskningsstandard'",
+    "Approve on GitHub (gh pr review 36 --approve) or post findings as review comments",
+    "Do NOT merge; Tobias merges",
+    "Do NOT add rung-5 manifests/gates/queue wiring - explicitly out of scope until the crop-OOF table is read"
+  ],
+  "off_limits": [
+    "fable/benchmark branches (frozen, referenced by cluster job specs)",
+    "LUCAS holdout side (never trained on, never extracted in distill jobs)",
+    "cluster pods' cloned trees (live training)",
+    "904-set numbers (invalid everywhere; valid table is the 900 set)"
+  ],
+  "repository_key": "ImintEngine--f4ea50ce3600",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-833a4e9266ae6c39",
+  "target": "codex",
+  "task_id": "0036",
+  "verification": "pytest tests/test_crop_distill_wiring.py tests/test_ladder_manifests.py tests/test_distill_stage_wiring.py tests/test_ladder_queue.py tests/test_lucas_split_guard.py -> 253 passed; full suite 1708 passed (3 pre-existing order-dependent test_fetch failures, unrelated); kubectl apply --dry-run=server OK on all 7 new manifests; gen_ladder_manifests.py --check clean (24 existing manifests byte-identical)"
+}

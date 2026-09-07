@@ -33,6 +33,19 @@ on:
       - 'docker/**'
       - '.github/workflows/build-pipeline-images.yml'
   workflow_dispatch:
+    inputs:
+      image:
+        description: Image to build (feature-branch default is crop only)
+        required: false
+        type: choice
+        options:
+          - all
+          - ladder-crop-distill
+
+# Den säkra standarden gäller alla jobb som kan köras från en PR. Endast det
+# explicit icke-PR-gatade publish-jobbet får höja dessa rättigheter.
+permissions:
+  contents: read
 
 # Tillåt en run per ref åt gången — om en push triggas medan föregående
 # fortfarande bygger så avbryts den föregående.
@@ -41,45 +54,197 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: ${{ matrix.image }} (${{ matrix.platforms }})
+  select_images:
+    name: Select image matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - name: Select requested images
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
+          REQUESTED_IMAGE: ${{ inputs.image }}
+        run: |
+          requested="$REQUESTED_IMAGE"
+          if [ -z "$requested" ] && [ "$EVENT_NAME" = workflow_dispatch ] && \
+             [ "$REF_NAME" != refs/heads/main ]; then
+            requested=ladder-crop-distill
+          fi
+          if [ "$requested" = ladder-crop-distill ]; then
+            matrix='{"include":[{"image":"ladder-crop-distill","context":".","dockerfile":"docker/ladder-crop-distill/Dockerfile","platforms":"linux/amd64"}]}'
+          else
+            matrix='{"include":[{"image":"cloud-models","context":"docker/cloud-models","dockerfile":"docker/cloud-models/Dockerfile","platforms":"linux/amd64,linux/arm64"},{"image":"c2rcc-snap","context":"docker/c2rcc-snap","dockerfile":"docker/c2rcc-snap/Dockerfile","platforms":"linux/amd64"},{"image":"ladder-crop-distill","context":".","dockerfile":"docker/ladder-crop-distill/Dockerfile","platforms":"linux/amd64"}]}'
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  pr_build:
+    name: PR build ${{ matrix.image }} (${{ matrix.platforms }})
+    needs: select_images
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false  # En image som failar ska inte stoppa de andra
+      matrix: ${{ fromJSON(needs.select_images.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up QEMU
+        if: contains(matrix.platforms, 'arm64')
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Compute image name
+        id: meta
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${OWNER}/imint-${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate PR tags
+        id: tags
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ steps.meta.outputs.image }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=pr
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=ImintEngine pipeline image: ${{ matrix.image }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build PR candidate without publishing
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          build-args: |
+            SOURCE_GIT_SHA=${{ github.sha }}
+          push: false
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: true
+          sbom: true
+
+      # PR:en har inga registry-skriv- eller OIDC-rättigheter. Bygg därför en
+      # lokal amd64-kandidat med samma Dockerfile/args och smoke-testa den.
+      - name: Smoke-test local PR candidate (amd64)
+        env:
+          PR_IMAGE_REF: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          SOURCE_GIT_SHA: ${{ github.sha }}
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag smoke-${{ matrix.image }}:test \
+            --load \
+            --file ${{ matrix.dockerfile }} \
+            --build-arg SOURCE_GIT_SHA=${{ github.sha }} \
+            --cache-from type=gha,scope=${{ matrix.image }} \
+            ${{ matrix.context }}
+          case "${{ matrix.image }}" in
+            cloud-models)
+              docker run --rm --entrypoint python \
+                smoke-${{ matrix.image }}:test \
+                -c "import torch, s2cloudless; print('torch', torch.__version__)"
+              docker run --rm --entrypoint python \
+                smoke-${{ matrix.image }}:test \
+                -c "import py_compile; py_compile.compile('/opt/runner/run_cloud_models.py', doraise=True); print('driver ok')"
+              ;;
+            c2rcc-snap)
+              docker run --rm smoke-${{ matrix.image }}:test /bin/sh -c \
+                'echo "SNAP version: $(cat /opt/snap/VERSION.txt)" && \
+                 grep -q "^13" /opt/snap/VERSION.txt && \
+                 /opt/snap/bin/gpt -h 2>&1 | grep -E "c2rcc.msi" && \
+                 /opt/snap/bin/gpt -h Read 2>&1 | grep -q "Reads a data product"'
+              ;;
+            ladder-crop-distill)
+              docker run --rm --entrypoint python \
+                smoke-${{ matrix.image }}:test \
+                /opt/imintengine/scripts/crop_distill_provenance.py \
+                verify-runtime \
+                --source-git-sha "$SOURCE_GIT_SHA" \
+                --image-ref "$PR_IMAGE_REF" \
+                --runtime-manifest /opt/provenance/runtime.json
+              docker run --rm \
+                --user 0:2000 \
+                --env CROP_DISTILL_SOURCE_GIT_SHA="$SOURCE_GIT_SHA" \
+                --env CROP_DISTILL_IMAGE="$PR_IMAGE_REF" \
+                --env POD_UID=storage-prep-smoke \
+                --cap-drop ALL \
+                --cap-add CHOWN \
+                --cap-add FOWNER \
+                --security-opt no-new-privileges \
+                --read-only \
+                --network none \
+                --tmpfs /cephfs/distill:rw,nosuid,nodev,noexec,size=16m \
+                --tmpfs /cephfs/ops:rw,nosuid,nodev,noexec,size=16m \
+                --entrypoint python \
+                smoke-${{ matrix.image }}:test \
+                /opt/imintengine/scripts/prepare_crop_distill_storage.py
+              docker run --rm --entrypoint kubectl \
+                smoke-${{ matrix.image }}:test \
+                version --client=true --output=json
+              docker run --rm \
+                --user 0:2000 \
+                --env CROP_DISTILL_SOURCE_GIT_SHA="$SOURCE_GIT_SHA" \
+                --env CROP_DISTILL_IMAGE="$PR_IMAGE_REF" \
+                --env POD_UID=freeze-operator-smoke \
+                --cap-drop ALL \
+                --cap-add CHOWN \
+                --cap-add FOWNER \
+                --security-opt no-new-privileges \
+                --read-only \
+                --network none \
+                --tmpfs /state-parent:rw,nosuid,nodev,noexec,size=1m \
+                --entrypoint /bin/sh \
+                smoke-${{ matrix.image }}:test \
+                -ec 'python /opt/imintengine/scripts/crop_source_freeze_operator.py \
+                       prepare --state-parent /state-parent && \
+                     python /opt/imintengine/scripts/crop_source_freeze_operator.py \
+                       prepare --state-parent /state-parent'
+              ;;
+          esac
+
+  publish:
+    name: Publish ${{ matrix.image }} (${{ matrix.platforms }})
+    needs: select_images
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read       # checkout
       packages: write      # GHCR push
       id-token: write      # cosign keyless OIDC
-      attestations: write  # SLSA build provenance
 
     strategy:
       fail-fast: false  # En image som failar ska inte stoppa de andra
-      matrix:
-        include:
-          - image: cloud-models
-            context: docker/cloud-models
-            platforms: linux/amd64,linux/arm64
-          - image: c2rcc-snap
-            context: docker/c2rcc-snap
-            platforms: linux/amd64
-            # arm64 ej möjligt: mundialis/esa-snap är amd64-only.
-            # ESA SNAP har Java + JNI native libs (GDAL etc.) som ESA
-            # inte distribuerar för arm64. Dokumenterat i Dockerfile.
+      matrix: ${{ fromJSON(needs.select_images.outputs.matrix) }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # QEMU behövs för att bygga arm64 på en amd64-runner. Ingen kostnad
       # för amd64-bara images (skip om bara linux/amd64 i platforms).
       - name: Set up QEMU
         if: contains(matrix.platforms, 'arm64')
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -95,7 +260,7 @@ jobs:
 
       - name: Generate tags
         id: tags
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ steps.meta.outputs.image }}
           tags: |
@@ -110,11 +275,14 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platforms }}
-          push: ${{ github.event_name != 'pull_request' }}
+          build-args: |
+            SOURCE_GIT_SHA=${{ github.sha }}
+          push: true
           tags: ${{ steps.tags.outputs.tags }}
           labels: ${{ steps.tags.outputs.labels }}
           # GH cache mellan body — sparar ~70% bygg-tid mellan commits
@@ -124,27 +292,31 @@ jobs:
           provenance: true     # SLSA build provenance
           sbom: true           # SPDX SBOM för supply-chain
 
-      # Smoke-test: bygg amd64-variant lokalt och kör en sanity-check.
-      # Multi-arch buildx pushar direkt utan att ladda lokalt, så vi
-      # bygger en separat lokal-load-bara amd64-tag för testet.
-      - name: Smoke-test (amd64)
+      # Smoke-testa exakt den pushade, ännu osignerade digest-kandidaten.
+      # Ingen andra build/cache/network-resolution får skapa andra bytes än
+      # de som signeras i nästa steg.
+      - name: Smoke-test pushed digest (amd64)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SOURCE_GIT_SHA: ${{ github.sha }}
         run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            --tag smoke-${{ matrix.image }}:test \
-            --load \
-            --cache-from type=gha,scope=${{ matrix.image }} \
-            ${{ matrix.context }}
+          printf '%s\n' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          docker pull --platform linux/amd64 "${IMAGE}@${DIGEST}"
           case "${{ matrix.image }}" in
             cloud-models)
               # --entrypoint krävs: imagen har ENTRYPOINT satt, så bara
               # "python -c ..." skulle bli ARGUMENT till driver-skriptet.
-              docker run --rm --entrypoint python smoke-${{ matrix.image }}:test -c "import torch, s2cloudless; print('torch', torch.__version__)"
+              docker run --rm --pull never --platform linux/amd64 \
+                --entrypoint python "${IMAGE}@${DIGEST}" \
+                -c "import torch, s2cloudless; print('torch', torch.__version__)"
               # ...och entrypoint-filen måste finnas och kompilera (den
               # COPY:ades aldrig in före 2026-08-31 — byggena var gröna
               # medan varje docker run var död). Ingen --help: drivern
               # läser /work/in villkorslöst, så det vore en riktig körning.
-              docker run --rm --entrypoint python smoke-${{ matrix.image }}:test -c "import py_compile; py_compile.compile('/opt/runner/run_cloud_models.py', doraise=True); print('driver ok')"
+              docker run --rm --pull never --platform linux/amd64 \
+                --entrypoint python "${IMAGE}@${DIGEST}" \
+                -c "import py_compile; py_compile.compile('/opt/runner/run_cloud_models.py', doraise=True); print('driver ok')"
               ;;
             c2rcc-snap)
               # Verifiera SNAP 13 + c2rcc.msi-operator. Smoke-test ENBART av
@@ -152,23 +324,71 @@ jobs:
               # att SNAP 9-image kunde ha c2rcc.msi registrerad men sakna
               # S2 product reader för 2025 SAFE-format. Detta test verifierar
               # också SNAP-versionen via VERSION.txt + att Read-operatorn finns.
-              docker run --rm smoke-${{ matrix.image }}:test /bin/sh -c \
+              docker run --rm --pull never --platform linux/amd64 \
+                "${IMAGE}@${DIGEST}" /bin/sh -c \
                 'echo "SNAP version: $(cat /opt/snap/VERSION.txt)" && \
                  grep -q "^13" /opt/snap/VERSION.txt && \
                  /opt/snap/bin/gpt -h 2>&1 | grep -E "c2rcc.msi" && \
                  /opt/snap/bin/gpt -h Read 2>&1 | grep -q "Reads a data product"'
               ;;
+            ladder-crop-distill)
+              docker run --rm --pull never --platform linux/amd64 \
+                --entrypoint python "${IMAGE}@${DIGEST}" \
+                /opt/imintengine/scripts/crop_distill_provenance.py \
+                verify-runtime \
+                --source-git-sha "$SOURCE_GIT_SHA" \
+                --image-ref "${IMAGE}@${DIGEST}" \
+                --runtime-manifest /opt/provenance/runtime.json
+              # Exercise the storage-prep UID-0 role with the exact capability
+              # and read-only-root constraints emitted by its Kubernetes Job.
+              # The entrypoint self-verifies owner, group, mode, and inode.
+              docker run --rm --pull never --platform linux/amd64 \
+                --user 0:2000 \
+                --env CROP_DISTILL_SOURCE_GIT_SHA="$SOURCE_GIT_SHA" \
+                --env CROP_DISTILL_IMAGE="${IMAGE}@${DIGEST}" \
+                --env POD_UID=storage-prep-smoke \
+                --cap-drop ALL \
+                --cap-add CHOWN \
+                --cap-add FOWNER \
+                --security-opt no-new-privileges \
+                --read-only \
+                --network none \
+                --tmpfs /cephfs/distill:rw,nosuid,nodev,noexec,size=16m \
+                --tmpfs /cephfs/ops:rw,nosuid,nodev,noexec,size=16m \
+                --entrypoint python \
+                "${IMAGE}@${DIGEST}" \
+                /opt/imintengine/scripts/prepare_crop_distill_storage.py
+              docker run --rm --pull never --platform linux/amd64 \
+                --entrypoint kubectl "${IMAGE}@${DIGEST}" \
+                version --client=true --output=json
+              docker run --rm --pull never --platform linux/amd64 \
+                --user 0:2000 \
+                --env CROP_DISTILL_SOURCE_GIT_SHA="$SOURCE_GIT_SHA" \
+                --env CROP_DISTILL_IMAGE="${IMAGE}@${DIGEST}" \
+                --env POD_UID=freeze-operator-smoke \
+                --cap-drop ALL \
+                --cap-add CHOWN \
+                --cap-add FOWNER \
+                --security-opt no-new-privileges \
+                --read-only \
+                --network none \
+                --tmpfs /state-parent:rw,nosuid,nodev,noexec,size=1m \
+                --entrypoint /bin/sh \
+                "${IMAGE}@${DIGEST}" \
+                -ec 'python /opt/imintengine/scripts/crop_source_freeze_operator.py \
+                       prepare --state-parent /state-parent && \
+                     python /opt/imintengine/scripts/crop_source_freeze_operator.py \
+                       prepare --state-parent /state-parent'
+              ;;
           esac
 
       # Cosign keyless signering via GitHub OIDC. Ingen privat nyckel
       # behöver hanteras — Sigstore Fulcio utfärdar ett kortlivat
-      # certifikat som binder signaturen till GitHub-workflow-runen.
+      # certifikat som binds till workflow-identitet, repository och käll-SHA.
       - name: Install cosign
-        if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Sign image manifest digests
-        if: github.event_name != 'pull_request'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           TAGS: ${{ steps.tags.outputs.tags }}
@@ -177,35 +397,85 @@ jobs:
           # Signera content-hashen, inte taggen — taggar kan ändras,
           # men digest är immutable. Verifiera med:
           #   cosign verify ghcr.io/<owner>/imint-<image>@<digest> \
-          #     --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \
+          #     --certificate-identity "https://github.com/${GITHUB_WORKFLOW_REF}" \
+          #     --certificate-github-workflow-sha "$GITHUB_SHA" \
+          #     --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
           #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
           for tag in ${TAGS}; do
             cosign sign --yes "${tag}@${DIGEST}"
           done
 
       - name: Verify signature
-        if: github.event_name != 'pull_request'
+        # Explicit bash enables -o pipefail. Without it, a failed cosign on
+        # the left of the jq pipeline could be masked by jq exiting zero.
+        shell: bash
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           IMAGE: ${{ steps.meta.outputs.image }}
         run: |
+          set -euo pipefail
           cosign verify "${IMAGE}@${DIGEST}" \
-            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-identity "https://github.com/${GITHUB_WORKFLOW_REF}" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             | jq '.[] | {Subject: .optional.Subject, Issuer: .optional.Issuer}'
+
+      # Publish the digest hand-off only after the signature has passed the
+      # exact workflow/ref, source-SHA, repository, and issuer checks above.
+      - name: Record crop-distill digest
+        if: matrix.image == 'ladder-crop-distill'
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_GIT_SHA: ${{ github.sha }}
+        run: |
+          printf '%s\n' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          printf '%s@%s\nsource_git_sha=%s\nworkflow_sha=%s\nworkflow_repository=%s\nworkflow_ref=%s\n' \
+            "$IMAGE" "$DIGEST" "$SOURCE_GIT_SHA" "$GITHUB_SHA" \
+            "$GITHUB_REPOSITORY" "$GITHUB_WORKFLOW_REF" \
+            | tee crop-distill-image.txt
+          cat crop-distill-image.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload crop-distill digest evidence
+        if: matrix.image == 'ladder-crop-distill'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: crop-distill-image-${{ github.sha }}
+          path: crop-distill-image.txt
+          if-no-files-found: error
+          retention-days: 90
 
   # Sammanfattnings-job — failar om någon image inte byggdes,
   # ger en enda statusrad i PR-kommentaren.
   summary:
     name: Build summary
-    needs: build
+    needs: [select_images, pr_build, publish]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: always()
     steps:
       - name: Check build matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BUILD_RESULT: ${{ needs.pr_build.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          SELECT_RESULT: ${{ needs.select_images.result }}
         run: |
-          if [ "${{ needs.build.result }}" != "success" ]; then
-            echo "::error::En eller flera pipeline-images failade att bygga"
+          if [ "$SELECT_RESULT" != success ]; then
+            echo "::error::Image-matrisen kunde inte väljas"
             exit 1
           fi
-          echo "Alla pipeline-images byggde och signerades OK"
+          if [ "$EVENT_NAME" = pull_request ]; then
+            if [ "$PR_BUILD_RESULT" != success ]; then
+              echo "::error::En eller flera PR-images failade build/smoke"
+              exit 1
+            fi
+            echo "Alla PR-images byggde och smoke-testades OK (inget publicerades)"
+          elif [ "$PUBLISH_RESULT" != success ]; then
+            echo "::error::En eller flera pipeline-images failade att bygga"
+            exit 1
+          else
+            echo "Alla pipeline-images byggde, smoke-testades, publicerades och signerades OK"
+          fi

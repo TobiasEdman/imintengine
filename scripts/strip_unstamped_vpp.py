@@ -39,6 +39,7 @@ import argparse
 import collections
 import os
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +50,11 @@ sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 
 from backfill_vpp import _atomic_savez, _tile_year  # noqa: E402
 from imint.training.tile_fetch import list_tile_paths  # noqa: E402
+from scripts.atomic_npz import (  # noqa: E402
+    capture_npz,
+    default_dataset_lock,
+    exclusive_dataset_lock,
+)
 
 _VPP_KEYS = ("vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv")
 
@@ -98,16 +104,39 @@ def scan(data_dir: str, *, keep_correct_2021: bool) -> tuple[list[str], dict]:
     }
 
 
-def strip(path: str) -> bool:
+def strip(
+    path: str,
+    *,
+    keep_correct_2021: bool = False,
+    dataset_lock: str | None = None,
+    _lock_held: bool = False,
+) -> bool:
     """Delete the five vpp_* keys from one tile, preserving everything else."""
-    data = dict(np.load(path, allow_pickle=True))
-    removed = [k for k in _VPP_KEYS if k in data]
-    if not removed:
+    if not _lock_held:
+        lock_path = (
+            Path(dataset_lock)
+            if dataset_lock is not None
+            else default_dataset_lock(Path(path).parent)
+        )
+        with exclusive_dataset_lock(lock_path):
+            return strip(
+                path,
+                keep_correct_2021=keep_correct_2021,
+                dataset_lock=dataset_lock,
+                _lock_held=True,
+            )
+
+    data, initial_identity = capture_npz(path)
+    # Revalidate the scan predicate on the fd/hash-bound snapshot. An
+    # uncoordinated replacement may have become stamped or otherwise
+    # ineligible since the inventory pass; never strip that newer meaning.
+    if "vpp_year" in data or not all(key in data for key in _VPP_KEYS):
         return False
-    for k in removed:
+    if keep_correct_2021 and _tile_year(data) == 2021:
+        return False
+    for k in _VPP_KEYS:
         del data[k]
-    data.pop("vpp_year", None)   # defensive; these tiles have none by definition
-    _atomic_savez(path, data)
+    _atomic_savez(path, data, expected=initial_identity)
     return True
 
 
@@ -119,30 +148,54 @@ def main() -> int:
     ap.add_argument("--keep-correct-2021", action="store_true",
                     help="Spare unstamped tiles whose own year is 2021, where "
                          "the old default was accidentally correct.")
+    ap.add_argument(
+        "--dataset-lock",
+        default=None,
+        help=(
+            "Shared source-access lock (default: "
+            "<data-dir-parent>/ops/crop-distill/source-access/locks/dataset.lock)"
+        ),
+    )
     args = ap.parse_args()
 
-    targets, report = scan(args.data_dir,
-                           keep_correct_2021=args.keep_correct_2021)
-    print(f"scanned                : {report['scanned']:,}")
-    print(f"unstamped w/ VPP bands : {report['to_strip']:,}")
-    print(f"spared (correct 2021)  : {report['spared_correct_2021']:,}")
-    print(f"tile-year histogram    : {report['year_histogram']}")
-    for p in targets[:10]:
-        print(f"    {os.path.basename(p)}")
-    if len(targets) > 10:
-        print(f"    ... and {len(targets) - 10} more")
+    lock_path = (
+        Path(args.dataset_lock)
+        if args.dataset_lock is not None
+        else default_dataset_lock(args.data_dir)
+    )
+    lock_context = exclusive_dataset_lock(lock_path) if args.apply else nullcontext()
+    with lock_context:
+        # The apply inventory and every initial read/write remain inside the
+        # same lock acquisition; a cooperating PLAN cannot start between scan
+        # and replacement.
+        targets, report = scan(
+            args.data_dir,
+            keep_correct_2021=args.keep_correct_2021,
+        )
+        print(f"scanned                : {report['scanned']:,}")
+        print(f"unstamped w/ VPP bands : {report['to_strip']:,}")
+        print(f"spared (correct 2021)  : {report['spared_correct_2021']:,}")
+        print(f"tile-year histogram    : {report['year_histogram']}")
+        for p in targets[:10]:
+            print(f"    {os.path.basename(p)}")
+        if len(targets) > 10:
+            print(f"    ... and {len(targets) - 10} more")
 
-    if not args.apply:
-        print("\nDRY RUN — nothing modified. Re-run with --apply to strip.")
-        return 0
+        if not args.apply:
+            print("\nDRY RUN — nothing modified. Re-run with --apply to strip.")
+            return 0
 
-    ok = fail = 0
-    for p in targets:
-        try:
-            ok += bool(strip(p))
-        except Exception as e:  # noqa: BLE001 — one bad tile must not kill the run
-            fail += 1
-            print(f"  FAILED {os.path.basename(p)}: {type(e).__name__}: {e}")
+        ok = fail = 0
+        for p in targets:
+            try:
+                ok += bool(strip(
+                    p,
+                    keep_correct_2021=args.keep_correct_2021,
+                    _lock_held=True,
+                ))
+            except Exception as e:  # noqa: BLE001 — isolate per-tile failures
+                fail += 1
+                print(f"  FAILED {os.path.basename(p)}: {type(e).__name__}: {e}")
     print(f"\nstripped={ok}  failed={fail}")
     print("Next: derive_missing_vpp_mgrs.py (they are now visible to it), "
           "then prefetch_vpp_wekeo.py, then backfill_vpp.py.")

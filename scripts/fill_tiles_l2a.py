@@ -39,10 +39,10 @@ import argparse
 import glob
 import os
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -54,6 +54,13 @@ from imint.training.openeo_tile_graph import (
     ALL_BANDS,
     ALL_BANDS_INDEX,
     fetch_tile_at_specific_dates,
+)
+from scripts.atomic_npz import (
+    FileIdentity,
+    capture_npz,
+    default_dataset_lock,
+    durable_atomic_savez,
+    exclusive_dataset_lock,
 )
 
 # min-positive reflectance at/above this == the +0.1 offset-not-applied bug
@@ -218,33 +225,49 @@ def assemble_bands(
     return spectral, extras, stats
 
 
-def _atomic_savez(dest: str, data: dict) -> None:
+def _atomic_savez(
+    dest: str,
+    data: dict,
+    *,
+    expected: FileIdentity | None = None,
+) -> None:
     """Write ``data`` to ``dest`` atomically (temp in same dir + os.replace).
 
     A file handle is passed to savez_compressed (NOT a path) so numpy does not
-    append a second ``.npz`` to the temp name.
+    append a second ``.npz`` to the temp name. Replacements preserve the
+    existing file's UID, GID, and permission bits (fchown before fchmod) and refuse
+    path/inode drift before publish; new destinations retain private 0600.
     """
-    dest_dir = os.path.dirname(dest) or "."
-    os.makedirs(dest_dir, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=dest_dir, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            np.savez_compressed(fh, **data)
-        os.replace(tmp, dest)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    durable_atomic_savez(dest, data, expected=expected)
 
 
-def fill_one_tile(tile_path: str, out_dir: str | None = None,
-                  skip_existing: bool = True) -> dict:
+def fill_one_tile(
+    tile_path: str,
+    out_dir: str | None = None,
+    skip_existing: bool = True,
+    *,
+    dataset_lock: str | None = None,
+    _lock_held: bool = False,
+) -> dict:
     """Fill one tile with the full L2A band set. See module docstring."""
+    if out_dir is None and not _lock_held:
+        lock_path = (
+            Path(dataset_lock)
+            if dataset_lock is not None
+            else default_dataset_lock(Path(tile_path).parent)
+        )
+        with exclusive_dataset_lock(lock_path):
+            return fill_one_tile(
+                tile_path,
+                out_dir=out_dir,
+                skip_existing=skip_existing,
+                dataset_lock=dataset_lock,
+                _lock_held=True,
+            )
+
     name = Path(tile_path).stem
     try:
-        data = dict(np.load(tile_path, allow_pickle=True))
+        data, initial_identity = capture_npz(tile_path)
     except Exception as e:  # noqa: BLE001 — corrupt .npz must not kill the run
         return {"name": name, "status": "failed", "reason": f"load:{type(e).__name__}"}
 
@@ -323,7 +346,11 @@ def fill_one_tile(tile_path: str, out_dir: str | None = None,
 
     dest = os.path.join(out_dir, name + ".npz") if out_dir else tile_path
     try:
-        _atomic_savez(dest, data)
+        _atomic_savez(
+            dest,
+            data,
+            expected=initial_identity if out_dir is None else None,
+        )
     except Exception as e:  # noqa: BLE001
         return {"name": name, "status": "failed", "reason": f"write:{type(e).__name__}:{e}"}
 
@@ -341,6 +368,14 @@ def main() -> int:
     ap.add_argument("--max-tiles", type=int, default=None)
     ap.add_argument("--skip-existing", action="store_true", default=True)
     ap.add_argument("--no-skip-existing", dest="skip_existing", action="store_false")
+    ap.add_argument(
+        "--dataset-lock",
+        default=None,
+        help=(
+            "Shared source-access lock for in-place writes (default: "
+            "<data-dir-parent>/ops/crop-distill/source-access/locks/dataset.lock)"
+        ),
+    )
     args = ap.parse_args()
 
     if args.data_dir:
@@ -360,9 +395,17 @@ def main() -> int:
     done = 0
     t0 = time.time()
 
+    in_place = args.out_dir is None
+
     def _run(path: str) -> None:
         nonlocal done, fixed_spec, fixed_re
-        r = fill_one_tile(path, out_dir=args.out_dir, skip_existing=args.skip_existing)
+        r = fill_one_tile(
+            path,
+            out_dir=args.out_dir,
+            skip_existing=args.skip_existing,
+            dataset_lock=args.dataset_lock,
+            _lock_held=in_place,
+        )
         with lock:
             done += 1
             stats[r["status"]] = stats.get(r["status"], 0) + 1
@@ -374,13 +417,32 @@ def main() -> int:
             print(f"  [{done}/{len(tiles)}] {r['name']}: {r['status']}{extra} | {rate:.0f}/h",
                   flush=True)
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futs = {pool.submit(_run, t): t for t in tiles}
-        for f in as_completed(futs):
-            try:
-                f.result()
-            except Exception as e:  # noqa: BLE001
-                print(f"  worker error: {type(e).__name__}: {e}", flush=True)
+    if in_place and tiles:
+        data_dirs = {str(Path(tile).resolve().parent) for tile in tiles}
+        if len(data_dirs) > 1 and args.dataset_lock is None:
+            print(
+                "REFUSING in-place fill across multiple dataset directories "
+                "without one explicit --dataset-lock",
+                file=sys.stderr,
+            )
+            return 2
+        lock_path = (
+            Path(args.dataset_lock)
+            if args.dataset_lock is not None
+            else default_dataset_lock(next(iter(data_dirs), Path(".")))
+        )
+        lock_context = exclusive_dataset_lock(lock_path)
+    else:
+        lock_context = nullcontext()
+
+    with lock_context:
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futs = {pool.submit(_run, t): t for t in tiles}
+            for f in as_completed(futs):
+                try:
+                    f.result()
+                except Exception as e:  # noqa: BLE001
+                    print(f"  worker error: {type(e).__name__}: {e}", flush=True)
 
     print(f"\n=== Done in {(time.time()-t0)/60:.1f} min ===", flush=True)
     print(f"  OK={stats['ok']}  Skipped={stats['skipped']}  Failed={stats['failed']}  "

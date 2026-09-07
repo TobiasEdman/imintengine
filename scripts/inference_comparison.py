@@ -16,17 +16,231 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import io
 import json
+import os
 import re as _re
+import stat
 import sys
+import tempfile
 from pathlib import Path
+from typing import BinaryIO
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from imint.training.unified_schema import UNIFIED_CLASSES
+class TileIdentityError(RuntimeError):
+    """A frozen tile's path, size, or bytes differ from its inventory."""
+
+
+class CheckpointIdentityError(RuntimeError):
+    """A checkpoint path or its bytes violate the sealed-file contract."""
+
+
+_READ_BLOCK_SIZE = 1024 * 1024
+_SHA256_PATTERN = _re.compile(r"[0-9a-f]{64}")
+
+
+def _file_snapshot(identity: os.stat_result) -> tuple[int, ...]:
+    """Return metadata that changes when an opened file is replaced/mutated."""
+    return (
+        identity.st_dev,
+        identity.st_ino,
+        stat.S_IFMT(identity.st_mode),
+        identity.st_nlink,
+        identity.st_size,
+        identity.st_mtime_ns,
+        identity.st_ctime_ns,
+    )
+
+
+def _assert_path_names_open_file(
+    path: Path,
+    opened: os.stat_result,
+    *,
+    error_type: type[RuntimeError],
+    label: str,
+) -> None:
+    """Reject a path swapped away from the descriptor after ``open(2)``."""
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise error_type(f"{label} path changed while open: {path}: {exc}") from exc
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or current.st_nlink != 1
+        or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise error_type(f"{label} path changed while open: {path}")
+
+
+def _open_regular_nofollow(
+    path: Path,
+    *,
+    error_type: type[RuntimeError],
+    label: str,
+) -> tuple[int, os.stat_result]:
+    """Open ``path`` descriptor-first and reject links/non-regular files."""
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise error_type("this platform cannot enforce O_NOFOLLOW")
+    flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise error_type(f"cannot open {label} without following links: {path}: {exc}") from exc
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise error_type(f"{label} is not a regular file: {path}")
+        if opened.st_nlink != 1:
+            raise error_type(
+                f"{label} must have exactly one hard link: {path} "
+                f"(found {opened.st_nlink})"
+            )
+        _assert_path_names_open_file(
+            path, opened, error_type=error_type, label=label
+        )
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd, opened
+
+
+def _assert_open_file_unchanged(
+    fd: int,
+    path: Path,
+    opened: os.stat_result,
+    *,
+    error_type: type[RuntimeError],
+    label: str,
+) -> None:
+    """Detect in-place writes, link changes, and path swaps after opening."""
+    try:
+        current = os.fstat(fd)
+    except OSError as exc:
+        raise error_type(f"cannot re-inspect open {label} {path}: {exc}") from exc
+    if _file_snapshot(current) != _file_snapshot(opened):
+        raise error_type(f"{label} changed while being read: {path}")
+    _assert_path_names_open_file(
+        path, current, error_type=error_type, label=label
+    )
+
+
+def _validate_expected_identity(
+    *,
+    expected_sha256: str | None,
+    expected_size: int | None,
+    error_type: type[RuntimeError],
+    label: str,
+) -> bool:
+    """Validate an optional exact size/SHA pair and return whether it exists."""
+    if expected_sha256 is None and expected_size is None:
+        return False
+    if expected_sha256 is None or expected_size is None:
+        raise error_type(f"expected {label} size and sha256 must be supplied together")
+    if (
+        not isinstance(expected_sha256, str)
+        or _SHA256_PATTERN.fullmatch(expected_sha256) is None
+    ):
+        raise error_type(f"expected {label} sha256 must be 64 lowercase hex")
+    if (
+        isinstance(expected_size, bool)
+        or not isinstance(expected_size, int)
+        or expected_size <= 0
+    ):
+        raise error_type(f"expected {label} size must be a positive integer")
+    return True
+
+
+def _copy_and_hash_open_file(source: BinaryIO, destination: BinaryIO) -> tuple[int, str]:
+    """Copy one open file into private storage while hashing identical bytes."""
+    digest = hashlib.sha256()
+    total = 0
+    for block in iter(lambda: source.read(_READ_BLOCK_SIZE), b""):
+        digest.update(block)
+        destination.write(block)
+        total += len(block)
+    return total, digest.hexdigest()
+
+
+def _load_checkpoint_for_inference(
+    checkpoint_path: str | Path,
+    *,
+    map_location="cpu",
+    expected_sha256: str | None = None,
+    expected_size: int | None = None,
+):
+    """Authenticate shared bytes, then deserialize only a private snapshot.
+
+    ``weights_only=True`` is intentionally unconditional.  A checkpoint that
+    needs arbitrary pickle globals is not a valid inference artifact; there is
+    no unsafe compatibility fallback. The shared-PVC descriptor is never given
+    to PyTorch: another CephFS writer could mutate that inode after hashing but
+    before deserialization. Instead, the exact hashed bytes are copied into an
+    anonymous mode-0600 file under the Pod-private ``TMPDIR`` first.
+    """
+    import torch
+
+    authenticated = _validate_expected_identity(
+        expected_sha256=expected_sha256,
+        expected_size=expected_size,
+        error_type=CheckpointIdentityError,
+        label="checkpoint",
+    )
+    path = Path(checkpoint_path)
+    fd, opened = _open_regular_nofollow(
+        path, error_type=CheckpointIdentityError, label="checkpoint"
+    )
+    try:
+        try:
+            source = os.fdopen(fd, "rb", closefd=True)
+        except BaseException:
+            os.close(fd)
+            raise
+        with source, tempfile.TemporaryFile(
+            mode="w+b",
+            dir=os.environ.get("TMPDIR"),
+        ) as private_checkpoint:
+            os.fchmod(private_checkpoint.fileno(), 0o600)
+            if authenticated and opened.st_size != expected_size:
+                raise CheckpointIdentityError(
+                    f"checkpoint size mismatch for {path}: expected "
+                    f"{expected_size}, got {opened.st_size}"
+                )
+            copied_size, actual_sha256 = _copy_and_hash_open_file(
+                source, private_checkpoint
+            )
+            _assert_open_file_unchanged(
+                source.fileno(),
+                path,
+                opened,
+                error_type=CheckpointIdentityError,
+                label="checkpoint",
+            )
+            if copied_size != opened.st_size:
+                raise CheckpointIdentityError(
+                    f"checkpoint changed size while copying: {path}"
+                )
+            if authenticated and actual_sha256 != expected_sha256:
+                raise CheckpointIdentityError(
+                    f"checkpoint sha256 mismatch for {path}: expected "
+                    f"{expected_sha256}, got {actual_sha256}"
+                )
+            private_checkpoint.flush()
+            private_checkpoint.seek(0)
+            payload = torch.load(
+                private_checkpoint,
+                map_location=map_location,
+                weights_only=True,
+            )
+            return payload
+    except OSError as exc:
+        raise CheckpointIdentityError(
+            f"cannot read checkpoint {path}: {exc}"
+        ) from exc
 
 # 23-class RGB color palette
 CLASS_COLORS = np.array([
@@ -85,8 +299,81 @@ def model_has_frac_head(model) -> bool:
                    "frac_head", None) is not None
 
 
-def load_model(ckpt_path: str, device, backbone_name: str | None = None,
-               img_size: int | None = None):
+_CLAY_TRAINING_ONLY_STATE_PREFIXES = (
+    "encoder.teacher.",
+    "encoder.decoder.",
+    "encoder.proj.",
+)
+_FAMILY_CHECKPOINT_ONLY_STATE_KEYS = {
+    "croma": frozenset({
+        "_norm_croma.s2_mean",
+        "_norm_croma.s2_std",
+        "_norm_croma.s1_mean",
+        "_norm_croma.s1_std",
+    }),
+    "terramind": frozenset({
+        "_norm_terramind.s2_mean",
+        "_norm_terramind.s2_std",
+        "_norm_terramind.s1_mean",
+        "_norm_terramind.s1_std",
+    }),
+}
+_STATE_KEY_SAMPLE_LIMIT = 8
+
+
+def _state_key_sample(keys: tuple[str, ...]) -> str:
+    """Format a bounded state-key sample for a load failure."""
+    shown = ", ".join(repr(key) for key in keys[:_STATE_KEY_SAMPLE_LIMIT])
+    remainder = len(keys) - _STATE_KEY_SAMPLE_LIMIT
+    if remainder > 0:
+        shown = f"{shown}, ... (+{remainder} more)"
+    return f"[{shown}]"
+
+
+def _checkpoint_state_for_inference(state_dict, *, family: str) -> dict:
+    """Remove only verified family-specific checkpoint-only training state."""
+    exact_keys = _FAMILY_CHECKPOINT_ONLY_STATE_KEYS.get(family, frozenset())
+
+    def is_checkpoint_only(key: str) -> bool:
+        return (
+            family == "clay"
+            and key.startswith(_CLAY_TRAINING_ONLY_STATE_PREFIXES)
+        ) or key in exact_keys
+
+    return {
+        key: value for key, value in state_dict.items()
+        if not is_checkpoint_only(key)
+    }
+
+
+def _validate_checkpoint_state_keys(model_state, checkpoint_state) -> None:
+    """Reject missing or unexpected keys with bounded diagnostics."""
+    model_keys = set(model_state)
+    checkpoint_keys = set(checkpoint_state)
+    missing = tuple(sorted(model_keys - checkpoint_keys))
+    unexpected = tuple(sorted(checkpoint_keys - model_keys))
+
+    if not missing and not unexpected:
+        return
+
+    raise RuntimeError(
+        "[load_model] checkpoint state is incompatible with the rebuilt "
+        f"model: missing={len(missing)} "
+        f"{_state_key_sample(missing)}; unexpected={len(unexpected)} "
+        f"{_state_key_sample(unexpected)}. Refusing a partial state_dict load."
+    )
+
+
+def load_model(
+    ckpt_path: str,
+    device,
+    backbone_name: str | None = None,
+    img_size: int | None = None,
+    *,
+    expected_checkpoint_sha256: str | None = None,
+    expected_checkpoint_size: int | None = None,
+    return_checkpoint_config: bool = False,
+):
     """Load a segmentation model from checkpoint.
 
     Routes through the model registry (``imint.fm.registry.MODEL_CONFIGS``)
@@ -112,7 +399,6 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None,
     feeds (grid_size + expected token count match the encoder output). None →
     the historical behaviour (pos_embed / config / pool-count reconciliation).
     """
-    import torch
     from imint.fm.registry import (
         MODEL_CONFIGS, build_backbone, resolve_backbone_name,
     )
@@ -120,7 +406,12 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None,
     from imint.training.config import TrainingConfig
 
     cfg = TrainingConfig()
-    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    ck = _load_checkpoint_for_inference(
+        ckpt_path,
+        map_location="cpu",
+        expected_sha256=expected_checkpoint_sha256,
+        expected_size=expected_checkpoint_size,
+    )
 
     ck_cfg = ck.get("config", {})
     num_frames = ck_cfg.get("num_temporal_frames", cfg.num_temporal_frames)
@@ -137,9 +428,9 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None,
     # trusting ck_cfg. The trainer's minimal best_model.pt config omits
     # n_aux_channels entirely (the clay/croma/terramind runs, and any run
     # that logged only enable_*_channel flags), so the config default of 11
-    # builds an 11-channel LiDARBranch that CANNOT load a 10-aux checkpoint
-    # (silent gated_fusions / lidar_branch drop under strict=False, which the
-    # mismatch warning below would then flag). The aux branch's first conv is
+    # builds an 11-channel LiDARBranch that CANNOT load a 10-aux checkpoint.
+    # The fail-closed state reconciliation below rejects that mismatch. The
+    # aux branch's first conv is
     # Conv2d(n_aux, 32, 3): its in-channel dim IS n_aux_channels. Search both
     # the Prithvi wrapper key (`aux_branch.*` / `lidar_branch.net.0.conv`) and
     # the ViTUPerNetHead key (`decoder_head.lidar_branch.net.0.conv`).
@@ -301,8 +592,8 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None,
         enable_temporal_pooling=cfg.enable_temporal_pooling,
         enable_multilevel_aux=cfg.enable_multilevel_aux,
         # Fraction head: the trainer persists these in the checkpoint config —
-        # without threading them the frac_head weights are silently dropped by
-        # strict=False and --use-fraction-head cannot run.
+        # without threading them the strict state load fails and
+        # --use-fraction-head cannot run.
         # Weights beat config here too: clay's minimal config omits
         # enable_tradslag_head, so a config-only read builds the head with
         # frac disabled and the forward refuses return_fractions even though
@@ -322,18 +613,9 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None,
                     else ck_cfg.get("aux_fusion", "concat")),
         device=device,
     )
-    incompat = model.load_state_dict(sd, strict=False)
-    # Surface load mismatches: with strict=False a mismatched architecture
-    # (e.g. gated checkpoint into a concat model) loads "successfully" but
-    # drops weights silently. Warn loudly on anything beyond the expected
-    # backbone-buffer misses so a bad load can't masquerade as a valid run.
-    _miss = [k for k in incompat.missing_keys if "encoder." not in k]
-    if _miss or incompat.unexpected_keys:
-        print(f"  [load_model] WARN state_dict mismatch — "
-              f"missing(non-encoder)={len(_miss)}, "
-              f"unexpected={len(incompat.unexpected_keys)}")
-        for k in (_miss[:8] + list(incompat.unexpected_keys)[:8]):
-            print(f"    · {k}")
+    inference_state = _checkpoint_state_for_inference(sd, family=spec.family)
+    _validate_checkpoint_state_keys(model.state_dict(), inference_state)
+    model.load_state_dict(inference_state, strict=True)
     model = model.to(device).eval()
     # Stash the spec so the inference input builder can route on family
     # (tessera reads the pre-baked embedding; Prithvi reads reflectance).
@@ -346,7 +628,10 @@ def load_model(ckpt_path: str, device, backbone_name: str | None = None,
 
     epoch = ck.get("epoch", "?")
     miou = ck.get("metrics", {}).get("miou", "?")
-    return model, epoch, miou, img_size
+    loaded = (model, epoch, miou, img_size)
+    if return_checkpoint_config:
+        return (*loaded, dict(ck_cfg))
+    return loaded
 
 
 # Families whose forward is routed through imint.fm.forward_router.family_forward
@@ -425,8 +710,96 @@ def _build_routed_batch(data, tile_path, device, img_size, family):
     return batch, y0, x0, crop_sz
 
 
+def _load_npz_for_inference(
+    tile_path,
+    *,
+    expected_sha256: str | None = None,
+    expected_size: int | None = None,
+):
+    """Open one tile, optionally authenticating the exact bytes in one read.
+
+    Crop-distill columns run weeks apart, so their frozen tile inventory must
+    bind the bytes consumed by every forward.  Reading the file into a
+    ``BytesIO`` while hashing lets ``numpy.load`` consume that same buffer:
+    the PVC is not swept once for verification and then read a second time
+    for inference.  The returned buffer must remain alive until the NpzFile
+    is closed.
+    """
+    authenticated = _validate_expected_identity(
+        expected_sha256=expected_sha256,
+        expected_size=expected_size,
+        error_type=TileIdentityError,
+        label="tile",
+    )
+    if not authenticated:
+        return np.load(tile_path, allow_pickle=False), None
+
+    path = Path(tile_path)
+    buffer = io.BytesIO()
+    try:
+        fd, opened = _open_regular_nofollow(
+            path, error_type=TileIdentityError, label="frozen tile"
+        )
+        digest = hashlib.sha256()
+        try:
+            source = os.fdopen(fd, "rb", closefd=True)
+        except BaseException:
+            os.close(fd)
+            raise
+        with source:
+            if opened.st_size != expected_size:
+                raise TileIdentityError(
+                    f"frozen tile size mismatch for {path}: expected "
+                    f"{expected_size}, got {opened.st_size}"
+                )
+            for block in iter(lambda: source.read(_READ_BLOCK_SIZE), b""):
+                digest.update(block)
+                buffer.write(block)
+            _assert_open_file_unchanged(
+                source.fileno(),
+                path,
+                opened,
+                error_type=TileIdentityError,
+                label="frozen tile",
+            )
+    except TileIdentityError:
+        buffer.close()
+        raise
+    except OSError as exc:
+        buffer.close()
+        raise TileIdentityError(
+            f"cannot read frozen tile {path}: {exc}"
+        ) from exc
+    actual_sha256 = digest.hexdigest()
+    if actual_sha256 != expected_sha256:
+        buffer.close()
+        raise TileIdentityError(
+            f"frozen tile sha256 mismatch for {path}: expected "
+            f"{expected_sha256}, got {actual_sha256}"
+        )
+    buffer.seek(0)
+    try:
+        return np.load(buffer, allow_pickle=False), buffer
+    except Exception:
+        buffer.close()
+        raise
+
+
+def _close_inference_inputs(inputs) -> None:
+    """Release an NpzFile and its optional authenticated byte buffer."""
+    data = inputs.get("data")
+    close = getattr(data, "close", None)
+    if close is not None:
+        close()
+    buffer = inputs.get("data_buffer")
+    if buffer is not None:
+        buffer.close()
+
+
 def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
-                            family="prithvi", num_frames=None):
+                            family="prithvi", num_frames=None,
+                            expected_tile_sha256=None,
+                            expected_tile_size=None):
     """Build (img5d, aux, temporal_coords, location_coords, crop meta) for a tile.
 
     Shared preprocessing for both the class-head and fraction-head inference
@@ -460,7 +833,11 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
     )
     aux_names = aux_channel_names if aux_channel_names is not None else AUX_CHANNEL_NAMES
 
-    data = np.load(tile_path, allow_pickle=True)
+    data, data_buffer = _load_npz_for_inference(
+        tile_path,
+        expected_sha256=expected_tile_sha256,
+        expected_size=expected_tile_size,
+    )
 
     routed = family in _ROUTED_FAMILIES
     img5d = None
@@ -576,6 +953,7 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
         "img5d": img5d, "aux": aux, "batch": batch, "family": family,
         "temporal_coords": temporal_coords, "location_coords": location_coords,
         "y0": y0, "x0": x0, "crop_sz": crop_sz, "data": data,
+        "data_buffer": data_buffer,
         "aux_names": aux_names,
     }
 
@@ -612,7 +990,9 @@ def _forward_from_inputs(model, inp, device, *, return_fractions=False):
 
 
 def run_fraction_inference(model, tile_path: str, device, img_size: int = 224,
-                           aux_channel_names=None):
+                           aux_channel_names=None,
+                           expected_tile_sha256=None,
+                           expected_tile_size=None):
     """Run the FRACTION head on a single tile → (4, cs, cs) sigmoid fractions.
 
     Uses the same preprocessing/crop as ``run_inference`` and calls the model
@@ -626,16 +1006,21 @@ def run_fraction_inference(model, tile_path: str, device, img_size: int = 224,
     family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
     inp = _build_inference_inputs(
         tile_path, device, img_size, aux_channel_names, family=family,
-        num_frames=getattr(model, "num_frames", None))
-    with torch.no_grad():
-        _logits, frac_logits = _forward_from_inputs(
-            model, inp, device, return_fractions=True)
-        fracs = torch.sigmoid(frac_logits).squeeze(0).cpu().numpy()  # (4, cs, cs)
-    return fracs
+        num_frames=getattr(model, "num_frames", None),
+        expected_tile_sha256=expected_tile_sha256,
+        expected_tile_size=expected_tile_size)
+    try:
+        with torch.no_grad():
+            _logits, frac_logits = _forward_from_inputs(
+                model, inp, device, return_fractions=True)
+            return torch.sigmoid(frac_logits).squeeze(0).cpu().numpy()
+    finally:
+        _close_inference_inputs(inp)
 
 
 def run_inference(model, tile_path: str, device, img_size: int = 224,
-                  return_probs: bool = False, aux_channel_names=None):
+                  return_probs: bool = False, aux_channel_names=None,
+                  expected_tile_sha256=None, expected_tile_size=None):
     """Run inference on a single tile.
 
     Returns (H, W) prediction, or ((C, H, W) softmax, (B, H, W) spectral_raw, (N, H, W) aux)
@@ -649,29 +1034,41 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
     family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
     inp = _build_inference_inputs(
         tile_path, device, img_size, aux_channel_names, family=family,
-        num_frames=getattr(model, "num_frames", None))
+        num_frames=getattr(model, "num_frames", None),
+        expected_tile_sha256=expected_tile_sha256,
+        expected_tile_size=expected_tile_size)
     y0 = inp["y0"]; x0 = inp["x0"]; crop_sz = inp["crop_sz"]
     data = inp["data"]; aux_names = inp["aux_names"]
 
-    with torch.no_grad():
-        logits = _forward_from_inputs(model, inp, device)
-        if return_probs:
-            import torch.nn.functional as F
-            probs = F.softmax(logits, dim=1).squeeze(0).cpu().numpy()  # (C, H, W)
-            # Return raw spectral (before normalization) + aux for superpixel generation
-            raw_spectral = data.get("spectral", data.get("image")).astype(np.float32)
-            _, h_full, w_full = raw_spectral.shape
-            raw_spectral = raw_spectral[:, y0:y0+crop_sz, x0:x0+crop_sz]
-            # Collect raw aux
-            raw_aux_list = []
-            for ch_name in aux_names:
-                if ch_name in data:
-                    a = data[ch_name].astype(np.float32)[y0:y0+crop_sz, x0:x0+crop_sz]
-                    raw_aux_list.append(a[np.newaxis])
-            raw_aux = np.concatenate(raw_aux_list, axis=0) if raw_aux_list else None
-            return probs, raw_spectral, raw_aux
-        pred = logits.argmax(1).squeeze(0).cpu().numpy()
-    return pred
+    try:
+        with torch.no_grad():
+            logits = _forward_from_inputs(model, inp, device)
+            if return_probs:
+                import torch.nn.functional as F
+                probs = F.softmax(logits, dim=1).squeeze(0).cpu().numpy()
+                # Return raw spectral (before normalization) + aux for
+                # superpixel generation.
+                raw_spectral = data.get(
+                    "spectral", data.get("image")
+                ).astype(np.float32)
+                raw_spectral = raw_spectral[
+                    :, y0:y0+crop_sz, x0:x0+crop_sz
+                ]
+                raw_aux_list = []
+                for ch_name in aux_names:
+                    if ch_name in data:
+                        array = data[ch_name].astype(np.float32)[
+                            y0:y0+crop_sz, x0:x0+crop_sz
+                        ]
+                        raw_aux_list.append(array[np.newaxis])
+                raw_aux = (
+                    np.concatenate(raw_aux_list, axis=0)
+                    if raw_aux_list else None
+                )
+                return probs, raw_spectral, raw_aux
+            return logits.argmax(1).squeeze(0).cpu().numpy()
+    finally:
+        _close_inference_inputs(inp)
 
 
 def main():
