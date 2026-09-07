@@ -154,6 +154,15 @@ granskningen. Falskt "läst" är handlingsbart; avsaknad av ACK är det inte.
   Saknas den men finns id:t i `.seen` → bekräftad tyst förlust, och `Stop`
   (v1:s P1-1) skulle införa samma fel på ett tredje event.
 
+  **AVGJORD för Claude-sidan 2026-09-07 11:23Z, empiriskt:** två
+  inbox-meddelanden (min egen v2-post 11:08:48Z + en syskonsessions
+  koordinationsnot 11:20:34Z) levererades till denna session via just
+  `PreToolUse:Bash`-hooken, mitt i en pågående session utan
+  SessionStart emellan, och nådde modellens kontext — testfallet
+  inträffade naturligt. Granskarens fynd 7-hypotes är **motbevisad**
+  för Claude Code i körande version. Kvarstår öppen för `Stop`-eventet
+  och för Codex-sidan (där hookarna inte kör alls, se ovan).
+
 ### 1. Noll kod, högst nytta
 
 **Förbjud ostämplade negativa påståenden.** En protokollregel i AGENTS.md /
