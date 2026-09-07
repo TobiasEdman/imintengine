@@ -28,8 +28,9 @@ spec:
           env:
             - { name: MODE, value: "dry" }
           resources:
-            requests: { cpu: "500m", memory: 256Mi }
-            limits: { cpu: "2", memory: 1Gi }
+            # iceguard-webhook kräver requests == limits.
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { cpu: "1", memory: 1Gi }
           command:
             - bash
             - -c
