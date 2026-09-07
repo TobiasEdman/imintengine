@@ -56,7 +56,7 @@ spec:
               # ONE pod loads every backbone family, so it needs the union
               # of the per-column loader deps.
               pip install --quiet --no-cache-dir "git+https://github.com/Clay-foundation/model.git"
-              git clone --depth 1 https://github.com/antofuller/CROMA /workspace/CROMA && pip install --quiet --no-cache-dir -e /workspace/CROMA || true
+              git clone --depth 1 https://github.com/antofuller/CROMA /workspace/CROMA && export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}
               pip install --quiet --no-cache-dir terratorch
               mkdir -p /cephfs/ops/deps
               pip freeze > /cephfs/ops/deps/ladder-inference-matrix-$RUN_ID.txt

@@ -85,10 +85,14 @@ RUNGS = {
 # garbage. sar_cohort marks the two columns whose trainable tiles are the
 # s1_vv_vh subset; their dense pass pre-filters to exactly that cohort.
 _LEGACY_DISTILL_SETUP = {
+    # CROMA ships plain modules without packaging — pip install -e cannot
+    # work (no setup.py/pyproject); the loader's contract is use_croma.py on
+    # PYTHONPATH, same as the training manifests. No error-swallowing: a
+    # hidden clone failure resurfaces as ModuleNotFoundError mid-run.
     "croma": (
         "git clone --depth 1 https://github.com/antofuller/CROMA "
-        "/workspace/CROMA && pip install --quiet --no-cache-dir "
-        "-e /workspace/CROMA || true"
+        "/workspace/CROMA && "
+        "export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}"
     ),
     "terramind": "pip install --quiet --no-cache-dir terratorch",
     "clay": (
