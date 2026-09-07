@@ -146,3 +146,32 @@ def test_non_crop_manifests_match_generator():
 def test_every_cell_of_the_matrix_exists():
     found = {(m, r) for m, r, p in _manifests() if p.exists()}
     assert len(found) == len(BASES) * len(RUNGS) == 28
+
+
+def test_4f_dependency_lock_is_shared_and_complete():
+    """One lock for every 4f job: the base manifest (inherited by the four
+    rung jobs) and the generator's pinned distill block must pin the SAME
+    package==version set, and nothing in either may be unversioned. Two
+    drifting copies would silently split the 'shared lock' the exploratory
+    comparison's runtime identity rests on (PR #42 review)."""
+    import re
+
+    from scripts.gen_ladder_manifests import _DISTILL_DEPS_PINNED
+
+    base = (REPO / "k8s" / "train-prithvi300m-4f-job.yaml").read_text()
+
+    def pins(text: str) -> set[str]:
+        return set(re.findall(r"[A-Za-z0-9_.-]+==[0-9][A-Za-z0-9_.!+-]*", text))
+
+    base_pins = pins(base)
+    distill_pins = pins(_DISTILL_DEPS_PINNED)
+    assert base_pins == distill_pins, (
+        f"lock drift: only-in-base={sorted(base_pins - distill_pins)} "
+        f"only-in-distill={sorted(distill_pins - base_pins)}")
+    assert len(base_pins) >= 40, "the full resolved lock, not a top-level list"
+
+    # No unversioned install may sneak in beside the lock (comments exempt).
+    for line in base.splitlines():
+        code = line.split("#", 1)[0]
+        if "pip install" in code and "--no-deps" not in code:
+            raise AssertionError(f"unpinned pip path in 4f base: {line.strip()}")

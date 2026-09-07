@@ -32,9 +32,10 @@ The other four ladder backbones (tessera/clay/croma/terramind) are
 
 ## The new column: `prithvi300m4f`
 
-Base: `k8s/train-prithvi300m-4f-job.yaml` (committed) — byte-identical to
-`train-prithvi300m-job.yaml` except the two multitemporal flags. batch-size 8
-kept unchanged (300m 4-frame = 3844 tokens < 600m 4-frame = 5184, which runs
+Base: `k8s/train-prithvi300m-4f-job.yaml` — same training flags as
+`train-prithvi300m-job.yaml` except the two multitemporal flags; runtime
+identity is pinned and differs from the archived 1f arm (see "What this
+measures"). batch-size 8 kept unchanged (300m 4-frame = 3844 tokens < 600m 4-frame = 5184, which runs
 batch 8 on 80Gi) so batch size matches the 1f arm.
 
 ## Wiring (landed in PR #42)
@@ -65,8 +66,7 @@ the crux file. Do all of the below on a branch rebased onto post-#36 main:
   approved by Tobias 2026-09-07 ("H100 är OK", via Codex).
 - **Cost:** 4 rungs × ~a few h H100 + 1 distill (2080ti). APPROVED by
   Tobias 2026-09-07 ("H100 är OK", via Codex) for the full r1-r4 scope —
-  do not re-ask unless the scope changes. ~~Confirm scope with
-  user — full r1-r4 vs. a minimal r1+r2+distill first cut.
+  do not re-ask unless the scope changes.
 - **eval:** the frame-ablation checkpoints, once trained, get NFI+LUCAS eval via
   the same per-cell jobs (the `num_frames`-from-checkpoint eval fix, PR #38,
   handles 4-frame correctly).

@@ -36,12 +36,21 @@ spec:
               export PYTHONUNBUFFERED=1
               echo "=== ladder distill stage — prithvi300m4f ==="
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
+              pip install --quiet --no-cache-dir --no-deps torch==2.5.1 torchvision==0.20.1 \
                 --index-url https://download.pytorch.org/whl/cu121
-              pip install --quiet --no-cache-dir \
-                timm==1.0.11 einops==0.8.0 numpy==1.26.4 Pillow==10.4.0 \
-                scipy==1.13.1 scikit-learn==1.5.1 huggingface_hub==0.26.2 \
-                pandas==2.2.2 pyarrow==17.0.0 rasterio==1.3.11 pyproj==3.6.1
+              pip install --quiet --no-cache-dir --no-deps \
+                Jinja2==3.1.6 MarkupSafe==3.0.3 PyYAML==6.0.2 affine==3.0.1 \
+                attrs==26.1.0 certifi==2026.7.22 charset-normalizer==3.5.1 \
+                click-plugins==1.1.1.2 click==8.5.0 cligj==0.7.2 cloudpickle==3.1.2 \
+                einops==0.8.0 filelock==3.32.5 fsspec==2026.7.0 \
+                huggingface-hub==0.26.2 idna==3.19 joblib==1.6.0 mpmath==1.3.0 \
+                networkx==3.6.1 numpy==1.26.4 packaging==26.3 pandas==2.2.2 \
+                pillow==10.4.0 pyarrow==17.0.0 pyparsing==3.3.2 pyproj==3.6.1 \
+                python-dateutil==2.9.0.post0 pytz==2026.3.post1 rasterio==1.3.11 \
+                requests==2.34.2 safetensors==0.8.0 scikit-learn==1.5.1 \
+                scipy==1.13.1 setuptools==84.0.0 six==1.17.0 snuggs==1.4.7 \
+                sympy==1.13.1 threadpoolctl==3.6.0 timm==1.0.11 tqdm==4.70.0 \
+                typing_extensions==4.16.0 tzdata==2026.3 urllib3==2.7.0
 
               mkdir -p /workspace && cd /workspace
               HEAD_SHA=1fd08fad9ba9ab599415230938e6fade357cd5eb
@@ -49,7 +58,6 @@ spec:
               git remote add origin https://github.com/TobiasEdman/ImintEngine.git
               git fetch -q --depth 1 origin "$HEAD_SHA"
               git checkout -q "$HEAD_SHA"
-              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
               echo "PINNED SOURCE: $HEAD_SHA"
               mkdir -p /cephfs/ops/deps
               pip freeze > /cephfs/ops/deps/ladder-distill-prithvi300m4f-$(date -u +%Y%m%dT%H%M%SZ).txt
