@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the label-source ladder manifests (6 backbones × 4 rungs),
+"""Generate the label-source ladder manifests (7 backbones × 4 rungs),
 plus the distill stage (NFI) and the LUCAS crop-distill stage per column.
 
 See docs/experiments/label_source_ladder.md. Every rung is the same trainer on
@@ -11,9 +11,9 @@ so a rung-to-rung delta attributes to exactly one thing:
     rung 3 nfi        + NFI-distilled forest type  (--label-dir …_distill_…)
     rung 4 tradslag   + Trädslag fraction head     (+ --frac-dir)
 
-Hand-writing 24 near-identical manifests invites exactly the drift this
+Hand-writing 28 near-identical manifests invites exactly the drift this
 experiment cannot tolerate (one stray --epochs and a rung delta becomes an
-early-stopping artefact). So they are generated from the six existing
+early-stopping artefact). So they are generated from the per-column
 per-backbone yamls, which stay the single source of each backbone's regime —
 crop size, aux fusion, ΔSAR, model-specific preflights and all.
 
@@ -52,6 +52,12 @@ OUT_DIR = REPO / "k8s" / "ladder"
 # stripped below so the ladder cold-starts like every other column.
 BASES = {
     "prithvi300m": "k8s/train-prithvi300m-job.yaml",
+    # Temporal-frame comparison arm (issue #39): same training flags as
+    # prithvi300m except --enable-multitemporal --num-temporal-frames 4,
+    # but PINNED runtime identity (digest image + baked source SHA) where
+    # the archived 1f arm ran an earlier one — an exploratory historical
+    # comparison, not a runtime-identical controlled ablation (PR #42).
+    "prithvi300m4f": "k8s/train-prithvi300m-4f-job.yaml",
     "prithvi600m": "k8s/train-v8b-nmd2023-long-job.yaml",
     "croma": "k8s/train-croma-job.yaml",
     "terramind": "k8s/train-terramind-job.yaml",
@@ -117,6 +123,14 @@ DISTILL = {
     }
     for model, protocol in CROP_MODELS.items()
 }
+# Temporal-frame ablation column (issue #39): ladder rungs + NFI distill
+# only. Deliberately NOT in CROP_MODELS — the crop stage's per-model UID
+# map (2001-2006) has no slot for it, and the ablation needs no crop/LUCAS
+# pass. Extend the UID map first if a crop column is ever justified.
+DISTILL["prithvi300m4f"] = {"img_size": 496, "backbone": "prithvi_300m"}
+# 4f runs with pinned source identity (PR #42): the same commit the 4f
+# training base bakes. Re-pin deliberately when re-running the column.
+PRITHVI300M4F_SOURCE_GIT_SHA = "1fd08fad9ba9ab599415230938e6fade357cd5eb"
 
 # LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
 # features at the frozen LUCAS crop distill points, score the pinned-
@@ -356,19 +370,10 @@ spec:
               export PYTHONUNBUFFERED=1
               echo "=== ladder distill stage — {model} ==="
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              pip install --quiet --no-cache-dir torch torchvision \\
-                --index-url https://download.pytorch.org/whl/cu121
-              pip install --quiet --no-cache-dir \\
-                timm einops numpy Pillow scipy scikit-learn huggingface_hub \\
-                pandas pyarrow rasterio pyproj
+              {dep_install}
 
               mkdir -p /workspace && cd /workspace
-              BRANCH=main
-              git clone --depth 1 --branch "$BRANCH" \\
-                https://github.com/TobiasEdman/ImintEngine.git imintengine
-              cd /workspace/imintengine
-              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
-              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              {source_setup}
               # Per-column backbone deps — the r2 checkpoints cannot even
               # LOAD without them (terramind: terratorch ImportError killed
               # the first submission; croma/clay: their loader packages).
@@ -1377,11 +1382,71 @@ spec:
 """
 
 
+# The six legacy distill columns keep their historical (mutable) setup —
+# re-pinning them retroactively would falsify already-produced OOF
+# provenance. The 4f column pins source + top-level deps (PR #42 review);
+# transitives are captured by its pip-freeze record.
+_DISTILL_DEPS_LEGACY = """pip install --quiet --no-cache-dir torch torchvision \\
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \\
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \\
+                pandas pyarrow rasterio pyproj"""
+# The FULL resolved lock for linux/py3.11/cu121, shared by every 4f job
+# (base + rungs inherit it from the base manifest; a test asserts the two
+# copies stay identical). --no-deps: nothing resolves at run time.
+_DISTILL_DEPS_PINNED = """pip install --quiet --no-cache-dir --no-deps torch==2.5.1+cu121 torchvision==0.20.1+cu121 \\
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir --no-deps \\
+                affine==3.0.1 attrs==26.1.0 certifi==2026.7.22 \\
+                charset-normalizer==3.5.1 click==8.5.0 \\
+                click-plugins==1.1.1.2 cligj==0.7.2 cloudpickle==3.1.2 \\
+                einops==0.8.0 filelock==3.32.5 fsspec==2026.7.0 \\
+                huggingface-hub==0.26.2 idna==3.19 jinja2==3.1.6 \\
+                joblib==1.6.0 markupsafe==3.0.3 mpmath==1.3.0 \\
+                networkx==3.6.1 numpy==1.26.4 nvidia-cublas-cu12==12.1.3.1 \\
+                nvidia-cuda-cupti-cu12==12.1.105 \\
+                nvidia-cuda-nvrtc-cu12==12.1.105 \\
+                nvidia-cuda-runtime-cu12==12.1.105 \\
+                nvidia-cudnn-cu12==9.1.0.70 nvidia-cufft-cu12==11.0.2.54 \\
+                nvidia-curand-cu12==10.3.2.106 \\
+                nvidia-cusolver-cu12==11.4.5.107 \\
+                nvidia-cusparse-cu12==12.1.0.106 nvidia-nccl-cu12==2.21.5 \\
+                nvidia-nvjitlink-cu12==12.9.86 nvidia-nvtx-cu12==12.1.105 \\
+                packaging==26.3 pandas==2.2.2 pillow==10.4.0 pyarrow==17.0.0 \\
+                pyparsing==3.3.2 pyproj==3.6.1 python-dateutil==2.9.0.post0 \\
+                pytz==2026.3.post1 pyyaml==6.0.2 rasterio==1.3.11 \\
+                requests==2.34.2 safetensors==0.8.0 scikit-learn==1.5.1 \\
+                scipy==1.13.1 setuptools==84.0.0 six==1.17.0 snuggs==1.4.7 \\
+                sympy==1.13.1 threadpoolctl==3.6.0 timm==1.0.11 tqdm==4.70.0 \\
+                triton==3.1.0 typing-extensions==4.16.0 tzdata==2026.3 \\
+                urllib3==2.7.0"""
+_DISTILL_SOURCE_LEGACY = """BRANCH=main
+              git clone --depth 1 --branch "$BRANCH" \\
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)\""""
+
+
+def _distill_source_pinned(model: str) -> str:
+    sha = _require_full_sha(PRITHVI300M4F_SOURCE_GIT_SHA,
+                            "PRITHVI300M4F_SOURCE_GIT_SHA")
+    return f"""HEAD_SHA={sha}
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$HEAD_SHA"
+              git checkout -q "$HEAD_SHA"
+              echo "PINNED SOURCE: $HEAD_SHA"
+              mkdir -p /cephfs/ops/deps
+              pip freeze > /cephfs/ops/deps/ladder-distill-{model}-$(date -u +%Y%m%dT%H%M%SZ).txt"""
+
+
 def render_distill(model: str) -> str:
     cfg = DISTILL[model]
     keys = cfg.get("require_keys", ())
     sar_filter = "".join(
         f"\n                --require-npz-key {k} \\" for k in keys)
+    pinned = model == "prithvi300m4f"
     header = (
         f"# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         f"# Distill stage for {model}: r2 checkpoint → plot features →\n"
@@ -1394,6 +1459,9 @@ def render_distill(model: str) -> str:
         model=model, img_size=cfg["img_size"], backbone=cfg["backbone"],
         extract_filter=sar_filter, sar_filter=sar_filter,
         extra_setup=cfg.get("extra_setup", "true  # no extra deps"),
+        dep_install=_DISTILL_DEPS_PINNED if pinned else _DISTILL_DEPS_LEGACY,
+        source_setup=(_distill_source_pinned(model) if pinned
+                      else _DISTILL_SOURCE_LEGACY),
         python_image=PYTHON_IMAGE)
 
 
@@ -1855,7 +1923,9 @@ def main() -> int:
         or args.non_crop_only
     ):
         outputs.update(render_non_crop_outputs())
-        for model in BASES:
+        # Crop consumers are defined by the crop protocol, not the training
+        # bases: prithvi300m4f (issue #39) is a ladder/distill-only column.
+        for model in CROP_MODELS:
             outputs[OUT_DIR / f"crop-distill-{model}-job.yaml"] = (
                 render_crop_distill(model)
             )

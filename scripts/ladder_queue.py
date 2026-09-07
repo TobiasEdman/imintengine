@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Submit label-source ladder jobs as the memory quota frees. Runs in-cluster.
 
-The ladder is 24 runs but the namespace fits only ~3 concurrently (250 Gi hard
+The ladder is 28 runs (7 columns x 4 rungs) but the namespace fits only ~3 concurrently (250 Gi hard
 cap on requests.memory, ~39 Gi held by standing services). Something has to
 submit the next run when one finishes. That "something" must be automatic and
 must live in the cluster: a laptop-side scheduled task missed every slot it was
@@ -21,7 +21,7 @@ Never exceeds quota. A Job admitted past the cap creates NO pod and sits at
 So the walk stops at the first job that does not fit rather than skipping ahead
 to a smaller one, which also keeps the submission order interpretable.
 
-When all 12 exist it suspends its own CronJob, so it cannot become an orphan.
+When all 14 rung-1/2 jobs exist it suspends its own CronJob, so it cannot become an orphan.
 
     ladder_queue.py --dry-run     # report only
     ladder_queue.py               # submit what fits, then maybe self-suspend
@@ -36,7 +36,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Largest-first within each rung: 80 Gi backbones before 48 Gi ones.
-MODEL_ORDER = ["prithvi600m", "prithvi300m", "tessera", "croma", "terramind", "clay"]
+# prithvi300m4f (issue #39, temporal-frame ablation) is 80 Gi like its
+# 1-frame sibling and queues right after it.
+MODEL_ORDER = ["prithvi600m", "prithvi300m", "prithvi300m4f", "tessera",
+               "croma", "terramind", "clay"]
 RUNGS = (1, 2)
 # Rungs 3/4 are DISTILL-GATED: a column joins their queue only when its
 # distill job has written the _GATE_OK marker (state on disk, never job

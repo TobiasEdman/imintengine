@@ -145,4 +145,45 @@ def test_non_crop_manifests_match_generator():
 
 def test_every_cell_of_the_matrix_exists():
     found = {(m, r) for m, r, p in _manifests() if p.exists()}
-    assert len(found) == len(BASES) * len(RUNGS) == 24
+    assert len(found) == len(BASES) * len(RUNGS) == 28
+
+
+def test_4f_dependency_lock_is_shared_and_complete():
+    """One lock for every 4f job, anchored in the RESOLVER REPORT: the
+    committed k8s/prithvi300m4f-deps.lock is the canonical uv resolution
+    (linux/py3.11/cu121 — markers evaluated for Linux, which is exactly
+    what a mac-side pip resolution silently gets wrong: the nvidia/triton
+    closure). The base manifest (inherited by the four rung jobs) and the
+    generator's pinned distill block must both pin exactly that set, and
+    nothing in either may be unversioned (PR #42 review)."""
+    import re
+
+    from scripts.gen_ladder_manifests import _DISTILL_DEPS_PINNED
+
+    base = (REPO / "k8s" / "train-prithvi300m-4f-job.yaml").read_text()
+    lockfile = (REPO / "k8s" / "prithvi300m4f-deps.lock").read_text()
+
+    def pins(text: str) -> set[str]:
+        found = re.findall(r"([A-Za-z0-9_.-]+)==([0-9][A-Za-z0-9_.!+-]*)", text)
+        return {f"{n.lower().replace('_', '-')}=={v}" for n, v in found}
+
+    lock_pins = pins("\n".join(
+        ln for ln in lockfile.splitlines() if not ln.startswith("#")))
+    base_pins = pins(base)
+    distill_pins = pins(_DISTILL_DEPS_PINNED)
+
+    assert lock_pins, "empty lockfile"
+    for name, got in (("base", base_pins), ("distill", distill_pins)):
+        assert got == lock_pins, (
+            f"{name} drifts from the resolver lock: "
+            f"missing={sorted(lock_pins - got)} extra={sorted(got - lock_pins)}")
+    # The Linux-marker closure must actually be present — the exact gap a
+    # cross-platform resolution hides.
+    assert any(p.startswith("nvidia-cudnn-cu12==") for p in lock_pins)
+    assert any(p.startswith("triton==") for p in lock_pins)
+
+    # No unversioned install may sneak in beside the lock (comments exempt).
+    for line in base.splitlines():
+        code = line.split("#", 1)[0]
+        if "pip install" in code and "--no-deps" not in code:
+            raise AssertionError(f"unpinned pip path in 4f base: {line.strip()}")
