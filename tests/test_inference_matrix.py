@@ -86,39 +86,46 @@ def _write_holdout_npz(holdout: "Path", name: str) -> None:
 
 
 def test_render_shared_writes_both_truth_panels(tmp_path):
-    """Two training vocabularies → two truth panels: the in-tile 23-class
-    label (rung 1) and the NMD2023 sidecar's 28-class label (rungs 2-4)."""
+    """Two training vocabularies → two truth panels, BOTH from reference-
+    built sidecars: the holdout tiles' baked label carries raw NMD codes
+    and no LPIS/SKS masks, so the in-tile label renders neither truth."""
     from ladder_inference_matrix import render_shared
 
     holdout = tmp_path / "holdout"
-    sidecars = tmp_path / "nmd2023_labels"
+    side23 = tmp_path / "nmd2018_labels"
+    side28 = tmp_path / "nmd2023_labels"
     out = tmp_path / "out"
-    holdout.mkdir(), sidecars.mkdir()
+    holdout.mkdir(), side23.mkdir(), side28.mkdir()
     _write_holdout_npz(holdout, "holdoutval_1_1_2022")
-    label28 = np.full((8, 8), 25, dtype=np.uint8)   # NMD2023-only class
-    np.savez(sidecars / "holdoutval_1_1_2022.npz", label=label28)
+    np.savez(side23 / "holdoutval_1_1_2022.npz",
+             label=np.full((8, 8), 22, dtype=np.uint8))   # hygge — v5-only
+    np.savez(side28 / "holdoutval_1_1_2022.npz",
+             label=np.full((8, 8), 25, dtype=np.uint8))   # NMD2023-only
 
     tiles = [{"name": "holdoutval_1_1_2022"}]
-    render_shared(tiles, holdout, out, sidecars)
+    render_shared(tiles, holdout, out, side23, side28)
 
-    for panel in ("_rgb", "_truth", "_truth28"):
+    for panel in ("_rgb", "_truth23", "_truth28"):
         assert (out / panel / "holdoutval_1_1_2022.png").exists(), panel
 
 
 def test_render_shared_fails_closed_on_missing_sidecar(tmp_path):
-    """A truth28 panel without its sidecar would misrepresent what rungs
-    2-4 trained on — refuse loudly, pointing at the build job."""
+    """A truth panel without its sidecar would misrepresent what the rungs
+    trained on — refuse loudly, pointing at the right build job."""
     from ladder_inference_matrix import render_shared
 
     holdout = tmp_path / "holdout"
+    side28 = tmp_path / "nmd2023_labels"
     out = tmp_path / "out"
-    holdout.mkdir()
+    holdout.mkdir(), side28.mkdir()
     _write_holdout_npz(holdout, "holdoutval_2_2_2022")
+    np.savez(side28 / "holdoutval_2_2_2022.npz",
+             label=np.zeros((8, 8), dtype=np.uint8))
 
-    with pytest.raises(FileNotFoundError, match="build-labels-holdout-nmd2023"):
+    with pytest.raises(FileNotFoundError, match="build-labels-holdout-nmd2018"):
         render_shared([{"name": "holdoutval_2_2_2022"}], holdout, out,
-                      tmp_path / "no_sidecars")
-    assert not (out / "_truth28").exists()
+                      tmp_path / "no_2018_sidecars", side28)
+    assert not (out / "_truth23").exists()
 
 
 def test_job_follows_ladder_conventions():
