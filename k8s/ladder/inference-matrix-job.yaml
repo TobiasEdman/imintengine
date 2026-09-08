@@ -105,7 +105,7 @@ spec:
               mkdir -p /workspace && cd /workspace
               git init -q imintengine && cd imintengine
               git remote add origin https://github.com/TobiasEdman/ImintEngine.git
-              HEAD_SHA=a01f93552b88d14864cdf126abcacb3c4be85c70
+              HEAD_SHA=5e28a2100fb698e70bc41297e8166241ea0ff9f9
               git fetch -q --depth 1 origin "$HEAD_SHA"
               git checkout -q "$HEAD_SHA"
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
