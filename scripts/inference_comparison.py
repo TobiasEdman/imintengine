@@ -190,10 +190,11 @@ def _numpy_metric_safe_globals() -> list:
         multiarray = importlib.import_module("numpy._core.multiarray")
     except ImportError:
         multiarray = importlib.import_module("numpy.core.multiarray")
-    dtype_classes = [
-        cls for cls in vars(np.dtypes).values()
-        if isinstance(cls, type) and issubclass(cls, np.dtype)
-    ]
+    # Narrow to the dtype classes checkpoints actually serialize (epoch
+    # as int64, metrics as float64/float32) — allowlisting every
+    # np.dtypes class would grant more surface than the artifacts need.
+    dtype_classes = [np.dtypes.Int64DType, np.dtypes.Float64DType,
+                     np.dtypes.Float32DType]
     return [multiarray.scalar, np.dtype, *dtype_classes]
 
 

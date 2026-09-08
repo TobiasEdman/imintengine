@@ -172,37 +172,44 @@ def _save_png(arr: np.ndarray, path: Path) -> None:
 
 
 def render_shared(tiles: list[dict], holdout_dir: Path, out_dir: Path,
-                  nmd2023_label_dir: Path) -> None:
+                  nmd2018_label_dir: Path, nmd2023_label_dir: Path) -> None:
     """RGB + both training-truth panels, once per tile (idempotent).
 
-    Two truths because the ladder trains against two vocabularies:
-    ``_truth`` is the in-tile 23-class unified label (rung 1's target,
-    NMD2018 base + LPIS + SKS) and ``_truth28`` is the NMD2023 sidecar's
-    28-class unified label (rungs 2-4's target). Both use UNIFIED_COLORS —
-    the 23-class values are a subset of 0-27, so shared classes keep
-    identical colours across the panels.
+    Two truths because the ladder trains against two vocabularies —
+    BOTH read from reference-built sidecars, never the in-tile ``label``:
+    the holdout tiles' baked label carries RAW NMD2018 codes (max 128,
+    never unified-mapped at fetch) and no LPIS/SKS masks, so it can
+    render neither vocabulary. ``_truth`` is the 23-class unified v5
+    (rung 1's target, NMD2018 + LPIS crops + SKS clearcuts) from the
+    nmd2018 sidecar; ``_truth28`` is the 28-class (rungs 2-4's target)
+    from the nmd2023 sidecar. Both use UNIFIED_COLORS — 23-class values
+    are a subset of 0-27, so shared classes keep identical colours.
 
     A missing sidecar is a broken precondition, not a skippable gap: the
-    panel claims to show what rungs 2-4 trained on, so rendering without
-    it would misrepresent the matrix. Build sidecars for the holdout set
-    first (k8s/build-labels-holdout-nmd2023-job.yaml).
+    panels claim to show what the rungs trained on, so rendering without
+    them would misrepresent the matrix. Build both holdout sidecar sets
+    first (k8s/build-labels-holdout-nmd2018-job.yaml and
+    k8s/build-labels-holdout-nmd2023-job.yaml).
     """
     for t in tiles:
         rgb_p = out_dir / "_rgb" / f"{t['name']}.png"
-        truth_p = out_dir / "_truth" / f"{t['name']}.png"
+        truth_p = out_dir / "_truth23" / f"{t['name']}.png"
         truth28_p = out_dir / "_truth28" / f"{t['name']}.png"
         if rgb_p.exists() and truth_p.exists() and truth28_p.exists():
             continue
-        sidecar = nmd2023_label_dir / f"{t['name']}.npz"
-        if not sidecar.exists():
-            raise FileNotFoundError(
-                f"NMD2023 sidecar missing for frozen tile {t['name']}: "
-                f"{sidecar} — run k8s/build-labels-holdout-nmd2023-job.yaml "
-                f"before the matrix job")
+        side23 = nmd2018_label_dir / f"{t['name']}.npz"
+        side28 = nmd2023_label_dir / f"{t['name']}.npz"
+        for side, job in ((side23, "build-labels-holdout-nmd2018-job.yaml"),
+                          (side28, "build-labels-holdout-nmd2023-job.yaml")):
+            if not side.exists():
+                raise FileNotFoundError(
+                    f"truth sidecar missing for frozen tile {t['name']}: "
+                    f"{side} — run k8s/{job} before the matrix job")
         with np.load(holdout_dir / f"{t['name']}.npz", allow_pickle=False) as z:
             _save_png(summer_rgb(z["spectral"]), rgb_p)
+        with np.load(side23, allow_pickle=False) as z:
             _save_png(colorize(z["label"]), truth_p)
-        with np.load(sidecar, allow_pickle=False) as z:
+        with np.load(side28, allow_pickle=False) as z:
             _save_png(colorize(z["label"]), truth28_p)
         print(f"  shared panels: {t['name']}")
 
@@ -227,13 +234,14 @@ def render_cell(model: str, rung: int, ckpt: Path, tiles: list[dict],
     dev = torch.device(device)
     # Aux set from the checkpoint's own config — reconstructing it from
     # flags is how terramind died in the distill stage (13 vs 11 aux).
-    ck_cfg = torch.load(str(ckpt), map_location="cpu",
-                        weights_only=False).get("config", {})
-    aux_names = ck_cfg.get("enabled_aux_names")
-    aux_names = list(aux_names) if aux_names else None
-    model_obj, epoch, miou, _ = infcmp.load_model(
+    # ONE load through the reviewed safe loader (weights_only=True +
+    # descriptor sealing); a raw unsafe torch.load on the shared PVC
+    # would hand code execution to any checkpoint writer.
+    model_obj, epoch, miou, _, ck_cfg = infcmp.load_model(
         str(ckpt), dev, backbone_name=cfg["backbone"],
-        img_size=cfg["img_size"])
+        img_size=cfg["img_size"], return_checkpoint_config=True)
+    aux_names = (ck_cfg or {}).get("enabled_aux_names")
+    aux_names = list(aux_names) if aux_names else None
     print(f"[{model}_r{rung}] epoch={epoch} mIoU={miou} sha={sha[:8]}")
 
     for t in tiles:
@@ -261,6 +269,10 @@ def main() -> None:
     ap.add_argument("--k", type=int, default=K_DEFAULT)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--git-sha", default=None)
+    ap.add_argument("--nmd2018-label-dir", default="/cephfs/nmd2018_labels",
+                    help="sidecar dir with 23-class unified v5 labels "
+                         "(rung 1's training truth incl. LPIS+SKS) for the "
+                         "truth23 panel")
     ap.add_argument("--nmd2023-label-dir", default="/cephfs/nmd2023_labels",
                     help="sidecar dir with 28-class unified labels "
                          "(rungs 2-4's training truth) for the truth28 panel")
@@ -271,7 +283,8 @@ def main() -> None:
     out_dir = Path(args.out_dir)
 
     tiles = freeze_tiles(holdout, out_dir, args.k, args.git_sha)
-    render_shared(tiles, holdout, out_dir, Path(args.nmd2023_label_dir))
+    render_shared(tiles, holdout, out_dir, Path(args.nmd2018_label_dir),
+                  Path(args.nmd2023_label_dir))
 
     cells: dict[str, dict] = {}
     for model in DISTILL:
