@@ -405,6 +405,32 @@ def test_storage_prep_is_the_only_root_job_and_has_one_capability(render_identit
     ]
 
 
+def test_storage_prep_tracks_current_crop_runtime_not_source_access(monkeypatch):
+    current_source = "1" * 40
+    current_image = (
+        "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "2" * 64
+    )
+    monkeypatch.setattr(
+        manifests, "CROP_DISTILL_SOURCE_GIT_SHA", current_source
+    )
+    monkeypatch.setattr(manifests, "CROP_DISTILL_IMAGE", current_image)
+    monkeypatch.setattr(
+        manifests, "CROP_SOURCE_ACCESS_SOURCE_GIT_SHA", "3" * 40
+    )
+    monkeypatch.setattr(
+        manifests,
+        "CROP_SOURCE_ACCESS_IMAGE",
+        "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "4" * 64,
+    )
+
+    _, container = _pod_and_container(manifests.render_crop_storage_prep())
+    env = {item["name"]: item for item in container["env"]}
+
+    assert container["image"] == current_image
+    assert env["CROP_DISTILL_SOURCE_GIT_SHA"]["value"] == current_source
+    assert env["CROP_DISTILL_IMAGE"]["value"] == current_image
+
+
 def test_storage_prep_uses_one_pvc_volume(render_identity):
     document = yaml.safe_load(manifests.render_crop_storage_prep())
     pod = document["spec"]["template"]["spec"]
