@@ -1773,11 +1773,11 @@ _MATRIX_LOADER_SETUP = (
 _MATRIX_DEPS_PINNED = """# COMPLETE resolver closure from k8s/inference-matrix-deps.lock —
               # 141 pkgs co-resolved for py3.11/linux/cu126 (top-levels from the
               # successful run's freeze record). --no-deps: nothing resolves at
-              # run time. torch >= 2.10.0: GHSA-63cw-57p8-fm3p.
+              # run time. torch >= 2.10.0: GHSA-63cw-57p8-fm3p. Clay LAST —
+              # after the locked setuptools — and --no-build-isolation, so its
+              # build backend comes from the lock, not a fresh resolution.
               pip install --quiet --no-cache-dir --no-deps torch==2.10.0+cu126 torchvision==0.25.0+cu126 \\
                 --index-url https://download.pytorch.org/whl/cu126
-              pip install --quiet --no-cache-dir --no-deps \\
-                "git+https://github.com/Clay-foundation/model.git@f14e698f3c237cabf8d28dec669a362d66625381"
               pip install --quiet --no-cache-dir --no-deps \\
                 absl-py==2.5.0 aenum==3.1.17 affine==3.0.1 \\
                 aiohappyeyeballs==2.7.1 aiohttp==3.14.3 aiosignal==1.4.0 \\
@@ -1831,7 +1831,10 @@ _MATRIX_DEPS_PINNED = """# COMPLETE resolver closure from k8s/inference-matrix-d
                 typeshed-client==2.13.0 typing-extensions==4.16.0 \\
                 typing-inspection==0.4.4 tzdata==2026.3 urllib3==2.7.0 \\
                 vit-pytorch==1.17.8 wandb==0.29.0 werkzeug==3.1.8 \\
-                xarray==2026.7.0 xxhash==4.0.1 yarl==1.24.5 zipp==4.1.0"""
+                xarray==2026.7.0 xxhash==4.0.1 yarl==1.24.5 zipp==4.1.0
+              pip install --quiet --no-cache-dir --no-deps --no-build-isolation \\
+                "git+https://github.com/Clay-foundation/model.git@f14e698f3c237cabf8d28dec669a362d66625381"
+"""
 
 
 def render_non_crop_outputs() -> dict[Path, str]:

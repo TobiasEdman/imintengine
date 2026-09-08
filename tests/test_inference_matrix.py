@@ -300,6 +300,15 @@ def test_matrix_dependency_lock_parity():
     sha = "f14e698f3c237cabf8d28dec669a362d66625381"
     assert sha in lock_text and sha in job_text
 
+    # Clay must install LAST (after the locked setuptools) and without
+    # build isolation, or its build backend resolves fresh (PR #45 MEDIUM).
+    clay_pos = job_text.find("Clay-foundation/model.git@")
+    setuptools_pos = job_text.find("setuptools==")
+    assert 0 < setuptools_pos < clay_pos, "clay must come after the closure"
+    clay_line = next(l for l in job_text.splitlines()
+                     if "no-build-isolation" in l.split("#", 1)[0])
+    assert "--no-deps" in clay_line
+
     # Every matrix pip line is --no-deps (comments exempt).
     for line in job_text.splitlines():
         code = line.split("#", 1)[0]

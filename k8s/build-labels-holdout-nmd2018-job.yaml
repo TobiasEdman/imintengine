@@ -33,9 +33,11 @@ spec:
             - |
               set -euo pipefail
               export PYTHONUNBUFFERED=1
-              echo "=== Build NMD2023 holdout sidecars — $(date) ==="
+              echo "=== Build NMD2018 unified-v5 holdout sidecars — $(date) ==="
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
-              pip install -q --no-cache-dir numpy scipy rasterio geopandas shapely pyproj pyarrow pyyaml
+              # Pinned top-level builder deps (uv-verified resolvable set for
+              # py3.11/linux); freeze recorded below. PR #45 LOW.
+              pip install -q --no-cache-dir numpy==2.4.6 scipy==1.17.1 rasterio==1.4.4 geopandas==1.1.2 shapely==2.1.2 pyproj==3.7.2 pyarrow==17.0.0 pyyaml==6.0.2
 
               # PINNED source: post-#41 main. No mutable refs — the flags
               # this job needs are proven present at this exact commit.
@@ -48,11 +50,13 @@ spec:
               echo "PINNED SOURCE: $HEAD_SHA"
               grep -q 'label-out-dir' scripts/build_labels.py \
                 && grep -q 'nmd-version' scripts/build_labels.py \
-                || { echo "FATAL: NMD2023 flags missing at pin"; exit 1; }
+                || { echo "FATAL: build_labels flags missing at pin"; exit 1; }
 
               N_HOLD=$(ls /data/holdout_val_512/*.npz | wc -l)
               echo "Inventory: holdout=$N_HOLD | NMD2018=$(ls -lh /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif | awk '{print $5}') | LPIS=$(ls /data/lpis/*.parquet | wc -l) | SKS=$(ls /data/sks/*.parquet | wc -l)"
 
+              mkdir -p /data/ops/deps 2>/dev/null || true
+              pip freeze > /data/ops/deps/build-labels-holdout-nmd2018-$(date -u +%Y%m%dT%H%M%SZ).txt || true
               python scripts/build_labels.py \
                 --data-dir     /data/holdout_val_512 \
                 --nmd-raster   /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
