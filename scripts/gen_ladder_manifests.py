@@ -130,7 +130,7 @@ DISTILL = {
 DISTILL["prithvi300m4f"] = {"img_size": 496, "backbone": "prithvi_300m"}
 # 4f runs with pinned source identity (PR #42): the same commit the 4f
 # training base bakes. Re-pin deliberately when re-running the column.
-PRITHVI300M4F_SOURCE_GIT_SHA = "1fd08fad9ba9ab599415230938e6fade357cd5eb"
+PRITHVI300M4F_SOURCE_GIT_SHA = "bc293d03af2d12806bbc2a810b6393b71f2f4af7"
 
 # LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
 # features at the frozen LUCAS crop distill points, score the pinned-
