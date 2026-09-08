@@ -274,11 +274,10 @@ def _validated_git_authority(
     require_current_output_anchor: bool = True,
 ) -> dict[str, str]:
     authority = _git_authority()
-    source_access_kinds = {
-        "storage-prep",
-        "source-access-plan",
-        "source-access-apply",
-    }
+    # Storage prep owns the protocol's current target allowlist and therefore
+    # rotates with the crop runtime.  Only PLAN/APPLY remain bound to the
+    # historical source-access runtime that produced their frozen evidence.
+    source_access_kinds = {"source-access-plan", "source-access-apply"}
     identity_pairs = [("source_git_sha", "image_ref", "crop-distill")]
     if evidence_kind in source_access_kinds | {"split"}:
         identity_pairs.append(

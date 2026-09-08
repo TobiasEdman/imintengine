@@ -614,9 +614,9 @@ def _storage_prep_record() -> dict[str, object]:
         },
         "preserved_frozen_mode": format(evidence.FROZEN_SPLIT_MODE, "04o"),
         "runtime": _runtime(
-            source_git_sha=SOURCE_ACCESS_SOURCE_GIT_SHA,
-            image_ref=SOURCE_ACCESS_IMAGE,
-            image_digest=SOURCE_ACCESS_DIGEST,
+            source_git_sha=SOURCE_GIT_SHA,
+            image_ref=IMAGE,
+            image_digest=DIGEST,
         ),
         "targets": targets,
         "dataset_lock": {
@@ -1095,6 +1095,23 @@ def test_storage_prep_capture_binds_exact_marker_pvc_and_root_pod(
         evidence._mount("training-data-cephfs", "/cephfs/distill", "distill", False),
         evidence._mount("training-data-cephfs", "/cephfs/ops", "ops", False),
     ]
+
+
+def test_storage_prep_authority_tracks_current_crop_runtime() -> None:
+    authority = evidence._validated_git_authority("storage-prep")
+
+    assert authority["source_git_sha"] == SOURCE_GIT_SHA
+    assert authority["image_ref"] == IMAGE
+    assert authority["source_git_sha"] != SOURCE_ACCESS_SOURCE_GIT_SHA
+    assert authority["image_ref"] != SOURCE_ACCESS_IMAGE
+
+    for kind in ("source-access-plan", "source-access-apply"):
+        source_authority = evidence._validated_git_authority(
+            kind,
+            require_current_output_anchor=False,
+        )
+        assert source_authority["source_git_sha"] == SOURCE_ACCESS_SOURCE_GIT_SHA
+        assert source_authority["image_ref"] == SOURCE_ACCESS_IMAGE
 
 
 @pytest.mark.parametrize(
