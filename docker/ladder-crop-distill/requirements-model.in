@@ -7,10 +7,12 @@
 # TerraTorch 1.2.11 still requires NumPy >=2.2, so model execution remains
 # isolated from the NumPy 1.26 scoring environment.
 #
-# Exact CPython 3.11 / linux-x86_64 CUDA 12.1 wheels. Direct URLs prevent
+# Exact CPython 3.11 / linux-x86_64 CUDA 12.6 wheels. Direct URLs prevent
 # pip/uv index ordering from resolving a CPU wheel or a different platform.
-torch @ https://download-r2.pytorch.org/whl/cu121/torch-2.5.1%2Bcu121-cp311-cp311-linux_x86_64.whl#sha256=c8ab8c92eab928a93c483f83ca8c63f13dafc10fc93ad90ed2dcb7c82ea50410
-torchvision @ https://download-r2.pytorch.org/whl/cu121/torchvision-0.20.1%2Bcu121-cp311-cp311-linux_x86_64.whl#sha256=237609a3551c2b68f32bcd3f3875dca93836010d83922ef2f3bd3a7540caee58
+# torch >= 2.10.0 REQUIRED: GHSA-53q9-r3pm-6pq6 (<=2.5.1) and
+# GHSA-63cw-57p8-fm3p (<=2.9.1) — RCE in the weights_only unpickler.
+torch @ https://download.pytorch.org/whl/cu126/torch-2.10.0%2Bcu126-cp311-cp311-manylinux_2_28_x86_64.whl#sha256=a9a9ba3b2baf23c044499ffbcbed88e04b6e38b94189c7dc42dd2cfcdd8c55c0
+torchvision @ https://download.pytorch.org/whl/cu126/torchvision-0.25.0%2Bcu126-cp311-cp311-manylinux_2_28_x86_64.whl#sha256=09a1c80106b4cbf750af8af4ef0cde98a03ddd963dcf0f843b89e03a061959ae
 terratorch==1.2.11
 torchgeo==0.8.1
 numpy>=2.2

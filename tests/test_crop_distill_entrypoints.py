@@ -62,6 +62,14 @@ EXPECTED_MODELS = {
         1_285_893_675,
         "a27dadd9caf1c9ccfba6ecbd76ac7815fcb7236978e9df807e1d1bf7a498cda0",
     ),
+    # Seventh column (Tobias-approved 2026-09-08): the 4-frame arm.
+    "prithvi300m4f": (
+        496,
+        "prithvi_300m",
+        (),
+        1_370_853_931,
+        "9f013d26fb3ba8f6afb510e0f1ca7cadf988b29201cab45a065cb35ccfd972a9",
+    ),
     "prithvi600m": (
         504,
         "prithvi_600m",
@@ -145,7 +153,7 @@ def _crop_split_source(root: Path) -> tuple[Path, str]:
     return manifest, hashlib.sha256(manifest.read_bytes()).hexdigest()
 
 
-def test_protocol_pins_all_six_model_columns_exactly():
+def test_protocol_pins_all_seven_model_columns_exactly():
     assert protocol.MODEL_KEYS == tuple(sorted(EXPECTED_MODELS))
     assert set(protocol.CROP_MODELS) == set(EXPECTED_MODELS)
     for model, expected in EXPECTED_MODELS.items():

@@ -295,7 +295,7 @@ def test_crop_columns_have_distinct_fixed_uids():
     assert len(set(manifests.CROP_MODEL_UIDS.values())) == len(
         manifests.CROP_MODEL_UIDS
     )
-    assert set(manifests.CROP_MODEL_UIDS.values()) == set(range(2001, 2007))
+    assert set(manifests.CROP_MODEL_UIDS.values()) == set(range(2001, 2008))
 
 
 @pytest.mark.parametrize("model", manifests.CROP_MODELS)
@@ -307,8 +307,12 @@ def test_crop_mounts_only_its_preowned_output_directories(render_identity, model
 
     assert heads["subPath"] == f"distill/crop_heads/{model}_r2_crop_runs"
     assert records["subPath"] == f"ops/crop-distill/{model}"
+    # Boundary-aware: plain substring matching false-alarms on name
+    # prefixes (prithvi300m is a prefix of prithvi300m4f) — compare the
+    # exact foreign path forms instead.
     assert all(
-        other not in heads["subPath"] and other not in records["subPath"]
+        heads["subPath"] != f"distill/crop_heads/{other}_r2_crop_runs"
+        and records["subPath"] != f"ops/crop-distill/{other}"
         for other in manifests.CROP_MODELS
         if other != model
     )
@@ -322,9 +326,9 @@ def test_crop_mounts_only_its_preowned_output_directories(render_identity, model
         (
             {
                 **manifests.CROP_MODEL_UIDS,
-                "tessera": 2007,
+                "tessera": 2008,
             },
-            "2001..2006",
+            "2001..2007",
         ),
         (
             {
