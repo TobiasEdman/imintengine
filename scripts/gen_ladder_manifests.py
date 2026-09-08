@@ -130,7 +130,7 @@ DISTILL = {
 DISTILL["prithvi300m4f"] = {"img_size": 496, "backbone": "prithvi_300m"}
 # 4f runs with pinned source identity (PR #42): the same commit the 4f
 # training base bakes. Re-pin deliberately when re-running the column.
-PRITHVI300M4F_SOURCE_GIT_SHA = "bc293d03af2d12806bbc2a810b6393b71f2f4af7"
+PRITHVI300M4F_SOURCE_GIT_SHA = "eb74d05d91ab0b6e39e9588b524886871c6b9408"
 
 # LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
 # features at the frozen LUCAS crop distill points, score the pinned-
@@ -1127,7 +1127,7 @@ spec:
 # EXACTLY this commit — the one whose payload (ladder_inference_matrix.py)
 # was reviewed. A payload change requires a deliberate constant bump in a
 # reviewed commit; ordinary generator/docs changes never move the anchor.
-INFERENCE_MATRIX_SOURCE_GIT_SHA = "bc293d03af2d12806bbc2a810b6393b71f2f4af7"
+INFERENCE_MATRIX_SOURCE_GIT_SHA = "eb74d05d91ab0b6e39e9588b524886871c6b9408"
 
 
 def _require_full_sha(sha: str, name: str) -> str:

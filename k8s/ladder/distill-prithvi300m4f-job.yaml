@@ -65,7 +65,7 @@ spec:
                 urllib3==2.7.0
 
               mkdir -p /workspace && cd /workspace
-              HEAD_SHA=bc293d03af2d12806bbc2a810b6393b71f2f4af7
+              HEAD_SHA=eb74d05d91ab0b6e39e9588b524886871c6b9408
               git init -q imintengine && cd imintengine
               git remote add origin https://github.com/TobiasEdman/ImintEngine.git
               git fetch -q --depth 1 origin "$HEAD_SHA"
