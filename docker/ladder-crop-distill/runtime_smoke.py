@@ -68,9 +68,9 @@ def smoke_model() -> None:
         "numpy": "2.2.6",
         "terratorch": "1.2.11",
         "timm": "1.0.15",
-        "torch": "2.5.1+cu121",
+        "torch": "2.10.0+cu126",
         "torchgeo": "0.8.1",
-        "torchvision": "0.20.1+cu121",
+        "torchvision": "0.25.0+cu126",
     }
     actual_versions = {
         package: importlib.metadata.version(package)
