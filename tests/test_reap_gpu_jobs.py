@@ -100,6 +100,16 @@ def _deletes(calls: list[list[str]]) -> list[list[str]]:
     return [c for c in calls if c and c[0] == "delete"]
 
 
+def _assert_raw_uid_delete(calls: list[list[str]]) -> None:
+    deletes = _deletes(calls)
+    assert len(deletes) == 1
+    assert deletes[0][:3] == [
+        "delete",
+        "--raw=/apis/batch/v1/namespaces/prithvi-training-default/jobs/train-x",
+        "-f",
+    ]
+
+
 def test_archive_failure_forbids_delete(monkeypatch, tmp_path):
     calls = _run_main(monkeypatch, tmp_path, apply=True, fail_on_logs=True)
     assert _deletes(calls) == [], "deleted a job whose evidence could not be archived"
@@ -119,10 +129,7 @@ def test_unwritable_archive_root_forbids_delete(monkeypatch, tmp_path):
 
 def test_successful_archive_then_delete_and_run_report(monkeypatch, tmp_path):
     calls = _run_main(monkeypatch, tmp_path, apply=True)
-    assert _deletes(calls) == [[
-        "delete", "jobs", "-l",
-        f"{reap.REAPER_CLAIM_LABEL}=uid-train-x", "--wait=false",
-    ]]
+    _assert_raw_uid_delete(calls)
 
     root = tmp_path / "archive"
     job_dirs = [d for d in root.iterdir() if d.name.startswith("train-x-")]
@@ -152,10 +159,7 @@ def test_job_scope_excludes_other_due_jobs(monkeypatch, tmp_path):
                                      "--job", "train-x",
                                      "--archive-dir", str(tmp_path / "archive")])
     assert reap.main() == 0
-    assert _deletes(calls) == [[
-        "delete", "jobs", "-l",
-        f"{reap.REAPER_CLAIM_LABEL}=uid-train-x", "--wait=false",
-    ]]
+    _assert_raw_uid_delete(calls)
 
 
 def test_dry_run_touches_nothing(monkeypatch, tmp_path):
@@ -260,7 +264,7 @@ def test_successful_job_complete_condition_is_terminal():
     }) is True
 
 
-def test_claim_uses_uid_test_and_selector_delete(monkeypatch, tmp_path):
+def test_claim_uses_uid_test_before_precondition_delete(monkeypatch, tmp_path):
     calls = _run_main(monkeypatch, tmp_path, apply=True)
     patch = next(call for call in calls if call[0] == "patch")
     operations = json.loads(patch[patch.index("-p") + 1])
@@ -269,9 +273,7 @@ def test_claim_uses_uid_test_and_selector_delete(monkeypatch, tmp_path):
         "path": "/metadata/uid",
         "value": "uid-train-x",
     }
-    assert _deletes(calls)[0][2:] == [
-        "-l", f"{reap.REAPER_CLAIM_LABEL}=uid-train-x", "--wait=false",
-    ]
+    _assert_raw_uid_delete(calls)
 
 
 def test_delete_requires_claimed_uid_to_enter_deletion(monkeypatch):
@@ -281,6 +283,14 @@ def test_delete_requires_claimed_uid_to_enter_deletion(monkeypatch):
         calls.append(args)
         if args[0] == "delete":
             return "no resources found\n"
+        if args[:2] == ["get", "jobs"]:
+            return json.dumps({"items": [{
+                "metadata": {"name": "train-x", "uid": "uid-train-x"},
+                "status": {
+                    "failed": 1,
+                    "conditions": [{"type": "Failed", "status": "True"}],
+                },
+            }]})
         if args[:2] == ["get", "job"]:
             return json.dumps({
                 "metadata": {"name": "train-x", "uid": "uid-train-x"},
@@ -300,6 +310,47 @@ def test_delete_requires_claimed_uid_to_enter_deletion(monkeypatch):
             "icekube",
             "ns",
         )
+
+
+def test_uid_precondition_spares_same_name_replacement(monkeypatch):
+    calls: list[list[str]] = []
+    payloads: list[dict] = []
+
+    def fake(args: list[str], context: str, namespace: str) -> str:
+        calls.append(args)
+        if args[:2] == ["get", "jobs"]:
+            return json.dumps({"items": [{
+                "metadata": {"name": "train-x", "uid": "uid-train-x"},
+                "status": {
+                    "failed": 1,
+                    "conditions": [{"type": "Failed", "status": "True"}],
+                },
+            }]})
+        if args[0] == "delete":
+            payload = json.loads(Path(args[args.index("-f") + 1]).read_text())
+            payloads.append(payload)
+            # Model the old Job disappearing and an active same-name retry
+            # appearing after prevalidation but before the API DELETE.
+            if payload["preconditions"]["uid"] != "replacement-uid":
+                raise RuntimeError("409 Conflict: UID precondition failed")
+            raise AssertionError("replacement would have been deleted")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(reap, "_kubectl", fake)
+    with pytest.raises(RuntimeError, match="409 Conflict"):
+        reap._delete_claimed_job(
+            f"{reap.REAPER_CLAIM_LABEL}=uid-train-x",
+            "train-x",
+            "uid-train-x",
+            "icekube",
+            "ns",
+        )
+    assert payloads == [{
+        "apiVersion": "v1",
+        "kind": "DeleteOptions",
+        "preconditions": {"uid": "uid-train-x"},
+        "propagationPolicy": "Background",
+    }]
 
 
 def test_hold_selector_preserves_matching_job(monkeypatch, tmp_path, capsys):
@@ -364,10 +415,7 @@ def test_hold_selector_expires_to_archive_then_delete(monkeypatch, tmp_path):
     )
 
     assert reap.main() == 0
-    assert _deletes(calls) == [[
-        "delete", "jobs", "-l",
-        f"{reap.REAPER_CLAIM_LABEL}=uid-train-x", "--wait=false",
-    ]]
+    _assert_raw_uid_delete(calls)
 
 
 def test_hold_selector_does_not_preserve_nonmatching_job(monkeypatch, tmp_path):
@@ -389,10 +437,7 @@ def test_hold_selector_does_not_preserve_nonmatching_job(monkeypatch, tmp_path):
         ],
     )
     assert reap.main() == 0
-    assert _deletes(calls) == [[
-        "delete", "jobs", "-l",
-        f"{reap.REAPER_CLAIM_LABEL}=uid-train-x", "--wait=false",
-    ]]
+    _assert_raw_uid_delete(calls)
 
 
 def test_hold_lookup_failure_refuses_all_deletion(monkeypatch, tmp_path, capsys):

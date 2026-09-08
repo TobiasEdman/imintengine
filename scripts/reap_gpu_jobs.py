@@ -34,8 +34,10 @@ import json
 import math
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 TERMINAL = ("Succeeded", "Failed")
 TERMINAL_JOB_CONDITIONS = ("Complete", "Failed")
@@ -149,12 +151,30 @@ def _delete_claimed_job(
     context: str,
     namespace: str,
 ) -> None:
-    """Delete only the uniquely claimed UID and verify acceptance."""
-    _kubectl(
-        ["delete", "jobs", "-l", selector, "--wait=false"],
-        context,
-        namespace,
-    )
+    """Delete the exact UID through the API and verify acceptance."""
+    if not _claimed_terminal_job(
+        selector, job_name, job_uid, context, namespace
+    ):
+        raise RuntimeError(f"claimed Job {job_name} changed before delete")
+    delete_options = {
+        "apiVersion": "v1",
+        "kind": "DeleteOptions",
+        "preconditions": {"uid": job_uid},
+        "propagationPolicy": "Background",
+    }
+    namespace_path = quote(namespace, safe="")
+    job_path = quote(job_name, safe="")
+    raw_path = f"/apis/batch/v1/namespaces/{namespace_path}/jobs/{job_path}"
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", encoding="utf-8"
+    ) as body:
+        json.dump(delete_options, body)
+        body.flush()
+        _kubectl(
+            ["delete", f"--raw={raw_path}", "-f", body.name],
+            context,
+            namespace,
+        )
     raw = _kubectl(
         ["get", "job", job_name, "-o", "json", "--ignore-not-found=true"],
         context,
