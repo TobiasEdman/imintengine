@@ -1127,7 +1127,7 @@ spec:
 # EXACTLY this commit — the one whose payload (ladder_inference_matrix.py)
 # was reviewed. A payload change requires a deliberate constant bump in a
 # reviewed commit; ordinary generator/docs changes never move the anchor.
-INFERENCE_MATRIX_SOURCE_GIT_SHA = "a9f88a0488305e43787e0941389a813d8c6601af"
+INFERENCE_MATRIX_SOURCE_GIT_SHA = "bc293d03af2d12806bbc2a810b6393b71f2f4af7"
 
 
 def _require_full_sha(sha: str, name: str) -> str:
