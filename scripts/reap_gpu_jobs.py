@@ -32,12 +32,17 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import re
+import ssl
 import subprocess
 import sys
-import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 TERMINAL = ("Succeeded", "Failed")
 TERMINAL_JOB_CONDITIONS = ("Complete", "Failed")
@@ -78,6 +83,17 @@ def _job_is_terminal(job: dict) -> bool:
         and condition.get("status") == "True"
         for condition in status.get("conditions", [])
     )
+
+
+def _terminal_transition_timestamp(job: dict) -> str | None:
+    stamps = [
+        condition.get("lastTransitionTime")
+        for condition in job.get("status", {}).get("conditions", [])
+        if condition.get("type") in TERMINAL_JOB_CONDITIONS
+        and condition.get("status") == "True"
+        and condition.get("lastTransitionTime")
+    ]
+    return max(stamps, default=None)
 
 
 def _claim_terminal_job(
@@ -144,6 +160,109 @@ def _claimed_terminal_job(
     )
 
 
+@contextmanager
+def _kubernetes_api(context: str):
+    """Yield API base URL, headers, and TLS context for this execution mode."""
+    if not context:
+        host = os.environ.get("KUBERNETES_SERVICE_HOST")
+        port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+        token_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
+        ca_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+        if not host or not token_path.is_file() or not ca_path.is_file():
+            raise RuntimeError("in-cluster Kubernetes credentials are unavailable")
+        token = token_path.read_text().strip()
+        if not token:
+            raise RuntimeError("in-cluster Kubernetes token is empty")
+        yield (
+            f"https://{host}:{port}",
+            {"Authorization": f"Bearer {token}"},
+            ssl.create_default_context(cafile=str(ca_path)),
+        )
+        return
+
+    cmd = [
+        "kubectl",
+        "--context",
+        context,
+        "proxy",
+        "--address=127.0.0.1",
+        "--port=0",
+        "--append-server-path",
+    ]
+    proxy = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        if proxy.stdout is None:
+            raise RuntimeError("kubectl proxy stdout was unavailable")
+        line = proxy.stdout.readline().strip()
+        match = re.search(r"127\.0\.0\.1:(\d+)", line)
+        if match is None:
+            if proxy.poll() is None:
+                proxy.terminate()
+            stderr = proxy.stderr.read(200) if proxy.stderr else ""
+            raise RuntimeError(f"kubectl proxy failed: {line} {stderr}".strip())
+        yield f"http://127.0.0.1:{match.group(1)}", {}, None
+    finally:
+        if proxy.poll() is None:
+            proxy.terminate()
+            try:
+                proxy.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proxy.kill()
+                proxy.wait(timeout=5)
+
+
+def _http_delete_json(
+    url: str,
+    payload: dict,
+    headers: dict[str, str],
+    tls_context: ssl.SSLContext | None,
+) -> None:
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", **headers},
+        method="DELETE",
+    )
+    try:
+        with urlopen(request, context=tls_context, timeout=30) as response:
+            if response.status >= 300:
+                raise RuntimeError(f"Kubernetes DELETE returned HTTP {response.status}")
+    except HTTPError as exc:
+        detail = exc.read(200).decode(errors="replace")
+        raise RuntimeError(
+            f"Kubernetes DELETE returned HTTP {exc.code}: {detail}"
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Kubernetes DELETE transport failed: {exc.reason}") from exc
+
+
+def _delete_job_uid_precondition(
+    job_name: str,
+    job_uid: str,
+    context: str,
+    namespace: str,
+) -> None:
+    delete_options = {
+        "apiVersion": "v1",
+        "kind": "DeleteOptions",
+        "preconditions": {"uid": job_uid},
+        "propagationPolicy": "Background",
+    }
+    namespace_path = quote(namespace, safe="")
+    job_path = quote(job_name, safe="")
+    path = f"/apis/batch/v1/namespaces/{namespace_path}/jobs/{job_path}"
+    with _kubernetes_api(context) as (base_url, headers, tls_context):
+        _http_delete_json(
+            f"{base_url}{path}", delete_options, headers, tls_context
+        )
+
+
 def _delete_claimed_job(
     selector: str,
     job_name: str,
@@ -156,36 +275,7 @@ def _delete_claimed_job(
         selector, job_name, job_uid, context, namespace
     ):
         raise RuntimeError(f"claimed Job {job_name} changed before delete")
-    delete_options = {
-        "apiVersion": "v1",
-        "kind": "DeleteOptions",
-        "preconditions": {"uid": job_uid},
-        "propagationPolicy": "Background",
-    }
-    namespace_path = quote(namespace, safe="")
-    job_path = quote(job_name, safe="")
-    raw_path = f"/apis/batch/v1/namespaces/{namespace_path}/jobs/{job_path}"
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", encoding="utf-8"
-    ) as body:
-        json.dump(delete_options, body)
-        body.flush()
-        _kubectl(
-            ["delete", f"--raw={raw_path}", "-f", body.name],
-            context,
-            namespace,
-        )
-    raw = _kubectl(
-        ["get", "job", job_name, "-o", "json", "--ignore-not-found=true"],
-        context,
-        namespace,
-    )
-    if not raw.strip():
-        return
-    metadata = json.loads(raw).get("metadata", {})
-    if metadata.get("uid") != job_uid or metadata.get("deletionTimestamp"):
-        return
-    raise RuntimeError(f"claimed Job {job_name} deletion was not accepted")
+    _delete_job_uid_precondition(job_name, job_uid, context, namespace)
 
 
 def collect(context: str, namespace: str, selector: str | None) -> tuple[list, list, int]:
@@ -237,6 +327,9 @@ def collect(context: str, namespace: str, selector: str | None) -> tuple[list, l
                 "phase": phase,
                 "gpus": 0,
                 "age_min": _age_minutes(
+                    _terminal_transition_timestamp(job)
+                ),
+                "job_age_min": _age_minutes(
                     job["metadata"].get("creationTimestamp")
                 ),
             }
@@ -354,7 +447,7 @@ def archive_evidence(
         ):
             raise RuntimeError("claimed Job UID/state changed during archive")
         return dest
-    except (RuntimeError, OSError) as exc:  # noqa: BLE001 — any miss forbids deletion
+    except (RuntimeError, OSError) as exc:
         print(f"  EVIDENCE ARCHIVE FAILED for {job}: {exc}")
         return None
 
@@ -419,7 +512,7 @@ def main() -> int:
         return (
             args.hold_minutes is not None
             and record["job_uid"] in held_job_uids
-            and record["age_min"] < args.hold_minutes
+            and record["job_age_min"] < args.hold_minutes
         )
 
     print(f"=== GPU held by FINISHED jobs: {held} slot(s) ===")
@@ -427,7 +520,7 @@ def main() -> int:
         print("  (none — nothing squatting)")
     for r in sorted(reapable, key=lambda x: -x["age_min"]):
         if under_hold(r):
-            remaining = args.hold_minutes - r["age_min"]
+            remaining = args.hold_minutes - r["job_age_min"]
             due = f"HOLD({remaining:.0f}m remaining)"
         else:
             due = (
@@ -517,7 +610,7 @@ def main() -> int:
             msg = f"deleted {r['job']} ({r['phase']}) — evidence in {dest}"
             print(f"  {msg}")
             report.append(msg)
-        except RuntimeError as exc:  # noqa: BLE001 — one failure must not stop the sweep
+        except RuntimeError as exc:
             msg = f"DELETE FAILED {r['job']}: {exc}"
             print(f"  {msg}")
             report.append(msg)
