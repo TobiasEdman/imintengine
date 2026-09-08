@@ -151,10 +151,10 @@ CROP_SPLIT_MANIFEST = str(PROTOCOL_CROP_SPLIT_MANIFEST)
 # Replaced with the real Commit-A identities before generator output is
 # committed. The impossible all-zero sentinels make an accidental partial
 # bootstrap fail tests and deployment review loudly.
-CROP_DISTILL_SOURCE_GIT_SHA = "1fd08fad9ba9ab599415230938e6fade357cd5eb"
+CROP_DISTILL_SOURCE_GIT_SHA = "7d935b9a0210f9a88b641ef24e7d83206c2fdcb0"
 CROP_DISTILL_IMAGE = (
     "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
-    "dba3a47b2936a8b4f64bbaacc1e2bbaa4ddc4f57802077f7c6c576f63de996cf"
+    "25919e5cc0bc5ccba770b80f5906d0721cf47a779e3b4591a07cf5c5f3dc3599"
 )
 CROP_SOURCE_ACCESS_SOURCE_GIT_SHA = (
     "c6ad69242e7239662461bf7ff0b6bcd4d072509a"
@@ -335,7 +335,7 @@ SKLEARN_PIN = "scikit-learn==1.5.1"
 # reading/writing the shared cephfs PVC. Runs on the 2080ti pool so the
 # distill stage NEVER competes with the H100 memory quota the ladder
 # trainings are packed against. The protocol constants (folds, head, seed,
-# test-frac) are pinned HERE, once, for all six columns — that uniformity
+# test-frac) are pinned HERE, once, for all seven columns — that uniformity
 # IS the distillability experiment; see docs/experiments/
 # ladder_distill_stage.md.
 DISTILL_TEMPLATE = """apiVersion: batch/v1
