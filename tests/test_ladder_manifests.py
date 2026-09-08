@@ -151,7 +151,7 @@ def test_every_cell_of_the_matrix_exists():
 def test_4f_dependency_lock_is_shared_and_complete():
     """One lock for every 4f job, anchored in the RESOLVER REPORT: the
     committed k8s/prithvi300m4f-deps.lock is the canonical uv resolution
-    (linux/py3.11/cu121 — markers evaluated for Linux, which is exactly
+    (linux/py3.11/cu126 — markers evaluated for Linux, which is exactly
     what a mac-side pip resolution silently gets wrong: the nvidia/triton
     closure). The base manifest (inherited by the four rung jobs) and the
     generator's pinned distill block must both pin exactly that set, and
