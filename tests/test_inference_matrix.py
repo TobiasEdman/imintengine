@@ -267,3 +267,42 @@ def test_payloads_never_use_unsafe_torch_load():
         src = (REPO / "scripts" / payload).read_text()
         assert "weights_only=False" not in src, payload
         assert "return_checkpoint_config=True" in src, payload
+
+
+def test_matrix_dependency_lock_parity():
+    """The matrix pod env must be constructible: PR #45 review round 3
+    found independently-pinned third-party versions that were mutually
+    unsatisfiable (clay needs einops<0.8, terratorch 1.2.13 needs
+    py3.12-only torchgeo, ...). The committed lock is ONE co-resolved
+    closure (top-levels from the successful run's freeze record) and the
+    generated job must pin exactly that set, --no-deps, patched torch."""
+    import re
+
+    lock_text = (REPO / "k8s" / "inference-matrix-deps.lock").read_text()
+    job_text = _job_text()
+
+    def pins(text: str) -> set[str]:
+        found = re.findall(r"([A-Za-z0-9_.-]+)==([0-9][A-Za-z0-9_.!+-]*)", text)
+        return {f"{n.lower().replace('_', '-')}=={v}" for n, v in found}
+
+    lock_pins = pins("\n".join(
+        ln for ln in lock_text.splitlines() if not ln.startswith("#")))
+    job_pins = pins(job_text)
+    assert lock_pins, "empty matrix lockfile"
+    assert job_pins == lock_pins, (
+        f"job drifts from the lock: missing={sorted(lock_pins - job_pins)} "
+        f"extra={sorted(job_pins - lock_pins)}")
+
+    # Patched torch (GHSA-63cw-57p8-fm3p) and the proven-compatible pair.
+    assert "torch==2.10.0+cu126" in job_pins
+    assert "einops==0.7.0" in job_pins, "clay requires einops<0.8"
+    # claymodel rides as a git pin, outside the ==-set.
+    sha = "f14e698f3c237cabf8d28dec669a362d66625381"
+    assert sha in lock_text and sha in job_text
+
+    # Every matrix pip line is --no-deps (comments exempt).
+    for line in job_text.splitlines():
+        code = line.split("#", 1)[0]
+        if "pip install" in code and "--no-deps" not in code \
+                and "-e ." not in code:
+            raise AssertionError(f"unpinned pip path in matrix: {line.strip()}")
