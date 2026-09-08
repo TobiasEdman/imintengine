@@ -51,6 +51,12 @@ def smoke_model() -> None:
     import torch
     import torchgeo
     import torchvision
+
+    # Lock/install parity for the CVE gate: the built venv must carry the
+    # patched torch (GHSA-53q9-r3pm-6pq6 <=2.5.1, GHSA-63cw-57p8-fm3p
+    # <=2.9.1) — a rebuilt image with a stale lock fails here, at build.
+    assert torch.__version__.startswith("2.10."), (
+        f"patched torch >=2.10 required, venv has {torch.__version__}")
     from claymodel.module import ClayMAEModule  # noqa: F401
     from use_croma import PretrainedCROMA  # noqa: F401
 
