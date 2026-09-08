@@ -131,6 +131,25 @@ def test_checkpoint_with_numpy_scalar_metrics_loads(tmp_path: Path) -> None:
     assert float(payload["best_miou"]) == pytest.approx(0.7123)
 
 
+def test_numpy_safe_globals_via_module_import_not_attribute_chain() -> None:
+    """The scalar reconstructor must come from a real module IMPORT.
+    Reaching it as an attribute chain (np._core.multiarray) depends on the
+    numpy version and on which submodules other libraries imported first —
+    the 4f distill job died on exactly that under numpy 1.26.4 while
+    numpy 2.x environments passed (2026-09-08)."""
+    import importlib
+
+    src = inspect.getsource(inference._numpy_metric_safe_globals)
+    assert "import_module" in src
+    assert 'getattr(np, "_core"' not in src, "attribute-chain access is back"
+
+    try:
+        expected = importlib.import_module("numpy._core.multiarray").scalar
+    except ImportError:
+        expected = importlib.import_module("numpy.core.multiarray").scalar
+    assert inference._numpy_metric_safe_globals()[0] is expected
+
+
 def test_checkpoint_never_falls_back_to_unsafe_pickle(tmp_path: Path) -> None:
     marker = tmp_path / "pickle-executed"
 

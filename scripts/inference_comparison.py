@@ -173,16 +173,28 @@ def _numpy_metric_safe_globals() -> list:
     them needs numpy's scalar reconstructor plus the dtype classes. All are
     pure data carriers with no code-execution surface, so allowlisting them
     keeps the fail-closed ``weights_only=True`` posture for everything else.
-    ``np._core`` is numpy>=2; ``np.core`` is the 1.x spelling.
+
+    The reconstructor must be reached by a real module IMPORT, never an
+    attribute chain: whether ``np._core.multiarray`` exists as an attribute
+    depends on the numpy version AND on which submodules other libraries
+    happen to have imported first (the 4f distill job died on exactly that
+    under numpy 1.26.4 while numpy 2.x environments passed). The import
+    path is deterministic on both spellings — verified against 1.26.4 and
+    2.1.3.
     """
+    import importlib
+
     import numpy as np
 
-    core = getattr(np, "_core", None) or np.core
+    try:
+        multiarray = importlib.import_module("numpy._core.multiarray")
+    except ImportError:
+        multiarray = importlib.import_module("numpy.core.multiarray")
     dtype_classes = [
         cls for cls in vars(np.dtypes).values()
         if isinstance(cls, type) and issubclass(cls, np.dtype)
     ]
-    return [core.multiarray.scalar, np.dtype, *dtype_classes]
+    return [multiarray.scalar, np.dtype, *dtype_classes]
 
 
 def _load_checkpoint_for_inference(
