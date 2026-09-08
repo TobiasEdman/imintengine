@@ -123,13 +123,12 @@ DISTILL = {
     }
     for model, protocol in CROP_MODELS.items()
 }
-# Temporal-frame ablation column (issue #39): ladder rungs + NFI distill
-# only. Deliberately NOT in CROP_MODELS — the crop stage's per-model UID
-# map (2001-2006) has no slot for it, and the ablation needs no crop/LUCAS
-# pass. Extend the UID map first if a crop column is ever justified.
-DISTILL["prithvi300m4f"] = {"img_size": 496, "backbone": "prithvi_300m"}
-# 4f runs with pinned source identity (PR #42): the same commit the 4f
-# training base bakes. Re-pin deliberately when re-running the column.
+# prithvi300m4f entered CROP_MODELS 2026-09-08 (Tobias-approved seventh
+# column — unmix scale from temporality in the R5 table), so the DISTILL
+# comprehension above covers it; PR #42's manual ladder-only entry is gone
+# and its exclusion invariant flipped to inclusion in the same change.
+# 4f distill runs with pinned source identity: re-pin deliberately when
+# re-running the column.
 PRITHVI300M4F_SOURCE_GIT_SHA = "bc293d03af2d12806bbc2a810b6393b71f2f4af7"
 
 # LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
@@ -1923,8 +1922,8 @@ def main() -> int:
         or args.non_crop_only
     ):
         outputs.update(render_non_crop_outputs())
-        # Crop consumers are defined by the crop protocol, not the training
-        # bases: prithvi300m4f (issue #39) is a ladder/distill-only column.
+        # Crop consumers are defined by the crop protocol, not the
+        # training bases (since 2026-09-08 that includes prithvi300m4f).
         for model in CROP_MODELS:
             outputs[OUT_DIR / f"crop-distill-{model}-job.yaml"] = (
                 render_crop_distill(model)
