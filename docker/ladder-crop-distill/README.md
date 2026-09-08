@@ -135,7 +135,7 @@ of truth. Model extraction must invoke the model interpreter, while split and
 head scoring must invoke the scoring interpreter listed above.
 
 Before PLAN, a no-argument storage-prep entrypoint authenticates the baked
-runtime against A and the reviewed image digest, then prepares exactly 20
+runtime against A and the reviewed image digest, then prepares exactly 22
 baked targets. `/cephfs/distill/crop_split` is UID/GID 2000 mode `03770` until
 frozen to `0550`; `/cephfs/distill/crop_heads` and
 `/cephfs/ops/crop-distill` are root:GID-2000 mode-`0750` parents; and
