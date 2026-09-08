@@ -128,9 +128,9 @@ DISTILL = {
 # comprehension above covers it; PR #42's manual ladder-only entry is gone
 # and its exclusion invariant flipped to inclusion in the same change.
 # 4f distill runs with pinned source identity: re-pin deliberately when
-# re-running the column. Pin from main's #45 merge — the tree with the
-# safe-loader + lock security rounds.
-PRITHVI300M4F_SOURCE_GIT_SHA = "eb74d05d91ab0b6e39e9588b524886871c6b9408"
+# re-running the column. Pin at the both-spellings loader fix (#49) —
+# newer than #45's eb74d05d and required for cross-numpy checkpoints.
+PRITHVI300M4F_SOURCE_GIT_SHA = "9750fa917ec95962d59c3468ffaa521bb9e7e01c"
 
 # LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
 # features at the frozen LUCAS crop distill points, score the pinned-
@@ -1127,7 +1127,7 @@ spec:
 # EXACTLY this commit — the one whose payload (ladder_inference_matrix.py)
 # was reviewed. A payload change requires a deliberate constant bump in a
 # reviewed commit; ordinary generator/docs changes never move the anchor.
-INFERENCE_MATRIX_SOURCE_GIT_SHA = "5e28a2100fb698e70bc41297e8166241ea0ff9f9"
+INFERENCE_MATRIX_SOURCE_GIT_SHA = "9750fa917ec95962d59c3468ffaa521bb9e7e01c"
 
 
 def _require_full_sha(sha: str, name: str) -> str:
