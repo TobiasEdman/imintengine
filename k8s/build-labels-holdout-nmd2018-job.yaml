@@ -39,9 +39,9 @@ spec:
               # py3.11/linux); freeze recorded below. PR #45 LOW.
               pip install -q --no-cache-dir numpy==2.4.6 scipy==1.17.1 rasterio==1.4.4 geopandas==1.1.2 shapely==2.1.2 pyproj==3.7.2 pyarrow==17.0.0 pyyaml==6.0.2
 
-              # PINNED source: post-#41 main. No mutable refs — the flags
-              # this job needs are proven present at this exact commit.
-              HEAD_SHA=8ff35c4bfa83d62a3c1fd2b883488f5a68a3d5c9
+              # PINNED source: the allow_pickle=False builder fix (PR #45).
+              # Re-pin deliberately per re-run.
+              HEAD_SHA=b0781d926a3873395273049421acc7e3c0cabb0a
               mkdir -p /workspace && cd /workspace
               git init -q imintengine && cd imintengine
               git remote add origin https://github.com/TobiasEdman/ImintEngine.git
