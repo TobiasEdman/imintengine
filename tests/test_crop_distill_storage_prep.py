@@ -320,7 +320,9 @@ def test_production_storage_layout_preowns_isolated_model_directories():
     expected_paths.update(
         protocol.crop_record_backing_dir(model) for model in protocol.MODEL_KEYS
     )
-    assert len(protocol.STORAGE_TARGETS) == len(expected_paths) == 20
+    # 22 = shared roots + per-model heads/records for SEVEN columns
+    # (2026-09-08: prithvi300m4f entered the crop protocol).
+    assert len(protocol.STORAGE_TARGETS) == len(expected_paths) == 22
     assert set(targets) == expected_paths
 
     split = targets[protocol.DISTILL_DIR]

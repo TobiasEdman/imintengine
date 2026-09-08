@@ -141,16 +141,27 @@ def test_crop_renderers_cover_every_column_without_committed_manifests():
     assert yaml.safe_load(render_crop_deny_egress())["kind"] == "NetworkPolicy"
 
 
-def test_frame_ablation_column_is_not_crop_rendered():
-    """prithvi300m4f is ladder/NFI-only (issue #39): no crop UID slot, no
-    crop consumer. The exclusion is an invariant, not a coverage gap — the
-    column must exist in DISTILL, be absent from the crop protocol, refuse
-    to crop-render, and have no committed crop manifest."""
+def test_frame_ablation_column_is_crop_rendered():
+    """PR #42 excluded prithvi300m4f from the crop stage as a deliberate
+    invariant; on 2026-09-08 Tobias approved the seventh column (unmixing
+    scale from temporality in the R5 table), so the invariant flips just
+    as deliberately: the column must be IN the crop protocol with its own
+    reviewed UID outside the original 2001-2006 range, render a consumer,
+    and have a committed manifest pinning the exact 4f-r2 checkpoint."""
     assert "prithvi300m4f" in DISTILL
-    assert "prithvi300m4f" not in crop_protocol.CROP_MODELS
-    with pytest.raises(ValueError, match="unknown crop-distill model"):
-        render_crop_distill("prithvi300m4f")
-    assert not _crop_path("prithvi300m4f").exists()
+    assert "prithvi300m4f" in crop_protocol.CROP_MODELS
+    assert crop_protocol.CROP_MODEL_UIDS["prithvi300m4f"] == 2007
+    assert sorted(crop_protocol.CROP_MODEL_UIDS.values()) == list(
+        range(2001, 2008)), "UID range must stay dense and collision-free"
+    doc = yaml.safe_load(render_crop_distill("prithvi300m4f"))
+    assert doc["kind"] == "Job"
+    assert _crop_path("prithvi300m4f").exists()
+    # Checkpoint identity is deliberately NOT in the manifest — it
+    # resolves from the protocol module baked into the runtime image, so
+    # the seventh run additionally requires an image rebuilt from a
+    # commit that carries this CROP_MODELS entry.
+    pod = doc["spec"]["template"]["spec"]
+    assert pod["securityContext"]["runAsUser"] == 2007
 
 
 @pytest.mark.parametrize("model", MODELS)

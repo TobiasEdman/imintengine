@@ -88,7 +88,7 @@ COPY docker/ladder-crop-distill/requirements-scoring.lock /opt/provenance/scorin
 # intentionally remains on NumPy 1.26.4.
 # Both lockfiles contain every transitive version and accepted distribution
 # hash. Torch and torchvision use exact official CPython-3.11/linux-x86_64
-# cu121 wheel URLs, so no index can silently substitute another build.
+# cu126 wheel URLs, so no index can silently substitute another build.
 RUN python -m venv /opt/venvs/model \
     && /opt/venvs/model/bin/python -m pip install \
       --require-hashes --no-build-isolation \

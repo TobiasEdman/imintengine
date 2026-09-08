@@ -1,0 +1,13 @@
+{
+  "id": "0004",
+  "subject": "Add prithvi300m4f as seventh crop-distill column",
+  "description": "Extend the crop protocol with the 4-frame Prithvi-300M arm (UID 2007, exact 4f-r2 checkpoint identity) to unmix scale from temporality in the R5 table; render the seventh consumer manifest; flip the PR#42 exclusion invariant to inclusion. Run gated on: this PR reviewed+merged by Codex, image rebuilt from a post-merge commit, digest/source bump reviewed. Parity required at read time: n=2491, y_sha256 356c3b0ed3d0ef2e. Cost approved by Tobias 2026-09-08 (~1h CPU + 2080Ti minutes, no H100).",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/crop-4f-column",
+  "created_at": "2026-09-08T07:48:48Z",
+  "updated_at": "2026-09-08T07:48:48Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-09-08T07:48:48Z"
+}
