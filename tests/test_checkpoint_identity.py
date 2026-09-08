@@ -147,7 +147,13 @@ def test_numpy_safe_globals_via_module_import_not_attribute_chain() -> None:
         expected = importlib.import_module("numpy._core.multiarray").scalar
     except ImportError:
         expected = importlib.import_module("numpy.core.multiarray").scalar
-    assert inference._numpy_metric_safe_globals()[0] is expected
+    first_obj, first_name = inference._numpy_metric_safe_globals()[0]
+    assert first_obj is expected
+    names = [n for _, n in inference._numpy_metric_safe_globals()[:2]]
+    # BOTH pickle spellings must be present when importable — the fleet
+    # carries checkpoints saved under numpy 1.x AND 2.x (2026-09-08).
+    assert "numpy._core.multiarray.scalar" in names or \
+        "numpy.core.multiarray.scalar" in names
 
 
 def test_numpy_safe_globals_1x_fallback_sequence(monkeypatch) -> None:
@@ -175,8 +181,9 @@ def test_numpy_safe_globals_1x_fallback_sequence(monkeypatch) -> None:
     monkeypatch.setattr(importlib, "import_module", fake)
     result = inference._numpy_metric_safe_globals()
     assert calls[0] == "numpy._core.multiarray"
-    assert "numpy.core.multiarray" in calls, "1.x fallback never attempted"
-    assert callable(result[0])
+    assert "numpy.core.multiarray" in calls, "1.x spelling never attempted"
+    obj, name = result[0]
+    assert callable(obj) and name == "numpy.core.multiarray.scalar"
 
 
 def test_checkpoint_never_falls_back_to_unsafe_pickle(tmp_path: Path) -> None:

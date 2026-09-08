@@ -186,16 +186,28 @@ def _numpy_metric_safe_globals() -> list:
 
     import numpy as np
 
-    try:
-        multiarray = importlib.import_module("numpy._core.multiarray")
-    except ImportError:
-        multiarray = importlib.import_module("numpy.core.multiarray")
+    # The checkpoint FLEET carries both pickle spellings: cells trained
+    # under numpy 1.x reference numpy.core.multiarray.scalar, numpy 2.x
+    # cells reference numpy._core.multiarray.scalar — and torch's
+    # weights_only checker matches the pickle's global NAME, not the
+    # resolved object. Register the reconstructor under BOTH names via
+    # torch's (object, "full.name") aliasing form; each import is
+    # guarded because only one spelling may exist in a given numpy.
+    entries = []
+    for name in ("numpy._core.multiarray.scalar",
+                 "numpy.core.multiarray.scalar"):
+        mod, _, attr = name.rpartition(".")
+        try:
+            entries.append((getattr(importlib.import_module(mod), attr), name))
+        except (ImportError, AttributeError):
+            continue
+    if not entries:
+        raise ImportError("no numpy multiarray.scalar spelling importable")
     # Narrow to the dtype classes checkpoints actually serialize (epoch
-    # as int64, metrics as float64/float32) — allowlisting every
-    # np.dtypes class would grant more surface than the artifacts need.
+    # as int64, metrics as float64/float32).
     dtype_classes = [np.dtypes.Int64DType, np.dtypes.Float64DType,
                      np.dtypes.Float32DType]
-    return [multiarray.scalar, np.dtype, *dtype_classes]
+    return [*entries, np.dtype, *dtype_classes]
 
 
 def _load_checkpoint_for_inference(
