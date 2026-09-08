@@ -1,0 +1,10 @@
+{
+  "id": "0006",
+  "subject": "Add a cluster-visible hold for gpu-reaper",
+  "description": "Prevent the scheduled gpu-reaper from deleting an explicitly held Job while preserving its archive-before-delete default, then verify the exact crop-distill retry can carry and later release that hold.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/codex/ops-gpu-reaper-hold",
+  "created_at": "2026-09-08T20:35:00Z",
+  "updated_at": "2026-09-08T20:35:00Z"
+}
