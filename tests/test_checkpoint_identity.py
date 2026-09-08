@@ -150,6 +150,35 @@ def test_numpy_safe_globals_via_module_import_not_attribute_chain() -> None:
     assert inference._numpy_metric_safe_globals()[0] is expected
 
 
+def test_numpy_safe_globals_1x_fallback_sequence(monkeypatch) -> None:
+    """Force the numpy-1.x path regardless of the installed numpy: when
+    numpy._core.multiarray is unimportable the loader must fall back to
+    numpy.core.multiarray — asserted by intercepting the imports, not by
+    hoping CI happens to run 1.26.4 (PR #45 review, MEDIUM)."""
+    import importlib
+
+    calls: list[str] = []
+    real = importlib.import_module
+
+    def fake(name, *a, **k):
+        calls.append(name)
+        if name == "numpy._core.multiarray":
+            raise ImportError("forced 1.x environment")
+        if name == "numpy.core.multiarray":
+            return real("numpy._core.multiarray") if _np2() else real(name)
+        return real(name, *a, **k)
+
+    def _np2() -> bool:
+        import numpy as np
+        return int(np.__version__.split(".")[0]) >= 2
+
+    monkeypatch.setattr(importlib, "import_module", fake)
+    result = inference._numpy_metric_safe_globals()
+    assert calls[0] == "numpy._core.multiarray"
+    assert "numpy.core.multiarray" in calls, "1.x fallback never attempted"
+    assert callable(result[0])
+
+
 def test_checkpoint_never_falls_back_to_unsafe_pickle(tmp_path: Path) -> None:
     marker = tmp_path / "pickle-executed"
 

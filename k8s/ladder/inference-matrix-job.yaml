@@ -36,10 +36,13 @@ spec:
               mkdir -p /cephfs/ops
               trap 'rc=$?; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run=$RUN_ID job=ladder-inference-matrix HEAD=${HEAD_SHA:-unknown} ${ARTIFACTS:-artifacts=none} rc=$rc status=$([ "$rc" -eq 0 ] && echo OK || echo FAIL)" >> /cephfs/ops/crop_distill.log' EXIT
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              pip install --quiet --no-cache-dir torch torchvision \
-                --index-url https://download.pytorch.org/whl/cu121
+              # torch >= 2.10.0: GHSA-63cw-57p8-fm3p patches an RCE in
+              # the weights_only unpickler (affected <= 2.9.1).
+              pip install --quiet --no-cache-dir torch==2.10.0 torchvision==0.25.0 \
+                --index-url https://download.pytorch.org/whl/cu126
               pip install --quiet --no-cache-dir \
-                timm einops Pillow scipy huggingface_hub rasterio pyproj \
+                timm==1.0.11 einops==0.8.0 Pillow==10.4.0 scipy==1.13.1 \
+                huggingface_hub==0.26.2 rasterio==1.3.11 pyproj==3.6.1 \
                 numpy==1.26.4 pandas==2.2.2 pyarrow==17.0.0 scikit-learn==1.5.1
               # BAKED source anchor: the payload commit whose script was
               # reviewed. No runtime resolution of any mutable ref — a
@@ -55,9 +58,11 @@ spec:
               echo "PINNED SOURCE: $HEAD_SHA"
               # ONE pod loads every backbone family, so it needs the union
               # of the per-column loader deps.
-              pip install --quiet --no-cache-dir "git+https://github.com/Clay-foundation/model.git"
-              git clone --depth 1 https://github.com/antofuller/CROMA /workspace/CROMA && export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}
-              pip install --quiet --no-cache-dir terratorch
+              pip install --quiet --no-cache-dir "git+https://github.com/Clay-foundation/model.git@f14e698f3c237cabf8d28dec669a362d66625381"
+              git clone https://github.com/antofuller/CROMA /workspace/CROMA
+              git -C /workspace/CROMA checkout -q 59505a6bcadbf36ba20767270154bf9f3067c5e7
+              export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}
+              pip install --quiet --no-cache-dir terratorch==1.2.13
               mkdir -p /cephfs/ops/deps
               pip freeze > /cephfs/ops/deps/ladder-inference-matrix-$RUN_ID.txt
 

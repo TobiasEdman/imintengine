@@ -206,9 +206,12 @@ def test_cell_rerenders_on_checkpoint_change(tmp_path, monkeypatch):
 
     class _FakeInfcmp:
         @staticmethod
-        def load_model(ckpt, dev, backbone_name=None, img_size=None):
+        def load_model(ckpt, dev, backbone_name=None, img_size=None,
+                       return_checkpoint_config=False):
             calls["n"] += 1
-            return object(), 7, 0.5, img_size
+            assert return_checkpoint_config, \
+                "render_cell must take the config from the SAFE load"
+            return object(), 7, 0.5, img_size, {"enabled_aux_names": None}
 
         @staticmethod
         def run_inference(model, tile_path, dev, img_size=None,
@@ -246,3 +249,14 @@ def test_cell_rerenders_on_checkpoint_change(tmp_path, monkeypatch):
     assert c3["ckpt_sha"] != c1["ckpt_sha"]
     cell = json.loads((out / "tessera_r2" / "_cell.json").read_text())
     assert cell["ckpt_sha"] == c3["ckpt_sha"]
+
+
+def test_payloads_never_use_unsafe_torch_load():
+    """PR #45 review (HIGH): both anchored payloads once called
+    torch.load(weights_only=False) on shared-PVC checkpoints — code
+    execution for any checkpoint writer. Config must come from the
+    reviewed load_model(..., return_checkpoint_config=True) path only."""
+    for payload in ("ladder_inference_matrix.py", "distill_forest_labels.py"):
+        src = (REPO / "scripts" / payload).read_text()
+        assert "weights_only=False" not in src, payload
+        assert "return_checkpoint_config=True" in src, payload

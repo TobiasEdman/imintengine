@@ -227,13 +227,14 @@ def render_cell(model: str, rung: int, ckpt: Path, tiles: list[dict],
     dev = torch.device(device)
     # Aux set from the checkpoint's own config — reconstructing it from
     # flags is how terramind died in the distill stage (13 vs 11 aux).
-    ck_cfg = torch.load(str(ckpt), map_location="cpu",
-                        weights_only=False).get("config", {})
-    aux_names = ck_cfg.get("enabled_aux_names")
-    aux_names = list(aux_names) if aux_names else None
-    model_obj, epoch, miou, _ = infcmp.load_model(
+    # ONE load through the reviewed safe loader (weights_only=True +
+    # descriptor sealing); a raw unsafe torch.load on the shared PVC
+    # would hand code execution to any checkpoint writer.
+    model_obj, epoch, miou, _, ck_cfg = infcmp.load_model(
         str(ckpt), dev, backbone_name=cfg["backbone"],
-        img_size=cfg["img_size"])
+        img_size=cfg["img_size"], return_checkpoint_config=True)
+    aux_names = (ck_cfg or {}).get("enabled_aux_names")
+    aux_names = list(aux_names) if aux_names else None
     print(f"[{model}_r{rung}] epoch={epoch} mIoU={miou} sha={sha[:8]}")
 
     for t in tiles:
