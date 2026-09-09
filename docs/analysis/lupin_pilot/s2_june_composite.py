@@ -164,6 +164,43 @@ def fetch_june_composite(coords: dict, year: int, *, conn=None,
 FEATURE_NAMES = ALL_BANDS + ["blueness", "magenta", "brightness"]
 
 
+def build_feature_cube(conn, coords: dict, year: int):
+    """One 14-band cube: June median reflectance + peak-bloom indices.
+
+    Both halves reduce the temporal dimension away, so they share a grid
+    and merge into a single cube — and therefore a single openEO job.
+    That matters for batch execution: one job per group instead of two
+    halves the queue and removes any chance of the two downloads landing
+    on different grids.
+
+    Band order is ``FEATURE_NAMES``. Reflectance is DN/10000 with NO
+    -1000 offset (see fetch_june_composite for why).
+    """
+    from imint.fetch import CDSE_COLLECTION, _to_nmd_grid
+
+    projected = _to_nmd_grid(coords)
+    temporal = [f"{year}-06-01", f"{year}-07-01"]
+
+    def _load(bands):
+        return conn.load_collection(
+            collection_id=CDSE_COLLECTION, spatial_extent=projected,
+            temporal_extent=temporal, bands=bands)
+
+    cube = _load(BANDS_10M)
+    ref = cube
+    for bands in (BANDS_20M, BANDS_60M):
+        cube = cube.merge_cubes(
+            _load(bands).resample_cube_spatial(target=ref, method="bilinear"))
+
+    scl = _load(["SCL"]).resample_cube_spatial(target=ref, method="near")
+    mask = scl.band("SCL").apply(
+        lambda v: sum((v == c) for c in SCL_DROP)).apply(lambda v: v > 0)
+    refl = cube.mask(mask) / 10000.0
+
+    median = refl.reduce_dimension(dimension="t", reducer="median")
+    return median.merge_cubes(bloom_indices(refl))
+
+
 def fetch_june_features(coords: dict, year: int, *, conn=None):
     """June median reflectance PLUS peak-bloom colour indices.
 

@@ -126,3 +126,9 @@ k8s/lpis-viz-server.yaml
 scripts/verify_fetch_refactor.py
 # Office lock files (created while a document is open; junk in git)
 ~$*
+
+# Lupine S2 pilot: fetched rasters and job state are reproducible outputs
+docs/analysis/lupin_pilot/s2_jobs/
+docs/analysis/lupin_pilot/s2_cache/
+docs/analysis/lupin_pilot/s2_jobs.json
+docs/analysis/lupin_pilot/features_s2*.npz

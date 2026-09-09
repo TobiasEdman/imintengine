@@ -148,7 +148,11 @@ def main() -> None:
         block, year = key
         gpts = groups[key]
         tag = f"{block}_{year}"
-        npz = cache / f"{tag}.npz"
+        # Cache key includes the mode: composite emits 14 features, the
+        # single-date modes 11, and a shared key silently mixes the two
+        # into one feature matrix. Caught as an inhomogeneous-shape crash
+        # on the first run that reused a single-date cache entry.
+        npz = cache / f"{tag}__{args.screen}.npz"
 
         if npz.exists():
             cached = np.load(npz)
@@ -256,6 +260,10 @@ def main() -> None:
             vec = img[:, row, col].astype(np.float32)
             if not np.isfinite(vec).all() or np.all(vec == 0):
                 continue
+            if cols["X"] and len(vec) != len(cols["X"][0]):
+                raise RuntimeError(
+                    f"{tag}: feature width {len(vec)} != "
+                    f"{len(cols['X'][0])} — refusing to mix schemas")
             cols["X"].append(vec)
             cols["y"].append(p["label"])
             cols["lat"].append(p["lat"]); cols["lon"].append(p["lon"])
