@@ -1,6 +1,6 @@
 # LUCAS crop-distill runtime
 
-This image is the immutable runtime for the frozen LUCAS split and the six
+This image is the immutable runtime for the frozen LUCAS split and the seven
 crop-distillation columns. It contains no mutable source checkout and performs
 no package or model download at runtime.
 
@@ -20,25 +20,25 @@ independently hash-locked environments:
 
 | Purpose | Interpreter | Key ABI |
 | --- | --- | --- |
-| model/extraction | `/opt/venvs/model/bin/python` | TerraTorch 1.2.11, TorchGeo 0.8.1, NumPy 2.2.6, Torch 2.5.1+cu121 |
+| model/extraction | `/opt/venvs/model/bin/python` | TerraTorch 1.2.11, TorchGeo 0.8.1, NumPy 2.2.6, Torch 2.10.0+cu126 |
 | split/scoring | `/opt/venvs/scoring/bin/python` | NumPy 1.26.4, pandas 2.2.2, PyArrow 17.0.0, scikit-learn 1.5.1 |
 | provenance only | `/usr/local/bin/python` | Python standard library |
 
 `requirements-model.lock` and `requirements-scoring.lock` include exact
 versions and hashes for every transitive dependency. Torch and TorchVision use
-direct, hash-pinned official CUDA 12.1 CPython 3.11 wheels. The model lock was
+direct, hash-pinned official CUDA 12.6 CPython 3.11 wheels. The model lock was
 resolved with `--exclude-newer 2026-08-31T07:47:18Z`; that resolver selected
 NumPy 2.2.6 under all transitive constraints. Clay is installed
 with `--no-deps` from its verified source tree; CROMA is not pip-installable and
 is exposed only through `PYTHONPATH`.
 
-Torch 2.5.1 preserves the observed training ABI but its `weights_only`
-unpickler is affected by the upstream
+The model environment uses Torch 2.10.0 rather than the previously observed
+2.5.1 line because the older `weights_only` unpickler is affected by the
+upstream
 [2025](https://github.com/pytorch/pytorch/security/advisories/GHSA-53q9-r3pm-6pq6)
 and
 [2026](https://github.com/pytorch/pytorch/security/advisories/GHSA-63cw-57p8-fm3p)
-code-execution advisories; the current patched line starts at 2.10. This
-evidence run therefore admits only the six
+code-execution advisories. This evidence run admits only the seven
 first-party checkpoints whose size/SHA-256 were anchored during review as
 trust-on-first-use. The digests prove no change after anchoring, not that bytes
 were safe beforehand, and no separate pickle-scan result is claimed. Unknown
@@ -108,7 +108,7 @@ authority C pins the reviewed PLAN Pod UID and SHA-256 and
 `--crop-apply-only` generates only the metadata repair. Completion authority D
 pins the reviewed APPLY Pod UID and completion SHA-256, after which
 `--crop-split-only` generates split attempt 3. Consumer authorization E pins
-the verified split-manifest SHA-256 and generates the six crop Jobs. Each
+the verified split-manifest SHA-256 and generates the seven crop Jobs. Each
 downstream renderer fails before its upstream authority is nonzero and pinned.
 
 ## Runtime verification
@@ -135,14 +135,14 @@ of truth. Model extraction must invoke the model interpreter, while split and
 head scoring must invoke the scoring interpreter listed above.
 
 Before PLAN, a no-argument storage-prep entrypoint authenticates the baked
-runtime against A and the reviewed image digest, then prepares exactly 20
+runtime against A and the reviewed image digest, then prepares exactly 22
 baked targets. `/cephfs/distill/crop_split` is UID/GID 2000 mode `03770` until
 frozen to `0550`; `/cephfs/distill/crop_heads` and
 `/cephfs/ops/crop-distill` are root:GID-2000 mode-`0750` parents; and
 `/cephfs/ops/crop-distill/split` is the UID/GID-2000 mode-`0750` split-record
 leaf. The root:GID-2000 mode-`0750` source-access root and its `plan`, `apply`,
 and `locks` leaves hold immutable per-Pod evidence and the cooperative lock.
-Each of the six model UIDs 2001–2006 owns a mode-`0750` head leaf at
+Each of the seven model UIDs 2001–2007 owns a mode-`0750` head leaf at
 `/cephfs/distill/crop_heads/<model>_r2_crop_runs` and evidence leaf at
 `/cephfs/ops/crop-distill/<model>`, all with GID 2000. The root-owned parents
 prevent models from creating or replacing sibling leaves.

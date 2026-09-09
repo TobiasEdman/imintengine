@@ -1,7 +1,7 @@
 """Immutable protocol constants for the LUCAS crop-distill evidence jobs.
 
 This module is part of the runtime-image payload.  Kubernetes manifests may
-select one of the six model keys, but every behavioural value is resolved here
+select one of the seven model keys, but every behavioural value is resolved here
 from the source SHA baked into that image.  Keeping the map in Commit A closes
 the gap where a later manifest-only commit could otherwise change an image's
 checkpoint, crop grid, modality requirements, or scoring protocol.
@@ -158,6 +158,22 @@ CROP_MODELS = {
             "a27dadd9caf1c9ccfba6ecbd76ac7815fcb7236978e9df807e1d1bf7a498cda0"
         ),
     ),
+    # Seventh column (Tobias-approved 2026-09-08, ~1h CPU + 2080Ti
+    # minutes, no H100): the 4-frame Prithvi-300M arm, added to unmix
+    # scale from temporality in the R5 table — 300m@1f vs 300m@4f vs
+    # 600m@4f on the SAME frozen 2,491 plots. Deliberately REVERSES the
+    # PR #42 exclusion; the exclusion invariant test flips to inclusion
+    # in the same commit. Checkpoint identity hashed from the PVC.
+    "prithvi300m4f": _model(
+        "prithvi300m4f",
+        img_size=496,
+        backbone="prithvi_300m",
+        required_npz_keys=(),
+        checkpoint_size=1_370_853_931,
+        checkpoint_sha256=(
+            "9f013d26fb3ba8f6afb510e0f1ca7cadf988b29201cab45a065cb35ccfd972a9"
+        ),
+    ),
     "prithvi600m": _model(
         "prithvi600m",
         img_size=504,
@@ -204,6 +220,9 @@ CROP_MODEL_UIDS = {
     "prithvi600m": 2004,
     "terramind": 2005,
     "tessera": 2006,
+    # Intentional range extension for the seventh column (reviewed with
+    # the CROP_MODELS entry above; Tobias-approved 2026-09-08).
+    "prithvi300m4f": 2007,
 }
 
 
@@ -265,8 +284,10 @@ def validate_model_uid_map(mapping: Mapping[str, int]) -> None:
     if set(mapping) != set(CROP_MODELS):
         raise ValueError("model UID map must declare exactly the crop model keys")
     values = tuple(mapping.values())
-    if any(type(uid) is not int or not 2001 <= uid <= 2006 for uid in values):
-        raise ValueError("model UIDs must be integers in the reviewed range 2001..2006")
+    # Range extended 2006 -> 2007 with the seventh column (prithvi300m4f,
+    # Tobias-approved 2026-09-08) — the extension is itself the reviewed act.
+    if any(type(uid) is not int or not 2001 <= uid <= 2007 for uid in values):
+        raise ValueError("model UIDs must be integers in the reviewed range 2001..2007")
     if len(set(values)) != len(values):
         raise ValueError("model UIDs must be unique")
 

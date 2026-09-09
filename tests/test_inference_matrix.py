@@ -86,39 +86,46 @@ def _write_holdout_npz(holdout: "Path", name: str) -> None:
 
 
 def test_render_shared_writes_both_truth_panels(tmp_path):
-    """Two training vocabularies → two truth panels: the in-tile 23-class
-    label (rung 1) and the NMD2023 sidecar's 28-class label (rungs 2-4)."""
+    """Two training vocabularies → two truth panels, BOTH from reference-
+    built sidecars: the holdout tiles' baked label carries raw NMD codes
+    and no LPIS/SKS masks, so the in-tile label renders neither truth."""
     from ladder_inference_matrix import render_shared
 
     holdout = tmp_path / "holdout"
-    sidecars = tmp_path / "nmd2023_labels"
+    side23 = tmp_path / "nmd2018_labels"
+    side28 = tmp_path / "nmd2023_labels"
     out = tmp_path / "out"
-    holdout.mkdir(), sidecars.mkdir()
+    holdout.mkdir(), side23.mkdir(), side28.mkdir()
     _write_holdout_npz(holdout, "holdoutval_1_1_2022")
-    label28 = np.full((8, 8), 25, dtype=np.uint8)   # NMD2023-only class
-    np.savez(sidecars / "holdoutval_1_1_2022.npz", label=label28)
+    np.savez(side23 / "holdoutval_1_1_2022.npz",
+             label=np.full((8, 8), 22, dtype=np.uint8))   # hygge — v5-only
+    np.savez(side28 / "holdoutval_1_1_2022.npz",
+             label=np.full((8, 8), 25, dtype=np.uint8))   # NMD2023-only
 
     tiles = [{"name": "holdoutval_1_1_2022"}]
-    render_shared(tiles, holdout, out, sidecars)
+    render_shared(tiles, holdout, out, side23, side28)
 
-    for panel in ("_rgb", "_truth", "_truth28"):
+    for panel in ("_rgb", "_truth23", "_truth28"):
         assert (out / panel / "holdoutval_1_1_2022.png").exists(), panel
 
 
 def test_render_shared_fails_closed_on_missing_sidecar(tmp_path):
-    """A truth28 panel without its sidecar would misrepresent what rungs
-    2-4 trained on — refuse loudly, pointing at the build job."""
+    """A truth panel without its sidecar would misrepresent what the rungs
+    trained on — refuse loudly, pointing at the right build job."""
     from ladder_inference_matrix import render_shared
 
     holdout = tmp_path / "holdout"
+    side28 = tmp_path / "nmd2023_labels"
     out = tmp_path / "out"
-    holdout.mkdir()
+    holdout.mkdir(), side28.mkdir()
     _write_holdout_npz(holdout, "holdoutval_2_2_2022")
+    np.savez(side28 / "holdoutval_2_2_2022.npz",
+             label=np.zeros((8, 8), dtype=np.uint8))
 
-    with pytest.raises(FileNotFoundError, match="build-labels-holdout-nmd2023"):
+    with pytest.raises(FileNotFoundError, match="build-labels-holdout-nmd2018"):
         render_shared([{"name": "holdoutval_2_2_2022"}], holdout, out,
-                      tmp_path / "no_sidecars")
-    assert not (out / "_truth28").exists()
+                      tmp_path / "no_2018_sidecars", side28)
+    assert not (out / "_truth23").exists()
 
 
 def test_job_follows_ladder_conventions():
@@ -206,9 +213,12 @@ def test_cell_rerenders_on_checkpoint_change(tmp_path, monkeypatch):
 
     class _FakeInfcmp:
         @staticmethod
-        def load_model(ckpt, dev, backbone_name=None, img_size=None):
+        def load_model(ckpt, dev, backbone_name=None, img_size=None,
+                       return_checkpoint_config=False):
             calls["n"] += 1
-            return object(), 7, 0.5, img_size
+            assert return_checkpoint_config, \
+                "render_cell must take the config from the SAFE load"
+            return object(), 7, 0.5, img_size, {"enabled_aux_names": None}
 
         @staticmethod
         def run_inference(model, tile_path, dev, img_size=None,
@@ -246,3 +256,62 @@ def test_cell_rerenders_on_checkpoint_change(tmp_path, monkeypatch):
     assert c3["ckpt_sha"] != c1["ckpt_sha"]
     cell = json.loads((out / "tessera_r2" / "_cell.json").read_text())
     assert cell["ckpt_sha"] == c3["ckpt_sha"]
+
+
+def test_payloads_never_use_unsafe_torch_load():
+    """PR #45 review (HIGH): both anchored payloads once called
+    torch.load(weights_only=False) on shared-PVC checkpoints — code
+    execution for any checkpoint writer. Config must come from the
+    reviewed load_model(..., return_checkpoint_config=True) path only."""
+    for payload in ("ladder_inference_matrix.py", "distill_forest_labels.py"):
+        src = (REPO / "scripts" / payload).read_text()
+        assert "weights_only=False" not in src, payload
+        assert "return_checkpoint_config=True" in src, payload
+
+
+def test_matrix_dependency_lock_parity():
+    """The matrix pod env must be constructible: PR #45 review round 3
+    found independently-pinned third-party versions that were mutually
+    unsatisfiable (clay needs einops<0.8, terratorch 1.2.13 needs
+    py3.12-only torchgeo, ...). The committed lock is ONE co-resolved
+    closure (top-levels from the successful run's freeze record) and the
+    generated job must pin exactly that set, --no-deps, patched torch."""
+    import re
+
+    lock_text = (REPO / "k8s" / "inference-matrix-deps.lock").read_text()
+    job_text = _job_text()
+
+    def pins(text: str) -> set[str]:
+        found = re.findall(r"([A-Za-z0-9_.-]+)==([0-9][A-Za-z0-9_.!+-]*)", text)
+        return {f"{n.lower().replace('_', '-')}=={v}" for n, v in found}
+
+    lock_pins = pins("\n".join(
+        ln for ln in lock_text.splitlines() if not ln.startswith("#")))
+    job_pins = pins(job_text)
+    assert lock_pins, "empty matrix lockfile"
+    assert job_pins == lock_pins, (
+        f"job drifts from the lock: missing={sorted(lock_pins - job_pins)} "
+        f"extra={sorted(job_pins - lock_pins)}")
+
+    # Patched torch (GHSA-63cw-57p8-fm3p) and the proven-compatible pair.
+    assert "torch==2.10.0+cu126" in job_pins
+    assert "einops==0.7.0" in job_pins, "clay requires einops<0.8"
+    # claymodel rides as a git pin, outside the ==-set.
+    sha = "f14e698f3c237cabf8d28dec669a362d66625381"
+    assert sha in lock_text and sha in job_text
+
+    # Clay must install LAST (after the locked setuptools) and without
+    # build isolation, or its build backend resolves fresh (PR #45 MEDIUM).
+    clay_pos = job_text.find("Clay-foundation/model.git@")
+    setuptools_pos = job_text.find("setuptools==")
+    assert 0 < setuptools_pos < clay_pos, "clay must come after the closure"
+    clay_line = next(l for l in job_text.splitlines()
+                     if "no-build-isolation" in l.split("#", 1)[0])
+    assert "--no-deps" in clay_line
+
+    # Every matrix pip line is --no-deps (comments exempt).
+    for line in job_text.splitlines():
+        code = line.split("#", 1)[0]
+        if "pip install" in code and "--no-deps" not in code \
+                and "-e ." not in code:
+            raise AssertionError(f"unpinned pip path in matrix: {line.strip()}")

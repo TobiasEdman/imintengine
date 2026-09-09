@@ -301,7 +301,7 @@ runtime against commit A and the reviewed image digest. It performs no PVC
 data parsing or network access, runs as UID 0:GID 2000 with a read-only root
 filesystem, no service-account token, no privilege escalation, RuntimeDefault
 seccomp, and only `CHOWN` plus `FOWNER` after dropping every capability. It
-prepares exactly 20 directories with baked ownership and modes:
+prepares exactly 22 directories with baked ownership and modes:
 
 - `/cephfs/distill/crop_split` is UID/GID `2000:2000`, mode `03770` until
   the completed freeze locks it to `0550`;
@@ -315,9 +315,10 @@ prepares exactly 20 directories with baked ownership and modes:
   writes one create-only child named by its Downward-API Pod UID; and
 - each model owns one mode-`0750` head leaf at
   `/cephfs/distill/crop_heads/<model>_r2_crop_runs` and one mode-`0750`
-  evidence leaf at `/cephfs/ops/crop-distill/<model>`. The six owners are
+  evidence leaf at `/cephfs/ops/crop-distill/<model>`. The seven owners are
   `clay:2001`, `croma:2002`, `prithvi300m:2003`, `prithvi600m:2004`,
-  `terramind:2005`, and `tessera:2006`, all with GID 2000.
+  `terramind:2005`, `tessera:2006`, and `prithvi300m4f:2007`, all with GID
+  2000.
 
 The split Job runs non-root as UID/GID 2000. Each crop model can write only
 its pre-owned leaves; the shared GID permits read/traverse but not sibling
@@ -711,7 +712,7 @@ stop condition is fail-closed.
    its lease CAS, or sees an overlap, it stops issuing a held lease; phase
    authorization fails and payload checks abort before terminal publication.
 
-4. Server-side dry-run and create storage prep. Verify exactly 20 baked
+4. Server-side dry-run and create storage prep. Verify exactly 22 baked
    targets. Authorize PLAN only after a fresh watchdog scan, then dry-run and
    create `crop-source-access-plan-job.yaml`:
 

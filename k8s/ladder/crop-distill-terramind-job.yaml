@@ -32,7 +32,7 @@ spec:
         accelerator: nvidia-gtx-2080ti
       containers:
         - name: crop-distill
-          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:dba3a47b2936a8b4f64bbaacc1e2bbaa4ddc4f57802077f7c6c576f63de996cf
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:25919e5cc0bc5ccba770b80f5906d0721cf47a779e3b4591a07cf5c5f3dc3599
           imagePullPolicy: IfNotPresent
           command:
             - /usr/local/bin/python
@@ -42,9 +42,9 @@ spec:
             - terramind
           env:
             - name: CROP_DISTILL_SOURCE_GIT_SHA
-              value: "1fd08fad9ba9ab599415230938e6fade357cd5eb"
+              value: "7d935b9a0210f9a88b641ef24e7d83206c2fdcb0"
             - name: CROP_DISTILL_IMAGE
-              value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:dba3a47b2936a8b4f64bbaacc1e2bbaa4ddc4f57802077f7c6c576f63de996cf"
+              value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:25919e5cc0bc5ccba770b80f5906d0721cf47a779e3b4591a07cf5c5f3dc3599"
             - name: CROP_DISTILL_SPLIT_MANIFEST_SHA256
               value: "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed"
             - name: CROP_DISTILL_SPLIT_SOURCE_GIT_SHA
@@ -53,6 +53,18 @@ spec:
               value: /work/home
             - name: TMPDIR
               value: /work/tmp
+            # torch >= 2.10's inductor resolves a cache dir via
+            # getpass.getuser(), which falls back to pwd.getpwuid() when no
+            # LOGNAME/USER env exists — and the numeric runtime UIDs have no
+            # passwd entry in the image (KeyError killed the seventh run at
+            # extract-features). getpass reads these envs FIRST; the explicit
+            # cache dir under the writable workdir is belt and braces.
+            - name: LOGNAME
+              value: crop-distill
+            - name: USER
+              value: crop-distill
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /work/torch-inductor
             - name: POD_UID
               valueFrom:
                 fieldRef:

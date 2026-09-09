@@ -131,6 +131,61 @@ def test_checkpoint_with_numpy_scalar_metrics_loads(tmp_path: Path) -> None:
     assert float(payload["best_miou"]) == pytest.approx(0.7123)
 
 
+def test_numpy_safe_globals_via_module_import_not_attribute_chain() -> None:
+    """The scalar reconstructor must come from a real module IMPORT.
+    Reaching it as an attribute chain (np._core.multiarray) depends on the
+    numpy version and on which submodules other libraries imported first —
+    the 4f distill job died on exactly that under numpy 1.26.4 while
+    numpy 2.x environments passed (2026-09-08)."""
+    import importlib
+
+    src = inspect.getsource(inference._numpy_metric_safe_globals)
+    assert "import_module" in src
+    assert 'getattr(np, "_core"' not in src, "attribute-chain access is back"
+
+    try:
+        expected = importlib.import_module("numpy._core.multiarray").scalar
+    except ImportError:
+        expected = importlib.import_module("numpy.core.multiarray").scalar
+    first_obj, first_name = inference._numpy_metric_safe_globals()[0]
+    assert first_obj is expected
+    names = [n for _, n in inference._numpy_metric_safe_globals()[:2]]
+    # BOTH pickle spellings must be present when importable — the fleet
+    # carries checkpoints saved under numpy 1.x AND 2.x (2026-09-08).
+    assert "numpy._core.multiarray.scalar" in names or \
+        "numpy.core.multiarray.scalar" in names
+
+
+def test_numpy_safe_globals_1x_fallback_sequence(monkeypatch) -> None:
+    """Force the numpy-1.x path regardless of the installed numpy: when
+    numpy._core.multiarray is unimportable the loader must fall back to
+    numpy.core.multiarray — asserted by intercepting the imports, not by
+    hoping CI happens to run 1.26.4 (PR #45 review, MEDIUM)."""
+    import importlib
+
+    calls: list[str] = []
+    real = importlib.import_module
+
+    def fake(name, *a, **k):
+        calls.append(name)
+        if name == "numpy._core.multiarray":
+            raise ImportError("forced 1.x environment")
+        if name == "numpy.core.multiarray":
+            return real("numpy._core.multiarray") if _np2() else real(name)
+        return real(name, *a, **k)
+
+    def _np2() -> bool:
+        import numpy as np
+        return int(np.__version__.split(".")[0]) >= 2
+
+    monkeypatch.setattr(importlib, "import_module", fake)
+    result = inference._numpy_metric_safe_globals()
+    assert calls[0] == "numpy._core.multiarray"
+    assert "numpy.core.multiarray" in calls, "1.x spelling never attempted"
+    obj, name = result[0]
+    assert callable(obj) and name == "numpy.core.multiarray.scalar"
+
+
 def test_checkpoint_never_falls_back_to_unsafe_pickle(tmp_path: Path) -> None:
     marker = tmp_path / "pickle-executed"
 

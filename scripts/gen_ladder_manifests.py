@@ -123,14 +123,14 @@ DISTILL = {
     }
     for model, protocol in CROP_MODELS.items()
 }
-# Temporal-frame ablation column (issue #39): ladder rungs + NFI distill
-# only. Deliberately NOT in CROP_MODELS — the crop stage's per-model UID
-# map (2001-2006) has no slot for it, and the ablation needs no crop/LUCAS
-# pass. Extend the UID map first if a crop column is ever justified.
-DISTILL["prithvi300m4f"] = {"img_size": 496, "backbone": "prithvi_300m"}
-# 4f runs with pinned source identity (PR #42): the same commit the 4f
-# training base bakes. Re-pin deliberately when re-running the column.
-PRITHVI300M4F_SOURCE_GIT_SHA = "1fd08fad9ba9ab599415230938e6fade357cd5eb"
+# prithvi300m4f entered CROP_MODELS 2026-09-08 (Tobias-approved seventh
+# column — unmix scale from temporality in the R5 table), so the DISTILL
+# comprehension above covers it; PR #42's manual ladder-only entry is gone
+# and its exclusion invariant flipped to inclusion in the same change.
+# 4f distill runs with pinned source identity: re-pin deliberately when
+# re-running the column. Pin at the both-spellings loader fix (#49) —
+# newer than #45's eb74d05d and required for cross-numpy checkpoints.
+PRITHVI300M4F_SOURCE_GIT_SHA = "9750fa917ec95962d59c3468ffaa521bb9e7e01c"
 
 # LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
 # features at the frozen LUCAS crop distill points, score the pinned-
@@ -151,10 +151,10 @@ CROP_SPLIT_MANIFEST = str(PROTOCOL_CROP_SPLIT_MANIFEST)
 # Replaced with the real Commit-A identities before generator output is
 # committed. The impossible all-zero sentinels make an accidental partial
 # bootstrap fail tests and deployment review loudly.
-CROP_DISTILL_SOURCE_GIT_SHA = "1fd08fad9ba9ab599415230938e6fade357cd5eb"
+CROP_DISTILL_SOURCE_GIT_SHA = "7d935b9a0210f9a88b641ef24e7d83206c2fdcb0"
 CROP_DISTILL_IMAGE = (
     "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
-    "dba3a47b2936a8b4f64bbaacc1e2bbaa4ddc4f57802077f7c6c576f63de996cf"
+    "25919e5cc0bc5ccba770b80f5906d0721cf47a779e3b4591a07cf5c5f3dc3599"
 )
 CROP_SOURCE_ACCESS_SOURCE_GIT_SHA = (
     "c6ad69242e7239662461bf7ff0b6bcd4d072509a"
@@ -335,7 +335,7 @@ SKLEARN_PIN = "scikit-learn==1.5.1"
 # reading/writing the shared cephfs PVC. Runs on the 2080ti pool so the
 # distill stage NEVER competes with the H100 memory quota the ladder
 # trainings are packed against. The protocol constants (folds, head, seed,
-# test-frac) are pinned HERE, once, for all six columns — that uniformity
+# test-frac) are pinned HERE, once, for all seven columns — that uniformity
 # IS the distillability experiment; see docs/experiments/
 # ladder_distill_stage.md.
 DISTILL_TEMPLATE = """apiVersion: batch/v1
@@ -507,6 +507,18 @@ spec:
               value: /work/home
             - name: TMPDIR
               value: /work/tmp
+            # torch >= 2.10's inductor resolves a cache dir via
+            # getpass.getuser(), which falls back to pwd.getpwuid() when no
+            # LOGNAME/USER env exists — and the numeric runtime UIDs have no
+            # passwd entry in the image (KeyError killed the seventh run at
+            # extract-features). getpass reads these envs FIRST; the explicit
+            # cache dir under the writable workdir is belt and braces.
+            - name: LOGNAME
+              value: crop-distill
+            - name: USER
+              value: crop-distill
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /work/torch-inductor
             - name: POD_UID
               valueFrom:
                 fieldRef:
@@ -1127,7 +1139,7 @@ spec:
 # EXACTLY this commit — the one whose payload (ladder_inference_matrix.py)
 # was reviewed. A payload change requires a deliberate constant bump in a
 # reviewed commit; ordinary generator/docs changes never move the anchor.
-INFERENCE_MATRIX_SOURCE_GIT_SHA = "a9f88a0488305e43787e0941389a813d8c6601af"
+INFERENCE_MATRIX_SOURCE_GIT_SHA = "9750fa917ec95962d59c3468ffaa521bb9e7e01c"
 
 
 def _require_full_sha(sha: str, name: str) -> str:
@@ -1172,11 +1184,7 @@ spec:
               mkdir -p /cephfs/ops
               trap 'rc=$?; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run=$RUN_ID job=ladder-inference-matrix HEAD=${{HEAD_SHA:-unknown}} ${{ARTIFACTS:-artifacts=none}} rc=$rc status=$([ "$rc" -eq 0 ] && echo OK || echo FAIL)" >> /cephfs/ops/crop_distill.log' EXIT
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              pip install --quiet --no-cache-dir torch torchvision \\
-                --index-url https://download.pytorch.org/whl/cu121
-              pip install --quiet --no-cache-dir \\
-                timm einops Pillow scipy huggingface_hub rasterio pyproj \\
-                {scoring_pins} {sklearn_pin}
+              {matrix_deps}
               # BAKED source anchor: the payload commit whose script was
               # reviewed. No runtime resolution of any mutable ref — a
               # re-run months from now executes byte-identical code, and
@@ -1279,6 +1287,18 @@ spec:
               value: /work/home
             - name: TMPDIR
               value: /work/tmp
+            # torch >= 2.10's inductor resolves a cache dir via
+            # getpass.getuser(), which falls back to pwd.getpwuid() when no
+            # LOGNAME/USER env exists — and the numeric runtime UIDs have no
+            # passwd entry in the image (KeyError killed the seventh run at
+            # extract-features). getpass reads these envs FIRST; the explicit
+            # cache dir under the writable workdir is belt and braces.
+            - name: LOGNAME
+              value: crop-distill
+            - name: USER
+              value: crop-distill
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /work/torch-inductor
             - name: POD_UID
               valueFrom:
                 fieldRef:
@@ -1391,34 +1411,35 @@ _DISTILL_DEPS_LEGACY = """pip install --quiet --no-cache-dir torch torchvision \
               pip install --quiet --no-cache-dir \\
                 timm einops numpy Pillow scipy scikit-learn huggingface_hub \\
                 pandas pyarrow rasterio pyproj"""
-# The FULL resolved lock for linux/py3.11/cu121, shared by every 4f job
+# The FULL resolved lock for linux/py3.11/cu126, shared by every 4f job
 # (base + rungs inherit it from the base manifest; a test asserts the two
 # copies stay identical). --no-deps: nothing resolves at run time.
-_DISTILL_DEPS_PINNED = """pip install --quiet --no-cache-dir --no-deps torch==2.5.1+cu121 torchvision==0.20.1+cu121 \\
-                --index-url https://download.pytorch.org/whl/cu121
+_DISTILL_DEPS_PINNED = """pip install --quiet --no-cache-dir --no-deps torch==2.10.0+cu126 torchvision==0.25.0+cu126 \\
+                --index-url https://download.pytorch.org/whl/cu126
               pip install --quiet --no-cache-dir --no-deps \\
                 affine==3.0.1 attrs==26.1.0 certifi==2026.7.22 \\
                 charset-normalizer==3.5.1 click==8.5.0 \\
                 click-plugins==1.1.1.2 cligj==0.7.2 cloudpickle==3.1.2 \\
-                einops==0.8.0 filelock==3.32.5 fsspec==2026.7.0 \\
-                huggingface-hub==0.26.2 idna==3.19 jinja2==3.1.6 \\
-                joblib==1.6.0 markupsafe==3.0.3 mpmath==1.3.0 \\
-                networkx==3.6.1 numpy==1.26.4 nvidia-cublas-cu12==12.1.3.1 \\
-                nvidia-cuda-cupti-cu12==12.1.105 \\
-                nvidia-cuda-nvrtc-cu12==12.1.105 \\
-                nvidia-cuda-runtime-cu12==12.1.105 \\
-                nvidia-cudnn-cu12==9.1.0.70 nvidia-cufft-cu12==11.0.2.54 \\
-                nvidia-curand-cu12==10.3.2.106 \\
-                nvidia-cusolver-cu12==11.4.5.107 \\
-                nvidia-cusparse-cu12==12.1.0.106 nvidia-nccl-cu12==2.21.5 \\
-                nvidia-nvjitlink-cu12==12.9.86 nvidia-nvtx-cu12==12.1.105 \\
+                cuda-bindings==12.9.4 cuda-pathfinder==1.8.1 einops==0.8.0 \\
+                filelock==3.32.5 fsspec==2026.7.0 huggingface-hub==0.26.2 \\
+                idna==3.19 jinja2==3.1.6 joblib==1.6.0 markupsafe==3.0.3 \\
+                mpmath==1.3.0 networkx==3.6.1 numpy==1.26.4 \\
+                nvidia-cublas-cu12==12.6.4.1 nvidia-cuda-cupti-cu12==12.6.80 \\
+                nvidia-cuda-nvrtc-cu12==12.6.77 \\
+                nvidia-cuda-runtime-cu12==12.6.77 \\
+                nvidia-cudnn-cu12==9.10.2.21 nvidia-cufft-cu12==11.3.0.4 \\
+                nvidia-cufile-cu12==1.11.1.6 nvidia-curand-cu12==10.3.7.77 \\
+                nvidia-cusolver-cu12==11.7.1.2 \\
+                nvidia-cusparse-cu12==12.5.4.2 nvidia-cusparselt-cu12==0.7.1 \\
+                nvidia-nccl-cu12==2.27.5 nvidia-nvjitlink-cu12==12.6.85 \\
+                nvidia-nvshmem-cu12==3.4.5 nvidia-nvtx-cu12==12.6.77 \\
                 packaging==26.3 pandas==2.2.2 pillow==10.4.0 pyarrow==17.0.0 \\
                 pyparsing==3.3.2 pyproj==3.6.1 python-dateutil==2.9.0.post0 \\
                 pytz==2026.3.post1 pyyaml==6.0.2 rasterio==1.3.11 \\
                 requests==2.34.2 safetensors==0.8.0 scikit-learn==1.5.1 \\
                 scipy==1.13.1 setuptools==84.0.0 six==1.17.0 snuggs==1.4.7 \\
-                sympy==1.13.1 threadpoolctl==3.6.0 timm==1.0.11 tqdm==4.70.0 \\
-                triton==3.1.0 typing-extensions==4.16.0 tzdata==2026.3 \\
+                sympy==1.14.0 threadpoolctl==3.6.0 timm==1.0.11 tqdm==4.70.0 \\
+                triton==3.6.0 typing-extensions==4.16.0 tzdata==2026.3 \\
                 urllib3==2.7.0"""
 _DISTILL_SOURCE_LEGACY = """BRANCH=main
               git clone --depth 1 --branch "$BRANCH" \\
@@ -1495,7 +1516,11 @@ def render_crop_distill(model: str) -> str:
 
 
 def render_crop_storage_prep() -> str:
-    _validate_source_access_runtime_identity()
+    # The baked storage target allowlist grows with CROP_MODELS.  Bind this
+    # one-shot producer to the current crop runtime, not the historical
+    # source-access runtime, or a newly added model's directories are absent
+    # even though its consumer manifest is current.
+    _validate_crop_distill_runtime_identity()
     header = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         "# One-shot least-privilege migration: prepares crop_split plus\n"
@@ -1505,8 +1530,8 @@ def render_crop_storage_prep() -> str:
         "# Plan: docs/experiments/ladder_distill_stage.md\n"
     )
     return header + CROP_STORAGE_PREP_TEMPLATE.format(
-        source_git_sha=CROP_SOURCE_ACCESS_SOURCE_GIT_SHA,
-        crop_image=CROP_SOURCE_ACCESS_IMAGE,
+        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
+        crop_image=CROP_DISTILL_IMAGE,
     )
 
 
@@ -1760,6 +1785,86 @@ def render(model: str, rung: int, base_text: str) -> str:
     return header + out.lstrip("\n")
 
 
+# The matrix payload's third-party loader code, pinned to exact
+# commits/artifacts (PR #45 review): the anchored rerun is only bound if
+# EVERY executed source is — clay from a floating git head, croma cloned
+# at whatever HEAD and unversioned terratorch would all float otherwise.
+_MATRIX_LOADER_SETUP = (
+    "git clone https://github.com/antofuller/CROMA /workspace/CROMA\n"
+    "              git -C /workspace/CROMA checkout -q "
+    "59505a6bcadbf36ba20767270154bf9f3067c5e7\n"
+    "              export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}"
+)
+
+
+# The matrix's COMPLETE dependency closure — see k8s/inference-matrix-deps.lock.
+_MATRIX_DEPS_PINNED = """# COMPLETE resolver closure from k8s/inference-matrix-deps.lock —
+              # 141 pkgs co-resolved for py3.11/linux/cu126 (top-levels from the
+              # successful run's freeze record). --no-deps: nothing resolves at
+              # run time. torch >= 2.10.0: GHSA-63cw-57p8-fm3p. Clay LAST —
+              # after the locked setuptools — and --no-build-isolation, so its
+              # build backend comes from the lock, not a fresh resolution.
+              pip install --quiet --no-cache-dir --no-deps torch==2.10.0+cu126 torchvision==0.25.0+cu126 \\
+                --index-url https://download.pytorch.org/whl/cu126
+              pip install --quiet --no-cache-dir --no-deps \\
+                absl-py==2.5.0 aenum==3.1.17 affine==3.0.1 \\
+                aiohappyeyeballs==2.7.1 aiohttp==3.14.3 aiosignal==1.4.0 \\
+                albucore==0.0.24 albumentations==2.0.8 \\
+                annotated-types==0.8.0 antlr4-python3-runtime==4.9.3 \\
+                anyio==4.15.1 attrs==26.1.0 certifi==2026.7.22 \\
+                charset-normalizer==3.5.1 click==8.5.0 \\
+                click-plugins==1.1.1.2 cligj==0.7.2 cloudpickle==3.1.2 \\
+                contourpy==1.3.3 cuda-bindings==12.9.4 \\
+                cuda-pathfinder==1.8.1 cycler==0.12.1 diffusers==0.40.0 \\
+                docstring-parser==0.18.0 einops==0.7.0 filelock==3.32.5 \\
+                fonttools==4.64.0 frozenlist==1.8.0 fsspec==2026.7.0 \\
+                geopandas==1.1.4 grpcio==1.83.1 h11==0.16.0 h5py==3.16.0 \\
+                hf-xet==1.6.0 httpcore==1.0.9 httpx==0.28.1 \\
+                huggingface-hub==1.30.0 hydra-core==1.3.6 idna==3.19 \\
+                imageio==2.37.4 importlib-metadata==9.0.1 jinja2==3.1.6 \\
+                joblib==1.6.0 jsonargparse==4.52.0 kiwisolver==1.5.1 \\
+                kornia==0.8.3 kornia-rs==0.1.14 lazy-loader==0.5 \\
+                lightly==1.5.22 lightly-utils==0.0.2 lightning==2.6.5 \\
+                lightning-utilities==0.15.3 markdown==3.10.3 \\
+                markdown-it-py==4.2.0 markupsafe==3.0.3 matplotlib==3.11.1 \\
+                mdurl==0.1.2 mpmath==1.3.0 multidict==6.7.1 networkx==3.6.1 \\
+                numpy==2.4.6 nvidia-cublas-cu12==12.6.4.1 \\
+                nvidia-cuda-cupti-cu12==12.6.80 \\
+                nvidia-cuda-nvrtc-cu12==12.6.77 \\
+                nvidia-cuda-runtime-cu12==12.6.77 \\
+                nvidia-cudnn-cu12==9.10.2.21 nvidia-cufft-cu12==11.3.0.4 \\
+                nvidia-cufile-cu12==1.11.1.6 nvidia-curand-cu12==10.3.7.77 \\
+                nvidia-cusolver-cu12==11.7.1.2 \\
+                nvidia-cusparse-cu12==12.5.4.2 nvidia-cusparselt-cu12==0.7.1 \\
+                nvidia-nccl-cu12==2.27.5 nvidia-nvjitlink-cu12==12.6.85 \\
+                nvidia-nvshmem-cu12==3.4.5 nvidia-nvtx-cu12==12.6.77 \\
+                omegaconf==2.3.1 opencv-python-headless==5.0.0.93 \\
+                opentelemetry-api==1.44.0 packaging==26.3 pandas==2.2.2 \\
+                pillow==12.3.0 platformdirs==4.11.7 propcache==0.5.2 \\
+                protobuf==7.36.1 pyarrow==17.0.0 pycocotools==2.0.11 \\
+                pydantic==2.13.5 pydantic-core==2.46.5 pygments==2.21.0 \\
+                pyogrio==0.13.0 pyparsing==3.3.2 pyproj==3.7.2 \\
+                python-box==7.4.1 python-dateutil==2.9.0.post0 \\
+                pytorch-lightning==2.6.5 pytz==2026.3.post1 pyyaml==6.0.3 \\
+                rasterio==1.4.4 regex==2026.9.3 requests==2.34.2 \\
+                rich==15.0.0 rioxarray==0.19.0 safetensors==0.8.0 \\
+                scikit-image==0.26.0 scikit-learn==1.5.1 scipy==1.17.1 \\
+                segmentation-models-pytorch==0.5.0 sentry-sdk==2.69.0 \\
+                setuptools==84.0.0 shapely==2.1.2 simsimd==6.5.16 \\
+                six==1.17.0 stringzilla==5.1.2 sympy==1.14.0 \\
+                tensorboard==2.21.0 tensorboard-data-server==0.7.2 \\
+                termcolor==3.3.0 terratorch==1.2.11 threadpoolctl==3.6.0 \\
+                tifffile==2026.3.3 timm==1.0.29 torchgeo==0.8.1 \\
+                torchmetrics==1.9.0 tqdm==4.70.0 triton==3.6.0 \\
+                typeshed-client==2.13.0 typing-extensions==4.16.0 \\
+                typing-inspection==0.4.4 tzdata==2026.3 urllib3==2.7.0 \\
+                vit-pytorch==1.17.8 wandb==0.29.0 werkzeug==3.1.8 \\
+                xarray==2026.7.0 xxhash==4.0.1 yarl==1.24.5 zipp==4.1.0
+              pip install --quiet --no-cache-dir --no-deps --no-build-isolation \\
+                "git+https://github.com/Clay-foundation/model.git@f14e698f3c237cabf8d28dec669a362d66625381"
+"""
+
+
 def render_non_crop_outputs() -> dict[Path, str]:
     """Render every legacy ladder/distill manifest without crop anchors.
 
@@ -1786,9 +1891,8 @@ def render_non_crop_outputs() -> dict[Path, str]:
             sklearn_pin=SKLEARN_PIN,
             source_sha=_require_full_sha(INFERENCE_MATRIX_SOURCE_GIT_SHA,
                                          "INFERENCE_MATRIX_SOURCE_GIT_SHA"),
-            extra_setup_all="\n              ".join(
-                cfg["extra_setup"] for cfg in DISTILL.values()
-                if "extra_setup" in cfg)))
+            matrix_deps=_MATRIX_DEPS_PINNED,
+            extra_setup_all=_MATRIX_LOADER_SETUP))
     outputs[OUT_DIR / "distill-pinned-plots-job.yaml"] = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         "# Pins the shared NFI plot set every column's distillability OOF\n"
@@ -1923,8 +2027,8 @@ def main() -> int:
         or args.non_crop_only
     ):
         outputs.update(render_non_crop_outputs())
-        # Crop consumers are defined by the crop protocol, not the training
-        # bases: prithvi300m4f (issue #39) is a ladder/distill-only column.
+        # Crop consumers are defined by the crop protocol, not the
+        # training bases (since 2026-09-08 that includes prithvi300m4f).
         for model in CROP_MODELS:
             outputs[OUT_DIR / f"crop-distill-{model}-job.yaml"] = (
                 render_crop_distill(model)

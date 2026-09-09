@@ -173,16 +173,41 @@ def _numpy_metric_safe_globals() -> list:
     them needs numpy's scalar reconstructor plus the dtype classes. All are
     pure data carriers with no code-execution surface, so allowlisting them
     keeps the fail-closed ``weights_only=True`` posture for everything else.
-    ``np._core`` is numpy>=2; ``np.core`` is the 1.x spelling.
+
+    The reconstructor must be reached by a real module IMPORT, never an
+    attribute chain: whether ``np._core.multiarray`` exists as an attribute
+    depends on the numpy version AND on which submodules other libraries
+    happen to have imported first (the 4f distill job died on exactly that
+    under numpy 1.26.4 while numpy 2.x environments passed). The import
+    path is deterministic on both spellings — verified against 1.26.4 and
+    2.1.3.
     """
+    import importlib
+
     import numpy as np
 
-    core = getattr(np, "_core", None) or np.core
-    dtype_classes = [
-        cls for cls in vars(np.dtypes).values()
-        if isinstance(cls, type) and issubclass(cls, np.dtype)
-    ]
-    return [core.multiarray.scalar, np.dtype, *dtype_classes]
+    # The checkpoint FLEET carries both pickle spellings: cells trained
+    # under numpy 1.x reference numpy.core.multiarray.scalar, numpy 2.x
+    # cells reference numpy._core.multiarray.scalar — and torch's
+    # weights_only checker matches the pickle's global NAME, not the
+    # resolved object. Register the reconstructor under BOTH names via
+    # torch's (object, "full.name") aliasing form; each import is
+    # guarded because only one spelling may exist in a given numpy.
+    entries = []
+    for name in ("numpy._core.multiarray.scalar",
+                 "numpy.core.multiarray.scalar"):
+        mod, _, attr = name.rpartition(".")
+        try:
+            entries.append((getattr(importlib.import_module(mod), attr), name))
+        except (ImportError, AttributeError):
+            continue
+    if not entries:
+        raise ImportError("no numpy multiarray.scalar spelling importable")
+    # Narrow to the dtype classes checkpoints actually serialize (epoch
+    # as int64, metrics as float64/float32).
+    dtype_classes = [np.dtypes.Int64DType, np.dtypes.Float64DType,
+                     np.dtypes.Float32DType]
+    return [*entries, np.dtype, *dtype_classes]
 
 
 def _load_checkpoint_for_inference(
