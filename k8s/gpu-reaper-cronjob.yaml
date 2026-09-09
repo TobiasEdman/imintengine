@@ -42,7 +42,9 @@ rules:
     verbs: ["get"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["get", "list", "delete"]
+    # patch atomically binds a sweep to the terminal Job UID before the
+    # selector-based delete; a same-name replacement can never be deleted.
+    verbs: ["get", "list", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -110,10 +112,15 @@ spec:
                   # logs/spec/events to --archive-dir FIRST and is refused if
                   # that fails; the run report is written there too, because
                   # this pod's own 30 min TTL destroys its stdout.
+                  # Crop-distill jobs are owned by an evidence monitor. Preserve
+                  # them for 24 h from creation so a failed run survives review;
+                  # after that bounded window normal archive+reap resumes.
                   python3 scripts/reap_gpu_jobs.py \
                     --context "" \
                     --namespace prithvi-training-default \
                     --grace-minutes 60 \
+                    --hold-selector purpose=ladder-crop-distill \
+                    --hold-minutes 1440 \
                     --archive-dir /cephfs/ops/reaper_archive \
                     --apply
               resources:
