@@ -603,7 +603,8 @@ function renderInference() {
        tiles.map(x => `<td>${img(`_rgb/${x.name}.png`)}</td>`).join("") + "</tr>";
   h += `<tr><td class="rung-label">Truth 23-cl<small>rung 1 target (NMD2018+LPIS+SKS)</small></td>` +
        tiles.map(x => `<td>${img(`_truth23/${x.name}.png`)}</td>`).join("") + "</tr>";
-  h += `<tr><td class="rung-label">Truth 28-cl<small>rungs 2–4 target (NMD2023+LPIS+SKS)</small></td>` +
+  h += `<tr><td class="rung-label">Truth 28-cl<small>rungs 2–4 target (NMD2023+LPIS+SKS)</small>
+       <small style="color:#fbbf24">helsvart = utanför NMD2023:s rullande utbredning — täckningsluckan är källdata, inte fel (2 av 10 frysta tiles helt, 1 delvis)</small></td>` +
        tiles.map(x => `<td>${img(`_truth28/${x.name}.png`)}</td>`).join("") + "</tr>";
   let rendered = 0;
   for (const m of MODELS) {
