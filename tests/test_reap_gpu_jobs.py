@@ -134,7 +134,10 @@ def test_unwritable_archive_root_forbids_delete(monkeypatch, tmp_path):
     blocked.write_text("a file, not a directory — mkdir must fail")
     monkeypatch.setattr("sys.argv", ["reap_gpu_jobs.py", "--apply",
                                      "--archive-dir", str(blocked)])
-    assert reap.main() == 0
+    # Non-zero: an archive root that cannot be written is an operational
+    # fault, and the run report cannot land there either. A broken mount must
+    # surface to the scheduler rather than look like a clean sweep forever.
+    assert reap.main() == 1
     assert _deletes(calls) == []
 
 
@@ -531,6 +534,55 @@ def test_partial_sweep_still_records_what_it_deleted(monkeypatch, tmp_path):
     assert "deleted train-x" in body
     assert "SKIPPED train-y" in body and "JSONDecodeError" in body
     assert "1 job(s) failed" in body
+
+
+def test_unwritable_run_report_after_deletion_exits_nonzero(monkeypatch, tmp_path):
+    """Deleting jobs and losing the record of it is not a successful sweep.
+
+    Regression: `_write_run_report` swallowed OSError and `main()` keyed its
+    exit code off per-job errors alone, so a sweep whose deletions all
+    succeeded but whose report could not be written exited 0 — the same
+    silent-success class the per-job guard was widened to avoid.
+    """
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "runs").write_text("occupied by a file, so mkdir fails")
+    deleted: list[str] = []
+    monkeypatch.setattr(reap, "collect", lambda *a: (list(DUE), [], 1))
+    monkeypatch.setattr(
+        reap, "_claim_terminal_job", lambda name, uid, ctx, ns: f"sel={uid}"
+    )
+    monkeypatch.setattr(
+        reap, "archive_evidence",
+        lambda job, uid, sel, ctx, ns, root: root / job,
+    )
+    monkeypatch.setattr(reap, "_claimed_terminal_job", lambda *a: True)
+    monkeypatch.setattr(
+        reap, "_delete_claimed_job",
+        lambda sel, name, uid, ctx, ns: deleted.append(name),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["reap_gpu_jobs.py", "--apply", "--archive-dir", str(archive)],
+    )
+
+    assert reap.main() == 1
+    assert deleted == ["train-x"]          # the deletion really happened
+    assert (archive / "runs").is_file()    # and left no report behind
+
+
+def test_hold_minutes_help_states_terminal_transition(monkeypatch, capsys):
+    """The operator-facing contract of a destructive tool must match the code.
+
+    `--hold-minutes` documented "from creation" after the window had been
+    changed to run from the terminal transition.
+    """
+    monkeypatch.setattr("sys.argv", ["reap_gpu_jobs.py", "--help"])
+    with pytest.raises(SystemExit):
+        reap.main()
+    help_text = capsys.readouterr().out
+    assert "terminal transition" in help_text
+    assert "minutes from creation" not in help_text
 
 
 def test_hold_selector_does_not_preserve_nonmatching_job(monkeypatch, tmp_path):

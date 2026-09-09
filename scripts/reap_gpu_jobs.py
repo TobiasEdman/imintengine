@@ -510,22 +510,29 @@ def _reap_due(due: list[dict], args, report: list[str]) -> tuple[int, int]:
     return freed, errors
 
 
-def _write_run_report(archive_dir: Path, report: list[str]) -> None:
-    """Persist what this sweep did, on every exit path.
+def _write_run_report(archive_dir: Path, report: list[str]) -> bool:
+    """Persist what this sweep did, on every exit path. True if it landed.
 
     The reaper's own pod TTLs away 30 min after it runs, taking this stdout
     with it — which is how the overnight sweeps of 2026-08-29 left no record
     of WHAT they deleted. The run report therefore lives on the PVC too, and
     is written from a finally so no exit path can drop it.
+
+    A write that fails is reported to the caller rather than swallowed: the
+    per-job evidence archives limit the data loss, but a sweep that deleted
+    jobs and left no durable record of it must not look like a success to the
+    scheduler.
     """
     try:
         runs = archive_dir / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         (runs / f"{stamp}.txt").write_text("\n".join(report) + "\n")
+        return True
     except OSError as exc:
         print(f"run-report write failed (deletions above were still "
               f"individually archived): {exc}")
+        return False
 
 
 def main() -> int:
@@ -551,7 +558,8 @@ def main() -> int:
         "--hold-minutes",
         type=float,
         default=None,
-        help="preserve --hold-selector matches for this many minutes from creation",
+        help="preserve --hold-selector matches for this many minutes from "
+             "terminal transition (when the job finished, not when it started)",
     )
     ap.add_argument("--archive-dir", type=Path, default=Path("/cephfs/ops/reaper_archive"),
                     help="evidence archive root; no delete ever happens without a "
@@ -655,8 +663,11 @@ def main() -> int:
         print(f"\n{summary}")
         report.append(summary)
     finally:
-        _write_run_report(args.archive_dir, report)
-    return 1 if errors else 0
+        # A lost report is itself a failure: the sweep may have deleted jobs
+        # and left no durable trace, which must not read as success to the
+        # scheduler any more than a failed deletion does.
+        reported = _write_run_report(args.archive_dir, report)
+    return 1 if errors or not reported else 0
 
 
 if __name__ == "__main__":
