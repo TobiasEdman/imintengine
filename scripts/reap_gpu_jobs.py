@@ -329,9 +329,6 @@ def collect(context: str, namespace: str, selector: str | None) -> tuple[list, l
                 "age_min": _age_minutes(
                     _terminal_transition_timestamp(job)
                 ),
-                "job_age_min": _age_minutes(
-                    job["metadata"].get("creationTimestamp")
-                ),
             }
             reapable_by_uid[owner["uid"]] = record
         record["gpus"] += g
@@ -452,6 +449,85 @@ def archive_evidence(
         return None
 
 
+def _reap_due(due: list[dict], args, report: list[str]) -> tuple[int, int]:
+    """Archive then delete each due Job. Returns (gpus freed, unexpected errors).
+
+    Every per-job failure is caught and recorded rather than raised. Once one
+    job in a sweep has been deleted, an escaping exception would cost the run
+    report its only chance to record that deletion — the reaper pod's own TTL
+    destroys stdout 30 min later. The guards are deliberately broad because a
+    malformed kubectl response raises ValueError or KeyError, neither of which
+    is a RuntimeError.
+
+    Broad guards must not turn a failing sweep into a silent success, so the
+    error count is returned and becomes a non-zero exit: a CronJob that exits
+    0 while nothing worked is indistinguishable from one that had no work.
+    """
+    freed = 0
+    errors = 0
+    for r in due:
+        try:
+            claim_selector = _claim_terminal_job(
+                r["job"], r["job_uid"], args.context, args.namespace
+            )
+        except Exception as exc:
+            msg = f"SKIPPED {r['job']} ({r['phase']}) — claim failed: {exc!r}"
+            print(f"  {msg}")
+            report.append(msg)
+            errors += 1
+            continue
+        try:
+            dest = archive_evidence(
+                r["job"],
+                r["job_uid"],
+                claim_selector,
+                args.context,
+                args.namespace,
+                args.archive_dir,
+            )
+            if dest is None:
+                msg = (f"SKIPPED {r['job']} ({r['phase']}) — refusing to "
+                       f"delete without archived evidence")
+                print(f"  {msg}")
+                report.append(msg)
+                continue
+            if not _claimed_terminal_job(
+                claim_selector, r["job"], r["job_uid"], args.context, args.namespace
+            ):
+                raise RuntimeError("claimed Job UID/state changed after archive")
+            _delete_claimed_job(
+                claim_selector, r["job"], r["job_uid"], args.context, args.namespace
+            )
+            freed += r["gpus"]
+            msg = f"deleted {r['job']} ({r['phase']}) — evidence in {dest}"
+            print(f"  {msg}")
+            report.append(msg)
+        except Exception as exc:
+            msg = f"DELETE FAILED {r['job']}: {exc!r}"
+            print(f"  {msg}")
+            report.append(msg)
+            errors += 1
+    return freed, errors
+
+
+def _write_run_report(archive_dir: Path, report: list[str]) -> None:
+    """Persist what this sweep did, on every exit path.
+
+    The reaper's own pod TTLs away 30 min after it runs, taking this stdout
+    with it — which is how the overnight sweeps of 2026-08-29 left no record
+    of WHAT they deleted. The run report therefore lives on the PVC too, and
+    is written from a finally so no exit path can drop it.
+    """
+    try:
+        runs = archive_dir / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        (runs / f"{stamp}.txt").write_text("\n".join(report) + "\n")
+    except OSError as exc:
+        print(f"run-report write failed (deletions above were still "
+              f"individually archived): {exc}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--context", default="icekube")
@@ -509,10 +585,18 @@ def main() -> int:
             return 1
 
     def under_hold(record: dict) -> bool:
+        # Measured from the terminal transition, not creation. From creation
+        # the effective window is hold_minutes MINUS however long the job ran,
+        # so a job that fails near its activeDeadlineSeconds is preserved for
+        # the shortest time exactly when it was the most expensive to produce
+        # — and a job whose deadline exceeds hold_minutes gets no hold at all
+        # while still reporting as held. The bound stays anti-squatter: a
+        # finished job can squat its GPU for at most hold_minutes after it
+        # finished.
         return (
             args.hold_minutes is not None
             and record["job_uid"] in held_job_uids
-            and record["job_age_min"] < args.hold_minutes
+            and record["age_min"] < args.hold_minutes
         )
 
     print(f"=== GPU held by FINISHED jobs: {held} slot(s) ===")
@@ -520,7 +604,7 @@ def main() -> int:
         print("  (none — nothing squatting)")
     for r in sorted(reapable, key=lambda x: -x["age_min"]):
         if under_hold(r):
-            remaining = args.hold_minutes - r["job_age_min"]
+            remaining = args.hold_minutes - r["age_min"]
             due = f"HOLD({remaining:.0f}m remaining)"
         else:
             due = (
@@ -555,7 +639,6 @@ def main() -> int:
               f"{sum(r['gpus'] for r in due)} GPU slot(s). Re-run with --apply.")
         return 0
 
-    freed = 0
     report = [
         (
             f"reap run {datetime.now(timezone.utc).isoformat()} — "
@@ -563,72 +646,17 @@ def main() -> int:
             f"{held} GPU slot(s) held by finished jobs"
         )
     ]
-    for r in due:
-        try:
-            claim_selector = _claim_terminal_job(
-                r["job"],
-                r["job_uid"],
-                args.context,
-                args.namespace,
-            )
-        except RuntimeError as exc:
-            msg = f"SKIPPED {r['job']} ({r['phase']}) — claim failed: {exc}"
-            print(f"  {msg}")
-            report.append(msg)
-            continue
-        dest = archive_evidence(
-            r["job"],
-            r["job_uid"],
-            claim_selector,
-            args.context,
-            args.namespace,
-            args.archive_dir,
-        )
-        if dest is None:
-            msg = (f"SKIPPED {r['job']} ({r['phase']}) — refusing to delete "
-                   f"without archived evidence")
-            print(f"  {msg}")
-            report.append(msg)
-            continue
-        try:
-            if not _claimed_terminal_job(
-                claim_selector,
-                r["job"],
-                r["job_uid"],
-                args.context,
-                args.namespace,
-            ):
-                raise RuntimeError("claimed Job UID/state changed after archive")
-            _delete_claimed_job(
-                claim_selector,
-                r["job"],
-                r["job_uid"],
-                args.context,
-                args.namespace,
-            )
-            freed += r["gpus"]
-            msg = f"deleted {r['job']} ({r['phase']}) — evidence in {dest}"
-            print(f"  {msg}")
-            report.append(msg)
-        except RuntimeError as exc:
-            msg = f"DELETE FAILED {r['job']}: {exc}"
-            print(f"  {msg}")
-            report.append(msg)
-    print(f"\nfreed {freed} GPU slot(s)")
-    report.append(f"freed {freed} GPU slot(s)")
-
-    # The reaper's own pod TTLs away 30 min after it runs, taking this stdout
-    # with it — which is how the overnight sweeps of 2026-08-29 left no record
-    # of WHAT they deleted. The run report therefore lives on the PVC too.
+    errors = 0
     try:
-        runs = args.archive_dir / "runs"
-        runs.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        (runs / f"{stamp}.txt").write_text("\n".join(report) + "\n")
-    except OSError as exc:
-        print(f"run-report write failed (deletions above were still "
-              f"individually archived): {exc}")
-    return 0
+        freed, errors = _reap_due(due, args, report)
+        summary = f"freed {freed} GPU slot(s)"
+        if errors:
+            summary += f" — {errors} job(s) failed"
+        print(f"\n{summary}")
+        report.append(summary)
+    finally:
+        _write_run_report(args.archive_dir, report)
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
