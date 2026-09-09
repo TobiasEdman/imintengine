@@ -1,0 +1,212 @@
+{
+  "features_file": "features.npz",
+  "n": 2999,
+  "n_pos": 1870,
+  "n_neg": 1129,
+  "n_road_covered": 2999,
+  "results": {
+    "main": {
+      "logreg_embed": {
+        "auc_pooled": 0.7449,
+        "ap_pooled": 0.8045,
+        "auc_folds": [
+          0.7606,
+          0.7561,
+          0.7153,
+          0.7824,
+          0.7143
+        ],
+        "n": 2999,
+        "n_pos": 1870,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "mlp_embed": {
+        "auc_pooled": 0.74,
+        "ap_pooled": 0.794,
+        "auc_folds": [
+          0.7625,
+          0.7306,
+          0.7363,
+          0.7668,
+          0.709
+        ],
+        "n": 2999,
+        "n_pos": 1870,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "logreg_latlon_CTRL": {
+        "auc_pooled": 0.5415,
+        "ap_pooled": 0.645,
+        "auc_folds": [
+          0.468,
+          0.5691,
+          0.5834,
+          0.5934,
+          0.5405
+        ],
+        "n": 2999,
+        "n_pos": 1870,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "mlp_latlon_CTRL": {
+        "auc_pooled": 0.4783,
+        "ap_pooled": 0.6277,
+        "auc_folds": [
+          0.5215,
+          0.3958,
+          0.4625,
+          0.5652,
+          0.4497
+        ],
+        "n": 2999,
+        "n_pos": 1870,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "logreg_year_CTRL": {
+        "auc_pooled": 0.5903,
+        "ap_pooled": 0.6645,
+        "auc_folds": [
+          0.6419,
+          0.6828,
+          0.5861,
+          0.5611,
+          0.5342
+        ],
+        "n": 2999,
+        "n_pos": 1870,
+        "n_groups": 32,
+        "skipped_folds": 0
+      }
+    },
+    "veto_sweep": {
+      "100": {
+        "auc_pooled": 0.7449,
+        "ap_pooled": 0.8045,
+        "auc_folds": [
+          0.7606,
+          0.7561,
+          0.7153,
+          0.7824,
+          0.7143
+        ],
+        "n": 2999,
+        "n_pos": 1870,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "250": {
+        "auc_pooled": 0.7518,
+        "ap_pooled": 0.8415,
+        "auc_folds": [
+          0.8056,
+          0.7615,
+          0.7222,
+          0.7248,
+          0.7483
+        ],
+        "n": 2781,
+        "n_pos": 1870,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "500": {
+        "auc_pooled": 0.7232,
+        "ap_pooled": 0.8677,
+        "auc_folds": [
+          0.7372,
+          0.7957,
+          0.6642,
+          0.7115,
+          0.7372
+        ],
+        "n": 2490,
+        "n_pos": 1870,
+        "n_groups": 32,
+        "skipped_folds": 0
+      }
+    },
+    "road_matched": {
+      "logreg_embed": {
+        "auc_pooled": 0.6664,
+        "ap_pooled": 0.8339,
+        "auc_folds": [
+          0.7515,
+          0.6654,
+          0.655,
+          0.6231,
+          0.6284
+        ],
+        "n": 1969,
+        "n_pos": 1458,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "mlp_latlon_CTRL": {
+        "auc_pooled": 0.5062,
+        "ap_pooled": 0.7721,
+        "auc_folds": [
+          0.5505,
+          0.4596,
+          0.4106,
+          0.567,
+          0.4744
+        ],
+        "n": 1969,
+        "n_pos": 1458,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "logreg_year_CTRL": {
+        "auc_pooled": 0.6338,
+        "ap_pooled": 0.794,
+        "auc_folds": [
+          0.7545,
+          0.7156,
+          0.571,
+          0.619,
+          0.5629
+        ],
+        "n": 1969,
+        "n_pos": 1458,
+        "n_groups": 32,
+        "skipped_folds": 0
+      }
+    },
+    "month_strata": {
+      "jun_jul": {
+        "auc_pooled": 0.7431,
+        "ap_pooled": 0.7661,
+        "auc_folds": [
+          0.824,
+          0.768,
+          0.7162,
+          0.7298,
+          0.7096
+        ],
+        "n": 2633,
+        "n_pos": 1504,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "aug": {
+        "auc_pooled": 0.6845,
+        "ap_pooled": 0.4136,
+        "auc_folds": [
+          0.8009,
+          0.7169,
+          0.6555,
+          0.6568,
+          0.7083
+        ],
+        "n": 1495,
+        "n_pos": 366,
+        "n_groups": 32,
+        "skipped_folds": 0
+      }
+    }
+  }
+}
