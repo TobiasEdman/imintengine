@@ -235,6 +235,13 @@ _SOURCE_ACCESS_IMAGE_ENV = "CROP_SOURCE_ACCESS_IMAGE"
 _SPLIT_SOURCE_ENV = "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA"
 _FREEZE_LEASE_ENV = "CROP_SOURCE_FREEZE_LEASE_PATH"
 _POD_UID_ENV = "POD_UID"
+_NONROOT_WORK_ENV = {
+    "HOME": "/work/home",
+    "LOGNAME": "crop-distill",
+    "TMPDIR": "/work/tmp",
+    "TORCHINDUCTOR_CACHE_DIR": "/work/torch-inductor",
+    "USER": "crop-distill",
+}
 _MAX_POD_JSON_BYTES = 8 * 1024 * 1024
 _MAX_POD_LOG_BYTES = 64 * 1024 * 1024
 _MAX_BUNDLE_FILE_BYTES = 16 * 1024 * 1024
@@ -1312,14 +1319,14 @@ def _workload_contract(subject: Mapping[str, Any]) -> dict[str, Any]:
     authority = _validated_git_authority(kind, require_current_output_anchor=False)
     volumes = [_pvc_volume()]
     node_selector: dict[str, str] = {}
+    if kind in {"crop", "split"}:
+        literal_env.update(_NONROOT_WORK_ENV)
     if kind == "crop":
         model = str(subject["model"])
         literal_env.update(
             {
                 _SPLIT_ENV: str(subject["split_manifest_sha256"]),
                 _SPLIT_SOURCE_ENV: authority["split_source_git_sha"],
-                "HOME": "/work/home",
-                "TMPDIR": "/work/tmp",
             }
         )
         command = [str(BASE_PYTHON)]
@@ -1353,8 +1360,6 @@ def _workload_contract(subject: Mapping[str, Any]) -> dict[str, Any]:
                 _SOURCE_ACCESS_IMAGE_ENV: authority["source_access_image_ref"],
                 _SPLIT_SOURCE_ENV: authority["split_source_git_sha"],
                 _FREEZE_LEASE_ENV: "/var/run/crop-source-freeze/lease.json",
-                "HOME": "/work/home",
-                "TMPDIR": "/work/tmp",
             }
         )
         command = [str(SCORING_PYTHON)]
