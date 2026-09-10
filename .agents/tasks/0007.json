@@ -1,0 +1,10 @@
+{
+  "id": "0007",
+  "subject": "Align strict crop evidence with runtime environment",
+  "description": "Update the strict crop evidence contract for the three reviewed PR55 runtime variables, add an exact regression for the preserved successful R7 Pod, and restore canonical bundle capture without weakening environment validation.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/codex/evidence-crop-env-contract",
+  "created_at": "2026-09-10T03:04:09Z",
+  "updated_at": "2026-09-10T03:04:09Z"
+}
