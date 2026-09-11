@@ -832,7 +832,10 @@ def test_capture_writes_deterministic_verified_bundle_for_containerd(
         "CROP_DISTILL_SPLIT_MANIFEST_SHA256": SPLIT_MANIFEST_SHA256,
         "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA": SPLIT_SOURCE_GIT_SHA,
         "HOME": "/work/home",
+        "LOGNAME": "crop-distill",
         "TMPDIR": "/work/tmp",
+        "TORCHINDUCTOR_CACHE_DIR": "/work/torch-inductor",
+        "USER": "crop-distill",
     }
     split_mount = next(
         mount
@@ -914,8 +917,31 @@ def test_capture_binds_split_job_and_container(tmp_path: Path) -> None:
         "CROP_SOURCE_ACCESS_PLAN_POD_UID": SOURCE_ACCESS_PLAN_POD_UID,
         "CROP_SOURCE_ACCESS_PLAN_SHA256": SOURCE_ACCESS_PLAN_SHA256,
         "HOME": "/work/home",
+        "LOGNAME": "crop-distill",
         "TMPDIR": "/work/tmp",
+        "TORCHINDUCTOR_CACHE_DIR": "/work/torch-inductor",
+        "USER": "crop-distill",
     }
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["LOGNAME", "USER", "TORCHINDUCTOR_CACHE_DIR"],
+)
+def test_crop_capture_requires_pr55_runtime_environment(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    pod = _pod()
+    container = pod["spec"]["containers"][0]
+    container["env"] = [
+        entry for entry in container["env"] if entry["name"] != name
+    ]
+
+    with pytest.raises(SystemExit, match="environment"):
+        evidence.main(_capture_args(tmp_path, pod=pod))
+
+    assert not (tmp_path / "bundle").exists()
 
 
 @pytest.mark.parametrize(
