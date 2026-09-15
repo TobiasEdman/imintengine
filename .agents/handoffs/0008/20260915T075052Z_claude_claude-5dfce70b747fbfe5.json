@@ -1,0 +1,38 @@
+{
+  "active_goal": "Cross-vendor (Codex) review of TobiasEdman/space-datalab-metafilter PR #1 at exact head 285660e0cb6ffc36b6004594bf1413d8952c6022 (base master@06fedc11cbde06c30c9036690860e9714581c1de). Return PASS or BLOCK bound to that SHA as a GitHub PR review. On PASS: approve and integrate as the Codex identity, then tag v0.1.0 on the resulting master commit (pyproject declares 0.1.0; no tag exists). On BLOCK: post findings and stop; the author fixes and re-requests on a new SHA.",
+  "active_rules": [
+    "Claude-side PRs are approved and integrated by Codex, never by Claude [user-stated 2026-09-08]",
+    "Exact-SHA review: claim the tuple before reviewing; a verdict binds to one head SHA only; an unreviewed new SHA is not approved [mode/harness]",
+    "Cost decisions (GPU/PU/spend) go to Tobias via Codex; none are involved here [user-stated 2026-09-08]",
+    "No force-push on reviewed heads [inferred, joint Claude/Codex protocol]",
+    "Tobias interrupted 'land it and tag v0.1.0' to require Codex review per the rules; do not skip the review [user-stated 2026-09-14]",
+    "Communicate through the agentic framework: task claims, handoffs, inbox, GitHub as durable authority [user-stated 2026-09-15]"
+  ],
+  "blockers": [],
+  "changed_paths": [
+    ".agents/tasks/0008.json"
+  ],
+  "commit": "285660e0cb6ffc36b6004594bf1413d8952c6022",
+  "created_at": "2026-09-15T07:50:51Z",
+  "current_state": "PR #1 is OPEN, MERGEABLE/CLEAN, 19 commits, 31 files, +3782/-322, all commits authored and committed by multi-agentic-coordinator[bot]. Branch codex/shareable-era5 is Codex's own 2026-09-10 rebase of the 17-commit integration branch onto DES master 06fedc11, plus: Codex's fixes A (requests>=2.33.1 floor) and B (CDF-5 not routed to scipy); a message-only reword to <=50-char subjects (tree-hash invariance proven across every rewrite); requires-python moved to >=3.10 because requests 2.33.0+ requires it (Claude's earlier BLOCK caused that inconsistency; an independent reviewer caught it); the flagship commit body corrected to state CDF-5 is deliberately unclaimed; all 19 commits re-authored to the bot on Tobias's instruction. An independent fresh-context Claude reviewer returned PASS on exactly 285660e. The package installs from the public branch URL into a clean Python 3.12 venv, all four public imports resolve, both console scripts answer --help, wheel metadata reads Requires-Python >=3.10 and requests<3,>=2.33.1. No CI exists in that repository (no .github/). A review-request comment with the exact tuple is on the PR (posted by the coordinator bot, 2026-09-14T09:20:57Z). Inbox request 1789377554517-d904c550 on the ImintEngine key was delivered to two Codex sessions and not acted on; this task record is the framework-conformant request. Tobias explicitly interrupted a land-it-now instruction on 2026-09-14 to require this review.",
+  "next_steps": [
+    "Claim task 0008 from your own worktree: AGENT_ID=te-codex AGENT_RUNTIME=codex agentic-task claim . --remote origin",
+    "Fetch and review PR #1 at 285660e: git diff 06fedc11..285660e in TobiasEdman/space-datalab-metafilter; rerun pytest -W error tests/ -q in a Python>=3.10 venv (expect 99 passed); check wheel metadata (Requires-Python >=3.10)",
+    "Post the verdict as a GitHub PR review on #1 bound to 285660e: exact PASS (approve) or BLOCK (request changes with findings)",
+    "On PASS: integrate #1 as the Codex identity, then tag v0.1.0 on the resulting master commit and push the tag",
+    "Complete the task: AGENT_ID=te-codex AGENT_RUNTIME=codex agentic-task complete . 0008 --remote origin, and post the outcome to the ImintEngine inbox"
+  ],
+  "off_limits": [
+    "codex/shareable-era5 history: do not rewrite, amend, rebase or force-push; the PASS is SHA-bound and any change requires re-review on the new SHA",
+    "The ImintEngine main working tree (/Users/tobiasedman/Developer/ImintEngine) is shared by several sessions; use your own worktree",
+    "/Users/tobiasedman/Developer/space-datalab-metafilter-wt-shareable-era5 is Claude's worktree (untracked .venv/, build/, data/ are local artefacts, not part of the PR)",
+    "Do not integrate on BLOCK; do not tag before integration; do not open a PR against DigitalEarthSweden/space-datalab-metafilter (fork-only target was Tobias's decision)"
+  ],
+  "repository_key": "ImintEngine--f4ea50ce3600",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-5dfce70b747fbfe5",
+  "target": "codex",
+  "task_id": "0008",
+  "verification": "pytest -W error tests/ -q -> 99 passed (Python 3.12.13); uv pip compile: 3.10/3.11/3.12 resolve, 3.9 refused by declaration; pip install git+https://github.com/TobiasEdman/space-datalab-metafilter@codex/shareable-era5 into a clean 3.12 venv -> OK, 4 public imports OK, both console scripts answer --help; built wheel metadata Requires-Python >=3.10, requests<3,>=2.33.1; independent fresh-context review PASS on 285660e (tree-hash invariance across all rewrites, README install chain executed end-to-end, security sweep clean, 0 cross-vendor trailers); GitHub compare master...codex/shareable-era5: ahead 19, behind 0"
+}
