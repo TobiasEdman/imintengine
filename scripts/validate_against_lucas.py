@@ -61,7 +61,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from imint.training.unified_schema import (  # noqa: E402
+from imint.schema.unified_schema import (  # noqa: E402
     NUM_UNIFIED_CLASSES,
     UNIFIED_CLASSES,
 )

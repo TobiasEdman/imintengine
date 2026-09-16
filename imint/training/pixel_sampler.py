@@ -30,7 +30,7 @@ from typing import Sequence
 
 import numpy as np
 
-from .unified_schema import NUM_UNIFIED_CLASSES, UNIFIED_CLASS_NAMES
+from imint.schema.unified_schema import NUM_UNIFIED_CLASSES, UNIFIED_CLASS_NAMES
 
 IGNORE_CLASS = 0
 

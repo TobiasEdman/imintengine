@@ -1,5 +1,5 @@
 """Unit tests for the per-slot download in
-``imint.training.openeo_tile_graph.fetch_tile_all_slots_des_openeo``.
+``imint.data.openeo_tile_graph.fetch_tile_all_slots_des_openeo``.
 
 The des tile-graph now downloads ONE openEO job per slot (reusing one
 connection) instead of a single merged N-slot cube — a merged download
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from imint.training import openeo_tile_graph as otg
+from imint.data import openeo_tile_graph as otg
 
 _BBOX = {"west": 400000, "south": 6400000, "east": 400040, "north": 6400040}
 _WINDOWS = [(0, "2022-05-01", "2022-05-11"),

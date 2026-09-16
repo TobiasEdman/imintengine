@@ -55,7 +55,7 @@ spec:
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
-              pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+              pip install --no-cache-dir -e '.[training]' || pip install --quiet --no-cache-dir -r requirements.txt
 
               # Symlink cached Prithvi 600M weights from training-data PVC
               # if present (the model_cache lives on the 256-set PVC; we

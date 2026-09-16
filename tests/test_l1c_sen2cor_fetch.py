@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 
 from imint.training import fetch_spectral as fs
-from imint.training.openeo_tile_graph import ALL_BANDS
+from imint.data.openeo_tile_graph import ALL_BANDS
 
 _BBOX = {"west": 500000, "south": 6500000, "east": 505120, "north": 6505120}
 _COORDS = {"west": 14.0, "south": 60.0, "east": 14.1, "north": 60.1}
@@ -36,7 +36,7 @@ def _patch_chain(monkeypatch, *, era5_clear=True, scenes=None, l2a="ok", cube="o
     # passes and the rest of the chain runs; the test box has no real binary.
     monkeypatch.setattr("shutil.which", lambda name: "/opt/Sen2Cor/bin/L2A_Process")
     monkeypatch.setattr(
-        "imint.training.optimal_fetch.era5_prefilter_dates",
+        "imint.data.optimal_fetch.era5_prefilter_dates",
         lambda bbox, d0, d1: [_DATE] if era5_clear else [],
     )
     if scenes is None:
@@ -72,7 +72,7 @@ def test_era5_cloudy_skips_download(monkeypatch):
     calls = {"stac": 0}
     monkeypatch.setattr("shutil.which", lambda name: "/opt/Sen2Cor/bin/L2A_Process")
     monkeypatch.setattr(
-        "imint.training.optimal_fetch.era5_prefilter_dates", lambda *a, **k: [])
+        "imint.data.optimal_fetch.era5_prefilter_dates", lambda *a, **k: [])
     monkeypatch.setattr(
         "imint.training.sen2cor_l2a.stac_l1c_scenes",
         lambda *a, **k: calls.__setitem__("stac", calls["stac"] + 1) or [])
@@ -108,7 +108,7 @@ def test_missing_l2a_binary_skips_everything(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda name: None)
     calls = {"era5": 0, "stac": 0, "safe": 0}
     monkeypatch.setattr(
-        "imint.training.optimal_fetch.era5_prefilter_dates",
+        "imint.data.optimal_fetch.era5_prefilter_dates",
         lambda *a, **k: calls.__setitem__("era5", calls["era5"] + 1) or [_DATE])
     monkeypatch.setattr(
         "imint.training.sen2cor_l2a.stac_l1c_scenes",

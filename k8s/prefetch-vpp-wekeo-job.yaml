@@ -9,7 +9,7 @@ metadata:
 spec:
   backoffLimit: 0
   # Bulk-prefetch HR-VPP VPP COGs from WEkEO HDA into /data/vpp_wekeo —
-  # the CDSE-quota fallback cache read by imint.training.cdse_vpp. The
+  # the CDSE-quota fallback cache read by imint.data.cdse_vpp. The
   # 44 MGRS tiles are the European (UTM zone 32/33/34) tiles from the
   # sen2cor frame_2016 plan; 13 antimeridian zone-01/60 tiles are
   # excluded — HR-VPP only covers the EEA39 region. WEkEO credentials
@@ -70,7 +70,7 @@ spec:
               python3 -c "
               import glob, rasterio
               from rasterio.warp import transform_bounds
-              from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+              from imint.data.wekeo_vpp import fetch_vpp_tiles_local
               cog = sorted(glob.glob('/data/vpp_wekeo/VPP_*_SOSD.tif'))[0]
               with rasterio.open(cog) as src:
                   w, s, e, n = transform_bounds(src.crs, 'EPSG:3006', *src.bounds)

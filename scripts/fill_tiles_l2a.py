@@ -50,7 +50,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.coregistration import coregister_to_reference
-from imint.training.openeo_tile_graph import (
+from imint.data.openeo_tile_graph import (
     ALL_BANDS,
     ALL_BANDS_INDEX,
     fetch_tile_at_specific_dates,

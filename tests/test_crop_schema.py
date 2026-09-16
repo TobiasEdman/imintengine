@@ -1,4 +1,4 @@
-"""Tests for imint/training/crop_schema.py — the kept crop-class mappings.
+"""Tests for imint/schema/crop_schema.py — the kept crop-class mappings.
 
 Salvaged from the retired tests/test_crop_dataset.py (the CropDataset half went
 away with the LUCAS crop-only pipeline). Covers the LUCAS→crop and SJV→crop
@@ -7,7 +7,7 @@ reference, plus the SJV_TO_CROP table relocated here from build_crop_dataset.
 """
 from __future__ import annotations
 
-from imint.training.crop_schema import (
+from imint.schema.crop_schema import (
     CLASS_NAMES,
     LUCAS_SUPPORTED_YEARS,
     LUCAS_TO_CROP,

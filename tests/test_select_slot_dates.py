@@ -33,7 +33,7 @@ def _patch_ofd(monkeypatch, *, empty_windows=frozenset()):
             return SimpleNamespace(dates=[])
         return SimpleNamespace(dates=[ds, _mid(ds, de), de])
 
-    monkeypatch.setattr("imint.training.optimal_fetch.optimal_fetch_dates", _fake)
+    monkeypatch.setattr("imint.data.optimal_fetch.optimal_fetch_dates", _fake)
     return calls
 
 

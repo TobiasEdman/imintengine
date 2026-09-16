@@ -31,3 +31,19 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
+
+  installed-library:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build the distributable
+        run: python -m pip wheel --no-deps . --wheel-dir dist
+      - name: Install only the base library
+        run: |
+          cd "$RUNNER_TEMP"
+          python -m pip install "$GITHUB_WORKSPACE"/dist/imint_engine-*.whl
+      - name: Verify installed imports and bundled resources
+        run: python -I tests/smoke_installed_package.py
