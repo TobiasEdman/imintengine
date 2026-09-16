@@ -9,17 +9,17 @@
   ],
   "blockers": [],
   "changed_paths": [
-    ".agents/tasks/0009.json"
+    ".agents/tasks/0010.json"
   ],
   "commit": "f97eaf85629ab4f8794f42be8aa26516a424c9e1",
-  "created_at": "2026-09-16T19:59:51Z",
-  "current_state": "PR #1 OPEN at f97eaf85629ab4f8794f42be8aa26516a424c9e1: 26 commits (19 reviewed at 285660e + 7 fixes), 100% bot-authored, no history rewritten, pushed to the fork. Finding->commit: 1 model pin + model-keyed cache = eecf9cb; 2 profile-derived ERA5-Land variables = 728deb1; 3 forecast-start de-accumulation of ssrd AND tp (same defect) = e1d97bb; 4 empty cloud list and 5 cloud nearest-cell fallback = 743da18; 6 --bbox on the process command = 9ff21ab; 7 atomic fit publication and 8 dated-row validation = 5f08b70; the 9 review regressions adopted with only the source path changed = f97eaf8. Verification: pytest -W error tests/ -q -> 127 passed (99 baseline + 9 regressions + 19 new). Open-Meteo models=era5_land live-checked (data returned, unknown model rejected); Open-Meteo 'preceding hour' convention taken from its docs; ERA5-Land accumulation per ECMWF. Source convention is an explicit dataset attribute set by the adapter; untagged data is CDS. Synthetic ERA5-Land fixtures now carry CDS's accumulation shape; two tests restated by the hour they cover. Re-review comment with this tuple posted on the PR by the coordinator bot.",
+  "created_at": "2026-09-16T20:10:37Z",
+  "current_state": "PR #1 OPEN at f97eaf85629ab4f8794f42be8aa26516a424c9e1: 26 commits (19 reviewed at 285660e + 7 fixes), 100% bot-authored, no history rewritten, pushed to the fork. Finding->commit: 1 model pin + model-keyed cache = eecf9cb; 2 profile-derived ERA5-Land variables = 728deb1; 3 forecast-start de-accumulation of ssrd AND tp (same defect) = e1d97bb; 4 empty cloud list and 5 cloud nearest-cell fallback = 743da18; 6 --bbox on the process command = 9ff21ab; 7 atomic fit publication and 8 dated-row validation = 5f08b70; the 9 review regressions adopted with only the source path changed = f97eaf8. Verification: pytest -W error tests/ -q -> 127 passed (99 baseline + 9 regressions + 19 new). Open-Meteo models=era5_land live-checked (data returned, unknown model rejected); Open-Meteo 'preceding hour' convention taken from its docs; ERA5-Land accumulation per ECMWF. Source convention is an explicit dataset attribute set by the adapter; untagged data is CDS. Synthetic ERA5-Land fixtures now carry CDS's accumulation shape; two tests restated by the hour they cover. Re-review comment with this tuple posted on the PR by the coordinator bot. NOTE: this request was first filed as task 0009, which collided with Codex's own 0009 (repository separation, claimed 14:47Z); that record was removed unclaimed and re-filed as 0010.",
   "next_steps": [
-    "Claim 0009 from your own worktree: AGENT_ID=te-codex AGENT_RUNTIME=codex agentic-task claim . --remote origin",
+    "Claim 0010 from your own worktree: AGENT_ID=te-codex AGENT_RUNTIME=codex agentic-task claim . --remote origin",
     "Review the 7 fix commits: git diff 285660e..f97eaf85629ab4f8794f42be8aa26516a424c9e1; rerun pytest -W error tests/ -q (expect 127 passed) and tests/test_review_regressions.py (expect 9 passed)",
     "Post the verdict as a GitHub PR review on #1 bound to f97eaf85629ab4f8794f42be8aa26516a424c9e1",
     "On PASS: integrate #1 as the Codex identity, tag v0.1.0 on the resulting master, push the tag",
-    "Complete: AGENT_ID=te-codex AGENT_RUNTIME=codex agentic-task complete . 0009 --remote origin, and post the outcome to the ImintEngine inbox"
+    "Complete: AGENT_ID=te-codex AGENT_RUNTIME=codex agentic-task complete . 0010 --remote origin, and post the outcome to the ImintEngine inbox"
   ],
   "off_limits": [
     "codex/shareable-era5 history: no amend, rebase or force-push; verdicts are SHA-bound",
@@ -32,6 +32,6 @@
   "source_runtime": "claude",
   "source_session": "claude-5dfce70b747fbfe5",
   "target": "codex",
-  "task_id": "0009",
+  "task_id": "0010",
   "verification": "pytest -W error tests/ -q -> 127 passed; tests/test_review_regressions.py -> 9 passed; live Open-Meteo archive call with models=era5_land returned 24 hourly rows and models=not_a_model was rejected; GitHub compare master...codex/shareable-era5 ahead 26 behind 0, single author multi-agentic-coordinator[bot]"
 }
