@@ -1,0 +1,37 @@
+{
+  "active_goal": "Cross-vendor (Codex) re-review of TobiasEdman/space-datalab-metafilter PR #1 at exact head f97eaf85629ab4f8794f42be8aa26516a424c9e1 (base master@06fedc11cbde06c30c9036690860e9714581c1de), after the 0008 BLOCK. Return PASS or BLOCK bound to that SHA as a GitHub PR review. On PASS: approve and integrate as the Codex identity, then tag v0.1.0 on the resulting master commit. On BLOCK: post findings and stop.",
+  "active_rules": [
+    "Claude-side PRs are approved and integrated by Codex, never by Claude [user-stated 2026-09-08]",
+    "Exact-SHA review: claim before reviewing; a verdict binds to one head SHA [mode/harness]",
+    "Review BLOCKs are resolved agent-to-agent, not escalated finding-by-finding [user-stated 2026-09-07]",
+    "Communicate through the agentic framework: task claims, handoffs, inbox, GitHub as durable authority [user-stated 2026-09-15]",
+    "No force-push on reviewed heads [inferred, joint protocol]"
+  ],
+  "blockers": [],
+  "changed_paths": [
+    ".agents/tasks/0009.json"
+  ],
+  "commit": "f97eaf85629ab4f8794f42be8aa26516a424c9e1",
+  "created_at": "2026-09-16T19:59:51Z",
+  "current_state": "PR #1 OPEN at f97eaf85629ab4f8794f42be8aa26516a424c9e1: 26 commits (19 reviewed at 285660e + 7 fixes), 100% bot-authored, no history rewritten, pushed to the fork. Finding->commit: 1 model pin + model-keyed cache = eecf9cb; 2 profile-derived ERA5-Land variables = 728deb1; 3 forecast-start de-accumulation of ssrd AND tp (same defect) = e1d97bb; 4 empty cloud list and 5 cloud nearest-cell fallback = 743da18; 6 --bbox on the process command = 9ff21ab; 7 atomic fit publication and 8 dated-row validation = 5f08b70; the 9 review regressions adopted with only the source path changed = f97eaf8. Verification: pytest -W error tests/ -q -> 127 passed (99 baseline + 9 regressions + 19 new). Open-Meteo models=era5_land live-checked (data returned, unknown model rejected); Open-Meteo 'preceding hour' convention taken from its docs; ERA5-Land accumulation per ECMWF. Source convention is an explicit dataset attribute set by the adapter; untagged data is CDS. Synthetic ERA5-Land fixtures now carry CDS's accumulation shape; two tests restated by the hour they cover. Re-review comment with this tuple posted on the PR by the coordinator bot.",
+  "next_steps": [
+    "Claim 0009 from your own worktree: AGENT_ID=te-codex AGENT_RUNTIME=codex agentic-task claim . --remote origin",
+    "Review the 7 fix commits: git diff 285660e..f97eaf85629ab4f8794f42be8aa26516a424c9e1; rerun pytest -W error tests/ -q (expect 127 passed) and tests/test_review_regressions.py (expect 9 passed)",
+    "Post the verdict as a GitHub PR review on #1 bound to f97eaf85629ab4f8794f42be8aa26516a424c9e1",
+    "On PASS: integrate #1 as the Codex identity, tag v0.1.0 on the resulting master, push the tag",
+    "Complete: AGENT_ID=te-codex AGENT_RUNTIME=codex agentic-task complete . 0009 --remote origin, and post the outcome to the ImintEngine inbox"
+  ],
+  "off_limits": [
+    "codex/shareable-era5 history: no amend, rebase or force-push; verdicts are SHA-bound",
+    "/Users/tobiasedman/Developer/ImintEngine main tree is shared; use your own worktree",
+    "/Users/tobiasedman/Developer/space-datalab-metafilter-wt-shareable-era5 is Claude's worktree; untracked build/ is a local artefact",
+    "Do not integrate on BLOCK; do not tag before integration; fork-only target (Tobias's decision)"
+  ],
+  "repository_key": "ImintEngine--f4ea50ce3600",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-5dfce70b747fbfe5",
+  "target": "codex",
+  "task_id": "0009",
+  "verification": "pytest -W error tests/ -q -> 127 passed; tests/test_review_regressions.py -> 9 passed; live Open-Meteo archive call with models=era5_land returned 24 hourly rows and models=not_a_model was rejected; GitHub compare master...codex/shareable-era5 ahead 26 behind 0, single author multi-agentic-coordinator[bot]"
+}
