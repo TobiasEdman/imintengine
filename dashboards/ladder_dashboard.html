@@ -133,6 +133,24 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
     <span id="infStatus" style="font-size:12.5px;color:#6b7280"></span>
   </div>
   <div style="overflow-x:auto"><table id="infMatrix"></table></div>
+
+  <h3 style="margin:18px 0 6px">Tile-inspektör — svep facit ↔ prediktion</h3>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+    <button id="swPrev" style="cursor:pointer">◀</button>
+    <select id="swTile"></select>
+    <button id="swNext" style="cursor:pointer">▶</button>
+    <select id="swLeft"></select>
+    <span style="color:#6b7280">↔</span>
+    <select id="swRight"></select>
+  </div>
+  <div id="swStage" style="position:relative;max-width:560px;user-select:none;cursor:ew-resize">
+    <img id="swImgL" style="display:block;width:100%;border-radius:6px" draggable="false">
+    <img id="swImgR" style="position:absolute;inset:0;width:100%;border-radius:6px;clip-path:inset(0 0 0 50%)" draggable="false">
+    <div id="swBar" style="position:absolute;top:0;bottom:0;left:50%;width:2px;background:#fbbf24;pointer-events:none"></div>
+    <span id="swLabL" style="position:absolute;left:6px;top:6px;font-size:11px;background:#0008;color:#fff;padding:2px 6px;border-radius:4px"></span>
+    <span id="swLabR" style="position:absolute;right:6px;top:6px;font-size:11px;background:#0008;color:#fff;padding:2px 6px;border-radius:4px"></span>
+  </div>
+  <input id="swSlide" type="range" min="0" max="100" value="50" style="width:100%;max-width:560px;margin-top:6px">
   <div class="foot">Frozen farthest-point panel from the held-out validation set
     (<span class="stat">holdout_val_512</span> — never trained on by any rung). Rows: summer RGB,
     in-tile truth, then each backbone's prediction for the selected rung. Click a thumbnail for
@@ -619,10 +637,85 @@ function renderInference() {
   status.textContent = `· ${rendered}/${MODELS.length} backbones rendered for rung ${rung}`;
 }
 
+
+// Tile-inspektör: one tile at a time, swipe between any two layers
+// (ground truth / RGB / any rendered cell). Pure client-side; images are
+// the same PNGs the matrix table uses.
+let SW_BUILT = false;
+function swLayers() {
+  const layers = [["_rgb", "RGB (sommar)"], ["_truth23", "Facit 23-kl"],
+                  ["_truth28", "Facit 28-kl"]];
+  for (const m of MODELS) for (const r of [1, 2, 3, 4]) {
+    const c = INF.cells?.[`${m}_r${r}`];
+    if (c) layers.push([`${m}_r${r}`, `${LABELS[m]} · r${r}`,
+                        (c.ckpt_sha || "").slice(0, 8)]);
+  }
+  return layers;
+}
+function swUpdate() {
+  const t = document.getElementById("swTile").value;
+  const L = document.getElementById("swLeft").value;
+  const R = document.getElementById("swRight").value;
+  const layers = Object.fromEntries(swLayers().map(x => [x[0], x]));
+  const v = k => layers[k]?.[2] ? `?v=${layers[k][2]}` : "";
+  document.getElementById("swImgL").src = `inference/${L}/${t}.png${v(L)}`;
+  document.getElementById("swImgR").src = `inference/${R}/${t}.png${v(R)}`;
+  document.getElementById("swLabL").textContent = layers[L]?.[1] || L;
+  document.getElementById("swLabR").textContent = layers[R]?.[1] || R;
+}
+function swPos(pct) {
+  pct = Math.max(0, Math.min(100, pct));
+  document.getElementById("swImgR").style.clipPath = `inset(0 0 0 ${pct}%)`;
+  document.getElementById("swBar").style.left = `${pct}%`;
+  document.getElementById("swSlide").value = pct;
+}
+function renderInspector() {
+  if (!INF || !INF.tiles?.length) return;
+  const tileSel = document.getElementById("swTile");
+  const lSel = document.getElementById("swLeft");
+  const rSel = document.getElementById("swRight");
+  const layers = swLayers();
+  if (!SW_BUILT) {
+    tileSel.innerHTML = INF.tiles.map(t =>
+      `<option value="${t.name}">${t.name.replace(/^holdoutval_/, "")}</option>`).join("");
+    document.getElementById("swPrev").onclick = () => {
+      tileSel.selectedIndex = (tileSel.selectedIndex + tileSel.length - 1) % tileSel.length;
+      swUpdate();
+    };
+    document.getElementById("swNext").onclick = () => {
+      tileSel.selectedIndex = (tileSel.selectedIndex + 1) % tileSel.length;
+      swUpdate();
+    };
+    for (const el of [tileSel, lSel, rSel]) el.onchange = swUpdate;
+    document.getElementById("swSlide").oninput = e => swPos(+e.target.value);
+    const stage = document.getElementById("swStage");
+    const drag = e => {
+      const r = stage.getBoundingClientRect();
+      swPos(100 * ((e.touches ? e.touches[0].clientX : e.clientX) - r.left) / r.width);
+    };
+    stage.onpointerdown = e => { stage.setPointerCapture(e.pointerId); drag(e); stage.onpointermove = drag; };
+    stage.onpointerup = () => { stage.onpointermove = null; };
+    SW_BUILT = true;
+  }
+  // (Re)fill layer selects, preserving choices as cells appear over time.
+  const keep = sel => { const v = sel.value; return () => {
+    if ([...sel.options].some(o => o.value === v)) sel.value = v; }; };
+  const kL = keep(lSel), kR = keep(rSel);
+  const opts = layers.map(x => `<option value="${x[0]}">${x[1]}</option>`).join("");
+  lSel.innerHTML = opts; rSel.innerHTML = opts;
+  kL(); kR();
+  if (lSel.value === rSel.value) {
+    lSel.value = "_truth23";
+    rSel.value = layers[3]?.[0] || "_truth28";
+  }
+  swUpdate();
+}
+
 async function tick() {
   await loadAll();
   renderMatrix(); renderDeltas(); renderDistill(); renderAll(); fillSelects(); renderH2H();
   renderInference();
+  renderInspector();
   document.getElementById("updated").textContent =
     "· refreshed " + new Date().toLocaleTimeString();
 }
