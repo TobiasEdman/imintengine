@@ -1,0 +1,10 @@
+{
+  "id": "0010",
+  "subject": "Execute the foundation-model experiment campaign",
+  "description": "Execute the user-approved 2026-09-17 E00-E12 plan: audit 28 checkpoints, freeze evaluation and leakage controls, evaluate NFI/LUCAS, validate seven crop probes, implement and run approved controlled experiments. E05/R5 and E13 remain subject to their stated decision gates. Scope: new campaign scripts/eval modules/tests, k8s/fm-campaign, docs/experiments; reuse existing preprocessing. Do not mutate historical data/checkpoints or other worktrees. Session 01a0af99-f99a-7ab3-88f7-d3e013d163d7.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/codex/study-fm-experiments",
+  "created_at": "2026-09-17T14:26:20Z",
+  "updated_at": "2026-09-17T14:26:20Z"
+}
