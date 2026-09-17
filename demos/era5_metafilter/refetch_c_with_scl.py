@@ -15,7 +15,7 @@ This script:
   1. Loads the 36 A_baseline candidate dates from cot_metrics.json.
   2. Re-fetches each via the production fetch_des_data path with
      cloud_threshold=0.10 and include_scl=True (same as
-     imint/training/cdse_s2.py defaults).
+     imint/data/cdse_s2.py defaults).
   3. Records pass/reject per date plus AOI SCL cloud fraction.
   4. The dates that ALSO have STAC granule cc ≤ 30 % AND survive the
      SCL filter form the new C_fetch_s2_full set.

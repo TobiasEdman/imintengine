@@ -47,7 +47,7 @@ try:
 except ImportError:
     _TORCH_AVAILABLE = False
 
-from .unified_schema import NUM_UNIFIED_CLASSES
+from imint.schema.unified_schema import NUM_UNIFIED_CLASSES
 from .unified_dataset import (
     AUX_CHANNEL_NAMES,
     normalize_aux_channel,

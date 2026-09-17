@@ -6,6 +6,25 @@ Analyzes cloud-free Sentinel-2 imagery for change detection, spectral classifica
 
 ---
 
+## Install as a library
+
+```bash
+python -m pip install '.[fetch]'       # acquisition without PyTorch
+python -m pip install '.[inference]'   # model runtime
+python -m pip install '.[training]'    # training and evaluation
+python -m pip install 'git+https://github.com/TobiasEdman/des-contracts.git@v0.1.0'
+python -m pip install '.[api]'         # HTTP service and inference
+```
+
+Use a built wheel or an immutable Git revision in downstream studies. Import shared
+providers from `imint.data`, label mappings from `imint.schema`, and numerical
+metrics from `imint.metrics`. Importing `imint` does not initialize models.
+
+The public site is extracted to the sibling `imint-showcase` repository. Study
+runners belong to the `studies` repository and consume this package. See
+[repository separation](docs/plans/repository-separation.md) for ownership,
+compatibility and the hosting cutover sequence.
+
 ## Architecture
 
 ```
@@ -39,14 +58,16 @@ imint/                      Core engine (executor-agnostic)
     terratorch_loader.py    TerraTorch model loading
     upernet.py              UPerNet segmentation head
 
+  data/                     Shared acquisition providers and concurrency
+  schema/                   Shared unified, crop and legacy label schemas
+  metrics.py                Shared numerical evaluation metrics
+
   training/                 Training pipeline
     trainer.py              Training loop orchestrator
     unified_dataset.py      Multitemporal unified dataset (4-frame)
-    unified_schema.py       20-class schema (NMD + LPIS crops + SKS harvest)
     tile_fetch.py           Shared fetch primitives (STAC → CDSE → DES)
     dataset.py              Legacy tile dataset with augmentation
     config.py               Training configuration
-    class_schema.py         LULC class hierarchy (10-class legacy)
     prepare_data.py         Data preparation from NMD/DEM/SCB
     sampler.py              Balanced sampling strategies
     evaluate.py             Model evaluation & metrics
@@ -111,27 +132,8 @@ data/                       Training data & caches
   seasonal_tiles/           Multi-year seasonal tiles
   symbols/                  Map symbol library
 
-docs/                       GitHub Pages showcase
-  index.html                Dashboard shell (tabs, descriptions, chart canvases)
-  css/
-    leaflet.css             Leaflet 1.9.4 styles
-    styles.css              Custom dashboard styles
-  js/
-    vendor/                 Third-party libraries (Leaflet, Chart.js)
-    tab-data.js             Shared legends, GeoJSON paths, tab configs
-    app.js                  Reusable components, map init, event handlers
-  data/
-    vessels.geojson         YOLO vessel detections
-    lpis.geojson            LPIS grazing block polygons
-    erosion.geojson         Coastline erosion vectors
-    segformer-shorelines.geojson  SegFormer shoreline vectors
-    coastline-shorelines.geojson  Index-based shoreline vectors
-    chart-data.json         NMD cross-reference chart data
-  showcase/
-    fire/                   Wildfire analysis images (Ljusdal)
-    marine/                 Marine vessel detection images (Hunnebostrand)
-    grazing/                Grazing land monitoring images (Lund)
-    kustlinje/              Coastline erosion images (Ystad)
+docs/                       Engineering documentation and plans
+  SHOWCASE.md               Artifact export and separate site ownership
 
 outputs/                    Generated files (gitignored except showcase)
 checkpoints/                Model training checkpoints

@@ -28,7 +28,7 @@ from imint.training.config import TrainingConfig
 from imint.training.dataset import LULCDataset
 from imint.training.trainer import LULCTrainer
 from imint.training.evaluate import evaluate_model
-from imint.training.class_schema import get_class_names
+from imint.schema.class_schema import get_class_names
 
 
 def main():

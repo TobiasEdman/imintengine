@@ -57,7 +57,7 @@ load_env()
 
 from imint.training.config import TrainingConfig
 from imint.training.dataset import LULCDataset
-from imint.training.class_schema import get_class_names
+from imint.schema.class_schema import get_class_names
 
 
 def load_model(checkpoint_path: str, config: TrainingConfig, device):

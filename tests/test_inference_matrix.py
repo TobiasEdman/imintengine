@@ -59,7 +59,7 @@ def test_select_spread_small_pool_returns_everything():
 
 
 def test_colorize_matches_unified_palette():
-    from imint.training.unified_schema import UNIFIED_COLORS
+    from imint.schema.unified_schema import UNIFIED_COLORS
 
     from ladder_inference_matrix import colorize
 

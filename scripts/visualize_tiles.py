@@ -21,7 +21,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from imint.training.class_schema import get_class_names
+from imint.schema.class_schema import get_class_names
 
 # NMD class colors (RGB) for label overlay
 LABEL_COLORS = {

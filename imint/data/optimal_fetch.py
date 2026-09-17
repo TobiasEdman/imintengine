@@ -1,5 +1,5 @@
 """
-imint/training/optimal_fetch.py — Optimal Sentinel-2 candidate-day selection.
+imint/data/optimal_fetch.py — Optimal Sentinel-2 candidate-day selection.
 
 Chains the cheapest filter first so that costly downstream calls only run
 on the few surviving days:
@@ -16,7 +16,7 @@ uses.
 Usage
 -----
 
-    from imint.training.optimal_fetch import optimal_fetch_dates
+    from imint.data.optimal_fetch import optimal_fetch_dates
 
     dates = optimal_fetch_dates(
         bbox_wgs84={"west": ..., "south": ..., "east": ..., "north": ...},

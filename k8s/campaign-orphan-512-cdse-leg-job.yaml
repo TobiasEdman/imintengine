@@ -67,7 +67,7 @@ spec:
               # pod attempt 2026-07-05 died on exactly that). Same pattern as
               # refetch-recoreg-aux-free's resolve_fetch_bbox guard.
               git grep -q '_bands_groups_for_source("cdse-openeo")' \
-                  imint/training/openeo_tile_graph.py \
+                  imint/data/openeo_tile_graph.py \
                 && echo "OK: 12-band parity fix present in clone" \
                 || { echo "FATAL: parity fix NOT in clone — abort"; exit 1; }
               cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints

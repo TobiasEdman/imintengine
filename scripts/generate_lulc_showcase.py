@@ -44,7 +44,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
-from imint.training.unified_schema import UNIFIED_COLORS, UNIFIED_CLASSES
+from imint.schema.unified_schema import UNIFIED_COLORS, UNIFIED_CLASSES
 
 
 def _hex_to_rgba(hex_color: str, alpha: float = 0.85) -> str:

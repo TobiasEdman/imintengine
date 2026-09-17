@@ -47,7 +47,7 @@ from imint.fetch import (
     fetch_seasonal_image,
     fetch_nmd_data, FetchError,
 )
-from imint.training.class_schema import nmd_raster_to_lulc
+from imint.schema.class_schema import nmd_raster_to_lulc
 from imint.training.vpp_windows import (
     compute_growing_season_windows,
     doy_windows_to_month_windows,
@@ -218,7 +218,7 @@ class SeasonalFetchExecutor:
         doy_windows = None
         if vpp_guided:
             try:
-                from imint.training.cdse_vpp import fetch_vpp_tiles
+                from imint.data.cdse_vpp import fetch_vpp_tiles
                 # Convert WGS84 coords to EPSG:3006 for VPP fetch
                 vpp = fetch_vpp_tiles(
                     west=float(os.environ.get("WEST_3006", easting)),

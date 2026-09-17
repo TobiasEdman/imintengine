@@ -51,7 +51,7 @@ sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 from backfill_vpp import _tile_year, _vpp_is_empty  # noqa: E402
 from imint.training.tile_bbox import resolve_fetch_bbox  # noqa: E402
 from imint.training.tile_fetch import list_tile_paths  # noqa: E402
-from imint.training.wekeo_vpp import _parse_vpp_filename  # noqa: E402
+from imint.data.wekeo_vpp import _parse_vpp_filename  # noqa: E402
 
 # All five HR-VPP metrics must be cached for a (MGRS, year) to count as
 # covered — a partial set would still make fetch_vpp_tiles_local come back

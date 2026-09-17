@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from imint.training.class_schema import compute_class_weights
+from imint.schema.class_schema import compute_class_weights
 
 
 # Realistic 23-class pixel counts (approximating v5 schema distribution)

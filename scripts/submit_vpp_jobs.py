@@ -188,7 +188,7 @@ def _run_local(
 ) -> None:
     """Run VPP fetching locally with ThreadPoolExecutor (no ColonyOS)."""
     import numpy as np
-    from imint.training.cdse_vpp import fetch_vpp_tiles
+    from imint.data.cdse_vpp import fetch_vpp_tiles
 
     half_m = patch_size_m // 2
 

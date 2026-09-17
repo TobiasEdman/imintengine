@@ -65,7 +65,7 @@ spec:
               echo "=== class-distribution QC over sidecars ==="
               python3 - <<'PY'
               import glob, numpy as np, collections
-              from imint.training.unified_schema import UNIFIED_CLASSES, NUM_UNIFIED_CLASSES
+              from imint.schema.unified_schema import UNIFIED_CLASSES, NUM_UNIFIED_CLASSES
               files = sorted(glob.glob("/data/nmd2023_labels/*.npz"))
               print(f"sidecars written: {len(files)}")
               tot = collections.Counter()

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import numpy as np
 
-# Unified forest classes — imint.training.unified_schema._NMD_FOREST.
+# Unified forest classes — imint.schema.unified_schema._NMD_FOREST.
 _FOREST_CLASSES = (1, 2, 3, 4, 5, 6)
 # Aux channels physically defined on forest land (the alignment canaries).
 FORESTRY_AUX = ("height", "volume", "basal_area", "diameter")

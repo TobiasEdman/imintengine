@@ -30,7 +30,7 @@ import numpy as np
 # Import unified schema — try installed package first, then fallback to repo
 # ---------------------------------------------------------------------------
 try:
-    from imint.training.unified_schema import (
+    from imint.schema.unified_schema import (
         NUM_UNIFIED_CLASSES,
         SJV_TO_UNIFIED,
         UNIFIED_CLASSES,
@@ -38,7 +38,7 @@ try:
 except ModuleNotFoundError:
     # Running from repo root without install
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from imint.training.unified_schema import (
+    from imint.schema.unified_schema import (
         NUM_UNIFIED_CLASSES,
         SJV_TO_UNIFIED,
         UNIFIED_CLASSES,

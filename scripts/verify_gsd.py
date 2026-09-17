@@ -42,7 +42,7 @@ import numpy as np
 
 def fetch_correct_bbox(center_e: int, center_n: int, date: str, size_px: int = 512):
     """Fetch with the correct (size_px × 10 m) bbox at 10m GSD."""
-    from imint.training.cdse_s2 import fetch_s2_scene
+    from imint.data.cdse_s2 import fetch_s2_scene
     half_m = size_px * 10 // 2  # 5120 // 2 = 2560m
     west = center_e - half_m
     south = center_n - half_m

@@ -1,6 +1,6 @@
 """WEkEO HR-VPP vegetation phenology fetching — CDSE fallback.
 
-Fallback for :mod:`imint.training.cdse_vpp` when the CDSE Sentinel Hub
+Fallback for :mod:`imint.data.cdse_vpp` when the CDSE Sentinel Hub
 processing-unit quota is exhausted. Same HR-VPP source data (Copernicus
 Land Monitoring Service), accessed via the WEkEO Harmonised Data Access
 (HDA) API instead of the CDSE Sentinel Hub Process API.

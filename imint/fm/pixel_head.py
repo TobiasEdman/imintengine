@@ -48,7 +48,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from imint.training.unified_schema import NUM_UNIFIED_CLASSES
+from imint.schema.unified_schema import NUM_UNIFIED_CLASSES
 
 # Default AUX dimensionality — matches len(AUX_CHANNEL_NAMES) in unified_dataset
 N_AUX_DEFAULT = 10   # height, volume, basal_area, diameter, dem,

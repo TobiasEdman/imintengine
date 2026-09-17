@@ -39,8 +39,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from validate_against_nfi import (  # noqa: E402
     derive_nfi_forest_class, accuracy_suite,
 )
-from imint.training.class_schema import nmd_raster_to_lulc  # noqa: E402
-from imint.training.unified_schema import nmd19_to_unified  # noqa: E402
+from imint.schema.class_schema import nmd_raster_to_lulc  # noqa: E402
+from imint.schema.unified_schema import nmd19_to_unified  # noqa: E402
 
 
 def sample_nmd_unified(tif: str, easting, northing) -> np.ndarray:
