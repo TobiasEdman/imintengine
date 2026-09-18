@@ -1,0 +1,37 @@
+{
+  "active_goal": "Review metafilter PR #2, return an exact-head verdict, and integrate/tag v0.1.1 only after a fresh PASS and normal merge checks.",
+  "active_rules": [
+    "[user-stated, current conversation] Follow the formal workflow and continue authorized work; do not stop without a concrete dependency.",
+    "[repository] Exclusively owned worktrees and authoritative task claims; verify before completion.",
+    "[mode/harness] Reviews, checks and integration must be bound to the actual current head/base; no fabricated approval or weakened gates."
+  ],
+  "blockers": [
+    "P1: selecting sde globally after concat loses all legacy sd-only months. Two individually valid zero-snow caches yield [null, null, 0, 0] for Aug 30 through Sep 2, incorrectly rejecting the first two snow-free dates."
+  ],
+  "changed_paths": [
+    ".agents/tasks/0101.json"
+  ],
+  "commit": "10e8cba0f36cb99b7d4459ba3474d05a17feda6f",
+  "created_at": "2026-09-18T11:48:41Z",
+  "current_state": "Task 0101 remains claimed by te-codex at authoritative refs/heads/agentic-task/claims/0101 = 10e8cba0f36cb99b7d4459ba3474d05a17feda6f. PR #2 head a18d9c7ae7fde2230f6bd1031a433f4a8df50092 against master a815f0ee22673ab15868143ab275f94d60e16bb1 is BLOCK. Formal REQUEST_CHANGES: https://github.com/TobiasEdman/space-datalab-metafilter/pull/2#pullrequestreview-5247397476 . Canonical verdict: https://github.com/TobiasEdman/space-datalab-metafilter/pull/2#issuecomment-5729516376 . No source edits, integration, or v0.1.1 tag by reviewer. Shared tell record queued; no live recipient wake attempted. Evidence is saved at /private/tmp/metafilter-pr2-evidence/.",
+  "next_steps": [
+    "Claude: normalize legacy sd to sde within each input dataset before concatenation and duplicate-time removal; preserve sde precedence within files containing both names, including genuine missing sde values.",
+    "Claude: add a public-API regression combining valid old and new monthly caches, both chronological orders and shared boundary midnight. Both caches must remain accepted without network retrieval; legacy-month observations must survive.",
+    "Claude: update README metric source and set both pyproject.toml/setup.py versions to 0.1.1 before release; request review on the new exact head.",
+    "Codex: review new head, run warnings-as-errors suite, mixed-cache regression, and cached real-CDS replay; post a new SHA-bound verdict. On PASS run normal merge checks, integrate, tag v0.1.1, and complete task 0101. Claude owns the GitHub Release text.",
+    "Framework follow-up: exact two rejected commands from 2026-09-18T10:28:29Z and 10:29:19Z reproduce the parser error without execution. Minimal inert input echo with a date command substitution followed by the words pr merge also reproduces it. Plain git pull --ff-only does not. Preserve as a separate parser defect; do not relax the merge gate in this task."
+  ],
+  "off_limits": [
+    "Other agents' source and coordination worktrees, including ImintEngine main.",
+    "Existing v0.1.0 tag; do not rewrite it.",
+    "DigitalEarthSweden upstream remote; publication target is TobiasEdman/space-datalab-metafilter.",
+    "Installed merge-gate policy and other runtimes' credentials."
+  ],
+  "repository_key": "ImintEngine--f4ea50ce3600",
+  "schema_version": "1",
+  "source_runtime": "codex",
+  "source_session": "codex-b704bb27bbe9b197",
+  "target": "claude",
+  "task_id": "0101",
+  "verification": "157 tests passed with warnings treated as errors at a18d9c7 (pytest.log/xml). Public-API mixed-cache reproduction fails with the four-day missing-snow result above; both monthly caches pass _valid_cache, standalone snow is complete, and network calls = 0. A fresh-context reviewer independently reproduced the loss across 31 legacy-month days. Independently replayed real CDS August 2024 file SHA256 e868b3479222a6f42e64323d53cbf821d5f5906f26adb42089ac700e0e82c3c8: previous release fails missing snow metric; PR2 produces 31 rows, 22 selected, 39.71918487548828 mm rain, no missing daily snow, zero new network calls. This validates that one observed month, not provider-wide coverage. Parser investigation is read-only: exact saved commands were supplied as strings to merge_target_from_hook, never executed; gate-exact-replay.json and gate-minimal-repro.json retain results."
+}
