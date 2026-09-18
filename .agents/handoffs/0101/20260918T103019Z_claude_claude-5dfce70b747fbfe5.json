@@ -1,0 +1,37 @@
+{
+  "active_goal": "Cross-vendor review of TobiasEdman/space-datalab-metafilter PR #2 at exact head a18d9c7ae7fde2230f6bd1031a433f4a8df50092 (base master@a815f0ee22673ab15868143ab275f94d60e16bb1). Post PASS or BLOCK bound to that SHA as a GitHub PR review. On PASS: integrate as the Codex identity, then tag v0.1.1 on the resulting master - it supersedes v0.1.0 as the shareable tag. On BLOCK: post findings and stop.",
+  "active_rules": [
+    "Claude-side PRs are approved and integrated by Codex, never by Claude [user-stated 2026-09-08]",
+    "Exact-SHA review: claim before reviewing; a verdict binds to one head SHA [mode/harness]",
+    "Reviewer may push a fix only after posting the verdict, fast-forward, with notification, one mechanical change [user-stated 2026-09-17]",
+    "Communicate through the agentic framework; GitHub is the durable authority [user-stated 2026-09-15]",
+    "Fix permanently: root fix plus guard plus sweep for the same pattern [user-stated, memory]"
+  ],
+  "blockers": [],
+  "changed_paths": [
+    ".agents/tasks/0101.json"
+  ],
+  "commit": "a18d9c7ae7fde2230f6bd1031a433f4a8df50092",
+  "created_at": "2026-09-18T10:30:18Z",
+  "current_state": "PR #2 OPEN at a18d9c7ae7fde2230f6bd1031a433f4a8df50092, 1 commit, 4 files, +93/-8, bot-authored. THE DEFECT: CDS reanalysis-era5-land returns a snow_depth request as 'sde'; metafilter/core.py tested for 'sd', so snow_depth_mean_m was never derived from real CDS data and filters/sentinel1_default.json raised MetafilterConfigurationError on every credentialed run. v0.1.0 (integration commit a815f0ee, tagged) carries this defect. THE FIX: read 'sde' first and 'sd' second (Open-Meteo caches predating this carry 'sd'); the Open-Meteo adapter now emits 'sde'; tests/conftest.py fixtures carry 'sde'; new tests/test_cds_variable_names.py pins the live short-name map. LIVE EVIDENCE 2026-09-18 (credentialed CDS): stage 1 confirmed your 40e3514 month-end work on real data - 745 samples 2024-08-01T00 to 2024-09-01T00, 31 daily rows ending 2024-08-31, 39.72 mm de-accumulated, 0 incomplete days, legacy filter selected 23 dates. Stage 2 exposed the sde defect. Sweep of all 9 ERA5-Land and 2 single-levels variables: snow_depth was the ONLY mismatch (t2m tp ssrd skt stl1 swvl1 tcc lcc all match; sf and d2m fetched but unread). POST-FIX: pytest -W error -> 157 passed; reverse-fit on the same failing live file yields snow_depth_mean_m and sentinel1_default selects 22 of 31 days (frost_free 31/31 13.83-20.37C, no_diurnal_freeze 31/31, snow_free 31/31, dry_canopy 22/31 0-7.97mm, stable_soil_moisture 27/31).",
+  "next_steps": [
+    "Claim 0101: AGENT_ID=te-codex AGENT_RUNTIME=codex agentic-task claim . --remote origin (from a worktree with agent/te/claude/task-metafilter-review fetched)",
+    "Review PR #2 at a18d9c7ae7fde2230f6bd1031a433f4a8df50092: git diff a815f0ee..a18d9c7ae7fde2230f6bd1031a433f4a8df50092; rerun pytest -W error tests/ -q (expect 157 passed)",
+    "Post the verdict as a GitHub PR review on #2 bound to that head",
+    "On PASS: integrate #2 as the Codex identity, tag v0.1.1 on the resulting master, push the tag",
+    "Complete: agentic-task complete . 0101 --remote origin, and post the outcome to the ImintEngine inbox"
+  ],
+  "off_limits": [
+    "Do not integrate on BLOCK; do not tag before integration; fork-only target (Tobias's decision)",
+    "v0.1.0 and its tag stay as they are - v0.1.1 supersedes, nothing is retagged",
+    "/Users/tobiasedman/Developer/space-datalab-metafilter-wt-sde-fix is Claude's worktree at the PR head",
+    "If you push a fix onto the branch, post the review first and notify - the reviewer-push contract Tobias decided 2026-09-17"
+  ],
+  "repository_key": "ImintEngine--f4ea50ce3600",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-5dfce70b747fbfe5",
+  "target": "codex",
+  "task_id": "0101",
+  "verification": "pytest -W error tests/ -q -> 157 passed; live credentialed CDS reverse-fit on the file that failed -> sentinel1_default selects 22/31 days; live sweep of all 11 requested variables -> snow_depth was the only name mismatch; GitHub compare master...branch ahead=1 behind=0, single author"
+}

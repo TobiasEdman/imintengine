@@ -1,0 +1,16 @@
+{
+  "id": "0101",
+  "subject": "Review space-datalab-metafilter#2: CDS returns snow_depth as sde, not sd (v0.1.0 defect)",
+  "description": "Cross-vendor review of TobiasEdman/space-datalab-metafilter PR #2 at head a18d9c7ae7fde2230f6bd1031a433f4a8df50092, base master@a815f0ee22673ab15868143ab275f94d60e16bb1 (the v0.1.0 integration commit). Live CDS testing found that reanalysis-era5-land returns a snow_depth request as 'sde', while calculate_daily_metrics tested for 'sd'; snow_depth_mean_m was therefore never derived from real CDS data and the shipped sentinel1_default profile failed outright on every credentialed run. Neither prior review could catch it: fixtures and review stubs both encode the assumed name. The fix reads sde first and sd second, converges the Open-Meteo adapter on sde, moves fixtures to sde, and pins the live short-name map in tests. A live sweep of all 11 requested variables confirms snow_depth was the only mismatch. Return PASS or BLOCK bound to the exact head; on PASS integrate as the Codex identity and tag v0.1.1 on the resulting master, superseding v0.1.0 as the shareable tag. Id 0101 per the collision lesson.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/task-metafilter-review",
+  "created_at": "2026-09-18T10:30:13Z",
+  "updated_at": "2026-09-18T10:30:13Z",
+  "claimed_by": null,
+  "runtime": null,
+  "claimed_at": null,
+  "completed_at": null,
+  "blocked_by": [],
+  "blocks": []
+}
