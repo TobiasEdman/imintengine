@@ -205,6 +205,8 @@ def main() -> int:
     ap.add_argument("--rungs", default=",".join(str(r) for r in EVAL_RUNGS),
                     help="comma-separated 28-class rungs (rung 1 is 23-class)")
     ap.add_argument("--git-sha", default="unknown")
+    ap.add_argument("--resume", action="store_true",
+                    help="skip cells already present in --out")
     args = ap.parse_args()
 
     rungs = [int(r) for r in args.rungs.split(",") if r.strip()]
@@ -220,37 +222,77 @@ def main() -> int:
     print(f"=== 28-class holdout eval — {len(models)} columns x {len(rungs)} "
           f"rungs x {len(tiles)} tiles ===", flush=True)
 
-    results, missing = [], []
+    # Resume: a sweep is 20+ cells over many hours, and cells already scored
+    # into --out are not re-run. Without this a single late failure costs the
+    # whole sweep on restart.
+    results, missing, failed = [], [], []
+    done: set[str] = set()
+    if args.resume and args.out.exists():
+        try:
+            prior = json.loads(args.out.read_text())
+            results = list(prior.get("cells", []))
+            done = {c["cell"] for c in results}
+            print(f"resuming — {len(done)} cell(s) already scored", flush=True)
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"could not resume from {args.out}: {exc!r}", flush=True)
+
+    def _write() -> None:
+        # Called after every cell, success or failure: a failure
+        # after the last success would otherwise never reach the
+        # file, which is exactly when the record matters most.
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps({
+            "schema": "ladder-holdout28-v1",
+            "git_sha": args.git_sha,
+            "num_classes": NUM_CLASSES_28,
+            "unified_classes": NUM_UNIFIED_CLASSES,
+            "holdout_dir": str(args.holdout_dir),
+            "label_dir": str(args.label_dir),
+            "tiles": tiles,
+            "missing_cells": missing,
+            "failed_cells": failed,
+            "cells": results,
+        }, indent=1))
+
     for model in models:
         for rung in rungs:
+            cell = f"{model}_r{rung}"
+            if cell in done:
+                print(f"[{cell}] already scored — skipping", flush=True)
+                continue
             ckpt = args.ckpt_root / f"{model}_r{rung}" / "best_model.pt"
             if not ckpt.exists():
-                missing.append(f"{model}_r{rung}")
-                print(f"[{model}_r{rung}] no checkpoint — skipping", flush=True)
+                missing.append(cell)
+                print(f"[{cell}] no checkpoint — skipping", flush=True)
                 continue
-            results.append(score_cell(model, rung, ckpt, tiles,
-                                      args.holdout_dir, args.label_dir,
-                                      args.device))
-            args.out.parent.mkdir(parents=True, exist_ok=True)
-            args.out.write_text(json.dumps({
-                "schema": "ladder-holdout28-v1",
-                "git_sha": args.git_sha,
-                "num_classes": NUM_CLASSES_28,
-                "unified_classes": NUM_UNIFIED_CLASSES,
-                "holdout_dir": str(args.holdout_dir),
-                "label_dir": str(args.label_dir),
-                "tiles": tiles,
-                "missing_cells": missing,
-                "cells": results,
-            }, indent=1))
+            try:
+                results.append(score_cell(model, rung, ckpt, tiles,
+                                          args.holdout_dir, args.label_dir,
+                                          args.device))
+            except Exception as exc:
+                # One unscoreable cell must not cost the other twenty. The
+                # dataset's fail-loud contracts are the expected case here:
+                # croma/terramind refuse a tile whose s1_enrich_v predates
+                # what they were trained on, which is a property of the
+                # holdout set, not of this sweep.
+                failed.append({"cell": cell, "error": repr(exc)[:400]})
+                print(f"[{cell}] FAILED — {exc!r}"[:500], flush=True)
+                _write()
+                continue
+            _write()
 
+    _write()
     if not results:
-        raise SystemExit("no cell scored — nothing was written")
+        raise SystemExit("no cell scored — see failed_cells in the report")
+    if failed:
+        print(f"\n{len(failed)} cell(s) could not be scored:")
+        for f in failed:
+            print(f"  {f['cell']}: {f['error'][:140]}")
     best = max(results, key=lambda r: r["overall_accuracy"] or 0)
     print(f"\nBEST 28-class OA: {best['cell']} = {best['overall_accuracy']} "
           f"(mIoU {best['mean_iou']})")
     print(f"wrote {args.out}")
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
