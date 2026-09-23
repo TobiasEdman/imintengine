@@ -33,7 +33,7 @@ spec:
               import json, os, numpy as np
               from PIL import Image
               from imint.training.tile_config import TileConfig
-              from imint.training.cdse_s2 import fetch_s2_scene
+              from imint.data.cdse_s2 import fetch_s2_scene
 
               # Read best_dates.json — pick a tile we KNOW has a cloud-free date
               with open("/data/unified_v2_512/best_dates.json") as f:

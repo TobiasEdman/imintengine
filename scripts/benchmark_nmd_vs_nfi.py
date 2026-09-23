@@ -35,8 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from validate_against_nfi import (  # noqa: E402
     derive_nfi_forest_class, FOREST_CLASSES, FOREST_NAMES, accuracy_suite,
 )
-from imint.training.class_schema import nmd_raster_to_lulc  # noqa: E402
-from imint.training.unified_schema import nmd19_to_unified  # noqa: E402
+from imint.schema.class_schema import nmd_raster_to_lulc  # noqa: E402
+from imint.schema.unified_schema import nmd19_to_unified  # noqa: E402
 
 
 def score_nmd(nmd_path: str, index_df: pd.DataFrame,

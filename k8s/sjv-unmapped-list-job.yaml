@@ -26,7 +26,7 @@ spec:
               sys.path.insert(0, "/tmp/imintengine")
               import geopandas as gpd
               import pandas as pd
-              from imint.training.unified_schema import SJV_TO_UNIFIED
+              from imint.schema.unified_schema import SJV_TO_UNIFIED
 
               gdf = gpd.read_parquet("/data/lpis/jordbruksskiften_2022.parquet")
               print(f"rows: {len(gdf)}")

@@ -48,7 +48,7 @@ spec:
 
               def map_codes_to_lulc(arr):
                   """The nmd_raster_to_lulc transform — same as in
-                  imint/training/class_schema.py."""
+                  imint/schema/class_schema.py."""
                   # NMD raw → 19-class. 0 = background.
                   LUT = np.zeros(256, dtype=np.uint8)
                   # Map known NMD codes to sequential 1..19

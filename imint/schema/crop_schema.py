@@ -1,5 +1,5 @@
 """
-imint/training/crop_schema.py — Swedish crop class schema and LUCAS mapping
+imint/schema/crop_schema.py — Swedish crop class schema and LUCAS mapping
 
 Maps LUCAS Copernicus 2018/2022 land cover codes to Swedish crop classes
 based on Jordbruksverkets (SJV) grödgrupper and SCB crop statistics.

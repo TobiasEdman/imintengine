@@ -92,7 +92,7 @@ def _fetch_ai2_scene(
 
     Returns (bands_dict, scl, cloud_fraction) or None if rejected.
     """
-    from imint.training.cdse_vpp import _get_token, _token_lock, _SH_PROCESS_URL
+    from imint.data.cdse_vpp import _get_token, _token_lock, _SH_PROCESS_URL
     import rasterio
     from rasterio.io import MemoryFile
 
@@ -157,7 +157,7 @@ def _fetch_ai2_scene(
 
         except urllib.error.HTTPError as e:
             if e.code == 401:
-                import imint.training.cdse_vpp as _vpp_mod
+                import imint.data.cdse_vpp as _vpp_mod
                 with _token_lock:
                     _vpp_mod._cached_token = None
                     _vpp_mod._token_expires = 0.0
@@ -254,7 +254,7 @@ def main():
 
     from scipy.ndimage import gaussian_filter
     from imint.fetch import _stac_available_dates, _to_nmd_grid
-    from imint.training.cdse_s2 import fetch_s2_scene
+    from imint.data.cdse_s2 import fetch_s2_scene
     from imint.exporters.export import save_vessel_heatmap_png
 
     out_dir = str(PROJECT_ROOT / "outputs" / "showcase" / "marine_commercial")

@@ -1,5 +1,5 @@
 """
-imint/training/unified_schema.py — Unified LULC + Crop + Harvest class schema
+imint/schema/unified_schema.py — Unified LULC + Crop + Harvest class schema
 
 Merges NMD land cover (19-class sequential) with LPIS crop detail and SKS harvest
 data into a single 23-class segmentation schema.
@@ -8,7 +8,7 @@ NMD provides background (forest, water, developed, wetland). LPIS overrides NMD 
 agricultural pixels with crop-specific classes. SKS marks harvested forest (hygge).
 
 Usage:
-    from imint.training.unified_schema import merge_all, UNIFIED_CLASSES
+    from imint.schema.unified_schema import merge_all, UNIFIED_CLASSES
 
     # NMD-only tile:
     unified = nmd19_to_unified(nmd_19class)

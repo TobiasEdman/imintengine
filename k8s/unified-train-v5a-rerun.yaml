@@ -52,7 +52,7 @@ spec:
               echo "Cloning ImintEngine..."
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
-              cd /workspace/imintengine && pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+              cd /workspace/imintengine && pip install --no-cache-dir -e '.[training]' || pip install --quiet --no-cache-dir -r requirements.txt
 
               # Symlink cached Prithvi weights from PVC (avoids HF download)
               if [ -f /data/model_cache/Prithvi_EO_V2_300M_TL.pt ]; then

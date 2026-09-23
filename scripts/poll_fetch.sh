@@ -17,7 +17,7 @@ if [ ! -f "$CLASS_STATS" ]; then
 import numpy as np, glob, json, os, sys
 sys.path.insert(0, '/workspace/imintengine')
 from collections import Counter
-from imint.training.unified_schema import UNIFIED_CLASS_NAMES as CLASS_NAMES
+from imint.schema.unified_schema import UNIFIED_CLASS_NAMES as CLASS_NAMES
 
 pixel_counts = Counter()
 tile_dominant = Counter()

@@ -51,7 +51,7 @@ def _stac_s2_dates(d0: date, d1: date) -> dict[str, float]:
 
     Returns ``{date: granule_eo_cloud_cover_pct}`` for every acquisition in
     the window (no cloud filter) — these are the ACTUAL satellite pass days,
-    not a synthetic cadence. Mirrors imint.training.optimal_fetch.
+    not a synthetic cadence. Mirrors imint.data.optimal_fetch.
     stac_filter_dates but keeps all dates + their granule cloud.
     """
     import requests

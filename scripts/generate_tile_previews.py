@@ -27,7 +27,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # ── Color palette ──────────────────────────────────────────────────────────────
-from imint.training.unified_schema import (
+from imint.schema.unified_schema import (
     UNIFIED_COLORS, UNIFIED_CLASSES, NUM_UNIFIED_CLASSES, HARVEST_CLASS,
 )
 from imint.training.unified_dataset import UnifiedDataset

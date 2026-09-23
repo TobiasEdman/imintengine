@@ -38,7 +38,7 @@ License: Copernicus Open Access
 
 Typical usage::
 
-    from imint.training.cdse_s2 import fetch_s2_scene, fetch_s2_scene_with_fallback
+    from imint.data.cdse_s2 import fetch_s2_scene, fetch_s2_scene_with_fallback
 
     # HTTP only (fast, no openEO dependency)
     result = fetch_s2_scene(west, south, east, north, date="2019-07-15")
@@ -96,7 +96,7 @@ def _is_pu_exhausted_error(exc: BaseException) -> bool:
     server format changes; the unique error-code token from Sentinel Hub
     is the reliable signal.
 
-    Counterpart to :func:`imint.training.openeo_tile_graph._is_payment_required_error`,
+    Counterpart to :func:`imint.data.openeo_tile_graph._is_payment_required_error`,
     which catches the equivalent (different) signal on the CDSE openEO
     backend (HTTP 402 / "PaymentRequired").
     """
@@ -129,7 +129,7 @@ def _prescreen_scl(
         # looked identical to 100 % AOI cloud rejection — don't repeat it.
         msg = str(e)[:200]
         if _is_pu_exhausted_error(e):
-            from imint.training.openeo_tile_graph import (
+            from imint.data.openeo_tile_graph import (
                 is_source_dead, mark_source_dead,
             )
             if not is_source_dead("cdse"):
@@ -224,7 +224,7 @@ def fetch_s2_scene(
     except Exception as e:
         msg = str(e)[:200]
         if _is_pu_exhausted_error(e):
-            from imint.training.openeo_tile_graph import (
+            from imint.data.openeo_tile_graph import (
                 is_source_dead, mark_source_dead,
             )
             if not is_source_dead("cdse"):
@@ -674,7 +674,7 @@ def _fetch_s2_tiff(
             if e.code == 401:
                 from .cdse_vpp import _cached_token, _token_expires
                 with _token_lock:
-                    import imint.training.cdse_vpp as _vpp_mod
+                    import imint.data.cdse_vpp as _vpp_mod
                     _vpp_mod._cached_token = None
                     _vpp_mod._token_expires = 0.0
                 token = _get_token()

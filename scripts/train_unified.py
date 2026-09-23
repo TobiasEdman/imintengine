@@ -43,7 +43,7 @@ from imint.training.config import TrainingConfig
 from imint.training.unified_dataset import UnifiedDataset
 from imint.training.trainer import LULCTrainer
 from imint.training.evaluate import evaluate_model
-from imint.training.unified_schema import UNIFIED_CLASS_NAMES
+from imint.schema.unified_schema import UNIFIED_CLASS_NAMES
 
 
 # Default data directories (comma-separated)

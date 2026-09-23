@@ -29,7 +29,7 @@ import numpy as np
 import rasterio
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from imint.training.class_schema import nmd_raster_to_lulc
+from imint.schema.class_schema import nmd_raster_to_lulc
 from imint.training.tile_config import TileConfig
 
 NMD_RASTER = "data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"

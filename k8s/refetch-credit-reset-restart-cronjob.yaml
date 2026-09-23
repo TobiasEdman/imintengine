@@ -2,7 +2,7 @@
 # credit-reset window so the in-process credit-guard (cleared by pod
 # restart) gets a chance to retry CDSE openEO.
 #
-# Why: the credit-guard in imint/training/openeo_tile_graph.py marks
+# Why: the credit-guard in imint/data/openeo_tile_graph.py marks
 # cdse-openeo dead for the rest of the Python process on the first 402.
 # When the monthly CDSE credit pool refills, the dead-mark prevents the
 # running pod from noticing. Restarting the pod clears the in-process

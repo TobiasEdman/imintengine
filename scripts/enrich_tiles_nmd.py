@@ -28,7 +28,7 @@ from imint.config.env import load_env
 load_env()
 
 from imint.fetch import fetch_nmd_data
-from imint.training.class_schema import nmd_raster_to_lulc
+from imint.schema.class_schema import nmd_raster_to_lulc
 
 
 def process_tile(tile_path: str) -> dict:

@@ -49,13 +49,13 @@ class TestResolveBboxSizes:
 
 @pytest.mark.parametrize("size_px", [256, 512])
 class TestFetchS2SceneAssertion:
-    """The assertion added to imint.training.cdse_s2.fetch_s2_scene must
+    """The assertion added to imint.data.cdse_s2.fetch_s2_scene must
     reject mismatched (bbox, size_px) before any HTTP call."""
 
     def test_correct_extent_passes_assertion(self, size_px):
         """We only verify the assertion layer — don't actually call CDSE.
         A mismatch should raise ValueError BEFORE _get_token() is reached."""
-        from imint.training import cdse_s2
+        from imint.data import cdse_s2
 
         t = TileConfig(size_px=size_px)
         # Build a correctly-sized bbox
@@ -72,7 +72,7 @@ class TestFetchS2SceneAssertion:
     def test_wrong_extent_raises_before_network(self, size_px):
         """Passing a mismatched bbox must raise ValueError before the
         fetcher does any network I/O."""
-        from imint.training import cdse_s2
+        from imint.data import cdse_s2
 
         # Construct a stale bbox that mimics the actual bug: 2560m extent
         # with size_px=512 would have silently returned 5m GSD data.

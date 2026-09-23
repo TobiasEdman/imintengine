@@ -46,7 +46,7 @@ def generic_accuracy_suite(truth: np.ndarray, pred: np.ndarray) -> dict:
     of 1.0 with zero information in it. Generic truth is scored over the
     classes actually present, same measures, no remap.
     """
-    from imint.training.unified_schema import UNIFIED_CLASSES
+    from imint.schema.unified_schema import UNIFIED_CLASSES
 
     classes = sorted(set(np.unique(truth)) | set(np.unique(pred)))
     idx = {c: i for i, c in enumerate(classes)}

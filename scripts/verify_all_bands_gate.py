@@ -50,7 +50,7 @@ import sys
 
 import numpy as np
 
-from imint.training.openeo_tile_graph import (
+from imint.data.openeo_tile_graph import (
     ALL_BANDS,
     ALL_BANDS_INDEX,
     fetch_tile_at_specific_dates,
@@ -103,7 +103,7 @@ def _resolve_target(args) -> tuple[dict, str, int]:
     date = args.date
     if not date:
         from imint.training.tile_fetch import bbox_3006_to_wgs84
-        from imint.training.optimal_fetch import optimal_fetch_dates
+        from imint.data.optimal_fetch import optimal_fetch_dates
         plan = optimal_fetch_dates(
             bbox_3006_to_wgs84(bbox), "2023-06-01", "2023-08-31")
         if not plan.dates:
