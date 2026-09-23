@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -134,3 +135,73 @@ def test_crop_offset_matches_run_inference_arithmetic():
         y0, x0 = (h - crop_sz) // 2, (w - crop_sz) // 2
         truth[y0:y0 + crop_sz, x0:x0 + crop_sz] = 3
         assert (lhe.centre_crop_truth(truth, img) == 3).all()
+
+
+def _args(tmp_path, **kw):
+    a = ["ladder_holdout_eval.py", "--holdout-dir", str(kw["hold"]),
+         "--label-dir", str(kw["lab"]), "--ckpt-root", str(kw["ck"]),
+         "--out", str(kw["out"]), "--device", "cpu"]
+    return a + list(kw.get("extra", []))
+
+
+def _fake_tree(tmp_path, cells):
+    hold = tmp_path / "hold"; lab = tmp_path / "lab"; ck = tmp_path / "ck"
+    for d in (hold, lab, ck):
+        d.mkdir()
+    (hold / "t0.npz").touch(); (lab / "t0.npz").touch()
+    for c in cells:
+        (ck / c).mkdir()
+        (ck / c / "best_model.pt").touch()
+    return hold, lab, ck
+
+
+def test_one_unscoreable_cell_does_not_kill_the_sweep(monkeypatch, tmp_path, capsys):
+    """Regression: a fail-loud dataset contract killed a 21-cell sweep.
+
+    croma refuses a tile whose s1_enrich_v predates its training, which is a
+    property of the holdout set — not a reason to lose the other twenty cells.
+    """
+    hold, lab, ck = _fake_tree(tmp_path, ["clay_r2", "croma_r2"])
+    out = tmp_path / "out.json"
+
+    def fake_score(model, rung, ckpt, tiles, hd, ld, dev):
+        if model == "croma":
+            raise KeyError("tile requires s1_enrich_v==4 but found 3")
+        return {"cell": f"{model}_r{rung}", "overall_accuracy": 0.5,
+                "mean_iou": 0.3, "pixels_scored": 10}
+
+    monkeypatch.setattr(lhe, "score_cell", fake_score)
+    monkeypatch.setattr("sys.argv", _args(
+        tmp_path, hold=hold, lab=lab, ck=ck, out=out,
+        extra=["--models", "clay,croma", "--rungs", "2"]))
+
+    # Non-zero: the sweep did not do all of its work.
+    assert lhe.main() == 1
+    body = json.loads(out.read_text())
+    assert [c["cell"] for c in body["cells"]] == ["clay_r2"]
+    assert body["failed_cells"][0]["cell"] == "croma_r2"
+    assert "s1_enrich_v" in body["failed_cells"][0]["error"]
+
+
+def test_resume_skips_cells_already_scored(monkeypatch, tmp_path):
+    hold, lab, ck = _fake_tree(tmp_path, ["clay_r2", "clay_r3"])
+    out = tmp_path / "out.json"
+    out.write_text(json.dumps({"cells": [
+        {"cell": "clay_r2", "overall_accuracy": 0.61, "mean_iou": 0.3}]}))
+
+    scored = []
+
+    def fake_score(model, rung, ckpt, tiles, hd, ld, dev):
+        scored.append(f"{model}_r{rung}")
+        return {"cell": f"{model}_r{rung}", "overall_accuracy": 0.5,
+                "mean_iou": 0.3, "pixels_scored": 10}
+
+    monkeypatch.setattr(lhe, "score_cell", fake_score)
+    monkeypatch.setattr("sys.argv", _args(
+        tmp_path, hold=hold, lab=lab, ck=ck, out=out,
+        extra=["--models", "clay", "--rungs", "2,3", "--resume"]))
+
+    assert lhe.main() == 0
+    assert scored == ["clay_r3"]                     # r2 was not re-run
+    cells = {c["cell"] for c in json.loads(out.read_text())["cells"]}
+    assert cells == {"clay_r2", "clay_r3"}           # and r2 survived
