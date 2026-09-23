@@ -1,0 +1,31 @@
+{
+  "active_goal": "Completed: review PR #2, integrate the fix, publish v0.1.1, and close task 0101.",
+  "active_rules": [
+    "[user-stated, current conversation] Follow the formal cross-runtime workflow and continue authorized work.",
+    "[repository] Isolated worktrees; verification before completion; exact-head verdicts."
+  ],
+  "blockers": [],
+  "changed_paths": [
+    ".agents/tasks/0101.json"
+  ],
+  "commit": "f9d81b9b059b95485a73d65b6ae4d8d937ba5892",
+  "created_at": "2026-09-23T21:10:03Z",
+  "current_state": "PR #2 approved at 89fdaac46dcbbce48e98f9a51e9b65742b973d1e and merged at da1e58c1c8463ea893ca5b2bf7f8fe6cdbce0547 on 2026-09-23T21:06:44Z. Codex reviewer App posted the approval; the established authorized operator CLI merged as TobiasEdman after the unchanged installed merge gate returned allowed=true, failures=[]. Master CI 35920373363 succeeded. Annotated v0.1.1 object f7cb0369ef94aec3cda6ea62a0db4c04db0f4982 was pushed and verified to peel to the merge commit. Task 0101 completed with the native CLI at f9d81b9b059b95485a73d65b6ae4d8d937ba5892. Source review worktree is clean. Permanent evidence: ~/.agents/continuity/evidence/space-datalab-metafilter/v0.1.1-89fdaac/.",
+  "next_steps": [
+    "Claude: verify the published v0.1.1 tag and write the GitHub Release as agreed. State the observed CDS result precisely: the saved August 2024 file selected 22/31 dates; do not claim general provider coverage.",
+    "The original temporary CDS input has expired. September 23 verification is 159 tests plus an independent offline cache matrix; September 18 independent real-CDS replay and Claude's subsequent same-file replay are separate evidence.",
+    "No Codex review, integration, tagging, or task-completion work remains for 0101."
+  ],
+  "off_limits": [
+    "Existing v0.1.0 and v0.1.1 tags must not be rewritten.",
+    "Other agents' source and coordination worktrees.",
+    "DigitalEarthSweden upstream publication remains outside this fork-only release."
+  ],
+  "repository_key": "ImintEngine--f4ea50ce3600",
+  "schema_version": "1",
+  "source_runtime": "codex",
+  "source_session": "codex-b704bb27bbe9b197",
+  "target": "claude",
+  "task_id": "0101",
+  "verification": "159 tests pass with warnings treated as errors. Four varied-snow cases cover both naming chronologies and both input orders, retaining 1465 unique hours and 61 correct daily means each. Public cache API never refetches valid legacy/new files. Genuine sde NaNs remain missing beside sd. Installed package reports 0.1.1 and dependency check is clean. Fresh-context review: LGTM. git diff between approved head and merge commit is empty; merge parents are the approved base/head; master CI is green. Remote tag and peeled SHA confirmed. Approval https://github.com/TobiasEdman/space-datalab-metafilter/pull/2#pullrequestreview-5296773922 ; PASS https://github.com/TobiasEdman/space-datalab-metafilter/pull/2#issuecomment-5802897995 ."
+}
