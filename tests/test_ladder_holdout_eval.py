@@ -103,3 +103,34 @@ def test_no_overlapping_truth_fails_loudly(tmp_path):
     (hold / "t0.npz").touch()
     with pytest.raises(SystemExit, match="sidecar"):
         lhe.select_tiles(hold, lab, None)
+
+
+def test_truth_is_cropped_to_the_window_the_model_saw():
+    """504-sized predictions score against truth[4:508, 4:508], not the tile.
+
+    Regression: comparing a 504 prediction with the full 512 label skipped
+    every tile (the probe scored 0 pixels). Resizing instead would be worse
+    than skipping — interpolating categorical labels invents classes.
+    """
+    truth = np.zeros((512, 512), dtype=np.int64)
+    truth[4:508, 4:508] = 7          # exactly the window the model sees
+    out = lhe.centre_crop_truth(truth, 504)
+    assert out.shape == (504, 504)
+    assert (out == 7).all()          # the border is gone, nothing shifted
+
+
+def test_crop_is_a_noop_when_the_model_sees_the_whole_tile():
+    truth = np.arange(512 * 512, dtype=np.int64).reshape(512, 512)
+    assert np.array_equal(lhe.centre_crop_truth(truth, 512), truth)
+    # img_size larger than the tile cannot crop beyond it
+    assert lhe.centre_crop_truth(truth, 1024).shape == (512, 512)
+
+
+def test_crop_offset_matches_run_inference_arithmetic():
+    """Pin the exact offset math copied from inference_comparison."""
+    for h, w, img in ((512, 512, 504), (512, 512, 224), (500, 500, 504)):
+        truth = np.zeros((h, w), dtype=np.int64)
+        crop_sz = min(img, h, w)
+        y0, x0 = (h - crop_sz) // 2, (w - crop_sz) // 2
+        truth[y0:y0 + crop_sz, x0:x0 + crop_sz] = 3
+        assert (lhe.centre_crop_truth(truth, img) == 3).all()
