@@ -198,16 +198,19 @@ as each column's rung 2 lands. The ladder queue does NOT submit these
 
 ## The LUCAS crop-distill stage (added 2026-09-01) — the R5 evidence pass
 
-**Operational status, 2026-09-03:** split attempt 2 ran as UID/GID 2000 and
-failed closed before freezing a split because 1,966 of the 2,074 post-window
-candidate tiles were unreadable. No crop consumer has run and no successful
-split exists. The retained failed record is evidence of failure, not success.
+**Operational status, 2026-09-23:** complete. All seven crop consumers have
+run against the frozen 2,491-plot split and the R5 table is assembled at the
+end of this document. The 2026-09-03 entry this replaces recorded split
+attempt 2 failing closed with 1,966 of 2,074 candidate tiles unreadable; that
+failure, the storage-prep repair, and the three failed launches of the seventh
+consumer are retained in the evidence README as the record of how the stage
+got here.
 
 **R5 = R4 + LUCAS crop type** [user-stated 2026-08-31], and distillability
 comes before any retraining. Before a rung 5 exists, every column therefore
 gets a crop-distillability number using LUCAS crop points (unified classes
 11–21). The experiment deliberately creates neither a gate nor a rung-5
-manifest; the six crop-OOF results are evidence for the later decision.
+manifest; the seven crop-OOF results are evidence for the later decision.
 
 ### Immutable multi-phase bootstrap
 
@@ -245,7 +248,7 @@ The stage is bootstrapped in this fixed order:
    remains non-root UID/GID 2000, drops all capabilities, and has no token.
 8. Independently verify the split completion and frozen manifest. A later
    **consumer-authorization commit E** pins that externally observed digest
-   as `CROP_DISTILL_SPLIT_MANIFEST_SHA256` and generates the six crop Jobs.
+   as `CROP_DISTILL_SPLIT_MANIFEST_SHA256` and generates the seven crop Jobs.
    Full generation rejects a zero, malformed, or abbreviated source, image,
    PLAN, completion, or split identity. Review E before any crop Job runs.
 
@@ -801,7 +804,7 @@ stop condition is fail-closed.
 
 8. Pin the verified split-manifest SHA-256, run the full generator/check, and
    review the consumer-authorization commit. Run and capture each model as
-   described in the evidence README. Assemble six crop OOF results for the R5
+   described in the evidence README. Assemble seven crop OOF results for the R5
    decision; this stage creates no gate, sidecar, queue entry, or rung-5 Job.
 
 The advisory dataset lock is separate from the external Kubernetes freeze.
@@ -829,3 +832,79 @@ tested in `tests/test_crop_distill_wiring.py`:
 
 Generic truth now remains in its own label space, and NFI-specific behavior
 remains NFI-only.
+
+## R5 result — the crop-distillability table (2026-09-23)
+
+All seven consumers have run. The table below is the evidence the stage was
+built to produce; the R5 retraining decision rests on it and is still open.
+
+Every column scores the **same frozen 2,491 LUCAS plots** with the same
+5-fold, tile-grouped, seed-42 protocol. Parity is not asserted but measured:
+`_meta.y_sha256` is `356c3b0ed3d0ef2e` in all seven records, so every head was
+fitted against a byte-identical truth vector. Only the frozen r2 checkpoint
+differs between columns.
+
+| backbone | frames | params | OOF accuracy | Cohen κ |
+|---|---|---|---|---|
+| tessera | — | — | **0.8294** | 0.7916 |
+| prithvi600m | 4 | 600M | 0.7965 | 0.7513 |
+| prithvi300m4f | 4 | 300M | 0.7720 | 0.7209 |
+| terramind | 4 | — | 0.7515 | 0.6959 |
+| prithvi300m | 1 | 300M | 0.7435 | 0.6858 |
+| clay | 4 | — | 0.7383 | 0.6798 |
+| croma | 4 | — | 0.7266 | 0.6655 |
+
+### Scale versus temporality
+
+The seventh column exists to separate two variables the first six confounded.
+Holding the Prithvi family fixed:
+
+- **temporality**, at equal scale: `prithvi300m4f` − `prithvi300m` = **+2.85
+  points** (0.7720 vs 0.7435);
+- **scale**, across the 1-frame/4-frame boundary: `prithvi600m` −
+  `prithvi300m` = **+5.30 points** (0.7965 vs 0.7435).
+
+Scale buys roughly twice what temporality does here, and the two are additive
+in sign rather than substituting for each other. Note what this does *not*
+say: `prithvi600m` is itself 4-frame, so its +5.30 is scale *and* temporality
+together, and the clean scale-only contrast (600M@1f) was never run. The
+honest reading is that 300M→600M adds about 2.5 points *beyond* what the
+fourth frame already gave.
+
+Both Prithvi results remain below `tessera`, which was trained on neither.
+
+### Per-class F1 (crop classes 11–21)
+
+| crop | support | tessera | prithvi600m | prithvi300m4f | terramind | prithvi300m | clay | croma |
+|---|---|---|---|---|---|---|---|---|
+| vete | 484 | **0.883** | 0.850 | 0.818 | 0.804 | 0.774 | 0.804 | 0.805 |
+| korn | 247 | **0.840** | 0.773 | 0.751 | 0.740 | 0.709 | 0.658 | 0.675 |
+| havre | 139 | **0.803** | 0.784 | 0.732 | 0.674 | 0.622 | 0.597 | 0.564 |
+| oljeväxter | 146 | **0.860** | 0.788 | 0.794 | 0.791 | 0.788 | 0.720 | 0.829 |
+| slåttervall | 466 | **0.734** | 0.698 | 0.657 | 0.637 | 0.630 | 0.652 | 0.591 |
+| bete | 745 | **0.832** | 0.819 | 0.807 | 0.788 | 0.803 | 0.785 | 0.761 |
+| potatis | 39 | **0.854** | 0.800 | 0.819 | 0.730 | 0.769 | 0.779 | 0.805 |
+| sockerbetor | 92 | **0.995** | 0.973 | 0.973 | 0.935 | 0.925 | 0.962 | 0.942 |
+| trindsäd | 58 | **0.776** | 0.748 | 0.673 | 0.644 | 0.643 | 0.566 | 0.643 |
+| råg | 33 | **0.630** | 0.621 | 0.480 | 0.520 | 0.621 | 0.571 | 0.586 |
+| majs | 42 | **0.955** | 0.861 | 0.861 | 0.809 | 0.744 | 0.868 | 0.805 |
+
+`tessera` wins all eleven classes — a clean sweep, not an aggregate artefact
+of one or two dominant crops. The ranking is least stable on the three
+smallest classes (`råg` n=33, `potatis` n=39, `majs` n=42), where single-plot
+movements shift F1 by several points; `råg` is the only class where
+`prithvi300m4f` falls below `prithvi300m`, and at n=33 that inversion should
+not be read as a temporality effect.
+
+### Provenance caveat, stated rather than buried
+
+Six columns were scored at source `1fd08fad`; `prithvi300m4f` at `7d935b9a`.
+The diff between those commits touches `scripts/crop_distill_protocol.py`
+only by adding the seventh registry entry, its UID, and the widened UID-range
+guard — no feature-extraction or scoring path changed. Together with the
+measured `y_sha256` parity, the seventh column is comparable to the other six.
+
+### What this table does not decide
+
+It is evidence for the R5 decision, not the decision. No rung-5 manifest,
+gate, sidecar, or queue entry exists, and none is created by this stage.
