@@ -846,7 +846,7 @@ differs between columns.
 
 | backbone | frames | params | OOF accuracy | Cohen κ |
 |---|---|---|---|---|
-| tessera | — | — | **0.8294** | 0.7916 |
+| tessera | 1 | — | **0.8294** | 0.7916 |
 | prithvi600m | 4 | 600M | 0.7965 | 0.7513 |
 | prithvi300m4f | 4 | 300M | 0.7720 | 0.7209 |
 | terramind | 4 | — | 0.7515 | 0.6959 |
@@ -856,22 +856,30 @@ differs between columns.
 
 ### Scale versus temporality
 
-The seventh column exists to separate two variables the first six confounded.
-Holding the Prithvi family fixed:
+The seventh column exists to separate two variables the first six confounded,
+and with it the 2×2 is complete: `prithvi300m` is 1-frame, while both
+`prithvi300m4f` and `prithvi600m` are 4-frame. Each contrast therefore moves
+exactly one variable:
 
-- **temporality**, at equal scale: `prithvi300m4f` − `prithvi300m` = **+2.85
-  points** (0.7720 vs 0.7435);
-- **scale**, across the 1-frame/4-frame boundary: `prithvi600m` −
-  `prithvi300m` = **+5.30 points** (0.7965 vs 0.7435).
+- **temporality**, at fixed 300M scale: `prithvi300m4f` − `prithvi300m` =
+  **+2.85 points** (0.7720 vs 0.7435);
+- **scale**, at fixed 4 frames: `prithvi600m` − `prithvi300m4f` = **+2.45
+  points** (0.7965 vs 0.7720).
 
-Scale buys roughly twice what temporality does here, and the two are additive
-in sign rather than substituting for each other. Note what this does *not*
-say: `prithvi600m` is itself 4-frame, so its +5.30 is scale *and* temporality
-together, and the clean scale-only contrast (600M@1f) was never run. The
-honest reading is that 300M→600M adds about 2.5 points *beyond* what the
-fourth frame already gave.
+**The fourth frame is worth slightly more than doubling the parameters.** The
+same ordering holds on the ladder's own rung-1 mIoU, where temporality gives
++2.69 points (0.5430 vs 0.5161) and scale +1.31 (0.5561 vs 0.5430) — there
+the gap is wider still.
 
-Both Prithvi results remain below `tessera`, which was trained on neither.
+The tempting shortcut is to read `prithvi600m` against `prithvi300m` and call
+the resulting +5.30 a scale effect. It is not: that contrast moves both
+variables at once, and it is very nearly the sum of the two clean ones
+(2.85 + 2.45 = 5.30). Scale and temporality are additive here, and neither
+dominates.
+
+Both Prithvi results remain below `tessera` — which is **1-frame**. A frozen
+representation trained elsewhere beats both the fourth frame and the doubled
+parameter count, and beats their sum.
 
 ### Per-class F1 (crop classes 11–21)
 
