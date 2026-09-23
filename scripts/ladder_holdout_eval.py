@@ -112,6 +112,25 @@ def derive(confusion: np.ndarray, ignore_index: int = 0) -> dict:
     }
 
 
+def centre_crop_truth(truth: np.ndarray, img_size: int) -> np.ndarray:
+    """Crop the label to the exact window the model actually saw.
+
+    ``run_inference`` centre-crops its input with
+    ``crop_sz = min(img_size, H, W)`` and ``y0 = (H - crop_sz) // 2``, so a
+    512x512 tile scored at img_size 504 yields a prediction covering
+    ``truth[4:508, 4:508]`` — not the whole tile. This repeats that arithmetic
+    exactly rather than resizing: labels are categorical, so any interpolation
+    would invent classes that were never there, and an off-by-four alignment
+    would still produce a plausible-looking accuracy computed against shifted
+    ground.
+    """
+    h, w = truth.shape
+    crop_sz = min(img_size, h, w)
+    y0 = (h - crop_sz) // 2
+    x0 = (w - crop_sz) // 2
+    return truth[y0:y0 + crop_sz, x0:x0 + crop_sz]
+
+
 def score_cell(model: str, rung: int, ckpt: Path, tiles: list[str],
                holdout_dir: Path, label_dir: Path, device: str) -> dict:
     import torch
@@ -137,9 +156,11 @@ def score_cell(model: str, rung: int, ckpt: Path, tiles: list[str],
             img_size=cfg["img_size"], aux_channel_names=aux_names))
         with np.load(label_dir / f"{name}.npz", allow_pickle=False) as z:
             truth = z["label"]
+        truth = centre_crop_truth(truth, cfg["img_size"])
         if pred.shape != truth.shape:
-            # A shape mismatch means the sidecar and the tile disagree about
-            # geometry; scoring it would silently compare different ground.
+            # The prediction should now be exactly the cropped window. If it
+            # is not, the tile's geometry disagrees with the crop contract and
+            # scoring it would compare different ground.
             skipped.append(name)
             continue
         if truth.max() >= NUM_CLASSES_28 or pred.max() >= NUM_CLASSES_28:
