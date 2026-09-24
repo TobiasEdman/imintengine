@@ -33,8 +33,9 @@ def test_rung1_is_not_charged_for_classes_it_cannot_emit():
 
     Regression: validate_against_lucas divides by len(truth) while the matrix
     only counts in-vocabulary pairs, so those points are pure loss for rung 1
-    — 7.1% of LUCAS. Under the shared-vocabulary rule both cells score 1.0,
-    because both are perfect on everything they can actually address.
+    — 7.1% of LUCAS. Folding 24/27 onto open land lets rung 1's answer of 8
+    count as the agreement it is, so both cells score 1.0 and no point is
+    thrown away to get there.
     """
     pts = [1, 2, 3, 4]
     dumps = {
@@ -45,7 +46,7 @@ def test_rung1_is_not_charged_for_classes_it_cannot_emit():
     shared = {r["cell"]: r for r in lfs.score_lucas(dumps, shared_only=True)}
     assert shared["clay_r1"]["overall"] == 1.0
     assert shared["clay_r2"]["overall"] == 1.0
-    assert shared["clay_r1"]["n"] == 2          # only the shared-vocab points
+    assert shared["clay_r1"]["n"] == 4          # folded, not discarded
 
     # Without the rule, rung 1 looks worse purely from vocabulary.
     full = {r["cell"]: r for r in lfs.score_lucas(dumps, shared_only=False)}
@@ -120,3 +121,36 @@ def test_cell_name_is_parsed_from_the_dump_filename(tmp_path):
         df.to_parquet(tmp_path / name)
     got = lfs.load_dumps(tmp_path, "lucas-per-point")
     assert set(got) == {"tessera_r3", "prithvi300m4f_r1"}
+
+
+def test_fine_open_land_classes_fold_onto_their_parent():
+    """A 28-class model answering 24 where truth is 8 is not wrong.
+
+    Regression: the first shared-vocabulary rule filtered only the truth, so a
+    28-class model was charged for finer-but-correct answers while a 23-class
+    model structurally could not make that mistake. Here both cells are right
+    on every point, and the table must say so.
+    """
+    pts = [1, 2, 3, 4]
+    dumps = {
+        "clay_r1": _lucas(pts, [8, 8, 24, 27], [8, 8, 8, 8]),
+        "clay_r2": _lucas(pts, [8, 8, 24, 27], [8, 24, 24, 27]),
+    }
+    rows = {r["cell"]: r for r in lfs.score_lucas(dumps, shared_only=True)}
+    assert rows["clay_r1"]["overall"] == 1.0
+    assert rows["clay_r2"]["overall"] == 1.0
+    assert rows["clay_r1"]["n"] == rows["clay_r2"]["n"] == 4   # nothing dropped
+
+
+def test_folding_does_not_forgive_a_genuinely_wrong_class():
+    """Only 23-27 fold; a wrong forest or crop answer stays wrong."""
+    dumps = {"a_r2": _lucas([1, 2], [3, 11], [24, 12])}
+    rows = lfs.score_lucas(dumps, shared_only=True)
+    assert rows[0]["overall"] == 0.0
+
+
+def test_full_28class_table_still_charges_the_finer_answer():
+    """The unfolded table keeps the strict reading, for rungs 2-4."""
+    dumps = {"a_r2": _lucas([1, 2], [8, 8], [24, 8])}
+    rows = lfs.score_lucas(dumps, shared_only=False)
+    assert rows[0]["overall"] == 0.5

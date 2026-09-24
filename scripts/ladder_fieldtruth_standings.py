@@ -10,12 +10,14 @@ centre-crops a different window and keeps a different subset of plots. Columns
 are therefore scored on the INTERSECTION of points every cell kept, never on
 each cell's own subset.
 
-**Same vocabulary.** Rung 1 is 23-class; rungs 2-4 are 28-class. LUCAS carries
-truth for classes 24 and 27, which a 23-class model cannot emit — 7.1% of the
-points. Scoring rung 1 against those counts structural impossibility as model
-error, so the cross-rung LUCAS table is restricted to the shared vocabulary
-(classes <= 22), and the full 28-class table is reported separately for rungs
-2-4 only.
+**Same vocabulary.** Rung 1 is 23-class; rungs 2-4 are 28-class. The extra
+classes 23-27 are not new concepts — they are NMD2023's finer subdivisions of
+open land. The cross-rung LUCAS table therefore folds 23-27 onto class 8 in
+BOTH truth and prediction, so "shrub-dominated open land" scores against
+"open land" as the agreement it is. Restricting only the truth, as this first
+did, quietly favours rung 1: a 28-class model can answer 24 where the truth is
+8 and be marked wrong, while a 23-class model cannot make that mistake at all.
+The full 28-class table is reported separately for rungs 2-4.
 
 NFI needs no vocabulary correction: its 5-class forest collapse maps classes
 1-4, which both vocabularies contain.
@@ -38,8 +40,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from validate_against_nfi import accuracy_suite  # noqa: E402
 
-# The 23-class unified vocabulary is 0..22; 28-class adds 23..27.
+# The 23-class unified vocabulary is 0..22; 28-class adds 23..27, which are
+# NMD2023-only FINE SUBDIVISIONS of open land (unified_schema: 24 shrub-,
+# 25 dwarf-shrub-, 26 grass-dominated, 27 bare ground; 23 peat extraction).
+# They are not new concepts, so the shared vocabulary is reached by collapsing
+# them to their parent rather than by discarding the points.
 SHARED_MAX_CLASS = 22
+OPEN_LAND = 8
+FINE_TO_PARENT = {23: OPEN_LAND, 24: OPEN_LAND, 25: OPEN_LAND,
+                  26: OPEN_LAND, 27: OPEN_LAND}
+
+
+def to_shared_vocab(s: "pd.Series") -> "pd.Series":
+    """Fold the 28-class-only fine classes onto their 23-class parent.
+
+    Applied to BOTH truth and prediction. Restricting only the truth — the
+    first attempt here — silently favours rung 1: a 28-class model can answer
+    24 on a point whose truth is 8 and be marked wrong, while a 23-class model
+    cannot make that mistake at all. Collapsing both sides scores "shrub-
+    dominated open land" against "open land" as the agreement it is, and keeps
+    every point instead of dropping the 7.1% whose truth is 24 or 27.
+    """
+    return s.replace(FINE_TO_PARENT)
+
+
 NFI_KEY = ["TractID", "PlotID", "Year"]
 CELL_RE = re.compile(r"-(?P<cell>[a-z0-9]+_r[1-4])\.parquet$")
 
@@ -92,9 +116,10 @@ def score_lucas(dumps: dict[str, pd.DataFrame], *, shared_only: bool,
     keys = common_keys(sel, ["point_id"])
     rows = []
     for cell, df in sel.items():
-        d = _restrict(df, keys, ["point_id"])
+        d = _restrict(df, keys, ["point_id"]).copy()
         if shared_only:
-            d = d[d["unified_class"] <= SHARED_MAX_CLASS]
+            d["unified_class"] = to_shared_vocab(d["unified_class"])
+            d["pred_class"] = to_shared_vocab(d["pred_class"])
         n = int(len(d))
         if not n:
             continue
@@ -150,9 +175,9 @@ def main() -> int:
 
     table("NFI — held-out forest type, 5-class collapse", nfi_rows,
           "all 28 cells comparable: classes 1-4 exist in both vocabularies")
-    table("LUCAS — shared vocabulary (classes <= 22)", lucas_shared,
-          "all 28 cells on identical points; 24/27 excluded so rung 1 is not "
-          "charged for classes it cannot emit")
+    table("LUCAS — shared vocabulary (23-27 folded onto open land)", lucas_shared,
+          "all cells on identical points; both truth AND prediction collapsed, "
+          "so a 28-class model is not charged for finer-but-correct answers")
     table("LUCAS — full 28-class (rungs 2-4 only)", lucas_full,
           "rung 1 omitted: 23-class output cannot address classes 24/27")
 
