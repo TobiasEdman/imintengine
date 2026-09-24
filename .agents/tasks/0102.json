@@ -2,15 +2,15 @@
   "id": "0102",
   "subject": "Review space-datalab-metafilter: lookback windows parsed from column names",
   "description": "Cross-vendor review of TobiasEdman/space-datalab-metafilter PR at head a88e57b395fa13b61e6379aef8a3e96fe9bea1df, base master@da1e58c1c8463ea893ca5b2bf7f8fe6cdbce0547. Four near-identical rolling blocks differed only in a number that was encoded in the column name; the name is the contract across core.py, the filter profiles and the downloader, so adding a window meant editing three files. The span is now parsed out of the name, so a profile naming precip_prev14d_mm gets a 14-day rolling sum with no code change. Buffer months are sized to the longest window, fixing a silent gap where a 30-day window over March saw only February's 28 days. CARRIES A FETCH-VOLUME CHANGE that was not requested and needs a decision: sentinel1_default goes from 1 land retrieval per month to 2, sentinel2_extended from 2 to 3 in March only. Return PASS or BLOCK bound to the exact head; the fetch-volume question is Tobias's to settle if you would rather not.",
-  "status": "claimed",
+  "status": "completed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/task-metafilter-review",
   "created_at": "2026-09-24T15:39:31Z",
-  "updated_at": "2026-09-24T15:50:16Z",
+  "updated_at": "2026-09-24T17:32:16Z",
   "claimed_by": "te-codex",
   "runtime": "codex",
   "claimed_at": "2026-09-24T15:50:16Z",
-  "completed_at": null,
+  "completed_at": "2026-09-24T17:32:16Z",
   "blocked_by": [],
   "blocks": []
 }
