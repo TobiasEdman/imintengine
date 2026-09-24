@@ -38,6 +38,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.eval.metrics import auroc_aupr
+from imint.training.unified_dataset import TilePrerequisiteError
 
 # Unified-schema forest classes (imint/training/unified_schema.py).
 TALLSKOG, GRANSKOG, LOVSKOG, BLANDSKOG = 1, 2, 3, 4
@@ -198,6 +199,7 @@ def score_against_nfi(
     num_classes: int = 23,
     dominant_frac: float = 0.7,
     per_plot_sink: list | None = None,
+    skip_unscoreable: bool = False,
 ) -> dict:
     """Sample predictions at plot pixels and score forest-type agreement.
 
@@ -223,9 +225,20 @@ def score_against_nfi(
     mature: list[int] = []
     probs_at_plot: list[np.ndarray] = []
 
+    skipped: list[dict] = []
     for tile_name, grp in index_df.groupby("tile_name", sort=False):
         tile_path = grp["tile_path"].iloc[0] if "tile_path" in grp else tile_name
-        class_map, probs = predict_fn(tile_path)
+        try:
+            class_map, probs = predict_fn(tile_path)
+        except TilePrerequisiteError as exc:
+            # See validate_against_lucas: only the eligible tile-prerequisite
+            # error is caught, so model and configuration failures still
+            # propagate rather than being recorded as coverage gaps.
+            if not skip_unscoreable:
+                raise
+            skipped.append({"tile": str(tile_name), "plots": int(len(grp)),
+                            "reason": repr(exc)[:200]})
+            continue
         for _, r in grp.iterrows():
             rr, cc = int(r["row"]), int(r["col"])
             pc = int(class_map[rr, cc])
@@ -246,6 +259,17 @@ def score_against_nfi(
                 rec.update({f"p{k}": float(probs[k, rr, cc]) for k in (1, 2, 3, 4)})
                 per_plot_sink.append(rec)
 
+    if skipped:
+        print(f"skipped {len(skipped)} unscoreable tile(s), "
+              f"{sum(s['plots'] for s in skipped)} plot(s)", flush=True)
+    if not pred_class:
+        # Every tile was skipped. Returning here would hand the CLI NaN
+        # headline metrics over n_plots=0 and write them out as a successful
+        # result — a run that measured nothing must not look like one that
+        # measured zero.
+        raise SystemExit(
+            f"no plot could be scored: all {len(skipped)} tile(s) were "
+            f"skipped as unscoreable. Nothing was written.")
     pred = np.array(pred_class)
     truth = np.array([c if c is not None else -1 for c in nfi_class])
     P = np.vstack(probs_at_plot) if probs_at_plot else np.zeros((0, num_classes))
@@ -272,6 +296,7 @@ def score_against_nfi(
                 per_class_auroc[FOREST_NAMES[c]] = {"auroc": round(a, 4), "aupr": round(p, 4)}
 
     return {
+        "skipped_tiles": skipped,
         "n_plots": int(len(pred)),
         "n_forest": n_forest,
         "n_mature": int(np.array(mature).sum()),
@@ -423,6 +448,9 @@ def main() -> None:
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--plot-index", required=True, help="parquet from nfi_tile_coverage.py")
     ap.add_argument("--out", default="docs/data/nfi-validation.json")
+    ap.add_argument("--skip-unscoreable", action="store_true",
+                    help="record and skip tiles the dataset refuses (missing "
+                         "S1 composite) instead of failing the whole run")
     ap.add_argument("--dump-per-plot", default=None,
                     help="parquet path: one row per scored plot (identifiers + "
                          "NFI forest truth + model prediction) for an external "
@@ -511,7 +539,8 @@ def main() -> None:
     per_plot: list | None = [] if args.dump_per_plot else None
     results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes,
                                 dominant_frac=args.dominant_frac,
-                                per_plot_sink=per_plot)
+                                per_plot_sink=per_plot,
+                                skip_unscoreable=args.skip_unscoreable)
     results["_meta"] = {
         "checkpoint": args.checkpoint, "img_size": args.img_size,
         "plots_in_crop": len(index_df), "plots_total": before,
