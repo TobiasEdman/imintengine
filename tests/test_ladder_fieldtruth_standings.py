@@ -154,3 +154,22 @@ def test_full_28class_table_still_charges_the_finer_answer():
     dumps = {"a_r2": _lucas([1, 2], [8, 8], [24, 8])}
     rows = lfs.score_lucas(dumps, shared_only=False)
     assert rows[0]["overall"] == 0.5
+
+
+def test_a_point_in_two_tiles_is_scored_once_per_cell():
+    """LUCAS edge points appear in every tile that contains them.
+
+    Regression: 10,329 index rows cover 7,143 distinct points, and a cell's
+    img_size decides which duplicate tiles survive its crop — so keeping all
+    rows both double-weighted those points and gave each cell a different n
+    (9,892 vs 9,976 in the first real run).
+    """
+    a = pd.DataFrame({"point_id": [1, 1, 2], "unified_class": [5, 5, 6],
+                      "pred_class": [5, 9, 6]})          # point 1 twice
+    b = pd.DataFrame({"point_id": [1, 2], "unified_class": [5, 6],
+                      "pred_class": [5, 6]})             # point 1 once
+    rows = {r["cell"]: r for r in lfs.score_lucas({"a_r2": a, "b_r2": b},
+                                                  shared_only=True)}
+    assert rows["a_r2"]["n"] == rows["b_r2"]["n"] == 2
+    assert rows["a_r2"]["overall"] == 1.0    # the kept row for point 1 is right
+    assert rows["b_r2"]["overall"] == 1.0
