@@ -839,14 +839,15 @@ All seven consumers have run. The table below is the evidence the stage was
 built to produce; the R5 retraining decision rests on it and is still open.
 
 Every column scores the **same frozen 2,491 LUCAS plots** with the same
-5-fold, tile-grouped, seed-42 protocol. Parity is not asserted but measured:
-`_meta.y_sha256` is `356c3b0ed3d0ef2e` in all seven records, so every head was
-fitted against a byte-identical truth vector. Only the frozen r2 checkpoint
-differs between columns.
+5-fold, tile-grouped, seed-42 protocol, and every record reads the same frozen
+split manifest `0d4e21d01a87de20`. Label parity is measured rather than
+asserted: `_meta.y_sha256` is `356c3b0ed3d0ef2e` in all seven. The frozen r2
+checkpoint is the intended difference between columns; one unintended
+difference remains, recorded under Provenance below.
 
 | backbone | frames | params | OOF accuracy | Cohen κ |
 |---|---|---|---|---|
-| tessera | 1 | — | **0.8294** | 0.7916 |
+| tessera | annual¹ | — | **0.8294** | 0.7916 |
 | prithvi600m | 4 | 600M | 0.7965 | 0.7513 |
 | prithvi300m4f | 4 | 300M | 0.7720 | 0.7209 |
 | terramind | 4 | — | 0.7515 | 0.6959 |
@@ -854,32 +855,44 @@ differs between columns.
 | clay | 4 | — | 0.7383 | 0.6798 |
 | croma | 4 | — | 0.7266 | 0.6655 |
 
+¹ `tessera` consumes a precomputed annual embedding, not one acquisition; it
+is outside the frame-count comparison rather than at its low end.
+
 ### Scale versus temporality
 
-The seventh column exists to separate two variables the first six confounded,
-and with it the 2×2 is complete: `prithvi300m` is 1-frame, while both
-`prithvi300m4f` and `prithvi600m` are 4-frame. Each contrast therefore moves
-exactly one variable:
+The seventh column separates two variables the first six confounded, but it
+does not complete the factorial: the 600M single-frame arm was never run, so
+there is no 2×2. What exists is two descriptive contrasts, each moving one
+variable, each a single run:
 
 - **temporality**, at fixed 300M scale: `prithvi300m4f` − `prithvi300m` =
-  **+2.85 points** (0.7720 vs 0.7435);
+  **+2.85 points** (0.7720 vs 0.7435) — 1 frame against 4, so three added
+  frames, not one;
 - **scale**, at fixed 4 frames: `prithvi600m` − `prithvi300m4f` = **+2.45
   points** (0.7965 vs 0.7720).
 
-**The fourth frame is worth slightly more than doubling the parameters.** The
-same ordering holds on the ladder's own rung-1 mIoU, where temporality gives
-+2.69 points (0.5430 vs 0.5161) and scale +1.31 (0.5561 vs 0.5430) — there
-the gap is wider still.
+Three added frames are worth slightly more here than doubling the parameters.
+The ladder's own rung-1 mIoU orders them the same way and more sharply
+(+2.69 and +1.31).
 
-The tempting shortcut is to read `prithvi600m` against `prithvi300m` and call
-the resulting +5.30 a scale effect. It is not: that contrast moves both
-variables at once, and it is very nearly the sum of the two clean ones
-(2.85 + 2.45 = 5.30). Scale and temporality are additive here, and neither
-dominates.
+**These are not causal estimates.** One run per arm, no seeds, no interval —
+they describe what these seven checkpoints did on these 2,491 plots. A
+difference of 0.4 points between the two contrasts carries no claim of being
+distinguishable.
 
-Both Prithvi results remain below `tessera` — which is **1-frame**. A frozen
-representation trained elsewhere beats both the fourth frame and the doubled
-parameter count, and beats their sum.
+The tempting shortcut is to read `prithvi600m` against `prithvi300m`, call the
+resulting +5.30 a scale effect, and note that 2.85 + 2.45 = 5.30 as evidence
+that the two effects are additive. The first is wrong — that contrast moves
+both variables — and the second is empty: the sum of two adjacent differences
+equals the end-to-end difference by arithmetic, whatever the underlying
+interaction. Testing for interaction needs the missing 600M@1f arm.
+
+Both Prithvi results remain below `tessera` — but `tessera` does not belong
+on the temporal axis at all. Its `num_frames=1` is not a single acquisition:
+the loader bakes in **annual** 128-D per-pixel Sentinel-1/2 embeddings, so a
+whole year is already integrated before the head ever sees it. Reading it as
+the 1-frame end of a temporality contrast would compare a frozen annual
+composite with a 4-frame stack and call the difference frames.
 
 ### Per-class F1 (crop classes 11–21)
 
@@ -904,13 +917,43 @@ movements shift F1 by several points; `råg` is the only class where
 `prithvi300m4f` falls below `prithvi300m`, and at n=33 that inversion should
 not be read as a temporality effect.
 
-### Provenance caveat, stated rather than buried
+### Provenance, in three parts that are easy to conflate
 
 Six columns were scored at source `1fd08fad`; `prithvi300m4f` at `7d935b9a`.
-The diff between those commits touches `scripts/crop_distill_protocol.py`
-only by adding the seventh registry entry, its UID, and the widened UID-range
-guard — no feature-extraction or scoring path changed. Together with the
-measured `y_sha256` parity, the seventh column is comparable to the other six.
+Three different things could make that matter, and only two of them are
+settled.
+
+**Label parity — measured.** `_meta.y_sha256` is `356c3b0ed3d0ef2e` in all
+seven records. Every head was fitted against a byte-identical truth vector.
+
+**Scoring-environment parity — declared and matching.** All seven records
+carry the same scoring environment, and the scoring code itself is unchanged
+between the two commits apart from `_numpy_metric_safe_globals()`, which
+governs which numpy pickle spellings a checkpoint may be deserialised under.
+
+**Model-runtime parity — NOT established.** The same diff moves the model
+runtime from Torch 2.5.1+cu121 to 2.10.0+cu126, rewriting 179 lines of
+`requirements-model.lock` along with the Dockerfile and its smoke test.
+Feature extraction runs on that runtime. Identical labels say nothing about
+whether two Torch/CUDA generations produce numerically identical features
+from the same frozen checkpoint, and nothing here tests it.
+
+So the seventh column is comparable in its truth and its scoring, and
+unverified in the stack that produced its features. The contrasts above
+should be read with that open.
+
+Closing it would mean re-running one of the six on the new runtime and
+checking its numbers reproduce — roughly an hour of 2080Ti time, no H100.
+That has not been done.
+
+### A further limitation worth recording
+
+`_meta.y_sha256` is the first 16 hex characters of a SHA-256 over the truth
+vector alone. It binds the label values and their order. It does not bind the
+plot identities, the group assignment, or the fold split, so two records could
+agree on it while differing in which plots they are. They do not differ here —
+all seven read the same frozen manifest `0d4e21d01a87de20` — but the digest is
+not what proves that.
 
 ### What this table does not decide
 
