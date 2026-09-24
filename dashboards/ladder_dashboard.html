@@ -90,14 +90,19 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
 </div>
 
 <div class="panel">
-  <h2>Field truth — NFI forest type, scored against NMD itself</h2>
+  <h2>Field truth — NFI forest type (full cohort, training overlap)</h2>
   <table id="fieldtruth"></table>
-  <div class="foot">The only measure that can say whether a model beats the map, because the map is
-    not its own examiner here: held-out NFI (Riksskogstaxeringen) plots, 5-class forest collapse.
+  <div class="foot"><b>Full-cohort diagnostics, not a held-out evaluation.</b> These score the
+    whole NFI index (<span class="stat">nfi_index_unified_v2_512</span>), and that same index
+    supplies the rung-3/4 distillation teachers — roughly three quarters of its plots are in the
+    distillation training split. Rungs 3 and 4 are therefore scored partly on plots whose NFI
+    labels shaped their training targets, and their margins here are inflated by an unquantified
+    amount. Rungs 1 and 2 never saw NFI and carry no such overlap.
     Each cell shows its accuracy and its margin over <b>NMD2023 v2.1 scored on that cell's own
     plots</b> — the reference is recomputed per column, so the margin is valid even where a
-    backbone's img_size keeps a slightly different plot subset. Rung 1 competes here despite being
-    23-class: classes 1–4 exist in both vocabularies.
+    backbone's img_size keeps a different plot subset. Rung 1 competes despite being 23-class:
+    classes 1–4 exist in both vocabularies. A held-out comparison needs the per-model
+    <span class="stat">*_r2_split.json</span> test tiles applied first.
     <span id="ftRef"></span></div>
 </div>
 
@@ -397,7 +402,7 @@ function renderFieldTruth() {
   }
   let h = "<thead><tr><th></th>" + MODELS.map(m=>`<th>${LABELS[m]}</th>`).join("") +
           "</tr></thead><tbody>";
-  let ref = null;
+  const refs = new Set();
   for (const r of RUNGS) {
     h += `<tr><td class="rung-label">r${r.n} ${r.name}</td>`;
     for (const m of MODELS) {
@@ -405,7 +410,7 @@ function renderFieldTruth() {
       if (!mm) { h += `<td class="delta flat">—</td>`; continue; }
       const nmd = sp.sources["NMD2023_v2.1"].overall_accuracy_5class;
       const oa = mm.overall_accuracy_5class, d = oa - nmd;
-      ref = nmd;
+      refs.add(nmd.toFixed(4));
       const cls = d > 0.0005 ? "up" : d < -0.0005 ? "down" : "flat";
       h += `<td class="delta ${cls}" title="n=${sp.n_plots_compared} plots, ` +
            `kappa ${mm.cohen_kappa.toFixed(4)}">${oa.toFixed(4)}` +
@@ -414,8 +419,13 @@ function renderFieldTruth() {
     h += "</tr>";
   }
   el.innerHTML = h + "</tbody>";
-  document.getElementById("ftRef").textContent = ref === null ? "" :
-    `NMD2023 on these plots: ${ref.toFixed(4)}. ${have} of ${MODELS.length*RUNGS.length} cells scored.`;
+  const r = [...refs].sort();
+  document.getElementById("ftRef").textContent = !r.length ? "" :
+    (r.length === 1
+      ? `NMD2023 on these plots: ${r[0]}. `
+      : `NMD2023 differs by column (${r.join(", ")}) because each is scored on ` +
+        `its own plot subset — read the margins, not the levels. `) +
+    `${have} of ${MODELS.length * RUNGS.length} cells scored.`;
 }
 
 function renderFieldTruthLucas() {
@@ -426,8 +436,8 @@ function renderFieldTruthLucas() {
     document.getElementById("ftLucasNote").textContent = "";
     return;
   }
-  const by = {}; let n = null;
-  for (const r of rows) { by[r.cell] = r; n = r.n; }
+  const by = {}; const ns = new Set();
+  for (const r of rows) { by[r.cell] = r; ns.add(r.n); }
   let h = "<thead><tr><th></th>" + MODELS.map(m=>`<th>${LABELS[m]}</th>`).join("") +
           "</tr></thead><tbody>";
   for (const r of RUNGS) {
@@ -440,8 +450,12 @@ function renderFieldTruthLucas() {
     h += "</tr>";
   }
   el.innerHTML = h + "</tbody>";
-  document.getElementById("ftLucasNote").textContent =
-    `${rows.length} cell(s) scored on ${n} shared points.`;
+  const nn = [...ns].sort((a, b) => a - b);
+  document.getElementById("ftLucasNote").textContent = nn.length === 1
+    ? `${rows.length} cell(s) scored on ${nn[0]} shared points.`
+    : `${rows.length} cell(s); point counts DIFFER (${nn.join(", ")}), so these ` +
+      `columns are not on a common cohort — equal counts would anyway be ` +
+      `necessary but not sufficient. Hover a cell for its own n.`;
 }
 
 function options() {
