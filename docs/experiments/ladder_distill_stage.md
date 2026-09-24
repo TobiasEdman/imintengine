@@ -198,16 +198,19 @@ as each column's rung 2 lands. The ladder queue does NOT submit these
 
 ## The LUCAS crop-distill stage (added 2026-09-01) — the R5 evidence pass
 
-**Operational status, 2026-09-03:** split attempt 2 ran as UID/GID 2000 and
-failed closed before freezing a split because 1,966 of the 2,074 post-window
-candidate tiles were unreadable. No crop consumer has run and no successful
-split exists. The retained failed record is evidence of failure, not success.
+**Operational status, 2026-09-23:** complete. All seven crop consumers have
+run against the frozen 2,491-plot split and the R5 table is assembled at the
+end of this document. The 2026-09-03 entry this replaces recorded split
+attempt 2 failing closed with 1,966 of 2,074 candidate tiles unreadable; that
+failure, the storage-prep repair, and the three failed launches of the seventh
+consumer are retained in the evidence README as the record of how the stage
+got here.
 
 **R5 = R4 + LUCAS crop type** [user-stated 2026-08-31], and distillability
 comes before any retraining. Before a rung 5 exists, every column therefore
 gets a crop-distillability number using LUCAS crop points (unified classes
 11–21). The experiment deliberately creates neither a gate nor a rung-5
-manifest; the six crop-OOF results are evidence for the later decision.
+manifest; the seven crop-OOF results are evidence for the later decision.
 
 ### Immutable multi-phase bootstrap
 
@@ -245,7 +248,7 @@ The stage is bootstrapped in this fixed order:
    remains non-root UID/GID 2000, drops all capabilities, and has no token.
 8. Independently verify the split completion and frozen manifest. A later
    **consumer-authorization commit E** pins that externally observed digest
-   as `CROP_DISTILL_SPLIT_MANIFEST_SHA256` and generates the six crop Jobs.
+   as `CROP_DISTILL_SPLIT_MANIFEST_SHA256` and generates the seven crop Jobs.
    Full generation rejects a zero, malformed, or abbreviated source, image,
    PLAN, completion, or split identity. Review E before any crop Job runs.
 
@@ -801,7 +804,7 @@ stop condition is fail-closed.
 
 8. Pin the verified split-manifest SHA-256, run the full generator/check, and
    review the consumer-authorization commit. Run and capture each model as
-   described in the evidence README. Assemble six crop OOF results for the R5
+   described in the evidence README. Assemble seven crop OOF results for the R5
    decision; this stage creates no gate, sidecar, queue entry, or rung-5 Job.
 
 The advisory dataset lock is separate from the external Kubernetes freeze.
@@ -829,3 +832,130 @@ tested in `tests/test_crop_distill_wiring.py`:
 
 Generic truth now remains in its own label space, and NFI-specific behavior
 remains NFI-only.
+
+## R5 result — the crop-distillability table (2026-09-23)
+
+All seven consumers have run. The table below is the evidence the stage was
+built to produce; the R5 retraining decision rests on it and is still open.
+
+Every column scores the **same frozen 2,491 LUCAS plots** with the same
+5-fold, tile-grouped, seed-42 protocol, and every record reads the same frozen
+split manifest `0d4e21d01a87de20`. Label parity is measured rather than
+asserted: `_meta.y_sha256` is `356c3b0ed3d0ef2e` in all seven. The frozen r2
+checkpoint is the intended difference between columns; one unintended
+difference remains, recorded under Provenance below.
+
+| backbone | frames | params | OOF accuracy | Cohen κ |
+|---|---|---|---|---|
+| tessera | annual¹ | — | **0.8294** | 0.7916 |
+| prithvi600m | 4 | 600M | 0.7965 | 0.7513 |
+| prithvi300m4f | 4 | 300M | 0.7720 | 0.7209 |
+| terramind | 4 | — | 0.7515 | 0.6959 |
+| prithvi300m | 1 | 300M | 0.7435 | 0.6858 |
+| clay | 4 | — | 0.7383 | 0.6798 |
+| croma | 4 | — | 0.7266 | 0.6655 |
+
+¹ `tessera` consumes a precomputed annual embedding, not one acquisition; it
+is outside the frame-count comparison rather than at its low end.
+
+### Scale versus temporality
+
+The seventh column separates two variables the first six confounded, but it
+does not complete the factorial: the 600M single-frame arm was never run, so
+there is no 2×2. What exists is two descriptive contrasts, each moving one
+variable, each a single run:
+
+- **temporality**, at fixed 300M scale: `prithvi300m4f` − `prithvi300m` =
+  **+2.85 points** (0.7720 vs 0.7435) — 1 frame against 4, so three added
+  frames, not one;
+- **scale**, at fixed 4 frames: `prithvi600m` − `prithvi300m4f` = **+2.45
+  points** (0.7965 vs 0.7720).
+
+Three added frames are worth slightly more here than doubling the parameters.
+The ladder's own rung-1 mIoU orders them the same way and more sharply
+(+2.69 and +1.31).
+
+**These are not causal estimates.** One run per arm, no seeds, no interval —
+they describe what these seven checkpoints did on these 2,491 plots. A
+difference of 0.4 points between the two contrasts carries no claim of being
+distinguishable.
+
+The tempting shortcut is to read `prithvi600m` against `prithvi300m`, call the
+resulting +5.30 a scale effect, and note that 2.85 + 2.45 = 5.30 as evidence
+that the two effects are additive. The first is wrong — that contrast moves
+both variables — and the second is empty: the sum of two adjacent differences
+equals the end-to-end difference by arithmetic, whatever the underlying
+interaction. Testing for interaction needs the missing 600M@1f arm.
+
+Both Prithvi results remain below `tessera` — but `tessera` does not belong
+on the temporal axis at all. Its `num_frames=1` is not a single acquisition:
+the loader bakes in **annual** 128-D per-pixel Sentinel-1/2 embeddings, so a
+whole year is already integrated before the head ever sees it. Reading it as
+the 1-frame end of a temporality contrast would compare a frozen annual
+composite with a 4-frame stack and call the difference frames.
+
+### Per-class F1 (crop classes 11–21)
+
+| crop | support | tessera | prithvi600m | prithvi300m4f | terramind | prithvi300m | clay | croma |
+|---|---|---|---|---|---|---|---|---|
+| vete | 484 | **0.883** | 0.850 | 0.818 | 0.804 | 0.774 | 0.804 | 0.805 |
+| korn | 247 | **0.840** | 0.773 | 0.751 | 0.740 | 0.709 | 0.658 | 0.675 |
+| havre | 139 | **0.803** | 0.784 | 0.732 | 0.674 | 0.622 | 0.597 | 0.564 |
+| oljeväxter | 146 | **0.860** | 0.788 | 0.794 | 0.791 | 0.788 | 0.720 | 0.829 |
+| slåttervall | 466 | **0.734** | 0.698 | 0.657 | 0.637 | 0.630 | 0.652 | 0.591 |
+| bete | 745 | **0.832** | 0.819 | 0.807 | 0.788 | 0.803 | 0.785 | 0.761 |
+| potatis | 39 | **0.854** | 0.800 | 0.819 | 0.730 | 0.769 | 0.779 | 0.805 |
+| sockerbetor | 92 | **0.995** | 0.973 | 0.973 | 0.935 | 0.925 | 0.962 | 0.942 |
+| trindsäd | 58 | **0.776** | 0.748 | 0.673 | 0.644 | 0.643 | 0.566 | 0.643 |
+| råg | 33 | **0.630** | 0.621 | 0.480 | 0.520 | 0.621 | 0.571 | 0.586 |
+| majs | 42 | **0.955** | 0.861 | 0.861 | 0.809 | 0.744 | 0.868 | 0.805 |
+
+`tessera` wins all eleven classes — a clean sweep, not an aggregate artefact
+of one or two dominant crops. The ranking is least stable on the three
+smallest classes (`råg` n=33, `potatis` n=39, `majs` n=42), where single-plot
+movements shift F1 by several points; `råg` is the only class where
+`prithvi300m4f` falls below `prithvi300m`, and at n=33 that inversion should
+not be read as a temporality effect.
+
+### Provenance, in three parts that are easy to conflate
+
+Six columns were scored at source `1fd08fad`; `prithvi300m4f` at `7d935b9a`.
+Three different things could make that matter, and only two of them are
+settled.
+
+**Label parity — measured.** `_meta.y_sha256` is `356c3b0ed3d0ef2e` in all
+seven records. Every head was fitted against a byte-identical truth vector.
+
+**Scoring-environment parity — declared and matching.** All seven records
+carry the same scoring environment, and the scoring code itself is unchanged
+between the two commits apart from `_numpy_metric_safe_globals()`, which
+governs which numpy pickle spellings a checkpoint may be deserialised under.
+
+**Model-runtime parity — NOT established.** The same diff moves the model
+runtime from Torch 2.5.1+cu121 to 2.10.0+cu126, rewriting 179 lines of
+`requirements-model.lock` along with the Dockerfile and its smoke test.
+Feature extraction runs on that runtime. Identical labels say nothing about
+whether two Torch/CUDA generations produce numerically identical features
+from the same frozen checkpoint, and nothing here tests it.
+
+So the seventh column is comparable in its truth and its scoring, and
+unverified in the stack that produced its features. The contrasts above
+should be read with that open.
+
+Closing it would mean re-running one of the six on the new runtime and
+checking its numbers reproduce — roughly an hour of 2080Ti time, no H100.
+That has not been done.
+
+### A further limitation worth recording
+
+`_meta.y_sha256` is the first 16 hex characters of a SHA-256 over the truth
+vector alone. It binds the label values and their order. It does not bind the
+plot identities, the group assignment, or the fold split, so two records could
+agree on it while differing in which plots they are. They do not differ here —
+all seven read the same frozen manifest `0d4e21d01a87de20` — but the digest is
+not what proves that.
+
+### What this table does not decide
+
+It is evidence for the R5 decision, not the decision. No rung-5 manifest,
+gate, sidecar, or queue entry exists, and none is created by this stage.

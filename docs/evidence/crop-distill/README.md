@@ -4,11 +4,15 @@ This directory is the status index and runbook for the LUCAS crop-distill
 rollout. It is not evidence that a live Job succeeded. Successful storage-prep
 and source-access PLAN/APPLY bundles have been captured for the reviewed image
 and strictly verified against their current Git pins. The attempt-16 split
-verifier and exact restore have also succeeded. All six crop-consumer Jobs then
+verifier and exact restore have also succeeded. Six crop-consumer Jobs
 completed successfully on the rebuilt, digest-pinned runtime; their reaper
 archives were copied off-PVC and six strict external bundles passed offline
 verification. The committed rollout receipt below is a non-sensitive index to
-those restricted bundles.
+those six restricted bundles. The seventh consumer (`prithvi300m4f`) ran later,
+after #58 taught the strict contract the three PR55 runtime variables; its
+canonical bundle was captured from merged-main code on 2026-09-11 and passed
+offline verification twice, independently. That bundle is **not** indexed by
+the 2026-09-07 receipt.
 
 Kubernetes Pod objects disappear after the Job TTL. Workload records on the
 RWX PVC share the workload trust domain. Acceptance therefore requires an
@@ -34,7 +38,7 @@ followed by offline verification against the reviewed Git pins.
 | split verifier attempt 16 | succeeded under the held split-phase lease: all 2,074 source files and the existing immutable split were verified; no split bytes were regenerated | Job UID `2ce376e7-69b9-4968-936a-dee1587778fb`; Pod UID `8aba4806-1638-45d6-9c08-f5d8acfe75e3`; completion SHA-256 `3ece63bf7d94333c764251f949699416703fbdfbfc2c2d6d47667bae8ca77296`; manifest SHA-256 `0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed`; 3,555 qualified / 2,491 distill / 1,064 holdout; exit 0, zero restarts |
 | attempt-16 exact restore | succeeded: the lease returned to released/idle and all three controller suspension states matched the pre-hold snapshot | operator Job UID `300519bd-98f4-485a-8313-0265b7d6dfb8`; Pod UID `f4799b11-7ff5-45bf-8cc6-c687d00b5cc0`; `ladder-queue=true`, `gpu-reaper=false`, `campaign-orchestrator=true`; exit 0, zero restarts |
 | crop consumers | succeeded 6/6; zero failed; six strict external bundles verified after archive-before-delete | source `1fd08fad9ba9ab599415230938e6fade357cd5eb`; image digest `dba3a47b2936a8b4f64bbaacc1e2bbaa4ddc4f57802077f7c6c576f63de996cf`; split manifest `0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed`; receipt [`2026-09-07-consumer-rollout-receipt.json`](2026-09-07-consumer-rollout-receipt.json) |
-
+| seventh crop consumer (`prithvi300m4f`) | succeeded after three failed launches — root-created subPath (fixed by the storage-prep rotation), evidence authority misclassification, then `pwd.getpwuid(2007)` KeyError from torch 2.10's inductor resolving its cache dir via `getpass.getuser()` on a passwd-less numeric UID | source `7d935b9a0210f9a88b641ef24e7d83206c2fdcb0`; Pod UID `c79245ec-5896-44b8-930a-a4cd08e24414`; same split manifest `0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed`; measured truth parity `y_sha256=356c3b0ed3d0ef2e` with all six earlier columns |
 ## Consumer rollout receipt
 
 [`2026-09-07-consumer-rollout-receipt.json`](2026-09-07-consumer-rollout-receipt.json)
