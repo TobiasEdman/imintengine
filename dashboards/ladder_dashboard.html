@@ -36,6 +36,14 @@ thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color
 .cell.completed .bar > div { background:#16a34a; }
 .delta { font-size:11.5px; font-variant-numeric:tabular-nums; }
 .up { color:#4ade80; } .down { color:#f87171; } .flat { color:#6b7280; }
+/* Swipe layers share ONE geographic frame. Each layer is centred and scaled
+   by its own native size against the widest layer, so a 496 or 504 centre
+   crop covers exactly the ground it represents and a 512 truth layer keeps
+   its outer ring. Stretching every layer to 100% put different ground
+   resolutions on the same pixels and misregistered the comparison. */
+.sw-layer { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+            width:100%; border-radius:6px; image-rendering:pixelated; }
+#swStale { display:none; color:#fbbf24; font-size:12.5px; margin:6px 0 0; }
 select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-radius:6px; padding:5px 8px; font:inherit; font-size:12.5px; }
 .h2h { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
 .h2h-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
@@ -135,6 +143,8 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
   <div style="overflow-x:auto"><table id="infMatrix"></table></div>
 
   <h3 style="margin:18px 0 6px">Tile-inspektör — svep facit ↔ prediktion</h3>
+  <p id="swStale"></p>
+  <div id="swBox">
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
     <button id="swPrev" style="cursor:pointer">◀</button>
     <select id="swTile"></select>
@@ -143,14 +153,17 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
     <span style="color:#6b7280">↔</span>
     <select id="swRight"></select>
   </div>
-  <div id="swStage" style="position:relative;max-width:560px;user-select:none;cursor:ew-resize">
-    <img id="swImgL" style="display:block;width:100%;border-radius:6px" draggable="false">
-    <img id="swImgR" style="position:absolute;inset:0;width:100%;border-radius:6px;clip-path:inset(0 0 0 50%)" draggable="false">
+  <div id="swStage" style="position:relative;max-width:560px;aspect-ratio:1/1;background:#0b0e17;border-radius:6px;user-select:none;cursor:ew-resize">
+    <img id="swImgL" class="sw-layer" draggable="false">
+    <div id="swClipR" style="position:absolute;inset:0;clip-path:inset(0 0 0 50%)">
+      <img id="swImgR" class="sw-layer" draggable="false">
+    </div>
     <div id="swBar" style="position:absolute;top:0;bottom:0;left:50%;width:2px;background:#fbbf24;pointer-events:none"></div>
     <span id="swLabL" style="position:absolute;left:6px;top:6px;font-size:11px;background:#0008;color:#fff;padding:2px 6px;border-radius:4px"></span>
     <span id="swLabR" style="position:absolute;right:6px;top:6px;font-size:11px;background:#0008;color:#fff;padding:2px 6px;border-radius:4px"></span>
   </div>
   <input id="swSlide" type="range" min="0" max="100" value="50" style="width:100%;max-width:560px;margin-top:6px">
+  </div>
   <div class="foot">Frozen farthest-point panel from the held-out validation set
     (<span class="stat">holdout_val_512</span> — never trained on by any rung). Rows: summer RGB,
     in-tile truth, then each backbone's prediction for the selected rung. Click a thumbnail for
@@ -658,19 +671,48 @@ function swUpdate() {
   const R = document.getElementById("swRight").value;
   const layers = Object.fromEntries(swLayers().map(x => [x[0], x]));
   const v = k => layers[k]?.[2] ? `?v=${layers[k][2]}` : "";
-  document.getElementById("swImgL").src = `inference/${L}/${t}.png${v(L)}`;
-  document.getElementById("swImgR").src = `inference/${R}/${t}.png${v(R)}`;
+  const a = document.getElementById("swImgL"), b = document.getElementById("swImgR");
+  a.onload = b.onload = swFit;
+  a.src = `inference/${L}/${t}.png${v(L)}`;
+  b.src = `inference/${R}/${t}.png${v(R)}`;
   document.getElementById("swLabL").textContent = layers[L]?.[1] || L;
   document.getElementById("swLabR").textContent = layers[R]?.[1] || R;
 }
+// Scale both layers against the widest of the two. All layers are centre
+// crops of one tile footprint, so equal centres plus native-proportional
+// width is exact relative registration — no estimated offset, no sign to
+// get wrong. Runs on every load because natural sizes differ per layer.
+function swFit() {
+  const a = document.getElementById("swImgL"), b = document.getElementById("swImgR");
+  const ref = Math.max(a.naturalWidth || 0, b.naturalWidth || 0);
+  if (!ref) return;
+  for (const el of [a, b]) {
+    const n = el.naturalWidth || 0;
+    el.style.width = n ? `${(100 * n / ref).toFixed(4)}%` : "100%";
+  }
+}
 function swPos(pct) {
   pct = Math.max(0, Math.min(100, pct));
-  document.getElementById("swImgR").style.clipPath = `inset(0 0 0 ${pct}%)`;
+  document.getElementById("swClipR").style.clipPath = `inset(0 0 0 ${pct}%)`;
   document.getElementById("swBar").style.left = `${pct}%`;
   document.getElementById("swSlide").value = pct;
 }
 function renderInspector() {
-  if (!INF || !INF.tiles?.length) return;
+  const box = document.getElementById("swBox"), stale = document.getElementById("swStale");
+  if (!INF || !INF.tiles?.length) {
+    // The index went away mid-session (matrix.json 404). Whatever is on
+    // screen describes a run we can no longer confirm, so stop offering it.
+    box.style.display = "none";
+    stale.style.display = "block";
+    stale.textContent = "Inspektören är pausad — inferensindexet kunde inte läsas. "
+      + "Senast visade rutor är inte längre bekräftade.";
+    for (const id of ["swTile", "swLeft", "swRight", "swPrev", "swNext", "swSlide"])
+      document.getElementById(id).disabled = true;
+    return;
+  }
+  box.style.display = ""; stale.style.display = "none";
+  for (const id of ["swTile", "swLeft", "swRight", "swPrev", "swNext", "swSlide"])
+    document.getElementById(id).disabled = false;
   const tileSel = document.getElementById("swTile");
   const lSel = document.getElementById("swLeft");
   const rSel = document.getElementById("swRight");
