@@ -23,6 +23,7 @@ many tiles are scored.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import sys
@@ -177,6 +178,13 @@ def score_cell(model: str, rung: int, ckpt: Path, tiles: list[str],
     if dev.type == "cuda":
         torch.cuda.empty_cache()
 
+    if not confusion.sum():
+        # Every tile was skipped or unusable. An all-zero matrix yields None
+        # headline metrics that would still enter the results list as a
+        # scored cell; the caller records it as failed instead.
+        raise RuntimeError(
+            f"{model}_r{rung}: no pixel scored — "
+            f"{len(skipped)} of {len(tiles)} tile(s) skipped")
     out = derive(confusion)
     out.update({
         "cell": f"{model}_r{rung}", "backbone": cfg["backbone"],
@@ -189,6 +197,24 @@ def score_cell(model: str, rung: int, ckpt: Path, tiles: list[str],
     print(f"[{model}_r{rung}] OA={out['overall_accuracy']} "
           f"mIoU={out['mean_iou']} over {out['pixels_scored']:,} px", flush=True)
     return out
+
+
+def run_fingerprint(tiles: list[str], args) -> dict:
+    """What a prior report must agree with before its cells may be reused.
+
+    Cell name alone is not identity. A first run with --limit-tiles 1, then a
+    changed checkpoint and an unlimited resume, would skip scoring entirely
+    and write the new tile list over a result whose tiles_scored is 1 and
+    whose checkpoint hash is the old one.
+    """
+    return {
+        "num_classes": NUM_CLASSES_28,
+        "holdout_dir": str(args.holdout_dir),
+        "label_dir": str(args.label_dir),
+        "ckpt_root": str(args.ckpt_root),
+        "n_tiles": len(tiles),
+        "tiles_sha256": hashlib.sha256("\n".join(tiles).encode()).hexdigest()[:16],
+    }
 
 
 def main() -> int:
@@ -227,12 +253,28 @@ def main() -> int:
     # whole sweep on restart.
     results, missing, failed = [], [], []
     done: set[str] = set()
+    fingerprint = run_fingerprint(tiles, args)
     if args.resume and args.out.exists():
         try:
             prior = json.loads(args.out.read_text())
-            results = list(prior.get("cells", []))
+            if prior.get("fingerprint") != fingerprint:
+                # Different inputs produced that file. Reusing its cells would
+                # mix two scoring runs under one report.
+                raise SystemExit(
+                    f"--resume refused: {args.out} was written for different "
+                    f"inputs.\n  prior: {prior.get('fingerprint')}\n  now:   "
+                    f"{fingerprint}\nDelete it or point --out elsewhere.")
+            # A cell is reusable only if its checkpoint is still the one that
+            # produced it; a retrained cell must be re-scored.
+            for c in prior.get("cells", []):
+                ck = args.ckpt_root / c["cell"] / "best_model.pt"
+                if ck.exists() and c.get("ckpt_sha256") == ckpt_sha256(str(ck)):
+                    results.append(c)
+                else:
+                    print(f"[{c['cell']}] checkpoint changed — re-scoring",
+                          flush=True)
             done = {c["cell"] for c in results}
-            print(f"resuming — {len(done)} cell(s) already scored", flush=True)
+            print(f"resuming — {len(done)} cell(s) reusable", flush=True)
         except (OSError, ValueError, KeyError) as exc:
             print(f"could not resume from {args.out}: {exc!r}", flush=True)
 

@@ -94,8 +94,8 @@ def test_nfi_needs_no_vocabulary_correction():
     assert rows["clay_r1"]["n"] == 2
 
 
-def test_nfi_intersection_and_unscorable_plots():
-    """Plots absent from one cell, and plots with no NFI truth, are dropped."""
+def test_nfi_intersection_keeps_treeless_drops_absent():
+    """Absent plots are dropped; treeless ones (-1) are kept and scored as 0."""
     dumps = {
         "a_r2": pd.DataFrame({"TractID": [1, 2, 3], "PlotID": [1, 1, 1],
                               "Year": [2022] * 3, "nfi_forest": [1, 2, -1],
@@ -105,8 +105,9 @@ def test_nfi_intersection_and_unscorable_plots():
                               "model_pred": [1, 4]}),
     }
     rows = {r["cell"]: r for r in lfs.score_nfi(dumps)}
-    # Tract 2 is missing from b; tract 3 has no truth. One plot survives.
-    assert rows["a_r2"]["n"] == rows["b_r2"]["n"] == 1
+    # Tract 2 is missing from b, so it leaves the intersection. Tract 3 is
+    # treeless, not missing, so it stays and is scored against class 0.
+    assert rows["a_r2"]["n"] == rows["b_r2"]["n"] == 2
 
 
 def test_empty_dump_dir_yields_no_rows(tmp_path):
@@ -173,3 +174,45 @@ def test_a_point_in_two_tiles_is_scored_once_per_cell():
     assert rows["a_r2"]["n"] == rows["b_r2"]["n"] == 2
     assert rows["a_r2"]["overall"] == 1.0    # the kept row for point 1 is right
     assert rows["b_r2"]["overall"] == 1.0
+
+
+def test_treeless_plots_are_scored_not_dropped():
+    """nfi_forest == -1 is the producer's treeless plot, mapped to class 0.
+
+    Regression: filtering them forgave every false forest positive. Here one
+    forest plot is predicted correctly and one treeless plot is wrongly called
+    forest — the honest score is 0.5 over two plots, not 1.0 over one.
+    """
+    key = {"TractID": [1, 2], "PlotID": [1, 1], "Year": [2022, 2022]}
+    dumps = {"a_r2": pd.DataFrame({**key, "nfi_forest": [1, -1],
+                                   "model_pred": [1, 1]})}
+    row = lfs.score_nfi(dumps)[0]
+    assert row["n"] == 2
+    assert row["overall"] == 0.5
+
+
+def test_nfi_observation_counted_once_per_cell():
+    """A plot-year hit by two tiles in one cell must not outweigh the other.
+
+    Regression: common_keys deduplicated the keys but _restrict kept every
+    matching row, so two identical observations gave OA=0.667 over n=3 where
+    the other column scored 0.5 over n=2.
+    """
+    a = pd.DataFrame({"TractID": [1, 1, 2], "PlotID": [1, 1, 1],
+                      "Year": [2022] * 3, "tile_name": ["t1", "t2", "t1"],
+                      "nfi_forest": [1, 1, 2], "model_pred": [1, 1, 3]})
+    b = pd.DataFrame({"TractID": [1, 2], "PlotID": [1, 1],
+                      "Year": [2022] * 2, "tile_name": ["t1", "t1"],
+                      "nfi_forest": [1, 2], "model_pred": [1, 3]})
+    rows = {r["cell"]: r for r in lfs.score_nfi({"a_r2": a, "b_r2": b})}
+    assert rows["a_r2"]["n"] == rows["b_r2"]["n"] == 2
+    assert rows["a_r2"]["overall"] == rows["b_r2"]["overall"] == 0.5
+
+
+def test_lucas_same_point_in_two_years_is_two_observations():
+    """point_id alone is not the identity; the observation year is part of it."""
+    d = pd.DataFrame({"point_id": [1, 1], "Year": [2018, 2022],
+                      "unified_class": [11, 12], "pred_class": [11, 9]})
+    row = lfs.score_lucas({"a_r2": d}, shared_only=True)[0]
+    assert row["n"] == 2          # not collapsed to one
+    assert row["overall"] == 0.5

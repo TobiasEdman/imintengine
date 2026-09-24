@@ -186,8 +186,15 @@ def test_one_unscoreable_cell_does_not_kill_the_sweep(monkeypatch, tmp_path, cap
 def test_resume_skips_cells_already_scored(monkeypatch, tmp_path):
     hold, lab, ck = _fake_tree(tmp_path, ["clay_r2", "clay_r3"])
     out = tmp_path / "out.json"
-    out.write_text(json.dumps({"cells": [
-        {"cell": "clay_r2", "overall_accuracy": 0.61, "mean_iou": 0.3}]}))
+    # A reusable report must carry the run fingerprint and each cell's
+    # checkpoint hash; resume refuses anything else.
+    import argparse as _ap
+    ns = _ap.Namespace(holdout_dir=hold, label_dir=lab, ckpt_root=ck)
+    fp = lhe.run_fingerprint(["t0"], ns)
+    sha = lhe.ckpt_sha256(str(ck / "clay_r2" / "best_model.pt"))
+    out.write_text(json.dumps({"fingerprint": fp, "cells": [
+        {"cell": "clay_r2", "overall_accuracy": 0.61, "mean_iou": 0.3,
+         "ckpt_sha256": sha}]}))
 
     scored = []
 
@@ -205,3 +212,43 @@ def test_resume_skips_cells_already_scored(monkeypatch, tmp_path):
     assert scored == ["clay_r3"]                     # r2 was not re-run
     cells = {c["cell"] for c in json.loads(out.read_text())["cells"]}
     assert cells == {"clay_r2", "clay_r3"}           # and r2 survived
+
+
+def test_resume_refuses_a_report_written_for_other_inputs(monkeypatch, tmp_path):
+    """Cell name is not identity.
+
+    Regression: a first run with --limit-tiles 1, then a changed checkpoint
+    and an unlimited resume, skipped scoring and wrote the new tile list over
+    a result whose tiles_scored was 1 and whose checkpoint hash was stale.
+    """
+    hold, lab, ck = _fake_tree(tmp_path, ["clay_r2"])
+    out = tmp_path / "out.json"
+    out.write_text(json.dumps({
+        "fingerprint": {"n_tiles": 999, "tiles_sha256": "deadbeef"},
+        "cells": [{"cell": "clay_r2", "overall_accuracy": 0.61,
+                   "mean_iou": 0.3, "ckpt_sha256": "x"}]}))
+    monkeypatch.setattr(lhe, "score_cell", lambda *a: pytest.fail("scored"))
+    monkeypatch.setattr("sys.argv", _args(
+        tmp_path, hold=hold, lab=lab, ck=ck, out=out,
+        extra=["--models", "clay", "--rungs", "2", "--resume"]))
+    with pytest.raises(SystemExit, match="different"):
+        lhe.main()
+
+
+def test_resume_rescores_a_cell_whose_checkpoint_changed(monkeypatch, tmp_path):
+    hold, lab, ck = _fake_tree(tmp_path, ["clay_r2"])
+    out = tmp_path / "out.json"
+    import argparse as _ap
+    fp = lhe.run_fingerprint(["t0"], _ap.Namespace(
+        holdout_dir=hold, label_dir=lab, ckpt_root=ck))
+    out.write_text(json.dumps({"fingerprint": fp, "cells": [
+        {"cell": "clay_r2", "overall_accuracy": 0.61, "mean_iou": 0.3,
+         "ckpt_sha256": "sha-of-a-checkpoint-that-is-gone"}]}))
+    scored = []
+    monkeypatch.setattr(lhe, "score_cell", lambda m, r, *a: scored.append(m) or {
+        "cell": f"{m}_r{r}", "overall_accuracy": 0.5, "mean_iou": 0.3})
+    monkeypatch.setattr("sys.argv", _args(
+        tmp_path, hold=hold, lab=lab, ck=ck, out=out,
+        extra=["--models", "clay", "--rungs", "2", "--resume"]))
+    assert lhe.main() == 0
+    assert scored == ["clay"]      # stale checkpoint → re-scored, not reused

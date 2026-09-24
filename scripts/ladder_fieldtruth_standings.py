@@ -33,6 +33,7 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -95,12 +96,28 @@ def _restrict(df: pd.DataFrame, keys: pd.DataFrame, key: list[str]) -> pd.DataFr
 
 
 def score_nfi(dumps: dict[str, pd.DataFrame]) -> list[dict]:
+    # One row per (TractID, PlotID, Year) per cell, deterministically chosen.
+    # A plot whose tile was hit twice in one cell but once in another would
+    # otherwise be weighted differently between columns: two identical
+    # observations give OA=0.667 over n=3 against 0.5 over n=2.
+    sort_by = NFI_KEY + (["tile_name"] if all(
+        "tile_name" in d.columns for d in dumps.values()) else [])
+    dumps = {c: d.sort_values(sort_by).drop_duplicates(subset=NFI_KEY,
+                                                       keep="first")
+             for c, d in dumps.items()}
     keys = common_keys(dumps, NFI_KEY)
     rows = []
     for cell, df in dumps.items():
         d = _restrict(df, keys, NFI_KEY)
-        d = d[d["nfi_forest"] >= 0]
-        s = accuracy_suite(d["nfi_forest"].to_numpy(), d["model_pred"].to_numpy())
+        # nfi_forest == -1 is the producer's TREELESS plot, not a missing
+        # observation, and the five-class scoring maps it to class 0. Dropping
+        # these would forgive every false forest positive: a model that calls
+        # a treeless plot forest would simply not be asked about it. The
+        # producer scores one correct forest plot and one wrongly-forested
+        # treeless plot as 0.5 over n=2; filtering gives 1.0 over n=1.
+        truth = d["nfi_forest"].to_numpy()
+        truth = np.where(truth < 0, 0, truth)
+        s = accuracy_suite(truth, d["model_pred"].to_numpy())
         rows.append({"cell": cell, "n": int(len(d)),
                      "overall": s["overall_accuracy_5class"],
                      "kappa": s["cohen_kappa"], "per_class": s["per_class"]})
@@ -123,12 +140,14 @@ def score_lucas(dumps: dict[str, pd.DataFrame], *, shared_only: bool,
     # Residual: two cells may score the same point from different tiles, since
     # the dump records no tile_name. Adding it to validate_against_lucas would
     # make the key exact, at the cost of re-running every LUCAS job.
-    sel = {c: d.drop_duplicates(subset=["point_id"], keep="first")
+    key = ["point_id", "Year"] if all("Year" in d.columns for d in sel.values()) \
+        else ["point_id"]
+    sel = {c: d.sort_values(key).drop_duplicates(subset=key, keep="first")
            for c, d in sel.items()}
-    keys = common_keys(sel, ["point_id"])
+    keys = common_keys(sel, key)
     rows = []
     for cell, df in sel.items():
-        d = _restrict(df, keys, ["point_id"]).copy()
+        d = _restrict(df, keys, key).copy()
         if shared_only:
             d["unified_class"] = to_shared_vocab(d["unified_class"])
             d["pred_class"] = to_shared_vocab(d["pred_class"])
