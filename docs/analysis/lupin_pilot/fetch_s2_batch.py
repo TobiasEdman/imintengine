@@ -71,8 +71,14 @@ class JobState:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--points", default=str(HERE / "chosen_points.json"))
-    ap.add_argument("--state", default=str(HERE / "s2_jobs.json"))
-    ap.add_argument("--result-dir", default=str(HERE / "s2_jobs"))
+    ap.add_argument("--band-set", default="10m", choices=["all", "10m"],
+                    help="10m (default) = B02/B03/B04/B08 only, ~4/11 of "
+                         "the input pixels and therefore roughly that "
+                         "share of the credits; all = every L2A band. "
+                         "State and results are kept per band-set so the "
+                         "two schemas can never be mixed.")
+    ap.add_argument("--state", default=None)
+    ap.add_argument("--result-dir", default=None)
     ap.add_argument("--max-groups", type=int, default=0)
     ap.add_argument("--concurrency", type=int, default=4,
                     help="simultaneous RUNNING jobs. CDSE caps this per "
@@ -85,7 +91,14 @@ def main() -> None:
 
     from pyproj import Transformer
     from imint.fetch import _connect_cdse
-    from s2_june_composite import FEATURE_NAMES, build_feature_cube
+    from s2_june_composite import build_feature_cube, feature_names
+
+    suffix = "" if args.band_set == "all" else f"_{args.band_set}"
+    args.state = args.state or str(HERE / f"s2_jobs{suffix}.json")
+    args.result_dir = args.result_dir or str(HERE / f"s2_jobs{suffix}")
+    print(f"band set {args.band_set}: "
+          f"{len(feature_names(args.band_set))} features -> "
+          f"{Path(args.result_dir).name}", flush=True)
 
     outdir = Path(args.result_dir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -160,7 +173,8 @@ def main() -> None:
             block, year = tag_to_key[tag]
             bbox = group_bbox(groups[(block, year)], to4326)
             try:
-                cube = build_feature_cube(conn, bbox, year)
+                cube = build_feature_cube(conn, bbox, year,
+                                          band_set=args.band_set)
                 job = cube.create_job(title=f"lupin-{tag}",
                                       out_format="GTiff")
                 job.start()

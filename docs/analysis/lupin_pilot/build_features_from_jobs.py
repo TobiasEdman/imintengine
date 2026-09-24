@@ -31,14 +31,20 @@ def main() -> None:
     ap.add_argument("--points", default=str(HERE / "chosen_points.json"))
     ap.add_argument("--road-dist", default=str(HERE / "road_dist.json"))
     ap.add_argument("--dist-lupin", default=str(HERE / "dist_lupin.json"))
-    ap.add_argument("--job-dir", default=str(HERE / "s2_jobs"))
-    ap.add_argument("--out", default=str(HERE / "features_s2.npz"))
+    ap.add_argument("--band-set", default="10m", choices=["all", "10m"])
+    ap.add_argument("--job-dir", default=None)
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
     import rasterio
     import rasterio.transform as rt
     from pyproj import Transformer
-    from s2_june_composite import FEATURE_NAMES
+    from s2_june_composite import feature_names
+
+    suffix = "" if args.band_set == "all" else f"_{args.band_set}"
+    args.job_dir = args.job_dir or str(HERE / f"s2_jobs{suffix}")
+    args.out = args.out or str(HERE / f"features_s2{suffix}.npz")
+    FEATURE_NAMES = feature_names(args.band_set)
 
     pts = json.loads(Path(args.points).read_text())
     road = json.loads(Path(args.road_dist).read_text())

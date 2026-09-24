@@ -36,10 +36,25 @@ _ap.add_argument("--features", default="features.npz",
                  help="features.npz (final) or features_partial.npz (interim)")
 _ap.add_argument("--out", default="probe_results.json")
 _ap.add_argument("--min-per-class", type=int, default=200)
+_ap.add_argument("--road-max", type=float, default=30.0,
+                 help="metres from an OSM road defining the habitat-matched "
+                      "subset. 30 m still admits forest edges along tracks — "
+                      "measured NDVI gap pos-vs-neg 0,612 vs 0,651 there but "
+                      "0,581 vs 0,589 at 10 m, i.e. only the tighter cut "
+                      "actually matches habitat.")
 _args = _ap.parse_args()
 
-print(f"features: {_args.features}")
-d = np.load(DATA / _args.features, allow_pickle=True)
+# Accept a bare name under data/ (where the TESSERA run wrote), a path
+# next to this script (where build_features_from_jobs.py writes), or an
+# absolute path. The two producers disagreed and the probe should not care.
+_cands = [DATA / _args.features, Path(__file__).parent / _args.features,
+          Path(_args.features)]
+_feat = next((p for p in _cands if p.exists()), None)
+if _feat is None:
+    raise SystemExit("features not found; looked in:\n  " +
+                     "\n  ".join(str(p) for p in _cands))
+print(f"features: {_feat}")
+d = np.load(_feat, allow_pickle=True)
 X = d["X"].astype(np.float32)
 y = d["y"].astype(int)
 lat, lon = d["lat"].astype(float), d["lon"].astype(float)
@@ -187,14 +202,15 @@ for thr in (100, 250, 500):
 
 print("== habitat-matchat subset (D2): båda klasser <=30 m från väg ==")
 road_ok = ~np.isnan(dist_road)
-m = road_ok & (dist_road <= 30)
+m = road_ok & (dist_road <= _args.road_max)
 if m.sum() >= 200 and len(set(y[m].tolist())) == 2:
     for name in ("logreg_embed", "mlp_latlon_CTRL", "logreg_year_CTRL"):
         mdl, feats = make_models()[name]
         results["road_matched"][name] = pooled_cv(
-            mdl, feats[m], y[m], groups_all[m], tag=f"road30:{name}")
+            mdl, feats[m], y[m], groups_all[m], tag=f"road{_args.road_max:g}:{name}")
 else:
-    print(f"  otillräckligt: {int(m.sum())} punkter inom 30 m "
+    print(f"  otillräckligt: {int(m.sum())} punkter inom "
+          f"{_args.road_max:g} m "
           f"(OSM-täckning {int(road_ok.sum())}/{n})")
 
 print("== månadsstratifiering (D5): positiver juni/juli vs augusti ==")
@@ -207,5 +223,9 @@ for label, months in (("jun_jul", (6, 7)), ("aug", (8,))):
 meta = {"features_file": _args.features, "n": n, "n_pos": n_pos,
         "n_neg": n_neg, "n_road_covered": int(road_ok.sum()),
         "results": results}
-(DATA / _args.out).write_text(json.dumps(meta, indent=2))
-print(f"saved {DATA/_args.out}")
+_out = Path(_args.out)
+if not _out.is_absolute():
+    _out = (DATA if DATA.exists() else Path(__file__).parent) / _out
+_out.parent.mkdir(parents=True, exist_ok=True)
+_out.write_text(json.dumps(meta, indent=2))
+print(f"saved {_out}")

@@ -132,3 +132,9 @@ docs/analysis/lupin_pilot/s2_jobs/
 docs/analysis/lupin_pilot/s2_cache/
 docs/analysis/lupin_pilot/s2_jobs.json
 docs/analysis/lupin_pilot/features_s2*.npz
+docs/analysis/lupin_pilot/s2_jobs_10m/
+docs/analysis/lupin_pilot/s2_jobs_10m.json
+docs/analysis/lupin_pilot/tessera_tiles/
+docs/analysis/lupin_pilot/tessera_cache/
+docs/analysis/lupin_pilot/osm_verge_cache/
+docs/analysis/lupin_pilot/data/

@@ -48,6 +48,19 @@ BANDS_20M = ["B05", "B06", "B07", "B8A", "B11", "B12"]
 BANDS_60M = ["B09"]
 ALL_BANDS = BANDS_10M + BANDS_20M + BANDS_60M
 
+# Band sets. CDSE bills by input pixels, so dropping the resampled 20/60 m
+# bands cuts cost roughly in proportion: measured 5.2 credits/group for
+# the full 11-band set. "10m" keeps the four native-resolution bands,
+# which carry the visible colour the bloom indices are built from plus
+# NIR for vegetation vigour; SCL is still fetched for masking either way
+# (it is 20 m natively and is not part of the output).
+BAND_SETS = {"all": ALL_BANDS, "10m": BANDS_10M}
+INDEX_NAMES = ["blueness", "magenta", "brightness"]
+
+
+def feature_names(band_set: str = "all") -> list[str]:
+    return BAND_SETS[band_set] + INDEX_NAMES
+
 
 def bloom_indices(cube):
     """Per-pixel June maxima of three flower-colour indices.
@@ -164,7 +177,8 @@ def fetch_june_composite(coords: dict, year: int, *, conn=None,
 FEATURE_NAMES = ALL_BANDS + ["blueness", "magenta", "brightness"]
 
 
-def build_feature_cube(conn, coords: dict, year: int):
+def build_feature_cube(conn, coords: dict, year: int,
+                       band_set: str = "all"):
     """One 14-band cube: June median reflectance + peak-bloom indices.
 
     Both halves reduce the temporal dimension away, so they share a grid
@@ -188,9 +202,11 @@ def build_feature_cube(conn, coords: dict, year: int):
 
     cube = _load(BANDS_10M)
     ref = cube
-    for bands in (BANDS_20M, BANDS_60M):
-        cube = cube.merge_cubes(
-            _load(bands).resample_cube_spatial(target=ref, method="bilinear"))
+    if band_set == "all":
+        for bands in (BANDS_20M, BANDS_60M):
+            cube = cube.merge_cubes(
+                _load(bands).resample_cube_spatial(target=ref,
+                                                   method="bilinear"))
 
     scl = _load(["SCL"]).resample_cube_spatial(target=ref, method="near")
     mask = scl.band("SCL").apply(
