@@ -1,0 +1,37 @@
+{
+  "active_goal": "Cross-vendor review of the parameterised-lookbacks branch at exact head a88e57b395fa13b61e6379aef8a3e96fe9bea1df (base master@da1e58c1c8463ea893ca5b2bf7f8fe6cdbce0547) in TobiasEdman/space-datalab-metafilter. Post PASS or BLOCK bound to that SHA as a GitHub PR review. On PASS integrate as the Codex identity. The fetch-volume increase is flagged in the PR body as a decision for Tobias, not a defect.",
+  "active_rules": [
+    "Claude-side PRs are approved and integrated by Codex, never by Claude [user-stated 2026-09-08]",
+    "Exact-SHA review: claim before reviewing; a verdict binds to one head SHA [mode/harness]",
+    "Cost decisions are Tobias's; ask him directly when he is in the conversation [user-stated 2026-09-24]",
+    "Reviewer may push a fix only after posting the verdict, fast-forward, with notification [user-stated 2026-09-17]",
+    "Fix permanently: root fix plus guard plus sweep for the same pattern [user-stated, memory]"
+  ],
+  "blockers": [],
+  "changed_paths": [
+    ".agents/tasks/0102.json"
+  ],
+  "commit": "a88e57b395fa13b61e6379aef8a3e96fe9bea1df",
+  "created_at": "2026-09-24T15:39:41Z",
+  "current_state": "Head a88e57b395fa13b61e6379aef8a3e96fe9bea1df, 5 files, +303/-82, bot-authored, fast-forward on master. WHAT CHANGED: metafilter/core.py gains _LOOKBACK_STEMS, _LOOKBACK_PATTERN, parse_lookback() and lookback_days(); the four hardcoded rolling blocks (precip 24h/48h/7d/30d, ssrd 30d, gdd 30d, swvl1 30d) are replaced by one generator driven by a lookback_columns argument that defaults to exactly the previous set. process_era5_data adds any window the active rules name. scripts/download_era5.py drops _LONG_LOOKBACK_PREFIXES for lookback_days_needed() and buffer_months(), which walks back until the requested span is covered. dry_streak_days has no window in its name and keeps its month of history explicitly. VERIFICATION: pytest -W error 168 passed (159 before, 9 new); precip_prev14d_mm computed end-to-end from a profile naming it, NaN through day 13 and 28.0 mm on day 14 for a 2 mm/day series; buffer_months(2024,3,30) returns Jan+Feb, (2024,8,30) returns Jul alone. COST: S1 1->2 land retrievals per month, S2-extended 2->3 in March only, legacy profile unchanged at 1, Open-Meteo unaffected. The S1 change is real: its 24h window reaches into the previous month, and without it day one of every month has no precip_prev24h_mm and can never satisfy the dry-canopy rule.",
+  "next_steps": [
+    "Claim 0102: AGENT_ID=te-codex AGENT_RUNTIME=codex agentic-task claim . --remote origin",
+    "Review the branch at a88e57b395fa13b61e6379aef8a3e96fe9bea1df: git diff da1e58c1..a88e57b3; rerun pytest -W error tests/ -q (expect 168 passed)",
+    "Post the verdict as a GitHub PR review bound to that head",
+    "On PASS: integrate as the Codex identity",
+    "Complete: agentic-task complete . 0102 --remote origin, and post the outcome to the ImintEngine inbox"
+  ],
+  "off_limits": [
+    "Do not integrate on BLOCK; fork-only target (Tobias's decision)",
+    "v0.1.1 and its tag stay as they are; this is not a release",
+    "/Users/tobiasedman/Developer/space-datalab-metafilter-wt-lookback-windows is Claude's worktree at the head",
+    "space-datalab-metafilter#3 (licence and autosave) is a separate open PR on the same base; review order does not matter"
+  ],
+  "repository_key": "ImintEngine--f4ea50ce3600",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-6755a5816bd770c4",
+  "target": "codex",
+  "task_id": "0102",
+  "verification": "pytest -W error tests/ -q -> 168 passed; 14-day window computed end-to-end from a profile that names it; buffer_months verified across a short February; GitHub compare master...branch 5 files +303/-82, single author"
+}
