@@ -38,6 +38,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.eval.metrics import auroc_aupr
+from imint.training.unified_dataset import TilePrerequisiteError
 
 # Unified-schema forest classes (imint/training/unified_schema.py).
 TALLSKOG, GRANSKOG, LOVSKOG, BLANDSKOG = 1, 2, 3, 4
@@ -229,11 +230,10 @@ def score_against_nfi(
         tile_path = grp["tile_path"].iloc[0] if "tile_path" in grp else tile_name
         try:
             class_map, probs = predict_fn(tile_path)
-        except (KeyError, ValueError) as exc:
-            # See validate_against_lucas: raising is the right default, but a
-            # tile with no Sentinel-1 composite available anywhere is a data
-            # coverage limit. Declining to score it declares the gap rather
-            # than feeding a mis-composited stack.
+        except TilePrerequisiteError as exc:
+            # See validate_against_lucas: only the eligible tile-prerequisite
+            # error is caught, so model and configuration failures still
+            # propagate rather than being recorded as coverage gaps.
             if not skip_unscoreable:
                 raise
             skipped.append({"tile": str(tile_name), "plots": int(len(grp)),
@@ -262,6 +262,14 @@ def score_against_nfi(
     if skipped:
         print(f"skipped {len(skipped)} unscoreable tile(s), "
               f"{sum(s['plots'] for s in skipped)} plot(s)", flush=True)
+    if not pred_class:
+        # Every tile was skipped. Returning here would hand the CLI NaN
+        # headline metrics over n_plots=0 and write them out as a successful
+        # result — a run that measured nothing must not look like one that
+        # measured zero.
+        raise SystemExit(
+            f"no plot could be scored: all {len(skipped)} tile(s) were "
+            f"skipped as unscoreable. Nothing was written.")
     pred = np.array(pred_class)
     truth = np.array([c if c is not None else -1 for c in nfi_class])
     P = np.vstack(probs_at_plot) if probs_at_plot else np.zeros((0, num_classes))

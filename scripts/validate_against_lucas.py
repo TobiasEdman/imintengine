@@ -61,6 +61,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from imint.training.unified_dataset import TilePrerequisiteError
 from imint.training.unified_schema import (  # noqa: E402
     NUM_UNIFIED_CLASSES,
     UNIFIED_CLASSES,
@@ -333,15 +334,12 @@ def score_against_lucas(
         tile_path = grp["tile_path"].iloc[0] if "tile_path" in grp else tile_name
         try:
             out = predict_fn(tile_path)
-        except (KeyError, ValueError) as exc:
-            # The dataset's fail-loud contracts refuse a tile whose enrichment
-            # predates what this backbone needs. Raising is right by default:
-            # a mis-composited SAR stack must never be scored silently. But
-            # DECLINING to score a tile feeds nothing — it declares a gap. 28
-            # of 7,882 training tiles have no Sentinel-1 composite available
-            # at all (no_composite_ASCENDING/DESCENDING), which is a data
-            # coverage limit, not a fixable state; without this they cost
-            # croma and terramind every cell rather than 0.43% of points.
+        except TilePrerequisiteError as exc:
+            # Only TilePrerequisiteError is eligible. Catching bare KeyError
+            # or ValueError here would also swallow model and configuration
+            # failures — an aux-channel mismatch raises ValueError before any
+            # tile is read, and would be recorded as a coverage gap for every
+            # tile, returning an empty result that looks successful.
             if not skip_unscoreable:
                 raise
             skipped.append({"tile": str(tile_name), "points": int(len(grp)),
@@ -375,6 +373,14 @@ def score_against_lucas(
             if per_point_sink is not None:
                 per_point_sink.append(dict(rec))
 
+    if not records:
+        # Same rule as the NFI path: an all-skipped run raises here rather
+        # than letting the empty frame surface later as an unrelated
+        # KeyError('unified_class'), which reads as a code fault instead of
+        # the coverage gap it is.
+        raise SystemExit(
+            f"no point could be scored: all {len(skipped)} tile(s) were "
+            f"skipped as unscoreable. Nothing was written.")
     scored = pd.DataFrame(records)
     if skipped:
         print(f"skipped {len(skipped)} unscoreable tile(s), "

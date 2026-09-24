@@ -37,7 +37,10 @@ lucas = _load("validate_against_lucas")
 nfi = _load("validate_against_nfi")
 
 BAD = "44883674"
-S1_ERR = KeyError("tile requires s1_enrich_v==4 but found s1_enrich_v=0")
+from imint.training.unified_dataset import TilePrerequisiteError  # noqa: E402
+
+S1_ERR = TilePrerequisiteError(
+    "tile requires s1_enrich_v==4 but found s1_enrich_v=0")
 
 
 def _lucas_index():
@@ -97,3 +100,50 @@ def test_nfi_skip_records_the_gap():
     res = nfi.score_against_nfi(_nfi_index(), _predict, skip_unscoreable=True)
     assert [s["tile"] for s in res["skipped_tiles"]] == [BAD]
     assert res["skipped_tiles"][0]["plots"] == 1
+
+
+# --- the skip must not become a catch-all -------------------------------
+
+def _raiser(exc):
+    def f(tile_path):
+        raise exc
+    return f
+
+
+@pytest.mark.parametrize("exc", [
+    KeyError("enabled_aux_names"),                       # config fault
+    ValueError("checkpoint config lists 1 aux but n_aux_channels=2"),
+    RuntimeError("CUDA out of memory"),
+])
+def test_unrelated_failures_still_propagate_lucas(exc):
+    """Only TilePrerequisiteError is eligible.
+
+    Regression: catching bare KeyError/ValueError converted a checkpoint
+    contract failure — which raises before any tile is read — into a
+    "coverage gap" for every tile, and returned an empty result that looked
+    like a successful run.
+    """
+    with pytest.raises(type(exc)):
+        lucas.score_against_lucas(_lucas_index(), _raiser(exc),
+                                  min_support=1, skip_unscoreable=True)
+
+
+@pytest.mark.parametrize("exc", [
+    KeyError("enabled_aux_names"),
+    ValueError("checkpoint config lists 1 aux but n_aux_channels=2"),
+])
+def test_unrelated_failures_still_propagate_nfi(exc):
+    with pytest.raises(type(exc)):
+        nfi.score_against_nfi(_nfi_index(), _raiser(exc), skip_unscoreable=True)
+
+
+def test_all_tiles_skipped_fails_loudly_lucas():
+    """A run that measured nothing must not be written as one that measured 0."""
+    with pytest.raises(SystemExit, match="no point could be scored"):
+        lucas.score_against_lucas(_lucas_index(), _raiser(S1_ERR),
+                                  min_support=1, skip_unscoreable=True)
+
+
+def test_all_tiles_skipped_fails_loudly_nfi():
+    with pytest.raises(SystemExit, match="no plot could be scored"):
+        nfi.score_against_nfi(_nfi_index(), _raiser(S1_ERR), skip_unscoreable=True)
