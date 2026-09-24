@@ -299,6 +299,7 @@ def score_against_lucas(
     is_fraction: bool = False,
     tile_years: dict | None = None,
     per_point_sink: list | None = None,
+    skip_unscoreable: bool = False,
 ) -> dict:
     """Sample member predictions at LUCAS points and score L2b (+ L2a if frac).
 
@@ -327,9 +328,25 @@ def score_against_lucas(
         assert_crop_year_match(index_df, tile_years)
 
     records = []
+    skipped: list[dict] = []
     for tile_name, grp in index_df.groupby("tile_name", sort=False):
         tile_path = grp["tile_path"].iloc[0] if "tile_path" in grp else tile_name
-        out = predict_fn(tile_path)
+        try:
+            out = predict_fn(tile_path)
+        except (KeyError, ValueError) as exc:
+            # The dataset's fail-loud contracts refuse a tile whose enrichment
+            # predates what this backbone needs. Raising is right by default:
+            # a mis-composited SAR stack must never be scored silently. But
+            # DECLINING to score a tile feeds nothing — it declares a gap. 28
+            # of 7,882 training tiles have no Sentinel-1 composite available
+            # at all (no_composite_ASCENDING/DESCENDING), which is a data
+            # coverage limit, not a fixable state; without this they cost
+            # croma and terramind every cell rather than 0.43% of points.
+            if not skip_unscoreable:
+                raise
+            skipped.append({"tile": str(tile_name), "points": int(len(grp)),
+                            "reason": repr(exc)[:200]})
+            continue
         # frac path returns (class_map, probs, fracs); hard path (class_map, probs)
         if is_fraction:
             class_map, _probs, fracs = out
@@ -359,8 +376,12 @@ def score_against_lucas(
                 per_point_sink.append(dict(rec))
 
     scored = pd.DataFrame(records)
+    if skipped:
+        print(f"skipped {len(skipped)} unscoreable tile(s), "
+              f"{sum(s['points'] for s in skipped)} point(s)", flush=True)
 
     results = {
+        "skipped_tiles": skipped,
         "l2b_hard_28class": score_l2b(
             scored, num_classes=num_classes, min_support=min_support
         ),
@@ -509,6 +530,9 @@ def main() -> None:
     ap.add_argument("--data-dir", required=True,
                     help="tile root; tile_path = <data-dir>/{tile_name}.npz")
     ap.add_argument("--out", default="docs/data/lucas-validation.json")
+    ap.add_argument("--skip-unscoreable", action="store_true",
+                    help="record and skip tiles the dataset refuses (missing "
+                         "S1 composite) instead of failing the whole run")
     ap.add_argument("--dump-per-point", default=None,
                     help="parquet: one row per scored point (point_id, "
                          "unified_class, pred_class, split, year, source, "
@@ -584,12 +608,14 @@ def main() -> None:
     results = score_against_lucas(
         index_df, predict_fn, num_classes=args.num_classes,
         min_support=args.min_support, is_fraction=is_fraction,
-        tile_years=tile_years, per_point_sink=per_point)
+        tile_years=tile_years, per_point_sink=per_point,
+        skip_unscoreable=args.skip_unscoreable)
     results["_meta"] = {
         "checkpoint": args.checkpoint, "img_size": args.img_size,
         "num_classes": args.num_classes, "min_support": args.min_support,
         "is_fraction_member": is_fraction,
-        "points_scored": len(index_df),
+        "points_scored": len(index_df) - sum(
+            s["points"] for s in results.get("skipped_tiles", [])),
         "n_tiles": int(index_df["tile_name"].nunique()),
     }
     print(json.dumps(results, indent=2, ensure_ascii=False, default=str))
