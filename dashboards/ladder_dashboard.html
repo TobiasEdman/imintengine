@@ -43,6 +43,12 @@ thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color
    resolutions on the same pixels and misregistered the comparison. */
 .sw-layer { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
             width:100%; border-radius:6px; image-rendering:pixelated; }
+/* Hatched backdrop. A centre-cropped layer does not reach the frame edge,
+   so whatever ring it leaves uncovered shows this pattern instead of dead
+   background — the viewer can see where a prediction simply has no data
+   rather than reading the gap as empty ground. */
+#swNoData { position:absolute; inset:0; border-radius:6px;
+  background:repeating-linear-gradient(45deg,#1b2433 0 6px,#0f1622 6px 12px); }
 #swStale { display:none; color:#fbbf24; font-size:12.5px; margin:6px 0 0; }
 select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-radius:6px; padding:5px 8px; font:inherit; font-size:12.5px; }
 .h2h { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
@@ -154,6 +160,7 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
     <select id="swRight"></select>
   </div>
   <div id="swStage" style="position:relative;max-width:560px;aspect-ratio:1/1;background:#0b0e17;border-radius:6px;user-select:none;cursor:ew-resize">
+    <div id="swNoData"></div>
     <img id="swImgL" class="sw-layer" draggable="false">
     <div id="swClipR" style="position:absolute;inset:0;clip-path:inset(0 0 0 50%)">
       <img id="swImgR" class="sw-layer" draggable="false">
@@ -168,7 +175,10 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
     (<span class="stat">holdout_val_512</span> — never trained on by any rung). Rows: summer RGB,
     in-tile truth, then each backbone's prediction for the selected rung. Click a thumbnail for
     full size. A row renders once <span class="stat">ladder-inference-matrix</span> has run for
-    that cell's checkpoint; predictions are sha-keyed to the exact checkpoint bytes.</div>
+    that cell's checkpoint; predictions are sha-keyed to the exact checkpoint bytes.
+    In the inspector all layers share one 512&nbsp;px tile frame; a hatched ring marks
+    ground the selected layer does not cover, which is normal for centre-cropped
+    predictions and is not missing truth.</div>
 </div>
 
 <script>
@@ -654,6 +664,11 @@ function renderInference() {
 // Tile-inspektör: one tile at a time, swipe between any two layers
 // (ground truth / RGB / any rendered cell). Pure client-side; images are
 // the same PNGs the matrix table uses.
+// The tile footprint every layer is a centre crop of. Fixing the frame here
+// rather than taking max() of the two loaded layers keeps the zoom stable
+// across layer pairs: a 496-vs-504 comparison now renders on the same
+// 512 ground extent as a 512-vs-496 one, instead of silently rescaling.
+const TILE_PX = 512;
 let SW_BUILT = false;
 function swLayers() {
   const layers = [["_rgb", "RGB (sommar)"], ["_truth23", "Facit 23-kl"],
@@ -684,8 +699,10 @@ function swUpdate() {
 // get wrong. Runs on every load because natural sizes differ per layer.
 function swFit() {
   const a = document.getElementById("swImgL"), b = document.getElementById("swImgR");
-  const ref = Math.max(a.naturalWidth || 0, b.naturalWidth || 0);
-  if (!ref) return;
+  // Guard the max() so an unexpectedly larger layer cannot overflow the
+  // frame; in normal data every layer is <= TILE_PX.
+  const ref = Math.max(TILE_PX, a.naturalWidth || 0, b.naturalWidth || 0);
+  if (!(a.naturalWidth || b.naturalWidth)) return;
   for (const el of [a, b]) {
     const n = el.naturalWidth || 0;
     el.style.width = n ? `${(100 * n / ref).toFixed(4)}%` : "100%";
