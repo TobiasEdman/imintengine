@@ -1,0 +1,128 @@
+# PVC-retention för training-data-cephfs — se docs/ops/pvc_retention_plan.md.
+# Scope (plan 0d1cdbc, godkänd av Tobias, körs post-#36):
+#   1. /cephfs/checkpoints/ladder/*/epoch_*.pt        (~182.7 G; best/last/log bevaras)
+#   2. /cephfs/checkpoints/ladder/*_nomarkfukt (hela) (~+11 G utöver epoch)
+#   3. /cephfs/vpp_wekeo + /cephfs/nvv_aux            (+104 G, kalla fetch-cachar)
+#   4. /cephfs/embeddings + /cephfs/tessera_cache     (+35 G, kalla enrichment-cachar)
+# BEVARAS: model_cache, unified_v2_512, holdout_val_512, alla icke-ladder-checkpoints.
+# MODE=dry listar + asserterar utan att röra något. Execute-varianten är
+# identisk sånär som på namn + MODE=execute.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pvc-retention-execute
+  namespace: prithvi-training-default
+  labels: { app: unified-training, purpose: pvc-retention, mode: execute }
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: { app: unified-training, purpose: pvc-retention, mode: execute }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: retention
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+          env:
+            - { name: MODE, value: "execute" }
+          resources:
+            # iceguard-webhook kräver requests == limits.
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { cpu: "1", memory: 1Gi }
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              MODE="${MODE:?}"
+              RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${MODE}"
+              EV="/cephfs/ops/retention/${RUN_ID}"
+              mkdir -p "$EV"
+              echo "=== pvc-retention MODE=${MODE} run=${RUN_ID} ==="
+              df -B1 /cephfs | tee "$EV/df_before.txt"
+
+              LADDER=/cephfs/checkpoints/ladder
+
+              # 1. Epok-snapshots (behåll best/last/log).
+              find "$LADDER" -mindepth 2 -maxdepth 2 -type f -name 'epoch_*.pt' \
+                | sort > "$EV/epoch_list.txt"
+              if grep -E 'best_model\.pt|last_checkpoint\.pt|training_log\.json' \
+                  "$EV/epoch_list.txt"; then
+                echo "FATAL: skyddad fil i raderingslistan"; exit 1
+              fi
+              EPOCH_N=$(wc -l < "$EV/epoch_list.txt")
+              EPOCH_B=$(tr '\n' '\0' < "$EV/epoch_list.txt" \
+                | xargs -0 -r du -bc 2>/dev/null | tail -1 | cut -f1)
+
+              # 2. Supersederade _nomarkfukt-dirs (hela).
+              find "$LADDER" -mindepth 1 -maxdepth 1 -type d -name '*_nomarkfukt' \
+                | sort > "$EV/nomarkfukt_dirs.txt"
+
+              # 3+4. Kalla cachar (hela dirs).
+              : > "$EV/cache_dirs.txt"
+              for d in /cephfs/vpp_wekeo /cephfs/nvv_aux \
+                       /cephfs/embeddings /cephfs/tessera_cache; do
+                [ -d "$d" ] && echo "$d" >> "$EV/cache_dirs.txt"
+              done
+
+              # Storlekar på hel-dirs (dry + execute: samma bokföring).
+              : > "$EV/dir_sizes.txt"
+              cat "$EV/nomarkfukt_dirs.txt" "$EV/cache_dirs.txt" | while read -r d; do
+                du -sb "$d" >> "$EV/dir_sizes.txt"
+              done
+
+              # Keeper-inventering per aktiv cell (ej nomarkfukt).
+              : > "$EV/keeper_status.txt"
+              MISSING_KEEPERS=0
+              for cell in "$LADDER"/*/; do
+                case "$cell" in *_nomarkfukt/) continue ;; esac
+                for k in best_model.pt last_checkpoint.pt training_log.json; do
+                  if [ -f "${cell}${k}" ]; then
+                    echo "OK   ${cell}${k}" >> "$EV/keeper_status.txt"
+                  else
+                    echo "MISS ${cell}${k}" >> "$EV/keeper_status.txt"
+                    MISSING_KEEPERS=$((MISSING_KEEPERS+1))
+                  fi
+                done
+              done
+
+              {
+                echo "mode=${MODE}"
+                echo "epoch_files=${EPOCH_N}"
+                echo "epoch_bytes=${EPOCH_B:-0}"
+                echo "nomarkfukt_dirs=$(wc -l < "$EV/nomarkfukt_dirs.txt")"
+                echo "cache_dirs=$(wc -l < "$EV/cache_dirs.txt")"
+                echo "missing_keepers=${MISSING_KEEPERS}"
+              } | tee "$EV/summary.txt"
+
+              if [ "$MODE" = "dry" ]; then
+                echo "DRY RUN — ingenting raderat. Evidens: $EV"
+                exit 0
+              fi
+
+              # ===== EXECUTE =====
+              # Vägra om en keeper saknas redan FÖRE radering — då är
+              # planens förutsättning bruten och en människa ska titta.
+              if [ "$MISSING_KEEPERS" -ne 0 ]; then
+                echo "FATAL: ${MISSING_KEEPERS} keepers saknas före radering — avbryter"
+                exit 1
+              fi
+              tr '\n' '\0' < "$EV/epoch_list.txt" | xargs -0 -r rm -f
+              cat "$EV/nomarkfukt_dirs.txt" "$EV/cache_dirs.txt" | while read -r d; do
+                rm -rf "$d"
+              done
+              df -B1 /cephfs | tee "$EV/df_after.txt"
+              # Post-assert: keepers intakta i varje kvarvarande cell.
+              for cell in "$LADDER"/*/; do
+                for k in best_model.pt last_checkpoint.pt training_log.json; do
+                  [ -f "${cell}${k}" ] || { echo "FATAL: ${cell}${k} borta"; exit 1; }
+                done
+              done
+              echo "EXECUTE klar. Evidens: $EV"
+          volumeMounts:
+            - { name: cephfs, mountPath: /cephfs }
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: { claimName: training-data-cephfs }
