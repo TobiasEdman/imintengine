@@ -113,6 +113,18 @@ def score_lucas(dumps: dict[str, pd.DataFrame], *, shared_only: bool,
     sel = {c: d for c, d in dumps.items() if cells is None or c in cells}
     if not sel:
         return []
+    # A LUCAS point that lies near a tile edge appears in EVERY tile that
+    # contains it — 10,329 index rows for 7,143 distinct points. Keeping all
+    # of them would double-weight those points and, worse, give each cell a
+    # different row count, because a cell's img_size decides which of the
+    # duplicate tiles survive its centre crop. One row per point per cell,
+    # chosen deterministically, restores parity.
+    #
+    # Residual: two cells may score the same point from different tiles, since
+    # the dump records no tile_name. Adding it to validate_against_lucas would
+    # make the key exact, at the cost of re-running every LUCAS job.
+    sel = {c: d.drop_duplicates(subset=["point_id"], keep="first")
+           for c, d in sel.items()}
     keys = common_keys(sel, ["point_id"])
     rows = []
     for cell, df in sel.items():
