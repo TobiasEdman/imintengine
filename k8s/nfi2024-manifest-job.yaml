@@ -1,0 +1,144 @@
+---
+# Step 1: build the 2024 tile manifest, and derive the WEkEO VPP gap it implies.
+#
+# A 5,120 m lattice cell decides WHICH plots share a tile; the tile is then
+# CENTRED on the bounding box of those plots rather than laid on the cell.
+# Placement on the cell left 464 of 2,389 plots (19.4%) within 32 px of a tile
+# edge and one plot 1 m from it, where context is entirely one-sided. Centring
+# costs no extra tiles and moves that to 4 plots (0.2%), median plot-to-edge
+# 838 m -> 2,336 m. Every plot stays inside its own tile by construction: a
+# cell spans at most 5,120 m, so a 5,120 m tile centred on its plot bbox always
+# contains them, and the job asserts it.
+#
+# `packaging` is pinned in the pip line on purpose — it is an undeclared
+# transitive dep of the mgrs wheel, as derive_missing_vpp_mgrs.py warns.
+#
+# First executed 2026-09-26 as job `nfi2024-manifest-v2`; the name here is the
+# clean one for re-use.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-manifest
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: manifest
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy pandas pyarrow pyproj mgrs packaging rasterio
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd /workspace/ie
+              echo "HEAD: $(git rev-parse HEAD)"
+              mkdir -p /data/manifests
+              python - <<'PY'
+              import json
+              import sys
+
+              import numpy as np
+              import pandas as pd
+
+              sys.path.insert(0, "scripts")
+              from derive_missing_vpp_mgrs import mgrs_tiles_for_bbox, cached_pairs
+
+              YEAR, TILE_M, HALF = 2024, 5120, 2560
+              MANIFEST = f"/data/manifests/nfi{YEAR}_512.json"
+              MGRS_OUT = f"/data/manifests/nfi{YEAR}_vpp_gaps.json"
+
+              plots = pd.read_parquet("/data/nfi/nfi_plots.parquet")
+              p = plots[plots["Year"] == YEAR].copy()
+              print(f"NFI {YEAR} plots: {len(p):,}")
+
+              p["cx"] = (p["Easting"] // TILE_M).astype("int64")
+              p["cy"] = (p["Northing"] // TILE_M).astype("int64")
+
+              def edges(grp, w, s):
+                  """Distance from each plot to the nearest tile edge."""
+                  return np.minimum.reduce([
+                      (grp["Easting"] - w).to_numpy(),
+                      (w + TILE_M - grp["Easting"]).to_numpy(),
+                      (grp["Northing"] - s).to_numpy(),
+                      (s + TILE_M - grp["Northing"]).to_numpy(),
+                  ])
+
+              tiles, e_grid, e_centred = [], [], []
+              for (cx, cy), grp in p.groupby(["cx", "cy"]):
+                  gw, gs = cx * TILE_M, cy * TILE_M
+                  e_grid.extend(edges(grp, gw, gs).tolist())
+
+                  # Centre on the plot bounding box, snapped to the 10 m NMD grid.
+                  mid_e = (grp["Easting"].min() + grp["Easting"].max()) / 2
+                  mid_n = (grp["Northing"].min() + grp["Northing"].max()) / 2
+                  w = float(np.round((mid_e - HALF) / 10) * 10)
+                  s = float(np.round((mid_n - HALF) / 10) * 10)
+
+                  d = edges(grp, w, s)
+                  assert d.min() >= 0, f"plot outside its tile at cell {cx},{cy}"
+                  e_centred.extend(d.tolist())
+
+                  tiles.append({
+                      "name": f"nfi{YEAR}_{int(gw)}_{int(gs)}",
+                      "bbox_3006": {"west": w, "south": s,
+                                    "east": w + TILE_M, "north": s + TILE_M},
+                      "year": YEAR,
+                      "source": "lulc",   # forest truth; the year key forces strict matching
+                      "n_plots": int(len(grp)),
+                  })
+
+              tiles.sort(key=lambda t: -t["n_plots"])
+              with open(MANIFEST, "w") as f:
+                  json.dump(tiles, f, indent=1)
+
+              covered = sum(t["n_plots"] for t in tiles)
+              assert covered == len(p), "every plot must land on exactly one tile"
+              g, c = np.asarray(e_grid), np.asarray(e_centred)
+              print(f"tiles:          {len(tiles):,}")
+              print(f"plots covered:  {covered:,} / {len(p):,}")
+              print(f"plots per tile: mean {covered/len(tiles):.2f}, max {tiles[0]['n_plots']}")
+              print("\n=== plot-to-edge distance (m) ===")
+              print(f"{'':10s} {'min':>6s} {'p05':>6s} {'median':>7s}  {'<320 m':>12s}")
+              for name, a in (("lattice", g), ("centred", c)):
+                  print(f"{name:10s} {a.min():>6.0f} {np.percentile(a,5):>6.0f} "
+                        f"{np.median(a):>7.0f}  {int((a<320).sum()):>5,} "
+                        f"({100*(a<320).mean():>4.1f}%)")
+              print(f"\nwrote {MANIFEST}")
+
+              need = set()
+              for t in tiles:
+                  need |= mgrs_tiles_for_bbox(t["bbox_3006"])
+              have = cached_pairs("/data/vpp_wekeo")
+              missing = sorted(m for m in need if (m, YEAR) not in have)
+
+              print(f"\n=== VPP cache, {YEAR} ===")
+              print(f"MGRS cells touched:        {len(need)}")
+              print(f"already complete in cache: {len(need) - len(missing)}")
+              print(f"MISSING — must prefetch:   {len(missing)}")
+              if missing:
+                  print(f"\n  --mgrs-tiles {','.join(missing)}")
+              with open(MGRS_OUT, "w") as f:
+                  json.dump({"year": YEAR, "needed": sorted(need),
+                             "missing": missing}, f, indent=1)
+              print(f"\nwrote {MGRS_OUT}")
+              PY
+          resources:
+            requests: {cpu: "2", memory: "8Gi"}
+            limits: {cpu: "2", memory: "8Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

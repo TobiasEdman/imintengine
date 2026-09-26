@@ -1,0 +1,135 @@
+---
+# Step 3: plot-driven spectral fetch — 518 tiles placed at the 2024 NFI plots.
+#
+# APPLY ONLY AFTER nfi2024-vpp-prefetch is Complete. VPP_SOURCE=wekeo makes a
+# cache miss raise per tile rather than silently spending CDSE PU; running this
+# against an unfilled cache is exactly how campaign-orphan-512 wrote 0/1147
+# tiles and exited 0 on 2026-06-29.
+#
+# WHY: tiles were historically sampled first and NFI plots counted afterwards,
+# so 1,105 of 18,661 S2-era plots land on a tile and none of them are RTK.
+# 518 tiles cover all 2,389 plots of 2024 — the first RTK year (2-5 cm against
+# the earlier handheld metre-level), still inside LPIS. Measured 2026-09-26.
+#
+# --workers 6: DES allotment is 6 [user-stated 2026-09-26]. That is a CEILING,
+# not a default. Watch `DES: permits=N` in the log and compare per-worker wall
+# rate; if the rate per worker falls, or [408]/429 appear, lower it. Nothing
+# else is streaming DES concurrently here — --scl-backend des shares these same
+# six slots, so 6 is the total, not 6 plus screening.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-fetch
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi2024-plot-driven}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 259200   # 72 h
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fetch
+          # python:3.11-slim (not the sen2cor image): no L2A_Process, so
+          # l1c_sen2cor is auto-dead and this Job is strictly DES. The 2016
+          # background slot lands empty with temporal_mask==0 where DES has no
+          # 2016 L2A; the dataset zero-pads and masks frame 0 for that case.
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== nfi2024 plot-driven fetch — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              OUT=/data/unified_v2_512_nfi2024_staging
+              MANIFEST=/data/manifests/nfi2024_512.json
+
+              echo ""
+              echo "=== VPP cache precondition ==="
+              python3 - <<'PYEOF'
+              import json, sys
+              gaps = json.load(open("/data/manifests/nfi2024_vpp_gaps.json"))
+              if gaps["missing"]:
+                  sys.exit(
+                      f"REFUSING: {len(gaps['missing'])} (MGRS, 2024) pairs still "
+                      f"absent from the WEkEO cache: {gaps['missing']}. Run "
+                      f"nfi2024-vpp-prefetch first — VPP_SOURCE=wekeo will raise "
+                      f"per tile, and paying CDSE PU for VPP is forbidden."
+                  )
+              print(f"all {len(gaps['needed'])} MGRS cells cached for 2024 — proceeding")
+              PYEOF
+
+              echo ""
+              echo "=== fetch: 518 tiles, des-only, --workers 6 → $OUT ==="
+              python3 scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json "$MANIFEST" \
+                --output-dir "$OUT" \
+                --tile-size-px 512 \
+                --years 2024 \
+                --workers 6 \
+                --fetch-sources des \
+                --scl-backend des \
+                --claim-dir "$OUT/.claims"
+
+              echo ""
+              echo "=== layout sanity (sample 5) ==="
+              python3 - <<'PYEOF'
+              import glob
+              import numpy as np
+              outs = sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz"))
+              print(f"tiles written: {len(outs)}")
+              for p in outs[:5]:
+                  d = np.load(p, allow_pickle=True)
+                  assert d["spectral"].shape[1:] == (512, 512), (p, d["spectral"].shape)
+                  assert "coreg_ref_frame" in d.files, f"{p} missing anchor"
+                  print(f"  {p.split('/')[-1]}: spectral={d['spectral'].shape} "
+                        f"mask={list(d['temporal_mask'])} "
+                        f"coreg_m2={int(d.get('coreg_m2', 0))}")
+              PYEOF
+              echo ""
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            # ── VPP ROUTING — MUST be wekeo for any fetch_unified_tiles run ──
+            # The auto-router falls through to CDSE Sentinel Hub on a cache
+            # miss, draining the SHARED cdse PU pool; credit_guard then marks
+            # CDSE DEAD and the spectral fetch loses its backend silently.
+            # wekeo = cache-only: a miss raises, visibly, per tile.
+            - {name: VPP_SOURCE, value: "wekeo"}
+            - {name: VPP_WEKEO_DIR, value: "/data/vpp_wekeo"}
+            - name: DES_USER
+              valueFrom: {secretKeyRef: {name: des-credentials, key: user, optional: true}}
+            - name: DES_PASSWORD
+              valueFrom: {secretKeyRef: {name: des-credentials, key: password, optional: true}}
+            - name: CDSE_CLIENT_ID
+              valueFrom: {secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}}
+            - name: CDSE_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}}
+          envFrom:
+            - secretRef: {name: wekeo-creds}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
