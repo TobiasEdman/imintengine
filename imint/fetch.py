@@ -2,7 +2,7 @@
 imint/fetch.py — Sentinel-2 data fetching (DES + CDSE) and cloud detection
 
 **openEO-based fetchers** — used as fallback when the primary CDSE
-Sentinel Hub HTTP fetch (``imint/training/cdse_s2.py``) fails.  For bulk
+Sentinel Hub HTTP fetch (``imint/data/cdse_s2.py``) fails.  For bulk
 training data preparation, ``prepare_data.py`` uses the Sentinel Hub
 Process API first (fast, single HTTP POST per tile) and falls back to
 these openEO functions on error.
@@ -1787,7 +1787,7 @@ def _get_cdse_oidc_password_token() -> str:
     """Get a CDSE OAuth2 access token via the resource-owner password grant.
 
     Used by :func:`_cdse_download_safe` for CDSE OData/Catalogue access.
-    The token from :func:`imint.training.cdse_vpp._get_token` (client
+    The token from :func:`imint.data.cdse_vpp._get_token` (client
     credentials, SH-scoped service account) returns ``401 Unauthorized``
     on the OData download endpoint — this helper produces a token with
     the right scope.
@@ -3511,7 +3511,7 @@ def fetch_grazing_timeseries(
             (B01, B05, B06, B07, B08, B09) are filled: B08 ≈ B8A,
             others set to zero.
             """
-            from .training.cdse_s2 import fetch_s2_scene
+            from .data.cdse_s2 import fetch_s2_scene
 
             c_start, c_end = c_start_end
             chunk_dates = []

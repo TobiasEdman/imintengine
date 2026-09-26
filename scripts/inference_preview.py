@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from imint.fm.terratorch_loader import _load_prithvi_from_hf
 from imint.fm.upernet import PrithviSegmentationModel, get_default_pool_sizes
-from imint.training.unified_schema import (
+from imint.schema.unified_schema import (
     UNIFIED_CLASSES,
     UNIFIED_COLORS,
     NUM_UNIFIED_CLASSES,

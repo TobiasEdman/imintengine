@@ -56,7 +56,7 @@ from imint.training.skg_grunddata import (
     fetch_tree_height_tile,
 )
 from imint.training.copernicus_dem import fetch_dem_tile
-from imint.training.cdse_vpp import fetch_vpp_tiles
+from imint.data.cdse_vpp import fetch_vpp_tiles
 from imint.training.slu_markfukt import fetch_markfukt_tile
 from imint.training.tile_bbox import resolve_fetch_bbox
 

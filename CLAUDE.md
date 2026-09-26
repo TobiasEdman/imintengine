@@ -9,7 +9,7 @@
 
 ## Schema — 23-klassers Unified Schema (v5)
 
-Det enhetliga schemat (`imint/training/unified_schema.py`) slår samman NMD + LPIS-grödor + SKS-avverkning:
+Det enhetliga schemat (`imint/schema/unified_schema.py`) slår samman NMD + LPIS-grödor + SKS-avverkning:
 
 | Klass | Namn | Källa | SJV-koder |
 |-------|------|-------|-----------|
@@ -62,7 +62,7 @@ Modellen har två output-huvuden från samma backbone:
 
 | Modul | Syfte |
 |-------|-------|
-| `imint/training/unified_schema.py` | 20-klassers schemadefinition |
+| `imint/schema/unified_schema.py` | 20-klassers schemadefinition |
 | `imint/training/unified_dataset.py` | Multitemporal dataset loader |
 | `imint/training/tile_fetch.py` | Delad hämtningslogik (STAC → CDSE → DES fallback) |
 | `scripts/fetch_unified_tiles.py` | Enhetlig 4-rams tile-hämtare (LULC + crop + urban) |
@@ -102,7 +102,7 @@ De är helt oberoende och körs i sekvens.
 ### VPP — ALLTID `VPP_SOURCE=wekeo` i fetch-yamls
 
 `scripts/fetch_unified_tiles.py` kör VPP-prefetch via
-`imint.training.cdse_vpp.fetch_vpp_tiles`. Default-routing (`_auto_fetch_vpp`)
+`imint.data.cdse_vpp.fetch_vpp_tiles`. Default-routing (`_auto_fetch_vpp`)
 är "cache-first med CDSE-fallback" — men på en cache-miss faller den
 tillbaka till CDSE Sentinel Hub Process API, som **delar PU-pool med
 spektralfetchen**. En större fetch mot ett delvis befolkat WEkEO-cache
@@ -182,7 +182,7 @@ allotment.
 
 ### CDSE PU — **delad pool**, använd klokt
 
-`imint.training.cdse_vpp._PU_POOL = "cdse"` är **delad** mellan tre
+`imint.data.cdse_vpp._PU_POOL = "cdse"` är **delad** mellan tre
 clients som alla räknas mot samma månatliga PU-budget:
 
 1. **CDSE SH-Process API** (`--fetch-sources cdse` backend, plus
@@ -261,7 +261,7 @@ Tre distinkta mekanismer, i denna ordning. **Relativ före absolut; helstacken, 
 
 Innan du skriver en ny lösning, sök i repot. Det här är en genomtänkt arkitektur, inte en samling lösa skript. Konkreta regler:
 
-- **Sentinel-2-hämtning** → använd alltid `imint.training.optimal_fetch.optimal_fetch_dates(mode="era5_then_scl")` för att välja rena scener. Hardkodade datumlistor är förbjudna — Atmosfär-pipelinen är designad för att eliminera molniga scener före spektral-fetch.
+- **Sentinel-2-hämtning** → använd alltid `imint.data.optimal_fetch.optimal_fetch_dates(mode="era5_then_scl")` för att välja rena scener. Hardkodade datumlistor är förbjudna — Atmosfär-pipelinen är designad för att eliminera molniga scener före spektral-fetch.
 - **Showcase-tabbar** → alltid `TAB_CONFIG[<key>]` i `docs/js/tab-data.js` + tom `<div class="tab-dynamic"></div>` i HTML. Mallen `renderTabDynamic` (`docs/js/app.js:88`) renderar paneler, opacity-sliders, bgToggle, legends och summary-cards konsekvent med övriga tabbar.
 - **Showcasens visuella identitet (DES)** → ALLA sidor under `docs/` — tabbar OCH fristående `.html` (t.ex. `coregistration.html`) — ska följa den visuella identiteten i `docs/css/styles.css`. Länka `css/styles.css?v=2` + Space Grotesk; **vit bakgrund**, skogsgrön `#1A4338` (primär) / `#245045` (sekundär), mint `#cff8e4`-accent, `#171717` text, `#6b7280` grå, `#e5e7eb` linjer. Återanvänd klasserna: `.header` (vit topbar med `<span>IMINT</span>`-titel + `.theme-tab`-nav), `.summary-section`/`.summary-card`, `.testimonial` (callouts), `.section-byline`. Analysis-lager med kartöverlägg = TAB_CONFIG (Leaflet-paneler); metod-/info-sidor = fristående HTML, men ALDRIG eget tema/egen palett (off-brand `#27ae60`, mörk header etc.) — det bryter mot DES och mot resten av showcasen. (Lärdom 2026-06-09: koregistreringssidan byggdes först off-brand och fick göras om.)
 - **Aux-channel-fetcher** → följ mönstret från `imint/training/skg_height.py`: `(west, south, east, north, *, size_px, cache_dir)`-signatur, EPSG:3006-bbox snappad till 10 m grid via `_to_nmd_grid_bounds`, `.npy`-cache med deterministisk nyckel.

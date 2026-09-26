@@ -107,7 +107,7 @@ def _fetch_rededge_frame_cdse(
     ``_set_rate_limit`` — blocks here before any network I/O if the
     sliding-window quota would be exceeded.
     """
-    from imint.training.cdse_s2 import _fetch_s2_tiff, _parse_multiband_tiff, _get_token
+    from imint.data.cdse_s2 import _fetch_s2_tiff, _parse_multiband_tiff, _get_token
     from imint.training.tile_fetch import _CDSE_SEMAPHORE
 
     _wait_for_rate_limit()

@@ -52,10 +52,10 @@ spec:
               import numpy as np
               from collections import Counter
 
-              from imint.training.unified_schema import (
+              from imint.schema.unified_schema import (
                   SJV_TO_UNIFIED, UNIFIED_CLASS_NAMES,
               )
-              from imint.training.class_schema import _LUT_19
+              from imint.schema.class_schema import _LUT_19
               from imint.analyzers.nmd import NMD_LEVEL2
 
               print("=" * 70)

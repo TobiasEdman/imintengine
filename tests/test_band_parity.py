@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 import imint.fetch
-from imint.training import openeo_tile_graph as otg
+from imint.data import openeo_tile_graph as otg
 
 _BBOX = {"west": 500000.0, "south": 6500000.0,
          "east": 505120.0, "north": 6505120.0}

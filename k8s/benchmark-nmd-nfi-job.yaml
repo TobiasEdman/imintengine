@@ -33,8 +33,8 @@ spec:
               import glob, json, numpy as np, pandas as pd, rasterio, sys
               sys.path.insert(0, "/w/ie/scripts")
               from validate_against_nfi import derive_nfi_forest_class, FOREST_CLASSES, FOREST_NAMES
-              from imint.training.class_schema import nmd_raster_to_lulc
-              from imint.training.unified_schema import nmd19_to_unified
+              from imint.schema.class_schema import nmd_raster_to_lulc
+              from imint.schema.unified_schema import nmd19_to_unified
 
               df = pd.read_parquet("/data/nfi/nfi_index_unified_v2_512.parquet")
               nmd_path = sorted(glob.glob("/data/nmd/*.tif"))[0]

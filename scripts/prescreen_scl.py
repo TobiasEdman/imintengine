@@ -53,7 +53,7 @@ def screen_tile(tile_loc: dict, frame_windows: list, year: int,
     from imint.training.tile_fetch import (
         bbox_3006_to_wgs84, _CDSE_SEMAPHORE,
     )
-    from imint.training.cdse_s2 import _prescreen_scl, _get_token
+    from imint.data.cdse_s2 import _prescreen_scl, _get_token
     from imint.fetch import _stac_available_dates
 
     # Normalize bbox to current tile size — manifest bbox may be stale

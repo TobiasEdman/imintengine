@@ -31,7 +31,7 @@ Compatibility
 * DES openEO 1.1 (``openeo.digitalearth.se``) — same graph shape;
   ``aggregate_spatial`` has a known geopandas-dtype server bug so
   AOI cloud verification uses the pixel ``scl_stack_screen`` path
-  (handled upstream in :func:`imint.training.optimal_fetch.verify_aoi_scl`).
+  (handled upstream in :func:`imint.data.optimal_fetch.verify_aoi_scl`).
 
 Date metadata caveat
 --------------------
@@ -153,7 +153,7 @@ def _cdse_single_flight(source: str):
     if source != "cdse-openeo":
         yield
         return
-    from imint.training.tile_fetch import _CDSE_OPENEO_SEMAPHORE
+    from imint.data.concurrency import _CDSE_OPENEO_SEMAPHORE
     _CDSE_OPENEO_SEMAPHORE.acquire()
     try:
         yield
@@ -687,7 +687,7 @@ def fetch_tile_at_specific_dates(
 
     This is the **architecturally correct** entry point for the refetch
     pipeline. The caller is expected to have run an SCL-based cloud
-    scorer (e.g. :func:`imint.training.optimal_fetch.optimal_fetch_dates`
+    scorer (e.g. :func:`imint.data.optimal_fetch.optimal_fetch_dates`
     with ``mode="era5_then_scl"``) and picked the lowest-AOI-cloud-count
     date per slot.
 

@@ -26,7 +26,7 @@ except ImportError:
     raise ImportError("PyTorch is required. Install with: pip install torch")
 
 from .config import TrainingConfig
-from .class_schema import compute_class_weights
+from imint.schema.class_schema import compute_class_weights
 from .dataset import LULCDataset, build_weighted_sampler
 from .evaluate import evaluate_model
 
@@ -347,7 +347,7 @@ class LULCTrainer:
                 class_counts = {int(k): v for k, v in stats["class_counts"].items()}
             elif "pixel_counts" in stats:
                 # Map class names to indices using unified schema
-                from .unified_schema import UNIFIED_CLASS_NAMES
+                from imint.schema.unified_schema import UNIFIED_CLASS_NAMES
                 name_to_idx = {name: i for i, name in enumerate(UNIFIED_CLASS_NAMES)}
                 class_counts = {}
                 for name, count in stats["pixel_counts"].items():

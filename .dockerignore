@@ -22,3 +22,10 @@ docker-compose.yml
 docker-compose.colonyos.yml
 .env
 .env.*
+
+# Wheel-owned runtime resources and the shared acquisition package.
+!imint/data/
+!imint/data/**
+!imint/fm/cot_models/*.pt
+!imint/fm/cot_models_l1c/*.npz
+!imint/fm/pib_grazing/**/train_stats/*.pth

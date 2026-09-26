@@ -29,8 +29,8 @@ for line in open(f"{ROOT}/.env"):
     if m:
         os.environ[m.group(1)] = m.group(2).strip().strip('"').strip("'")
 
-from imint.training.cdse_s2 import _CRS_3006, _get_token, _prescreen_scl
-from imint.training.optimal_fetch import era5_to_scl_gate, rank_stac_era5_candidates
+from imint.data.cdse_s2 import _CRS_3006, _get_token, _prescreen_scl
+from imint.data.optimal_fetch import era5_to_scl_gate, rank_stac_era5_candidates
 
 # Three production-sized Swedish AOIs (5120m extent = 512 px × 10 m).
 # Bboxes computed by snapping to the 10 m grid; WGS84 is bbox center

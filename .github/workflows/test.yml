@@ -29,5 +29,23 @@ jobs:
           pip install -r requirements.txt
           pip install pytest scikit-learn
 
-      - name: Run tests
-        run: pytest tests/ -v
+      # This module performs interactive OIDC login during collection.
+      # Run it separately in an authenticated DES session.
+      - name: Run offline regression tests
+        run: pytest tests/ --ignore=tests/test_des_connection.py -v
+
+  installed-library:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build the distributable
+        run: python -m pip wheel --no-deps . --wheel-dir dist
+      - name: Install only the base library
+        run: |
+          cd "$RUNNER_TEMP"
+          python -m pip install "$GITHUB_WORKSPACE"/dist/imint_engine-*.whl
+      - name: Verify installed imports and bundled resources
+        run: python -I tests/smoke_installed_package.py

@@ -36,7 +36,7 @@ from imint.config.env import load_env
 load_env()
 
 from imint.fetch import S2L2A_SPECTRAL_BANDS, fetch_des_data  # noqa: E402
-from imint.training.optimal_fetch import (  # noqa: E402
+from imint.data.optimal_fetch import (  # noqa: E402
     _connect_des_openeo, scl_stack_screen,
 )
 

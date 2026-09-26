@@ -49,7 +49,7 @@ _LATENCY_LOW_S = 30.0       # p90 below this → scale up
 _ERROR_RATE_HIGH = 0.30     # >30 % errors → scale down
 
 from .config import TrainingConfig
-from .class_schema import nmd_raster_to_lulc
+from imint.schema.class_schema import nmd_raster_to_lulc
 from .sampler import (
     generate_grid, grid_to_wgs84, split_by_latitude,
     densify_grid, generate_densification_regions,
@@ -1131,7 +1131,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                 windows = default_windows
                 if use_vpp_guided:
                     try:
-                        from .cdse_vpp import fetch_vpp_tiles
+                        from imint.data.cdse_vpp import fetch_vpp_tiles
                         from .vpp_windows import (
                             compute_growing_season_windows,
                         )
@@ -1170,7 +1170,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                 # candidate — fetches spectral + SCL, checks cloud/nodata/
                 # haze locally.  No openEO fallback (same CDSE platform,
                 # same rate limits).
-                from .cdse_s2 import fetch_s2_scene
+                from imint.data.cdse_s2 import fetch_s2_scene
 
                 frames = []       # list of (6, H, W) arrays
                 frame_dates = []  # list of date strings

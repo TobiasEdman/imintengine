@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from imint.training import optimal_fetch as of
+from imint.data import optimal_fetch as of
 
 
 def test_retry_after_parsing():

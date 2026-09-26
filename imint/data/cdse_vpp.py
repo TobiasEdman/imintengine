@@ -27,10 +27,10 @@ Source routing ($VPP_SOURCE):
     CDSE Sentinel Hub and the WEkEO COG cache serve the SAME HR-VPP
     product, so routing is by cost/coverage/availability, not quality.
       * ``auto`` (default): cache-first + circuit breaker.
-          1. WEkEO cache (imint.training.wekeo_vpp, $VPP_WEKEO_DIR, default
+          1. WEkEO cache (imint.data.wekeo_vpp, $VPP_WEKEO_DIR, default
              /data/vpp_wekeo) when it covers the tile — free, local.
           2. CDSE for coverage gaps, but only while the shared SH-Process
-             PU pool isn't marked dead (imint.training.openeo_tile_graph
+             PU pool isn't marked dead (imint.data.openeo_tile_graph
              credit guard, key "cdse"); first PU exhaustion trips it so no
              later tile wastes a doomed call.
           3. WEkEO best-effort otherwise.
@@ -42,7 +42,7 @@ License: Copernicus Open Access
 
 Typical usage::
 
-    from imint.training.cdse_vpp import fetch_vpp_tiles
+    from imint.data.cdse_vpp import fetch_vpp_tiles
     vpp = fetch_vpp_tiles(west, south, east, north, size_px=256)
     # vpp["sosd"].shape == (256, 256), dtype float32
 
@@ -223,7 +223,7 @@ def fetch_vpp_band(
 
 
 # Shared SH-Process credit-guard key. CDSE VPP (SH Process API) draws from
-# the SAME PU pool as the CDSE spectral path (imint.training.cdse_s2 marks
+# the SAME PU pool as the CDSE spectral path (imint.data.cdse_s2 marks
 # "cdse"), so one exhaustion must trip the guard for both.
 _PU_POOL = "cdse"
 
@@ -271,7 +271,7 @@ def _read_wekeo_vpp(
     cog_dir = Path(os.environ.get("VPP_WEKEO_DIR", "/data/vpp_wekeo"))
     if not (cog_dir / "index.json").exists():
         return None
-    from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+    from imint.data.wekeo_vpp import fetch_vpp_tiles_local
     return fetch_vpp_tiles_local(
         west, south, east, north,
         size_px=size_px, vpp_cog_dir=cog_dir, year=year,
@@ -308,7 +308,7 @@ def _auto_fetch_vpp(
        degrades to fallback windows rather than aborting the tile; raise
        only if there is no WEkEO cache at all and CDSE is unavailable.
     """
-    from imint.training.openeo_tile_graph import (
+    from imint.data.openeo_tile_graph import (
         is_source_dead, mark_source_dead, _is_payment_required_error,
     )
 

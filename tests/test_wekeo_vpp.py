@@ -1,4 +1,4 @@
-"""Tests for the WEkEO HR-VPP fallback (imint.training.wekeo_vpp).
+"""Tests for the WEkEO HR-VPP fallback (imint.data.wekeo_vpp).
 
 Endpoint-independent: no WEkEO network access. The HDA download path
 (prefetch_vpp_cogs) is exercised by the k8s job verify-wekeo-vpp; here
@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from imint.training import wekeo_vpp
+from imint.data import wekeo_vpp
 
 
 # ── filename parser ──────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ class TestFallbackWiring:
         That None is the cue for the auto router to fall through to CDSE,
         and for VPP_SOURCE=wekeo to raise a clear "no cache" error.
         """
-        from imint.training import cdse_vpp
+        from imint.data import cdse_vpp
 
         with tempfile.TemporaryDirectory() as d:
             monkeypatch.setenv("VPP_WEKEO_DIR", d)  # empty — no index.json
@@ -209,7 +209,7 @@ class TestFallbackWiring:
         entirely (no CDSE credentials are set, so a CDSE attempt would
         fail with a different message).
         """
-        from imint.training import cdse_vpp
+        from imint.data import cdse_vpp
 
         with tempfile.TemporaryDirectory() as d:
             monkeypatch.setenv("VPP_SOURCE", "wekeo")

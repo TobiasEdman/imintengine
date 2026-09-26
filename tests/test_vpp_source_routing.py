@@ -11,8 +11,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from imint.training import cdse_vpp
-from imint.training import openeo_tile_graph as guard
+from imint.data import cdse_vpp
+from imint.data import openeo_tile_graph as guard
 
 H = W = 16
 

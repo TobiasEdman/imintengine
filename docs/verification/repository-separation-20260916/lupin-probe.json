@@ -1,0 +1,212 @@
+{
+  "features_file": "/Users/tobiasedman/Developer/studies-wt-imint-split/lupin-vagkant/runners/features_s2.npz",
+  "n": 3046,
+  "n_pos": 1895,
+  "n_neg": 1151,
+  "n_road_covered": 3046,
+  "results": {
+    "main": {
+      "logreg_embed": {
+        "auc_pooled": 0.6728,
+        "ap_pooled": 0.7188,
+        "auc_folds": [
+          0.6758,
+          0.6491,
+          0.6909,
+          0.7263,
+          0.6389
+        ],
+        "n": 3046,
+        "n_pos": 1895,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "mlp_embed": {
+        "auc_pooled": 0.6697,
+        "ap_pooled": 0.7365,
+        "auc_folds": [
+          0.6301,
+          0.6651,
+          0.7009,
+          0.735,
+          0.6068
+        ],
+        "n": 3046,
+        "n_pos": 1895,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "logreg_latlon_CTRL": {
+        "auc_pooled": 0.5337,
+        "ap_pooled": 0.6361,
+        "auc_folds": [
+          0.5337,
+          0.5713,
+          0.5199,
+          0.5791,
+          0.5445
+        ],
+        "n": 3046,
+        "n_pos": 1895,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "mlp_latlon_CTRL": {
+        "auc_pooled": 0.5124,
+        "ap_pooled": 0.629,
+        "auc_folds": [
+          0.5189,
+          0.4113,
+          0.4763,
+          0.5747,
+          0.4789
+        ],
+        "n": 3046,
+        "n_pos": 1895,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "logreg_year_CTRL": {
+        "auc_pooled": 0.5938,
+        "ap_pooled": 0.6658,
+        "auc_folds": [
+          0.6495,
+          0.7543,
+          0.554,
+          0.4969,
+          0.5973
+        ],
+        "n": 3046,
+        "n_pos": 1895,
+        "n_groups": 32,
+        "skipped_folds": 0
+      }
+    },
+    "veto_sweep": {
+      "100": {
+        "auc_pooled": 0.6728,
+        "ap_pooled": 0.7188,
+        "auc_folds": [
+          0.6758,
+          0.6491,
+          0.6909,
+          0.7263,
+          0.6389
+        ],
+        "n": 3046,
+        "n_pos": 1895,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "250": {
+        "auc_pooled": 0.6803,
+        "ap_pooled": 0.7639,
+        "auc_folds": [
+          0.7018,
+          0.6751,
+          0.6305,
+          0.698,
+          0.6961
+        ],
+        "n": 2826,
+        "n_pos": 1895,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "500": {
+        "auc_pooled": 0.6876,
+        "ap_pooled": 0.8266,
+        "auc_folds": [
+          0.7586,
+          0.7321,
+          0.5933,
+          0.6835,
+          0.6783
+        ],
+        "n": 2531,
+        "n_pos": 1895,
+        "n_groups": 32,
+        "skipped_folds": 0
+      }
+    },
+    "road_matched": {
+      "logreg_embed": {
+        "auc_pooled": 0.5816,
+        "ap_pooled": 0.8039,
+        "auc_folds": [
+          0.6779,
+          0.5158,
+          0.5674,
+          0.5816,
+          0.5783
+        ],
+        "n": 1188,
+        "n_pos": 915,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "mlp_latlon_CTRL": {
+        "auc_pooled": 0.5074,
+        "ap_pooled": 0.7863,
+        "auc_folds": [
+          0.6743,
+          0.4518,
+          0.6347,
+          0.4937,
+          0.4384
+        ],
+        "n": 1188,
+        "n_pos": 915,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "logreg_year_CTRL": {
+        "auc_pooled": 0.6502,
+        "ap_pooled": 0.8326,
+        "auc_folds": [
+          0.72,
+          0.7649,
+          0.6567,
+          0.6592,
+          0.4729
+        ],
+        "n": 1188,
+        "n_pos": 915,
+        "n_groups": 32,
+        "skipped_folds": 0
+      }
+    },
+    "month_strata": {
+      "jun_jul": {
+        "auc_pooled": 0.6754,
+        "ap_pooled": 0.6775,
+        "auc_folds": [
+          0.7015,
+          0.6695,
+          0.6732,
+          0.7109,
+          0.6287
+        ],
+        "n": 2677,
+        "n_pos": 1526,
+        "n_groups": 32,
+        "skipped_folds": 0
+      },
+      "aug": {
+        "auc_pooled": 0.5922,
+        "ap_pooled": 0.2847,
+        "auc_folds": [
+          0.6345,
+          0.5861,
+          0.5554,
+          0.6446,
+          0.6384
+        ],
+        "n": 1520,
+        "n_pos": 369,
+        "n_groups": 32,
+        "skipped_folds": 0
+      }
+    }
+  }
+}

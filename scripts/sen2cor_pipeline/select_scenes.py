@@ -90,7 +90,7 @@ def _stac_l1c_scenes(
     """
     from pystac_client import Client
 
-    from imint.training.optimal_fetch import retry_on_rate_limit
+    from imint.data.optimal_fetch import retry_on_rate_limit
 
     def _query() -> list:
         client = Client.open(_CDSE_STAC_ROOT)
@@ -143,7 +143,7 @@ def _stac_l1c_scenes(
 
 def _era5_dates(bbox_wgs84: dict, date_start: str, date_end: str) -> set[str]:
     """ISO dates in the given window passing the ERA5 atmosphere rules."""
-    from imint.training.optimal_fetch import era5_prefilter_dates
+    from imint.data.optimal_fetch import era5_prefilter_dates
     return set(era5_prefilter_dates(bbox_wgs84, date_start, date_end))
 
 

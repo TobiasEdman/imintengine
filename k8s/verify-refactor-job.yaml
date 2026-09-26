@@ -38,7 +38,7 @@ spec:
               echo "=== Fetching tile_${CENTER_E}_${CENTER_N} at 256 px ==="
               python3 - <<PYEOF
               from imint.training.tile_config import TileConfig
-              from imint.training.cdse_s2 import fetch_s2_scene
+              from imint.data.cdse_s2 import fetch_s2_scene
               import numpy as np, os
 
               tile = TileConfig(size_px=256)
@@ -94,7 +94,7 @@ spec:
               echo "=== Fetching tile_${CENTER_E}_${CENTER_N} at 512 px ==="
               python3 - <<PYEOF
               from imint.training.tile_config import TileConfig
-              from imint.training.cdse_s2 import fetch_s2_scene
+              from imint.data.cdse_s2 import fetch_s2_scene
               import numpy as np
 
               tile = TileConfig(size_px=512)

@@ -107,7 +107,7 @@ spec:
           # scripts/train_unified.py injects the repo root into sys.path
           # itself (line 37). Import smoke proves the locked env + source
           # actually compose BEFORE the GPU is touched.
-          python -c "import sys; sys.path.insert(0, '.'); import torch, timm, einops, scipy, sklearn, pyproj, yaml; from imint.training.unified_schema import NUM_UNIFIED_CLASSES; assert NUM_UNIFIED_CLASSES == 28; print('import smoke OK - torch', torch.__version__)"
+          python -c "import sys; sys.path.insert(0, '.'); import torch, timm, einops, scipy, sklearn, pyproj, yaml; from imint.schema.unified_schema import NUM_UNIFIED_CLASSES; assert NUM_UNIFIED_CLASSES == 28; print('import smoke OK - torch', torch.__version__)"
           echo "PINNED SOURCE: $HEAD_SHA"
           # Durable runtime-identity record for the run.
           mkdir -p /cephfs/ops/deps

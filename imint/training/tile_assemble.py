@@ -15,7 +15,7 @@ from datetime import datetime
 
 import numpy as np
 
-from imint.training.openeo_tile_graph import ALL_BANDS_INDEX
+from imint.data.openeo_tile_graph import ALL_BANDS_INDEX
 
 
 def date_to_doy(date_str: str) -> int:

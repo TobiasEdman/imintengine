@@ -61,7 +61,7 @@ import numpy as np
 
 # Reuse CDSE OAuth token machinery — STAC search is anonymous, but asset
 # downloads go through the authenticated zipper endpoint.
-from .cdse_vpp import _get_token
+from imint.data.cdse_vpp import _get_token
 from . import s1_shared
 
 # CDSE Keycloak token endpoint (password grant). The zipper/OData download

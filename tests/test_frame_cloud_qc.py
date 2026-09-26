@@ -154,7 +154,7 @@ def test_measure_flags_cloudy_frames(tmp_path, monkeypatch):
                    frame_2016_b02=0.05)
     # ERA5 patched to "all clear" so it never gates — we test the PIXEL gate.
     monkeypatch.setattr(
-        "imint.training.optimal_fetch.era5_prefilter_dates",
+        "imint.data.optimal_fetch.era5_prefilter_dates",
         lambda bbox, d0, d1, **kw: [d0])
 
     res = qc.measure_tile(str(p), threshold=0.2, bright=0.2, with_era5=True)
@@ -172,7 +172,7 @@ def test_measure_report_aggregates_and_replace_list(tmp_path, monkeypatch):
     _make_tile(tmp_path / "t1.npz", slot_b02={1: 0.5, 2: 0.05})  # slot1 fails
     _make_tile(tmp_path / "t2.npz", slot_b02={1: 0.05, 2: 0.05})  # both clean
     monkeypatch.setattr(
-        "imint.training.optimal_fetch.era5_prefilter_dates",
+        "imint.data.optimal_fetch.era5_prefilter_dates",
         lambda bbox, d0, d1, **kw: [d0])
 
     report_path = tmp_path / "report.json"
@@ -194,7 +194,7 @@ def test_measure_report_aggregates_and_replace_list(tmp_path, monkeypatch):
 def test_measure_dry_run_writes_nothing(tmp_path, monkeypatch):
     _make_tile(tmp_path / "t1.npz", slot_b02={1: 0.5})
     monkeypatch.setattr(
-        "imint.training.optimal_fetch.era5_prefilter_dates",
+        "imint.data.optimal_fetch.era5_prefilter_dates",
         lambda bbox, d0, d1, **kw: [d0])
     report_path = tmp_path / "report.json"
     args = qc.build_parser().parse_args([
@@ -218,7 +218,7 @@ def _patch_select(monkeypatch, returned_dates: list[str]):
         return _Plan([d for d in returned_dates if d0 <= d <= d1])
 
     monkeypatch.setattr(
-        "imint.training.optimal_fetch.optimal_fetch_dates", _fake)
+        "imint.data.optimal_fetch.optimal_fetch_dates", _fake)
 
 
 def _patch_fetch(monkeypatch, b02_value: float):

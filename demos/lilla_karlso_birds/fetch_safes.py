@@ -25,7 +25,7 @@ from imint.config.env import load_env
 load_env()
 
 from imint.fetch import fetch_l1c_safe_from_gcp  # noqa: E402
-from imint.training.optimal_fetch import optimal_fetch_dates  # noqa: E402
+from imint.data.optimal_fetch import optimal_fetch_dates  # noqa: E402
 
 from demos.lilla_karlso_birds import config  # noqa: E402
 

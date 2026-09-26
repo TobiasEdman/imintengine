@@ -38,7 +38,7 @@ spec:
               # requests against the two collections.
               import os, sys, urllib.error, urllib.request, json
 
-              from imint.training.cdse_vpp import _get_token, _SH_PROCESS_URL
+              from imint.data.cdse_vpp import _get_token, _SH_PROCESS_URL
 
               # Small Swedish bbox (EPSG:3006), well-known cloud-free area.
               BBOX_3006 = (614000, 6395000, 616560, 6397560)  # 256 px @ 10 m

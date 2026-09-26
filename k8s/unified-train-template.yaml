@@ -114,7 +114,7 @@ spec:
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
-              pip install --no-cache-dir -e . || \
+              pip install --no-cache-dir -e '.[training]' || \
                 pip install --quiet --no-cache-dir -r requirements.txt
 
               # Per-family deps. Fail fast if the requested backbone

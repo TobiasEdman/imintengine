@@ -12,7 +12,7 @@ DES openEO. For each strategy we measure:
     * Mean COT — re-uses cached 11-band tiles + the imint.analyzers.cot
       MLP5 ensemble.
 
-Strategies (mode names mirror imint.training.optimal_fetch):
+Strategies (mode names mirror imint.data.optimal_fetch):
 
     M0  stac_only       — naive baseline
     M1  atmosphere      — ERA5 prefilter only
@@ -44,7 +44,7 @@ from imint.config.env import load_env
 load_env()
 
 from imint.fetch import fetch_seasonal_image, S2L2A_SPECTRAL_BANDS  # noqa: E402
-from imint.training.optimal_fetch import optimal_fetch_dates  # noqa: E402
+from imint.data.optimal_fetch import optimal_fetch_dates  # noqa: E402
 from imint.analyzers.cot import (  # noqa: E402
     DEFAULT_MODEL_PATHS, _load_ensemble, cot_inference,
 )

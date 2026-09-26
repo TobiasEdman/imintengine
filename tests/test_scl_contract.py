@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 
 from imint.training import fetch_spectral as fs
-from imint.training.openeo_tile_graph import ALL_BANDS
+from imint.data.openeo_tile_graph import ALL_BANDS
 from imint.training.tile_config import TileConfig
 
 # _split_entry_result lives in scripts/fetch_unified_tiles.py — load it by path

@@ -40,7 +40,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from imint.training.unified_schema import NUM_UNIFIED_CLASSES, UNIFIED_COLORS
+from imint.schema.unified_schema import NUM_UNIFIED_CLASSES, UNIFIED_COLORS
 
 from gen_ladder_manifests import DISTILL, RUNGS
 from infer_tiles import ckpt_sha256

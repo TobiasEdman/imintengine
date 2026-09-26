@@ -36,7 +36,7 @@ from scipy.ndimage import label as nd_label
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.tile_fetch import fetch_nmd_label_local
-from imint.training.unified_schema import merge_all, merge_all_2023, UNIFIED_CLASS_NAMES
+from imint.schema.unified_schema import merge_all, merge_all_2023, UNIFIED_CLASS_NAMES
 
 def _compute_nmd_area_map(nmd_label: np.ndarray, pixel_ha: float = 0.01) -> np.ndarray:
     """Per-pixel area map derived from NMD raster via connected components.

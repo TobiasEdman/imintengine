@@ -33,7 +33,7 @@ from imint.config.env import load_env
 load_env()
 
 from imint.fetch import S2L2A_SPECTRAL_BANDS, fetch_seasonal_image  # noqa: E402
-from imint.training.optimal_fetch import optimal_fetch_dates  # noqa: E402
+from imint.data.optimal_fetch import optimal_fetch_dates  # noqa: E402
 
 # Reuse layer specs + AOI from fetch_and_render
 from demos.wetland_pirinen.fetch_and_render import (  # noqa: E402

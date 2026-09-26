@@ -85,7 +85,7 @@ except ImportError:
         "PyTorch is required for training. Install with: pip install torch"
     )
 
-from .unified_schema import NUM_UNIFIED_CLASSES, HARVEST_CLASS
+from imint.schema.unified_schema import NUM_UNIFIED_CLASSES, HARVEST_CLASS
 from .losses import parcel_area_to_pixel_weights
 from .sampler import _sweref99_to_wgs84
 

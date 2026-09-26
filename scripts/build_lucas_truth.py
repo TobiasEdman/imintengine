@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 import pyproj
 
-from imint.training.unified_schema import UNIFIED_CLASSES
+from imint.schema.unified_schema import UNIFIED_CLASSES
 
 # ── Paths ────────────────────────────────────────────────────────────────
 REPO_ROOT = Path(__file__).resolve().parents[1]

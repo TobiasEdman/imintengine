@@ -35,7 +35,7 @@ from collections import Counter, defaultdict
 
 import numpy as np
 
-# Unified-schema class groups (imint/training/unified_schema.py v5)
+# Unified-schema class groups (imint/schema/unified_schema.py v5)
 _CROP = set(range(11, 22))      # 11..21 LPIS crops
 _WETLAND = {5, 7}              # sumpskog, våtmark
 _URBAN = {9}                   # bebyggelse

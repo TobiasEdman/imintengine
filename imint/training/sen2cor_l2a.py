@@ -22,7 +22,7 @@ import numpy as np
 # contract the openEO backends return — so the caller's _split_all_bands derives
 # the 6-band model input PLUS the b08/rededge/b01/b09 extras. Import the
 # canonical order so the sen2cor path and the openEO path can never drift.
-from imint.training.openeo_tile_graph import ALL_BANDS
+from imint.data.openeo_tile_graph import ALL_BANDS
 
 
 # ── L1C scene selection (CDSE STAC, existence-only) ──────────────────────────
@@ -46,7 +46,7 @@ def stac_l1c_scenes(bbox_wgs84: dict, date_start: str, date_end: str) -> list[di
     """
     from pystac_client import Client
 
-    from imint.training.optimal_fetch import retry_on_rate_limit
+    from imint.data.optimal_fetch import retry_on_rate_limit
 
     def _query() -> list:
         client = Client.open(_CDSE_STAC_ROOT)

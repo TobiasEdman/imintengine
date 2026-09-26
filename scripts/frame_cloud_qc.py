@@ -15,7 +15,7 @@ PHASE A — measure (cheap, in-place, no network)
     stack on disk, so the ``cot_l1c`` analyzer (needs 12 bands incl. B10
     cirrus) and an SCL cloud-fraction both require re-downloading the SAFE —
     which defeats the whole point of a *cheap* measure pass. The repo already
-    gates haze on B02 mean reflectance (``imint.training.cdse_s2`` "B02 haze
+    gates haze on B02 mean reflectance (``imint.data.cdse_s2`` "B02 haze
     gate"); we reuse that signal as a per-pixel fraction: clouds are bright in
     the blue band, vegetation/soil/water are dark, so
     ``mean(B02_valid > 0.2)`` is a zero-network cloud proxy computed directly
@@ -106,7 +106,7 @@ FRAME_2016_KEY = "frame_2016"
 ALL_FRAME_KEYS = SLOT_KEYS + [FRAME_2016_KEY]
 
 # B02 brightness threshold (reflectance) above which a pixel is counted "cloud".
-# Matches the repo's B02 haze gate (imint.training.cdse_s2). Not a tunable knob
+# Matches the repo's B02 haze gate (imint.data.cdse_s2). Not a tunable knob
 # of this script — the *tile-level* pass/fail threshold is --threshold; this is
 # the per-pixel brightness cut that defines the fraction.
 B02_BRIGHT_REFLECTANCE = 0.20
@@ -258,7 +258,7 @@ def _era5_pass(bbox_wgs84: dict, date_str: str) -> bool:
     Reuses ``optimal_fetch.era5_prefilter_dates`` (the SPEC-mandated date
     predictor). A 1-day window asks ERA5 exactly about the stored date.
     """
-    from imint.training.optimal_fetch import era5_prefilter_dates
+    from imint.data.optimal_fetch import era5_prefilter_dates
     if not date_str:
         return False
     try:
@@ -415,7 +415,7 @@ def _select_cleaner_date(
     construction, inside the slot window; we additionally assert its year equals
     ``slot_year(tile_year, key)`` (the temporal-matching guard) before returning.
     """
-    from imint.training.optimal_fetch import optimal_fetch_dates
+    from imint.data.optimal_fetch import optimal_fetch_dates
 
     date_start, date_end = frame_window(tile_year, key)
     want_year = slot_year(tile_year, key)

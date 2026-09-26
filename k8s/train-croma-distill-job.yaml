@@ -84,7 +84,7 @@ spec:
               git clone --depth 1 https://github.com/antofuller/CROMA /workspace/CROMA
               export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}
               cd /workspace/imintengine
-              pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+              pip install --no-cache-dir -e '.[training]' || pip install --quiet --no-cache-dir -r requirements.txt
               echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
               grep -q 'enable-tradslag-head' scripts/train_unified.py \
                 || { echo "FATAL: tradslag flags missing on clone"; exit 1; }

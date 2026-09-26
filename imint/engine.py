@@ -58,6 +58,8 @@ ANALYZER_REGISTRY = {
 
 def _load_config(path: str) -> dict:
     p = Path(path)
+    if not p.exists() and path == "config/analyzers.yaml":
+        p = Path(__file__).parent / "config" / "analyzers.yaml"
     if p.exists():
         with open(p) as f:
             return yaml.safe_load(f) or {}

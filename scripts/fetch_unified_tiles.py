@@ -875,7 +875,7 @@ def repair_to_canonical_layout(
     if not missing_slots and not dropped:
         return {"name": name, "status": "skipped", "reason": "all_slots_filled"}
 
-    from imint.training.optimal_fetch import rank_stac_era5_candidates
+    from imint.data.optimal_fetch import rank_stac_era5_candidates
     growing_dates: list[str] | None = None
     autumn_dates: list[str] | None = None
     # Ranked (date, granule_cc, overpass_cloud) tuples per window — fed to
@@ -950,8 +950,8 @@ def repair_to_canonical_layout(
     # health re-check skips slots cleanly if the backend dies (e.g.
     # cdse-openeo 402 PaymentRequired) without spamming doomed calls.
     from imint.training.fetch_spectral import fetch_spectral, SUPPORTED_BACKENDS
-    from imint.training.openeo_tile_graph import is_source_dead
-    from imint.training.optimal_fetch import era5_to_scl_gate
+    from imint.data.openeo_tile_graph import is_source_dead
+    from imint.data.optimal_fetch import era5_to_scl_gate
 
     unknown_sources = [s for s in sources if s not in SUPPORTED_BACKENDS]
     primary_backend: str | None = None

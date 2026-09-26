@@ -20,7 +20,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, "/workspace")
-from imint.training.unified_schema import UNIFIED_COLORS, UNIFIED_CLASS_NAMES
+from imint.schema.unified_schema import UNIFIED_COLORS, UNIFIED_CLASS_NAMES
 
 TILES_DIR = "/data/unified_v2"
 PORT      = 8000

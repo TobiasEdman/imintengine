@@ -5,6 +5,8 @@ outputs/*
 !outputs/showcase/
 !outputs/showcase/**
 data/
+!imint/data/
+!imint/data/**
 !docs/data/
 # NFI (Riksskogstaxeringen) plot coordinates are protected under SLU data
 # terms — never track, never `git add -f`. The repo is PUBLIC; a committed
@@ -126,3 +128,9 @@ k8s/lpis-viz-server.yaml
 scripts/verify_fetch_refactor.py
 # Office lock files (created while a document is open; junk in git)
 ~$*
+
+# Published assets belong to imint-showcase; producers may stage fresh exports here.
+/docs/showcase/
+/docs/data/*.json
+/docs/data/*.geojson
+/docs/data/img/

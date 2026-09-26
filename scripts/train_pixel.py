@@ -100,7 +100,7 @@ def _safe_collate(batch):
     return default_collate(batch)
 
 from imint.training.pixel_dataset import PixelContextDataset, TileGroupSampler, N_AUX
-from imint.training.unified_schema import (
+from imint.schema.unified_schema import (
     NUM_UNIFIED_CLASSES,
     UNIFIED_CLASS_NAMES,
     get_class_weights,
