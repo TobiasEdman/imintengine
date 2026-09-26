@@ -845,25 +845,45 @@ asserted: `_meta.y_sha256` is `356c3b0ed3d0ef2e` in all seven. The frozen r2
 checkpoint is the intended difference between columns; one unintended
 difference remains, recorded under Provenance below.
 
-| backbone | frames | params | OOF accuracy | Cohen κ |
+| backbone | temporal input | params | OOF accuracy | Cohen κ |
 |---|---|---|---|---|
-| tessera | annual¹ | — | **0.8294** | 0.7916 |
-| prithvi600m | 4 | 600M | 0.7965 | 0.7513 |
-| prithvi300m4f | 4 | 300M | 0.7720 | 0.7209 |
-| terramind | 4 | — | 0.7515 | 0.6959 |
-| prithvi300m | 1 | 300M | 0.7435 | 0.6858 |
-| clay | 4 | — | 0.7383 | 0.6798 |
-| croma | 4 | — | 0.7266 | 0.6655 |
+| tessera | annual embedding¹ | — | **0.8294** | 0.7916 |
+| prithvi600m | 4 S2 frames | 600M | 0.7965 | 0.7513 |
+| prithvi300m4f | 4 S2 frames | 300M | 0.7720 | 0.7209 |
+| terramind | 1 S2 frame + S1 composite² | — | 0.7515 | 0.6959 |
+| prithvi300m | 1 S2 frame | 300M | 0.7435 | 0.6858 |
+| clay | 1 S2 frame² | — | 0.7383 | 0.6798 |
+| croma | 1 S2 frame + S1 composite² | — | 0.7266 | 0.6655 |
 
 ¹ `tessera` consumes a precomputed annual embedding, not one acquisition; it
 is outside the frame-count comparison rather than at its low end.
+
+² **The column previously read `frames`, and gave Clay, CROMA and TerraMind
+a 4.** They never received four. In the crop-feature path
+(`run_crop_distill_job.py` → `extract_plot_features.py` →
+`inference_comparison.run_inference` → `UnifiedDataset._build_model_specific_tensors`)
+a single best-frame index is chosen and one 6-band frame is emitted for all
+three; CROMA and TerraMind additionally read `s1`, which
+`scripts/enrich_tiles_s1.py` stores as one per-orbit growing-season median
+composite in linear γ⁰ — a direct read, no frame selection. Only the two
+Prithvi 4f columns consume a genuine four-frame stack. The paths are unchanged
+between the two source revisions the columns were scored at.
+
+**This narrows what the table shows.** `tessera` is not beating five
+four-frame models; it beats two four-frame Prithvi arms and four inputs that
+are single-frame or single-frame-plus-SAR. The temporality contrast below is
+unaffected — it is drawn between the two Prithvi arms, which do differ in
+frame count — but the ranking as a whole says less about temporality than a
+`frames` column implied.
 
 ### Scale versus temporality
 
 The seventh column separates two variables the first six confounded, but it
 does not complete the factorial: the 600M single-frame arm was never run, so
-there is no 2×2. What exists is two descriptive contrasts, each moving one
-variable, each a single run:
+there is no 2×2. What exists is two descriptive contrasts between checkpoints that differ
+principally in one variable — but not only in it, since they also differ in
+the runtime that produced their features, and in the scale case in native crop
+handling. Each is a single run:
 
 - **temporality**, at fixed 300M scale: `prithvi300m4f` − `prithvi300m` =
   **+2.85 points** (0.7720 vs 0.7435) — 1 frame against 4, so three added
@@ -871,9 +891,22 @@ variable, each a single run:
 - **scale**, at fixed 4 frames: `prithvi600m` − `prithvi300m4f` = **+2.45
   points** (0.7965 vs 0.7720).
 
-Three added frames are worth slightly more here than doubling the parameters.
+Three added frames coincide with a slightly larger gain here than doubling
+the parameters does — a descriptive difference between four checkpoints, not a
+measured effect of frames against parameters.
 The ladder's own rung-1 mIoU orders them the same way and more sharply
 (+2.69 and +1.31).
+
+**The scored population overlaps the protected holdout.** The 2,491 rows
+carry only 1,521 unique point IDs, and 404 of those IDs also appear in the
+crop-holdout — 386 of them in the same year, touching 616 of the holdout's
+1,064 rows. The exact `(tile_name, point_id)` keys are disjoint, which is why
+the split froze cleanly, but point identity is not. The hash-bound E01 index
+audit reports this as `protected_role_overlap_detected` with
+`cleared_for_scoring: false`. This does not by itself establish leakage within
+an OOF fold, and it quantifies no bias in the numbers above; operational
+completion and scientific independence are separate questions, and only the
+first is settled. Read the table as a ranking, not as a level.
 
 **These are not causal estimates.** One run per arm, no seeds, no interval —
 they describe what these seven checkpoints did on these 2,491 plots. A
@@ -951,9 +984,17 @@ That has not been done.
 `_meta.y_sha256` is the first 16 hex characters of a SHA-256 over the truth
 vector alone. It binds the label values and their order. It does not bind the
 plot identities, the group assignment, or the fold split, so two records could
-agree on it while differing in which plots they are. They do not differ here —
-all seven read the same frozen manifest `0d4e21d01a87de20` — but the digest is
-not what proves that.
+agree on it while differing in which plots they are.
+
+What is actually established, by the authenticated metadata audit, is
+narrower than "they do not differ here": all seven records reference the same
+frozen split manifest `0d4e21d01a87de20`, and agree on plot counts, the
+declared fold protocol, the seed, the per-class supports and the legacy target
+digest. **The exact scored-key order, the group vectors and the realised fold
+assignments were not read back and remain unverified.** Records can agree on
+every checked field and still have partitioned the same plots differently.
+Closing that would mean persisting the per-record key order and fold vector
+and comparing them directly; no consumer writes them today.
 
 ### What this table does not decide
 
