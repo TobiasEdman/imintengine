@@ -1,0 +1,137 @@
+---
+# Step 3: re-run the 109 tiles the first pass could not write.
+#
+# NOTHING IS RELAXED. The write gate that rejected them is deliberate:
+#
+#   "never persist a tile with an incomplete growing season (slots 1-3)...
+#    Failing here instead releases the claim, so a later run against healthy
+#    backends re-selects dates fresh"  (fetch_unified_tiles.py:617-621)
+#
+# It was added after the 2026-07-05 throttle storm wrote partially-fetched
+# tiles that resume then skipped forever. Loosening it would reintroduce that
+# bug. --cloud-max also stays at its default: admitting cloudier scenes trades
+# quality for coverage, and that trade has not been asked for.
+#
+# The remedy the gate itself names is exactly this — run again, let date
+# selection start over. 181 [503] gateway errors during the first pass make it
+# likely that some failures were backend luck rather than genuine cloud.
+#
+# Scope is the explicit failed list, not the full manifest: the 398 good tiles
+# are not touched at all, so the blast radius is the tiles that have nothing
+# to lose.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-retry
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi2024-retry}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 86400
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: retry
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              STAGE=/data/unified_v2_512_nfi2024_staging
+              SUB=/data/manifests/nfi2024_retry.json
+
+              echo "=== nfi2024 retry — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin >/dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy scipy rasterio pyproj requests Pillow \
+                pystac-client openeo shapely 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              echo ""
+              echo "=== import smoke ==="
+              python3 scripts/fetch_unified_tiles.py --help > /dev/null
+              echo "imports OK"
+
+              echo ""
+              echo "=== VPP cache precondition ==="
+              python3 - <<'PYEOF'
+              import json, sys
+              gaps = json.load(open("/data/manifests/nfi2024_vpp_gaps.json"))
+              if gaps["missing"]:
+                  sys.exit(f"REFUSING: {len(gaps['missing'])} MGRS cells still uncached")
+              print(f"all {len(gaps['needed'])} MGRS cells cached for 2024")
+              PYEOF
+
+              echo ""
+              echo "=== build the retry sub-manifest ==="
+              python3 - <<'PYEOF'
+              import json
+              man = json.load(open("/data/manifests/nfi2024_512.json"))
+              failed = set(json.load(open("/data/manifests/nfi2024_yield.json"))["failed_tiles"])
+              sub = [t for t in man if t["name"] in failed]
+              assert len(sub) == len(failed), f"{len(sub)} != {len(failed)}"
+              json.dump(sub, open("/data/manifests/nfi2024_retry.json", "w"), indent=1)
+              print(f"retrying {len(sub)} tiles, {sum(t['n_plots'] for t in sub)} plots")
+              PYEOF
+
+              BEFORE=$(ls $STAGE/*.npz 2>/dev/null | wc -l)
+              echo "TILES BEFORE: $BEFORE"
+
+              set +e
+              python3 scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json "$SUB" \
+                --output-dir "$STAGE" \
+                --tile-size-px 512 \
+                --years 2024 \
+                --workers 6 \
+                --fetch-sources des \
+                --scl-backend des \
+                --claim-dir "$STAGE/.claims"
+              RC=$?
+              set -e
+
+              AFTER=$(ls $STAGE/*.npz 2>/dev/null | wc -l)
+              echo ""
+              echo "TILES AFTER:  $AFTER  (before: $BEFORE, recovered $((AFTER-BEFORE)))"
+              [ "$AFTER" -ge "$BEFORE" ] || { echo "FAIL: tiles disappeared"; exit 1; }
+
+              echo ""
+              echo "NOTE: recovered tiles carry RAW NMD labels — rerun"
+              echo "      k8s/nfi2024-labels-job.yaml before they are scorable."
+              echo "=== done: $(date -u) ==="
+              exit $RC
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: VPP_SOURCE, value: "wekeo"}
+            - {name: VPP_WEKEO_DIR, value: "/data/vpp_wekeo"}
+            - name: DES_USER
+              valueFrom: {secretKeyRef: {name: des-credentials, key: user, optional: true}}
+            - name: DES_PASSWORD
+              valueFrom: {secretKeyRef: {name: des-credentials, key: password, optional: true}}
+            - name: CDSE_CLIENT_ID
+              valueFrom: {secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}}
+            - name: CDSE_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}}
+          envFrom:
+            - secretRef: {name: wekeo-creds}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

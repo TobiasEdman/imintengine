@@ -1,0 +1,38 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: nfi-index-identity-check, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: idcheck
+          image: python:3.11-slim
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              set -e
+              pip install -q --no-cache-dir pandas pyarrow numpy
+              python - <<'PY'
+              import pandas as pd
+              v3 = pd.read_parquet("/data/nfi/nfi_index_v4_2026-09-30.parquet")
+              pin = pd.read_parquet("/data/nfi/nfi_index_unified_v2_512.parquet")
+              ID = ["TractID", "PlotID", "Year"]
+              for name, d in (("pinned", pin), ("v4", v3)):
+                  per = d.groupby(ID)["tile_name"].nunique()
+                  print(f"{name:7s} rows={len(d):>6,}  unique plot-years={len(per):>6,}  "
+                        f"on >1 tile={int((per > 1).sum()):>5,}  "
+                        f"max tiles/plot={int(per.max())}")
+              v24 = v3[v3.Year == 2024]
+              per = v24.groupby(ID)["tile_name"].nunique()
+              print(f"\n2024 only: rows={len(v24):,}  unique plot-years={len(per):,}  "
+                    f"duplicated across tiles={int((per > 1).sum()):,}")
+              print(f"  -> distinct 2024 plots actually gained: {len(per):,}")
+              PY
+          resources: {requests: {cpu: "2", memory: "8Gi"}, limits: {cpu: "2", memory: "8Gi"}}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes: [{name: d, persistentVolumeClaim: {claimName: training-data-cephfs}}]

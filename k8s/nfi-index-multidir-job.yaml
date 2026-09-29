@@ -1,0 +1,118 @@
+---
+# Step 5: rebuild the NFI plot->tile index over BOTH tile directories, so the
+# 1,978 plots the 2024 campaign added become scorable.
+#
+# nfi_tile_coverage.py takes a single --tile-dir, so it runs once per directory
+# and the two indexes are concatenated. Globbing /data recursively would work
+# but would also sweep in every other tile set on the PVC.
+#
+# Write-once to a new path. The pinned index is left byte-identical and its
+# sha256 is asserted before and after: live evaluations and the frozen identity
+# audit reference it by hash, so overwriting it would invalidate numbers that
+# are already reported.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-index-multidir
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-index-v3}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: rebuild
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              PINNED=/data/nfi/nfi_index_unified_v2_512.parquet
+              OUT=/data/nfi/nfi_index_v4_2026-09-30.parquet
+              A=/data/nfi/.v4_cohort.parquet
+              B=/data/nfi/.v4_nfi2024.parquet
+
+              echo "=== NFI index v4 — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow rasterio pyproj openpyxl
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse --short HEAD)"
+
+              echo ""
+              echo "=== import smoke ==="
+              python scripts/nfi_tile_coverage.py --help > /dev/null
+              echo "imports OK"
+
+              [ -e "$OUT" ] && { echo "FAIL: $OUT exists, refusing to overwrite"; exit 1; }
+              BEFORE=$(sha256sum "$PINNED" | cut -d' ' -f1)
+              echo "pinned sha256 before: $BEFORE"
+
+              echo ""
+              echo "=== leg 1: the existing cohort ==="
+              python scripts/nfi_tile_coverage.py \
+                --tile-dir /data/unified_v2_512 --nfi-dir /data/nfi \
+                --infer-size --out "$A"
+
+              echo ""
+              echo "=== leg 2: the 2024 plot-driven tiles ==="
+              python scripts/nfi_tile_coverage.py \
+                --tile-dir /data/unified_v2_512_nfi2024_staging --nfi-dir /data/nfi \
+                --infer-size --out "$B"
+
+              AFTER=$(sha256sum "$PINNED" | cut -d' ' -f1)
+              echo ""
+              echo "pinned sha256 after:  $AFTER"
+              [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: pinned index changed"; exit 1; }
+
+              python - "$A" "$B" "$OUT" "$PINNED" <<'PYEOF'
+              import sys
+
+              import pandas as pd
+
+              a, b, out, pinned = sys.argv[1:5]
+              left, right = pd.read_parquet(a), pd.read_parquet(b)
+              both = pd.concat([left, right], ignore_index=True)
+
+              # A plot could in principle be co-located onto a tile in each
+              # directory; identity is (tile_name, TractID, PlotID, Year), so a
+              # genuine duplicate would be the SAME plot on the SAME tile.
+              key = ["tile_name", "TractID", "PlotID", "Year"]
+              dupes = int(both.duplicated(subset=key).sum())
+              both = both.drop_duplicates(subset=key).reset_index(drop=True)
+              both.to_parquet(out, index=False)
+
+              old = pd.read_parquet(pinned)
+              def line(name, df):
+                  print(f"  {name:10s} rows={len(df):>7,}  tiles={df['tile_name'].nunique():>6,}  "
+                        f"years={sorted(df['Year'].unique().tolist())}")
+              print("")
+              print("=== index comparison ===")
+              line("pinned", old)
+              line("cohort", left)
+              line("nfi2024", right)
+              line("v4", both)
+              print(f"  duplicate (tile,tract,plot,year) rows dropped: {dupes}")
+              print(f"\n  v4 / pinned = {len(both)/max(len(old),1):.2f}x")
+              print(f"  by year: {both['Year'].value_counts().sort_index().to_dict()}")
+              if "tier" in both:
+                  print(f"  by tier: {both['tier'].value_counts().to_dict()}")
+              print(f"\nwrote {out}")
+              PYEOF
+
+              rm -f "$A" "$B"
+              echo ""
+              echo "=== done: $(date -u) ==="
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
