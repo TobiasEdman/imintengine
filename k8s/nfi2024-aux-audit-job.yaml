@@ -1,0 +1,58 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: nfi2024-aux-audit2, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: audit
+          image: python:3.11-slim
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python - <<'PY'
+              import glob, random
+              from collections import Counter
+              import numpy as np
+
+              def keys_profile(pattern, n=25, label=""):
+                  paths = sorted(glob.glob(pattern))
+                  if not paths:
+                      print(f"{label}: NO TILES at {pattern}"); return None, 0
+                  random.seed(42)
+                  sample = random.sample(paths, min(n, len(paths)))
+                  c = Counter()
+                  for p in sample:
+                      c.update(np.load(p, allow_pickle=True).files)
+                  print(f"\n=== {label}: {len(paths):,} tiles, sampled {len(sample)} ===")
+                  return c, len(sample)
+
+              new, n_new = keys_profile(
+                  "/data/unified_v2_512_nfi2024_staging/*.npz", label="nfi2024 staging")
+              old, n_old = keys_profile(
+                  "/data/unified_v2_512/*.npz", label="existing cohort")
+
+              allk = sorted(set(new or {}) | set(old or {}))
+              print(f"\n{'key':26s} {'nfi2024':>9s} {'cohort':>9s}   verdict")
+              missing = []
+              for k in allk:
+                  a = (new.get(k, 0) / max(n_new, 1)) if new else 0
+                  b = (old.get(k, 0) / max(n_old, 1)) if old else 0
+                  verdict = ""
+                  if b > 0.5 and a < 0.5:
+                      verdict = "*** MISSING in nfi2024 ***"; missing.append(k)
+                  elif a > 0.5 and b < 0.5:
+                      verdict = "(only in nfi2024)"
+                  print(f"{k:26s} {a:>8.0%} {b:>8.0%}   {verdict}")
+              print(f"\nKEYS THE COHORT HAS AND THE NEW TILES LACK: {missing or 'none'}")
+              PY
+          resources: {requests: {cpu: "2", memory: "8Gi"}, limits: {cpu: "2", memory: "8Gi"}}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes: [{name: d, persistentVolumeClaim: {claimName: training-data-cephfs}}]
