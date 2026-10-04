@@ -1,0 +1,76 @@
+---
+# Mark the two genuine TESSERA coverage holes with has_tessera=0.
+#
+# Both reproduce on refetch: one has no overlapping TESSERA block at all, the
+# other has a block that is entirely zeros. Same category as markfukt's real
+# SLU gaps — not a fetch bug, so no retry logic belongs here.
+#
+# But an all-zero array left behind has_tessera=1 is a zero-fill in disguise,
+# which this repo forbids. has_tessera=0 is the honest marking and is the
+# convention the enrich script already uses for a missing year.
+apiVersion: batch/v1
+kind: Job
+metadata: {name: tessera-mark-holes, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mark
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import json
+              import os
+
+              import numpy as np
+
+              STAGE = "/data/unified_v2_512_nfi2024_staging"
+              marked = []
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  a = d.get("tessera")
+                  hole = a is None or (getattr(a, "ndim", 0) >= 2 and not np.any(a))
+                  if not hole:
+                      continue
+                  if int(d.get("has_tessera", 0)) == 0 and a is not None:
+                      continue
+                  d["has_tessera"] = np.array(0)
+                  d["tessera_gap_reason"] = np.array("no_tessera_coverage_verified_2026-10-04")
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **d)
+                  os.replace(tmp, p)
+                  marked.append(os.path.basename(p))
+
+              print(f"marked has_tessera=0 on {len(marked)} tiles:")
+              for m in marked:
+                  print(f"  {m}")
+
+              # Final inventory, and the plot cost of the holes.
+              man = json.load(open("/data/manifests/nfi2024_512.json"))
+              by = {t["name"] + ".npz": t["n_plots"] for t in man}
+              ok = hole = 0
+              lost = 0
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  if int(d.get("has_tessera", 0)) == 1:
+                      ok += 1
+                  else:
+                      hole += 1
+                      lost += by.get(os.path.basename(p), 0)
+              print(f"\ncampaign tiles with usable tessera : {ok}")
+              print(f"coverage holes                     : {hole}")
+              print(f"plots on hole tiles                : {lost}")
+              PYEOF
+          resources: {requests: {cpu: "2", memory: "8Gi"}, limits: {cpu: "2", memory: "8Gi"}}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

@@ -1,0 +1,164 @@
+---
+# Is TESSERA dataset_version=v1 the same data at the new host?
+#
+# dl2.geotessera.org now returns 410 telling clients to upgrade to 0.10+, which
+# fetches from a new location. The cohort's 7,882 tiles were enriched through
+# the OLD host with a <=0.7.5 client. If the embeddings differ, cohort tiles and
+# the 475 new campaign tiles carry different feature distributions, and any
+# comparison across them is confounded — a difference that would look like a
+# model effect. If they are identical, re-fetching the cohort is days of work
+# for nothing.
+#
+# The test re-fetches through 0.10.2 using each tile's OWN stored bbox and its
+# OWN stored tessera_year, so a difference cannot be explained by geometry or
+# year selection. Read-only: nothing is written back.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tessera-equivalence3
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: tessera-equivalence}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 10800
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: equiv
+          image: python:3.12-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy scipy rasterio pyproj pyyaml geotessera pandas pyarrow
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python -c "import importlib.metadata as m; print('geotessera', m.version('geotessera'))"
+              echo "HEAD: $(git rev-parse --short HEAD)"
+
+              python - <<'PYEOF'
+              import glob
+              import random
+              import sys
+              import tempfile
+
+              import numpy as np
+
+              sys.path.insert(0, "/workspace/ie")
+              from geotessera import GeoTessera
+              from scripts.enrich_tiles_tessera import _fetch_tessera_for_tile
+              from imint.training.tile_bbox import resolve_tile_bbox
+              from imint.training.tile_config import TileConfig
+              from imint.training.tile_fetch import infer_tile_year
+
+              # Cohort tiles that already carry tessera from the old host.
+              paths = sorted(glob.glob("/data/unified_v2_512/*.npz"))
+              random.seed(7)
+              random.shuffle(paths)
+
+              picked = []
+              for p in paths:
+                  d = np.load(p, allow_pickle=True)
+                  if "tessera" in d.files and int(d.get("has_tessera", 0)) == 1:
+                      picked.append(p)
+                  if len(picked) == 12:
+                      break
+              if not picked:
+                  sys.exit("no cohort tile with tessera found")
+
+              with tempfile.TemporaryDirectory() as cache:
+                  gt = GeoTessera(embeddings_dir=cache, cache_dir=cache)
+                  verdicts = []
+                  for p in picked:
+                      d = np.load(p, allow_pickle=True)
+                      old = np.asarray(d["tessera"])
+                      year = int(d["tessera_year"])
+                      size = int(d["tile_size_px"])
+                      name = p.split("/")[-1]
+                      # Use the repo's own 4-method resolver, not a guess at
+                      # how bbox_3006 happens to be stored.
+                      bbox = resolve_tile_bbox(
+                          name=name[:-4], tile=TileConfig(size_px=size),
+                          npz_data=dict(d),
+                      )
+                      if bbox is None:
+                          print("  no bbox resolvable — skipping"); continue
+                      print(f"\n=== {name}  year={year} size={size} ===")
+                      want = infer_tile_year(dict(d))
+                      stale = (want is not None and int(want) != year)
+                      print(f"  stored : shape={old.shape} dtype={old.dtype}")
+                      print(f"  year   : stamped={year} inferred={want} "
+                            f"year0_defect={stale}")
+
+                      new, n_merged = _fetch_tessera_for_tile(gt, bbox, year, size)
+                      if new is None or n_merged == 0:
+                          print("  refetch: FAILED — cannot compare"); verdicts.append("nofetch")
+                          continue
+                      new = np.asarray(new)
+                      print(f"  refetch: shape={new.shape} dtype={new.dtype} merged={n_merged}")
+
+                      if new.shape != old.shape:
+                          print("  *** SHAPE MISMATCH ***"); verdicts.append("shape"); continue
+
+                      a = old.astype(np.float32)
+                      b = new.astype(np.float32)
+                      same = np.array_equal(old, new)
+                      diff = np.abs(a - b)
+                      finite = np.isfinite(a) & np.isfinite(b)
+                      frac = float((diff[finite] > 0).mean()) if finite.any() else float("nan")
+                      denom = float(np.nanstd(a))
+                      print(f"  identical          : {same}")
+                      print(f"  pixels differing   : {frac:.4%}")
+                      print(f"  max |diff|         : {np.nanmax(diff):.6g}")
+                      print(f"  mean |diff|        : {np.nanmean(diff):.6g}")
+                      print(f"  std of stored      : {denom:.6g}")
+                      if denom > 0:
+                          print(f"  mean|diff| / std   : {np.nanmean(diff)/denom:.4%}")
+                      verdicts.append(("identical" if same else "differs", stale))
+
+              print("\n" + "=" * 54)
+              from collections import Counter
+              tab = Counter(verdicts)
+              print(f"{'verdict':12s} {'year0_defect':>13s}  {'n':>3s}")
+              for (v, s), n in sorted(tab.items()):
+                  print(f"{v:12s} {str(s):>13s}  {n:>3d}")
+              diff_stale = tab[("differs", True)]
+              diff_clean = tab[("differs", False)]
+              print(f"\ndiffering WITH the known year-0 defect : {diff_stale}")
+              print(f"differing WITHOUT it (unexplained)     : {diff_clean}")
+              if diff_clean == 0 and diff_stale > 0:
+                  print("\nCONCLUSION: every difference is explained by the pre-existing")
+                  print("            year-0 defect, not by the new host. v1 data is stable.")
+                  print("            Re-fetch only the year-0-defective tiles — which the")
+                  print("            enrich script already detects on its own.")
+              elif diff_clean > 0:
+                  print("\nCONCLUSION: differences remain on tiles with a correct year stamp.")
+                  print("            That points at the data itself, and the cohort would be")
+                  print("            inconsistent with the new tiles. Whole-cohort decision.")
+              vlist = [v for v, _ in verdicts]
+              if all(v == "identical" for v in vlist):
+                  print("CONCLUSION: v1 embeddings are byte-identical at the new host.")
+                  print("            Do NOT re-fetch the cohort. Enrich only the new tiles.")
+              elif any(v in ("differs", "shape") for v in vlist):
+                  print("CONCLUSION: embeddings DIFFER. Mixing old and new tessera would")
+                  print("            confound every comparison across the two tile sets.")
+                  print("            This is a re-fetch decision for the whole cohort.")
+              elif True:
+                  print("CONCLUSION: inconclusive — refetch failed, nothing compared.")
+              PYEOF
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

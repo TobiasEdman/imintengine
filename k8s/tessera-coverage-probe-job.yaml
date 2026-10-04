@@ -1,0 +1,108 @@
+---
+# Two tiles of 475 came out wrong: one with no tessera, one all-zero.
+# --no-skip-existing would redo all 475 (2 h) for two tiles, and plain
+# --skip-existing would skip the all-zero one because it technically has the
+# key. So this targets exactly those two through the same repo internals the
+# enrich script uses, and reports whether the failure is transient or a real
+# coverage gap at the edge of TESSERA's advertised 2017-2025 range.
+apiVersion: batch/v1
+kind: Job
+metadata: {name: tessera-fix2, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fix
+          image: python:3.12-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml geotessera
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python - <<'PYEOF'
+              import glob
+              import os
+              import sys
+              import tempfile
+
+              import numpy as np
+
+              sys.path.insert(0, "/workspace/ie")
+              from geotessera import GeoTessera
+              from imint.training.tile_bbox import resolve_tile_bbox
+              from imint.training.tile_config import TileConfig
+              from imint.training.tile_fetch import infer_tile_year
+              from scripts.enrich_tiles_tessera import _fetch_tessera_for_tile
+
+              bad = []
+              for p in sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  if "tessera" not in d.files:
+                      bad.append((p, "missing"))
+                  else:
+                      a = np.asarray(d["tessera"])
+                      if a.ndim >= 2 and not np.any(a):
+                          bad.append((p, "all-zero"))
+              print(f"offending tiles: {len(bad)}")
+              for p, why in bad:
+                  print(f"  {os.path.basename(p)}: {why}")
+              if not bad:
+                  print("nothing to fix"); raise SystemExit(0)
+
+              cache = tempfile.mkdtemp(prefix="gt-")
+              gt = GeoTessera(embeddings_dir=cache, cache_dir=cache)
+              fixed = still = 0
+              for p, why in bad:
+                  data = dict(np.load(p, allow_pickle=True))
+                  size = int(data["tile_size_px"])
+                  year = int(data["tessera_year"]) if "tessera_year" in data else None
+                  if year is None:
+                      year = int(infer_tile_year(data))
+                  bbox = resolve_tile_bbox(
+                      name=os.path.basename(p)[:-4],
+                      tile=TileConfig(size_px=size), npz_data=data)
+                  print(f"\n{os.path.basename(p)}  was={why} year={year}")
+                  print(f"  bbox={bbox}")
+                  try:
+                      arr, merged = _fetch_tessera_for_tile(gt, bbox, year, size)
+                  except Exception as e:
+                      print(f"  fetch raised: {type(e).__name__}: {e}")
+                      still += 1
+                      continue
+                  if arr is None or merged == 0:
+                      print("  fetch returned nothing — TESSERA has no coverage here")
+                      still += 1
+                      continue
+                  arr = np.asarray(arr)
+                  if not np.any(arr):
+                      print(f"  refetch is ALSO all-zero (merged={merged}) "
+                            f"— genuine coverage hole, not transient")
+                      still += 1
+                      continue
+                  data["tessera"] = arr
+                  data["tessera_year"] = np.array(year)
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **data)
+                  os.replace(tmp, p)
+                  print(f"  FIXED (merged={merged}, nonzero={np.count_nonzero(arr)/arr.size:.1%})")
+                  fixed += 1
+
+              print(f"\nfixed={fixed} still_bad={still}")
+              if still:
+                  print("Remaining tiles are coverage holes, not failures. They can be")
+                  print("excluded from tessera cells or kept with has_tessera=0.")
+              PYEOF
+          resources: {requests: {cpu: "4", memory: "16Gi"}, limits: {cpu: "4", memory: "16Gi"}}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
