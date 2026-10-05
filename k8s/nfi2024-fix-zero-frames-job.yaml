@@ -1,0 +1,97 @@
+---
+# Two tiles carry an all-zero frame_2016 behind has_frame_2016=1.
+#
+# The full key census found them; no earlier check did, including the
+# enrichment jobs' own non-degenerate assertions — those listed s1, tessera
+# and the forestry channels, and frame_2016 was not among them.
+#
+# Mechanism: the tile footprint falls in the granule's no-data area. The COT
+# gate measures low cloud optical thickness over no-data and passes it,
+# sen2cor runs, the L2A window extraction returns zeros, and they are written
+# as a valid frame. cot_max=None on both, so they came through the baseline
+# 8.0 gate rather than any relaxed stage.
+#
+# An all-zero array behind a positive flag is a zero-fill in disguise, which
+# this repo forbids. They are demoted to has_frame_2016=0 with a dated reason,
+# the same convention as the other gaps. The array is left in place rather
+# than deleted so the defect stays inspectable.
+apiVersion: batch/v1
+kind: Job
+metadata: {name: nfi2024-fix-zero-frames, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fix
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import json
+              import os
+
+              import numpy as np
+
+              STAGE = "/data/unified_v2_512_nfi2024_staging"
+              REASON = ("frame_2016_extracted_all_zero__tile_in_granule_nodata__"
+                        "cot_gate_passed_on_nodata__verified_2026-10-05")
+              fixed = []
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  a = d.get("frame_2016")
+                  if a is None or getattr(a, "ndim", 0) < 2 or np.any(a):
+                      continue
+                  if int(d.get("has_frame_2016", 0)) == 0:
+                      continue
+                  d["has_frame_2016"] = np.array(0)
+                  d["frame_2016_gap_reason"] = np.array(REASON)
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **d)
+                  os.replace(tmp, p)
+                  fixed.append(os.path.basename(p)[:-4])
+
+              print(f"demoted {len(fixed)} tiles to has_frame_2016=0:")
+              for f_ in fixed:
+                  print(f"  {f_}")
+
+              # Re-census the frame state, and re-assert no positive flag
+              # sits on an empty array anywhere.
+              ok = marked = bad = 0
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  hf = int(d.get("has_frame_2016", 0))
+                  a = d["frame_2016"] if "frame_2016" in d.files else None
+                  empty = a is not None and not np.any(np.asarray(a))
+                  if hf == 1 and not empty:
+                      ok += 1
+                  elif hf == 1 and empty:
+                      bad += 1
+                  else:
+                      marked += 1
+              total = ok + marked + bad
+              print(f"\nCENSUS over {total} tiles:")
+              print(f"  usable frame_2016      : {ok}")
+              print(f"  marked as gap          : {marked}")
+              print(f"  flagged valid but EMPTY: {bad}")
+              with open("/data/manifests/nfi2024_zero_frames_fixed.json", "w") as f:
+                  json.dump({"demoted": fixed, "reason": REASON,
+                             "usable": ok, "marked": marked,
+                             "still_bad": bad}, f, indent=2)
+              if bad:
+                  raise SystemExit(f"FAIL: {bad} still flagged valid while empty")
+              print("\nno positive frame flag sits on an empty array")
+              PYEOF
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

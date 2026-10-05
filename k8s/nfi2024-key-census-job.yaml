@@ -1,0 +1,175 @@
+---
+# Full key census — replaces the 25-tile sampling audit for completeness calls.
+#
+# nfi2024-aux-audit samples 25 tiles per directory. Its percentages are
+# estimates, and reading them as counts is what produced "s1_vv_vh_2016 100%"
+# when the real figure was 464 of 475. This counts every tile.
+#
+# Presence is exact and cheap: np.load().files reads the npz zip namelist
+# without decompressing anything, so 8,357 tiles is minutes. The all-zero
+# check must decompress, so it is scoped to the 475 campaign tiles — a
+# zero-filled array behind a present key is the failure mode this repo
+# forbids, and the campaign tiles are the ones recently written.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-key-census2
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: key-census}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: census
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import json
+              import os
+              from collections import Counter
+
+              import numpy as np
+
+              STAGE = "/data/unified_v2_512_nfi2024_staging"
+              COHORT = "/data/unified_v2_512"
+              REPORT = "/data/manifests/nfi2024_key_census.json"
+
+              def presence(root):
+                  """Exact key counts. Reads the zip namelist, no decompression."""
+                  c, n = Counter(), 0
+                  for p in sorted(glob.glob(f"{root}/*.npz")):
+                      try:
+                          with np.load(p, allow_pickle=True) as d:
+                              c.update(d.files)
+                      except Exception:
+                          c["__unreadable__"] += 1
+                      n += 1
+                      if n % 2000 == 0:
+                          print(f"    {root.split('/')[-1]}: {n:,}...", flush=True)
+                  return c, n
+
+              print("counting staging...")
+              s_keys, s_n = presence(STAGE)
+              print(f"  {s_n:,} tiles")
+              print("counting cohort...")
+              c_keys, c_n = presence(COHORT)
+              print(f"  {c_n:,} tiles")
+
+              # A key is a GAP only when staging is materially BEHIND the
+              # cohort. The first version flagged any key that was not
+              # universal in staging while present in the cohort, which
+              # labelled harvest_mask (92.0% staging vs 84.9% cohort) a gap —
+              # staging was ahead. Many of these keys are data-dependent and
+              # legitimately vary per tile, so the comparison has to be
+              # relative, not absolute.
+              MARGIN = 0.02
+              allk = sorted(set(s_keys) | set(c_keys))
+              print(f"\n{'key':28s} {'staging':>16s} {'cohort':>16s}  verdict")
+              gaps, ahead, extras = [], [], []
+              for k in allk:
+                  s, c = s_keys.get(k, 0), c_keys.get(k, 0)
+                  sp, cp = s / max(s_n, 1), c / max(c_n, 1)
+                  v = ""
+                  if cp - sp > MARGIN:
+                      v = f"*** BEHIND cohort by {int(round((cp-sp)*s_n))} tiles ***"
+                      gaps.append((k, s, s_n, round(sp, 4), round(cp, 4)))
+                  elif sp - cp > MARGIN:
+                      v = f"(ahead of cohort by {int(round((sp-cp)*s_n))})"
+                      ahead.append((k, round(sp, 4), round(cp, 4)))
+                  elif sp > 0.5 and cp < 0.01:
+                      v = "(staging only)"
+                      extras.append(k)
+                  print(f"{k:28s} {s:>7,}/{s_n:<8,} {c:>7,}/{c_n:<8,}  {v}")
+
+              print("\n=== all-zero census over the campaign tiles ===")
+              CHECK = ["spectral", "label", "s1_vv_vh", "s1_vv_vh_2016", "tessera",
+                       "height", "volume", "basal_area", "diameter", "dem",
+                       "markfukt", "frame_2016",
+                       "vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv"]
+              zero = Counter()
+              seen = Counter()
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  for k in CHECK:
+                      if k not in d.files:
+                          continue
+                      a = np.asarray(d[k])
+                      if getattr(a, "ndim", 0) < 2:
+                          continue
+                      seen[k] += 1
+                      if not np.any(a):
+                          zero[k] += 1
+              print(f"{'key':20s} {'present':>9s} {'all-zero':>9s}")
+              degenerate = []
+              for k in CHECK:
+                  if seen[k]:
+                      print(f"{k:20s} {seen[k]:>9,} {zero[k]:>9,}")
+                      if zero[k]:
+                          degenerate.append((k, zero[k], seen[k]))
+
+              print("\n" + "=" * 58)
+              if ahead:
+                  print(f"keys where staging is AHEAD of the cohort: {len(ahead)}"
+                        f" — not gaps")
+              if gaps:
+                  print("KEYS WHERE STAGING IS BEHIND THE COHORT:")
+                  for k, s, n, sp, cp in gaps:
+                      print(f"  {k:26s} staging {s}/{n} ({sp:.1%})  cohort {cp:.1%}")
+              else:
+                  print("no key the cohort has is short in staging")
+              if degenerate:
+                  print("\nZERO-FILLED ARRAYS (forbidden):")
+                  for k, z, t in degenerate:
+                      print(f"  {k}: {z}/{t}")
+              else:
+                  print("no zero-filled arrays among the checked keys")
+
+              print("\n=== flag-vs-array consistency ===")
+              PAIRS = [("tessera", "has_tessera"),
+                       ("frame_2016", "has_frame_2016"),
+                       ("s1_vv_vh", "has_s1")]
+              lying = []
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  for key, flag in PAIRS:
+                      if key not in d.files or flag not in d.files:
+                          continue
+                      a = np.asarray(d[key])
+                      if getattr(a, "ndim", 0) < 2:
+                          continue
+                      if int(d[flag]) == 1 and not np.any(a):
+                          lying.append((os.path.basename(p)[:-4], key, flag))
+              if lying:
+                  print(f"POSITIVE FLAG ON AN EMPTY ARRAY: {len(lying)}")
+                  for n_, k_, f_ in lying:
+                      print(f"  {n_}: {f_}=1 but {k_} is all zero")
+              else:
+                  print("no positive flag sits on an empty array")
+
+              with open(REPORT, "w") as f:
+                  json.dump({"staging_tiles": s_n, "cohort_tiles": c_n,
+                             "staging_keys": dict(s_keys), "cohort_keys": dict(c_keys),
+                             "gaps": gaps, "staging_only": extras,
+                             "all_zero": {k: [z, seen[k]] for k, z, _ in degenerate},
+                             "ahead_of_cohort": ahead,
+                             "flag_on_empty": lying},
+                            f, indent=2)
+              print(f"\nreport -> {REPORT}")
+              PYEOF
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

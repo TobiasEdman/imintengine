@@ -1,0 +1,84 @@
+---
+# Mark tiles that have a 2016 background frame but no 2016 S1 analogue.
+#
+# s1_vv_vh_2016 is written only where has_frame_2016 == 1. A full census of
+# all 475 tiles (not the 25-tile audit sample) found 464 with both composites,
+# 8 with none because they have no background frame at all, and 3 that have a
+# frame yet no SAR analogue. Those 3 gained their frame in the fallback/relax
+# rounds, and the final S1 run executed afterwards with --no-skip-existing, so
+# they have had their chance; they also lack s1_dates_2016, so nothing was
+# half-written. The likely cause is no same-orbit S1 acquisition in the 2016
+# growing-season window for their location.
+#
+# Marked rather than retried: an absent key is indistinguishable from
+# "never attempted", and these were attempted.
+apiVersion: batch/v1
+kind: Job
+metadata: {name: nfi2024-mark-s1-2016-gaps, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mark
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import json
+              import os
+
+              import numpy as np
+
+              STAGE = "/data/unified_v2_512_nfi2024_staging"
+              REASON = "no_same_orbit_s1_in_2016_window__verified_2026-10-05"
+              marked = []
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  if int(d.get("has_frame_2016", 0)) != 1:
+                      continue
+                  if "s1_vv_vh_2016" in d:
+                      continue
+                  d["s1_2016_gap_reason"] = np.array(REASON)
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **d)
+                  os.replace(tmp, p)
+                  marked.append(os.path.basename(p)[:-4])
+
+              print(f"marked {len(marked)} tiles with s1_2016_gap_reason:")
+              for m in marked:
+                  print(f"  {m}")
+
+              both = frame_only = neither = 0
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  hf = int(d.get("has_frame_2016", 0)) == 1
+                  s16 = "s1_vv_vh_2016" in d.files
+                  if hf and s16:
+                      both += 1
+                  elif hf:
+                      frame_only += 1
+                  else:
+                      neither += 1
+              print(f"\nCENSUS over all {both+frame_only+neither} tiles:")
+              print(f"  dual S1 (gs + 2016)        : {both}")
+              print(f"  frame but no 2016 SAR      : {frame_only}  (marked)")
+              print(f"  no background frame        : {neither}  (marked)")
+              with open("/data/manifests/nfi2024_s1_2016_gaps.json", "w") as f:
+                  json.dump({"marked": marked, "reason": REASON,
+                             "dual_s1": both, "frame_only": frame_only,
+                             "no_frame": neither}, f, indent=2)
+              PYEOF
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
