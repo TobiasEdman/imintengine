@@ -1,0 +1,145 @@
+---
+# Flag the cohort's silently-empty arrays as empty.
+#
+# cohort-frame-consistency scanned all 7,882 tiles and found 91 arrays that
+# are entirely zero while their flag says valid: 71 tessera and 20
+# frame_2016. These are pre-existing — the nfi2024 campaign did not write
+# them — and they sit in TRAINING data, so 71 tiles have been feeding the
+# model 128 channels of zeros as if they were embeddings, under
+# has_tessera=1. Tessera is the backbone that wins the R5 table.
+#
+# For frame_2016 the mechanism is known: the tile footprint sits in a granule
+# no-data area, the COT gate measures low cloud optical thickness over no-data
+# and passes it, sen2cor runs, and the extraction writes zeros as a valid
+# frame. The gate is not broken; no-data has no clouds.
+#
+# WHAT THIS CHANGES. Flipping the flag changes what the dataset loader treats
+# as present, which is the point: it stops zeros being read as real. The
+# arrays are left in place rather than deleted, so the defect stays
+# inspectable and the change is reversible from the report this writes.
+#
+# Pre-checked before submit: no active jobs, no training pods. The
+# train-croma-terramind-v3 lock covers code paths, not tile data.
+#
+# Every affected tile name is recorded in full — not a capped sample — so the
+# change can be undone or audited per tile.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cohort-flag-empty-arrays
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: cohort-flag-empty}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: flag
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import json
+              import os
+              from collections import Counter
+
+              import numpy as np
+
+              COHORT = "/data/unified_v2_512"
+              REPORT = "/data/manifests/cohort_empty_arrays_flagged.json"
+              PAIRS = {
+                  "tessera": ("has_tessera",
+                              "tessera_all_zero__pre_existing__verified_2026-10-05"),
+                  "frame_2016": ("has_frame_2016",
+                                 "frame_2016_all_zero__tile_in_granule_nodata__"
+                                 "cot_gate_passed_on_nodata__pre_existing__"
+                                 "verified_2026-10-05"),
+              }
+
+              flagged = {k: [] for k in PAIRS}
+              n = 0
+              for p in sorted(glob.glob(f"{COHORT}/*.npz")):
+                  n += 1
+                  if n % 1000 == 0:
+                      print(f"  scanned {n:,} ...", flush=True)
+                  try:
+                      d = np.load(p, allow_pickle=True)
+                  except Exception:
+                      continue
+                  hits = []
+                  for key, (flag, reason) in PAIRS.items():
+                      if key not in d.files or flag not in d.files:
+                          continue
+                      a = np.asarray(d[key])
+                      if getattr(a, "ndim", 0) < 2 or np.any(a):
+                          continue
+                      if int(d[flag]) == 0:
+                          continue
+                      hits.append((key, flag, reason))
+                  if not hits:
+                      continue
+                  data = dict(d)
+                  for key, flag, reason in hits:
+                      data[flag] = np.array(0)
+                      data[f"{key}_gap_reason"] = np.array(reason)
+                      flagged[key].append(os.path.basename(p)[:-4])
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **data)
+                  os.replace(tmp, p)
+
+              print(f"\nscanned {n:,} cohort tiles")
+              for k, names in flagged.items():
+                  print(f"  {k}: flagged {len(names):,}")
+
+              print("\n=== re-verify: no positive flag on an empty array ===")
+              tab = Counter()
+              remaining = []
+              for p in sorted(glob.glob(f"{COHORT}/*.npz")):
+                  try:
+                      d = np.load(p, allow_pickle=True)
+                  except Exception:
+                      continue
+                  for key, (flag, _) in PAIRS.items():
+                      if key not in d.files or flag not in d.files:
+                          continue
+                      a = np.asarray(d[key])
+                      if getattr(a, "ndim", 0) < 2:
+                          continue
+                      if not np.any(a):
+                          tab[f"{key}:empty"] += 1
+                          if int(d[flag]) == 1:
+                              tab[f"{key}:STILL_FLAGGED_OK"] += 1
+                              remaining.append((os.path.basename(p)[:-4], key))
+                      else:
+                          tab[f"{key}:real"] += 1
+              for k, v in sorted(tab.items()):
+                  print(f"  {k:36s} {v:>7,}")
+
+              with open(REPORT, "w") as f:
+                  json.dump({"cohort_tiles": n,
+                             "flagged": flagged,
+                             "post_state": dict(tab),
+                             "still_flagged_ok": remaining,
+                             "reversible": "arrays left in place; flip the flag "
+                                           "back using the names above"},
+                            f, indent=2)
+              print(f"\nreport -> {REPORT}")
+              if remaining:
+                  raise SystemExit(f"FAIL: {len(remaining)} still flagged valid")
+              print("every empty array in the cohort is now marked")
+              PYEOF
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
