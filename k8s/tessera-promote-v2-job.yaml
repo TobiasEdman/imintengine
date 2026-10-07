@@ -1,0 +1,186 @@
+---
+# Promote tessera_v2 to tessera across the cohort, so every tile reads from
+# the one source that still exists.
+#
+# Decision 2026-10-07: v2 everywhere. The cohort and the campaign were on
+# DIFFERENT sources under the same key name — the cohort's tessera came from
+# the retired dl2.geotessera.org, the campaign's 475 were fetched with
+# geotessera 0.10.2 from the new location. 36.6% of the cohort's values
+# differ, so any comparison across the two sets mixed sources silently.
+#
+# THIS IS A RENAME, NOT AN OVERWRITE. The old embeddings cannot be
+# re-obtained (410), and the published R5 numbers rest on them, so they are
+# preserved as tessera_v1 / tessera_v1_year rather than destroyed. Disk is
+# flat: a tile holds two 128-channel arrays before and after.
+#
+#   tessera      <- tessera_v2        (what the model reads)
+#   tessera_year <- tessera_v2_year
+#   tessera_v1   <- the old array     (irreproducible, kept)
+#   tessera_source = geotessera-0.10.2
+#   tessera_v2*  dropped — they are tessera now
+#
+# has_tessera is RECOMPUTED, not carried. 71 tiles were flagged 0 because
+# their old array was all zeros; if v2 is real for them the flag returns to 1
+# and the stale gap reason is removed. If v2 is also empty the flag stays 0
+# with a reason naming the new source.
+#
+# Resumable: a tile that already has tessera_v1 is skipped, so a restart
+# continues. Every tile is rewritten in full (npz is a zip), which is why
+# this is hours rather than minutes.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tessera-promote-v2
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: tessera-promote}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 144000  # 40 h — ~310 tiles/h measured, full recompression per tile
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: promote
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import json
+              import os
+              from collections import Counter
+
+              import numpy as np
+
+              COHORT = "/data/unified_v2_512"
+              STAGE = "/data/unified_v2_512_nfi2024_staging"
+              REPORT = "/data/manifests/tessera_promotion.json"
+              SRC = "geotessera-0.10.2"
+              EMPTY_REASON = ("tessera_all_zero_in_v2_source__"
+                              "verified_2026-10-07")
+
+              st = Counter()
+              recovered, still_empty = [], []
+
+              print("=== cohort: promote v2 -> tessera, keep old as v1 ===")
+              n = 0
+              for p in sorted(glob.glob(f"{COHORT}/*.npz")):
+                  n += 1
+                  if n % 500 == 0:
+                      print(f"  {n:,} tiles  "
+                            f"promoted={st['promoted']:,} skipped={st['already']:,}",
+                            flush=True)
+                  try:
+                      d = dict(np.load(p, allow_pickle=True))
+                  except Exception:
+                      st["unreadable"] += 1
+                      continue
+                  name = os.path.basename(p)[:-4]
+
+                  if "tessera_v1" in d:
+                      st["already"] += 1
+                      continue
+                  if "tessera_v2" not in d:
+                      st["no_v2"] += 1
+                      continue
+
+                  d["tessera_v1"] = d.get("tessera")
+                  if "tessera_year" in d:
+                      d["tessera_v1_year"] = d["tessera_year"]
+
+                  new = np.asarray(d["tessera_v2"])
+                  d["tessera"] = new
+                  if "tessera_v2_year" in d:
+                      d["tessera_year"] = d["tessera_v2_year"]
+                  d["tessera_source"] = np.array(SRC)
+
+                  for k in ("tessera_v2", "tessera_v2_year",
+                            "tessera_v2_source", "tessera_v2_merged"):
+                      d.pop(k, None)
+
+                  if new.ndim >= 2 and not np.any(new):
+                      d["has_tessera"] = np.array(0)
+                      d["tessera_gap_reason"] = np.array(EMPTY_REASON)
+                      st["empty_in_v2"] += 1
+                      still_empty.append(name)
+                  else:
+                      was = int(np.asarray(d.get("has_tessera", 0)))
+                      d["has_tessera"] = np.array(1)
+                      d.pop("tessera_gap_reason", None)
+                      if was == 0:
+                          st["recovered_from_zero"] += 1
+                          recovered.append(name)
+
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **d)
+                  os.replace(tmp, p)
+                  st["promoted"] += 1
+
+              print(f"\ncohort tiles: {n:,}")
+
+              # The campaign tiles already hold new-source embeddings under the
+              # canonical key; they only lack the provenance stamp.
+              print("\n=== campaign: stamp the source ===")
+              m = 0
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  if "tessera" not in d or "tessera_source" in d:
+                      continue
+                  d["tessera_source"] = np.array(SRC)
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **d)
+                  os.replace(tmp, p)
+                  m += 1
+              print(f"  stamped {m} campaign tiles")
+
+              print(f"\n{'state':26s} {'count':>8s}")
+              for k, v in sorted(st.items()):
+                  print(f"{k:26s} {v:>8,}")
+              print(f"\nrecovered from all-zero: {len(recovered)}")
+              for r in recovered[:10]:
+                  print(f"  {r}")
+              print(f"still empty in v2: {len(still_empty)}")
+              for r in still_empty[:10]:
+                  print(f"  {r}")
+
+              print("\n=== verify ===")
+              chk = Counter()
+              for p in sorted(glob.glob(f"{COHORT}/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  chk["has_v1"] += "tessera_v1" in d.files
+                  chk["has_v2_left"] += "tessera_v2" in d.files
+                  if "tessera" in d.files and "has_tessera" in d.files:
+                      a = np.asarray(d["tessera"])
+                      if a.ndim >= 2:
+                          if int(d["has_tessera"]) == 1 and not np.any(a):
+                              chk["FLAG_ON_EMPTY"] += 1
+                          if str(d.get("tessera_source", "")) .find("0.10.2") >= 0:
+                              chk["stamped"] += 1
+              for k, v in sorted(chk.items()):
+                  print(f"  {k:18s} {v:>8,}")
+
+              with open(REPORT, "w") as f:
+                  json.dump({"source": SRC, "states": dict(st),
+                             "recovered_from_zero": recovered,
+                             "still_empty_in_v2": still_empty,
+                             "campaign_stamped": m,
+                             "verify": dict(chk),
+                             "old_preserved_as": "tessera_v1 / tessera_v1_year"},
+                            f, indent=2)
+              print(f"\nreport -> {REPORT}")
+              if chk["FLAG_ON_EMPTY"]:
+                  raise SystemExit(f"FAIL: {chk['FLAG_ON_EMPTY']} flagged valid while empty")
+              print("every cohort tile reads the current source; old kept as tessera_v1")
+              PYEOF
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
