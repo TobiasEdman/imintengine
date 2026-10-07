@@ -996,6 +996,53 @@ every checked field and still have partitioned the same plots differently.
 Closing that would mean persisting the per-record key order and fold vector
 and comparing them directly; no consumer writes them today.
 
+### The tessera row's provenance (recorded 2026-10-07)
+
+The winning row carries three separate provenance problems, all measured
+after the table was produced. None of them changes the ranking; all of them
+change what the row can be said to rest on.
+
+**The embeddings cannot be re-obtained.** `dl2.geotessera.org` returns HTTP
+410 and directs clients to geotessera 0.10+, which reads from a new location.
+The cohort was enriched through the retired host. The library split at the
+same point: 0.8.0+ requires Python ≥ 3.12, and 0.7.5 — the last
+3.11-compatible release — is the one that points at the dead host, so an
+image on 3.11 silently keeps resolving to it.
+
+**The data behind those embeddings changed.** Re-fetching each tile with its
+own stored bbox and its own stored `tessera_year`, so that neither geometry
+nor year selection can explain a difference, found **2,878 of 7,873 tiles
+differ — 36.6%**. On the differing tiles the mean absolute difference is a
+median 7.5% of the stored array's own standard deviation, with a maximum of
+435%. Zero of the differences are explained by the known year-0 stamp defect;
+a 12-tile cross-tab against that defect found 5 differing and 0 of them
+stale-stamped. The share fell monotonically across the run (59% → 36.6%) as
+tiles were processed in name and therefore geographic order, so the change is
+concentrated rather than uniform. Per-tile figures:
+`/data/manifests/tessera_v2_comparison.jsonl`.
+
+**71 training tiles contributed all-zero embeddings.** A full consistency
+census of all 7,882 cohort tiles — not the 25-tile sampling audit, which
+cannot see this, because an all-zero array behind a positive flag counts as
+present in every presence count — found 71 tiles whose `tessera` array is
+entirely zero while `has_tessera` reads 1. That is 0.9% of the cohort, in the
+channel this row rests on. They have since been flagged
+(`/data/manifests/cohort_empty_arrays_flagged.json`), with the arrays left in
+place so the defect stays inspectable.
+
+The same census found 20 tiles with an all-zero `frame_2016` behind
+`has_frame_2016 = 1`, by a mechanism worth recording: the tile footprint sits
+in a granule no-data area, the COT gate measures low cloud optical thickness
+over no-data and passes it, sen2cor runs, and the window extraction writes
+zeros as a valid frame. The gate is not broken — no-data has no clouds.
+
+**What this does not establish.** No bias in the reported OOF accuracies is
+quantified here. The 71 zero-bearing tiles are not shown to be among those
+scored, and the 36.6% figure describes the cohort rather than the 2,491
+scored plots. The claim is narrower: the row's inputs are not reproducible
+from the source, a third of the cohort's equivalents now resolve differently,
+and a small fraction were zeros presented as embeddings.
+
 ### What this table does not decide
 
 It is evidence for the R5 decision, not the decision. No rung-5 manifest,
