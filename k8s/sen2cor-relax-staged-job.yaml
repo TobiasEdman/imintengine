@@ -1,0 +1,229 @@
+---
+# Option B for the last 14 tiles: relax the COT gate, by the smallest amount
+# each tile actually needs.
+#
+# Pass A (sen2cor-fallback-nfi2024c) took 423 -> 461 with --cot-max untouched
+# at 8.0, then stopped on genuine exhaustion: every scene covering the
+# remaining 14 has been tried and rejected. They can only get a background
+# frame by loosening the gate.
+#
+# A single high threshold would relax every tile to the same degree regardless
+# of need. This steps the threshold up instead — 10, 12, 16, 20, 25 — and each
+# stage only processes tiles that are still missing, so a tile gets its frame
+# at the LOWEST threshold that works for it.
+#
+# THE RELAXATION IS STAMPED INTO THE TILE. The runner records
+# frame_2016_scene/date/year but NOT the COT value, so without this a relaxed
+# frame would be indistinguishable from a clean one by the tile's own
+# contents — the same defect class as unstamped VPP. After each stage the
+# tiles that just gained a frame get frame_2016_cot_max = <threshold used>,
+# so a relaxed frame is visible and can be excluded selectively.
+#
+# The background frame is a change anchor rather than a spectral measurement,
+# which is why relaxing it is defensible at all; it would not be for a
+# growing-season frame.
+#
+# tried-state is reset so each tile's best (primary) scene is a candidate
+# again — at a higher threshold the closest, least-cloudy scene is the right
+# one to retry, not the next fallback.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sen2cor-relax-nfi2024
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: sen2cor-relax-nfi2024}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.present
+                    operator: In
+                    values: ["true"]
+      containers:
+        - name: relax
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== sen2cor COT relaxation, staged — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow \
+                pystac-client openeo torch 2>&1 | tail -3
+              command -v git >/dev/null || { echo "FAIL: git absent"; exit 1; }
+              nvidia-smi --query-gpu=name --format=csv,noheader
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse --short HEAD)"
+
+              python3 - <<'PYEOF'
+              import glob
+              import json
+              import os
+              import re
+              import subprocess
+              import sys
+
+              import numpy as np
+
+              STAGE = "/data/unified_v2_512_nfi2024_staging"
+              PLAN0 = "/data/debug/sen2cor_frame2016_nfi2024_plan.json"
+              REPORT = "/data/manifests/nfi2024_frame2016_relaxed.json"
+              THRESHOLDS = [10.0, 12.0, 16.0, 20.0, 25.0]
+
+              plan0 = json.load(open(PLAN0))
+              fallbacks = plan0.get("tile_fallbacks", {})
+              primary = {}
+              for s in plan0.get("scenes", []):
+                  for t in s["tile_names"]:
+                      primary.setdefault(t, s["scene_id"])
+
+              def missing():
+                  out = []
+                  for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                      d = np.load(p, allow_pickle=True)
+                      if int(d.get("has_frame_2016", 0)) != 1:
+                          out.append(os.path.basename(p)[:-4])
+                  return out
+
+              def dt_from_scene(sid):
+                  m = re.search(r"_(\d{8})T(\d{6})_", sid)
+                  if not m:
+                      return ""
+                  d, t = m.group(1), m.group(2)
+                  return f"{d[:4]}-{d[4:6]}-{d[6:]}T{t[:2]}:{t[2:4]}:{t[4:]}"
+
+              def stamp(tiles, cot):
+                  """Make the relaxation visible in the tile itself."""
+                  n = 0
+                  for name in tiles:
+                      p = f"{STAGE}/{name}.npz"
+                      d = dict(np.load(p, allow_pickle=True))
+                      if int(d.get("has_frame_2016", 0)) != 1:
+                          continue
+                      d["frame_2016_cot_max"] = np.float32(cot)
+                      tmp = p + ".tmp.npz"
+                      np.savez_compressed(tmp, **d)
+                      os.replace(tmp, p)
+                      n += 1
+                  return n
+
+              total = len(glob.glob(f"{STAGE}/*.npz"))
+              start = missing()
+              print(f"start: {total - len(start)}/{total} have frame_2016, "
+                    f"{len(start)} missing")
+              record = {}
+
+              for cot in THRESHOLDS:
+                  before = missing()
+                  print(f"\n{'='*58}")
+                  print(f"--cot-max {cot}: {len(before)} tiles still missing")
+                  if not before:
+                      print("nothing left")
+                      break
+
+                  by_scene = {}
+                  for t in before:
+                      sid = primary.get(t) or next(iter(fallbacks.get(t, [])), None)
+                      if sid:
+                          by_scene.setdefault(sid, []).append(t)
+                  if not by_scene:
+                      print("no scene resolvable for any remaining tile")
+                      break
+
+                  plan = {
+                      "year_primary": plan0.get("year_primary"),
+                      "year_fallback": plan0.get("year_fallback"),
+                      "scenes": [
+                          {"scene_id": sid, "datetime": dt_from_scene(sid),
+                           "mgrs_tile": "", "tile_names": names}
+                          for sid, names in sorted(by_scene.items())
+                      ],
+                      "tile_fallbacks": fallbacks,
+                      "unassigned": [],
+                  }
+                  plan["n_scenes"] = len(plan["scenes"])
+                  plan["n_tiles_covered"] = sum(
+                      len(s["tile_names"]) for s in plan["scenes"])
+                  pf = f"/data/debug/sen2cor_nfi2024_relax_{int(cot)}.json"
+                  with open(pf, "w") as f:
+                      json.dump(plan, f, indent=2)
+                  print(f"  {plan['n_scenes']} scenes -> {pf}")
+
+                  rc = subprocess.run([
+                      "python3", "scripts/sen2cor_pipeline/run_sen2cor_per_scene.py",
+                      "--plan", pf,
+                      "--data-dir", STAGE,
+                      "--safe-cache", "/data/sen2cor_cache",
+                      "--cot-max", str(cot),
+                      "--workers", "4",
+                      "--device", "cuda",
+                  ]).returncode
+                  print(f"  runner exit: {rc}")
+                  if rc != 0:
+                      sys.exit(f"ABORTING at --cot-max {cot}: runner exited {rc}")
+
+                  after = set(missing())
+                  gained = [t for t in before if t not in after]
+                  n = stamp(gained, cot)
+                  print(f"  gained {len(gained)} tiles at cot<={cot}, stamped {n}")
+                  for t in gained:
+                      record[t] = cot
+
+              final = missing()
+              print(f"\n{'='*58}")
+              print(f"FINAL: {total - len(final)}/{total} tiles have frame_2016")
+              if record:
+                  print("relaxation needed, per tile:")
+                  for cot in THRESHOLDS:
+                      got = [t for t, c in record.items() if c == cot]
+                      if got:
+                          print(f"  cot<={cot}: {len(got)} tiles")
+              if final:
+                  print(f"STILL MISSING at cot<={THRESHOLDS[-1]}: {len(final)}")
+                  for t in final:
+                      print(f"  {t}")
+              with open(REPORT, "w") as f:
+                  json.dump({"relaxed": record,
+                             "still_missing": final,
+                             "thresholds_tried": THRESHOLDS,
+                             "baseline_cot_max": 8.0}, f, indent=2)
+              print(f"\nreport -> {REPORT}")
+              PYEOF
+              echo ""
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests:
+              cpu: "24"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "24"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

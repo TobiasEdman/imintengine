@@ -1,0 +1,156 @@
+---
+# Step 6: enrich the 475 campaign tiles with the aux the fetch does not write.
+#
+# The fetch produced spectral, b01/b08/b09, rededge, dem, markfukt, all five
+# VPP channels and M2 coregistration. Enrichment is a separate stage by design
+# — like labels — and had never run on these tiles. A key audit against the
+# cohort found them missing s1_vv_vh, tessera, and the four SKG forestry
+# channels. CROMA and TerraMind raise KeyError without s1; tessera is the
+# backbone that wins the R5 table outright. Zero-filling aux is forbidden here,
+# so these are fetched, not defaulted.
+#
+# ONE JOB, THREE SEQUENTIAL STEPS — not three parallel jobs. All three
+# overwrite the same .npz files, and concurrent aux writers race on
+# os.replace; k8s/refetch-recoreg-vpp-job.yaml carries that warning in its
+# header. Sequential also means a failure stops the chain instead of leaving a
+# half-enriched cohort.
+#
+# PU-FREE, verified before submit: tessera via geotessera (public), S1 via
+# pc-rtc (Planetary Computer), the four forestry channels via Skogsstyrelsen.
+# vpp and frame_2016 are the prefetch_aux channels that WOULD cost CDSE PU and
+# are deliberately not requested — VPP is already present from the WEkEO cache.
+#
+# Order is tessera -> S1 -> SKG: tessera carries the result, S1 decides whether
+# two of seven cells can run at all, forestry is four of eleven aux channels.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-enrich-s1-skg
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi2024-enrich}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800   # 8 h
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: enrich
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              STAGE=/data/unified_v2_512_nfi2024_staging
+
+              echo "=== nfi2024 enrichment — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy scipy rasterio pyproj pyyaml geotessera \
+                requests shapely pystac-client planetary-computer \
+                pandas pyarrow Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse --short HEAD)"
+
+              echo ""
+              echo "=== import smoke — all three entry points, ~3 s ==="
+              python scripts/enrich_tiles_s1.py --help > /dev/null
+              python scripts/prefetch_aux.py --help > /dev/null
+              echo "imports OK"
+
+              BEFORE=$(ls $STAGE/*.npz 2>/dev/null | wc -l)
+              echo "TILES BEFORE: $BEFORE"
+
+              echo ""
+              echo "######## 1/2 SENTINEL-1 ########  $(date -u)"
+              python scripts/enrich_tiles_s1.py \
+                --data-dir "$STAGE" \
+                --s1-backend pc-rtc \
+                --workers 8 \
+                --skip-existing
+
+              echo ""
+              echo "######## 2/2 SKG FORESTRY ########  $(date -u)"
+              # dem is already present from the fetch; vpp/frame_2016 omitted
+              # on purpose — those are the CDSE-PU channels.
+              python scripts/prefetch_aux.py \
+                --data-dir "$STAGE" \
+                --channels height volume basal_area diameter \
+                --workers 8
+
+              AFTER=$(ls $STAGE/*.npz 2>/dev/null | wc -l)
+              echo ""
+              echo "TILES AFTER:  $AFTER  (before: $BEFORE)"
+              [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed"; exit 1; }
+
+              echo ""
+              echo "=== verify the gap actually closed ==="
+              python - <<'PYEOF'
+              import glob
+              import random
+              import sys
+              from collections import Counter
+
+              import numpy as np
+
+              # Exactly the keys the audit found missing against the cohort.
+              REQUIRED = [
+                  "s1_vv_vh", "s1_dates", "s1_orbit", "has_s1",
+                  "height", "volume", "basal_area", "diameter",
+              ]
+              paths = sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz"))
+              random.seed(42)
+              sample = random.sample(paths, min(60, len(paths)))
+              present, degenerate = Counter(), Counter()
+              for p in sample:
+                  d = np.load(p, allow_pickle=True)
+                  for k in REQUIRED:
+                      if k not in d.files:
+                          continue
+                      present[k] += 1
+                      # A key that exists but is all-zero is a zero-fill in
+                      # disguise, which is what this repo forbids.
+                      v = d[k]
+                      if getattr(v, "ndim", 0) >= 2 and not np.any(v):
+                          degenerate[k] += 1
+
+              n = len(sample)
+              print(f"sampled {n} of {len(paths)} tiles")
+              print(f"{'key':16s} {'present':>8s} {'all-zero':>9s}")
+              bad = []
+              for k in REQUIRED:
+                  frac = present[k] / n
+                  print(f"{k:16s} {frac:>7.0%} {degenerate[k]:>9d}")
+                  if frac < 0.95:
+                      bad.append(f"{k} present on only {frac:.0%}")
+                  if degenerate[k] > n * 0.05:
+                      bad.append(f"{k} all-zero on {degenerate[k]}/{n}")
+              if bad:
+                  print("\nFAIL:")
+                  for b in bad:
+                      print(f"  {b}")
+                  sys.exit(1)
+              print("\nall required aux present and non-degenerate")
+              PYEOF
+              echo ""
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

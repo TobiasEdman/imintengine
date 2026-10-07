@@ -1,0 +1,92 @@
+---
+# How many 512-tiles would be needed to put every NFI plot on a tile?
+#
+# The rebuilt index showed only 1,105 of 18,661 plots land on the current
+# cohort, because tiles were sampled first and plots counted afterwards. This
+# sizes the inverse: draw tiles AT the plots. Read-only, no writes, CPU only.
+#
+#   kubectl apply -f nfi-cover-estimate.yaml
+#   kubectl logs -f job/nfi-cover-estimate -n prithvi-training-default
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-cover-estimate
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: estimate
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              pip install -q --no-cache-dir numpy pandas pyarrow
+              python - <<'PY'
+              import pandas as pd
+
+              TILE_M = 512 * 10          # 5,120 m tile side on the 10 m NMD grid
+              COHORT_YEARS = {2018, 2021, 2022}
+              RTK_FROM = 2024
+
+              plots = pd.read_parquet("/data/nfi/nfi_plots.parquet")
+              have = pd.read_parquet(
+                  "/data/nfi/nfi_index_unified_v2_512.rebuild-2026-09-26.parquet"
+              )
+
+              print(f"NFI plots total:        {len(plots):,}")
+              print(f"already co-located:     {len(have):,}")
+              print(f"years present in NFI:   {sorted(plots['Year'].unique().tolist())}")
+              print()
+
+              # A tile drawn on a regular 5,120 m lattice. Plots sharing a cell
+              # share a tile, so distinct cells = tiles needed at that placement.
+              cell = (
+                  (plots["Easting"] // TILE_M).astype("int64").astype(str)
+                  + "_"
+                  + (plots["Northing"] // TILE_M).astype("int64").astype(str)
+              )
+              plots = plots.assign(cell=cell)
+
+              print("=== tiles needed, whole NFI set ===")
+              print(f"distinct lattice cells: {plots['cell'].nunique():,}")
+              print(f"distinct tracts:        {plots['TractID'].nunique():,}")
+              print(f"plots per cell:         mean {len(plots)/plots['cell'].nunique():.2f}, "
+                    f"max {plots.groupby('cell').size().max()}")
+              print()
+
+              print("=== per year: plots, tiles needed, in cohort? ===")
+              for year, grp in plots.groupby("Year"):
+                  mark = "in cohort" if year in COHORT_YEARS else "NOT FETCHED"
+                  tier = "RTK" if year >= RTK_FROM else "GPS"
+                  print(f"  {year}  plots={len(grp):>6,}  tiles={grp['cell'].nunique():>6,}"
+                        f"  {tier}  {mark}")
+              print()
+
+              missing = plots[~plots["Year"].isin(COHORT_YEARS)]
+              rtk = plots[plots["Year"] >= RTK_FROM]
+              print("=== the gap ===")
+              print(f"plots in years never fetched: {len(missing):,} "
+                    f"over {missing['cell'].nunique():,} tiles")
+              print(f"  of which RTK (>= {RTK_FROM}): {len(rtk):,} "
+                    f"over {rtk['cell'].nunique():,} tiles")
+              lpis_ok = missing[missing["Year"] <= 2024]
+              print(f"  with LPIS crop labels available (<= 2024): {len(lpis_ok):,} "
+                    f"over {lpis_ok['cell'].nunique():,} tiles")
+              PY
+          resources:
+            requests: {cpu: "2", memory: "8Gi"}
+            limits: {cpu: "2", memory: "8Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

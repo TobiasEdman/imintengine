@@ -1,0 +1,64 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: sen2cor-plan-check, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import json
+              import os
+
+              import numpy as np
+
+              plan = json.load(open("/data/debug/sen2cor_frame2016_nfi2024_plan.json"))
+              unassigned = set(plan.get("unassigned", []))
+              print(f"plan: scenes={plan.get('n_scenes')} "
+                    f"tiles_covered={plan.get('n_tiles_covered')} "
+                    f"unassigned={len(unassigned)}")
+
+              have = lack = 0
+              lack_names = []
+              for p in sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  if int(d.get("has_frame_2016", 0)) == 1:
+                      have += 1
+                  else:
+                      lack += 1
+                      lack_names.append(os.path.basename(p)[:-4])
+
+              print(f"\ntiles WITH frame_2016   : {have}")
+              print(f"tiles WITHOUT           : {lack}")
+              in_plan = [n for n in lack_names if n not in unassigned]
+              no_scene = [n for n in lack_names if n in unassigned]
+              print(f"\n  of those missing:")
+              print(f"    no covering scene at all (unassigned) : {len(no_scene)}")
+              print(f"    a scene WAS assigned but no frame     : {len(in_plan)}")
+              if in_plan:
+                  print(f"      -> these were rejected downstream (COT gate at --cot-max 8.0,")
+                  print(f"         or sen2cor/extract failure). Potentially recoverable.")
+                  for n in in_plan[:8]:
+                      print(f"      {n}")
+              if no_scene:
+                  print(f"      -> no 2016/2015 L1C covers these. Hard limit, not a failure.")
+                  for n in no_scene[:8]:
+                      print(f"      {n}")
+              PYEOF
+          resources: {requests: {cpu: "2", memory: "8Gi"}, limits: {cpu: "2", memory: "8Gi"}}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

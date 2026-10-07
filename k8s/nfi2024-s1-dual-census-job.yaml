@@ -1,0 +1,70 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: nfi2024-s1-dual-check, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import os
+              from collections import Counter
+
+              import numpy as np
+
+              STAGE = "/data/unified_v2_512_nfi2024_staging"
+              tab = Counter()
+              zero_gs, zero_16, shapes = [], [], Counter()
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  name = os.path.basename(p)[:-4]
+                  hf = int(d.get("has_frame_2016", 0))
+
+                  def state(key):
+                      if key not in d.files:
+                          return "absent"
+                      a = np.asarray(d[key])
+                      if a.ndim < 2:
+                          return "scalar?"
+                      shapes[(key, a.shape)] += 1
+                      return "ALL-ZERO" if not np.any(a) else "real"
+
+                  gs = state("s1_vv_vh")
+                  s16 = state("s1_vv_vh_2016")
+                  tab[(f"frame={hf}", f"gs={gs}", f"y2016={s16}")] += 1
+                  if gs == "ALL-ZERO":
+                      zero_gs.append(name)
+                  if s16 == "ALL-ZERO":
+                      zero_16.append(name)
+
+              print("cross-tab (frame_2016 flag x the two S1 composites):")
+              for k, n in sorted(tab.items(), key=lambda kv: -kv[1]):
+                  print(f"  {n:4d}  {k[0]:8s} {k[1]:16s} {k[2]}")
+              print("\nshapes seen:")
+              for (key, shp), n in sorted(shapes.items()):
+                  print(f"  {key:16s} {str(shp):16s} x{n}")
+              print(f"\ngrowing-season all-zero : {len(zero_gs)}")
+              for n in zero_gs[:6]:
+                  print(f"    {n}")
+              print(f"2016 analogue all-zero  : {len(zero_16)}")
+              for n in zero_16[:10]:
+                  print(f"    {n}")
+              PYEOF
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

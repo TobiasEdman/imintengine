@@ -1,0 +1,92 @@
+---
+# Rebuild the NFI plot->tile index against the CURRENT tile set.
+#
+# Why: the pinned index (/data/nfi/nfi_index_unified_v2_512.parquet) was built
+# when the cohort was small — it carries 982 rows over 270 tiles. The cohort is
+# now 7,882 tiles. Every field-truth cell therefore scores n=169-190 plots when
+# far more are available, which is what makes the held-out margins fragile.
+#
+# Writes a NEW file. The pinned index is left byte-identical: live evaluations
+# and the frozen identity audit reference it by hash, and clobbering it in place
+# would invalidate results that are already reported.
+#
+#   kubectl apply -f nfi-index-rebuild.yaml
+#   kubectl logs -f job/nfi-index-rebuild -n prithvi-training-default
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-index-rebuild
+  namespace: prithvi-training-default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 10800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: rebuild
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              OUT=/data/nfi/nfi_index_unified_v2_512.rebuild-2026-09-26.parquet
+              PINNED=/data/nfi/nfi_index_unified_v2_512.parquet
+
+              echo "=== NFI index rebuild — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow rasterio openpyxl
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd /workspace/ie
+              echo "HEAD: $(git rev-parse HEAD)"
+
+              BEFORE=$(sha256sum "$PINNED" | cut -d' ' -f1)
+              echo "pinned index sha256 before: $BEFORE"
+
+              if [ -e "$OUT" ]; then
+                echo "FAIL: $OUT already exists — refusing to overwrite"
+                exit 1
+              fi
+
+              python scripts/nfi_tile_coverage.py \
+                --tile-dir /data/unified_v2_512 \
+                --nfi-dir /data/nfi \
+                --infer-size \
+                --out "$OUT"
+
+              AFTER=$(sha256sum "$PINNED" | cut -d' ' -f1)
+              echo "pinned index sha256 after:  $AFTER"
+              [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: pinned index was modified"; exit 1; }
+
+              echo ""
+              echo "=== old vs new ==="
+              python - "$PINNED" "$OUT" <<'PY'
+              import sys
+              import pandas as pd
+              old, new = (pd.read_parquet(p) for p in sys.argv[1:3])
+              for name, df in (("pinned", old), ("rebuilt", new)):
+                  print(f"{name:8s} rows={len(df):>7,}  tiles={df['tile_name'].nunique():>6,}  "
+                        f"plots={df['PlotID'].nunique():>5,}  "
+                        f"years={sorted(df['Year'].unique().tolist())}")
+              gained = set(new["tile_name"]) - set(old["tile_name"])
+              lost = set(old["tile_name"]) - set(new["tile_name"])
+              print(f"tiles gained={len(gained):,}  tiles lost={len(lost):,}")
+              if lost:
+                  print("  lost sample:", sorted(lost)[:5])
+              PY
+              echo ""
+              echo "=== Done: $(date -u) ==="
+          resources:
+            requests: {cpu: "8", memory: "16Gi"}
+            limits: {cpu: "8", memory: "16Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

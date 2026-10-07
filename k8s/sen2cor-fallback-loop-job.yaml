@@ -1,0 +1,238 @@
+---
+# Fallback passes for the 52 campaign tiles whose primary scene was rejected
+# by the COT gate — iterate until every tile has frame_2016, or until no tile
+# has an untried fallback left.
+#
+# Why a driver is needed. The runner records COT-rejected tiles as 'deferred'
+# "so a fallback pass can retry them against another scene", and the selector
+# emits tile_fallbacks: {tile: [ranked scene_ids]} for exactly that. But
+# nothing drives that pass: the runner only honours the primary assignment,
+# and re-running the selector is deterministic — it would choose the same
+# primary and fail identically.
+#
+# NOTHING IS RELAXED. --cot-max stays at 8.0. The whole campaign was built on
+# not compromising the cloud gate, and loosening it in the last step for 11% of
+# the tiles would trade away exactly that property. This looks for a clearer
+# scene instead.
+#
+# sen2cor-plan-check established these are recoverable rather than a hard
+# limit: the plan covered all 475 tiles with unassigned=0, so every one of the
+# 52 had a scene and lost it downstream. Their names cluster tightly in
+# southern Sweden, which points at one cloudy 2015 granule taking 52 neighbours
+# with it.
+#
+# The runner needs only scene_id and tile_names — it fetches the SAFE by name
+# with no STAC re-resolution — and the acquisition datetime is parsed out of
+# the scene id, so each pass is built from the stored plan without re-querying
+# the catalogue.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sen2cor-fallback-nfi2024c
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: sen2cor-fallback-nfi2024}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200   # 12 h
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.present
+                    operator: In
+                    values: ["true"]
+      containers:
+        - name: fallback
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== sen2cor fallback passes — $(date -u) ==="
+              # The sen2cor image carries no git, python3-pip or gdal — the
+              # original frame_2016 job installs them before cloning, and
+              # omitting that is what failed the first attempt.
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow \
+                pystac-client openeo torch 2>&1 | tail -3
+              command -v git >/dev/null || { echo "FAIL: git still absent"; exit 1; }
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              export PYTHONPATH=/workspace/imintengine:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse --short HEAD)"
+              nvidia-smi --query-gpu=name --format=csv,noheader || true
+
+              # ONE-TIME RESET. The previous run marked scenes as tried
+              # BEFORE invoking the runner and ignored its exit code, so eight
+              # passes consumed 51 of 52 fallback lists against a runner that
+              # died on "Found no NVIDIA driver" and never processed a scene.
+              # Those tiles are not actually out of options. The abort-on-
+              # failure guard below means this state can only grow from runs
+              # that really executed, so clearing it once is safe.
+              rm -f /data/debug/sen2cor_nfi2024_tried.json
+              echo "cleared poisoned tried-state"
+
+              python3 - <<'PYEOF'
+              import glob
+              import json
+              import os
+              import re
+              import subprocess
+              import sys
+
+              import numpy as np
+
+              STAGE = "/data/unified_v2_512_nfi2024_staging"
+              PLAN0 = "/data/debug/sen2cor_frame2016_nfi2024_plan.json"
+              TRIED = "/data/debug/sen2cor_nfi2024_tried.json"
+              MAX_PASSES = 8
+
+              plan0 = json.load(open(PLAN0))
+              fallbacks = plan0.get("tile_fallbacks", {})
+
+              # Scenes already used as primaries count as tried.
+              tried = json.load(open(TRIED)) if os.path.exists(TRIED) else {}
+              for s in plan0.get("scenes", []):
+                  for t in s["tile_names"]:
+                      tried.setdefault(t, [])
+                      if s["scene_id"] not in tried[t]:
+                          tried[t].append(s["scene_id"])
+
+              def missing_tiles():
+                  out = []
+                  for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                      d = np.load(p, allow_pickle=True)
+                      if int(d.get("has_frame_2016", 0)) != 1:
+                          out.append(os.path.basename(p)[:-4])
+                  return out
+
+              def dt_from_scene(sid):
+                  m = re.search(r"_(\d{8})T(\d{6})_", sid)
+                  if not m:
+                      return ""
+                  d, t = m.group(1), m.group(2)
+                  return f"{d[:4]}-{d[4:6]}-{d[6:]}T{t[:2]}:{t[2:4]}:{t[4:]}"
+
+              total = len(glob.glob(f"{STAGE}/*.npz"))
+              for p in range(1, MAX_PASSES + 1):
+                  miss = missing_tiles()
+                  print(f"\n{'='*58}")
+                  print(f"PASS {p}: {total - len(miss)}/{total} have frame_2016, "
+                        f"{len(miss)} missing")
+                  if not miss:
+                      print("every tile has frame_2016 — done")
+                      break
+
+                  by_scene = {}
+                  no_options = []
+                  for t in miss:
+                      nxt = next((s for s in fallbacks.get(t, [])
+                                  if s not in tried.get(t, [])), None)
+                      if nxt is None:
+                          no_options.append(t)
+                      else:
+                          by_scene.setdefault(nxt, []).append(t)
+
+                  print(f"  tiles with an untried fallback : "
+                        f"{sum(len(v) for v in by_scene.values())}")
+                  print(f"  tiles with NO option left      : {len(no_options)}")
+                  if not by_scene:
+                      print("\nFALLBACKS EXHAUSTED — no tile has an untried scene.")
+                      print("Remaining tiles cannot get a frame without relaxing")
+                      print("--cot-max, which is a separate decision.")
+                      break
+
+                  plan = {
+                      "year_primary": plan0.get("year_primary"),
+                      "year_fallback": plan0.get("year_fallback"),
+                      "scenes": [
+                          {"scene_id": sid, "datetime": dt_from_scene(sid),
+                           "mgrs_tile": "", "tile_names": names}
+                          for sid, names in sorted(by_scene.items())
+                      ],
+                      "tile_fallbacks": fallbacks,
+                      "unassigned": no_options,
+                  }
+                  plan["n_scenes"] = len(plan["scenes"])
+                  plan["n_tiles_covered"] = sum(
+                      len(s["tile_names"]) for s in plan["scenes"])
+                  pf = f"/data/debug/sen2cor_nfi2024_fallback_pass{p}.json"
+                  with open(pf, "w") as f:
+                      json.dump(plan, f, indent=2)
+                  print(f"  pass plan: {plan['n_scenes']} scenes -> {pf}")
+
+                  rc = subprocess.run([
+                      "python3", "scripts/sen2cor_pipeline/run_sen2cor_per_scene.py",
+                      "--plan", pf,
+                      "--data-dir", STAGE,
+                      "--safe-cache", "/data/sen2cor_cache",
+                      "--cot-max", "8.0",
+                      "--workers", "4",
+                      "--device", "cuda",
+                  ]).returncode
+                  print(f"  runner exit: {rc}")
+
+                  # Only a run that actually executed may consume a tile's
+                  # options. Marking first and ignoring rc is what exhausted
+                  # 51 of 52 fallback lists against a runner that never ran.
+                  if rc != 0:
+                      sys.exit(
+                          f"ABORTING at pass {p}: runner exited {rc}. No scene "
+                          f"marked tried — the option space is untouched. Fix "
+                          f"the runner, then rerun."
+                      )
+                  for sid, names in by_scene.items():
+                      for t in names:
+                          tried.setdefault(t, []).append(sid)
+                  with open(TRIED, "w") as f:
+                      json.dump(tried, f, indent=2)
+
+              miss = missing_tiles()
+              print(f"\n{'='*58}")
+              print(f"FINAL: {total - len(miss)}/{total} tiles have frame_2016")
+              if miss:
+                  print(f"still missing: {len(miss)}")
+                  for t in miss[:12]:
+                      print(f"  {t}")
+                  exhausted = [t for t in miss
+                               if not [s for s in fallbacks.get(t, [])
+                                       if s not in tried.get(t, [])]]
+                  print(f"  of which fallback-exhausted: {len(exhausted)}")
+              PYEOF
+              echo ""
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests:
+              cpu: "24"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "24"
+              memory: "64Gi"
+              # Node affinity alone puts the pod on a GPU NODE; without this
+              # request the container gets no GPU DEVICE and --device cuda
+              # fails on "Found no NVIDIA driver". That is what burned eight
+              # fallback passes.
+              nvidia.com/gpu: "1" 
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

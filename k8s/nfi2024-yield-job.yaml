@@ -1,0 +1,42 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: nfi2024-yield, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: yield
+          image: python:3.11-slim
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python - <<'PY'
+              import glob, json, os
+              stage = "/data/unified_v2_512_nfi2024_staging"
+              written = {os.path.basename(p)[:-4] for p in glob.glob(f"{stage}/*.npz")}
+              man = json.load(open("/data/manifests/nfi2024_512.json"))
+              full = json.load(open("/data/manifests/nfi2024_512.full.json"))
+              by = {t["name"]: t["n_plots"] for t in man}
+              got = sum(n for k, n in by.items() if k in written)
+              print(f"tiles written : {len(written)} / {len(man)} attempted "
+                    f"({len(full)} before the VPP drop)")
+              print(f"PLOTS GAINED  : {got} / {sum(by.values())} on attempted "
+                    f"({sum(t['n_plots'] for t in full)} in 2024 total)")
+              miss = sorted((n, k) for k, n in by.items() if k not in written)
+              print(f"lost to failed tiles: {sum(n for n, _ in miss)} plots "
+                    f"over {len(miss)} tiles")
+              print(f"current cohort carries 1105 -> new total ~{1105 + got}")
+              json.dump({"tiles_written": len(written), "plots_gained": got,
+                         "failed_tiles": [k for _, k in miss]},
+                        open("/data/manifests/nfi2024_yield.json", "w"), indent=1)
+              PY
+          resources: {requests: {cpu: "1", memory: "4Gi"}, limits: {cpu: "1", memory: "4Gi"}}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes: [{name: d, persistentVolumeClaim: {claimName: training-data-cephfs}}]

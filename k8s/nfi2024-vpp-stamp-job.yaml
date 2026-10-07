@@ -1,0 +1,87 @@
+---
+# Stamp vpp_year=2024 on the 475 campaign tiles.
+#
+# Their five vpp_* channels are present but unstamped, which makes them
+# indistinguishable — from the tile's own contents — from the defect class
+# strip_unstamped_vpp.py exists to remove: "phenology of unverifiable year",
+# where pre-fix code defaulted to 2021 and the 2026-08-26 audit found 68 of 75
+# carrying the wrong year. Left unstamped, the next maintenance run of that
+# script would strip VPP from all 475.
+#
+# 2024 is established, not inferred: every manifest entry carries year 2024,
+# the WEkEO prefetch ran --years 2024, and nfi2024_vpp_gaps.json records 2024.
+# The job refuses any tile whose own inferred year is not 2024 rather than
+# stamping on faith.
+apiVersion: batch/v1
+kind: Job
+metadata: {name: nfi2024-vpp-stamp, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: stamp
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python - <<'PYEOF'
+              import glob
+              import os
+              import sys
+
+              import numpy as np
+
+              sys.path.insert(0, "/workspace/ie")
+              from imint.training.tile_fetch import infer_tile_year
+
+              VPP = ["vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv"]
+              YEAR = 2024
+              stamped = already = skipped = refused = 0
+              for p in sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  if not all(k in d for k in VPP):
+                      skipped += 1
+                      continue
+                  if "vpp_year" in d:
+                      already += 1
+                      continue
+                  own = infer_tile_year(d)
+                  if own is None or int(own) != YEAR:
+                      print(f"  REFUSED {os.path.basename(p)}: own year={own} != {YEAR}")
+                      refused += 1
+                      continue
+                  d["vpp_year"] = np.array(YEAR)
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **d)
+                  os.replace(tmp, p)
+                  stamped += 1
+
+              print(f"stamped={stamped} already={already} "
+                    f"no_vpp_bands={skipped} refused={refused}")
+
+              bad = 0
+              for p in sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  if all(k in d.files for k in VPP) and "vpp_year" not in d.files:
+                      bad += 1
+              print(f"tiles with vpp bands but no stamp, after: {bad}")
+              if bad or refused:
+                  sys.exit(f"FAIL: {bad} unstamped, {refused} refused")
+              print("every VPP-bearing campaign tile now carries vpp_year=2024")
+              PYEOF
+          resources: {requests: {cpu: "4", memory: "16Gi"}, limits: {cpu: "4", memory: "16Gi"}}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

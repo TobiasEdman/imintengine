@@ -1,0 +1,117 @@
+---
+# Does the COHORT carry the same silent corruption the campaign tiles had?
+#
+# Two of 467 campaign frames were all-zero behind has_frame_2016=1: the tile
+# footprint sat in a granule no-data area, the COT gate measured low cloud
+# over no-data and passed, and the extraction wrote zeros as a valid frame.
+# The gate is not broken — no-data has no clouds.
+#
+# The campaign ran that path for 475 tiles. The cohort ran it for thousands,
+# so if the defect is systematic it affects training data rather than a
+# holdout. Key presence says nothing about this: the census reported
+# s1_vv_vh_2016 at 90.9% of the cohort by presence, which is exactly the
+# metric that hid the two empty frames.
+#
+# This decompresses arrays, so it is the expensive check — hence it was
+# scoped to staging first. Reporting counts, not percentages.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cohort-frame-consistency
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: cohort-consistency}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import json
+              import os
+              from collections import Counter
+
+              import numpy as np
+
+              COHORT = "/data/unified_v2_512"
+              PAIRS = [("frame_2016", "has_frame_2016"),
+                       ("s1_vv_vh_2016", None),
+                       ("s1_vv_vh", "has_s1"),
+                       ("tessera", "has_tessera")]
+              tab = Counter()
+              lying = {k: [] for k, _ in PAIRS}
+              n = 0
+              for p in sorted(glob.glob(f"{COHORT}/*.npz")):
+                  n += 1
+                  if n % 500 == 0:
+                      print(f"  {n:,} tiles...", flush=True)
+                  try:
+                      d = np.load(p, allow_pickle=True)
+                  except Exception:
+                      tab["unreadable"] += 1
+                      continue
+                  name = os.path.basename(p)[:-4]
+                  for key, flag in PAIRS:
+                      if key not in d.files:
+                          tab[f"{key}:absent"] += 1
+                          continue
+                      a = np.asarray(d[key])
+                      if getattr(a, "ndim", 0) < 2:
+                          tab[f"{key}:not_array"] += 1
+                          continue
+                      empty = not np.any(a)
+                      fl = int(d[flag]) if flag and flag in d.files else None
+                      if empty:
+                          tab[f"{key}:EMPTY"] += 1
+                          # A positive flag (or no flag at all) on an empty
+                          # array is what makes it silent.
+                          if fl != 0:
+                              tab[f"{key}:EMPTY_but_flagged_ok"] += 1
+                              if len(lying[key]) < 25:
+                                  lying[key].append(name)
+                      else:
+                          tab[f"{key}:real"] += 1
+
+              print(f"\ncohort tiles scanned: {n:,}")
+              print(f"\n{'state':40s} {'count':>8s}")
+              for k, v in sorted(tab.items()):
+                  print(f"{k:40s} {v:>8,}")
+
+              print("\n" + "=" * 58)
+              bad = 0
+              for key, names in lying.items():
+                  cnt = tab.get(f"{key}:EMPTY_but_flagged_ok", 0)
+                  if not cnt:
+                      continue
+                  bad += cnt
+                  print(f"{key}: {cnt:,} tiles EMPTY yet not marked")
+                  for nm in names[:8]:
+                      print(f"    {nm}")
+              if not bad:
+                  print("no empty array passes as valid anywhere in the cohort")
+              else:
+                  print(f"\nTOTAL silently-empty arrays in the cohort: {bad:,}")
+                  print("This is pre-existing: the campaign did not write these.")
+
+              with open("/data/manifests/cohort_frame_consistency.json", "w") as f:
+                  json.dump({"tiles": n, "states": dict(tab),
+                             "examples": lying}, f, indent=2)
+              PYEOF
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

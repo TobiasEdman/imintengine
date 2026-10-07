@@ -1,0 +1,102 @@
+---
+# Mark the campaign tiles that end up without a 2016/2015 background frame.
+#
+# It scans for what is ACTUALLY missing rather than carrying a hardcoded list,
+# so it stays correct whatever the preceding fallback run recovered.
+#
+# Why marking matters: absence of has_frame_2016 is indistinguishable from
+# "never attempted". These tiles have been attempted exhaustively — pass A
+# tried every covering scene at --cot-max 8.0, the staged relaxation went to
+# 25.0, and the fallback pass retried the alternates across all thresholds.
+# The blocker is the source archive: L2A_Process fails with "Product metadata
+# file cannot be found" on their L1C SAFEs, which no threshold affects.
+#
+# Same convention as the tessera coverage holes: an explicit zero plus a dated
+# reason, so a reader of the tile alone knows this was established and not
+# skipped. The CLAUDE.md rule says a tile without frame_2016 is not complete —
+# these are the recorded exceptions to that, not a redefinition of it.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-mark-frame-gaps
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi2024-mark-frame-gaps}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mark
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import json
+              import os
+
+              import numpy as np
+
+              STAGE = "/data/unified_v2_512_nfi2024_staging"
+              REASON = "no_usable_l1c_2016_2015__l2a_process_metadata_error__verified_2026-10-05"
+              REPORT = "/data/manifests/nfi2024_frame2016_gaps.json"
+
+              man = {t["name"]: t["n_plots"]
+                     for t in json.load(open("/data/manifests/nfi2024_512.json"))}
+
+              marked, plots, have = [], 0, 0
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  name = os.path.basename(p)[:-4]
+                  if int(d.get("has_frame_2016", 0)) == 1:
+                      have += 1
+                      continue
+                  d["has_frame_2016"] = np.array(0)
+                  d["frame_2016_gap_reason"] = np.array(REASON)
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **d)
+                  os.replace(tmp, p)
+                  marked.append(name)
+                  plots += man.get(name, 0)
+
+              total = have + len(marked)
+              print(f"tiles with frame_2016 : {have} / {total}")
+              print(f"marked as gaps        : {len(marked)}")
+              print(f"plots on gap tiles    : {plots} "
+                    f"({100*plots/max(sum(man.values()),1):.1f}% of {sum(man.values())})")
+              for m in marked:
+                  print(f"  {m}")
+
+              # Relaxed frames, for the same auditability.
+              relaxed = {}
+              for p in sorted(glob.glob(f"{STAGE}/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  if "frame_2016_cot_max" in d.files:
+                      relaxed[os.path.basename(p)[:-4]] = float(d["frame_2016_cot_max"])
+              print(f"\nframes carried at a relaxed COT gate: {len(relaxed)}")
+              for k, v in sorted(relaxed.items(), key=lambda kv: kv[1]):
+                  print(f"  {k}: cot<={v}")
+
+              with open(REPORT, "w") as f:
+                  json.dump({"baseline_cot_max": 8.0,
+                             "tiles_with_frame": have,
+                             "tiles_marked_gap": marked,
+                             "plots_on_gap_tiles": plots,
+                             "gap_reason": REASON,
+                             "relaxed_frames": relaxed}, f, indent=2)
+              print(f"\nreport -> {REPORT}")
+              PYEOF
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

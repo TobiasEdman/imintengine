@@ -1,0 +1,107 @@
+---
+# The 475 campaign tiles still have NO tessera. tessera-v2-add skipped them:
+# its comparison path needs a prior array and a stored tessera_year, and these
+# have neither — reported as no_prior_tessera=483.
+#
+# They need the CANONICAL `tessera` key, not `tessera_v2`: there is no older
+# value to preserve here, and `tessera` is what unified_dataset reads, so
+# tessera_v2 alone would be inert. That makes this the repo's own script, with
+# the only change being the image — geotessera 0.8.0+ needs Python >= 3.12, and
+# 0.7.5 points at the dead dl2 host.
+#
+# --skip-existing is left at its default, so this touches only tiles that lack
+# tessera. The year comes from the script's own infer_tile_year.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tessera-staging
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: tessera-staging}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: tessera
+          image: python:3.12-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              STAGE=/data/unified_v2_512_nfi2024_staging
+              echo "=== tessera for the campaign tiles — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy scipy rasterio pyproj pyyaml geotessera pandas pyarrow
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python -c "import importlib.metadata as m; print('geotessera', m.version('geotessera'))"
+              echo "HEAD: $(git rev-parse --short HEAD)"
+              df -h /data | tail -1
+
+              echo ""
+              echo "=== import smoke ==="
+              python scripts/enrich_tiles_tessera.py --help > /dev/null
+              echo "imports OK"
+
+              BEFORE=$(ls $STAGE/*.npz 2>/dev/null | wc -l)
+              echo "TILES BEFORE: $BEFORE"
+
+              python scripts/enrich_tiles_tessera.py \
+                --data-dir "$STAGE" \
+                --embeddings-dir /data/tessera_cache/embeddings \
+                --registry-cache-dir /data/tessera_cache/registry \
+                --workers 4 \
+                --cache-soft-gb 20 \
+                --skip-existing
+
+              AFTER=$(ls $STAGE/*.npz 2>/dev/null | wc -l)
+              echo ""
+              echo "TILES AFTER:  $AFTER  (before: $BEFORE)"
+              [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed"; exit 1; }
+
+              echo ""
+              echo "=== verify ==="
+              python - <<'PYEOF'
+              import glob
+              import sys
+              import numpy as np
+              paths = sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz"))
+              have = zero = missing = 0
+              years = {}
+              for p in paths:
+                  d = np.load(p, allow_pickle=True)
+                  if "tessera" not in d.files:
+                      missing += 1
+                      continue
+                  a = np.asarray(d["tessera"])
+                  have += 1
+                  if a.ndim >= 2 and not np.any(a):
+                      zero += 1
+                  y = int(d["tessera_year"]) if "tessera_year" in d.files else None
+                  years[y] = years.get(y, 0) + 1
+              print(f"tiles              : {len(paths):,}")
+              print(f"  with tessera     : {have:,}")
+              print(f"  all-zero (bad)   : {zero:,}")
+              print(f"  WITHOUT tessera  : {missing:,}")
+              print(f"  tessera_year     : {years}")
+              if missing or zero:
+                  sys.exit(f"FAIL: {missing} without tessera, {zero} all-zero")
+              print("\nevery campaign tile carries non-degenerate tessera")
+              PYEOF
+              echo ""
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

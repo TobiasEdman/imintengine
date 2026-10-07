@@ -1,0 +1,78 @@
+---
+# HR-VPP has no product for 5 of the 76 MGRS cells the manifest touches
+# (33UVC, 34WCS, 34WCT, 34WCU, 34WCV) — confirmed by a focused re-search that
+# returned zero products, and by those cells having nothing cached for ANY
+# year. The 11 tiles that depend on them cannot get their five VPP phenology
+# channels, and would also lose VPP-driven frame-window selection. Zero-filling
+# aux is forbidden, so they are dropped rather than fetched degraded.
+#
+# The gap report is not blanked — that would defeat the fetch's own guard.
+# The needed set is RECOMPUTED from the filtered manifest, so "missing: []"
+# means what it says: everything this manifest needs is cached.
+apiVersion: batch/v1
+kind: Job
+metadata: {name: nfi2024-drop-uncovered, namespace: prithvi-training-default}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: drop
+          image: python:3.11-slim
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              set -e
+              apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy pyproj mgrs packaging rasterio
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              python - <<'PY'
+              import json, sys
+              sys.path.insert(0, "scripts")
+              from derive_missing_vpp_mgrs import mgrs_tiles_for_bbox, cached_pairs
+
+              M = "/data/manifests/nfi2024_512.json"
+              full = json.load(open(M))
+              blocked = set(json.load(open("/data/manifests/nfi2024_blocked_tiles.json")))
+
+              if not any(t["name"] in blocked for t in full):
+                  print("manifest already filtered — nothing to do"); raise SystemExit(0)
+
+              json.dump(full, open("/data/manifests/nfi2024_512.full.json", "w"), indent=1)
+              kept = [t for t in full if t["name"] not in blocked]
+              json.dump(kept, open(M, "w"), indent=1)
+
+              lost = sum(t["n_plots"] for t in full if t["name"] in blocked)
+              print(f"tiles: {len(full)} -> {len(kept)}  (dropped {len(full)-len(kept)})")
+              print(f"plots: {sum(t['n_plots'] for t in full)} -> "
+                    f"{sum(t['n_plots'] for t in kept)}  (lost {lost})")
+              print("full manifest preserved at nfi2024_512.full.json")
+
+              need = set()
+              for t in kept:
+                  need |= mgrs_tiles_for_bbox(t["bbox_3006"])
+              have = cached_pairs("/data/vpp_wekeo")
+              still = sorted(m for m in need if (m, 2024) not in have)
+              print(f"\nrecomputed from the KEPT tiles: {len(need)} MGRS cells needed, "
+                    f"{len(still)} missing")
+              if still:
+                  raise SystemExit(f"UNEXPECTED — still missing after drop: {still}")
+              json.dump({"year": 2024, "needed": sorted(need), "missing": [],
+                         "dropped_tiles": sorted(blocked),
+                         "dropped_reason": "no HR-VPP product for 33UVC/34WCS/34WCT/"
+                                           "34WCU/34WCV in any year; confirmed by "
+                                           "re-search returning zero products"},
+                        open("/data/manifests/nfi2024_vpp_gaps.json", "w"), indent=1)
+              print("gap report recomputed — the fetch guard is now honestly satisfied")
+              PY
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits: {cpu: "2", memory: "4Gi"}
+          volumeMounts: [{name: d, mountPath: /data}]
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

@@ -1,0 +1,124 @@
+---
+# Step 4: build unified labels for the 398 plot-driven 2024 tiles.
+#
+# Fetch and label stay strictly separate (CLAUDE.md): this job touches only
+# NMD/LPIS/SKS -> labels, never spectral. Reference data verified on the PVC.
+#
+# v1 died on a missing scipy AFTER apt+pip+clone had already run. The import
+# smoke check below now runs `--help` first, which exercises every top-level
+# import and exits in about a second, so a missing dependency costs a second
+# rather than the whole setup.
+#
+# Tiles are counted before and after, and the run asserts the label actually
+# came out in unified space (0-22). Before this job the `label` key holds RAW
+# NMD codes (111-128 etc.) written by the fetch; build_labels overwrites that
+# same key with the unified result, so "classes <= 22" is the proof the remap
+# happened rather than a printout to eyeball.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-labels
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi2024-labels}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: labels
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              STAGE=/data/unified_v2_512_nfi2024_staging
+              echo "=== nfi2024 labels — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy scipy pandas pyarrow rasterio pyproj shapely \
+                geopandas fiona python-dotenv requests Pillow
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse --short HEAD)"
+
+              echo ""
+              echo "=== import smoke (every top-level import, ~1 s) ==="
+              python scripts/build_labels.py --help > /dev/null
+              echo "imports OK"
+
+              BEFORE=$(ls $STAGE/*.npz 2>/dev/null | wc -l)
+              echo "TILES BEFORE: $BEFORE"
+
+              set +e
+              python scripts/build_labels.py \
+                --data-dir "$STAGE" \
+                --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
+                --nmd-version 2018 \
+                --lpis-dir /data/lpis \
+                --sks-dir /data/sks \
+                --workers 4
+              RC=$?
+              set -e
+              echo "build_labels exit: $RC"
+
+              AFTER=$(ls $STAGE/*.npz 2>/dev/null | wc -l)
+              echo "TILES AFTER:  $AFTER  (before: $BEFORE)"
+              [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed"; exit 1; }
+
+              echo ""
+              echo "=== verify the remap actually happened ==="
+              python - <<'PYEOF'
+              import glob
+              import sys
+              from collections import Counter
+
+              import numpy as np
+
+              sys.path.insert(0, "/workspace/ie")
+              from imint.training.unified_schema import UNIFIED_CLASS_NAMES
+
+              tot, bad, n = Counter(), [], 0
+              for p in sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz")):
+                  lab = np.load(p, allow_pickle=True).get("label")
+                  if lab is None:
+                      bad.append((p.split("/")[-1], "no label key"))
+                      continue
+                  mx = int(lab.max())
+                  if mx > 22:
+                      bad.append((p.split("/")[-1], f"max class {mx} — still raw NMD"))
+                      continue
+                  n += 1
+                  u, c = np.unique(lab, return_counts=True)
+                  tot.update(dict(zip(u.tolist(), c.tolist())))
+
+              px = sum(tot.values()) or 1
+              print(f"tiles in unified space: {n}")
+              print("class distribution:")
+              for cls, cnt in sorted(tot.items()):
+                  i = int(cls)
+                  name = UNIFIED_CLASS_NAMES[i] if i < len(UNIFIED_CLASS_NAMES) else "?"
+                  print(f"  {i:3d} {name:22s} {100*cnt/px:6.2f}%  ({cnt:,})")
+              crop = sum(c for k, c in tot.items() if 11 <= int(k) <= 21)
+              print(f"\ncrop classes 11-21: {100*crop/px:.2f}% of pixels ({crop:,})")
+              if bad:
+                  print(f"\nNOT REMAPPED: {len(bad)} tiles")
+                  for name, why in bad[:10]:
+                      print(f"  {name}: {why}")
+                  sys.exit(1)
+              PYEOF
+              echo ""
+              echo "=== done: $(date -u) ==="
+              exit $RC
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

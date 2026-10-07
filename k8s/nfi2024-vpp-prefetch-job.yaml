@@ -1,0 +1,102 @@
+---
+# Step 2: fill the WEkEO VPP cache for 2024 before any spectral fetch runs.
+#
+# The 518-tile 2024 manifest touches 76 MGRS cells and the cache holds NONE of
+# them for 2024 — the year has never been fetched. VPP_SOURCE=wekeo makes the
+# spectral fetch raise per tile on a cache miss rather than fall through to the
+# metered CDSE Sentinel Hub path, so without this step the fetch produces
+# nothing. Paying CDSE PU for VPP is forbidden: it drains the shared pool,
+# credit_guard then marks CDSE DEAD, and the spectral fetch loses its backend
+# silently (campaign-orphan-512, 0/1147 tiles, exit-0, 2026-06-29).
+#
+# PU-FREE: WEkEO HDA is a separate, unmetered source. The MGRS list is read
+# from the gap report rather than pasted, so it cannot drift from the manifest.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-vpp-prefetch
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi2024-vpp}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 86400   # 24 h — 76 MGRS x 5 metrics over HDA
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: prefetch
+          image: python:3.11-slim
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== nfi2024 VPP prefetch (WEkEO, PU-free) — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy rasterio pyproj requests hda 2>&1 | tail -2
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd /workspace/ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse --short HEAD)"
+
+              MGRS=$(python3 -c "
+              import json
+              g = json.load(open('/data/manifests/nfi2024_vpp_gaps.json'))
+              print(','.join(g['missing']))")
+              N=$(echo "$MGRS" | tr ',' '\n' | grep -c . || true)
+              echo "missing (MGRS, 2024) pairs to fetch: $N"
+              if [ "$N" = "0" ]; then
+                echo "cache already complete — nothing to do"
+                exit 0
+              fi
+
+              python3 scripts/prefetch_vpp_wekeo.py \
+                --mgrs-tiles "$MGRS" \
+                --years 2024 \
+                --dest-dir /data/vpp_wekeo
+
+              echo ""
+              echo "=== verify the gap actually closed ==="
+              python3 - <<'PYEOF'
+              import json
+              import sys
+              sys.path.insert(0, "scripts")
+              from derive_missing_vpp_mgrs import cached_pairs
+              gaps = json.load(open("/data/manifests/nfi2024_vpp_gaps.json"))
+              have = cached_pairs("/data/vpp_wekeo")
+              still = sorted(m for m in gaps["needed"] if (m, 2024) not in have)
+              print(f"needed {len(gaps['needed'])}, still missing {len(still)}")
+              if still:
+                  # Not a failure of this job by itself — some MGRS cells may
+                  # have no HR-VPP product for 2024 at all. But the fetch must
+                  # not start believing the cache is whole, so the report is
+                  # rewritten with the truth and this exits non-zero.
+                  gaps["missing"] = still
+                  json.dump(gaps, open("/data/manifests/nfi2024_vpp_gaps.json", "w"), indent=1)
+                  sys.exit(f"STILL MISSING: {still}")
+              gaps["missing"] = []
+              json.dump(gaps, open("/data/manifests/nfi2024_vpp_gaps.json", "w"), indent=1)
+              print("cache complete for 2024 — spectral fetch may start")
+              PYEOF
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          envFrom:
+            - secretRef: {name: wekeo-creds}   # WEKEO_USERNAME + WEKEO_PASSWORD
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

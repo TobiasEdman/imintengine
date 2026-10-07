@@ -1,0 +1,134 @@
+---
+# Step 6c: the four SKG forestry aux channels for the 475 campaign tiles.
+#
+# Previous attempt failed on all 475 with "Skogliga grunddata URL not
+# configured" — prefetch_aux needs the skg-endpoints Secret mounted at
+# /etc/skg and copied to .skg_endpoints in the repo root. Every existing SKG
+# job does that (enrich-512-skg-dem-job.yaml:45); mine did not.
+#
+# S1 is already done — it succeeded on 475/475 in 7.4 min in that same run, so
+# only the forestry channels are outstanding. dem is already present from the
+# fetch, and vpp/frame_2016 are the prefetch_aux channels that would cost CDSE
+# PU, so they stay unrequested: VPP came from the WEkEO cache.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-skg
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi2024-skg}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: skg
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              STAGE=/data/unified_v2_512_nfi2024_staging
+
+              echo "=== nfi2024 SKG forestry aux — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy scipy rasterio pyproj requests shapely pandas pyarrow Pillow
+
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse --short HEAD)"
+
+              # The endpoint config the previous run was missing.
+              cp /etc/skg/skg_endpoints /workspace/ie/.skg_endpoints
+              echo "endpoint config in place:"
+              grep -c 'url' /workspace/ie/.skg_endpoints
+
+              echo ""
+              echo "=== import smoke ==="
+              python scripts/prefetch_aux.py --help > /dev/null
+              echo "imports OK"
+
+              BEFORE=$(ls $STAGE/*.npz 2>/dev/null | wc -l)
+              echo "TILES BEFORE: $BEFORE"
+
+              python scripts/prefetch_aux.py \
+                --data-dir "$STAGE" \
+                --channels height volume basal_area diameter \
+                --workers 8
+
+              AFTER=$(ls $STAGE/*.npz 2>/dev/null | wc -l)
+              echo ""
+              echo "TILES AFTER:  $AFTER  (before: $BEFORE)"
+              [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed"; exit 1; }
+
+              echo ""
+              echo "=== verify S1 + forestry present and non-degenerate ==="
+              python - <<'PYEOF'
+              import glob
+              import random
+              import sys
+              from collections import Counter
+
+              import numpy as np
+
+              REQUIRED = ["s1_vv_vh", "s1_dates", "s1_orbit", "has_s1",
+                          "height", "volume", "basal_area", "diameter"]
+              paths = sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz"))
+              random.seed(42)
+              sample = random.sample(paths, min(60, len(paths)))
+              present, allzero = Counter(), Counter()
+              for p in sample:
+                  d = np.load(p, allow_pickle=True)
+                  for k in REQUIRED:
+                      if k not in d.files:
+                          continue
+                      present[k] += 1
+                      v = d[k]
+                      if getattr(v, "ndim", 0) >= 2 and not np.any(v):
+                          allzero[k] += 1
+
+              n = len(sample)
+              print(f"sampled {n} of {len(paths)}")
+              print(f"{'key':14s} {'present':>8s} {'all-zero':>9s}")
+              bad = []
+              for k in REQUIRED:
+                  frac = present[k] / n
+                  print(f"{k:14s} {frac:>7.0%} {allzero[k]:>9d}")
+                  if frac < 0.95:
+                      bad.append(f"{k} on only {frac:.0%}")
+                  # markfukt has genuine SLU coverage gaps; forestry should not.
+                  if allzero[k] > n * 0.05:
+                      bad.append(f"{k} all-zero on {allzero[k]}/{n}")
+              if bad:
+                  print("\nFAIL:")
+                  for b in bad:
+                      print(f"  {b}")
+                  sys.exit(1)
+              print("\nS1 and forestry aux present and non-degenerate")
+              PYEOF
+              echo ""
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+            - {name: skg-endpoints, mountPath: /etc/skg, readOnly: true}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: skg-endpoints
+          secret:
+            secretName: skg-endpoints
