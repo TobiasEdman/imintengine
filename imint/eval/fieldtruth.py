@@ -4,12 +4,58 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
+import sys
 from pathlib import Path
 
 import pandas as pd
 
 NFI_KEY = ["TractID", "PlotID", "Year"]
 LUCAS_KEY = ["point_id", "Year"]
+
+
+NFI_MODELS = ("clay", "croma", "prithvi300m", "prithvi300m4f",
+              "prithvi600m", "terramind", "tessera")
+NFI_CELLS = frozenset(f"{model}_r{rung}" for model in NFI_MODELS for rung in range(1, 5))
+NFI_SOURCE_FILES = frozenset({
+    "imint/eval/fieldtruth.py", "scripts/prepare_nfi_holdout.py",
+    "scripts/nfi_checkpoint_inputs.py", "scripts/validate_against_nfi.py",
+    "scripts/inference_comparison.py", "scripts/compare_nmd2023_nfi.py",
+    "scripts/score_nfi_holdout.py", "scripts/race_rigor_stats.py",
+    "imint/training/unified_dataset.py", "imint/training/errors.py",
+})
+NFI_PROTOCOL = {
+    "truth_dominant_fraction": 0.7, "classes": [0, 1, 2, 3, 4],
+    "primary_head": "class", "bootstrap_seed": 20260818,
+    "bootstrap_samples": 10000, "block_km": 50, "sesoi": 0.02,
+    "block_signflip_method": "exact_integer_sum_distribution",
+    "block_assignment": "50km_grid_at_frozen_tract_year_centroid",
+    "teacher_exclusion": "all_recorded_feature_plot_years",
+}
+
+
+def validate_freeze_structure(manifest: dict) -> None:
+    """Reject incomplete freezes even when their hash was supplied explicitly."""
+    if manifest.get("schema") != "nfi-fieldtruth-freeze-v1":
+        raise ValueError("not a supported frozen NFI manifest")
+    if (manifest.get("identity") != NFI_KEY
+            or set(manifest.get("cells", {})) != NFI_CELLS
+            or "NMD2023" not in manifest.get("baselines", {})
+            or not NFI_SOURCE_FILES <= set(manifest.get("source_sha256", {}))
+            or any(manifest.get("protocol", {}).get(k) != v for k, v in NFI_PROTOCOL.items())):
+        raise ValueError("incomplete frozen NFI identity, roster, source or protocol")
+    source = manifest["source_sha256"]
+    if any(not isinstance(h, str) or re.fullmatch(r"[0-9a-f]{64}", h) is None
+           for h in source.values()):
+        raise ValueError("invalid frozen source digest")
+    runtime = manifest.get("preparation_runtime", {})
+    if (runtime.get("source", {}).get("git_sha") != manifest.get("git_sha")
+            or not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("git_sha", "")))
+            or runtime.get("image", {}).get("ref") != manifest.get("runtime_image")
+            or not re.fullmatch(r".+@sha256:[0-9a-f]{64}", str(manifest.get("runtime_image", "")))
+            or not runtime.get("runtime_manifest", {}).get("sha256")
+            or not runtime.get("source", {}).get("payload_sha256")):
+        raise ValueError("incomplete frozen runtime identity")
 
 
 def sha256_file(path: str | Path) -> str:
@@ -111,13 +157,17 @@ def resolve_observation_year(features: pd.DataFrame, index: pd.DataFrame) -> pd.
     return resolved
 
 
-def load_frozen_holdout(manifest_path: str | Path) -> tuple[pd.DataFrame, dict]:
+def load_frozen_holdout(manifest_path: str | Path, expected_manifest_sha256: str) -> tuple[pd.DataFrame, dict]:
     path = Path(manifest_path)
     manifest_bytes = path.read_bytes()
+    digest = hashlib.sha256(manifest_bytes).hexdigest()
+    if (not isinstance(expected_manifest_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_manifest_sha256) is None
+            or digest != expected_manifest_sha256):
+        raise ValueError("frozen manifest differs from the approved SHA256")
     manifest = json.loads(manifest_bytes)
-    manifest["_manifest_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
-    if manifest.get("schema") != "nfi-fieldtruth-freeze-v1":
-        raise ValueError("not a supported frozen NFI manifest")
+    manifest["_manifest_sha256"] = digest
+    validate_freeze_structure(manifest)
     table_path = path.parent / manifest["holdout"]["file"]
     holdout = read_verified_parquet(table_path, manifest["holdout"]["sha256"])
     require_columns(holdout, NFI_KEY + ["tile_name"])
@@ -127,6 +177,9 @@ def load_frozen_holdout(manifest_path: str | Path) -> tuple[pd.DataFrame, dict]:
         raise ValueError("frozen holdout count mismatch")
     training_path = path.parent / manifest["training"]["file"]
     training = read_verified_parquet(training_path, manifest["training"]["sha256"])
+    if (training.duplicated(NFI_KEY).any()
+            or len(training) != manifest["training"]["observations"]):
+        raise ValueError("frozen training identity count mismatch")
     if observation_keys(holdout).isin(observation_keys(training)).any():
         raise ValueError("training observation leaked into frozen holdout")
     if manifest.get("campaign", {}).get("training_tiles") != 0:
@@ -171,22 +224,50 @@ def read_verified_parquet(path: Path, expected_sha256: str) -> pd.DataFrame:
 
 def verify_prediction_dump(
     path: Path, manifest_path: Path, cell: str, *, manifest: dict | None = None,
+    expected_manifest_sha256: str | None = None,
 ) -> pd.DataFrame:
     """Verify and parse the SAME prediction bytes under the frozen run."""
     metadata_path = path.with_suffix(path.suffix + ".meta.json")
     metadata = json.loads(metadata_path.read_text())
     if manifest is None:
-        _, manifest = load_frozen_holdout(manifest_path)
+        _, manifest = load_frozen_holdout(manifest_path, expected_manifest_sha256)
     if (metadata.get("cell") != cell
             or metadata.get("holdout_manifest_sha256") != manifest["_manifest_sha256"]
             or metadata.get("checkpoint_sha256") != manifest["cells"][cell]["checkpoint"]["sha256"]
+            or any(metadata.get(k) != v for k, v in evaluation_runtime_identity(manifest).items())
             or metadata.get("status") != "success"):
         raise ValueError("prediction dump provenance does not match frozen run")
-    return read_verified_parquet(path, metadata["prediction_sha256"])
+    frame = read_verified_parquet(path, metadata["prediction_sha256"])
+    frame.attrs["authenticated_sha256"] = metadata["prediction_sha256"]
+    return frame
 
 
-def verify_evaluation_source(manifest: dict) -> None:
+def evaluation_runtime_identity(manifest: dict) -> dict:
+    runtime = manifest["preparation_runtime"]
+    return {"runtime_image": manifest["runtime_image"],
+            "source_git_sha": manifest["git_sha"],
+            "source_payload_sha256": runtime["source"]["payload_sha256"],
+            "runtime_manifest_sha256": runtime["runtime_manifest"]["sha256"]}
+
+
+def verify_evaluation_source(manifest: dict, *, environment: str = "model") -> dict:
+    """Reauthenticate the full sealed source and execution environment."""
+    from scripts.crop_distill_provenance import verify_runtime, snapshot_tree, tree_payload_sha256
+
+    validate_freeze_structure(manifest)
     root = Path(__file__).resolve().parents[2]
     for relative, expected in manifest["source_sha256"].items():
         if sha256_file(root / relative) != expected:
             raise ValueError(f"evaluation code differs from frozen source: {relative}")
+    frozen = manifest["preparation_runtime"]
+    runtime = verify_runtime(Path(frozen["runtime_manifest"]["path"]),
+                             source_git_sha=manifest["git_sha"],
+                             image_ref=manifest["runtime_image"])
+    if runtime != frozen:
+        raise ValueError("execution runtime differs from frozen runtime")
+    if tree_payload_sha256(snapshot_tree(root)) != frozen["source"]["payload_sha256"]:
+        raise ValueError("execution source tree differs from frozen source")
+    expected_python = runtime["environments"][environment]["python"]["path"]
+    if Path(sys.executable).absolute() != Path(expected_python).absolute():
+        raise ValueError(f"evaluation requires the verified {environment} interpreter")
+    return evaluation_runtime_identity(manifest)

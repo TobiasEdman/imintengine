@@ -15,7 +15,8 @@ def load(name):
     spec=importlib.util.spec_from_file_location(name,ROOT/'scripts'/(name+'.py'))
     mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod);return mod
 nfi=load('validate_against_nfi');inf=load('inference_comparison')
-from imint.eval.fieldtruth import sha256_file,verify_prediction_dump
+from imint.eval.fieldtruth import sha256_file,verify_prediction_dump, evaluation_runtime_identity
+from tests.nfi_freeze_fixtures import complete_manifest
 
 
 def setup(tmp_path,heights=(8,)):
@@ -37,7 +38,7 @@ def setup(tmp_path,heights=(8,)):
         training=dict(file=tpath.name,sha256=sha256_file(tpath),observations=0),
         cells={'tessera_r1':dict(checkpoint=identity(cp),img_size=8,num_classes=23,backbone='tessera_v1')},
         protocol={'truth_dominant_fraction':.7},inputs=[],tiles={p.stem:dict(identity(p), geometry={"height": h, "width": h}) for p,h in zip(paths,heights)})
-    mp=tmp_path/'manifest.json';mp.write_text(json.dumps(manifest))
+    mp=tmp_path/'manifest.json';mp.write_text(json.dumps(complete_manifest(manifest)))
     return paths,cp,mp
 
 
@@ -66,9 +67,11 @@ def patch_model(monkeypatch,after_preflight=lambda:None):
 
 
 def cli(monkeypatch,tmp_path,cp,mp):
+    # This suite isolates authenticated readers; full runtime checks have their own tests.
+    monkeypatch.setattr(nfi, 'verify_evaluation_source', evaluation_runtime_identity)
     out=tmp_path/'results.json';dump=tmp_path/'predictions.parquet'
     monkeypatch.setattr(sys,'argv',['nfi','--checkpoint',str(cp),'--holdout-manifest',str(mp),
-        '--cell','tessera_r1','--out',str(out),'--dump-per-plot',str(dump),'--device','cpu'])
+        '--expected-manifest-sha256',sha256_file(mp),'--cell','tessera_r1','--out',str(out),'--dump-per-plot',str(dump),'--device','cpu'])
     nfi.main()
     return out,dump
 

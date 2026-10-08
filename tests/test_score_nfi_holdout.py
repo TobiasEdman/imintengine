@@ -43,9 +43,8 @@ def test_no_nmd_coverage_cannot_produce_winner():
 
 def test_block_test_does_not_treat_repeated_plots_as_independent():
     from score_nfi_holdout import block_signflip_pvalue
-    rng = np.random.default_rng(1)
-    original = block_signflip_pvalue(np.array([1, 1]), np.array([0, 1]), rng, 100)
-    repeated = block_signflip_pvalue(np.ones(200), np.repeat([0, 1], 100), rng, 100)
+    original = block_signflip_pvalue(np.array([1, 1]), np.array([0, 1]))
+    repeated = block_signflip_pvalue(np.ones(200), np.repeat([0, 1], 100))
     assert original == repeated == 0.5
 
 
@@ -75,3 +74,33 @@ def test_frozen_baseline_roles_cannot_be_swapped_or_omitted(tmp_path):
         validate_baseline_paths(manifest, {"NMD2023": b, "NMD2018": a})
     with pytest.raises(ValueError, match="roster"):
         validate_baseline_paths(manifest, {"NMD2023": a})
+
+
+def test_exact_block_tail_has_no_monte_carlo_resolution_floor():
+    from score_nfi_holdout import block_signflip_pvalue
+    assert block_signflip_pvalue(np.ones(22), np.arange(22)) == 2 ** -21
+
+
+def test_integer_block_distribution_matches_exhaustive_label_swaps():
+    import itertools
+    from score_nfi_holdout import block_signflip_pvalue
+    rng = np.random.default_rng(41)
+    blocks = np.repeat(np.arange(7), 4)
+    signs = np.array(list(itertools.product([-1, 1], repeat=7)))
+    for _ in range(20):
+        difference = rng.choice([-1, 0, 1], size=len(blocks))
+        sums = np.array([difference[blocks == b].sum() for b in range(7)])
+        exhaustive = np.mean(np.abs(signs @ sums) >= abs(sums.sum()))
+        assert block_signflip_pvalue(difference, blocks) == exhaustive
+
+
+def test_tract_year_centroids_keep_cluster_whole_and_preserve_sampling_coordinates():
+    from score_nfi_holdout import tract_block_frame
+    from race_rigor_stats import block_ids
+    held = pd.DataFrame({"TractID": [1, 1, 1], "Year": [2024, 2024, 2022],
+                         "Easting": [49999., 50001., 160000.], "Northing": [6500000.] * 3})
+    original = held.copy(deep=True)
+    statistical = tract_block_frame(held)
+    blocks = block_ids(statistical, 50)
+    assert blocks[0] == blocks[1] and blocks[0] != blocks[2]
+    pd.testing.assert_frame_equal(held, original)

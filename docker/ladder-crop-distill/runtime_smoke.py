@@ -44,6 +44,26 @@ def _load_script(path: Path) -> None:
             sys.modules[module_name] = previous
 
 
+def smoke_nmd_sampler() -> None:
+    """Exercise CPU raster sampling on synthetic pixels, with no field data."""
+    import tempfile
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+    from scripts.compare_nmd2023_nfi import sample_nmd_unified
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "synthetic-nmd.tif"
+        with rasterio.open(path, "w", driver="GTiff", height=1, width=2,
+                           count=1, dtype="uint16", crs="EPSG:3006",
+                           transform=from_origin(100000, 6500000, 10, 10), nodata=0) as dst:
+            dst.write(np.array([[111, 112]], dtype=np.uint16), 1)
+        classes, raw = sample_nmd_unified(str(path), [100005, 100015], [6499995, 6499995])
+        assert raw.tolist() == [111, 112]
+        assert classes.tolist() == [1, 2]
+    print({"status": "ok", "environment": "nmd-sampler", "pixels": 2})
+
+
 def smoke_model() -> None:
     import numpy
     import terratorch
@@ -115,6 +135,7 @@ def smoke_model() -> None:
         path = source_root / relative
         compile(path.read_text(encoding="utf-8"), relative, "exec")
 
+    smoke_nmd_sampler()
     print({"status": "ok", "environment": "model", **actual_versions})
 
 

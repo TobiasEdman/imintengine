@@ -28,29 +28,38 @@ from validate_against_nfi import accuracy_suite
 from race_rigor_stats import block_ids, compare_pair, holm
 
 
-def block_signflip_pvalue(
-    difference: np.ndarray, blocks: np.ndarray, rng: np.random.Generator,
-    samples: int,
-) -> float:
-    """Paired label swaps operate on whole spatial blocks, never on plots.
+def block_signflip_pvalue(difference: np.ndarray, blocks: np.ndarray) -> float:
+    """Exact paired label swaps over independent spatial blocks.
 
-    The null assumes exchangeability of model labels within independent
-    blocks. Enumerate small block sets; otherwise use Monte Carlo with the
-    plus-one correction. Zero-difference blocks do not affect the statistic.
+    Correctness differences are integers, so dynamic programming builds the
+    complete distribution of signed block sums in O(blocks * observations).
+    No Monte Carlo p-value floor or simulation noise enters Holm correction.
     """
-    sums = np.array([difference[blocks == b].sum() for b in np.unique(blocks)])
-    sums = sums[sums != 0]
-    if not len(sums):
-        return 1.0
-    observed = abs(sums.sum())
-    if len(sums) <= 16:
-        draws = np.arange(2 ** len(sums), dtype=np.uint64)[:, None]
-        signs = 2 * ((draws >> np.arange(len(sums), dtype=np.uint64)) & 1).astype(int) - 1
-        stats = np.abs(signs @ sums)
-        return float((stats >= observed).mean())
-    signs = rng.choice([-1, 1], size=(samples, len(sums)))
-    exceed = int((np.abs(signs @ sums) >= observed).sum())
-    return (exceed + 1) / (samples + 1)
+    difference = np.asarray(difference)
+    blocks = np.asarray(blocks)
+    if (difference.shape != np.asarray(blocks).shape
+            or not np.isin(difference, [-1, 0, 1]).all()):
+        raise ValueError("block test requires paired correctness differences")
+    sums = np.array([difference[blocks == b].sum() for b in np.unique(blocks)], dtype=int)
+    weights = np.abs(sums[sums != 0])
+    distribution = np.ones(1)
+    for weight in weights:
+        updated = np.zeros(len(distribution) + weight)
+        updated[:len(distribution)] += distribution * 0.5
+        updated[weight:] += distribution * 0.5
+        distribution = updated
+    signed = 2 * np.arange(len(distribution)) - int(weights.sum())
+    return min(1.0, float(distribution[np.abs(signed) >= abs(sums.sum())].sum()))
+
+
+def tract_block_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep each tract-year in one 50 km block, without altering NMD locations."""
+    result = frame.copy()
+    coordinates = ["Easting", "Northing"]
+    if not np.isfinite(result[coordinates].to_numpy(dtype=float)).all():
+        raise ValueError("spatial blocks require finite observation coordinates")
+    result[coordinates] = result.groupby(["TractID", "Year"])[coordinates].transform("mean")
+    return result
 
 
 def paired_report(
@@ -65,6 +74,7 @@ def paired_report(
     if not covered.any():
         raise ValueError("no common NMD coverage on the frozen observations")
     selected = holdout.loc[covered].copy()
+    statistical = tract_block_frame(holdout).loc[covered].copy()
     truth = truth[covered]
     sources = dict(predictions)
     sources.update({name: pred for name, (pred, _) in baselines.items()})
@@ -80,7 +90,7 @@ def paired_report(
         scores[name] = dict(accuracy_suite(truth, pred[covered]),
                             n=len(truth), correct=int(correct.sum()),
                             overall_exact=float(correct.mean()))
-        frames[name] = selected.assign(correct=correct.astype(int)).set_index(NFI_KEY)
+        frames[name] = statistical.assign(correct=correct.astype(int)).set_index(NFI_KEY)
     # All model-model and model-NMD comparisons form one prespecified family;
     # the winner's comparisons are never selected only after seeing scores.
     pairs = {}
@@ -93,10 +103,9 @@ def paired_report(
             block_km=protocol["block_km"], n_boot=protocol["bootstrap_samples"], rng=rng)
         difference = frames[a]["correct"].to_numpy() - frames[b]["correct"].to_numpy()
         pair["block_signflip_p"] = block_signflip_pvalue(
-            difference, block_ids(selected, protocol["block_km"]),
-            rng, protocol["bootstrap_samples"])
+            difference, block_ids(statistical, protocol["block_km"]))
         pairs[f"{a} vs {b}"] = dict(pair, a=a, b=b)
-    n_blocks = int(len(np.unique(block_ids(selected, protocol["block_km"]))))
+    n_blocks = int(len(np.unique(block_ids(statistical, protocol["block_km"]))))
     adjusted = holm([p["block_signflip_p"] for p in pairs.values()])
     for pair, p_adj in zip(pairs.values(), adjusted):
         pair["block_signflip_holm"] = p_adj
@@ -111,7 +120,9 @@ def paired_report(
         "schema": "nfi-paired-model-nmd-v1",
         "frozen_observations": len(holdout), "compared_observations": len(selected),
         "excluded_for_nmd_coverage": int((~covered).sum()),
+        "block_assignment": "50km_grid_at_frozen_tract_year_centroid",
         "spatial_blocks": n_blocks, "scores": scores, "pairs": pairs,
+        "block_signflip_method": "exact_integer_sum_distribution",
         "highest_point_estimate": best,
         "interpretation": (
             "Highest point estimate is descriptive. Difference support requires "
@@ -150,9 +161,10 @@ def main() -> None:
     ap.add_argument("--nmd2023", type=Path, required=True)
     ap.add_argument("--nmd2018", type=Path)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--expected-manifest-sha256", help="SHA256 approved at go/no-go")
     args = ap.parse_args()
-    holdout, manifest = load_frozen_holdout(args.holdout_manifest)
-    verify_evaluation_source(manifest)
+    holdout, manifest = load_frozen_holdout(args.holdout_manifest, args.expected_manifest_sha256)
+    runtime_identity = verify_evaluation_source(manifest)
     if args.out.exists():
         raise ValueError("result already exists; choose a new output")
     predictions, dump_hashes = {}, {}
@@ -164,7 +176,7 @@ def main() -> None:
                               holdout["nfi_forest"].replace(-1, 0)):
             raise ValueError(f"{cell}: truth differs from frozen observations")
         predictions[cell] = selected["model_pred"].to_numpy()
-        dump_hashes[cell] = sha256_file(path)
+        dump_hashes[cell] = dump.attrs["authenticated_sha256"]
     baseline_paths = {"NMD2023": args.nmd2023}
     if args.nmd2018:
         baseline_paths["NMD2018"] = args.nmd2018
@@ -174,6 +186,7 @@ def main() -> None:
         baselines[name] = sample_nmd_unified(str(path), holdout.Easting, holdout.Northing)
         verify_file_identity(manifest["baselines"][name])
     result = paired_report(holdout, predictions, baselines, manifest["protocol"])
+    result["execution_runtime"] = runtime_identity
     result["manifest_sha256"] = manifest["_manifest_sha256"]
     result["prediction_sha256"] = dump_hashes
     serialized = json.dumps(json_metrics(result), indent=2, allow_nan=False) + "\n"

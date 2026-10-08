@@ -287,15 +287,17 @@ def main() -> int:
             # A cell is reusable only if its checkpoint is still the one that
             # produced it; a retrained cell must be re-scored.
             requested = {f"{m}_r{r}" for m in models for r in rungs}
+            reusable = []
             for c in prior.get("cells", []):
                 if c["cell"] not in requested:
                     continue
                 ck = args.ckpt_root / c["cell"] / "best_model.pt"
                 if ck.exists() and c.get("ckpt_sha256") == ckpt_sha256(str(ck)):
-                    results.append(c)
+                    reusable.append(c)
                 else:
                     print(f"[{c['cell']}] checkpoint changed — re-scoring",
                           flush=True)
+            results = reusable
             done = {c["cell"] for c in results}
             print(f"resuming — {len(done)} cell(s) reusable", flush=True)
         except (OSError, ValueError, KeyError) as exc:

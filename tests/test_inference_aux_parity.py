@@ -203,9 +203,9 @@ def test_run_inference_explicit_argument_still_wins(monkeypatch) -> None:
 def test_run_inference_falls_back_when_checkpoint_records_nothing(
     monkeypatch,
 ) -> None:
-    """Pre-config-era checkpoint → None → the builder's canonical default."""
+    """Pre-config-era checkpoint uses the shared canonical default."""
     model = _Model(None, len(AUX_CHANNEL_NAMES))
-    assert _captured_aux_names(monkeypatch, model) is None
+    assert _captured_aux_names(monkeypatch, model) == list(AUX_CHANNEL_NAMES)
 
 
 def test_run_inference_refuses_name_count_conv_mismatch(monkeypatch) -> None:

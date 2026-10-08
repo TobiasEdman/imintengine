@@ -45,7 +45,7 @@ from validate_against_nfi import (  # noqa: E402
     derive_nfi_forest_class, accuracy_suite,
 )
 from imint.eval.fieldtruth import (  # noqa: E402
-    NFI_KEY, load_frozen_holdout, restrict_to_frozen, shared_observations,
+    NFI_KEY, verify_evaluation_source, load_frozen_holdout, restrict_to_frozen, shared_observations,
     sha256_file, verify_prediction_dump, verify_file_identity,
 )
 from imint.training.class_schema import nmd_raster_to_lulc  # noqa: E402
@@ -75,8 +75,9 @@ def sample_nmd_unified(tif: str, easting, northing) -> np.ndarray:
 
 def _restrict_to_holdout(
     plots: pd.DataFrame, truth: np.ndarray, manifest_path: str,
+    expected_manifest_sha256: str, *, frozen: tuple | None = None,
 ) -> tuple[pd.DataFrame, np.ndarray, dict]:
-    holdout, manifest = load_frozen_holdout(manifest_path)
+    holdout, manifest = frozen or load_frozen_holdout(manifest_path, expected_manifest_sha256)
     frame = plots.assign(_truth=truth)
     selected = restrict_to_frozen(frame, holdout)
     if "nfi_forest" in holdout:
@@ -85,7 +86,7 @@ def _restrict_to_holdout(
             raise ValueError("prediction dump truth differs from frozen observation truth")
     meta = {
         "manifest": str(manifest_path),
-        "manifest_sha256": sha256_file(manifest_path),
+        "manifest_sha256": manifest["_manifest_sha256"],
         "identity": NFI_KEY,
         "n_plots_before": len(plots),
         "n_plots_after": len(selected),
@@ -108,9 +109,12 @@ def main() -> None:
     ap.add_argument("--model-id", default=None, help="actual model/cell identifier")
     ap.add_argument("--dominant-frac", type=float, default=0.7)
     ap.add_argument("--out", default="docs/data/compare-nmd2023-nfi.json")
+    ap.add_argument("--expected-manifest-sha256", help="SHA256 approved at go/no-go")
     a = ap.parse_args()
 
     model_pred_col = None
+    freeze = None
+    authenticated_dump_sha256 = None
     holdout = None
     if a.model_per_plot:
         # The per-plot dump IS the plot table for the same-ytor comparison: it
@@ -127,9 +131,13 @@ def main() -> None:
         if not a.model_id:
             ap.error("--model-per-plot requires --model-id")
         if a.holdout_manifest:
-            _, freeze = load_frozen_holdout(a.holdout_manifest)
+            held, freeze = load_frozen_holdout(a.holdout_manifest, a.expected_manifest_sha256)
+            runtime_identity = verify_evaluation_source(freeze)
+            if a.dominant_frac != freeze["protocol"]["truth_dominant_fraction"]:
+                ap.error("truth threshold differs from frozen protocol")
             plots = verify_prediction_dump(
                 Path(a.model_per_plot), Path(a.holdout_manifest), a.model_id, manifest=freeze)
+            authenticated_dump_sha256 = plots.attrs["authenticated_sha256"]
             truth = plots["nfi_forest"].replace(-1, 0).to_numpy(dtype=int)
             supplied = {"NMD2023": Path(a.nmd2023)}
             if a.nmd2018:
@@ -142,7 +150,8 @@ def main() -> None:
                     raise ValueError(f"{name} path differs from its frozen role")
                 verify_file_identity(identity)
             plots, truth, holdout = _restrict_to_holdout(
-                plots, truth, a.holdout_manifest)
+                plots, truth, a.holdout_manifest, a.expected_manifest_sha256,
+                frozen=(held, freeze))
         else:
             plots = shared_observations(
                 {"model": plots}, NFI_KEY, "nfi_forest", "model_pred")["model"]
@@ -179,11 +188,15 @@ def main() -> None:
 
     if not covered.any():
         raise ValueError("no common NMD coverage")
+    if freeze:
+        for identity in freeze["baselines"].values():
+            verify_file_identity(identity)
     result = {
+        "execution_runtime": runtime_identity if freeze else None,
         "input_sha256": {
-            "nmd2023": sha256_file(a.nmd2023),
-            **({"nmd2018": sha256_file(a.nmd2018)} if a.nmd2018 else {}),
-            **({"model_per_plot": sha256_file(a.model_per_plot)} if a.model_per_plot else {}),
+            "nmd2023": freeze["baselines"]["NMD2023"]["sha256"] if freeze else sha256_file(a.nmd2023),
+            **({"nmd2018": freeze["baselines"]["NMD2018"]["sha256"] if freeze else sha256_file(a.nmd2018)} if a.nmd2018 else {}),
+            **({"model_per_plot": authenticated_dump_sha256 if freeze else sha256_file(a.model_per_plot)} if a.model_per_plot else {}),
         },
         "n_plots_compared": int(covered.sum()),
         "n_plots_total": int(len(plots)),

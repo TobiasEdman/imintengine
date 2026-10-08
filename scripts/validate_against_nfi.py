@@ -130,6 +130,10 @@ def derive_nfi_forest_class(row, *, dominant_frac: float = 0.7) -> int | None:
     *sumpskog* (swamp forest, class 5) is a site condition, not derivable from
     species, so it is deliberately not produced here.
     """
+    volumes = np.asarray([row[k] for k in (
+        "VolPine", "VolContorta", "VolSpruce", "VolBirch", "VolOtherDec")], dtype=float)
+    if not np.isfinite(volumes).all() or (volumes < 0).any():
+        raise ValueError("NFI species volumes must be finite and nonnegative")
     pine = float(row["VolPine"]) + float(row["VolContorta"])
     conifer = pine + float(row["VolSpruce"])
     decid = float(row["VolBirch"]) + float(row["VolOtherDec"])
@@ -493,14 +497,15 @@ def main() -> None:
                     help="feed markfukt as the 11th aux (for a wetness-aux "
                          "checkpoint); appends it to the canonical 10")
     ap.add_argument("--device", default=None)
+    ap.add_argument("--expected-manifest-sha256", help="SHA256 approved at go/no-go")
     args = ap.parse_args()
 
     import torch
 
     freeze = None
     if args.holdout_manifest:
-        index_df, freeze = load_frozen_holdout(args.holdout_manifest)
-        verify_evaluation_source(freeze)
+        index_df, freeze = load_frozen_holdout(args.holdout_manifest, args.expected_manifest_sha256)
+        runtime_identity = verify_evaluation_source(freeze)
         if args.cell not in freeze["cells"]:
             ap.error("--cell must name a frozen evaluation cell")
         config = freeze["cells"][args.cell]
@@ -510,7 +515,7 @@ def main() -> None:
             ap.error("truth threshold differs from frozen protocol")
         if sha256_file(args.checkpoint) != config["checkpoint"]["sha256"]:
             raise ValueError("checkpoint differs from frozen cell")
-        for record in freeze["inputs"] + list(freeze["tiles"].values()):
+        for record in freeze["tiles"].values():
             verify_file_identity(record)
         args.img_size = config["img_size"]
         args.num_classes = config["num_classes"]
@@ -601,6 +606,7 @@ def main() -> None:
         failure = exc
         results = exc.report
     results["_meta"] = {
+        **(runtime_identity if freeze else {}),
         "checkpoint": args.checkpoint, "img_size": args.img_size,
         "plots_in_crop": len(index_df), "plots_total": before,
         "cell": args.cell,

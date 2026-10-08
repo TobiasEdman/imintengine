@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from validate_against_nfi import accuracy_suite  # noqa: E402
 from imint.eval.fieldtruth import (  # noqa: E402
     shared_observations, load_frozen_holdout, restrict_to_frozen, verify_prediction_dump,
+    verify_evaluation_source,
 )
 
 # The 23-class unified vocabulary is 0..22; 28-class adds 23..27, which are
@@ -159,6 +160,7 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--holdout-manifest", type=Path,
                     help="verified NFI freeze; otherwise results are diagnostics")
+    ap.add_argument("--expected-manifest-sha256", help="SHA256 approved at go/no-go")
     args = ap.parse_args()
 
     nfi = load_dumps(args.dump_dir, "nfi-per-plot")
@@ -167,7 +169,8 @@ def main() -> int:
 
     freeze = None
     if args.holdout_manifest:
-        holdout, freeze = load_frozen_holdout(args.holdout_manifest)
+        holdout, freeze = load_frozen_holdout(args.holdout_manifest, args.expected_manifest_sha256)
+        verify_evaluation_source(freeze, environment="scoring")
         expected = set(freeze["cells"])
         if set(nfi) != expected:
             raise ValueError("NFI dump cells do not match the frozen evaluation")
@@ -191,6 +194,7 @@ def main() -> int:
 
     payload = {"schema": "ladder-fieldtruth-standings-v2",
                "holdout_manifest": str(args.holdout_manifest) if freeze else None,
+               "manifest_sha256": freeze["_manifest_sha256"] if freeze else None,
                "interpretation": {"nfi": "held-out" if freeze else "diagnostic",
                                   "lucas": "diagnostic"},
                "nfi": nfi_rows, "lucas_shared_vocab": lucas_shared,

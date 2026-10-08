@@ -31,10 +31,14 @@ A model winner means the highest observed overall accuracy on the common
 population. Statistical support is reported separately. The joint report
 uses the existing spatial-block bootstrap (50 km EPSG:3006 grid, 10,000
 draws, seed 20260818) and a paired sign-flip randomization over whole blocks.
+Assign each tract-year to the grid cell of its centroid in the complete
+frozen population. Bootstrap and sign-flip use that same assignment; NMD
+sampling retains each observation's original coordinates.
 Holm correction covers the complete model-model/model-NMD comparison family.
 The block test assumes model-label exchangeability within independent blocks;
-small block sets use exact enumeration, larger sets use 10,000 Monte Carlo
-draws with the plus-one correction. Plot-level McNemar is diagnostic only. Pair confidence intervals and
+the complete signed-sum distribution is computed by dynamic programming
+on integer block sums, with no Monte Carlo p-value floor. Plot-level McNemar
+is diagnostic only. Pair confidence intervals and
 equivalence checks are marginal, not simultaneous. A nonsignificant
 difference does not establish equivalence. SESOI is 0.02. Class supports,
 confusion matrices, paired differences and NMD coverage exclusions remain
@@ -55,14 +59,28 @@ the same observation can occur in a teacher's training tile.
    Verify tile membership and the recorded train/test row counts. Recover
    missing feature years only through an unambiguous observation/tile join
    to the teacher's source index; never infer a year from a tile name.
-2. Form the union of all teacher-training plot-years. Exclude that union
-   from the candidate NFI index across every tile. Different inventory
-   years remain different observations.
+2. Check each head's seed, raw training-row count and feature width against
+   its split/table. Require all eligible dense-label sidecars, and verify
+   every file in each model directory carries that head's SHA256 prefix.
+   Historical heads lack a split/feature digest and downstream checkpoints
+   lack a consumed-sidecar inventory. These consistency checks cannot
+   retrospectively prove the exact training lineage. Conservatively exclude
+   the union of **all seven recorded feature pools**, including old test
+   observations, from every candidate tile. Save this exclusion population
+   in `training.parquet`; report the actual recorded train-union separately.
+   Different inventory years remain different observations.
 3. Reject any campaign tile in a teacher's training list. Keep campaign and
    training roots disjoint; require exactly 475 campaign tile files.
 4. Require the promoted Tessera source, valid flags/arrays and current
    SAR prerequisites. Check every campaign tile, including unindexed tiles.
-   Record modality gaps. Require NFI year to equal spectral year.
+   Check spectral/Tessera/SAR/B08/rededge grid and frame shapes, then the
+   union of auxiliary channels declared by all 28 authenticated checkpoints.
+   Missing/malformed stored aux excludes the tile. Legitimate physical zeros
+   remain valid; partial markfukt NaNs are recorded. Native neutral fill for
+   absent 2016 SAR baselines and optional CROMA B01/B09 padding is recorded
+   for go/no-go; unsupported ERA5 checkpoint channels fail preparation.
+   Require NFI year to equal spectral year using the colocation resolver;
+   unknown tile years are excluded explicitly.
 5. Intersect native model crop support, choose the lexically first eligible
    tile per observation, and retain exactly one row per plot-year. Reject
    inconsistent field truth.
@@ -74,7 +92,9 @@ the same observation can occur in a teacher's training tile.
 The promotion producer uses a Counter and omits zero-valued
 `FLAG_ON_EMPTY`. The gate accepts an omitted value only together with
 successful completion, the expected source, complete cohort counts for
-`has_v1` and `stamped`, and no remaining v2/unreadable records.
+`has_v1` and `stamped`, explicit `has_v2_left=0`, and
+`promoted + already = cohort_count`. Missing error-only Counter keys mean
+zero; required producer counters cannot be absent.
 The per-tile audit independently rejects positive flags on invalid arrays.
 
 Raw NFI records and coordinates stay in the data environment. Return only
@@ -87,7 +107,8 @@ Capture the actual completed Kubernetes Job JSON using explicit context
 report through the data mount. Run `scripts/prepare_nfi_holdout.py --help`
 from the committed, reviewed source in the pinned evaluation environment.
 Supply the v4 candidate index, the teacher source index, seven-teacher root,
-checkpoint root, separate cohort/staging roots, job/report evidence,
+checkpoint root, `--distill-root /cephfs/distill`, separate cohort/staging
+roots, job/report evidence,
 NMD rasters, a digest-pinned runtime image and a new output directory.
 
 Use the existing `docker/ladder-crop-distill` image rebuilt at the reviewed
@@ -97,7 +118,15 @@ The baked runtime manifest verifies the complete source tree, dependency
 identities and interpreter without requiring Git in the container. An image
 built before this change cannot be substituted. The image build exercises
 the preparation imports and the sealed-source verifier in the actual CPU
-environment without PyTorch or field data.
+environment without PyTorch or field data. Preparation invokes a CPU-only
+metadata child under `/opt/venvs/model/bin/python`: `weights_only=True`,
+`map_location="meta"`, authenticated private checkpoint copies, no model
+construction or forward. Mount a writable Pod-private `TMPDIR` large enough
+for one checkpoint; keep source/runtime and input data mounts read-only.
+The model-image smoke separately exercises Rasterio with a two-pixel
+synthetic raster. Neither smoke samples real NMD or performs inference.
+Capture the actual Pod `imageID` alongside the requested digest; the runtime
+manifest checks content, but cannot independently discover its OCI identity.
 
 The command performs no inference or NMD sampling. It refuses altered
 source or the wrong interpreter, incomplete promotion, ambiguous years, staging leakage and
@@ -108,9 +137,10 @@ the filenames match: historical dumps lack the required provenance.
 Present for go/no-go:
 
 - Terminal job/report evidence and zero invalid positive Tessera flags.
-- Plot-year overlap = 0 against the union of the seven teachers; campaign
+- Plot-year overlap = 0 against all seven teacher feature pools; campaign
   tiles in training = 0.
-- Unique held-out count, class/year support, modality and border exclusions.
+- Unique held-out count, class/year support, modality and border exclusions,
+  native neutral-fill gaps and historical provenance limitations.
 - Manifest digest, checkpoint identities, runtime image and code identity.
 - CPU regression results, in-environment preparation verification, Claude's
   SHA-bound review and the bounded execution plan.
@@ -118,16 +148,34 @@ Present for go/no-go:
 ## Execution only after go/no-go
 
 Each cell runs `validate_against_nfi.py --holdout-manifest MANIFEST --cell CELL`
-with its recorded checkpoint and a per-plot output. Native crop geometry is
+with `--expected-manifest-sha256 APPROVED_SHA256`, its recorded checkpoint
+and a per-plot output. Supply the externally approved digest to every frozen
+consumer (validate, score, compare and standings); never derive approval from
+the mutable manifest being consumed. Incomplete source/28-cell/protocol
+rosters fail closed. Every frozen consumer verifies the full sealed source,
+dependencies and its interpreter against the preparation runtime.
+Native crop geometry is
 per tile. Authenticated input readers check the exact checkpoint/tile bytes
 consumed. The sidecar `.parquet.meta.json` binds the prediction dump to its
-cell, checkpoint and freeze digest. A changed input is a failure.
+cell, checkpoint, freeze digest, source payload, source commit and runtime
+identity. A changed input is a failure.
 
-After all cells finish, `score_nfi_holdout.py` verifies every expected dump,
+After all cells finish, run `score_nfi_holdout.py` with
+`/opt/venvs/model/bin/python`, which contains the pinned Rasterio sampler.
+This remains CPU scoring; the separate preparation/scoring interpreter
+does not include Rasterio. The command verifies every expected dump,
 samples the frozen NMD raster(s), and applies one common coverage mask to
 every model and baseline. No source gets its own easier denominator.
 `ladder_fieldtruth_standings.py` remains a diagnostic convenience unless
-an NFI freeze is supplied; LUCAS is always marked diagnostic there.
+an NFI freeze is supplied; it uses the verified scoring interpreter.
+LUCAS is always marked diagnostic there.
+
+Observation-level independence is established against the recorded teacher
+feature pools. It is not a claim of geographic independence from every
+historical training tile. NMD2023 is a fixed reference against observations
+from several years, so temporal mismatch remains a limitation. Promoted
+Tessera v2 is not proven prediction-equivalent to the historical v1 inputs;
+the comparison ranks these stored checkpoints under the new input protocol.
 
 The separate 28-class tile benchmark is not the NFI field-truth answer.
 Its resume fingerprint binds tile/label bytes, scoring source and model

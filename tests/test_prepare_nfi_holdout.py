@@ -15,7 +15,7 @@ from imint.eval.fieldtruth import resolve_observation_year
 def promotion():
     return ({"metadata": {"name": "tessera-promote-v2"},
              "status": {"conditions": [{"type": "Complete", "status": "True"}]}},
-            {"source": "geotessera-0.10.2",
+            {"source": "geotessera-0.10.2", "states": {"promoted": 7882},
              "verify": {"has_v1": 7882, "stamped": 7882, "has_v2_left": 0}})
 
 
@@ -87,10 +87,10 @@ def test_teacher_training_count_mismatch_fails():
 
 def test_empty_tessera_positive_flag_fails_on_actual_npz(tmp_path):
     path = tmp_path / "tile.npz"
-    np.savez(path, spectral=np.ones((6, 8, 8)), tessera=np.zeros((128, 8, 8)),
+    np.savez(path, spectral=np.ones((24, 8, 8)), tessera=np.zeros((128, 8, 8)),
              has_tessera=1, tessera_source="geotessera-0.10.2",
              s1_vv_vh=np.ones((2, 8, 8)), s1_enrich_v=4, has_s1=1,
-             b08=np.ones((8, 8)), rededge=np.ones((3, 8, 8)), year=2024)
+             b08=np.ones((4, 8, 8)), rededge=np.ones((12, 8, 8)), year=2024)
     with pytest.raises(ValueError, match="positive has_tessera"):
         prep.tile_readiness(path)
 
@@ -135,3 +135,53 @@ print('CPU preparation imports OK')
         capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert 'CPU preparation imports OK' in result.stdout
+
+
+def test_promotion_requires_producer_structure_and_accepts_resume():
+    job, report = promotion()
+    report["states"] = {"already": 7882}
+    report["campaign_stamped"] = 0
+    prep.check_promotion(job, report, 7882)
+    for key in ("has_v2_left", "has_v1", "stamped"):
+        broken = copy.deepcopy(report)
+        del broken["verify"][key]
+        with pytest.raises(ValueError, match="required"):
+            prep.check_promotion(job, broken, 7882)
+    broken = copy.deepcopy(report)
+    del broken["states"]
+    with pytest.raises(ValueError, match="counter objects"):
+        prep.check_promotion(job, broken, 7882)
+
+
+def test_promotion_counters_cannot_be_incomplete_or_boolean():
+    job, report = promotion()
+    report["states"]["promoted"] = 7881
+    with pytest.raises(ValueError, match="clean v2"):
+        prep.check_promotion(job, report, 7882)
+    report["states"]["promoted"] = True
+    with pytest.raises(ValueError, match="nonnegative integers"):
+        prep.check_promotion(job, report, 7882)
+
+
+def test_tessera_validation_precedes_unrelated_modality_exclusions(tmp_path):
+    path = tmp_path / "bad.npz"
+    np.savez(path, tessera=np.zeros((128, 8, 8)), has_tessera=1,
+             tessera_source="geotessera-0.10.2")
+    with pytest.raises(ValueError, match="positive has_tessera"):
+        prep.tile_readiness(path)
+    np.savez(path, has_tessera=1)
+    with pytest.raises(ValueError, match="without an array"):
+        prep.tile_readiness(path)
+
+
+def test_readiness_uses_colocation_date_year_and_excludes_unknown(tmp_path):
+    path = tmp_path / "tile.npz"
+    data = dict(spectral=np.ones((24, 8, 8)), tessera=np.ones((128, 8, 8)),
+                has_tessera=1, tessera_source="geotessera-0.10.2",
+                s1_vv_vh=np.ones((2, 8, 8)), s1_enrich_v=4, has_s1=1,
+                b08=np.ones((4, 8, 8)), rededge=np.ones((12, 8, 8)))
+    np.savez(path, **data, dates=np.array(["2023-10-01", "2024-05-01", "2024-07-01"]))
+    meta, reason = prep.tile_readiness(path)
+    assert reason is None and meta["year"] == 2024
+    np.savez(path, **data)
+    assert prep.tile_readiness(path) == ({}, "unknown_spectral_year")
