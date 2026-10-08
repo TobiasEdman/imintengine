@@ -38,6 +38,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.eval.metrics import auroc_aupr
+from imint.training.unified_dataset import TilePrerequisiteError
+from imint.eval.fieldtruth import (
+    NoScoredObservations, load_frozen_holdout, verify_file_identity, sha256_file,
+    verify_evaluation_source,
+)
 
 # Unified-schema forest classes (imint/training/unified_schema.py).
 TALLSKOG, GRANSKOG, LOVSKOG, BLANDSKOG = 1, 2, 3, 4
@@ -185,9 +190,7 @@ def nfi_is_mature(row) -> int:
     return int(m is not None and not pd.isna(m) and float(m) >= MATURE_FROM_CLASS)
 
 
-# Plot identifiers carried into a per-plot dump when requested. TractID+PlotID
-# uniquely key an NFI plot, so a downstream consumer can re-join to the full
-# nfi_plots table for coordinates even if Easting/Northing are absent here.
+# Observation identity includes Year; plot identity alone repeats across surveys.
 _PER_PLOT_ID_COLS = ("TractID", "PlotID", "Year", "Easting", "Northing")
 
 
@@ -198,6 +201,7 @@ def score_against_nfi(
     num_classes: int = 23,
     dominant_frac: float = 0.7,
     per_plot_sink: list | None = None,
+    skip_unscoreable: bool = False,
 ) -> dict:
     """Sample predictions at plot pixels and score forest-type agreement.
 
@@ -223,9 +227,20 @@ def score_against_nfi(
     mature: list[int] = []
     probs_at_plot: list[np.ndarray] = []
 
+    skipped: list[dict] = []
     for tile_name, grp in index_df.groupby("tile_name", sort=False):
         tile_path = grp["tile_path"].iloc[0] if "tile_path" in grp else tile_name
-        class_map, probs = predict_fn(tile_path)
+        try:
+            class_map, probs = predict_fn(tile_path)
+        except TilePrerequisiteError as exc:
+            # See validate_against_lucas: only the eligible tile-prerequisite
+            # error is caught, so model and configuration failures still
+            # propagate rather than being recorded as coverage gaps.
+            if not skip_unscoreable:
+                raise
+            skipped.append({"tile": str(tile_name), "plots": int(len(grp)),
+                            "reason": repr(exc)[:200]})
+            continue
         for _, r in grp.iterrows():
             rr, cc = int(r["row"]), int(r["col"])
             pc = int(class_map[rr, cc])
@@ -246,6 +261,15 @@ def score_against_nfi(
                 rec.update({f"p{k}": float(probs[k, rr, cc]) for k in (1, 2, 3, 4)})
                 per_plot_sink.append(rec)
 
+    if skipped:
+        print(f"skipped {len(skipped)} unscoreable tile(s), "
+              f"{sum(s['plots'] for s in skipped)} plot(s)", flush=True)
+    if not pred_class:
+        # Every tile was skipped. Returning here would hand the CLI NaN
+        # headline metrics over n_plots=0 and write them out as a successful
+        # result — a run that measured nothing must not look like one that
+        # measured zero.
+        raise NoScoredObservations("plot", skipped)
     pred = np.array(pred_class)
     truth = np.array([c if c is not None else -1 for c in nfi_class])
     P = np.vstack(probs_at_plot) if probs_at_plot else np.zeros((0, num_classes))
@@ -272,6 +296,7 @@ def score_against_nfi(
                 per_class_auroc[FOREST_NAMES[c]] = {"auroc": round(a, 4), "aupr": round(p, 4)}
 
     return {
+        "skipped_tiles": skipped,
         "n_plots": int(len(pred)),
         "n_forest": n_forest,
         "n_mature": int(np.array(mature).sum()),
@@ -286,7 +311,8 @@ def score_against_nfi(
 
 
 def make_model_predict_fn(checkpoint: str, device, img_size: int,
-                          aux_channel_names=None, backbone_name=None):
+                          aux_channel_names=None, backbone_name=None, *,
+                          checkpoint_identity=None, tile_identities=None):
     """Real ``predict_fn`` for a UNIFIED-format checkpoint (v8+, 10-aux).
 
     Reuses ``inference_comparison.{load_model, run_inference}`` — the same
@@ -315,14 +341,26 @@ def make_model_predict_fn(checkpoint: str, device, img_size: int,
     # Thread the runtime img_size so the FM families (clay/croma — no
     # pos_embed, minimal config) build their head at the EXACT resolution
     # inference feeds (grid_size + PSP pool count), not a 224 default.
+    checkpoint_kwargs = {}
+    if checkpoint_identity is not None:
+        checkpoint_kwargs = {
+            "expected_checkpoint_sha256": checkpoint_identity["sha256"],
+            "expected_checkpoint_size": checkpoint_identity["bytes"],
+        }
     model, epoch, miou, model_img_size = infcmp.load_model(
-        checkpoint, device, backbone_name=backbone_name, img_size=img_size)
+        checkpoint, device, backbone_name=backbone_name, img_size=img_size,
+        **checkpoint_kwargs)
     print(f"  [load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size}")
 
     def predict_fn(tile_path):
+        tile_kwargs = {}
+        if tile_identities is not None:
+            identity = tile_identities[str(Path(tile_path).resolve())]
+            tile_kwargs = {"expected_tile_sha256": identity["sha256"],
+                           "expected_tile_size": identity["bytes"]}
         probs, _raw_spectral, _raw_aux = infcmp.run_inference(
             model, tile_path, device, img_size=img_size, return_probs=True,
-            aux_channel_names=aux_channel_names,
+            aux_channel_names=aux_channel_names, **tile_kwargs,
         )  # probs: (C, cs, cs)
         return probs.argmax(0).astype(np.int64), probs
 
@@ -421,8 +459,13 @@ def crop_offset(tile_h: int, img_size: int) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--plot-index", required=True, help="parquet from nfi_tile_coverage.py")
+    ap.add_argument("--plot-index", help="parquet from nfi_tile_coverage.py")
+    ap.add_argument("--holdout-manifest", type=Path)
+    ap.add_argument("--cell", help="cell named in the frozen manifest")
     ap.add_argument("--out", default="docs/data/nfi-validation.json")
+    ap.add_argument("--skip-unscoreable", action="store_true",
+                    help="record and skip tiles the dataset refuses (missing "
+                         "S1 composite) instead of failing the whole run")
     ap.add_argument("--dump-per-plot", default=None,
                     help="parquet path: one row per scored plot (identifiers + "
                          "NFI forest truth + model prediction) for an external "
@@ -454,7 +497,28 @@ def main() -> None:
 
     import torch
 
-    index_df = pd.read_parquet(args.plot_index)
+    freeze = None
+    if args.holdout_manifest:
+        index_df, freeze = load_frozen_holdout(args.holdout_manifest)
+        verify_evaluation_source(freeze)
+        if args.cell not in freeze["cells"]:
+            ap.error("--cell must name a frozen evaluation cell")
+        config = freeze["cells"][args.cell]
+        if args.use_fraction_head or args.enable_markfukt or args.skip_unscoreable:
+            ap.error("frozen primary evaluation requires its class-head/common-support protocol")
+        if args.dominant_frac != freeze["protocol"]["truth_dominant_fraction"]:
+            ap.error("truth threshold differs from frozen protocol")
+        if sha256_file(args.checkpoint) != config["checkpoint"]["sha256"]:
+            raise ValueError("checkpoint differs from frozen cell")
+        for record in freeze["inputs"] + list(freeze["tiles"].values()):
+            verify_file_identity(record)
+        args.img_size = config["img_size"]
+        args.num_classes = config["num_classes"]
+        args.backbone_name = config["backbone"]
+    else:
+        if not args.plot_index:
+            ap.error("--plot-index or --holdout-manifest is required")
+        index_df = pd.read_parquet(args.plot_index)
     print(f"plot index: {len(index_df):,} co-located plots on "
           f"{index_df['tile_name'].nunique()} tiles")
 
@@ -463,6 +527,8 @@ def main() -> None:
     # exists so a stale row can't abort the whole run (FileNotFoundError).
     import os
     exists = index_df["tile_path"].map(os.path.exists)
+    if freeze and not exists.all():
+        raise ValueError("frozen tile disappeared")
     if not exists.all():
         gone = int((~exists).sum())
         print(f"dropping {gone} plots on tiles no longer in the dataset "
@@ -472,20 +538,30 @@ def main() -> None:
     # run_inference centre-crops to img_size; remap plot (row,col) into crop
     # coords and drop plots in the discarded border (else they'd index the
     # wrong pixel / fall outside the returned array).
-    sample_path = index_df["tile_path"].iloc[0]
-    tile_h = int(np.load(sample_path, allow_pickle=True)["spectral"].shape[-1])
-    off = crop_offset(tile_h, args.img_size)
-    cs = min(args.img_size, tile_h)
+    if index_df.empty:
+        raise NoScoredObservations("plot", [])
     before = len(index_df)
-    index_df = index_df[
-        (index_df["row"] >= off) & (index_df["row"] < off + cs)
-        & (index_df["col"] >= off) & (index_df["col"] < off + cs)
-    ].copy()
-    index_df["row"] -= off
-    index_df["col"] -= off
-    print(f"crop offset={off} (tile {tile_h}→{cs}); kept {len(index_df)}/{before} "
-          f"plots in-crop ({before - len(index_df)} border-dropped)")
+    cropped = []
+    for tile_name, group in index_df.groupby("tile_name", sort=False):
+        if freeze:
+            geometry = freeze["tiles"][str(tile_name)]["geometry"]
+            height, width = geometry["height"], geometry["width"]
+        else:
+            with np.load(group["tile_path"].iloc[0], allow_pickle=False) as data:
+                height, width = data["spectral"].shape[-2:]
+        size = min(args.img_size, height, width)
+        y0, x0 = (height - size) // 2, (width - size) // 2
+        keep = (group["row"].between(y0, y0 + size - 1)
+                & group["col"].between(x0, x0 + size - 1))
+        group = group.loc[keep].copy()
+        group["row"] -= y0
+        group["col"] -= x0
+        cropped.append(group)
+    index_df = pd.concat(cropped)
+    print(f"kept {len(index_df)}/{before} plots in their per-tile crop")
 
+    if freeze and len(index_df) != before:
+        raise ValueError("frozen observation fell outside the model crop")
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -506,15 +582,30 @@ def main() -> None:
     else:
         predict_fn = make_model_predict_fn(args.checkpoint, device, args.img_size,
                                            aux_channel_names=aux_names,
-                                           backbone_name=args.backbone_name)
+                                           backbone_name=args.backbone_name,
+                                           **({
+                                               "checkpoint_identity": config["checkpoint"],
+                                               "tile_identities": {
+                                                   r["path"]: r for r in freeze["tiles"].values()
+                                               },
+                                           } if freeze else {}))
 
     per_plot: list | None = [] if args.dump_per_plot else None
-    results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes,
-                                dominant_frac=args.dominant_frac,
-                                per_plot_sink=per_plot)
+    failure = None
+    try:
+        results = score_against_nfi(index_df, predict_fn, num_classes=args.num_classes,
+                                    dominant_frac=args.dominant_frac,
+                                    per_plot_sink=per_plot,
+                                    skip_unscoreable=args.skip_unscoreable)
+    except NoScoredObservations as exc:
+        failure = exc
+        results = exc.report
     results["_meta"] = {
         "checkpoint": args.checkpoint, "img_size": args.img_size,
         "plots_in_crop": len(index_df), "plots_total": before,
+        "cell": args.cell,
+        "holdout_manifest_sha256": freeze["_manifest_sha256"] if freeze else None,
+        "checkpoint_sha256": config["checkpoint"]["sha256"] if freeze else None,
     }
     print(json.dumps(results, indent=2, ensure_ascii=False))
 
@@ -528,6 +619,12 @@ def main() -> None:
         pp.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(per_plot).to_parquet(pp, index=False)
         print(f"wrote {pp} ({len(per_plot)} plots)")
+        metadata = dict(results["_meta"], prediction_sha256=sha256_file(pp),
+                        status="success" if failure is None else "no_scored_observations")
+        pp.with_suffix(pp.suffix + ".meta.json").write_text(json.dumps(metadata, indent=2))
+
+    if failure is not None:
+        raise failure
 
 
 if __name__ == "__main__":

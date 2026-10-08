@@ -862,6 +862,17 @@ _FOREST_CLASSES = frozenset({1, 2, 3, 4, 5})
 _LABEL_SIDECAR_KEYS = ("label", "parcel_area_ha", "nmd_area_ha")
 
 
+class TilePrerequisiteError(KeyError):
+    """A tile lacks a precondition this model needs, and no run can fix it.
+
+    Subclasses KeyError so existing handlers keep working. It exists so a
+    caller can skip a tile it cannot read WITHOUT also swallowing model,
+    configuration or output-contract failures — catching bare KeyError there
+    would turn an aux-channel mismatch into a "coverage gap" for every tile
+    and return an empty result that looks like a successful run.
+    """
+
+
 class _LabelOverlay:
     """Read-only overlay of a label sidecar npz over a source tile npz.
 
@@ -2016,7 +2027,7 @@ class UnifiedDataset(Dataset):
         if needs_sar:
             s1_ver = int(data.get("s1_enrich_v", 0))
             if s1_ver != S1_ENRICH_VERSION:
-                raise KeyError(
+                raise TilePrerequisiteError(
                     f"tile requires s1_enrich_v=={S1_ENRICH_VERSION} RTC γ⁰ season composite for "
                     f"model_keys={sorted(set(self.model_keys) & {'croma_base', 'terramind_v1_base'})}"
                     f" but found s1_enrich_v={s1_ver}. Re-run the S1 season "
