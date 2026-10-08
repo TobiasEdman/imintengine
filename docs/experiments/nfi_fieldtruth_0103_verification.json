@@ -32,7 +32,10 @@
   },
   "external_review": {
     "reviewer": "Claude",
-    "status": "pending replacement PR review"
+    "reviewed_head": "307678d71200a8512c68a8efaf4709ed65caa432",
+    "external_verdict": "PASS with three P2 findings",
+    "internal_cli_verdict": "NEEDS CHANGES",
+    "current_status": "Fixes committed; exact new head requires Claude re-review"
   },
   "readiness": {
     "tessera_promotion": "active=1, ready=1 at latest cluster inspection",
@@ -65,5 +68,28 @@
     },
     "image_build_run": "https://github.com/TobiasEdman/imintengine/actions/runs/37785634741",
     "runtime_image": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:d25aa72c2205453d211f31e8fe1491f0fe6c5686c4624ddf32caa514cb4888a5"
+  },
+  "review_corrections": {
+    "implementation_commit": "a9d1ad983df9002e432b1ff0e9fc70cdb38141c1",
+    "verified_at": "2026-10-08T14:28:07.393197+00:00",
+    "tests": "328 passed in 62.97s",
+    "internal_review": "Three bounded independent reviews PASS after corrections",
+    "source_sha256": {
+      "imint/eval/fieldtruth.py": "e329bcd44c8695c1730336c20231867f0206c049977baa50b6651ed6ce92730d",
+      "scripts/prepare_nfi_holdout.py": "b881d653b48e39b9c7c719564d462b82e617d77f5ae4bdf79ed0310b3624c227",
+      "scripts/nfi_checkpoint_inputs.py": "16d0061174544241b3f395d6ed42ddace9af00004800e035b0d0e947040b0a46",
+      "scripts/score_nfi_holdout.py": "5e6fa38303b2234e9d33f10ecf48a2d328cb24e943a77607d59e7b5dffca20f5",
+      "scripts/compare_nmd2023_nfi.py": "329891bdec5106cb256fb39fec64d7cf15aa78483917eb71147d7426fcc7d075",
+      "scripts/validate_against_nfi.py": "7207155f89e4971039dc46438ae32339ceff7cb2678aab5579fc12d11840c1d5",
+      "scripts/inference_comparison.py": "a6ea2ea9ee3d3494b8583c88dfd94781c51b91a96820fe9276a9f0937dfa54ec"
+    },
+    "additional_smoke": "Two synthetic GeoTIFF pixels through actual Rasterio sampler; PASS locally",
+    "runtime_image": "New image build required for this source; prior digest is insufficient",
+    "protocol_change": "Conservatively exclude all recorded teacher feature plot-years; old heads lack exact split digests"
+  },
+  "cluster_identity_audit": {
+    "artifact": "nfi_fieldtruth_0103_identity_audit.json",
+    "status": "Complete; aggregate counts and actual Pod imageID verified",
+    "input_freeze": false
   }
 }
