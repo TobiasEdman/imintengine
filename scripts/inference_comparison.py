@@ -419,8 +419,8 @@ def checkpoint_aux_count(config, state_dict):
     if len(counts) > 1:
         raise ValueError("checkpoint has contradictory auxiliary channel widths")
     count = next(iter(counts)) if counts else config.get("n_aux_channels", 11)
-    if type(count) is not int or count <= 0:
-        raise ValueError("checkpoint auxiliary channel count must be positive")
+    if type(count) is not int or count < 0:
+        raise ValueError("checkpoint auxiliary channel count must be nonnegative")
     return count, "state_dict" if counts else "config_or_default"
 
 
@@ -429,7 +429,7 @@ def inference_aux_names(config, n_aux_channels=None):
     from imint.training.unified_dataset import AUX_CHANNEL_NAMES, AUX_NORM
 
     recorded = config.get("enabled_aux_names")
-    names = recorded if recorded else AUX_CHANNEL_NAMES
+    names = recorded if recorded else ([] if n_aux_channels == 0 else AUX_CHANNEL_NAMES)
     if (not isinstance(names, (list, tuple))
             or any(not isinstance(n, str) or n not in AUX_NORM for n in names)
             or len(set(names)) != len(names)):
@@ -1018,7 +1018,9 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
             arr = np.full((crop_sz, crop_sz), fill, dtype=np.float32)
         aux_arrays.append(normalize_aux_channel(ch_name, arr))
 
-    aux = torch.from_numpy(np.stack(aux_arrays, axis=0)).unsqueeze(0).to(device)
+    aux_stack = (np.stack(aux_arrays, axis=0) if aux_arrays
+                 else np.empty((0, crop_sz, crop_sz), dtype=np.float32))
+    aux = torch.from_numpy(aux_stack).unsqueeze(0).to(device)
 
     temporal_coords = None
     location_coords = None

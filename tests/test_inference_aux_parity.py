@@ -216,3 +216,17 @@ def test_run_inference_refuses_name_count_conv_mismatch(monkeypatch) -> None:
         lambda *a, **k: pytest.fail("must refuse before building inputs"))
     with pytest.raises(ValueError, match="aux conv takes"):
         infcmp.run_inference(model, "unused.npz", "cpu", img_size=TILE)
+
+
+def test_no_aux_model_builds_empty_stack(monkeypatch, tmp_path):
+    model = _Model(None, 0)
+    assert _captured_aux_names(monkeypatch, model) == []
+    monkeypatch.undo()
+    stack = _aux_stack(_tile(tmp_path), [])
+    assert stack.shape == (0, TILE, TILE)
+
+
+def test_no_aux_model_rejects_nonempty_names(monkeypatch):
+    model = _Model(["dem"], 0)
+    with pytest.raises(ValueError, match="aux conv takes"):
+        _captured_aux_names(monkeypatch, model)

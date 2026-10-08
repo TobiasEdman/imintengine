@@ -93,3 +93,18 @@ def test_mandatory_arrays_must_share_grid_and_frame_count(tmp_path, key, shape):
     data[key] = np.ones(shape)
     np.savez(path, **data)
     assert tile_readiness(path)[1] == "mandatory_input_shape:" + key
+
+
+def test_zero_aux_checkpoint_has_empty_contract(tmp_path):
+    path = tmp_path / "no_aux.pt"
+    torch.save({"config": {"n_aux_channels": 0}}, path)
+    result = checkpoint_inputs({"tessera_r1": {"checkpoint": file_identity(path)}})
+    contract = result["cells"]["tessera_r1"]
+    assert contract["n_aux_channels"] == 0
+    assert contract["enabled_aux_names"] == []
+
+
+@pytest.mark.parametrize("count", [-1, True, 1.5])
+def test_invalid_aux_count_rejected(count):
+    with pytest.raises(ValueError, match="nonnegative"):
+        checkpoint_aux_count({"n_aux_channels": count}, {})
