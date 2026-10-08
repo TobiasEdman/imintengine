@@ -5,7 +5,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: nfi0103-exposure-audit-v1
+  name: nfi0103-exposure-audit-v2
   namespace: prithvi-training-default
   labels:
     app: nfi-fieldtruth-evaluation
@@ -63,7 +63,8 @@ spec:
 
           index = read_input("/cephfs/nfi/nfi_index_v4_2026-09-30.parquet", "parquet")
           source = read_input("/cephfs/nfi/nfi_index_unified_v2_512.parquet", "parquet")
-          staging = {p.stem for p in Path("/cephfs/unified_v2_512_nfi2024_staging").glob("*.npz")}
+          staging = {p.stem for p in Path("/cephfs/unified_v2_512_nfi2024_staging").glob("*.npz")
+                     if not p.name.endswith(".tmp.npz")}
           assert len(staging) == 475, "campaign must have exactly 475 evaluation tiles"
           teachers, training, exposure = {}, [], []
           for model in DISTILL:
