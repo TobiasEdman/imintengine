@@ -1046,24 +1046,16 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
 
         doy = data.get("doy")
         if doy is not None:
-            from imint.training.sampler import _sweref99_to_wgs84
-            year = int(data.get("year", data.get("lpis_year", 2022)))
-            tc = np.zeros((n_frames, 2), dtype=np.float32)
-            tc[:, 0] = float(year)
-            if not single_frame:
-                # Multitemporal: per-frame DOY, as trained.
-                tc[:len(doy), 1] = doy[:n_frames].astype(np.float32)
-            # Single-frame mirrors training's non-multitemporal path, which
-            # builds coords with doy=None → [[year, 0]] (unified_dataset
-            # ~L582/L834). Leaving tc[:,1]=0 here matches it exactly.
-            temporal_coords = torch.from_numpy(tc).unsqueeze(0).to(device)
-
-            easting = float(data.get("easting", 500_000))
-            northing = float(data.get("northing", 6_500_000))
-            lat, lon = _sweref99_to_wgs84(easting, northing)
-            location_coords = torch.from_numpy(
-                np.array([[lat, lon]], dtype=np.float32)
-            ).to(device)
+            from imint.training.unified_dataset import UnifiedDataset
+            # Use training's resolver and prior-autumn convention. Campaign
+            # tiles carry dates without year/lpis_year; never invent 2022.
+            # A one-frame checkpoint trains with DOY=None, even when the
+            # source tile already contains only six spectral bands.
+            frame_doy = (np.asarray(doy).reshape(-1)[:n_frames].astype(np.int32)
+                         if n_frames > 1 else None)
+            tc, lc = UnifiedDataset._build_coords(data, frame_doy, n_frames)
+            temporal_coords = tc.unsqueeze(0).to(device)
+            location_coords = lc.unsqueeze(0).to(device)
 
     return {
         "img5d": img5d, "aux": aux, "batch": batch, "family": family,

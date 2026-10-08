@@ -174,19 +174,26 @@ def test_tessera_validation_precedes_unrelated_modality_exclusions(tmp_path):
         prep.tile_readiness(path)
 
 
-def test_readiness_excludes_model_year_fallback_and_unknown(tmp_path):
+def test_readiness_resolves_dates_without_model_year_fallback(tmp_path):
     path = tmp_path / "tile.npz"
     data = dict(spectral=np.ones((24, 8, 8)), tessera=np.ones((128, 8, 8)),
                 has_tessera=1, tessera_source="geotessera-0.10.2",
                 s1_vv_vh=np.ones((2, 8, 8)), s1_enrich_v=4, has_s1=1,
-                b08=np.ones((4, 8, 8)), rededge=np.ones((12, 8, 8)))
-    np.savez(path, **data, dates=np.array(["2023-10-01", "2024-05-01", "2024-07-01"]))
-    assert prep.tile_readiness(path) == ({}, "missing_explicit_model_year")
-    np.savez(path, **data, year=2024, easting=500000., northing=6500000., doy=np.array([280,150,180,210]))
+                b08=np.ones((4, 8, 8)), rededge=np.ones((12, 8, 8)),
+                easting=500000., northing=6500000., doy=np.array([280,150,180,210]))
+    dates=np.array(["2023-10-01", "2024-05-01", "2024-07-01", "2024-08-01"])
+    np.savez(path, **data, dates=dates)
+    meta, reason = prep.tile_readiness(path)
+    assert reason is None and meta["year"] == 2024 and meta["year_source"] == "dates"
+    np.savez(path, **data, year=2024)
     meta, reason = prep.tile_readiness(path)
     assert reason is None and meta["year"] == 2024 and meta["year_source"] == "year"
     np.savez(path, **data)
     assert prep.tile_readiness(path) == ({}, "unknown_spectral_year")
+    np.savez(path, **data, year=2022, dates=dates)
+    assert prep.tile_readiness(path)[1] == "conflicting_or_invalid_spectral_year"
+    np.savez(path, **data, year=2024, lpis_year=2024.5)
+    assert prep.tile_readiness(path)[1] == "invalid_model_metadata:lpis_year"
 
 
 def test_readiness_rejects_missing_location_or_frame_metadata(tmp_path):

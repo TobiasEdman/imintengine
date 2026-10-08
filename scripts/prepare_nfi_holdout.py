@@ -28,7 +28,7 @@ from imint.eval.fieldtruth import (
 )
 from build_pinned_plot_set import npz_key_names, npz_version_ok
 from gen_ladder_manifests import DISTILL
-from imint.training.nfi_colocate import tile_year
+from imint.training.tile_time import resolve_tile_year
 from scripts.crop_distill_provenance import (
     verify_runtime, snapshot_tree, tree_payload_sha256,
 )
@@ -167,19 +167,21 @@ def tile_readiness(path: Path) -> tuple[dict, str | None]:
         for name in ("b08", "rededge"):
             if not np.isfinite(data[name]).all():
                 return {}, "mandatory_input_nonfinite:" + name
-        year = tile_year(data)
+        explicit_year_keys = [key for key in ("year", "lpis_year") if key in data]
+        for key in [*explicit_year_keys, "easting", "northing"]:
+            if (key not in data or data[key].shape != ()
+                    or data[key].dtype.kind not in "iuf"
+                    or not np.isfinite(data[key])):
+                return {}, "invalid_model_metadata:" + key
+            if key in explicit_year_keys and not float(data[key]).is_integer():
+                return {}, "invalid_model_metadata:" + key
+        try:
+            year = resolve_tile_year(data)
+        except (TypeError, ValueError):
+            return {}, "conflicting_or_invalid_spectral_year"
         if year is None:
             return {}, "unknown_spectral_year"
-        # Existing inference uses explicit year/lpis_year and otherwise 2022.
-        # Do not admit date-only tiles under a different model-time value.
-        year_source = next((key for key in ("year", "lpis_year") if key in data), None)
-        if year_source is None:
-            return {}, "missing_explicit_model_year"
-        for key in (year_source, "easting", "northing"):
-            if key not in data or data[key].shape != () or not np.isfinite(data[key]):
-                return {}, "invalid_model_metadata:" + key
-        if float(data[year_source]) != year:
-            return {}, "invalid_model_metadata:" + year_source
+        year_source = explicit_year_keys[0] if explicit_year_keys else "dates"
         if ("doy" not in data or data["doy"].shape != (4,)
                 or not np.isfinite(data["doy"]).all()
                 or not ((data["doy"] >= 0) & (data["doy"] <= 366)).all()):

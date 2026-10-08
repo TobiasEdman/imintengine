@@ -2,8 +2,8 @@
 
 Owner: Codex, branch `agent/te/codex/eval-nfi-fieldtruth`.
 Reviewer: Claude. This PR replaces #65, #62 and #63 after review; those PRs
-remain open until the replacement is reviewed. No changes are pushed to
-their author branches.
+were closed after Claude review. No changes were pushed to their author
+branches.
 
 ## Execution boundary approved by Tobias, 2026-10-08
 
@@ -50,7 +50,15 @@ older models were trained with earlier inputs. The result answers which
 available checkpoint performs best under this recorded evaluation protocol,
 not whether a single architectural change caused a difference.
 
-The default primary population includes all eligible held-out observations
+Tobias withdrew the 2024-only scope on 2026-10-08 and requested evenly
+distributed inventory years. The current candidate audit is dominated by
+2024 (2,212 of 2,354 independent plot-years before modality/crop checks).
+It is not the final study population. Target years and per-year counts need
+to be set before a balanced selection and any additional fetch campaign;
+no new fetch is authorized by this protocol. Do not freeze the current
+unbalanced candidate population as the final evaluation.
+
+The current selector can include all eligible held-out observations
 (`--population all`). Every row records `tile_role`; report descriptive
 accuracy and confusion matrices separately for campaign and cohort tiles.
 Cohort tiles may carry the exact NMD2023 targets seen during segmentation
@@ -58,8 +66,9 @@ training. Their NFI measurements remain held out, but comparison with NMD
 there measures agreement with independent field truth on familiar imagery
 and label locations. This dependence must be stated alongside the result.
 `--population campaign` selects only eligible campaign observations before
-freezing if Tobias chooses that narrower primary population. This choice is
-recorded in the approved manifest; it cannot be switched after scoring.
+freezing as a diagnostic option. Neither existing selector by itself
+establishes the requested year balance. Final year selection and equal
+counts must be prespecified and recorded in the approved manifest.
 
 ## Observation independence and selection
 
@@ -90,11 +99,14 @@ the same observation can occur in a teacher's training tile.
    remain valid; partial markfukt NaNs are recorded. Native neutral fill for
    absent 2016 SAR baselines and optional CROMA B01/B09 padding is recorded
    for go/no-go; unsupported ERA5 checkpoint channels fail preparation.
-   Require NFI year to equal spectral year using the colocation resolver;
-   unknown tile years are excluded explicitly. Tiles must also carry an
-   explicit year/lpis_year, four valid DOYs and finite location metadata, so
-   the existing inference code cannot silently substitute year 2022 or a
-   default position. Date-only years remain identifiable but are excluded.
+   Require NFI year to equal spectral year using the training year resolver;
+   unknown or contradictory years are excluded. Both explicit year fields
+   must be finite integer scalars when present; otherwise dates resolve the
+   growing-season year. Require four valid DOYs and finite location metadata.
+   Prithvi inference reuses training's coordinate builder: prior autumn has
+   year-1, growing frames have year, and single-frame input has DOY zero.
+   Campaign tiles with dates and no explicit year therefore use their actual
+   year, with no 2022 substitute and no changes to stored input data.
 5. Intersect native model crop support, prefer an eligible campaign tile,
    then choose the lexically first eligible tile within the role per observation, and retain exactly one row per plot-year. Reject
    inconsistent field truth.
