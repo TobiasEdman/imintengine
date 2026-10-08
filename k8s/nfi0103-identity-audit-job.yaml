@@ -3,7 +3,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: nfi0103-identity-audit-307678d
+  name: nfi0103-identity-audit-307678d-r2
   namespace: prithvi-training-default
   labels:
     app: nfi-fieldtruth-evaluation
@@ -94,8 +94,8 @@ spec:
           value: ''
         resources:
           requests:
-            cpu: '1'
-            memory: 1Gi
+            cpu: '2'
+            memory: 4Gi
           limits:
             cpu: '2'
             memory: 4Gi
