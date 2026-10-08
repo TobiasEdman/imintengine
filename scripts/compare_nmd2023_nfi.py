@@ -46,7 +46,7 @@ from validate_against_nfi import (  # noqa: E402
 )
 from imint.eval.fieldtruth import (  # noqa: E402
     NFI_KEY, verify_evaluation_source, load_frozen_holdout, restrict_to_frozen, shared_observations,
-    sha256_file, verify_prediction_dump, verify_file_identity,
+    sha256_file, verify_prediction_dump, verify_file_identity, validate_year_balance,
 )
 from imint.training.class_schema import nmd_raster_to_lulc  # noqa: E402
 from imint.training.unified_schema import nmd19_to_unified  # noqa: E402
@@ -189,6 +189,7 @@ def main() -> None:
     if not covered.any():
         raise ValueError("no common NMD coverage")
     if freeze:
+        validate_year_balance(plots.loc[covered], freeze["protocol"])
         for identity in freeze["baselines"].values():
             verify_file_identity(identity)
     result = {

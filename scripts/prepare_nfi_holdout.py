@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from imint.eval.fieldtruth import (
     NFI_KEY, NFI_SOURCE_FILES, NFI_PROTOCOL, exclude_training_observations, observation_keys,
     require_columns, resolve_observation_year, sha256_file,
+    NFI_YEAR_SAMPLING, validate_year_selection, validate_year_balance,
 )
 from build_pinned_plot_set import npz_key_names, npz_version_ok
 from gen_ladder_manifests import DISTILL
@@ -300,6 +301,35 @@ def select_holdout(
     return holdout, counts
 
 
+def select_balanced_years(holdout: pd.DataFrame, selection: dict) -> tuple[pd.DataFrame, dict]:
+    """Select equal plot-year counts by identity hash, independent of truth/scores."""
+    protocol = {"primary_population": "balanced", "year_selection": selection}
+    validate_year_selection(protocol)
+    keys = observation_keys(holdout)
+    if keys.has_duplicates:
+        raise ValueError("year selection requires unique plot-years")
+    years, count = selection["years"], selection["observations_per_year"]
+    candidates = holdout.loc[holdout["Year"].isin(years)].copy()
+    available = {str(y): int((candidates["Year"] == y).sum()) for y in years}
+    if any(n < count for n in available.values()):
+        raise ValueError(f"insufficient eligible observations for equal annual target {count}: {available}")
+    seed = selection["seed"]
+    candidates["_year_rank"] = [
+        hashlib.sha256(f"{seed}:{tract}:{plot}:{year}".encode("ascii")).hexdigest()
+        for tract, plot, year in observation_keys(candidates)
+    ]
+    selected = (candidates.sort_values(["_year_rank", *NFI_KEY])
+                .groupby("Year", sort=True).head(count)
+                .drop(columns="_year_rank").sort_values(NFI_KEY).reset_index(drop=True))
+    validate_year_balance(selected, protocol)
+    return selected, {
+        "pre_balance_observations": len(holdout),
+        "outside_selected_years": len(holdout) - len(candidates),
+        "eligible_by_selected_year": available,
+        "excluded_by_year_quota": len(candidates) - len(selected),
+    }
+
+
 def file_identity(path: Path) -> dict:
     before = path.stat()
     digest = sha256_file(path)
@@ -331,14 +361,25 @@ def main() -> None:
                  "promotion-report", "nmd2023", "out-dir"):
         ap.add_argument("--" + name, type=Path, required=True)
     ap.add_argument("--nmd2018", type=Path)
-    ap.add_argument("--population", choices=("all", "campaign"), default="all",
-                    help="prespecified primary population; all reports tile-role strata")
+    ap.add_argument("--population", choices=("balanced", "all", "campaign"), default="balanced",
+                    help="balanced is the required primary study; all/campaign are diagnostic")
+    ap.add_argument("--inventory-years", type=int, nargs="+",
+                    help="explicit inventory years approved for equal-count selection")
+    ap.add_argument("--observations-per-year", type=int,
+                    help="explicit positive equal target after common input support checks")
     ap.add_argument("--runtime-image", required=True,
                     help="reviewed inference image pinned with @sha256")
     ap.add_argument("--runtime-manifest", type=Path, required=True,
                     help="sealed image provenance, normally /opt/provenance/runtime.json")
     ap.add_argument("--source-git-sha", required=True, help="reviewed build source SHA")
     args = ap.parse_args()
+    year_selection = None
+    if args.population == "balanced":
+        year_selection = dict(NFI_YEAR_SAMPLING, years=args.inventory_years,
+                              observations_per_year=args.observations_per_year)
+        validate_year_selection({"primary_population": "balanced", "year_selection": year_selection})
+    elif args.inventory_years is not None or args.observations_per_year is not None:
+        raise ValueError("year targets require --population balanced")
     if args.out_dir.exists():
         raise ValueError("freeze output already exists; never overwrite it")
     root = Path(__file__).resolve().parents[1]
@@ -456,8 +497,12 @@ def main() -> None:
                 excluded[name] = "auxiliary_gaps:" + ",".join(failures)
             else:
                 metadata[name] = meta
-    candidate_index = index if args.population == "all" else index[index["tile_role"] == "campaign"]
+    candidate_index = index[index["tile_role"] == "campaign"] if args.population == "campaign" else index
     holdout, counts = select_holdout(candidate_index, training, metadata)
+    if year_selection is not None:
+        holdout, balance_counts = select_balanced_years(holdout, year_selection)
+        counts.update(balance_counts, observations=len(holdout))
+        counts["tile_role_support"] = {str(role): int(n) for role, n in holdout["tile_role"].value_counts().items()}
     counts["primary_population"] = args.population
     counts["all_candidate_rows"] = len(index)
     from validate_against_nfi import derive_nfi_forest_class
@@ -504,7 +549,8 @@ def main() -> None:
         "excluded_teacher_feature_plot_years": len(training),
         "campaign": {"tiles": len(staging), "training_tiles": campaign_training_tiles,
                      "root": str(args.staging_dir.resolve())},
-        "protocol": dict(NFI_PROTOCOL, primary_population=args.population),
+        "protocol": dict(NFI_PROTOCOL, primary_population=args.population,
+                         **({"year_selection": year_selection} if year_selection is not None else {})),
         "execution": "awaiting_user_go_no_go",
     }
     for path, original in input_stats.items():

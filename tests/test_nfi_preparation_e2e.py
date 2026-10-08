@@ -93,7 +93,7 @@ def prepared_inputs(tmp_path, monkeypatch):
     monkeypatch.setattr(prep, "preparation_runtime", lambda *a: runtime)
     # Only the sealed-image verifier is a fixture. The real CPU child verifies
     # and parses all 28 checkpoints, and main reads/writes the real NPZ/parquets.
-    argv = ["prepare"]
+    argv = ["prepare", "--population", "all"]
     for name, value in values.items(): argv.extend(["--" + name, str(value)])
     argv.extend(["--runtime-image", runtime["image"]["ref"], "--source-git-sha", "a"*40,
                  "--runtime-manifest", "/fixture/runtime.json"])
@@ -152,3 +152,42 @@ def test_campaign_population_is_selected_before_freeze(prepared_inputs, monkeypa
     assert held.TractID.tolist() == [3]
     assert held.tile_role.tolist() == ["campaign"]
     assert manifest["protocol"]["primary_population"] == "campaign"
+
+
+def test_default_balance_requires_years_before_any_runtime_or_data_read(prepared_inputs, monkeypatch):
+    argv = list(sys.argv)
+    i = argv.index("--population"); del argv[i:i+2]
+    monkeypatch.setattr(sys, "argv", argv)
+    def forbidden(*args):
+        raise AssertionError("must reject incomplete scope before accessing runtime")
+    monkeypatch.setattr(prep, "preparation_runtime", forbidden)
+    with pytest.raises(ValueError, match="balanced year"):
+        prep.main()
+    assert not prepared_inputs["out-dir"].exists()
+
+
+def test_balanced_population_freezes_exact_equal_counts(prepared_inputs, monkeypatch):
+    index_path = prepared_inputs["plot-index"]
+    frame = pd.read_parquet(index_path)
+    additions = frame.iloc[[2,2,2]].copy()
+    additions["TractID"] = [4,5,6]
+    additions["Year"] = [2023,2023,2024]
+    additions["tile_name"] = ["campaign002", "campaign002", "campaign000"]
+    pd.concat([frame, additions]).to_parquet(index_path, index=False)
+    tile = prepared_inputs["staging-dir"] / "campaign002.npz"
+    with np.load(tile, allow_pickle=False) as z:
+        data = dict(z)
+    data["dates"] = np.array(["2022-10-07", "2023-05-29", "2023-06-28", "2023-07-28"])
+    np.savez(tile, **data)
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--population", "balanced",
+                       "--inventory-years", "2023", "2024", "--observations-per-year", "1"])
+    prep.main()
+    path = prepared_inputs["out-dir"] / "manifest.json"
+    held, manifest = load_frozen_holdout(path, sha256_file(path))
+    assert held.Year.value_counts().to_dict() == {2023:1, 2024:1}
+    assert not set(held.TractID) & {1,2}
+    assert manifest["protocol"]["year_selection"]["years"] == [2023, 2024]
+    assert manifest["selection"]["observations"] == 2
+    assert manifest["selection"]["pre_balance_observations"] == 4
+    assert manifest["selection"]["excluded_by_year_quota"] == 2
+    assert manifest["selection"]["tile_role_support"] == {"campaign": 2}

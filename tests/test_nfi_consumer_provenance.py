@@ -73,3 +73,29 @@ def test_dump_must_bind_runtime_identity(frozen):
     sidecar.write_text(json.dumps(meta))
     with pytest.raises(ValueError, match="provenance"):
         ft.verify_prediction_dump(dump, path, "clay_r1", expected_manifest_sha256=digest)
+
+
+def test_compare_balanced_cli_cannot_score_after_nmd_removes_a_plot(frozen, tmp_path, monkeypatch):
+    held, manifest, path, _, raster, dump = frozen
+    held = pd.concat([held] * 4, ignore_index=True)
+    held["TractID"] = [1,2,3,4]
+    held["Year"] = [2023,2023,2024,2024]
+    held.to_parquet(tmp_path / manifest["holdout"]["file"], index=False)
+    manifest["holdout"].update(observations=4, sha256=ft.sha256_file(tmp_path / manifest["holdout"]["file"]))
+    manifest["protocol"].update(primary_population="balanced", year_selection={
+        **ft.NFI_YEAR_SAMPLING, "years": [2023,2024], "observations_per_year": 2})
+    path.write_text(json.dumps(manifest)); digest = ft.sha256_file(path)
+    held.assign(model_pred=1).to_parquet(dump, index=False)
+    sidecar = dump.with_suffix(".parquet.meta.json")
+    meta = json.loads(sidecar.read_text())
+    meta.update(holdout_manifest_sha256=digest, prediction_sha256=ft.sha256_file(dump))
+    sidecar.write_text(json.dumps(meta))
+    monkeypatch.setattr(comparison, "verify_evaluation_source", ft.evaluation_runtime_identity)
+    monkeypatch.setattr(comparison, "sample_nmd_unified", lambda *a: (np.ones(4), np.array([0,111,111,111])))
+    out = tmp_path / "balanced-compare.json"
+    monkeypatch.setattr(sys, "argv", ["compare", "--plots", "unused", "--nmd2023", str(raster),
+        "--model-per-plot", str(dump), "--model-id", "clay_r1", "--holdout-manifest", str(path),
+        "--expected-manifest-sha256", digest, "--out", str(out)])
+    with pytest.raises(ValueError, match="year balance differs"):
+        comparison.main()
+    assert not out.exists()

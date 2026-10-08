@@ -24,6 +24,8 @@ NFI_SOURCE_FILES = frozenset({
     "scripts/score_nfi_holdout.py", "scripts/race_rigor_stats.py",
     "imint/training/unified_dataset.py", "imint/training/errors.py",
 })
+NFI_YEAR_SAMPLING = {"method": "sha256_plot_year_rank_v1", "seed": 20261008}
+
 NFI_PROTOCOL = {
     "truth_dominant_fraction": 0.7, "classes": [0, 1, 2, 3, 4],
     "primary_head": "class", "bootstrap_seed": 20260818,
@@ -41,10 +43,11 @@ def validate_freeze_structure(manifest: dict) -> None:
     if (manifest.get("identity") != NFI_KEY
             or set(manifest.get("cells", {})) != NFI_CELLS
             or "NMD2023" not in manifest.get("baselines", {})
-            or manifest.get("protocol", {}).get("primary_population") not in {"all", "campaign"}
+            or manifest.get("protocol", {}).get("primary_population") not in {"all", "campaign", "balanced"}
             or not NFI_SOURCE_FILES <= set(manifest.get("source_sha256", {}))
             or any(manifest.get("protocol", {}).get(k) != v for k, v in NFI_PROTOCOL.items())):
         raise ValueError("incomplete frozen NFI identity, roster, source or protocol")
+    validate_year_selection(manifest["protocol"])
     source = manifest["source_sha256"]
     if any(not isinstance(h, str) or re.fullmatch(r"[0-9a-f]{64}", h) is None
            for h in source.values()):
@@ -57,6 +60,39 @@ def validate_freeze_structure(manifest: dict) -> None:
             or not runtime.get("runtime_manifest", {}).get("sha256")
             or not runtime.get("source", {}).get("payload_sha256")):
         raise ValueError("incomplete frozen runtime identity")
+
+
+def validate_year_selection(protocol: dict) -> dict | None:
+    """Require an explicit, prespecified quota for the balanced population."""
+    if protocol.get("primary_population") != "balanced":
+        return None
+    selection = protocol.get("year_selection")
+    if not isinstance(selection, dict):
+        raise ValueError("balanced population requires an explicit year selection")
+    years = selection.get("years")
+    count = selection.get("observations_per_year")
+    if (not isinstance(years, list) or len(years) < 2
+            or any(type(y) is not int or y < 1 for y in years)
+            or years != sorted(set(years))
+            or type(count) is not int or count < 1
+            or type(selection.get("seed")) is not int
+            or any(selection.get(k) != v for k, v in NFI_YEAR_SAMPLING.items())):
+        raise ValueError("invalid prespecified balanced year selection")
+    return selection
+
+
+def validate_year_balance(frame: pd.DataFrame, protocol: dict) -> None:
+    """No consumer may silently change the approved equal annual counts."""
+    selection = validate_year_selection(protocol)
+    if selection is None:
+        return
+    keys = observation_keys(frame)
+    if keys.has_duplicates:
+        raise ValueError("balanced population contains duplicate plot-years")
+    actual = {int(y): int(n) for y, n in frame["Year"].value_counts().items()}
+    expected = dict.fromkeys(selection["years"], selection["observations_per_year"])
+    if actual != expected:
+        raise ValueError(f"year balance differs from the frozen target: {actual}; expected {expected}")
 
 
 def sha256_file(path: str | Path) -> str:
@@ -176,6 +212,7 @@ def load_frozen_holdout(manifest_path: str | Path, expected_manifest_sha256: str
         raise ValueError("frozen holdout must contain unique, nonempty plot-years")
     if len(holdout) != manifest["holdout"]["observations"]:
         raise ValueError("frozen holdout count mismatch")
+    validate_year_balance(holdout, manifest["protocol"])
     training_path = path.parent / manifest["training"]["file"]
     training = read_verified_parquet(training_path, manifest["training"]["sha256"])
     if (training.duplicated(NFI_KEY).any()

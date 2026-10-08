@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from imint.eval.fieldtruth import (
     NFI_KEY, load_frozen_holdout, restrict_to_frozen, sha256_file,
-    verify_file_identity, verify_prediction_dump, verify_evaluation_source,
+    verify_file_identity, verify_prediction_dump, verify_evaluation_source, validate_year_balance,
 )
 from compare_nmd2023_nfi import sample_nmd_unified
 from validate_against_nfi import accuracy_suite
@@ -67,6 +67,7 @@ def paired_report(
     baselines: dict[str, tuple[np.ndarray, np.ndarray]], protocol: dict,
 ) -> dict:
     """One denominator across every model and baseline, after coverage only."""
+    validate_year_balance(holdout, protocol)
     truth = holdout["nfi_forest"].replace(-1, 0).to_numpy(dtype=int)
     covered = np.ones(len(holdout), dtype=bool)
     for _, raw in baselines.values():
@@ -74,6 +75,7 @@ def paired_report(
     if not covered.any():
         raise ValueError("no common NMD coverage on the frozen observations")
     selected = holdout.loc[covered].copy()
+    validate_year_balance(selected, protocol)
     statistical = tract_block_frame(holdout).loc[covered].copy()
     truth = truth[covered]
     sources = dict(predictions)
@@ -130,6 +132,8 @@ def paired_report(
     return {
         "schema": "nfi-paired-model-nmd-v1",
         "primary_population": protocol.get("primary_population", "all"),
+        "year_selection": protocol.get("year_selection"),
+        "compared_year_support": {str(int(y)): int(n) for y, n in selected["Year"].value_counts().sort_index().items()},
         "confusion_matrix_axes": {"rows": "NFI truth", "columns": "prediction", "class_order": [0,1,2,3,4]},
         "tile_role_scores": strata,
         "tile_role_interpretation": "Descriptive strata; confirmatory inference applies only to the prespecified primary population.",

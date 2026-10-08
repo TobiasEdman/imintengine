@@ -58,17 +58,28 @@ to be set before a balanced selection and any additional fetch campaign;
 no new fetch is authorized by this protocol. Do not freeze the current
 unbalanced candidate population as the final evaluation.
 
-The current selector can include all eligible held-out observations
-(`--population all`). Every row records `tile_role`; report descriptive
-accuracy and confusion matrices separately for campaign and cohort tiles.
-Cohort tiles may carry the exact NMD2023 targets seen during segmentation
-training. Their NFI measurements remain held out, but comparison with NMD
-there measures agreement with independent field truth on familiar imagery
-and label locations. This dependence must be stated alongside the result.
-`--population campaign` selects only eligible campaign observations before
-freezing as a diagnostic option. Neither existing selector by itself
-establishes the requested year balance. Final year selection and equal
-counts must be prespecified and recorded in the approved manifest.
+The default `--population balanced` requires an explicit ascending list of
+at least two `--inventory-years` and a positive `--observations-per-year`.
+There are no default years or counts. Selection runs after teacher exclusion,
+modality checks, common native crop support and one-tile-per-plot-year
+resolution. Within each selected year, it ranks the ASCII identity string
+`20261008:TractID:PlotID:Year` by SHA256 and retains the requested count.
+The fixed seed and algorithm are recorded with the years/count in the
+manifest; row order, field classes and predictions cannot change selection.
+Insufficient support in any year stops preparation rather than reducing the
+quota, dropping a year, or borrowing from 2024. This is equal-year sampling
+of eligible observations, not a guarantee of national area representation.
+
+`--population all` and `--population campaign` remain explicit diagnostic
+options; neither is the final balanced study. Every row records `tile_role`;
+report descriptive accuracy and confusion matrices separately for campaign
+and cohort tiles. Cohort tiles may carry the exact NMD2023 targets seen
+during segmentation training. Their NFI measurements remain held out, but
+comparison with NMD there measures agreement with independent field truth
+on familiar imagery and label locations. State this dependence alongside
+results. A balanced frozen reader checks the actual annual counts, and
+joint scoring stops if NMD coverage removes any required observation; it
+must not silently turn the approved balanced design into another population.
 
 ## Observation independence and selection
 
@@ -102,7 +113,9 @@ the same observation can occur in a teacher's training tile.
    Require NFI year to equal spectral year using the training year resolver;
    unknown or contradictory years are excluded. Both explicit year fields
    must be finite integer scalars when present; otherwise dates resolve the
-   growing-season year. Require four valid DOYs and finite location metadata.
+   growing-season year. Require four finite DOYs in 0–366 and finite location metadata.
+   These checks do not establish that all four frames are present; temporal
+   masks and missing-frame quality remain part of the go/no-go evidence.
    Prithvi inference reuses training's coordinate builder: prior autumn has
    year-1, growing frames have year, and single-frame input has DOY zero.
    Campaign tiles with dates and no explicit year therefore use their actual
@@ -134,8 +147,8 @@ report through the data mount. Run `scripts/prepare_nfi_holdout.py --help`
 from the committed, reviewed source in the pinned evaluation environment.
 Supply the v4 candidate index, the teacher source index, seven-teacher root,
 checkpoint root, `--distill-root /cephfs/distill`, separate cohort/staging
-roots, job/report evidence,
-NMD rasters, a digest-pinned runtime image and a new output directory.
+roots, job/report evidence, the approved `--inventory-years` and
+`--observations-per-year` under `--population balanced`, NMD rasters, a digest-pinned runtime image and a new output directory.
 
 Use the existing `docker/ladder-crop-distill` image rebuilt at the reviewed
 source SHA, and `/opt/venvs/scoring/bin/python` for preparation. Supply
