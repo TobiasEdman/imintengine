@@ -1,0 +1,10 @@
+{
+  "id": "0103",
+  "subject": "Complete reproducible held-out NFI model and NMD evaluation",
+  "description": "Goal set by Tobias on 2026-10-07. Scope: audit and correct PRs #65, #62 and #63; freeze observation-level held-out support and input provenance; prepare and verify the NFI model-vs-NMD evaluation. Intended files: scripts/compare_nmd2023_nfi.py, scripts/ladder_fieldtruth_standings.py, scripts/ladder_holdout_eval.py, scripts/validate_against_nfi.py, scripts/validate_against_lucas.py, focused tests, and evaluation protocol/run artifacts. No edits to another session worktree or active training/fetch code. Commit/publish the task registration only after user approval.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/codex/eval-nfi-fieldtruth",
+  "created_at": "2026-10-07T14:49:01.175900+00:00",
+  "updated_at": "2026-10-07T14:49:01.175900+00:00"
+}
