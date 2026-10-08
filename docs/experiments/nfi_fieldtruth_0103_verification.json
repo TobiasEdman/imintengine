@@ -55,13 +55,15 @@
       "docker/ladder-crop-distill/runtime_smoke.py": "76687d732dcb6172674f4b61ce4ad5da0ae72c6f9a30d570a3558db6ffa63c2f"
     },
     "review": "PASS: independent runtime compatibility review",
-    "image_smoke": "Build-time check added; actual image build pending",
+    "image_smoke": "PASS: built and pushed digest, CPU preparation smoke and cosign verification",
     "prior_head_ci": {
       "head": "6df01390e985062678eef4ba86583e2d07f03e50",
       "run": "https://github.com/TobiasEdman/imintengine/actions/runs/37783125810",
       "python311": "2619 passed, 4 failed, 11 skipped",
       "failure": "Four unchanged test_slu_markfukt live-service tests received HTML instead of raster",
       "python312": "Cancelled by matrix fail-fast"
-    }
+    },
+    "image_build_run": "https://github.com/TobiasEdman/imintengine/actions/runs/37785634741",
+    "runtime_image": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:d25aa72c2205453d211f31e8fe1491f0fe6c5686c4624ddf32caa514cb4888a5"
   }
 }

@@ -1,0 +1,116 @@
+# Read-only CPU audit; no input freeze, model inference or NMD scoring.
+# Image/source verified by Actions run 37785634741.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi0103-identity-audit-307678d
+  namespace: prithvi-training-default
+  labels:
+    app: nfi-fieldtruth-evaluation
+    task: '0103'
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: nfi-fieldtruth-evaluation
+        task: '0103'
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+      - name: ghcr-push
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: audit
+        image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:d25aa72c2205453d211f31e8fe1491f0fe6c5686c4624ddf32caa514cb4888a5
+        imagePullPolicy: IfNotPresent
+        command:
+        - /opt/venvs/scoring/bin/python
+        - -u
+        - -c
+        - |
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          import numpy as np
+          import pandas as pd
+          sys.path.insert(0, "/opt/imintengine/scripts")
+          from scripts.prepare_nfi_holdout import preparation_runtime, teacher_training_set
+          from imint.eval.fieldtruth import NFI_KEY, observation_keys, exclude_training_observations
+          from gen_ladder_manifests import DISTILL
+
+          runtime = preparation_runtime(
+              Path("/opt/imintengine"), Path("/opt/provenance/runtime.json"),
+              os.environ["NFI_SOURCE_SHA"], os.environ["NFI_RUNTIME_IMAGE"])
+          index = pd.read_parquet("/cephfs/nfi/nfi_index_v4_2026-09-30.parquet")
+          source = pd.read_parquet("/cephfs/nfi/nfi_index_unified_v2_512.parquet")
+          staging = {p.stem for p in Path("/cephfs/unified_v2_512_nfi2024_staging").glob("*.npz")}
+          assert len(staging) == 475, "campaign must have exactly 475 evaluation tiles"
+          teachers, training = {}, []
+          for model in DISTILL:
+              root = Path("/cephfs/distill/heads")
+              features = pd.read_parquet(root / f"{model}_r2_plot_features.parquet")
+              split = json.loads((root / f"{model}_r2_split.json").read_text())
+              trained = teacher_training_set(features, split, source, staging)
+              teachers[model] = {"feature_rows": len(features), "training_plot_years": len(trained),
+                                "campaign_training_tiles": len(set(split["train_tiles"]) & staging)}
+              training.append(trained)
+          training = pd.concat(training).drop_duplicates(NFI_KEY)
+          eligible = exclude_training_observations(index, training)
+          assert not observation_keys(eligible).isin(observation_keys(training)).any()
+          volumes = index[["VolPine", "VolContorta", "VolSpruce", "VolBirch", "VolOtherDec"]].to_numpy(dtype=float)
+          invalid_truth = (~np.isfinite(volumes) | (volumes < 0)).any(axis=1)
+          print(json.dumps({
+              "schema": "nfi-fieldtruth-identity-audit-v1", "status": "completed",
+              "preliminary": True, "input_freeze": False, "inference": False, "nmd_scoring": False,
+              "source_git_sha": runtime["source"]["git_sha"], "image": runtime["image"],
+              "identity": NFI_KEY, "candidate_rows": len(index),
+              "candidate_plot_years": len(observation_keys(index).unique()),
+              "teacher_training_plot_years_union": len(training), "teachers": teachers,
+              "training_overlap_rows": len(index) - len(eligible),
+              "training_overlap_plot_years": len(observation_keys(index).unique()) - len(observation_keys(eligible).unique()),
+              "eligible_rows_before_modality_crop": len(eligible),
+              "eligible_plot_years_before_modality_crop": len(observation_keys(eligible).unique()),
+              "remaining_training_overlap": 0, "campaign_tiles": len(staging),
+              "invalid_volume_rows": int(invalid_truth.sum()),
+              "year_row_support_before_modality_crop": {str(int(y)): int(n) for y,n in eligible.groupby("Year").size().items()},
+              "next_gate": "terminal clean Tessera promotion before input freeze"
+          }, indent=2, allow_nan=False))
+        env:
+        - name: NFI_SOURCE_SHA
+          value: 307678d71200a8512c68a8efaf4709ed65caa432
+        - name: NFI_RUNTIME_IMAGE
+          value: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:d25aa72c2205453d211f31e8fe1491f0fe6c5686c4624ddf32caa514cb4888a5
+        - name: CUDA_VISIBLE_DEVICES
+          value: ''
+        resources:
+          requests:
+            cpu: '1'
+            memory: 1Gi
+          limits:
+            cpu: '2'
+            memory: 4Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: data
+          mountPath: /cephfs
+          readOnly: true
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: training-data-cephfs
+          readOnly: true
