@@ -156,20 +156,39 @@ def smoke_scoring() -> None:
         "scripts/nfi_head_cv.py",
         "scripts/run_lucas_crop_split_job.py",
         "scripts/validate_against_nfi.py",
+        "scripts/prepare_nfi_holdout.py",
     ):
         _load_script(source_root / relative)
     assert "torch" not in sys.modules
     print({"status": "ok", "environment": "scoring", **actual_versions})
 
 
+def smoke_preparation(source_git_sha: str) -> None:
+    """Verify the actual sealed CPU runtime without reading field data."""
+    from scripts.prepare_nfi_holdout import preparation_runtime
+
+    result = preparation_runtime(
+        Path("/opt/imintengine"), Path("/opt/provenance/runtime.json"),
+        source_git_sha, "local-build@sha256:" + "0" * 64)
+    assert result["source"]["git_sha"] == source_git_sha
+    assert "torch" not in sys.modules
+    print({"status": "ok", "environment": "nfi-preparation",
+           "source_git_sha": source_git_sha})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("environment", choices=("model", "scoring"))
+    parser.add_argument("environment", choices=("model", "scoring", "preparation"))
+    parser.add_argument("--source-git-sha")
     args = parser.parse_args()
+    if args.environment == "preparation" and not args.source_git_sha:
+        parser.error("preparation requires --source-git-sha")
     if args.environment == "model":
         smoke_model()
-    else:
+    elif args.environment == "scoring":
         smoke_scoring()
+    else:
+        smoke_preparation(args.source_git_sha)
 
 
 if __name__ == "__main__":

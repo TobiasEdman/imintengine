@@ -10,8 +10,6 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import re
-import subprocess
 import sys
 
 import numpy as np
@@ -26,6 +24,9 @@ from imint.eval.fieldtruth import (
 )
 from build_pinned_plot_set import npz_key_names, npz_version_ok
 from gen_ladder_manifests import DISTILL
+from scripts.crop_distill_provenance import (
+    verify_runtime, snapshot_tree, tree_payload_sha256,
+)
 
 
 def check_promotion(job: dict, report: dict, cohort_count: int) -> None:
@@ -150,6 +151,21 @@ def file_identity(path: Path) -> dict:
     return {"path": str(path.resolve()), "bytes": after.st_size, "sha256": digest}
 
 
+def preparation_runtime(
+    root: Path, runtime_manifest: Path, source_git_sha: str, image_ref: str,
+) -> dict:
+    """Authenticate the sealed source and CPU interpreter, without Git."""
+    runtime = verify_runtime(runtime_manifest, source_git_sha=source_git_sha,
+                             image_ref=image_ref)
+    if tree_payload_sha256(snapshot_tree(root)) != runtime["source"]["payload_sha256"]:
+        raise ValueError("preparation is not running from the verified source tree")
+    expected_python = runtime["environments"]["scoring"]["python"]["path"]
+    # Do not resolve venv symlinks: both environments can share a base binary.
+    if Path(sys.executable).absolute() != Path(expected_python).absolute():
+        raise ValueError("preparation must use the verified scoring interpreter")
+    return runtime
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     for name in ("plot-index", "teacher-index", "teacher-root", "checkpoint-root",
@@ -159,18 +175,16 @@ def main() -> None:
     ap.add_argument("--nmd2018", type=Path)
     ap.add_argument("--runtime-image", required=True,
                     help="reviewed inference image pinned with @sha256")
+    ap.add_argument("--runtime-manifest", type=Path, required=True,
+                    help="sealed image provenance, normally /opt/provenance/runtime.json")
+    ap.add_argument("--source-git-sha", required=True, help="reviewed build source SHA")
     args = ap.parse_args()
-    if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", args.runtime_image):
-        ap.error("--runtime-image must be pinned to a sha256 digest")
     if args.out_dir.exists():
         raise ValueError("freeze output already exists; never overwrite it")
     root = Path(__file__).resolve().parents[1]
-    dirty = subprocess.check_output(
-        ["git", "status", "--porcelain"], cwd=root, text=True)
-    if dirty:
-        raise ValueError("commit and review the preparation code before freezing inputs")
-    code_sha = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    runtime = preparation_runtime(root, args.runtime_manifest,
+                                  args.source_git_sha, args.runtime_image)
+    code_sha = runtime["source"]["git_sha"]
     cohort = {p.stem: p for p in args.cohort_dir.glob("*.npz")}
     staging = {p.stem: p for p in args.staging_dir.glob("*.npz")}
     if len(staging) != 475 or set(staging) & set(cohort):
@@ -245,6 +259,7 @@ def main() -> None:
         "schema": "nfi-fieldtruth-freeze-v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "git_sha": code_sha, "runtime_image": args.runtime_image,
+        "preparation_runtime": runtime,
         "source_sha256": {
             str(p.relative_to(root)): sha256_file(p)
             for p in [
@@ -256,6 +271,7 @@ def main() -> None:
                 root / "scripts/score_nfi_holdout.py",
                 root / "scripts/race_rigor_stats.py",
                 root / "imint/training/unified_dataset.py",
+                root / "imint/training/errors.py",
             ]
         },
         "identity": NFI_KEY, "cells": cells,

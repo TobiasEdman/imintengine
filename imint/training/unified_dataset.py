@@ -68,6 +68,7 @@ from .era5_aux import (
     era5_grid_context,
     format_era5_cell_id,
 )
+from .errors import TilePrerequisiteError
 from .s1_enrichment import S1_ENRICH_VERSION
 from .tile_bbox import resolve_tile_bbox
 from .tile_config import TileConfig
@@ -860,17 +861,6 @@ _FOREST_CLASSES = frozenset({1, 2, 3, 4, 5})
 # other bookkeeping keys (nmd_label_raw, label_mask, harvest_mask, n_parcels,
 # …) are not consumed here and are left untouched.
 _LABEL_SIDECAR_KEYS = ("label", "parcel_area_ha", "nmd_area_ha")
-
-
-class TilePrerequisiteError(KeyError):
-    """A tile lacks a precondition this model needs, and no run can fix it.
-
-    Subclasses KeyError so existing handlers keep working. It exists so a
-    caller can skip a tile it cannot read WITHOUT also swallowing model,
-    configuration or output-contract failures — catching bare KeyError there
-    would turn an aux-channel mismatch into a "coverage gap" for every tile
-    and return an empty result that looks like a successful run.
-    """
 
 
 class _LabelOverlay:

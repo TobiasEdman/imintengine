@@ -38,7 +38,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.eval.metrics import auroc_aupr
-from imint.training.unified_dataset import TilePrerequisiteError
+from imint.training.errors import TilePrerequisiteError
 from imint.eval.fieldtruth import (
     NoScoredObservations, load_frozen_holdout, verify_file_identity, sha256_file,
     verify_evaluation_source,

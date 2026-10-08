@@ -37,7 +37,7 @@ lucas = _load("validate_against_lucas")
 nfi = _load("validate_against_nfi")
 
 BAD = "44883674"
-from imint.training.unified_dataset import TilePrerequisiteError  # noqa: E402
+from imint.training.errors import TilePrerequisiteError  # noqa: E402
 
 S1_ERR = TilePrerequisiteError(
     "tile requires s1_enrich_v==4 but found s1_enrich_v=0")

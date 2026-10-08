@@ -107,3 +107,31 @@ def test_string_identities_cannot_bypass_numeric_training_identity():
     trained = source[prep.NFI_KEY].astype(str)
     with pytest.raises(ValueError, match="non-numeric"):
         exclude_training_observations(source, trained)
+
+
+def test_preparation_and_truth_import_without_model_or_geospatial_stack():
+    """Exercise real imports in a fresh CPU-only subprocess, not cached modules."""
+    import os
+    import subprocess
+    code = """
+import importlib.abc
+import sys
+sys.path.insert(0, 'scripts')
+class CPUOnly(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'torch', 'pyproj', 'rasterio', 'timm', 'terratorch'}:
+            raise ImportError('model/geospatial stack unavailable: ' + fullname)
+sys.meta_path.insert(0, CPUOnly())
+import prepare_nfi_holdout
+from validate_against_nfi import derive_nfi_forest_class
+from imint.training.errors import TilePrerequisiteError
+assert issubclass(TilePrerequisiteError, KeyError)
+assert 'torch' not in sys.modules
+print('CPU preparation imports OK')
+"""
+    result = subprocess.run(
+        [sys.executable, '-c', code], cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'},
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert 'CPU preparation imports OK' in result.stdout

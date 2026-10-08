@@ -90,8 +90,17 @@ Supply the v4 candidate index, the teacher source index, seven-teacher root,
 checkpoint root, separate cohort/staging roots, job/report evidence,
 NMD rasters, a digest-pinned runtime image and a new output directory.
 
-The command performs no inference or NMD sampling. It refuses a dirty
-source tree, incomplete promotion, ambiguous years, staging leakage and
+Use the existing `docker/ladder-crop-distill` image rebuilt at the reviewed
+source SHA, and `/opt/venvs/scoring/bin/python` for preparation. Supply
+`--runtime-manifest /opt/provenance/runtime.json` and `--source-git-sha SHA`.
+The baked runtime manifest verifies the complete source tree, dependency
+identities and interpreter without requiring Git in the container. An image
+built before this change cannot be substituted. The image build exercises
+the preparation imports and the sealed-source verifier in the actual CPU
+environment without PyTorch or field data.
+
+The command performs no inference or NMD sampling. It refuses altered
+source or the wrong interpreter, incomplete promotion, ambiguous years, staging leakage and
 empty support. Changed files during preparation abort before the manifest
 is written. Do not call historical predictions reproducible solely because
 the filenames match: historical dumps lack the required provenance.

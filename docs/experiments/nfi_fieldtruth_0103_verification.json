@@ -40,5 +40,28 @@
     "actual_model_inference": "not performed",
     "actual_joint_nmd_scoring": "not performed",
     "gpu_jobs_started": 0
+  },
+  "runtime_followup": {
+    "verified_at": "2026-10-08T13:35:19.451502+00:00",
+    "tests": "221 passed in 136.09s",
+    "command": "PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider tests/test_ladder_fieldtruth_standings.py tests/test_ladder_holdout_eval.py tests/test_validator_skip_unscoreable.py tests/test_sameplots_holdout_filter.py tests/test_prepare_nfi_holdout.py tests/test_fieldtruth_cli_provenance.py tests/test_validate_against_nfi.py tests/test_nfi_frozen_readers.py tests/test_score_nfi_holdout.py tests/test_distill_stage_wiring.py tests/test_crop_distill_provenance.py -q",
+    "source_sha256": {
+      "scripts/prepare_nfi_holdout.py": "4e45aa2d12370cbbbcf3b0dadd67f4d9f5f0502d4b473f1030f0e600156b3637",
+      "imint/training/errors.py": "fe974003a908e107ffc41051332c21261bc7fa8e5e1d3c3ef7caf629411b983c",
+      "imint/training/unified_dataset.py": "1cdbccdb3f59386524645282a9a308ad3446e4f4ba0b731a6fe0c8b54083d0d2",
+      "scripts/validate_against_nfi.py": "fb5ba99cf100a14a6cd8de95d6cee981a51949763bd0edceab43f929d897f2b2",
+      "scripts/validate_against_lucas.py": "b490510c334fc6c5327c6b0d310f08c5af71a18db97f90b8ea54f63ce6c22c5f",
+      "docker/ladder-crop-distill/Dockerfile": "9439098e2ef7da2c59a8aa6c56357c407d70d98281d728772ed103d2e9aa45ef",
+      "docker/ladder-crop-distill/runtime_smoke.py": "76687d732dcb6172674f4b61ce4ad5da0ae72c6f9a30d570a3558db6ffa63c2f"
+    },
+    "review": "PASS: independent runtime compatibility review",
+    "image_smoke": "Build-time check added; actual image build pending",
+    "prior_head_ci": {
+      "head": "6df01390e985062678eef4ba86583e2d07f03e50",
+      "run": "https://github.com/TobiasEdman/imintengine/actions/runs/37783125810",
+      "python311": "2619 passed, 4 failed, 11 skipped",
+      "failure": "Four unchanged test_slu_markfukt live-service tests received HTML instead of raster",
+      "python312": "Cancelled by matrix fail-fast"
+    }
   }
 }
