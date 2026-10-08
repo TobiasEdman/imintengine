@@ -1,0 +1,150 @@
+{
+  "task": "0103",
+  "verified_at": "2026-10-08T17:29:28.624752+00:00",
+  "implementation_commit": "1350519889e437bd120f8033621a04b523a38451",
+  "stage": "CPU preparation verified; real input freeze and inference pending",
+  "tests": {
+    "result": "385 passed",
+    "seconds": 186.0,
+    "command": [
+      "/Users/tobiasedman/Developer/ImintEngine/.venv/bin/python",
+      "-m",
+      "pytest",
+      "-p",
+      "no:cacheprovider",
+      "tests/test_nfi_year_balance.py",
+      "tests/test_inference_time_parity.py",
+      "tests/test_tessera_wiring.py",
+      "tests/test_ladder_fieldtruth_standings.py",
+      "tests/test_ladder_holdout_eval.py",
+      "tests/test_validator_skip_unscoreable.py",
+      "tests/test_sameplots_holdout_filter.py",
+      "tests/test_prepare_nfi_holdout.py",
+      "tests/test_fieldtruth_cli_provenance.py",
+      "tests/test_validate_against_nfi.py",
+      "tests/test_nfi_frozen_readers.py",
+      "tests/test_score_nfi_holdout.py",
+      "tests/test_distill_stage_wiring.py",
+      "tests/test_crop_distill_provenance.py",
+      "tests/test_nfi_preparation_e2e.py",
+      "tests/test_nfi_checkpoint_inputs.py",
+      "tests/test_nfi_manifest_anchor.py",
+      "tests/test_nfi_consumer_provenance.py",
+      "tests/test_inference_aux_parity.py",
+      "tests/test_inference_matrix.py",
+      "tests/test_checkpoint_state_compatibility.py",
+      "tests/test_checkpoint_identity_io.py",
+      "tests/test_inference_tile_identity.py",
+      "-q"
+    ],
+    "log_sha256": "29bc986e67e19df186501d7cc5d644ee6c38893837da203a667be9e20bd60cda",
+    "working_tree_clean_at_start": true,
+    "planner": "7 additional tests passed; planner source unchanged since ba31235"
+  },
+  "historical_local_identity_regression": {
+    "scope": "historical local identity regression only; not an input freeze or score",
+    "source_sha256": {
+      "index": "671d4bbb0d168f15635f09fc93fe04ec66845575adcb5342e4c3d82de6fcda33",
+      "features": "e2039c9eac3e6928f2b7a7854ea0ebffae58cef43be816d2518257a2f60e82d7",
+      "split": "c7e1ac20cf66c495f3a500e9f183e85557c9b9b739430753f9789c88806b626e",
+      "dump": "4d71fa1033a3dd0727a956fabf8e26587aea523bad930b50f2fa396a7da890de"
+    },
+    "teacher_train_rows": 735,
+    "teacher_train_plot_years": 667,
+    "old_tile_test_rows": 209,
+    "old_tile_test_plot_years": 202,
+    "leaked_plot_years_excluded": 28,
+    "remaining_rows": 175,
+    "remaining_plot_years": 174,
+    "remaining_training_overlap": 0
+  },
+  "internal_reviews": {
+    "identity_and_preparation": "PASS after corrections",
+    "resume_pairing_and_statistics": "PASS after corrections",
+    "validator_io_and_authenticated_reads": "PASS after corrections"
+  },
+  "external_review": {
+    "reviewer": "Claude (designated)",
+    "reviewed_head": "a67aaec64962e6d13d889c2765191f120ac97b4c",
+    "external_verdict": "PASS-with-P3 on delta; not freeze-ready (3 P2)",
+    "current_status": "All 3 P2 fixes implemented and internally reviewed; exact new head awaits Claude re-review"
+  },
+  "readiness": {
+    "tessera_promotion": "active=1, ready=1 at latest cluster inspection",
+    "input_freeze": "not performed",
+    "actual_model_inference": "not performed",
+    "actual_joint_nmd_scoring": "not performed",
+    "gpu_jobs_started": 0
+  },
+  "runtime_followup": {
+    "verified_at": "2026-10-08T13:35:19.451502+00:00",
+    "tests": "221 passed in 136.09s",
+    "command": "PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider tests/test_ladder_fieldtruth_standings.py tests/test_ladder_holdout_eval.py tests/test_validator_skip_unscoreable.py tests/test_sameplots_holdout_filter.py tests/test_prepare_nfi_holdout.py tests/test_fieldtruth_cli_provenance.py tests/test_validate_against_nfi.py tests/test_nfi_frozen_readers.py tests/test_score_nfi_holdout.py tests/test_distill_stage_wiring.py tests/test_crop_distill_provenance.py -q",
+    "source_sha256": {
+      "scripts/prepare_nfi_holdout.py": "4e45aa2d12370cbbbcf3b0dadd67f4d9f5f0502d4b473f1030f0e600156b3637",
+      "imint/training/errors.py": "fe974003a908e107ffc41051332c21261bc7fa8e5e1d3c3ef7caf629411b983c",
+      "imint/training/unified_dataset.py": "1cdbccdb3f59386524645282a9a308ad3446e4f4ba0b731a6fe0c8b54083d0d2",
+      "scripts/validate_against_nfi.py": "fb5ba99cf100a14a6cd8de95d6cee981a51949763bd0edceab43f929d897f2b2",
+      "scripts/validate_against_lucas.py": "b490510c334fc6c5327c6b0d310f08c5af71a18db97f90b8ea54f63ce6c22c5f",
+      "docker/ladder-crop-distill/Dockerfile": "9439098e2ef7da2c59a8aa6c56357c407d70d98281d728772ed103d2e9aa45ef",
+      "docker/ladder-crop-distill/runtime_smoke.py": "76687d732dcb6172674f4b61ce4ad5da0ae72c6f9a30d570a3558db6ffa63c2f"
+    },
+    "review": "PASS: independent runtime compatibility review",
+    "image_smoke": "PASS: built and pushed digest, CPU preparation smoke and cosign verification",
+    "prior_head_ci": {
+      "head": "6df01390e985062678eef4ba86583e2d07f03e50",
+      "run": "https://github.com/TobiasEdman/imintengine/actions/runs/37783125810",
+      "python311": "2619 passed, 4 failed, 11 skipped",
+      "failure": "Four unchanged test_slu_markfukt live-service tests received HTML instead of raster",
+      "python312": "Cancelled by matrix fail-fast"
+    },
+    "image_build_run": "https://github.com/TobiasEdman/imintengine/actions/runs/37785634741",
+    "runtime_image": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:d25aa72c2205453d211f31e8fe1491f0fe6c5686c4624ddf32caa514cb4888a5"
+  },
+  "review_corrections": {
+    "implementation_commit": "a9d1ad983df9002e432b1ff0e9fc70cdb38141c1",
+    "verified_at": "2026-10-08T14:28:07.393197+00:00",
+    "tests": "328 passed in 62.97s",
+    "internal_review": "Three bounded independent reviews PASS after corrections",
+    "source_sha256": {
+      "imint/eval/fieldtruth.py": "e329bcd44c8695c1730336c20231867f0206c049977baa50b6651ed6ce92730d",
+      "scripts/prepare_nfi_holdout.py": "b881d653b48e39b9c7c719564d462b82e617d77f5ae4bdf79ed0310b3624c227",
+      "scripts/nfi_checkpoint_inputs.py": "16d0061174544241b3f395d6ed42ddace9af00004800e035b0d0e947040b0a46",
+      "scripts/score_nfi_holdout.py": "5e6fa38303b2234e9d33f10ecf48a2d328cb24e943a77607d59e7b5dffca20f5",
+      "scripts/compare_nmd2023_nfi.py": "329891bdec5106cb256fb39fec64d7cf15aa78483917eb71147d7426fcc7d075",
+      "scripts/validate_against_nfi.py": "7207155f89e4971039dc46438ae32339ceff7cb2678aab5579fc12d11840c1d5",
+      "scripts/inference_comparison.py": "a6ea2ea9ee3d3494b8583c88dfd94781c51b91a96820fe9276a9f0937dfa54ec"
+    },
+    "additional_smoke": "Two synthetic GeoTIFF pixels through actual Rasterio sampler; PASS locally",
+    "runtime_image": "New image build required for this source; prior digest is insufficient",
+    "protocol_change": "Conservatively exclude all recorded teacher feature plot-years; old heads lack exact split digests"
+  },
+  "cluster_identity_audit": {
+    "artifact": "nfi_fieldtruth_0103_identity_audit.json",
+    "status": "Complete; aggregate counts and actual Pod imageID verified",
+    "input_freeze": false
+  },
+  "multi_year_preparation": {
+    "source_git_sha": "1350519889e437bd120f8033621a04b523a38451",
+    "changes": [
+      "training-equivalent masked temporal frames",
+      "CPU NMD coverage before annual quota through sealed Rasterio interpreter",
+      "separate evaluation roots with original475 campaign and teacher exclusion gates"
+    ],
+    "internal_review": "PASS after default-frame and interpreter fixes",
+    "runtime_image": "Final source requires a new sealed image; no real freeze executed",
+    "synthetic_nmd_subprocess_smoke": "PASS locally; included in future image build smoke"
+  },
+  "cluster_tile_sizing": {
+    "artifact": "nfi_fieldtruth_0103_tile_sizing_20261008.json",
+    "report": "nfi_fieldtruth_0103_tile_sizing.md",
+    "status": "Complete; exit0 and actual imageID verified",
+    "input_freeze": false
+  },
+  "prior_head_ci": {
+    "source_git_sha": "a67aaec64962e6d13d889c2765191f120ac97b4c",
+    "run": "https://github.com/TobiasEdman/imintengine/actions/runs/37805043028",
+    "result": "2696 passed, 4 failed, 11 skipped",
+    "failures": "Only four unchanged live SLU Markfukt tests: endpoint returned HTML instead of raster"
+  }
+}

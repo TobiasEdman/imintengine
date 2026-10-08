@@ -44,6 +44,60 @@ def _load_script(path: Path) -> None:
             sys.modules[module_name] = previous
 
 
+def smoke_nmd_sampler(source_root: Path = Path("/opt/imintengine")) -> None:
+    """Exercise CPU raster sampling on synthetic pixels, with no field data."""
+    import tempfile
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+    from scripts.compare_nmd2023_nfi import sample_nmd_unified
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "synthetic-nmd.tif"
+        with rasterio.open(path, "w", driver="GTiff", height=1, width=2,
+                           count=1, dtype="uint16", crs="EPSG:3006",
+                           transform=from_origin(100000, 6500000, 10, 10), nodata=0) as dst:
+            dst.write(np.array([[111, 112]], dtype=np.uint16), 1)
+        classes, raw = sample_nmd_unified(str(path), [100005, 100015], [6499995, 6499995])
+        assert raw.tolist() == [111, 112]
+        assert classes.tolist() == [1, 2]
+        import json
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, str(source_root / "scripts/nfi_nmd_coverage.py")],
+            input=json.dumps({"baselines": {"NMD2023": str(path)},
+                              "coordinates": [[100005,6499995], [100015,6499995], [0,0]]}),
+            capture_output=True, text=True, check=True,
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+        assert json.loads(result.stdout) == {"NMD2023": [True, True, False]}
+    print({"status": "ok", "environment": "nmd-sampler", "pixels": 2})
+
+
+def smoke_checkpoint_metadata(source_root: Path = Path("/opt/imintengine")) -> None:
+    """Exercise safe CPU meta loading in the real model environment."""
+    import json
+    import subprocess
+    import tempfile
+    import torch
+    from imint.eval.fieldtruth import sha256_file
+
+    with tempfile.TemporaryDirectory() as directory:
+        private = Path(directory) / "private"
+        private.mkdir(mode=0o700)
+        checkpoint = Path(directory) / "synthetic.pt"
+        torch.save({"config": {"enabled_aux_names": ["dem"], "n_aux_channels": 1},
+                    "model_state_dict": {"lidar_branch.net.0.conv.weight": torch.ones(2, 1, 3, 3)}}, checkpoint)
+        cells = {"clay_r1": {"checkpoint": {"path": str(checkpoint),
+                 "bytes": checkpoint.stat().st_size, "sha256": sha256_file(checkpoint)}}}
+        result = subprocess.run(
+            [sys.executable, str(source_root / "scripts/nfi_checkpoint_inputs.py")],
+            input=json.dumps(cells), text=True, capture_output=True, check=True,
+            env={**os.environ, "TMPDIR": str(private), "CUDA_VISIBLE_DEVICES": ""})
+        contract = json.loads(result.stdout)["cells"]["clay_r1"]
+        assert contract["enabled_aux_names"] == ["dem"] and contract["n_aux_channels"] == 1
+    print({"status": "ok", "environment": "checkpoint-metadata", "device": "meta"})
+
+
 def smoke_model() -> None:
     import numpy
     import terratorch
@@ -115,6 +169,8 @@ def smoke_model() -> None:
         path = source_root / relative
         compile(path.read_text(encoding="utf-8"), relative, "exec")
 
+    smoke_nmd_sampler()
+    smoke_checkpoint_metadata()
     print({"status": "ok", "environment": "model", **actual_versions})
 
 
@@ -156,20 +212,40 @@ def smoke_scoring() -> None:
         "scripts/nfi_head_cv.py",
         "scripts/run_lucas_crop_split_job.py",
         "scripts/validate_against_nfi.py",
+        "scripts/prepare_nfi_holdout.py",
+        "scripts/ladder_fieldtruth_standings.py",
     ):
         _load_script(source_root / relative)
     assert "torch" not in sys.modules
     print({"status": "ok", "environment": "scoring", **actual_versions})
 
 
+def smoke_preparation(source_git_sha: str) -> None:
+    """Verify the actual sealed CPU runtime without reading field data."""
+    from scripts.prepare_nfi_holdout import preparation_runtime
+
+    result = preparation_runtime(
+        Path("/opt/imintengine"), Path("/opt/provenance/runtime.json"),
+        source_git_sha, "local-build@sha256:" + "0" * 64)
+    assert result["source"]["git_sha"] == source_git_sha
+    assert "torch" not in sys.modules
+    print({"status": "ok", "environment": "nfi-preparation",
+           "source_git_sha": source_git_sha})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("environment", choices=("model", "scoring"))
+    parser.add_argument("environment", choices=("model", "scoring", "preparation"))
+    parser.add_argument("--source-git-sha")
     args = parser.parse_args()
+    if args.environment == "preparation" and not args.source_git_sha:
+        parser.error("preparation requires --source-git-sha")
     if args.environment == "model":
         smoke_model()
-    else:
+    elif args.environment == "scoring":
         smoke_scoring()
+    else:
+        smoke_preparation(args.source_git_sha)
 
 
 if __name__ == "__main__":

@@ -411,6 +411,35 @@ def _validate_checkpoint_state_keys(model_state, checkpoint_state) -> None:
     )
 
 
+def checkpoint_aux_count(config, state_dict):
+    """Read the actual aux-convolution width before falling back to config."""
+    counts = {int(weight.shape[1]) for key, weight in state_dict.items()
+              if key.endswith("lidar_branch.net.0.conv.weight")
+              and getattr(weight, "ndim", None) == 4}
+    if len(counts) > 1:
+        raise ValueError("checkpoint has contradictory auxiliary channel widths")
+    count = next(iter(counts)) if counts else config.get("n_aux_channels", 11)
+    if type(count) is not int or count < 0:
+        raise ValueError("checkpoint auxiliary channel count must be nonnegative")
+    return count, "state_dict" if counts else "config_or_default"
+
+
+def inference_aux_names(config, n_aux_channels=None):
+    """One ordered checkpoint contract for preparation and real inference."""
+    from imint.training.unified_dataset import AUX_CHANNEL_NAMES, AUX_NORM
+
+    recorded = config.get("enabled_aux_names")
+    names = recorded if recorded else ([] if n_aux_channels == 0 else AUX_CHANNEL_NAMES)
+    if (not isinstance(names, (list, tuple))
+            or any(not isinstance(n, str) or n not in AUX_NORM for n in names)
+            or len(set(names)) != len(names)):
+        raise ValueError("checkpoint has invalid auxiliary channel names")
+    if n_aux_channels is not None and len(names) != n_aux_channels:
+        raise ValueError(f"checkpoint config lists {len(names)} aux names "
+                         f"but its aux conv takes {n_aux_channels} channels")
+    return list(names)
+
+
 def load_model(
     ckpt_path: str,
     device,
@@ -481,15 +510,10 @@ def load_model(
     # Conv2d(n_aux, 32, 3): its in-channel dim IS n_aux_channels. Search both
     # the Prithvi wrapper key (`aux_branch.*` / `lidar_branch.net.0.conv`) and
     # the ViTUPerNetHead key (`decoder_head.lidar_branch.net.0.conv`).
-    _naux = None
-    for _k in sd:
-        if _k.endswith("lidar_branch.net.0.conv.weight") and sd[_k].dim() == 4:
-            _naux = sd[_k].shape[1]; break
-    n_aux = _naux if _naux is not None else ck_cfg.get("n_aux_channels", 11)
-    if _naux is not None and _naux != ck_cfg.get("n_aux_channels", 11):
+    n_aux, aux_count_source = checkpoint_aux_count(ck_cfg, sd)
+    if aux_count_source == "state_dict" and n_aux != ck_cfg.get("n_aux_channels", 11):
         print(f"  [load_model] n_aux_channels inferred from checkpoint: "
-              f"{_naux} (config default was "
-              f"{ck_cfg.get('n_aux_channels', 11)})")
+              f"{n_aux} (config default was {ck_cfg.get('n_aux_channels', 11)})")
 
     # Resolve backbone_name. Fallback chain:
     #  (1) ck_cfg["backbone_name"] — set by trainer since registry refactor
@@ -918,6 +942,8 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
         img5d = torch.from_numpy(emb).unsqueeze(0).to(device)  # (1, 128, H, W)
     else:
         spectral = data.get("spectral", data.get("image")).astype(np.float32)
+        if num_frames is None:
+            num_frames = spectral.shape[0] // N_BANDS
 
         # Single-frame checkpoints (num_temporal_frames=1, e.g. Prithvi-300M)
         # must see the SAME one frame training selected — feeding the tile's
@@ -934,6 +960,12 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
                 spectral = UnifiedDataset._extract_crop_frame(data)
             else:
                 spectral = UnifiedDataset._extract_lulc_frame(data)
+        elif num_frames > 1:
+            from imint.training.unified_dataset import UnifiedDataset
+            # Training replaces masked frames with the nearest valid frame.
+            # Reuse that loader before normalization and retain its DOYs.
+            spectral, _, frame_doy = UnifiedDataset._extract_all_frames(
+                data, source="lulc", num_frames=num_frames)
 
         # Normalize: reflectance → DN → Prithvi z-score
         n_frames = spectral.shape[0] // N_BANDS
@@ -994,7 +1026,9 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
             arr = np.full((crop_sz, crop_sz), fill, dtype=np.float32)
         aux_arrays.append(normalize_aux_channel(ch_name, arr))
 
-    aux = torch.from_numpy(np.stack(aux_arrays, axis=0)).unsqueeze(0).to(device)
+    aux_stack = (np.stack(aux_arrays, axis=0) if aux_arrays
+                 else np.empty((0, crop_sz, crop_sz), dtype=np.float32))
+    aux = torch.from_numpy(aux_stack).unsqueeze(0).to(device)
 
     temporal_coords = None
     location_coords = None
@@ -1020,24 +1054,16 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
 
         doy = data.get("doy")
         if doy is not None:
-            from imint.training.sampler import _sweref99_to_wgs84
-            year = int(data.get("year", data.get("lpis_year", 2022)))
-            tc = np.zeros((n_frames, 2), dtype=np.float32)
-            tc[:, 0] = float(year)
-            if not single_frame:
-                # Multitemporal: per-frame DOY, as trained.
-                tc[:len(doy), 1] = doy[:n_frames].astype(np.float32)
-            # Single-frame mirrors training's non-multitemporal path, which
-            # builds coords with doy=None → [[year, 0]] (unified_dataset
-            # ~L582/L834). Leaving tc[:,1]=0 here matches it exactly.
-            temporal_coords = torch.from_numpy(tc).unsqueeze(0).to(device)
-
-            easting = float(data.get("easting", 500_000))
-            northing = float(data.get("northing", 6_500_000))
-            lat, lon = _sweref99_to_wgs84(easting, northing)
-            location_coords = torch.from_numpy(
-                np.array([[lat, lon]], dtype=np.float32)
-            ).to(device)
+            from imint.training.unified_dataset import UnifiedDataset
+            # Use training's resolver and prior-autumn convention. Campaign
+            # tiles carry dates without year/lpis_year; never invent 2022.
+            # A one-frame checkpoint trains with DOY=None, even when the
+            # source tile already contains only six spectral bands.
+            if n_frames == 1:
+                frame_doy = None
+            tc, lc = UnifiedDataset._build_coords(data, frame_doy, n_frames)
+            temporal_coords = tc.unsqueeze(0).to(device)
+            location_coords = lc.unsqueeze(0).to(device)
 
     return {
         "img5d": img5d, "aux": aux, "batch": batch, "family": family,
@@ -1127,15 +1153,8 @@ def run_inference(model, tile_path: str, device, img_size: int = 224,
     import torch
     family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
     if aux_channel_names is None:
-        recorded = getattr(model, "ck_cfg", {}).get("enabled_aux_names")
-        if recorded:
-            aux_channel_names = list(recorded)
-            n_aux = getattr(model, "n_aux_channels", None)
-            if n_aux is not None and len(aux_channel_names) != n_aux:
-                raise ValueError(
-                    f"checkpoint config lists {len(aux_channel_names)} aux "
-                    f"names {aux_channel_names} but its aux conv takes "
-                    f"{n_aux} channels")
+        aux_channel_names = inference_aux_names(
+            getattr(model, "ck_cfg", {}), getattr(model, "n_aux_channels", None))
     inp = _build_inference_inputs(
         tile_path, device, img_size, aux_channel_names, family=family,
         num_frames=getattr(model, "num_frames", None),
