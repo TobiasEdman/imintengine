@@ -942,6 +942,8 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
         img5d = torch.from_numpy(emb).unsqueeze(0).to(device)  # (1, 128, H, W)
     else:
         spectral = data.get("spectral", data.get("image")).astype(np.float32)
+        if num_frames is None:
+            num_frames = spectral.shape[0] // N_BANDS
 
         # Single-frame checkpoints (num_temporal_frames=1, e.g. Prithvi-300M)
         # must see the SAME one frame training selected — feeding the tile's
@@ -958,6 +960,12 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
                 spectral = UnifiedDataset._extract_crop_frame(data)
             else:
                 spectral = UnifiedDataset._extract_lulc_frame(data)
+        elif num_frames > 1:
+            from imint.training.unified_dataset import UnifiedDataset
+            # Training replaces masked frames with the nearest valid frame.
+            # Reuse that loader before normalization and retain its DOYs.
+            spectral, _, frame_doy = UnifiedDataset._extract_all_frames(
+                data, source="lulc", num_frames=num_frames)
 
         # Normalize: reflectance → DN → Prithvi z-score
         n_frames = spectral.shape[0] // N_BANDS
@@ -1051,8 +1059,8 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
             # tiles carry dates without year/lpis_year; never invent 2022.
             # A one-frame checkpoint trains with DOY=None, even when the
             # source tile already contains only six spectral bands.
-            frame_doy = (np.asarray(doy).reshape(-1)[:n_frames].astype(np.int32)
-                         if n_frames > 1 else None)
+            if n_frames == 1:
+                frame_doy = None
             tc, lc = UnifiedDataset._build_coords(data, frame_doy, n_frames)
             temporal_coords = tc.unsqueeze(0).to(device)
             location_coords = lc.unsqueeze(0).to(device)
