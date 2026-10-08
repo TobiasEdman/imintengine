@@ -104,3 +104,20 @@ def test_tract_year_centroids_keep_cluster_whole_and_preserve_sampling_coordinat
     blocks = block_ids(statistical, 50)
     assert blocks[0] == blocks[1] and blocks[0] != blocks[2]
     pd.testing.assert_frame_equal(held, original)
+
+
+def test_tile_role_scores_keep_the_same_common_coverage():
+    held = pd.DataFrame({"TractID": [1,2,3], "PlotID": [1]*3, "Year": [2024]*3,
+                         "tile_role": ["campaign", "cohort", "campaign"], "nfi_forest": [1,2,3],
+                         "Easting": [100000.,200000.,300000.], "Northing": [6500000.]*3})
+    result = paired_report(held, {"model": np.array([1,1,3])},
+        {"NMD2023": (np.array([2,2,3]), np.array([112,112,0]))},
+        {"bootstrap_seed": 1, "bootstrap_samples": 100, "block_km": 50, "sesoi": .02, "primary_population": "all"})
+    assert result["tile_role_scores"]["campaign"]["model"]["n"] == 1
+    assert result["tile_role_scores"]["campaign"]["model"]["overall_exact"] == 1.
+    assert result["tile_role_scores"]["cohort"]["model"]["overall_exact"] == 0.
+    assert result["compared_observations"] == 2
+    matrix = result["tile_role_scores"]["campaign"]["model"]["confusion_matrix"]
+    assert np.asarray(matrix).shape == (5, 5) and np.asarray(matrix).sum() == 1
+    assert matrix[1][1] == 1
+    assert np.asarray(result["scores"]["model"]["confusion_matrix"]).sum() == 2

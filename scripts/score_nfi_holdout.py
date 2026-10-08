@@ -78,7 +78,7 @@ def paired_report(
     truth = truth[covered]
     sources = dict(predictions)
     sources.update({name: pred for name, (pred, _) in baselines.items()})
-    scores, frames = {}, {}
+    scores, frames, strata = {}, {}, {}
     for name, pred in sources.items():
         pred = np.asarray(pred)
         if pred.shape != (len(holdout),):
@@ -89,8 +89,19 @@ def paired_report(
         correct = collapsed == truth
         scores[name] = dict(accuracy_suite(truth, pred[covered]),
                             n=len(truth), correct=int(correct.sum()),
-                            overall_exact=float(correct.mean()))
+                            overall_exact=float(correct.mean()),
+                            confusion_matrix=np.bincount(
+                                truth * 5 + collapsed.astype(int), minlength=25).reshape(5, 5).tolist())
         frames[name] = statistical.assign(correct=correct.astype(int)).set_index(NFI_KEY)
+        if "tile_role" in selected:
+            for role in sorted(selected["tile_role"].unique()):
+                mask = selected["tile_role"].to_numpy() == role
+                strata.setdefault(str(role), {})[name] = dict(
+                    accuracy_suite(truth[mask], pred[covered][mask]),
+                    n=int(mask.sum()), correct=int(correct[mask].sum()),
+                    overall_exact=float(correct[mask].mean()),
+                    confusion_matrix=np.bincount(
+                        truth[mask] * 5 + collapsed[mask].astype(int), minlength=25).reshape(5, 5).tolist())
     # All model-model and model-NMD comparisons form one prespecified family;
     # the winner's comparisons are never selected only after seeing scores.
     pairs = {}
@@ -118,6 +129,10 @@ def paired_report(
     best = sorted(m for m in predictions if scores[m]["overall_exact"] == best_score)
     return {
         "schema": "nfi-paired-model-nmd-v1",
+        "primary_population": protocol.get("primary_population", "all"),
+        "confusion_matrix_axes": {"rows": "NFI truth", "columns": "prediction", "class_order": [0,1,2,3,4]},
+        "tile_role_scores": strata,
+        "tile_role_interpretation": "Descriptive strata; confirmatory inference applies only to the prespecified primary population.",
         "frozen_observations": len(holdout), "compared_observations": len(selected),
         "excluded_for_nmd_coverage": int((~covered).sum()),
         "block_assignment": "50km_grid_at_frozen_tract_year_centroid",

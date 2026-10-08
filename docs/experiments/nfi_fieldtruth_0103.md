@@ -50,6 +50,17 @@ older models were trained with earlier inputs. The result answers which
 available checkpoint performs best under this recorded evaluation protocol,
 not whether a single architectural change caused a difference.
 
+The default primary population includes all eligible held-out observations
+(`--population all`). Every row records `tile_role`; report descriptive
+accuracy and confusion matrices separately for campaign and cohort tiles.
+Cohort tiles may carry the exact NMD2023 targets seen during segmentation
+training. Their NFI measurements remain held out, but comparison with NMD
+there measures agreement with independent field truth on familiar imagery
+and label locations. This dependence must be stated alongside the result.
+`--population campaign` selects only eligible campaign observations before
+freezing if Tobias chooses that narrower primary population. This choice is
+recorded in the approved manifest; it cannot be switched after scoring.
+
 ## Observation independence and selection
 
 Identity is `(TractID, PlotID, Year)`. A test tile is insufficient:
@@ -80,9 +91,12 @@ the same observation can occur in a teacher's training tile.
    absent 2016 SAR baselines and optional CROMA B01/B09 padding is recorded
    for go/no-go; unsupported ERA5 checkpoint channels fail preparation.
    Require NFI year to equal spectral year using the colocation resolver;
-   unknown tile years are excluded explicitly.
-5. Intersect native model crop support, choose the lexically first eligible
-   tile per observation, and retain exactly one row per plot-year. Reject
+   unknown tile years are excluded explicitly. Tiles must also carry an
+   explicit year/lpis_year, four valid DOYs and finite location metadata, so
+   the existing inference code cannot silently substitute year 2022 or a
+   default position. Date-only years remain identifiable but are excluded.
+5. Intersect native model crop support, prefer an eligible campaign tile,
+   then choose the lexically first eligible tile within the role per observation, and retain exactly one row per plot-year. Reject
    inconsistent field truth.
 6. Save `holdout.parquet`, `training.parquet` and `manifest.json` in a
    new run directory on the data volume. The manifest binds code, runtime
@@ -123,8 +137,9 @@ metadata child under `/opt/venvs/model/bin/python`: `weights_only=True`,
 `map_location="meta"`, authenticated private checkpoint copies, no model
 construction or forward. Mount a writable Pod-private `TMPDIR` large enough
 for one checkpoint; keep source/runtime and input data mounts read-only.
-The model-image smoke separately exercises Rasterio with a two-pixel
-synthetic raster. Neither smoke samples real NMD or performs inference.
+The model-image smoke exercises Rasterio with a two-pixel synthetic raster
+and runs the checkpoint metadata child with a synthetic safe checkpoint and
+private TMPDIR. The scoring-image smoke also imports standings. Neither smoke samples real NMD or performs inference.
 Capture the actual Pod `imageID` alongside the requested digest; the runtime
 manifest checks content, but cannot independently discover its OCI identity.
 

@@ -41,6 +41,7 @@ def validate_freeze_structure(manifest: dict) -> None:
     if (manifest.get("identity") != NFI_KEY
             or set(manifest.get("cells", {})) != NFI_CELLS
             or "NMD2023" not in manifest.get("baselines", {})
+            or manifest.get("protocol", {}).get("primary_population") not in {"all", "campaign"}
             or not NFI_SOURCE_FILES <= set(manifest.get("source_sha256", {}))
             or any(manifest.get("protocol", {}).get(k) != v for k, v in NFI_PROTOCOL.items())):
         raise ValueError("incomplete frozen NFI identity, roster, source or protocol")

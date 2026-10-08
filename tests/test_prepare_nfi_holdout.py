@@ -174,14 +174,37 @@ def test_tessera_validation_precedes_unrelated_modality_exclusions(tmp_path):
         prep.tile_readiness(path)
 
 
-def test_readiness_uses_colocation_date_year_and_excludes_unknown(tmp_path):
+def test_readiness_excludes_model_year_fallback_and_unknown(tmp_path):
     path = tmp_path / "tile.npz"
     data = dict(spectral=np.ones((24, 8, 8)), tessera=np.ones((128, 8, 8)),
                 has_tessera=1, tessera_source="geotessera-0.10.2",
                 s1_vv_vh=np.ones((2, 8, 8)), s1_enrich_v=4, has_s1=1,
                 b08=np.ones((4, 8, 8)), rededge=np.ones((12, 8, 8)))
     np.savez(path, **data, dates=np.array(["2023-10-01", "2024-05-01", "2024-07-01"]))
+    assert prep.tile_readiness(path) == ({}, "missing_explicit_model_year")
+    np.savez(path, **data, year=2024, easting=500000., northing=6500000., doy=np.array([280,150,180,210]))
     meta, reason = prep.tile_readiness(path)
-    assert reason is None and meta["year"] == 2024
+    assert reason is None and meta["year"] == 2024 and meta["year_source"] == "year"
     np.savez(path, **data)
     assert prep.tile_readiness(path) == ({}, "unknown_spectral_year")
+
+
+def test_readiness_rejects_missing_location_or_frame_metadata(tmp_path):
+    path = tmp_path / "tile.npz"
+    data = dict(spectral=np.ones((24,8,8)), tessera=np.ones((128,8,8)), has_tessera=1,
+                tessera_source="geotessera-0.10.2", s1_vv_vh=np.ones((2,8,8)), s1_enrich_v=4,
+                has_s1=1, b08=np.ones((4,8,8)), rededge=np.ones((12,8,8)), year=2024,
+                easting=500000., northing=6500000., doy=np.array([280,150,180,210]))
+    for key in ("easting", "northing", "doy"):
+        np.savez(path, **{k: v for k, v in data.items() if k != key})
+        assert prep.tile_readiness(path)[1] == "invalid_model_metadata:" + key
+
+
+def test_campaign_tile_preference_precedes_lexical_order():
+    source = pd.DataFrame({"TractID": [1,1], "PlotID": [1,1], "Year": [2024,2024],
+                           "tile_name": ["a_cohort", "z_campaign"], "tile_role": ["cohort", "campaign"],
+                           "row": [4,4], "col": [4,4]})
+    meta = {name: {"height": 8, "width": 8, "year": 2024} for name in source.tile_name}
+    held, counts = prep.select_holdout(source, source[prep.NFI_KEY].iloc[:0], meta)
+    assert held.tile_name.tolist() == ["z_campaign"]
+    assert counts["tile_role_support"] == {"campaign": 1}

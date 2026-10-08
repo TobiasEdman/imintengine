@@ -170,8 +170,23 @@ def tile_readiness(path: Path) -> tuple[dict, str | None]:
         year = tile_year(data)
         if year is None:
             return {}, "unknown_spectral_year"
+        # Existing inference uses explicit year/lpis_year and otherwise 2022.
+        # Do not admit date-only tiles under a different model-time value.
+        year_source = next((key for key in ("year", "lpis_year") if key in data), None)
+        if year_source is None:
+            return {}, "missing_explicit_model_year"
+        for key in (year_source, "easting", "northing"):
+            if key not in data or data[key].shape != () or not np.isfinite(data[key]):
+                return {}, "invalid_model_metadata:" + key
+        if float(data[year_source]) != year:
+            return {}, "invalid_model_metadata:" + year_source
+        if ("doy" not in data or data["doy"].shape != (4,)
+                or not np.isfinite(data["doy"]).all()
+                or not ((data["doy"] >= 0) & (data["doy"] <= 366)).all()):
+            return {}, "invalid_model_metadata:doy"
         return {"height": int(spectral.shape[-2]),
-                "width": int(spectral.shape[-1]), "year": int(year)}, None
+                "width": int(spectral.shape[-1]), "year": int(year),
+                "year_source": year_source, "model_location_present": True}, None
 
 
 def audit_auxiliary_inputs(path: Path, geometry: dict, requirements: dict) -> tuple[dict, list[str]]:
@@ -263,7 +278,14 @@ def select_holdout(
         candidates.append(group.loc[keep])
     if not candidates:
         raise ValueError("no eligible observations with common input support")
-    paired = pd.concat(candidates).sort_values(NFI_KEY + ["tile_name"])
+    paired = pd.concat(candidates)
+    if "tile_role" in paired:
+        paired["_tile_priority"] = paired["tile_role"].map({"campaign": 0, "cohort": 1})
+        if paired["_tile_priority"].isna().any():
+            raise ValueError("unknown tile role")
+        paired = paired.sort_values(NFI_KEY + ["_tile_priority", "tile_name"]).drop(columns="_tile_priority")
+    else:
+        paired = paired.sort_values(NFI_KEY + ["tile_name"])
     holdout = paired.drop_duplicates(NFI_KEY).reset_index(drop=True)
     if holdout.empty:
         raise ValueError("holdout is empty")
@@ -271,6 +293,8 @@ def select_holdout(
     counts.update(common_support_rows=len(paired),
                   observations=len(holdout), duplicate_rows_removed=len(paired)-len(holdout),
                   training_observation_overlap=0)
+    if "tile_role" in holdout:
+        counts["tile_role_support"] = {str(role): int(n) for role, n in holdout["tile_role"].value_counts().items()}
     return holdout, counts
 
 
@@ -305,6 +329,8 @@ def main() -> None:
                  "promotion-report", "nmd2023", "out-dir"):
         ap.add_argument("--" + name, type=Path, required=True)
     ap.add_argument("--nmd2018", type=Path)
+    ap.add_argument("--population", choices=("all", "campaign"), default="all",
+                    help="prespecified primary population; all reports tile-role strata")
     ap.add_argument("--runtime-image", required=True,
                     help="reviewed inference image pinned with @sha256")
     ap.add_argument("--runtime-manifest", type=Path, required=True,
@@ -347,6 +373,7 @@ def main() -> None:
     if not set(index["tile_name"].astype(str)) <= set(paths):
         raise ValueError("indexed tile absent from the two declared data roots")
     index["tile_path"] = index["tile_name"].map(lambda n: str(paths[str(n)].resolve()))
+    index["tile_role"] = index["tile_name"].map(lambda n: "campaign" if str(n) in staging else "cohort")
     inputs = [args.plot_index, args.teacher_index, args.promotion_job_json,
               args.promotion_report, args.nmd2023]
     if args.nmd2018:
@@ -399,10 +426,13 @@ def main() -> None:
         }
         for m, cfg in DISTILL.items() for r in range(1, 5)
     }
-    extracted = subprocess.run(
-        [runtime["environments"]["model"]["python"]["path"],
-         str(root / "scripts/nfi_checkpoint_inputs.py")],
-        input=json.dumps(cells), capture_output=True, text=True, check=True)
+    try:
+        extracted = subprocess.run(
+            [runtime["environments"]["model"]["python"]["path"],
+             str(root / "scripts/nfi_checkpoint_inputs.py")],
+            input=json.dumps(cells), capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise ValueError("checkpoint metadata preparation failed: " + exc.stderr[-4000:]) from exc
     requirements = json.loads(extracted.stdout)
     if set(requirements["cells"]) != set(cells):
         raise ValueError("checkpoint input contract roster mismatch")
@@ -424,7 +454,10 @@ def main() -> None:
                 excluded[name] = "auxiliary_gaps:" + ",".join(failures)
             else:
                 metadata[name] = meta
-    holdout, counts = select_holdout(index, training, metadata)
+    candidate_index = index if args.population == "all" else index[index["tile_role"] == "campaign"]
+    holdout, counts = select_holdout(candidate_index, training, metadata)
+    counts["primary_population"] = args.population
+    counts["all_candidate_rows"] = len(index)
     from validate_against_nfi import derive_nfi_forest_class
     holdout["nfi_forest"] = [
         derive_nfi_forest_class(row, dominant_frac=0.7) or 0
@@ -469,7 +502,7 @@ def main() -> None:
         "excluded_teacher_feature_plot_years": len(training),
         "campaign": {"tiles": len(staging), "training_tiles": campaign_training_tiles,
                      "root": str(args.staging_dir.resolve())},
-        "protocol": dict(NFI_PROTOCOL),
+        "protocol": dict(NFI_PROTOCOL, primary_population=args.population),
         "execution": "awaiting_user_go_no_go",
     }
     for path, original in input_stats.items():

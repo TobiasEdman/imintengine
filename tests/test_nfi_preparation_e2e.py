@@ -54,7 +54,8 @@ def prepared_inputs(tmp_path, monkeypatch):
     tile = dict(spectral=np.ones((24,8,8)), tessera=np.ones((128,8,8)),
                 s1_vv_vh=np.ones((2,8,8)), b08=np.ones((4,8,8)), rededge=np.ones((12,8,8)),
                 has_tessera=1, tessera_source="geotessera-0.10.2", has_s1=1, s1_enrich_v=4,
-                dem=np.zeros((8,8)), year=2024)
+                dem=np.zeros((8,8)), year=2024, easting=500000., northing=6500000.,
+                doy=np.array([280,150,180,210]))
     for name in ("train", "oldtest"):
         np.savez(directories["cohort-dir"] / (name + ".npz"), **tile)
     stream = io.BytesIO(); np.savez(stream, **tile)
@@ -136,3 +137,17 @@ def test_main_rejects_parsed_input_replaced_after_read(prepared_inputs, monkeypa
     with pytest.raises(ValueError, match="parsed input changed"):
         prep.main()
     assert not prepared_inputs["out-dir"].exists()
+
+
+def test_campaign_population_is_selected_before_freeze(prepared_inputs, monkeypatch):
+    index_path = prepared_inputs["plot-index"]
+    frame = pd.read_parquet(index_path)
+    extra = frame.iloc[[0]].assign(TractID=999)
+    pd.concat([frame, extra]).to_parquet(index_path)
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--population", "campaign"])
+    prep.main()
+    path = prepared_inputs["out-dir"] / "manifest.json"
+    held, manifest = load_frozen_holdout(path, sha256_file(path))
+    assert held.TractID.tolist() == [3]
+    assert held.tile_role.tolist() == ["campaign"]
+    assert manifest["protocol"]["primary_population"] == "campaign"

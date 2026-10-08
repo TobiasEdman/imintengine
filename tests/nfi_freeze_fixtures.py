@@ -7,7 +7,7 @@ from imint.eval.fieldtruth import NFI_CELLS, NFI_KEY, NFI_PROTOCOL, NFI_SOURCE_F
 
 def complete_manifest(manifest):
     root = Path(__file__).resolve().parents[1]
-    manifest.update(identity=NFI_KEY, protocol=deepcopy(NFI_PROTOCOL),
+    manifest.update(identity=NFI_KEY, protocol=dict(deepcopy(NFI_PROTOCOL), primary_population="all"),
                     git_sha="a" * 40, runtime_image="registry/test@sha256:" + "b" * 64,
                     source_sha256={n: sha256_file(root / n) for n in NFI_SOURCE_FILES})
     cells = manifest.get("cells", {})

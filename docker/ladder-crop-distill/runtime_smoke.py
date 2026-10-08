@@ -64,6 +64,31 @@ def smoke_nmd_sampler() -> None:
     print({"status": "ok", "environment": "nmd-sampler", "pixels": 2})
 
 
+def smoke_checkpoint_metadata(source_root: Path = Path("/opt/imintengine")) -> None:
+    """Exercise safe CPU meta loading in the real model environment."""
+    import json
+    import subprocess
+    import tempfile
+    import torch
+    from imint.eval.fieldtruth import sha256_file
+
+    with tempfile.TemporaryDirectory() as directory:
+        private = Path(directory) / "private"
+        private.mkdir(mode=0o700)
+        checkpoint = Path(directory) / "synthetic.pt"
+        torch.save({"config": {"enabled_aux_names": ["dem"], "n_aux_channels": 1},
+                    "model_state_dict": {"lidar_branch.net.0.conv.weight": torch.ones(2, 1, 3, 3)}}, checkpoint)
+        cells = {"clay_r1": {"checkpoint": {"path": str(checkpoint),
+                 "bytes": checkpoint.stat().st_size, "sha256": sha256_file(checkpoint)}}}
+        result = subprocess.run(
+            [sys.executable, str(source_root / "scripts/nfi_checkpoint_inputs.py")],
+            input=json.dumps(cells), text=True, capture_output=True, check=True,
+            env={**os.environ, "TMPDIR": str(private), "CUDA_VISIBLE_DEVICES": ""})
+        contract = json.loads(result.stdout)["cells"]["clay_r1"]
+        assert contract["enabled_aux_names"] == ["dem"] and contract["n_aux_channels"] == 1
+    print({"status": "ok", "environment": "checkpoint-metadata", "device": "meta"})
+
+
 def smoke_model() -> None:
     import numpy
     import terratorch
@@ -136,6 +161,7 @@ def smoke_model() -> None:
         compile(path.read_text(encoding="utf-8"), relative, "exec")
 
     smoke_nmd_sampler()
+    smoke_checkpoint_metadata()
     print({"status": "ok", "environment": "model", **actual_versions})
 
 
@@ -178,6 +204,7 @@ def smoke_scoring() -> None:
         "scripts/run_lucas_crop_split_job.py",
         "scripts/validate_against_nfi.py",
         "scripts/prepare_nfi_holdout.py",
+        "scripts/ladder_fieldtruth_standings.py",
     ):
         _load_script(source_root / relative)
     assert "torch" not in sys.modules
