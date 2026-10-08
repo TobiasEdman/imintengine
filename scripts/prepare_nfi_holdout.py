@@ -2,7 +2,7 @@
 """Prepare a reproducible NFI holdout on CPU, only after Tessera promotion.
 
 Run in the data environment: raw observations and the resulting parquet stay
-there. This command performs no inference, NMD sampling or model fitting.
+there. Only NMD coverage is checked; no inference, scoring or model fitting.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import json
 import hashlib
 import io
+import os
 import re
 from pathlib import Path
 import sys
@@ -283,7 +284,7 @@ def select_holdout(
         raise ValueError("no eligible observations with common input support")
     paired = pd.concat(candidates)
     if "tile_role" in paired:
-        paired["_tile_priority"] = paired["tile_role"].map({"campaign": 0, "cohort": 1})
+        paired["_tile_priority"] = paired["tile_role"].map({"campaign": 0, "evaluation": 1, "cohort": 2})
         if paired["_tile_priority"].isna().any():
             raise ValueError("unknown tile role")
         paired = paired.sort_values(NFI_KEY + ["_tile_priority", "tile_name"]).drop(columns="_tile_priority")
@@ -299,6 +300,47 @@ def select_holdout(
     if "tile_role" in holdout:
         counts["tile_role_support"] = {str(role): int(n) for role, n in holdout["tile_role"].value_counts().items()}
     return holdout, counts
+
+
+def filter_nmd_coverage(holdout: pd.DataFrame, baselines: dict[str, Path],
+                        model_python: str) -> tuple[pd.DataFrame, dict]:
+    """Check coverage only before annual quotas; never derive or score classes."""
+    coordinates = holdout[["Easting", "Northing"]].to_numpy(dtype=float)
+    if not np.isfinite(coordinates).all():
+        raise ValueError("NMD coverage requires finite observation coordinates")
+    try:
+        result = subprocess.run(
+            [model_python, str(Path(__file__).with_name("nfi_nmd_coverage.py"))],
+            input=json.dumps({"coordinates": coordinates.tolist(),
+                              "baselines": {name: str(path) for name, path in baselines.items()}},
+                             allow_nan=False),
+            capture_output=True, text=True, check=True,
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+    except subprocess.CalledProcessError as exc:
+        raise ValueError("NMD coverage preparation failed: " + exc.stderr[-2000:]) from exc
+    masks = json.loads(result.stdout)
+    if (set(masks) != set(baselines)
+            or any(not isinstance(mask, list) or len(mask) != len(holdout)
+                   or any(type(v) is not bool for v in mask) for mask in masks.values())):
+        raise ValueError("invalid NMD coverage support returned by model interpreter")
+    common = np.ones(len(holdout), dtype=bool)
+    counts = {}
+    for name, mask in masks.items():
+        covered = np.asarray(mask, dtype=bool)
+        common &= covered
+        counts[name] = {"covered": int(covered.sum()), "uncovered": int((~covered).sum())}
+    if not common.any():
+        raise ValueError("no common NMD coverage before holdout selection")
+    selected = holdout.loc[common].copy().reset_index(drop=True)
+    return selected, {
+        "nmd_coverage": counts,
+        "pre_nmd_coverage_observations": len(holdout),
+        "excluded_for_nmd_coverage": int((~common).sum()),
+        "nmd_coverage_excluded_by_year": {
+            str(int(year)): int((~common[holdout.Year.to_numpy() == year]).sum())
+            for year in sorted(holdout.Year.unique())
+        },
+    }
 
 
 def select_balanced_years(holdout: pd.DataFrame, selection: dict) -> tuple[pd.DataFrame, dict]:
@@ -361,6 +403,8 @@ def main() -> None:
                  "promotion-report", "nmd2023", "out-dir"):
         ap.add_argument("--" + name, type=Path, required=True)
     ap.add_argument("--nmd2018", type=Path)
+    ap.add_argument("--evaluation-dir", type=Path, action="append", default=[],
+                    help="additional evaluation-only data root; repeat for multiple years")
     ap.add_argument("--population", choices=("balanced", "all", "campaign"), default="balanced",
                     help="balanced is the required primary study; all/campaign are diagnostic")
     ap.add_argument("--inventory-years", type=int, nargs="+",
@@ -390,6 +434,18 @@ def main() -> None:
     staging = {p.stem: p for p in args.staging_dir.glob("*.npz")}
     if len(staging) != 475 or set(staging) & set(cohort):
         raise ValueError("campaign must contain 475 evaluation-only, disjoint tiles")
+    paths = {**cohort, **staging}
+    evaluation_names = set(staging)
+    evaluation_roots = [{"root": str(args.staging_dir.resolve()), "tiles": len(staging),
+                         "role": "campaign"}]
+    for directory in args.evaluation_dir:
+        additional = {p.stem: p for p in directory.glob("*.npz") if not p.name.endswith(".tmp.npz")}
+        if not additional or set(additional) & set(paths):
+            raise ValueError("evaluation roots must be nonempty with globally unique tile names")
+        paths.update(additional)
+        evaluation_names.update(additional)
+        evaluation_roots.append({"root": str(directory.resolve()), "tiles": len(additional),
+                                 "role": "evaluation"})
     input_stats = {}
     parsed_identities = {}
     def capture(path):
@@ -412,11 +468,11 @@ def main() -> None:
                     read_input(args.promotion_report, "json"), len(cohort))
     index = read_input(args.plot_index, "parquet")
     source = read_input(args.teacher_index, "parquet")
-    paths = {**cohort, **staging}
     if not set(index["tile_name"].astype(str)) <= set(paths):
-        raise ValueError("indexed tile absent from the two declared data roots")
+        raise ValueError("indexed tile absent from the declared data roots")
     index["tile_path"] = index["tile_name"].map(lambda n: str(paths[str(n)].resolve()))
-    index["tile_role"] = index["tile_name"].map(lambda n: "campaign" if str(n) in staging else "cohort")
+    index["tile_role"] = index["tile_name"].map(
+        lambda n: "campaign" if str(n) in staging else "evaluation" if str(n) in evaluation_names else "cohort")
     inputs = [args.plot_index, args.teacher_index, args.promotion_job_json,
               args.promotion_report, args.nmd2023]
     if args.nmd2018:
@@ -440,7 +496,7 @@ def main() -> None:
         feature_frame = read_input(features, "parquet")
         split_record = read_input(split, "json")
         campaign_training_names.update(set(split_record["train_tiles"]) & set(staging))
-        trained.append(teacher_training_set(feature_frame, split_record, source, set(staging)))
+        trained.append(teacher_training_set(feature_frame, split_record, source, evaluation_names))
         # Older heads lack split/feature digests: conservatively exclude every
         # observation ever in the recorded feature pool, including its test set.
         exposure.append(resolve_observation_year(feature_frame, source)[NFI_KEY])
@@ -454,7 +510,7 @@ def main() -> None:
         directory = args.distill_root / f"{model}_r2"
         for path in directory.glob("*.npz"):
             capture(path)
-        sidecars = teacher_sidecar_inventory(directory, expected, head["sidecar_head_sha"], set(staging))
+        sidecars = teacher_sidecar_inventory(directory, expected, head["sidecar_head_sha"], evaluation_names)
         teacher_provenance[model] = {"head": head, "sidecars": sidecars,
                                    "historical_split_digest_available": False}
         inputs.extend([features, split, head_path])
@@ -483,8 +539,8 @@ def main() -> None:
         cells[cell]["input_contract"] = contract
     auxiliary_audit = {}
     metadata, excluded = {}, {}
-    # Inspect all campaign tiles, including tiles carrying no indexed plots.
-    names = set(staging) | set(index["tile_name"].astype(str))
+    # Inspect every declared evaluation tile, including those without indexed plots.
+    names = evaluation_names | set(index["tile_name"].astype(str))
     for name in sorted(names):
         capture(paths[name])
         meta, reason = tile_readiness(paths[name])
@@ -499,6 +555,13 @@ def main() -> None:
                 metadata[name] = meta
     candidate_index = index[index["tile_role"] == "campaign"] if args.population == "campaign" else index
     holdout, counts = select_holdout(candidate_index, training, metadata)
+    baselines = {"NMD2023": args.nmd2023}
+    if args.nmd2018:
+        baselines["NMD2018"] = args.nmd2018
+    holdout, coverage_counts = filter_nmd_coverage(
+        holdout, baselines, runtime["environments"]["model"]["python"]["path"])
+    counts.update(coverage_counts, observations=len(holdout))
+    counts["tile_role_support"] = {str(role): int(n) for role, n in holdout["tile_role"].value_counts().items()}
     if year_selection is not None:
         holdout, balance_counts = select_balanced_years(holdout, year_selection)
         counts.update(balance_counts, observations=len(holdout))
@@ -547,6 +610,7 @@ def main() -> None:
         "exposure_policy": "exclude_all_recorded_teacher_feature_plot_years",
         "recorded_training_plot_years": len(observed_training),
         "excluded_teacher_feature_plot_years": len(training),
+        "evaluation_roots": evaluation_roots,
         "campaign": {"tiles": len(staging), "training_tiles": campaign_training_tiles,
                      "root": str(args.staging_dir.resolve())},
         "protocol": dict(NFI_PROTOCOL, primary_population=args.population,

@@ -215,3 +215,29 @@ def test_campaign_tile_preference_precedes_lexical_order():
     held, counts = prep.select_holdout(source, source[prep.NFI_KEY].iloc[:0], meta)
     assert held.tile_name.tolist() == ["z_campaign"]
     assert counts["tile_role_support"] == {"campaign": 1}
+
+
+def test_common_nmd_coverage_excludes_masks_and_keeps_nonforest(tmp_path):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    frame = pd.DataFrame({"TractID": range(5), "PlotID": 1, "Year": 2024,
+                          "Easting": [5.,15.,25.,35.,45.], "Northing": 5.})
+    paths = {}
+    for name, values in {"NMD2023": [111, 12, 0, 111], "NMD2018": [111, 12, 111, 65535]}.items():
+        path = tmp_path / (name + ".tif")
+        with rasterio.open(path, "w", driver="GTiff", width=4, height=1,
+                           count=1, dtype="uint16", nodata=65535, crs="EPSG:3006",
+                           transform=from_origin(0, 10, 10, 10)) as dst:
+            dst.write(np.array([[values]], dtype=np.uint16))
+        paths[name] = path
+    selected, counts = prep.filter_nmd_coverage(frame, paths, sys.executable)
+    assert selected.TractID.tolist() == [0, 1]  # Non-forest raw code 12 is eligible.
+    assert counts["excluded_for_nmd_coverage"] == 3
+    assert counts["nmd_coverage_excluded_by_year"] == {"2024": 3}
+    with pytest.raises(ValueError, match="no common NMD coverage"):
+        prep.filter_nmd_coverage(frame.iloc[[4]], paths, sys.executable)
+    with rasterio.open(paths["NMD2023"], "r+") as raster:
+        raster.crs = "EPSG:4326"
+    with pytest.raises(ValueError, match="EPSG:3006"):
+        prep.filter_nmd_coverage(frame, paths, sys.executable)

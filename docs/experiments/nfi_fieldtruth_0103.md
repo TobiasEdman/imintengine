@@ -53,16 +53,22 @@ not whether a single architectural change caused a difference.
 Tobias withdrew the 2024-only scope on 2026-10-08 and requested evenly
 distributed inventory years. The current candidate audit is dominated by
 2024 (2,212 of 2,354 independent plot-years before modality/crop checks).
-It is not the final study population. Target years and per-year counts need
-to be set before a balanced selection and any additional fetch campaign;
-no new fetch is authorized by this protocol. Do not freeze the current
-unbalanced candidate population as the final evaluation.
+It is not the final study population. Tobias then directed use of every
+year with usable field/training data and satellite inputs, and delegated
+the tile-sizing calculation. The read-only planner compares 2018–2024,
+the common same-year source range including Tessera, and reports both
+the largest equal candidate quota and explicit smaller scenarios. The
+calculation does not freeze a quota or authorize a fetch. Final quality,
+coverage and independence checks must precede the go/no-go population.
 
 The default `--population balanced` requires an explicit ascending list of
 at least two `--inventory-years` and a positive `--observations-per-year`.
 There are no default years or counts. Selection runs after teacher exclusion,
-modality checks, common native crop support and one-tile-per-plot-year
-resolution. Within each selected year, it ranks the ASCII identity string
+modality checks, common native crop support, one-tile-per-plot-year
+resolution and common NMD coverage. The coverage preflight reads only
+whether each raster has a valid nonzero pixel; it computes no class or
+accuracy. It runs on CPU in the sealed model interpreter, which contains
+Rasterio; the scoring interpreter remains free of model dependencies. Within each selected year, it ranks the ASCII identity string
 `20261008:TractID:PlotID:Year` by SHA256 and retains the requested count.
 The fixed seed and algorithm are recorded with the years/count in the
 manifest; row order, field classes and predictions cannot change selection.
@@ -72,8 +78,8 @@ of eligible observations, not a guarantee of national area representation.
 
 `--population all` and `--population campaign` remain explicit diagnostic
 options; neither is the final balanced study. Every row records `tile_role`;
-report descriptive accuracy and confusion matrices separately for campaign
-and cohort tiles. Cohort tiles may carry the exact NMD2023 targets seen
+report descriptive accuracy and confusion matrices separately for campaign,
+additional evaluation and cohort tiles. Cohort tiles may carry the exact NMD2023 targets seen
 during segmentation training. Their NFI measurements remain held out, but
 comparison with NMD there measures agreement with independent field truth
 on familiar imagery and label locations. State this dependence alongside
@@ -100,8 +106,11 @@ the same observation can occur in a teacher's training tile.
    observations, from every candidate tile. Save this exclusion population
    in `training.parquet`; report the actual recorded train-union separately.
    Different inventory years remain different observations.
-3. Reject any campaign tile in a teacher's training list. Keep campaign and
-   training roots disjoint; require exactly 475 campaign tile files.
+3. Reject every declared evaluation tile in a teacher's training list or
+   dense-label sidecar inventory. Keep all data roots disjoint by tile name;
+   require exactly 475 original campaign tile files. Repeat
+   `--evaluation-dir` for additional per-year or audited legacy-copy roots.
+   Record every root and its tile count in the manifest.
 4. Require the promoted Tessera source, valid flags/arrays and current
    SAR prerequisites. Check every campaign tile, including unindexed tiles.
    Check spectral/Tessera/SAR/B08/rededge grid and frame shapes, then the
@@ -116,13 +125,18 @@ the same observation can occur in a teacher's training tile.
    growing-season year. Require four finite DOYs in 0–366 and finite location metadata.
    These checks do not establish that all four frames are present; temporal
    masks and missing-frame quality remain part of the go/no-go evidence.
-   Prithvi inference reuses training's coordinate builder: prior autumn has
+   Prithvi inference reuses training's frame loader, including nearest-valid
+   replacement for masked frames, before normalization. It also reuses the
+   coordinate builder: prior autumn has
    year-1, growing frames have year, and single-frame input has DOY zero.
    Campaign tiles with dates and no explicit year therefore use their actual
    year, with no 2022 substitute and no changes to stored input data.
-5. Intersect native model crop support, prefer an eligible campaign tile,
-   then choose the lexically first eligible tile within the role per observation, and retain exactly one row per plot-year. Reject
-   inconsistent field truth.
+5. Intersect native model crop support, prefer campaign, additional evaluation,
+   then cohort tiles. Choose the lexically first eligible tile within the
+   role and retain exactly one row per plot-year. Reject inconsistent truth.
+   Exclude missing NMD coverage before applying the fixed annual quotas;
+   retain nonforest observations with valid coverage and report exclusions
+   separately by year and baseline.
 6. Save `holdout.parquet`, `training.parquet` and `manifest.json` in a
    new run directory on the data volume. The manifest binds code, runtime
    image digest, checkpoints, teacher artifacts, indices, selected tiles,

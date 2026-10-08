@@ -87,7 +87,13 @@ def prepared_inputs(tmp_path, monkeypatch):
     values["promotion-job-json"].write_text(json.dumps({"metadata": {"name": "tessera-promote-v2"}, "status": {"conditions": [{"type": "Complete", "status": "True"}]}}))
     values["promotion-report"] = tmp_path / "report.json"
     values["promotion-report"].write_text(json.dumps({"source": "geotessera-0.10.2", "states": {"promoted": 2}, "verify": {"has_v1": 2, "stamped": 2, "has_v2_left": 0}}))
-    values["nmd2023"] = tmp_path / "baseline.tif"; values["nmd2023"].write_bytes(b"not sampled during preparation")
+    import rasterio
+    from rasterio.transform import from_origin
+    values["nmd2023"] = tmp_path / "baseline.tif"
+    with rasterio.open(values["nmd2023"], "w", driver="GTiff", width=4, height=4,
+                       count=1, dtype="uint16", crs="EPSG:3006", nodata=0,
+                       transform=from_origin(499980, 6500020, 10, 10)) as dst:
+        dst.write(np.full((1,4,4), 111, dtype=np.uint16))
     values["out-dir"] = tmp_path / "freeze"
     runtime = complete_manifest({})["preparation_runtime"]
     monkeypatch.setattr(prep, "preparation_runtime", lambda *a: runtime)
@@ -166,13 +172,16 @@ def test_default_balance_requires_years_before_any_runtime_or_data_read(prepared
     assert not prepared_inputs["out-dir"].exists()
 
 
-def test_balanced_population_freezes_exact_equal_counts(prepared_inputs, monkeypatch):
+@pytest.mark.parametrize("missing_nmd", [False, True])
+def test_balanced_population_freezes_exact_equal_counts(prepared_inputs, monkeypatch, missing_nmd):
     index_path = prepared_inputs["plot-index"]
     frame = pd.read_parquet(index_path)
     additions = frame.iloc[[2,2,2]].copy()
     additions["TractID"] = [4,5,6]
     additions["Year"] = [2023,2023,2024]
     additions["tile_name"] = ["campaign002", "campaign002", "campaign000"]
+    if missing_nmd:
+        additions.loc[additions.TractID.isin([4, 6]), "Easting"] = 600000.
     pd.concat([frame, additions]).to_parquet(index_path, index=False)
     tile = prepared_inputs["staging-dir"] / "campaign002.npz"
     with np.load(tile, allow_pickle=False) as z:
@@ -188,6 +197,40 @@ def test_balanced_population_freezes_exact_equal_counts(prepared_inputs, monkeyp
     assert not set(held.TractID) & {1,2}
     assert manifest["protocol"]["year_selection"]["years"] == [2023, 2024]
     assert manifest["selection"]["observations"] == 2
-    assert manifest["selection"]["pre_balance_observations"] == 4
-    assert manifest["selection"]["excluded_by_year_quota"] == 2
+    assert manifest["selection"]["pre_balance_observations"] == (2 if missing_nmd else 4)
+    assert manifest["selection"]["excluded_by_year_quota"] == (0 if missing_nmd else 2)
+    assert manifest["selection"]["excluded_for_nmd_coverage"] == (2 if missing_nmd else 0)
+    if missing_nmd:
+        assert held.TractID.tolist() == [3, 5]
     assert manifest["selection"]["tile_role_support"] == {"campaign": 2}
+
+
+def test_multiple_evaluation_roots_keep_campaign_invariant_and_balance(prepared_inputs, monkeypatch):
+    extra = prepared_inputs["out-dir"].parent / "evaluation2019"
+    extra.mkdir()
+    with np.load(prepared_inputs["staging-dir"] / "campaign000.npz", allow_pickle=False) as tile:
+        data = dict(tile)
+    data["dates"] = np.array(["2018-10-07", "2019-05-29", "2019-06-28", "2019-07-28"])
+    np.savez(extra / "new2019.npz", **data)
+    index_path = prepared_inputs["plot-index"]
+    frame = pd.read_parquet(index_path)
+    new = frame.iloc[[2]].assign(TractID=7, Year=2019, tile_name="new2019")
+    pd.concat([frame, new]).to_parquet(index_path, index=False)
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--evaluation-dir", str(extra),
+                       "--population", "balanced", "--inventory-years", "2019", "2024",
+                       "--observations-per-year", "1"])
+    prep.main()
+    path = prepared_inputs["out-dir"] / "manifest.json"
+    held, manifest = load_frozen_holdout(path, sha256_file(path))
+    assert held.Year.value_counts().to_dict() == {2019: 1, 2024: 1}
+    assert set(held.tile_role) == {"campaign", "evaluation"}
+    assert manifest["campaign"]["tiles"] == 475
+    assert manifest["campaign"]["training_tiles"] == 0
+    assert [r["tiles"] for r in manifest["evaluation_roots"]] == [475, 1]
+
+
+def test_evaluation_root_name_collision_is_rejected_early(prepared_inputs, monkeypatch):
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--evaluation-dir", str(prepared_inputs["cohort-dir"])])
+    with pytest.raises(ValueError, match="globally unique tile names"):
+        prep.main()
+    assert not prepared_inputs["out-dir"].exists()

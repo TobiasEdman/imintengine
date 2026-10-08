@@ -19,7 +19,8 @@ NFI_MODELS = ("clay", "croma", "prithvi300m", "prithvi300m4f",
 NFI_CELLS = frozenset(f"{model}_r{rung}" for model in NFI_MODELS for rung in range(1, 5))
 NFI_SOURCE_FILES = frozenset({
     "imint/eval/fieldtruth.py", "scripts/prepare_nfi_holdout.py",
-    "scripts/nfi_checkpoint_inputs.py", "scripts/validate_against_nfi.py",
+    "scripts/nfi_checkpoint_inputs.py", "scripts/nfi_nmd_coverage.py",
+    "scripts/validate_against_nfi.py",
     "scripts/inference_comparison.py", "scripts/compare_nmd2023_nfi.py",
     "scripts/score_nfi_holdout.py", "scripts/race_rigor_stats.py",
     "imint/training/unified_dataset.py", "imint/training/errors.py",

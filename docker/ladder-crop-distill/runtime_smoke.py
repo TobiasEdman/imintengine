@@ -44,7 +44,7 @@ def _load_script(path: Path) -> None:
             sys.modules[module_name] = previous
 
 
-def smoke_nmd_sampler() -> None:
+def smoke_nmd_sampler(source_root: Path = Path("/opt/imintengine")) -> None:
     """Exercise CPU raster sampling on synthetic pixels, with no field data."""
     import tempfile
     import numpy as np
@@ -61,6 +61,15 @@ def smoke_nmd_sampler() -> None:
         classes, raw = sample_nmd_unified(str(path), [100005, 100015], [6499995, 6499995])
         assert raw.tolist() == [111, 112]
         assert classes.tolist() == [1, 2]
+        import json
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, str(source_root / "scripts/nfi_nmd_coverage.py")],
+            input=json.dumps({"baselines": {"NMD2023": str(path)},
+                              "coordinates": [[100005,6499995], [100015,6499995], [0,0]]}),
+            capture_output=True, text=True, check=True,
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+        assert json.loads(result.stdout) == {"NMD2023": [True, True, False]}
     print({"status": "ok", "environment": "nmd-sampler", "pixels": 2})
 
 
