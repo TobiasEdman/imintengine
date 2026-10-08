@@ -1,0 +1,44 @@
+{
+  "task": "0103",
+  "verified_at": "2026-10-08T13:10:21.919261+00:00",
+  "implementation_commit": "3bb80283056e17b16d2bf39b71cccea6bbbd4c28",
+  "stage": "CPU preparation verified; real input freeze and inference pending",
+  "tests": {
+    "result": "152 passed",
+    "seconds": 66.25,
+    "command": "PYTHONDONTWRITEBYTECODE=1 /Users/tobiasedman/Developer/ImintEngine/.venv/bin/python -m pytest -p no:cacheprovider tests/test_ladder_fieldtruth_standings.py tests/test_ladder_holdout_eval.py tests/test_validator_skip_unscoreable.py tests/test_sameplots_holdout_filter.py tests/test_prepare_nfi_holdout.py tests/test_fieldtruth_cli_provenance.py tests/test_validate_against_nfi.py tests/test_nfi_frozen_readers.py tests/test_score_nfi_holdout.py tests/test_distill_stage_wiring.py -q"
+  },
+  "historical_local_identity_regression": {
+    "scope": "historical local identity regression only; not an input freeze or score",
+    "source_sha256": {
+      "index": "671d4bbb0d168f15635f09fc93fe04ec66845575adcb5342e4c3d82de6fcda33",
+      "features": "e2039c9eac3e6928f2b7a7854ea0ebffae58cef43be816d2518257a2f60e82d7",
+      "split": "c7e1ac20cf66c495f3a500e9f183e85557c9b9b739430753f9789c88806b626e",
+      "dump": "4d71fa1033a3dd0727a956fabf8e26587aea523bad930b50f2fa396a7da890de"
+    },
+    "teacher_train_rows": 735,
+    "teacher_train_plot_years": 667,
+    "old_tile_test_rows": 209,
+    "old_tile_test_plot_years": 202,
+    "leaked_plot_years_excluded": 28,
+    "remaining_rows": 175,
+    "remaining_plot_years": 174,
+    "remaining_training_overlap": 0
+  },
+  "internal_reviews": {
+    "identity_and_preparation": "PASS after corrections",
+    "resume_pairing_and_statistics": "PASS after corrections",
+    "validator_io_and_authenticated_reads": "PASS after corrections"
+  },
+  "external_review": {
+    "reviewer": "Claude",
+    "status": "pending replacement PR review"
+  },
+  "readiness": {
+    "tessera_promotion": "active=1, ready=1 at latest cluster inspection",
+    "input_freeze": "not performed",
+    "actual_model_inference": "not performed",
+    "actual_joint_nmd_scoring": "not performed",
+    "gpu_jobs_started": 0
+  }
+}
