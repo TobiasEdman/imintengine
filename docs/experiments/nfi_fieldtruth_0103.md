@@ -187,8 +187,12 @@ LUCAS is always marked diagnostic there.
 
 Observation-level independence is established against the recorded teacher
 feature pools. It is not a claim of geographic independence from every
-historical training tile. NMD2023 is a fixed reference against observations
-from several years, so temporal mismatch remains a limitation. Promoted
+historical training tile. The candidate support is dominated by the 2024
+campaign; a result on that population does not establish performance across
+inventory years. Report the surviving year and tile-role counts after the
+all-feature exclusion and input checks. For 2024 observations, NMD2023 is
+one year earlier (NMD2018 is six years earlier), so temporal mismatch remains
+a limitation. Promoted
 Tessera v2 is not proven prediction-equivalent to the historical v1 inputs;
 the comparison ranks these stored checkpoints under the new input protocol.
 

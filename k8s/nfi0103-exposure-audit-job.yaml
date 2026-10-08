@@ -1,0 +1,141 @@
+# Read-only CPU audit; no input freeze, model inference or NMD scoring.
+# Image/source verified by Actions run 37785634741.
+# Uses only that image's unchanged identity helpers; this versioned driver
+# adds conservative all-feature exclusion and reports both population options.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi0103-exposure-audit-v1
+  namespace: prithvi-training-default
+  labels:
+    app: nfi-fieldtruth-evaluation
+    task: '0103'
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: nfi-fieldtruth-evaluation
+        task: '0103'
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+      - name: ghcr-push
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: audit
+        image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:d25aa72c2205453d211f31e8fe1491f0fe6c5686c4624ddf32caa514cb4888a5
+        imagePullPolicy: IfNotPresent
+        command:
+        - /opt/venvs/scoring/bin/python
+        - -u
+        - -c
+        - |
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          import numpy as np
+          import pandas as pd
+          sys.path.insert(0, "/opt/imintengine/scripts")
+          from scripts.prepare_nfi_holdout import preparation_runtime, teacher_training_set
+          from imint.eval.fieldtruth import NFI_KEY, observation_keys, exclude_training_observations, resolve_observation_year
+          from gen_ladder_manifests import DISTILL
+
+          runtime = preparation_runtime(
+              Path("/opt/imintengine"), Path("/opt/provenance/runtime.json"),
+              os.environ["NFI_SOURCE_SHA"], os.environ["NFI_RUNTIME_IMAGE"])
+          inputs = {}
+          def read_input(path, kind):
+              payload = Path(path).read_bytes()
+              inputs[str(path)] = {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+              return pd.read_parquet(io.BytesIO(payload)) if kind == "parquet" else json.loads(payload)
+
+          index = read_input("/cephfs/nfi/nfi_index_v4_2026-09-30.parquet", "parquet")
+          source = read_input("/cephfs/nfi/nfi_index_unified_v2_512.parquet", "parquet")
+          staging = {p.stem for p in Path("/cephfs/unified_v2_512_nfi2024_staging").glob("*.npz")}
+          assert len(staging) == 475, "campaign must have exactly 475 evaluation tiles"
+          teachers, training, exposure = {}, [], []
+          for model in DISTILL:
+              root = Path("/cephfs/distill/heads")
+              features = read_input(root / f"{model}_r2_plot_features.parquet", "parquet")
+              split = read_input(root / f"{model}_r2_split.json", "json")
+              trained = teacher_training_set(features, split, source, staging)
+              teachers[model] = {"feature_rows": len(features), "training_plot_years": len(trained),
+                                "campaign_training_tiles": len(set(split["train_tiles"]) & staging)}
+              training.append(trained)
+              exposure.append(resolve_observation_year(features, source)[NFI_KEY])
+          training = pd.concat(training).drop_duplicates(NFI_KEY)
+          excluded = pd.concat(exposure).drop_duplicates(NFI_KEY)
+          eligible = exclude_training_observations(index, excluded)
+          assert not observation_keys(eligible).isin(observation_keys(excluded)).any()
+          eligible = eligible.copy()
+          eligible["tile_role"] = np.where(eligible["tile_name"].astype(str).isin(staging), "campaign", "cohort")
+          def support(frame):
+              return {"rows": len(frame), "plot_years": len(observation_keys(frame).unique()),
+                      "tiles": int(frame["tile_name"].nunique())}
+          populations = {"all": support(eligible),
+                         "campaign": support(eligible[eligible["tile_role"] == "campaign"])}
+          year_role = [{"year": int(year), "tile_role": role, **support(frame)}
+                       for (year, role), frame in eligible.groupby(["Year", "tile_role"])]
+          volumes = index[["VolPine", "VolContorta", "VolSpruce", "VolBirch", "VolOtherDec"]].to_numpy(dtype=float)
+          invalid_truth = (~np.isfinite(volumes) | (volumes < 0)).any(axis=1)
+          print(json.dumps({
+              "schema": "nfi-fieldtruth-exposure-audit-v1", "status": "completed",
+              "preliminary": True, "input_freeze": False, "inference": False, "nmd_scoring": False,
+              "source_git_sha": runtime["source"]["git_sha"], "image": runtime["image"],
+              "input_identities": inputs, "exclusion_policy": "all_teacher_feature_plot_years",
+              "primary_population": "not_frozen", "population_options": populations,
+              "year_role_support_before_modality_crop": year_role,
+              "identity": NFI_KEY, "candidate_rows": len(index),
+              "candidate_plot_years": len(observation_keys(index).unique()),
+              "teacher_training_plot_years_union": len(training), "teachers": teachers,
+              "teacher_feature_plot_years_union": len(excluded),
+              "feature_overlap_rows": len(index) - len(eligible),
+              "feature_overlap_plot_years": len(observation_keys(index).unique()) - len(observation_keys(eligible).unique()),
+              "eligible_rows_before_modality_crop": len(eligible),
+              "eligible_plot_years_before_modality_crop": len(observation_keys(eligible).unique()),
+              "remaining_feature_overlap": 0, "campaign_tiles": len(staging),
+              "invalid_volume_rows": int(invalid_truth.sum()),
+              "year_row_support_before_modality_crop": {str(int(y)): int(n) for y,n in eligible.groupby("Year").size().items()},
+              "next_gate": "terminal clean Tessera promotion before input freeze"
+          }, indent=2, allow_nan=False))
+        env:
+        - name: NFI_SOURCE_SHA
+          value: 307678d71200a8512c68a8efaf4709ed65caa432
+        - name: NFI_RUNTIME_IMAGE
+          value: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:d25aa72c2205453d211f31e8fe1491f0fe6c5686c4624ddf32caa514cb4888a5
+        - name: CUDA_VISIBLE_DEVICES
+          value: ''
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+          limits:
+            cpu: '2'
+            memory: 4Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: data
+          mountPath: /cephfs
+          readOnly: true
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: training-data-cephfs
+          readOnly: true
