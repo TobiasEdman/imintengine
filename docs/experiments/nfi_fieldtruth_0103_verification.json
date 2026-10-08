@@ -1,12 +1,45 @@
 {
   "task": "0103",
-  "verified_at": "2026-10-08T13:10:21.919261+00:00",
-  "implementation_commit": "3bb80283056e17b16d2bf39b71cccea6bbbd4c28",
+  "verified_at": "2026-10-08T17:29:28.624752+00:00",
+  "implementation_commit": "1350519889e437bd120f8033621a04b523a38451",
   "stage": "CPU preparation verified; real input freeze and inference pending",
   "tests": {
-    "result": "152 passed",
-    "seconds": 66.25,
-    "command": "PYTHONDONTWRITEBYTECODE=1 /Users/tobiasedman/Developer/ImintEngine/.venv/bin/python -m pytest -p no:cacheprovider tests/test_ladder_fieldtruth_standings.py tests/test_ladder_holdout_eval.py tests/test_validator_skip_unscoreable.py tests/test_sameplots_holdout_filter.py tests/test_prepare_nfi_holdout.py tests/test_fieldtruth_cli_provenance.py tests/test_validate_against_nfi.py tests/test_nfi_frozen_readers.py tests/test_score_nfi_holdout.py tests/test_distill_stage_wiring.py -q"
+    "result": "385 passed",
+    "seconds": 186.0,
+    "command": [
+      "/Users/tobiasedman/Developer/ImintEngine/.venv/bin/python",
+      "-m",
+      "pytest",
+      "-p",
+      "no:cacheprovider",
+      "tests/test_nfi_year_balance.py",
+      "tests/test_inference_time_parity.py",
+      "tests/test_tessera_wiring.py",
+      "tests/test_ladder_fieldtruth_standings.py",
+      "tests/test_ladder_holdout_eval.py",
+      "tests/test_validator_skip_unscoreable.py",
+      "tests/test_sameplots_holdout_filter.py",
+      "tests/test_prepare_nfi_holdout.py",
+      "tests/test_fieldtruth_cli_provenance.py",
+      "tests/test_validate_against_nfi.py",
+      "tests/test_nfi_frozen_readers.py",
+      "tests/test_score_nfi_holdout.py",
+      "tests/test_distill_stage_wiring.py",
+      "tests/test_crop_distill_provenance.py",
+      "tests/test_nfi_preparation_e2e.py",
+      "tests/test_nfi_checkpoint_inputs.py",
+      "tests/test_nfi_manifest_anchor.py",
+      "tests/test_nfi_consumer_provenance.py",
+      "tests/test_inference_aux_parity.py",
+      "tests/test_inference_matrix.py",
+      "tests/test_checkpoint_state_compatibility.py",
+      "tests/test_checkpoint_identity_io.py",
+      "tests/test_inference_tile_identity.py",
+      "-q"
+    ],
+    "log_sha256": "29bc986e67e19df186501d7cc5d644ee6c38893837da203a667be9e20bd60cda",
+    "working_tree_clean_at_start": true,
+    "planner": "7 additional tests passed; planner source unchanged since ba31235"
   },
   "historical_local_identity_regression": {
     "scope": "historical local identity regression only; not an input freeze or score",
@@ -31,11 +64,10 @@
     "validator_io_and_authenticated_reads": "PASS after corrections"
   },
   "external_review": {
-    "reviewer": "Claude",
-    "reviewed_head": "307678d71200a8512c68a8efaf4709ed65caa432",
-    "external_verdict": "PASS with three P2 findings",
-    "internal_cli_verdict": "NEEDS CHANGES",
-    "current_status": "Fixes committed; exact new head requires Claude re-review"
+    "reviewer": "Claude (designated)",
+    "reviewed_head": "a67aaec64962e6d13d889c2765191f120ac97b4c",
+    "external_verdict": "PASS-with-P3 on delta; not freeze-ready (3 P2)",
+    "current_status": "All 3 P2 fixes implemented and internally reviewed; exact new head awaits Claude re-review"
   },
   "readiness": {
     "tessera_promotion": "active=1, ready=1 at latest cluster inspection",
@@ -91,5 +123,28 @@
     "artifact": "nfi_fieldtruth_0103_identity_audit.json",
     "status": "Complete; aggregate counts and actual Pod imageID verified",
     "input_freeze": false
+  },
+  "multi_year_preparation": {
+    "source_git_sha": "1350519889e437bd120f8033621a04b523a38451",
+    "changes": [
+      "training-equivalent masked temporal frames",
+      "CPU NMD coverage before annual quota through sealed Rasterio interpreter",
+      "separate evaluation roots with original475 campaign and teacher exclusion gates"
+    ],
+    "internal_review": "PASS after default-frame and interpreter fixes",
+    "runtime_image": "Final source requires a new sealed image; no real freeze executed",
+    "synthetic_nmd_subprocess_smoke": "PASS locally; included in future image build smoke"
+  },
+  "cluster_tile_sizing": {
+    "artifact": "nfi_fieldtruth_0103_tile_sizing_20261008.json",
+    "report": "nfi_fieldtruth_0103_tile_sizing.md",
+    "status": "Complete; exit0 and actual imageID verified",
+    "input_freeze": false
+  },
+  "prior_head_ci": {
+    "source_git_sha": "a67aaec64962e6d13d889c2765191f120ac97b4c",
+    "run": "https://github.com/TobiasEdman/imintengine/actions/runs/37805043028",
+    "result": "2696 passed, 4 failed, 11 skipped",
+    "failures": "Only four unchanged live SLU Markfukt tests: endpoint returned HTML instead of raster"
   }
 }

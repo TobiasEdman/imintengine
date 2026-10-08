@@ -247,3 +247,14 @@ authenticated reader failure paths with synthetic model forwards. They do
 not establish the runtime or scientific result of a real GPU evaluation.
 The frozen population, in-cluster preparation report and GPU result are
 pending the promotion gate and subsequent go/no-go.
+
+
+## Measured multi-year sizing, 2026-10-08
+
+The [read-only tile-sizing report](nfi_fieldtruth_0103_tile_sizing.md) records
+15,425 independent candidates over 2018–2024. The maximum equal candidate
+quota is 1,902 per year (13,314 total). Conditional geometric reuse yields
+2,465 additional tiles for that sample, or 2,562 to cover all candidates.
+The latter is the recommended planning scope, subject to reuse audits and
+separate acquisition approval. A 1,000-per-year scenario needs 1,858 tiles.
+No count here is a frozen readiness result or a GPU authorization.
