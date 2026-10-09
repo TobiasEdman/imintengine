@@ -1,0 +1,10 @@
+{
+  "id": "0011",
+  "subject": "Run and publish the ten SDL 3.0 case notebooks",
+  "description": "Make notebooks/sdl3-cases (010-100) run end to end from this repo, execute all ten with papermill as ICE jobs, keep the executed notebooks with their outputs, and prepare their move to DigitalEarthSweden/digital-earth-sweden-community. Publishing outside this repo needs Tobias's explicit OK. Needed so the SDL final report (due 23 Nov 2026) can list the notebook library as delivered. Full brief: .agents/handoffs/0011/.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/notebooks-sdl3-run",
+  "created_at": "2026-10-09T22:59:15Z",
+  "updated_at": "2026-10-09T22:59:15Z"
+}

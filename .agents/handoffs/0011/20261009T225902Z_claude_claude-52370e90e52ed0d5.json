@@ -1,0 +1,44 @@
+{
+  "active_goal": "Make the ten SDL 3.0 case notebooks in notebooks/sdl3-cases run end to end from an ImintEngine checkout, execute all ten on the ICE cluster with real DES data, keep the executed notebooks with outputs in this repo, and prepare (not perform without Tobias's OK) their move to DigitalEarthSweden/digital-earth-sweden-community. The SDL final report (space-data-lab, branch agent/te/claude/docs-slutrapport, due 23 Nov 2026) currently lists the notebook library as 'partly delivered: ten draft notebooks, not yet run end to end or published' and needs this to say 'delivered'.",
+  "active_rules": [
+    "[user-stated 2026-10-10] Option C: run the notebooks end to end and publish them in the DES community repository; run on the ICE cluster; the task lives in ImintEngine.",
+    "[user-stated 2026-10-09] The SDL report is public; partners named in notebooks must be confirmed before they appear as contributors.",
+    "[mode/harness] Writing sessions use an owned worktree; commits as multi-agentic-coordinator[bot] with Verified-by and Co-Authored-By trailers; PRs through the Coordinator App.",
+    "[mode/harness] Running jobs are read-only to other sessions; requests == limits on ICE."
+  ],
+  "blockers": [
+    "Publishing to the DigitalEarthSweden organisation needs Tobias's OK and possibly access for the Coordinator App or his own account.",
+    "GPU availability is shared with the FM campaign; Tobias decides priority if they collide."
+  ],
+  "changed_paths": [
+    ".agents/tasks/0011.json"
+  ],
+  "commit": null,
+  "created_at": "2026-10-09T22:59:02Z",
+  "current_state": "Nothing has been run or changed for this task yet; only this task record exists. Findings from a read-only check on 2026-10-10: (1) none of the ten notebooks has saved outputs; each is 3-4 code cells that call executors.local.LocalExecutor with config/analyzers.yaml. (2) executors/ and config/ are not in the pip package (pyproject packages.find include = imint*), so the documented 'pip install git+...imintengine' route fails on the first code cell; the notebooks only run with the repo root as cwd/PYTHONPATH. (3) Data comes from DES via imint.fetch.fetch_des_data (DES_USER/DES_PASSWORD or DES_TOKEN). (4) The space-data-lab repo holds an older, diverged copy of the same notebooks (Swedish titles, Binder links to space-data-lab); this repo's copy (070_CASE_ titles, English, last changed 9119fb6 on 2026-04-21) is the newer one. (5) notebooks/ci/test_notebooks.sh in space-data-lab already runs all notebooks headless with papermill. (6) Existing k8s jobs here use python:3.11-slim + git clone + PYTHONPATH=/w/ie, the des-credentials secret (keys user, password) and the training-data-cephfs PVC at /data, in namespace prithvi-training-default on context icekube.",
+  "next_steps": [
+    "Claim this task with agentic-task claim . --remote origin --task-id 0011 from a clean worktree; register any cluster job with ~/.agents/bin/agentic-continuity active-job.",
+    "Make the notebooks runnable from a repo checkout: either set sys.path/cwd explicitly in a setup cell or move LocalExecutor into the imint package; keep one source of truth here.",
+    "Smoke-run the light notebooks first (010 Getting started, 080 cloud filtering, 100 custom analyzer) as a CPU Job (requests == limits; iceguard rejects bursting), writing executed copies to a new directory on the training-data-cephfs PVC.",
+    "Before any GPU job, check free GPUs and the GPU reaper rules so the FM campaign (task 0010/0103) is not starved; then run 020-070 and 090 (Prithvi, SegFormer, vessel detectors) with one GPU, with activeDeadlineSeconds and ttlSecondsAfterFinished set.",
+    "Copy the executed notebooks back with a short-lived CPU pod mounting the PVC; check that every code cell has outputs and that the figures match the IMINT Engine showcase (places: Hunnebostrand, Munkarp/Höör, Ystad, Lake Vänern near Lidköping, Kårböle, Öresund).",
+    "Commit the executed notebooks here, note any notebook that cannot run with real data and why; check the Kårböle burnt area (notebook says Skogsstyrelsen ~8,400 ha, the report says ~9,500 ha).",
+    "Draft (do not open) the PR to DigitalEarthSweden/digital-earth-sweden-community, including the final category prefix and CC0 licence; ask Tobias before publishing.",
+    "Report back to the space-data-lab report session: which notebooks ran, where they are published, and the commit SHA, so the delivery table, Continuation and Appendix B can be updated."
+  ],
+  "off_limits": [
+    "Codex task 0010 worktree ImintEngine-wt-fm-experiments-01a0af99 and its uncommitted changes",
+    "PR #68 / task 0103 and the FM evaluation data on the PVC (read only)",
+    "Running cluster jobs of other tasks; do not delete or patch jobs you did not create",
+    "Raw NFI coordinates must not leave the data environment",
+    "No push, PR or issue to DigitalEarthSweden/* without Tobias's explicit OK in chat",
+    "The space-data-lab repo and its report branch (the report is updated from there once results exist)"
+  ],
+  "repository_key": "ImintEngine--f4ea50ce3600",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-52370e90e52ed0d5",
+  "target": null,
+  "task_id": "0011",
+  "verification": "Task record only; nothing executed. Findings were checked by reading notebooks/sdl3-cases (no outputs in any cell), pyproject.toml at v0.2.0 (packages include imint* only) and k8s/benchmark-nmd-nfi-job.yaml at HEAD."
+}
