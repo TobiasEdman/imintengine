@@ -62,6 +62,8 @@ en blocker) uppdaterar tabellen i samma PR där det är möjligt.
 | IM-015 | Inference-fix-branch `fix/inference-comparison-patch-size` ej PR-öppnad | housekeeping | open | branch pushad, 3 commits (`c117ac3` + `00b7cc7` + `5e7860d`) | Öppna PR när compare verifierats end-to-end (görs nu) |
 | IM-016 | Klassvikt-rebalansering: sänk över-viktade rare crops, höj lövskog | investigation | open | — | Direkt åtgärd för IM-007 findings. Föreslag: bete 2.10 → 1.5, potatis 3.02 → 2.0, majs 5.0 → 3.5, råg 4.11 → 3.5 för 600M. Switch till effective-number weighting |
 | IM-018 | Repo-isolation för parallella workstreams: utvärdera monorepo + submodules vs separate repos | investigation | open | — | 2026-05-22 incident: bf18671 (aircraft_parallax GIF) läckte in i `fix/refetch-late-autumn-frames` via worktree-mess mellan parallella agent-sessioner. PR #16 visar nu en ovidkommande commit. Worktree-isolation (intended boundary) räcker inte. Alternativ: (1) status quo monorepo + striktare conventions, (2) separate repo per workstream, (3) monorepo + git submodules som hård gräns. Beslutas vid nästa retro |
+| IM-019 | `save_tabbed_report`: odefinierad `grazing_prefix` i `imint/exporters/html_report.py:2178` | bug | open | — | NameError när `grazing_dir` är satt men `grazing_meta.json` saknas (fallback-grenen till `_read_shape`). Hittad 2026-10-10 under task 0104 (S1-fartyg); fixas separat |
+| IM-020 | Bakgrundsväxlingen på RGB-panelen: odefinierad JS-variabel `bg` i `imint/exporters/html_report.py:3402` | bug | open | — | Ska vara `activeBg` (deklarerad :3387). ReferenceError när man klickar RGB/Sjökort på en `<prefix>-rgb`-panel, så overlay-referens och opacity-slider uppdateras inte. Hittad 2026-10-10 under task 0104; fixas separat |
 
 ---
 
