@@ -1,0 +1,10 @@
+{
+  "id": "0104",
+  "subject": "Sentinel-1 vessel detection analyzer and marine radar tab",
+  "description": "Goal set by Tobias on 2026-10-10 (brief ~/.agents/continuity/briefs/imintengine_s1_vessel_detection_2026-10-10.md). Port AI2's rslearn_projects Sentinel-1 vessel detector + attribute model as imint/analyzers/ai2_vessels_s1.py, add an S1 GRD amplitude fetch (target + ~60 d historical, same orbit direction) in imint/fetch.py, verify against AI2's reference pipeline on Skagen 2026-06-28, add a 'Marin - radar' report tab over the marine tab's Oresund area (relabel the existing tab 'Marin - optisk'), and write a detections GeoJSON for marine-awareness. Intended files: imint/analyzers/ai2_vessels_s1.py, imint/analyzers/__init__/registry, imint/fetch.py, imint/exporters/html_report.py, scripts/generate_marine_radar_showcase.py, tests/test_ai2_vessels_s1.py, docs for the reference comparison. No retraining; no edits to marine-awareness or to running training/fetch code.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/marine-s1-vessels",
+  "created_at": "2026-10-10T07:14:34.510197+00:00",
+  "updated_at": "2026-10-10T07:14:34.510197+00:00"
+}
