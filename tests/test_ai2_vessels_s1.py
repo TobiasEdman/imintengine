@@ -898,3 +898,48 @@ def test_model_reproduces_reference_detection_on_crop():
     assert attrs["speed_knots"] == pytest.approx(expected["speed"], abs=0.5)
     assert abs((attrs["heading_deg"] - expected["heading"] + 180) % 360 - 180) < 3
     assert res.metadata["infra_filter"]["applied"] is False
+
+
+def _serve_stalled_response() -> tuple[str, "socket.socket"]:
+    """Local server that sends headers for a large file, then no bytes."""
+    import socket
+    import threading
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+
+    def handle():
+        while True:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100000000\r\n"
+                         b"Accept-Ranges: bytes\r\nContent-Type: image/tiff\r\n\r\n")
+            # Hold the connection open without sending the body.
+
+    threading.Thread(target=handle, daemon=True).start()
+    return f"http://127.0.0.1:{srv.getsockname()[1]}/stalled.tif", srv
+
+
+def test_s1_gdal_env_turns_a_stalled_read_into_an_error():
+    """The env's timeout keys must be names GDAL honours; a stall must raise, not hang."""
+    import time
+
+    import rasterio
+    from rasterio.errors import RasterioIOError
+
+    assert fetch._S1_GDAL_ENV["GDAL_HTTP_LOW_SPEED_TIME"] == "60"
+    assert fetch._S1_GDAL_ENV["GDAL_HTTP_CONNECTTIMEOUT"] == "30"
+    url, srv = _serve_stalled_response()
+    env = {**fetch._S1_GDAL_ENV, "GDAL_HTTP_LOW_SPEED_TIME": "2", "GDAL_HTTP_MAX_RETRY": "0"}
+    t0 = time.monotonic()
+    try:
+        with pytest.raises(RasterioIOError), rasterio.Env(**env):
+            with rasterio.open(f"/vsicurl/{url}") as src:
+                src.read(1)
+    finally:
+        srv.close()
+    assert time.monotonic() - t0 < 20

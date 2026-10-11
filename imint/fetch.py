@@ -2484,10 +2484,16 @@ _S1_RADAR_MARGIN_PX = 32
 # radar window is distrusted (a quarter of the margin).
 _S1_TPS_ROUNDTRIP_TOL_M = _S1_RADAR_MARGIN_PX * S1_VESSEL_GSD_M / 4
 _S1_POLARISATIONS = ("vv", "vh")
+# Without the timeouts a stalled blob read waits forever (seen on MPC
+# 2026-10-11: 0 bytes in curl poll, run hung) and the retries never fire;
+# with them a stall fails loud.
 _S1_GDAL_ENV = {
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     "GDAL_HTTP_MAX_RETRY": "5",
     "GDAL_HTTP_RETRY_DELAY": "2",
+    "GDAL_HTTP_CONNECTTIMEOUT": "30",
+    "GDAL_HTTP_LOW_SPEED_TIME": "60",
+    "GDAL_HTTP_LOW_SPEED_LIMIT": "1024",
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff",
     "GDAL_HTTP_MULTIRANGE": "YES",
     "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
