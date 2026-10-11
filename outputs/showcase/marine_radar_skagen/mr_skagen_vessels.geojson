@@ -1,0 +1,1683 @@
+{
+ "type": "FeatureCollection",
+ "properties": {
+  "coordinates": "pixel [col, row] of the EPSG:3006 display grid 2327x2140 px, row 0 = top",
+  "area": "skagen",
+  "scene_id": "S1D_IW_GRDH_1SDV_20260628T053135_20260628T053200_003432_0060CF",
+  "scene_time_utc": "2026-06-28T05:31:42.206698Z",
+  "historical_scene_id": "S1D_IW_GRDH_1SDV_20260523T053133_20260523T053158_002907_004F80",
+  "score_floor": 0.3,
+  "production_threshold": 0.7,
+  "count": 34,
+  "count_above_threshold": 25,
+  "note": "Detections are candidates, not confirmed vessels; no AIS matched. above_threshold marks AI2's production threshold."
+ },
+ "features": [
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       719.46,
+       1346.67
+      ],
+      [
+       716.81,
+       1376.57
+      ],
+      [
+       746.59,
+       1379.21
+      ],
+      [
+       749.25,
+       1349.32
+      ],
+      [
+       719.46,
+       1346.67
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.3439,
+    "pixel_count": 896,
+    "pred_length_m": 148.3,
+    "pred_width_m": 20.6,
+    "pred_speed_kn": 8.5,
+    "pred_heading_deg": 119.7,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.495,
+    "above_threshold": false,
+    "lon": 10.695563,
+    "lat": 57.701392,
+    "point_px": [
+     732.71,
+     1363.56
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1251.03,
+       1604.5
+      ],
+      [
+       1248.35,
+       1634.68
+      ],
+      [
+       1272.04,
+       1636.78
+      ],
+      [
+       1274.71,
+       1606.6
+      ],
+      [
+       1251.03,
+       1604.5
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.3595,
+    "pixel_count": 720,
+    "pred_length_m": 19.9,
+    "pred_width_m": 6.0,
+    "pred_speed_kn": 4.8,
+    "pred_heading_deg": 0.5,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.745,
+    "above_threshold": false,
+    "lon": 10.786704,
+    "lat": 57.681271,
+    "point_px": [
+     1261.34,
+     1621.45
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       32.24,
+       1645.12
+      ],
+      [
+       30.38,
+       1666.06
+      ],
+      [
+       60.19,
+       1668.71
+      ],
+      [
+       62.04,
+       1647.77
+      ],
+      [
+       32.24,
+       1645.12
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.375,
+    "pixel_count": 628,
+    "pred_length_m": 33.5,
+    "pred_width_m": 6.3,
+    "pred_speed_kn": 5.5,
+    "pred_heading_deg": 48.3,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.484,
+    "above_threshold": false,
+    "lon": 10.58382,
+    "lat": 57.671126,
+    "point_px": [
+     45.59,
+     1657.2
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       32.53,
+       1665.67
+      ],
+      [
+       29.88,
+       1695.57
+      ],
+      [
+       59.86,
+       1698.23
+      ],
+      [
+       62.51,
+       1668.33
+      ],
+      [
+       32.53,
+       1665.67
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.4978,
+    "pixel_count": 902,
+    "pred_length_m": 27.9,
+    "pred_width_m": 6.3,
+    "pred_speed_kn": 5.9,
+    "pred_heading_deg": 277.9,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.434,
+    "above_threshold": false,
+    "lon": 10.584058,
+    "lat": 57.668877,
+    "point_px": [
+     45.37,
+     1682.3
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1691.99,
+       1778.22
+      ],
+      [
+       1690.44,
+       1795.71
+      ],
+      [
+       1720.57,
+       1798.38
+      ],
+      [
+       1722.12,
+       1780.89
+      ],
+      [
+       1691.99,
+       1778.22
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.5349,
+    "pixel_count": 530,
+    "pred_length_m": 89.6,
+    "pred_width_m": 8.6,
+    "pred_speed_kn": 9.0,
+    "pred_heading_deg": 181.8,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.401,
+    "above_threshold": false,
+    "lon": 10.862713,
+    "lat": 57.668765,
+    "point_px": [
+     1705.6,
+     1788.46
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1051.94,
+       1755.28
+      ],
+      [
+       1050.42,
+       1772.5
+      ],
+      [
+       1080.8,
+       1775.2
+      ],
+      [
+       1082.33,
+       1757.98
+      ],
+      [
+       1051.94,
+       1755.28
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.5719,
+    "pixel_count": 527,
+    "pred_length_m": 96.2,
+    "pred_width_m": 14.7,
+    "pred_speed_kn": 9.2,
+    "pred_heading_deg": 180.9,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.812,
+    "above_threshold": false,
+    "lon": 10.755499,
+    "lat": 57.667243,
+    "point_px": [
+     1065.69,
+     1765.82
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1847.75,
+       1792.52
+      ],
+      [
+       1845.57,
+       1817.09
+      ],
+      [
+       1875.48,
+       1819.75
+      ],
+      [
+       1877.66,
+       1795.18
+      ],
+      [
+       1847.75,
+       1792.52
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.5771,
+    "pixel_count": 740,
+    "pred_length_m": 42.7,
+    "pred_width_m": 11.0,
+    "pred_speed_kn": 19.5,
+    "pred_heading_deg": 222.0,
+    "pred_type": "passenger",
+    "pred_type_conf": 0.933,
+    "above_threshold": false,
+    "lon": 10.888831,
+    "lat": 57.668018,
+    "point_px": [
+     1860.72,
+     1806.24
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       424.11,
+       1093.27
+      ],
+      [
+       421.45,
+       1123.16
+      ],
+      [
+       451.33,
+       1125.81
+      ],
+      [
+       453.98,
+       1095.92
+      ],
+      [
+       424.11,
+       1093.27
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.6624,
+    "pixel_count": 899,
+    "pred_length_m": 20.6,
+    "pred_width_m": 6.2,
+    "pred_speed_kn": 3.6,
+    "pred_heading_deg": 133.9,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.704,
+    "above_threshold": false,
+    "lon": 10.643317,
+    "lat": 57.722385,
+    "point_px": [
+     436.74,
+     1110.23
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       2147.46,
+       1484.66
+      ],
+      [
+       2144.8,
+       1514.55
+      ],
+      [
+       2174.62,
+       1517.2
+      ],
+      [
+       2177.27,
+       1487.31
+      ],
+      [
+       2147.46,
+       1484.66
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.6966,
+    "pixel_count": 897,
+    "pred_length_m": 19.4,
+    "pred_width_m": 5.8,
+    "pred_speed_kn": 7.1,
+    "pred_heading_deg": 89.7,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.779,
+    "above_threshold": false,
+    "lon": 10.935812,
+    "lat": 57.696957,
+    "point_px": [
+     2160.01,
+     1501.32
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       9.94,
+       1194.02
+      ],
+      [
+       7.29,
+       1223.88
+      ],
+      [
+       37.18,
+       1226.54
+      ],
+      [
+       39.83,
+       1196.67
+      ],
+      [
+       9.94,
+       1194.02
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.7892,
+    "pixel_count": 898,
+    "pred_length_m": 20.7,
+    "pred_width_m": 7.3,
+    "pred_speed_kn": 0.9,
+    "pred_heading_deg": 80.6,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.264,
+    "above_threshold": true,
+    "lon": 10.575152,
+    "lat": 57.710943,
+    "point_px": [
+     22.9,
+     1211.12
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       63.39,
+       2112.72
+      ],
+      [
+       60.74,
+       2142.6
+      ],
+      [
+       90.58,
+       2145.24
+      ],
+      [
+       93.23,
+       2115.37
+      ],
+      [
+       63.39,
+       2112.72
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.828,
+    "pixel_count": 897,
+    "pred_length_m": 21.7,
+    "pred_width_m": 6.1,
+    "pred_speed_kn": 3.6,
+    "pred_heading_deg": 4.1,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.572,
+    "above_threshold": true,
+    "lon": 10.594046,
+    "lat": 57.629042,
+    "point_px": [
+     76.05,
+     2129.08
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1844.99,
+       1196.49
+      ],
+      [
+       1842.34,
+       1226.35
+      ],
+      [
+       1872.18,
+       1229.0
+      ],
+      [
+       1874.84,
+       1199.14
+      ],
+      [
+       1844.99,
+       1196.49
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.886,
+    "pixel_count": 897,
+    "pred_length_m": 252.6,
+    "pred_width_m": 37.6,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 5.7,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.661,
+    "above_threshold": true,
+    "lon": 10.882362,
+    "lat": 57.721123,
+    "point_px": [
+     1858.11,
+     1213.35
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1694.62,
+       1762.01
+      ],
+      [
+       1691.97,
+       1791.93
+      ],
+      [
+       1721.04,
+       1794.51
+      ],
+      [
+       1723.69,
+       1764.59
+      ],
+      [
+       1694.62,
+       1762.01
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9508,
+    "pixel_count": 875,
+    "pred_length_m": 57.9,
+    "pred_width_m": 7.2,
+    "pred_speed_kn": 6.8,
+    "pred_heading_deg": 8.8,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.394,
+    "above_threshold": true,
+    "lon": 10.862927,
+    "lat": 57.66966,
+    "point_px": [
+     1707.48,
+     1778.58
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1332.78,
+       209.34
+      ],
+      [
+       1330.12,
+       239.21
+      ],
+      [
+       1359.91,
+       241.85
+      ],
+      [
+       1362.57,
+       211.99
+      ],
+      [
+       1332.78,
+       209.34
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9755,
+    "pixel_count": 896,
+    "pred_length_m": 23.2,
+    "pred_width_m": 6.5,
+    "pred_speed_kn": 18.0,
+    "pred_heading_deg": 307.2,
+    "pred_type": "passenger",
+    "pred_type_conf": 0.513,
+    "above_threshold": true,
+    "lon": 10.786342,
+    "lat": 57.806787,
+    "point_px": [
+     1346.15,
+     225.6
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       745.55,
+       1436.93
+      ],
+      [
+       742.89,
+       1466.82
+      ],
+      [
+       772.68,
+       1469.46
+      ],
+      [
+       775.34,
+       1439.58
+      ],
+      [
+       745.55,
+       1436.93
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9851,
+    "pixel_count": 896,
+    "pred_length_m": 278.2,
+    "pred_width_m": 42.4,
+    "pred_speed_kn": 0.4,
+    "pred_heading_deg": 22.6,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.923,
+    "above_threshold": true,
+    "lon": 10.700899,
+    "lat": 57.693504,
+    "point_px": [
+     758.91,
+     1453.28
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1857.42,
+       1745.46
+      ],
+      [
+       1854.77,
+       1775.36
+      ],
+      [
+       1884.6,
+       1778.01
+      ],
+      [
+       1887.25,
+       1748.1
+      ],
+      [
+       1857.42,
+       1745.46
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9876,
+    "pixel_count": 898,
+    "pred_length_m": 40.0,
+    "pred_width_m": 8.3,
+    "pred_speed_kn": 17.2,
+    "pred_heading_deg": 234.1,
+    "pred_type": "passenger",
+    "pred_type_conf": 0.638,
+    "above_threshold": true,
+    "lon": 10.890047,
+    "lat": 57.672043,
+    "point_px": [
+     1870.68,
+     1761.92
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1829.17,
+       1213.52
+      ],
+      [
+       1826.51,
+       1243.42
+      ],
+      [
+       1856.28,
+       1246.06
+      ],
+      [
+       1858.93,
+       1216.17
+      ],
+      [
+       1829.17,
+       1213.52
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9925,
+    "pixel_count": 896,
+    "pred_length_m": 231.4,
+    "pred_width_m": 41.9,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 8.4,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.914,
+    "above_threshold": true,
+    "lon": 10.87993,
+    "lat": 57.719542,
+    "point_px": [
+     1842.56,
+     1230.05
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       374.78,
+       1961.99
+      ],
+      [
+       372.13,
+       1991.86
+      ],
+      [
+       402.01,
+       1994.51
+      ],
+      [
+       404.66,
+       1964.64
+      ],
+      [
+       374.78,
+       1961.99
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9927,
+    "pixel_count": 899,
+    "pred_length_m": 258.6,
+    "pred_width_m": 43.3,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 267.3,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.813,
+    "above_threshold": true,
+    "lon": 10.644477,
+    "lat": 57.644298,
+    "point_px": [
+     387.76,
+     1978.92
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       586.29,
+       1729.79
+      ],
+      [
+       583.64,
+       1759.68
+      ],
+      [
+       613.33,
+       1762.31
+      ],
+      [
+       615.98,
+       1732.43
+      ],
+      [
+       586.29,
+       1729.79
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9942,
+    "pixel_count": 893,
+    "pred_length_m": 226.1,
+    "pred_width_m": 32.1,
+    "pred_speed_kn": 0.2,
+    "pred_heading_deg": 48.8,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.945,
+    "above_threshold": true,
+    "lon": 10.677328,
+    "lat": 57.666327,
+    "point_px": [
+     599.26,
+     1746.53
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1240.56,
+       2.37
+      ],
+      [
+       1237.9,
+       32.22
+      ],
+      [
+       1267.77,
+       34.88
+      ],
+      [
+       1270.42,
+       5.02
+      ],
+      [
+       1240.56,
+       2.37
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9942,
+    "pixel_count": 897,
+    "pred_length_m": 242.8,
+    "pred_width_m": 41.8,
+    "pred_speed_kn": 7.4,
+    "pred_heading_deg": 283.8,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.926,
+    "above_threshold": true,
+    "lon": 10.768707,
+    "lat": 57.824733,
+    "point_px": [
+     1253.97,
+     19.5
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       223.94,
+       1862.97
+      ],
+      [
+       221.28,
+       1892.9
+      ],
+      [
+       250.98,
+       1895.54
+      ],
+      [
+       253.64,
+       1865.61
+      ],
+      [
+       223.94,
+       1862.97
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9942,
+    "pixel_count": 895,
+    "pred_length_m": 93.2,
+    "pred_width_m": 14.2,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 263.5,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.808,
+    "above_threshold": true,
+    "lon": 10.618192,
+    "lat": 57.652274,
+    "point_px": [
+     236.79,
+     1880.12
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       632.67,
+       1404.87
+      ],
+      [
+       630.02,
+       1434.76
+      ],
+      [
+       659.8,
+       1437.4
+      ],
+      [
+       662.45,
+       1407.51
+      ],
+      [
+       632.67,
+       1404.87
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9944,
+    "pixel_count": 896,
+    "pred_length_m": 215.6,
+    "pred_width_m": 32.1,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 261.9,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.975,
+    "above_threshold": true,
+    "lon": 10.681708,
+    "lat": 57.695737,
+    "point_px": [
+     646.22,
+     1421.18
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       253.69,
+       1342.05
+      ],
+      [
+       251.03,
+       1371.98
+      ],
+      [
+       280.74,
+       1374.62
+      ],
+      [
+       283.4,
+       1344.69
+      ],
+      [
+       253.69,
+       1342.05
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9947,
+    "pixel_count": 895,
+    "pred_length_m": 135.4,
+    "pred_width_m": 22.0,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 268.5,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.86,
+    "above_threshold": true,
+    "lon": 10.617598,
+    "lat": 57.699178,
+    "point_px": [
+     267.02,
+     1358.38
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       627.1,
+       1597.99
+      ],
+      [
+       624.45,
+       1627.88
+      ],
+      [
+       654.18,
+       1630.52
+      ],
+      [
+       656.84,
+       1600.63
+      ],
+      [
+       627.1,
+       1597.99
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9949,
+    "pixel_count": 895,
+    "pred_length_m": 181.8,
+    "pred_width_m": 31.8,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 245.5,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.959,
+    "above_threshold": true,
+    "lon": 10.682749,
+    "lat": 57.678384,
+    "point_px": [
+     640.11,
+     1614.53
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       84.79,
+       1896.47
+      ],
+      [
+       82.13,
+       1926.37
+      ],
+      [
+       111.88,
+       1929.01
+      ],
+      [
+       114.53,
+       1899.11
+      ],
+      [
+       84.79,
+       1896.47
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.995,
+    "pixel_count": 895,
+    "pred_length_m": 76.7,
+    "pred_width_m": 12.6,
+    "pred_speed_kn": 0.4,
+    "pred_heading_deg": 89.7,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.547,
+    "above_threshold": true,
+    "lon": 10.595403,
+    "lat": 57.648521,
+    "point_px": [
+     98.23,
+     1913.04
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       772.43,
+       2028.96
+      ],
+      [
+       769.77,
+       2058.93
+      ],
+      [
+       799.48,
+       2061.57
+      ],
+      [
+       802.14,
+       2031.6
+      ],
+      [
+       772.43,
+       2028.96
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9951,
+    "pixel_count": 896,
+    "pred_length_m": 275.4,
+    "pred_width_m": 43.8,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 19.7,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.545,
+    "above_threshold": true,
+    "lon": 10.71166,
+    "lat": 57.640622,
+    "point_px": [
+     785.72,
+     2045.37
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       367.2,
+       1417.96
+      ],
+      [
+       364.55,
+       1447.82
+      ],
+      [
+       394.27,
+       1450.46
+      ],
+      [
+       396.93,
+       1420.6
+      ],
+      [
+       367.2,
+       1417.96
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9952,
+    "pixel_count": 893,
+    "pred_length_m": 117.4,
+    "pred_width_m": 18.8,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 193.4,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.937,
+    "above_threshold": true,
+    "lon": 10.637288,
+    "lat": 57.692996,
+    "point_px": [
+     379.8,
+     1434.7
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       581.21,
+       1896.68
+      ],
+      [
+       578.55,
+       1926.59
+      ],
+      [
+       608.33,
+       1929.23
+      ],
+      [
+       610.99,
+       1899.32
+      ],
+      [
+       581.21,
+       1896.68
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9954,
+    "pixel_count": 896,
+    "pred_length_m": 182.0,
+    "pred_width_m": 32.0,
+    "pred_speed_kn": 0.4,
+    "pred_heading_deg": 282.2,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.863,
+    "above_threshold": true,
+    "lon": 10.678311,
+    "lat": 57.651311,
+    "point_px": [
+     594.46,
+     1913.87
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       137.1,
+       1361.48
+      ],
+      [
+       134.45,
+       1391.36
+      ],
+      [
+       164.13,
+       1394.0
+      ],
+      [
+       166.79,
+       1364.11
+      ],
+      [
+       137.1,
+       1361.48
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9955,
+    "pixel_count": 893,
+    "pred_length_m": 131.8,
+    "pred_width_m": 21.2,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 271.7,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.593,
+    "above_threshold": true,
+    "lon": 10.598193,
+    "lat": 57.69673,
+    "point_px": [
+     149.73,
+     1378.1
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       1050.22,
+       1764.78
+      ],
+      [
+       1047.57,
+       1794.68
+      ],
+      [
+       1077.31,
+       1797.32
+      ],
+      [
+       1079.97,
+       1767.42
+      ],
+      [
+       1050.22,
+       1764.78
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9958,
+    "pixel_count": 895,
+    "pred_length_m": 98.7,
+    "pred_width_m": 15.1,
+    "pred_speed_kn": 10.5,
+    "pred_heading_deg": 183.8,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.73,
+    "above_threshold": true,
+    "lon": 10.755262,
+    "lat": 57.665809,
+    "point_px": [
+     1063.28,
+     1781.68
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       448.46,
+       128.65
+      ],
+      [
+       445.8,
+       158.53
+      ],
+      [
+       475.48,
+       161.17
+      ],
+      [
+       478.14,
+       131.29
+      ],
+      [
+       448.46,
+       128.65
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9964,
+    "pixel_count": 893,
+    "pred_length_m": 188.8,
+    "pred_width_m": 32.2,
+    "pred_speed_kn": 14.3,
+    "pred_heading_deg": 94.5,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.95,
+    "above_threshold": true,
+    "lon": 10.636987,
+    "lat": 57.808983,
+    "point_px": [
+     461.22,
+     144.93
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       235.11,
+       1708.13
+      ],
+      [
+       232.46,
+       1737.97
+      ],
+      [
+       262.18,
+       1740.61
+      ],
+      [
+       264.83,
+       1710.77
+      ],
+      [
+       235.11,
+       1708.13
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9965,
+    "pixel_count": 893,
+    "pred_length_m": 174.4,
+    "pred_width_m": 28.8,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 248.5,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.964,
+    "above_threshold": true,
+    "lon": 10.618481,
+    "lat": 57.666285,
+    "point_px": [
+     248.59,
+     1724.45
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       751.42,
+       1868.33
+      ],
+      [
+       748.77,
+       1898.25
+      ],
+      [
+       778.52,
+       1900.89
+      ],
+      [
+       781.18,
+       1870.97
+      ],
+      [
+       751.42,
+       1868.33
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.9976,
+    "pixel_count": 896,
+    "pred_length_m": 178.7,
+    "pred_width_m": 31.8,
+    "pred_speed_kn": 8.2,
+    "pred_heading_deg": 221.4,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.975,
+    "above_threshold": true,
+    "lon": 10.706465,
+    "lat": 57.654887,
+    "point_px": [
+     764.81,
+     1884.79
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       748.6,
+       1739.09
+      ],
+      [
+       745.96,
+       1768.92
+      ],
+      [
+       768.61,
+       1770.93
+      ],
+      [
+       771.25,
+       1741.1
+      ],
+      [
+       748.6,
+       1739.09
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.998,
+    "pixel_count": 680,
+    "pred_length_m": 173.4,
+    "pred_width_m": 30.0,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 258.9,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.959,
+    "above_threshold": true,
+    "lon": 10.703989,
+    "lat": 57.66642,
+    "point_px": [
+     758.19,
+     1755.61
+    ]
+   }
+  }
+ ]
+}
