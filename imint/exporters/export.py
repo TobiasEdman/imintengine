@@ -153,6 +153,139 @@ def _pixel_bbox_to_wgs84(bbox: dict, geo) -> tuple[float, float, float, float]:
     return lons[0], lats[0], lons[1], lats[1]
 
 
+def s1_regions_in_bbox(regions: list[dict], bbox: list[float]) -> list[dict]:
+    """Regions whose reported (AI2) point lies inside ``[west, south, east, north]``.
+
+    The analysed grid is AI2's UTM lattice around the WGS84 bbox, so it
+    overshoots the bbox at the corners; detections there are outside the request.
+    """
+    west, south, east, north = bbox
+    return [r for r in regions if west <= r["lon"] <= east and south <= r["lat"] <= north]
+
+
+def s1_vessel_feature_collection(
+    result,
+    geo,
+    *,
+    date: str,
+    bbox: list[float],
+    scene_id: str,
+    historical_scene_id: str,
+    scene_time_utc: str,
+    scene_start_utc: str,
+    scene_end_utc: str,
+    source: str,
+) -> dict:
+    """Sentinel-1 vessel detections as the GeoJSON marine-awareness reads.
+
+    Mirrors marine-awareness ``scripts/detect_vessels_s2.py::box_feature``:
+    each detection is its detector box as a closed WGS84 polygon (RFC 7946:
+    counter-clockwise exterior ring, no ``crs`` member) with the attribute
+    predictions flattened into ``pred_*`` properties; marine-awareness
+    ``load_detections`` takes the ring's vertex mean (closing vertex dropped)
+    as the position and reads ``score`` and ``pixel_count``. The box is the
+    detector's footprint (~17-30 px by construction of AI2's point labels),
+    not a hull outline; ``pred_length_m`` is the length estimate.
+
+    Only detections whose AI2 point lies inside ``bbox`` are written
+    (:func:`s1_regions_in_bbox`); ``n_outside_bbox`` counts the dropped ones.
+
+    A detection without an AIS match is a candidate, not a confirmed vessel.
+
+    Args:
+        result: ``AnalysisResult`` of ``AI2S1VesselAnalyzer``.
+        geo: GeoContext of the analysed grid.
+        date: target acquisition date (``YYYY-MM-DD``).
+        bbox: requested ``[west, south, east, north]`` in WGS84.
+        scene_id, historical_scene_id: Sentinel-1 product ids.
+        scene_time_utc: when the target scene imaged the AOI centre
+            (``S1VesselScenes.scene_time_utc``), ISO 8601 ending in ``Z``.
+        scene_start_utc, scene_end_utc: the target slice's start and end, same format.
+        source: data-source description.
+    """
+    from pyproj import Transformer
+
+    for name, value in (("scene_time_utc", scene_time_utc),
+                        ("scene_start_utc", scene_start_utc),
+                        ("scene_end_utc", scene_end_utc)):
+        if not value.endswith("Z"):
+            raise ValueError(f"{name} must be UTC ISO 8601 with 'Z': {value!r}")
+    to_wgs84 = Transformer.from_crs(geo.crs, "EPSG:4326", always_xy=True).transform
+    t = geo.transform
+
+    def opt(attrs: dict | None, key: str, ndigits: int):
+        return None if attrs is None else round(float(attrs[key]), ndigits)
+
+    regions = result.outputs["regions"]
+    inside = s1_regions_in_bbox(regions, bbox)
+    features = []
+    for region in inside:
+        x1, y1, x2, y2 = region["box_px"]
+        ring = []
+        # Pixel rows grow southwards: (x1, y1) is the NW corner. NW -> SW -> SE
+        # -> NE -> NW is counter-clockwise on the map.
+        for px, py in ((x1, y1), (x1, y2), (x2, y2), (x2, y1), (x1, y1)):
+            lon, lat = to_wgs84(*(t * (px, py)))
+            ring.append([round(lon, 7), round(lat, 7)])
+        attrs = region.get("attributes")
+        heading = opt(attrs, "heading_deg", 1)
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": [ring]},
+            "properties": {
+                "detector": "ai2_s1",
+                "score": round(float(region["score"]), 4),
+                "pixel_count": int(region["pixel_count"]),
+                "pred_length_m": opt(attrs, "length_m", 1),
+                "pred_width_m": opt(attrs, "width_m", 1),
+                "pred_speed_kn": opt(attrs, "speed_knots", 1),
+                # round(359.96, 1) == 360.0: wrap again after rounding.
+                "pred_heading_deg": None if heading is None else heading % 360.0,
+                "pred_type": None if attrs is None else attrs["vessel_type"],
+                "pred_type_conf": opt(attrs, "type_confidence", 3),
+            },
+        })
+    md = result.metadata
+    height, width = geo.shape
+    summary = {
+        "date": date,
+        "bbox": [float(v) for v in bbox],
+        "crs": str(geo.crs),
+        "grid_px": [int(width), int(height)],
+        "source": source,
+        "sensor": "sentinel-1",
+        "scene_id": scene_id,
+        "historical_scene_id": historical_scene_id,
+        "scene_time_utc": scene_time_utc,
+        "scene_start_utc": scene_start_utc,
+        "scene_end_utc": scene_end_utc,
+        "valid_frac_target": md.get("valid_frac_target"),
+        "valid_frac_historical": md.get("valid_frac_historical"),
+        "n_outside_bbox": len(regions) - len(inside),
+        "detectors": {"ai2_s1": {
+            "name": "imint AI2S1VesselAnalyzer (Swin V2 B x2 + FPN + Faster R-CNN)",
+            "inputs": "GRD DN VV+VH, target + historical scene, AI2 10 m UTM grid",
+            "score_threshold": md.get("score_threshold"),
+            "raw": md.get("raw_detections"),
+            "after_nms": md.get("after_nms"),
+            "infra_filter": md.get("infra_filter"),
+            "attributes": bool(result.outputs.get("has_attributes")),
+            "water_mask": md.get("water_mask"),
+            "count": len(features),
+        }},
+    }
+    return {"type": "FeatureCollection", "properties": summary, "features": features}
+
+
+def save_s1_vessel_geojson(feature_collection: dict, path: str | os.PathLike) -> str:
+    """Write :func:`s1_vessel_feature_collection` output to ``path``."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(feature_collection, f, indent=1, default=_json_default)
+    print(f"    saved: {path}")
+    return str(path)
+
+
 def save_geotiff(
     array: np.ndarray,
     path: str,

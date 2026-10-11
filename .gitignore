@@ -30,6 +30,11 @@ data/nfi/
 # sen2cor scene-selector — must ship with the repo so k8s jobs
 # that git-clone the repo get the weights without a Drive download.
 !imint/fm/cot_models_l1c/*.pt
+# Exception: model-test crop for the AI2 Sentinel-1 vessel port, 103 KB:
+# 192x192 GRD DN (target + historical, VV/VH) around one reference detection,
+# cut from AI2's own materialised model input (Copernicus Sentinel-1 data 2026).
+# Needed by tests/test_ai2_vessels_s1.py.
+!tests/fixtures/ai2_s1_vessel_crop.npz
 
 # Baselines (large numpy files)
 **/baselines/

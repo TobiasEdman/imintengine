@@ -59,16 +59,18 @@ import calendar
 import gzip
 import hashlib
 import io
+import json
 import math
 import os
 import tarfile
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .utils import dn_to_reflectance, des_to_imint_bands, bands_to_rgb
+from .utils import dn_to_reflectance, des_to_imint_bands, bands_to_rgb, haversine_m
 from .job import GeoContext
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -2445,6 +2447,625 @@ def _fetch_ai2_bands(
     )
 
     return bands, scl, geo
+
+
+# ── Sentinel-1 GRD scenes for the AI2 vessel detector ────────────────────────
+#
+# Input contract (docs/marine/s1_vessels_reference.md §c): uncalibrated GRD DN
+# (detected amplitude, uint16) from the ESA measurement TIFFs, warped exactly as
+# rslearn ingests and materialises them in AI2's scene-ID pipeline:
+#   1. radar geometry + GCPs -> cubic WarpedVRT, thin-plate spline, into the UTM
+#      zone of the FIRST GCP on GDAL's suggested grid (~10.06 m), uint16;
+#   2. -> cubic WarpedVRT onto the window grid: UTM zone of the target footprint
+#      centroid, 10 m, origin on integer multiples of 10 m; uint16 (rslearn casts
+#      to float32 here; the analyzer does so per 512 px patch instead).
+# GDAL's warp output depends on the request window (each chunk gets its own
+# kernel scale and approximate-transformer segments), so a warp of a small crop
+# is NOT the full-scene result. Both steps therefore run over the full scene's
+# request geometry: the source is a full-size VRT carrying all GCPs whose pixels
+# are real only inside a radar window around the AOI. Inside the AOI the output
+# is bit-identical to the full-scene chain; only the radar window is downloaded.
+
+S1_VESSEL_CHAIN_VERSION = 1          # pixel chain; part of the cache key, bump when it changes
+_S1_VESSEL_CACHE_FORMAT = 2          # cached record layout; part of the cache key
+S1_VESSEL_GSD_M = 10                 # AI2 window resolution
+S1_VESSEL_SOURCE = "Microsoft Planetary Computer sentinel-1-grd (GRD DN, uncalibrated)"
+# Keys of the analyzer's ``bands`` dict: GRD DN, [vv, vh], target then historical.
+S1_TARGET_BAND_KEYS = ("VV_DN", "VH_DN")
+S1_HISTORICAL_BAND_KEYS = ("VV_DN_HIST", "VH_DN_HIST")
+# AI2 predict_pipeline: HISTORICAL_TIME_OFFSET = -60 d, then a 30 d search window,
+# i.e. the historical scene starts in [t0 - 60 d, t0 - 30 d].
+S1_VESSEL_HISTORICAL_OFFSET_DAYS = 60
+S1_VESSEL_HISTORICAL_WINDOW_DAYS = 30
+# Radar-pixel margin around the AOI footprint. The cubic supports of both warps
+# plus GDAL's 0.125 px transformer tolerance need ~6 px; 32 is cheap headroom.
+_S1_RADAR_MARGIN_PX = 32
+# Forward(inverse(TPS)) round-trip error allowed on the AOI outline before the
+# radar window is distrusted (a quarter of the margin).
+_S1_TPS_ROUNDTRIP_TOL_M = _S1_RADAR_MARGIN_PX * S1_VESSEL_GSD_M / 4
+_S1_POLARISATIONS = ("vv", "vh")
+_S1_GDAL_ENV = {
+    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+    "GDAL_HTTP_MAX_RETRY": "5",
+    "GDAL_HTTP_RETRY_DELAY": "2",
+    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff",
+    "GDAL_HTTP_MULTIRANGE": "YES",
+    "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
+}
+
+
+@dataclass
+class S1SceneInfo:
+    """Provenance of one Sentinel-1 IW GRDH scene (MPC ``sentinel-1-grd`` item)."""
+    scene_id: str            # MPC item id: the ESA product name without the CRC
+    safe_name: str           # SAFE directory name incl. CRC, from the asset href
+    start_utc: str           # ISO 8601 with "Z"
+    end_utc: str
+    platform: str
+    orbit_direction: str     # "ASCENDING" | "DESCENDING"
+    relative_orbit: int
+    absolute_orbit: int
+    footprint: dict          # GeoJSON Polygon, WGS84
+
+
+@dataclass
+class S1VesselScenes:
+    """Target + historical GRD DN on one grid, as AI2's S1 vessel detector expects.
+
+    Attributes:
+        target: (2, H, W) uint16 DN, bands [vv, vh]; 0 is nodata (outside the swath).
+        historical: (2, H, W) uint16 DN on the same grid.
+        geo: AI2's window grid: UTM, 10 m, origin on multiples of 10 m. This is
+            NOT the NMD/EPSG:3006 grid; the detector's contract fixes the grid.
+        target_scene / historical_scene: scene provenance.
+        scene_time_utc: when the target scene imaged the AOI centre (ISO 8601,
+            "Z"): ``start + (row_c / lines) * (end - start)`` with ``row_c`` the
+            radar line of the AOI centre and ``lines`` the scene's line count.
+            A slice spans ~25 s, so ``target_scene.start_utc`` can be off by
+            that much (~155 m of travel at 12 kn).
+        provenance: chain version, grids, radar windows, coverage, library versions.
+    """
+    target: np.ndarray
+    historical: np.ndarray
+    geo: GeoContext
+    target_scene: S1SceneInfo
+    historical_scene: S1SceneInfo
+    scene_time_utc: str
+    provenance: dict
+
+    def bands(self) -> dict[str, np.ndarray]:
+        """Band dict in the layout ``AI2S1VesselAnalyzer`` reads (views, no copies)."""
+        out = dict(zip(S1_TARGET_BAND_KEYS, self.target, strict=True))
+        out.update(zip(S1_HISTORICAL_BAND_KEYS, self.historical, strict=True))
+        return out
+
+
+def fetch_s1_vessel_scenes(
+    coords: dict,
+    date: str,
+    *,
+    cache_dir: str | Path,
+) -> S1VesselScenes:
+    """Fetch the Sentinel-1 target scene and AI2's historical scene for an AOI.
+
+    Data source: Microsoft Planetary Computer ``sentinel-1-grd`` (anonymous,
+    SAS-signed COGs; no PU billing, no requester-pays). Only a radar-geometry
+    window around the AOI is downloaded.
+
+    Scene choice:
+        * target: the IW GRDH VV+VH scene acquired on ``date`` (UTC) whose
+          footprint covers most of the AOI (earliest start on a tie);
+        * historical: AI2's rule, the scene starting in ``[t0 - 60 d, t0 - 30 d]``
+          (t0 = target start) whose footprint overlaps the target footprint
+          most, restricted to the target's orbit direction (AI2 states the
+          scenes must share it; its catalogue query does not filter on it).
+
+    Everything fetched or computed is cached under ``cache_dir``: the raw radar
+    windows (``s1_grd/<scene>/``) and the final model input
+    (``s1_vessel_inputs/<date>_<key>.tif`` + ``.json``). A cached request is
+    answered without network access.
+
+    Args:
+        coords: WGS84 bbox ``{"west", "south", "east", "north"}``.
+        date: target acquisition date, ``YYYY-MM-DD`` (UTC).
+        cache_dir: cache root.
+
+    Returns:
+        S1VesselScenes on the AOI subset of AI2's window grid.
+
+    Raises:
+        FetchError: no suitable target/historical scene, or the AOI is outside
+            the target swath.
+    """
+    cache_dir = Path(cache_dir)
+    key = _s1_vessel_cache_key(coords, date)
+    out_dir = cache_dir / "s1_vessel_inputs"
+    tif_path = out_dir / f"{date}_{key}.tif"
+    meta_path = out_dir / f"{date}_{key}.json"
+    if tif_path.exists() and meta_path.exists():
+        print(f"    [S1 vessels] cache hit {tif_path}")
+        return _load_s1_vessel_cache(tif_path, meta_path)
+
+    import rasterio
+    from rasterio.transform import Affine
+    from shapely.geometry import box
+
+    aoi = box(coords["west"], coords["south"], coords["east"], coords["north"])
+    target_item, aoi_cover = _select_s1_target(aoi, date)
+    hist_item = _select_s1_historical(target_item)
+    target_scene, hist_scene = _s1_scene_info(target_item), _s1_scene_info(hist_item)
+    print(f"    [S1 vessels] target {target_scene.scene_id} (AOI cover {aoi_cover:.3f}), "
+          f"historical {hist_scene.scene_id}")
+
+    epsg, window_px = _ai2_scene_window(target_item.geometry)
+    aoi_px = _s1_aoi_pixel_bounds(coords, epsg, window_px)
+    radar_windows: dict = {}
+    stacks = []
+    for item in (target_item, hist_item):
+        signed = None
+        pols = []
+        for pol in _S1_POLARISATIONS:
+            vrt_path, rwin, step1_epsg, signed = _s1_sparse_scene_vrt(
+                item, pol, epsg, aoi_px, cache_dir / "s1_grd" / item.id, signed)
+            radar_windows[f"{item.id}/{pol}"] = {**rwin, "step1_epsg": step1_epsg}
+            pols.append(_s1_grd_to_window_grid(vrt_path, step1_epsg, epsg, window_px, aoi_px))
+        stacks.append(np.stack(pols))
+    target_dn, hist_dn = stacks
+
+    valid_t = np.count_nonzero(target_dn[0]) / target_dn[0].size
+    valid_h = np.count_nonzero(hist_dn[0]) / hist_dn[0].size
+    if valid_t == 0.0:
+        raise FetchError(f"AOI {coords} lies outside the swath of {target_scene.scene_id}")
+    centre = radar_windows[f"{target_item.id}/{_S1_POLARISATIONS[0]}"]
+    scene_time_utc = _s1_line_time_utc(target_scene, centre["aoi_center_row"] / centre["lines"])
+
+    c0, r0, c1, r1 = aoi_px
+    transform = Affine(
+        S1_VESSEL_GSD_M, 0, c0 * S1_VESSEL_GSD_M, 0, -S1_VESSEL_GSD_M, -r0 * S1_VESSEL_GSD_M)
+    geo = GeoContext(
+        crs=f"EPSG:{epsg}",
+        transform=transform,
+        bounds_projected={"west": c0 * S1_VESSEL_GSD_M, "south": -r1 * S1_VESSEL_GSD_M,
+                          "east": c1 * S1_VESSEL_GSD_M, "north": -r0 * S1_VESSEL_GSD_M},
+        bounds_wgs84=dict(coords),
+        shape=(r1 - r0, c1 - c0),
+    )
+    provenance = {
+        "chain_version": S1_VESSEL_CHAIN_VERSION,
+        "source": S1_VESSEL_SOURCE,
+        "request": {"coords": dict(coords), "date": date},
+        "window_epsg": epsg,
+        "ai2_window_px": list(window_px),
+        "aoi_px": list(aoi_px),
+        "aoi_cover_target_footprint": round(aoi_cover, 6),
+        "valid_frac_target": round(valid_t, 6),
+        "valid_frac_historical": round(valid_h, 6),
+        "radar_windows": radar_windows,
+        "rasterio": rasterio.__version__,
+        "gdal": rasterio.__gdal_version__,
+    }
+    scenes = S1VesselScenes(target=target_dn, historical=hist_dn, geo=geo,
+                            target_scene=target_scene, historical_scene=hist_scene,
+                            scene_time_utc=scene_time_utc, provenance=provenance)
+    _write_s1_vessel_cache(tif_path, meta_path, scenes)
+    return scenes
+
+
+def _s1_vessel_cache_key(coords: dict, date: str) -> str:
+    """Deterministic cache key of a fetch request (chain + record versions, date, bbox)."""
+    payload = {
+        "chain": S1_VESSEL_CHAIN_VERSION,
+        "format": _S1_VESSEL_CACHE_FORMAT,
+        "date": date,
+        "bbox": [round(float(coords[k]), 6) for k in ("west", "south", "east", "north")],
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _ai2_s1_candidates(items: list) -> list:
+    """IW GRDH dual-pol (VV+VH) items: the only products AI2's data source returns."""
+    from .training import s1_shared
+
+    return [
+        it for it in s1_shared.filter_iw_grdh(items, None)
+        if "_GRDH_" in it.id
+        and sorted(it.properties.get("sar:polarizations") or []) == ["VH", "VV"]
+    ]
+
+
+def _parse_utc(iso: str) -> datetime:
+    """ISO 8601 UTC string (``...Z``) -> aware datetime."""
+    return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
+def _s1_start(item) -> datetime:
+    """Scene start time (aware datetime), AI2's ``time_range[0]``."""
+    return _parse_utc(item.properties["start_datetime"])
+
+
+def _s1_line_time_utc(scene: S1SceneInfo, line_frac: float) -> str:
+    """Acquisition time of a radar line at ``line_frac`` (0 = first, 1 = last) of the slice.
+
+    GRD lines are in azimuth-time order, so the time is linear in the line
+    index between the scene's start and end. Returns ISO 8601 with "Z".
+    """
+    if not 0.0 <= line_frac <= 1.0:
+        raise ValueError(f"line fraction {line_frac} outside the scene [0, 1]")
+    start, end = _parse_utc(scene.start_utc), _parse_utc(scene.end_utc)
+    t = start + line_frac * (end - start)
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _select_s1_target(aoi, date: str) -> tuple[Any, float]:
+    """Target scene on ``date``: largest footprint overlap with the AOI."""
+    from .training import mpc_s1, s1_shared
+
+    day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    interval = f"{day:%Y-%m-%dT%H:%M:%SZ}/{day + timedelta(days=1):%Y-%m-%dT%H:%M:%SZ}"
+    items = _ai2_s1_candidates(mpc_s1.search_grd_items(interval, bbox_4326=aoi.bounds))
+    if not items:
+        raise FetchError(f"No Sentinel-1 IW GRDH VV+VH scene on {date} over {aoi.bounds}")
+    best = min(items, key=lambda it: (-s1_shared.footprint_intersection_area(it, aoi),
+                                      _s1_start(it)))
+    cover = s1_shared.footprint_intersection_area(best, aoi) / aoi.area
+    if cover == 0.0:
+        raise FetchError(f"No Sentinel-1 footprint on {date} intersects {aoi.bounds}")
+    return best, cover
+
+
+def _select_s1_historical(target) -> Any:
+    """AI2's historical scene: best footprint overlap in ``[t0 - 60 d, t0 - 30 d]``."""
+    from shapely.geometry import shape
+
+    from .training import mpc_s1, s1_shared
+
+    t0 = _s1_start(target)
+    lo = t0 - timedelta(days=S1_VESSEL_HISTORICAL_OFFSET_DAYS)
+    hi = lo + timedelta(days=S1_VESSEL_HISTORICAL_WINDOW_DAYS)
+    footprint = shape(target.geometry)
+    direction = s1_shared.orbit_from_item(target)
+    items = [
+        it for it in _ai2_s1_candidates(
+            mpc_s1.search_grd_items(f"{lo.isoformat()}/{hi.isoformat()}",
+                                    intersects=target.geometry, limit=100))
+        if s1_shared.orbit_from_item(it) == direction
+    ]
+    if not items:
+        raise FetchError(f"No {direction} historical scene for {target.id} in "
+                         f"[{lo:%Y-%m-%d}, {hi:%Y-%m-%d}]")
+    return min(items, key=lambda it: (-s1_shared.footprint_intersection_area(it, footprint),
+                                      _s1_start(it)))
+
+
+def _s1_scene_info(item) -> S1SceneInfo:
+    from .training import s1_shared
+
+    p = item.properties
+    return S1SceneInfo(
+        scene_id=item.id,
+        safe_name=item.assets["vv"].href.split("?")[0].split("/")[-3],
+        start_utc=p["start_datetime"],
+        end_utc=p["end_datetime"],
+        platform=p.get("platform", ""),
+        orbit_direction=s1_shared.orbit_from_item(item) or "UNKNOWN",
+        relative_orbit=int(p["sat:relative_orbit"]),
+        absolute_orbit=int(p["sat:absolute_orbit"]),
+        footprint=item.geometry,
+    )
+
+
+def _ai2_utm_epsg(lon: float, lat: float) -> int:
+    """UTM EPSG for a point, chosen exactly as rslearn's ``get_utm_ups_crs`` does."""
+    from pyproj.aoi import AreaOfInterest
+    from pyproj.database import query_utm_crs_info
+
+    infos = query_utm_crs_info(
+        datum_name="WGS 84",
+        area_of_interest=AreaOfInterest(west_lon_degree=lon, south_lat_degree=lat,
+                                        east_lon_degree=lon, north_lat_degree=lat),
+    )
+    if not infos:
+        raise FetchError(f"No UTM zone for lon={lon}, lat={lat}")
+    return int(infos[0].code)
+
+
+def _ai2_scene_window(footprint: dict) -> tuple[int, tuple[int, int, int, int]]:
+    """AI2's scene-ID window: UTM zone of the footprint centroid, int() pixel bounds.
+
+    Mirrors ``setup_dataset_with_scene_ids``: the footprint is reprojected
+    vertex-wise, divided by (10, -10) and its bounds are truncated with
+    ``int()`` (towards zero, so the negative row bounds round up).
+    """
+    from rasterio.warp import transform_geom
+    from shapely.geometry import shape
+
+    shp = shape(footprint)
+    epsg = _ai2_utm_epsg(shp.centroid.x, shp.centroid.y)
+    minx, miny, maxx, maxy = shape(transform_geom("EPSG:4326", f"EPSG:{epsg}", footprint)).bounds
+    g = S1_VESSEL_GSD_M
+    return epsg, (int(minx / g), int(maxy / -g), int(maxx / g), int(miny / -g))
+
+
+def _s1_aoi_pixel_bounds(coords: dict, epsg: int, window_px: tuple) -> tuple[int, int, int, int]:
+    """The AOI on the window's pixel lattice (absolute pixel units), clipped to it."""
+    from rasterio.warp import transform_bounds
+
+    left, bottom, right, top = transform_bounds(
+        "EPSG:4326", f"EPSG:{epsg}", coords["west"], coords["south"],
+        coords["east"], coords["north"], densify_pts=21)
+    g = S1_VESSEL_GSD_M
+    c0 = max(math.floor(left / g), window_px[0])
+    r0 = max(math.floor(-top / g), window_px[1])
+    c1 = min(math.ceil(right / g), window_px[2])
+    r1 = min(math.ceil(-bottom / g), window_px[3])
+    if c1 <= c0 or r1 <= r0:
+        raise FetchError(f"AOI {coords} does not intersect the scene window {window_px}")
+    return c0, r0, c1, r1
+
+
+def _s1_aoi_outline_lonlat(epsg: int, aoi_px: tuple, pad_px: int = 4,
+                           n: int = 64) -> tuple[np.ndarray, np.ndarray]:
+    """Densified outline of the AOI rectangle (padded by ``pad_px``) as lon/lat."""
+    from pyproj import Transformer
+
+    c0, r0, c1, r1 = aoi_px[0] - pad_px, aoi_px[1] - pad_px, aoi_px[2] + pad_px, aoi_px[3] + pad_px
+    t = np.linspace(0.0, 1.0, n, endpoint=False)
+    cols = np.concatenate([c0 + (c1 - c0) * t, np.full(n, c1), c1 - (c1 - c0) * t, np.full(n, c0)])
+    rows = np.concatenate([np.full(n, r0), r0 + (r1 - r0) * t, np.full(n, r1), r1 - (r1 - r0) * t])
+    g = S1_VESSEL_GSD_M
+    return Transformer.from_crs(epsg, 4326, always_xy=True).transform(cols * g, rows * -g)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` via a sibling temp file + ``os.replace``.
+
+    A reader (or a cache-hit check) never sees a partially written file.
+    """
+    tmp = path.with_name(path.name + ".part")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def _s1_scene_header(item, pol: str, scene_dir: Path, signed) -> tuple[dict, Any]:
+    """Full raster size, nodata and all GCPs of one measurement TIFF (cached JSON)."""
+    path = scene_dir / f"{pol}_header.json"
+    if path.exists():
+        return json.loads(path.read_text()), signed
+    import rasterio
+
+    from .training import mpc_s1, s1_shared
+
+    signed = signed or mpc_s1.sign_item(item)
+    href = dict(zip(_S1_POLARISATIONS, s1_shared.pick_measurement_urls(signed), strict=True))[pol]
+    with rasterio.Env(**_S1_GDAL_ENV), rasterio.open(href) as src:
+        gcps, gcp_crs = src.gcps
+        if src.crs is not None or not gcps:
+            raise FetchError(f"{item.id} {pol}: expected a GCP-referenced radar-geometry GRD")
+        header = {
+            "scene_id": item.id,
+            "href": href.split("?")[0],
+            "width": src.width,
+            "height": src.height,
+            "dtype": src.dtypes[0],
+            "nodata": src.nodata,
+            "gcp_crs": str(gcp_crs),
+            "gcps": [[g.id, g.col, g.row, g.x, g.y, g.z] for g in gcps],
+        }
+    scene_dir.mkdir(parents=True, exist_ok=True)
+    _atomic_write_text(path, json.dumps(header))
+    return header, signed
+
+
+def _s1_radar_window(header: dict, epsg: int, aoi_px: tuple) -> dict:
+    """Radar-geometry window (col, row, width, height) covering the AOI + margin.
+
+    Also returns the radar line of the AOI centre (``aoi_center_row``, float;
+    clamped to the scene when an AOI only partly covered by this slice has its
+    centre outside it) and the scene's line count (``lines``), which date the
+    AOI within the slice.
+    """
+    from pyproj import Transformer
+    from rasterio.control import GroundControlPoint
+    from rasterio.transform import GCPTransformer
+
+    gcps = [GroundControlPoint(row=r, col=c, x=x, y=y, z=z, id=i)
+            for i, c, r, x, y, z in header["gcps"]]
+    tps = GCPTransformer(gcps, tps=True)
+    lon, lat = _s1_aoi_outline_lonlat(epsg, aoi_px)
+    rows, cols = tps.rowcol(lon, lat, op=float)
+    # Guard: the inverse TPS must agree with the forward TPS on the AOI outline.
+    lon2, lat2 = tps.xy(rows, cols, offset="ul")
+    err_m = float(np.max(haversine_m(lon, lat, lon2, lat2)))
+    if err_m > _S1_TPS_ROUNDTRIP_TOL_M:
+        raise FetchError(f"{header['scene_id']}: TPS round-trip error {err_m:.1f} m on the "
+                         f"AOI outline exceeds {_S1_TPS_ROUNDTRIP_TOL_M} m")
+    m = _S1_RADAR_MARGIN_PX
+    c0 = max(math.floor(np.min(cols)) - m, 0)
+    r0 = max(math.floor(np.min(rows)) - m, 0)
+    c1 = min(math.ceil(np.max(cols)) + m, header["width"])
+    r1 = min(math.ceil(np.max(rows)) + m, header["height"])
+    if c1 <= c0 or r1 <= r0:
+        raise FetchError(f"{header['scene_id']}: AOI maps outside the radar raster")
+    g = S1_VESSEL_GSD_M
+    lon_c, lat_c = Transformer.from_crs(epsg, 4326, always_xy=True).transform(
+        (aoi_px[0] + aoi_px[2]) / 2 * g, (aoi_px[1] + aoi_px[3]) / 2 * -g)
+    row_c, _ = tps.rowcol(lon_c, lat_c, op=float)
+    return {"col_off": c0, "row_off": r0, "width": c1 - c0, "height": r1 - r0,
+            "tps_roundtrip_max_m": round(err_m, 3),
+            "aoi_center_row": round(float(min(max(row_c, 0.0), header["height"])), 3),
+            "lines": header["height"]}
+
+
+def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Path,
+                         signed) -> tuple[Path, dict, int, Any]:
+    """Cache the radar window and wrap it in a full-size VRT with all GCPs.
+
+    Returns ``(vrt_path, radar_window, step1_epsg, signed_item_or_None)``.
+    """
+    import rasterio
+    from rasterio.control import GroundControlPoint
+    from rasterio.windows import Window
+
+    header, signed = _s1_scene_header(item, pol, scene_dir, signed)
+    rwin = _s1_radar_window(header, epsg, aoi_px)
+    stem = f"{pol}_c{rwin['col_off']}_r{rwin['row_off']}_{rwin['width']}x{rwin['height']}"
+    win_path, vrt_path = scene_dir / f"{stem}.tif", scene_dir / f"{stem}.vrt"
+    if not win_path.exists():
+        from .training import mpc_s1, s1_shared
+
+        signed = signed or mpc_s1.sign_item(item)
+        href = dict(zip(_S1_POLARISATIONS, s1_shared.pick_measurement_urls(signed), strict=True))[pol]
+        window = Window(rwin["col_off"], rwin["row_off"], rwin["width"], rwin["height"])
+        with rasterio.Env(**_S1_GDAL_ENV), rasterio.open(href) as src:
+            data = src.read(1, window=window)
+        # Self-describing crop: the GCPs shifted into the crop's pixel space.
+        shifted = [GroundControlPoint(row=r - rwin["row_off"], col=c - rwin["col_off"],
+                                      x=x, y=y, z=z, id=i)
+                   for i, c, r, x, y, z in header["gcps"]]
+        tmp = win_path.with_suffix(".tif.part")
+        with rasterio.open(tmp, "w", driver="GTiff", width=data.shape[1], height=data.shape[0],
+                           count=1, dtype=data.dtype, nodata=header["nodata"], compress="zstd",
+                           tiled=True, blockxsize=512, blockysize=512,
+                           gcps=shifted, crs=header["gcp_crs"]) as dst:
+            dst.write(data, 1)
+            dst.update_tags(SCENE_ID=header["scene_id"], SOURCE_HREF=header["href"],
+                            COL_OFF=str(rwin["col_off"]), ROW_OFF=str(rwin["row_off"]))
+        os.replace(tmp, win_path)
+        print(f"    [S1 vessels] cached radar window {win_path} "
+              f"({data.shape[1]}x{data.shape[0]} px)")
+    _atomic_write_text(vrt_path, _s1_sparse_vrt_xml(header, rwin, win_path.name))
+    first = header["gcps"][0]
+    return vrt_path, rwin, _ai2_utm_epsg(first[3], first[4]), signed
+
+
+_GDAL_DATA_TYPES = {"uint16": "UInt16"}     # GRD measurement TIFFs are uint16
+
+
+def _s1_sparse_vrt_xml(header: dict, rwin: dict, window_file: str) -> str:
+    """GDAL VRT: the full scene's size and GCPs, real pixels only in the radar window.
+
+    Built with ElementTree so the GCP CRS (possibly WKT with quotes) and every
+    other value is XML-escaped.
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        gdal_type = _GDAL_DATA_TYPES[header["dtype"]]
+    except KeyError:
+        raise FetchError(f"{header['scene_id']}: GRD data type {header['dtype']!r} is not "
+                         f"supported (expected one of {sorted(_GDAL_DATA_TYPES)})") from None
+    root = ET.Element("VRTDataset", rasterXSize=str(header["width"]),
+                      rasterYSize=str(header["height"]))
+    gcp_list = ET.SubElement(root, "GCPList", Projection=header["gcp_crs"])
+    for i, c, r, x, y, z in header["gcps"]:
+        ET.SubElement(gcp_list, "GCP", Id=str(i), Pixel=repr(c), Line=repr(r),
+                      X=repr(x), Y=repr(y), Z=repr(z))
+    band = ET.SubElement(root, "VRTRasterBand", dataType=gdal_type, band="1")
+    if header["nodata"] is not None:
+        ET.SubElement(band, "NoDataValue").text = repr(header["nodata"])
+    src = ET.SubElement(band, "SimpleSource")
+    ET.SubElement(src, "SourceFilename", relativeToVRT="1").text = window_file
+    ET.SubElement(src, "SourceBand").text = "1"
+    w, h = str(rwin["width"]), str(rwin["height"])
+    ET.SubElement(src, "SrcRect", xOff="0", yOff="0", xSize=w, ySize=h)
+    ET.SubElement(src, "DstRect", xOff=str(rwin["col_off"]), yOff=str(rwin["row_off"]),
+                  xSize=w, ySize=h)
+    ET.indent(root)
+    return ET.tostring(root, encoding="unicode") + "\n"
+
+
+def _s1_grd_to_window_grid(src_path: str | Path, step1_epsg: int, epsg: int,
+                           window_px: tuple, aoi_px: tuple) -> np.ndarray:
+    """rslearn's ingest + materialise warps over the full request; returns the AOI.
+
+    Step 1 is ``DefaultTileStore.write_raster_file`` (TPS, cubic, GDAL-suggested
+    grid, uint16); step 2 is ``GeotiffRasterFormat.decode_raster`` onto the
+    whole window (cubic, the tile's nodata). Both are whole-dataset reads, as in
+    rslearn, so GDAL chunks them exactly as it does there.
+
+    Returns:
+        (H, W) uint16 on ``aoi_px``.
+    """
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.io import MemoryFile
+    from rasterio.transform import Affine
+    from rasterio.vrt import WarpedVRT
+
+    with rasterio.open(src_path) as src:
+        nodata = src.nodata
+        with WarpedVRT(src, crs=f"EPSG:{step1_epsg}", resampling=Resampling.cubic,
+                       MAX_GCP_ORDER="-1") as vrt:
+            step1 = vrt.read()
+            profile = {"driver": "GTiff", "width": vrt.width, "height": vrt.height, "count": 1,
+                       "dtype": step1.dtype, "crs": vrt.crs, "transform": vrt.transform,
+                       "nodata": nodata, "tiled": True, "blockxsize": 512, "blockysize": 512,
+                       "SPARSE_OK": True}
+    g = S1_VESSEL_GSD_M
+    c0, r0, c1, r1 = window_px
+    with MemoryFile() as mf:
+        with mf.open(**profile) as tile:
+            tile.write(step1)
+        del step1
+        with mf.open() as tile, WarpedVRT(
+                tile, crs=f"EPSG:{epsg}",
+                transform=Affine(g, 0, c0 * g, 0, -g, r0 * -g),
+                width=c1 - c0, height=r1 - r0, resampling=Resampling.cubic) as vrt:
+            step2 = vrt.read(1)
+    a0, b0, a1, b1 = aoi_px
+    return step2[b0 - r0:b1 - r0, a0 - c0:a1 - c0].copy()
+
+
+def _write_s1_vessel_cache(tif_path: Path, meta_path: Path, scenes: S1VesselScenes) -> None:
+    """Persist the model input (uint16, 4 bands) and its record sidecar (written last)."""
+    import dataclasses
+
+    import rasterio
+
+    if scenes.target.dtype != np.uint16 or scenes.historical.dtype != np.uint16:
+        raise TypeError(f"S1 vessel input must be uint16 DN, got {scenes.target.dtype} / "
+                        f"{scenes.historical.dtype}")
+    geo = scenes.geo
+    tif_path.parent.mkdir(parents=True, exist_ok=True)
+    stack = np.concatenate([scenes.target, scenes.historical])
+    tmp = tif_path.with_name(tif_path.name + ".part")
+    with rasterio.open(tmp, "w", driver="GTiff", width=stack.shape[2], height=stack.shape[1],
+                       count=4, dtype="uint16", crs=geo.crs, transform=geo.transform, nodata=0,
+                       compress="zstd", tiled=True, blockxsize=512, blockysize=512) as dst:
+        dst.write(stack)
+        dst.descriptions = ("target_vv", "target_vh", "historical_vv", "historical_vh")
+    os.replace(tmp, tif_path)
+    _atomic_write_text(meta_path, json.dumps({
+        "target_scene": dataclasses.asdict(scenes.target_scene),
+        "historical_scene": dataclasses.asdict(scenes.historical_scene),
+        "scene_time_utc": scenes.scene_time_utc,
+        "geo": {"crs": geo.crs, "transform": list(geo.transform)[:6],
+                "bounds_projected": geo.bounds_projected, "bounds_wgs84": geo.bounds_wgs84,
+                "shape": list(geo.shape)},
+        "provenance": scenes.provenance,
+    }, indent=1))
+    print(f"    [S1 vessels] saved {tif_path}")
+
+
+def _load_s1_vessel_cache(tif_path: Path, meta_path: Path) -> S1VesselScenes:
+    """Read a cached request back exactly as it was written (uint16 DN)."""
+    import rasterio
+    from rasterio.transform import Affine
+
+    meta = json.loads(meta_path.read_text())
+    with rasterio.open(tif_path) as src:
+        stack = src.read()
+    g = meta["geo"]
+    geo = GeoContext(crs=g["crs"], transform=Affine(*g["transform"]),
+                     bounds_projected=g["bounds_projected"], bounds_wgs84=g["bounds_wgs84"],
+                     shape=tuple(g["shape"]))
+    return S1VesselScenes(
+        target=stack[:2], historical=stack[2:], geo=geo,
+        target_scene=S1SceneInfo(**meta["target_scene"]),
+        historical_scene=S1SceneInfo(**meta["historical_scene"]),
+        scene_time_utc=meta["scene_time_utc"],
+        provenance=meta["provenance"],
+    )
 
 
 def _fetch_tci_scl_batch(
