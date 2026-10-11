@@ -1,0 +1,21 @@
+{
+ "top_level_keys": [
+  "epoch",
+  "global_step",
+  "pytorch-lightning_version",
+  "state_dict",
+  "loops",
+  "callbacks",
+  "optimizer_states",
+  "lr_schedulers"
+ ],
+ "epoch": 36,
+ "global_step": 166130,
+ "lightning_version": "2.6.1",
+ "n_tensors": 479,
+ "n_params": 105882153,
+ "dtypes": {
+  "torch.float32": 455,
+  "torch.int64": 24
+ }
+}
