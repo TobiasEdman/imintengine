@@ -12,9 +12,12 @@
         var items = LEGENDS[legendKey];
         if (!items || !items.length) return '';
         var html = '<div class="legend-strip">';
+        // item.color = filled swatch; item.swatch = inline swatch CSS (e.g. a
+        // solid or dashed outline); neither = text-only item (attribution).
         items.forEach(function(item) {
+            var style = item.swatch || (item.color ? 'background:' + item.color : '');
             html += '<span class="legend-item">' +
-                '<span class="legend-swatch" style="background:' + item.color + '"></span>' +
+                (style ? '<span class="legend-swatch" style="' + style + '"></span>' : '') +
                 item.label + '</span>';
         });
         html += '</div>';
@@ -240,6 +243,14 @@
             var cc = {'erosion':'#d73027','stable':'#ffffbf','accumulation':'#1a9850'};
             return {color: cc[p.change_type] || '#fff', weight: 3.5, opacity: 0.95, fill: false};
         }
+        // Sentinel-1 detection — colour by AI2 score (S1_SCORE_RAMP), solid at
+        // or above AI2's production threshold, dashed for candidates below it
+        if (p.detector === 'ai2_s1') {
+            var sc = S1_SCORE_RAMP[0].color;
+            S1_SCORE_RAMP.forEach(function(b) { if (p.score >= b.min) sc = b.color; });
+            return {color: sc, weight: 2.5, opacity: 1, fillColor: sc, fillOpacity: 0.12,
+                    dashArray: p.above_threshold ? null : '5 4'};
+        }
         // AI2 vessel with speed attribute — color by speed
         if (p.label === 'vessel' && typeof p.speed_knots === 'number') {
             var spd = p.speed_knots;
@@ -266,6 +277,22 @@
         if (p.change_type) {
             var labels = {'erosion':'Erosion','stable':'Stabil','accumulation':'Ackumulation'};
             layer.bindPopup('<b>' + (labels[p.change_type]||p.change_type) + '</b><br>Förändring: ' + p.change_m + ' m');
+            return;
+        }
+        // Sentinel-1 detections (radar sub-tabs): unverified, and every
+        // attribute is a model prediction (pred_*).
+        if (p.detector === 'ai2_s1') {
+            var s1 = '<b>' + (p.above_threshold ? 'Detektion' : 'Kandidat under tröskeln') +
+                ' (Sentinel-1)</b><br>Poäng: ' + p.score.toFixed(3) +
+                (p.above_threshold ? ' (≥ 0.7, AI2:s tröskel)' : ' (under AI2:s tröskel 0.7)');
+            if (typeof p.pred_length_m === 'number') s1 += '<br>Predikterad längd: ' + Math.round(p.pred_length_m) + ' m';
+            if (typeof p.pred_width_m === 'number') s1 += '<br>Predikterad bredd: ' + Math.round(p.pred_width_m) + ' m';
+            if (typeof p.pred_heading_deg === 'number') s1 += '<br>Predikterad kurs: ' + Math.round(p.pred_heading_deg) + '°';
+            if (typeof p.pred_speed_kn === 'number') s1 += '<br>Predikterad fart: ' + p.pred_speed_kn.toFixed(1) + ' kn';
+            if (p.pred_type) s1 += '<br>Predikterad typ: ' + p.pred_type +
+                (typeof p.pred_type_conf === 'number' ? ' (' + Math.round(p.pred_type_conf * 100) + '%)' : '');
+            s1 += '<br><em>Kandidat, ej bekräftad (ingen AIS-matchning)</em>';
+            layer.bindPopup(s1);
             return;
         }
         if (p.label === 'vessel') {
