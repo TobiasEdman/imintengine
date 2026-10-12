@@ -1,0 +1,26 @@
+{
+ "materialised_input": {
+  "target_vv": {
+   "same_grid": true,
+   "n_diff": 0
+  },
+  "target_vh": {
+   "same_grid": true,
+   "n_diff": 0
+  },
+  "historical1_vv": {
+   "same_grid": true,
+   "n_diff": 0
+  },
+  "historical1_vh": {
+   "same_grid": true,
+   "n_diff": 0
+  }
+ },
+ "n_features": [
+  107,
+  107
+ ],
+ "features_identical_except_crop_paths": true,
+ "differing_feature_indices": []
+}

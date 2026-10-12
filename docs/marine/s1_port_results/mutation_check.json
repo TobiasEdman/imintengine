@@ -1,0 +1,23 @@
+[
+ {
+  "file": "imint/fetch.py",
+  "mutation": "lo = t0 - timedelta(days=S1_VESSEL_HISTORICAL_OFFSET_DAYS)  ->  lo = t0 + timedelta(days=S1_VESSEL_HISTORICAL_OFFSET_DAYS)",
+  "pytest_summary": "3 failed, 65 passed in 20.65s",
+  "failing_tests": [
+   "test_fetch_offline_end_to_end_then_cache_round_trip",
+   "test_select_historical_applies_ai2_window_direction_and_overlap",
+   "test_select_historical_tie_goes_to_the_earliest_start"
+  ],
+  "restored": true
+ },
+ {
+  "file": "imint/analyzers/ai2_vessels_s1.py",
+  "mutation": "b[:, [0, 2]] += c  ->  b[:, [0, 2]] += r",
+  "pytest_summary": "2 failed, 66 passed in 13.08s",
+  "failing_tests": [
+   "test_analyzer_merges_patch_duplicates_and_keeps_uint16_input",
+   "test_detect_places_patch_boxes_at_global_image_coordinates"
+  ],
+  "restored": true
+ }
+]

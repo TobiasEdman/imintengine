@@ -150,3 +150,17 @@ def bands_to_rgb(
         rgb = np.clip((rgb - p2) / (p98 - p2 + 1e-6), 0, 1)
 
     return rgb
+
+
+def haversine_m(lon1, lat1, lon2, lat2) -> np.ndarray:
+    """Great-circle distance in metres on a sphere of radius 6371 km.
+
+    Inputs are degrees and broadcast against each other. The radius is the
+    mean Earth radius AI2's marine-infrastructure filter uses, so distances
+    compared against its thresholds are computed the same way.
+    """
+    lon1, lat1, lon2, lat2 = (np.radians(np.asarray(v, dtype=np.float64))
+                              for v in (lon1, lat1, lon2, lat2))
+    a = (np.sin((lat2 - lat1) / 2) ** 2
+         + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2)
+    return 6_371_000.0 * 2 * np.arcsin(np.sqrt(a))
