@@ -57,6 +57,8 @@ spec:
               cd ie
               git fetch -q --depth 1 origin "$SOURCE_COMMIT"
               git checkout -q "$SOURCE_COMMIT"
+              # Never run an old census: the pinned bytes must be the reviewed ones.
+              echo "$CENSUS_SCRIPT_SHA256  scripts/census_holdout_val_512.py" | sha256sum -c -
               echo "HEAD: $(git rev-parse HEAD)"
               export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
               python scripts/census_holdout_val_512.py --help > /dev/null && echo "imports OK"
@@ -198,7 +200,8 @@ spec:
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: SOURCE_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
-            - {name: SOURCE_COMMIT, value: "0386349d557aadd6b9857cc0753d239d0ccbae45"}
+            - {name: SOURCE_COMMIT, value: "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb"}
+            - {name: CENSUS_SCRIPT_SHA256, value: "9244f7bc5415af4b3aab75a3d6b6a4f393bc070bf598bfa518c0622c4f43084a"}
             - {name: EXPECTED_EXCLUDED, value: "212"}
           resources:
             requests: {cpu: "4", memory: "16Gi"}

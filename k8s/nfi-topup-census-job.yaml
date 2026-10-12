@@ -38,6 +38,8 @@ spec:
               cd ie
               git fetch -q --depth 1 origin "$CENSUS_COMMIT" "$FIELDTRUTH_COMMIT" "$SIZING_COMMIT"
               git checkout -q "$CENSUS_COMMIT"
+              # Never run an old census: the pinned bytes must be the reviewed ones.
+              echo "$CENSUS_SCRIPT_SHA256  scripts/census_holdout_val_512.py" | sha256sum -c -
               git checkout -q "$FIELDTRUTH_COMMIT" -- imint/eval/fieldtruth.py
               git show "$SIZING_COMMIT:docs/experiments/nfi_fieldtruth_0103_tile_sizing_20261008.json" > /workspace/codex_sizing.json
               echo "HEAD: $(git rev-parse HEAD)"; sha256sum imint/eval/fieldtruth.py /workspace/codex_sizing.json
@@ -61,7 +63,8 @@ spec:
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: YEARS, value: "2018 2019 2021 2022"}
             - {name: CENSUS_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
-            - {name: CENSUS_COMMIT, value: "0386349d557aadd6b9857cc0753d239d0ccbae45"}
+            - {name: CENSUS_COMMIT, value: "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb"}
+            - {name: CENSUS_SCRIPT_SHA256, value: "9244f7bc5415af4b3aab75a3d6b6a4f393bc070bf598bfa518c0622c4f43084a"}
             - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
             - {name: SIZING_COMMIT, value: "94b26bbbef9d28220734e4efce38ed4943fd6157"}
           resources:
