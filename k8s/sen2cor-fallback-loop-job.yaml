@@ -32,6 +32,7 @@ metadata:
   namespace: prithvi-training-default
   labels: {app: fieldtruth-prep, purpose: sen2cor-fallback-nfi2024}
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   activeDeadlineSeconds: 43200   # 12 h
   template:
@@ -55,6 +56,9 @@ spec:
           command: ["bash", "-c"]
           args:
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -e
               export PYTHONUNBUFFERED=1
               echo "=== sen2cor fallback passes — $(date -u) ==="
@@ -76,15 +80,9 @@ spec:
               echo "HEAD: $(git rev-parse --short HEAD)"
               nvidia-smi --query-gpu=name --format=csv,noheader || true
 
-              # ONE-TIME RESET. The previous run marked scenes as tried
-              # BEFORE invoking the runner and ignored its exit code, so eight
-              # passes consumed 51 of 52 fallback lists against a runner that
-              # died on "Found no NVIDIA driver" and never processed a scene.
-              # Those tiles are not actually out of options. The abort-on-
-              # failure guard below means this state can only grow from runs
-              # that really executed, so clearing it once is safe.
-              rm -f /data/debug/sen2cor_nfi2024_tried.json
-              echo "cleared poisoned tried-state"
+              # Preserve persisted tried-state on every restart. The historical
+              # poisoned record has no authenticated identity here; any repair
+              # requires a separately reviewed, backed-up, explicitly scoped action.
 
               python3 - <<'PYEOF'
               import glob

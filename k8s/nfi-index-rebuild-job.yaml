@@ -18,6 +18,7 @@ metadata:
   name: nfi-index-rebuild
   namespace: prithvi-training-default
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   activeDeadlineSeconds: 10800
   template:
@@ -30,6 +31,9 @@ spec:
             - /bin/bash
             - -c
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -euo pipefail
               export PYTHONUNBUFFERED=1
               OUT=/data/nfi/nfi_index_unified_v2_512.rebuild-2026-09-26.parquet

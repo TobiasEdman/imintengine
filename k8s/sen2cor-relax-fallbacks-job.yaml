@@ -23,9 +23,9 @@
 # which is why relaxing it is defensible at all; it would not be for a
 # growing-season frame.
 #
-# tried-state is reset so each tile's best (primary) scene is a candidate
-# again — at a higher threshold the closest, least-cloudy scene is the right
-# one to retry, not the next fallback.
+# Fallback attempts are keyed by tile, scene and threshold. All fallback
+# candidates at a threshold are exhausted before relaxing further; a failed
+# runner consumes no attempts. Primaries remain excluded in this fallback job.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -33,6 +33,7 @@ metadata:
   namespace: prithvi-training-default
   labels: {app: fieldtruth-prep, purpose: sen2cor-relax-nfi2024}
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   activeDeadlineSeconds: 43200
   template:
@@ -56,6 +57,9 @@ spec:
           command: ["bash", "-c"]
           args:
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -e
               export PYTHONUNBUFFERED=1
               echo "=== sen2cor COT relaxation, staged — $(date -u) ==="
@@ -131,7 +135,7 @@ spec:
               print(f"start: {total - len(start)}/{total} have frame_2016, "
                     f"{len(start)} missing")
               record = {}
-              attempted = {}
+              attempted = set()
 
               for cot in THRESHOLDS:
                   before = missing()
@@ -141,64 +145,70 @@ spec:
                       print("nothing left")
                       break
 
-                  # Try the FALLBACK scenes at this threshold, not the
-                  # primary again. The previous relaxation run retried only
-                  # primaries, so fallbacks rejected for cloud at 8.0 were
-                  # never re-tested at 10-25 — and the 9 tiles still missing
-                  # fail because sen2cor crashes on their PRIMARY archive
-                  # ("Product metadata file cannot be found"), which no
-                  # threshold can fix. A different archive might be intact.
-                  by_scene = {}
-                  for t in before:
-                      opts = [s for s in fallbacks.get(t, [])
-                              if s != primary.get(t)
-                              and s not in attempted.get(t, [])]
-                      if opts:
-                          sid = opts[0]
-                          by_scene.setdefault(sid, []).append(t)
-                          attempted.setdefault(t, []).append(sid)
-                  if not by_scene:
-                      print("no scene resolvable for any remaining tile")
-                      break
+                  while True:
+                      before = missing()
+                      if not before:
+                          break
+                      # Try the FALLBACK scenes at this threshold, not the
+                      # primary again. The previous relaxation run retried only
+                      # primaries, so fallbacks rejected for cloud at 8.0 were
+                      # never re-tested at 10-25 — and the 9 tiles still missing
+                      # fail because sen2cor crashes on their PRIMARY archive
+                      # ("Product metadata file cannot be found"), which no
+                      # threshold can fix. A different archive might be intact.
+                      by_scene = {}
+                      for t in before:
+                          opts = [s for s in fallbacks.get(t, [])
+                                  if s != primary.get(t)
+                                  and (t, s, cot) not in attempted]
+                          if opts:
+                              sid = opts[0]
+                              by_scene.setdefault(sid, []).append(t)
+                      if not by_scene:
+                          print("no scene resolvable for any remaining tile")
+                          break
 
-                  plan = {
-                      "year_primary": plan0.get("year_primary"),
-                      "year_fallback": plan0.get("year_fallback"),
-                      "scenes": [
-                          {"scene_id": sid, "datetime": dt_from_scene(sid),
-                           "mgrs_tile": "", "tile_names": names}
-                          for sid, names in sorted(by_scene.items())
-                      ],
-                      "tile_fallbacks": fallbacks,
-                      "unassigned": [],
-                  }
-                  plan["n_scenes"] = len(plan["scenes"])
-                  plan["n_tiles_covered"] = sum(
-                      len(s["tile_names"]) for s in plan["scenes"])
-                  pf = f"/data/debug/sen2cor_nfi2024_relax_{int(cot)}.json"
-                  with open(pf, "w") as f:
-                      json.dump(plan, f, indent=2)
-                  print(f"  {plan['n_scenes']} scenes -> {pf}")
+                      plan = {
+                          "year_primary": plan0.get("year_primary"),
+                          "year_fallback": plan0.get("year_fallback"),
+                          "scenes": [
+                              {"scene_id": sid, "datetime": dt_from_scene(sid),
+                               "mgrs_tile": "", "tile_names": names}
+                              for sid, names in sorted(by_scene.items())
+                          ],
+                          "tile_fallbacks": fallbacks,
+                          "unassigned": [],
+                      }
+                      plan["n_scenes"] = len(plan["scenes"])
+                      plan["n_tiles_covered"] = sum(
+                          len(s["tile_names"]) for s in plan["scenes"])
+                      pf = f"/data/debug/sen2cor_nfi2024_relax_{int(cot)}.json"
+                      with open(pf, "w") as f:
+                          json.dump(plan, f, indent=2)
+                      print(f"  {plan['n_scenes']} scenes -> {pf}")
 
-                  rc = subprocess.run([
-                      "python3", "scripts/sen2cor_pipeline/run_sen2cor_per_scene.py",
-                      "--plan", pf,
-                      "--data-dir", STAGE,
-                      "--safe-cache", "/data/sen2cor_cache",
-                      "--cot-max", str(cot),
-                      "--workers", "4",
-                      "--device", "cuda",
-                  ]).returncode
-                  print(f"  runner exit: {rc}")
-                  if rc != 0:
-                      sys.exit(f"ABORTING at --cot-max {cot}: runner exited {rc}")
+                      rc = subprocess.run([
+                          "python3", "scripts/sen2cor_pipeline/run_sen2cor_per_scene.py",
+                          "--plan", pf,
+                          "--data-dir", STAGE,
+                          "--safe-cache", "/data/sen2cor_cache",
+                          "--cot-max", str(cot),
+                          "--workers", "4",
+                          "--device", "cuda",
+                      ]).returncode
+                      print(f"  runner exit: {rc}")
+                      if rc != 0:
+                          sys.exit(f"ABORTING at --cot-max {cot}: runner exited {rc}")
 
-                  after = set(missing())
-                  gained = [t for t in before if t not in after]
-                  n = stamp(gained, cot)
-                  print(f"  gained {len(gained)} tiles at cot<={cot}, stamped {n}")
-                  for t in gained:
-                      record[t] = cot
+                      for sid, names in by_scene.items():
+                          attempted.update((t, sid, cot) for t in names)
+
+                      after = set(missing())
+                      gained = [t for t in before if t not in after]
+                      n = stamp(gained, cot)
+                      print(f"  gained {len(gained)} tiles at cot<={cot}, stamped {n}")
+                      for t in gained:
+                          record[t] = cot
 
               final = missing()
               print(f"\n{'='*58}")

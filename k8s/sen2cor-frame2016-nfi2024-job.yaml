@@ -7,6 +7,7 @@ metadata:
     app: ensemble-prep
     purpose: sen2cor-frame2016-nfi2024
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   # Full 512 frame_2016 back-fill. Selector (~5219 missing tiles,
   # parallel ERA5+STAC) → runner (all scenes, 4 parallel sen2cor).
@@ -42,6 +43,9 @@ spec:
             - bash
             - -c
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -e
               export PYTHONUNBUFFERED=1
               echo "=== sen2cor frame_2016 512 full run ==="

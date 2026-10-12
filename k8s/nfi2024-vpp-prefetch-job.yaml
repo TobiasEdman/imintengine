@@ -18,6 +18,7 @@ metadata:
   namespace: prithvi-training-default
   labels: {app: fieldtruth-prep, purpose: nfi2024-vpp}
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   activeDeadlineSeconds: 86400   # 24 h — 76 MGRS x 5 metrics over HDA
   template:
@@ -32,6 +33,9 @@ spec:
             - bash
             - -c
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -e
               export PYTHONUNBUFFERED=1
               echo "=== nfi2024 VPP prefetch (WEkEO, PU-free) — $(date -u) ==="

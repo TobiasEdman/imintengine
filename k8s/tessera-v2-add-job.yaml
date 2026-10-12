@@ -12,8 +12,8 @@
 # Cost of the second copy: 67 MB raw per tile x 8,357 = ~560 GB. The PVC was
 # expanded 1600 -> 2400 Gi for it.
 #
-# Resumable: a tile that already has tessera_v2 is skipped, so a crash or a
-# disk-guard exit continues rather than restarts. The disk guard exists because
+# Resumable: existing tessera_v2 arrays are reused and their durable comparison
+# sidecars reconciled, so a crash or disk-guard exit continues rather than restarts. The disk guard exists because
 # a mid-run ENOSPC on this volume has happened before (see the preflight note
 # in enrich_tiles_tessera.py).
 #
@@ -26,6 +26,7 @@ metadata:
   namespace: prithvi-training-default
   labels: {app: fieldtruth-prep, purpose: tessera-v2-add}
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   activeDeadlineSeconds: 43200   # 12 h
   template:
@@ -39,6 +40,9 @@ spec:
           command: ["bash", "-c"]
           args:
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -e
               export PYTHONUNBUFFERED=1
               echo "=== tessera_v2 alongside — $(date -u) ==="
@@ -62,6 +66,8 @@ spec:
 
               python - <<'PYEOF'
               import glob
+              import hashlib
+              import importlib.metadata
               import json
               import os
               import shutil
@@ -82,6 +88,9 @@ spec:
               DIRS = ["/data/unified_v2_512", "/data/unified_v2_512_nfi2024_staging"]
               MIN_FREE_GB = 150.0
               REPORT = "/data/manifests/tessera_v2_comparison.jsonl"
+              SOURCE = "geotessera-" + importlib.metadata.version("geotessera")
+              EVIDENCE = REPORT + ".d"
+              os.makedirs(EVIDENCE, exist_ok=True)
 
               paths = []
               for d in DIRS:
@@ -97,6 +106,46 @@ spec:
               stop = threading.Event()
               rows = []
 
+              def comparison(path, data):
+                  old, new = np.asarray(data["tessera"]), np.asarray(data["tessera_v2"])
+                  same_shape = old.shape == new.shape
+                  diff = rel = None
+                  if same_shape and np.isfinite(old).all() and np.isfinite(new).all():
+                      a, b = old.astype(np.float32), new.astype(np.float32)
+                      diff = float(np.mean(np.abs(a - b)))
+                      rel = diff / float(np.std(a) or 1.0)
+                  return {"tile": os.path.basename(path), "path": os.path.abspath(path),
+                          "identical": same_shape and bool(np.array_equal(old, new)),
+                          "mean_abs_diff": diff, "rel_to_std": rel,
+                          "merged": int(data.get("tessera_v2_merged", 0)),
+                          "year": int(data["tessera_v2_year"]),
+                          "source": str(data.get("tessera_v2_source", "unknown")),
+                          "old_sha256": hashlib.sha256(old.tobytes()).hexdigest(),
+                          "new_sha256": hashlib.sha256(new.tobytes()).hexdigest(),
+                          "old_shape": list(old.shape), "new_shape": list(new.shape),
+                          "old_dtype": str(old.dtype), "new_dtype": str(new.dtype)}
+
+
+              def persist_comparison(path, row):
+                  key = hashlib.sha256(os.path.abspath(path).encode()).hexdigest()
+                  target = os.path.join(EVIDENCE, key + ".json")
+                  fd, tmp = tempfile.mkstemp(prefix=key + ".", suffix=".tmp", dir=EVIDENCE)
+                  try:
+                      with os.fdopen(fd, "w") as stream:
+                          json.dump(row, stream, allow_nan=False)
+                          stream.flush()
+                          os.fsync(stream.fileno())
+                      os.replace(tmp, target)
+                      directory_fd = os.open(EVIDENCE, os.O_RDONLY)
+                      try:
+                          os.fsync(directory_fd)
+                      finally:
+                          os.close(directory_fd)
+                  finally:
+                      if os.path.exists(tmp):
+                          os.unlink(tmp)
+
+
               def free_gb():
                   return shutil.disk_usage("/data").free / 1e9
 
@@ -111,8 +160,15 @@ spec:
                           stats["unreadable"] += 1
                       return
                   if "tessera_v2" in data:
+                      # Tile replacement may have completed before a crash or before this
+                      # evidence protocol existed. Rebuild from the two stored arrays;
+                      # do not fetch again or invent missing source metadata.
+                      row = comparison(p, data)
+                      persist_comparison(p, row)
                       with lock:
+                          stats["identical" if row["identical"] else "differs"] += 1
                           stats["already"] += 1
+                          rows.append(row)
                       return
                   if "tessera" not in data or "tessera_year" not in data:
                       with lock:
@@ -139,30 +195,27 @@ spec:
                           stats["fetch_empty"] += 1
                       return
 
-                  old = np.asarray(data["tessera"])
-                  new = np.asarray(new)
-                  same = old.shape == new.shape and np.array_equal(old, new)
-                  if old.shape == new.shape:
-                      a, b = old.astype(np.float32), new.astype(np.float32)
-                      diff = float(np.nanmean(np.abs(a - b)))
-                      rel = diff / float(np.nanstd(a) or 1.0)
-                  else:
-                      diff = rel = float("nan")
-
-                  data["tessera_v2"] = new
+                  data["tessera_v2"] = np.asarray(new)
                   data["tessera_v2_year"] = np.array(year)
-                  data["tessera_v2_source"] = np.array("geotessera-0.10.2")
+                  data["tessera_v2_source"] = np.array(SOURCE)
                   data["tessera_v2_merged"] = np.array(merged)
+                  row = comparison(p, data)
 
                   tmp = p + ".tmp.npz"
                   np.savez_compressed(tmp, **data)
+                  with open(tmp, "rb") as stream:
+                      os.fsync(stream.fileno())
                   os.replace(tmp, p)
+                  directory_fd = os.open(os.path.dirname(p), os.O_RDONLY)
+                  try:
+                      os.fsync(directory_fd)
+                  finally:
+                      os.close(directory_fd)
+                  persist_comparison(p, row)
 
                   with lock:
-                      stats["identical" if same else "differs"] += 1
-                      rows.append({"tile": name, "identical": bool(same),
-                                   "mean_abs_diff": diff, "rel_to_std": rel,
-                                   "merged": int(merged), "year": year})
+                      stats["identical" if row["identical"] else "differs"] += 1
+                      rows.append(row)
                       n = sum(stats.values())
                       if n % 200 == 0:
                           d_ = stats["differs"]; i_ = stats["identical"]
@@ -180,9 +233,12 @@ spec:
                   list(ex.map(one, paths))
 
               shutil.rmtree(cache, ignore_errors=True)
-              with open(REPORT, "a") as f:
+              with open(REPORT + ".tmp", "w") as f:
                   for r in rows:
                       f.write(json.dumps(r) + "\n")
+                  f.flush()
+                  os.fsync(f.fileno())
+              os.replace(REPORT + ".tmp", REPORT)
 
               print("\n=== result ===")
               for k, v in stats.most_common():
@@ -192,11 +248,11 @@ spec:
                   print(f"\nchanged vs the stored embeddings: "
                         f"{stats['differs']/tot:.1%} of {tot:,} compared")
                   nz = [r["rel_to_std"] for r in rows
-                        if not r["identical"] and r["rel_to_std"] == r["rel_to_std"]]
+                        if not r["identical"] and r["rel_to_std"] is not None]
                   if nz:
                       print(f"  mean|diff|/std on differing tiles: "
                             f"median {np.median(nz):.1%}, max {max(nz):.1%}")
-              print(f"\nper-tile comparison appended to {REPORT}")
+              print(f"\nper-tile comparison summarized in {REPORT}")
               print(f"free space: {free_gb():.0f}G")
               if stop.is_set():
                   sys.exit("stopped by disk guard — rerun to resume")

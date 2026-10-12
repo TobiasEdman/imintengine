@@ -13,6 +13,7 @@ apiVersion: batch/v1
 kind: Job
 metadata: {name: nfi2024-drop-uncovered, namespace: prithvi-training-default}
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   activeDeadlineSeconds: 900
   template:
@@ -24,6 +25,9 @@ spec:
           command: ["/bin/bash","-c"]
           args:
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -e
               apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
               pip install -q --no-cache-dir numpy pyproj mgrs packaging rasterio

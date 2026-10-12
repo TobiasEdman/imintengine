@@ -23,6 +23,7 @@ metadata:
   namespace: prithvi-training-default
   labels: {app: fieldtruth-prep, purpose: nfi2024-plot-driven}
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   activeDeadlineSeconds: 259200   # 72 h
   template:
@@ -41,6 +42,9 @@ spec:
             - bash
             - -c
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -e
               export PYTHONUNBUFFERED=1
               echo "=== nfi2024 plot-driven fetch — $(date -u) ==="

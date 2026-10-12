@@ -21,6 +21,7 @@ metadata:
   name: nfi2024-manifest
   namespace: prithvi-training-default
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   activeDeadlineSeconds: 1800
   template:
@@ -33,6 +34,9 @@ spec:
             - /bin/bash
             - -c
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -euo pipefail
               export PYTHONUNBUFFERED=1
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1

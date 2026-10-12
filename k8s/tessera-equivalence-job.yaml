@@ -19,6 +19,7 @@ metadata:
   namespace: prithvi-training-default
   labels: {app: fieldtruth-prep, purpose: tessera-equivalence}
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   activeDeadlineSeconds: 10800
   ttlSecondsAfterFinished: 86400
@@ -31,6 +32,9 @@ spec:
           command: ["bash", "-c"]
           args:
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -e
               export PYTHONUNBUFFERED=1
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
@@ -90,7 +94,9 @@ spec:
                           npz_data=dict(d),
                       )
                       if bbox is None:
-                          print("  no bbox resolvable — skipping"); continue
+                          print("  no bbox resolvable — skipping")
+                          verdicts.append(("no_bbox", False))
+                          continue
                       print(f"\n=== {name}  year={year} size={size} ===")
                       want = infer_tile_year(dict(d))
                       stale = (want is not None and int(want) != year)
@@ -98,15 +104,20 @@ spec:
                       print(f"  year   : stamped={year} inferred={want} "
                             f"year0_defect={stale}")
 
-                      new, n_merged = _fetch_tessera_for_tile(gt, bbox, year, size)
+                      try:
+                          new, n_merged = _fetch_tessera_for_tile(gt, bbox, year, size)
+                      except Exception as exc:
+                          print(f"  refetch: FAILED — {exc}")
+                          verdicts.append(("nofetch", stale))
+                          continue
                       if new is None or n_merged == 0:
-                          print("  refetch: FAILED — cannot compare"); verdicts.append("nofetch")
+                          print("  refetch: FAILED — cannot compare"); verdicts.append(("nofetch", stale))
                           continue
                       new = np.asarray(new)
                       print(f"  refetch: shape={new.shape} dtype={new.dtype} merged={n_merged}")
 
                       if new.shape != old.shape:
-                          print("  *** SHAPE MISMATCH ***"); verdicts.append("shape"); continue
+                          print("  *** SHAPE MISMATCH ***"); verdicts.append(("shape", stale)); continue
 
                       a = old.astype(np.float32)
                       b = new.astype(np.float32)
@@ -130,29 +141,16 @@ spec:
               print(f"{'verdict':12s} {'year0_defect':>13s}  {'n':>3s}")
               for (v, s), n in sorted(tab.items()):
                   print(f"{v:12s} {str(s):>13s}  {n:>3d}")
-              diff_stale = tab[("differs", True)]
-              diff_clean = tab[("differs", False)]
-              print(f"\ndiffering WITH the known year-0 defect : {diff_stale}")
-              print(f"differing WITHOUT it (unexplained)     : {diff_clean}")
-              if diff_clean == 0 and diff_stale > 0:
-                  print("\nCONCLUSION: every difference is explained by the pre-existing")
-                  print("            year-0 defect, not by the new host. v1 data is stable.")
-                  print("            Re-fetch only the year-0-defective tiles — which the")
-                  print("            enrich script already detects on its own.")
-              elif diff_clean > 0:
-                  print("\nCONCLUSION: differences remain on tiles with a correct year stamp.")
-                  print("            That points at the data itself, and the cohort would be")
-                  print("            inconsistent with the new tiles. Whole-cohort decision.")
-              vlist = [v for v, _ in verdicts]
-              if all(v == "identical" for v in vlist):
-                  print("CONCLUSION: v1 embeddings are byte-identical at the new host.")
-                  print("            Do NOT re-fetch the cohort. Enrich only the new tiles.")
-              elif any(v in ("differs", "shape") for v in vlist):
-                  print("CONCLUSION: embeddings DIFFER. Mixing old and new tessera would")
-                  print("            confound every comparison across the two tile sets.")
-                  print("            This is a re-fetch decision for the whole cohort.")
-              elif True:
-                  print("CONCLUSION: inconclusive — refetch failed, nothing compared.")
+              compared = sum(n for (verdict, _), n in tab.items()
+                             if verdict in ("identical", "differs"))
+              failed = len(verdicts) - compared
+              print(f"compared={compared} failed={failed} selected={len(picked)}")
+              if failed or not compared:
+                  print("CONCLUSION: inconclusive — incomplete comparison population.")
+              elif any(verdict == "differs" for verdict, _ in verdicts):
+                  print("CONCLUSION: embeddings differ in the compared sample.")
+              else:
+                  print("CONCLUSION: embeddings are byte-identical in the compared sample.")
               PYEOF
           resources:
             requests: {cpu: "4", memory: "16Gi"}

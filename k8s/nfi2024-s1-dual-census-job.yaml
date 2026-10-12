@@ -3,6 +3,7 @@ apiVersion: batch/v1
 kind: Job
 metadata: {name: nfi2024-s1-dual-check, namespace: prithvi-training-default}
 spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
   backoffLimit: 0
   activeDeadlineSeconds: 1800
   template:
@@ -14,6 +15,9 @@ spec:
           command: ["bash", "-c"]
           args:
             - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
               set -e
               pip install -q --no-cache-dir numpy
               python - <<'PYEOF'
