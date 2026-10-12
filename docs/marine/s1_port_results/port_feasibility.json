@@ -1,0 +1,66 @@
+{
+ "plain_strict_load": "<All keys matched successfully>",
+ "rslearn_strict_load": "<All keys matched successfully>",
+ "patch_window_offset": [
+  2766,
+  5532
+ ],
+ "patch_abs_px": [
+  59547,
+  -639635
+ ],
+ "n_plain": 6,
+ "n_plain_gt_0.7": 5,
+ "n_rslearn": 6,
+ "n_rslearn_gt_0.7": 5,
+ "max_abs_score_diff": 1.1920928955078125e-07,
+ "max_abs_box_diff_px": 3.0517578125e-05,
+ "reference_in_patch": [
+  [
+   107,
+   364
+  ],
+  [
+   214,
+   64
+  ],
+  [
+   458,
+   355
+  ],
+  [
+   469,
+   353
+  ],
+  [
+   475,
+   26
+  ],
+  [
+   487,
+   220
+  ]
+ ],
+ "plain_centres_gt_0.7": [
+  [
+   107,
+   363
+  ],
+  [
+   214,
+   63
+  ],
+  [
+   458,
+   354
+  ],
+  [
+   475,
+   25
+  ],
+  [
+   487,
+   219
+  ]
+ ]
+}

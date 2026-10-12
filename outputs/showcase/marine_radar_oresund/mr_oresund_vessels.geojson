@@ -1,0 +1,213 @@
+{
+ "type": "FeatureCollection",
+ "properties": {
+  "coordinates": "pixel [col, row] of the EPSG:3006 display grid 893x588 px, row 0 = top",
+  "area": "oresund",
+  "scene_id": "S1C_IW_GRDH_1SDV_20250719T165231_20250719T165256_003292_006A41",
+  "scene_time_utc": "2025-07-19T16:52:33.718037Z",
+  "historical_scene_id": "S1C_IW_GRDH_1SDV_20250601T165228_20250601T165253_002592_005606",
+  "score_floor": 0.3,
+  "production_threshold": 0.7,
+  "count": 4,
+  "count_above_threshold": 0,
+  "note": "Detections are candidates, not confirmed vessels; no AIS matched. above_threshold marks AI2's production threshold."
+ },
+ "features": [
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       674.34,
+       300.92
+      ],
+      [
+       674.34,
+       330.88
+      ],
+      [
+       704.39,
+       330.88
+      ],
+      [
+       704.38,
+       300.92
+      ],
+      [
+       674.34,
+       300.92
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.3006,
+    "pixel_count": 900,
+    "pred_length_m": 20.8,
+    "pred_width_m": 6.0,
+    "pred_speed_kn": 4.3,
+    "pred_heading_deg": 215.1,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.548,
+    "above_threshold": false,
+    "lon": 12.66896,
+    "lat": 56.033779,
+    "point_px": [
+     689.0,
+     316.0
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       772.34,
+       222.71
+      ],
+      [
+       772.34,
+       252.7
+      ],
+      [
+       802.48,
+       252.7
+      ],
+      [
+       802.48,
+       222.71
+      ],
+      [
+       772.34,
+       222.71
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.5485,
+    "pixel_count": 904,
+    "pred_length_m": 23.7,
+    "pred_width_m": 9.0,
+    "pred_speed_kn": 4.8,
+    "pred_heading_deg": 185.6,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.63,
+    "above_threshold": false,
+    "lon": 12.684255,
+    "lat": 56.041077,
+    "point_px": [
+     787.0,
+     238.0
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       738.18,
+       268.92
+      ],
+      [
+       738.18,
+       298.98
+      ],
+      [
+       768.19,
+       298.98
+      ],
+      [
+       768.19,
+       268.92
+      ],
+      [
+       738.18,
+       268.92
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.5818,
+    "pixel_count": 902,
+    "pred_length_m": 28.7,
+    "pred_width_m": 6.4,
+    "pred_speed_kn": 2.5,
+    "pred_heading_deg": 341.2,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.632,
+    "above_threshold": false,
+    "lon": 12.67905,
+    "lat": 56.036845,
+    "point_px": [
+     753.0,
+     284.0
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       724.47,
+       419.11
+      ],
+      [
+       724.47,
+       449.11
+      ],
+      [
+       754.48,
+       449.11
+      ],
+      [
+       754.48,
+       419.11
+      ],
+      [
+       724.47,
+       419.11
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "label": "vessel",
+    "detector": "ai2_s1",
+    "score": 0.5936,
+    "pixel_count": 901,
+    "pred_length_m": 21.0,
+    "pred_width_m": 5.9,
+    "pred_speed_kn": 9.2,
+    "pred_heading_deg": 185.9,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.452,
+    "above_threshold": false,
+    "lon": 12.677619,
+    "lat": 56.023247,
+    "point_px": [
+     739.0,
+     435.0
+    ]
+   }
+  }
+ ]
+}

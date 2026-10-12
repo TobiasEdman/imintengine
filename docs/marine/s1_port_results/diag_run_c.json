@@ -1,0 +1,246 @@
+[
+ {
+  "kind": "ai2-only",
+  "lon": 11.655873543411406,
+  "lat": 57.746527653180365,
+  "score": 0.7412622570991516,
+  "nearest_other_m": 3576.6194427946252,
+  "aoi_edge_dist_px": 350,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     8759,
+     4610
+    ],
+    "edge_dist_px": 198,
+    "best_score": 0.7412616610527039
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     6454,
+     3227
+    ],
+    "edge_dist_px": 12,
+    "best_score": 0.6421283483505249
+   },
+   {
+    "patch_local": [
+     6792,
+     3227
+    ],
+    "edge_dist_px": 161,
+    "best_score": 0.6980681419372559
+   }
+  ]
+ },
+ {
+  "kind": "ai2-only",
+  "lon": 11.622130104461588,
+  "lat": 57.63561825147542,
+  "score": 0.7777158617973328,
+  "nearest_other_m": 3663.110430792956,
+  "aoi_edge_dist_px": 503,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     8759,
+     5993
+    ],
+    "edge_dist_px": 57,
+    "best_score": 0.7777156829833984
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     6454,
+     4149
+    ],
+    "edge_dist_px": 31,
+    "best_score": 0.6960781216621399
+   },
+   {
+    "patch_local": [
+     6454,
+     4610
+    ],
+    "edge_dist_px": 20,
+    "best_score": 0.654525101184845
+   },
+   {
+    "patch_local": [
+     6792,
+     4149
+    ],
+    "edge_dist_px": 9,
+    "best_score": 0.4892750382423401
+   },
+   {
+    "patch_local": [
+     6792,
+     4610
+    ],
+    "edge_dist_px": 9,
+    "best_score": 0.4633442461490631
+   }
+  ]
+ },
+ {
+  "kind": "ai2-only",
+  "lon": 10.67901197219303,
+  "lat": 57.66648468512623,
+  "score": 0.8739691972732544,
+  "nearest_other_m": 113.66151238812587,
+  "aoi_edge_dist_px": 1163,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     2766,
+     5532
+    ],
+    "edge_dist_px": 43,
+    "best_score": null
+   },
+   {
+    "patch_local": [
+     3227,
+     5532
+    ],
+    "edge_dist_px": 8,
+    "best_score": 0.8739691972732544
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     922,
+     4149
+    ],
+    "edge_dist_px": 196,
+    "best_score": null
+   }
+  ]
+ },
+ {
+  "kind": "port-only",
+  "lon": 11.587518962579535,
+  "lat": 57.608383559037684,
+  "score": 0.8686468005180359,
+  "nearest_other_m": 3663.110430792956,
+  "aoi_edge_dist_px": 698,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     8298,
+     5993
+    ],
+    "edge_dist_px": 132,
+    "best_score": 0.637234091758728
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     6454,
+     4610
+    ],
+    "edge_dist_px": 152,
+    "best_score": 0.8686468005180359
+   }
+  ]
+ },
+ {
+  "kind": "port-only",
+  "lon": 11.6976884423301,
+  "lat": 57.66934616495555,
+  "score": 0.7765703201293945,
+  "nearest_other_m": 1029.9796215401168,
+  "aoi_edge_dist_px": 67,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     9220,
+     5532
+    ],
+    "edge_dist_px": 89,
+    "best_score": 0.6852942109107971
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     6792,
+     4149
+    ],
+    "edge_dist_px": 67,
+    "best_score": 0.7765703201293945
+   }
+  ]
+ },
+ {
+  "kind": "port-only",
+  "lon": 10.643484438104547,
+  "lat": 57.72238296393633,
+  "score": 0.7678948640823364,
+  "nearest_other_m": 3017.2566722477995,
+  "aoi_edge_dist_px": 936,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     2766,
+     5071
+    ],
+    "edge_dist_px": 197,
+    "best_score": 0.6522447466850281
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     461,
+     3688
+    ],
+    "edge_dist_px": 37,
+    "best_score": 0.5652908086776733
+   },
+   {
+    "patch_local": [
+     922,
+     3688
+    ],
+    "edge_dist_px": 14,
+    "best_score": 0.7678948640823364
+   }
+  ]
+ },
+ {
+  "kind": "port-only",
+  "lon": 11.694984497656726,
+  "lat": 57.66455095825458,
+  "score": 0.7401665449142456,
+  "nearest_other_m": 1393.049946690053,
+  "aoi_edge_dist_px": 81,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     9220,
+     5532
+    ],
+    "edge_dist_px": 75,
+    "best_score": 0.6482657194137573
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     6792,
+     4149
+    ],
+    "edge_dist_px": 81,
+    "best_score": 0.7401665449142456
+   }
+  ]
+ }
+]

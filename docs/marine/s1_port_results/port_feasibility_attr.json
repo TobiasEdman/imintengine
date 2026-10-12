@@ -1,0 +1,9 @@
+{
+ "strict_load": "<All keys matched successfully>",
+ "n": 107,
+ "type_matches": 107,
+ "max_abs_length_diff": 0.0002384185791015625,
+ "max_abs_width_diff": 4.023313522338867e-05,
+ "max_abs_speed_diff": 1.4156103134155273e-05,
+ "max_abs_heading_diff": 0.0005985141629878399
+}
