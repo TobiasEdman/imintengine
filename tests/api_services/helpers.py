@@ -20,3 +20,14 @@ def handler(cls, path):
     h.send_error=lambda code,*a: setattr(h,'status',code)
     h.send_header=lambda *a:None; h.end_headers=lambda:None
     return h
+
+
+import asyncio
+
+
+async def drain(server):
+    # Poll only the synthetic worker, yielding the event loop, without sockets.
+    for _ in range(1000):
+        if server._jobs and all(j['status'] in ('success', 'failed') for j in server._jobs.values()): return
+        await asyncio.sleep(0.001)
+    raise AssertionError('Synthetic job did not terminate')

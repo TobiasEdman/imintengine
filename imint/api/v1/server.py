@@ -136,7 +136,7 @@ async def telemetry_middleware(request: Request, call_next):
     request_id = new_request_id()
     # `route.path` is the parameterised pattern (e.g. /v1/jobs/{job_id});
     # falls back to URL path if FastAPI hasn't matched yet.
-    route_template = getattr(request.scope.get("route"), "path", request.url.path)
+    route_template = "unmatched"
 
     with span(
         f"http.{request.method.lower()}",
@@ -158,7 +158,7 @@ async def telemetry_middleware(request: Request, call_next):
             )
             record_request(
                 method=request.method,
-                route=route_template,
+                route=getattr(request.scope.get("route"), "path", "unmatched"),
                 status=response.status_code,
                 duration_ms=duration_ms,
             )
@@ -175,7 +175,7 @@ async def telemetry_middleware(request: Request, call_next):
             )
             record_request(
                 method=request.method,
-                route=route_template,
+                route=getattr(request.scope.get("route"), "path", "unmatched"),
                 status=500,
                 duration_ms=duration_ms,
             )
