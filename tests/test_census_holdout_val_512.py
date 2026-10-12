@@ -86,15 +86,18 @@ def data_root(tmp_path: Path) -> Path:
     _tile(hold / "holdoutval_100_1250_2019.npz", a, 2019)                       # complete, unstamped
     _tile(hold / "holdoutval_110_1250_2022.npz", b, 2022, tessera_zero=True,     # lying flag, no frame,
           frame=False, stamped=True, vpp=False, mode=0o600)                      # not world-readable
-    _tile(hold / "holdoutval_120_1250_2019.npz", c, 2019, stamped=True,          # complete, promoted stamp,
-          dates=["2018-09-10", "2020-06-01", "2020-07-01", "2020-08-01"])        # dates contradict year below
-    with np.load(hold / "holdoutval_120_1250_2019.npz") as d:
+    _tile(hold / "holdoutval_120_1250_2019.npz", c, 2019, stamped=True)          # complete, promoted stamp
+    e = _bbox(150, 1250)                                                         # metadata says 2019, dates say 2020
+    _tile(hold / "holdoutval_150_1250_2019.npz", e, 2019, stamped=True,
+          dates=["2018-09-10", "2020-06-01", "2020-07-01", "2020-08-01"])
+    with np.load(hold / "holdoutval_150_1250_2019.npz") as d:
         arrays = dict(d)
     arrays["year"] = np.array(2019)
-    np.savez(hold / "holdoutval_120_1250_2019.npz", **arrays)
+    np.savez(hold / "holdoutval_150_1250_2019.npz", **arrays)
     manifest = [{"name": "holdoutval_100_1250_2019", "bbox_3006": a, "year": 2019, "source": "lulc"},
                 {"name": "holdoutval_110_1250_2022", "bbox_3006": b, "year": 2022, "source": "lulc"},
                 {"name": "holdoutval_120_1250_2019", "bbox_3006": c, "year": 2019, "source": "lulc"},
+                {"name": "holdoutval_150_1250_2019", "bbox_3006": e, "year": 2019, "source": "lulc"},
                 {"name": "holdoutval_130_1250_2023", "bbox_3006": _bbox(130, 1250), "year": 2023, "source": "lulc"}]
     (root / "audits/holdout_val_phaseA.json").write_text(json.dumps(manifest))
 
@@ -109,6 +112,7 @@ def data_root(tmp_path: Path) -> Path:
         (770005, 1, 2022, *inside(b)),            # eligible on B, which is not world-readable
         (770006, 1, 2019, *inside(c)),            # on C, invalid volume (set below)
         (770007, 1, 2019, *inside(c, dy=1000)),   # eligible on C, already in index v4
+        (770008, 1, 2019, *inside(e)),            # on the quarantined tile: never counted
     ])
     plots.loc[plots["TractID"] == 770006, "VolPine"] = -1.0
     plots.to_parquet(root / "nfi/nfi_plots.parquet", index=False)
@@ -149,18 +153,20 @@ def _run(root: Path, fieldtruth_file: Path, tmp_path: Path, extra: list[str] | N
 def test_census_counts_files_keys_flags_and_modalities(data_root, fieldtruth_file, tmp_path):
     report = _run(data_root, fieldtruth_file, tmp_path)
     files = report["files"]
-    assert files["present"] == 3 and files["readable"] == 3 and files["unreadable"] == []
+    assert files["present"] == 4 and files["readable"] == 4 and files["unreadable"] == []
+    assert files["admitted"] == 3 and files["quarantined_year_conflict"] == ["holdoutval_150_1250_2019"]
+    assert files["quarantined_by_manifest_year"] == {"2019": 1}
     assert files["not_world_readable"] == 1 and files["not_world_readable_by_year"] == {"2022": 1}
     assert files["planned_but_missing_by_year"] == {"2023": 1}
     c = report["census"]
     assert c["flag_on_empty_array"] == {"tessera": 1}
-    assert c["all_zero"]["tessera"] == {"present": 3, "all_zero": 1}
+    assert c["all_zero"]["tessera"] == {"present": 4, "all_zero": 1}
     assert c["all_zero"]["s1_vv_vh_2016"]["all_zero"] == 1
     assert set(c["keys_behind_nfi2024_bar"]) >= {"frame_2016", "has_frame_2016", "vpp_year", "frame_2016_year"}
-    assert c["spectral_ok"] == 3 and c["bbox_on_grid"] == 3 and c["bbox_matches_manifest"] == 3
+    assert c["spectral_ok"] == 4 and c["bbox_on_grid"] == 4 and c["bbox_matches_manifest"] == 4
     m = report["modalities"]
-    assert m["tiles_by_year"] == {"2019": 2, "2022": 1}
-    assert m["year_conflict_strict"] == 1 and m["year_matches_manifest"] == {"2019": 2, "2022": 1}
+    assert m["tiles_admitted"] == 3 and m["tiles_by_year"] == {"2019": 2, "2022": 1}
+    assert m["year_conflict_strict"] == 0 and m["year_matches_manifest"] == {"2019": 2, "2022": 1}
     assert m["tessera_source"] == {"unstamped": 1, "geotessera-0.10.2": 2}
     assert m["frame_2016_usable"] == {"2019": 2}
     assert m["bar_modalities"] == {"2019": 2}
@@ -193,7 +199,11 @@ def test_eligibility_uses_identity_crop_exclusion_and_separates_restricted_files
 
 def test_never_trained_on_passes_and_reports_footprint_and_visualisation(data_root, fieldtruth_file, tmp_path):
     p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
-    assert p["used_for_training_or_selection"] is False
+    assert p["verdict"] == "no_named_tile_use_detected" and p["named_tile_use_detected"] is False
+    assert p["scan_inconclusive_reasons"] == [] and p["split_files_not_parsed"] == []
+    assert p["spatial_independence"]["status"] == "unresolved_by_this_check"
+    assert p["spatial_independence"]["holdout_tiles_overlapping_same_year_training_tile"] == {"2019": 1}
+    assert p["spatial_independence"]["excluded_same_year_overlap_tiles"] == 1
     assert p["names_in_training_cohort_dir"] == 0 and p["split_files_naming_holdout_tiles"] == []
     assert [Path(x).name for x in p["visualisation_files_naming_holdout_tiles"]] == ["tiles.json"]
     assert set(p["teacher_feature_tables_naming_holdout_tiles"]) == set(MODELS)
@@ -206,19 +216,49 @@ def test_never_trained_on_passes_and_reports_footprint_and_visualisation(data_ro
     assert fp["holdout_tiles_overlapping_same_year_training_tile"] == {"2019": 1}
     assert fp["holdout_tiles_overlapping_any_year_training_tile"] == {"2019": 2}
     assert fp["excluded_same_year_overlap_names"] == ["holdoutval_100_1250_2019"]
-    assert [Path(h["path"]).name for h in p["text_files_mentioning_holdout"]] == ["holdout_val_phaseA.json", "tiles.json"]
+    assert [(Path(h["path"]).name, h["class"]) for h in p["text_files_mentioning_holdout"]] == [
+        ("holdout_val_phaseA.json", "provenance_record"), ("tiles.json", "parsed_split_file")]
 
 
 def test_a_holdout_name_in_a_split_file_fails_the_check(data_root, fieldtruth_file, tmp_path):
     (data_root / "unified_v2_512/val.txt").write_text("tile_616960_6402560\nholdoutval_120_1250_2019\n")
     p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
-    assert p["used_for_training_or_selection"] is True
+    assert p["verdict"] == "named_tile_use_detected" and p["named_tile_use_detected"] is True
     assert [Path(x).name for x in p["split_files_naming_holdout_tiles"]] == ["val.txt"]
+
+
+def test_a_malformed_split_file_naming_a_holdout_tile_is_inconclusive(data_root, fieldtruth_file, tmp_path):
+    (data_root / "distill/heads/clay_r2_split.json").write_text('{"train_tiles": ["holdoutval_120_1250_2019",')
+    p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
+    assert p["verdict"] == "inconclusive" and p["named_tile_use_detected"] is False
+    assert [Path(x).name for x in p["split_files_not_parsed"]] == ["clay_r2_split.json"]
+    assert any("clay_r2_split.json" in r for r in p["scan_inconclusive_reasons"])
+
+
+def test_training_evidence_found_only_by_text_scan_is_inconclusive(data_root, fieldtruth_file, tmp_path):
+    (data_root / "checkpoints/ladder/clay_r2/notes.md").write_text("trained on holdoutval_120_1250_2019 too\n")
+    p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
+    assert p["verdict"] == "inconclusive"
+    assert any("notes.md" in r and "unclassified" in r for r in p["scan_inconclusive_reasons"])
+
+
+def test_a_train_tiles_json_under_checkpoints_is_parsed_and_detected(data_root, fieldtruth_file, tmp_path):
+    (data_root / "checkpoints/ladder/clay_r2/train_tiles.json").write_text(
+        json.dumps(["tile_a", "holdoutval_120_1250_2019"]))
+    p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
+    assert p["verdict"] == "named_tile_use_detected"
+    assert [Path(x).name for x in p["split_files_naming_holdout_tiles"]] == ["train_tiles.json"]
+
+
+def test_quarantined_tile_contributes_nothing_to_eligibility_or_readiness(data_root, fieldtruth_file, tmp_path):
+    report = _run(data_root, fieldtruth_file, tmp_path)
+    assert report["eligibility_by_year"]["2019"]["plot_years_on_tiles"] == 5     # 770008 sits on the quarantined tile
+    assert report["modalities"]["bar_full_promoted_tessera"] == {"2019": 1}       # C only, never E
 
 
 def test_report_carries_no_plot_identity_or_coordinate(data_root, fieldtruth_file, tmp_path):
     text = json.dumps(_run(data_root, fieldtruth_file, tmp_path))
-    for ident in ("770001", "770005", "770007", "Easting", "Northing", "_bbox", "_meta"):
+    for ident in ("770001", "770005", "770007", "770008", "Easting", "Northing", "_bbox", "_meta"):
         assert ident not in text
 
 

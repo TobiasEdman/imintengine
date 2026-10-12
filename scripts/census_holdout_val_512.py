@@ -87,10 +87,14 @@ SPLIT_GLOBS = (
     "unified_v2/train.txt", "unified_v2/val.txt", "unified_v2/test.txt",
     "distill/*.json", "distill/**/*split*.json", "distill/heads/*_split.json",
     "distill/crop_split/**/*.json",
-    "checkpoints/**/*split*.json", "checkpoints/**/train.txt",
-    "checkpoints/**/val.txt", "checkpoints/**/test.txt",
-    "ladder_inference/tiles.json",
+    "checkpoints/**/*split*.json", "checkpoints/**/*train*.json", "checkpoints/**/*val*.json",
+    "checkpoints/**/*test*.json", "checkpoints/**/*tiles*.json", "checkpoints/**/*.txt",
+    "distill/**/*.txt", "ladder_inference/tiles.json",
 )
+# Text-scan hits by top-level directory. Anything else is training territory
+# or unknown and makes the verdict inconclusive until a human classifies it.
+PROVENANCE_DIRS = {"audits", "debug", "manifests", "nfi"}
+VISUALISATION_DIRS = {"ladder_inference"}
 TEXT_SCAN_DIRS = ("checkpoints", "distill", "manifests", "audits",
                   "ladder_inference", "nfi", "debug")
 TEXT_SUFFIXES = {".json", ".txt", ".yaml", ".yml", ".md", ".log", ".csv", ".jsonl"}
@@ -194,10 +198,10 @@ def read_tile(path: Path, manifest: dict | None) -> dict:
             else:
                 rec["spectral_ok"] = False
     except PermissionError as exc:
-        rec.update(readable=False, error=f"PermissionError: {exc.strerror}")
+        rec.update(readable=False, admitted=False, error=f"PermissionError: {exc.strerror}")
         return rec
     except Exception as exc:  # truncated zip, bad pickle, ... — counted, never fatal
-        rec.update(readable=False, error=f"{type(exc).__name__}: {exc}")
+        rec.update(readable=False, admitted=False, error=f"{type(exc).__name__}: {exc}")
         return rec
     rec["readable"] = True
     rec["present"] = present
@@ -235,6 +239,10 @@ def read_tile(path: Path, manifest: dict | None) -> dict:
         rec["year_conflict"] = True
     rec["year_matches_manifest"] = (rec["manifest_year"] is not None
                                     and rec["year_lenient"] == rec["manifest_year"])
+    # Quarantine: a tile whose explicit year contradicts its spectral dates, or
+    # whose year cannot be resolved, is neither colocated nor counted as ready.
+    # Year-exact colocation on a contradictory year would be a silent mismatch.
+    rec["admitted"] = not rec["year_conflict"] and rec["year_lenient"] is not None
     mask = meta.get("temporal_mask")
     rec["temporal_mask"] = ("".join(str(int(x)) for x in np.asarray(mask).reshape(-1)[:4])
                             if mask is not None else None)
@@ -315,8 +323,10 @@ def _by_year(tiles: list[dict], predicate) -> dict[str, int]:
 
 
 def modality_tables(tiles: list[dict]) -> dict:
-    readable = [t for t in tiles if t.get("readable")]
+    """Readiness over ADMITTED tiles only; quarantined tiles are listed under files."""
+    readable = [t for t in tiles if t.get("admitted")]
     return {
+        "tiles_admitted": len(readable),
         "tiles_by_year": _by_year(readable, lambda t: True),
         "year_matches_manifest": _by_year(readable, lambda t: t["year_matches_manifest"]),
         "year_conflict_strict": sum(1 for t in readable if t["year_conflict"]),
@@ -346,7 +356,7 @@ def build_index(tiles: list[dict], plots: pd.DataFrame) -> pd.DataFrame:
     """Year-exact colocation of NFI plots onto the readable holdout tiles (index-v4 path)."""
     frames = []
     for t in tiles:
-        if not t.get("readable") or t["_bbox"] is None or t["year_lenient"] is None:
+        if not t.get("admitted") or t["_bbox"] is None:
             continue
         bbox = t["_bbox"]
         meta = dict(t["_meta"])
@@ -556,6 +566,7 @@ def footprint_overlap(tiles: list[dict], cohort: pd.DataFrame) -> dict:
     geo = cohort.dropna(subset=["west"]) if len(cohort) else cohort
     for t in tiles:
         t["any_year_overlap"] = t["same_year_overlap"] = False
+    tiles = [t for t in tiles if t.get("admitted", t.get("readable")) and t.get("_bbox") is not None]
     if geo.empty:
         return {"cohort_tiles_with_geometry": 0, "excluded_same_year_overlap_names": []}
     W, S, E, N = (geo[c].to_numpy(float) for c in ("west", "south", "east", "north"))
@@ -563,8 +574,6 @@ def footprint_overlap(tiles: list[dict], cohort: pd.DataFrame) -> dict:
     any_year, same_year, tiles_any, tiles_same = Counter(), Counter(), Counter(), Counter()
     excluded = []
     for t in tiles:
-        if not t.get("readable") or t["_bbox"] is None:
-            continue
         b = t["_bbox"]
         hit = (W < b["east"]) & (E > b["west"]) & (S < b["north"]) & (N > b["south"])
         same = hit & (Y == t["year_lenient"])
@@ -586,36 +595,84 @@ def footprint_overlap(tiles: list[dict], cohort: pd.DataFrame) -> dict:
             "excluded_same_year_overlap_names": sorted(excluded)}
 
 
+def classify_text_hit(path: str, data_root: Path, parsed: set[str]) -> str:
+    if path in parsed:
+        return "parsed_split_file"
+    top = Path(path).relative_to(data_root).parts[0]
+    if top in PROVENANCE_DIRS:
+        return "provenance_record"
+    if top in VISUALISATION_DIRS:
+        return "visualisation"
+    return "unclassified"
+
+
 def never_trained_on(ft: ModuleType, data_root: Path, cohort_dir: Path, staging_dir: Path,
                      tiles: list[dict], exposure_tables: dict[str, pd.DataFrame],
                      indexes: dict[str, pd.DataFrame], footprint: dict) -> dict:
+    """Named-tile evidence of training or selection use, failing closed.
+
+    The verdict is about tile NAMES in split files, feature tables, plot
+    indexes and the training directories. It is not an imagery-independence
+    proof: footprint overlap with training tiles is reported beside it as an
+    unresolved spatial question (decision 2026-10-12 excludes the same-year
+    overlaps). A split file that cannot be parsed, or a text file in training
+    territory that names a holdout tile without being a parsed split file,
+    makes the verdict inconclusive rather than clean.
+    """
     holdout = {t["name"] for t in tiles}
     cohort_names = {p.stem for p in cohort_dir.glob("*.npz")} if cohort_dir.is_dir() else set()
     staging_names = {p.stem for p in staging_dir.glob("*.npz")} if staging_dir.is_dir() else set()
     split_files = scan_split_files(data_root, holdout)
+    parsed = {f["path"] for f in split_files if "error" not in f}
+    scan_errors = [f for f in split_files if "error" in f]
     text_hits = scan_text_mentions(data_root, holdout)
+    for h in text_hits:
+        h["class"] = classify_text_hit(h["path"], data_root, parsed)
     feature_hits = {name: int(frame["tile_name"].isin(holdout).sum()) for name, frame in exposure_tables.items()}
     index_hits = {name: int(frame["tile_name"].isin(holdout).sum()) for name, frame in indexes.items()}
     split_hits = [f for f in split_files if f.get("holdout_names_found")]
     # The ladder inference matrix renders predictions on frozen holdout tiles for
     # the dashboard. It chooses nothing (checkpoints are selected on the training
     # val split), so it is reported but not counted as selection use.
-    visual_only = [f for f in split_hits if f["path"].endswith("ladder_inference/tiles.json")]
+    visual_only = [f for f in split_hits if classify_text_hit(f["path"], data_root, set()) == "visualisation"]
     selection_hits = [f for f in split_hits if f not in visual_only]
+    unclassified = [h for h in text_hits if h["class"] == "unclassified" and h["holdout_tile_names"]]
+    inconclusive = ([f"split file not parsed: {f['path']} ({f['error']})" for f in scan_errors]
+                    + [f"unclassified text evidence naming {h['holdout_tile_names']} holdout tiles: {h['path']}"
+                       for h in unclassified])
+    named_use = bool((holdout & cohort_names) or selection_hits
+                     or any(feature_hits.values()) or any(index_hits.values()))
+    if named_use:
+        verdict = "named_tile_use_detected"
+    elif inconclusive:
+        verdict = "inconclusive"
+    else:
+        verdict = "no_named_tile_use_detected"
+    same_year = footprint.get("holdout_tiles_overlapping_same_year_training_tile", {})
     return {
+        "verdict": verdict,
+        "verdict_basis": "tile names in split files, feature tables, plot indexes and training directories; "
+                         "not an imagery-independence proof",
+        "named_tile_use_detected": named_use,
+        "scan_inconclusive_reasons": inconclusive,
+        "spatial_independence": {
+            "status": "unresolved_by_this_check",
+            "holdout_tiles_overlapping_same_year_training_tile": same_year,
+            "excluded_same_year_overlap_tiles": len(footprint.get("excluded_same_year_overlap_names", [])),
+            "note": "decision 2026-10-12: tiles overlapping a same-year training tile are excluded; "
+                    "other-year overlap is allowed (D6)",
+        },
         "holdout_tile_names": len(holdout),
         "names_in_training_cohort_dir": len(holdout & cohort_names),
         "names_in_nfi2024_staging_dir": len(holdout & staging_names),
         "split_files_scanned": split_files,
+        "split_files_not_parsed": [f["path"] for f in scan_errors],
         "split_files_naming_holdout_tiles": [f["path"] for f in selection_hits],
         "visualisation_files_naming_holdout_tiles": [f["path"] for f in visual_only],
         "teacher_feature_tables_naming_holdout_tiles": feature_hits,
         "plot_indexes_naming_holdout_tiles": index_hits,
         "text_files_mentioning_holdout": text_hits,
         "footprint": footprint,
-        "used_for_training_or_selection": bool(
-            (holdout & cohort_names) or selection_hits
-            or any(feature_hits.values()) or any(index_hits.values())),
     }
 
 
@@ -661,6 +718,7 @@ def main(argv: list[str] | None = None) -> dict:
         if i % 100 == 0:
             print(f"  {i:,}/{len(paths):,} tiles read ({time.time() - t0:.0f}s)", flush=True)
     readable = [t for t in tiles if t.get("readable")]
+    quarantined = [t for t in readable if not t.get("admitted")]
     restricted = [t for t in tiles if not t["world_readable"]]
     unreadable = [t for t in tiles if not t.get("readable")]
     planned_missing = Counter(str(r["year"]) for n, r in manifest.items() if n not in {t["name"] for t in tiles})
@@ -732,6 +790,9 @@ def main(argv: list[str] | None = None) -> dict:
             "present": len(tiles),
             "readable": len(readable),
             "unreadable": [{"name": t["name"], "error": t.get("error")} for t in unreadable],
+            "admitted": len(readable) - len(quarantined),
+            "quarantined_year_conflict": sorted(t["name"] for t in quarantined),
+            "quarantined_by_manifest_year": dict(sorted(Counter(str(t["manifest_year"]) for t in quarantined).items())),
             "not_world_readable": len(restricted),
             "not_world_readable_names": sorted(t["name"] for t in restricted),
             "not_world_readable_by_year": dict(sorted(Counter(str(t["manifest_year"]) for t in restricted).items())),
@@ -757,6 +818,8 @@ def _print_summary(report: dict) -> None:
     print("\n=== files ===")
     print(f"present {f['present']:,}  readable {f['readable']:,}  unreadable {len(f['unreadable'])}  "
           f"not world-readable {f['not_world_readable']} {f['not_world_readable_by_year']}")
+    print(f"admitted {f['admitted']:,}; quarantined for contradictory year: {len(f['quarantined_year_conflict'])} "
+          f"{f['quarantined_by_manifest_year']}")
     print(f"planned {f['planned_in_manifest']:,}, planned but missing by year {f['planned_but_missing_by_year']}")
     print("\n=== key census (readable tiles) ===")
     for key, n in c["key_presence"].items():
@@ -787,19 +850,23 @@ def _print_summary(report: dict) -> None:
     p = report["provenance"]
     print("\n=== never trained on ===")
     print(f"names in cohort dir {p['names_in_training_cohort_dir']}, in nfi2024 staging {p['names_in_nfi2024_staging_dir']}")
-    print(f"split files scanned {len(p['split_files_scanned'])}, naming holdout tiles: "
-          f"{p['split_files_naming_holdout_tiles'] or 'none'}")
+    print(f"split files scanned {len(p['split_files_scanned'])}, not parsed {p['split_files_not_parsed'] or 'none'}, "
+          f"naming holdout tiles: {p['split_files_naming_holdout_tiles'] or 'none'}")
     print(f"visualisation-only files naming holdout tiles: {p['visualisation_files_naming_holdout_tiles'] or 'none'}")
     print(f"teacher feature tables naming holdout tiles: {p['teacher_feature_tables_naming_holdout_tiles']}")
     print(f"plot indexes naming holdout tiles: {p['plot_indexes_naming_holdout_tiles']}")
     print(f"text files mentioning the holdout: {len(p['text_files_mentioning_holdout'])}")
     for h in p["text_files_mentioning_holdout"]:
-        print(f"    {h['path']}  dir={h['mentions_holdout_dir']} names={h['holdout_tile_names']}")
+        print(f"    {h['path']}  dir={h['mentions_holdout_dir']} names={h['holdout_tile_names']} [{h['class']}]")
     fp = dict(p.get("footprint") or {})
     excluded = fp.pop("excluded_same_year_overlap_names", [])
     print(f"footprint: {fp}")
     print(f"holdout tiles excluded for same-year training overlap: {len(excluded)}")
-    print(f"\nUSED FOR TRAINING OR SELECTION: {p['used_for_training_or_selection']}")
+    print(f"\nVERDICT (named-tile evidence only): {p['verdict']}")
+    for r in p["scan_inconclusive_reasons"]:
+        print(f"  inconclusive: {r}")
+    print(f"spatial independence: {p['spatial_independence']['status']}; same-year overlap tiles "
+          f"{p['spatial_independence']['holdout_tiles_overlapping_same_year_training_tile']}")
     if report["sizing_cross_check"]:
         print(f"sizing cross-check: {report['sizing_cross_check']}")
 
