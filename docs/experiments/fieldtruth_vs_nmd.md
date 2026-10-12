@@ -1,6 +1,7 @@
-# Field truth — the measure that can beat the map
+# Historical NFI comparison — provenance pending
 
-**Status:** RESULT, held-out numbers · **Created:** 2026-09-26
+**Status:** PROVISIONAL historical numbers; held-out provenance not verified here
+**Created:** 2026-09-26 · **Review update:** 2026-10-12
 **Parent:** [`ladder_distill_stage.md`](ladder_distill_stage.md) ·
 **Related:** [`lucas_validation_plan.md`](lucas_validation_plan.md)
 
@@ -15,8 +16,12 @@ the first two versions measured something other than what they claimed.
 
 ## The result
 
-Scored on **held-out plots** — the distillation's own `test_tiles` — with
-NMD2023 scored on **exactly the same plots**:
+The September run was reported as restricted to the distillation's
+`test_tiles`, with NMD2023 scored on the same plots. The table is retained
+as a historical record, not as verified held-out evidence: an immutable
+result linked to the split and process revision has not been provided here.
+The reproduction requirements below must be met before using it for a
+held-out superiority claim.
 
 | cell | n | model | NMD2023 | margin |
 |---|---|---|---|---|
@@ -26,15 +31,14 @@ NMD2023 scored on **exactly the same plots**:
 | prithvi300m4f_r3 | 169 | 0.5385 | 0.4970 | +4.2 |
 | **tessera_r2** | 184 | **0.5109** | 0.4891 | **+2.2** |
 
-**The cleanest evidence is `tessera_r2`, not the largest margin.** Rung 2
-never touched NFI in training, so it is structurally immune to the
-contamination described below. It beats the map anyway. Every other row in
-this table is an upper bound on its own honesty; `tessera_r2` is a floor.
+`tessera_r2` is the relevant comparison for a model without NFI supervision:
+rung 2 did not use the NFI distillation targets used at rungs 3 and 4. That
+removes this particular route for target leakage; it does not establish
+spatial independence, rule out selection effects, or verify the scored split.
 
-The headline is therefore narrow and defensible: **a model trained without any
-NFI supervision scores higher against forest field observations than the
-national land-cover map does, on the same plots.** Two points of overall
-accuracy, on 184 plots. Not a large claim. A real one.
+The printed `tessera_r2` margin is +2.2 percentage points on 184 plots.
+It is a descriptive difference, not a lower bound on performance or evidence
+of statistically established superiority. The other rows are not upper bounds.
 
 ## What was wrong the first two times
 
@@ -47,8 +51,8 @@ plots against 53 test tiles / 209 plots — so roughly **three quarters of the
 plots being scored were plots whose NFI labels had shaped the training targets
 of the very rungs showing the gain.**
 
-The recomputation proves the contamination by asymmetry rather than by
-assertion. Restricted to held-out plots:
+The reported recomputation on the restricted subset changed the scores as
+follows; its held-out provenance remains pending:
 
 | | change vs full cohort |
 |---|---|
@@ -57,16 +61,21 @@ assertion. Restricted to held-out plots:
 | terramind_r4 | −8.3 |
 | tessera_r1 | **+3.9** |
 
-**Every rung-3/4 cell falls. Every rung-1/2 cell rises.** Contaminated cells
-lose their advantage on plots they have not seen; clean cells gain slightly,
-as a smaller and differently distributed sample will. That pattern is what a
-leak looks like from the outside, and no other explanation fits both signs.
+The report states that every rung-3/4 cell fell and every rung-1/2 cell rose.
+Those directions alone do not prove contamination: a change in sample
+composition can improve one fixed classifier and worsen another without
+label leakage. Overlap between scored identities and teacher targets is the
+relevant evidence; it must be checked against the actual splits and inputs.
 
-The distillation effect survives the correction, halved: rung 2 → 3 gives
-**+2.9 to +10.3 across five backbones, mean ≈ +5.3**, against the +9.8 the
-contaminated measurement reported.
+The reported rung 2 → 3 contrasts were **+2.9 to +10.3 across five backbones,
+mean ≈ +5.3**, compared with +9.8 on the full cohort. These are descriptive
+contrasts on different populations, not a causal distillation effect or a
+measurement of the amount of leakage removed.
 
-## What these numbers still cannot carry
+## Historical coverage and remaining limits
+
+The coverage figures below describe the September 2026 cohort, before the
+2024 campaign and the legacy-holdout census. They are not current availability.
 
 **n is small — 169 to 190 plots per cell — and that is a property of the
 cohort, not of the index.** Measured 2026-09-26: rebuilding the plot→tile
@@ -89,38 +98,41 @@ Two consequences follow directly:
   earlier handheld metre-level). The most positionally accurate plots in the
   entire inventory contribute nothing, because no 2024+ tiles exist.
 
-**Point identity overlaps the protected holdout.** The scored set carries
-2,491 rows at 1,521 unique point IDs, 404 of which also appear in the
-crop-holdout — 386 in the same year, touching 616 of the holdout's 1,064 rows.
-Exact `(tile_name, point_id)` keys are disjoint, which is why the split froze
-cleanly; point identity is not. The hash-bound E01 index audit records this as
-`protected_role_overlap_detected` with `cleared_for_scoring: false`.
+**The crop overlap audit is a separate population.** The 2,491 distill rows
+and 1,064 protected-holdout rows belong to the LUCAS crop experiment, indexed
+in [`crop-distill/README.md`](../evidence/crop-distill/README.md). Its point-ID
+overlap and `cleared_for_scoring: false` finding do not describe the NFI rows
+in this table. NFI independence requires its own identity and split audit.
 
-**One run per cell.** No seeds, no intervals. A margin of +2.2 on 184 plots is
-a result, not an estimate with a bound on it.
+**One run per cell.** No repeated training seeds or uncertainty intervals
+are recorded here. The +2.2-point margin on 184 plots has no reported bound.
 
-## How to reproduce, and how to tell the two apart
+## Reproduction requirements
 
-Full-cohort and held-out runs are now distinguishable from their output alone.
-`compare_nmd2023_nfi.py --split-json <split>` restricts scoring to the split's
-`test_tiles` and writes the split's path, SHA-256 and before/after plot counts
-into the result under `holdout`. Without the flag the comparison is
-full-cohort and `holdout` is `null`.
+At reviewed head `924091f7456c3b44be6fdae85ca0b8bdae1f71ba`,
+`compare_nmd2023_nfi.py` has no
+`--split-json` argument and emits no `holdout` block. Its existing
+`--model-per-plot` option compares the supplied model rows with NMD; it does
+not establish that those rows were held out. The proposed split-aware path
+is tracked in PR #65. Check the integrated revision before using that path.
 
-Any figure quoted as held-out must come from a result whose `holdout` block is
-populated. The two versions of this document that had to be withdrawn were
-both cases of a full-cohort number wearing a held-out label, and the flag
-exists so that mistake leaves a trace instead of a claim.
+Before promoting these numbers to verified held-out results, retain for each
+cell an immutable result and receipt that binds the process commit, checkpoint,
+input hashes, split path and SHA-256, held-out identities, and before/after
+plot counts. For a split-aware rerun, require a populated `holdout` block
+and validate it against the split; the presence of the block alone is not
+proof of independence. Historical filtered results may be used only with
+equivalent auditable provenance. No such rerun or receipt is supplied by this
+write-up, and arithmetic checks on the margins cannot substitute for it.
 
-## What would make this stronger
+## Next evidence
 
-In the order that buys the most per unit of cost:
+The 2024 plot-driven campaign is recorded in PR #67. Merged PR #71 adds the
+[2026-10-12 legacy-holdout census](https://github.com/TobiasEdman/imintengine/blob/91902bf2cf3b8f9bef7aa0579da52d877245fbb8/docs/experiments/nfi_multiyear_holdout_census_2026-10-12.md),
+including the exclusion of 212 same-year overlapping training tiles. These
+later populations do not retroactively validate the September table.
 
-1. **Draw tiles at the plots for one inventory year.** **518 tiles** covers
-   all 2,389 plots of 2024 — and 2024 is the year to pick: it is the first RTK
-   year, and LPIS crop labels still reach it. That single fetch would more than
-   double the entire field-truth set using under 3% as many tiles as the
-   current cohort, and it is PU-free over DES.
-2. **Re-score the ladder on the held-out flag** so every published cell is
-   generated by the restricted path rather than corrected after the fact.
-3. **Seeds.** Until then, no margin here is separable from another.
+The next scoring pass needs audited held-out provenance, a fixed eligible
+population and paired uncertainty estimates that account for tract clustering.
+Repeated training seeds address training variability separately. Any new fetch,
+evaluation run or freeze needs its own authorisation.
