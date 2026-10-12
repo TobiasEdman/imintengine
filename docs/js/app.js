@@ -433,10 +433,27 @@
                 var ov = allOverlays[mapId];
                 if (ov) {
                     if (ov.setOpacity) ov.setOpacity(val / 100);
-                    else if (ov.setStyle) ov.setStyle({opacity: val / 100});
+                    else if (ov.setStyle) ov.setStyle(fadedStyle(val / 100));
                 }
             });
         });
+    }
+
+    // Vector fade: scale stroke AND fill from each feature's own base style,
+    // so 0 % hides a polygon completely and 100 % restores it exactly.
+    function fadedStyle(level) {
+        return function(feature) {
+            var base = gjStyle(feature);
+            return {
+                opacity: (base.opacity !== undefined ? base.opacity : 1) * level,
+                fillOpacity: (base.fillOpacity !== undefined ? base.fillOpacity : 0.2) * level
+            };
+        };
+    }
+
+    function sliderLevel(mapId) {
+        var slider = document.getElementById('opacity-' + mapId);
+        return slider ? parseInt(slider.value) / 100 : 1;
     }
 
     function bindBgToggles() {
@@ -449,9 +466,17 @@
                     if (!layers) return;
                     toggle.querySelectorAll('.bg-btn').forEach(function(b) { b.classList.remove('active'); });
                     this.classList.add('active');
+                    // On an image panel the background IS the content: rebind
+                    // the slider to the background now showing and keep the
+                    // slider's level. Other panels keep backgrounds opaque.
+                    var contentIsBg = Object.keys(layers).some(function(key) {
+                        return layers[key] === allOverlays[mapId];
+                    });
+                    if (contentIsBg && layers[activeBg]) allOverlays[mapId] = layers[activeBg];
+                    var shown = contentIsBg ? sliderLevel(mapId) : 1;
                     Object.keys(layers).forEach(function(key) {
                         if (layers[key] && layers[key].setOpacity) {
-                            layers[key].setOpacity(key === activeBg ? 1 : 0);
+                            layers[key].setOpacity(key === activeBg ? shown : 0);
                         }
                     });
                 });
