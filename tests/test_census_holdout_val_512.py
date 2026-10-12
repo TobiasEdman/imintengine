@@ -23,13 +23,10 @@ SIZE = 16  # spectral side in the fixtures; the census checks 24 bands and squar
 
 @pytest.fixture(scope="module")
 def fieldtruth_file(tmp_path_factory) -> Path:
-    """Codex's identity module at the sizing's process commit, or skip when the object is absent."""
-    proc = subprocess.run(["git", "-C", str(REPO), "show", f"{FIELDTRUTH_COMMIT}:imint/eval/fieldtruth.py"],
-                          capture_output=True)
-    if proc.returncode != 0:
-        pytest.skip("fieldtruth.py at the task-0103 process commit is not in this clone")
+    """Use the byte-exact sizing identity module, even in shallow/source archives."""
+    fixture = REPO / "tests" / "fixtures" / f"fieldtruth_{FIELDTRUTH_COMMIT}.py"
     path = tmp_path_factory.mktemp("ft") / "fieldtruth.py"
-    path.write_bytes(proc.stdout)
+    path.write_bytes(fixture.read_bytes())
     assert census.sha256_path(path) == census.FIELDTRUTH_SHA256
     return path
 
@@ -315,3 +312,12 @@ def test_out_json_under_the_data_root_is_refused(data_root, fieldtruth_file):
     with pytest.raises(SystemExit, match="must not be under the data root"):
         census.main(["--data-root", str(data_root), "--fieldtruth-file", str(fieldtruth_file),
                      "--out-json", str(data_root / "census.json")])
+
+
+def test_fieldtruth_fixture_needs_no_git_history(monkeypatch, tmp_path_factory):
+    def forbid_git(*args, **kwargs):
+        raise AssertionError("The census fixture must work without Git history")
+
+    monkeypatch.setattr(subprocess, "run", forbid_git)
+    path = fieldtruth_file.__wrapped__(tmp_path_factory)
+    assert census.sha256_path(path) == census.FIELDTRUTH_SHA256
