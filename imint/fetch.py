@@ -2,7 +2,7 @@
 imint/fetch.py — Sentinel-2 data fetching (DES + CDSE) and cloud detection
 
 **openEO-based fetchers** — used as fallback when the primary CDSE
-Sentinel Hub HTTP fetch (``imint/training/cdse_s2.py``) fails.  For bulk
+Sentinel Hub HTTP fetch (``imint/data/cdse_s2.py``) fails.  For bulk
 training data preparation, ``prepare_data.py`` uses the Sentinel Hub
 Process API first (fast, single HTTP POST per tile) and falls back to
 these openEO functions on error.
@@ -1790,7 +1790,7 @@ def _get_cdse_oidc_password_token() -> str:
     """Get a CDSE OAuth2 access token via the resource-owner password grant.
 
     Used by :func:`_cdse_download_safe` for CDSE OData/Catalogue access.
-    The token from :func:`imint.training.cdse_vpp._get_token` (client
+    The token from :func:`imint.data.cdse_vpp._get_token` (client
     credentials, SH-scoped service account) returns ``401 Unauthorized``
     on the OData download endpoint — this helper produces a token with
     the right scope.
@@ -2671,7 +2671,7 @@ def _s1_vessel_cache_key(coords: dict, date: str) -> str:
 
 def _ai2_s1_candidates(items: list) -> list:
     """IW GRDH dual-pol (VV+VH) items: the only products AI2's data source returns."""
-    from .training import s1_shared
+    from .data import s1_shared
 
     return [
         it for it in s1_shared.filter_iw_grdh(items, None)
@@ -2705,7 +2705,7 @@ def _s1_line_time_utc(scene: S1SceneInfo, line_frac: float) -> str:
 
 def _select_s1_target(aoi, date: str) -> tuple[Any, float]:
     """Target scene on ``date``: largest footprint overlap with the AOI."""
-    from .training import mpc_s1, s1_shared
+    from .data import mpc_s1, s1_shared
 
     day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     interval = f"{day:%Y-%m-%dT%H:%M:%SZ}/{day + timedelta(days=1):%Y-%m-%dT%H:%M:%SZ}"
@@ -2724,7 +2724,7 @@ def _select_s1_historical(target) -> Any:
     """AI2's historical scene: best footprint overlap in ``[t0 - 60 d, t0 - 30 d]``."""
     from shapely.geometry import shape
 
-    from .training import mpc_s1, s1_shared
+    from .data import mpc_s1, s1_shared
 
     t0 = _s1_start(target)
     lo = t0 - timedelta(days=S1_VESSEL_HISTORICAL_OFFSET_DAYS)
@@ -2745,7 +2745,7 @@ def _select_s1_historical(target) -> Any:
 
 
 def _s1_scene_info(item) -> S1SceneInfo:
-    from .training import s1_shared
+    from .data import s1_shared
 
     p = item.properties
     return S1SceneInfo(
@@ -2853,7 +2853,7 @@ def _s1_scene_header(item, pol: str, scene_dir: Path, signed) -> tuple[dict, Any
         return json.loads(path.read_text()), signed
     import rasterio
 
-    from .training import mpc_s1, s1_shared
+    from .data import mpc_s1, s1_shared
 
     signed = signed or mpc_s1.sign_item(item)
     href = dict(zip(_S1_POLARISATIONS, s1_shared.pick_measurement_urls(signed), strict=True))[pol]
@@ -2931,7 +2931,7 @@ def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Pa
     stem = f"{pol}_c{rwin['col_off']}_r{rwin['row_off']}_{rwin['width']}x{rwin['height']}"
     win_path, vrt_path = scene_dir / f"{stem}.tif", scene_dir / f"{stem}.vrt"
     if not win_path.exists():
-        from .training import mpc_s1, s1_shared
+        from .data import mpc_s1, s1_shared
 
         signed = signed or mpc_s1.sign_item(item)
         href = dict(zip(_S1_POLARISATIONS, s1_shared.pick_measurement_urls(signed), strict=True))[pol]
@@ -4167,7 +4167,7 @@ def fetch_grazing_timeseries(
             (B01, B05, B06, B07, B08, B09) are filled: B08 ≈ B8A,
             others set to zero.
             """
-            from .training.cdse_s2 import fetch_s2_scene
+            from .data.cdse_s2 import fetch_s2_scene
 
             c_start, c_end = c_start_end
             chunk_dates = []

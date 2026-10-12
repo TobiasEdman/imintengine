@@ -8,7 +8,7 @@ Validates, in order:
     2. `list_collections()` includes the legacy `s2_msi_l2a`.
     3. A *minimal* `load_collection → filter_bands → reduce_dimension →
        rename_labels → download` graph — same shape as
-       `imint/training/openeo_tile_graph.py::_build_slot_cube` — runs
+       `imint/data/openeo_tile_graph.py::_build_slot_cube` — runs
        end-to-end. The graph deliberately includes `rename_labels`
        because that process is not advertised on `/processes`; this
        call answers whether the server still accepts it.

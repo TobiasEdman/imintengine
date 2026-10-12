@@ -62,7 +62,7 @@ spec:
               import glob, time
               import numpy as np
               from imint.training.tile_config import TileConfig
-              from imint.training.openeo_tile_graph import fetch_tile_at_specific_dates
+              from imint.data.openeo_tile_graph import fetch_tile_at_specific_dates
 
               HALO = 520  # canon 512 + 8 px halo, matching the entry
               src = None

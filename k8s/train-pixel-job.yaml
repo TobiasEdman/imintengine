@@ -61,7 +61,7 @@ spec:
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
-              pip install --no-cache-dir -e . 2>/dev/null || \
+              pip install --no-cache-dir -e '.[training]' 2>/dev/null || \
                 pip install --quiet --no-cache-dir -r requirements.txt 2>/dev/null || true
 
               echo ""

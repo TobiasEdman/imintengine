@@ -97,7 +97,7 @@ def _tile_bbox(easting: float, northing: float, grid_half: float = 5000.0):
 def get_vpp_windows(easting: float, northing: float,
                     n_frames: int = 4) -> list[tuple[int, int]]:
     """Re-derive VPP-guided DOY windows for a tile location."""
-    from imint.training.cdse_vpp import fetch_vpp_tiles
+    from imint.data.cdse_vpp import fetch_vpp_tiles
     from imint.training.vpp_windows import compute_growing_season_windows
 
     _wgs84, projected = _tile_bbox(easting, northing)
@@ -130,7 +130,7 @@ def gapfill_tile(
     """
     from datetime import datetime
     from imint.fetch import fetch_seasonal_dates_doy
-    from imint.training.cdse_s2 import fetch_s2_scene
+    from imint.data.cdse_s2 import fetch_s2_scene
 
     npz_path = tile_info["path"]
     easting = tile_info["easting"]

@@ -41,9 +41,9 @@ from pathlib import Path
 # Ensure project root is on sys.path when running as a script
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from imint.training.cdse_s2 import fetch_s2_seasonal_tile
+from imint.data.cdse_s2 import fetch_s2_seasonal_tile
 from imint.fetch import fetch_nmd_data, FetchError
-from imint.training.class_schema import nmd_raster_to_lulc
+from imint.schema.class_schema import nmd_raster_to_lulc
 
 
 def _parse_windows(s: str) -> list[tuple[int, int]]:

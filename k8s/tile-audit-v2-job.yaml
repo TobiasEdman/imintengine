@@ -56,7 +56,7 @@ spec:
               from rasterio.enums import Resampling
 
               sys.path.insert(0, "/tmp/imintengine")
-              from imint.training.class_schema import nmd_raster_to_lulc
+              from imint.schema.class_schema import nmd_raster_to_lulc
 
               SRC = Path("/data/unified_v2_512")
               NMD = "/data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif"
