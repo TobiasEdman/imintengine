@@ -91,6 +91,33 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
 </div>
 
 <div class="panel">
+  <h2>Field truth — NFI forest type (full cohort, training overlap)</h2>
+  <table id="fieldtruth"></table>
+  <div class="foot"><b>Full-cohort diagnostics, not a held-out evaluation.</b> These score the
+    whole NFI index (<span class="stat">nfi_index_unified_v2_512</span>), and that same index
+    supplies the rung-3/4 distillation teachers — roughly three quarters of its plots are in the
+    distillation training split. Rungs 3 and 4 are therefore scored partly on plots whose NFI
+    labels shaped their training targets, and their margins here are inflated by an unquantified
+    amount. Rungs 1 and 2 never saw NFI and carry no such overlap.
+    Each cell shows its accuracy and its margin over <b>NMD2023 v2.1 scored on that cell's own
+    plots</b> — the reference is recomputed per column, so the margin is valid even where a
+    backbone's img_size keeps a different plot subset. Rung 1 competes despite being 23-class:
+    classes 1–4 exist in both vocabularies. A held-out comparison needs the per-model
+    <span class="stat">*_r2_split.json</span> test tiles applied first.
+    <span id="ftRef"></span></div>
+</div>
+
+<div class="panel">
+  <h2>Field truth — LUCAS, shared vocabulary</h2>
+  <table id="fieldtruthLucas"></table>
+  <div class="foot">LUCAS carries field truth for crops, which NFI cannot: 21 of 28 classes against
+    NFI's 5. Classes 23–27 are NMD2023's finer subdivisions of open land and are folded onto class 8
+    in <b>both</b> truth and prediction, so a 28-class model is not charged for a finer-but-correct
+    answer and no point is discarded. Columns are scored on the points every cell kept.
+    <span id="ftLucasNote"></span></div>
+</div>
+
+<div class="panel">
   <h2>All runs — every curve on one axis</h2>
   <div class="h2h-controls">
     <select id="rungFilter">
@@ -167,6 +194,8 @@ let DATA = {};   // "model_rN" -> log | null
 let DSTL = {};   // model -> distillability json | null
 let STAGE = {};  // model -> {gate:bool, feats:bool} — distill-stage probes
 let INF = null;  // inference/matrix.json — the visual matrix' index
+let FT = null;   // fieldtruth/fieldtruth-standings.json (NFI + LUCAS)
+let FTSP = {};   // cell -> fieldtruth/sameplots/*.json (model vs NMD, same plots)
 // nfi_head_cv.py BASELINES: NMD2023's own 5-class field accuracy at the
 // same plots — the number a column's features must beat to claim the
 // model knows more forest type than the map it was trained on.
@@ -208,6 +237,22 @@ async function loadAll() {
       const res = await fetch(`inference/matrix.json?t=${Date.now()}`);
       INF = res.ok ? await res.json() : null;
     } catch { INF = null; }
+  })(), (async () => {
+    // Field truth (the /www/ladder/fieldtruth symlink). Both files are
+    // written by separate jobs and appear cell by cell over hours, so every
+    // miss is an awaiting-state, never an error.
+    try {
+      const res = await fetch(`fieldtruth/fieldtruth-standings.json?t=${Date.now()}`);
+      FT = res.ok ? await res.json() : null;
+    } catch { FT = null; }
+    FTSP = {};
+    const cells = MODELS.flatMap(m => RUNGS.map(r => `${m}_r${r.n}`));
+    await Promise.all(cells.map(async (cell) => {
+      try {
+        const res = await fetch(`fieldtruth/sameplots/sameplots-${cell}.json?t=${Date.now()}`);
+        if (res.ok) FTSP[cell] = await res.json();
+      } catch {}
+    }));
   })()]));
 }
 
@@ -335,6 +380,83 @@ function renderDeltas() {
     h += "</tr>";
   }
   document.getElementById("deltas").innerHTML = h + "</tbody>";
+}
+
+function ftModel(sp) {
+  // compare_nmd2023_nfi labels the model under test with a legacy key; the
+  // two NMD entries are the fixed references, so the model is whatever is
+  // left. Keying on the leftover survives that name changing.
+  const s = sp && sp.sources;
+  if (!s) return null;
+  const k = Object.keys(s).find(x => x !== "NMD2023_v2.1" && x !== "NMD2018_v1.1");
+  return k ? s[k] : null;
+}
+
+function renderFieldTruth() {
+  const el = document.getElementById("fieldtruth");
+  const have = Object.keys(FTSP).length;
+  if (!have) {
+    el.innerHTML = "<tbody><tr><td class='rung-label'>awaiting the field-truth jobs" +
+                   " — nothing scored yet</td></tr></tbody>";
+    document.getElementById("ftRef").textContent = "";
+    return;
+  }
+  let h = "<thead><tr><th></th>" + MODELS.map(m=>`<th>${LABELS[m]}</th>`).join("") +
+          "</tr></thead><tbody>";
+  const refs = new Set();
+  for (const r of RUNGS) {
+    h += `<tr><td class="rung-label">r${r.n} ${r.name}</td>`;
+    for (const m of MODELS) {
+      const sp = FTSP[`${m}_r${r.n}`], mm = ftModel(sp);
+      if (!mm) { h += `<td class="delta flat">—</td>`; continue; }
+      const nmd = sp.sources["NMD2023_v2.1"].overall_accuracy_5class;
+      const oa = mm.overall_accuracy_5class, d = oa - nmd;
+      refs.add(nmd.toFixed(4));
+      const cls = d > 0.0005 ? "up" : d < -0.0005 ? "down" : "flat";
+      h += `<td class="delta ${cls}" title="n=${sp.n_plots_compared} plots, ` +
+           `kappa ${mm.cohen_kappa.toFixed(4)}">${oa.toFixed(4)}` +
+           `<small style="display:block">${d>0?"+":""}${d.toFixed(4)}</small></td>`;
+    }
+    h += "</tr>";
+  }
+  el.innerHTML = h + "</tbody>";
+  const r = [...refs].sort();
+  document.getElementById("ftRef").textContent = !r.length ? "" :
+    (r.length === 1
+      ? `NMD2023 on these plots: ${r[0]}. `
+      : `NMD2023 differs by column (${r.join(", ")}) because each is scored on ` +
+        `its own plot subset — read the margins, not the levels. `) +
+    `${have} of ${MODELS.length * RUNGS.length} cells scored.`;
+}
+
+function renderFieldTruthLucas() {
+  const el = document.getElementById("fieldtruthLucas");
+  const rows = (FT && FT.lucas_shared_vocab) || [];
+  if (!rows.length) {
+    el.innerHTML = "<tbody><tr><td class='rung-label'>awaiting the standings job</td></tr></tbody>";
+    document.getElementById("ftLucasNote").textContent = "";
+    return;
+  }
+  const by = {}; const ns = new Set();
+  for (const r of rows) { by[r.cell] = r; ns.add(r.n); }
+  let h = "<thead><tr><th></th>" + MODELS.map(m=>`<th>${LABELS[m]}</th>`).join("") +
+          "</tr></thead><tbody>";
+  for (const r of RUNGS) {
+    h += `<tr><td class="rung-label">r${r.n} ${r.name}</td>`;
+    for (const m of MODELS) {
+      const row = by[`${m}_r${r.n}`];
+      h += row ? `<td class="delta flat" title="n=${row.n} points">${row.overall.toFixed(4)}</td>`
+               : `<td class="delta flat">—</td>`;
+    }
+    h += "</tr>";
+  }
+  el.innerHTML = h + "</tbody>";
+  const nn = [...ns].sort((a, b) => a - b);
+  document.getElementById("ftLucasNote").textContent = nn.length === 1
+    ? `${rows.length} cell(s) scored on ${nn[0]} shared points.`
+    : `${rows.length} cell(s); point counts DIFFER (${nn.join(", ")}), so these ` +
+      `columns are not on a common cohort — equal counts would anyway be ` +
+      `necessary but not sufficient. Hover a cell for its own n.`;
 }
 
 function options() {
@@ -623,7 +745,7 @@ function renderInference() {
 async function tick() {
   await loadAll();
   renderMatrix(); renderDeltas(); renderDistill(); renderAll(); fillSelects(); renderH2H();
-  renderInference();
+  renderInference(); renderFieldTruth(); renderFieldTruthLucas();
   document.getElementById("updated").textContent =
     "· refreshed " + new Date().toLocaleTimeString();
 }

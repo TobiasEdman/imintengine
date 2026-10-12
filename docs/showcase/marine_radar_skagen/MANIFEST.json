@@ -1,0 +1,153 @@
+{
+  "description": "Sentinel-1 radar showcase (Skagen anchorage): VV images of the target and historical scenes, a nautical chart and AI2 Sentinel-1 vessel detections (score >= 0.3) on the EPSG:3006 display grid. Detections are candidates, not confirmed vessels; no AIS matched.",
+  "produced_at": "2026-10-11T19:27:18.228099+00:00",
+  "produced_by": "scripts/generate_marine_radar_showcase.py",
+  "git_sha": "1095c6e",
+  "git_dirty": false,
+  "run_args": {
+    "area": "skagen",
+    "cache_dir": "/Users/tobiasedman/imint_cache/s1",
+    "output_dir": null,
+    "enc_dir": "/Users/tobiasedman/Developer/ImintEngine-wt-marine-s1/outputs/sjokort_oresund/unique_enc",
+    "marine_awareness_repo": "/Users/tobiasedman/Developer/marine-awareness",
+    "marine_awareness_ref": "origin/main",
+    "device": "cpu",
+    "preset": {
+      "key": "skagen",
+      "name": "Skagen anchorage",
+      "coords": {
+        "west": 10.58,
+        "south": 57.64,
+        "east": 10.95,
+        "north": 57.82
+      },
+      "target_date": "2026-06-28",
+      "target_scene_id": "S1D_IW_GRDH_1SDV_20260628T053135_20260628T053200_003432_0060CF",
+      "historical_scene_id": "S1D_IW_GRDH_1SDV_20260523T053133_20260523T053158_002907_004F80",
+      "margin_m": 1500.0,
+      "chart": "osm"
+    },
+    "coords_fetch": {
+      "west": 10.554762,
+      "south": 57.626525,
+      "east": 10.975238,
+      "north": 57.833475
+    }
+  },
+  "source": "Microsoft Planetary Computer sentinel-1-grd (GRD DN, uncalibrated)",
+  "scenes": {
+    "target": {
+      "scene_id": "S1D_IW_GRDH_1SDV_20260628T053135_20260628T053200_003432_0060CF",
+      "safe_name": "S1D_IW_GRDH_1SDV_20260628T053135_20260628T053200_003432_0060CF_71E0",
+      "start_utc": "2026-06-28T05:31:35.545314Z",
+      "end_utc": "2026-06-28T05:32:00.544057Z",
+      "platform": "sentinel-1d",
+      "orbit_direction": "DESCENDING",
+      "relative_orbit": 66,
+      "absolute_orbit": 3432
+    },
+    "historical": {
+      "scene_id": "S1D_IW_GRDH_1SDV_20260523T053133_20260523T053158_002907_004F80",
+      "safe_name": "S1D_IW_GRDH_1SDV_20260523T053133_20260523T053158_002907_004F80_AE87",
+      "start_utc": "2026-05-23T05:31:33.076174Z",
+      "end_utc": "2026-05-23T05:31:58.074727Z",
+      "platform": "sentinel-1d",
+      "orbit_direction": "DESCENDING",
+      "relative_orbit": 66,
+      "absolute_orbit": 2907
+    }
+  },
+  "fetch_provenance": {
+    "chain_version": 1,
+    "window_epsg": 32632,
+    "aoi_px": [
+      59232,
+      -641189,
+      61796,
+      -638819
+    ],
+    "valid_frac_target": 1.0,
+    "valid_frac_historical": 1.0,
+    "rasterio": "1.4.4",
+    "gdal": "3.10.3"
+  },
+  "input_data_sha256": "sha256:d4efef3aa8a023010089417a938785eb7b990c5b902798c88c0aba558139deb6",
+  "input_data_hash_of": "uint16 [target_vv, target_vh, historical_vv, historical_vh] model input stack, C order",
+  "models": {
+    "licence": "AI2 rslearn_projects weights + code Apache-2.0, annotations CC-BY 4.0",
+    "detector": {
+      "file": "detect_best.ckpt",
+      "sha256": "sha256:85f86043db84f7e899de5c6642c3a0afc591621d277080a298d023b81c3633c5"
+    },
+    "attribute": {
+      "file": "attribute_best.ckpt",
+      "sha256": "sha256:24b1e759ba4f250c84cdbc5913fec24e140195f59bc7b13f50c9654e7b435913"
+    }
+  },
+  "infra_filter": {
+    "applied": true,
+    "distance_m": 200.0,
+    "removed": 0,
+    "dataset": "Satlas marine infrastructure (Allen AI, ODC-BY)",
+    "path": "/Users/tobiasedman/.cache/imint/satlas_marine_infrastructure/latest.geojson",
+    "points": 39582,
+    "sha256": "a40bebd54df7cdd4c46d25d4ce2a7035d1f7201c6b23bb7fac7144c1f3266f63"
+  },
+  "chart": {
+    "source": "OpenStreetMap basemap + OpenSeaMap seamarks, offline tiles committed in marine-awareness (scripts/prefetch_osm_tiles.py)",
+    "attribution": "\u00a9 OpenStreetMap contributors (ODbL), seamarks \u00a9 OpenSeaMap (CC BY-SA)",
+    "licence": "OSM data ODbL; OpenSeaMap tiles CC BY-SA 2.0; this derived chart image is shared under CC BY-SA",
+    "repo": "marine-awareness",
+    "ref": "origin/main",
+    "commit": "6af8c24ca5aca42b1f25008ff85ba209713256bf",
+    "zooms": {
+      "base": 12,
+      "seamark": 13
+    },
+    "tiles": {
+      "base": 25,
+      "seamark": 100
+    },
+    "tile_blobs_sha256": "sha256:b90b2d3249afea486a7ccedb202a84dc01adbd698f9d39b1bb69f1919212234f",
+    "tile_blobs_sha256_of": "sorted '<path> <git blob sha>' lines, newline-joined",
+    "resampling": "base bicubic x2 to z13, composite, then bilinear to EPSG:3006"
+  },
+  "process_files": [
+    {
+      "path": "scripts/generate_marine_radar_showcase.py",
+      "sha256": "sha256:3f520dbee11f35d2b280fd2b136ba0609c6a47b109060f92a890f243f34ed80d"
+    },
+    {
+      "path": "scripts/generate_marine_commercial_showcase.py",
+      "sha256": "sha256:be59166c6d0f61c29a5e06edca7a6035415be50f65ed0957ad17798793ab6a06"
+    },
+    {
+      "path": "imint/analyzers/ai2_vessels_s1.py",
+      "sha256": "sha256:6a42de4e94e88346a25e154fbb87413e20306f21011ae999660e3d21d353514a"
+    },
+    {
+      "path": "imint/fetch.py",
+      "sha256": "sha256:68dd8c7928bd281c3d6d5a2e9a42f5f1ed95d07a31f9e7c621beeb772228d695"
+    },
+    {
+      "path": "imint/exporters/export.py",
+      "sha256": "sha256:6677f9063630faca66c5207394df4f0edfef86928a093fd03a57d2e425efb664"
+    }
+  ],
+  "outputs": {
+    "outputs/showcase/marine_radar_skagen/rgb.png": "sha256:b3418334d2b281b3c7a93a41def0e96fc774f7dfdee3182898dcc05ce411ee1b",
+    "outputs/showcase/marine_radar_skagen/baseline.png": "sha256:675963a91fc0bba1200284552a49e88a22720f9baee623e206f8235ebc1402d9",
+    "outputs/showcase/marine_radar_skagen/sjokort.png": "sha256:b74ae97e301ed35b1d864783429d7416781a219a80ca8ec730ed77d6e97d4b1c",
+    "outputs/showcase/marine_radar_skagen/showcase_summary.json": "sha256:21e2fb1e5f9430fd2ac1951d31f1d5994e5cbbfcef330c65dde915c232bd2b28",
+    "outputs/showcase/marine_radar_skagen/mr_skagen_vessels.geojson": "sha256:1f46c0b08bd483517edec94ff380267009a43fa0f0d955664da0cbb2bdbc875f",
+    "outputs/showcase/marine_radar_skagen/mr_skagen_vessels_wgs84.geojson": "sha256:44ab8318275264dd2717c65cc76fa7690deaf00ab29324a3f471aec1c44fb3bf"
+  },
+  "outputs_copied_to": [
+    "docs/showcase/marine_radar_skagen/rgb.png",
+    "docs/showcase/marine_radar_skagen/baseline.png",
+    "docs/showcase/marine_radar_skagen/sjokort.png",
+    "docs/showcase/marine_radar_skagen/showcase_summary.json",
+    "docs/showcase/marine_radar_skagen/MANIFEST.json",
+    "docs/data/mr_skagen_vessels.geojson"
+  ]
+}

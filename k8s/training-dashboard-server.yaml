@@ -104,6 +104,12 @@ spec:
               # ladder-inference-matrix job. Dangling until its first run —
               # the panel renders an awaiting-state.
               ln -sfn /cephfs/ladder_inference /www/ladder/inference
+              # Field truth: NFI and LUCAS standings plus the same-plots
+              # comparison against NMD2023/NMD2018, written by the
+              # ft-<model>-r<rung>, ladder-fieldtruth-standings and
+              # nmd-sameplots-compare jobs. Dangling until those run — the
+              # panel renders an awaiting-state rather than an error.
+              ln -sfn /cephfs/ladder_eval /www/ladder/fieldtruth
 
               # Patch 1: null-safe tile-count cells (avoids TypeError when
               # train_tiles/val_tiles missing from the new schema).

@@ -11,6 +11,7 @@ own licenses. This file documents those components and their licensing terms.
 |-----------|---------|-----------|-------|
 | **YOLO11s** (vessel detection) | AGPL-3.0 | Ultralytics | Copyleft — commercial closed-source use requires [Enterprise license](https://www.ultralytics.com/license) |
 | **AI2 rslearn** (detection + attributes) | Apache 2.0 | 2024 Allen Institute for AI | Weights: Apache 2.0, annotations: CC-BY 4.0 |
+| **AI2 rslearn Sentinel-1 vessels** (detection + attributes) | Apache 2.0 | 2026 Allen Institute for AI | Weights: Apache 2.0, annotations: CC-BY 4.0. Sources and sha256 in `imint/fm/ai2_vessels_s1/LICENSE.md` |
 | **SatlasPretrain** (Swin V2 B backbone) | Apache 2.0 | 2024 Allen Institute for AI | Pre-trained on Sentinel-2 via Satlas |
 | **Prithvi-EO 2.0** (burn segmentation) | Apache 2.0 | IBM, NASA, Juelich Supercomputing Centre | Geospatial foundation model (ViT-MAE, 600M params). [HuggingFace](https://huggingface.co/ibm-nasa-geospatial/Prithvi-100M) |
 | **COT MLP5 ensemble** (cloud optical thickness) | **TBD** | Aleksis Pirinen / RISE | Pirinen et al., 2024. "Creating and Leveraging a Synthetic Dataset of Cloud Optical Thickness Measures for Cloud Detection in MSI." Remote Sensing. [GitHub](https://github.com/DigitalEarthSweden/ml-cloud-opt-thick). Commercial license not yet clarified — contact aleksis.pirinen@ri.se |
@@ -21,6 +22,8 @@ own licenses. This file documents those components and their licensing terms.
 | Source | License | Copyright | Notes |
 |--------|---------|-----------|-------|
 | **Sentinel-2 L2A** | Open and free | ESA / Copernicus | Free use, attribution recommended |
+| **Sentinel-1 GRD** (via Microsoft Planetary Computer) | Open and free | ESA / Copernicus | Free use, attribution recommended |
+| **Satlas marine infrastructure** (AI2 S1 vessel infrastructure filter) | ODC-BY | Allen Institute for AI | Attribution required. Downloaded on first use from `satlas-explorer-public` |
 | **Digital Earth Sweden** (openEO) | Apache 2.0 / CC0 | Rymdstyrelsen / RISE | Code: Apache 2.0, data: CC0 |
 | **NMD** (Nationellt Marktackedata) | CC0 | Naturvardsverket | Public domain, attribution recommended |
 | **Sjokort S-57** (nautical charts) | Academic-restricted | Sjofartsverket | Available via [SLU GET](https://maps.slu.se/get/) for SLU staff/students. Publication in scientific works permitted with attribution. |

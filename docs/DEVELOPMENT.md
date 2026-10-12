@@ -185,7 +185,7 @@ cd docs && python3 -m http.server 8091
 1. Grid generation        sampler.py → 5,801 tiles across Sweden
 2. Fetch Sentinel-2       fetch.py → seasonal S2 L2A (CDSE or DES)
 3. Fetch NMD labels        nmd.py → 19-class land cover labels
-4. Fetch aux channels      skg_height.py, skg_grunddata.py, copernicus_dem.py
+4. Fetch aux channels      skg_grunddata.py, slu_markfukt.py (open-data mirror via skg_open.py), copernicus_dem.py
 5. Train model             trainer.py → Prithvi + UPerNet + AuxEncoder
 6. Evaluate                evaluate.py → per-class IoU, confusion matrix
 ```
@@ -223,7 +223,7 @@ make train-dev ARGS="--epochs 100 --enable-all-aux --unfreeze-backbone-layers 12
 
 Enable all: `--enable-all-aux`
 
-Skogsstyrelsen endpoints require `.skg_endpoints` config file or `SKG_HEIGHT_URL` / `SKG_GRUNDDATA_URL` env vars (see `config/environments/template.env`).
+Skogsstyrelsen forestry and SLU markfukt are read from the open-data mirror on the PVC (`SKG_OPEN_DIR`, default `/data/skg_open`; staged by `scripts/stage_skg_open.py`, see `docs/data/skg_open_mirror.md`).
 
 ### Model Evaluation Results
 
@@ -335,8 +335,8 @@ imint/
     evaluate.py              ← Evaluation metrics
     sampler.py               ← Grid generation
     prepare_data.py          ← Data preparation pipeline
-    skg_height.py            ← Skogsstyrelsen tree height
-    skg_grunddata.py         ← Skogsstyrelsen volume/basal/diameter
+    skg_open.py              ← Skogsstyrelsen open-data mirror reader (IM-022)
+    skg_grunddata.py         ← Skogsstyrelsen volume/basal/diameter/tree height
     copernicus_dem.py        ← Copernicus DEM
   fm/
     upernet.py               ← UPerNet + AuxEncoder + Prithvi backbone
@@ -445,6 +445,6 @@ make test-seasonal-des       # Local seasonal fetch test (DES)
 | Copernicus (CDSE) | `CDSE_CLIENT_ID`, `CDSE_CLIENT_SECRET` | Sentinel Hub dashboard |
 | Skogsstyrelsen | `SKG_HEIGHT_URL`, `SKG_GRUNDDATA_URL` | Licensed endpoints |
 
-All credentials go in `config/environments/*.env` (gitignored) or `.skg_endpoints` (gitignored).
+All credentials go in `config/environments/*.env` (gitignored).
 
 Never commit credentials. The `*.env` and `*credentials*` patterns in `.gitignore` protect against accidental commits.
