@@ -1,3 +1,5 @@
+# HISTORICAL ONLY: September 2026 operation; DO NOT RUN or remove the guard.
+# Future cleanup requires a new reviewed inventory-bound job; see plan doc.
 # PVC-retention för training-data-cephfs — se docs/ops/pvc_retention_plan.md.
 # Scope (plan 0d1cdbc, godkänd av Tobias, körs post-#36):
 #   1. /cephfs/checkpoints/ladder/*/epoch_*.pt        (~182.7 G; best/last/log bevaras)
@@ -14,6 +16,7 @@ metadata:
   namespace: prithvi-training-default
   labels: { app: unified-training, purpose: pvc-retention, mode: execute }
 spec:
+  suspend: true  # Historical record; execution also refuses below.
   backoffLimit: 0
   activeDeadlineSeconds: 7200
   ttlSecondsAfterFinished: 604800
@@ -36,6 +39,9 @@ spec:
             - -c
             - |
               set -euo pipefail
+              echo 'REFUSING: historical September retention job. Create a new reviewed inventory-bound job; see docs/ops/pvc_retention_plan.md.' >&2
+              exit 64
+              # Original September body retained below, unreachable.
               MODE="${MODE:?}"
               RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${MODE}"
               EV="/cephfs/ops/retention/${RUN_ID}"

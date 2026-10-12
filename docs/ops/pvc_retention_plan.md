@@ -1,8 +1,38 @@
-# PVC-retention — städplan för training-data-cephfs (REVIEW, ej körd)
+# PVC-retention — historiskt underlag från september 2026
 
-**Datum:** 2026-09-03. **Frigör totalt ~333 G.** **Status:** godkänd av
-Tobias i princip; körs EFTER #36-rollout. INGEN mutation gjord när detta
-skrevs.
+**Status 2026-10-12: ARKIVERAT — FÅR INTE KÖRAS.** PR #50 beskriver
+septemberkörningen som genomförd 2026-09-07; loggarna finns enligt PR:n på
+PVC:n under `/cephfs/ops/retention/`. De har inte verifierats på nytt här.
+Texten nedan bevarar planens antaganden och storlekar från 2026-09-03,
+inklusive dess då framtida körinstruktioner. Den är inte en aktuell körplan.
+
+Båda Job-manifesterna är suspenderade och avbryter ovillkorligt före all
+åtkomst till PVC:n, även om någon tar bort `suspend`. Den äldre shell-koden
+ligger kvar efter spärren som historiskt underlag. Ta inte bort spärren för
+att återanvända jobbet.
+
+## Krav på en ny städning
+
+NFI-kampanjen (#67) och den fortsatta planeringen efter den sammanslagna #71
+behöver fetch-/enrichmentdata. Antagandet nedan om ett fryst dataset utan
+nya tileplaner gäller därför inte som grund för att radera cacharna nu.
+
+En ny städning kräver en separat granskad plan och ett nytt jobb:
+1. Inventera aktuella konsumenter och jobb; verifiera att berörda celler är
+   avslutade och att inga läsare eller skrivare använder raderingsmålen.
+2. Lista exakta filer och kataloger, deras identiteter och storlekar i en
+   beständig dry-run-inventering. Bedöm varje cache separat; bevara den om
+   dess användning eller återbyggnadskostnad inte är klarlagd.
+3. Bind exekveringen till den granskade inventeringens SHA-256 och godkända
+   scope. Avbryt vid tillkomna/ändrade mål eller ändrat jobb-/datasetläge;
+   generera aldrig en ny bred raderingslista vid exekvering.
+4. Verifiera skyddade filer före och efter och spara evidens. Den gamla
+   septemberauktorisationen gäller inte en ny körning.
+
+## Ursprunglig plan (2026-09-03)
+
+Planerad återvinning var cirka 333 G. Planen var då godkänd i princip och
+skulle köras efter #36-rollout; nedanstående presens avser det datumet.
 
 ## Varför (kapacitetsbilden)
 
