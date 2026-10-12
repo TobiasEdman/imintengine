@@ -49,6 +49,9 @@ def _encoded_tiff(width: int, height: int) -> bytes:
 class _Resp(io.BytesIO):
     status = 200
 
+    def geturl(self) -> str:
+        return "https://images.example.org/ImageServer/exportImage"
+
 
 @pytest.fixture
 def fake_server(monkeypatch):
