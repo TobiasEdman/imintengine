@@ -12,13 +12,26 @@
 # Outcomes are kept apart (Codex review 5496125869):
 #   recovered          non-zero, finite, correctly shaped embedding -> has_tessera=1 + stamp
 #   already_recovered  a previous run already did that; left untouched (resume-safe)
-#   coverage_hole      the helper reports no TESSERA block for the year, or the block
-#                      is all zero -> has_tessera=0 with a reason that says "confirmed"
+#   coverage_hole      the registry lists no TESSERA block for the bbox and year, or the
+#                      delivered blocks are all zero -> has_tessera=0, reason says "confirmed"
 #   unresolved         any other failure (download, metadata, non-finite values):
 #                      tile left exactly as it was, listed, and the Job exits non-zero —
-#                      a failed probe is never recorded as a confirmed hole
+#                      a failed probe is never recorded as a confirmed hole. geotessera
+#                      0.10.2's fetch_embeddings swallows download exceptions (core.py:533-543)
+#                      and the helper then reports no_tessera_tiles_for_year; the GeoTessera
+#                      handle is therefore wrapped so that fewer delivered than requested
+#                      blocks raises, and "no block" is only believed when the registry
+#                      itself returned none (Codex review 5496217165).
+#   A usable embedding must also carry the tile's own TESSERA year (the helper's
+#   clamped year-0): a stamp alone does not prove temporal correctness, so a
+#   wrong-year or yearless embedding is re-probed, never kept as already_recovered.
 #   missing_in_copy    named in the report but absent from the copy -> listed, exit non-zero
-# The report's dir and source must match this Job's, or it refuses.
+# The report's dir and source must match this Job's, or it refuses. Before
+# probing, every tile of the copy is scanned: one flagged usable whose
+# embedding is not finite, non-zero and 128 x spectral grid is added to the
+# targets (prescan_invalid) — the tessera Job's own check accepted NaN/Inf, so
+# this is where that gap is closed for the whole copy, and the final check
+# covers every tile in the copy, not only the targets.
 #
 # Source binding: the repo helper is taken from a full reviewed commit of main
 # and its bytes are checked before import, like the planner and census Jobs.
@@ -67,7 +80,8 @@ spec:
               import numpy as np
 
               sys.path.insert(0, "/workspace/ie")
-              from scripts.enrich_tiles_tessera import enrich_one_tile
+              from scripts.enrich_tiles_tessera import (
+                  TESSERA_YEARS, _clamp_year_for_tessera, _infer_tile_year, enrich_one_tile)
               from geotessera import GeoTessera
 
               DIR = "/data/holdout_eval_512"
@@ -86,20 +100,43 @@ spec:
                   sys.exit(f"REFUSING: report is for dir={report.get('dir')} source={report.get('source')}, "
                            f"this Job runs on {DIR} with {SRC}")
               names = sorted(report["failed_or_hole"])
-              print(f"tiles to re-probe: {len(names)}")
+              print(f"tiles listed by the tessera report: {len(names)}")
 
               def load(path):
                   d = np.load(path, allow_pickle=True)
                   return d, (d["tessera"] if "tessera" in d.files else None)
 
+              def expected_year(d):
+                  """The TESSERA year the helper itself would fetch for this tile (clamped year-0)."""
+                  y = _infer_tile_year(d)
+                  return None if y is None else _clamp_year_for_tessera(int(y), TESSERA_YEARS)
+
               def usable(d, a):
-                  """Finite, non-zero, 128 channels on the spectral grid, flagged and stamped."""
-                  if a is None or "spectral" not in d.files:
+                  """Finite, non-zero, 128 channels on the spectral grid, for the tile's own year."""
+                  if a is None or "spectral" not in d.files or "tessera_year" not in d.files:
+                      return False
+                  want = expected_year(d)
+                  if want is None or int(d["tessera_year"]) != want:
                       return False
                   a = np.asarray(a)
                   grid = tuple(d["spectral"].shape[1:])
                   return (a.ndim == 3 and a.shape[0] == EMBED_CH and tuple(a.shape[1:]) == grid
                           and np.isfinite(a).all() and bool(np.any(a)))
+
+              class StrictHandle:
+                  """GeoTessera handle whose fetch_embeddings fails loudly on a short delivery."""
+                  def __init__(self, gt):
+                      self._gt, self.registry = gt, gt.registry
+                      self.requested = self.delivered = 0
+
+                  def fetch_embeddings(self, blocks, *args, **kwargs):
+                      blocks = list(blocks)
+                      self.requested, self.delivered = len(blocks), 0
+                      for item in self._gt.fetch_embeddings(blocks, *args, **kwargs):
+                          self.delivered += 1
+                          yield item
+                      if self.delivered < self.requested:
+                          raise RuntimeError(f"download_incomplete: {self.delivered}/{self.requested} blocks delivered")
 
               def rewrite(path, drop=(), **fields):
                   data = dict(np.load(path, allow_pickle=True))
@@ -110,8 +147,20 @@ spec:
                   np.savez_compressed(tmp, **data)
                   os.replace(tmp, path)
 
+              # Pre-scan the whole copy: a usable flag on an invalid embedding is a target too.
+              prescan_invalid = []
+              for q in sorted(os.listdir(DIR)):
+                  if not q.endswith(".npz") or q.endswith(".tmp.npz") or q[:-4] in names:
+                      continue
+                  d, a = load(f"{DIR}/{q}")
+                  if int(d.get("has_tessera", 0)) == 1 and not usable(d, a):
+                      prescan_invalid.append(q[:-4])
+              names = sorted(set(names) | set(prescan_invalid))
+              print(f"usable flags on invalid embeddings found by pre-scan: {len(prescan_invalid)}")
+              print(f"tiles to re-probe: {len(names)}")
+
               out = {"recovered": [], "already_recovered": [], "coverage_hole": [], "unresolved": [],
-                     "missing_in_copy": []}
+                     "missing_in_copy": [], "prescan_invalid": prescan_invalid}
               reasons = {}
               gt = None
               for i, name in enumerate(names, 1):
@@ -125,7 +174,8 @@ spec:
                       else:
                           if gt is None:
                               os.makedirs(EMB, exist_ok=True); os.makedirs(REG, exist_ok=True)
-                              gt = GeoTessera(embeddings_dir=EMB, cache_dir=REG)  # one worker, no eviction guard
+                              gt = StrictHandle(GeoTessera(embeddings_dir=EMB, cache_dir=REG))  # one worker, no eviction guard
+                          gt.requested = gt.delivered = 0
                           r = enrich_one_tile(path, gt, skip_existing=False)
                           reason = str(r.get("reason", ""))
                           if r.get("status") == "ok":
@@ -143,12 +193,15 @@ spec:
                                   rewrite(path, has_tessera=0)
                                   reasons[name] = f"invalid_embedding shape={arr.shape} finite={bool(np.isfinite(arr).all())}"
                                   state = "unresolved"
-                          elif reason.startswith("no_tessera_tiles_for_year"):
+                          elif reason.startswith("no_tessera_tiles_for_year") and gt.requested == 0:
+                              # the registry itself listed no block for this bbox and year
                               rewrite(path, has_tessera=0, tessera_source=SRC,
                                       tessera_gap_reason=f"no_tessera_coverage__{reason}__confirmed_by_single_worker_reprobe__{STAMP}")
                               state = "coverage_hole"
                           else:
-                              reasons[name] = reason or "failed"   # download/metadata/other: left untouched
+                              # download/metadata/other, including "no block" after a short delivery: left untouched
+                              reasons[name] = (reason or "failed") + (
+                                  f" (registry listed {gt.requested}, delivered {gt.delivered})" if gt.requested else "")
                               state = "unresolved"
                           if state != "unresolved":
                               out[state].append(name)
@@ -156,17 +209,17 @@ spec:
                               out["unresolved"].append(name)
                   print(f"  [{i}/{len(names)}] {name}: {state}", flush=True)
 
-              # Final check over every target still in the copy: a usable flag needs finite,
-              # non-zero, correctly shaped data and the promoted stamp.
+              # Final check over EVERY tile in the copy: a usable flag needs finite,
+              # non-zero, correctly shaped data for the tile's own year and the promoted stamp.
               chk = Counter()
-              for name in names:
-                  path = f"{DIR}/{name}.npz"
-                  if not os.path.exists(path):
+              for q in sorted(os.listdir(DIR)):
+                  if not q.endswith(".npz") or q.endswith(".tmp.npz"):
                       continue
-                  d, a = load(path)
+                  d, a = load(f"{DIR}/{q}")
                   if int(d.get("has_tessera", 0)) == 1 and not (usable(d, a) and str(d.get("tessera_source", "")) == SRC):
                       chk["USABLE_FLAG_WITHOUT_VALID_STAMPED_EMBEDDING"] += 1
               counts = {k: len(v) for k, v in out.items()}
+              counts["targets"] = len(names)
               print(f"\nresult: {counts}; verify: {dict(chk)}")
               json.dump({"dir": DIR, "source": SRC, "scripts_commit": os.environ["SCRIPTS_COMMIT"],
                          "reprobed": len(names), "counts": counts, **out, "unresolved_reasons": reasons,
@@ -174,7 +227,7 @@ spec:
                         open(REPORT_OUT, "w"), indent=1)
               print(f"report -> {REPORT_OUT}")
               if chk:
-                  sys.exit("FAIL: a usable flag sits on an invalid or unstamped embedding")
+                  sys.exit("FAIL: a usable flag sits on an invalid, wrong-year or unstamped embedding")
               if out["unresolved"] or out["missing_in_copy"]:
                   sys.exit(f"UNRESOLVED: {len(out['unresolved'])} probes failed for non-coverage reasons and "
                            f"{len(out['missing_in_copy'])} targets are missing; reconcile explicitly before the census")
