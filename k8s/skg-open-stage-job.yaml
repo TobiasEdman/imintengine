@@ -1,0 +1,90 @@
+---
+# Stage Skogsstyrelsen's open GeoTIFF products on the PVC (backlog IM-022).
+#
+# Replaces the retired kartportal ImageServer proxies as the source of the
+# forestry aux channels (height, volume, basal_area, diameter) and SLU
+# markfukt. Runs scripts/stage_skg_open.py: downloads the per-county zips
+# from geodpags.skogsstyrelsen.se to /data/skg_open/raw, re-encodes each
+# raster as a tiled COG, builds one VRT per product and writes
+# /data/skg_open/MANIFEST.json (source URL, sha256, bytes, dates, git sha).
+#
+# Scope of this manifest: grunddata omdrev 1-3 (volym, grundyta,
+# medeldiameter) + markfukt, 174 files, 97.3 GiB raw as planned 2026-10-12
+# (PVC free before: 626 GiB). Trädhöjd (329 GiB raw at 1 m) is a separate
+# run with --products tradhojd once its size is approved.
+#
+# Resumable: re-apply under a new name after a failure; files already
+# hashed in the manifest with their COG present are skipped. Writes ONLY
+# under /data/skg_open. No tile is touched.
+#
+# Image digest: python:3.11-slim as resolved 2026-10-12 (same pin as
+# k8s/skg-endpoint-probe-job.yaml).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: skg-open-stage
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: skg-open-stage}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 172800        # 48 h cap; ~100 GiB download + COG conversion
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: stage
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== skg-open-stage — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio inflate64
+              gdalinfo --version
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch "${IMINT_BRANCH}" https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export IMINT_GIT_SHA="$(git rev-parse HEAD)"
+              echo "HEAD: ${IMINT_GIT_SHA} (${IMINT_BRANCH})"
+              df -h /data | tail -1
+              python scripts/stage_skg_open.py --dest /data/skg_open \
+                --products ${STAGE_PRODUCTS} --omdrev 1 2 3
+              echo "=== manifest summary ==="
+              python - <<'PY'
+              import json
+              m = json.load(open("/data/skg_open/MANIFEST.json"))
+              raw = sum(r["bytes"] for r in m["files"].values() if not r.get("raw_deleted_at"))
+              der = sum(r["bytes"] for r in m["derived"].values())
+              print(f"files {len(m['files'])}, derived {len(m['derived'])}, vrt {len(m['vrt'])}")
+              print(f"raw {raw/2**30:.1f} GiB, derived {der/2**30:.1f} GiB, git {m['git_sha']}")
+              PY
+              du -sh /data/skg_open/raw /data/skg_open/grunddata /data/skg_open/markfukt 2>/dev/null || true
+              df -h /data | tail -1
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: IMINT_BRANCH, value: "agent/te/claude/im022-skg-geotiff-source"}
+            - {name: STAGE_PRODUCTS, value: "grunddata markfukt"}
+            - {name: GDAL_CACHEMAX, value: "2048"}
+          resources:
+            requests: {cpu: "4", memory: "8Gi"}
+            limits: {cpu: "4", memory: "8Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
