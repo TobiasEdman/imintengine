@@ -1,17 +1,20 @@
 ---
-# Step 3e: Sentinel-1 and the four SKG forestry channels for the top-up
-# tiles, per staging root, sequentially (concurrent aux writers race on
-# os.replace). PU-free: S1 via pc-rtc, forestry via Skogsstyrelsen with the
-# skg-endpoints Secret at /etc/skg (the 2024 run failed on all 475 without it).
-# Same calls as nfi2024-enrich-s1-job.yaml + nfi2024-skg-job.yaml. Tessera,
-# vpp_year, frame_2016 and S1-2016 follow in their own Jobs.
+# Step 3e: Sentinel-1 for the top-up tiles, per staging root, and the
+# explicit aux-incomplete marking Tobias decided on 2026-10-12 (option a).
 #
-# BLOCKED for forestry until backlog IM-022: k8s/skg-endpoint-probe-job
-# (2026-10-12) showed the Skogsstyrelsen proxies retired (HTML answer, PR
-# #73), so prefetch_aux fails per tile and the verify step below fails this
-# Job loudly. New tiles cannot reach the 2024 bar (4 of 11 aux channels, and
-# markfukt from the same family of proxies) until the open GeoTIFF source is
-# wired in. Tobias decides whether to fetch spectral now and enrich later.
+# The Skogsstyrelsen proxies behind height/volume/basal_area/diameter and
+# markfukt are retired (PR #73; k8s/skg-endpoint-probe-job confirmed 403/HTML
+# on the configured endpoint). The fetch's aux step is skip-on-fail, so the
+# new tiles arrive WITHOUT those channels, and nothing may zero-fill them.
+# Decision: fetch spectral now, enrich forestry + markfukt later when the open
+# GeoTIFF source is wired in (backlog IM-022, a separate PR, not this chain).
+# Until then every such tile is marked, in the tile itself, the way tessera
+# and frame_2016 gaps are marked: aux_complete=0, aux_missing=<channels>,
+# aux_gap_reason=<dated string>. Evaluation and inference must not read a
+# tile with aux_complete=0; the final census reports them per year.
+#
+# S1 via pc-rtc is unaffected and runs here (PU-free). Forestry is not
+# attempted; a retired endpoint costs three retries per tile for nothing.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -35,7 +38,7 @@ spec:
             - |
               set -euo pipefail
               export PYTHONUNBUFFERED=1
-              echo "=== top-up S1 + forestry — $(date -u) ==="
+              echo "=== top-up S1 + aux-incomplete marking — $(date -u) ==="
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
               pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml requests shapely pystac-client planetary-computer pandas pyarrow Pillow
               mkdir -p /workspace && cd /workspace
@@ -43,10 +46,7 @@ spec:
               cd ie
               export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
               echo "HEAD: $(git rev-parse HEAD)"
-              cp /etc/skg/skg_endpoints /workspace/ie/.skg_endpoints
-              python scripts/enrich_tiles_s1.py --help > /dev/null
-              python scripts/prefetch_aux.py --help > /dev/null
-              echo "imports OK"
+              python scripts/enrich_tiles_s1.py --help > /dev/null && echo "imports OK"
               for Y in $YEARS; do
                 ROOT=/data/unified_v2_512_nfi${Y}_staging
                 [ -d "$ROOT" ] || { echo "$Y: no staging root, skipping"; continue; }
@@ -54,29 +54,38 @@ spec:
                 echo ""; echo "######## $Y: $BEFORE tiles ########"
                 [ "$BEFORE" -gt 0 ] || continue
                 python scripts/enrich_tiles_s1.py --data-dir "$ROOT" --s1-backend pc-rtc --workers 8 --skip-existing
-                python scripts/prefetch_aux.py --data-dir "$ROOT" --channels height volume basal_area diameter --workers 8
                 AFTER=$(ls $ROOT/*.npz 2>/dev/null | wc -l)
                 [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed in $ROOT"; exit 1; }
-                python - "$ROOT" <<'PYEOF'
-              import glob, sys
+                python - "$ROOT" "$Y" <<'PYEOF'
+              import glob, json, os, sys, time
               from collections import Counter
               import numpy as np
-              REQ = ["s1_vv_vh", "s1_dates", "s1_orbit", "has_s1", "height", "volume", "basal_area", "diameter"]
-              root = sys.argv[1]; present, zero, n = Counter(), Counter(), 0
+              root, year = sys.argv[1], sys.argv[2]
+              AUX = ("height", "volume", "basal_area", "diameter", "markfukt")
+              STAMP = time.strftime("%Y-%m-%d")
+              REASON = f"forestry_markfukt_unavailable__skg_proxies_retired__pending_IM-022__verified_{STAMP}"
+              c = Counter(); marked = []
               for p in sorted(glob.glob(f"{root}/*.npz")):
-                  d = np.load(p, allow_pickle=True); n += 1
-                  for k in REQ:
-                      if k in d.files:
-                          present[k] += 1
-                          v = d[k]
-                          if getattr(v, "ndim", 0) >= 2 and not np.any(v):
-                              zero[k] += 1
-              print({k: (present[k], zero[k]) for k in REQ}, "of", n)
-              bad = [k for k in REQ if present[k] != n]
-              if bad:
-                  sys.exit(f"FAIL: missing on some tiles: {bad}")
-              if any(zero[k] for k in ("height", "volume", "basal_area", "diameter")):
-                  print("WARNING: all-zero forestry on some tiles — the census will show them")
+                  d = dict(np.load(p, allow_pickle=True))
+                  c["tiles"] += 1
+                  if "s1_vv_vh" not in d or not np.any(d["s1_vv_vh"]) or int(d.get("has_s1", 0)) != 1:
+                      c["S1_MISSING"] += 1
+                  missing = [k for k in AUX if k not in d or (getattr(d[k], "ndim", 0) >= 2 and not np.any(np.nan_to_num(d[k])))]
+                  if not missing:
+                      if int(d.get("aux_complete", 1)) == 0:
+                          d["aux_complete"] = np.array(1); d.pop("aux_missing", None); d.pop("aux_gap_reason", None)
+                          tmp = p + ".tmp.npz"; np.savez_compressed(tmp, **d); os.replace(tmp, p)
+                      c["aux_complete"] += 1; continue
+                  for k in missing:
+                      d.pop(k, None)  # never leave a zero array behind a present key
+                  d["aux_complete"] = np.array(0); d["aux_missing"] = np.array(missing); d["aux_gap_reason"] = np.array(REASON)
+                  tmp = p + ".tmp.npz"; np.savez_compressed(tmp, **d); os.replace(tmp, p)
+                  marked.append(os.path.basename(p)[:-4]); c["aux_incomplete"] += 1
+              print(f"{year}: {dict(c)}")
+              json.dump({"year": int(year), "tiles": c["tiles"], "aux_incomplete": marked, "aux_missing_channels": list(AUX),
+                         "reason": REASON}, open(f"/data/manifests/nfi{year}_topup_aux_incomplete.json", "w"), indent=1)
+              if c["S1_MISSING"]:
+                  sys.exit(f"FAIL {year}: S1 missing or empty on {c['S1_MISSING']} tiles")
               PYEOF
               done
               echo "=== done: $(date -u) ==="
@@ -88,9 +97,6 @@ spec:
             limits: {cpu: "8", memory: "32Gi"}
           volumeMounts:
             - {name: d, mountPath: /data}
-            - {name: skg-endpoints, mountPath: /etc/skg, readOnly: true}
       volumes:
         - name: d
           persistentVolumeClaim: {claimName: training-data-cephfs}
-        - name: skg-endpoints
-          secret: {secretName: skg-endpoints}
