@@ -24,7 +24,7 @@ def download_full_vv(item_id: str, date: str, bbox, path: rec.Path) -> None:
     import rasterio
 
     from imint.fetch import _S1_GDAL_ENV
-    from imint.training import mpc_s1, s1_shared
+    from imint.data import mpc_s1, s1_shared
 
     t = time.time()
     (item,) = [it for it in mpc_s1.search_grd_items(f"{date}T00:00:00Z/{date}T23:59:59Z",

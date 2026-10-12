@@ -108,7 +108,7 @@ spec:
               python3 -c "
               import glob, rasterio
               from rasterio.warp import transform_bounds
-              from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+              from imint.data.wekeo_vpp import fetch_vpp_tiles_local
               for year in (2019, 2020):
                   cogs = sorted(glob.glob(f'/data/vpp_wekeo/VPP_{year}_*_SOSD.tif'))
                   assert cogs, f'no {year} SOSD COG fetched'

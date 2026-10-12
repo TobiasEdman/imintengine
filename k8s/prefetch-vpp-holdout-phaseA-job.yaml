@@ -71,7 +71,7 @@ spec:
               python3 -c "
               import glob, rasterio
               from rasterio.warp import transform_bounds
-              from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+              from imint.data.wekeo_vpp import fetch_vpp_tiles_local
               cog = sorted(glob.glob('/data/vpp_wekeo/VPP_*2022*_SOSD.tif'))[0]
               with rasterio.open(cog) as src:
                   w, s, e, n = transform_bounds(src.crs, 'EPSG:3006', *src.bounds)

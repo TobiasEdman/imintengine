@@ -1,7 +1,7 @@
 """CLI: bulk-prefetch HR-VPP VPP COGs from WEkEO to a local cache.
 
 Run once (e.g. on a k8s pod) to populate the WEkEO fallback cache that
-imint.training.cdse_vpp falls back to when the CDSE Sentinel Hub quota
+imint.data.cdse_vpp falls back to when the CDSE Sentinel Hub quota
 is exhausted.
 
     python scripts/prefetch_vpp_wekeo.py \\
@@ -22,7 +22,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from imint.training.wekeo_vpp import prefetch_vpp_cogs
+from imint.data.wekeo_vpp import prefetch_vpp_cogs
 
 
 def main() -> None:

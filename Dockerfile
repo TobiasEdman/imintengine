@@ -4,12 +4,15 @@ FROM python:3.11-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgdal-dev \
-    g++ \
+    g++ git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /wheels
-COPY requirements.txt .
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt
+COPY pyproject.toml README.md LICENSE THIRD_PARTY_LICENSES.md ./
+COPY imint/ imint/
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels \
+    "git+https://github.com/TobiasEdman/des-contracts.git@v0.1.0"
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels --find-links=/wheels ".[api]"
 
 # Stage 2: Runtime — slim image with pre-built wheels
 FROM python:3.11-slim
@@ -23,9 +26,10 @@ WORKDIR /app
 
 # Install from pre-built wheels (fast, no compilation)
 COPY --from=builder /wheels /wheels
-COPY requirements.txt .
+COPY pyproject.toml README.md LICENSE THIRD_PARTY_LICENSES.md ./
+COPY imint/ imint/
 RUN pip install --no-cache-dir --no-index --find-links=/wheels \
-    -r requirements.txt \
+    "imint-engine[api]==0.2.0" \
     && rm -rf /wheels
 
 # Copy application code

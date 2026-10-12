@@ -33,7 +33,7 @@ from pathlib import Path
 # Ensure project root is on sys.path when running as a script
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from imint.training.cdse_vpp import fetch_vpp_tiles
+from imint.data.cdse_vpp import fetch_vpp_tiles
 
 # VPP band names as stored in the .npz tile
 _VPP_CHANNEL_NAMES = ["vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv"]

@@ -124,7 +124,7 @@ spec:
               python3 - <<'PY'
               import glob, numpy as np, rasterio
               from rasterio.warp import transform_bounds
-              from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+              from imint.data.wekeo_vpp import fetch_vpp_tiles_local
               cogs = sorted(glob.glob('/data/vpp_wekeo/VPP_*_SOSD.tif'))
               assert cogs, 'no SOSD COGs downloaded'
               # Locate real data instead of trusting the tile centre, and try

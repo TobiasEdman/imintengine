@@ -49,8 +49,8 @@ from imint.eval.fieldtruth import (  # noqa: E402
     sha256_file, verify_prediction_dump, verify_file_identity, validate_year_balance,
 )
 from scripts.nfi_nmd_coverage import nmd_covered
-from imint.training.class_schema import nmd_raster_to_lulc  # noqa: E402
-from imint.training.unified_schema import nmd19_to_unified  # noqa: E402
+from imint.schema.class_schema import nmd_raster_to_lulc  # noqa: E402
+from imint.schema.unified_schema import nmd19_to_unified  # noqa: E402
 
 
 def sample_nmd_unified(tif: str, easting, northing) -> np.ndarray:

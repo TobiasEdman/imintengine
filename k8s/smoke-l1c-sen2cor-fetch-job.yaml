@@ -74,7 +74,7 @@ spec:
               from pyproj import Transformer
 
               from imint.training.tile_config import TileConfig
-              from imint.training.optimal_fetch import era5_prefilter_dates
+              from imint.data.optimal_fetch import era5_prefilter_dates
               from imint.training.sen2cor_l2a import stac_l1c_scenes
               from imint.training.fetch_spectral import fetch_spectral
 

@@ -35,8 +35,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from imint.training.evaluate import compute_miou  # noqa: E402
-from imint.training.unified_schema import NUM_UNIFIED_CLASSES  # noqa: E402
+from imint.metrics import compute_miou  # noqa: E402
+from imint.schema.unified_schema import NUM_UNIFIED_CLASSES  # noqa: E402
 from gen_ladder_manifests import DISTILL  # noqa: E402
 from infer_tiles import ckpt_sha256  # noqa: E402
 from imint.eval.fieldtruth import sha256_file  # noqa: E402
@@ -219,7 +219,7 @@ def run_fingerprint(tiles: list[str], args) -> dict:
                 Path(__file__).resolve(),
                 Path(__file__).with_name("inference_comparison.py"),
                 Path(__file__).resolve().parents[1] / "imint/training/unified_dataset.py",
-                Path(__file__).resolve().parents[1] / "imint/training/evaluate.py",
+                Path(__file__).resolve().parents[1] / "imint/metrics.py",
             ]
         },
         "model_configs": json.loads(json.dumps(DISTILL)),

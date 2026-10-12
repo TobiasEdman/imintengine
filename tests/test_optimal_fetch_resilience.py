@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from imint.training import optimal_fetch as of
+from imint.data import optimal_fetch as of
 
 
 class _FakeResp:

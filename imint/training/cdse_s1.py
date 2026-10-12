@@ -31,7 +31,7 @@ from datetime import datetime
 
 import numpy as np
 
-from .cdse_vpp import _get_token, _token_lock, _SH_PROCESS_URL
+from imint.data.cdse_vpp import _get_token, _token_lock, _SH_PROCESS_URL
 
 # ── Constants ────────────────────────────────────────────────────────────
 

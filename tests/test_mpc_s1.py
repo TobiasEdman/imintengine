@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from imint.training import mpc_s1, s1_shared
+from imint.data import mpc_s1, s1_shared
 from tests.s1_synthetic import synthetic_grd
 
 _CAL_XML = """<calibration><calibrationVectorList count="2">

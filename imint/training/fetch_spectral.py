@@ -41,8 +41,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from imint.training.cdse_s2 import fetch_s2_scene
-from imint.training.openeo_tile_graph import (
+from imint.data.cdse_s2 import fetch_s2_scene
+from imint.data.openeo_tile_graph import (
     ALL_BANDS,
     ALL_BANDS_INDEX,
     _is_payment_required_error,
@@ -71,7 +71,7 @@ def _split_all_bands(arr: np.ndarray, collect_extra: dict | None) -> np.ndarray:
         collect_extra["b01"] = arr[ALL_BANDS_INDEX["b01"][0]]
         collect_extra["b09"] = arr[ALL_BANDS_INDEX["b09"][0]]
     return spectral
-from imint.training.optimal_fetch import verify_aoi_scl
+from imint.data.optimal_fetch import verify_aoi_scl
 from imint.training.tile_fetch import (
     _CDSE_OPENEO_SEMAPHORE,
     _CDSE_SEMAPHORE,
@@ -355,7 +355,7 @@ def _l1c_sen2cor_allband_cube(
     from pathlib import Path
 
     from imint.fetch import fetch_l1c_safe_by_name
-    from imint.training.optimal_fetch import era5_prefilter_dates
+    from imint.data.optimal_fetch import era5_prefilter_dates
     from imint.training.sen2cor_l2a import (
         read_l2a_allband,
         run_sen2cor,

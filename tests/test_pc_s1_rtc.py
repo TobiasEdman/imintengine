@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 
 from imint.training import pc_s1_rtc as rtc
-from imint.training import s1_shared
+from imint.data import s1_shared
 
 
 # ── Fake STAC item ────────────────────────────────────────────────────────

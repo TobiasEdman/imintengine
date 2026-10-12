@@ -27,7 +27,7 @@ from imint.analyzers import ai2_vessels_s1 as s1
 from imint.analyzers.base import AnalysisResult
 from imint.fetch import S1_HISTORICAL_BAND_KEYS, S1_TARGET_BAND_KEYS
 from imint.job import GeoContext
-from imint.training import mpc_s1
+from imint.data import mpc_s1
 from tests.s1_synthetic import synthetic_grd
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ai2_s1_vessel_crop.npz"
