@@ -22,6 +22,12 @@
 #                      handle is therefore wrapped so that fewer delivered than requested
 #                      blocks raises, and "no block" is only believed when the registry
 #                      itself returned none (Codex review 5496217165).
+#   A swallowed failure on one of several blocks leaves a partially zero embedding
+#   that the first pass flagged usable (any non-zero value passed). Pixels whose
+#   128 channels are all zero can only come from an undelivered or absent block,
+#   so the pre-scan targets such tiles too; after a complete delivery (the handle
+#   did not raise) remaining zero pixels are genuine registry edge gaps and are
+#   recorded per tile as partial_coverage, never hidden.
 #   A usable embedding must also carry the tile's own TESSERA year (the helper's
 #   clamped year-0): a stamp alone does not prove temporal correctness, so a
 #   wrong-year or yearless embedding is re-probed, never kept as already_recovered.
@@ -138,6 +144,11 @@ spec:
                       if self.delivered < self.requested:
                           raise RuntimeError(f"download_incomplete: {self.delivered}/{self.requested} blocks delivered")
 
+              def zero_pixel_fraction(a):
+                  """Share of pixels whose whole embedding vector is zero: undelivered or absent block."""
+                  a = np.asarray(a)
+                  return float(np.mean(~np.any(a != 0, axis=0)))
+
               def rewrite(path, drop=(), **fields):
                   data = dict(np.load(path, allow_pickle=True))
                   for k in drop:
@@ -153,7 +164,7 @@ spec:
                   if not q.endswith(".npz") or q.endswith(".tmp.npz") or q[:-4] in names:
                       continue
                   d, a = load(f"{DIR}/{q}")
-                  if int(d.get("has_tessera", 0)) == 1 and not usable(d, a):
+                  if int(d.get("has_tessera", 0)) == 1 and (not usable(d, a) or zero_pixel_fraction(a) > 0):
                       prescan_invalid.append(q[:-4])
               names = sorted(set(names) | set(prescan_invalid))
               print(f"usable flags on invalid embeddings found by pre-scan: {len(prescan_invalid)}")
@@ -161,7 +172,7 @@ spec:
 
               out = {"recovered": [], "already_recovered": [], "coverage_hole": [], "unresolved": [],
                      "missing_in_copy": [], "prescan_invalid": prescan_invalid}
-              reasons = {}
+              reasons, partial = {}, {}
               gt = None
               for i, name in enumerate(names, 1):
                   path = f"{DIR}/{name}.npz"
@@ -169,7 +180,8 @@ spec:
                       out["missing_in_copy"].append(name); state = "missing_in_copy"
                   else:
                       d, a = load(path)
-                      if int(d.get("has_tessera", 0)) == 1 and str(d.get("tessera_source", "")) == SRC and usable(d, a):
+                      if (int(d.get("has_tessera", 0)) == 1 and str(d.get("tessera_source", "")) == SRC
+                              and usable(d, a) and zero_pixel_fraction(a) == 0):
                           out["already_recovered"].append(name); state = "already_recovered"
                       else:
                           if gt is None:
@@ -184,6 +196,8 @@ spec:
                               if usable(d, a):
                                   rewrite(path, drop=("tessera_gap_reason",), has_tessera=1, tessera_source=SRC)
                                   state = "recovered"
+                                  if (frac := zero_pixel_fraction(a)) > 0:
+                                      partial[name] = frac   # every listed block delivered: a registry edge gap
                               elif arr.ndim >= 2 and np.isfinite(arr).all() and not np.any(arr):
                                   rewrite(path, has_tessera=0, tessera_source=SRC,
                                           tessera_gap_reason=f"tessera_all_zero_in_{SRC}__confirmed_by_single_worker_reprobe__{STAMP}")
@@ -223,6 +237,7 @@ spec:
               print(f"\nresult: {counts}; verify: {dict(chk)}")
               json.dump({"dir": DIR, "source": SRC, "scripts_commit": os.environ["SCRIPTS_COMMIT"],
                          "reprobed": len(names), "counts": counts, **out, "unresolved_reasons": reasons,
+                         "partial_coverage": partial,
                          "verify": dict(chk), "verified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
                         open(REPORT_OUT, "w"), indent=1)
               print(f"report -> {REPORT_OUT}")

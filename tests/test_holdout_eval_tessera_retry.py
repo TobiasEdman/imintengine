@@ -74,11 +74,13 @@ def execute(tmp_path, monkeypatch, outcomes, *, existing=None, report=None, vers
     def enrich(path, gt, skip_existing):
         assert skip_existing is False
         name = Path(path).stem; calls.append(name); outcome = outcomes[name]
-        if outcome in ("ok", "zero", "nan", "inf", "badshape"):
+        if outcome in ("ok", "zero", "nan", "inf", "badshape", "partial"):
             with np.load(path) as z:
                 arrays = {k: z[k] for k in z.files}
             if outcome == "badshape":
                 arrays["tessera"] = np.ones((64, 4, 4), np.float16)
+            elif outcome == "partial":
+                arrays["tessera"] = partial_embedding()
             else:
                 value = {"ok": 1.0, "zero": 0.0, "nan": float("nan"), "inf": float("inf")}[outcome]
                 arrays["tessera"] = np.full((128, 4, 4), value, np.float16)
@@ -205,14 +207,32 @@ def test_prescan_targets_usable_flags_on_nan_or_wrong_year_embeddings(tmp_path, 
     stamped = {"has_tessera": np.array(1), "tessera_source": np.array(SRC)}
     extra = {"nan_tile": {**stamped, "tessera": np.full((128, 4, 4), float("nan"), np.float16), "tessera_year": np.array(2022)},
              "year_tile": {**stamped, "tessera": np.ones((128, 4, 4), np.float16), "tessera_year": np.array(2021)},
-             "good_tile": {**stamped, "tessera": np.ones((128, 4, 4), np.float16), "tessera_year": np.array(2022)}}
+             "good_tile": {**stamped, "tessera": np.ones((128, 4, 4), np.float16), "tessera_year": np.array(2022)},
+             "part_tile": {**stamped, "tessera": partial_embedding(), "tessera_year": np.array(2022)}}
     data, before, calls, code, result = execute(
-        tmp_path, monkeypatch, {"listed": "ok", "nan_tile": "nan", "year_tile": "ok", "good_tile": "unused"},
+        tmp_path, monkeypatch, {"listed": "ok", "nan_tile": "nan", "year_tile": "ok", "part_tile": "ok", "good_tile": "unused"},
         extra_tiles=extra, report={"dir": "/data/holdout_eval_512", "source": SRC, "failed_or_hole": ["listed"]})
-    assert result["prescan_invalid"] == ["nan_tile", "year_tile"] and sorted(calls) == ["listed", "nan_tile", "year_tile"]
-    assert result["recovered"] == ["listed", "year_tile"] and result["unresolved"] == ["nan_tile"] and code != 0
-    assert result["counts"]["targets"] == 3 and flag_and_reason(data, "nan_tile")[0] == 0
+    assert result["prescan_invalid"] == ["nan_tile", "part_tile", "year_tile"]
+    assert sorted(calls) == ["listed", "nan_tile", "part_tile", "year_tile"]
+    assert result["recovered"] == ["listed", "part_tile", "year_tile"] and result["unresolved"] == ["nan_tile"] and code != 0
+    assert result["counts"]["targets"] == 4 and flag_and_reason(data, "nan_tile")[0] == 0
+    assert result["partial_coverage"] == {}   # the re-probe delivered the whole tile
     assert before["good_tile.npz"] == sha(data, "good_tile")
+
+
+def partial_embedding():
+    """One block of a two-block tile missing: a column of pixels whose 128 channels are all zero."""
+    a = np.ones((128, 4, 4), np.float16)
+    a[:, :, 0] = 0
+    return a
+
+
+def test_partial_delivery_after_complete_probe_is_recorded_not_hidden(tmp_path, monkeypatch):
+    data, _, calls, code, result = execute(tmp_path, monkeypatch, {"tile": "partial"})
+    assert calls == ["tile"] and code == 0 and result["recovered"] == ["tile"]
+    assert result["partial_coverage"] == {"tile": 0.25}
+    with np.load(data / "tile.npz") as z:
+        assert z["has_tessera"] == 1 and str(z["tessera_source"]) == SRC
 
 
 def test_wrong_report_root_or_source_is_refused(tmp_path, monkeypatch):
