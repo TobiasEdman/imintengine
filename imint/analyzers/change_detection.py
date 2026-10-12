@@ -376,9 +376,9 @@ class ChangeDetectionAnalyzer(BaseAnalyzer):
             ys, xs = np.where(component)
             bbox = {
                 "y_min": int(ys.min()),
-                "y_max": int(ys.max()),
+                "y_max": int(ys.max()) + 1,
                 "x_min": int(xs.min()),
-                "x_max": int(xs.max()),
+                "x_max": int(xs.max()) + 1,
             }
             regions.append({"bbox": bbox, "pixel_count": pixel_count})
 
