@@ -1,0 +1,337 @@
+{
+ "type": "FeatureCollection",
+ "properties": {
+  "date": "2025-07-19",
+  "bbox": [
+   12.543921,
+   56.001017,
+   12.716079,
+   56.068983
+  ],
+  "crs": "EPSG:32633",
+  "grid_px": [
+   1099,
+   794
+  ],
+  "source": "Microsoft Planetary Computer sentinel-1-grd (GRD DN, uncalibrated)",
+  "sensor": "sentinel-1",
+  "scene_id": "S1C_IW_GRDH_1SDV_20250719T165231_20250719T165256_003292_006A41",
+  "historical_scene_id": "S1C_IW_GRDH_1SDV_20250601T165228_20250601T165253_002592_005606",
+  "scene_time_utc": "2025-07-19T16:52:33.718037Z",
+  "scene_start_utc": "2025-07-19T16:52:31.357769Z",
+  "scene_end_utc": "2025-07-19T16:52:56.356077Z",
+  "valid_frac_target": 1.0,
+  "valid_frac_historical": 1.0,
+  "n_outside_bbox": 0,
+  "detectors": {
+   "ai2_s1": {
+    "name": "imint AI2S1VesselAnalyzer (Swin V2 B x2 + FPN + Faster R-CNN)",
+    "inputs": "GRD DN VV+VH, target + historical scene, AI2 10 m UTM grid",
+    "score_threshold": 0.3,
+    "raw": 16,
+    "after_nms": 7,
+    "infra_filter": {
+     "applied": true,
+     "distance_m": 200.0,
+     "removed": 0,
+     "dataset": "Satlas marine infrastructure (Allen AI, ODC-BY)",
+     "path": "/Users/tobiasedman/.cache/imint/satlas_marine_infrastructure/latest.geojson",
+     "points": 39582,
+     "sha256": "a40bebd54df7cdd4c46d25d4ce2a7035d1f7201c6b23bb7fac7144c1f3266f63"
+    },
+    "attributes": true,
+    "water_mask": "none (Sentinel-1 has no SCL; AI2 applies none)",
+    "count": 7
+   }
+  }
+ },
+ "features": [
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       12.5819381,
+       56.0051224
+      ],
+      [
+       12.5821063,
+       56.0024304
+      ],
+      [
+       12.5869152,
+       56.0025247
+      ],
+      [
+       12.5867473,
+       56.0052166
+      ],
+      [
+       12.5819381,
+       56.0051224
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.6219,
+    "pixel_count": 900,
+    "pred_length_m": 18.6,
+    "pred_width_m": 6.7,
+    "pred_speed_kn": 0.5,
+    "pred_heading_deg": 228.5,
+    "pred_type": "passenger",
+    "pred_type_conf": 0.418
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       12.7036268,
+       56.0041084
+      ],
+      [
+       12.7037866,
+       56.0014146
+      ],
+      [
+       12.7086066,
+       56.0015043
+      ],
+      [
+       12.7084471,
+       56.0041981
+      ],
+      [
+       12.7036268,
+       56.0041084
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.6065,
+    "pixel_count": 903,
+    "pred_length_m": 19.5,
+    "pred_width_m": 6.5,
+    "pred_speed_kn": 4.4,
+    "pred_heading_deg": 357.0,
+    "pred_type": "passenger",
+    "pred_type_conf": 0.366
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       12.675204,
+       56.0246297
+      ],
+      [
+       12.675366,
+       56.0219358
+      ],
+      [
+       12.6801769,
+       56.0220264
+      ],
+      [
+       12.6800153,
+       56.0247203
+      ],
+      [
+       12.675204,
+       56.0246297
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.5936,
+    "pixel_count": 901,
+    "pred_length_m": 21.0,
+    "pred_width_m": 5.9,
+    "pred_speed_kn": 9.2,
+    "pred_heading_deg": 185.9,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.452
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       12.676592,
+       56.0381544
+      ],
+      [
+       12.6767542,
+       56.0354552
+      ],
+      [
+       12.6815659,
+       56.0355458
+      ],
+      [
+       12.681404,
+       56.0382449
+      ],
+      [
+       12.676592,
+       56.0381544
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.5818,
+    "pixel_count": 902,
+    "pred_length_m": 28.7,
+    "pred_width_m": 6.4,
+    "pred_speed_kn": 2.5,
+    "pred_heading_deg": 341.2,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.632
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       12.6818214,
+       56.0424055
+      ],
+      [
+       12.6819828,
+       56.0397136
+      ],
+      [
+       12.6868162,
+       56.0398044
+      ],
+      [
+       12.6866551,
+       56.0424963
+      ],
+      [
+       12.6818214,
+       56.0424055
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.5485,
+    "pixel_count": 904,
+    "pred_length_m": 23.7,
+    "pred_width_m": 9.0,
+    "pred_speed_kn": 4.8,
+    "pred_heading_deg": 185.6,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.63
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       12.6027421,
+       56.0048251
+      ],
+      [
+       12.602909,
+       56.0021298
+      ],
+      [
+       12.6077209,
+       56.0022233
+      ],
+      [
+       12.6075543,
+       56.0049186
+      ],
+      [
+       12.6027421,
+       56.0048251
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.3966,
+    "pixel_count": 902,
+    "pred_length_m": 27.2,
+    "pred_width_m": 6.6,
+    "pred_speed_kn": 5.7,
+    "pred_heading_deg": 1.2,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.6
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       12.666528,
+       56.0350885
+      ],
+      [
+       12.6666904,
+       56.0323988
+      ],
+      [
+       12.6715075,
+       56.0324898
+      ],
+      [
+       12.6713454,
+       56.0351796
+      ],
+      [
+       12.666528,
+       56.0350885
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.3006,
+    "pixel_count": 900,
+    "pred_length_m": 20.8,
+    "pred_width_m": 6.0,
+    "pred_speed_kn": 4.3,
+    "pred_heading_deg": 215.1,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.548
+   }
+  }
+ ]
+}
