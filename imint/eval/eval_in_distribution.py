@@ -288,7 +288,7 @@ def _eval_one_predictor(
         per_tile_metrics.append({
             "tile":   tile_name,
             "n_pix":  n_pix,
-            "mIoU":   tile_iou.get("mean_iou"),
+            "mIoU":   tile_iou.get("miou"),
         })
 
         # ECE reservoir sampling.
