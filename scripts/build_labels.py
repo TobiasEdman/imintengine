@@ -207,7 +207,13 @@ def build_tile_label(
 
     name = os.path.basename(tile_path).replace(".npz", "")
     try:
-        data = dict(np.load(tile_path, allow_pickle=True))
+        # allow_pickle=False is a security boundary, not a convenience:
+        # this runs in a root pod mounting the full shared PVC, and an
+        # object-array member in any tile NPZ would otherwise execute
+        # pickle here. A tile carrying object payloads fails loudly as a
+        # per-tile 'failed' record instead (PR #45 review).
+        with np.load(tile_path, allow_pickle=False) as _z:
+            data = {k: _z[k] for k in _z.files}
 
         # Derive tile size from raster (authoritative) or persisted key
         sp = data.get("spectral", data.get("image"))

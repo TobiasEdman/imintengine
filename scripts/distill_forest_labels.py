@@ -285,9 +285,9 @@ def main() -> None:
     # (pre-2026-08-24 trainer) silently defaults to prithvi_300m — the
     # wrong backbone entirely. Relying on checkpoint recency is an
     # accident, not a contract.
-    model, epoch, miou, model_img_size = infcmp.load_model(
+    model, epoch, miou, model_img_size, _ck_cfg = infcmp.load_model(
         args.checkpoint, device, backbone_name=args.backbone_name,
-        img_size=args.img_size)
+        img_size=args.img_size, return_checkpoint_config=True)
     print(f"[load_model] epoch={epoch} ckpt_mIoU={miou} native_img={model_img_size}")
     if model_img_size != args.img_size:
         print(f"  WARN: --img-size {args.img_size} != model native "
@@ -301,9 +301,11 @@ def main() -> None:
     # lidar_branch conv rejected the tensor. The saved config is the
     # single source of truth; the flag survives only as a fallback for
     # pre-config-era checkpoints.
-    import torch as _torch
-    _cfg = _torch.load(args.checkpoint, map_location="cpu",
-                       weights_only=False).get("config", {})
+    # Config comes from the SAME safe load_model pass above (reviewed
+    # loader: weights_only=True + descriptor sealing) — a second raw
+    # unsafe torch.load on the shared PVC would hand code execution to
+    # any checkpoint writer.
+    _cfg = _ck_cfg or {}
     aux_names = _cfg.get("enabled_aux_names")
     if aux_names:
         aux_names = list(aux_names)

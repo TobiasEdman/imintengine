@@ -1,0 +1,13 @@
+{
+  "id": "0005",
+  "subject": "Publish and pin the seventh crop-distill runtime",
+  "description": "Build the crop-distill image from post-PR49 main, bind its immutable digest and reviewed source in a dedicated PR, obtain Claude exact-SHA review, then launch and verify only the user-authorized seventh Prithvi300m4f crop-distill consumer.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/codex/crop-storage-evidence-r7",
+  "created_at": "2026-09-08T12:01:53Z",
+  "updated_at": "2026-09-08T15:21:44Z",
+  "claimed_by": "te-codex",
+  "runtime": "codex",
+  "claimed_at": "2026-09-08T12:02:47Z"
+}

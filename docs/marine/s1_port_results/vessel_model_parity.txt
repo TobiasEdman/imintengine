@@ -1,0 +1,10 @@
+# scripts/marine/vessel_model_parity.py, 2026-10-10: the shared rslearn blocks
+# (imint/analyzers/ai2_rslearn_blocks.py) against the code before the move.
+# before.npz: PYTHONPATH=<tree before the move>; after.npz: PYTHONPATH=<tree after>;
+# both with --s2-dir = the S2 checkpoints (imint/fm/ai2_vessels/ of the main checkout).
+# Arrays: S2 Swin features (4) and FPN outputs (4), S2 detections at score_thresh 0.5
+# and 0.0 for 2 images (boxes + scores), S2 attribute heads (6), crop_centered (4 cases),
+# S1 detections at 0.05 and 0.0 for 2 images, S1 attribute heads (6).
+$ python scripts/marine/vessel_model_parity.py --compare before.npz after.npz
+40 arrays compared, bit-identical: 40, differing: []
+detections per dumped head output: {'s2_det_thr0.5_0_scores': 0, 's2_det_thr0.5_1_scores': 0, 's2_det_thr0.0_0_scores': 100, 's2_det_thr0.0_1_scores': 100, 's1_det_thr0.05_0_scores': 0, 's1_det_thr0.05_1_scores': 0, 's1_det_thr0.0_0_scores': 100, 's1_det_thr0.0_1_scores': 100}

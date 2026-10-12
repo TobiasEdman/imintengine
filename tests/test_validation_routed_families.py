@@ -267,8 +267,8 @@ def test_load_model_infers_n_aux_from_weights_and_loads_clean(tmp_path):
     ckpt_path = tmp_path / "prithvi10aux.pt"
     torch.save(ckpt, str(ckpt_path))
 
-    import io
     import contextlib
+    import io
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         loaded, epoch, miou, img_size = infcmp.load_model(
@@ -297,8 +297,9 @@ def test_load_model_reconciles_psp_pool_count(tmp_path):
     Prithvi head at img=448 (patch=16 → fm=28 → 5 pools), STRIP pos_embed and
     OMIT img_size from the config so load_model would otherwise default to 224
     (patch=16 → 4 pools). The reconciliation must recover the pool count (5)
-    from the checkpoint's psp_modules indices, correct img_size to a 5-pool
-    value, and load with ZERO non-encoder missing/unexpected keys.
+    from the checkpoint's psp_modules indices and correct img_size to a 5-pool
+    value. Because this synthetic fixture deliberately removes Prithvi's
+    learned ``pos_embed``, the final fail-closed load must then reject it.
     """
     from imint.fm.registry import MODEL_CONFIGS, build_backbone
     from imint.fm.upernet import build_segmentation_from_spec, get_default_pool_sizes
@@ -337,34 +338,33 @@ def test_load_model_reconciles_psp_pool_count(tmp_path):
     ckpt_path = tmp_path / "prithvi448_5pool.pt"
     torch.save(ckpt, str(ckpt_path))
 
-    import io
     import contextlib
+    import io
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        loaded, epoch, miou, out_img_size = infcmp.load_model(
-            str(ckpt_path), device="cpu", backbone_name="prithvi_300m")
+    with pytest.raises(RuntimeError, match=r"missing=1.*encoder\.pos_embed"):
+        with contextlib.redirect_stdout(buf):
+            infcmp.load_model(
+                str(ckpt_path), device="cpu", backbone_name="prithvi_300m")
     log = buf.getvalue()
 
     # The reconciliation corrected img_size to a 5-pool value (448 is the
-    # smallest patch-16 multiple that yields 5 pools).
+    # smallest patch-16 multiple that yields 5 pools) before rejecting the
+    # incomplete checkpoint.
     assert "PSP pool count mismatch" in log, log
-    assert out_img_size == 448
-    assert len(loaded.decoder.psp_modules) == n_pools
-    # Clean load: no non-encoder missing / unexpected keys.
-    assert "WARN state_dict mismatch" not in log, log
+    assert "corrected img_size to 448" in log, log
 
 
-def test_load_model_explicit_img_size_builds_at_that_resolution(tmp_path):
-    """An explicit runtime img_size builds the head at exactly that grid.
+def test_load_model_complete_checkpoint_builds_at_exact_grid(tmp_path):
+    """A complete checkpoint builds and loads at its exact recorded grid.
 
     The pool-count SEARCH picks the *smallest* matching img_size (448 for
     5 pools / patch 16), which fixes the pool structure but NOT the grid_size
     used to reshape encoder tokens — so a model built at 448 would raise on
     504-px chips ("expected N patches"). The validator therefore threads its
-    runtime --img-size into load_model. Given a pos_embed-less checkpoint
-    whose true resolution is 512 (patch16 → 32 grid → still 5 pools), passing
-    img_size=512 must build the head at 512 (not the 448 the search would
-    pick), with no pool-mismatch correction and a clean load.
+    runtime --img-size into load_model. Given a complete checkpoint whose true
+    resolution is 512 (patch16 → 32 grid → still 5 pools), passing img_size=512
+    must build the head at 512 (not the 448 the search would pick), with no
+    pool-mismatch correction and a strict, clean load.
     """
     from imint.fm.registry import MODEL_CONFIGS, build_backbone
     from imint.fm.upernet import build_segmentation_from_spec, get_default_pool_sizes
@@ -380,8 +380,7 @@ def test_load_model_explicit_img_size_builds_at_that_resolution(tmp_path):
         decoder_channels=256, n_aux_channels=10,
         enable_tradslag_head=True, num_tradslag=K_FRAC, device="cpu",
     )
-    sd = {"model." + k: v for k, v in model.state_dict().items()
-          if k != "encoder.pos_embed"}
+    sd = {"model." + k: v for k, v in model.state_dict().items()}
     ckpt = {
         "model_state_dict": sd,
         "config": {
@@ -396,8 +395,8 @@ def test_load_model_explicit_img_size_builds_at_that_resolution(tmp_path):
     ckpt_path = tmp_path / "prithvi512_5pool.pt"
     torch.save(ckpt, str(ckpt_path))
 
-    import io
     import contextlib
+    import io
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         loaded, epoch, miou, out_img_size = infcmp.load_model(
@@ -410,4 +409,3 @@ def test_load_model_explicit_img_size_builds_at_that_resolution(tmp_path):
     # No pool-count correction needed (512 already yields the 5 pools).
     assert "PSP pool count mismatch" not in log, log
     assert len(loaded.decoder.psp_modules) == 5
-    assert "WARN state_dict mismatch" not in log, log

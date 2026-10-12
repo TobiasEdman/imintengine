@@ -1,0 +1,112 @@
+---
+# Job: build NMD2018-based unified v5 labels (23-class incl. LPIS crops
+# + SKS clearcuts, sidecar) for the HOLDOUT set, NON-DESTRUCTIVELY.
+# The holdout tiles' in-tile `label` carries RAW NMD2018 codes (max 128,
+# never unified-mapped at fetch) and no overlay masks — so rung 1's
+# actual training truth (unified v5) cannot be rendered from the tiles.
+# This builds it from the reference data, exactly like the training set.
+# Twin of build-labels-holdout-nmd2023-job.yaml with --nmd-version 2018.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-labels-holdout-nmd2018
+  namespace: prithvi-training-default
+  labels:
+    app: ops
+    purpose: build-labels-holdout-nmd2018
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400   # 4 h cap; holdout is ~1/5 of the training set
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels:
+        app: ops
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: builder
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== Build NMD2018 unified-v5 holdout sidecars — $(date) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              # Pinned top-level builder deps (uv-verified resolvable set for
+              # py3.11/linux); freeze recorded below. PR #45 LOW.
+              pip install -q --no-cache-dir numpy==2.4.6 scipy==1.17.1 rasterio==1.4.4 geopandas==1.1.2 shapely==2.1.2 pyproj==3.7.2 pyarrow==17.0.0 pyyaml==6.0.2
+
+              # PINNED source: the allow_pickle=False builder fix (PR #45).
+              # Re-pin deliberately per re-run.
+              HEAD_SHA=b0781d926a3873395273049421acc7e3c0cabb0a
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$HEAD_SHA"
+              git checkout -q "$HEAD_SHA"
+              echo "PINNED SOURCE: $HEAD_SHA"
+              grep -q 'label-out-dir' scripts/build_labels.py \
+                && grep -q 'nmd-version' scripts/build_labels.py \
+                || { echo "FATAL: build_labels flags missing at pin"; exit 1; }
+
+              N_HOLD=$(ls /data/holdout_val_512/*.npz | wc -l)
+              echo "Inventory: holdout=$N_HOLD | NMD2018=$(ls -lh /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif | awk '{print $5}') | LPIS=$(ls /data/lpis/*.parquet | wc -l) | SKS=$(ls /data/sks/*.parquet | wc -l)"
+
+              mkdir -p /data/ops/deps 2>/dev/null || true
+              pip freeze > /data/ops/deps/build-labels-holdout-nmd2018-$(date -u +%Y%m%dT%H%M%SZ).txt || true
+              python scripts/build_labels.py \
+                --data-dir     /data/holdout_val_512 \
+                --nmd-raster   /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
+                --nmd-version  2018 \
+                --lpis-dir     /data/lpis \
+                --sks-dir      /data/sks \
+                --label-out-dir /data/nmd2018_labels \
+                --workers 16
+
+              echo ""
+              echo "=== QC: holdout sidecar coverage + class sanity ==="
+              python3 - <<'PY'
+              import glob, numpy as np
+              hold = sorted(glob.glob("/data/holdout_val_512/*.npz"))
+              side = {f.rsplit("/", 1)[1] for f in
+                      glob.glob("/data/nmd2018_labels/holdoutval_*.npz")}
+              missing = [h for h in hold
+                         if h.rsplit("/", 1)[1] not in side]
+              print(f"holdout tiles: {len(hold)}, sidecars: {len(side)}, "
+                    f"missing: {len(missing)}")
+              assert not missing, f"missing sidecars: {missing[:5]}"
+              sample = np.load(sorted(glob.glob(
+                  "/data/nmd2018_labels/holdoutval_*.npz"))[0])["label"]
+              assert sample.max() <= 22, f"label out of range: {sample.max()}"
+              import numpy as _np
+              tot = _np.zeros(23, dtype=_np.int64)
+              for f in glob.glob("/data/nmd2018_labels/holdoutval_*.npz"):
+                  lab = np.load(f)["label"]
+                  v, c = _np.unique(lab, return_counts=True)
+                  tot[v] += c
+              crops = int(tot[11:22].sum()); hygge = int(tot[22])
+              print(f"crops px={crops} hygge px={hygge} max={sample.max()}")
+              assert crops > 0, "no LPIS crop classes produced"
+              assert hygge > 0, "no SKS hygge produced"
+              PY
+              echo "=== Done: $(date) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "96Gi"
+            limits:
+              cpu: "16"
+              memory: "96Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

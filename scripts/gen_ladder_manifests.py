@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Generate the label-source ladder manifests (6 backbones × 4 rungs).
+"""Generate the label-source ladder manifests (7 backbones × 4 rungs),
+plus the distill stage (NFI) and the LUCAS crop-distill stage per column.
 
 See docs/experiments/label_source_ladder.md. Every rung is the same trainer on
 the same tiles with the same per-backbone regime; ONLY the label flags change,
@@ -10,14 +11,15 @@ so a rung-to-rung delta attributes to exactly one thing:
     rung 3 nfi        + NFI-distilled forest type  (--label-dir …_distill_…)
     rung 4 tradslag   + Trädslag fraction head     (+ --frac-dir)
 
-Hand-writing 24 near-identical manifests invites exactly the drift this
+Hand-writing 28 near-identical manifests invites exactly the drift this
 experiment cannot tolerate (one stray --epochs and a rung delta becomes an
-early-stopping artefact). So they are generated from the six existing
+early-stopping artefact). So they are generated from the per-column
 per-backbone yamls, which stay the single source of each backbone's regime —
 crop size, aux fusion, ΔSAR, model-specific preflights and all.
 
     python scripts/gen_ladder_manifests.py           # write k8s/ladder/
     python scripts/gen_ladder_manifests.py --check   # verify on disk == generated
+    python scripts/gen_ladder_manifests.py --non-crop-only --check
 
 --check exits non-zero if any file is missing or stale, so CI can pin the
 manifests to this generator.
@@ -29,6 +31,18 @@ import re
 import sys
 from pathlib import Path
 
+if __package__:
+    from . import crop_distill_protocol as crop_protocol
+else:
+    import crop_distill_protocol as crop_protocol
+
+CROP_MODELS = crop_protocol.CROP_MODELS
+CROP_MODEL_UIDS = crop_protocol.CROP_MODEL_UIDS
+PROTOCOL_CROP_INDEX = crop_protocol.CROP_INDEX
+PROTOCOL_CROP_SPLIT = crop_protocol.CROP_SPLIT
+PROTOCOL_CROP_SPLIT_MANIFEST = crop_protocol.CROP_SPLIT_MANIFEST
+TRUTH_COLUMN = crop_protocol.TRUTH_COLUMN
+
 REPO = Path(__file__).resolve().parents[1]
 OUT_DIR = REPO / "k8s" / "ladder"
 
@@ -38,6 +52,12 @@ OUT_DIR = REPO / "k8s" / "ladder"
 # stripped below so the ladder cold-starts like every other column.
 BASES = {
     "prithvi300m": "k8s/train-prithvi300m-job.yaml",
+    # Temporal-frame comparison arm (issue #39): same training flags as
+    # prithvi300m except --enable-multitemporal --num-temporal-frames 4,
+    # but PINNED runtime identity (digest image + baked source SHA) where
+    # the archived 1f arm ran an earlier one — an exploratory historical
+    # comparison, not a runtime-identical controlled ablation (PR #42).
+    "prithvi300m4f": "k8s/train-prithvi300m-4f-job.yaml",
     "prithvi600m": "k8s/train-v8b-nmd2023-long-job.yaml",
     "croma": "k8s/train-croma-job.yaml",
     "terramind": "k8s/train-terramind-job.yaml",
@@ -70,37 +90,252 @@ RUNGS = {
 # BUILT at, which for clay/croma is the difference between features and
 # garbage. sar_cohort marks the two columns whose trainable tiles are the
 # s1_vv_vh subset; their dense pass pre-filters to exactly that cohort.
-DISTILL = {
-    "prithvi300m": {"img_size": 496, "backbone": "prithvi_300m"},
-    "prithvi600m": {"img_size": 504, "backbone": "prithvi_600m"},
-    "croma": {"img_size": 504, "backbone": "croma_base",
-              "require_keys": ("s1_vv_vh",),
-              "extra_setup": (
-                  "git clone --depth 1 https://github.com/antofuller/CROMA "
-                  "/workspace/CROMA && pip install --quiet --no-cache-dir "
-                  "-e /workspace/CROMA || true")},
-    "terramind": {"img_size": 496, "backbone": "terramind_v1_base",
-                  "require_keys": ("s1_vv_vh",),
-                  "extra_setup": "pip install --quiet --no-cache-dir terratorch"},
-    "tessera": {"img_size": 504, "backbone": "tessera_v1",
-                # The dense pass must mirror the TRAINING cohort: the
-                # dataset drops tessera-embedding-less tiles at index
-                # construction (unified_dataset._MODEL_REQUIRED_TILE_KEYS
-                # + the runtime required_key skip), so training ran on
-                # 7874 tiles while the unfiltered dense pass walked 7882
-                # and its cohort gate refused on the 8 stragglers —
-                # correctly, but for a cohort nobody trains on.
-                "require_keys": ("tessera",)},
-    "clay": {"img_size": 504, "backbone": "clay_v1_5",
-             "extra_setup": ("pip install --quiet --no-cache-dir "
-                             "\"git+https://github.com/Clay-foundation/model.git\"")},
+_LEGACY_DISTILL_SETUP = {
+    # CROMA ships plain modules without packaging — pip install -e cannot
+    # work (no setup.py/pyproject); the loader's contract is use_croma.py on
+    # PYTHONPATH, same as the training manifests. No error-swallowing: a
+    # hidden clone failure resurfaces as ModuleNotFoundError mid-run.
+    "croma": (
+        "git clone --depth 1 https://github.com/antofuller/CROMA "
+        "/workspace/CROMA && "
+        "export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}"
+    ),
+    "terramind": "pip install --quiet --no-cache-dir terratorch",
+    "clay": (
+        "pip install --quiet --no-cache-dir "
+        "\"git+https://github.com/Clay-foundation/model.git\""
+    ),
 }
+DISTILL = {
+    model: {
+        "img_size": protocol.img_size,
+        "backbone": protocol.backbone,
+        **(
+            {"require_keys": protocol.required_npz_keys}
+            if protocol.required_npz_keys
+            else {}
+        ),
+        **(
+            {"extra_setup": _LEGACY_DISTILL_SETUP[model]}
+            if model in _LEGACY_DISTILL_SETUP
+            else {}
+        ),
+    }
+    for model, protocol in CROP_MODELS.items()
+}
+# prithvi300m4f entered CROP_MODELS 2026-09-08 (Tobias-approved seventh
+# column — unmix scale from temporality in the R5 table), so the DISTILL
+# comprehension above covers it; PR #42's manual ladder-only entry is gone
+# and its exclusion invariant flipped to inclusion in the same change.
+# 4f distill runs with pinned source identity: re-pin deliberately when
+# re-running the column. Pin at the both-spellings loader fix (#49) —
+# newer than #45's eb74d05d and required for cross-numpy checkpoints.
+PRITHVI300M4F_SOURCE_GIT_SHA = "9750fa917ec95962d59c3468ffaa521bb9e7e01c"
+
+# LUCAS crop-distill stage — the R5 evidence pass. Per column: extract
+# features at the frozen LUCAS crop distill points, score the pinned-
+# protocol crop OOF. The numbers decide WHETHER a rung 5 exists
+# [user-stated 2026-08-31: distillability before any retraining], so this
+# stage deliberately writes NO _GATE_OK and no queue rung consumes it —
+# rung 5 must not auto-train off these files before the numbers are read.
+CROP_TRUTH_COL = TRUTH_COLUMN
+CROP_INDEX = str(PROTOCOL_CROP_INDEX)
+CROP_SPLIT = str(PROTOCOL_CROP_SPLIT)
+CROP_SPLIT_MANIFEST = str(PROTOCOL_CROP_SPLIT_MANIFEST)
+
+# Multi-phase bootstrap for immutable Pod code. Payload commit A builds the
+# image. Later reviewed commits pin A/image, then the read-only source-access
+# plan, the metadata-only apply completion, and finally the frozen split. Each
+# downstream renderer refuses until its immediate upstream evidence is pinned.
+#
+# Replaced with the real Commit-A identities before generator output is
+# committed. The impossible all-zero sentinels make an accidental partial
+# bootstrap fail tests and deployment review loudly.
+CROP_DISTILL_SOURCE_GIT_SHA = "7d935b9a0210f9a88b641ef24e7d83206c2fdcb0"
+CROP_DISTILL_IMAGE = (
+    "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+    "25919e5cc0bc5ccba770b80f5906d0721cf47a779e3b4591a07cf5c5f3dc3599"
+)
+CROP_SOURCE_ACCESS_SOURCE_GIT_SHA = (
+    "c6ad69242e7239662461bf7ff0b6bcd4d072509a"
+)
+CROP_SOURCE_ACCESS_IMAGE = (
+    "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+    "7c4fe00f9df2a28caaf05f006f2c567ffb912d514bff13289ef6ec3dd039ba7c"
+)
+CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA = (
+    "e2d9fd79c2e279c74872d7cc59b2dc695a8b4a07"
+)
+CROP_SOURCE_FREEZE_OPERATOR_IMAGE = (
+    "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+    "d7f8889bef45ce73b36d1ed7be2db6a6739ddb7f265b2564b2d26b3e09024164"
+)
+CROP_SOURCE_FREEZE_OPERATOR_RUN_ID = "lucas-crop-attempt-16-verify"
+CROP_SOURCE_FREEZE_RECOVERY_RUN_ID = "lucas-crop-attempt-15-verify"
+CROP_SOURCE_FREEZE_RECOVERY_JOB_NAME = (
+    "ladder-crop-source-freeze-recovery-attempt-15"
+)
+CROP_DISTILL_SPLIT_SOURCE_GIT_SHA = (
+    "c6ad69242e7239662461bf7ff0b6bcd4d072509a"
+)
+CROP_SOURCE_ACCESS_INDEX_SHA256 = crop_protocol.SOURCE_ACCESS_INDEX_SHA256
+CROP_SOURCE_ACCESS_PLAN_SHA256 = (
+    "d8cdd10b8e9e2668aadafec1aef1a87f5067c2f414e9453e4ce33c196bc04e98"
+)
+CROP_SOURCE_ACCESS_PLAN_POD_UID = "fe949aaa-8191-4c03-8989-2b3516a2e2a7"
+CROP_SOURCE_ACCESS_COMPLETION_SHA256 = (
+    "4cbce71f3224c4e6170b2113c774104ab96a6ef14b4e67d51ab0ddf03354aa97"
+)
+CROP_SOURCE_ACCESS_COMPLETION_POD_UID = "2d193bf7-2217-4878-b2e5-f1367e7137b3"
+CROP_DISTILL_SPLIT_MANIFEST_SHA256 = (
+    "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed"
+)
+_CROP_DISTILL_IMAGE_RE = re.compile(
+    r"^ghcr\.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+    r"(?P<digest>[0-9a-f]{64})$"
+)
+
+
+def _validate_runtime_identity(
+    source_git_sha: str,
+    image: str,
+    *,
+    source_label: str,
+    image_label: str,
+) -> None:
+    """Refuse to render a Job against an unpinned source or image."""
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", source_git_sha) is None
+        or source_git_sha == "0" * 40
+    ):
+        raise ValueError(
+            f"{source_label} must be one nonzero, lowercase, full 40-hex commit"
+        )
+    image_match = _CROP_DISTILL_IMAGE_RE.fullmatch(image)
+    if image_match is None or image_match.group("digest") == "0" * 64:
+        raise ValueError(
+            f"{image_label} must be "
+            "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+            "<64 lowercase nonzero hex>"
+        )
+
+
+def _validate_crop_distill_runtime_identity() -> None:
+    _validate_runtime_identity(
+        CROP_DISTILL_SOURCE_GIT_SHA,
+        CROP_DISTILL_IMAGE,
+        source_label="CROP_DISTILL_SOURCE_GIT_SHA",
+        image_label="CROP_DISTILL_IMAGE",
+    )
+
+
+def _validate_source_access_runtime_identity() -> None:
+    _validate_runtime_identity(
+        CROP_SOURCE_ACCESS_SOURCE_GIT_SHA,
+        CROP_SOURCE_ACCESS_IMAGE,
+        source_label="CROP_SOURCE_ACCESS_SOURCE_GIT_SHA",
+        image_label="CROP_SOURCE_ACCESS_IMAGE",
+    )
+
+
+def _validate_freeze_operator_runtime_identity() -> None:
+    _validate_runtime_identity(
+        CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA,
+        CROP_SOURCE_FREEZE_OPERATOR_IMAGE,
+        source_label="CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA",
+        image_label="CROP_SOURCE_FREEZE_OPERATOR_IMAGE",
+    )
+
+
+def _validate_split_source_authority() -> None:
+    crop_protocol.require_source_git_sha(
+        CROP_DISTILL_SPLIT_SOURCE_GIT_SHA,
+        "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA",
+    )
+
+
+def _validate_crop_source_index_identity() -> None:
+    if CROP_SOURCE_ACCESS_INDEX_SHA256 != crop_protocol.SOURCE_ACCESS_INDEX_SHA256:
+        raise ValueError(
+            "CROP_SOURCE_ACCESS_INDEX_SHA256 must equal the baked producer-index "
+            "authority"
+        )
+
+
+def _validate_source_access_plan_authority() -> None:
+    _validate_source_access_runtime_identity()
+    _validate_crop_source_index_identity()
+    crop_protocol.require_source_access_sha256(
+        CROP_SOURCE_ACCESS_PLAN_SHA256,
+        "CROP_SOURCE_ACCESS_PLAN_SHA256",
+    )
+    crop_protocol.require_source_access_run_id(
+        CROP_SOURCE_ACCESS_PLAN_POD_UID,
+        "CROP_SOURCE_ACCESS_PLAN_POD_UID",
+    )
+
+
+def _validate_source_access_completion_authority() -> None:
+    _validate_source_access_plan_authority()
+    crop_protocol.require_source_access_sha256(
+        CROP_SOURCE_ACCESS_COMPLETION_SHA256,
+        "CROP_SOURCE_ACCESS_COMPLETION_SHA256",
+    )
+    crop_protocol.require_source_access_run_id(
+        CROP_SOURCE_ACCESS_COMPLETION_POD_UID,
+        "CROP_SOURCE_ACCESS_COMPLETION_POD_UID",
+    )
+
+
+def _validate_crop_distill_identity() -> None:
+    """Refuse crop consumers until Git pins the frozen split manifest."""
+    _validate_crop_distill_runtime_identity()
+    _validate_source_access_completion_authority()
+    _validate_split_source_authority()
+    if (
+        re.fullmatch(
+            r"[0-9a-f]{64}", CROP_DISTILL_SPLIT_MANIFEST_SHA256
+        )
+        is None
+        or CROP_DISTILL_SPLIT_MANIFEST_SHA256 == "0" * 64
+    ):
+        raise ValueError(
+            "CROP_DISTILL_SPLIT_MANIFEST_SHA256 must be one nonzero, "
+            "lowercase, full 64-hex digest from the reviewed split freeze"
+        )
+    try:
+        crop_protocol.validate_model_uid_map(CROP_MODEL_UIDS)
+    except ValueError as exc:
+        raise ValueError(f"CROP_MODEL_UIDS invalid: {exc}") from exc
+
+# Exact byte identities measured on the ladder PVC.  The extractor hashes and
+# deserializes each checkpoint through one descriptor; terminal provenance
+# binds that authenticated expected identity without reopening 2.7 GB files.
+CROP_CHECKPOINTS = {
+    model: {
+        "size": protocol.checkpoint_size,
+        "sha256": protocol.checkpoint_sha256,
+    }
+    for model, protocol in CROP_MODELS.items()
+}
+
+# Digest-pinned, never a mutable tag (repo zero-tolerance rule: a tag can
+# be repointed under the pipeline's feet). Manifest-list digest for
+# python:3.11-slim, resolved 2026-09-01 from registry-1.docker.io.
+PYTHON_IMAGE = ("python:3.11-slim@sha256:"
+                "d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0")
+
+# Deps for the legacy NFI-distill/pinned-plots Jobs. The LUCAS crop stage uses
+# CROP_DISTILL_IMAGE instead: its complete model-loading stack is hash-locked
+# and baked once, so staggered columns cannot drift at all.
+SCORING_PINS = "numpy==1.26.4 pandas==2.2.2 pyarrow==17.0.0"
+SKLEARN_PIN = "scikit-learn==1.5.1"
 
 # One Job per column, three script steps + the distillability OOF, all
 # reading/writing the shared cephfs PVC. Runs on the 2080ti pool so the
 # distill stage NEVER competes with the H100 memory quota the ladder
 # trainings are packed against. The protocol constants (folds, head, seed,
-# test-frac) are pinned HERE, once, for all six columns — that uniformity
+# test-frac) are pinned HERE, once, for all seven columns — that uniformity
 # IS the distillability experiment; see docs/experiments/
 # ladder_distill_stage.md.
 DISTILL_TEMPLATE = """apiVersion: batch/v1
@@ -126,7 +361,7 @@ spec:
         accelerator: nvidia-gtx-2080ti
       containers:
         - name: distill
-          image: python:3.11-slim
+          image: {python_image}
           command:
             - bash
             - -c
@@ -135,19 +370,10 @@ spec:
               export PYTHONUNBUFFERED=1
               echo "=== ladder distill stage — {model} ==="
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
-              pip install --quiet --no-cache-dir torch torchvision \\
-                --index-url https://download.pytorch.org/whl/cu121
-              pip install --quiet --no-cache-dir \\
-                timm einops numpy Pillow scipy scikit-learn huggingface_hub \\
-                pandas pyarrow rasterio pyproj
+              {dep_install}
 
               mkdir -p /workspace && cd /workspace
-              BRANCH=main
-              git clone --depth 1 --branch "$BRANCH" \\
-                https://github.com/TobiasEdman/ImintEngine.git imintengine
-              cd /workspace/imintengine
-              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
-              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
+              {source_setup}
               # Per-column backbone deps — the r2 checkpoints cannot even
               # LOAD without them (terramind: terratorch ImportError killed
               # the first submission; croma/clay: their loader packages).
@@ -166,7 +392,7 @@ spec:
                 --plot-index /cephfs/nfi/nfi_index_unified_v2_512.parquet \\
                 --img-size {img_size} \\
                 --backbone-name {backbone} \\
-                --enable-markfukt \\
+                --enable-markfukt \\{extract_filter}
                 --out /cephfs/distill/heads/{model}_r2_plot_features.parquet \\
                 --device cuda
 
@@ -211,8 +437,14 @@ spec:
               valueFrom:
                 secretKeyRef: {{ name: hf-token, key: token, optional: true }}
           resources:
-            requests: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
-            limits: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
           volumeMounts:
             - {{ name: cephfs, mountPath: /cephfs }}
             # Same PVC, second mount point. The NFI plot index stores
@@ -225,6 +457,902 @@ spec:
       volumes:
         - name: cephfs
           persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+"""
+
+CROP_DISTILL_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-crop-distill-{model}
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-distill, model: {model} }}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-distill, model: {model} }}
+    spec:
+      activeDeadlineSeconds: 43200
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {run_uid}
+        runAsGroup: 2000
+        seccompProfile: {{ type: RuntimeDefault }}
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: crop-distill
+          image: {crop_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/python
+          args:
+            - /opt/imintengine/scripts/run_crop_distill_job.py
+            - --model
+            - {model}
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{crop_image}"
+            - name: CROP_DISTILL_SPLIT_MANIFEST_SHA256
+              value: "{split_manifest_sha256}"
+            - name: CROP_DISTILL_SPLIT_SOURCE_GIT_SHA
+              value: "{split_source_git_sha}"
+            - name: HOME
+              value: /work/home
+            - name: TMPDIR
+              value: /work/tmp
+            # torch >= 2.10's inductor resolves a cache dir via
+            # getpass.getuser(), which falls back to pwd.getpwuid() when no
+            # LOGNAME/USER env exists — and the numeric runtime UIDs have no
+            # passwd entry in the image (KeyError killed the seventh run at
+            # extract-features). getpass reads these envs FIRST; the explicit
+            # cache dir under the writable workdir is belt and braces.
+            - name: LOGNAME
+              value: crop-distill
+            - name: USER
+              value: crop-distill
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /work/torch-inductor
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {{ drop: ["ALL"] }}
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: {run_uid}
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "4", memory: "24Gi", ephemeral-storage: "8Gi", nvidia.com/gpu: "1" }}
+            limits: {{ cpu: "4", memory: "24Gi", ephemeral-storage: "8Gi", nvidia.com/gpu: "1" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /cephfs/unified_v2_512
+              subPath: unified_v2_512
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/checkpoints/ladder/{model}_r2
+              subPath: checkpoints/ladder/{model}_r2
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/distill/crop_split
+              subPath: distill/crop_split/crop_consumer
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/crop-heads
+              subPath: {head_subpath}
+            - name: training-data-cephfs
+              mountPath: /cephfs/crop-records
+              subPath: {record_subpath}
+            - name: work
+              mountPath: /work
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: work
+          emptyDir:
+            sizeLimit: 8Gi
+"""
+
+CROP_STORAGE_PREP_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-crop-distill-storage-prep
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-distill-storage }}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-distill-storage }}
+    spec:
+      activeDeadlineSeconds: 600
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 2000
+        seccompProfile: {{ type: RuntimeDefault }}
+      containers:
+        - name: storage-prep
+          image: {crop_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/python
+          args:
+            - /opt/imintengine/scripts/prepare_crop_distill_storage.py
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{crop_image}"
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "500m", memory: "256Mi" }}
+            limits: {{ cpu: "500m", memory: "256Mi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /cephfs/distill
+              subPath: distill
+            - name: training-data-cephfs
+              mountPath: /cephfs/ops
+              subPath: ops
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+"""
+
+CROP_SOURCE_ACCESS_PLAN_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-crop-source-access-plan
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-access-plan }}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-source-access-plan }}
+    spec:
+      activeDeadlineSeconds: 7200
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 2000
+        seccompProfile: {{ type: RuntimeDefault }}
+      containers:
+        - name: source-access-plan
+          image: {crop_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/venvs/scoring/bin/python
+          args:
+            - /opt/imintengine/scripts/crop_source_access.py
+            - plan
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{crop_image}"
+            - name: CROP_SOURCE_ACCESS_INDEX_SHA256
+              value: "{source_index_sha256}"
+            - name: CROP_SOURCE_FREEZE_LEASE_PATH
+              value: /var/run/crop-source-freeze/lease.json
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {{ drop: ["ALL"] }}
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "2", memory: "4Gi" }}
+            limits: {{ cpu: "2", memory: "4Gi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /cephfs/unified_v2_512
+              subPath: unified_v2_512
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/lucas/lucas_tile_index.parquet
+              subPath: lucas/lucas_tile_index.parquet
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-plan-records
+              subPath: ops/crop-distill/source-access/plan
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-lock
+              subPath: ops/crop-distill/source-access/locks
+            - name: crop-source-freeze-lease
+              mountPath: /var/run/crop-source-freeze
+              readOnly: true
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: crop-source-freeze-lease
+          configMap:
+            name: crop-source-freeze-lease
+            optional: false
+            items:
+              - key: lease.json
+                path: lease.json
+"""
+
+CROP_SOURCE_ACCESS_APPLY_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-crop-source-access-apply
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-access-apply }}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-source-access-apply }}
+    spec:
+      activeDeadlineSeconds: 7200
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 2000
+        seccompProfile: {{ type: RuntimeDefault }}
+      containers:
+        - name: source-access-apply
+          image: {crop_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/venvs/scoring/bin/python
+          args:
+            - /opt/imintengine/scripts/crop_source_access.py
+            - apply
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{crop_image}"
+            - name: CROP_SOURCE_ACCESS_INDEX_SHA256
+              value: "{source_index_sha256}"
+            - name: CROP_SOURCE_ACCESS_PLAN_SHA256
+              value: "{plan_sha256}"
+            - name: CROP_SOURCE_ACCESS_PLAN_POD_UID
+              value: "{plan_pod_uid}"
+            - name: CROP_SOURCE_FREEZE_LEASE_PATH
+              value: /var/run/crop-source-freeze/lease.json
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "2", memory: "4Gi" }}
+            limits: {{ cpu: "2", memory: "4Gi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /cephfs/unified_v2_512
+              subPath: unified_v2_512
+            - name: training-data-cephfs
+              mountPath: /cephfs/lucas/lucas_tile_index.parquet
+              subPath: lucas/lucas_tile_index.parquet
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-plan/plan.json
+              subPath: ops/crop-distill/source-access/plan/{plan_pod_uid}/plan.json
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-apply-records
+              subPath: ops/crop-distill/source-access/apply
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-lock
+              subPath: ops/crop-distill/source-access/locks
+            - name: crop-source-freeze-lease
+              mountPath: /var/run/crop-source-freeze
+              readOnly: true
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: crop-source-freeze-lease
+          configMap:
+            name: crop-source-freeze-lease
+            optional: false
+            items:
+              - key: lease.json
+                path: lease.json
+"""
+
+CROP_SOURCE_FREEZE_OPERATOR_TEMPLATE = """apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ladder-crop-source-freeze-operator
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ladder-crop-source-freeze-operator
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "replicationcontrollers"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["crop-source-freeze-lease"]
+    verbs: ["get", "update"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    resourceNames: ["ladder-queue", "gpu-reaper", "campaign-orchestrator"]
+    verbs: ["update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ladder-crop-source-freeze-operator
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
+subjects:
+  - kind: ServiceAccount
+    name: ladder-crop-source-freeze-operator
+    namespace: prithvi-training-default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ladder-crop-source-freeze-operator
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-crop-source-freeze-operator
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-operator }}
+    spec:
+      activeDeadlineSeconds: 43200
+      automountServiceAccountToken: false
+      serviceAccountName: ladder-crop-source-freeze-operator
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        seccompProfile: {{ type: RuntimeDefault }}
+      initContainers:
+        - name: prepare-state
+          image: {operator_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/python
+          args:
+            - /opt/imintengine/scripts/crop_source_freeze_operator.py
+            - prepare
+            - --state-parent
+            - /state-parent
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{operator_source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{operator_image}"
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "500m", memory: "256Mi" }}
+            limits: {{ cpu: "500m", memory: "256Mi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /state-parent
+              subPath: ops/crop-distill/source-access
+      containers:
+        - name: freeze-operator
+          image: {operator_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/python
+          args:
+            - /opt/imintengine/scripts/crop_source_freeze_operator.py
+            - serve
+            - --state-dir
+            - /state
+            - --run-id
+            - {run_id}
+            - --namespace
+            - prithvi-training-default
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{operator_source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{operator_image}"
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {{ drop: ["ALL"] }}
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 2000
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "500m", memory: "256Mi" }}
+            limits: {{ cpu: "500m", memory: "256Mi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /state
+              subPath: ops/crop-distill/source-access/crop-source-freeze
+            - name: tmp
+              mountPath: /tmp
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: kube-api-access
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  expirationSeconds: 3600
+                  path: token
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
+"""
+
+CROP_SOURCE_FREEZE_RECOVERY_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {job_name}
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-recovery }}
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-source-freeze-recovery }}
+    spec:
+      activeDeadlineSeconds: 900
+      automountServiceAccountToken: false
+      serviceAccountName: ladder-crop-source-freeze-operator
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        seccompProfile: {{ type: RuntimeDefault }}
+      containers:
+        - name: exact-restore
+          image: {operator_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/python
+          args:
+            - -c
+            - |
+              from pathlib import Path
+              import os
+              import sys
+              sys.path.insert(0, "/opt/imintengine/scripts")
+              import crop_source_freeze as freeze
+              import crop_source_freeze_operator as operator
+              if (os.geteuid(), os.getegid()) != (2000, 2000):
+                  raise RuntimeError("recovery requires UID:GID 2000:2000")
+              operator._verify_runtime_identity()
+              operator._require_state_root(Path("/state"))
+              operator._install_in_cluster_kubeconfig()
+              client = freeze.Kubectl(
+                  context="", namespace="prithvi-training-default"
+              )
+              old_operator_objects = []
+              for item in client.inventory():
+                  metadata = item.get("metadata", {{}})
+                  labels = metadata.get("labels", {{}})
+                  owner_references = metadata.get("ownerReferences", [])
+                  is_old_job = (
+                      item.get("kind") == "Job"
+                      and metadata.get("name")
+                      == "ladder-crop-source-freeze-operator"
+                  )
+                  is_old_pod = item.get("kind") == "Pod" and (
+                      metadata.get("name", "").startswith(
+                          "ladder-crop-source-freeze-operator-"
+                      )
+                      or labels.get("job-name")
+                      == "ladder-crop-source-freeze-operator"
+                      or any(
+                          reference.get("kind") == "Job"
+                          and reference.get("name")
+                          == "ladder-crop-source-freeze-operator"
+                          and reference.get("controller") is True
+                          for reference in owner_references
+                      )
+                  )
+                  if is_old_job or is_old_pod:
+                      old_operator_objects.append(
+                          f"{{item.get('kind')}}/{{metadata.get('name')}}"
+                      )
+              if old_operator_objects:
+                  raise RuntimeError(
+                      "old freeze operator still exists: "
+                      + ", ".join(sorted(old_operator_objects))
+                  )
+              freeze.restore(
+                  client,
+                  run_dir=Path("/state") / "{run_id}",
+                  timeout_seconds=60.0,
+              )
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{operator_source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{operator_image}"
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {{ drop: ["ALL"] }}
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 2000
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "500m", memory: "256Mi" }}
+            limits: {{ cpu: "500m", memory: "256Mi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /state
+              subPath: ops/crop-distill/source-access/crop-source-freeze
+            - name: tmp
+              mountPath: /tmp
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: kube-api-access
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  expirationSeconds: 600
+                  path: token
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
+"""
+
+CROP_DENY_EGRESS_TEMPLATE = """apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ladder-crop-distill-deny-egress
+  namespace: prithvi-training-default
+  labels: { app: unified-training, purpose: ladder-crop-distill-security }
+spec:
+  podSelector:
+    matchExpressions:
+      - key: purpose
+        operator: In
+        values:
+          - ladder-crop-distill
+          - ladder-crop-distill-storage
+          - ladder-crop-source-access-plan
+          - ladder-crop-source-access-apply
+  policyTypes:
+    - Egress
+  egress: []
+"""
+
+# Per-stage source anchor [agreed with Codex 2026-09-02]: the job runs
+# EXACTLY this commit — the one whose payload (ladder_inference_matrix.py)
+# was reviewed. A payload change requires a deliberate constant bump in a
+# reviewed commit; ordinary generator/docs changes never move the anchor.
+INFERENCE_MATRIX_SOURCE_GIT_SHA = "9750fa917ec95962d59c3468ffaa521bb9e7e01c"
+
+
+def _require_full_sha(sha: str, name: str) -> str:
+    """Fail-CLOSED at render time — a test-only guard lets a zero or
+    abbreviated SHA reach the cluster from any path that skips pytest."""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha) or sha == "0" * 40:
+        raise ValueError(f"{name} must be a full lowercase 40-hex commit "
+                         f"SHA, got {sha!r}")
+    return sha
+
+INFERENCE_MATRIX_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-inference-matrix
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-inference-matrix, model: shared }}
+spec:
+  backoffLimit: 0
+  # Budget: <=24 cells x (model load + 10 tile forwards) on a 2080ti,
+  # dominated by per-cell model loads (HF weight downloads on first run).
+  # 6 h caps runaway only; idempotent skip makes re-runs minutes.
+  activeDeadlineSeconds: 21600
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-inference-matrix, model: shared }}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: inference-matrix
+          image: {python_image}
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== ladder inference matrix — all completed cells ==="
+              RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$
+              mkdir -p /cephfs/ops
+              trap 'rc=$?; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run=$RUN_ID job=ladder-inference-matrix HEAD=${{HEAD_SHA:-unknown}} ${{ARTIFACTS:-artifacts=none}} rc=$rc status=$([ "$rc" -eq 0 ] && echo OK || echo FAIL)" >> /cephfs/ops/crop_distill.log' EXIT
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              {matrix_deps}
+              # BAKED source anchor: the payload commit whose script was
+              # reviewed. No runtime resolution of any mutable ref — a
+              # re-run months from now executes byte-identical code, and
+              # the run record can never claim code the pod did not run.
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              HEAD_SHA={source_sha}
+              git fetch -q --depth 1 origin "$HEAD_SHA"
+              git checkout -q "$HEAD_SHA"
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "PINNED SOURCE: $HEAD_SHA"
+              # ONE pod loads every backbone family, so it needs the union
+              # of the per-column loader deps.
+              {extra_setup_all}
+              mkdir -p /cephfs/ops/deps
+              pip freeze > /cephfs/ops/deps/ladder-inference-matrix-$RUN_ID.txt
+
+              python3 scripts/ladder_inference_matrix.py \\
+                --holdout-dir /cephfs/holdout_val_512 \\
+                --checkpoint-root /cephfs/checkpoints/ladder \\
+                --out-dir /cephfs/ladder_inference \\
+                --git-sha "$HEAD_SHA" \\
+                --device cuda
+
+              MATRIX_SHA=$(sha256sum /cephfs/ladder_inference/matrix.json | cut -d" " -f1)
+              echo "$MATRIX_SHA" | grep -qE "^[0-9a-f]{{64}}$"
+              ARTIFACTS="matrix_sha256=$MATRIX_SHA"
+              echo "=== inference matrix complete ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef: {{ name: hf-token, key: token, optional: true }}
+          resources:
+            requests: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+            limits: {{ cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }}
+          volumeMounts:
+            - {{ name: cephfs, mountPath: /cephfs }}
+            - {{ name: cephfs, mountPath: /data }}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+"""
+
+LUCAS_SPLIT_TEMPLATE = """apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ladder-lucas-crop-split
+  namespace: prithvi-training-default
+  labels: {{ app: unified-training, purpose: ladder-crop-distill, model: shared }}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {{ app: unified-training, purpose: ladder-crop-distill, model: shared }}
+    spec:
+      activeDeadlineSeconds: 21600
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile: {{ type: RuntimeDefault }}
+      containers:
+        - name: split
+          image: {crop_image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/venvs/scoring/bin/python
+          args:
+            - /opt/imintengine/scripts/run_lucas_crop_split_job.py
+          env:
+            - name: CROP_DISTILL_SOURCE_GIT_SHA
+              value: "{source_git_sha}"
+            - name: CROP_DISTILL_IMAGE
+              value: "{crop_image}"
+            - name: CROP_SOURCE_ACCESS_PLAN_SHA256
+              value: "{source_access_plan_sha256}"
+            - name: CROP_SOURCE_ACCESS_PLAN_POD_UID
+              value: "{source_access_plan_pod_uid}"
+            - name: CROP_SOURCE_ACCESS_COMPLETION_SHA256
+              value: "{source_access_completion_sha256}"
+            - name: CROP_SOURCE_ACCESS_COMPLETION_POD_UID
+              value: "{source_access_completion_pod_uid}"
+            - name: CROP_SOURCE_ACCESS_SOURCE_GIT_SHA
+              value: "{source_access_source_git_sha}"
+            - name: CROP_SOURCE_ACCESS_IMAGE
+              value: "{source_access_image}"
+            - name: CROP_DISTILL_SPLIT_SOURCE_GIT_SHA
+              value: "{split_source_git_sha}"
+            - name: CROP_SOURCE_FREEZE_LEASE_PATH
+              value: /var/run/crop-source-freeze/lease.json
+            - name: HOME
+              value: /work/home
+            - name: TMPDIR
+              value: /work/tmp
+            # torch >= 2.10's inductor resolves a cache dir via
+            # getpass.getuser(), which falls back to pwd.getpwuid() when no
+            # LOGNAME/USER env exists — and the numeric runtime UIDs have no
+            # passwd entry in the image (KeyError killed the seventh run at
+            # extract-features). getpass reads these envs FIRST; the explicit
+            # cache dir under the writable workdir is belt and braces.
+            - name: LOGNAME
+              value: crop-distill
+            - name: USER
+              value: crop-distill
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /work/torch-inductor
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {{ drop: ["ALL"] }}
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 2000
+            runAsGroup: 2000
+          resources:
+            requests: {{ cpu: "2", memory: "8Gi" }}
+            limits: {{ cpu: "2", memory: "8Gi" }}
+          volumeMounts:
+            - name: training-data-cephfs
+              mountPath: /cephfs/unified_v2_512
+              subPath: unified_v2_512
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/lucas
+              subPath: lucas
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/distill/crop_split
+              subPath: distill/crop_split
+              readOnly: {split_read_only}
+            - name: training-data-cephfs
+              mountPath: /cephfs/ops/crop-distill
+              subPath: ops/crop-distill/split
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-completion/completion.json
+              subPath: ops/crop-distill/source-access/apply/{source_access_completion_pod_uid}/completion.json
+              readOnly: true
+            - name: training-data-cephfs
+              mountPath: /cephfs/source-access-lock
+              subPath: ops/crop-distill/source-access/locks
+            - name: work
+              mountPath: /work
+            - name: crop-source-freeze-lease
+              mountPath: /var/run/crop-source-freeze
+              readOnly: true
+      volumes:
+        - name: training-data-cephfs
+          persistentVolumeClaim: {{ claimName: training-data-cephfs }}
+        - name: work
+          emptyDir: {{}}
+        - name: crop-source-freeze-lease
+          configMap:
+            name: crop-source-freeze-lease
+            optional: false
+            items:
+              - key: lease.json
+                path: lease.json
 """
 
 PINNED_PLOTS_TEMPLATE = """apiVersion: batch/v1
@@ -244,7 +1372,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: pin
-          image: python:3.11-slim
+          image: {python_image}
           command:
             - bash
             - -c
@@ -274,11 +1402,72 @@ spec:
 """
 
 
+# The six legacy distill columns keep their historical (mutable) setup —
+# re-pinning them retroactively would falsify already-produced OOF
+# provenance. The 4f column pins source + top-level deps (PR #42 review);
+# transitives are captured by its pip-freeze record.
+_DISTILL_DEPS_LEGACY = """pip install --quiet --no-cache-dir torch torchvision \\
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \\
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \\
+                pandas pyarrow rasterio pyproj"""
+# The FULL resolved lock for linux/py3.11/cu126, shared by every 4f job
+# (base + rungs inherit it from the base manifest; a test asserts the two
+# copies stay identical). --no-deps: nothing resolves at run time.
+_DISTILL_DEPS_PINNED = """pip install --quiet --no-cache-dir --no-deps torch==2.10.0+cu126 torchvision==0.25.0+cu126 \\
+                --index-url https://download.pytorch.org/whl/cu126
+              pip install --quiet --no-cache-dir --no-deps \\
+                affine==3.0.1 attrs==26.1.0 certifi==2026.7.22 \\
+                charset-normalizer==3.5.1 click==8.5.0 \\
+                click-plugins==1.1.1.2 cligj==0.7.2 cloudpickle==3.1.2 \\
+                cuda-bindings==12.9.4 cuda-pathfinder==1.8.1 einops==0.8.0 \\
+                filelock==3.32.5 fsspec==2026.7.0 huggingface-hub==0.26.2 \\
+                idna==3.19 jinja2==3.1.6 joblib==1.6.0 markupsafe==3.0.3 \\
+                mpmath==1.3.0 networkx==3.6.1 numpy==1.26.4 \\
+                nvidia-cublas-cu12==12.6.4.1 nvidia-cuda-cupti-cu12==12.6.80 \\
+                nvidia-cuda-nvrtc-cu12==12.6.77 \\
+                nvidia-cuda-runtime-cu12==12.6.77 \\
+                nvidia-cudnn-cu12==9.10.2.21 nvidia-cufft-cu12==11.3.0.4 \\
+                nvidia-cufile-cu12==1.11.1.6 nvidia-curand-cu12==10.3.7.77 \\
+                nvidia-cusolver-cu12==11.7.1.2 \\
+                nvidia-cusparse-cu12==12.5.4.2 nvidia-cusparselt-cu12==0.7.1 \\
+                nvidia-nccl-cu12==2.27.5 nvidia-nvjitlink-cu12==12.6.85 \\
+                nvidia-nvshmem-cu12==3.4.5 nvidia-nvtx-cu12==12.6.77 \\
+                packaging==26.3 pandas==2.2.2 pillow==10.4.0 pyarrow==17.0.0 \\
+                pyparsing==3.3.2 pyproj==3.6.1 python-dateutil==2.9.0.post0 \\
+                pytz==2026.3.post1 pyyaml==6.0.2 rasterio==1.3.11 \\
+                requests==2.34.2 safetensors==0.8.0 scikit-learn==1.5.1 \\
+                scipy==1.13.1 setuptools==84.0.0 six==1.17.0 snuggs==1.4.7 \\
+                sympy==1.14.0 threadpoolctl==3.6.0 timm==1.0.11 tqdm==4.70.0 \\
+                triton==3.6.0 typing-extensions==4.16.0 tzdata==2026.3 \\
+                urllib3==2.7.0"""
+_DISTILL_SOURCE_LEGACY = """BRANCH=main
+              git clone --depth 1 --branch "$BRANCH" \\
+                https://github.com/TobiasEdman/ImintEngine.git imintengine
+              cd /workspace/imintengine
+              pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
+              echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)\""""
+
+
+def _distill_source_pinned(model: str) -> str:
+    sha = _require_full_sha(PRITHVI300M4F_SOURCE_GIT_SHA,
+                            "PRITHVI300M4F_SOURCE_GIT_SHA")
+    return f"""HEAD_SHA={sha}
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$HEAD_SHA"
+              git checkout -q "$HEAD_SHA"
+              echo "PINNED SOURCE: $HEAD_SHA"
+              mkdir -p /cephfs/ops/deps
+              pip freeze > /cephfs/ops/deps/ladder-distill-{model}-$(date -u +%Y%m%dT%H%M%SZ).txt"""
+
+
 def render_distill(model: str) -> str:
     cfg = DISTILL[model]
     keys = cfg.get("require_keys", ())
     sar_filter = "".join(
         f"\n                --require-npz-key {k} \\" for k in keys)
+    pinned = model == "prithvi300m4f"
     header = (
         f"# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         f"# Distill stage for {model}: r2 checkpoint → plot features →\n"
@@ -289,8 +1478,172 @@ def render_distill(model: str) -> str:
     )
     return header + DISTILL_TEMPLATE.format(
         model=model, img_size=cfg["img_size"], backbone=cfg["backbone"],
-        sar_filter=sar_filter,
-        extra_setup=cfg.get("extra_setup", "true  # no extra deps"))
+        extract_filter=sar_filter, sar_filter=sar_filter,
+        extra_setup=cfg.get("extra_setup", "true  # no extra deps"),
+        dep_install=_DISTILL_DEPS_PINNED if pinned else _DISTILL_DEPS_LEGACY,
+        source_setup=(_distill_source_pinned(model) if pinned
+                      else _DISTILL_SOURCE_LEGACY),
+        python_image=PYTHON_IMAGE)
+
+
+def render_crop_distill(model: str) -> str:
+    _validate_crop_distill_identity()
+    if model not in CROP_MODELS:
+        raise ValueError(f"unknown crop-distill model: {model}")
+    header = (
+        f"# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        f"# LUCAS crop-distill stage for {model}: r2 checkpoint → features at\n"
+        f"# the frozen LUCAS crop distill points → pinned-protocol crop OOF\n"
+        f"# ({model}_r2_crop_distillability.json). Evidence for the R5\n"
+        f"# decision — writes NO gate, feeds NO queue rung.\n"
+        f"# Prereq: ladder-lucas-crop-split (once, shared).\n"
+        f"# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_DISTILL_TEMPLATE.format(
+        model=model,
+        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
+        crop_image=CROP_DISTILL_IMAGE,
+        split_manifest_sha256=CROP_DISTILL_SPLIT_MANIFEST_SHA256,
+        split_source_git_sha=CROP_DISTILL_SPLIT_SOURCE_GIT_SHA,
+        run_uid=CROP_MODEL_UIDS[model],
+        head_subpath=crop_protocol.crop_head_backing_dir(model).relative_to(
+            crop_protocol.PVC_ROOT
+        ),
+        record_subpath=crop_protocol.crop_record_backing_dir(model).relative_to(
+            crop_protocol.PVC_ROOT
+        ),
+    )
+
+
+def render_crop_storage_prep() -> str:
+    # The baked storage target allowlist grows with CROP_MODELS.  Bind this
+    # one-shot producer to the current crop runtime, not the historical
+    # source-access runtime, or a newly added model's directories are absent
+    # even though its consumer manifest is current.
+    _validate_crop_distill_runtime_identity()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# One-shot least-privilege migration: prepares crop_split plus\n"
+        "# isolated per-model head/record directories and the split record\n"
+        "# directory plus isolated source-access evidence/lock roots. Run\n"
+        "# before PLAN; broad PVC roots stay unchanged.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_STORAGE_PREP_TEMPLATE.format(
+        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
+        crop_image=CROP_DISTILL_IMAGE,
+    )
+
+
+def render_crop_source_access_plan() -> str:
+    _validate_source_access_runtime_identity()
+    _validate_crop_source_index_identity()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Read-only PLAN: derives the exact post-window 2,074 LUCAS tile\n"
+        "# candidates and publishes a canonical, immutable inventory.\n"
+        "# This Job cannot change source-tile bytes or metadata.\n"
+        "# Requires a fresh plan-phase crop-source-freeze watchdog lease.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_SOURCE_ACCESS_PLAN_TEMPLATE.format(
+        source_git_sha=CROP_SOURCE_ACCESS_SOURCE_GIT_SHA,
+        crop_image=CROP_SOURCE_ACCESS_IMAGE,
+        source_index_sha256=CROP_SOURCE_ACCESS_INDEX_SHA256,
+    )
+
+
+def render_crop_source_access_apply() -> str:
+    _validate_source_access_plan_authority()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Metadata-only APPLY: consumes the reviewed PLAN hash and changes\n"
+        "# only its root:root 0600 candidates to root:2000 0640. The RW\n"
+        "# source mount is the unified_v2_512 dataset subPath, not PVC root.\n"
+        "# Requires a fresh apply-phase crop-source-freeze watchdog lease.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_SOURCE_ACCESS_APPLY_TEMPLATE.format(
+        source_git_sha=CROP_SOURCE_ACCESS_SOURCE_GIT_SHA,
+        crop_image=CROP_SOURCE_ACCESS_IMAGE,
+        source_index_sha256=CROP_SOURCE_ACCESS_INDEX_SHA256,
+        plan_sha256=CROP_SOURCE_ACCESS_PLAN_SHA256,
+        plan_pod_uid=CROP_SOURCE_ACCESS_PLAN_POD_UID,
+    )
+
+
+def render_crop_source_freeze_operator() -> str:
+    _validate_freeze_operator_runtime_identity()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# ICE-resident watchdog for the LUCAS split verification run. It\n"
+        "# owns only one restricted durable state subPath and the narrow\n"
+        "# Kubernetes reads/CAS updates required by the freeze protocol.\n"
+        "# It intentionally retains API egress and has no TTL.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_SOURCE_FREEZE_OPERATOR_TEMPLATE.format(
+        operator_image=CROP_SOURCE_FREEZE_OPERATOR_IMAGE,
+        operator_source_git_sha=CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA,
+        run_id=CROP_SOURCE_FREEZE_OPERATOR_RUN_ID,
+    )
+
+
+def render_crop_source_freeze_recovery() -> str:
+    _validate_freeze_operator_runtime_identity()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# One-shot exact restoration of the interrupted attempt-15 freeze.\n"
+        "# It reuses the reviewed operator image and existing narrow RBAC,\n"
+        "# but cannot acquire a new hold or launch a split workload.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_SOURCE_FREEZE_RECOVERY_TEMPLATE.format(
+        job_name=CROP_SOURCE_FREEZE_RECOVERY_JOB_NAME,
+        operator_image=CROP_SOURCE_FREEZE_OPERATOR_IMAGE,
+        operator_source_git_sha=CROP_SOURCE_FREEZE_OPERATOR_SOURCE_GIT_SHA,
+        run_id=CROP_SOURCE_FREEZE_RECOVERY_RUN_ID,
+    )
+
+
+def render_crop_deny_egress() -> str:
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Crop-distill runtime Pods require no network after image pull.\n"
+        "# This policy selects source-access, producer, consumer, and prep Pods.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + CROP_DENY_EGRESS_TEMPLATE
+
+
+def render_lucas_crop_split() -> str:
+    _validate_crop_distill_runtime_identity()
+    _validate_source_access_completion_authority()
+    _validate_split_source_authority()
+    header = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Freezes the LUCAS crop 70/30 distill/holdout split ONCE, before\n"
+        "# any crop training touches LUCAS (grouped by tile; prior 71-point\n"
+        "# freeze forced into holdout). Run before any crop-distill-<model>.\n"
+        "# Requires a fresh split-phase crop-source-freeze watchdog lease.\n"
+        "# Plan: docs/experiments/ladder_distill_stage.md\n"
+    )
+    return header + LUCAS_SPLIT_TEMPLATE.format(
+        crop_image=CROP_DISTILL_IMAGE,
+        source_git_sha=CROP_DISTILL_SOURCE_GIT_SHA,
+        source_access_plan_sha256=CROP_SOURCE_ACCESS_PLAN_SHA256,
+        source_access_plan_pod_uid=CROP_SOURCE_ACCESS_PLAN_POD_UID,
+        source_access_completion_sha256=CROP_SOURCE_ACCESS_COMPLETION_SHA256,
+        source_access_completion_pod_uid=CROP_SOURCE_ACCESS_COMPLETION_POD_UID,
+        source_access_source_git_sha=CROP_SOURCE_ACCESS_SOURCE_GIT_SHA,
+        source_access_image=CROP_SOURCE_ACCESS_IMAGE,
+        split_source_git_sha=CROP_DISTILL_SPLIT_SOURCE_GIT_SHA,
+        split_read_only=str(
+            CROP_DISTILL_SPLIT_SOURCE_GIT_SHA
+            != CROP_DISTILL_SOURCE_GIT_SHA
+        ).lower(),
+    )
+
 
 EPOCHS = 30  # fixed across the ladder: see the doc's "Controls"
 
@@ -432,12 +1785,95 @@ def render(model: str, rung: int, base_text: str) -> str:
     return header + out.lstrip("\n")
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--check", action="store_true",
-                    help="verify the committed manifests match this generator")
-    args = ap.parse_args()
+# The matrix payload's third-party loader code, pinned to exact
+# commits/artifacts (PR #45 review): the anchored rerun is only bound if
+# EVERY executed source is — clay from a floating git head, croma cloned
+# at whatever HEAD and unversioned terratorch would all float otherwise.
+_MATRIX_LOADER_SETUP = (
+    "git clone https://github.com/antofuller/CROMA /workspace/CROMA\n"
+    "              git -C /workspace/CROMA checkout -q "
+    "59505a6bcadbf36ba20767270154bf9f3067c5e7\n"
+    "              export PYTHONPATH=/workspace/CROMA:${PYTHONPATH:-}"
+)
 
+
+# The matrix's COMPLETE dependency closure — see k8s/inference-matrix-deps.lock.
+_MATRIX_DEPS_PINNED = """# COMPLETE resolver closure from k8s/inference-matrix-deps.lock —
+              # 141 pkgs co-resolved for py3.11/linux/cu126 (top-levels from the
+              # successful run's freeze record). --no-deps: nothing resolves at
+              # run time. torch >= 2.10.0: GHSA-63cw-57p8-fm3p. Clay LAST —
+              # after the locked setuptools — and --no-build-isolation, so its
+              # build backend comes from the lock, not a fresh resolution.
+              pip install --quiet --no-cache-dir --no-deps torch==2.10.0+cu126 torchvision==0.25.0+cu126 \\
+                --index-url https://download.pytorch.org/whl/cu126
+              pip install --quiet --no-cache-dir --no-deps \\
+                absl-py==2.5.0 aenum==3.1.17 affine==3.0.1 \\
+                aiohappyeyeballs==2.7.1 aiohttp==3.14.3 aiosignal==1.4.0 \\
+                albucore==0.0.24 albumentations==2.0.8 \\
+                annotated-types==0.8.0 antlr4-python3-runtime==4.9.3 \\
+                anyio==4.15.1 attrs==26.1.0 certifi==2026.7.22 \\
+                charset-normalizer==3.5.1 click==8.5.0 \\
+                click-plugins==1.1.1.2 cligj==0.7.2 cloudpickle==3.1.2 \\
+                contourpy==1.3.3 cuda-bindings==12.9.4 \\
+                cuda-pathfinder==1.8.1 cycler==0.12.1 diffusers==0.40.0 \\
+                docstring-parser==0.18.0 einops==0.7.0 filelock==3.32.5 \\
+                fonttools==4.64.0 frozenlist==1.8.0 fsspec==2026.7.0 \\
+                geopandas==1.1.4 grpcio==1.83.1 h11==0.16.0 h5py==3.16.0 \\
+                hf-xet==1.6.0 httpcore==1.0.9 httpx==0.28.1 \\
+                huggingface-hub==1.30.0 hydra-core==1.3.6 idna==3.19 \\
+                imageio==2.37.4 importlib-metadata==9.0.1 jinja2==3.1.6 \\
+                joblib==1.6.0 jsonargparse==4.52.0 kiwisolver==1.5.1 \\
+                kornia==0.8.3 kornia-rs==0.1.14 lazy-loader==0.5 \\
+                lightly==1.5.22 lightly-utils==0.0.2 lightning==2.6.5 \\
+                lightning-utilities==0.15.3 markdown==3.10.3 \\
+                markdown-it-py==4.2.0 markupsafe==3.0.3 matplotlib==3.11.1 \\
+                mdurl==0.1.2 mpmath==1.3.0 multidict==6.7.1 networkx==3.6.1 \\
+                numpy==2.4.6 nvidia-cublas-cu12==12.6.4.1 \\
+                nvidia-cuda-cupti-cu12==12.6.80 \\
+                nvidia-cuda-nvrtc-cu12==12.6.77 \\
+                nvidia-cuda-runtime-cu12==12.6.77 \\
+                nvidia-cudnn-cu12==9.10.2.21 nvidia-cufft-cu12==11.3.0.4 \\
+                nvidia-cufile-cu12==1.11.1.6 nvidia-curand-cu12==10.3.7.77 \\
+                nvidia-cusolver-cu12==11.7.1.2 \\
+                nvidia-cusparse-cu12==12.5.4.2 nvidia-cusparselt-cu12==0.7.1 \\
+                nvidia-nccl-cu12==2.27.5 nvidia-nvjitlink-cu12==12.6.85 \\
+                nvidia-nvshmem-cu12==3.4.5 nvidia-nvtx-cu12==12.6.77 \\
+                omegaconf==2.3.1 opencv-python-headless==5.0.0.93 \\
+                opentelemetry-api==1.44.0 packaging==26.3 pandas==2.2.2 \\
+                pillow==12.3.0 platformdirs==4.11.7 propcache==0.5.2 \\
+                protobuf==7.36.1 pyarrow==17.0.0 pycocotools==2.0.11 \\
+                pydantic==2.13.5 pydantic-core==2.46.5 pygments==2.21.0 \\
+                pyogrio==0.13.0 pyparsing==3.3.2 pyproj==3.7.2 \\
+                python-box==7.4.1 python-dateutil==2.9.0.post0 \\
+                pytorch-lightning==2.6.5 pytz==2026.3.post1 pyyaml==6.0.3 \\
+                rasterio==1.4.4 regex==2026.9.3 requests==2.34.2 \\
+                rich==15.0.0 rioxarray==0.19.0 safetensors==0.8.0 \\
+                scikit-image==0.26.0 scikit-learn==1.5.1 scipy==1.17.1 \\
+                segmentation-models-pytorch==0.5.0 sentry-sdk==2.69.0 \\
+                setuptools==84.0.0 shapely==2.1.2 simsimd==6.5.16 \\
+                six==1.17.0 stringzilla==5.1.2 sympy==1.14.0 \\
+                tensorboard==2.21.0 tensorboard-data-server==0.7.2 \\
+                termcolor==3.3.0 terratorch==1.2.11 threadpoolctl==3.6.0 \\
+                tifffile==2026.3.3 timm==1.0.29 torchgeo==0.8.1 \\
+                torchmetrics==1.9.0 tqdm==4.70.0 triton==3.6.0 \\
+                typeshed-client==2.13.0 typing-extensions==4.16.0 \\
+                typing-inspection==0.4.4 tzdata==2026.3 urllib3==2.7.0 \\
+                vit-pytorch==1.17.8 wandb==0.29.0 werkzeug==3.1.8 \\
+                xarray==2026.7.0 xxhash==4.0.1 yarl==1.24.5 zipp==4.1.0
+              pip install --quiet --no-cache-dir --no-deps --no-build-isolation \\
+                "git+https://github.com/Clay-foundation/model.git@f14e698f3c237cabf8d28dec669a362d66625381"
+"""
+
+
+def render_non_crop_outputs() -> dict[Path, str]:
+    """Render every legacy ladder/distill manifest without crop anchors.
+
+    Payload commit A and producer commit B intentionally cannot render crop
+    consumers yet.  Keeping the anchor-independent outputs available lets CI
+    prove that those committed manifests remain regenerable during both
+    bootstrap phases without weakening the crop generator's fail-closed
+    identity checks.
+    """
     outputs: dict[Path, str] = {}
     for model, base_rel in BASES.items():
         base_text = (REPO / base_rel).read_text()
@@ -445,12 +1881,217 @@ def main() -> int:
             dest = OUT_DIR / f"ladder-r{rung}-{model}-job.yaml"
             outputs[dest] = render(model, rung, base_text)
         outputs[OUT_DIR / f"distill-{model}-job.yaml"] = render_distill(model)
+    outputs[OUT_DIR / "inference-matrix-job.yaml"] = (
+        "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
+        "# Renders the dashboard's inference matrix: K frozen spread holdout\n"
+        "# tiles × every completed ladder cell. Idempotent per checkpoint\n"
+        "# (sha-keyed) — resubmit after new rungs finish to fill new rows.\n"
+        + INFERENCE_MATRIX_TEMPLATE.format(
+            python_image=PYTHON_IMAGE, scoring_pins=SCORING_PINS,
+            sklearn_pin=SKLEARN_PIN,
+            source_sha=_require_full_sha(INFERENCE_MATRIX_SOURCE_GIT_SHA,
+                                         "INFERENCE_MATRIX_SOURCE_GIT_SHA"),
+            matrix_deps=_MATRIX_DEPS_PINNED,
+            extra_setup_all=_MATRIX_LOADER_SETUP))
     outputs[OUT_DIR / "distill-pinned-plots-job.yaml"] = (
         "# GENERATED by scripts/gen_ladder_manifests.py — do not edit.\n"
         "# Pins the shared NFI plot set every column's distillability OOF\n"
         "# scores. Run ONCE before any distill-<model> job.\n"
         "# Plan: docs/experiments/ladder_distill_stage.md\n"
-        + PINNED_PLOTS_TEMPLATE.format())
+        + PINNED_PLOTS_TEMPLATE.format(python_image=PYTHON_IMAGE)
+    )
+    return outputs
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--check", action="store_true",
+                    help="verify the committed manifests match this generator")
+    phase = ap.add_mutually_exclusive_group()
+    phase.add_argument(
+        "--crop-operator-only",
+        action="store_true",
+        help="write/check only the digest-pinned in-cluster freeze operator",
+    )
+    phase.add_argument(
+        "--crop-recovery-only",
+        action="store_true",
+        help="write/check only the one-shot exact freeze recovery Job",
+    )
+    phase.add_argument(
+        "--crop-bootstrap-only",
+        action="store_true",
+        help=(
+            "write/check only storage-prep and read-only source-access PLAN "
+            "manifests (legacy name for the first crop bootstrap phase)"
+        ),
+    )
+    phase.add_argument(
+        "--crop-apply-only",
+        action="store_true",
+        help="write/check only the hash-bound source-access APPLY manifest",
+    )
+    phase.add_argument(
+        "--crop-split-only",
+        action="store_true",
+        help="write/check only the completion-gated LUCAS split manifest",
+    )
+    phase.add_argument(
+        "--non-crop-only",
+        action="store_true",
+        help=(
+            "write/check only the anchor-independent ladder and legacy "
+            "distill manifests"
+        ),
+    )
+    args = ap.parse_args()
+
+    if not args.non_crop_only:
+        try:
+            if args.crop_operator_only or args.crop_recovery_only:
+                _validate_freeze_operator_runtime_identity()
+            elif args.crop_bootstrap_only:
+                _validate_source_access_runtime_identity()
+                _validate_crop_source_index_identity()
+            elif args.crop_apply_only:
+                _validate_source_access_plan_authority()
+            elif args.crop_split_only:
+                _validate_crop_distill_runtime_identity()
+                _validate_source_access_completion_authority()
+                _validate_split_source_authority()
+            else:
+                _validate_crop_distill_identity()
+        except ValueError as exc:
+            print(
+                f"REFUSING crop-distill manifest generation: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+
+    outputs: dict[Path, str] = {}
+    if args.non_crop_only:
+        outputs.update(render_non_crop_outputs())
+    elif args.crop_operator_only:
+        outputs[OUT_DIR / "crop-source-freeze-operator-job.yaml"] = (
+            render_crop_source_freeze_operator()
+        )
+    elif args.crop_recovery_only:
+        outputs[OUT_DIR / "crop-source-freeze-recovery-job.yaml"] = (
+            render_crop_source_freeze_recovery()
+        )
+    elif args.crop_bootstrap_only:
+        outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
+            render_crop_deny_egress()
+        )
+        outputs[OUT_DIR / "crop-distill-storage-prep-job.yaml"] = (
+            render_crop_storage_prep()
+        )
+        outputs[OUT_DIR / "crop-source-access-plan-job.yaml"] = (
+            render_crop_source_access_plan()
+        )
+    elif args.crop_apply_only:
+        outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
+            render_crop_deny_egress()
+        )
+        outputs[OUT_DIR / "crop-source-access-apply-job.yaml"] = (
+            render_crop_source_access_apply()
+        )
+    elif args.crop_split_only:
+        outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
+            render_crop_deny_egress()
+        )
+        outputs[OUT_DIR / "lucas-crop-split-job.yaml"] = render_lucas_crop_split()
+    else:
+        outputs[OUT_DIR / "crop-source-freeze-operator-job.yaml"] = (
+            render_crop_source_freeze_operator()
+        )
+        outputs[OUT_DIR / "crop-distill-deny-egress.yaml"] = (
+            render_crop_deny_egress()
+        )
+        outputs[OUT_DIR / "crop-source-access-plan-job.yaml"] = (
+            render_crop_source_access_plan()
+        )
+        outputs[OUT_DIR / "crop-source-access-apply-job.yaml"] = (
+            render_crop_source_access_apply()
+        )
+        outputs[OUT_DIR / "lucas-crop-split-job.yaml"] = render_lucas_crop_split()
+        outputs[OUT_DIR / "crop-distill-storage-prep-job.yaml"] = (
+            render_crop_storage_prep()
+        )
+    if not (
+        args.crop_operator_only
+        or args.crop_recovery_only
+        or args.crop_bootstrap_only
+        or args.crop_apply_only
+        or args.crop_split_only
+        or args.non_crop_only
+    ):
+        outputs.update(render_non_crop_outputs())
+        # Crop consumers are defined by the crop protocol, not the
+        # training bases (since 2026-09-08 that includes prithvi300m4f).
+        for model in CROP_MODELS:
+            outputs[OUT_DIR / f"crop-distill-{model}-job.yaml"] = (
+                render_crop_distill(model)
+            )
+
+    if args.crop_bootstrap_only:
+        downstream_paths = [
+            OUT_DIR / "crop-source-access-apply-job.yaml",
+            OUT_DIR / "lucas-crop-split-job.yaml",
+            *[
+                OUT_DIR / f"crop-distill-{model}-job.yaml"
+                for model in CROP_MODELS
+            ],
+        ]
+        present_downstream = [
+            str(path.relative_to(REPO))
+            for path in downstream_paths
+            if path.exists()
+        ]
+        if present_downstream:
+            print(
+                "REFUSING crop PLAN bootstrap while stale downstream manifests "
+                "exist: " + ", ".join(present_downstream),
+                file=sys.stderr,
+            )
+            return 2
+    elif args.crop_split_only:
+        consumer_paths = [
+            OUT_DIR / f"crop-distill-{model}-job.yaml"
+            for model in CROP_MODELS
+        ]
+        present_consumers = [
+            str(path.relative_to(REPO))
+            for path in consumer_paths
+            if path.exists()
+        ]
+        if present_consumers:
+            print(
+                "REFUSING crop split while stale consumer manifests exist: "
+                + ", ".join(present_consumers),
+                file=sys.stderr,
+            )
+            return 2
+    elif args.crop_apply_only:
+        downstream_paths = [
+            OUT_DIR / "lucas-crop-split-job.yaml",
+            *[
+                OUT_DIR / f"crop-distill-{model}-job.yaml"
+                for model in CROP_MODELS
+            ],
+        ]
+        present_downstream = [
+            str(path.relative_to(REPO))
+            for path in downstream_paths
+            if path.exists()
+        ]
+        if present_downstream:
+            print(
+                "REFUSING crop APPLY while stale downstream manifests exist: "
+                + ", ".join(present_downstream),
+                file=sys.stderr,
+            )
+            return 2
 
     stale: list[str] = []
     for dest, text in outputs.items():

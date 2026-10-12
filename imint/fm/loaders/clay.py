@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import os
 
-
 # Clay Sentinel-2 band catalog (name → wavelength in micrometres + normalization).
 # Values transcribed from Clay-foundation/model/configs/metadata.yaml.
 CLAY_S2_BAND_META: dict[str, dict[str, float]] = {
@@ -72,8 +71,9 @@ def load_clay(
     """Load Clay v1.5 MAE encoder.
 
     Args:
-        pretrained: Load the released checkpoint. Required for downstream
-            use — Clay without pretrained weights is useless.
+        pretrained: Load the released checkpoint. ``False`` reconstructs the
+            empty encoder graph for restoring a complete ImintEngine rung
+            checkpoint without downloading separate upstream weights.
         num_frames: Clay is single-date; only 1 is valid. Collapse
             temporal stacks before calling.
         img_size: Input resolution (default 256, native). The encoder
@@ -95,6 +95,46 @@ def load_clay(
             f"Collapse temporal dimension before calling."
         )
 
+    # Reconstructing a fine-tuned ImintEngine checkpoint must not download or
+    # load Clay's original 5 GB pretraining checkpoint first.  The caller
+    # (``inference_comparison.load_model``) passes ``pretrained=False`` and
+    # then restores the complete rung checkpoint onto the returned module.
+    #
+    # Upstream ClayMAEModule cannot represent this mode: even a direct
+    # constructor creates a pretrained SAM ViT teacher, while
+    # ``load_from_checkpoint(None)`` fails.  Build only the inference encoder
+    # behind a one-attribute container.  The container deliberately preserves
+    # the historical state-dict prefix ``encoder.encoder.*``:
+    # ClaySegmentationModel.encoder -> this container -> Clay Encoder.  Rung
+    # checkpoints produced with the full ClayMAE wrapper therefore restore
+    # the exact encoder weights.  The outer checkpoint loader filters only
+    # the explicitly allowlisted training-only teacher/decoder/projection
+    # groups, then restores this graph strictly.
+    if not pretrained:
+        try:
+            from claymodel.model import Encoder
+            from torch import nn
+        except ImportError as e:
+            raise ImportError(
+                "Clay v1.5 requires the pinned clay-foundation/model source."
+            ) from e
+
+        class _InferenceClay(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = Encoder(
+                    mask_ratio=0.0,
+                    patch_size=8,
+                    shuffle=False,
+                    dim=1024,
+                    depth=24,
+                    heads=16,
+                    dim_head=64,
+                    mlp_ratio=4,
+                )
+
+        return _InferenceClay().eval()
+
     try:
         from claymodel.module import ClayMAEModule
     except ImportError as e:
@@ -104,7 +144,7 @@ def load_clay(
             "  pip install git+https://github.com/Clay-foundation/model.git"
         ) from e
 
-    # Resolve checkpoint path
+    # Resolve checkpoint path for an explicit upstream-pretrained load.
     if checkpoint_path is None:
         for candidate in (
             "/data/model_cache/clay-v1.5.ckpt",
@@ -115,7 +155,7 @@ def load_clay(
                 checkpoint_path = candidate
                 break
 
-    if pretrained and checkpoint_path is None:
+    if checkpoint_path is None:
         # Try downloading from HuggingFace Hub. The checkpoint lives under
         # the ``v1.5/`` subdirectory in the repo — filename ``clay-v1.5.ckpt``
         # at the repo root 404s (that stale path is what left the

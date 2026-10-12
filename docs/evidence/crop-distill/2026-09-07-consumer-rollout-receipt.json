@@ -1,0 +1,82 @@
+{
+  "schema": "imint-crop-distill-rollout-receipt-v1",
+  "pull_request": 44,
+  "consumer_authorization_commit": "2cd15ae5f5026c9a95fadba2ae0e2fb23546a8c0",
+  "result": {"status": "completed", "completed_jobs": 6, "failed_jobs": 0},
+  "runtime": {
+    "source_git_sha": "1fd08fad9ba9ab599415230938e6fade357cd5eb",
+    "image_ref": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:dba3a47b2936a8b4f64bbaacc1e2bbaa4ddc4f57802077f7c6c576f63de996cf"
+  },
+  "split": {
+    "source_git_sha": "c6ad69242e7239662461bf7ff0b6bcd4d072509a",
+    "manifest_sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed"
+  },
+  "evidence": {
+    "bundle_schema": "imint-crop-distill-evidence-capture-v3",
+    "custody": "restricted off-repository and off-PVC continuity store",
+    "observation_source": "gpu-reaper pre-delete Pod API snapshot and archived workload stdout",
+    "verification": "six strict offline bundle verifications passed"
+  },
+  "models": {
+    "clay": {
+      "pod_uid": "9e2df6e9-a16b-4c92-bba3-9e108e8eb67f",
+      "completion_sha256": "c8f8e37b29695418f8f876466d0361ba48c6b424ba69c0e39893a4761ad8f891",
+      "marker_sha256": "732d20a612efe1698e9027f64aee7e9969657a81369c861622b83378842fe7a3",
+      "raw_pod_sha256": "fdfeec7ade02ea1922e3fd4634bfc4855776334b8adde152afdc2ffbc52c1ff8",
+      "normalized_pod_sha256": "0501b2699fa3630b8bb2df519b988117cb6bb4088b9f8d72e7c1944a3abdedf1",
+      "features_sha256": "ea090afbef5907ae7346f427c12285c8ee56b14c146ae7ed1db5f8bf87b74a5b",
+      "oof_sha256": "68e22b1cc2602a4c4d30fa9b30febfa4e26d5f6bc08d8bfbccd64ff8721b3195",
+      "reaper_archive": {"directory": "ladder-crop-distill-clay-20260907T192028Z", "events_sha256": "2912efa614edd35ef6c3897c4ac59b879d51a0c6126313b37aa189898a808e40", "job_sha256": "a04755ce699a7c1a2e7a4e48177a207c67dbc71b83d68f91cb87a1a754d171ea", "log_sha256": "2ccc79c39afc0a4387dc7391153d03a55a0c3774897edad44492d179d229813e", "pods_sha256": "a08ae7c39ac3c9739142a68b56b00b178429a9bb56758ae77571d2889e8300ae"}
+    },
+    "croma": {
+      "pod_uid": "f2517279-8281-4426-885d-3f295a6d4556",
+      "completion_sha256": "0b3d59eab68f421ee1de3db328f1ee1e61a37a168b8de6dc8d76882acfe2bcbf",
+      "marker_sha256": "8f5d23cc17e6b4cb0e31ea24a500749c10eef8325549c842c721c92e92c2bf03",
+      "raw_pod_sha256": "e4edafcfcf3e97f23f83b4e0671064d0d61ae04ad8e9f0ac65768ebf34d2b363",
+      "normalized_pod_sha256": "657d09b30debb62db8f4e5afd7b74159480448698be7d500c26fc877011e48c4",
+      "features_sha256": "4d52b69ff3ad19c0d11bc08fc490b08e62818fcb4cf9a85144af72c035b080d5",
+      "oof_sha256": "3711a16ced0a636e7568fd24133e1588ce174ce852fa3fedced932ec3f90e84a",
+      "reaper_archive": {"directory": "ladder-crop-distill-croma-20260907T202024Z", "events_sha256": "39cd4bf670d9472439c540e205449c6ef4ccdf82b4c341ce5b6de71a326ed68e", "job_sha256": "c3b9d28be118715679358e11404a36812a0b25b98185a5aa91cb7dae880144dc", "log_sha256": "5f481a8b92f3943848fe3d66ad654475a804d46d3f683e4e48c692f384d2e86b", "pods_sha256": "2893a061337c53fbab874ec648d7edae5f1d10a3ee6924dbf0d44c78e4c550ed"}
+    },
+    "prithvi300m": {
+      "pod_uid": "b2a640cf-6d31-414a-bd19-5ce590a80cfd",
+      "completion_sha256": "33d8d784f808d46e0e94439058bcfd7328ae076e488152e74e1f3ef8c8afdceb",
+      "marker_sha256": "d08c35f1441ccc347f61947cfa560a48ec983494d2ac7a0cd2b98bdfeb983551",
+      "raw_pod_sha256": "139c8efb490d2110b1c657377afeb67e6bbdc23bf7d79b7335c3847ac5b196b6",
+      "normalized_pod_sha256": "b3bba4bf651981b6c0af08c80cfa9f9613f1c07211fe7658d075e05909ab2834",
+      "features_sha256": "53e6bdeeb1c4544a2d56ab14f77adb172256fb02b752cfd8c52dd4685f41f041",
+      "oof_sha256": "06b0f8a126b53ccb41e1f60387334f6afd5154732d7b752790a4eb90729436dc",
+      "reaper_archive": {"directory": "ladder-crop-distill-prithvi300m-20260907T192049Z", "events_sha256": "d062d7478471922eb2a5e72ec538fa09ac18ec32265494d903c836fd88fc84d9", "job_sha256": "ab5708ce45a1a5fa71a8f0590aeb8bead30888bfb837304afa839b3d80fc6dac", "log_sha256": "ec12bea228e0251fedc624096af219a7ac809b97c15ae1da89bc678c5e0e3b97", "pods_sha256": "203339387e9b4d4d0a4077a69f185f236f42fa7447adf6a2c97e9a82241a574c"}
+    },
+    "prithvi600m": {
+      "pod_uid": "dda4fb9f-eab6-4885-80fc-d8cd938d8b25",
+      "completion_sha256": "2149f3b4bc1860cee338564b3f10d8fc7aa73512ee0190f1740f7db48deca150",
+      "marker_sha256": "47584da6cc15196366bc1bdae46577683fd7de2f45117f3ddebf5cf57d358df5",
+      "raw_pod_sha256": "0678a88ad89eeef03f77c286c67bcd20f18048d87394cb1a7bb8c9b679315713",
+      "normalized_pod_sha256": "63d8f9e98d6165392f20fb3f38884f043bdce143a1a1e493de3c57abfeb461d7",
+      "features_sha256": "b8f92b8488dbccf3447708f0d663384ee39dae737732bda175226cb79d846a74",
+      "oof_sha256": "987765531b510f01a8cfbaf235cc9c1a9f571163c530f673c96ca27508ffa381",
+      "reaper_archive": {"directory": "ladder-crop-distill-prithvi600m-20260907T192111Z", "events_sha256": "10738f3b030d16d542e29fb632599fd93d4b8500d4877f14010df241cbc0baaa", "job_sha256": "380676fe047c5ae33070e41a32ba6ae3fa58bc309fae204751d3366bd1e449e1", "log_sha256": "3996ff5aab93e8023995a948a2ac66dfa46942c41f061eb7b69bc66e7081e1f4", "pods_sha256": "3a4121d74412a59b219302791a21fe97d3f92eb3fba2f63c8d79258cc17ba361"}
+    },
+    "terramind": {
+      "pod_uid": "d7af2ec8-d5e8-47c9-9a21-aa11712bd426",
+      "completion_sha256": "757cde388434da84318d7e55b8582985036062e32c6466dd62734afde4d9f93b",
+      "marker_sha256": "93399fef1b08fa6eaf572bc95975482a08623e7977ab2591d3aa1a49ea44cdb4",
+      "raw_pod_sha256": "0d46059ce35cf48c547150204e6b346a6ca99997c97e21c1ce3b368275504dcd",
+      "normalized_pod_sha256": "9c52cf00557c7a2a9e299e3365682ac5cdf73c2d0c757a2ec27f54f0b04bb3c3",
+      "features_sha256": "18f1c8d55eff86ba7bc18a2e996fcc7d3650bac9338f8a1320a0b20363b7943e",
+      "oof_sha256": "fa86140f42283adf8a921bc1a15831e3d7db836e943171f6e445f686ac77ae29",
+      "reaper_archive": {"directory": "ladder-crop-distill-terramind-20260907T192133Z", "events_sha256": "e5c0ac6df1fa5fcb1a0a46ebedac9cc888b3b9d213234c24bbfec5bf758acc0f", "job_sha256": "5ecdba6cf0031a7ac84a507383a10316388c0972fa7638490cd4f53ffb4b13d4", "log_sha256": "2559986a96c3afda5a6b4abee373e4e951f3d239a6ab21d483da1108b9a16b50", "pods_sha256": "2f73c1ba3be0a3f2d4bb60a11a9db8977b1a823d165ba936542c87553be4e463"}
+    },
+    "tessera": {
+      "pod_uid": "181fb142-de17-404d-8302-1cf384191e4d",
+      "completion_sha256": "a9e93e718814f6637d20059f08c64ef0a36c43c206e0f32de13951f53668d762",
+      "marker_sha256": "ed6911084cea74e9b8bf97958dafecdea3e9b1fe48ff0327e5c5870be8e7d69d",
+      "raw_pod_sha256": "78190fa6b23388c36e89cbb075cfc189d13dc88dfa5e6de4de4bbd1aaba3664f",
+      "normalized_pod_sha256": "cf5d666f83db664edf7430ab5176ff1f71787b210cea32a0ec738b77adcdf80a",
+      "features_sha256": "da285a85ef8eb2d06e6e800e5e52287636225d239f5e9ce9a66c349dfd49f2d9",
+      "oof_sha256": "ec056949badd401cfea2332a004796db0badc52073849024da04ee13a5a5ad94",
+      "reaper_archive": {"directory": "ladder-crop-distill-tessera-20260907T192154Z", "events_sha256": "45d1fc06fc65be79251681035f1e66e0326dc3e5ce691e1181f3ebb03e670ca2", "job_sha256": "261db90b3a0258c9ffe63e838eedd4d6e60e91ccb54cf57d083b1596ba5ad0e9", "log_sha256": "a0af61271e5cebd7472f89d5aa029e494045562303d5ad1984e1525469509e03", "pods_sha256": "651ad0e1966af81eff1a8a8a6f53b5422bfb2216ad250c7c68d2b00565b14f0c"}
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+ "n_regions": [
+  81,
+  81
+ ],
+ "regions_identical": true,
+ "differing_region_indices": [],
+ "inputs_identical": true,
+ "inputs_shape_dtype": [
+  [
+   4,
+   5787,
+   7304
+  ],
+  "uint16"
+ ]
+}

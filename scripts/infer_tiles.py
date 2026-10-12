@@ -143,13 +143,21 @@ class TileInferenceDataset:
     any odd-sized tile rather than mis-cropping.
     """
 
-    def __init__(self, tile_paths, device_family, img_size, aux_channel_names):
+    def __init__(self, tile_paths, device_family, img_size, aux_channel_names,
+                 num_frames=None):
         import torch  # noqa: F401  (import guarded to keep module import light)
         self._torch = __import__("torch")
         self.tile_paths = [str(p) for p in tile_paths]
         self.family = device_family
         self.img_size = img_size
         self.aux_channel_names = aux_channel_names
+        # The model's frame count MUST reach _build_inference_inputs, exactly
+        # as run_inference threads it. A single-frame checkpoint (Prithvi
+        # ladder: num_temporal_frames=1) with num_frames=None here defaults to
+        # the 4-frame branch, building 4x temporal_coords the model's
+        # single-frame temporal_encoding cannot add (15376 vs 3844) — the
+        # first ladder-eval wave died exactly so.
+        self.num_frames = num_frames
         self._infcmp = _load_infcmp()
 
     def __len__(self):
@@ -161,7 +169,8 @@ class TileInferenceDataset:
         # tensors are moved to the GPU in the main loop after collation.
         inp = self._infcmp._build_inference_inputs(
             tile_path, self._torch.device("cpu"), self.img_size,
-            self.aux_channel_names, family=self.family)
+            self.aux_channel_names, family=self.family,
+            num_frames=self.num_frames)
         item = {
             "img5d": inp["img5d"].squeeze(0),   # drop the (1, …) batch dim
             "aux": inp["aux"].squeeze(0),
@@ -246,7 +255,38 @@ def infer_all(
     print(f"  loaded epoch={epoch} ckpt_mIoU={miou} native_img={native} "
           f"family={family}")
 
-    ds = TileInferenceDataset(tiles, family, img_size, None)
+    # The checkpoint KNOWS its aux set — reconstructing it from defaults is
+    # how the ladder eval died on its first run: every ladder model is
+    # 11-aux (markfukt on) and terramind is 13-aux (ΔSAR), while a None
+    # here builds the canonical 10 and the aux_proj conv rejects the
+    # tensor at the first forward. Same rule as extract_plot_features.
+    # load_model already read the config and derived the aux count from the
+    # aux conv's in-channel dim, so read both off the model rather than
+    # re-opening the checkpoint (a second torch.load peaks at ~2x its size).
+    aux_names = getattr(model, "ck_cfg", {}).get("enabled_aux_names")
+    aux_names = list(aux_names) if aux_names else None
+    n_aux = getattr(model, "n_aux_channels", None)
+    if aux_names:
+        # The count is authoritative (read off the conv); the names are what
+        # the trainer recorded. A disagreement means the config does not
+        # describe this checkpoint, and feeding it would build a stack of the
+        # right depth from the wrong channels — right shape, wrong content,
+        # no exception. Refuse instead.
+        if n_aux is not None and len(aux_names) != n_aux:
+            raise ValueError(
+                f"{checkpoint}: config lists {len(aux_names)} aux names "
+                f"{aux_names} but the aux conv takes {n_aux} channels")
+        print(f"  aux from checkpoint config: {len(aux_names)} channels "
+              f"{aux_names}")
+
+    # load_model stamps the model with its trained frame count (single-frame
+    # ladder columns = 1, Prithvi-600M = 4). Thread it exactly as
+    # run_inference does — without it the dataset defaults to the 4-frame
+    # branch and a 1-frame model's temporal_encoding rejects the 4x token
+    # grid (15376 vs 3844), which killed the first ladder-eval wave.
+    model_num_frames = getattr(model, "num_frames", None)
+    ds = TileInferenceDataset(tiles, family, img_size, aux_names,
+                              num_frames=model_num_frames)
 
     # Group tiles by crop size so a batch collates cleanly. Odd-sized tiles are
     # inferred at batch=1 rather than being mis-cropped or padded.

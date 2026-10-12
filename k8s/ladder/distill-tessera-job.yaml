@@ -27,7 +27,7 @@ spec:
         accelerator: nvidia-gtx-2080ti
       containers:
         - name: distill
-          image: python:3.11-slim
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
           command:
             - bash
             - -c
@@ -68,6 +68,7 @@ spec:
                 --img-size 504 \
                 --backbone-name tessera_v1 \
                 --enable-markfukt \
+                --require-npz-key tessera \
                 --out /cephfs/distill/heads/tessera_r2_plot_features.parquet \
                 --device cuda
 
@@ -113,8 +114,14 @@ spec:
               valueFrom:
                 secretKeyRef: { name: hf-token, key: token, optional: true }
           resources:
-            requests: { cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }
-            limits: { cpu: "4", memory: "24Gi", nvidia.com/gpu: "1" }
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
           volumeMounts:
             - { name: cephfs, mountPath: /cephfs }
             # Same PVC, second mount point. The NFI plot index stores
