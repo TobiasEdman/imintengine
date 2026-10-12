@@ -57,8 +57,13 @@ from .sampler import (
 )
 from .scb_tatort import generate_scb_densification_regions
 from .skg_sumpskog import generate_sumpskog_densification_regions
-from .skg_height import fetch_height_tile
-from .skg_grunddata import fetch_volume_tile, fetch_basal_area_tile, fetch_diameter_tile
+
+from .skg_grunddata import (
+    fetch_basal_area_tile,
+    fetch_diameter_tile,
+    fetch_tree_height_tile,
+    fetch_volume_tile,
+)
 from .copernicus_dem import fetch_dem_tile
 
 # Sentinel value to signal that the NMD producer is done
@@ -928,7 +933,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                                   else None)
                     if config.enable_height_channel:
                         try:
-                            height = fetch_height_tile(
+                            height = fetch_tree_height_tile(
                                 cell.west_3006, cell.south_3006,
                                 cell.east_3006, cell.north_3006,
                                 size_px=_spatial,
@@ -1337,7 +1342,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                               else None)
                 if config.enable_height_channel:
                     try:
-                        height = fetch_height_tile(
+                        height = fetch_tree_height_tile(
                             cell.west_3006, cell.south_3006,
                             cell.east_3006, cell.north_3006,
                             size_px=_spatial,
