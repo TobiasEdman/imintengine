@@ -44,7 +44,7 @@ from typing import Literal
 
 import numpy as np
 
-from .skg_height import _to_nmd_grid_bounds
+from .nmd_grid import to_nmd_grid_bounds
 
 
 _DEFAULT_DATA_ROOT = "~/imint_data/nvv_aux"
@@ -152,8 +152,8 @@ def fetch_bush_cover_tile(west, south, east, north, **kw):
 def fetch_tree_height_tile_nvv(west, south, east, north, **kw):
     """Pirinen lager #8 — träd-höjd via NVV (5–45 m), uint8 dm.
 
-    Alternative to ``imint.training.skg_height.fetch_height_tile``,
-    sourced from NVV NMD2018 instead of Skogsstyrelsen ImageServer.
+    Alternative to ``imint.training.skg_grunddata.fetch_tree_height_tile``,
+    sourced from NVV NMD2018 instead of Skogsstyrelsen laser data.
     """
     return fetch_objektdata_tile(west, south, east, north,
                                   kind="hojd", height_range="5_45", **kw)
@@ -175,7 +175,7 @@ def fetch_objektdata_for_coords(
     data_root: Path | None = None,
 ) -> np.ndarray:
     """Fetch for a WGS84 bbox (snapped to NMD 10 m grid)."""
-    projected = _to_nmd_grid_bounds(coords)
+    projected = to_nmd_grid_bounds(coords)
     return fetch_objektdata_tile(
         projected["west"], projected["south"],
         projected["east"], projected["north"],

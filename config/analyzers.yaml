@@ -41,6 +41,16 @@ samgeo:
   # points: [[100,200]]     # Pixel coords for point mode
   # text_prompt: "buildings" # For text mode (requires groundingdino-py)
 
+ai2_vessels_s1:
+  # AI2 Sentinel-1 vessel detector + attributes (imint/analyzers/ai2_vessels_s1.py).
+  # Needs GRD DN bands VV_DN/VH_DN + VV_DN_HIST/VH_DN_HIST on AI2's UTM grid, as
+  # produced by imint.fetch.fetch_s1_vessel_scenes; Sentinel-2 jobs skip it.
+  enabled: false
+  score_threshold: 0.7      # AI2 API default
+  infra_distance_m: 200     # AI2 code default (its docs say 50 m)
+  # infra_path: /path/to/satlas_marine_infrastructure.geojson  # default: cached download
+  device: cpu
+
 insar:
   enabled: false            # InSAR ground displacement (requires: pip install mintpy)
   mode: differential        # "velocity", "timeseries", or "differential"

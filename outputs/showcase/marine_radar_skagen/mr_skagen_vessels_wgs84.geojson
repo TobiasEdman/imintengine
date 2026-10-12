@@ -1,0 +1,1608 @@
+{
+ "type": "FeatureCollection",
+ "properties": {
+  "date": "2026-06-28",
+  "bbox": [
+   10.554762,
+   57.626525,
+   10.975238,
+   57.833475
+  ],
+  "crs": "EPSG:32632",
+  "grid_px": [
+   2564,
+   2370
+  ],
+  "source": "Microsoft Planetary Computer sentinel-1-grd (GRD DN, uncalibrated)",
+  "sensor": "sentinel-1",
+  "scene_id": "S1D_IW_GRDH_1SDV_20260628T053135_20260628T053200_003432_0060CF",
+  "historical_scene_id": "S1D_IW_GRDH_1SDV_20260523T053133_20260523T053158_002907_004F80",
+  "scene_time_utc": "2026-06-28T05:31:42.206698Z",
+  "scene_start_utc": "2026-06-28T05:31:35.545314Z",
+  "scene_end_utc": "2026-06-28T05:32:00.544057Z",
+  "valid_frac_target": 1.0,
+  "valid_frac_historical": 1.0,
+  "n_outside_bbox": 1,
+  "detectors": {
+   "ai2_s1": {
+    "name": "imint AI2S1VesselAnalyzer (Swin V2 B x2 + FPN + Faster R-CNN)",
+    "inputs": "GRD DN VV+VH, target + historical scene, AI2 10 m UTM grid",
+    "score_threshold": 0.3,
+    "raw": 63,
+    "after_nms": 39,
+    "infra_filter": {
+     "applied": true,
+     "distance_m": 200.0,
+     "removed": 0,
+     "dataset": "Satlas marine infrastructure (Allen AI, ODC-BY)",
+     "path": "/Users/tobiasedman/.cache/imint/satlas_marine_infrastructure/latest.geojson",
+     "points": 39582,
+     "sha256": "a40bebd54df7cdd4c46d25d4ce2a7035d1f7201c6b23bb7fac7144c1f3266f63"
+    },
+    "attributes": true,
+    "water_mask": "none (Sentinel-1 has no SCL; AI2 applies none)",
+    "count": 38
+   }
+  }
+ },
+ "features": [
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.702212,
+       57.6678451
+      ],
+      [
+       10.7020861,
+       57.6651584
+      ],
+      [
+       10.7058933,
+       57.6651071
+      ],
+      [
+       10.7060195,
+       57.6677938
+      ],
+      [
+       10.702212,
+       57.6678451
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.998,
+    "pixel_count": 680,
+    "pred_length_m": 173.4,
+    "pred_width_m": 30.0,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 258.9,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.959
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.7040544,
+       57.6562849
+      ],
+      [
+       10.703928,
+       57.6535897
+      ],
+      [
+       10.7089276,
+       57.6535223
+      ],
+      [
+       10.7090543,
+       57.6562175
+      ],
+      [
+       10.7040544,
+       57.6562849
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9976,
+    "pixel_count": 896,
+    "pred_length_m": 178.7,
+    "pred_width_m": 31.8,
+    "pred_speed_kn": 8.2,
+    "pred_heading_deg": 221.4,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.975
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6160503,
+       57.6676682
+      ],
+      [
+       10.6159307,
+       57.6649802
+      ],
+      [
+       10.6209272,
+       57.6649162
+      ],
+      [
+       10.6210471,
+       57.6676042
+      ],
+      [
+       10.6160503,
+       57.6676682
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9965,
+    "pixel_count": 893,
+    "pred_length_m": 174.4,
+    "pred_width_m": 28.8,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 248.5,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.964
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6346679,
+       57.8103663
+      ],
+      [
+       10.6345462,
+       57.8076752
+      ],
+      [
+       10.6395552,
+       57.8076106
+      ],
+      [
+       10.6396773,
+       57.8103017
+      ],
+      [
+       10.6346679,
+       57.8103663
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9964,
+    "pixel_count": 893,
+    "pred_length_m": 188.8,
+    "pred_width_m": 32.2,
+    "pred_speed_kn": 14.3,
+    "pred_heading_deg": 94.5,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.95
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.7529017,
+       57.6672493
+      ],
+      [
+       10.7527717,
+       57.6645564
+      ],
+      [
+       10.7577716,
+       57.664487
+      ],
+      [
+       10.7579019,
+       57.6671799
+      ],
+      [
+       10.7529017,
+       57.6672493
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9958,
+    "pixel_count": 895,
+    "pred_length_m": 98.7,
+    "pred_width_m": 15.1,
+    "pred_speed_kn": 10.5,
+    "pred_heading_deg": 183.8,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.73
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.5958993,
+       57.698145
+      ],
+      [
+       10.5957809,
+       57.695453
+      ],
+      [
+       10.6007748,
+       57.6953899
+      ],
+      [
+       10.6008936,
+       57.6980819
+      ],
+      [
+       10.5958993,
+       57.698145
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9955,
+    "pixel_count": 893,
+    "pred_length_m": 131.8,
+    "pred_width_m": 21.2,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 271.7,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.593
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6759139,
+       57.6527752
+      ],
+      [
+       10.6757897,
+       57.650081
+      ],
+      [
+       10.6807931,
+       57.6500146
+      ],
+      [
+       10.6809176,
+       57.6527088
+      ],
+      [
+       10.6759139,
+       57.6527752
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9954,
+    "pixel_count": 896,
+    "pred_length_m": 182.0,
+    "pred_width_m": 32.0,
+    "pred_speed_kn": 0.4,
+    "pred_heading_deg": 282.2,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.863
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.9691037,
+       57.6771866
+      ],
+      [
+       10.9689576,
+       57.6744927
+      ],
+      [
+       10.9739673,
+       57.6744147
+      ],
+      [
+       10.9741137,
+       57.6771085
+      ],
+      [
+       10.9691037,
+       57.6771866
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9953,
+    "pixel_count": 897,
+    "pred_length_m": 164.1,
+    "pred_width_m": 27.1,
+    "pred_speed_kn": 11.6,
+    "pred_heading_deg": 295.9,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.576
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6349998,
+       57.6944217
+      ],
+      [
+       10.6348786,
+       57.691732
+      ],
+      [
+       10.6398788,
+       57.6916673
+      ],
+      [
+       10.6400003,
+       57.694357
+      ],
+      [
+       10.6349998,
+       57.6944217
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9952,
+    "pixel_count": 893,
+    "pred_length_m": 117.4,
+    "pred_width_m": 18.8,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 193.4,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.937
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.7092663,
+       57.642016
+      ],
+      [
+       10.7091394,
+       57.6393165
+      ],
+      [
+       10.7141298,
+       57.6392489
+      ],
+      [
+       10.714257,
+       57.6419485
+      ],
+      [
+       10.7092663,
+       57.642016
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9951,
+    "pixel_count": 896,
+    "pred_length_m": 275.4,
+    "pred_width_m": 43.8,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 19.7,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.545
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.5929765,
+       57.6499264
+      ],
+      [
+       10.5928585,
+       57.6472328
+      ],
+      [
+       10.5978555,
+       57.6471698
+      ],
+      [
+       10.5979739,
+       57.6498634
+      ],
+      [
+       10.5929765,
+       57.6499264
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.995,
+    "pixel_count": 895,
+    "pred_length_m": 76.7,
+    "pred_width_m": 12.6,
+    "pred_speed_kn": 0.4,
+    "pred_heading_deg": 89.7,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.547
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6803963,
+       57.6797909
+      ],
+      [
+       10.6802718,
+       57.6770989
+      ],
+      [
+       10.6852722,
+       57.6770323
+      ],
+      [
+       10.6853971,
+       57.6797244
+      ],
+      [
+       10.6803963,
+       57.6797909
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9949,
+    "pixel_count": 895,
+    "pred_length_m": 181.8,
+    "pred_width_m": 31.8,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 245.5,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.959
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6151915,
+       57.700563
+      ],
+      [
+       10.6150715,
+       57.6978672
+      ],
+      [
+       10.620069,
+       57.6978034
+      ],
+      [
+       10.6201893,
+       57.7004991
+      ],
+      [
+       10.6151915,
+       57.700563
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9947,
+    "pixel_count": 895,
+    "pred_length_m": 135.4,
+    "pred_width_m": 22.0,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 268.5,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.86
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.679266,
+       57.6971206
+      ],
+      [
+       10.6791414,
+       57.694428
+      ],
+      [
+       10.684151,
+       57.6943614
+      ],
+      [
+       10.684276,
+       57.697054
+      ],
+      [
+       10.679266,
+       57.6971206
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9944,
+    "pixel_count": 896,
+    "pred_length_m": 215.6,
+    "pred_width_m": 32.1,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 261.9,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.975
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6749818,
+       57.6677521
+      ],
+      [
+       10.6748577,
+       57.6650601
+      ],
+      [
+       10.6798486,
+       57.6649939
+      ],
+      [
+       10.679973,
+       57.6676859
+      ],
+      [
+       10.6749818,
+       57.6677521
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9942,
+    "pixel_count": 893,
+    "pred_length_m": 226.1,
+    "pred_width_m": 32.1,
+    "pred_speed_kn": 0.2,
+    "pred_heading_deg": 48.8,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.945
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.7662756,
+       57.8261925
+      ],
+      [
+       10.766144,
+       57.8235031
+      ],
+      [
+       10.7711856,
+       57.8234328
+      ],
+      [
+       10.7713176,
+       57.8261222
+      ],
+      [
+       10.7662756,
+       57.8261925
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9942,
+    "pixel_count": 897,
+    "pred_length_m": 242.8,
+    "pred_width_m": 41.8,
+    "pred_speed_kn": 7.4,
+    "pred_heading_deg": 283.8,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.926
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6158597,
+       57.6537354
+      ],
+      [
+       10.6157399,
+       57.6510396
+      ],
+      [
+       10.6207303,
+       57.6509757
+      ],
+      [
+       10.6208505,
+       57.6536715
+      ],
+      [
+       10.6158597,
+       57.6537354
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9942,
+    "pixel_count": 895,
+    "pred_length_m": 93.2,
+    "pred_width_m": 14.2,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 263.5,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.808
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6421273,
+       57.6457398
+      ],
+      [
+       10.6420057,
+       57.6430486
+      ],
+      [
+       10.6470254,
+       57.6429833
+      ],
+      [
+       10.6471473,
+       57.6456745
+      ],
+      [
+       10.6421273,
+       57.6457398
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9927,
+    "pixel_count": 899,
+    "pred_length_m": 258.6,
+    "pred_width_m": 43.3,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 267.3,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.813
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.5693137,
+       57.6859341
+      ],
+      [
+       10.5691975,
+       57.6832442
+      ],
+      [
+       10.5742076,
+       57.683182
+      ],
+      [
+       10.5743242,
+       57.6858718
+      ],
+      [
+       10.5693137,
+       57.6859341
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9925,
+    "pixel_count": 895,
+    "pred_length_m": 53.0,
+    "pred_width_m": 10.8,
+    "pred_speed_kn": 0.6,
+    "pred_heading_deg": 237.7,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.43
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.8775183,
+       57.7209496
+      ],
+      [
+       10.8773788,
+       57.7182565
+      ],
+      [
+       10.882389,
+       57.7181821
+      ],
+      [
+       10.8825288,
+       57.7208752
+      ],
+      [
+       10.8775183,
+       57.7209496
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9925,
+    "pixel_count": 896,
+    "pred_length_m": 231.4,
+    "pred_width_m": 41.9,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 8.4,
+    "pred_type": "tanker",
+    "pred_type_conf": 0.914
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.8876614,
+       57.6734461
+      ],
+      [
+       10.8875214,
+       57.6707524
+      ],
+      [
+       10.8925361,
+       57.6706775
+      ],
+      [
+       10.8926765,
+       57.6733712
+      ],
+      [
+       10.8876614,
+       57.6734461
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9876,
+    "pixel_count": 898,
+    "pred_length_m": 40.0,
+    "pred_width_m": 8.3,
+    "pred_speed_kn": 17.2,
+    "pred_heading_deg": 234.1,
+    "pred_type": "passenger",
+    "pred_type_conf": 0.638
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6984903,
+       57.6948926
+      ],
+      [
+       10.6983643,
+       57.6922007
+      ],
+      [
+       10.7033752,
+       57.6921334
+      ],
+      [
+       10.7035016,
+       57.6948253
+      ],
+      [
+       10.6984903,
+       57.6948926
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9851,
+    "pixel_count": 896,
+    "pred_length_m": 278.2,
+    "pred_width_m": 42.4,
+    "pred_speed_kn": 0.4,
+    "pred_heading_deg": 22.6,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.923
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.7839276,
+       57.8081681
+      ],
+      [
+       10.7837947,
+       57.8054781
+      ],
+      [
+       10.7888219,
+       57.8054073
+      ],
+      [
+       10.7889551,
+       57.8080972
+      ],
+      [
+       10.7839276,
+       57.8081681
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9755,
+    "pixel_count": 896,
+    "pred_length_m": 23.2,
+    "pred_width_m": 6.5,
+    "pred_speed_kn": 18.0,
+    "pred_heading_deg": 307.2,
+    "pred_type": "passenger",
+    "pred_type_conf": 0.513
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.8606083,
+       57.6710739
+      ],
+      [
+       10.8604703,
+       57.6683791
+      ],
+      [
+       10.8653563,
+       57.6683072
+      ],
+      [
+       10.8654947,
+       57.671002
+      ],
+      [
+       10.8606083,
+       57.6710739
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.9508,
+    "pixel_count": 875,
+    "pred_length_m": 57.9,
+    "pred_width_m": 7.2,
+    "pred_speed_kn": 6.8,
+    "pred_heading_deg": 8.8,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.394
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.8799935,
+       57.722562
+      ],
+      [
+       10.879854,
+       57.7198726
+      ],
+      [
+       10.8848785,
+       57.7197979
+      ],
+      [
+       10.8850183,
+       57.7224873
+      ],
+      [
+       10.8799935,
+       57.722562
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.886,
+    "pixel_count": 897,
+    "pred_length_m": 252.6,
+    "pred_width_m": 37.6,
+    "pred_speed_kn": 0.3,
+    "pred_heading_deg": 5.7,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.661
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6664217,
+       57.8247466
+      ],
+      [
+       10.6662975,
+       57.8220567
+      ],
+      [
+       10.6713241,
+       57.8219906
+      ],
+      [
+       10.6714486,
+       57.8246804
+      ],
+      [
+       10.6664217,
+       57.8247466
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.8609,
+    "pixel_count": 895,
+    "pred_length_m": 19.1,
+    "pred_width_m": 5.9,
+    "pred_speed_kn": 3.4,
+    "pred_heading_deg": 2.5,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.817
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.5917538,
+       57.6304341
+      ],
+      [
+       10.591636,
+       57.6277429
+      ],
+      [
+       10.596647,
+       57.6276798
+      ],
+      [
+       10.5967651,
+       57.6303709
+      ],
+      [
+       10.5917538,
+       57.6304341
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.828,
+    "pixel_count": 897,
+    "pred_length_m": 21.7,
+    "pred_width_m": 6.1,
+    "pred_speed_kn": 3.6,
+    "pred_heading_deg": 4.1,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.572
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.5727964,
+       57.712399
+      ],
+      [
+       10.5726797,
+       57.7097086
+      ],
+      [
+       10.57771,
+       57.709646
+      ],
+      [
+       10.577827,
+       57.7123364
+      ],
+      [
+       10.5727964,
+       57.712399
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.7892,
+    "pixel_count": 898,
+    "pred_length_m": 20.7,
+    "pred_width_m": 7.3,
+    "pred_speed_kn": 0.9,
+    "pred_heading_deg": 80.6,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.264
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.9335443,
+       57.6983825
+      ],
+      [
+       10.9334008,
+       57.6956904
+      ],
+      [
+       10.938416,
+       57.6956137
+      ],
+      [
+       10.9385599,
+       57.6983058
+      ],
+      [
+       10.9335443,
+       57.6983825
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.6966,
+    "pixel_count": 897,
+    "pred_length_m": 19.4,
+    "pred_width_m": 5.8,
+    "pred_speed_kn": 7.1,
+    "pred_heading_deg": 89.7,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.779
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6410189,
+       57.7238313
+      ],
+      [
+       10.640897,
+       57.7211391
+      ],
+      [
+       10.6459265,
+       57.7210738
+      ],
+      [
+       10.6460487,
+       57.723766
+      ],
+      [
+       10.6410189,
+       57.7238313
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.6624,
+    "pixel_count": 899,
+    "pred_length_m": 20.6,
+    "pred_width_m": 6.2,
+    "pred_speed_kn": 3.6,
+    "pred_heading_deg": 133.9,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.704
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.8865224,
+       57.6691765
+      ],
+      [
+       10.8864075,
+       57.6669635
+      ],
+      [
+       10.8914347,
+       57.6668885
+      ],
+      [
+       10.89155,
+       57.6691014
+      ],
+      [
+       10.8865224,
+       57.6691765
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.5771,
+    "pixel_count": 740,
+    "pred_length_m": 42.7,
+    "pred_width_m": 11.0,
+    "pred_speed_kn": 19.5,
+    "pred_heading_deg": 222.0,
+    "pred_type": "passenger",
+    "pred_type_conf": 0.933
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.75309,
+       57.6681101
+      ],
+      [
+       10.7530152,
+       57.6665589
+      ],
+      [
+       10.7581228,
+       57.666488
+      ],
+      [
+       10.7581979,
+       57.6680392
+      ],
+      [
+       10.75309,
+       57.6681101
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.5719,
+    "pixel_count": 527,
+    "pred_length_m": 96.2,
+    "pred_width_m": 14.7,
+    "pred_speed_kn": 9.2,
+    "pred_heading_deg": 180.9,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.812
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.8603337,
+       57.6696072
+      ],
+      [
+       10.860253,
+       57.6680321
+      ],
+      [
+       10.8653177,
+       57.6679575
+      ],
+      [
+       10.8653986,
+       57.6695327
+      ],
+      [
+       10.8603337,
+       57.6696072
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.5349,
+    "pixel_count": 530,
+    "pred_length_m": 89.6,
+    "pred_width_m": 8.6,
+    "pred_speed_kn": 9.0,
+    "pred_heading_deg": 181.8,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.401
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.5817306,
+       57.6702911
+      ],
+      [
+       10.5816133,
+       57.6675978
+      ],
+      [
+       10.5866524,
+       57.6675347
+      ],
+      [
+       10.58677,
+       57.670228
+      ],
+      [
+       10.5817306,
+       57.6702911
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.4978,
+    "pixel_count": 902,
+    "pred_length_m": 27.9,
+    "pred_width_m": 6.3,
+    "pred_speed_kn": 5.9,
+    "pred_heading_deg": 277.9,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.434
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.5814569,
+       57.6721296
+      ],
+      [
+       10.5813748,
+       57.6702435
+      ],
+      [
+       10.5863856,
+       57.6701808
+      ],
+      [
+       10.586468,
+       57.6720668
+      ],
+      [
+       10.5814569,
+       57.6721296
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.375,
+    "pixel_count": 628,
+    "pred_length_m": 33.5,
+    "pred_width_m": 6.3,
+    "pred_speed_kn": 5.5,
+    "pred_heading_deg": 48.3,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.484
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.7848026,
+       57.6827325
+      ],
+      [
+       10.7846689,
+       57.6800135
+      ],
+      [
+       10.7886515,
+       57.6799572
+      ],
+      [
+       10.7887855,
+       57.6826762
+      ],
+      [
+       10.7848026,
+       57.6827325
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.3595,
+    "pixel_count": 720,
+    "pred_length_m": 19.9,
+    "pred_width_m": 6.0,
+    "pred_speed_kn": 4.8,
+    "pred_heading_deg": 0.5,
+    "pred_type": "fishing",
+    "pred_type_conf": 0.745
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6654131,
+       57.6298498
+      ],
+      [
+       10.6652897,
+       57.6271561
+      ],
+      [
+       10.6703024,
+       57.6270899
+      ],
+      [
+       10.6704261,
+       57.6297836
+      ],
+      [
+       10.6654131,
+       57.6298498
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.347,
+    "pixel_count": 899,
+    "pred_length_m": 137.8,
+    "pred_width_m": 17.4,
+    "pred_speed_kn": 8.4,
+    "pred_heading_deg": 270.9,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.501
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       10.6931654,
+       57.7028289
+      ],
+      [
+       10.6930397,
+       57.7001358
+      ],
+      [
+       10.6980511,
+       57.7000686
+      ],
+      [
+       10.6981772,
+       57.7027617
+      ],
+      [
+       10.6931654,
+       57.7028289
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "detector": "ai2_s1",
+    "score": 0.3439,
+    "pixel_count": 896,
+    "pred_length_m": 148.3,
+    "pred_width_m": 20.6,
+    "pred_speed_kn": 8.5,
+    "pred_heading_deg": 119.7,
+    "pred_type": "cargo",
+    "pred_type_conf": 0.495
+   }
+  }
+ ]
+}
