@@ -165,7 +165,8 @@ class SAMGeoAnalyzer(BaseAnalyzer):
 
         # Compute segment statistics
         unique_ids, counts = np.unique(seg_mask, return_counts=True)
-        n_segments = int(len(unique_ids[unique_ids > 0]))
+        foreground_counts = counts[unique_ids > 0]
+        n_segments = int(len(foreground_counts))
         total_pixels = seg_mask.size
         segment_stats = {
             "n_segments": n_segments,
@@ -173,8 +174,8 @@ class SAMGeoAnalyzer(BaseAnalyzer):
             "segmented_fraction": round(
                 float(np.sum(seg_mask > 0)) / total_pixels, 4
             ),
-            "largest_segment_pixels": int(counts[1:].max()) if n_segments > 0 else 0,
-            "median_segment_pixels": int(np.median(counts[1:])) if n_segments > 0 else 0,
+            "largest_segment_pixels": int(foreground_counts.max()) if n_segments > 0 else 0,
+            "median_segment_pixels": int(np.median(foreground_counts)) if n_segments > 0 else 0,
         }
 
         # Cleanup temp files
