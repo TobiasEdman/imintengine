@@ -1,0 +1,9 @@
+{
+  "id": "0105",
+  "subject": "Multi-year NFI control tiles: step 0 versioning and step 1 holdout census",
+  "description": "Steps 0 and 1 of the multi-year NFI control-tile plan (PR #69, ~/.agents/continuity/evidence/ImintEngine/nfi-multiyear-control-plan.md), go from Tobias 2026-10-11 for these two steps only. Step 0: version the four 2024-campaign Jobs that ran unversioned (nfi2024-vpp-retry5, nfi2024-zero-probe, ref-inventory-2024, tessera-refetch-all) under k8s/ with digest-pinned images, recovered from the cluster and the session transcript. Step 1: a read-only CPU census Job over /data/holdout_val_512 (key and flag consistency as nfi2024-key-census2, per-tile modality completeness against the 2024 bar, an NFI plot index with the (TractID, PlotID, Year) identity, 496 px common crop and the task-0103 841-plot-year teacher exclusion, a never-trained-on check over every split file and feature table) with an aggregate report under docs/experiments/. Intended files: k8s/nfi2024-vpp-retry5-job.yaml, k8s/nfi2024-zero-probe-job.yaml, k8s/nfi2024-ref-inventory-job.yaml, k8s/tessera-refetch-all-job.yaml, k8s/nfi-holdout-census-job.yaml, scripts/census_holdout_val_512.py, tests/test_census_holdout_val_512.py, docs/experiments/nfi_multiyear_holdout_census_*. No fetch, no GPU, no freeze, no writes under /data; step 3 needs a separate go.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/nfi-multiyear-census",
+  "created_at": "2026-10-12T06:30:00Z"
+}
