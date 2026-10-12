@@ -25,13 +25,21 @@
 # nfi2024-key-census2, so it reads them and reports them separately
 # (not world-readable, by year). Whether to count them is Tobias's call.
 #
+# v2 (2026-10-12, after Codex's review of #71): the script now fails closed
+# on unparsed split files and unclassified text evidence, quarantines tiles
+# with contradictory years, names its verdict as named-tile evidence with
+# spatial independence beside it, and reports the view that excludes tiles
+# overlapping a same-year training tile (decision 2026-10-12). The first
+# run is Job nfi-holdout-census (uid b1bcbfbf-…); this rerun regenerates the
+# committed record from the corrected code. Still read-only, PVC readOnly.
+#
 # Scale: 1,463 tiles decompressed once (census2 took 18.7 min for 475) plus
 # 7,882 cohort headers for the footprint check, so ~2 h; deadline 5 h.
 # Aggregates only: no plot identity or coordinate reaches the log.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: nfi-holdout-census
+  name: nfi-holdout-census-v2
   namespace: prithvi-training-default
   labels: {app: fieldtruth-prep, purpose: holdout-census}
 spec:
@@ -88,7 +96,7 @@ spec:
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: CENSUS_BRANCH, value: "agent/te/claude/nfi-multiyear-census"}
-            - {name: CENSUS_COMMIT, value: "54c526e4380dc6b271f44b47bf818e53e82bfc7b"}
+            - {name: CENSUS_COMMIT, value: "df7dea162ec48981f81b4a72aced7f5ab2e59882"}
             - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
             - {name: SIZING_COMMIT, value: "94b26bbbef9d28220734e4efce38ed4943fd6157"}
           resources:
