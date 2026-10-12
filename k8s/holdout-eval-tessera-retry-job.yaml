@@ -9,15 +9,20 @@
 # it, not an absence of coverage. The 2024 campaign met the same ambiguity and
 # resolved it with a targeted re-probe (tessera-coverage-probe-job.yaml).
 #
-# This Job reads `failed_or_hole` from the tessera report and re-runs the
-# repo's enrich_one_tile on exactly those tiles with ONE worker and no cache
-# eviction, so a transient failure cannot repeat. A tile that now yields a
-# non-zero embedding gets has_tessera=1 and the geotessera stamp; one that
-# fails again or comes back all zero keeps has_tessera=0 with a reason that
-# says it was re-probed. Nothing else in the copy is touched. PU-free.
+# Outcomes are kept apart (Codex review 5496125869):
+#   recovered          non-zero, finite, correctly shaped embedding -> has_tessera=1 + stamp
+#   already_recovered  a previous run already did that; left untouched (resume-safe)
+#   coverage_hole      the helper reports no TESSERA block for the year, or the block
+#                      is all zero -> has_tessera=0 with a reason that says "confirmed"
+#   unresolved         any other failure (download, metadata, non-finite values):
+#                      tile left exactly as it was, listed, and the Job exits non-zero —
+#                      a failed probe is never recorded as a confirmed hole
+#   missing_in_copy    named in the report but absent from the copy -> listed, exit non-zero
+# The report's dir and source must match this Job's, or it refuses.
 #
-# geotessera is pinned to the promotion's version and the installed version is
-# asserted before anything is written, as in holdout-eval-tessera-job.yaml.
+# Source binding: the repo helper is taken from a full reviewed commit of main
+# and its bytes are checked before import, like the planner and census Jobs.
+# geotessera is pinned and the installed version asserted before any write.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -48,8 +53,12 @@ spec:
               mkdir -p /workspace && cd /workspace
               git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
               cd ie
-              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              git fetch -q --depth 1 origin "$SCRIPTS_COMMIT"
+              git checkout -q "$SCRIPTS_COMMIT"
               echo "HEAD: $(git rev-parse HEAD)"
+              # The helper that selects the year and rewrites the tile must be the reviewed bytes.
+              echo "$HELPER_SHA256  scripts/enrich_tiles_tessera.py" | sha256sum -c -
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
               python scripts/enrich_tiles_tessera.py --help > /dev/null && echo "imports OK"
               python - <<'PYEOF'
               import importlib.metadata, json, os, sys, time
@@ -66,18 +75,31 @@ spec:
               REPORT_IN = "/data/manifests/holdout_eval_512_tessera.json"
               REPORT_OUT = "/data/manifests/holdout_eval_512_tessera_retry.json"
               STAMP = time.strftime("%Y-%m-%d")
+              EMBED_CH = 128
               installed = importlib.metadata.version("geotessera")
               if installed != os.environ["GEOTESSERA_VERSION"]:
                   sys.exit(f"REFUSING: geotessera {installed} installed, {os.environ['GEOTESSERA_VERSION']} required")
               SRC = f"geotessera-{installed}"
 
-              names = json.load(open(REPORT_IN))["failed_or_hole"]
+              report = json.load(open(REPORT_IN))
+              if report.get("dir") != DIR or report.get("source") != SRC:
+                  sys.exit(f"REFUSING: report is for dir={report.get('dir')} source={report.get('source')}, "
+                           f"this Job runs on {DIR} with {SRC}")
+              names = sorted(report["failed_or_hole"])
               print(f"tiles to re-probe: {len(names)}")
-              if not names:
-                  json.dump({"dir": DIR, "reprobed": 0, "recovered": [], "genuine_holes": []}, open(REPORT_OUT, "w"), indent=1)
-                  print("nothing to re-probe"); sys.exit(0)
-              os.makedirs(EMB, exist_ok=True); os.makedirs(REG, exist_ok=True)
-              gt = GeoTessera(embeddings_dir=EMB, cache_dir=REG)   # no LRU guard: one worker, nothing evicts
+
+              def load(path):
+                  d = np.load(path, allow_pickle=True)
+                  return d, (d["tessera"] if "tessera" in d.files else None)
+
+              def usable(d, a):
+                  """Finite, non-zero, 128 channels on the spectral grid, flagged and stamped."""
+                  if a is None or "spectral" not in d.files:
+                      return False
+                  a = np.asarray(a)
+                  grid = tuple(d["spectral"].shape[1:])
+                  return (a.ndim == 3 and a.shape[0] == EMBED_CH and tuple(a.shape[1:]) == grid
+                          and np.isfinite(a).all() and bool(np.any(a)))
 
               def rewrite(path, drop=(), **fields):
                   data = dict(np.load(path, allow_pickle=True))
@@ -88,47 +110,82 @@ spec:
                   np.savez_compressed(tmp, **data)
                   os.replace(tmp, path)
 
-              st, recovered, genuine = Counter(), [], []
-              for i, name in enumerate(sorted(names), 1):
+              out = {"recovered": [], "already_recovered": [], "coverage_hole": [], "unresolved": [],
+                     "missing_in_copy": []}
+              reasons = {}
+              gt = None
+              for i, name in enumerate(names, 1):
                   path = f"{DIR}/{name}.npz"
                   if not os.path.exists(path):
-                      st["missing_in_copy"] += 1; continue
-                  r = enrich_one_tile(path, gt, skip_existing=False)
-                  ok = r.get("status") == "ok"
-                  a = np.asarray(np.load(path, allow_pickle=True)["tessera"]) if ok else None
-                  if ok and a.ndim >= 2 and np.any(a):
-                      rewrite(path, drop=("tessera_gap_reason",), has_tessera=1, tessera_source=SRC)
-                      st["recovered"] += 1; recovered.append(name)
+                      out["missing_in_copy"].append(name); state = "missing_in_copy"
                   else:
-                      why = "all_zero" if ok else str(r.get("reason", "unknown"))[:60].replace(" ", "_")
-                      rewrite(path, has_tessera=0, tessera_source=SRC,
-                              tessera_gap_reason=f"tessera_hole_confirmed_by_single_worker_reprobe__{why}__verified_{STAMP}")
-                      st["genuine_hole"] += 1; genuine.append(name)
-                  print(f"  [{i}/{len(names)}] {name}: {'recovered' if name in recovered else 'hole'}", flush=True)
+                      d, a = load(path)
+                      if int(d.get("has_tessera", 0)) == 1 and str(d.get("tessera_source", "")) == SRC and usable(d, a):
+                          out["already_recovered"].append(name); state = "already_recovered"
+                      else:
+                          if gt is None:
+                              os.makedirs(EMB, exist_ok=True); os.makedirs(REG, exist_ok=True)
+                              gt = GeoTessera(embeddings_dir=EMB, cache_dir=REG)  # one worker, no eviction guard
+                          r = enrich_one_tile(path, gt, skip_existing=False)
+                          reason = str(r.get("reason", ""))
+                          if r.get("status") == "ok":
+                              d, a = load(path)
+                              arr = np.asarray(a)
+                              if usable(d, a):
+                                  rewrite(path, drop=("tessera_gap_reason",), has_tessera=1, tessera_source=SRC)
+                                  state = "recovered"
+                              elif arr.ndim >= 2 and np.isfinite(arr).all() and not np.any(arr):
+                                  rewrite(path, has_tessera=0, tessera_source=SRC,
+                                          tessera_gap_reason=f"tessera_all_zero_in_{SRC}__confirmed_by_single_worker_reprobe__{STAMP}")
+                                  state = "coverage_hole"
+                              else:
+                                  # non-finite or wrong shape: a data failure, never promoted; tile left as written
+                                  rewrite(path, has_tessera=0)
+                                  reasons[name] = f"invalid_embedding shape={arr.shape} finite={bool(np.isfinite(arr).all())}"
+                                  state = "unresolved"
+                          elif reason.startswith("no_tessera_tiles_for_year"):
+                              rewrite(path, has_tessera=0, tessera_source=SRC,
+                                      tessera_gap_reason=f"no_tessera_coverage__{reason}__confirmed_by_single_worker_reprobe__{STAMP}")
+                              state = "coverage_hole"
+                          else:
+                              reasons[name] = reason or "failed"   # download/metadata/other: left untouched
+                              state = "unresolved"
+                          if state != "unresolved":
+                              out[state].append(name)
+                          else:
+                              out["unresolved"].append(name)
+                  print(f"  [{i}/{len(names)}] {name}: {state}", flush=True)
 
+              # Final check over every target still in the copy: a usable flag needs finite,
+              # non-zero, correctly shaped data and the promoted stamp.
               chk = Counter()
               for name in names:
                   path = f"{DIR}/{name}.npz"
                   if not os.path.exists(path):
                       continue
-                  d = np.load(path, allow_pickle=True)
-                  a = np.asarray(d["tessera"]); flag = int(d["has_tessera"])
-                  if flag == 1 and not np.any(a):
-                      chk["FLAG_ON_EMPTY"] += 1
-                  if flag == 1 and str(d["tessera_source"]) != SRC:
-                      chk["USABLE_WITHOUT_PROMOTED_STAMP"] += 1
-              print(f"\nresult: {dict(st)}; verify: {dict(chk)}")
-              json.dump({"dir": DIR, "source": SRC, "reprobed": len(names), "states": dict(st),
-                         "recovered": recovered, "genuine_holes": genuine, "verify": dict(chk)},
+                  d, a = load(path)
+                  if int(d.get("has_tessera", 0)) == 1 and not (usable(d, a) and str(d.get("tessera_source", "")) == SRC):
+                      chk["USABLE_FLAG_WITHOUT_VALID_STAMPED_EMBEDDING"] += 1
+              counts = {k: len(v) for k, v in out.items()}
+              print(f"\nresult: {counts}; verify: {dict(chk)}")
+              json.dump({"dir": DIR, "source": SRC, "scripts_commit": os.environ["SCRIPTS_COMMIT"],
+                         "reprobed": len(names), "counts": counts, **out, "unresolved_reasons": reasons,
+                         "verify": dict(chk), "verified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
                         open(REPORT_OUT, "w"), indent=1)
               print(f"report -> {REPORT_OUT}")
-              if chk["FLAG_ON_EMPTY"] or chk["USABLE_WITHOUT_PROMOTED_STAMP"]:
-                  sys.exit("FAIL: a usable tile lacks the promoted stamp or is empty")
+              if chk:
+                  sys.exit("FAIL: a usable flag sits on an invalid or unstamped embedding")
+              if out["unresolved"] or out["missing_in_copy"]:
+                  sys.exit(f"UNRESOLVED: {len(out['unresolved'])} probes failed for non-coverage reasons and "
+                           f"{len(out['missing_in_copy'])} targets are missing; reconcile explicitly before the census")
+              print("every re-probed tile is recovered or a confirmed coverage hole")
               PYEOF
               echo "=== done: $(date -u) ==="
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: GEOTESSERA_VERSION, value: "0.10.2"}   # the promotion's source
+            - {name: SCRIPTS_COMMIT, value: "d4d24f9ab1581ecdc8db739d4271905806401b6a"}   # main at review time
+            - {name: HELPER_SHA256, value: "71580e368bea50a405ec400f2607fe70be3cd92a7d641959c576ec048f0d2f20"}
           resources:
             requests: {cpu: "4", memory: "16Gi"}
             limits: {cpu: "4", memory: "16Gi"}
