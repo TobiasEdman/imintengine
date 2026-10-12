@@ -67,7 +67,7 @@ spec:
               PYEOF
 
               mkdir -p "$OUT"
-              BEFORE=$(ls $OUT/*.npz 2>/dev/null | wc -l); echo "TILES BEFORE: $BEFORE"
+              BEFORE=$(find "$OUT" -maxdepth 1 -name '*.npz' | wc -l); echo "TILES BEFORE: $BEFORE"
               set +e
               python3 scripts/fetch_unified_tiles.py \
                 --mode refetch \
@@ -82,7 +82,7 @@ spec:
                 --claim-dir "$OUT/.claims"
               RC=$?
               set -e
-              AFTER=$(ls $OUT/*.npz 2>/dev/null | wc -l); echo "TILES AFTER: $AFTER (before $BEFORE), fetch exit $RC"
+              AFTER=$(find "$OUT" -maxdepth 1 -name '*.npz' | wc -l); echo "TILES AFTER: $AFTER (before $BEFORE), fetch exit $RC"
 
               echo ""; echo "=== yield ==="
               python3 - "$MANIFEST" "$OUT" "$YEAR" <<'PYEOF'

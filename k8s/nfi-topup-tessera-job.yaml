@@ -30,7 +30,7 @@ spec:
               export PYTHONUNBUFFERED=1
               echo "=== top-up tessera — $(date -u) ==="
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
-              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml geotessera pandas pyarrow
+              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml "geotessera==$GEOTESSERA_VERSION" pandas pyarrow
               mkdir -p /workspace && cd /workspace
               git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
               cd ie
@@ -41,19 +41,23 @@ spec:
               for Y in $YEARS; do
                 ROOT=/data/unified_v2_512_nfi${Y}_staging
                 [ -d "$ROOT" ] || { echo "$Y: no staging root, skipping"; continue; }
-                BEFORE=$(ls $ROOT/*.npz 2>/dev/null | wc -l)
+                BEFORE=$(find "$ROOT" -maxdepth 1 -name '*.npz' | wc -l)
                 echo ""; echo "######## $Y: $BEFORE tiles ########"
                 [ "$BEFORE" -gt 0 ] || continue
                 python scripts/enrich_tiles_tessera.py --data-dir "$ROOT" \
                   --embeddings-dir /data/tessera_cache/embeddings --registry-cache-dir /data/tessera_cache/registry \
                   --workers 4 --cache-soft-gb 20 --skip-existing
-                AFTER=$(ls $ROOT/*.npz 2>/dev/null | wc -l)
+                AFTER=$(find "$ROOT" -maxdepth 1 -name '*.npz' | wc -l)
                 [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed in $ROOT"; exit 1; }
                 python - "$ROOT" <<'PYEOF'
-              import glob, os, sys, time
+              import glob, importlib.metadata, os, sys, time
               from collections import Counter
               import numpy as np
-              root = sys.argv[1]; SRC = "geotessera-0.10.2"; STAMP = time.strftime("%Y-%m-%d")
+              root = sys.argv[1]; STAMP = time.strftime("%Y-%m-%d")
+              installed = importlib.metadata.version("geotessera")
+              if installed != os.environ["GEOTESSERA_VERSION"]:
+                  sys.exit(f"REFUSING: geotessera {installed} installed, {os.environ['GEOTESSERA_VERSION']} required")
+              SRC = f"geotessera-{installed}"
               st = Counter()
               for p in sorted(glob.glob(f"{root}/*.npz")):
                   d = dict(np.load(p, allow_pickle=True))
@@ -77,6 +81,7 @@ spec:
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: YEARS, value: "2018 2019 2021 2022"}
+            - {name: GEOTESSERA_VERSION, value: "0.10.2"}   # the promotion's source
           resources:
             requests: {cpu: "8", memory: "32Gi"}
             limits: {cpu: "8", memory: "32Gi"}

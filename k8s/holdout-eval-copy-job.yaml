@@ -112,16 +112,30 @@ spec:
               if free_gb < need_gb + MARGIN_GB:
                   sys.exit("REFUSING: not enough free space for the copy plus margin")
 
-              # 3. verified, resumable copy
+              # 3. verified copy; resumable only for files that do not exist yet.
+              # A destination that differs from its source is enrichment (or a
+              # stale copy) and is NEVER overwritten: the Job refuses and names
+              # it. Likewise once any downstream manifest exists the copy is in
+              # use and a rerun must be a deliberate, separate decision.
+              downstream = [Path("/data/manifests") / n for n in (
+                  "holdout_eval_512_tessera.json", "holdout_eval_512_frame2016_gaps.json",
+                  "holdout_eval_512_forestry.json")]
+              present = [str(p) for p in downstream if p.exists()]
+              if present:
+                  sys.exit(f"REFUSING: the evaluation copy is already enriched ({present}); "
+                           f"a rerun would reset it. Remove the copy and its manifests deliberately first.")
               DST.mkdir(exist_ok=True)
               copied = skipped = 0
-              hashes = {}
+              hashes, conflicts = {}, []
               t0 = time.time()
               for i, p in enumerate(kept, 1):
                   dst = DST / p.name
                   s = sha(p)
-                  if dst.exists() and sha(dst) == s:
-                      skipped += 1
+                  if dst.exists():
+                      if sha(dst) == s:
+                          skipped += 1
+                      else:
+                          conflicts.append(p.stem)
                   else:
                       tmp = DST / (p.name + ".copying")
                       shutil.copyfile(p, tmp)
@@ -133,7 +147,10 @@ spec:
                   hashes[p.stem] = s
                   if i % 100 == 0:
                       print(f"  {i}/{len(kept)} ({time.time() - t0:.0f}s) copied={copied} skipped={skipped}", flush=True)
-              print(f"copied {copied}, already identical {skipped}, total {len(kept)}")
+              print(f"copied {copied}, already identical {skipped}, differing (left untouched) {len(conflicts)}, total {len(kept)}")
+              if conflicts:
+                  sys.exit(f"REFUSING: {len(conflicts)} existing copies differ from their source and were not "
+                           f"overwritten (first: {conflicts[:5]}); resolve deliberately before rerunning")
               extra = sorted(q.stem for q in DST.glob("*.npz") if q.stem not in hashes)
               if extra:
                   sys.exit(f"unexpected files in the copy: {extra[:5]} ...")

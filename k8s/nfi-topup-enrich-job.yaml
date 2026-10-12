@@ -56,11 +56,11 @@ spec:
               for Y in $YEARS; do
                 ROOT=/data/unified_v2_512_nfi${Y}_staging
                 [ -d "$ROOT" ] || { echo "$Y: no staging root, skipping"; continue; }
-                BEFORE=$(ls $ROOT/*.npz 2>/dev/null | wc -l)
+                BEFORE=$(find "$ROOT" -maxdepth 1 -name '*.npz' | wc -l)
                 echo ""; echo "######## $Y: $BEFORE tiles ########"
                 [ "$BEFORE" -gt 0 ] || continue
                 python scripts/enrich_tiles_s1.py --data-dir "$ROOT" --s1-backend pc-rtc --workers 8 --skip-existing
-                AFTER=$(ls $ROOT/*.npz 2>/dev/null | wc -l)
+                AFTER=$(find "$ROOT" -maxdepth 1 -name '*.npz' | wc -l)
                 [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed in $ROOT"; exit 1; }
                 python - "$ROOT" "$Y" <<'PYEOF'
               import glob, json, os, sys, time
