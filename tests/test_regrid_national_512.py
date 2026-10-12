@@ -28,7 +28,7 @@ from imint.coregistration import (  # noqa: E402
     subpixel_shift,
 )
 from imint.training import fetch_spectral as fs  # noqa: E402
-from imint.training.openeo_tile_graph import ALL_BANDS  # noqa: E402
+from imint.data.openeo_tile_graph import ALL_BANDS  # noqa: E402
 from imint.training.tile_assemble import assemble_fresh, crop_halo  # noqa: E402
 
 

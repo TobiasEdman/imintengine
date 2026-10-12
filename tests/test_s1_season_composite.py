@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 
 from imint.training import cdse_s1_stac as stac
-from imint.training import s1_shared
+from imint.data import s1_shared
 from imint.training.s1_enrichment import S1_ENRICH_VERSION
 
 

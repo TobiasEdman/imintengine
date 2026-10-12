@@ -28,7 +28,7 @@ import pandas as pd
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from imint.training.unified_schema import SJV_TO_UNIFIED, UNIFIED_CLASSES  # noqa: E402
+from imint.schema.unified_schema import SJV_TO_UNIFIED, UNIFIED_CLASSES  # noqa: E402
 
 CROP_CLASSES = tuple(range(11, 22))  # 11..21 in the unified schema
 EPSG_3006 = 3006

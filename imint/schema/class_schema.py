@@ -1,5 +1,5 @@
 """
-imint/training/class_schema.py — NMD to LULC class mappings
+imint/schema/class_schema.py — NMD to LULC class mappings
 
 Converts raw NMD uint8 class codes to contiguous 19-class training labels
 (full NMD Level 2). Use nmd_raster_to_lulc() for label generation, then

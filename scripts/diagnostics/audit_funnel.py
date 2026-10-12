@@ -47,7 +47,7 @@ from imint.config.env import load_env
 load_env()
 
 from imint.fetch import _stac_available_dates
-from imint.training.optimal_fetch import rank_stac_era5_candidates
+from imint.data.optimal_fetch import rank_stac_era5_candidates
 from imint.training.tile_fetch import bbox_3006_to_wgs84
 
 

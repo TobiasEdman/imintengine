@@ -29,7 +29,7 @@ def _patch(monkeypatch, by_backend: dict, dead: set[str] | None = None):
         calls.append(backend)
         return by_backend.get(backend)
     monkeypatch.setattr("imint.training.fetch_spectral.fetch_spectral", _fake)
-    monkeypatch.setattr("imint.training.openeo_tile_graph.is_source_dead",
+    monkeypatch.setattr("imint.data.openeo_tile_graph.is_source_dead",
                         lambda s: s in dead)
     return calls
 

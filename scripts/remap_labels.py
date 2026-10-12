@@ -25,7 +25,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from imint.training.unified_schema import merge_all, UNIFIED_CLASS_NAMES
+from imint.schema.unified_schema import merge_all, UNIFIED_CLASS_NAMES
 
 
 def remap_tile(path: str) -> dict:

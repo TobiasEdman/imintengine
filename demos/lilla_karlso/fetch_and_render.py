@@ -6,7 +6,7 @@ End-to-end demonstration of the Atmosfär-pipelinen on a real AOI:
     Lilla Karlsö (utanför Gotland, fågelreservat)
     Vår + sommar 2025 (april-september)
 
-Uses imint.training.optimal_fetch.optimal_fetch_dates(mode="era5_then_scl")
+Uses imint.data.optimal_fetch.optimal_fetch_dates(mode="era5_then_scl")
 to pick clear days, fetches all 11 L2A spectral bands via DES openEO,
 runs the DES MLP5 COT ensemble, and writes per-scene frames + a manifest.
 
@@ -38,7 +38,7 @@ from imint.config.env import load_env
 load_env()
 
 from imint.fetch import fetch_seasonal_image, S2L2A_SPECTRAL_BANDS  # noqa: E402
-from imint.training.optimal_fetch import optimal_fetch_dates  # noqa: E402
+from imint.data.optimal_fetch import optimal_fetch_dates  # noqa: E402
 from imint.analyzers.cot import (  # noqa: E402
     DEFAULT_MODEL_PATHS, _load_ensemble, cot_inference,
 )

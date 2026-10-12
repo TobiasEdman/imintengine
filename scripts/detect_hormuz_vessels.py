@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw
 # Add ImintEngine to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from imint.training.cdse_s2 import fetch_s2_scene_wgs84
+from imint.data.cdse_s2 import fetch_s2_scene_wgs84
 
 # ── Config ────────────────────────────────────────────────────────
 # Hormuz AOI in WGS84

@@ -1,14 +1,4 @@
-"""Shared metrics — wraps ``imint.training.evaluate`` + calibration extras.
-
-The existing ``imint.training.evaluate`` already provides per-class IoU,
-mean IoU, accuracy, and confusion matrix. This module thinly re-exports
-those plus the calibration metrics (ECE, MCE) and the dual-head specific
-metrics (AUROC, AUPR) that the segmentation-only evaluator doesn't
-cover.
-
-Design rule: **never recompute** what training/evaluate already does.
-Wrap and extend.
-"""
+"""Shared segmentation and calibration metrics for evaluation."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -26,8 +16,8 @@ def per_class_iou(
     num_classes: int,
     ignore_index: int = 0,
 ) -> dict:
-    """Thin re-export of :func:`imint.training.evaluate.compute_miou`."""
-    from imint.training.evaluate import compute_miou
+    """Thin re-export of :func:`imint.metrics.compute_miou`."""
+    from imint.metrics import compute_miou
     return compute_miou(pred, target, num_classes, ignore_index=ignore_index)
 
 

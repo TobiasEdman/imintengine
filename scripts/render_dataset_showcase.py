@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 
 BAND_ORDER = ["B02", "B03", "B04", "B8A", "B11", "B12"]
 
-# Frozen copy of imint/training/unified_schema.py UNIFIED_COLORS /
+# Frozen copy of imint/schema/unified_schema.py UNIFIED_COLORS /
 # UNIFIED_CLASSES so this showcase script runs standalone (no imint
 # import chain) inside a minimal numpy+matplotlib job. Keep in sync with
 # the schema module — it is the source of truth.

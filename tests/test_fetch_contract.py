@@ -49,13 +49,13 @@ class TestResolveBboxSizes:
 
 @pytest.mark.parametrize("size_px", [256, 512])
 class TestFetchS2SceneAssertion:
-    """The assertion added to imint.training.cdse_s2.fetch_s2_scene must
+    """The assertion added to imint.data.cdse_s2.fetch_s2_scene must
     reject mismatched (bbox, size_px) before any HTTP call."""
 
     def test_correct_extent_passes_assertion(self, size_px):
         """We only verify the assertion layer — don't actually call CDSE.
         A mismatch should raise ValueError BEFORE _get_token() is reached."""
-        from imint.training import cdse_s2
+        from imint.data import cdse_s2
 
         t = TileConfig(size_px=size_px)
         # Build a correctly-sized bbox
@@ -72,7 +72,7 @@ class TestFetchS2SceneAssertion:
     def test_wrong_extent_raises_before_network(self, size_px):
         """Passing a mismatched bbox must raise ValueError before the
         fetcher does any network I/O."""
-        from imint.training import cdse_s2
+        from imint.data import cdse_s2
 
         # Construct a stale bbox that mimics the actual bug: 2560m extent
         # with size_px=512 would have silently returned 5m GSD data.
@@ -118,30 +118,39 @@ class TestGrunddataExtentGuard:
     the central-2560m-stretched grid (volume/basal/diameter/dem/markfukt/vpp on
     unified_v2_512 were the central quarter of each tile, scaled 2x)."""
 
-    def test_mismatched_extent_raises_before_network(self):
-        from imint.training import skg_grunddata
+    def test_mismatched_extent_raises_before_reading(self, monkeypatch, tmp_path):
+        from imint.training import skg_grunddata, skg_open
+        monkeypatch.setenv(skg_open.ENV_MIRROR_DIR, str(tmp_path))
         # 2560 m extent rendered at 512 px → 5 m/px: the actual bug.
-        with patch.object(skg_grunddata, "_download_tile",
-                          side_effect=AssertionError("should not reach network")):
+        with patch.object(skg_open, "_read_window",
+                          side_effect=AssertionError("should not reach the mirror")):
             with pytest.raises(ValueError, match="bbox/size_px mismatch"):
                 skg_grunddata.fetch_volume_tile(
                     100000, 6500000, 102560, 6502560, size_px=512)
 
-    def test_correct_extent_passes_guard_to_download(self):
-        from imint.training import skg_grunddata
-        # 5120 m extent at 512 px → 10 m/px: guard passes, reaches the HTTP layer.
-        with patch.object(skg_grunddata, "_download_tile",
-                          side_effect=AssertionError("reached download")):
-            with pytest.raises(AssertionError, match="reached download"):
+    def test_correct_extent_passes_guard_to_read(self, monkeypatch, tmp_path):
+        from imint.training import skg_grunddata, skg_open
+        monkeypatch.setenv(skg_open.ENV_MIRROR_DIR, str(tmp_path))
+        (tmp_path / "grunddata").mkdir()
+        (tmp_path / "grunddata" / "volym_omdrev2.vrt").write_text("<VRTDataset/>")
+        # 5120 m extent at 512 px → 10 m/px: guard passes, reaches the raster read.
+        with patch.object(skg_open, "_raster_res", return_value=10.0), \
+                patch.object(skg_open, "_read_window",
+                             side_effect=AssertionError("reached read")):
+            with pytest.raises(AssertionError, match="reached read"):
                 skg_grunddata.fetch_volume_tile(
                     100000, 6500000, 105120, 6505120, size_px=512)
 
-    def test_256_dataset_extent_is_valid(self):
+    def test_256_dataset_extent_is_valid(self, monkeypatch, tmp_path):
         # 2560 m at 256 px IS correct (10 m/px) — must NOT raise on the guard.
-        from imint.training import skg_grunddata
-        with patch.object(skg_grunddata, "_download_tile",
-                          side_effect=AssertionError("reached download")):
-            with pytest.raises(AssertionError, match="reached download"):
+        from imint.training import skg_grunddata, skg_open
+        monkeypatch.setenv(skg_open.ENV_MIRROR_DIR, str(tmp_path))
+        (tmp_path / "grunddata").mkdir()
+        (tmp_path / "grunddata" / "volym_omdrev2.vrt").write_text("<VRTDataset/>")
+        with patch.object(skg_open, "_raster_res", return_value=10.0), \
+                patch.object(skg_open, "_read_window",
+                             side_effect=AssertionError("reached read")):
+            with pytest.raises(AssertionError, match="reached read"):
                 skg_grunddata.fetch_volume_tile(
                     100000, 6500000, 102560, 6502560, size_px=256)
 

@@ -1,99 +1,44 @@
-"""Skogsstyrelsen Skogliga grunddata fetching.
+"""Skogsstyrelsen Skogliga grunddata + Trädhöjd, read from the open-data mirror.
 
-Downloads forestry variable rasters from Skogsstyrelsen's ArcGIS
-ImageServer (Skogliga grunddata 3.1) and returns them as NumPy arrays
-aligned to the NMD 10 m grid used by the training pipeline.
+Forestry variables on the NMD 10 m grid, as NumPy arrays:
 
-The mosaic contains 10 bands with these forestry variables:
+    Variable         Unit       Typical range   Mirror product
+    ───────────────  ─────────  ──────────────  ─────────────────────────────
+    volume           m³sk/ha    0 – 700         sks_Volym_omdrev{1,2,3}
+    basal_area       m²/ha      0 – 60          sks_Grundyta_omdrev{1,2,3}
+    diameter         cm         0 – 60          sks_Medeldiameter_omdrev{1,2,3}
+    tree_height      dm (m out) 0 – 350         Trädhöjd, 10 m derivative
 
-    Band  Variable              Unit         Typical range
-    ────  ────────────────────  ───────────  ────────────────
-    0     Volym (volume)        m³sk/ha      0 – 700
-    1     Medelhöjd (Hgv)       dm           0 – 350
-    2     Grundyta (Gy)         m²/ha        0 – 60
-    3     Medeldiameter (Dgv)   cm           0 – 60
-    4     Biomassa              ton/ha       0 – 400
-    5     Trädhöjd (laser)      dm           0 – 350
-    6     (reserved)            —            —
-    7     Scanningsdatum        code         —
-    8     NMD produktivitet     class        0/1/2
-    9     Omdrev                version      1/2
+Until 2026 these came from Skogsstyrelsen's ArcGIS ImageServer through its
+public kartportal proxy. The proxy was retired; the same products are
+published as per-county GeoTIFF zips and mirrored to the PVC
+(``imint.training.skg_open``, backlog IM-022). Reading the mirror with the
+newest scanning round (omdrev) per pixel reproduces the proxy-fetched
+arrays exactly, so tiles enriched before and after the switch agree.
 
-Access went through Skogsstyrelsen's public kartportal proxy, which
-Skogsstyrelsen retired in 2026: requests now raise
-``skg_imageserver.SkgEndpointRetiredError`` naming the open per-county
-download that replaces it. Tiles fetched before then keep their stored
-aux channels.
-
-Endpoint URL is loaded from ``.skg_endpoints`` config file or the
-``SKG_GRUNDDATA_URL`` environment variable.
-
-License: CC0 (public domain)
+License: CC0 (Skogsstyrelsen open data).
 
 Typical usage::
 
     from imint.training.skg_grunddata import fetch_volume_tile
-    volume = fetch_volume_tile(west, south, east, north, size_px=256)
-    # volume.shape == (256, 256), dtype float32, unit: m³sk/ha
+    volume = fetch_volume_tile(west, south, east, north, size_px=512)
+    # volume.shape == (512, 512), dtype float32, unit: m³sk/ha
 """
 
 from __future__ import annotations
 
-import configparser
-import os
 from pathlib import Path
 
 import numpy as np
 
-from .skg_imageserver import download_export_image
+from . import skg_open
 
-# ── Band indices ──────────────────────────────────────────────────────────
-BAND_VOLUME = 0          # Virkesförråd, m³sk/ha
-BAND_MEAN_HEIGHT = 1     # Grundytevägd medelhöjd (Hgv), dm
-BAND_BASAL_AREA = 2      # Grundyta (Gy), m²/ha
-BAND_MEAN_DIAMETER = 3   # Grundytevägd medeldiameter (Dgv), cm
-BAND_BIOMASS = 4         # Biomassa, ton torrsubstans/ha
-BAND_TREE_HEIGHT = 5     # Trädhöjd (laser), dm
-BAND_SCAN_DATE = 7       # Scanningsdatum (kodad)
-BAND_NMD_PROD = 8        # NMD produktivitet: 0=annan, 1=produktiv, 2=improduktiv
-BAND_OMDREV = 9          # Omdrev (version)
-
-# ── ArcGIS ImageServer endpoint ────────────────────────────────────────
-# Loaded from .skg_endpoints config file or SKG_GRUNDDATA_URL env var.
-_IMAGESERVER_URL: str | None = None
-
-
-def _get_grunddata_url() -> str:
-    """Resolve the Skogliga grunddata endpoint URL."""
-    global _IMAGESERVER_URL
-    if _IMAGESERVER_URL is not None:
-        return _IMAGESERVER_URL
-
-    url = os.environ.get("SKG_GRUNDDATA_URL")
-    if url:
-        _IMAGESERVER_URL = url
-        return url
-
-    for candidate in [
-        Path(__file__).resolve().parents[2] / ".skg_endpoints",
-        Path.home() / ".skg_endpoints",
-    ]:
-        if candidate.exists():
-            cfg = configparser.ConfigParser()
-            cfg.read(candidate)
-            url = cfg.get("grunddata", "url", fallback=None)
-            if url:
-                _IMAGESERVER_URL = url
-                return url
-
-    raise RuntimeError(
-        "Skogliga grunddata URL not configured. "
-        "Set SKG_GRUNDDATA_URL env var or create .skg_endpoints file."
-    )
-
-_REQUEST_TIMEOUT_S = 60
-_MAX_RETRIES = 2
-_RETRY_DELAY_S = 3.0
+# Public channel name -> mirror variable.
+_VARIABLE = {
+    "volume": "volym",
+    "basal_area": "grundyta",
+    "diameter": "medeldiameter",
+}
 
 
 # ── Public API ───────────────────────────────────────────────────────────
@@ -107,22 +52,10 @@ def fetch_volume_tile(
     size_px: int | tuple[int, int] = 256,
     cache_dir: Path | None = None,
 ) -> np.ndarray:
-    """Fetch a timber volume tile (m³sk/ha) from Skogliga grunddata.
-
-    Args:
-        west, south, east, north: Bounding box in EPSG:3006 (meters).
-        size_px: Output size — int for square or (H, W) tuple.
-        cache_dir: Optional .npy cache directory.
-
-    Returns:
-        (H, W) float32 array, unit m³sk/ha.  NoData pixels are 0.
-    """
+    """Timber volume (m³sk/ha), ``(H, W)`` float32, nodata → 0."""
     return fetch_grunddata_tile(
         west, south, east, north,
-        band=BAND_VOLUME,
-        size_px=size_px,
-        cache_dir=cache_dir,
-        cache_prefix="volume",
+        variable="volume", size_px=size_px, cache_dir=cache_dir,
     )
 
 
@@ -135,25 +68,10 @@ def fetch_basal_area_tile(
     size_px: int | tuple[int, int] = 256,
     cache_dir: Path | None = None,
 ) -> np.ndarray:
-    """Fetch a basal area tile (m²/ha) from Skogliga grunddata.
-
-    Grundyta (Gy) — the cross-sectional area of all tree stems at
-    breast height (1.3 m) per hectare.  Typical range 0–60 m²/ha.
-
-    Args:
-        west, south, east, north: Bounding box in EPSG:3006 (meters).
-        size_px: Output size — int for square or (H, W) tuple.
-        cache_dir: Optional .npy cache directory.
-
-    Returns:
-        (H, W) float32 array, unit m²/ha.  NoData pixels are 0.
-    """
+    """Basal area / grundyta (m²/ha), ``(H, W)`` float32, nodata → 0."""
     return fetch_grunddata_tile(
         west, south, east, north,
-        band=BAND_BASAL_AREA,
-        size_px=size_px,
-        cache_dir=cache_dir,
-        cache_prefix="basal_area",
+        variable="basal_area", size_px=size_px, cache_dir=cache_dir,
     )
 
 
@@ -166,25 +84,11 @@ def fetch_diameter_tile(
     size_px: int | tuple[int, int] = 256,
     cache_dir: Path | None = None,
 ) -> np.ndarray:
-    """Fetch a mean diameter tile (cm) from Skogliga grunddata.
-
-    Grundytevägd medeldiameter (Dgv) — basal-area-weighted mean stem
-    diameter at breast height.  Typical range 0–60 cm.
-
-    Args:
-        west, south, east, north: Bounding box in EPSG:3006 (meters).
-        size_px: Output size — int for square or (H, W) tuple.
-        cache_dir: Optional .npy cache directory.
-
-    Returns:
-        (H, W) float32 array, unit cm.  NoData pixels are 0.
-    """
+    """Basal-area-weighted mean diameter / medeldiameter (cm), ``(H, W)``
+    float32, nodata → 0."""
     return fetch_grunddata_tile(
         west, south, east, north,
-        band=BAND_MEAN_DIAMETER,
-        size_px=size_px,
-        cache_dir=cache_dir,
-        cache_prefix="diameter",
+        variable="diameter", size_px=size_px, cache_dir=cache_dir,
     )
 
 
@@ -197,27 +101,14 @@ def fetch_tree_height_tile(
     size_px: int | tuple[int, int] = 256,
     cache_dir: Path | None = None,
 ) -> np.ndarray:
-    """Fetch a tree height tile (meters) from Skogliga grunddata band 5.
+    """Tree height (trädhöjd) in **metres**, ``(H, W)`` float32, nodata → 0.
 
-    Trädhöjd (laser) — stored in the mosaic as decimeters, converted here
-    to meters. This is the working source for height: the standalone
-    Trädhöjd ImageServer behind ``skg_height.fetch_height_tile`` is dead
-    and silently returns all-zeros.
-
-    Args:
-        west, south, east, north: Bounding box in EPSG:3006 (meters).
-        size_px: Output size — int for square or (H, W) tuple.
-        cache_dir: Optional .npy cache directory.
-
-    Returns:
-        (H, W) float32 array, unit meters.  NoData pixels are 0.
+    The mirror and the ``.npy`` cache hold decimetres (the product's unit);
+    the conversion happens here, after the cache, as it always did.
     """
-    dm = fetch_grunddata_tile(
-        west, south, east, north,
-        band=BAND_TREE_HEIGHT,
-        size_px=size_px,
-        cache_dir=cache_dir,
-        cache_prefix="tree_height",
+    dm = _cached(
+        "tree_height", west, south, east, north, size_px, cache_dir,
+        lambda: skg_open.read_tradhojd(west, south, east, north, size_px=size_px),
     )
     return dm.astype(np.float32) / 10.0
 
@@ -228,146 +119,55 @@ def fetch_grunddata_tile(
     east: float,
     north: float,
     *,
-    band: int = BAND_VOLUME,
+    variable: str,
     size_px: int | tuple[int, int] = 256,
     cache_dir: Path | None = None,
-    cache_prefix: str = "grunddata",
 ) -> np.ndarray:
-    """Fetch a single band from the Skogliga grunddata mosaic.
-
-    The ImageServer returns all 10 bands as a multi-band GeoTIFF.
-    We extract the requested band and return it as a 2D array.
+    """One grunddata variable (``volume``, ``basal_area`` or ``diameter``)
+    on the NMD 10 m grid.
 
     Args:
-        west, south, east, north: Bounding box in EPSG:3006 (meters).
-        band: Band index (0-based).  Use the ``BAND_*`` constants.
-        size_px: Output size — int for square or (H, W) tuple.
-        cache_dir: Optional .npy cache directory.
-        cache_prefix: Prefix for cache filenames.
+        west, south, east, north: Bounding box in EPSG:3006 (metres), on
+            the 10 m lattice, with ``extent == size_px × 10 m``.
+        variable: Channel name.
+        size_px: Output size — int for square or ``(H, W)`` tuple.
+        cache_dir: Optional ``.npy`` cache directory. The cache key is
+            ``<variable>_<west>_<south>_<east>_<north>.npy``.
 
     Returns:
-        (H, W) float32 array.  NoData pixels are 0.
+        ``(H, W)`` float32 array. Nodata pixels are 0.
     """
-    if isinstance(size_px, int):
-        h_px, w_px = size_px, size_px
-    else:
-        h_px, w_px = size_px
-
-    # Extent/size_px consistency guard (mirrors the cdse_s2 bbox/size_px check).
-    # This pipeline samples Skogliga grunddata at 10 m/px exclusively. A bbox
-    # whose extent implies a different GSD means the caller decoupled the ground
-    # extent from the output pixel count — the 256/512 aux-misalignment bug, where
-    # a 2560 m bbox rendered at 512 px gave 5 m/px (the central quarter, stretched
-    # 2×). Fail loudly BEFORE the HTTP call rather than silently returning data on
-    # the wrong grid. Build the bbox via TileConfig.bbox_from_center /
-    # resolve_tile_bbox so extent stays coupled to pixels.
-    _GSD_M = 10.0
-    ew, ns = (east - west), (north - south)
-    if abs(ew - w_px * _GSD_M) > _GSD_M or abs(ns - h_px * _GSD_M) > _GSD_M:
-        raise ValueError(
-            f"grunddata bbox/size_px mismatch: extent {ew:.0f}x{ns:.0f} m vs "
-            f"{w_px}x{h_px} px implies {ew / max(w_px, 1):.1f} m/px, expected "
-            f"{_GSD_M:.0f} m/px — caller decoupled extent from pixels."
-        )
-
-    # Check cache
-    if cache_dir is not None:
-        cache_key = (f"{cache_prefix}_{int(west)}_{int(south)}"
-                     f"_{int(east)}_{int(north)}.npy")
-        cache_path = cache_dir / cache_key
-        if cache_path.exists():
-            cached = np.load(cache_path)
-            if cached.shape == (h_px, w_px):
-                return cached
-
-    # Download multi-band TIFF
-    tiff_bytes = _download_tile(west, south, east, north, w_px, h_px)
-
-    # Parse and extract requested band
-    data = _parse_tiff_band(tiff_bytes, band, h_px, w_px)
-
-    # Convert to float and clamp negatives
-    data = data.astype(np.float32)
-    data = np.clip(data, 0.0, None)
-
-    # Cache
-    if cache_dir is not None:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        tmp = cache_dir / cache_key.replace(".npy", "_tmp.npy")
-        np.save(tmp, data)
-        Path(str(tmp)).rename(cache_path)
-
-    return data
-
-
-# ── Internal helpers ─────────────────────────────────────────────────────
-
-def _download_tile(
-    west: float, south: float, east: float, north: float,
-    width_px: int, height_px: int,
-) -> bytes:
-    """Download a multi-band GeoTIFF from the Skogliga grunddata service."""
-    params = {
-        "bbox": f"{west},{south},{east},{north}",
-        "bboxSR": "3006",
-        "imageSR": "3006",
-        "size": f"{width_px},{height_px}",
-        "format": "tiff",
-        "pixelType": "S16",
-        "noDataInterpretation": "esriNoDataMatchAny",
-        "interpolation": "RSP_BilinearInterpolation",
-        "renderingRule": '{"rasterFunction":"none"}',
-        "f": "image",
-    }
-
-    return download_export_image(
-        _get_grunddata_url(), params,
-        product="Skogliga grunddata",
-        open_data_hint="sks_<Volym|Grundyta|Medeldiameter|Medelhöjd>_omdrev<1-3>_<län>.zip",
-        timeout_s=_REQUEST_TIMEOUT_S,
-        retries=_MAX_RETRIES,
-        retry_delay_s=_RETRY_DELAY_S,
+    if variable not in _VARIABLE:
+        raise ValueError(f"unknown grunddata variable {variable!r}; "
+                         f"expected one of {tuple(_VARIABLE)}")
+    return _cached(
+        variable, west, south, east, north, size_px, cache_dir,
+        lambda: skg_open.read_grunddata(
+            _VARIABLE[variable], west, south, east, north, size_px=size_px),
     )
 
 
-def _parse_tiff_band(
-    tiff_bytes: bytes,
-    band: int,
-    expected_h: int,
-    expected_w: int,
-) -> np.ndarray:
-    """Parse a multi-band GeoTIFF and extract a single band."""
-    try:
-        import rasterio
-        from rasterio.io import MemoryFile
+# ── Cache contract (shared with slu_markfukt) ───────────────────────────
 
-        with MemoryFile(tiff_bytes) as memfile:
-            with memfile.open() as ds:
-                n_bands = ds.count
-                if band >= n_bands:
-                    raise ValueError(
-                        f"Requested band {band} but TIFF has {n_bands} bands"
-                    )
+def _cached(prefix, west, south, east, north, size_px, cache_dir, read):
+    """``<prefix>_<w>_<s>_<e>_<n>.npy`` under ``cache_dir``; a cached array of
+    another shape is ignored and overwritten; writes are tmp + rename.
 
-                # rasterio bands are 1-indexed
-                data = ds.read(band + 1)
-
-                # Handle nodata
-                nodata = ds.nodata
-                if nodata is not None:
-                    data = np.where(data == nodata, 0, data)
-
-                # Resize if needed
-                if data.shape != (expected_h, expected_w):
-                    from scipy.ndimage import zoom
-                    zy = expected_h / data.shape[0]
-                    zx = expected_w / data.shape[1]
-                    data = zoom(data, (zy, zx), order=1)
-
-                return data.astype(np.float32)
-
-    except ImportError:
-        raise ImportError(
-            "rasterio is required for TIFF parsing. "
-            "Install with: pip install rasterio"
-        )
+    The request is validated against the 10 m lattice *before* the cache
+    is consulted, so a stale array can never satisfy a malformed request."""
+    h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
+    skg_open.check_bbox(west, south, east, north, h_px, w_px)
+    if cache_dir is None:
+        return read()
+    cache_path = Path(cache_dir) / (
+        f"{prefix}_{int(west)}_{int(south)}_{int(east)}_{int(north)}.npy")
+    if cache_path.exists():
+        cached = np.load(cache_path)
+        if cached.shape == (h_px, w_px):
+            return cached
+    data = read()
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cache_path.with_name(cache_path.stem + "_tmp.npy")
+    np.save(tmp, data)
+    tmp.rename(cache_path)
+    return data

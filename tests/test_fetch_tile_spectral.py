@@ -18,7 +18,7 @@ from imint.coregistration import (
     subpixel_shift,
 )
 from imint.training import fetch_spectral as fs
-from imint.training.openeo_tile_graph import ALL_BANDS
+from imint.data.openeo_tile_graph import ALL_BANDS
 from imint.training.tile_assemble import assemble_fresh, crop_halo
 from imint.training.tile_config import TileConfig
 
