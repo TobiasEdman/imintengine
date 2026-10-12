@@ -53,14 +53,14 @@ spec:
               if not sub:
                   sys.exit("nothing to retry")
               PYEOF
-              BEFORE=$(find "$OUT" -maxdepth 1 -name '*.npz' | wc -l); echo "TILES BEFORE: $BEFORE"
+              BEFORE=$(find "$OUT" -maxdepth 1 -type f -name '*.npz' | wc -l); echo "TILES BEFORE: $BEFORE"
               set +e
               python3 scripts/fetch_unified_tiles.py --mode refetch --from-json "$SUB" --output-dir "$OUT" \
                 --tile-size-px 512 --years "$YEAR" --workers 6 --fetch-sources des --scl-backend des \
                 --no-pre2018 --claim-dir "$OUT/.claims"
               RC=$?
               set -e
-              AFTER=$(find "$OUT" -maxdepth 1 -name '*.npz' | wc -l)
+              AFTER=$(find "$OUT" -maxdepth 1 -type f -name '*.npz' | wc -l)
               echo "TILES AFTER: $AFTER (before $BEFORE, recovered $((AFTER-BEFORE))), fetch exit $RC"
               [ "$AFTER" -ge "$BEFORE" ] || { echo "FAIL: tiles disappeared"; exit 1; }
               python3 - "$MANIFEST" "$OUT" "$YEAR" <<'PYEOF'

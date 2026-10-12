@@ -194,6 +194,10 @@ def main(argv: list[str] | None = None) -> dict:
     vpp_cache = args.vpp_cache or root / "vpp_wekeo"
     t0 = time.time()
 
+    # Fail before any input is read or any output written: without a complete
+    # training-cohort inventory the footprint rule would silently exclude nothing.
+    cohort = require_cohort_geometry(cohort_dir)
+
     ft = load_fieldtruth(args.fieldtruth_file)
     from imint.training.slu_nfi import load_nfi_plots
     plots = load_nfi_plots(data_dir=root / "nfi", years=args.years)
@@ -213,10 +217,6 @@ def main(argv: list[str] | None = None) -> dict:
     else:
         covered_keys, covered_by_year = ft.observation_keys(plots.iloc[0:0]), {}
     print(f"evaluation copy: {len(tiles)} tiles, covered eligible plot-years {covered_by_year}", flush=True)
-    cohort = require_cohort_geometry(cohort_dir)  # refuses when missing or incomplete
-    if not (cohort["year"] == 0).empty and cohort["year"].isin(args.years).sum() == 0:
-        print(f"note: no training tile of a requested year under {cohort_dir}; "
-              f"footprint exclusion will exclude nothing for these years", flush=True)
 
     from derive_missing_vpp_mgrs import cached_pairs, mgrs_tiles_for_bbox
     have = cached_pairs(str(vpp_cache)) if vpp_cache.is_dir() else set()

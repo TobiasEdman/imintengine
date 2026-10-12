@@ -45,13 +45,13 @@ spec:
               for Y in $YEARS; do
                 ROOT=/data/unified_v2_512_nfi${Y}_staging
                 [ -d "$ROOT" ] || { echo "$Y: no staging root, skipping"; continue; }
-                BEFORE=$(find "$ROOT" -maxdepth 1 -name '*.npz' | wc -l)
+                BEFORE=$(find "$ROOT" -maxdepth 1 -type f -name '*.npz' | wc -l)
                 echo ""; echo "######## $Y: $BEFORE tiles ########"
                 [ "$BEFORE" -gt 0 ] || continue
                 python scripts/build_labels.py --data-dir "$ROOT" \
                   --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif --nmd-version 2018 \
                   --lpis-dir /data/lpis --sks-dir /data/sks --workers 4
-                AFTER=$(find "$ROOT" -maxdepth 1 -name '*.npz' | wc -l)
+                AFTER=$(find "$ROOT" -maxdepth 1 -type f -name '*.npz' | wc -l)
                 [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed in $ROOT"; exit 1; }
                 python - "$ROOT" <<'PYEOF'
               import glob, sys

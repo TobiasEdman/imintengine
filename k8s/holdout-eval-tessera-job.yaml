@@ -41,17 +41,17 @@ spec:
               export PYTHONUNBUFFERED=1
               echo "=== tessera re-source, evaluation copy — $(date -u) ==="
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
-              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml "geotessera==$GEOTESSERA_VERSION" pandas pyarrow
+              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml geotessera==0.10.2 pandas pyarrow
               mkdir -p /workspace && cd /workspace
               git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
               cd ie
               export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
-              python -c "import importlib.metadata as m; print('geotessera', m.version('geotessera'))"
+              python -c "import importlib.metadata as m, sys; v = m.version('geotessera'); sys.exit(f'Unexpected geotessera {v}') if v != '0.10.2' else print('geotessera', v)"
               echo "HEAD: $(git rev-parse HEAD)"
               test -f /data/manifests/holdout_eval_512_copy.json || { echo "REFUSING: no copy manifest"; exit 1; }
               python scripts/enrich_tiles_tessera.py --help > /dev/null && echo "imports OK"
               python - <<'PYEOF'
-              import importlib.metadata, json, os, sys, threading, time
+              import json, os, sys, threading, time
               from collections import Counter
               from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -64,12 +64,11 @@ spec:
 
               DIR = "/data/holdout_eval_512"
               EMB, REG = "/data/tessera_cache/embeddings", "/data/tessera_cache/registry"
-              # The stamp is derived from the producer actually installed and must
-              # equal the pinned version the promotion used; anything else aborts.
-              installed = importlib.metadata.version("geotessera")
-              if installed != os.environ["GEOTESSERA_VERSION"]:
-                  sys.exit(f"REFUSING: geotessera {installed} installed, {os.environ['GEOTESSERA_VERSION']} required")
-              SRC = f"geotessera-{installed}"
+              from importlib.metadata import version
+              producer_version = version("geotessera")
+              if producer_version != "0.10.2":
+                  sys.exit(f"REFUSING: unexpected geotessera {producer_version}")
+              SRC = f"geotessera-{producer_version}"
               STAMP = time.strftime("%Y-%m-%d")
               REPORT = "/data/manifests/holdout_eval_512_tessera.json"
               EXPECTED = len(json.load(open("/data/manifests/holdout_eval_512_copy.json"))["sha256"])
@@ -151,7 +150,6 @@ spec:
               echo "=== done: $(date -u) ==="
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
-            - {name: GEOTESSERA_VERSION, value: "0.10.2"}   # the promotion's source (tessera-promote-v2)
           resources:
             requests: {cpu: "8", memory: "32Gi"}
             limits: {cpu: "8", memory: "32Gi"}

@@ -544,12 +544,20 @@ def cohort_geometry(cohort_dir: Path) -> pd.DataFrame:
         bbox = None
         if "bbox_3006" in meta:
             v = np.asarray(meta["bbox_3006"]).reshape(-1)
-            if v.shape == (4,):
+            if v.shape == (4,) and np.isfinite(v.astype(float)).all():
                 bbox = [int(x) for x in v]
         elif "easting" in meta and "northing" in meta:
             b = TILE.bbox_from_center(int(meta["easting"]), int(meta["northing"]))
             bbox = [b["west"], b["south"], b["east"], b["north"]]
+        if bbox is not None and (bbox[2] <= bbox[0] or bbox[3] <= bbox[1]):
+            bbox = None  # inverted or degenerate footprint: no geometry
+        try:
+            strict = resolve_tile_year(meta)
+            conflict = False
+        except ValueError:
+            strict, conflict = None, True
         rows.append({"name": path.stem, "readable": True, "year": tile_year(meta),
+                     "year_strict": strict, "year_conflict": conflict,
                      "west": bbox[0] if bbox else None, "south": bbox[1] if bbox else None,
                      "east": bbox[2] if bbox else None, "north": bbox[3] if bbox else None})
     return pd.DataFrame(rows)
@@ -564,11 +572,14 @@ def require_cohort_geometry(cohort_dir: Path) -> pd.DataFrame:
     geo = cohort_geometry(cohort_dir)
     if geo.empty:
         raise SystemExit(f"REFUSING: no tiles under {cohort_dir}")
-    bad = geo.loc[~geo["readable"].astype(bool) | geo["west"].isna() | geo["year"].isna(), "name"].tolist() \
-        if "west" in geo else geo["name"].tolist()
+    if "west" not in geo:
+        bad = geo["name"].tolist()
+    else:
+        bad = geo.loc[~geo["readable"].astype(bool) | geo["west"].isna() | geo["year"].isna()
+                      | geo["year_conflict"].astype(bool), "name"].tolist()
     if bad:
-        raise SystemExit(f"REFUSING: {len(bad)} cohort tiles without readable geometry or year "
-                         f"(first: {bad[:3]}); the footprint exclusion would be incomplete")
+        raise SystemExit(f"REFUSING: {len(bad)} cohort tiles without readable geometry or year, or with a "
+                         f"contradictory year (first: {bad[:3]}); the footprint exclusion would be incomplete")
     return geo
 
 
