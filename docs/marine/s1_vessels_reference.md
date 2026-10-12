@@ -548,8 +548,8 @@ rasterio 1.4.4 / GDAL 3.10.3) plus `pystac-client` 0.9.0 and `planetary-computer
 | File | Role |
 |---|---|
 | `imint/fetch.py` `fetch_s1_vessel_scenes` | Target + historical GRD DN (uint16) on AI2's grid for a WGS84 bbox, with the AOI's acquisition time; cached. Owns the band keys and source string |
-| `imint/training/mpc_s1.py` | `search_grd_items` / `sign_item` factored out of `fetch_s1_scene` (σ⁰ path unchanged, pinned by a test) |
-| `imint/training/s1_shared.py` | `footprint_intersection_area` (footprint, not bbox, overlap) |
+| `imint/data/mpc_s1.py` | `search_grd_items` / `sign_item` factored out of `fetch_s1_scene` (σ⁰ path unchanged, pinned by a test) |
+| `imint/data/s1_shared.py` | `footprint_intersection_area` (footprint, not bbox, overlap) |
 | `imint/analyzers/ai2_rslearn_blocks.py` | torchvision blocks shared by the S2 and S1 analyzers |
 | `imint/analyzers/ai2_vessels_s1.py` | `AI2S1VesselAnalyzer` (registered as `ai2_vessels_s1`) + pure helpers |
 | `imint/exporters/export.py` | `s1_vessel_feature_collection` / `save_s1_vessel_geojson` (marine-awareness seam) |
