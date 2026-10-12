@@ -1,0 +1,55 @@
+---
+# Step 1b of the 2024 campaign: is the reference data the label step needs
+# actually on the PVC? Lists /data/lpis, /data/sks and /data/nmd and checks
+# the two LPIS 2024 parquets by name, before any fetch was submitted.
+#
+# Recovered 2026-10-12 from the session transcript that submitted it
+# (2026-09-26T21:50:57Z, scratchpad yaml, ttlSecondsAfterFinished 3600 — the
+# Job and its pod are gone from the cluster, which is why it is recovered from
+# the transcript and not from `kubectl get job`). Exit 0. Read-only.
+#
+# What it showed (log, 2026-09-26): LPIS parquets for 2018 (.bak only in the
+# tail), 2019, 2021, 2022, 2023, 2024 (+ _spatial); NO jordbruksskiften_2020*
+# or _2017*; SKS avverkningsanmalningar_spatial + utforda_avverkningar(_spatial);
+# NMD nmd2018bas_ogeneraliserad_v1_1.tif; both LPIS 2024 files present. The
+# 2020 gap matters for the multi-year campaign: build_labels._lpis_handle
+# returns None silently when a year's parquet is missing (tiles get no crop
+# classes, no error), so a 2020 label run needs that parquet staged first.
+#
+# Difference from the executed spec: image pinned to the digest the cluster
+# resolved for python:3.11-slim the same evening (nfi2024-vpp-retry5's pod,
+# 2026-09-26T23:15Z; this job's own pod no longer exists to read it from).
+# The TTL is kept so a re-run cleans up after itself like the original.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ref-inventory-2024
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: ref-inventory}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: inv
+          image: python:3.11-slim@sha256:9358444059ed78e2975ada2c189f1c1a3144a5dab6f35bff8c981afb38946634
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              echo "=== /data/lpis ==="; ls -lh /data/lpis/ 2>/dev/null | tail -20
+              echo ""; echo "=== /data/sks ==="; ls -lh /data/sks/ 2>/dev/null | tail -10
+              echo ""; echo "=== /data/nmd ==="; ls -lh /data/nmd/ 2>/dev/null | tail -10
+              echo ""; echo "=== LPIS 2024 present? ==="
+              for f in /data/lpis/jordbruksskiften_2024_spatial.parquet /data/lpis/jordbruksskiften_2024.parquet; do
+                [ -e "$f" ] && echo "YES $f" || echo "NO  $f"
+              done
+          resources:
+            requests: {cpu: "1", memory: "2Gi"}
+            limits: {cpu: "1", memory: "2Gi"}
+          volumeMounts: [{name: d, mountPath: /data, readOnly: true}]
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
