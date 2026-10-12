@@ -1,21 +1,56 @@
 # PVC-retention — historiskt underlag från september 2026
 
-**Status 2026-10-12: ARKIVERAT — FÅR INTE KÖRAS.** PR #50 beskriver
-septemberkörningen som genomförd 2026-09-07; loggarna finns enligt PR:n på
-PVC:n under `/cephfs/ops/retention/`. De har inte verifierats på nytt här.
-Texten nedan bevarar planens antaganden och storlekar från 2026-09-03,
-inklusive dess då framtida körinstruktioner. Den är inte en aktuell körplan.
+**Status 2026-10-12: ARKIVERAT — FÅR INTE KÖRAS.** Septemberkörningen
+genomfördes 2026-09-07 och evidensen ligger på PVC:n (verifierad
+2026-10-12, se nedan). Texten under "Ursprunglig plan" bevarar planens
+antaganden och storlekar från 2026-09-03, inklusive dess då framtida
+körinstruktioner. Den är inte en aktuell körplan.
 
 Båda Job-manifesterna är suspenderade och avbryter ovillkorligt före all
 åtkomst till PVC:n, även om någon tar bort `suspend`. Den äldre shell-koden
 ligger kvar efter spärren som historiskt underlag. Ta inte bort spärren för
 att återanvända jobbet.
 
+## Utförd körning 2026-09-07 (verifierad 2026-10-12)
+
+Evidens i `/cephfs/ops/retention/20260907T112302Z-dry/` och
+`…/20260907T112400Z-execute/` (summary, epoch-lista, dir-storlekar, df
+före/efter, keeper-status). Execute-sammanfattningen: 135 epoch-filer
+(196 217 645 304 B = 182,7 GiB), 4 `_nomarkfukt`-kataloger och 4 cache-
+kataloger raderade, `missing_keepers=0`. df: 95 % → 75 % av 1,6 TiB,
+330,8 GiB frigjort.
+
+## Läget 2026-10-12 (läst, ingen ändring)
+
+Läst read-only i `training-data-cephfs` via `ceph.dir.rbytes`. Volymen är
+utökad till **2 400 GiB**; 1,9 TiB använt (81 %), 460 GiB ledigt. 256-
+datasetet skrotades 2026-08-13 och finns inte längre på volymen.
+
+| katalog | 2026-09-03 | 2026-10-12 | anmärkning |
+|---|---:|---:|---|
+| `unified_v2_512` | 810 G | 1 222,6 GiB | kanoniskt dataset |
+| `checkpoints` | 328 G | 197,0 GiB | varav `ladder/` 125,6 GiB |
+| `holdout_val_512` | 146 G | 145,4 GiB | legacy-holdout (#71-census) |
+| `holdout_eval_512` | — | 122,7 GiB | utvärderingskopia, NFI-kampanjen (#75) |
+| `skg_open` | — | 70,7 GiB | SKS-spegel (IM-022, #74), staging pågår |
+| `unified_v2_512_nfi2024_staging` | — | 48,7 GiB | nfi2024-kampanjen (#67) |
+| `vpp_wekeo` | 68 G | 37,7 GiB | raderad 09-07, återuppbyggd av nfi2024 |
+| `model_cache` | 22 G | 21,2 GiB | HF-vikter |
+| `tessera_cache` | 16 G | 17,3 GiB | raderad 09-07, återuppbyggd (nu med `embeddings/`) |
+| `embeddings`, `nvv_aux` | 19 G, 36 G | finns ej | raderade 09-07 |
+
+Ladder har 28 celler (prithvi300m4f_r1–r4 tillkom efter planen). Åtta
+celler som tränats om efter 09-07 (croma_r3/r4, prithvi300m4f_r1–r4,
+terramind_r3/r4) bär åter mellanepoker: 48 `epoch_*.pt`, 44,5 GiB. Inga
+`_nomarkfukt`-kataloger finns kvar.
+
 ## Krav på en ny städning
 
-NFI-kampanjen (#67) och den fortsatta planeringen efter den sammanslagna #71
-behöver fetch-/enrichmentdata. Antagandet nedan om ett fryst dataset utan
-nya tileplaner gäller därför inte som grund för att radera cacharna nu.
+Den fleråriga NFI-kampanjen (plan #69; census #71; berikning och top-up
+#75) och IM-022-spegeln (#74) läser och skriver fetch-/enrichmentdata, och
+`vpp_wekeo` och `tessera_cache` har redan byggts upp igen. Antagandet nedan
+om ett fryst dataset utan nya tileplaner gäller därför inte som grund för
+att radera cacharna nu.
 
 En ny städning kräver en separat granskad plan och ett nytt jobb:
 1. Inventera aktuella konsumenter och jobb; verifiera att berörda celler är
