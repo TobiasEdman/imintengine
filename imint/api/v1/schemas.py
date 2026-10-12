@@ -6,11 +6,12 @@ spinning up FastAPI.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date as calendar_date, datetime, timezone
+from typing import Literal
 from enum import Enum
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class JobStatus(str, Enum):
@@ -21,13 +22,19 @@ class JobStatus(str, Enum):
 
 
 class BBox(BaseModel):
-    """Geographic bounding box. WGS84 unless `crs` says otherwise."""
+    """Ordered, nonempty WGS84 bounding box; antimeridian spans unsupported."""
 
     west: float = Field(..., ge=-180.0, le=180.0)
     south: float = Field(..., ge=-90.0, le=90.0)
     east: float = Field(..., ge=-180.0, le=180.0)
     north: float = Field(..., ge=-90.0, le=90.0)
-    crs: str = "EPSG:4326"
+    crs: Literal["EPSG:4326"] = "EPSG:4326"
+
+    @model_validator(mode="after")
+    def ordered_bounds(self) -> "BBox":
+        if self.west >= self.east or self.south >= self.north:
+            raise ValueError("bbox must satisfy west < east and south < north")
+        return self
 
 
 class AnalyzeRequest(BaseModel):
@@ -47,6 +54,15 @@ class AnalyzeRequest(BaseModel):
         json_schema_extra={"examples": ["2026-04-25"]},
     )
     bbox: BBox
+
+    @field_validator("date")
+    @classmethod
+    def exact_date(cls, value: str) -> str:
+        # The engine uses this value in output filenames: accept only a date.
+        parsed = calendar_date.fromisoformat(value)
+        if parsed.isoformat() != value:
+            raise ValueError("date must use YYYY-MM-DD")
+        return value
 
 
 

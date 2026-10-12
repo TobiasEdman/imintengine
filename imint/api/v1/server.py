@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+from pathlib import Path
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -330,6 +332,38 @@ async def get_job(job_id: str) -> JobStatusResponse:
 # ── Worker ─────────────────────────────────────────────────────────────────
 
 
+def _output_root() -> Path:
+    """Trusted operator setting, never a request-supplied path."""
+    return Path(os.environ.get("IMINT_API_OUTPUT_DIR", "outputs/api")).resolve()
+
+
+def _execute_analysis(req: dict[str, Any], job_id: str):
+    """Fetch real, exact-day DES imagery before calling the engine.
+
+    Uses the production fetcher, which rejects excess clouds and fetch
+    failures. There is deliberately no development/synthetic fallback.
+    """
+    from imint.fetch import fetch_des_data
+    from imint.engine import run_job
+    from imint.job import IMINTJob
+
+    config_path = Path("config/analyzers.yaml").resolve()
+    if not config_path.is_file():
+        raise RuntimeError("API requires config/analyzers.yaml in its working directory")
+    bbox = req["bbox"]
+    coords = {key: bbox[key] for key in ("west", "south", "east", "north")}
+    fetched = fetch_des_data(
+        date=req["date"], coords=coords, cloud_threshold=0.1,
+        include_scl=True, date_window=0,
+    )
+    job = IMINTJob(
+        date=req["date"], coords=coords, job_id=job_id,
+        rgb=fetched.rgb, bands=fetched.bands, scl=fetched.scl, geo=fetched.geo,
+        output_dir=str(_output_root() / job_id), config_path=str(config_path),
+    )
+    return run_job(job)
+
+
 async def _run_job_async(job_id: str) -> None:
     """Background worker — runs run_job() in a thread to avoid blocking the
     event loop on numpy/torch work."""
@@ -343,29 +377,8 @@ async def _run_job_async(job_id: str) -> None:
     start = time.monotonic()
 
     try:
-        # Lazy import — keeps API import time low when worker isn't called.
-        from imint.engine import run_job
-        from imint.job import IMINTJob
-
-        req = job["_request"]
-        bbox = req["bbox"]
-
-        # Construct the IMINTJob. Image data is fetched by run_job's
-        # downstream via the existing fetch pipeline; the API layer
-        # passes coords + date and lets the engine resolve the rest.
-        imint_job = IMINTJob(
-            date=req["date"],
-            coords={
-                "west": bbox["west"],
-                "south": bbox["south"],
-                "east": bbox["east"],
-                "north": bbox["north"],
-            },
-            job_id=job_id,
-        )
-
-        # Run in a thread — run_job is blocking numpy/torch.
-        result = await asyncio.to_thread(run_job, imint_job)
+        # Fetch and analysis are blocking; both stay off the event loop.
+        result = await asyncio.to_thread(_execute_analysis, job["_request"], job_id)
 
         job["completed_at"] = datetime.now(timezone.utc)
         job["duration_ms"] = (time.monotonic() - start) * 1000
