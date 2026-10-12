@@ -25,7 +25,9 @@
 # nfi2024-key-census2, so it reads them and reports them separately
 # (not world-readable, by year). Whether to count them is Tobias's call.
 #
-# v2 (2026-10-12, after Codex's review of #71): the script now fails closed
+# v3 (2026-10-12, after Codex's second review): parsed files account only for
+# the names they extracted, holdout-directory mentions in training territory
+# keep the verdict open. v2 (after the first review): the script fails closed
 # on unparsed split files and unclassified text evidence, quarantines tiles
 # with contradictory years, names its verdict as named-tile evidence with
 # spatial independence beside it, and reports the view that excludes tiles
@@ -39,7 +41,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: nfi-holdout-census-v2
+  name: nfi-holdout-census-v3
   namespace: prithvi-training-default
   labels: {app: fieldtruth-prep, purpose: holdout-census}
 spec:
@@ -96,7 +98,7 @@ spec:
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: CENSUS_BRANCH, value: "agent/te/claude/nfi-multiyear-census"}
-            - {name: CENSUS_COMMIT, value: "df7dea162ec48981f81b4a72aced7f5ab2e59882"}
+            - {name: CENSUS_COMMIT, value: "532df9aefa113e24272a36dd6a61f0119d360ad3"}
             - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
             - {name: SIZING_COMMIT, value: "94b26bbbef9d28220734e4efce38ed4943fd6157"}
           resources:
