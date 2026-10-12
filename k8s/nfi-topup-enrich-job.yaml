@@ -15,6 +15,12 @@
 #
 # S1 via pc-rtc is unaffected and runs here (PU-free). Forestry is not
 # attempted; a retired endpoint costs three retries per tile for nothing.
+#
+# Later pass (Tobias 2026-10-12): once the open GeoTIFFs are on the PVC and
+# the fetchers read them (IM-022), run prefetch_aux for the five channels
+# over each staging root and rerun THIS Job: a tile whose channels are then
+# present and non-zero is un-marked (aux_complete=1, reason removed) by the
+# same step, and the census shows the roots complete.
 apiVersion: batch/v1
 kind: Job
 metadata:
