@@ -1052,18 +1052,14 @@ def _build_inference_inputs(tile_path, device, img_size, aux_channel_names,
         T = img.shape[1] // 6
         img5d = img.view(1, T, 6, crop_sz, crop_sz).permute(0, 2, 1, 3, 4)
 
-        doy = data.get("doy")
-        if doy is not None:
-            from imint.training.unified_dataset import UnifiedDataset
-            # Use training's resolver and prior-autumn convention. Campaign
-            # tiles carry dates without year/lpis_year; never invent 2022.
-            # A one-frame checkpoint trains with DOY=None, even when the
-            # source tile already contains only six spectral bands.
-            if n_frames == 1:
-                frame_doy = None
-            tc, lc = UnifiedDataset._build_coords(data, frame_doy, n_frames)
-            temporal_coords = tc.unsqueeze(0).to(device)
-            location_coords = lc.unsqueeze(0).to(device)
+        from imint.training.unified_dataset import UnifiedDataset
+        # Training also builds zero-DOY coordinates when metadata is absent.
+        # Single-frame checkpoints always use DOY=None, as in the loader.
+        if n_frames == 1:
+            frame_doy = None
+        tc, lc = UnifiedDataset._build_coords(data, frame_doy, n_frames)
+        temporal_coords = tc.unsqueeze(0).to(device)
+        location_coords = lc.unsqueeze(0).to(device)
 
     return {
         "img5d": img5d, "aux": aux, "batch": batch, "family": family,

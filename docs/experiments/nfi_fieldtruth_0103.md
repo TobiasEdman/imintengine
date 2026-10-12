@@ -78,12 +78,13 @@ of eligible observations, not a guarantee of national area representation.
 
 `--population all` and `--population campaign` remain explicit diagnostic
 options; neither is the final balanced study. Every row records `tile_role`;
-report descriptive accuracy and confusion matrices separately for campaign,
-additional evaluation and cohort tiles. Cohort tiles may carry the exact NMD2023 targets seen
-during segmentation training. Their NFI measurements remain held out, but
-comparison with NMD there measures agreement with independent field truth
-on familiar imagery and label locations. State this dependence alongside
-results. A balanced frozen reader checks the actual annual counts, and
+report descriptive accuracy and confusion matrices separately by declared role,
+inventory year, and role × year, on the same common coverage as the overall
+scores. Cohort plot-years are excluded, including copies under another tile
+name. Plot-years inside any same-year cohort footprint are also excluded
+before annual quotas, even when carried in an evaluation root. Other-year
+spatial overlap remains eligible. This exclusion also applies to diagnostic
+populations; those modes do not relax independence requirements. A balanced frozen reader checks the actual annual counts, and
 joint scoring stops if NMD coverage removes any required observation; it
 must not silently turn the approved balanced design into another population.
 
@@ -109,8 +110,20 @@ the same observation can occur in a teacher's training tile.
 3. Reject every declared evaluation tile in a teacher's training list or
    dense-label sidecar inventory. Keep all data roots disjoint by tile name;
    require exactly 475 original campaign tile files. Repeat
-   `--evaluation-dir` for additional per-year or audited legacy-copy roots.
-   Record every root and its tile count in the manifest.
+   `--evaluation-root ROLE:YEAR:PATH` for additional per-year or audited
+   legacy-copy roots, e.g. `nfi2019:2019:/data/unified_v2_512_nfi2019_staging`
+   or `holdout_copy:any:/data/holdout_val_512_eval`. The former unbound
+   `--evaluation-dir` flag is rejected. A numeric year must match every tile's
+   resolved spectral year; `any` explicitly permits a mixed-year root, but
+   still requires a resolvable year. Role names `cohort` and `campaign` are
+   reserved. Ignore `.tmp.npz` files in every root. The original campaign's
+   mandatory 475-tile gate and role remain unchanged; it acquires no inferred
+   root-year restriction. Record declared role/year/path and tile count.
+   Authenticate all cohort files used for spatial exclusions in the manifest.
+   Use finite, ordered `bbox_3006` metadata, or for legacy files derive the
+   footprint from their actual array dimensions and center at 10 m GSD;
+   invalid geometry or unresolved year aborts preparation. Boundary points
+   are conservatively excluded. No PR75 code/dependency is needed.
 4. Require the promoted Tessera source, valid flags/arrays and current
    SAR prerequisites. Check every campaign tile, including unindexed tiles.
    Check spectral/Tessera/SAR/B08/rededge grid and frame shapes, then the

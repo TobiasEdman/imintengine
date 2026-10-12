@@ -64,13 +64,17 @@ def test_unresolvable_year_never_defaults_to_2022(tmp_path):
         build(write_tile(tmp_path, dates=np.array(["unknown"] * 4)), 4)
 
 
-def test_unfrozen_missing_doy_retains_existing_no_coordinates_path(tmp_path):
+@pytest.mark.parametrize("frames", [1, 4])
+def test_missing_doy_uses_training_zero_doy_coordinates(tmp_path, frames):
     path = tmp_path / "tile.npz"
     np.savez(path, spectral=np.ones((24,8,8)), year=2024)
-    inputs = build(path, 4)
+    inputs = build(path, frames)
     try:
-        assert inputs["temporal_coords"] is None
-        assert inputs["location_coords"] is None
+        with np.load(path) as tile:
+            doy = None if frames == 1 else UnifiedDataset._extract_all_frames(tile, "lulc", frames)[2]
+            tc, lc = UnifiedDataset._build_coords(tile, doy, frames)
+        torch.testing.assert_close(inputs["temporal_coords"][0], tc)
+        torch.testing.assert_close(inputs["location_coords"][0], lc)
     finally:
         inference._close_inference_inputs(inputs)
 

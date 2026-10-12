@@ -22,7 +22,7 @@ def test_shared_coverage_ranking_and_uncertainty_are_reproducible():
                    "model_b": np.array([1, 2, 0, 1])}
     baselines = {"NMD2023": (np.array([1, 2, 0, 1]), np.array([111, 112, 0, 113]))}
     protocol = {"bootstrap_seed": 123, "bootstrap_samples": 100,
-                "block_km": 50, "sesoi": 0.02}
+                "block_km": 50, "sesoi": 0.02, "primary_population": "all"}
     result = paired_report(held, predictions, baselines, protocol)
     assert result == paired_report(held, predictions, baselines, protocol)
     assert result["compared_observations"] == 3
@@ -38,7 +38,7 @@ def test_no_nmd_coverage_cannot_produce_winner():
     held = pd.DataFrame({"nfi_forest": [1]})
     with pytest.raises(ValueError, match="no common"):
         paired_report(held, {"a": np.array([1])},
-                      {"NMD2023": (np.array([0]), np.array([0]))}, {})
+                      {"NMD2023": (np.array([0]), np.array([0]))}, {"primary_population": "all"})
 
 
 def test_block_test_does_not_treat_repeated_plots_as_independent():
@@ -57,7 +57,7 @@ def test_undefined_metrics_become_null_before_output_creation():
     result = paired_report(
         held, {"model": np.ones(2)},
         {"NMD2023": (np.ones(2), np.full(2, 111))},
-        {"bootstrap_seed": 1, "bootstrap_samples": 100, "block_km": 50, "sesoi": .02})
+        {"bootstrap_seed": 1, "bootstrap_samples": 100, "block_km": 50, "sesoi": .02, "primary_population": "all"})
     encoded = json.dumps(json_metrics(result), allow_nan=False)
     assert json.loads(encoded)["scores"]["model"]["cohen_kappa"] is None
 

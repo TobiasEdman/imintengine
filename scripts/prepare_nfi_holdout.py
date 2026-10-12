@@ -256,8 +256,96 @@ def audit_auxiliary_inputs(path: Path, geometry: dict, requirements: dict) -> tu
     return {"gaps": gaps, "nodata_fraction": nodata}, sorted(failures)
 
 
+def tile_files(directory: Path) -> dict[str, Path]:
+    """Temporary writer outputs are never members of a declared root."""
+    return {p.stem: p for p in directory.glob("*.npz")
+            if not p.name.endswith(".tmp.npz")}
+
+
+def parse_evaluation_root(value: str) -> tuple[str, int | None, Path]:
+    parts = value.split(":", 2)
+    if (len(parts) != 3 or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", parts[0])
+            or parts[0] in {"cohort", "campaign"} or not parts[2]):
+        raise argparse.ArgumentTypeError("evaluation root requires ROLE:YEAR:PATH")
+    role, year, directory = parts
+    if year != "any" and not re.fullmatch(r"[1-9][0-9]{3}", year):
+        raise argparse.ArgumentTypeError("evaluation root YEAR must be YYYY or any")
+    return role, None if year == "any" else int(year), Path(directory)
+
+
+def checked_tile_year(data) -> int:
+    for key in ("year", "lpis_year"):
+        if key in data:
+            value = np.asarray(data[key])
+            if (value.shape != () or value.dtype.kind not in "iuf"
+                    or not np.isfinite(value) or not float(value).is_integer()):
+                raise ValueError("invalid explicit tile year")
+    year = resolve_tile_year(data)
+    if year is None or year < 1:
+        raise ValueError("unknown tile year")
+    return year
+
+
+def validate_root_year(path: Path, expected: int | None) -> None:
+    with np.load(path, allow_pickle=False) as data:
+        year = checked_tile_year(data)
+    if expected is not None and year != expected:
+        raise ValueError(f"evaluation root year mismatch or unknown tile year: {path}")
+
+
+def training_footprints(paths: dict[str, Path]) -> list[dict]:
+    """Conservative cohort footprints in SWEREF99 TM, at the tile's 10 m GSD.
+
+    Invalid geometry/year fails closed, including unindexed training tiles.
+    Read the full array only when legacy metadata lacks an explicit bbox.
+    """
+    footprints = []
+    for name, path in sorted(paths.items()):
+        with np.load(path, allow_pickle=False) as data:
+            try:
+                year = checked_tile_year(data)
+            except ValueError as exc:
+                raise ValueError(f"invalid training footprint year: {path}") from exc
+            if "bbox_3006" in data:
+                bbox = np.asarray(data["bbox_3006"], dtype=float)
+            else:
+                image = data["spectral"] if "spectral" in data else data["image"]
+                if image.ndim != 3 or min(image.shape[-2:]) <= 0:
+                    raise ValueError(f"invalid training footprint shape: {path}")
+                for key in ("easting", "northing"):
+                    value = np.asarray(data[key])
+                    if value.shape != () or value.dtype.kind not in "iuf" or not np.isfinite(value):
+                        raise ValueError(f"invalid training footprint center: {path}")
+                x, y = float(data["easting"]), float(data["northing"])
+                h, w = image.shape[-2:]
+                bbox = np.array([x - w * 5, y - h * 5, x + w * 5, y + h * 5])
+            if (bbox.shape != (4,) or not np.isfinite(bbox).all()
+                    or bbox[0] >= bbox[2] or bbox[1] >= bbox[3]):
+                raise ValueError(f"invalid training footprint bbox: {path}")
+            footprints.append(dict(name=name, year=int(year), bbox=bbox.tolist()))
+    return footprints
+
+
+def exclude_training_footprints(index: pd.DataFrame, footprints: list[dict]) -> pd.DataFrame:
+    require_columns(index, ["Easting", "Northing", "Year"])
+    xy = index[["Easting", "Northing"]].to_numpy(dtype=float)
+    if not np.isfinite(xy).all():
+        raise ValueError("footprint exclusion requires finite plot coordinates")
+    overlap = np.zeros(len(index), dtype=bool)
+    for footprint in footprints:
+        west, south, east, north = footprint["bbox"]
+        # Include boundary points conservatively; different years stay eligible.
+        overlap |= ((index.Year.to_numpy() == footprint["year"])
+                    & (xy[:, 0] >= west) & (xy[:, 0] <= east)
+                    & (xy[:, 1] >= south) & (xy[:, 1] <= north))
+    # Exclude the entire plot-year, even if another tile carries the same key.
+    keys = observation_keys(index)
+    return index.loc[~keys.isin(keys[overlap])].copy()
+
+
 def select_holdout(
     index: pd.DataFrame, training: pd.DataFrame, tile_meta: dict,
+    *, footprints: list[dict] | None = None, campaign_only: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     require_columns(index, NFI_KEY + ["tile_name", "row", "col"])
     if index.duplicated(NFI_KEY + ["tile_name"]).any():
@@ -266,6 +354,19 @@ def select_holdout(
     counts = {"index_rows": len(index),
               "index_observations": len(observation_keys(index).unique()),
               "training_overlap_rows": len(index) - len(eligible)}
+    before = len(eligible)
+    if "tile_role" in eligible:
+        keys = observation_keys(eligible)
+        cohort_keys = keys[eligible["tile_role"].to_numpy() == "cohort"]
+        eligible = eligible.loc[~keys.isin(cohort_keys)].copy()
+    counts["cohort_overlap_rows"] = before - len(eligible)
+    before = len(eligible)
+    if footprints is not None:
+        eligible = exclude_training_footprints(eligible, footprints)
+    counts["training_footprint_overlap_rows"] = before - len(eligible)
+    # Population selection must not hide cohort identities or footprint exposure.
+    if campaign_only:
+        eligible = eligible.loc[eligible["tile_role"] == "campaign"].copy()
     min_crop = min(c["img_size"] for c in DISTILL.values())
     candidates = []
     for name, group in eligible.groupby("tile_name", sort=True):
@@ -284,7 +385,7 @@ def select_holdout(
         raise ValueError("no eligible observations with common input support")
     paired = pd.concat(candidates)
     if "tile_role" in paired:
-        paired["_tile_priority"] = paired["tile_role"].map({"campaign": 0, "evaluation": 1, "cohort": 2})
+        paired["_tile_priority"] = paired["tile_role"].map(lambda role: 0 if role == "campaign" else 1)
         if paired["_tile_priority"].isna().any():
             raise ValueError("unknown tile role")
         paired = paired.sort_values(NFI_KEY + ["_tile_priority", "tile_name"]).drop(columns="_tile_priority")
@@ -403,8 +504,8 @@ def main() -> None:
                  "promotion-report", "nmd2023", "out-dir"):
         ap.add_argument("--" + name, type=Path, required=True)
     ap.add_argument("--nmd2018", type=Path)
-    ap.add_argument("--evaluation-dir", type=Path, action="append", default=[],
-                    help="additional evaluation-only data root; repeat for multiple years")
+    ap.add_argument("--evaluation-root", type=parse_evaluation_root, action="append", default=[],
+                    help="repeat ROLE:YEAR:PATH; use any for a mixed-year root")
     ap.add_argument("--population", choices=("balanced", "all", "campaign"), default="balanced",
                     help="balanced is the required primary study; all/campaign are diagnostic")
     ap.add_argument("--inventory-years", type=int, nargs="+",
@@ -430,27 +531,36 @@ def main() -> None:
     runtime = preparation_runtime(root, args.runtime_manifest,
                                   args.source_git_sha, args.runtime_image)
     code_sha = runtime["source"]["git_sha"]
-    cohort = {p.stem: p for p in args.cohort_dir.glob("*.npz")}
-    staging = {p.stem: p for p in args.staging_dir.glob("*.npz")}
+    cohort = tile_files(args.cohort_dir)
+    staging = tile_files(args.staging_dir)
     if len(staging) != 475 or set(staging) & set(cohort):
         raise ValueError("campaign must contain 475 evaluation-only, disjoint tiles")
     paths = {**cohort, **staging}
     evaluation_names = set(staging)
     evaluation_roots = [{"root": str(args.staging_dir.resolve()), "tiles": len(staging),
                          "role": "campaign"}]
-    for directory in args.evaluation_dir:
-        additional = {p.stem: p for p in directory.glob("*.npz") if not p.name.endswith(".tmp.npz")}
+    roles = {name: "cohort" for name in cohort}
+    roles.update({name: "campaign" for name in staging})
+    for role, year, directory in args.evaluation_root:
+        additional = tile_files(directory)
         if not additional or set(additional) & set(paths):
             raise ValueError("evaluation roots must be nonempty with globally unique tile names")
+        for path in additional.values():
+            validate_root_year(path, year)
         paths.update(additional)
+        roles.update({name: role for name in additional})
         evaluation_names.update(additional)
         evaluation_roots.append({"root": str(directory.resolve()), "tiles": len(additional),
-                                 "role": "evaluation"})
+                                 "role": role, "year": year})
     input_stats = {}
     parsed_identities = {}
     def capture(path):
         stat = path.stat()
-        input_stats[path] = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+        current = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+        # Keep the earliest snapshot: a later read cannot bless changed geometry.
+        original = input_stats.setdefault(path, current)
+        if current != original:
+            raise ValueError(f"input changed during holdout preparation: {path}")
 
     def read_input(path, kind):
         # Identity describes exactly the bytes parsed, not a later reread.
@@ -471,8 +581,12 @@ def main() -> None:
     if not set(index["tile_name"].astype(str)) <= set(paths):
         raise ValueError("indexed tile absent from the declared data roots")
     index["tile_path"] = index["tile_name"].map(lambda n: str(paths[str(n)].resolve()))
-    index["tile_role"] = index["tile_name"].map(
-        lambda n: "campaign" if str(n) in staging else "evaluation" if str(n) in evaluation_names else "cohort")
+    index["tile_role"] = index["tile_name"].map(lambda n: roles[str(n)])
+    # Capture every cohort file before its geometry is read, not only those
+    # with NFI records. Bind exclusion inputs into the freeze manifest below.
+    for path in cohort.values():
+        capture(path)
+    footprints = training_footprints(cohort)
     inputs = [args.plot_index, args.teacher_index, args.promotion_job_json,
               args.promotion_report, args.nmd2023]
     if args.nmd2018:
@@ -553,8 +667,9 @@ def main() -> None:
                 excluded[name] = "auxiliary_gaps:" + ",".join(failures)
             else:
                 metadata[name] = meta
-    candidate_index = index[index["tile_role"] == "campaign"] if args.population == "campaign" else index
-    holdout, counts = select_holdout(candidate_index, training, metadata)
+    holdout, counts = select_holdout(
+        index, training, metadata, footprints=footprints,
+        campaign_only=args.population == "campaign")
     baselines = {"NMD2023": args.nmd2023}
     if args.nmd2018:
         baselines["NMD2018"] = args.nmd2018
@@ -611,6 +726,8 @@ def main() -> None:
         "recorded_training_plot_years": len(observed_training),
         "excluded_teacher_feature_plot_years": len(training),
         "evaluation_roots": evaluation_roots,
+        "training_footprint_policy": "exclude_same_year_plot_points_in_any_cohort_bbox_inclusive",
+        "training_footprint_inputs": {n: file_identity(p) for n, p in sorted(cohort.items())},
         "campaign": {"tiles": len(staging), "training_tiles": campaign_training_tiles,
                      "root": str(args.staging_dir.resolve())},
         "protocol": dict(NFI_PROTOCOL, primary_population=args.population,

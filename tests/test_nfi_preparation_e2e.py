@@ -58,7 +58,7 @@ def prepared_inputs(tmp_path, monkeypatch):
                 dates=np.array(["2023-10-07","2024-05-29","2024-06-28","2024-07-28"]),
                 doy=np.array([280,150,180,210]))
     for name in ("train", "oldtest"):
-        np.savez(directories["cohort-dir"] / (name + ".npz"), **tile)
+        np.savez(directories["cohort-dir"] / (name + ".npz"), **dict(tile, easting=400000.))
     stream = io.BytesIO(); np.savez(stream, **tile)
     for i in range(475):
         (directories["staging-dir"] / f"campaign{i:03}.npz").write_bytes(stream.getvalue())
@@ -216,21 +216,21 @@ def test_multiple_evaluation_roots_keep_campaign_invariant_and_balance(prepared_
     frame = pd.read_parquet(index_path)
     new = frame.iloc[[2]].assign(TractID=7, Year=2019, tile_name="new2019")
     pd.concat([frame, new]).to_parquet(index_path, index=False)
-    monkeypatch.setattr(sys, "argv", sys.argv + ["--evaluation-dir", str(extra),
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--evaluation-root", f"nfi2019:2019:{extra}",
                        "--population", "balanced", "--inventory-years", "2019", "2024",
                        "--observations-per-year", "1"])
     prep.main()
     path = prepared_inputs["out-dir"] / "manifest.json"
     held, manifest = load_frozen_holdout(path, sha256_file(path))
     assert held.Year.value_counts().to_dict() == {2019: 1, 2024: 1}
-    assert set(held.tile_role) == {"campaign", "evaluation"}
+    assert set(held.tile_role) == {"campaign", "nfi2019"}
     assert manifest["campaign"]["tiles"] == 475
     assert manifest["campaign"]["training_tiles"] == 0
     assert [r["tiles"] for r in manifest["evaluation_roots"]] == [475, 1]
 
 
 def test_evaluation_root_name_collision_is_rejected_early(prepared_inputs, monkeypatch):
-    monkeypatch.setattr(sys, "argv", sys.argv + ["--evaluation-dir", str(prepared_inputs["cohort-dir"])])
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--evaluation-root", "holdout_copy:any:" + str(prepared_inputs["cohort-dir"])])
     with pytest.raises(ValueError, match="globally unique tile names"):
         prep.main()
     assert not prepared_inputs["out-dir"].exists()

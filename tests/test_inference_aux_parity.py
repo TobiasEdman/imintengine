@@ -59,6 +59,8 @@ def _tile(tmp_path: Path, *, with_sar: bool = True,
     rng = np.random.default_rng(1234)
     drop = drop or set()
     data = {
+        # Coordinate parity now requires the same resolvable year as training.
+        "year": np.array(2024),
         "spectral": (rng.random((N_BANDS_TOTAL, TILE, TILE),
                                 dtype=np.float32) * 0.3),
     }

@@ -209,7 +209,7 @@ def test_readiness_rejects_missing_location_or_frame_metadata(tmp_path):
 
 def test_campaign_tile_preference_precedes_lexical_order():
     source = pd.DataFrame({"TractID": [1,1], "PlotID": [1,1], "Year": [2024,2024],
-                           "tile_name": ["a_cohort", "z_campaign"], "tile_role": ["cohort", "campaign"],
+                           "tile_name": ["a_evaluation", "z_campaign"], "tile_role": ["holdout_copy", "campaign"],
                            "row": [4,4], "col": [4,4]})
     meta = {name: {"height": 8, "width": 8, "year": 2024} for name in source.tile_name}
     held, counts = prep.select_holdout(source, source[prep.NFI_KEY].iloc[:0], meta)

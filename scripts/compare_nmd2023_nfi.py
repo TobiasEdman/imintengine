@@ -48,6 +48,7 @@ from imint.eval.fieldtruth import (  # noqa: E402
     NFI_KEY, verify_evaluation_source, load_frozen_holdout, restrict_to_frozen, shared_observations,
     sha256_file, verify_prediction_dump, verify_file_identity, validate_year_balance,
 )
+from scripts.nfi_nmd_coverage import nmd_covered
 from imint.training.class_schema import nmd_raster_to_lulc  # noqa: E402
 from imint.training.unified_schema import nmd19_to_unified  # noqa: E402
 
@@ -62,12 +63,9 @@ def sample_nmd_unified(tif: str, easting, northing) -> np.ndarray:
     non-forest. Returns unified classes plus the raw sampled code (0 = the
     raster has no data at that point / outside produced extent).
     """
-    import rasterio
+    from scripts.nfi_nmd_coverage import sample_nmd_codes
 
-    with rasterio.open(tif) as src:
-        raw = np.array([v[0] for v in src.sample(zip(map(float, easting),
-                                                     map(float, northing)))],
-                       dtype=np.int64)
+    raw = sample_nmd_codes(tif, np.column_stack((easting, northing)))
     seq = nmd_raster_to_lulc(np.clip(raw, 0, 255).astype(np.uint8))
     unified = nmd19_to_unified(seq.astype(np.uint8)).astype(int)
     return unified, raw
@@ -172,7 +170,7 @@ def main() -> None:
         ])
 
     nmd23, raw23 = sample_nmd_unified(a.nmd2023, plots.Easting, plots.Northing)
-    covered = raw23 != 0
+    covered = nmd_covered(raw23)
     if not covered.any():
         raise ValueError("NMD2023 has no coverage on the selected observations")
     print(f"NMD2023 covered: {covered.sum():,}/{len(plots):,} "
@@ -181,7 +179,7 @@ def main() -> None:
     sources = {"NMD2023": nmd23}
     if a.nmd2018:
         nmd18, raw18 = sample_nmd_unified(a.nmd2018, plots.Easting, plots.Northing)
-        covered &= raw18 != 0
+        covered &= nmd_covered(raw18)
         sources["NMD2018"] = nmd18
     if model_pred_col:
         sources[a.model_id] = plots[model_pred_col].to_numpy(dtype=int)
