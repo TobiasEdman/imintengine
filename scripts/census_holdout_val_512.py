@@ -597,13 +597,17 @@ def footprint_overlap(tiles: list[dict], cohort: pd.DataFrame) -> dict:
 
 
 def classify_text_hit(path: str, data_root: Path, parsed_names: dict[str, set[str]],
-                      tokens: set[str] | None = None) -> tuple[str, int]:
+                      tokens: set[str] | None = None, dir_mentions: int = 0) -> tuple[str, int]:
     """Class of a text-scan hit and how many of its tile names no parser accounted for.
 
     A file that parsed as a split file accounts only for the exact names its
     parser extracted; a tile name embedded in a sentence or a config value is
     still unaccounted text evidence, and so is any mention of the holdout
-    directory itself outside the provenance and visualisation directories.
+    directory itself. Directory evidence is judged independently of whether
+    the file parsed: a parser extracts tile names, never directories, so a
+    ``train_dir`` pointing at the holdout stays unclassified until a human
+    classifies it. Only the provenance and visualisation directories are
+    exempt.
     """
     tokens = tokens or set()
     top = Path(path).relative_to(data_root).parts[0]
@@ -611,10 +615,10 @@ def classify_text_hit(path: str, data_root: Path, parsed_names: dict[str, set[st
         return "provenance_record", 0
     if top in VISUALISATION_DIRS:
         return "visualisation", 0
-    if path in parsed_names:
-        unaccounted = tokens - parsed_names[path]
-        return ("parsed_split_file" if not unaccounted else "unclassified"), len(unaccounted)
-    return "unclassified", len(tokens)
+    unaccounted = tokens - parsed_names[path] if path in parsed_names else tokens
+    if path in parsed_names and not unaccounted and not dir_mentions:
+        return "parsed_split_file", 0
+    return "unclassified", len(unaccounted)
 
 
 def never_trained_on(ft: ModuleType, data_root: Path, cohort_dir: Path, staging_dir: Path,
@@ -639,7 +643,7 @@ def never_trained_on(ft: ModuleType, data_root: Path, cohort_dir: Path, staging_
     text_hits = scan_text_mentions(data_root, holdout)
     for h in text_hits:
         h["class"], h["unaccounted_tile_names"] = classify_text_hit(
-            h["path"], data_root, parsed_names, h.pop("_tokens"))
+            h["path"], data_root, parsed_names, h.pop("_tokens"), h["mentions_holdout_dir"])
     feature_hits = {name: int(frame["tile_name"].isin(holdout).sum()) for name, frame in exposure_tables.items()}
     index_hits = {name: int(frame["tile_name"].isin(holdout).sum()) for name, frame in indexes.items()}
     split_hits = [f for f in split_files if f.get("holdout_names_found")]

@@ -255,13 +255,19 @@ def test_a_tile_name_embedded_in_a_parsed_file_stays_inconclusive(data_root, fie
     assert any(name in r and "unaccounted" in r for r in p["scan_inconclusive_reasons"])
 
 
-def test_a_holdout_directory_reference_in_training_territory_is_inconclusive(data_root, fieldtruth_file, tmp_path):
-    (data_root / "checkpoints/ladder/clay_r2/config.yaml").write_text("train_dir: /data/holdout_val_512\n")
+@pytest.mark.parametrize("name, text", [
+    ("config.yaml", "train_dir: /data/holdout_val_512\n"),                     # not a parsed file
+    ("train_config.json", json.dumps({"train_dir": "/data/holdout_val_512"})),  # parsed, no tile names
+    ("notes.txt", "fine-tuned on /data/holdout_val_512 for 3 epochs\n"),       # parsed, no tile names
+])
+def test_a_holdout_directory_reference_in_training_territory_is_inconclusive(
+        data_root, fieldtruth_file, tmp_path, name, text):
+    (data_root / "checkpoints/ladder/clay_r2" / name).write_text(text)
     p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
-    assert p["verdict"] == "inconclusive"
-    hit = [h for h in p["text_files_mentioning_holdout"] if h["path"].endswith("config.yaml")][0]
-    assert hit["mentions_holdout_dir"] == 1 and hit["holdout_tile_names"] == 0
-    assert any("config.yaml" in r and "1 holdout-directory mentions" in r for r in p["scan_inconclusive_reasons"])
+    assert p["verdict"] == "inconclusive" and p["named_tile_use_detected"] is False
+    hit = [h for h in p["text_files_mentioning_holdout"] if h["path"].endswith(name)][0]
+    assert hit["class"] == "unclassified" and hit["mentions_holdout_dir"] == 1 and hit["holdout_tile_names"] == 0
+    assert any(name in r and "1 holdout-directory mentions" in r for r in p["scan_inconclusive_reasons"])
 
 
 def test_a_train_tiles_json_under_checkpoints_is_parsed_and_detected(data_root, fieldtruth_file, tmp_path):
