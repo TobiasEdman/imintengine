@@ -1,0 +1,77 @@
+---
+# Step 3a: prespecify the top-up tiles for the years the evaluation copy
+# leaves short of 1,000 eligible plot-years (2018, 2019, 2021 after the
+# 2026-10-12 decisions). Read-only against the data; writes only the per-year
+# manifests and VPP gap reports under /data/manifests/.
+#
+# scripts/plan_nfi_topup_manifest.py applies the decided rules: the task-0103
+# teacher union is excluded, plot-years already on a kept evaluation-copy tile
+# count as covered, plots inside a same-year training footprint are
+# infeasible, a candidate tile that would overlap a same-year training tile is
+# dropped, and the choice among the rest is the sizing's identity hash with
+# its seed (20261008). Placement is the campaign's centred lattice with the
+# 496 px crop split. The log prints, per year, covered / need / candidates /
+# infeasible / chosen / gap-after-plan and the WEkEO request estimate.
+#
+# Runs after the whole evaluation-copy chain (the forestry manifest is the
+# last mutating step there); refuses otherwise, since "covered" would be
+# counted on an unfinished copy. The planner's own tile reading reuses the
+# census reader, so expect ~25 min for the copy's tiles.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-plan
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: plan
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== top-up plan — $(date -u) ==="
+              test -f /data/manifests/holdout_eval_512_forestry.json || { echo "REFUSING: evaluation copy chain not finished"; exit 1; }
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow rasterio pyproj openpyxl mgrs packaging
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch "$PLAN_BRANCH" https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              git fetch -q --depth 1 origin "$PLAN_COMMIT" "$FIELDTRUTH_COMMIT"
+              git checkout -q "$PLAN_COMMIT"
+              git checkout -q "$FIELDTRUTH_COMMIT" -- imint/eval/fieldtruth.py
+              echo "HEAD: $(git rev-parse HEAD)"; sha256sum imint/eval/fieldtruth.py
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python scripts/plan_nfi_topup_manifest.py --help > /dev/null && echo "imports OK"
+              python scripts/plan_nfi_topup_manifest.py \
+                --data-root /data \
+                --years $YEARS \
+                --target 1000 \
+                --out-dir /data/manifests \
+                --summary-json /data/manifests/nfi_topup_plan_summary.json
+              echo "=== PLAN_SUMMARY_BEGIN ==="; cat /data/manifests/nfi_topup_plan_summary.json; echo; echo "=== PLAN_SUMMARY_END ==="
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: PLAN_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
+            - {name: PLAN_COMMIT, value: "31d0afaf3e3221e449d6e50935b376771a93bc18"}
+            - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
+            - {name: YEARS, value: "2018 2019 2021"}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

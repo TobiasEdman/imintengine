@@ -1,0 +1,104 @@
+---
+# Step 3b: fill the WEkEO VPP cache for every (MGRS, year) the top-up
+# manifests need, BEFORE any spectral fetch. PU-FREE (WEkEO HDA).
+#
+# Same contract as nfi2024-vpp-prefetch-job.yaml: VPP_SOURCE=wekeo makes the
+# fetch raise per tile on a cache miss instead of spending CDSE PU, so an
+# unfilled cache means zero tiles, loudly; the gap reports are rewritten with
+# what actually landed and the Job exits non-zero if anything is still
+# missing (cells with no HR-VPP product then get dropped from the manifests,
+# as the 2024 run did for five cells).
+#
+# Quota: WEkEO HDA allows 500 requests per window and the client prints the
+# remaining count; one (cell, year) costs five requests. The planner's
+# estimate is checked against REQUEST_BUDGET before anything is requested;
+# above it the Job refuses and says how to split the years across windows.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-vpp-prefetch
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 86400
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: prefetch
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== top-up VPP prefetch (WEkEO, PU-free) — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio pyproj requests hda mgrs packaging 2>&1 | tail -1
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse HEAD)"
+              python3 scripts/prefetch_vpp_wekeo.py --help > /dev/null && echo "imports OK"
+
+              TOTAL=0
+              for Y in $YEARS; do
+                N=$(python3 -c "import json; print(len(json.load(open('/data/manifests/nfi${Y}_topup_vpp_gaps.json'))['missing']))")
+                echo "  $Y: $N (MGRS, year) pairs missing -> $((N * 5)) requests"
+                TOTAL=$((TOTAL + N * 5))
+              done
+              echo "requests needed: $TOTAL, budget this window: $REQUEST_BUDGET"
+              if [ "$TOTAL" -gt "$REQUEST_BUDGET" ]; then
+                echo "REFUSING: over budget. Run one year at a time (set YEARS) across quota windows."
+                exit 2
+              fi
+
+              for Y in $YEARS; do
+                MGRS=$(python3 -c "import json; print(','.join(json.load(open('/data/manifests/nfi${Y}_topup_vpp_gaps.json'))['missing']))")
+                if [ -z "$MGRS" ]; then echo "$Y: cache already complete"; continue; fi
+                echo ""; echo "=== $Y: prefetch $MGRS ==="
+                python3 scripts/prefetch_vpp_wekeo.py --mgrs-tiles "$MGRS" --years "$Y" --dest-dir /data/vpp_wekeo
+              done
+
+              echo ""; echo "=== verify the gaps actually closed ==="
+              python3 - <<'PYEOF'
+              import json, os, sys
+              sys.path.insert(0, "scripts")
+              from derive_missing_vpp_mgrs import cached_pairs
+              have = cached_pairs("/data/vpp_wekeo")
+              unresolved = {}
+              for y in os.environ["YEARS"].split():
+                  path = f"/data/manifests/nfi{y}_topup_vpp_gaps.json"
+                  gaps = json.load(open(path))
+                  still = sorted(m for m in gaps["needed"] if (m, int(y)) not in have)
+                  gaps["missing"] = still
+                  json.dump(gaps, open(path, "w"), indent=1)
+                  print(f"{y}: needed {len(gaps['needed'])}, still missing {len(still)} {still}")
+                  if still:
+                      unresolved[y] = still
+              if unresolved:
+                  sys.exit(f"STILL MISSING: {unresolved} — drop those tiles from the manifests before fetching")
+              print("cache complete for every top-up year — spectral fetch may start")
+              PYEOF
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: YEARS, value: "2018 2019 2021"}
+            - {name: REQUEST_BUDGET, value: "450"}
+            - {name: VPP_SOURCE, value: "wekeo"}        # cache-only, fail-loud on miss
+            - {name: VPP_WEKEO_DIR, value: "/data/vpp_wekeo"}
+          envFrom:
+            - secretRef: {name: wekeo-creds}   # WEKEO_USERNAME + WEKEO_PASSWORD
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

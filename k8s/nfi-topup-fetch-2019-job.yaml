@@ -1,0 +1,124 @@
+---
+# Step 3c (2019): plot-driven DES spectral fetch of the top-up tiles for 2019
+# into its own staging root, /data/unified_v2_512_nfi2019_staging — never into
+# training, never into the holdout copy.
+#
+# APPLY ONLY AFTER nfi-topup-vpp-prefetch is Complete for 2019: the Job reads
+# the gap report and refuses while anything is missing. VPP_SOURCE=wekeo makes
+# a cache miss raise per tile rather than spend CDSE PU (campaign-orphan-512,
+# 0/1147 tiles, exit 0, 2026-06-29).
+#
+# --workers 6 is the CAP, not a default (decision D5, 2026-10-11). Read
+# `DES: permits=N` in the log; if the per-worker rate falls or [408]/[429]
+# appear, lower it and resubmit. --scl-backend des shares the same slots, so
+# 6 is the total. The 2024 run held 6 for 31 h with zero 408/429.
+#
+# Same image and flags as nfi2024-fetch-job.yaml. For 2018 the autumn slot
+# (2017) has no DES L2A and lands masked, as in the cohort before its sen2cor
+# slot-0 backfill; the 2016 background frame is filled afterwards by the
+# sen2cor step of the top-up chain. Tiles the gate rejects are listed in
+# /data/manifests/nfi2019_topup_yield.json for one retry at the same gate.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-fetch-2019
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 172800   # 48 h
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: fetch
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              YEAR=2019
+              OUT=/data/unified_v2_512_nfi${YEAR}_staging
+              MANIFEST=/data/manifests/nfi${YEAR}_topup_512.json
+              GAPS=/data/manifests/nfi${YEAR}_topup_vpp_gaps.json
+              echo "=== top-up fetch $YEAR — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir numpy scipy rasterio pyproj requests Pillow pystac-client openeo shapely 2>&1 | tail -1
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse HEAD)"
+              python3 scripts/fetch_unified_tiles.py --help > /dev/null && echo "imports OK"
+
+              echo ""; echo "=== VPP cache precondition ==="
+              python3 - "$GAPS" "$MANIFEST" <<'PYEOF'
+              import json, sys
+              gaps = json.load(open(sys.argv[1])); man = json.load(open(sys.argv[2]))
+              if gaps["missing"]:
+                  sys.exit(f"REFUSING: {len(gaps['missing'])} (MGRS, year) pairs still absent from the WEkEO cache: {gaps['missing']}")
+              print(f"all {len(gaps['needed'])} MGRS cells cached; manifest: {len(man)} tiles, {sum(t['n_plots'] for t in man)} plots")
+              if not man:
+                  sys.exit("nothing to fetch: empty manifest")
+              PYEOF
+
+              mkdir -p "$OUT"
+              BEFORE=$(ls $OUT/*.npz 2>/dev/null | wc -l); echo "TILES BEFORE: $BEFORE"
+              set +e
+              python3 scripts/fetch_unified_tiles.py \
+                --mode refetch \
+                --from-json "$MANIFEST" \
+                --output-dir "$OUT" \
+                --tile-size-px 512 \
+                --years "$YEAR" \
+                --workers 6 \
+                --fetch-sources des \
+                --scl-backend des \
+                --no-pre2018 \
+                --claim-dir "$OUT/.claims"
+              RC=$?
+              set -e
+              AFTER=$(ls $OUT/*.npz 2>/dev/null | wc -l); echo "TILES AFTER: $AFTER (before $BEFORE), fetch exit $RC"
+
+              echo ""; echo "=== yield ==="
+              python3 - "$MANIFEST" "$OUT" "$YEAR" <<'PYEOF'
+              import glob, json, os, sys
+              man = json.load(open(sys.argv[1])); out, year = sys.argv[2], sys.argv[3]
+              written = {os.path.basename(p)[:-4] for p in glob.glob(f"{out}/*.npz")}
+              by = {t["name"]: t["n_plots"] for t in man}
+              got = sum(n for k, n in by.items() if k in written)
+              failed = sorted(k for k in by if k not in written)
+              print(f"tiles written {len(written & set(by))} / {len(by)}; plots gained {got} / {sum(by.values())}; failed tiles {len(failed)}")
+              json.dump({"year": int(year), "tiles_written": len(written & set(by)), "plots_gained": got,
+                         "failed_tiles": failed}, open(f"/data/manifests/nfi{year}_topup_yield.json", "w"), indent=1)
+              PYEOF
+              echo "NOTE: new tiles carry RAW NMD labels until the top-up label step runs."
+              echo "=== done: $(date -u) ==="
+              exit $RC
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            # VPP routing MUST be wekeo for every fetch_unified_tiles run (CLAUDE.md).
+            - {name: VPP_SOURCE, value: "wekeo"}
+            - {name: VPP_WEKEO_DIR, value: "/data/vpp_wekeo"}
+            - name: DES_USER
+              valueFrom: {secretKeyRef: {name: des-credentials, key: user, optional: true}}
+            - name: DES_PASSWORD
+              valueFrom: {secretKeyRef: {name: des-credentials, key: password, optional: true}}
+            - name: CDSE_CLIENT_ID
+              valueFrom: {secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}}
+            - name: CDSE_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}}
+          envFrom:
+            - secretRef: {name: wekeo-creds}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
