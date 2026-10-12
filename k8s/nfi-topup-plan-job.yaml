@@ -67,7 +67,7 @@ spec:
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: PLAN_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
             - {name: PLAN_SCRIPT_SHA256, value: "b16bc6a260f0af63f9244980ce22df3159416b51e6bf6b23d66d26d20e6067cb"}
-            - {name: PLAN_COMMIT, value: "e980b7a1ddfd8eb40d9ec414a6155d131e35e547"}
+            - {name: PLAN_COMMIT, value: "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb"}
             - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
             - {name: YEARS, value: "2018 2019 2021 2022"}
           resources:
