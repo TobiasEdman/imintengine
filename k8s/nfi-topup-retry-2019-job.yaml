@@ -1,0 +1,101 @@
+---
+# Step 3c-bis (2019): one re-run of the top-up tiles the first pass could not
+# write, at the SAME gate (nothing relaxed; the write gate's own remedy is a
+# rerun, see nfi2024-retry-job.yaml). Scope is the failed list from the yield
+# file, so the written tiles are never touched. Same VPP guard, same D5 cap.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-retry-2019
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 86400
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: retry
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              YEAR=2019
+              OUT=/data/unified_v2_512_nfi${YEAR}_staging
+              MANIFEST=/data/manifests/nfi${YEAR}_topup_512.json
+              YIELD=/data/manifests/nfi${YEAR}_topup_yield.json
+              SUB=/data/manifests/nfi${YEAR}_topup_retry.json
+              echo "=== top-up retry $YEAR — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir numpy scipy rasterio pyproj requests Pillow pystac-client openeo shapely 2>&1 | tail -1
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "CLONED main HEAD: $(git rev-parse HEAD)"
+              python3 scripts/fetch_unified_tiles.py --help > /dev/null && echo "imports OK"
+              python3 - "$MANIFEST" "$YIELD" "$SUB" <<'PYEOF'
+              import json, sys
+              man = json.load(open(sys.argv[1])); failed = set(json.load(open(sys.argv[2]))["failed_tiles"])
+              gaps = json.load(open(sys.argv[1].replace("_512.json", "_vpp_gaps.json")))
+              if gaps["missing"]:
+                  sys.exit(f"REFUSING: VPP cache still missing {gaps['missing']}")
+              sub = [t for t in man if t["name"] in failed]
+              assert len(sub) == len(failed), f"{len(sub)} != {len(failed)}"
+              json.dump(sub, open(sys.argv[3], "w"), indent=1)
+              print(f"retrying {len(sub)} tiles, {sum(t['n_plots'] for t in sub)} plots")
+              if not sub:
+                  sys.exit("nothing to retry")
+              PYEOF
+              BEFORE=$(ls $OUT/*.npz 2>/dev/null | wc -l); echo "TILES BEFORE: $BEFORE"
+              set +e
+              python3 scripts/fetch_unified_tiles.py --mode refetch --from-json "$SUB" --output-dir "$OUT" \
+                --tile-size-px 512 --years "$YEAR" --workers 6 --fetch-sources des --scl-backend des \
+                --no-pre2018 --claim-dir "$OUT/.claims"
+              RC=$?
+              set -e
+              AFTER=$(ls $OUT/*.npz 2>/dev/null | wc -l)
+              echo "TILES AFTER: $AFTER (before $BEFORE, recovered $((AFTER-BEFORE))), fetch exit $RC"
+              [ "$AFTER" -ge "$BEFORE" ] || { echo "FAIL: tiles disappeared"; exit 1; }
+              python3 - "$MANIFEST" "$OUT" "$YEAR" <<'PYEOF'
+              import glob, json, os, sys
+              man = json.load(open(sys.argv[1])); out, year = sys.argv[2], sys.argv[3]
+              written = {os.path.basename(p)[:-4] for p in glob.glob(f"{out}/*.npz")}
+              by = {t["name"]: t["n_plots"] for t in man}
+              failed = sorted(k for k in by if k not in written)
+              json.dump({"year": int(year), "tiles_written": len(written & set(by)),
+                         "plots_gained": sum(n for k, n in by.items() if k in written), "failed_tiles": failed},
+                        open(f"/data/manifests/nfi{year}_topup_yield.json", "w"), indent=1)
+              print(f"after retry: written {len(written & set(by))} / {len(by)}, still failed {len(failed)}")
+              PYEOF
+              echo "NOTE: recovered tiles carry RAW NMD labels until nfi-topup-labels runs (again)."
+              echo "=== done: $(date -u) ==="
+              exit $RC
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: VPP_SOURCE, value: "wekeo"}
+            - {name: VPP_WEKEO_DIR, value: "/data/vpp_wekeo"}
+            - name: DES_USER
+              valueFrom: {secretKeyRef: {name: des-credentials, key: user, optional: true}}
+            - name: DES_PASSWORD
+              valueFrom: {secretKeyRef: {name: des-credentials, key: password, optional: true}}
+            - name: CDSE_CLIENT_ID
+              valueFrom: {secretKeyRef: {name: cdse-credentials, key: client_id, optional: true}}
+            - name: CDSE_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: cdse-credentials, key: client_secret, optional: true}}
+          envFrom:
+            - secretRef: {name: wekeo-creds}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

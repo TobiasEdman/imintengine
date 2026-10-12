@@ -1,0 +1,89 @@
+---
+# Step 3e: Sentinel-1 and the four SKG forestry channels for the top-up
+# tiles, per staging root, sequentially (concurrent aux writers race on
+# os.replace). PU-free: S1 via pc-rtc, forestry via Skogsstyrelsen with the
+# skg-endpoints Secret at /etc/skg (the 2024 run failed on all 475 without it).
+# Same calls as nfi2024-enrich-s1-job.yaml + nfi2024-skg-job.yaml. Tessera,
+# vpp_year, frame_2016 and S1-2016 follow in their own Jobs.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-enrich
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: enrich
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== top-up S1 + forestry — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml requests shapely pystac-client planetary-computer pandas pyarrow Pillow
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse HEAD)"
+              cp /etc/skg/skg_endpoints /workspace/ie/.skg_endpoints
+              python scripts/enrich_tiles_s1.py --help > /dev/null
+              python scripts/prefetch_aux.py --help > /dev/null
+              echo "imports OK"
+              for Y in $YEARS; do
+                ROOT=/data/unified_v2_512_nfi${Y}_staging
+                [ -d "$ROOT" ] || { echo "$Y: no staging root, skipping"; continue; }
+                BEFORE=$(ls $ROOT/*.npz 2>/dev/null | wc -l)
+                echo ""; echo "######## $Y: $BEFORE tiles ########"
+                [ "$BEFORE" -gt 0 ] || continue
+                python scripts/enrich_tiles_s1.py --data-dir "$ROOT" --s1-backend pc-rtc --workers 8 --skip-existing
+                python scripts/prefetch_aux.py --data-dir "$ROOT" --channels height volume basal_area diameter --workers 8
+                AFTER=$(ls $ROOT/*.npz 2>/dev/null | wc -l)
+                [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed in $ROOT"; exit 1; }
+                python - "$ROOT" <<'PYEOF'
+              import glob, sys
+              from collections import Counter
+              import numpy as np
+              REQ = ["s1_vv_vh", "s1_dates", "s1_orbit", "has_s1", "height", "volume", "basal_area", "diameter"]
+              root = sys.argv[1]; present, zero, n = Counter(), Counter(), 0
+              for p in sorted(glob.glob(f"{root}/*.npz")):
+                  d = np.load(p, allow_pickle=True); n += 1
+                  for k in REQ:
+                      if k in d.files:
+                          present[k] += 1
+                          v = d[k]
+                          if getattr(v, "ndim", 0) >= 2 and not np.any(v):
+                              zero[k] += 1
+              print({k: (present[k], zero[k]) for k in REQ}, "of", n)
+              bad = [k for k in REQ if present[k] != n]
+              if bad:
+                  sys.exit(f"FAIL: missing on some tiles: {bad}")
+              if any(zero[k] for k in ("height", "volume", "basal_area", "diameter")):
+                  print("WARNING: all-zero forestry on some tiles — the census will show them")
+              PYEOF
+              done
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: YEARS, value: "2018 2019 2021"}
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+            - {name: skg-endpoints, mountPath: /etc/skg, readOnly: true}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: skg-endpoints
+          secret: {secretName: skg-endpoints}

@@ -1,0 +1,74 @@
+---
+# Step 3j, last of the top-up chain: the full key census over each staging
+# root — the same read-only script as nfi-holdout-census, pointed at the root
+# with its top-up manifest (same record shape as the Phase-A manifest), so
+# key presence against the 2024 bar, all-zero arrays, flag-vs-array
+# consistency, per-tile modalities, the NFI plot index with the task-0103
+# identity and exclusion, and never-trained-on are all checked on the new
+# tiles. One JSON per year between CENSUS_JSON markers in the log; the
+# committed record goes under docs/experiments/. PVC readOnly.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-census
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 18000
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: census
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== top-up census — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow rasterio pyproj openpyxl
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch "$CENSUS_BRANCH" https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              git fetch -q --depth 1 origin "$CENSUS_COMMIT" "$FIELDTRUTH_COMMIT" "$SIZING_COMMIT"
+              git checkout -q "$CENSUS_COMMIT"
+              git checkout -q "$FIELDTRUTH_COMMIT" -- imint/eval/fieldtruth.py
+              git show "$SIZING_COMMIT:docs/experiments/nfi_fieldtruth_0103_tile_sizing_20261008.json" > /workspace/codex_sizing.json
+              echo "HEAD: $(git rev-parse HEAD)"; sha256sum imint/eval/fieldtruth.py /workspace/codex_sizing.json
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python scripts/census_holdout_val_512.py --help > /dev/null && echo "imports OK"
+              for Y in $YEARS; do
+                DIR=/data/unified_v2_512_nfi${Y}_staging
+                [ -d "$DIR" ] || { echo "$Y: no staging root, skipping"; continue; }
+                echo ""; echo "######## $Y ########"
+                python scripts/census_holdout_val_512.py \
+                  --data-root /data \
+                  --holdout-dir "$DIR" \
+                  --manifest /data/manifests/nfi${Y}_topup_512.json \
+                  --years "$Y" \
+                  --expected-sizing /workspace/codex_sizing.json \
+                  --out-json /workspace/census_$Y.json
+                echo "=== CENSUS_JSON_BEGIN $Y ==="; cat /workspace/census_$Y.json; echo; echo "=== CENSUS_JSON_END $Y ==="
+              done
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: YEARS, value: "2018 2019 2021"}
+            - {name: CENSUS_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
+            - {name: CENSUS_COMMIT, value: "b1153ebaaf89a512106f93e1a654edd2f40aedda"}
+            - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
+            - {name: SIZING_COMMIT, value: "94b26bbbef9d28220734e4efce38ed4943fd6157"}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data, readOnly: true}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}

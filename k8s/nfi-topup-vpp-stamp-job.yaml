@@ -1,0 +1,75 @@
+---
+# Step 3g: stamp vpp_year on the top-up tiles, per staging root, with the
+# root's own year. Same refusal as nfi2024-vpp-stamp-job.yaml: a tile whose
+# own inferred year is not the root's year is refused, not stamped on faith.
+# Unstamped VPP is the defect class strip_unstamped_vpp.py removes.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-vpp-stamp
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: stamp
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse HEAD)"
+              for Y in $YEARS; do
+                ROOT=/data/unified_v2_512_nfi${Y}_staging
+                [ -d "$ROOT" ] || { echo "$Y: no staging root, skipping"; continue; }
+                python - "$ROOT" "$Y" <<'PYEOF'
+              import glob, os, sys
+              import numpy as np
+              sys.path.insert(0, "/workspace/ie")
+              from imint.training.tile_fetch import infer_tile_year
+              root, YEAR = sys.argv[1], int(sys.argv[2])
+              VPP = ["vpp_sosd", "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv"]
+              stamped = already = skipped = refused = 0
+              for p in sorted(glob.glob(f"{root}/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  if not all(k in d for k in VPP):
+                      skipped += 1; continue
+                  if "vpp_year" in d:
+                      already += 1; continue
+                  own = infer_tile_year(d)
+                  if own is None or int(own) != YEAR:
+                      print(f"  REFUSED {os.path.basename(p)}: own year={own} != {YEAR}"); refused += 1; continue
+                  d["vpp_year"] = np.array(YEAR)
+                  tmp = p + ".tmp.npz"; np.savez_compressed(tmp, **d); os.replace(tmp, p)
+                  stamped += 1
+              print(f"{YEAR}: stamped={stamped} already={already} no_vpp_bands={skipped} refused={refused}")
+              if refused or skipped:
+                  sys.exit(f"FAIL {YEAR}: {refused} refused, {skipped} without VPP bands")
+              PYEOF
+              done
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: YEARS, value: "2018 2019 2021"}
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
