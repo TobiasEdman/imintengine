@@ -88,7 +88,7 @@ spec:
               echo "=== done: $(date -u) ==="
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
-            - {name: YEARS, value: "2018 2019 2021"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
             - {name: REQUEST_BUDGET, value: "450"}
             - {name: VPP_SOURCE, value: "wekeo"}        # cache-only, fail-loud on miss
             - {name: VPP_WEKEO_DIR, value: "/data/vpp_wekeo"}

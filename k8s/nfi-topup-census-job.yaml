@@ -59,7 +59,7 @@ spec:
               echo "=== done: $(date -u) ==="
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
-            - {name: YEARS, value: "2018 2019 2021"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
             - {name: CENSUS_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
             - {name: CENSUS_COMMIT, value: "df7dea162ec48981f81b4a72aced7f5ab2e59882"}
             - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}

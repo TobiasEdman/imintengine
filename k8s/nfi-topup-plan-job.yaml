@@ -1,7 +1,7 @@
 ---
 # Step 3a: prespecify the top-up tiles for the years the evaluation copy
-# leaves short of 1,000 eligible plot-years (2018, 2019, 2021 after the
-# 2026-10-12 decisions). Read-only against the data; writes only the per-year
+# leaves short of 1,000 eligible plot-years (2018, 2019, 2021 and 2022 after
+# the 2026-10-12 same-year exclusion: gaps 511, 33, 152, 160). Read-only against the data; writes only the per-year
 # manifests and VPP gap reports under /data/manifests/.
 #
 # scripts/plan_nfi_topup_manifest.py applies the decided rules: the task-0103
@@ -66,7 +66,7 @@ spec:
             - {name: PLAN_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
             - {name: PLAN_COMMIT, value: "e5e41cdbc58296cc6d76caf0e40d3da9109aaf82"}
             - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
-            - {name: YEARS, value: "2018 2019 2021"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
           resources:
             requests: {cpu: "8", memory: "24Gi"}
             limits: {cpu: "8", memory: "24Gi"}

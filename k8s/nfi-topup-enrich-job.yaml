@@ -97,7 +97,7 @@ spec:
               echo "=== done: $(date -u) ==="
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
-            - {name: YEARS, value: "2018 2019 2021"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
           resources:
             requests: {cpu: "8", memory: "32Gi"}
             limits: {cpu: "8", memory: "32Gi"}
