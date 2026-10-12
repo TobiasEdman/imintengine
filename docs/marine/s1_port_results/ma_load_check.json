@@ -1,0 +1,18 @@
+{
+ "marine_awareness_ref": "origin/main (2658af4)",
+ "rings_counter_clockwise": true,
+ "pred_heading_deg_min_max": [
+  0.5,
+  352.5
+ ],
+ "n_load_detections": 77,
+ "n_features": 77,
+ "n_outside_bbox_dropped": 4,
+ "score_and_pixel_count_round_trip": true,
+ "centroid_vs_box_centre_m_max": 0.006134650902132761,
+ "centroid_vs_ai2_point_m_median_max": [
+  7.546996486715729,
+  12.829785705488453
+ ],
+ "scene_time_utc": "2026-06-28T05:31:40.547748Z"
+}

@@ -117,7 +117,7 @@
         <div class="header-left">
             <div>
                 <h1><span>IMINT</span> Analysrapport</h1>
-                <p>Showcase — Brand (2018-07-24) &middot; Marin (2025-07-10 / 2025-07-19) &middot; Betesmark (2025-06-14) &middot; Kust (Kustlinje + Vegetationskant)</p>
+                <p>Showcase — Brand (2018-07-24) &middot; Marin (2025-07-10 / 2025-07-19; radar 2025-07-19 / 2026-06-28) &middot; Betesmark (2025-06-14) &middot; Kust (Kustlinje + Vegetationskant)</p>
             </div>
         </div>
         <div class="header-nav">
@@ -136,6 +136,8 @@
         <div class="sub-tab-nav">
             <a href="#" class="sub-tab active" data-subtab="marine_leisure">⛵ Fritid — Bohuslän</a>
             <a href="#" class="sub-tab" data-subtab="marine_commercial">🚢 Sjöfart — Öresund</a>
+            <a href="#" class="sub-tab" data-subtab="marine_radar_skagen">📡 Radar — Skagen</a>
+            <a href="#" class="sub-tab" data-subtab="marine_radar_oresund">📡 Radar — Öresund</a>
         </div>
 
         <div class="sub-tab-content active" id="tab-marine_leisure">
@@ -215,6 +217,54 @@
                 <h3>NMD, NDVI, NDWI, COT</h3>
                 <p>
                     Samma spektrala index och stöddatalager som i den marina Bohuslän-analysen. Öresund ligger delvis utanför NMD:s täckningsområde (dansk sida, 65% oklassificerat). Den svenska sidan visar Helsingborg med bebyggelse, infrastruktur och hav. NDVI och NDWI ger spektrala karakteristiker av vattenytan, och COT verifierar molnfria förhållanden (94.7% klart).
+                </p>
+            </div>
+        </div>
+
+        <div class="sub-tab-content" id="tab-marine_radar_skagen">
+            <div class="tab-dynamic"></div>
+            <div class="tab-description">
+
+                <h3>Sentinel-1 radar — Efter- och Före-bilden</h3>
+                <p>
+                    Sentinel-1 är Copernicus-programmets radarsatelliter. De bär en syntetisk aperturradar (SAR) i C-bandet som själv belyser marken med mikrovågor, och fungerar därför oberoende av dagsljus och moln. Efter-bilden är passagen med Sentinel-1D den 28 juni 2026 kl. 05:31 UTC över ankringsområdet söder om Skagen. Före-bilden är modellens jämförelsepassage längs samma bana den 23 maj 2026. Båda visar VV-polarisationen som relativ radarintensitet i dB, beräknad som 20·log10 av de okalibrerade GRD-värdena (inte kalibrerad σ⁰) och visad med samma fasta skala 28–58 dB. Plant vatten reflekterar signalen bort från satelliten och blir mörkt. Ett stålskrov fungerar som en hörnreflektor och lyser vitt, ofta med ett kors av sidlober kring de starkaste ekona. Mörka stråk på vattenytan är lugnare vatten med mindre krusning.
+                    <br><em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-1" target="_blank">ESA Sentinel-1</a> (Copernicus), hämtad via <a href="https://planetarycomputer.microsoft.com/dataset/sentinel-1-grd" target="_blank">Microsoft Planetary Computer</a></em>
+                </p>
+
+                <h3>AI2 Fartygsdetektering (Sentinel-1) — Detektioner och kandidater</h3>
+                <p>
+                    Allen Institute for AI (AI2) har tränat en detektor för fartyg i Sentinel-1-bilder: en Swin Transformer V2 Base med Faster R-CNN-huvud som får VV och VH från både Efter- och Före-passagen. Före-bilden ger modellen sammanhang: AI2 tränade den med en äldre passage för att skilja fartyg från fasta strukturer. Modellen slår ihop inlärda drag från båda bilderna och har ingen fast regel om att det som syns i båda förkastas. Här körs den med tröskel 0.3: rutor med poäng ≥ 0.7 (AI2:s egen produktionströskel) ritas heldragna, kandidater mellan 0.3 och 0.7 streckade, och färgen går från mörk till ljus orange med poängen. I passagen gav modellen 25 detektioner över 0.7, 18 av dem med poäng 0.99–1.00. 16 har predikterad fart under 0,5 knop och predikterad längd 77–278 m, vilket stämmer med fartyg till ankars som ger starka radarekon. Mellan 0.3 och 0.7 finns bara 9 kandidater (predikterad längd 19–148 m, median 34 m). Attributmodellen predikterar längd, bredd, kurs, fart och typ, som visas när du klickar på en ruta. Detektionerna är kandidater och inte bekräftade fartyg: ingen AIS-data har matchats, och attributen är modellprediktioner.
+                    <br><em>Källa: Allen Institute for AI, <a href="https://github.com/allenai/rslearn_projects" target="_blank">github.com/allenai/rslearn_projects</a> (modellvikter och kod: Apache 2.0, annoteringar: CC-BY 4.0); Satlas marine infrastructure (ODC-BY)</em>
+                </p>
+
+                <h3>Sjökort — OpenSeaMap över OpenStreetMap</h3>
+                <p>
+                    Skagen ligger i danska vatten, där inga svenska sjökortsceller finns. Sjökortet är därför OpenSeaMaps sjömärkeslager (bojar, fyrar, trafikseparering) ovanpå OpenStreetMaps baskarta. Det är sammansatt av förhämtade kartrutor på zoomnivå 12 och 13 och omprojicerat till samma EPSG:3006-rutnät (SWEREF 99 TM, 2327×2140 pixlar à 10 m) som radarbilderna. Växla mellan Efter och Sjökort för att se ankringsfartygen i förhållande till trafikseparering och farleder.
+                    <br><em>Källa: &copy; OpenStreetMap contributors (ODbL), seamarks &copy; OpenSeaMap (CC BY-SA)</em>
+                </p>
+            </div>
+        </div>
+
+        <div class="sub-tab-content" id="tab-marine_radar_oresund">
+            <div class="tab-dynamic"></div>
+            <div class="tab-description">
+
+                <h3>Sentinel-1 radar — Efter- och Före-bilden</h3>
+                <p>
+                    Sentinel-1 är Copernicus-programmets radarsatelliter. De bär en syntetisk aperturradar (SAR) i C-bandet som själv belyser marken med mikrovågor, och fungerar därför oberoende av dagsljus och moln. Efter-bilden är passagen med Sentinel-1C den 19 juli 2025 kl. 16:52 UTC — samma dag som Sjöfart-flikens optiska bild men vid en annan tidpunkt, så fartygen i de två flikarna är inte desamma. Före-bilden är modellens jämförelsepassage längs samma bana den 1 juni 2025. Båda visar VV-polarisationen som relativ radarintensitet i dB, beräknad som 20·log10 av de okalibrerade GRD-värdena (inte kalibrerad σ⁰) och visad med samma fasta skala 28–58 dB. Plant vatten reflekterar signalen bort från satelliten och blir mörkt; fartygsskrov, kajer och byggnader fungerar som hörnreflektorer och lyser vitt. Det korniga mönstret är speckle, ett brus som är typiskt för radarbilder.
+                    <br><em>Källa: <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-1" target="_blank">ESA Sentinel-1</a> (Copernicus), hämtad via <a href="https://planetarycomputer.microsoft.com/dataset/sentinel-1-grd" target="_blank">Microsoft Planetary Computer</a></em>
+                </p>
+
+                <h3>AI2 Fartygsdetektering (Sentinel-1) — Detektioner och kandidater</h3>
+                <p>
+                    Allen Institute for AI (AI2) har tränat en detektor för fartyg i Sentinel-1-bilder: en Swin Transformer V2 Base med Faster R-CNN-huvud som får VV och VH från både Efter- och Före-passagen. Före-bilden ger modellen sammanhang: AI2 tränade den med en äldre passage för att skilja fartyg från fasta strukturer. Modellen slår ihop inlärda drag från båda bilderna och har ingen fast regel om att det som syns i båda förkastas. Här körs den med tröskel 0.3: rutor med poäng ≥ 0.7 (AI2:s egen produktionströskel) ritas heldragna, kandidater mellan 0.3 och 0.7 streckade, och färgen går från mörk till ljus orange med poängen. I passagen gav modellen ingen detektion över 0.7 inom området, och 4 kandidater mellan 0.30 och 0.59. Alla är små farkoster (predikterad längd 21–29 m) på den svenska halvan av sundet, utanför Helsingborg. Det starka målet vid färjeläget i Helsingør får ingen kandidat. Det finns också i Före-bilden. Att det syns i båda bilderna är en möjlig förklaring till att det inte detekteras, inte en fastställd orsak: modellen slår ihop inlärda drag från båda bilderna och anger inget skäl per objekt. Växla mellan Före och Efter för att jämföra. Attributmodellen predikterar längd, bredd, kurs, fart och typ, som visas när du klickar på en ruta. Detektionerna är kandidater och inte bekräftade fartyg: ingen AIS-data har matchats, och attributen är modellprediktioner.
+                    <br><em>Källa: Allen Institute for AI, <a href="https://github.com/allenai/rslearn_projects" target="_blank">github.com/allenai/rslearn_projects</a> (modellvikter och kod: Apache 2.0, annoteringar: CC-BY 4.0); Satlas marine infrastructure (ODC-BY)</em>
+                </p>
+
+                <h3>Sjökort — Sjöfartsverket</h3>
+                <p>
+                    Sjökortet är Sjöfartsverkets elektroniska sjökortsceller (S-57) renderade direkt på samma EPSG:3006-rutnät (SWEREF 99 TM, 893×588 pixlar à 10 m) som radarbilderna och Sjöfart-flikens Sentinel-2-bilder. Cellerna täcker svenska vatten, så den danska sidan av sundet är tom. Växla mellan Efter och Sjökort för att jämföra kustlinje, hamnar och farleder med radarbilden.
+                    <br><em>Källa: Sjökortsdata &copy; Sjöfartsverket, via <a href="https://maps.slu.se/get/" target="_blank">SLU GET</a></em>
                 </p>
             </div>
         </div>
@@ -1641,6 +1691,18 @@ python demos/cloud_models/run_comparison.py</pre>
                     <td>Fri användning, attribution rekommenderas</td>
                 </tr>
                 <tr>
+                    <td>Sentinel-1 GRD (radar)</td>
+                    <td><span class="license-badge badge-open">Öppen &amp; fri</span></td>
+                    <td>&copy; ESA / Copernicus</td>
+                    <td>Hämtad via Microsoft Planetary Computer (kostnadsfritt)</td>
+                </tr>
+                <tr>
+                    <td>OpenStreetMap + OpenSeaMap (sjökort Skagen)</td>
+                    <td><span class="license-badge badge-open">ODbL / CC BY-SA</span></td>
+                    <td>&copy; OpenStreetMap contributors, &copy; OpenSeaMap</td>
+                    <td>Data: ODbL, sjömärkesrutor: CC BY-SA 2.0; attribution krävs</td>
+                </tr>
+                <tr>
                     <td>Digital Earth Sweden (openEO)</td>
                     <td><span class="license-badge badge-open">Apache 2.0 / CC0</span></td>
                     <td>Rymdstyrelsen / RISE</td>
@@ -1695,8 +1757,8 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=17"></script>
-    <script src="js/app.js?v=12"></script>
+    <script src="js/tab-data.js?v=18"></script>
+    <script src="js/app.js?v=13"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>
     <script src="js/lilla-karlso-chart.js?v=1"></script>

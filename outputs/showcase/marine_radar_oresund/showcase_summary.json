@@ -1,0 +1,155 @@
+{
+  "area": "oresund",
+  "area_name": "\u00d6resund, Helsingborg\u2013Helsing\u00f8r",
+  "scenes": {
+    "target": {
+      "scene_id": "S1C_IW_GRDH_1SDV_20250719T165231_20250719T165256_003292_006A41",
+      "start_utc": "2025-07-19T16:52:31.357769Z",
+      "platform": "sentinel-1c",
+      "orbit_direction": "ASCENDING",
+      "relative_orbit": 146
+    },
+    "historical": {
+      "scene_id": "S1C_IW_GRDH_1SDV_20250601T165228_20250601T165253_002592_005606",
+      "start_utc": "2025-06-01T16:52:28.656615Z",
+      "platform": "sentinel-1c",
+      "orbit_direction": "ASCENDING",
+      "relative_orbit": 146
+    }
+  },
+  "target_scene_time_utc": "2025-07-19T16:52:33.718037Z",
+  "coords": {
+    "west": 12.56,
+    "south": 56.01,
+    "east": 12.7,
+    "north": 56.06
+  },
+  "coords_fetch": {
+    "west": 12.543921,
+    "south": 56.001017,
+    "east": 12.716079,
+    "north": 56.068983
+  },
+  "fetch_margin_m": 1000.0,
+  "display_grid": {
+    "crs": "EPSG:3006",
+    "transform": [
+      10.0,
+      0.0,
+      347870.0,
+      0.0,
+      -10.0,
+      6215450.0
+    ],
+    "width": 893,
+    "height": 588
+  },
+  "model_grid": {
+    "crs": "EPSG:32633",
+    "transform": [
+      10.0,
+      0.0,
+      346840.0,
+      0.0,
+      -10.0,
+      6216480.0
+    ],
+    "width": 1099,
+    "height": 794
+  },
+  "score_floor": 0.3,
+  "production_threshold": 0.7,
+  "detections_above_threshold": {
+    "count": 0,
+    "score_range": null,
+    "pred_length_m_median": null,
+    "pred_length_m_range": null
+  },
+  "candidates_below_threshold": {
+    "count": 4,
+    "score_range": [
+      0.3006,
+      0.5936
+    ],
+    "pred_length_m_median": 22.4,
+    "pred_length_m_range": [
+      20.8,
+      28.7
+    ]
+  },
+  "detections_above_threshold_in_requested_bbox": 0,
+  "detections_in_fetch_window": 7,
+  "display": {
+    "band": "VV",
+    "scale": "20*log10(GRD DN), uncalibrated",
+    "stretch_db": [
+      28.0,
+      58.0
+    ],
+    "resampling": "bilinear",
+    "rgb.png": {
+      "valid_frac": 1.0,
+      "db_p01_p50_p99": [
+        26.44,
+        33.62,
+        57.43
+      ],
+      "clipped_low_frac": 0.0421,
+      "clipped_high_frac": 0.0087
+    },
+    "baseline.png": {
+      "valid_frac": 1.0,
+      "db_p01_p50_p99": [
+        30.88,
+        37.27,
+        58.18
+      ],
+      "clipped_low_frac": 0.0003,
+      "clipped_high_frac": 0.0104
+    }
+  },
+  "chart": {
+    "source": "Sj\u00f6fartsverket S-57 ENC cells via SLU GET",
+    "attribution": "Sj\u00f6kortsdata \u00a9 Sj\u00f6fartsverket",
+    "renderer": "imint.fetch.render_sjokort_png",
+    "cells": [
+      {
+        "file": "SE2BHS1C.000",
+        "sha256": "sha256:15fcb4ce7f226f5622820fe1114ebd6818fac897aaa60555f93c538f6379a988"
+      },
+      {
+        "file": "SE3CI0XC.000",
+        "sha256": "sha256:d6d5432c552fed55b2ac370571eeb82c68e14986109cf27c2063cd699cc5546c"
+      },
+      {
+        "file": "SE4DI0XE.000",
+        "sha256": "sha256:043efcc04f59b295c07726c933f0f72a8a4f3f776fc3c8631f32a866881ec3c2"
+      },
+      {
+        "file": "SE5GI0XE.000",
+        "sha256": "sha256:1849dc8fa2487243574d7389700511e37f47544e2e64cf94ce6e93f0728d81a4"
+      }
+    ]
+  },
+  "detector": {
+    "score_threshold": 0.3,
+    "patches": 6,
+    "raw_detections": 16,
+    "after_nms": 7,
+    "final_detections": 7,
+    "infra_filter": {
+      "applied": true,
+      "distance_m": 200.0,
+      "removed": 0,
+      "dataset": "Satlas marine infrastructure (Allen AI, ODC-BY)",
+      "path": "/Users/tobiasedman/.cache/imint/satlas_marine_infrastructure/latest.geojson",
+      "points": 39582,
+      "sha256": "a40bebd54df7cdd4c46d25d4ce2a7035d1f7201c6b23bb7fac7144c1f3266f63"
+    },
+    "attr_crops_padded": 3,
+    "water_mask": "none (Sentinel-1 has no SCL; AI2 applies none)",
+    "valid_frac_target": 1.0,
+    "valid_frac_historical": 1.0,
+    "seconds_total": 18.4
+  }
+}
