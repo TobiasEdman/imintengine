@@ -1,5 +1,5 @@
 {
- "schema": "nfi-holdout-census-record-v1",
+ "schema": "nfi-holdout-census-record-v2",
  "preliminary": true,
  "input_freeze": false,
  "fetch_started": false,
@@ -8,8 +8,7 @@
  "process": {
   "driver": "scripts/census_holdout_val_512.py",
   "job_manifest": "k8s/nfi-holdout-census-job.yaml",
-  "census_commit": "54c526e4380dc6b271f44b47bf818e53e82bfc7b",
-  "job_manifest_commit": "a87cb85",
+  "census_commit": "df7dea162ec48981f81b4a72aced7f5ab2e59882",
   "fieldtruth_commit": "ba31235c6bb5f4c2fa9d5c71929926a0023d062b",
   "fieldtruth_sha256": "3f7143f2fceda3104ea61925000547f6cd6baac49d9112acce6c49be208ad68c",
   "sizing_commit": "94b26bbbef9d28220734e4efce38ed4943fd6157",
@@ -27,29 +26,59 @@
   "namespace": "prithvi-training-default",
   "pvc": "training-data-cephfs",
   "pvc_read_only": true,
-  "job": "nfi-holdout-census",
-  "job_uid": "b1bcbfbf-ba84-45b6-9f51-dd42d60b22f9",
-  "pod": "nfi-holdout-census-nwgfg",
-  "pod_uid": "0611e09b-8668-4545-8aa8-383518427c6b",
-  "node": "p02r09srv06",
+  "job": "nfi-holdout-census-v2",
+  "job_uid": "e087a102-d3a1-4cb3-9c34-09f4e718d761",
+  "pod": "nfi-holdout-census-v2-wxckr",
+  "pod_uid": "ccc98915-4ac2-4472-87d0-9444ce59d2cc",
+  "node": "p02r09srv02",
   "image": "python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
   "image_id": "docker-pullable://python@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
-  "job_start": "2026-10-12T05:57:30Z",
-  "container_started": "2026-10-12T05:57:38Z",
-  "container_finished": "2026-10-12T06:38:45Z",
-  "job_completion": "2026-10-12T06:38:48Z",
+  "job_start": "2026-10-12T17:19:13Z",
+  "container_started": "2026-10-12T17:19:16Z",
+  "container_finished": "2026-10-12T17:57:26Z",
+  "job_completion": "2026-10-12T17:57:30Z",
   "exit_code": 0,
   "phase": "Succeeded",
-  "log_bytes": 31226,
-  "log_sha256": "e9b111c902229173a1a30657cef2a2177ee13cf80a27bf2e815051e4c211e96f",
+  "log_bytes": 53768,
+  "log_sha256": "2a72321732c3fae1391f562c00686dd928d46641c98be2e996c62002ef4e3284",
   "run_as_root": true,
   "gpu_requested": false
  },
+ "previous_runs": [
+  {
+   "job": "nfi-holdout-census",
+   "census_commit": "54c526e4380dc6b271f44b47bf818e53e82bfc7b",
+   "execution_evidence": {
+    "cluster": "icekube",
+    "namespace": "prithvi-training-default",
+    "pvc": "training-data-cephfs",
+    "pvc_read_only": true,
+    "job": "nfi-holdout-census",
+    "job_uid": "b1bcbfbf-ba84-45b6-9f51-dd42d60b22f9",
+    "pod": "nfi-holdout-census-nwgfg",
+    "pod_uid": "0611e09b-8668-4545-8aa8-383518427c6b",
+    "node": "p02r09srv06",
+    "image": "python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
+    "image_id": "docker-pullable://python@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
+    "job_start": "2026-10-12T05:57:30Z",
+    "container_started": "2026-10-12T05:57:38Z",
+    "container_finished": "2026-10-12T06:38:45Z",
+    "job_completion": "2026-10-12T06:38:48Z",
+    "exit_code": 0,
+    "phase": "Succeeded",
+    "log_bytes": 31226,
+    "log_sha256": "e9b111c902229173a1a30657cef2a2177ee13cf80a27bf2e815051e4c211e96f",
+    "run_as_root": true,
+    "gpu_requested": false
+   },
+   "superseded_by": "this run; the first script counted the same tiles but had no fail-closed scans, no quarantine and a boolean verdict (Codex review 5492880648)"
+  }
+ ],
  "report": {
   "schema": "nfi-holdout-census-v1",
   "read_only": true,
-  "generated_at": "2026-10-12T06:38:44Z",
-  "elapsed_s": 2377.9,
+  "generated_at": "2026-10-12T17:57:26Z",
+  "elapsed_s": 2195.7,
   "years": [
    2018,
    2019,
@@ -121,6 +150,9 @@
    "present": 1463,
    "readable": 1463,
    "unreadable": [],
+   "admitted": 1463,
+   "quarantined_year_conflict": [],
+   "quarantined_by_manifest_year": {},
    "not_world_readable": 84,
    "not_world_readable_names": [
     "holdoutval_100_1228_2022",
@@ -468,6 +500,7 @@
    "bbox_matches_manifest": 1463
   },
   "modalities": {
+   "tiles_admitted": 1463,
    "tiles_by_year": {
     "2018": 134,
     "2019": 144,
@@ -594,9 +627,15 @@
     "eligible_new_vs_v4": 849,
     "tiles_with_plots": 134,
     "tiles_world_readable_with_plots": 112,
+    "tiles_excluded_same_year_overlap": 63,
+    "eligible_excl_same_year_overlap": 489,
+    "eligible_excl_same_year_overlap_world_readable": 462,
+    "eligible_excl_same_year_overlap_on_bar_modalities": 381,
     "gap_to_target_all_files": 100,
     "gap_to_target_world_readable": 263,
-    "gap_to_target_bar_full": 1000
+    "gap_to_target_bar_full": 1000,
+    "gap_to_target_excl_same_year_overlap": 511,
+    "gap_to_target_excl_same_year_overlap_world_readable": 538
    },
    "2019": {
     "rows": 998,
@@ -613,9 +652,15 @@
     "eligible_new_vs_v4": 967,
     "tiles_with_plots": 144,
     "tiles_world_readable_with_plots": 140,
+    "tiles_excluded_same_year_overlap": 0,
+    "eligible_excl_same_year_overlap": 967,
+    "eligible_excl_same_year_overlap_world_readable": 938,
+    "eligible_excl_same_year_overlap_on_bar_modalities": 816,
     "gap_to_target_all_files": 33,
     "gap_to_target_world_readable": 62,
-    "gap_to_target_bar_full": 1000
+    "gap_to_target_bar_full": 1000,
+    "gap_to_target_excl_same_year_overlap": 33,
+    "gap_to_target_excl_same_year_overlap_world_readable": 62
    },
    "2020": {
     "rows": 1055,
@@ -632,9 +677,15 @@
     "eligible_new_vs_v4": 1030,
     "tiles_with_plots": 151,
     "tiles_world_readable_with_plots": 147,
+    "tiles_excluded_same_year_overlap": 0,
+    "eligible_excl_same_year_overlap": 1030,
+    "eligible_excl_same_year_overlap_world_readable": 1003,
+    "eligible_excl_same_year_overlap_on_bar_modalities": 842,
     "gap_to_target_all_files": 0,
     "gap_to_target_world_readable": 0,
-    "gap_to_target_bar_full": 1000
+    "gap_to_target_bar_full": 1000,
+    "gap_to_target_excl_same_year_overlap": 0,
+    "gap_to_target_excl_same_year_overlap_world_readable": 0
    },
    "2021": {
     "rows": 919,
@@ -651,9 +702,15 @@
     "eligible_new_vs_v4": 898,
     "tiles_with_plots": 127,
     "tiles_world_readable_with_plots": 124,
+    "tiles_excluded_same_year_overlap": 8,
+    "eligible_excl_same_year_overlap": 848,
+    "eligible_excl_same_year_overlap_world_readable": 826,
+    "eligible_excl_same_year_overlap_on_bar_modalities": 652,
     "gap_to_target_all_files": 102,
     "gap_to_target_world_readable": 124,
-    "gap_to_target_bar_full": 1000
+    "gap_to_target_bar_full": 1000,
+    "gap_to_target_excl_same_year_overlap": 152,
+    "gap_to_target_excl_same_year_overlap_world_readable": 174
    },
    "2022": {
     "rows": 1337,
@@ -670,9 +727,15 @@
     "eligible_new_vs_v4": 1234,
     "tiles_with_plots": 247,
     "tiles_world_readable_with_plots": 227,
+    "tiles_excluded_same_year_overlap": 83,
+    "eligible_excl_same_year_overlap": 840,
+    "eligible_excl_same_year_overlap_world_readable": 769,
+    "eligible_excl_same_year_overlap_on_bar_modalities": 684,
     "gap_to_target_all_files": 0,
     "gap_to_target_world_readable": 0,
-    "gap_to_target_bar_full": 1000
+    "gap_to_target_bar_full": 1000,
+    "gap_to_target_excl_same_year_overlap": 160,
+    "gap_to_target_excl_same_year_overlap_world_readable": 231
    },
    "2023": {
     "rows": 1280,
@@ -689,9 +752,15 @@
     "eligible_new_vs_v4": 1245,
     "tiles_with_plots": 175,
     "tiles_world_readable_with_plots": 166,
+    "tiles_excluded_same_year_overlap": 0,
+    "eligible_excl_same_year_overlap": 1245,
+    "eligible_excl_same_year_overlap_world_readable": 1181,
+    "eligible_excl_same_year_overlap_on_bar_modalities": 1014,
     "gap_to_target_all_files": 0,
     "gap_to_target_world_readable": 0,
-    "gap_to_target_bar_full": 1000
+    "gap_to_target_bar_full": 1000,
+    "gap_to_target_excl_same_year_overlap": 0,
+    "gap_to_target_excl_same_year_overlap_world_readable": 0
    },
    "2024": {
     "rows": 1433,
@@ -708,16 +777,386 @@
     "eligible_new_vs_v4": 76,
     "tiles_with_plots": 197,
     "tiles_world_readable_with_plots": 181,
+    "tiles_excluded_same_year_overlap": 0,
+    "eligible_excl_same_year_overlap": 1402,
+    "eligible_excl_same_year_overlap_world_readable": 1282,
+    "eligible_excl_same_year_overlap_on_bar_modalities": 1197,
     "gap_to_target_all_files": 0,
     "gap_to_target_world_readable": 0,
-    "gap_to_target_bar_full": 1000
+    "gap_to_target_bar_full": 1000,
+    "gap_to_target_excl_same_year_overlap": 0,
+    "gap_to_target_excl_same_year_overlap_world_readable": 0
    }
   },
   "provenance": {
+   "verdict": "no_named_tile_use_detected",
+   "verdict_basis": "tile names in split files, feature tables, plot indexes and training directories; not an imagery-independence proof",
+   "named_tile_use_detected": false,
+   "scan_inconclusive_reasons": [],
+   "spatial_independence": {
+    "status": "unresolved_by_this_check",
+    "holdout_tiles_overlapping_same_year_training_tile": {
+     "2018": 63,
+     "2021": 8,
+     "2022": 141
+    },
+    "excluded_same_year_overlap_tiles": 212,
+    "note": "decision 2026-10-12: tiles overlapping a same-year training tile are excluded; other-year overlap is allowed (D6)"
+   },
    "holdout_tile_names": 1463,
    "names_in_training_cohort_dir": 0,
    "names_in_nfi2024_staging_dir": 0,
    "split_files_scanned": [
+    {
+     "path": "/data/checkpoints/backup_prephenology_20260828/clay/training_log.json",
+     "bytes": 239690,
+     "sha256": "0ad62bd24d89ff653f6e8f85ceaaaaa4e76ce1afc27af4f79ee61d5f36be87b2",
+     "tile_names": 173,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/backup_prephenology_20260828/croma_v3/training_log.json",
+     "bytes": 317678,
+     "sha256": "db4ed9a0c490a0e1b42dcb24f12b6762124cb41ba2987c19ee0e5731a9559b83",
+     "tile_names": 176,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/backup_prephenology_20260828/prithvi_300m_512/training_log.json",
+     "bytes": 344643,
+     "sha256": "a847afbb26b475302cbc1fc5528f26a51b330881f8469167bd77600dfafd7b7a",
+     "tile_names": 173,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/backup_prephenology_20260828/terramind_v3/training_log.json",
+     "bytes": 331169,
+     "sha256": "c9bcdf8e9385e9dbeb5eb7838ef728ebade9c34568a44ba90f2acd073860bb9e",
+     "tile_names": 176,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/backup_prephenology_20260828/tessera_gated/training_log.json",
+     "bytes": 289589,
+     "sha256": "b6e3487ed5fa18349c51c440d1466221f43f4ddf61c64de2b3afb194c6718243",
+     "tile_names": 173,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/backup_prephenology_20260828/v8b_nmd2023_long/training_log.json",
+     "bytes": 196681,
+     "sha256": "4da61601a2799aaf145d4a94db8826c17592d78a6186a872cfc2c36b011e39e4",
+     "tile_names": 166,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/croma/training_log.json",
+     "bytes": 136138,
+     "sha256": "43b03f866c696339033412db2521ba6310bc92f40d07fbbcce8bfe45a8caa276",
+     "tile_names": 173,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/croma_v3/training_log.json",
+     "bytes": 4974,
+     "sha256": "33864870ef48376becf26f9fc0fcba29e012053144ca598b281df313c0c59039",
+     "tile_names": 153,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/era5_smoke_prithvi600m/base_git_sha.txt",
+     "bytes": 41,
+     "sha256": "eef2fc66d97f24a8e6a2fae5df6ccbb85a22f1894c3b3714e581bf28544982de",
+     "tile_names": 1,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/era5_smoke_prithvi600m/control_code_sha256.txt",
+     "bytes": 804,
+     "sha256": "fdfdc6263e5f1a27415877a191a743682dede2895384e22cb093544b99fb8d9b",
+     "tile_names": 9,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/era5_smoke_prithvi600m/control_nvidia_smi.txt",
+     "bytes": 11287,
+     "sha256": "1ada874b1c1a392135375bbe86927a10c489f3ab41bf760234c8024b21cc9a87",
+     "tile_names": 184,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/era5_smoke_prithvi600m/control_pip_freeze.txt",
+     "bytes": 888,
+     "sha256": "ed0c99411a0f514278551d06fa1cb94473fdf064fae39c12ced7f82ecdece620",
+     "tile_names": 42,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/clay_r1/training_log.json",
+     "bytes": 235613,
+     "sha256": "14e818dd3d222e34095bba6a6bf29b7b2bbcda23a9bdd7f9e67183c8de808e7b",
+     "tile_names": 186,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/clay_r2/training_log.json",
+     "bytes": 291234,
+     "sha256": "57105057843b4659233d9623f6a1c827709177a06becff6eacccdf0432a6ad2a",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/clay_r3/training_log.json",
+     "bytes": 331003,
+     "sha256": "301485c85d1806a37df4f384261576bf24ea02bc6d643ab5bccdcba22289a76e",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/clay_r4/training_log.json",
+     "bytes": 292343,
+     "sha256": "4f0970d80bb949cfebbe06b68a956a8fd6fb7f1fbbe9c24ac564048e27313604",
+     "tile_names": 192,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/croma_r1/training_log.json",
+     "bytes": 225668,
+     "sha256": "6c61ada784298e112dd0426caadefc05fcab4dbab6c3de65a7f427497d4348d4",
+     "tile_names": 186,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/croma_r2/training_log.json",
+     "bytes": 316190,
+     "sha256": "ff58eb3903eb7b07337e5c6521764816ed3a37bc1eea1888f31c660fe73cfe3d",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/croma_r3/training_log.json",
+     "bytes": 342710,
+     "sha256": "922700228fa0d46b52d2ea231a708b330ea444ccc082d257d8ee89f1a379b1c6",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/croma_r4/training_log.json",
+     "bytes": 291096,
+     "sha256": "0c45b55a87aa5f6a5ca167f310c7e383d4b0fd64129ea3f9e9d01f11119049c7",
+     "tile_names": 192,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi300m4f_r1/training_log.json",
+     "bytes": 225349,
+     "sha256": "20f17e0f6cf8e85046c8ff07d575dfb139876f2653362ac54e7883642f397c38",
+     "tile_names": 186,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi300m4f_r2/training_log.json",
+     "bytes": 302990,
+     "sha256": "c99033abb28835359f43a18d8371608247ce47c0a83ce809b7985710e90a4d94",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi300m4f_r3/training_log.json",
+     "bytes": 316080,
+     "sha256": "febaf50cd4960225d6756531f54eb32e1e8582afc6a20cb9ca7ff45e175b409e",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi300m4f_r4/training_log.json",
+     "bytes": 317199,
+     "sha256": "3fb1abca41ec2cd9c10e2c4c798e8d71944d88e33c2f8bd5eb98457380486f48",
+     "tile_names": 192,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi300m_r1/training_log.json",
+     "bytes": 244214,
+     "sha256": "a0be878ff4669b20548cc434d923044f52857a65829527d93295784670c6fb03",
+     "tile_names": 186,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi300m_r2/training_log.json",
+     "bytes": 290509,
+     "sha256": "1e56d7fe45ad8e674081be02b25347c1773f165e981dfafb4d2c3022c9c66a03",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi300m_r3/training_log.json",
+     "bytes": 303119,
+     "sha256": "1eb6f3464c08058066b24b0a67fff90e4fed0402f8ccfeaad1da0f4b8d40765d",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi300m_r4/training_log.json",
+     "bytes": 317213,
+     "sha256": "0e638cba5c0e1c53f8354890e2b12bc1f5b60cde2bb6315307d5382523a14a34",
+     "tile_names": 192,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi600m_r1/training_log.json",
+     "bytes": 216006,
+     "sha256": "46fa46de2072fe6b560faa272036f1c8e6503120eae025c2e14a0294a5f179ef",
+     "tile_names": 186,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi600m_r2/training_log.json",
+     "bytes": 250431,
+     "sha256": "c3e6f6f44d5651b1494676ebbc4d4ada5e3d2ffe1d8264b5ca5c08ab53a71438",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi600m_r3/training_log.json",
+     "bytes": 276528,
+     "sha256": "cd14e360be2dd6d7105aadabb7beb03df39055b42011c2b941296b07113ba1a9",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/prithvi600m_r4/training_log.json",
+     "bytes": 329156,
+     "sha256": "b4e73af32252e849e7419b3e29b43a0e3647e9c427c8ae4e60ab8f5911d18c71",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/terramind_r1/training_log.json",
+     "bytes": 253419,
+     "sha256": "55e5ebe231a9d6cd207da503017de2d5c5b570a3c40cf330a4884e114a0e0910",
+     "tile_names": 186,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/terramind_r2/training_log.json",
+     "bytes": 316753,
+     "sha256": "5d173f8233e312180f98a2bbe9c9b8c1fe00d43350d20a7e56461d1061beeaed",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/terramind_r3/training_log.json",
+     "bytes": 303378,
+     "sha256": "9f8b176c52cffbb3c0266de0154173775cda06f241964a4113fb2c6dcd66b657",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/terramind_r4/training_log.json",
+     "bytes": 330811,
+     "sha256": "47463311818dd898e546197530ed5b67991acfb3b2565ef6a7c1233d48776a99",
+     "tile_names": 192,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/tessera_r1/training_log.json",
+     "bytes": 205944,
+     "sha256": "5b5249215c0b23437c2a93245815fb62a5c778c785b5d68bdeeba73e1202b729",
+     "tile_names": 186,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/tessera_r2/training_log.json",
+     "bytes": 288304,
+     "sha256": "06e0a734c34be4bd872319cdf5f75547b9f0187d177b2ed4bcf4cc6bfcdbe542",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/tessera_r3/training_log.json",
+     "bytes": 288178,
+     "sha256": "12017f241b8d5f91f0ab44d1632baed4d7620ec3e7f365a56e15cfcd266d72f0",
+     "tile_names": 191,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/ladder/tessera_r4/training_log.json",
+     "bytes": 289201,
+     "sha256": "d60c12d32fcdf64c087b29f76179dbd1e0854216af7629c2051ba895272df6e5",
+     "tile_names": 192,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/prithvi_300m_512/training_log.json",
+     "bytes": 33887,
+     "sha256": "3ad235973679154a5f961eb775f05d9de81a5f27e0e3b2aeb4ccb7c63efa547c",
+     "tile_names": 192,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/terramind/training_log.json",
+     "bytes": 265631,
+     "sha256": "7807d0217d3a864410790f6935773d12fc09ff4798f094720e372041d1391b6a",
+     "tile_names": 173,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/terramind_v3/training_log.json",
+     "bytes": 181589,
+     "sha256": "f07ddc16574d03ce49d4f3909b4da9cdb274dc9ba507987d07fb5deff22735bb",
+     "tile_names": 192,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/tessera_distill/training_log.json",
+     "bytes": 316530,
+     "sha256": "ba5b07b5972de1be88d6beb747bfa7b001c7bab345a007f18548c91b42f5382c",
+     "tile_names": 171,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/tessera_gated/training_log.json",
+     "bytes": 163386,
+     "sha256": "309e4809c7ff111c27cb6091a66a797b02df82c8978bb6d6ee1cda5d735c01a8",
+     "tile_names": 192,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/v8b_markfukt/training_log.json",
+     "bytes": 127774,
+     "sha256": "935b50a2f4218144c0d957f005e760b3bdf07bacbecd5121247f91c0ec91280b",
+     "tile_names": 161,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/v8b_nmd2023/training_log.json",
+     "bytes": 166121,
+     "sha256": "911d9f47e22a216ecddd2b1e767e7f7c7f6078de3682906a3fe3949d9ae59e65",
+     "tile_names": 166,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/v8b_nmd2023_distill/training_log.json",
+     "bytes": 153369,
+     "sha256": "7a9779c2937e7ecbd643ba217628bd1ab9b85dcf6ad7c7a1e081bf314903edb4",
+     "tile_names": 171,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/v8b_nmd2023_long/training_log.json",
+     "bytes": 171339,
+     "sha256": "6acb620a8bdf96c49ec71206f3b7057c2d50f88d43dcc89ae2fa5168ccec64eb",
+     "tile_names": 192,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/checkpoints/v8b_nmd2023_tradslag/training_log.json",
+     "bytes": 140703,
+     "sha256": "c93665505d1b40a1e36a3289684f19aad5038fdaae8fc83e296c368fa0126c04",
+     "tile_names": 172,
+     "holdout_names_found": 0
+    },
     {
      "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.MANIFEST.json",
      "bytes": 1977,
@@ -817,6 +1256,7 @@
      "holdout_names_found": 0
     }
    ],
+   "split_files_not_parsed": [],
    "split_files_naming_holdout_tiles": [],
    "visualisation_files_naming_holdout_tiles": [
     "/data/ladder_inference/tiles.json"
@@ -838,37 +1278,44 @@
     {
      "path": "/data/audits/holdout_val_cdse_probe.json",
      "mentions_holdout_dir": 0,
-     "holdout_tile_names": 1
+     "holdout_tile_names": 1,
+     "class": "provenance_record"
     },
     {
      "path": "/data/audits/holdout_val_cdse_probe2.json",
      "mentions_holdout_dir": 0,
-     "holdout_tile_names": 1
+     "holdout_tile_names": 1,
+     "class": "provenance_record"
     },
     {
      "path": "/data/audits/holdout_val_cdse_probe3.json",
      "mentions_holdout_dir": 0,
-     "holdout_tile_names": 1
+     "holdout_tile_names": 1,
+     "class": "provenance_record"
     },
     {
      "path": "/data/audits/holdout_val_phaseA.json",
      "mentions_holdout_dir": 0,
-     "holdout_tile_names": 1463
+     "holdout_tile_names": 1463,
+     "class": "provenance_record"
     },
     {
      "path": "/data/debug/holdout_sen2cor_frame2016_plan.json",
      "mentions_holdout_dir": 0,
-     "holdout_tile_names": 1463
+     "holdout_tile_names": 1463,
+     "class": "provenance_record"
     },
     {
      "path": "/data/ladder_inference/matrix.json",
      "mentions_holdout_dir": 0,
-     "holdout_tile_names": 10
+     "holdout_tile_names": 10,
+     "class": "visualisation"
     },
     {
      "path": "/data/ladder_inference/tiles.json",
      "mentions_holdout_dir": 1,
-     "holdout_tile_names": 10
+     "holdout_tile_names": 10,
+     "class": "parsed_split_file"
     }
    ],
    "footprint": {
@@ -900,9 +1347,222 @@
      "2018": 78,
      "2021": 8,
      "2022": 184
-    }
-   },
-   "used_for_training_or_selection": false
+    },
+    "excluded_same_year_overlap_names": [
+     "holdoutval_100_1228_2022",
+     "holdoutval_100_1231_2022",
+     "holdoutval_100_1288_2018",
+     "holdoutval_101_1247_2022",
+     "holdoutval_101_1255_2018",
+     "holdoutval_101_1317_2018",
+     "holdoutval_101_1329_2018",
+     "holdoutval_102_1299_2018",
+     "holdoutval_102_1387_2018",
+     "holdoutval_103_1262_2022",
+     "holdoutval_105_1246_2022",
+     "holdoutval_105_1319_2018",
+     "holdoutval_105_1327_2018",
+     "holdoutval_106_1246_2018",
+     "holdoutval_106_1267_2022",
+     "holdoutval_106_1403_2021",
+     "holdoutval_108_1238_2018",
+     "holdoutval_108_1240_2022",
+     "holdoutval_108_1296_2018",
+     "holdoutval_108_1380_2018",
+     "holdoutval_109_1246_2018",
+     "holdoutval_110_1354_2018",
+     "holdoutval_110_1392_2018",
+     "holdoutval_111_1240_2022",
+     "holdoutval_112_1275_2022",
+     "holdoutval_112_1316_2018",
+     "holdoutval_112_1411_2021",
+     "holdoutval_113_1282_2018",
+     "holdoutval_113_1414_2018",
+     "holdoutval_113_1436_2021",
+     "holdoutval_114_1243_2022",
+     "holdoutval_114_1257_2022",
+     "holdoutval_114_1258_2022",
+     "holdoutval_114_1260_2022",
+     "holdoutval_114_1274_2022",
+     "holdoutval_114_1304_2022",
+     "holdoutval_114_1335_2018",
+     "holdoutval_114_1338_2018",
+     "holdoutval_114_1360_2018",
+     "holdoutval_115_1221_2022",
+     "holdoutval_115_1302_2022",
+     "holdoutval_115_1319_2022",
+     "holdoutval_116_1288_2022",
+     "holdoutval_116_1293_2022",
+     "holdoutval_116_1306_2022",
+     "holdoutval_116_1316_2022",
+     "holdoutval_116_1342_2022",
+     "holdoutval_116_1411_2022",
+     "holdoutval_116_1420_2022",
+     "holdoutval_116_1465_2022",
+     "holdoutval_117_1276_2022",
+     "holdoutval_117_1282_2022",
+     "holdoutval_118_1276_2022",
+     "holdoutval_118_1325_2022",
+     "holdoutval_118_1349_2022",
+     "holdoutval_118_1366_2022",
+     "holdoutval_118_1392_2022",
+     "holdoutval_118_1393_2022",
+     "holdoutval_118_1453_2022",
+     "holdoutval_119_1452_2022",
+     "holdoutval_120_1237_2022",
+     "holdoutval_120_1303_2022",
+     "holdoutval_120_1339_2022",
+     "holdoutval_120_1443_2022",
+     "holdoutval_121_1241_2022",
+     "holdoutval_122_1388_2021",
+     "holdoutval_123_1280_2022",
+     "holdoutval_124_1278_2022",
+     "holdoutval_124_1285_2022",
+     "holdoutval_124_1408_2022",
+     "holdoutval_125_1284_2022",
+     "holdoutval_125_1305_2022",
+     "holdoutval_126_1284_2022",
+     "holdoutval_126_1377_2022",
+     "holdoutval_127_1290_2022",
+     "holdoutval_127_1308_2022",
+     "holdoutval_128_1290_2022",
+     "holdoutval_129_1276_2022",
+     "holdoutval_130_1279_2022",
+     "holdoutval_131_1369_2018",
+     "holdoutval_132_1295_2022",
+     "holdoutval_132_1298_2022",
+     "holdoutval_132_1431_2021",
+     "holdoutval_133_1282_2022",
+     "holdoutval_133_1301_2022",
+     "holdoutval_133_1302_2022",
+     "holdoutval_134_1290_2022",
+     "holdoutval_134_1292_2022",
+     "holdoutval_134_1295_2022",
+     "holdoutval_134_1296_2022",
+     "holdoutval_134_1446_2022",
+     "holdoutval_135_1284_2022",
+     "holdoutval_135_1289_2022",
+     "holdoutval_135_1300_2022",
+     "holdoutval_135_1307_2022",
+     "holdoutval_135_1425_2022",
+     "holdoutval_136_1280_2022",
+     "holdoutval_136_1415_2022",
+     "holdoutval_137_1284_2022",
+     "holdoutval_137_1294_2022",
+     "holdoutval_137_1301_2022",
+     "holdoutval_137_1383_2022",
+     "holdoutval_139_1242_2022",
+     "holdoutval_139_1412_2018",
+     "holdoutval_139_1436_2022",
+     "holdoutval_141_1247_2022",
+     "holdoutval_141_1294_2022",
+     "holdoutval_141_1384_2022",
+     "holdoutval_141_1489_2022",
+     "holdoutval_142_1426_2022",
+     "holdoutval_142_1460_2022",
+     "holdoutval_144_1435_2018",
+     "holdoutval_144_1491_2022",
+     "holdoutval_145_1461_2022",
+     "holdoutval_146_1472_2018",
+     "holdoutval_146_1489_2022",
+     "holdoutval_146_1491_2022",
+     "holdoutval_147_1437_2018",
+     "holdoutval_147_1481_2022",
+     "holdoutval_149_1425_2022",
+     "holdoutval_150_1423_2022",
+     "holdoutval_151_1406_2022",
+     "holdoutval_151_1412_2022",
+     "holdoutval_151_1478_2022",
+     "holdoutval_151_1481_2022",
+     "holdoutval_152_1390_2018",
+     "holdoutval_152_1396_2018",
+     "holdoutval_153_1393_2018",
+     "holdoutval_153_1402_2022",
+     "holdoutval_153_1415_2022",
+     "holdoutval_153_1485_2022",
+     "holdoutval_157_1459_2022",
+     "holdoutval_158_1433_2022",
+     "holdoutval_159_1433_2022",
+     "holdoutval_161_1447_2022",
+     "holdoutval_163_1434_2022",
+     "holdoutval_163_1450_2022",
+     "holdoutval_166_1477_2022",
+     "holdoutval_171_1448_2018",
+     "holdoutval_172_1449_2018",
+     "holdoutval_55_1265_2022",
+     "holdoutval_66_1253_2022",
+     "holdoutval_66_1296_2018",
+     "holdoutval_67_1283_2022",
+     "holdoutval_68_1292_2018",
+     "holdoutval_69_1286_2018",
+     "holdoutval_70_1235_2018",
+     "holdoutval_71_1242_2018",
+     "holdoutval_71_1304_2018",
+     "holdoutval_73_1219_2022",
+     "holdoutval_75_1278_2022",
+     "holdoutval_76_1237_2022",
+     "holdoutval_76_1284_2022",
+     "holdoutval_77_1266_2018",
+     "holdoutval_77_1321_2018",
+     "holdoutval_79_1234_2022",
+     "holdoutval_79_1301_2018",
+     "holdoutval_79_1348_2018",
+     "holdoutval_80_1209_2022",
+     "holdoutval_80_1263_2022",
+     "holdoutval_80_1374_2018",
+     "holdoutval_81_1202_2022",
+     "holdoutval_81_1210_2022",
+     "holdoutval_81_1247_2018",
+     "holdoutval_81_1296_2018",
+     "holdoutval_81_1353_2018",
+     "holdoutval_82_1242_2022",
+     "holdoutval_82_1296_2018",
+     "holdoutval_82_1352_2018",
+     "holdoutval_83_1211_2022",
+     "holdoutval_83_1305_2018",
+     "holdoutval_83_1332_2018",
+     "holdoutval_84_1233_2022",
+     "holdoutval_84_1290_2022",
+     "holdoutval_84_1297_2018",
+     "holdoutval_85_1225_2022",
+     "holdoutval_85_1231_2018",
+     "holdoutval_85_1316_2018",
+     "holdoutval_85_1323_2018",
+     "holdoutval_86_1250_2022",
+     "holdoutval_86_1273_2022",
+     "holdoutval_87_1225_2022",
+     "holdoutval_87_1273_2018",
+     "holdoutval_87_1311_2022",
+     "holdoutval_87_1319_2022",
+     "holdoutval_88_1284_2022",
+     "holdoutval_88_1317_2022",
+     "holdoutval_89_1223_2022",
+     "holdoutval_89_1225_2022",
+     "holdoutval_90_1229_2022",
+     "holdoutval_90_1249_2022",
+     "holdoutval_91_1232_2018",
+     "holdoutval_91_1265_2022",
+     "holdoutval_92_1249_2022",
+     "holdoutval_93_1226_2022",
+     "holdoutval_93_1239_2022",
+     "holdoutval_93_1257_2018",
+     "holdoutval_93_1284_2022",
+     "holdoutval_93_1296_2018",
+     "holdoutval_93_1304_2018",
+     "holdoutval_94_1336_2018",
+     "holdoutval_94_1354_2021",
+     "holdoutval_94_1370_2018",
+     "holdoutval_95_1275_2022",
+     "holdoutval_95_1286_2018",
+     "holdoutval_96_1235_2022",
+     "holdoutval_96_1302_2018",
+     "holdoutval_96_1375_2018",
+     "holdoutval_97_1373_2022",
+     "holdoutval_98_1296_2022",
+     "holdoutval_98_1364_2021",
+     "holdoutval_98_1389_2021"
+    ]
+   }
   },
   "sizing_cross_check": {
    "file": "/workspace/codex_sizing.json",
