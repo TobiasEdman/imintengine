@@ -1,9 +1,11 @@
 # Multi-year NFI control tiles, step 1: census of the legacy `holdout_val_512`
 
-Measured 2026-10-12 on the data volume, read-only, twice: a first run with
-the initial script (05:57–06:38 UTC) and a rerun with the corrected script
-after Codex's review of PR #71 (17:19–17:57 UTC). The numbers below are the
-rerun's; both are in the [JSON record](nfi_multiyear_holdout_census_20261012.json).
+Measured 2026-10-12 on the data volume, read-only, three times: a first run
+with the initial script (05:57–06:38 UTC) and two reruns with the script as
+corrected after Codex's two reviews of PR #71 (17:19–17:57 and 18:06–18:51
+UTC). Every count was identical across the three runs; the numbers below are
+the last run's, and all three are in the
+[JSON record](nfi_multiyear_holdout_census_20261012.json).
 This is the readiness check decision D3 asked for before the August-2026
 off-footprint holdout may be reused as evaluation imagery. It is a planning
 result: no freeze, no fetch, no GPU, no byte written under `/data`.
@@ -21,9 +23,10 @@ sen2cor plan) or the dashboard's inference matrix, which renders ten frozen
 tiles and selects nothing. Student models draw their 10 % validation split by
 MD5 of the tile name *inside the directories a training job lists*, and no
 training, ladder or distill manifest in the repository lists the holdout.
-Had any split file failed to parse, or had a file under `checkpoints/` or
-`distill/` named a holdout tile without being a parsed split file, the
-verdict would have been *inconclusive*; neither happened.
+Had any split file failed to parse, or had a file outside the provenance
+and visualisation directories mentioned a holdout tile or the holdout
+directory beyond what a parser accounted for, the verdict would have been
+*inconclusive*; neither happened.
 
 **Spatial independence is not established by this check.** The verdict rests
 on names. 212 holdout tiles overlap a *training* tile of the same year
@@ -163,30 +166,32 @@ set is excluded by decision; the other-year overlap stays allowed.
 ## Reproduction and verification
 
 - Driver `scripts/census_holdout_val_512.py` at
-  `df7dea162ec48981f81b4a72aced7f5ab2e59882`; Job
-  `k8s/nfi-holdout-census-job.yaml` (name `nfi-holdout-census-v2`).
+  `532df9aefa113e24272a36dd6a61f0119d360ad3`; Job
+  `k8s/nfi-holdout-census-job.yaml` (name `nfi-holdout-census-v3`).
 - Identity: `imint/eval/fieldtruth.py` at `ba31235c…` (sha256 `3f7143f2…`),
   the process commit of the task-0103 sizing; the script refuses any other
   version. Exclusion union 841, equal to the sizing. All eleven input hashes
   equal the sizing's (`nfi_fieldtruth_0103_tile_sizing_20261008.json` at
   `94b26bb…`).
-- Rerun: Job `nfi-holdout-census-v2` (uid `e087a102-d3a1-4cb3-9c34-09f4e718d761`),
-  pod `nfi-holdout-census-v2-wxckr` on p02r09srv02, image
-  `python:3.11-slim@sha256:5be45dba…`, started 17:19:16 UTC, exit 0 at
-  17:57:26 UTC (38 min). PVC mounted `readOnly` at volume and mount level.
-  CPU only. Log 53,768 bytes, sha256
-  `2a72321732c3fae1391f562c00686dd928d46641c98be2e996c62002ef4e3284`.
-- First run: Job `nfi-holdout-census` (uid `b1bcbfbf-ba84-45b6-9f51-dd42d60b22f9`),
-  script `54c526e…`, 05:57–06:38 UTC, exit 0, log sha256 `e9b111c9…`; same
-  counts, boolean verdict, no exclusion view, no fail-closed scans. Kept
-  under `previous_runs` in the JSON record.
-- Twelve unit tests on synthetic tiles: `pytest
-  tests/test_census_holdout_val_512.py`, 12 passed (crop border, teacher
+- Final run: Job `nfi-holdout-census-v3` (uid `9c191c23-48d9-4ade-bb6b-9750e798bc52`),
+  pod `nfi-holdout-census-v3-xcdgf` on p02r10srv02, image
+  `python:3.11-slim@sha256:5be45dba…`, started 18:06:20 UTC, exit 0 at
+  18:51:34 UTC (45 min). PVC mounted `readOnly` at volume and mount level.
+  CPU only. Log 54,090 bytes, sha256
+  `53d3582b4c73679e67a821ce3cadd9473e4c29e4ab1b9c6e9d5bfbbd92023909`.
+- Earlier runs, same counts, kept under `previous_runs` in the JSON record:
+  `nfi-holdout-census-v2` (script `df7dea1…`, 17:19–17:57 UTC, log sha256
+  `2a723217…`; parsed files counted as fully accounted for) and
+  `nfi-holdout-census` (script `54c526e…`, 05:57–06:38 UTC, log sha256
+  `e9b111c9…`; boolean verdict, no exclusion view, no fail-closed scans).
+- Fifteen unit tests on synthetic tiles: `pytest
+  tests/test_census_holdout_val_512.py`, 15 passed (crop border, teacher
   exclusion, invalid volume, root-only file, lying flag, same-year exclusion,
-  split-file leak detected, malformed split file and unclassified text
-  evidence both inconclusive, a `train_tiles.json` under `checkpoints/`
-  detected, quarantined tile counted nowhere, identity leak guard, wrong
-  identity module refused).
+  split-file leak detected, malformed split file inconclusive, a tile name
+  embedded in a parsed `notes.txt` or `train_config.json` inconclusive, a
+  `train_dir` pointing at the holdout directory inconclusive, a
+  `train_tiles.json` under `checkpoints/` detected, quarantined tile counted
+  nowhere, identity leak guard, wrong identity module refused).
 - Raw plot identities and coordinates stayed in the data environment; the
   report and the JSON record carry counts, year tables, tile names and file
   paths only.

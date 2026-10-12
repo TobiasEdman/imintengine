@@ -1,5 +1,5 @@
 {
- "schema": "nfi-holdout-census-record-v2",
+ "schema": "nfi-holdout-census-record-v3",
  "preliminary": true,
  "input_freeze": false,
  "fetch_started": false,
@@ -8,7 +8,7 @@
  "process": {
   "driver": "scripts/census_holdout_val_512.py",
   "job_manifest": "k8s/nfi-holdout-census-job.yaml",
-  "census_commit": "df7dea162ec48981f81b4a72aced7f5ab2e59882",
+  "census_commit": "532df9aefa113e24272a36dd6a61f0119d360ad3",
   "fieldtruth_commit": "ba31235c6bb5f4c2fa9d5c71929926a0023d062b",
   "fieldtruth_sha256": "3f7143f2fceda3104ea61925000547f6cd6baac49d9112acce6c49be208ad68c",
   "sizing_commit": "94b26bbbef9d28220734e4efce38ed4943fd6157",
@@ -26,21 +26,21 @@
   "namespace": "prithvi-training-default",
   "pvc": "training-data-cephfs",
   "pvc_read_only": true,
-  "job": "nfi-holdout-census-v2",
-  "job_uid": "e087a102-d3a1-4cb3-9c34-09f4e718d761",
-  "pod": "nfi-holdout-census-v2-wxckr",
-  "pod_uid": "ccc98915-4ac2-4472-87d0-9444ce59d2cc",
-  "node": "p02r09srv02",
+  "job": "nfi-holdout-census-v3",
+  "job_uid": "9c191c23-48d9-4ade-bb6b-9750e798bc52",
+  "pod": "nfi-holdout-census-v3-xcdgf",
+  "pod_uid": "c66fc257-2b09-4a44-a706-68bf62d7b688",
+  "node": "p02r10srv02",
   "image": "python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
   "image_id": "docker-pullable://python@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
-  "job_start": "2026-10-12T17:19:13Z",
-  "container_started": "2026-10-12T17:19:16Z",
-  "container_finished": "2026-10-12T17:57:26Z",
-  "job_completion": "2026-10-12T17:57:30Z",
+  "job_start": "2026-10-12T18:06:00Z",
+  "container_started": "2026-10-12T18:06:20Z",
+  "container_finished": "2026-10-12T18:51:34Z",
+  "job_completion": "2026-10-12T18:51:39Z",
   "exit_code": 0,
   "phase": "Succeeded",
-  "log_bytes": 53768,
-  "log_sha256": "2a72321732c3fae1391f562c00686dd928d46641c98be2e996c62002ef4e3284",
+  "log_bytes": 54090,
+  "log_sha256": "53d3582b4c73679e67a821ce3cadd9473e4c29e4ab1b9c6e9d5bfbbd92023909",
   "run_as_root": true,
   "gpu_requested": false
  },
@@ -72,13 +72,41 @@
     "gpu_requested": false
    },
    "superseded_by": "this run; the first script counted the same tiles but had no fail-closed scans, no quarantine and a boolean verdict (Codex review 5492880648)"
+  },
+  {
+   "job": "nfi-holdout-census-v2",
+   "census_commit": "df7dea162ec48981f81b4a72aced7f5ab2e59882",
+   "execution_evidence": {
+    "cluster": "icekube",
+    "namespace": "prithvi-training-default",
+    "pvc": "training-data-cephfs",
+    "pvc_read_only": true,
+    "job": "nfi-holdout-census-v2",
+    "job_uid": "e087a102-d3a1-4cb3-9c34-09f4e718d761",
+    "pod": "nfi-holdout-census-v2-wxckr",
+    "pod_uid": "ccc98915-4ac2-4472-87d0-9444ce59d2cc",
+    "node": "p02r09srv02",
+    "image": "python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
+    "image_id": "docker-pullable://python@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
+    "job_start": "2026-10-12T17:19:13Z",
+    "container_started": "2026-10-12T17:19:16Z",
+    "container_finished": "2026-10-12T17:57:26Z",
+    "job_completion": "2026-10-12T17:57:30Z",
+    "exit_code": 0,
+    "phase": "Succeeded",
+    "log_bytes": 53768,
+    "log_sha256": "2a72321732c3fae1391f562c00686dd928d46641c98be2e996c62002ef4e3284",
+    "run_as_root": true,
+    "gpu_requested": false
+   },
+   "superseded_by": "this run; v2 classified every parsed file as fully accounted for and ignored holdout-directory mentions (Codex review 5494386716)"
   }
  ],
  "report": {
   "schema": "nfi-holdout-census-v1",
   "read_only": true,
-  "generated_at": "2026-10-12T17:57:26Z",
-  "elapsed_s": 2195.7,
+  "generated_at": "2026-10-12T18:51:32Z",
+  "elapsed_s": 2367.0,
   "years": [
    2018,
    2019,
@@ -1279,43 +1307,50 @@
      "path": "/data/audits/holdout_val_cdse_probe.json",
      "mentions_holdout_dir": 0,
      "holdout_tile_names": 1,
-     "class": "provenance_record"
+     "class": "provenance_record",
+     "unaccounted_tile_names": 0
     },
     {
      "path": "/data/audits/holdout_val_cdse_probe2.json",
      "mentions_holdout_dir": 0,
      "holdout_tile_names": 1,
-     "class": "provenance_record"
+     "class": "provenance_record",
+     "unaccounted_tile_names": 0
     },
     {
      "path": "/data/audits/holdout_val_cdse_probe3.json",
      "mentions_holdout_dir": 0,
      "holdout_tile_names": 1,
-     "class": "provenance_record"
+     "class": "provenance_record",
+     "unaccounted_tile_names": 0
     },
     {
      "path": "/data/audits/holdout_val_phaseA.json",
      "mentions_holdout_dir": 0,
      "holdout_tile_names": 1463,
-     "class": "provenance_record"
+     "class": "provenance_record",
+     "unaccounted_tile_names": 0
     },
     {
      "path": "/data/debug/holdout_sen2cor_frame2016_plan.json",
      "mentions_holdout_dir": 0,
      "holdout_tile_names": 1463,
-     "class": "provenance_record"
+     "class": "provenance_record",
+     "unaccounted_tile_names": 0
     },
     {
      "path": "/data/ladder_inference/matrix.json",
      "mentions_holdout_dir": 0,
      "holdout_tile_names": 10,
-     "class": "visualisation"
+     "class": "visualisation",
+     "unaccounted_tile_names": 0
     },
     {
      "path": "/data/ladder_inference/tiles.json",
      "mentions_holdout_dir": 1,
      "holdout_tile_names": 10,
-     "class": "parsed_split_file"
+     "class": "visualisation",
+     "unaccounted_tile_names": 0
     }
    ],
    "footprint": {
