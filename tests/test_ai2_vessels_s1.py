@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 from datetime import timedelta
 from itertools import pairwise
 from pathlib import Path
@@ -828,7 +829,7 @@ def test_fetch_offline_end_to_end_then_cache_round_trip(tmp_path, monkeypatch):
     assert again.provenance == scenes.provenance
 
 
-def test_cache_write_read_round_trip(tmp_path):
+def _synthetic_vessel_scenes():
     rng = np.random.default_rng(3)
     target = rng.integers(0, 65535, (2, 37, 53), dtype=np.uint16)
     historical = rng.integers(0, 65535, (2, 37, 53), dtype=np.uint16)
@@ -847,6 +848,13 @@ def test_cache_write_read_round_trip(tmp_path):
                                   target_scene=info, historical_scene=hinfo,
                                   scene_time_utc="2026-06-28T05:31:38.700000Z",
                                   provenance={"chain_version": 1, "aoi_px": [1, 2, 3, 4]})
+    return scenes, info, hinfo
+
+
+def test_cache_write_read_round_trip(tmp_path):
+    scenes, info, hinfo = _synthetic_vessel_scenes()
+    target, historical, geo = scenes.target, scenes.historical, scenes.geo
+    transform = geo.transform
     tif, meta = tmp_path / "c" / "x.tif", tmp_path / "c" / "x.json"
     fetch._write_s1_vessel_cache(tif, meta, scenes)
     back = fetch._load_s1_vessel_cache(tif, meta)
@@ -864,6 +872,63 @@ def test_cache_write_read_round_trip(tmp_path):
     with pytest.raises(TypeError, match="uint16"):
         fetch._write_s1_vessel_cache(tif, meta, fetch.S1VesselScenes(
             **{**scenes.__dict__, "target": target.astype(np.float32)}))
+
+
+def _replace_after_barrier(monkeypatch, parties: int = 2):
+    """Make every os.replace wait until all writers have written their temp file.
+
+    That is the interleaving that broke the shared ``.part`` name: writer A
+    publishes, then writer B's replace finds its (shared) temp file gone.
+    """
+    import threading
+
+    barrier = threading.Barrier(parties, timeout=20)
+    real_replace = os.replace
+
+    def replace(src, dst):
+        barrier.wait()
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(fetch.os, "replace", replace)
+
+
+def _run_concurrently(fn, n: int = 2) -> list:
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(n) as pool:
+        futures = [pool.submit(fn) for _ in range(n)]
+        return [f.exception() for f in futures]
+
+
+def test_concurrent_atomic_text_writers_do_not_collide(tmp_path, monkeypatch):
+    target = tmp_path / "header.json"
+    _replace_after_barrier(monkeypatch)
+    errors = _run_concurrently(lambda: fetch._atomic_write_text(target, '{"a": 1}'))
+    assert errors == [None, None]
+    assert target.read_text() == '{"a": 1}'
+    assert [p.name for p in tmp_path.iterdir()] == ["header.json"]   # no temp left behind
+
+
+def test_concurrent_cache_writers_publish_a_consistent_pair(tmp_path, monkeypatch):
+    scenes, _, _ = _synthetic_vessel_scenes()
+    tif, meta = tmp_path / "c" / "x.tif", tmp_path / "c" / "x.json"
+    _replace_after_barrier(monkeypatch)
+    errors = _run_concurrently(lambda: fetch._write_s1_vessel_cache(tif, meta, scenes))
+    assert errors == [None, None]
+    back = fetch._load_s1_vessel_cache(tif, meta)
+    np.testing.assert_array_equal(back.target, scenes.target)
+    np.testing.assert_array_equal(back.historical, scenes.historical)
+    assert sorted(p.name for p in tif.parent.iterdir()) == ["x.json", "x.tif"]
+
+
+def test_failed_cache_write_leaves_no_temp_file(tmp_path, monkeypatch):
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(fetch.os, "replace", boom)
+    with pytest.raises(OSError, match="disk full"):
+        fetch._atomic_write_text(tmp_path / "x.json", "{}")
+    assert list(tmp_path.iterdir()) == []
 
 
 # ── model (needs the checkpoints) ───────────────────────────────────────────

@@ -63,6 +63,7 @@ import json
 import math
 import os
 import tarfile
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2822,14 +2823,27 @@ def _s1_aoi_outline_lonlat(epsg: int, aoi_px: tuple, pad_px: int = 4,
     return Transformer.from_crs(epsg, 4326, always_xy=True).transform(cols * g, rows * -g)
 
 
+def _private_tmp(path: Path) -> Path:
+    """A sibling temp name owned by one writer.
+
+    Concurrent writers of the same cache entry (e.g. two AOIs on one scene)
+    must never share a temp file: with a shared name one ``os.replace``
+    moves the other's file away and the second raises FileNotFoundError.
+    """
+    return path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` via a sibling temp file + ``os.replace``.
+    """Write ``text`` to ``path`` via a private sibling temp file + ``os.replace``.
 
     A reader (or a cache-hit check) never sees a partially written file.
     """
-    tmp = path.with_name(path.name + ".part")
-    tmp.write_text(text)
-    os.replace(tmp, path)
+    tmp = _private_tmp(path)
+    try:
+        tmp.write_text(text)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _s1_scene_header(item, pol: str, scene_dir: Path, signed) -> tuple[dict, Any]:
@@ -2928,15 +2942,19 @@ def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Pa
         shifted = [GroundControlPoint(row=r - rwin["row_off"], col=c - rwin["col_off"],
                                       x=x, y=y, z=z, id=i)
                    for i, c, r, x, y, z in header["gcps"]]
-        tmp = win_path.with_suffix(".tif.part")
-        with rasterio.open(tmp, "w", driver="GTiff", width=data.shape[1], height=data.shape[0],
-                           count=1, dtype=data.dtype, nodata=header["nodata"], compress="zstd",
-                           tiled=True, blockxsize=512, blockysize=512,
-                           gcps=shifted, crs=header["gcp_crs"]) as dst:
-            dst.write(data, 1)
-            dst.update_tags(SCENE_ID=header["scene_id"], SOURCE_HREF=header["href"],
-                            COL_OFF=str(rwin["col_off"]), ROW_OFF=str(rwin["row_off"]))
-        os.replace(tmp, win_path)
+        tmp = _private_tmp(win_path)
+        try:
+            with rasterio.open(tmp, "w", driver="GTiff", width=data.shape[1],
+                               height=data.shape[0], count=1, dtype=data.dtype,
+                               nodata=header["nodata"], compress="zstd", tiled=True,
+                               blockxsize=512, blockysize=512,
+                               gcps=shifted, crs=header["gcp_crs"]) as dst:
+                dst.write(data, 1)
+                dst.update_tags(SCENE_ID=header["scene_id"], SOURCE_HREF=header["href"],
+                                COL_OFF=str(rwin["col_off"]), ROW_OFF=str(rwin["row_off"]))
+            os.replace(tmp, win_path)
+        finally:
+            tmp.unlink(missing_ok=True)
         print(f"    [S1 vessels] cached radar window {win_path} "
               f"({data.shape[1]}x{data.shape[0]} px)")
     _atomic_write_text(vrt_path, _s1_sparse_vrt_xml(header, rwin, win_path.name))
@@ -3023,7 +3041,14 @@ def _s1_grd_to_window_grid(src_path: str | Path, step1_epsg: int, epsg: int,
 
 
 def _write_s1_vessel_cache(tif_path: Path, meta_path: Path, scenes: S1VesselScenes) -> None:
-    """Persist the model input (uint16, 4 bands) and its record sidecar (written last)."""
+    """Persist the model input (uint16, 4 bands) and its record sidecar (written last).
+
+    The sidecar is the completion marker: a cache hit needs both files, and it
+    is published only after the raster. Concurrent writers of one key each
+    use a private temp file; the key is a hash of every input, so they write
+    identical bytes and whichever ``os.replace`` lands last leaves a
+    consistent raster/sidecar pair.
+    """
     import dataclasses
 
     import rasterio
@@ -3034,13 +3059,17 @@ def _write_s1_vessel_cache(tif_path: Path, meta_path: Path, scenes: S1VesselScen
     geo = scenes.geo
     tif_path.parent.mkdir(parents=True, exist_ok=True)
     stack = np.concatenate([scenes.target, scenes.historical])
-    tmp = tif_path.with_name(tif_path.name + ".part")
-    with rasterio.open(tmp, "w", driver="GTiff", width=stack.shape[2], height=stack.shape[1],
-                       count=4, dtype="uint16", crs=geo.crs, transform=geo.transform, nodata=0,
-                       compress="zstd", tiled=True, blockxsize=512, blockysize=512) as dst:
-        dst.write(stack)
-        dst.descriptions = ("target_vv", "target_vh", "historical_vv", "historical_vh")
-    os.replace(tmp, tif_path)
+    tmp = _private_tmp(tif_path)
+    try:
+        with rasterio.open(tmp, "w", driver="GTiff", width=stack.shape[2],
+                           height=stack.shape[1], count=4, dtype="uint16", crs=geo.crs,
+                           transform=geo.transform, nodata=0, compress="zstd", tiled=True,
+                           blockxsize=512, blockysize=512) as dst:
+            dst.write(stack)
+            dst.descriptions = ("target_vv", "target_vh", "historical_vv", "historical_vh")
+        os.replace(tmp, tif_path)
+    finally:
+        tmp.unlink(missing_ok=True)
     _atomic_write_text(meta_path, json.dumps({
         "target_scene": dataclasses.asdict(scenes.target_scene),
         "historical_scene": dataclasses.asdict(scenes.historical_scene),
