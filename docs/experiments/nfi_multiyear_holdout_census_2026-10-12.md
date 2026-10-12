@@ -34,10 +34,10 @@ table below gives both views. Pixel-level overlap with other-year training
 tiles remains allowed and unquantified beyond tile counts.
 
 **Coverage after the exclusion.** With all 1,463 files and the 212 same-year
-tiles removed, the holdout reaches 1,000 eligible plot-years for 2019 (short
-by 33), 2020, 2023 and 2024, and falls short for 2018 (511), 2021 (152) and
-2022 (160). Without the exclusion only 2018, 2019 and 2021 were short. Option
-A of the plan (top-up only) still holds, but the top-up now includes 2022.
+tiles removed, the holdout reaches 1,000 eligible plot-years for 2020, 2023
+and 2024 only, and falls short for 2018 (511), 2019 (33), 2021 (152) and
+2022 (160). Without the exclusion 2018, 2019 and 2021 were short. Option A of
+the plan (top-up only) still holds, but the top-up now includes 2022.
 
 **The tiles are not at the 2024 bar yet.** Every one of the 1,463 carries
 TESSERA from the pre-promotion source with no `tessera_source` stamp; 255

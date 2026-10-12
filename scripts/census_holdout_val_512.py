@@ -497,7 +497,8 @@ def scan_split_files(data_root: Path, holdout: set[str]) -> list[dict]:
                 seen[path] = {"path": str(path), "error": f"{type(exc).__name__}"}
                 continue
             seen[path] = {"path": str(path), "bytes": len(payload), "sha256": sha256_bytes(payload),
-                          "tile_names": len(names), "holdout_names_found": len(names & holdout)}
+                          "tile_names": len(names), "holdout_names_found": len(names & holdout),
+                          "_holdout_names": names & holdout}
     return [seen[p] for p in sorted(seen)]
 
 
@@ -523,7 +524,7 @@ def scan_text_mentions(data_root: Path, holdout: set[str]) -> list[dict]:
                 tokens = set(_TILE_TOKEN.findall(text)) & holdout
                 if dir_hits or tokens:
                     hits.append({"path": str(path), "mentions_holdout_dir": dir_hits,
-                                 "holdout_tile_names": len(tokens)})
+                                 "holdout_tile_names": len(tokens), "_tokens": tokens})
     return sorted(hits, key=lambda h: h["path"])
 
 
@@ -595,15 +596,25 @@ def footprint_overlap(tiles: list[dict], cohort: pd.DataFrame) -> dict:
             "excluded_same_year_overlap_names": sorted(excluded)}
 
 
-def classify_text_hit(path: str, data_root: Path, parsed: set[str]) -> str:
-    if path in parsed:
-        return "parsed_split_file"
+def classify_text_hit(path: str, data_root: Path, parsed_names: dict[str, set[str]],
+                      tokens: set[str] | None = None) -> tuple[str, int]:
+    """Class of a text-scan hit and how many of its tile names no parser accounted for.
+
+    A file that parsed as a split file accounts only for the exact names its
+    parser extracted; a tile name embedded in a sentence or a config value is
+    still unaccounted text evidence, and so is any mention of the holdout
+    directory itself outside the provenance and visualisation directories.
+    """
+    tokens = tokens or set()
     top = Path(path).relative_to(data_root).parts[0]
     if top in PROVENANCE_DIRS:
-        return "provenance_record"
+        return "provenance_record", 0
     if top in VISUALISATION_DIRS:
-        return "visualisation"
-    return "unclassified"
+        return "visualisation", 0
+    if path in parsed_names:
+        unaccounted = tokens - parsed_names[path]
+        return ("parsed_split_file" if not unaccounted else "unclassified"), len(unaccounted)
+    return "unclassified", len(tokens)
 
 
 def never_trained_on(ft: ModuleType, data_root: Path, cohort_dir: Path, staging_dir: Path,
@@ -623,22 +634,29 @@ def never_trained_on(ft: ModuleType, data_root: Path, cohort_dir: Path, staging_
     cohort_names = {p.stem for p in cohort_dir.glob("*.npz")} if cohort_dir.is_dir() else set()
     staging_names = {p.stem for p in staging_dir.glob("*.npz")} if staging_dir.is_dir() else set()
     split_files = scan_split_files(data_root, holdout)
-    parsed = {f["path"] for f in split_files if "error" not in f}
+    parsed_names = {f["path"]: f.pop("_holdout_names") for f in split_files if "error" not in f}
     scan_errors = [f for f in split_files if "error" in f]
     text_hits = scan_text_mentions(data_root, holdout)
     for h in text_hits:
-        h["class"] = classify_text_hit(h["path"], data_root, parsed)
+        h["class"], h["unaccounted_tile_names"] = classify_text_hit(
+            h["path"], data_root, parsed_names, h.pop("_tokens"))
     feature_hits = {name: int(frame["tile_name"].isin(holdout).sum()) for name, frame in exposure_tables.items()}
     index_hits = {name: int(frame["tile_name"].isin(holdout).sum()) for name, frame in indexes.items()}
     split_hits = [f for f in split_files if f.get("holdout_names_found")]
     # The ladder inference matrix renders predictions on frozen holdout tiles for
     # the dashboard. It chooses nothing (checkpoints are selected on the training
     # val split), so it is reported but not counted as selection use.
-    visual_only = [f for f in split_hits if classify_text_hit(f["path"], data_root, set()) == "visualisation"]
+    visual_only = [f for f in split_hits if classify_text_hit(f["path"], data_root, {})[0] == "visualisation"]
     selection_hits = [f for f in split_hits if f not in visual_only]
-    unclassified = [h for h in text_hits if h["class"] == "unclassified" and h["holdout_tile_names"]]
+    # Outside the provenance and visualisation directories, every mention the
+    # parsers did not account for keeps the verdict open: a tile name in a
+    # sentence or a config value, or the holdout directory itself as a
+    # train_dir. Nothing here is counted as use; it is counted as unresolved.
+    unclassified = [h for h in text_hits if h["class"] == "unclassified"
+                    and (h["unaccounted_tile_names"] or h["mentions_holdout_dir"])]
     inconclusive = ([f"split file not parsed: {f['path']} ({f['error']})" for f in scan_errors]
-                    + [f"unclassified text evidence naming {h['holdout_tile_names']} holdout tiles: {h['path']}"
+                    + [f"unaccounted text evidence ({h['unaccounted_tile_names']} holdout tile names, "
+                       f"{h['mentions_holdout_dir']} holdout-directory mentions): {h['path']}"
                        for h in unclassified])
     named_use = bool((holdout & cohort_names) or selection_hits
                      or any(feature_hits.values()) or any(index_hits.values()))
@@ -857,7 +875,8 @@ def _print_summary(report: dict) -> None:
     print(f"plot indexes naming holdout tiles: {p['plot_indexes_naming_holdout_tiles']}")
     print(f"text files mentioning the holdout: {len(p['text_files_mentioning_holdout'])}")
     for h in p["text_files_mentioning_holdout"]:
-        print(f"    {h['path']}  dir={h['mentions_holdout_dir']} names={h['holdout_tile_names']} [{h['class']}]")
+        print(f"    {h['path']}  dir={h['mentions_holdout_dir']} names={h['holdout_tile_names']} "
+              f"unaccounted={h['unaccounted_tile_names']} [{h['class']}]")
     fp = dict(p.get("footprint") or {})
     excluded = fp.pop("excluded_same_year_overlap_names", [])
     print(f"footprint: {fp}")

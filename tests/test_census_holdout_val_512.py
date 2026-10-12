@@ -216,8 +216,8 @@ def test_never_trained_on_passes_and_reports_footprint_and_visualisation(data_ro
     assert fp["holdout_tiles_overlapping_same_year_training_tile"] == {"2019": 1}
     assert fp["holdout_tiles_overlapping_any_year_training_tile"] == {"2019": 2}
     assert fp["excluded_same_year_overlap_names"] == ["holdoutval_100_1250_2019"]
-    assert [(Path(h["path"]).name, h["class"]) for h in p["text_files_mentioning_holdout"]] == [
-        ("holdout_val_phaseA.json", "provenance_record"), ("tiles.json", "parsed_split_file")]
+    assert [(Path(h["path"]).name, h["class"], h["unaccounted_tile_names"]) for h in p["text_files_mentioning_holdout"]] == [
+        ("holdout_val_phaseA.json", "provenance_record", 0), ("tiles.json", "visualisation", 0)]
 
 
 def test_a_holdout_name_in_a_split_file_fails_the_check(data_root, fieldtruth_file, tmp_path):
@@ -239,7 +239,29 @@ def test_training_evidence_found_only_by_text_scan_is_inconclusive(data_root, fi
     (data_root / "checkpoints/ladder/clay_r2/notes.md").write_text("trained on holdoutval_120_1250_2019 too\n")
     p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
     assert p["verdict"] == "inconclusive"
-    assert any("notes.md" in r and "unclassified" in r for r in p["scan_inconclusive_reasons"])
+    assert any("notes.md" in r and "unaccounted" in r for r in p["scan_inconclusive_reasons"])
+
+
+@pytest.mark.parametrize("name, text", [
+    ("notes.txt", "trained on holdoutval_120_1250_2019 too\n"),
+    ("train_config.json", json.dumps({"note": "trained on holdoutval_120_1250_2019 too"})),
+])
+def test_a_tile_name_embedded_in_a_parsed_file_stays_inconclusive(data_root, fieldtruth_file, tmp_path, name, text):
+    (data_root / "checkpoints/ladder/clay_r2" / name).write_text(text)
+    p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
+    assert p["verdict"] == "inconclusive" and p["named_tile_use_detected"] is False
+    hit = [h for h in p["text_files_mentioning_holdout"] if h["path"].endswith(name)][0]
+    assert hit["class"] == "unclassified" and hit["unaccounted_tile_names"] == 1
+    assert any(name in r and "unaccounted" in r for r in p["scan_inconclusive_reasons"])
+
+
+def test_a_holdout_directory_reference_in_training_territory_is_inconclusive(data_root, fieldtruth_file, tmp_path):
+    (data_root / "checkpoints/ladder/clay_r2/config.yaml").write_text("train_dir: /data/holdout_val_512\n")
+    p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
+    assert p["verdict"] == "inconclusive"
+    hit = [h for h in p["text_files_mentioning_holdout"] if h["path"].endswith("config.yaml")][0]
+    assert hit["mentions_holdout_dir"] == 1 and hit["holdout_tile_names"] == 0
+    assert any("config.yaml" in r and "1 holdout-directory mentions" in r for r in p["scan_inconclusive_reasons"])
 
 
 def test_a_train_tiles_json_under_checkpoints_is_parsed_and_detected(data_root, fieldtruth_file, tmp_path):
