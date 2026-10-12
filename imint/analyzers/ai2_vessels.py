@@ -17,7 +17,6 @@ Inference uses 512×512 sliding windows with 10 % overlap.
 
 from __future__ import annotations
 
-import collections
 import logging
 import math
 from pathlib import Path
@@ -25,18 +24,14 @@ from typing import Optional
 
 import numpy as np
 import torch
-import torchvision
-from torchvision.models.detection import rpn as _rpn
-from torchvision.models.detection.anchor_utils import AnchorGenerator
-from torchvision.models.detection.faster_rcnn import (
-    FastRCNNPredictor,
-    TwoMLPHead,
-)
-from torchvision.models.detection.image_list import ImageList
-from torchvision.models.detection.roi_heads import RoIHeads
-from torchvision.models.detection.transform import GeneralizedRCNNTransform
-from torchvision.ops import FeaturePyramidNetwork, MultiScaleRoIAlign
 
+from imint.analyzers.ai2_rslearn_blocks import (
+    FPN,
+    FasterRCNNHead,
+    PoolingDecoder,
+    SwinFeatureExtractor,
+    crop_centered,
+)
 from imint.analyzers.base import AnalysisResult, BaseAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -52,10 +47,8 @@ _DEFAULT_ATTR_CKPT = _FM_DIR / "attribute_best.ckpt"
 # Model hyper-parameters (from rslearn config.yaml)
 # ---------------------------------------------------------------------------
 _INPUT_CHANNELS = 9
-_SWIN_OUTPUT_LAYERS = [1, 3, 5, 7]
 _FPN_IN_CHANNELS = [128, 256, 512, 1024]
 _FPN_OUT_CHANNELS = 128
-_ANCHOR_SIZES = [[32], [64], [128], [256]]
 _NUM_CLASSES = 2  # unknown + vessel
 _PATCH_SIZE = 512
 _OVERLAP_RATIO = 0.1
@@ -80,165 +73,8 @@ SHIP_TYPES = [
 
 
 # ===================================================================
-# Standalone model builder (no rslearn dependency)
+# Detection model (blocks: imint.analyzers.ai2_rslearn_blocks)
 # ===================================================================
-
-class _SwinFeatureExtractor(torch.nn.Module):
-    """Swin V2 B backbone that returns multi-scale feature maps.
-
-    Matches rslearn.models.swin.Swin with output_layers=[1,3,5,7].
-    """
-
-    def __init__(self, input_channels: int = 9) -> None:
-        super().__init__()
-        self.model = torchvision.models.swin_v2_b()
-        # Replace first conv to accept *input_channels* instead of 3
-        if input_channels != 3:
-            self.model.features[0][0] = torch.nn.Conv2d(
-                input_channels,
-                self.model.features[0][0].out_channels,
-                kernel_size=(4, 4),
-                stride=(4, 4),
-            )
-        self.output_layers = _SWIN_OUTPUT_LAYERS
-
-    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
-        """Return feature maps at the requested layers.
-
-        Args:
-            x: (B, C, H, W) tensor
-
-        Returns:
-            list of feature maps, each (B, C_i, H_i, W_i)
-        """
-        layer_features: list[torch.Tensor] = []
-        for layer in self.model.features:
-            x = layer(x)
-            # Swin outputs (B, H, W, C) — permute to (B, C, H, W)
-            layer_features.append(x.permute(0, 3, 1, 2))
-        return [layer_features[i] for i in self.output_layers]
-
-
-class _FPN(torch.nn.Module):
-    """Thin wrapper around torchvision FPN."""
-
-    def __init__(
-        self,
-        in_channels: list[int],
-        out_channels: int = 128,
-    ) -> None:
-        super().__init__()
-        self.fpn = FeaturePyramidNetwork(
-            in_channels_list=in_channels,
-            out_channels=out_channels,
-        )
-
-    def forward(self, features: list[torch.Tensor]) -> list[torch.Tensor]:
-        inp = collections.OrderedDict(
-            [(f"feat{i}", f) for i, f in enumerate(features)]
-        )
-        out = self.fpn(inp)
-        return list(out.values())
-
-
-class _NoopTransform(torch.nn.Module):
-    """Matches rslearn.models.faster_rcnn.NoopTransform."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.transform = GeneralizedRCNNTransform(
-            min_size=800, max_size=800, image_mean=[], image_std=[]
-        )
-
-    def forward(self, images, targets):
-        images = self.transform.batch_images(images, size_divisible=32)
-        image_sizes = [(img.shape[1], img.shape[2]) for img in images]
-        image_list = ImageList(images, image_sizes)
-        return image_list, targets
-
-
-class _FasterRCNNHead(torch.nn.Module):
-    """Faster R-CNN detection head matching rslearn config."""
-
-    def __init__(
-        self,
-        num_channels: int = 128,
-        num_classes: int = 2,
-        anchor_sizes: list[list[int]] | None = None,
-        box_score_thresh: float = 0.05,
-    ) -> None:
-        super().__init__()
-        if anchor_sizes is None:
-            anchor_sizes = _ANCHOR_SIZES
-
-        n_scales = len(anchor_sizes)
-        featmap_names = [f"feat{i}" for i in range(n_scales)]
-
-        self.noop_transform = _NoopTransform()
-
-        aspect_ratios = ((0.5, 1.0, 2.0),) * n_scales
-        rpn_anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
-        rpn_head = _rpn.RPNHead(
-            num_channels, rpn_anchor_generator.num_anchors_per_location()[0]
-        )
-        self.rpn = _rpn.RegionProposalNetwork(
-            rpn_anchor_generator,
-            rpn_head,
-            fg_iou_thresh=0.7,
-            bg_iou_thresh=0.3,
-            batch_size_per_image=256,
-            positive_fraction=0.5,
-            pre_nms_top_n=dict(training=2000, testing=2000),
-            post_nms_top_n=dict(training=2000, testing=2000),
-            nms_thresh=0.7,
-        )
-
-        box_roi_pool = MultiScaleRoIAlign(
-            featmap_names=featmap_names, output_size=7, sampling_ratio=2
-        )
-        box_head = TwoMLPHead(
-            num_channels * box_roi_pool.output_size[0] ** 2, 1024
-        )
-        box_predictor = FastRCNNPredictor(1024, num_classes)
-        self.roi_heads = RoIHeads(
-            box_roi_pool,
-            box_head,
-            box_predictor,
-            fg_iou_thresh=0.5,
-            bg_iou_thresh=0.5,
-            batch_size_per_image=512,
-            positive_fraction=0.25,
-            bbox_reg_weights=None,
-            score_thresh=box_score_thresh,
-            nms_thresh=0.5,
-            detections_per_img=100,
-        )
-
-    def forward(
-        self,
-        feature_maps: list[torch.Tensor],
-        raw_images: list[torch.Tensor],
-    ) -> list[dict]:
-        """Run detection on feature maps.
-
-        Args:
-            feature_maps: list of FPN outputs [(B,C,H_i,W_i), ...]
-            raw_images:   list of per-image tensors for computing image sizes
-
-        Returns:
-            list of dicts with 'boxes', 'labels', 'scores'
-        """
-        images, _ = self.noop_transform(raw_images, None)
-
-        feature_dict = collections.OrderedDict()
-        for i, fm in enumerate(feature_maps):
-            feature_dict[f"feat{i}"] = fm
-
-        proposals, _ = self.rpn(images, feature_dict, None)
-        detections, _ = self.roi_heads(
-            feature_dict, proposals, images.image_sizes, None
-        )
-        return detections
 
 
 class AI2VesselDetector(torch.nn.Module):
@@ -246,9 +82,9 @@ class AI2VesselDetector(torch.nn.Module):
 
     def __init__(self) -> None:
         super().__init__()
-        self.swin = _SwinFeatureExtractor(input_channels=_INPUT_CHANNELS)
-        self.fpn = _FPN(in_channels=_FPN_IN_CHANNELS, out_channels=_FPN_OUT_CHANNELS)
-        self.head = _FasterRCNNHead(
+        self.swin = SwinFeatureExtractor(input_channels=_INPUT_CHANNELS)
+        self.fpn = FPN(in_channels=_FPN_IN_CHANNELS, out_channels=_FPN_OUT_CHANNELS)
+        self.head = FasterRCNNHead(
             num_channels=_FPN_OUT_CHANNELS,
             num_classes=_NUM_CLASSES,
             box_score_thresh=_SCORE_THRESHOLD,
@@ -323,68 +159,6 @@ def _load_detection_model(ckpt_path: str | Path) -> AI2VesselDetector:
 # Attribute predictor model (SatlasPretrain + PoolingDecoder heads)
 # ===================================================================
 
-class _PoolingDecoder(torch.nn.Module):
-    """Decoder that pools multi-scale features into a flat vector.
-
-    Matches rslearn.models.pooling_decoder.PoolingDecoder exactly:
-      Conv(in→conv_ch, 3×3) → ReLU  (× num_conv_layers)
-      → GlobalMaxPool
-      → Linear(prev→fc_ch) → ReLU   (× num_fc_layers)
-      → Linear(fc_ch→out_ch)
-
-    Only uses the **last** feature map from the encoder.
-    """
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        num_conv_layers: int = 0,
-        num_fc_layers: int = 0,
-        conv_channels: int = 128,
-        fc_channels: int = 512,
-    ) -> None:
-        super().__init__()
-        conv_layers = []
-        prev_ch = in_channels
-        for _ in range(num_conv_layers):
-            conv_layers.append(
-                torch.nn.Sequential(
-                    torch.nn.Conv2d(prev_ch, conv_channels, 3, padding=1),
-                    torch.nn.ReLU(inplace=True),
-                )
-            )
-            prev_ch = conv_channels
-        self.conv_layers = torch.nn.Sequential(*conv_layers)
-
-        fc_layers = []
-        for _ in range(num_fc_layers):
-            fc_layers.append(
-                torch.nn.Sequential(
-                    torch.nn.Linear(prev_ch, fc_channels),
-                    torch.nn.ReLU(inplace=True),
-                )
-            )
-            prev_ch = fc_channels
-        self.fc_layers = torch.nn.Sequential(*fc_layers)
-
-        self.output_layer = torch.nn.Linear(prev_ch, out_channels)
-
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
-
-        Args:
-            features: (B, C, H, W) — the last FPN feature map.
-
-        Returns:
-            (B, out_channels) tensor.
-        """
-        x = self.conv_layers(features)
-        x = torch.amax(x, dim=(2, 3))       # global max pool → (B, C)
-        x = self.fc_layers(x)
-        return self.output_layer(x)
-
-
 class AI2AttributePredictor(torch.nn.Module):
     """Vessel attribute prediction using SatlasPretrain + 6 PoolingDecoder heads.
 
@@ -420,7 +194,7 @@ class AI2AttributePredictor(torch.nn.Module):
         self.decoders = torch.nn.ModuleDict()
         for name in self.HEAD_NAMES:
             out_ch = 9 if name == "ship_type" else 1
-            self.decoders[name] = _PoolingDecoder(
+            self.decoders[name] = PoolingDecoder(
                 in_channels=128,
                 out_channels=out_ch,
                 num_conv_layers=1,
@@ -506,40 +280,6 @@ def _normalize_bands_attr(arr: np.ndarray) -> np.ndarray:
     return np.clip(arr.astype(np.float32) / _ATTR_NORM_STD, 0.0, 1.0)
 
 
-def _crop_centered(image: np.ndarray, cy: int, cx: int, size: int) -> np.ndarray:
-    """Extract a (C, size, size) crop centred at (cy, cx), zero-padding edges.
-
-    Args:
-        image: (C, H, W) array.
-        cy, cx: centre pixel in image coords.
-        size: crop size.
-
-    Returns:
-        (C, size, size) array.
-    """
-    c, h, w = image.shape
-    half = size // 2
-    y0 = cy - half
-    x0 = cx - half
-
-    crop = np.zeros((c, size, size), dtype=image.dtype)
-
-    # Source region (clipped to image bounds)
-    sy0 = max(0, y0)
-    sx0 = max(0, x0)
-    sy1 = min(h, y0 + size)
-    sx1 = min(w, x0 + size)
-
-    # Destination region in the crop
-    dy0 = sy0 - y0
-    dx0 = sx0 - x0
-    dy1 = dy0 + (sy1 - sy0)
-    dx1 = dx0 + (sx1 - sx0)
-
-    crop[:, dy0:dy1, dx0:dx1] = image[:, sy0:sy1, sx0:sx1]
-    return crop
-
-
 def _predict_attributes(
     model: AI2AttributePredictor,
     image_9ch_dn: np.ndarray,
@@ -569,7 +309,7 @@ def _predict_attributes(
     for det in detections:
         cy = (det["y_min"] + det["y_max"]) // 2
         cx = (det["x_min"] + det["x_max"]) // 2
-        crop = _crop_centered(image_norm, cy, cx, _CROP_SIZE)
+        crop = crop_centered(image_norm, cy, cx, _CROP_SIZE)
         crops.append(crop)
 
     batch = torch.from_numpy(np.stack(crops, axis=0)).to(device)  # (N, 9, 128, 128)
