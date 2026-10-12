@@ -1,0 +1,86 @@
+---
+# Read-only probe: do the configured Skogsstyrelsen / SLU aux endpoints still
+# answer? PR #73 (2026-10-12) reports the kartportal ImageServer proxies
+# retired (redirect to a web page or a WAF 403), which turned CI red on every
+# PR. Step 2 (re-fetch of the 12 zero-forestry holdout tiles) and step 3
+# (forestry + markfukt for every new top-up tile) depend on these fetchers
+# through the skg-endpoints Secret, whose URLs may differ from the defaults
+# the tests hit. Before either chain is submitted this answers it directly:
+# one holdout tile is copied to the pod's /tmp, prefetch_aux --force runs the
+# five fetchers on that copy, and the log shows per-channel success and
+# whether the arrays are non-zero. Nothing under /data is written (readOnly).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: skg-endpoint-probe
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: probe}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: probe
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -uo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== SKG/SLU endpoint probe — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin curl >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio pyproj requests shapely pandas pyarrow Pillow
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse HEAD)"
+              cp /etc/skg/skg_endpoints /workspace/ie/.skg_endpoints
+              echo "--- configured endpoint hosts (paths hidden) ---"
+              grep -i url /workspace/ie/.skg_endpoints | sed -E 's#(https?://[^/]+).*#\1#' | sort | uniq -c
+              echo "--- HTTP answer of each configured URL (HEAD, no redirect follow) ---"
+              grep -i url /workspace/ie/.skg_endpoints | sed -E 's/^[^=]*=\s*//' | while read -r u; do
+                code=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 -I "$u" || echo "curl-failed")
+                host=$(echo "$u" | sed -E 's#(https?://[^/]+).*#\1#')
+                echo "  $host -> $code"
+              done
+              mkdir -p /tmp/probe
+              SRC=$(ls /data/holdout_val_512/*.npz | head -1)
+              cp "$SRC" /tmp/probe/
+              echo "probe tile: $(basename $SRC)"
+              set +e
+              python scripts/prefetch_aux.py --data-dir /tmp/probe --channels height volume basal_area diameter markfukt dem --workers 1 --force --no-cache
+              RC=$?
+              set -e
+              echo "prefetch_aux exit: $RC"
+              python - <<'PYEOF'
+              import glob, numpy as np
+              p = glob.glob("/tmp/probe/*.npz")[0]
+              d = np.load(p, allow_pickle=True)
+              for k in ("height", "volume", "basal_area", "diameter", "markfukt", "dem"):
+                  a = d[k] if k in d.files else None
+                  if a is None:
+                      print(f"  {k:12s} ABSENT"); continue
+                  finite = np.isfinite(a).sum()
+                  print(f"  {k:12s} shape={a.shape} nonzero={bool(np.any(np.nan_to_num(a)))} finite={finite}/{a.size}")
+              PYEOF
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "2", memory: "8Gi"}
+            limits: {cpu: "2", memory: "8Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data, readOnly: true}
+            - {name: skg-endpoints, mountPath: /etc/skg, readOnly: true}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}
+        - name: skg-endpoints
+          secret: {secretName: skg-endpoints}

@@ -4,17 +4,20 @@
 # forbidden in this repo: a zero array behind a present key is a fetch that
 # never happened, not a measurement.
 #
-# Fix first, exclude second: prefetch_aux --force re-fetches the four channels
-# on every tile of the copy (SKG is free, no CDSE PU; the campaign took 19 min
-# for 475 tiles). Tiles that are STILL all zero afterwards are a genuine
-# Skogsstyrelsen coverage gap (water, non-forest, outside the raster) and are
-# MOVED out of the copy to /data/holdout_eval_512_excluded/forestry_zero/
-# — not deleted — with their names in a manifest, so the final census sees a
-# copy whose every tile carries real forestry data. Tobias asked to be told
-# which it was; the manifest and the log say.
+# Fix was the first intention; it is not available. k8s/skg-endpoint-probe-job
+# (2026-10-12 15:03Z) ran prefetch_aux --force against the configured
+# endpoints on a scratch copy of one tile and got "Skogliga grunddata fetch
+# failed after 3 attempts: Unexpected response (… <!DOCTYPE html>)" — the
+# Skogsstyrelsen proxies are retired (PR #73), and the open replacement is
+# per-county GeoTIFF zips not yet downloaded (backlog IM-022). The probe also
+# showed that a failed --force leaves the stored arrays untouched, so nothing
+# was lost, but no re-fetch can succeed today.
 #
-# Needs the skg-endpoints Secret at /etc/skg (the 2024 SKG run failed on all
-# 475 tiles without it). Runs ONLY on /data/holdout_eval_512.
+# So this Job EXCLUDES: the still-zero tiles are MOVED out of the copy to
+# /data/holdout_eval_512_excluded/forestry_zero/ (not deleted), names in a
+# manifest, so the final census sees a copy whose every tile carries real
+# forestry data. Tobias asked to be told which it was: exclude, because fix
+# is impossible until IM-022 lands. Runs ONLY on /data/holdout_eval_512.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -23,7 +26,7 @@ metadata:
   labels: {app: fieldtruth-prep, purpose: holdout-eval}
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 21600   # 6 h
+  activeDeadlineSeconds: 3600
   template:
     metadata:
       labels: {app: fieldtruth-prep}
@@ -41,52 +44,26 @@ spec:
               DIR=/data/holdout_eval_512
               echo "=== forestry re-fetch, evaluation copy — $(date -u) ==="
               test -f /data/manifests/holdout_eval_512_copy.json || { echo "REFUSING: no copy manifest"; exit 1; }
-              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
-              pip install -q --no-cache-dir numpy scipy rasterio pyproj requests shapely pandas pyarrow Pillow
-              mkdir -p /workspace && cd /workspace
-              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
-              cd ie
-              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
-              echo "HEAD: $(git rev-parse HEAD)"
-              cp /etc/skg/skg_endpoints /workspace/ie/.skg_endpoints
-              echo "endpoint urls configured: $(grep -c url /workspace/ie/.skg_endpoints)"
-              python scripts/prefetch_aux.py --help > /dev/null && echo "imports OK"
-
-              python - <<'PYEOF'
-              import glob, json
-              import numpy as np
-              KEYS = ("height", "volume", "basal_area", "diameter")
-              zero = sorted(p.split("/")[-1][:-4] for p in glob.glob("/data/holdout_eval_512/*.npz")
-                            if all(not np.any(np.load(p, allow_pickle=True)[k]) for k in KEYS))
-              print(f"all-zero forestry before: {len(zero)}")
-              json.dump(zero, open("/tmp/zero_before.json", "w"))
-              PYEOF
-
-              BEFORE=$(ls $DIR/*.npz | wc -l); echo "TILES BEFORE: $BEFORE"
-              python scripts/prefetch_aux.py --data-dir "$DIR" \
-                --channels height volume basal_area diameter --workers 8 --force
-              AFTER=$(ls $DIR/*.npz | wc -l); echo "TILES AFTER: $AFTER"
-              [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed"; exit 1; }
-
+              pip install -q --no-cache-dir numpy
+              test -f /data/manifests/holdout_eval_512_copy.json || { echo "REFUSING: no copy manifest"; exit 1; }
               python - <<'PYEOF'
               import glob, json, os, time
               import numpy as np
               KEYS = ("height", "volume", "basal_area", "diameter")
               DIR = "/data/holdout_eval_512"
               OUT = "/data/holdout_eval_512_excluded/forestry_zero"
-              before = json.load(open("/tmp/zero_before.json"))
-              still = sorted(p.split("/")[-1][:-4] for p in glob.glob(f"{DIR}/*.npz")
-                             if all(not np.any(np.load(p, allow_pickle=True)[k]) for k in KEYS))
-              fixed = sorted(set(before) - set(still))
-              print(f"all-zero forestry after re-fetch: {len(still)}; fixed by re-fetch: {len(fixed)}")
+              zero = sorted(p.split("/")[-1][:-4] for p in sorted(glob.glob(f"{DIR}/*.npz"))
+                            if all(not np.any(np.load(p, allow_pickle=True)[k]) for k in KEYS))
+              print(f"all-zero forestry: {len(zero)}")
               os.makedirs(OUT, exist_ok=True)
-              for name in still:
+              for name in zero:
                   os.replace(f"{DIR}/{name}.npz", f"{OUT}/{name}.npz")
-              json.dump({"dir": DIR, "zero_before": before, "fixed_by_refetch": fixed,
-                         "excluded_still_zero": still, "excluded_to": OUT,
+              json.dump({"dir": DIR, "zero_forestry": zero, "fixed_by_refetch": [], "excluded_still_zero": zero,
+                         "excluded_to": OUT, "refetch_attempted": False,
+                         "reason": "Skogsstyrelsen ImageServer proxies retired (probe 2026-10-12, PR #73); open GeoTIFF source is backlog IM-022",
                          "verified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
                         open("/data/manifests/holdout_eval_512_forestry.json", "w"), indent=1)
-              print(f"excluded (moved, not deleted): {still}")
+              print(f"excluded (moved, not deleted): {zero}")
               print(f"tiles remaining in the copy: {len(glob.glob(f'{DIR}/*.npz'))}")
               PYEOF
               echo "=== done: $(date -u) ==="
@@ -97,9 +74,6 @@ spec:
             limits: {cpu: "8", memory: "24Gi"}
           volumeMounts:
             - {name: d, mountPath: /data}
-            - {name: skg-endpoints, mountPath: /etc/skg, readOnly: true}
       volumes:
         - name: d
           persistentVolumeClaim: {claimName: training-data-cephfs}
-        - name: skg-endpoints
-          secret: {secretName: skg-endpoints}
