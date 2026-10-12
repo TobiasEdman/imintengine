@@ -53,7 +53,7 @@ spec:
               set -euo pipefail
               export PYTHONUNBUFFERED=1
               echo "=== skg-open-stage — $(date -u) ==="
-              apt-get update -qq && apt-get install -y -qq git gdal-bin libgdal-dev >/dev/null 2>&1
+              apt-get update -qq && apt-get install -y -qq git gdal-bin >/dev/null 2>&1
               pip install -q --no-cache-dir numpy rasterio inflate64
               gdalinfo --version
               mkdir -p /workspace && cd /workspace
