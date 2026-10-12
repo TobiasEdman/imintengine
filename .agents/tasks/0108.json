@@ -2,9 +2,12 @@
   "id": "0108",
   "subject": "Repair confirmed repository audit correctness defects",
   "description": "User 2026-10-12: review everything in repo, all PRs until solved. Scope: ignored-target validation metrics, contradictory label years and stale label-owned overlays, recoverable dataset promotion, input-bound inference cache, known IM019/020 report failures, and associated verification. Code changes only; no production data mutations, launches or deployment. One logical commit per fix. Independent review required.",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/codex/repo-audit-fixes",
   "created_at": "2026-10-12T20:06:54Z",
-  "updated_at": "2026-10-12T20:06:54Z"
+  "updated_at": "2026-10-12T20:07:43Z",
+  "claimed_by": "te-codex",
+  "runtime": "codex",
+  "claimed_at": "2026-10-12T20:07:43Z"
 }
