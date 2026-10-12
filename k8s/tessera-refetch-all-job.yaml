@@ -1,0 +1,193 @@
+---
+# HISTORICAL RECORD — DO NOT RUN.
+#
+# The first attempt at re-sourcing TESSERA after dl2.geotessera.org went 410:
+# attest sha256 of every stored `tessera` array, then re-fetch IN PLACE with
+# --no-skip-existing over the cohort and the 2024 staging, then quantify the
+# change. Recovered 2026-10-12 from the cluster (`kubectl get job
+# tessera-refetch-all -o yaml`, uid f744f612-81f5-4992-b90c-b5a7a3427ad4);
+# runtime fields stripped.
+#
+# It ran 2026-10-03T05:56:13Z and died two minutes later, before the
+# attestation wrote a byte:
+#   bash: -c: line 132: syntax error: unexpected end of file
+# Cause: the attestation heredoc is nested inside `else … fi` and its PYEOF
+# terminator was indented with the block, so bash never saw it and the `fi`
+# was swallowed (checkpoint 2026-10-03 lesson 2: `bash -n` + ast.parse the
+# job script before submit). That one line is fixed here — the terminator is
+# at column 0 of the script — so the versioned text at least parses
+# (`bash -n` clean). Nothing else is changed except the image, pinned to the
+# digest the pod resolved for python:3.12-slim.
+#
+# Why it must not be resubmitted: it overwrites `tessera` in place. The old
+# embeddings cannot be fetched again (410) and the published R5 tessera row
+# rests on them. Tobias stopped this approach the same morning ("Kan vi inte
+# lägga till och jämföra istället?", 2026-10-03) and it was superseded by
+# tessera-v2-add-job.yaml (write `tessera_v2` alongside, nothing overwritten)
+# and then tessera-promote-v2-job.yaml (rename, keep `tessera_v1`). This file
+# exists so the failed step is versioned, not so it can run.
+#
+# python:3.12-slim because geotessera >= 0.8 needs Python >= 3.12 and 0.7.5,
+# the last 3.11 release, points at the dead host.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tessera-refetch-all
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: tessera-refetch}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200   # 12 h
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: refetch
+          image: python:3.12-slim@sha256:401f6e1a67dad31a1bd78e9ad22d0ee0a3b52154e6bd30e90be696bb6a3d7461
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              export PYTHONUNBUFFERED=1
+              COHORT=/data/unified_v2_512
+              STAGE=/data/unified_v2_512_nfi2024_staging
+              ATTEST=/data/manifests/tessera_pre_refetch_digests.jsonl
+
+              echo "=== TESSERA re-fetch — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy scipy rasterio pyproj pyyaml geotessera pandas pyarrow
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python -c "import importlib.metadata as m; print('geotessera', m.version('geotessera'))"
+              echo "HEAD: $(git rev-parse --short HEAD)"
+
+              echo ""
+              echo "=== import smoke ==="
+              python scripts/enrich_tiles_tessera.py --help > /dev/null
+              echo "imports OK"
+
+              echo ""
+              echo "######## 0/3 ATTEST THE PRIOR STATE ########  $(date -u)"
+              if [ -e "$ATTEST" ]; then
+                echo "attestation already exists ($(wc -l < $ATTEST) rows) — keeping it"
+              else
+                python - <<'PYEOF'
+              import glob
+              import hashlib
+              import json
+
+              import numpy as np
+
+              out = "/data/manifests/tessera_pre_refetch_digests.jsonl"
+              n = 0
+              with open(out + ".tmp", "w") as f:
+                  for root in ("/data/unified_v2_512",
+                               "/data/unified_v2_512_nfi2024_staging"):
+                      for p in sorted(glob.glob(f"{root}/*.npz")):
+                          d = np.load(p, allow_pickle=True)
+                          if "tessera" not in d.files:
+                              continue
+                          a = np.asarray(d["tessera"])
+                          f.write(json.dumps({
+                              "tile": p.split("/")[-1],
+                              "dir": root.split("/")[-1],
+                              "sha256": hashlib.sha256(a.tobytes()).hexdigest(),
+                              "dtype": str(a.dtype),
+                              "shape": list(a.shape),
+                              "tessera_year": int(d["tessera_year"])
+                                              if "tessera_year" in d.files else None,
+                          }) + "\n")
+                          n += 1
+              import os
+              os.replace(out + ".tmp", out)
+              print(f"attested {n:,} tiles -> {out}")
+              PYEOF
+              fi
+
+              echo ""
+              echo "######## 1/3 COHORT ($(ls $COHORT/*.npz | wc -l) tiles) ########  $(date -u)"
+              python scripts/enrich_tiles_tessera.py \
+                --data-dir "$COHORT" \
+                --embeddings-dir /data/tessera_cache/embeddings \
+                --registry-cache-dir /data/tessera_cache/registry \
+                --workers 4 \
+                --cache-soft-gb 20 \
+                --no-skip-existing
+
+              echo ""
+              echo "######## 2/3 CAMPAIGN TILES ($(ls $STAGE/*.npz | wc -l) tiles) ########  $(date -u)"
+              python scripts/enrich_tiles_tessera.py \
+                --data-dir "$STAGE" \
+                --embeddings-dir /data/tessera_cache/embeddings \
+                --registry-cache-dir /data/tessera_cache/registry \
+                --workers 4 \
+                --cache-soft-gb 20 \
+                --no-skip-existing
+
+              echo ""
+              echo "######## 3/3 VERIFY AND QUANTIFY THE CHANGE ########  $(date -u)"
+              python - <<'PYEOF'
+              import glob
+              import hashlib
+              import json
+              import sys
+
+              import numpy as np
+
+              prior = {}
+              with open("/data/manifests/tessera_pre_refetch_digests.jsonl") as f:
+                  for line in f:
+                      r = json.loads(line)
+                      prior[(r["dir"], r["tile"])] = r["sha256"]
+
+              changed = same = added = degenerate = missing = 0
+              for root in ("unified_v2_512", "unified_v2_512_nfi2024_staging"):
+                  for p in sorted(glob.glob(f"/data/{root}/*.npz")):
+                      d = np.load(p, allow_pickle=True)
+                      tile = p.split("/")[-1]
+                      if "tessera" not in d.files:
+                          missing += 1
+                          continue
+                      a = np.asarray(d["tessera"])
+                      if a.ndim >= 2 and not np.any(a):
+                          degenerate += 1
+                      h = hashlib.sha256(a.tobytes()).hexdigest()
+                      was = prior.get((root, tile))
+                      if was is None:
+                          added += 1
+                      elif was == h:
+                          same += 1
+                      else:
+                          changed += 1
+
+              total = changed + same + added
+              print(f"tiles with tessera   : {total:,}")
+              print(f"  changed            : {changed:,}  ({changed/max(total,1):.1%})")
+              print(f"  byte-identical     : {same:,}  ({same/max(total,1):.1%})")
+              print(f"  newly added        : {added:,}")
+              print(f"  all-zero (bad)     : {degenerate:,}")
+              print(f"tiles WITHOUT tessera: {missing:,}")
+              if missing or degenerate:
+                  sys.exit(f"FAIL: {missing} without tessera, {degenerate} all-zero")
+              print("\nevery tile carries non-degenerate tessera from the current source")
+              PYEOF
+              echo ""
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

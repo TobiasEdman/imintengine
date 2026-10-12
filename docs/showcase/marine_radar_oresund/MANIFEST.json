@@ -1,0 +1,157 @@
+{
+  "description": "Sentinel-1 radar showcase (\u00d6resund, Helsingborg\u2013Helsing\u00f8r): VV images of the target and historical scenes, a nautical chart and AI2 Sentinel-1 vessel detections (score >= 0.3) on the EPSG:3006 display grid. Detections are candidates, not confirmed vessels; no AIS matched.",
+  "produced_at": "2026-10-11T19:28:02.219324+00:00",
+  "produced_by": "scripts/generate_marine_radar_showcase.py",
+  "git_sha": "1095c6e",
+  "git_dirty": false,
+  "run_args": {
+    "area": "oresund",
+    "cache_dir": "/Users/tobiasedman/imint_cache/s1",
+    "output_dir": null,
+    "enc_dir": "/Users/tobiasedman/Developer/ImintEngine/outputs/sjokort_oresund/unique_enc",
+    "marine_awareness_repo": "/Users/tobiasedman/Developer/marine-awareness",
+    "marine_awareness_ref": "origin/main",
+    "device": "cpu",
+    "preset": {
+      "key": "oresund",
+      "name": "\u00d6resund, Helsingborg\u2013Helsing\u00f8r",
+      "coords": {
+        "west": 12.56,
+        "south": 56.01,
+        "east": 12.7,
+        "north": 56.06
+      },
+      "target_date": "2025-07-19",
+      "target_scene_id": "S1C_IW_GRDH_1SDV_20250719T165231_20250719T165256_003292_006A41",
+      "historical_scene_id": "S1C_IW_GRDH_1SDV_20250601T165228_20250601T165253_002592_005606",
+      "margin_m": 1000.0,
+      "chart": "s57"
+    },
+    "coords_fetch": {
+      "west": 12.543921,
+      "south": 56.001017,
+      "east": 12.716079,
+      "north": 56.068983
+    }
+  },
+  "source": "Microsoft Planetary Computer sentinel-1-grd (GRD DN, uncalibrated)",
+  "scenes": {
+    "target": {
+      "scene_id": "S1C_IW_GRDH_1SDV_20250719T165231_20250719T165256_003292_006A41",
+      "safe_name": "S1C_IW_GRDH_1SDV_20250719T165231_20250719T165256_003292_006A41_10B5",
+      "start_utc": "2025-07-19T16:52:31.357769Z",
+      "end_utc": "2025-07-19T16:52:56.356077Z",
+      "platform": "sentinel-1c",
+      "orbit_direction": "ASCENDING",
+      "relative_orbit": 146,
+      "absolute_orbit": 3292
+    },
+    "historical": {
+      "scene_id": "S1C_IW_GRDH_1SDV_20250601T165228_20250601T165253_002592_005606",
+      "safe_name": "S1C_IW_GRDH_1SDV_20250601T165228_20250601T165253_002592_005606_8D0B",
+      "start_utc": "2025-06-01T16:52:28.656615Z",
+      "end_utc": "2025-06-01T16:52:53.654995Z",
+      "platform": "sentinel-1c",
+      "orbit_direction": "ASCENDING",
+      "relative_orbit": 146,
+      "absolute_orbit": 2592
+    }
+  },
+  "fetch_provenance": {
+    "chain_version": 1,
+    "window_epsg": 32633,
+    "aoi_px": [
+      34684,
+      -621648,
+      35783,
+      -620854
+    ],
+    "valid_frac_target": 1.0,
+    "valid_frac_historical": 1.0,
+    "rasterio": "1.4.4",
+    "gdal": "3.10.3"
+  },
+  "input_data_sha256": "sha256:ceae037115ef452a16d85f05e796efd01522386546d3da73926c9fe9d246b22b",
+  "input_data_hash_of": "uint16 [target_vv, target_vh, historical_vv, historical_vh] model input stack, C order",
+  "models": {
+    "licence": "AI2 rslearn_projects weights + code Apache-2.0, annotations CC-BY 4.0",
+    "detector": {
+      "file": "detect_best.ckpt",
+      "sha256": "sha256:85f86043db84f7e899de5c6642c3a0afc591621d277080a298d023b81c3633c5"
+    },
+    "attribute": {
+      "file": "attribute_best.ckpt",
+      "sha256": "sha256:24b1e759ba4f250c84cdbc5913fec24e140195f59bc7b13f50c9654e7b435913"
+    }
+  },
+  "infra_filter": {
+    "applied": true,
+    "distance_m": 200.0,
+    "removed": 0,
+    "dataset": "Satlas marine infrastructure (Allen AI, ODC-BY)",
+    "path": "/Users/tobiasedman/.cache/imint/satlas_marine_infrastructure/latest.geojson",
+    "points": 39582,
+    "sha256": "a40bebd54df7cdd4c46d25d4ce2a7035d1f7201c6b23bb7fac7144c1f3266f63"
+  },
+  "chart": {
+    "source": "Sj\u00f6fartsverket S-57 ENC cells via SLU GET",
+    "attribution": "Sj\u00f6kortsdata \u00a9 Sj\u00f6fartsverket",
+    "renderer": "imint.fetch.render_sjokort_png",
+    "cells": [
+      {
+        "file": "SE2BHS1C.000",
+        "sha256": "sha256:15fcb4ce7f226f5622820fe1114ebd6818fac897aaa60555f93c538f6379a988"
+      },
+      {
+        "file": "SE3CI0XC.000",
+        "sha256": "sha256:d6d5432c552fed55b2ac370571eeb82c68e14986109cf27c2063cd699cc5546c"
+      },
+      {
+        "file": "SE4DI0XE.000",
+        "sha256": "sha256:043efcc04f59b295c07726c933f0f72a8a4f3f776fc3c8631f32a866881ec3c2"
+      },
+      {
+        "file": "SE5GI0XE.000",
+        "sha256": "sha256:1849dc8fa2487243574d7389700511e37f47544e2e64cf94ce6e93f0728d81a4"
+      }
+    ]
+  },
+  "process_files": [
+    {
+      "path": "scripts/generate_marine_radar_showcase.py",
+      "sha256": "sha256:3f520dbee11f35d2b280fd2b136ba0609c6a47b109060f92a890f243f34ed80d"
+    },
+    {
+      "path": "scripts/generate_marine_commercial_showcase.py",
+      "sha256": "sha256:be59166c6d0f61c29a5e06edca7a6035415be50f65ed0957ad17798793ab6a06"
+    },
+    {
+      "path": "imint/analyzers/ai2_vessels_s1.py",
+      "sha256": "sha256:6a42de4e94e88346a25e154fbb87413e20306f21011ae999660e3d21d353514a"
+    },
+    {
+      "path": "imint/fetch.py",
+      "sha256": "sha256:68dd8c7928bd281c3d6d5a2e9a42f5f1ed95d07a31f9e7c621beeb772228d695"
+    },
+    {
+      "path": "imint/exporters/export.py",
+      "sha256": "sha256:6677f9063630faca66c5207394df4f0edfef86928a093fd03a57d2e425efb664"
+    }
+  ],
+  "outputs": {
+    "outputs/showcase/marine_radar_oresund/rgb.png": "sha256:70b608d821fb0be8caac6d712f6db30fd0daf628579576f75d93a3acac5f6b4a",
+    "outputs/showcase/marine_radar_oresund/baseline.png": "sha256:43f3c89ae4a1c13227b00ba702dc8e35e5b5aa27bbf3b6f39e0f7b5006d630c1",
+    "outputs/showcase/marine_radar_oresund/sjokort.png": "sha256:866e6e36db2ec5a3d8cf02cbccc3ebd64b2f8925ec8d77e9968972ece6a1d282",
+    "outputs/showcase/marine_radar_oresund/showcase_summary.json": "sha256:ab7abc3d4d5c45d8c2355685e18bdbca2217a6f95558141baa79e2a6f6ac4b43",
+    "outputs/showcase/marine_radar_oresund/mr_oresund_vessels.geojson": "sha256:e495f1932e62f3c17c70a94dab63b1945ad24c8d1d9a1f5d0f0f108c87a061d6",
+    "outputs/showcase/marine_radar_oresund/mr_oresund_vessels_wgs84.geojson": "sha256:acb65717882d5cde702160a657094e8231aa68a3263c391209547c9b780b5f87"
+  },
+  "outputs_copied_to": [
+    "docs/showcase/marine_radar_oresund/rgb.png",
+    "docs/showcase/marine_radar_oresund/baseline.png",
+    "docs/showcase/marine_radar_oresund/sjokort.png",
+    "docs/showcase/marine_radar_oresund/showcase_summary.json",
+    "docs/showcase/marine_radar_oresund/MANIFEST.json",
+    "docs/data/mr_oresund_vessels.geojson"
+  ]
+}

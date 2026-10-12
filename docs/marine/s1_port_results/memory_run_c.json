@@ -1,0 +1,17 @@
+{
+ "what": "scripts/detect_vessels_s1.py on the Skagen bbox, model input from the cache (no fetch), /usr/bin/time -l on macOS, Apple M1",
+ "note": "max RSS counts mmapped checkpoint pages and excludes compressed pages; the peak memory footprint is the comparable figure. Wall time is not compared: the after-review run shared the CPU with other checks.",
+ "before_review": {
+  "log": "record:s1port/logs/run_c_cachehit_before_review.log",
+  "max_rss_bytes": 2897805312,
+  "peak_memory_footprint_bytes": 4855526528,
+  "detections": "208 patches, 103 raw, 81 after NMS, 81 after infra"
+ },
+ "after_review": {
+  "log": "record:s1port/logs/run_c_cachehit_after_review.log",
+  "max_rss_bytes": 2997157888,
+  "peak_memory_footprint_bytes": 3172509440,
+  "detections": "208 patches, 103 raw, 81 after NMS, 81 after infra"
+ },
+ "peak_memory_footprint_change_bytes": -1683017088
+}
