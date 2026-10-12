@@ -404,6 +404,8 @@ def eligibility(ft: ModuleType, index: pd.DataFrame, tiles: list[dict], exposure
     idx["restricted"] = ~idx["tile_name"].map(lambda n: by_name[n]["world_readable"]).astype(bool)
     idx["bar_modalities"] = idx["tile_name"].map(lambda n: by_name[n]["bar_modalities"]).astype(bool)
     idx["bar_full"] = idx["tile_name"].map(lambda n: by_name[n]["bar_full"]).astype(bool)
+    idx["same_year_overlap"] = idx["tile_name"].map(
+        lambda n: by_name[n].get("same_year_overlap", False)).astype(bool)
     assert not ft.observation_keys(idx.loc[~idx["exposed"]]).isin(exposure).any()
 
     def distinct(mask) -> int:
@@ -430,9 +432,19 @@ def eligibility(ft: ModuleType, index: pd.DataFrame, tiles: list[dict], exposure
             "tiles_with_plots": int(idx.loc[y, "tile_name"].nunique()),
             "tiles_world_readable_with_plots": int(idx.loc[open_, "tile_name"].nunique()),
         }
+        keep = elig & ~idx["same_year_overlap"]
+        row["tiles_excluded_same_year_overlap"] = int(
+            idx.loc[y & idx["same_year_overlap"], "tile_name"].nunique())
+        row["eligible_excl_same_year_overlap"] = distinct(keep)
+        row["eligible_excl_same_year_overlap_world_readable"] = distinct(keep & ~idx["restricted"])
+        row["eligible_excl_same_year_overlap_on_bar_modalities"] = distinct(keep & idx["bar_modalities"])
         row["gap_to_target_all_files"] = max(0, TARGET_PER_YEAR - row["eligible"])
         row["gap_to_target_world_readable"] = max(0, TARGET_PER_YEAR - row["eligible_world_readable"])
         row["gap_to_target_bar_full"] = max(0, TARGET_PER_YEAR - row["eligible_on_bar_full"])
+        row["gap_to_target_excl_same_year_overlap"] = max(
+            0, TARGET_PER_YEAR - row["eligible_excl_same_year_overlap"])
+        row["gap_to_target_excl_same_year_overlap_world_readable"] = max(
+            0, TARGET_PER_YEAR - row["eligible_excl_same_year_overlap_world_readable"])
         out[str(year)] = row
     return out
 
@@ -533,12 +545,23 @@ def cohort_geometry(cohort_dir: Path) -> pd.DataFrame:
 
 
 def footprint_overlap(tiles: list[dict], cohort: pd.DataFrame) -> dict:
+    """Mark every holdout tile's overlap with the training cohort and summarise.
+
+    Sets ``any_year_overlap`` and ``same_year_overlap`` on each readable tile.
+    Decision 2026-10-12 (Tobias, after PR #71): a holdout tile that overlaps a
+    training tile of the SAME year is excluded from the evaluation; D6 allows
+    other-year overlap only. The excluded names are listed so the evaluation
+    copy can leave them out reproducibly.
+    """
     geo = cohort.dropna(subset=["west"]) if len(cohort) else cohort
+    for t in tiles:
+        t["any_year_overlap"] = t["same_year_overlap"] = False
     if geo.empty:
-        return {"cohort_tiles_with_geometry": 0}
+        return {"cohort_tiles_with_geometry": 0, "excluded_same_year_overlap_names": []}
     W, S, E, N = (geo[c].to_numpy(float) for c in ("west", "south", "east", "north"))
     Y = geo["year"].to_numpy()
     any_year, same_year, tiles_any, tiles_same = Counter(), Counter(), Counter(), Counter()
+    excluded = []
     for t in tiles:
         if not t.get("readable") or t["_bbox"] is None:
             continue
@@ -546,22 +569,26 @@ def footprint_overlap(tiles: list[dict], cohort: pd.DataFrame) -> dict:
         hit = (W < b["east"]) & (E > b["west"]) & (S < b["north"]) & (N > b["south"])
         same = hit & (Y == t["year_lenient"])
         yr = str(t["year_lenient"])
+        t["any_year_overlap"] = bool(hit.any())
+        t["same_year_overlap"] = bool(same.any())
         if hit.any():
             tiles_any[yr] += 1
             any_year[yr] += int(hit.sum())
         if same.any():
             tiles_same[yr] += 1
             same_year[yr] += int(same.sum())
+            excluded.append(t["name"])
     return {"cohort_tiles_with_geometry": int(len(geo)),
             "holdout_tiles_overlapping_any_year_training_tile": dict(sorted(tiles_any.items())),
             "holdout_tiles_overlapping_same_year_training_tile": dict(sorted(tiles_same.items())),
             "training_tile_overlaps_any_year": dict(sorted(any_year.items())),
-            "training_tile_overlaps_same_year": dict(sorted(same_year.items()))}
+            "training_tile_overlaps_same_year": dict(sorted(same_year.items())),
+            "excluded_same_year_overlap_names": sorted(excluded)}
 
 
 def never_trained_on(ft: ModuleType, data_root: Path, cohort_dir: Path, staging_dir: Path,
                      tiles: list[dict], exposure_tables: dict[str, pd.DataFrame],
-                     indexes: dict[str, pd.DataFrame]) -> dict:
+                     indexes: dict[str, pd.DataFrame], footprint: dict) -> dict:
     holdout = {t["name"] for t in tiles}
     cohort_names = {p.stem for p in cohort_dir.glob("*.npz")} if cohort_dir.is_dir() else set()
     staging_names = {p.stem for p in staging_dir.glob("*.npz")} if staging_dir.is_dir() else set()
@@ -585,7 +612,7 @@ def never_trained_on(ft: ModuleType, data_root: Path, cohort_dir: Path, staging_
         "teacher_feature_tables_naming_holdout_tiles": feature_hits,
         "plot_indexes_naming_holdout_tiles": index_hits,
         "text_files_mentioning_holdout": text_hits,
-        "footprint": footprint_overlap(tiles, cohort_geometry(cohort_dir)) if cohort_dir.is_dir() else {},
+        "footprint": footprint,
         "used_for_training_or_selection": bool(
             (holdout & cohort_names) or selection_hits
             or any(feature_hits.values()) or any(index_hits.values())),
@@ -660,13 +687,16 @@ def main(argv: list[str] | None = None) -> dict:
     v4_known = ft.observation_keys(v4_crop).unique()
     index = build_index(tiles, plots)
     print(f"index: {len(index):,} rows on {index['tile_name'].nunique() if len(index) else 0:,} tiles", flush=True)
+    footprint = footprint_overlap(tiles, cohort_geometry(cohort_dir) if cohort_dir.is_dir() else pd.DataFrame())
+    print(f"footprint: {len(footprint['excluded_same_year_overlap_names'])} holdout tiles overlap a "
+          f"same-year training tile", flush=True)
     elig = eligibility(ft, index, tiles, exposure, v4_known, years)
 
     # ---- never trained on
     pinned = pd.read_parquet(io.BytesIO((root / "nfi/nfi_index_unified_v2_512.parquet").read_bytes()))
     feature_tables = {m: pd.read_parquet(root / f"distill/heads/{m}_r2_plot_features.parquet") for m in ft.NFI_MODELS}
     provenance = never_trained_on(ft, root, cohort_dir, staging_dir, tiles, feature_tables,
-                                  {"pinned_index": pinned, "v4_index": v4})
+                                  {"pinned_index": pinned, "v4_index": v4}, footprint)
 
     # ---- sizing cross-check
     sizing_check = None
@@ -741,7 +771,8 @@ def _print_summary(report: dict) -> None:
         print(f"  {key:28s} {m[key]}")
     print(f"  tessera_source: {m['tessera_source']}   temporal_mask: {m['temporal_mask']}")
     print("\n=== eligible plot-years (distinct TractID,PlotID,Year; 496 px crop; teacher pool excluded) ===")
-    hdr = ("year", "on_tiles", "in_crop", "excluded", "eligible", "world_rd", "restricted", "bar_full", "gap_all", "gap_rd")
+    hdr = ("year", "on_tiles", "in_crop", "excluded", "eligible", "world_rd", "restricted", "bar_full",
+           "gap_all", "gap_rd", "sameyr_tl", "elig_excl", "gap_excl")
     print("  " + " ".join(f"{h:>10s}" for h in hdr))
     for year, r in report["eligibility_by_year"].items():
         if not r:
@@ -750,7 +781,9 @@ def _print_summary(report: dict) -> None:
         print("  " + " ".join(f"{v:>10}" for v in (
             year, r["plot_years_on_tiles"], r["in_common_crop"], r["excluded_teacher_pool"], r["eligible"],
             r["eligible_world_readable"], r["eligible_restricted_files"], r["eligible_on_bar_full"],
-            r["gap_to_target_all_files"], r["gap_to_target_world_readable"])))
+            r["gap_to_target_all_files"], r["gap_to_target_world_readable"],
+            r["tiles_excluded_same_year_overlap"], r["eligible_excl_same_year_overlap"],
+            r["gap_to_target_excl_same_year_overlap"])))
     p = report["provenance"]
     print("\n=== never trained on ===")
     print(f"names in cohort dir {p['names_in_training_cohort_dir']}, in nfi2024 staging {p['names_in_nfi2024_staging_dir']}")
@@ -762,7 +795,10 @@ def _print_summary(report: dict) -> None:
     print(f"text files mentioning the holdout: {len(p['text_files_mentioning_holdout'])}")
     for h in p["text_files_mentioning_holdout"]:
         print(f"    {h['path']}  dir={h['mentions_holdout_dir']} names={h['holdout_tile_names']}")
-    print(f"footprint: {p.get('footprint')}")
+    fp = dict(p.get("footprint") or {})
+    excluded = fp.pop("excluded_same_year_overlap_names", [])
+    print(f"footprint: {fp}")
+    print(f"holdout tiles excluded for same-year training overlap: {len(excluded)}")
     print(f"\nUSED FOR TRAINING OR SELECTION: {p['used_for_training_or_selection']}")
     if report["sizing_cross_check"]:
         print(f"sizing cross-check: {report['sizing_cross_check']}")

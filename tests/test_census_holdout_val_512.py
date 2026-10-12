@@ -179,6 +179,13 @@ def test_eligibility_uses_identity_crop_exclusion_and_separates_restricted_files
     assert y19["eligible_also_in_v4_crop"] == 1 and y19["eligible_new_vs_v4"] == 1
     assert y19["eligible_on_bar_modalities"] == 2 and y19["eligible_on_bar_full"] == 1
     assert y19["gap_to_target_all_files"] == 998 and y19["gap_to_target_bar_full"] == 999
+    # tile A overlaps a same-year training tile -> its eligible plot is excluded; C overlaps 2021 only
+    assert y19["tiles_excluded_same_year_overlap"] == 1
+    assert y19["eligible_excl_same_year_overlap"] == 1 == y19["eligible_excl_same_year_overlap_world_readable"]
+    assert y19["eligible_excl_same_year_overlap_on_bar_modalities"] == 1
+    assert y19["gap_to_target_excl_same_year_overlap"] == 999
+    assert y22["tiles_excluded_same_year_overlap"] == 0 and y22["eligible_excl_same_year_overlap"] == 1
+    assert y22["gap_to_target_excl_same_year_overlap_world_readable"] == 1000
     assert y22["eligible"] == 1 and y22["eligible_world_readable"] == 0 and y22["eligible_restricted_files"] == 1
     assert y22["eligible_on_bar_modalities"] == 0
     assert y20["plot_years_on_tiles"] == 0 and y20["gap_to_target_all_files"] == 1000
@@ -198,6 +205,7 @@ def test_never_trained_on_passes_and_reports_footprint_and_visualisation(data_ro
     assert fp["cohort_tiles_with_geometry"] == 2
     assert fp["holdout_tiles_overlapping_same_year_training_tile"] == {"2019": 1}
     assert fp["holdout_tiles_overlapping_any_year_training_tile"] == {"2019": 2}
+    assert fp["excluded_same_year_overlap_names"] == ["holdoutval_100_1250_2019"]
     assert [Path(h["path"]).name for h in p["text_files_mentioning_holdout"]] == ["holdout_val_phaseA.json", "tiles.json"]
 
 
