@@ -24,7 +24,7 @@ logits and the fraction logits — no second pass.
 Cache layout: ``<cache-dir>/<ckpt_sha>/<tile_stem>.npz`` with
 ``pred`` (uint8, H×W), ``probs`` (float16, C×H×W), ``fracs`` (float16, 4×H×W),
 plus a ``<cache-dir>/<ckpt_sha>/MANIFEST.json`` provenance sidecar. Idempotent:
-a tile already cached for this checkpoint is skipped (like ``_valid_existing_tile``
+a tile with verified input bytes and inference identity is skipped (like ``_valid_existing_tile``
 in the fetchers).
 
     python scripts/infer_tiles.py \
@@ -51,6 +51,15 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.tile_fetch import is_tile_tmp  # noqa: E402
+from imint._cache_identity import (  # noqa: E402
+    producer_environment, producer_revision, record_caller,
+)
+
+record_caller()
+from scripts.cache_predict import (  # noqa: E402
+    CacheValidationError, atomic_write, file_identity,
+    read_cache_entry,
+)
 
 
 def _load_infcmp():
@@ -144,7 +153,7 @@ class TileInferenceDataset:
     """
 
     def __init__(self, tile_paths, device_family, img_size, aux_channel_names,
-                 num_frames=None):
+                 num_frames=None, identities=None, producer=None):
         import torch  # noqa: F401  (import guarded to keep module import light)
         self._torch = __import__("torch")
         self.tile_paths = [str(p) for p in tile_paths]
@@ -158,19 +167,28 @@ class TileInferenceDataset:
         # single-frame temporal_encoding cannot add (15376 vs 3844) — the
         # first ladder-eval wave died exactly so.
         self.num_frames = num_frames
+        self.identities = identities
+        self.producer = producer
         self._infcmp = _load_infcmp()
 
     def __len__(self):
         return len(self.tile_paths)
 
     def __getitem__(self, i):
+        if self.producer is not None:
+            producer_revision(expected=self.producer, helpers=self._infcmp)
         tile_path = self.tile_paths[i]
         # Build on CPU (device="cpu") — the DataLoader worker has no GPU;
         # tensors are moved to the GPU in the main loop after collation.
+        identity = self.identities[i] if self.identities is not None else None
+        verified = ({"expected_tile_sha256": identity["sha256"],
+                     "expected_tile_size": identity["size"]} if identity else {})
         inp = self._infcmp._build_inference_inputs(
             tile_path, self._torch.device("cpu"), self.img_size,
             self.aux_channel_names, family=self.family,
-            num_frames=self.num_frames)
+            num_frames=self.num_frames, **verified)
+        if self.producer is not None:
+            producer_revision(expected=self.producer, helpers=self._infcmp)
         item = {
             "img5d": inp["img5d"].squeeze(0),   # drop the (1, …) batch dim
             "aux": inp["aux"].squeeze(0),
@@ -183,6 +201,10 @@ class TileInferenceDataset:
         # collate can rebuild a batch tensor (all tiles in a batch share family).
         item["temporal_coords"] = tc.squeeze(0) if tc is not None else None
         item["location_coords"] = lc.squeeze(0) if lc is not None else None
+        if identity is not None:
+            item["identity"] = identity
+        from scripts.inference_comparison import _close_inference_inputs
+        _close_inference_inputs(inp)
         return item
 
 
@@ -195,6 +217,7 @@ def _collate(batch):
         "stems": [b["stem"] for b in batch],
         "crop_sz": [b["crop_sz"] for b in batch],
     }
+    out["identities"] = [b.get("identity") for b in batch]
     tcs = [b["temporal_coords"] for b in batch]
     lcs = [b["location_coords"] for b in batch]
     out["temporal_coords"] = (
@@ -205,9 +228,10 @@ def _collate(batch):
 
 
 def _write_manifest(sha_dir: Path, *, checkpoint, ckpt_sha, backbone_name,
-                    num_classes, img_size, n_tiles, git_sha, produced_at):
+                    num_classes, img_size, n_tiles, git_sha, produced_at, inference):
     """Provenance sidecar mirroring the repo's Docker-artifact MANIFEST rule."""
     manifest = {
+        "inference": inference,
         "checkpoint": str(checkpoint),
         "ckpt_sha": ckpt_sha,
         "backbone_name": backbone_name,
@@ -217,7 +241,8 @@ def _write_manifest(sha_dir: Path, *, checkpoint, ckpt_sha, backbone_name,
         "git_sha": git_sha,
         "produced_at": produced_at,
     }
-    (sha_dir / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
+    atomic_write(sha_dir / "MANIFEST.json",
+                 lambda f: f.write(json.dumps(manifest, indent=2).encode()))
 
 
 def infer_all(
@@ -232,10 +257,14 @@ def infer_all(
     import torch
     from torch.utils.data import DataLoader, Subset
 
+    revision = producer_revision()
+    environment = producer_environment()
     infcmp = _load_infcmp()
+    producer_revision(expected=revision, helpers=infcmp)
     dev = torch.device(device)
 
-    sha = ckpt_sha256(checkpoint)
+    checkpoint_identity = file_identity(checkpoint)
+    sha = checkpoint_identity["sha256"][:16]
     sha_dir = Path(cache_dir) / sha
     sha_dir.mkdir(parents=True, exist_ok=True)
 
@@ -250,7 +279,9 @@ def infer_all(
     # build their head at the exact resolution inference feeds — see
     # inference_comparison.load_model docstring.
     model, epoch, miou, native = infcmp.load_model(
-        checkpoint, dev, backbone_name=backbone_name, img_size=img_size)
+        checkpoint, dev, backbone_name=backbone_name, img_size=img_size,
+        expected_checkpoint_sha256=checkpoint_identity["sha256"],
+        expected_checkpoint_size=checkpoint_identity["size"])
     family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
     print(f"  loaded epoch={epoch} ckpt_mIoU={miou} native_img={native} "
           f"family={family}")
@@ -285,8 +316,18 @@ def infer_all(
     # branch and a 1-frame model's temporal_encoding rejects the 4x token
     # grid (15376 vs 3844), which killed the first ladder-eval wave.
     model_num_frames = getattr(model, "num_frames", None)
+    inference = {
+        "checkpoint": {k: checkpoint_identity[k] for k in ("size", "sha256")},
+        "backbone_name": backbone_name, "family": family,
+        "img_size": int(img_size), "num_classes": int(num_classes),
+        "aux_channel_names": aux_names, "n_aux_channels": n_aux,
+        "num_frames": model_num_frames, "preprocessing": revision,
+        "runtime": environment,
+    }
+    producer_revision(expected=revision, helpers=infcmp)
+    identities = [file_identity(p) for p in tiles]
     ds = TileInferenceDataset(tiles, family, img_size, aux_names,
-                              num_frames=model_num_frames)
+                             num_frames=model_num_frames, identities=identities, producer=revision)
 
     # Group tiles by crop size so a batch collates cleanly. Odd-sized tiles are
     # inferred at batch=1 rather than being mis-cropped or padded.
@@ -303,10 +344,13 @@ def infer_all(
     for cs, idxs in sorted(size_of.items()):
         # Skip tiles already cached (idempotent) BEFORE building the loader,
         # so a resumed run only re-infers the missing slice.
-        pending = [
-            i for i in idxs
-            if not (sha_dir / f"{Path(ds.tile_paths[i]).stem}.npz").exists()
-        ]
+        pending = []
+        for i in idxs:
+            cpath = sha_dir / f"{Path(ds.tile_paths[i]).stem}.npz"
+            try:
+                read_cache_entry(cpath, source=identities[i], inference=inference)
+            except CacheValidationError:
+                pending.append(i)
         n_skipped += len(idxs) - len(pending)
         done += len(idxs) - len(pending)
         if not pending:
@@ -333,10 +377,17 @@ def infer_all(
                     torch.float16).cpu().numpy()
                 fracs = torch.sigmoid(frac_logits).to(
                     torch.float16).cpu().numpy()
+            if probs.shape[1] != num_classes or fracs.shape[1] != 4:
+                raise ValueError("model output channels disagree with cache configuration")
             for j, stem in enumerate(batch["stems"]):
                 cpath = sha_dir / f"{stem}.npz"
-                np.savez_compressed(
-                    cpath, pred=pred[j], probs=probs[j], fracs=fracs[j])
+                metadata = json.dumps({"version": 1,
+                                       "source": batch["identities"][j],
+                                       "inference": inference}, sort_keys=True)
+                arrays = dict(pred=pred[j], probs=probs[j], fracs=fracs[j],
+                              metadata=np.array(metadata))
+                producer_revision(expected=revision, helpers=infcmp)
+                atomic_write(cpath, lambda f: np.savez_compressed(f, **arrays))
                 n_written += 1
             done += len(batch["stems"])
             if log_every and (n_written % log_every < len(batch["stems"])):
@@ -347,10 +398,11 @@ def infer_all(
                 print(f"  [{done}/{total}] {rate:.1f} tiles/s "
                       f"ETA {eta/60:.1f} min", flush=True)
 
+    producer_revision(expected=revision, helpers=infcmp)
     _write_manifest(
         sha_dir, checkpoint=checkpoint, ckpt_sha=sha, backbone_name=backbone_name,
         num_classes=num_classes, img_size=img_size, n_tiles=total,
-        git_sha=_git_sha(), produced_at=produced_at)
+        git_sha=_git_sha(), produced_at=produced_at, inference=inference)
     dt = time.time() - t0
     print(f"[infer_tiles] wrote {n_written}, skipped {n_skipped} (already "
           f"cached) in {dt/60:.1f} min → {sha_dir}")

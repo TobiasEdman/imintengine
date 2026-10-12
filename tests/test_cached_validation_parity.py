@@ -109,21 +109,23 @@ class _FakeInfcmp:
         self.run_inference = infcmp.run_inference
         self.run_fraction_inference = infcmp.run_fraction_inference
 
-    def load_model(self, ckpt_path, device, backbone_name=None, img_size=None):
+    def load_model(self, ckpt_path, device, backbone_name=None, img_size=None, **identity):
         return self._model, 0, 0.0, TILE
 
 
-def _run_stage_a(model, tiles, cache_dir, checkpoint):
+def _run_stage_a(model, tiles, cache_dir, checkpoint, **overrides):
     """Run infer_tiles.infer_all with the fake model patched in."""
     import unittest.mock as mock
     with mock.patch.object(infer_tiles, "_load_infcmp",
                            return_value=_FakeInfcmp(model)):
-        return infer_tiles.infer_all(
+        kwargs = dict(
             checkpoint=str(checkpoint), backbone_name="tessera_v1",
             data_dir=str(tiles), tile_list=None, img_size=TILE,
             num_classes=NUM_CLASSES, cache_dir=str(cache_dir),
             batch_size=2, num_workers=0, device="cpu", shard=None,
             log_every=0, produced_at="2026-08-13T00:00:00Z")
+        kwargs.update(overrides)
+        return infer_tiles.infer_all(**kwargs)
 
 
 @pytest.fixture()
@@ -289,3 +291,146 @@ def cache_dir_tmp(tmp_path):
     d = tmp_path / "pred_cache"
     d.mkdir()
     return d
+
+
+@pytest.mark.parametrize("change", ["bytes", "root", "crop", "frames", "aux", "backbone"])
+def test_cache_regenerates_changed_identity(tiles, cache_dir_tmp, checkpoint, tmp_path, change):
+    import shutil
+    model = FakeDualHead()
+    sha, _ = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
+    reader = cache_predict.make_cached_predict_fn(cache_dir_tmp, sha, want_fracs=False)
+    original_tile = tiles / "tileX_0.npz"
+    _, before = reader(original_tile)
+    options = {}
+    if change == "bytes":
+        _write_tile(original_tile, seed=900)
+        with pytest.raises(ValueError):
+            reader(original_tile)
+    elif change == "root":
+        other = tmp_path / "other-root"
+        shutil.copytree(tiles, other)
+        tiles = other  # identical bytes and names still have distinct provenance
+        with pytest.raises(ValueError):
+            reader(tiles / original_tile.name)
+    elif change == "crop":
+        options["img_size"] = TILE // 2
+    elif change == "frames":
+        model.num_frames = 1
+    elif change == "aux":
+        model.ck_cfg = {"enabled_aux_names": list(reversed(AUX_CHANNEL_NAMES))}
+    else:
+        options["backbone_name"] = "other-backbone"
+    _, counts = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint, **options)
+    assert counts == ((1, 2) if change == "bytes" else (3, 0))
+    fresh = cache_predict.make_cached_predict_fn(cache_dir_tmp, sha, want_fracs=False)
+    _, after = fresh(tiles / original_tile.name)
+    if change == "bytes":
+        assert not np.array_equal(before, after)
+        direct = _direct_probs(model, str(original_tile), torch.device("cpu"))
+        np.testing.assert_allclose(after, direct, atol=1e-3)
+    if change == "crop":
+        assert after.shape[1:] == (TILE // 2, TILE // 2)
+    if change not in ("bytes", "root"):
+        with pytest.raises(ValueError):
+            reader(original_tile)  # old reader cannot silently switch configuration
+
+
+@pytest.mark.parametrize("damage", ["truncated", "legacy", "shape", "nan", "metadata"])
+def test_cache_rejects_and_repairs_invalid_entries(tiles, cache_dir_tmp, checkpoint, damage):
+    model = FakeDualHead()
+    sha, _ = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
+    tile = tiles / "tileX_0.npz"
+    cpath = cache_predict.cache_path_for(cache_dir_tmp, sha, tile)
+    reader = cache_predict.make_cached_predict_fn(cache_dir_tmp, sha, want_fracs=True)
+    if damage == "truncated":
+        cpath.write_bytes(cpath.read_bytes()[:80])
+    else:
+        with np.load(cpath) as z:
+            arrays = {k: z[k] for k in z.files}
+        if damage == "legacy":
+            arrays.pop("metadata", None)
+        elif damage == "shape":
+            arrays["probs"] = arrays["probs"][:, :-1, :]
+        elif damage == "nan":
+            arrays["fracs"][0, 0, 0] = np.nan
+        else:
+            arrays["metadata"] = np.array("{}")
+        np.savez_compressed(cpath, **arrays)
+    with pytest.raises(ValueError, match="rerun infer_tiles"):
+        reader(tile)
+    assert _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)[1] == (1, 2)
+    assert np.isfinite(reader(tile)[2]).all()
+
+
+def test_cache_checkpoint_bytes_change_namespace(tiles, cache_dir_tmp, checkpoint):
+    model = FakeDualHead()
+    sha, _ = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
+    checkpoint.write_bytes(b"different synthetic checkpoint")
+    sha2, counts = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
+    assert sha2 != sha
+    assert counts == (3, 0)
+
+
+@pytest.mark.parametrize("options", [{"img_size": 8}, {"num_classes": 2}])
+def test_cache_reader_rejects_scoring_config(tiles, cache_dir_tmp, checkpoint, options):
+    sha, _ = _run_stage_a(FakeDualHead(), tiles, cache_dir_tmp, checkpoint)
+    with pytest.raises(ValueError, match="configuration mismatch"):
+        cache_predict.make_cached_predict_fn(cache_dir_tmp, sha, want_fracs=False, **options)
+
+
+def test_cache_authenticates_bytes_consumed_by_preprocessing(tiles, cache_dir_tmp, checkpoint, monkeypatch):
+    real = infcmp._load_npz_for_inference
+    changed = False
+
+    def replace_before_read(path, *args, **kwargs):
+        nonlocal changed
+        if not changed:
+            _write_tile(path, seed=876)
+            changed = True
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(infcmp, "_load_npz_for_inference", replace_before_read)
+    with pytest.raises(infcmp.TileIdentityError, match="mismatch"):
+        _run_stage_a(FakeDualHead(), tiles, cache_dir_tmp, checkpoint)
+    assert not list(cache_dir_tmp.glob("*/*.npz"))
+
+
+def test_cache_atomic_failure_preserves_complete_entry(tiles, cache_dir_tmp, checkpoint, monkeypatch):
+    model = FakeDualHead()
+    sha, _ = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
+    tile = tiles / "tileX_0.npz"
+    cpath = cache_predict.cache_path_for(cache_dir_tmp, sha, tile)
+    before = cpath.read_bytes()
+    _write_tile(tile, seed=999)
+    real = np.savez_compressed
+
+    def fail_write(destination, **arrays):
+        if hasattr(destination, "write"):
+            destination.write(b"partial")
+        else:
+            Path(destination).write_bytes(b"partial")
+        raise OSError("injected write failure")
+
+    monkeypatch.setattr(np, "savez_compressed", fail_write)
+    with pytest.raises(OSError, match="injected write failure"):
+        _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
+    assert cpath.read_bytes() == before
+    assert not list(cpath.parent.glob(".*.npz.*"))
+    monkeypatch.setattr(np, "savez_compressed", real)
+    assert _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)[1] == (1, 2)
+
+
+def test_cache_rejects_legacy_manifest(tiles, cache_dir_tmp, checkpoint):
+    sha, _ = _run_stage_a(FakeDualHead(), tiles, cache_dir_tmp, checkpoint)
+    manifest = cache_dir_tmp / sha / "MANIFEST.json"
+    data = json.loads(manifest.read_text())
+    data.pop("inference", None)
+    manifest.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="rerun infer_tiles"):
+        cache_predict.make_cached_predict_fn(cache_dir_tmp, sha, want_fracs=False)
+
+
+def test_cache_refuses_wrong_output_class_count(tiles, cache_dir_tmp, checkpoint):
+    with pytest.raises(ValueError, match="output channels"):
+        _run_stage_a(FakeDualHead(), tiles, cache_dir_tmp, checkpoint, num_classes=2)
+    assert not list(cache_dir_tmp.glob("*/*.npz"))

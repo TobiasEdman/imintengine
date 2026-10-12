@@ -100,7 +100,8 @@ def score_nfi(args) -> dict:
         # Fraction-collapse mode: identical rule to the fused validator via
         # the SHARED van.fracs_to_class_and_probs (parity by construction).
         base = make_cached_predict_fn(
-            args.cache_dir, args.ckpt_sha, want_fracs=True)
+            args.cache_dir, args.ckpt_sha, want_fracs=True,
+            img_size=args.img_size, num_classes=args.num_classes)
         print(f"  fraction-head collapse: dominant_frac={args.dominant_frac}, "
               f"forest_floor={args.forest_floor}")
 
@@ -111,7 +112,8 @@ def score_nfi(args) -> dict:
                 forest_floor=args.forest_floor, num_classes=args.num_classes)
     else:
         predict_fn = make_cached_predict_fn(
-            args.cache_dir, args.ckpt_sha, want_fracs=False)
+            args.cache_dir, args.ckpt_sha, want_fracs=False,
+            img_size=args.img_size, num_classes=args.num_classes)
     per_plot = [] if args.dump_per_plot else None
     results = van.score_against_nfi(
         index_df, predict_fn, num_classes=args.num_classes,
@@ -151,7 +153,8 @@ def score_lucas(args) -> dict:
               f"{'present → L2a on' if is_fraction else 'absent → L2b only'}")
 
     predict_fn = make_cached_predict_fn(
-        args.cache_dir, args.ckpt_sha, want_fracs=is_fraction)
+        args.cache_dir, args.ckpt_sha, want_fracs=is_fraction,
+            img_size=args.img_size, num_classes=args.num_classes)
     tile_years = val.build_tile_years(index_df)
 
     per_point = [] if args.dump_per_point else None
