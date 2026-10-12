@@ -375,8 +375,8 @@ async def _run_job_async(job_id: str) -> None:
         job["summary_path"] = result.summary_path
         job["analyzers"] = [
             AnalyzerSummary(
-                name=getattr(r, "name", "unknown"),
-                status=getattr(r, "status", "success"),
+                name=r.analyzer,
+                status="skipped" if r.skipped else ("success" if r.success else "failed"),
                 duration_ms=getattr(r, "duration_ms", None),
                 artifacts=list(getattr(r, "artifacts", []) or []),
                 error=getattr(r, "error", None),
