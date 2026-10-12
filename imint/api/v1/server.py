@@ -288,7 +288,6 @@ async def submit_analysis(req: AnalyzeRequest) -> AnalyzeResponse:
             "summary_path": None,
             "error": None,
             "_request": req.model_dump(),
-            "_callback_url": req.callback_url,
         },
     )
 
@@ -398,35 +397,6 @@ async def _run_job_async(job_id: str) -> None:
         job["duration_ms"] or 0.0,
         status=job["status"].value if isinstance(job["status"], JobStatus) else str(job["status"]),
     )
-
-    # Optional webhook notification — best-effort, never blocks the worker.
-    callback = job.get("_callback_url")
-    if callback:
-        asyncio.create_task(_notify_callback(job_id, callback))
-
-
-async def _notify_callback(job_id: str, url: str) -> None:
-    """POST the final job state to the configured webhook. Best-effort."""
-    try:
-        import httpx  # type: ignore[import-not-found]
-
-        job = await _get_job(job_id)
-        if job is None:
-            return
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(url, json={
-                "job_id": job_id,
-                "status": (
-                    job["status"].value
-                    if isinstance(job["status"], JobStatus)
-                    else str(job["status"])
-                ),
-                "success": job["success"],
-                "duration_ms": job["duration_ms"],
-            })
-    except Exception:
-        logger.exception("callback POST to %s failed for job %s", url, job_id)
-
 
 # ── Exception handlers ─────────────────────────────────────────────────────
 

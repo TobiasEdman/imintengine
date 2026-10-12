@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class JobStatus(str, Enum):
@@ -40,6 +40,8 @@ class AnalyzeRequest(BaseModel):
     `disable_analyzers` if needed.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     date: str = Field(
         ...,
         description="ISO-8601 date, e.g. 2026-04-25. Must match an existing or fetchable scene.",
@@ -58,10 +60,7 @@ class AnalyzeRequest(BaseModel):
         default=None,
         description="Per-analyzer config overrides, keyed by analyzer name.",
     )
-    callback_url: str | None = Field(
-        default=None,
-        description="Optional webhook for completion notification (POST with JobStatusResponse).",
-    )
+
 
 
 class AnalyzeResponse(BaseModel):
