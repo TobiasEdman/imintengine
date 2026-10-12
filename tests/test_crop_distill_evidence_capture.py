@@ -614,9 +614,9 @@ def _storage_prep_record() -> dict[str, object]:
         },
         "preserved_frozen_mode": format(evidence.FROZEN_SPLIT_MODE, "04o"),
         "runtime": _runtime(
-            source_git_sha=SOURCE_ACCESS_SOURCE_GIT_SHA,
-            image_ref=SOURCE_ACCESS_IMAGE,
-            image_digest=SOURCE_ACCESS_DIGEST,
+            source_git_sha=SOURCE_GIT_SHA,
+            image_ref=IMAGE,
+            image_digest=DIGEST,
         ),
         "targets": targets,
         "dataset_lock": {
@@ -832,7 +832,10 @@ def test_capture_writes_deterministic_verified_bundle_for_containerd(
         "CROP_DISTILL_SPLIT_MANIFEST_SHA256": SPLIT_MANIFEST_SHA256,
         "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA": SPLIT_SOURCE_GIT_SHA,
         "HOME": "/work/home",
+        "LOGNAME": "crop-distill",
         "TMPDIR": "/work/tmp",
+        "TORCHINDUCTOR_CACHE_DIR": "/work/torch-inductor",
+        "USER": "crop-distill",
     }
     split_mount = next(
         mount
@@ -914,8 +917,31 @@ def test_capture_binds_split_job_and_container(tmp_path: Path) -> None:
         "CROP_SOURCE_ACCESS_PLAN_POD_UID": SOURCE_ACCESS_PLAN_POD_UID,
         "CROP_SOURCE_ACCESS_PLAN_SHA256": SOURCE_ACCESS_PLAN_SHA256,
         "HOME": "/work/home",
+        "LOGNAME": "crop-distill",
         "TMPDIR": "/work/tmp",
+        "TORCHINDUCTOR_CACHE_DIR": "/work/torch-inductor",
+        "USER": "crop-distill",
     }
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["LOGNAME", "USER", "TORCHINDUCTOR_CACHE_DIR"],
+)
+def test_crop_capture_requires_pr55_runtime_environment(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    pod = _pod()
+    container = pod["spec"]["containers"][0]
+    container["env"] = [
+        entry for entry in container["env"] if entry["name"] != name
+    ]
+
+    with pytest.raises(SystemExit, match="environment"):
+        evidence.main(_capture_args(tmp_path, pod=pod))
+
+    assert not (tmp_path / "bundle").exists()
 
 
 @pytest.mark.parametrize(
@@ -1095,6 +1121,23 @@ def test_storage_prep_capture_binds_exact_marker_pvc_and_root_pod(
         evidence._mount("training-data-cephfs", "/cephfs/distill", "distill", False),
         evidence._mount("training-data-cephfs", "/cephfs/ops", "ops", False),
     ]
+
+
+def test_storage_prep_authority_tracks_current_crop_runtime() -> None:
+    authority = evidence._validated_git_authority("storage-prep")
+
+    assert authority["source_git_sha"] == SOURCE_GIT_SHA
+    assert authority["image_ref"] == IMAGE
+    assert authority["source_git_sha"] != SOURCE_ACCESS_SOURCE_GIT_SHA
+    assert authority["image_ref"] != SOURCE_ACCESS_IMAGE
+
+    for kind in ("source-access-plan", "source-access-apply"):
+        source_authority = evidence._validated_git_authority(
+            kind,
+            require_current_output_anchor=False,
+        )
+        assert source_authority["source_git_sha"] == SOURCE_ACCESS_SOURCE_GIT_SHA
+        assert source_authority["image_ref"] == SOURCE_ACCESS_IMAGE
 
 
 @pytest.mark.parametrize(

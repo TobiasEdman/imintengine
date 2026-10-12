@@ -1000,6 +1000,9 @@ def test_rendered_crop_job_is_shell_free_and_declarative(render_identity, model)
         "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA",
         "HOME",
         "TMPDIR",
+        "LOGNAME",
+        "USER",
+        "TORCHINDUCTOR_CACHE_DIR",
         "POD_UID",
     }
     assert env["CROP_DISTILL_SOURCE_GIT_SHA"]["value"] == SOURCE_SHA
@@ -1008,6 +1011,9 @@ def test_rendered_crop_job_is_shell_free_and_declarative(render_identity, model)
     assert env["CROP_DISTILL_SPLIT_SOURCE_GIT_SHA"]["value"] == SOURCE_SHA
     assert env["HOME"]["value"] == "/work/home"
     assert env["TMPDIR"]["value"] == "/work/tmp"
+    assert env["LOGNAME"]["value"] == "crop-distill"
+    assert env["USER"]["value"] == "crop-distill"
+    assert env["TORCHINDUCTOR_CACHE_DIR"]["value"] == "/work/torch-inductor"
     assert env["POD_UID"]["valueFrom"]["fieldRef"]["fieldPath"] == ("metadata.uid")
 
     forbidden = (

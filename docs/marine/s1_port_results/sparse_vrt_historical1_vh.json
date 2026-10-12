@@ -1,0 +1,27 @@
+{
+ "scene": "historical1",
+ "pol": "vh",
+ "step1_epsg": 32633,
+ "aoi_px": [
+  59781,
+  -641167,
+  61181,
+  -640067
+ ],
+ "radar_window": {
+  "col_off": 6904,
+  "row_off": 3178,
+  "width": 1615,
+  "height": 1346,
+  "tps_roundtrip_max_m": 0.0,
+  "aoi_center_row": 3850.89,
+  "lines": 12013
+ },
+ "crop_px": [
+  13371,
+  12013
+ ],
+ "n": 1540000,
+ "n_diff_vs_dense_chain": 0,
+ "n_diff_vs_ai2_materialised": 0
+}

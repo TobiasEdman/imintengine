@@ -1,0 +1,81 @@
+---
+# Step 18b of the 2024 campaign: name the all-zero arrays the full key census
+# (nfi2024-key-census2) had only counted.
+#
+# Recovered 2026-10-12 from the cluster (`kubectl get job nfi2024-zero-probe
+# -o yaml`, uid 1e4117e3-a939-4dee-97c1-8cb80c24a5f8); runtime fields
+# stripped. Ran 2026-10-05T16:37:04Z → 16:42:10Z, exit 0. Read-only: every
+# open() is a read, nothing under /data is rewritten.
+#
+# What it found, verbatim from the pod log:
+#   nfi2024_455680_6487040  frame_2016 (6,512,512) ALL ZERO  has_frame_2016=1  *** FLAGGED VALID ***
+#   nfi2024_558080_7383040  frame_2016 (6,512,512) ALL ZERO  has_frame_2016=1  *** FLAGGED VALID ***
+#   nfi2024_629760_6732800  tessera    (128,512,512) ALL ZERO  has_tessera=0  MARKED
+# The two frame_2016 cases (cot_max=None: they passed the baseline COT gate
+# because the footprint sits in granule no-data) are what
+# nfi2024-fix-zero-frames-job.yaml then demoted to has_frame_2016=0. The
+# tessera case was already marked by tessera-mark-holes.
+#
+# Difference from the executed spec: image pinned to the digest the pod
+# resolved for python:3.11-slim (status.containerStatuses[0].imageID).
+#
+# Safe to re-run at any time (read-only), but there is nothing left for it to
+# find on the 2024 staging: the census asserts "no positive flag sits on an
+# empty array" since 2026-10-05.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-zero-probe
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: key-census}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: probe
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import os
+
+              import numpy as np
+
+              for p in sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  n = os.path.basename(p)[:-4]
+                  for key, flag in (("tessera", "has_tessera"),
+                                    ("frame_2016", "has_frame_2016")):
+                      if key not in d.files:
+                          continue
+                      a = np.asarray(d[key])
+                      if getattr(a, "ndim", 0) < 2 or np.any(a):
+                          continue
+                      f = int(d.get(flag, -1))
+                      reason = d.get(f"{key}_gap_reason")
+                      cot = d.get("frame_2016_cot_max")
+                      scene = d.get("frame_2016_scene")
+                      print(f"{n}")
+                      print(f"   {key}: shape={a.shape} ALL ZERO")
+                      print(f"   {flag}={f}  "
+                            f"{'MARKED' if f == 0 else '*** FLAGGED VALID ***'}")
+                      if reason is not None:
+                          print(f"   gap_reason={reason}")
+                      if key == "frame_2016":
+                          print(f"   scene={scene}  cot_max={cot}")
+              PYEOF
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data, readOnly: true}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

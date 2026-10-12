@@ -430,6 +430,10 @@ def test_crop_jobs_use_one_pinned_offline_runtime(path):
     expected_env = {
         "CROP_DISTILL_IMAGE", "CROP_DISTILL_SOURCE_GIT_SHA", "HOME",
         "TMPDIR", "POD_UID",
+        # torch>=2.10 inductor user/cache identity (2026-09-08):
+        # getpass.getuser() must not fall through to pwd.getpwuid on
+        # the passwd-less numeric runtime UID.
+        "LOGNAME", "USER", "TORCHINDUCTOR_CACHE_DIR",
     }
     if is_crop:
         expected_env.update({

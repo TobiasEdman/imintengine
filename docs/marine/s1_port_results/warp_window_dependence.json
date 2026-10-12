@@ -1,0 +1,39 @@
+{
+ "rasterio": "1.4.4",
+ "gdal": "3.10.3",
+ "windows": [
+  {
+   "window": [
+    1000,
+    1000,
+    700,
+    500
+   ],
+   "diff_frac": 0.46011714285714284,
+   "max_abs_dn": 5
+  },
+  {
+   "window": [
+    1537,
+    1311,
+    1500,
+    900
+   ],
+   "diff_frac": 0.5035711111111111,
+   "max_abs_dn": 40
+  },
+  {
+   "window": [
+    3000,
+    2000,
+    2048,
+    1024
+   ],
+   "diff_frac": 0.5676941871643066,
+   "max_abs_dn": 9
+  }
+ ],
+ "block_by_block_512x128_diff_frac": 0.5589908568271882,
+ "exact_transformer_window_diff_frac": 0.4610666666666667,
+ "exact_vs_approx_full_diff_frac": 0.21127460636868117
+}

@@ -507,6 +507,18 @@ spec:
               value: /work/home
             - name: TMPDIR
               value: /work/tmp
+            # torch >= 2.10's inductor resolves a cache dir via
+            # getpass.getuser(), which falls back to pwd.getpwuid() when no
+            # LOGNAME/USER env exists — and the numeric runtime UIDs have no
+            # passwd entry in the image (KeyError killed the seventh run at
+            # extract-features). getpass reads these envs FIRST; the explicit
+            # cache dir under the writable workdir is belt and braces.
+            - name: LOGNAME
+              value: crop-distill
+            - name: USER
+              value: crop-distill
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /work/torch-inductor
             - name: POD_UID
               valueFrom:
                 fieldRef:
@@ -1275,6 +1287,18 @@ spec:
               value: /work/home
             - name: TMPDIR
               value: /work/tmp
+            # torch >= 2.10's inductor resolves a cache dir via
+            # getpass.getuser(), which falls back to pwd.getpwuid() when no
+            # LOGNAME/USER env exists — and the numeric runtime UIDs have no
+            # passwd entry in the image (KeyError killed the seventh run at
+            # extract-features). getpass reads these envs FIRST; the explicit
+            # cache dir under the writable workdir is belt and braces.
+            - name: LOGNAME
+              value: crop-distill
+            - name: USER
+              value: crop-distill
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /work/torch-inductor
             - name: POD_UID
               valueFrom:
                 fieldRef:

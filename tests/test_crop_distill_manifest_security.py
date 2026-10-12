@@ -1008,3 +1008,17 @@ def test_source_access_apply_has_exact_caps_and_dataset_subpath(render_identity)
     assert plan["subPath"].endswith(f"/{PLAN_POD_UID}/plan.json")
     assert plan["readOnly"] is True
     assert all(mount["mountPath"] != "/cephfs" for mount in container["volumeMounts"])
+
+
+@pytest.mark.parametrize("model", sorted(manifests.CROP_MODELS))
+def test_crop_runtime_has_user_identity_envs(model):
+    """torch >= 2.10's inductor resolves getpass.getuser(); without
+    LOGNAME/USER the numeric runtime UID hits pwd.getpwuid -> KeyError
+    (killed the seventh run, 2026-09-08). The envs must exist and the
+    inductor cache must live under the writable workdir."""
+    doc = yaml.safe_load(
+        (manifests.OUT_DIR / f"crop-distill-{model}-job.yaml").read_text())
+    env = {e["name"]: e.get("value")
+           for e in doc["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert env.get("LOGNAME") and env.get("USER")
+    assert env.get("TORCHINDUCTOR_CACHE_DIR", "").startswith("/work/")

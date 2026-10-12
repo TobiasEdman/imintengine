@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .skg_height import _to_nmd_grid_bounds
+from .nmd_grid import to_nmd_grid_bounds
 
 
 _DEFAULT_DATA_ROOT = "~/imint_data/nvv_aux"
@@ -113,7 +113,7 @@ def fetch_smi_for_coords(
     data_root: Path | None = None,
 ) -> np.ndarray:
     """Fetch SMI for a WGS84 bbox (snapped to 10 m EPSG:3006 grid)."""
-    projected = _to_nmd_grid_bounds(coords)
+    projected = to_nmd_grid_bounds(coords)
     return fetch_smi_tile(
         projected["west"], projected["south"],
         projected["east"], projected["north"],
