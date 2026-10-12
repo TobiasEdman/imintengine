@@ -109,12 +109,15 @@ are recorded here. The +2.2-point margin on 184 plots has no reported bound.
 
 ## Reproduction requirements
 
-At reviewed head `924091f7456c3b44be6fdae85ca0b8bdae1f71ba`,
-`compare_nmd2023_nfi.py` has no
+On main (checked 2026-10-12, `d4d24f9`), `compare_nmd2023_nfi.py` has no
 `--split-json` argument and emits no `holdout` block. Its existing
 `--model-per-plot` option compares the supplied model rows with NMD; it does
-not establish that those rows were held out. The proposed split-aware path
-is tracked in PR #65. Check the integrated revision before using that path.
+not establish that those rows were held out. The split-aware flag proposed
+in #65 was closed unmerged on 2026-10-08, together with #62 and #63. Their
+replacement is Codex's #68, a reproducible held-out NFI evaluation that
+excludes every teacher's feature plot-years by `(TractID, PlotID, Year)` and
+binds inputs, runtime, checkpoints and outputs by content hash. Use #68's
+evaluation, once integrated, rather than a flag on this script.
 
 Before promoting these numbers to verified held-out results, retain for each
 cell an immutable result and receipt that binds the process commit, checkpoint,
@@ -127,10 +130,15 @@ write-up, and arithmetic checks on the margins cannot substitute for it.
 
 ## Next evidence
 
-The 2024 plot-driven campaign is recorded in PR #67. Merged PR #71 adds the
+The 2024 plot-driven campaign is recorded in PR #67. The September table
+is being superseded by a multi-year evaluation, about 1,000 per
+inventory year 2018–2024 (plan: #69). Merged #71 versioned the 2024
+leftovers and ran the
 [2026-10-12 legacy-holdout census](https://github.com/TobiasEdman/imintengine/blob/91902bf2cf3b8f9bef7aa0579da52d877245fbb8/docs/experiments/nfi_multiyear_holdout_census_2026-10-12.md),
-including the exclusion of 212 same-year overlapping training tiles. These
-later populations do not retroactively validate the September table.
+which excludes 212 tiles that overlap same-year training imagery; #75
+enriches the remaining holdout copy and tops up 2018–2022; #68 freezes and
+scores the result. These later populations do not retroactively validate the
+September table.
 
 The next scoring pass needs audited held-out provenance, a fixed eligible
 population and paired uncertainty estimates that account for tract clustering.
