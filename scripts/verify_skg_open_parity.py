@@ -69,11 +69,16 @@ def main(argv: list[str] | None = None) -> int:
     rng = random.Random(args.seed)
 
     report: dict = {"roots": [str(r) for r in args.roots], "sample": args.sample, "per_root": {}}
+    total_rows = total_errors = 0
     for root in args.roots:
         for ch in args.channels:
             prefix, fetch = CHANNELS[ch]
             files = sorted((root / "cache" / ch).glob(f"{prefix}_*.npy"))
             if not files:
+                # explicit: this root has no reference arrays for the channel
+                report["per_root"].setdefault(str(root), {})[ch] = {
+                    "summary": {"n": 0, "errors": 0, "n_available": 0}, "tiles": []}
+                print(f"{root.name:40s} {ch:11s} no reference arrays", flush=True)
                 continue
             picks = rng.sample(files, min(args.sample, len(files)))
             rows, errors = [], 0
@@ -93,22 +98,28 @@ def main(argv: list[str] | None = None) -> int:
                     ref = np.where(ref > 101, 0, ref)
                     cand = np.where(cand > 101, 0, cand)
                 rows.append({"bbox": [w, s, e, n], **compare(ref, cand)})
-            if not rows:
-                continue
-            agg = {k: round(float(np.mean([r[k] for r in rows if r[k] is not None])), 4)
-                   for k in ("exact", "mae", "bias", "ref_nonzero", "cand_nonzero")}
-            agg["exact_min"] = round(min(r["exact"] for r in rows), 4)
-            agg["n"] = len(rows)
-            agg["errors"] = errors
-            agg["n_available"] = len(files)
+            total_rows += len(rows)
+            total_errors += errors
+            agg = {"n": len(rows), "errors": errors, "n_available": len(files)}
+            if rows:
+                agg.update({k: round(float(np.mean([r[k] for r in rows if r[k] is not None])), 4)
+                            for k in ("exact", "mae", "bias", "ref_nonzero", "cand_nonzero")})
+                agg["exact_min"] = round(min(r["exact"] for r in rows), 4)
             report["per_root"].setdefault(str(root), {})[ch] = {"summary": agg, "tiles": rows}
-            print(f"{root.name:40s} {ch:11s} n={len(rows):4d} exact={agg['exact']:.4f} "
-                  f"(min {agg['exact_min']:.4f}) mae={agg['mae']:.3f} bias={agg['bias']:+.3f} "
-                  f"nonzero ref/cand {agg['ref_nonzero']:.3f}/{agg['cand_nonzero']:.3f} errors={errors}",
-                  flush=True)
+            if rows:
+                print(f"{root.name:40s} {ch:11s} n={len(rows):4d} exact={agg['exact']:.4f} "
+                      f"(min {agg['exact_min']:.4f}) mae={agg['mae']:.3f} bias={agg['bias']:+.3f} "
+                      f"nonzero ref/cand {agg['ref_nonzero']:.3f}/{agg['cand_nonzero']:.3f} errors={errors}",
+                      flush=True)
+            else:
+                print(f"{root.name:40s} {ch:11s} n=0 errors={errors} — every read failed", flush=True)
+    report["summary"] = {"compared": total_rows, "errors": total_errors}
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=1))
-    print(f"wrote {args.out}")
+    print(f"wrote {args.out}: {total_rows} compared, {total_errors} errors")
+    if total_errors or not total_rows:
+        print("FAIL: parity did not validate every sample", flush=True)
+        return 1
     return 0
 
 

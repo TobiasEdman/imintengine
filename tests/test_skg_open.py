@@ -132,3 +132,30 @@ def test_wgs84_bbox_lands_on_the_lattice_in_3006():
     b = to_nmd_grid_bounds({"west": 15.85, "south": 64.25, "east": 16.02, "north": 64.34})
     assert is_on_grid(*b.values()) and b["west"] < b["east"] and b["south"] < b["north"]
     assert 500_000 < b["west"] < 600_000 and 7_100_000 < b["south"] < 7_200_000
+
+
+def test_cache_hit_cannot_bypass_the_grid_guard(mirror, tmp_path):
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    # a stale 2x2 array under a 40 m bbox: the extent implies 20 m/px
+    np.save(cache / f"volume_{W}_{S}_{W + 40}_{S + 40}.npy", np.ones((2, 2), np.float32))
+    with pytest.raises(ValueError, match="bbox/size_px mismatch"):
+        skg_grunddata.fetch_volume_tile(W, S, W + 40, S + 40, size_px=2, cache_dir=cache)
+    with pytest.raises(ValueError, match="not on the 10 m NMD lattice"):
+        skg_grunddata.fetch_volume_tile(W + 5, S, W + 25, S + 20, size_px=2, cache_dir=cache)
+
+
+def test_wetland_demo_box_matches_its_pixel_count():
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "demos" / "wetland_pirinen" / "fetch_and_render.py"
+    text = src.read_text(encoding="utf-8")
+    # evaluate only the geometry block: constants + _projected_box + the assert
+    ns: dict = {"np": np}
+    start = text.index("AOI_LAT = ")
+    end = text.index("assert E - W == N - S == SIZE_PX * 10") + len("assert E - W == N - S == SIZE_PX * 10")
+    block = text[start:end]
+    block = block[:block.index("WGS84_BBOX")] + block[block.index("def _projected_box"):]
+    exec(block, ns)
+    assert ns["E"] - ns["W"] == ns["N"] - ns["S"] == ns["SIZE_PX"] * 10 == 10_000
+    assert is_on_grid(ns["W"], ns["S"], ns["E"], ns["N"])
+    assert 500_000 < ns["W"] < 600_000 and 7_100_000 < ns["S"] < 7_200_000

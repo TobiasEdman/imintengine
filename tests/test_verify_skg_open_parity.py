@@ -35,3 +35,18 @@ def test_report_runs_the_real_fetchers_against_a_cache_root(monkeypatch, tmp_pat
     s = rep["per_root"][str(root)]["volume"]["summary"]
     assert s["n"] == 1 and s["errors"] == 0 and s["exact"] == round(1 - 1 / PX**2, 4)
     assert rep["per_root"][str(root)]["volume"]["tiles"][0]["bbox"] == [W, S, E, N]
+
+
+def test_failed_reads_are_persisted_and_fail_the_run(monkeypatch, tmp_path):
+    monkeypatch.setenv(skg_open.ENV_MIRROR_DIR, str(tmp_path / "mirror"))
+    (tmp_path / "mirror" / "grunddata").mkdir(parents=True)
+    (tmp_path / "mirror" / "grunddata" / "volym_omdrev2.vrt").write_text("not a raster")
+    root = tmp_path / "root"
+    (root / "cache" / "volume").mkdir(parents=True)
+    np.save(root / "cache" / "volume" / f"volume_{W}_{S}_{E}_{N}.npy", np.zeros((PX, PX), np.float32))
+    out = tmp_path / "report.json"
+    assert vp.main(["--roots", str(root), "--channels", "volume", "markfukt", "--out", str(out)]) == 1
+    rep = json.loads(out.read_text())
+    assert rep["summary"] == {"compared": 0, "errors": 1}
+    assert rep["per_root"][str(root)]["volume"]["summary"] == {"n": 0, "errors": 1, "n_available": 1}
+    assert rep["per_root"][str(root)]["markfukt"]["summary"] == {"n": 0, "errors": 0, "n_available": 0}

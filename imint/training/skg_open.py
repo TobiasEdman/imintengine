@@ -101,7 +101,7 @@ def _require(path: Path, product: str) -> Path:
     return path
 
 
-def _check_bbox(west: float, south: float, east: float, north: float,
+def check_bbox(west: float, south: float, east: float, north: float,
                 h_px: int, w_px: int) -> None:
     """The request must be a whole number of 10 m cells on the NMD lattice.
 
@@ -142,7 +142,7 @@ def read_grunddata(variable: str, west: float, south: float, east: float,
     from rasterio.enums import Resampling
 
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
-    _check_bbox(west, south, east, north, h_px, w_px)
+    check_bbox(west, south, east, north, h_px, w_px)
     out = np.full((h_px, w_px), GRUNDDATA_NODATA, dtype=np.int16)
     missing = np.ones((h_px, w_px), dtype=bool)
     found_any = False
@@ -177,7 +177,7 @@ def read_markfukt(west: float, south: float, east: float, north: float,
     from rasterio.enums import Resampling
 
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
-    _check_bbox(west, south, east, north, h_px, w_px)
+    check_bbox(west, south, east, north, h_px, w_px)
     path = _require(markfukt_path(), "SLU markfukt")
     arr = _read_window(path, west, south, east, north, (h_px, w_px),
                        resampling=Resampling.nearest, fill=MARKFUKT_NODATA)
@@ -194,7 +194,7 @@ def read_tradhojd(west: float, south: float, east: float, north: float,
     from rasterio.enums import Resampling
 
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
-    _check_bbox(west, south, east, north, h_px, w_px)
+    check_bbox(west, south, east, north, h_px, w_px)
     path = _require(tradhojd_path(), "Skogsstyrelsen trädhöjd")
     arr = _read_window(path, west, south, east, north, (h_px, w_px),
                        resampling=Resampling.nearest, fill=TRADHOJD_NODATA)

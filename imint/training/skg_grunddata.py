@@ -151,8 +151,12 @@ def fetch_grunddata_tile(
 
 def _cached(prefix, west, south, east, north, size_px, cache_dir, read):
     """``<prefix>_<w>_<s>_<e>_<n>.npy`` under ``cache_dir``; a cached array of
-    another shape is ignored and overwritten; writes are tmp + rename."""
+    another shape is ignored and overwritten; writes are tmp + rename.
+
+    The request is validated against the 10 m lattice *before* the cache
+    is consulted, so a stale array can never satisfy a malformed request."""
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
+    skg_open.check_bbox(west, south, east, north, h_px, w_px)
     if cache_dir is None:
         return read()
     cache_path = Path(cache_dir) / (

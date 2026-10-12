@@ -148,9 +148,29 @@ def save_manifest(dest: Path, manifest: dict) -> None:
 
 
 def is_done(item: Item, manifest: dict, dest: Path) -> bool:
+    """Raw hashed and derived raster present — or the raw zip intentionally
+    deleted after a verified derivation (``raw_deleted_at``), in which case
+    the derived raster alone completes the item."""
     rec = manifest["files"].get(item.name)
-    return bool(rec and rec.get("sha256") and (dest / "raw" / item.name).exists()
-                and item.derived in manifest["derived"] and (dest / item.derived).exists())
+    der = manifest["derived"].get(item.derived)
+    if not (rec and rec.get("sha256") and der and der.get("sha256") and (dest / item.derived).exists()):
+        return False
+    return bool(rec.get("raw_deleted_at")) or (dest / "raw" / item.name).exists()
+
+
+def staged_vrt_sources(manifest: dict, dest: Path, vrt: str) -> list[str]:
+    """Every derived raster on disk that belongs to ``vrt``'s product and
+    round, from the manifest — not only the counties of the current run, so a
+    subset re-run never shrinks a published mosaic."""
+    if vrt.startswith("grunddata/"):
+        var, om = re.fullmatch(r"grunddata/(\w+)_omdrev(\d)\.vrt", vrt).groups()
+        prefix = f"grunddata/omdrev{om}/{var}_"
+    elif vrt.startswith("markfukt/"):
+        prefix = "markfukt/markfukt_"
+    else:
+        prefix = "tradhojd/tradhojd_10m_"
+    return sorted(p for p in manifest["derived"]
+                  if p.startswith(prefix) and p.endswith(".tif") and (dest / p).exists())
 
 
 def _now() -> str:
@@ -465,7 +485,8 @@ def main(argv: list[str] | None = None) -> int:
         done += 1
         print(f"    done in {time.time() - t0:.0f}s", flush=True)
 
-    for vrt, rasters in vrt_targets(items).items():
+    for vrt in vrt_targets(items):
+        rasters = staged_vrt_sources(manifest, dest, vrt)
         nodata = 65535 if vrt.startswith("markfukt") else -1
         manifest["vrt"][vrt] = build_vrt(dest, vrt, rasters, nodata)
         print(f"vrt {vrt}: {len(rasters)} sources", flush=True)

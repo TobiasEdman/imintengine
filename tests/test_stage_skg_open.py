@@ -77,7 +77,7 @@ def test_is_done_requires_raw_hash_and_derived_raster(tmp_path):
     (tmp_path / "raw" / "a.zip").write_bytes(b"zip")
     m["files"]["a.zip"] = {"sha256": "f" * 64}
     assert not st.is_done(item, m, tmp_path)                       # derived missing
-    m["derived"]["markfukt/markfukt_01.tif"] = {"bytes": 1}
+    m["derived"]["markfukt/markfukt_01.tif"] = {"bytes": 1, "sha256": "e" * 64}
     assert not st.is_done(item, m, tmp_path)
     (tmp_path / "markfukt").mkdir()
     (tmp_path / "markfukt" / "markfukt_01.tif").write_bytes(b"tif")
@@ -187,3 +187,37 @@ def test_derive_tradhojd_10m_streams_to_the_lattice(tmp_path):
         arr = o.read(1)
         assert o.transform.c == 460000 and o.transform.f == 6270000 and o.block_shapes[0] == (512, 512)
     assert arr[1, 0] == -1 and arr[0, 0] == 8 and arr[129, 63] == 38   # p90 of 0..9 and of 30..39
+
+
+def test_is_done_accepts_an_intentionally_dropped_raw_zip(tmp_path):
+    item = st.Item("sksTradhojd01.zip", "tradhojd", "tradhojd/tradhojd_10m_01.tif", county="01")
+    m = st.load_manifest(tmp_path)
+    m["files"]["sksTradhojd01.zip"] = {"sha256": "a" * 64, "raw_deleted_at": "2026-10-12T20:00:00Z"}
+    m["derived"]["tradhojd/tradhojd_10m_01.tif"] = {"sha256": "b" * 64}
+    (tmp_path / "tradhojd").mkdir()
+    (tmp_path / "tradhojd" / "tradhojd_10m_01.tif").write_bytes(b"tif")
+    assert st.is_done(item, m, tmp_path)                           # no raw on disk, by design
+    del m["files"]["sksTradhojd01.zip"]["raw_deleted_at"]
+    assert not st.is_done(item, m, tmp_path)                       # genuinely missing input
+    m["derived"]["tradhojd/tradhojd_10m_01.tif"] = {}
+    m["files"]["sksTradhojd01.zip"]["raw_deleted_at"] = "x"
+    assert not st.is_done(item, m, tmp_path)                       # unverified derivation
+
+
+def test_vrt_sources_come_from_the_whole_staged_inventory(tmp_path):
+    m = st.load_manifest(tmp_path)
+    for p in ("markfukt/markfukt_01.tif", "markfukt/markfukt_03.tif", "grunddata/omdrev2/volym_01.tif",
+              "grunddata/omdrev2/volym_03.tif", "grunddata/omdrev3/volym_07.tif", "grunddata/omdrev2/grundyta_01.tif"):
+        m["derived"][p] = {"sha256": "c" * 64}
+        (tmp_path / p).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / p).write_bytes(b"tif")
+    m["derived"]["markfukt/markfukt_99.tif"] = {"sha256": "d" * 64}     # recorded but not on disk
+    assert st.staged_vrt_sources(m, tmp_path, "markfukt/markfukt.vrt") == [
+        "markfukt/markfukt_01.tif", "markfukt/markfukt_03.tif"]
+    assert st.staged_vrt_sources(m, tmp_path, "grunddata/volym_omdrev2.vrt") == [
+        "grunddata/omdrev2/volym_01.tif", "grunddata/omdrev2/volym_03.tif"]
+    assert st.staged_vrt_sources(m, tmp_path, "grunddata/volym_omdrev3.vrt") == ["grunddata/omdrev3/volym_07.tif"]
+    # a subset run (county 03 only) still publishes both counties
+    items = st.plan(["markfukt"], [2], ["03"], {"sksSLUMarkfuktighet03.zip": {"bytes": 1, "modified": ""}})
+    for vrt in st.vrt_targets(items):
+        assert len(st.staged_vrt_sources(m, tmp_path, vrt)) == 2

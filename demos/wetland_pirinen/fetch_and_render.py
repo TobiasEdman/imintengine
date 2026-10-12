@@ -58,7 +58,6 @@ from imint.training.nvv_objektdata import (  # noqa: E402
     fetch_tree_cover_tile,
 )
 from imint.training.nvv_smi import fetch_smi_tile  # noqa: E402
-from imint.training.nmd_grid import to_nmd_grid_bounds  # noqa: E402
 from imint.training.skg_grunddata import fetch_tree_height_tile  # noqa: E402
 from imint.training.slu_markfukt import fetch_markfukt_tile  # noqa: E402
 
@@ -103,9 +102,21 @@ class LayerSpec:
     extra_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
-# Re-project once to EPSG:3006 + snap to 10 m grid; reused by every fetcher
-PROJECTED = to_nmd_grid_bounds(WGS84_BBOX)
+# One exact 10 000 x 10 000 m box on the NMD 10 m lattice around the AOI
+# centre, reused by every fetcher: the mirror readers require
+# extent == SIZE_PX x 10 m, which a projected-and-snapped WGS84 box cannot
+# give (it comes out 10 210 x 10 190 m). WGS84_BBOX stays for the map frames.
+def _projected_box(lon: float, lat: float, half_m: int) -> dict[str, int]:
+    from rasterio.warp import transform
+
+    (cx,), (cy,) = transform("EPSG:4326", "EPSG:3006", [lon], [lat])
+    cx, cy = int(round(cx / 10) * 10), int(round(cy / 10) * 10)
+    return {"west": cx - half_m, "south": cy - half_m, "east": cx + half_m, "north": cy + half_m}
+
+
+PROJECTED = _projected_box(AOI_LON, AOI_LAT, SIZE_PX * 10 // 2)
 W, S, E, N = PROJECTED["west"], PROJECTED["south"], PROJECTED["east"], PROJECTED["north"]
+assert E - W == N - S == SIZE_PX * 10
 
 
 def _fetch_smi(**kw):
