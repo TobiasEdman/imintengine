@@ -1,0 +1,10 @@
+{
+  "id": "0106",
+  "subject": "Fail loudly on retired Skogsstyrelsen ImageServer proxies; offline CI tests",
+  "description": "Owner decision 2026-10-12: small fix, no data download. kartor.skogsstyrelsen.se/kartor/*ArcGIS93Rest proxies now redirect to the map portal (or WAF 403), so slu_markfukt, skg_grunddata and skg_height parse HTML and CI fails on 4 live markfukt tests. Scope: shared ImageServer download helper used by the three fetchers that raises a clear retired-endpoint error (no redirects followed, no retries on permanent failures) pointing to the open geodataport bulk downloads; offline tests; live tests opt-in via IMINT_LIVE_TESTS=1. Intended files: imint/training/skg_imageserver.py (new), imint/training/slu_markfukt.py, imint/training/skg_grunddata.py, imint/training/skg_height.py, tests/test_slu_markfukt.py, tests/test_skg_imageserver.py. Not in scope: mirroring the open bulk data (backlog), any change to existing tiles.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/fix-skg-retired-endpoints",
+  "created_at": "2026-10-12T14:24:31.006145+00:00",
+  "updated_at": "2026-10-12T14:24:31.006145+00:00"
+}
