@@ -1,0 +1,10 @@
+{
+  "id": "0107",
+  "subject": "Replace retired Skogsstyrelsen proxies with the open GeoTIFF mirror (IM-022)",
+  "description": "Owner decision 2026-10-12: download the open data we need (the same products the tiles already carry) to the PVC; keep-or-scrap of the raw files decided after enrichment. Scope: stage per-county GeoTIFF zips from geodpags.skogsstyrelsen.se/geodataport/data/ under /data/skg_open with MANIFEST.json (scripts/stage_skg_open.py, k8s/skg-open-stage-job.yaml); a mirror reader imint/training/skg_open.py with the skg_height.py signature and .npy cache contract; skg_grunddata.py and slu_markfukt.py read the mirror; the proxy path (skg_height.py, skg_imageserver.py, .skg_endpoints) is removed, not shimmed; parity against proxy-fetched cache arrays; tests for the adapter, grid snapping, staging plan and manifest. Not in scope: enriching tiles under /data/unified_v2_512* or the staging roots (census session's later pass), GPU jobs, PVC expansion.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/im022-skg-geotiff-source",
+  "created_at": "2026-10-12T18:40:00Z",
+  "updated_at": "2026-10-12T18:40:00Z"
+}
