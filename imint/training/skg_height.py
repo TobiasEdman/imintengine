@@ -9,9 +9,11 @@ airborne laser scanning (ALS) and aerial image matching, with ~2 m
 native resolution.  Values are stored in **decimeters** (125 = 12.5 m).
 We resample to 10 m to match the Sentinel-2 / NMD grid.
 
-Access goes through Skogsstyrelsen's public kartportal proxy which
-exposes the ImageServer ``exportImage`` endpoint without requiring a
-Geodatasamverkan user account.
+Access went through Skogsstyrelsen's public kartportal proxy, which
+Skogsstyrelsen retired in 2026: requests now raise
+``skg_imageserver.SkgEndpointRetiredError`` naming the open per-county
+download that replaces it. Tiles fetched before then keep their stored
+aux channels.
 
 Endpoint URL is loaded from ``.skg_endpoints`` config file or the
 ``SKG_HEIGHT_URL`` environment variable.
@@ -30,12 +32,11 @@ from __future__ import annotations
 import configparser
 import io
 import os
-import time
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 import numpy as np
+
+from .skg_imageserver import download_export_image
 
 # ── ArcGIS ImageServer endpoint ────────────────────────────────────────
 # Loaded from .skg_endpoints config file or SKG_HEIGHT_URL env var.
@@ -227,39 +228,14 @@ def _download_tile(
         "f": "image",
     }
 
-    url = _get_height_url() + "?" + urllib.parse.urlencode(params)
-
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            req = urllib.request.Request(url)
-            req.add_header("User-Agent", "ImintEngine/1.0")
-            resp = urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S)
-            data = resp.read()
-
-            # Check we got actual image data (not JSON error)
-            if data[:4] in (b"II*\x00", b"MM\x00*"):
-                return data
-
-            # If response looks like JSON error, decode and raise
-            try:
-                import json
-                err = json.loads(data)
-                msg = err.get("error", {}).get("message", str(err)[:200])
-                raise RuntimeError(f"ImageServer error: {msg}")
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                raise RuntimeError(
-                    f"Unexpected response ({len(data)} bytes, "
-                    f"starts with {data[:20]!r})"
-                )
-
-        except Exception as e:
-            if attempt < _MAX_RETRIES:
-                time.sleep(_RETRY_DELAY_S * (attempt + 1))
-                continue
-            raise RuntimeError(
-                f"Skogsstyrelsen height fetch failed after "
-                f"{_MAX_RETRIES + 1} attempts: {e}"
-            ) from e
+    return download_export_image(
+        _get_height_url(), params,
+        product="Skogsstyrelsen height",
+        open_data_hint="sksTradhojd<län>.zip, sks_Tradhojd_omdrev3_<län>.zip",
+        timeout_s=_REQUEST_TIMEOUT_S,
+        retries=_MAX_RETRIES,
+        retry_delay_s=_RETRY_DELAY_S,
+    )
 
 
 def _parse_tiff(
