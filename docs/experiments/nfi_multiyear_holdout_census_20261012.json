@@ -1,0 +1,917 @@
+{
+ "schema": "nfi-holdout-census-record-v1",
+ "preliminary": true,
+ "input_freeze": false,
+ "fetch_started": false,
+ "gpu_started": false,
+ "data_written": false,
+ "process": {
+  "driver": "scripts/census_holdout_val_512.py",
+  "job_manifest": "k8s/nfi-holdout-census-job.yaml",
+  "census_commit": "54c526e4380dc6b271f44b47bf818e53e82bfc7b",
+  "job_manifest_commit": "a87cb85",
+  "fieldtruth_commit": "ba31235c6bb5f4c2fa9d5c71929926a0023d062b",
+  "fieldtruth_sha256": "3f7143f2fceda3104ea61925000547f6cd6baac49d9112acce6c49be208ad68c",
+  "sizing_commit": "94b26bbbef9d28220734e4efce38ed4943fd6157",
+  "sizing_json_sha256": "4a7102cfac55c185b85ef65502646fb1328108def47b3bd13f17f52ed66dc41b",
+  "python_packages": {
+   "numpy": "2.4.6",
+   "pandas": "3.0.6",
+   "pyarrow": "26.0.0",
+   "pyproj": "3.7.2",
+   "rasterio": "1.4.4"
+  }
+ },
+ "execution_evidence": {
+  "cluster": "icekube",
+  "namespace": "prithvi-training-default",
+  "pvc": "training-data-cephfs",
+  "pvc_read_only": true,
+  "job": "nfi-holdout-census",
+  "job_uid": "b1bcbfbf-ba84-45b6-9f51-dd42d60b22f9",
+  "pod": "nfi-holdout-census-nwgfg",
+  "pod_uid": "0611e09b-8668-4545-8aa8-383518427c6b",
+  "node": "p02r09srv06",
+  "image": "python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
+  "image_id": "docker-pullable://python@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
+  "job_start": "2026-10-12T05:57:30Z",
+  "container_started": "2026-10-12T05:57:38Z",
+  "container_finished": "2026-10-12T06:38:45Z",
+  "job_completion": "2026-10-12T06:38:48Z",
+  "exit_code": 0,
+  "phase": "Succeeded",
+  "log_bytes": 31226,
+  "log_sha256": "e9b111c902229173a1a30657cef2a2177ee13cf80a27bf2e815051e4c211e96f",
+  "run_as_root": true,
+  "gpu_requested": false
+ },
+ "report": {
+  "schema": "nfi-holdout-census-v1",
+  "read_only": true,
+  "generated_at": "2026-10-12T06:38:44Z",
+  "elapsed_s": 2377.9,
+  "years": [
+   2018,
+   2019,
+   2020,
+   2021,
+   2022,
+   2023,
+   2024
+  ],
+  "identity": [
+   "TractID",
+   "PlotID",
+   "Year"
+  ],
+  "common_crop_px": 496,
+  "target_per_year": 1000,
+  "holdout_dir": "/data/holdout_val_512",
+  "inputs": {
+   "/workspace/ie/imint/eval/fieldtruth.py": {
+    "sha256": "3f7143f2fceda3104ea61925000547f6cd6baac49d9112acce6c49be208ad68c"
+   },
+   "/data/audits/holdout_val_phaseA.json": {
+    "bytes": 251713,
+    "sha256": "35b129b078b56eda212c2875131290f94987ec3cbd446b0ccbc8403011e572a0"
+   },
+   "/data/nfi/nfi_plots.parquet": {
+    "bytes": 4336303,
+    "sha256": "70d4daedeba4536362a22c23b84eee40e499f271c6d203829407e38290ff9de0"
+   },
+   "/data/nfi/nfi_index_unified_v2_512.parquet": {
+    "bytes": 141999,
+    "sha256": "671d4bbb0d168f15635f09fc93fe04ec66845575adcb5342e4c3d82de6fcda33"
+   },
+   "/data/distill/heads/clay_r2_plot_features.parquet": {
+    "bytes": 1378800,
+    "sha256": "49e0c1ec0b3f3e7e88ae680d58827ca62817b624bc6b409b53220dcdfaab7ddb"
+   },
+   "/data/distill/heads/croma_r2_plot_features.parquet": {
+    "bytes": 1389354,
+    "sha256": "c123b84c9b6e67890fa68534e4ec396f74a8d7f500ca2240f9f73b463828df4c"
+   },
+   "/data/distill/heads/prithvi300m_r2_plot_features.parquet": {
+    "bytes": 1452224,
+    "sha256": "e19d1dc154fe362c64e69c6d23adc0a632bc160aa21b98981f558fc85b6d5868"
+   },
+   "/data/distill/heads/prithvi300m4f_r2_plot_features.parquet": {
+    "bytes": 1487769,
+    "sha256": "3a70e178757d5d860208f829dd8eec218454ffa5fcc4175c0ee86d68d18ad92e"
+   },
+   "/data/distill/heads/prithvi600m_r2_plot_features.parquet": {
+    "bytes": 1608422,
+    "sha256": "ae5d6dfae5afc414b86dfc664b881b58a880d07c583e7f0341f61b35bd01057c"
+   },
+   "/data/distill/heads/terramind_r2_plot_features.parquet": {
+    "bytes": 1434286,
+    "sha256": "92ae4609d66d04cf11ffbdd9a0587df1ad22145fbb4ce80b901be1f7dd7df53c"
+   },
+   "/data/distill/heads/tessera_r2_plot_features.parquet": {
+    "bytes": 971347,
+    "sha256": "6193f5ca4bf49641a8d73e98e320861f87ac6658dbebc5b2df58a2fa26b42355"
+   },
+   "/data/nfi/nfi_index_v4_2026-09-30.parquet": {
+    "bytes": 413251,
+    "sha256": "bf08903edda0527241209ef5572b4e989b7554e9dbecaad91b09f917427dbc84"
+   }
+  },
+  "teacher_feature_union": 841,
+  "files": {
+   "present": 1463,
+   "readable": 1463,
+   "unreadable": [],
+   "not_world_readable": 84,
+   "not_world_readable_names": [
+    "holdoutval_100_1228_2022",
+    "holdoutval_100_1231_2022",
+    "holdoutval_100_1253_2022",
+    "holdoutval_100_1288_2018",
+    "holdoutval_100_1316_2019",
+    "holdoutval_100_1322_2023",
+    "holdoutval_100_1331_2024",
+    "holdoutval_100_1370_2019",
+    "holdoutval_100_1403_2023",
+    "holdoutval_100_1405_2022",
+    "holdoutval_101_1247_2022",
+    "holdoutval_101_1253_2022",
+    "holdoutval_101_1255_2018",
+    "holdoutval_101_1275_2023",
+    "holdoutval_101_1277_2023",
+    "holdoutval_101_1295_2024",
+    "holdoutval_101_1303_2024",
+    "holdoutval_101_1305_2024",
+    "holdoutval_101_1314_2019",
+    "holdoutval_101_1317_2018",
+    "holdoutval_101_1318_2024",
+    "holdoutval_101_1320_2023",
+    "holdoutval_101_1321_2022",
+    "holdoutval_101_1329_2018",
+    "holdoutval_101_1338_2023",
+    "holdoutval_101_1340_2024",
+    "holdoutval_101_1345_2023",
+    "holdoutval_101_1352_2023",
+    "holdoutval_101_1377_2023",
+    "holdoutval_101_1380_2021",
+    "holdoutval_101_1390_2021",
+    "holdoutval_101_1412_2022",
+    "holdoutval_102_1234_2022",
+    "holdoutval_102_1235_2022",
+    "holdoutval_102_1282_2024",
+    "holdoutval_102_1285_2022",
+    "holdoutval_102_1293_2021",
+    "holdoutval_102_1299_2018",
+    "holdoutval_102_1299_2022",
+    "holdoutval_102_1301_2024",
+    "holdoutval_102_1307_2022",
+    "holdoutval_102_1330_2020",
+    "holdoutval_102_1348_2022",
+    "holdoutval_102_1357_2024",
+    "holdoutval_102_1358_2024",
+    "holdoutval_102_1387_2018",
+    "holdoutval_102_1389_2019",
+    "holdoutval_103_1226_2024",
+    "holdoutval_103_1230_2022",
+    "holdoutval_103_1297_2020",
+    "holdoutval_103_1347_2020",
+    "holdoutval_104_1244_2022",
+    "holdoutval_104_1375_2022",
+    "holdoutval_105_1246_2022",
+    "holdoutval_105_1319_2018",
+    "holdoutval_105_1327_2018",
+    "holdoutval_105_1379_2022",
+    "holdoutval_105_1379_2024",
+    "holdoutval_106_1246_2018",
+    "holdoutval_106_1247_2024",
+    "holdoutval_106_1395_2018",
+    "holdoutval_106_1421_2024",
+    "holdoutval_107_1240_2024",
+    "holdoutval_107_1393_2020",
+    "holdoutval_108_1238_2018",
+    "holdoutval_108_1296_2018",
+    "holdoutval_108_1380_2018",
+    "holdoutval_109_1246_2018",
+    "holdoutval_109_1278_2018",
+    "holdoutval_109_1442_2024",
+    "holdoutval_110_1249_2022",
+    "holdoutval_110_1346_2018",
+    "holdoutval_110_1354_2018",
+    "holdoutval_110_1392_2018",
+    "holdoutval_110_1420_2018",
+    "holdoutval_111_1240_2022",
+    "holdoutval_111_1249_2022",
+    "holdoutval_112_1245_2022",
+    "holdoutval_112_1316_2018",
+    "holdoutval_112_1339_2022",
+    "holdoutval_112_1358_2022",
+    "holdoutval_113_1282_2018",
+    "holdoutval_113_1406_2022",
+    "holdoutval_113_1414_2018"
+   ],
+   "not_world_readable_by_year": {
+    "2018": 22,
+    "2019": 4,
+    "2020": 4,
+    "2021": 3,
+    "2022": 26,
+    "2023": 9,
+    "2024": 16
+   },
+   "not_world_readable_modes": {
+    "0o600 uid=0": 84
+   },
+   "not_in_manifest": [],
+   "planned_in_manifest": 1650,
+   "planned_but_missing_by_year": {
+    "2018": 2,
+    "2019": 17,
+    "2020": 13,
+    "2021": 4,
+    "2022": 124,
+    "2023": 13,
+    "2024": 14
+   }
+  },
+  "census": {
+   "tiles_readable": 1463,
+   "key_presence": {
+    "b01": 1463,
+    "b01_dates": 1463,
+    "b08": 1463,
+    "b08_dates": 1463,
+    "b09": 1463,
+    "b09_dates": 1463,
+    "basal_area": 1463,
+    "bbox_3006": 1463,
+    "coreg_anchor_valid_frac": 1463,
+    "coreg_m2": 1463,
+    "coreg_max_shift": 1463,
+    "coreg_n_aligned": 1463,
+    "coreg_ref_frame": 1463,
+    "coreg_shifts": 1463,
+    "dates": 1463,
+    "dem": 1463,
+    "diameter": 1463,
+    "doy": 1463,
+    "easting": 1463,
+    "frame_2016": 1208,
+    "frame_2016_bands": 1208,
+    "frame_2016_date": 1208,
+    "frame_2016_scene": 1208,
+    "frame_2016_year": 1208,
+    "has_b01": 1463,
+    "has_b08": 1463,
+    "has_b09": 1463,
+    "has_frame_2016": 1208,
+    "has_rededge": 1463,
+    "has_s1": 1463,
+    "has_tessera": 1463,
+    "height": 1463,
+    "label": 1463,
+    "markfukt": 1463,
+    "multitemporal": 1463,
+    "northing": 1463,
+    "num_bands": 1463,
+    "num_frames": 1463,
+    "rededge": 1463,
+    "rededge_dates": 1463,
+    "s1_dates": 1463,
+    "s1_dates_2016": 1202,
+    "s1_enrich_v": 1463,
+    "s1_orbit": 1463,
+    "s1_source": 1463,
+    "s1_vv_vh": 1463,
+    "s1_vv_vh_2016": 1202,
+    "scl": 1463,
+    "source": 1463,
+    "spectral": 1463,
+    "temporal_mask": 1463,
+    "tessera": 1463,
+    "tessera_year": 1463,
+    "tile_size_px": 1463,
+    "volume": 1463,
+    "vpp_eosd": 1463,
+    "vpp_length": 1463,
+    "vpp_maxv": 1463,
+    "vpp_minv": 1463,
+    "vpp_sosd": 1463,
+    "vpp_year": 1463
+   },
+   "keys_behind_nfi2024_bar": {
+    "frame_2016": {
+     "holdout": 1208,
+     "holdout_share": 0.8257,
+     "nfi2024_share": 0.9832
+    },
+    "frame_2016_bands": {
+     "holdout": 1208,
+     "holdout_share": 0.8257,
+     "nfi2024_share": 0.9832
+    },
+    "frame_2016_date": {
+     "holdout": 1208,
+     "holdout_share": 0.8257,
+     "nfi2024_share": 0.9832
+    },
+    "frame_2016_gap_reason": {
+     "holdout": 0,
+     "holdout_share": 0.0,
+     "nfi2024_share": 0.0211
+    },
+    "frame_2016_scene": {
+     "holdout": 1208,
+     "holdout_share": 0.8257,
+     "nfi2024_share": 0.9832
+    },
+    "frame_2016_year": {
+     "holdout": 1208,
+     "holdout_share": 0.8257,
+     "nfi2024_share": 0.9832
+    },
+    "harvest_mask": {
+     "holdout": 0,
+     "holdout_share": 0.0,
+     "nfi2024_share": 0.92
+    },
+    "has_frame_2016": {
+     "holdout": 1208,
+     "holdout_share": 0.8257,
+     "nfi2024_share": 1.0
+    },
+    "label_mask": {
+     "holdout": 0,
+     "holdout_share": 0.0,
+     "nfi2024_share": 0.7453
+    },
+    "n_harvest_polygons": {
+     "holdout": 0,
+     "holdout_share": 0.0,
+     "nfi2024_share": 0.92
+    },
+    "n_mature_polygons": {
+     "holdout": 0,
+     "holdout_share": 0.0,
+     "nfi2024_share": 0.8842
+    },
+    "n_parcels": {
+     "holdout": 0,
+     "holdout_share": 0.0,
+     "nfi2024_share": 0.7453
+    },
+    "nmd_area_ha": {
+     "holdout": 0,
+     "holdout_share": 0.0,
+     "nfi2024_share": 1.0
+    },
+    "nmd_label_raw": {
+     "holdout": 0,
+     "holdout_share": 0.0,
+     "nfi2024_share": 1.0
+    },
+    "parcel_area_ha": {
+     "holdout": 0,
+     "holdout_share": 0.0,
+     "nfi2024_share": 0.7453
+    },
+    "s1_dates_2016": {
+     "holdout": 1202,
+     "holdout_share": 0.8216,
+     "nfi2024_share": 0.9768
+    },
+    "s1_vv_vh_2016": {
+     "holdout": 1202,
+     "holdout_share": 0.8216,
+     "nfi2024_share": 0.9768
+    },
+    "tessera_source": {
+     "holdout": 0,
+     "holdout_share": 0.0,
+     "nfi2024_share": 0.9979
+    }
+   },
+   "all_zero": {
+    "spectral": {
+     "present": 1463,
+     "all_zero": 0
+    },
+    "label": {
+     "present": 1463,
+     "all_zero": 0
+    },
+    "s1_vv_vh": {
+     "present": 1463,
+     "all_zero": 0
+    },
+    "s1_vv_vh_2016": {
+     "present": 1202,
+     "all_zero": 0
+    },
+    "tessera": {
+     "present": 1463,
+     "all_zero": 1
+    },
+    "height": {
+     "present": 1463,
+     "all_zero": 12
+    },
+    "volume": {
+     "present": 1463,
+     "all_zero": 12
+    },
+    "basal_area": {
+     "present": 1463,
+     "all_zero": 12
+    },
+    "diameter": {
+     "present": 1463,
+     "all_zero": 12
+    },
+    "dem": {
+     "present": 1463,
+     "all_zero": 0
+    },
+    "markfukt": {
+     "present": 1463,
+     "all_zero": 0
+    },
+    "frame_2016": {
+     "present": 1208,
+     "all_zero": 4
+    },
+    "vpp_sosd": {
+     "present": 1463,
+     "all_zero": 0
+    },
+    "vpp_eosd": {
+     "present": 1463,
+     "all_zero": 0
+    },
+    "vpp_length": {
+     "present": 1463,
+     "all_zero": 0
+    },
+    "vpp_maxv": {
+     "present": 1463,
+     "all_zero": 0
+    },
+    "vpp_minv": {
+     "present": 1463,
+     "all_zero": 0
+    }
+   },
+   "flag_on_empty_array": {
+    "tessera": 1,
+    "frame_2016": 4
+   },
+   "spectral_ok": 1463,
+   "bbox_on_grid": 1463,
+   "bbox_matches_manifest": 1463
+  },
+  "modalities": {
+   "tiles_by_year": {
+    "2018": 134,
+    "2019": 144,
+    "2020": 151,
+    "2021": 127,
+    "2022": 535,
+    "2023": 175,
+    "2024": 197
+   },
+   "year_matches_manifest": {
+    "2018": 134,
+    "2019": 144,
+    "2020": 151,
+    "2021": 127,
+    "2022": 535,
+    "2023": 175,
+    "2024": 197
+   },
+   "year_conflict_strict": 0,
+   "year_unknown": 0,
+   "temporal_mask": {
+    "1111": 1157,
+    "0111": 306
+   },
+   "tessera_source": {
+    "unstamped": 1463
+   },
+   "tessera_year_equals_tile_year": 1463,
+   "has_tessera": {
+    "1": 1463
+   },
+   "tessera_usable": {
+    "2018": 134,
+    "2019": 144,
+    "2020": 150,
+    "2021": 127,
+    "2022": 535,
+    "2023": 175,
+    "2024": 197
+   },
+   "has_frame_2016": {
+    "1": 1208,
+    "None": 255
+   },
+   "frame_2016_usable": {
+    "2018": 106,
+    "2019": 121,
+    "2020": 124,
+    "2021": 99,
+    "2022": 440,
+    "2023": 145,
+    "2024": 169
+   },
+   "frame_2016_year": {
+    "2016": 1127,
+    "2015": 81,
+    "None": 255
+   },
+   "s1_vv_vh_2016_usable": {
+    "2018": 106,
+    "2019": 123,
+    "2020": 124,
+    "2021": 99,
+    "2022": 440,
+    "2023": 144,
+    "2024": 166
+   },
+   "s1_enrich_v": {
+    "4": 1462,
+    "3": 1
+   },
+   "vpp_year_present": 1463,
+   "vpp_year_equals_tile_year": {
+    "2018": 134,
+    "2019": 144,
+    "2020": 151,
+    "2021": 127,
+    "2022": 535,
+    "2023": 175,
+    "2024": 197
+   },
+   "aux_11_complete": {
+    "2018": 134,
+    "2019": 144,
+    "2020": 151,
+    "2021": 127,
+    "2022": 535,
+    "2023": 175,
+    "2024": 197
+   },
+   "label_present": {
+    "2018": 134,
+    "2019": 144,
+    "2020": 151,
+    "2021": 127,
+    "2022": 535,
+    "2023": 175,
+    "2024": 197
+   },
+   "bar_modalities": {
+    "2018": 105,
+    "2019": 121,
+    "2020": 123,
+    "2021": 99,
+    "2022": 429,
+    "2023": 144,
+    "2024": 165
+   },
+   "bar_full_promoted_tessera": {}
+  },
+  "eligibility_by_year": {
+   "2018": {
+    "rows": 949,
+    "plot_years_on_tiles": 949,
+    "in_common_crop": 918,
+    "excluded_teacher_pool": 18,
+    "invalid_values": 0,
+    "eligible": 900,
+    "eligible_world_readable": 737,
+    "eligible_restricted_files": 163,
+    "eligible_on_bar_modalities": 724,
+    "eligible_on_bar_full": 0,
+    "eligible_also_in_v4_crop": 51,
+    "eligible_new_vs_v4": 849,
+    "tiles_with_plots": 134,
+    "tiles_world_readable_with_plots": 112,
+    "gap_to_target_all_files": 100,
+    "gap_to_target_world_readable": 263,
+    "gap_to_target_bar_full": 1000
+   },
+   "2019": {
+    "rows": 998,
+    "plot_years_on_tiles": 998,
+    "in_common_crop": 967,
+    "excluded_teacher_pool": 0,
+    "invalid_values": 0,
+    "eligible": 967,
+    "eligible_world_readable": 938,
+    "eligible_restricted_files": 29,
+    "eligible_on_bar_modalities": 816,
+    "eligible_on_bar_full": 0,
+    "eligible_also_in_v4_crop": 0,
+    "eligible_new_vs_v4": 967,
+    "tiles_with_plots": 144,
+    "tiles_world_readable_with_plots": 140,
+    "gap_to_target_all_files": 33,
+    "gap_to_target_world_readable": 62,
+    "gap_to_target_bar_full": 1000
+   },
+   "2020": {
+    "rows": 1055,
+    "plot_years_on_tiles": 1055,
+    "in_common_crop": 1030,
+    "excluded_teacher_pool": 0,
+    "invalid_values": 0,
+    "eligible": 1030,
+    "eligible_world_readable": 1003,
+    "eligible_restricted_files": 27,
+    "eligible_on_bar_modalities": 842,
+    "eligible_on_bar_full": 0,
+    "eligible_also_in_v4_crop": 0,
+    "eligible_new_vs_v4": 1030,
+    "tiles_with_plots": 151,
+    "tiles_world_readable_with_plots": 147,
+    "gap_to_target_all_files": 0,
+    "gap_to_target_world_readable": 0,
+    "gap_to_target_bar_full": 1000
+   },
+   "2021": {
+    "rows": 919,
+    "plot_years_on_tiles": 919,
+    "in_common_crop": 898,
+    "excluded_teacher_pool": 0,
+    "invalid_values": 0,
+    "eligible": 898,
+    "eligible_world_readable": 876,
+    "eligible_restricted_files": 22,
+    "eligible_on_bar_modalities": 692,
+    "eligible_on_bar_full": 0,
+    "eligible_also_in_v4_crop": 0,
+    "eligible_new_vs_v4": 898,
+    "tiles_with_plots": 127,
+    "tiles_world_readable_with_plots": 124,
+    "gap_to_target_all_files": 102,
+    "gap_to_target_world_readable": 124,
+    "gap_to_target_bar_full": 1000
+   },
+   "2022": {
+    "rows": 1337,
+    "plot_years_on_tiles": 1337,
+    "in_common_crop": 1265,
+    "excluded_teacher_pool": 22,
+    "invalid_values": 0,
+    "eligible": 1243,
+    "eligible_world_readable": 1152,
+    "eligible_restricted_files": 91,
+    "eligible_on_bar_modalities": 1002,
+    "eligible_on_bar_full": 0,
+    "eligible_also_in_v4_crop": 9,
+    "eligible_new_vs_v4": 1234,
+    "tiles_with_plots": 247,
+    "tiles_world_readable_with_plots": 227,
+    "gap_to_target_all_files": 0,
+    "gap_to_target_world_readable": 0,
+    "gap_to_target_bar_full": 1000
+   },
+   "2023": {
+    "rows": 1280,
+    "plot_years_on_tiles": 1280,
+    "in_common_crop": 1245,
+    "excluded_teacher_pool": 0,
+    "invalid_values": 0,
+    "eligible": 1245,
+    "eligible_world_readable": 1181,
+    "eligible_restricted_files": 64,
+    "eligible_on_bar_modalities": 1014,
+    "eligible_on_bar_full": 0,
+    "eligible_also_in_v4_crop": 0,
+    "eligible_new_vs_v4": 1245,
+    "tiles_with_plots": 175,
+    "tiles_world_readable_with_plots": 166,
+    "gap_to_target_all_files": 0,
+    "gap_to_target_world_readable": 0,
+    "gap_to_target_bar_full": 1000
+   },
+   "2024": {
+    "rows": 1433,
+    "plot_years_on_tiles": 1433,
+    "in_common_crop": 1402,
+    "excluded_teacher_pool": 0,
+    "invalid_values": 0,
+    "eligible": 1402,
+    "eligible_world_readable": 1282,
+    "eligible_restricted_files": 120,
+    "eligible_on_bar_modalities": 1197,
+    "eligible_on_bar_full": 0,
+    "eligible_also_in_v4_crop": 1326,
+    "eligible_new_vs_v4": 76,
+    "tiles_with_plots": 197,
+    "tiles_world_readable_with_plots": 181,
+    "gap_to_target_all_files": 0,
+    "gap_to_target_world_readable": 0,
+    "gap_to_target_bar_full": 1000
+   }
+  },
+  "provenance": {
+   "holdout_tile_names": 1463,
+   "names_in_training_cohort_dir": 0,
+   "names_in_nfi2024_staging_dir": 0,
+   "split_files_scanned": [
+    {
+     "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.MANIFEST.json",
+     "bytes": 1977,
+     "sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed",
+     "tile_names": 49,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.json",
+     "bytes": 787580,
+     "sha256": "8d5e65f9fcae8e8ca6ae5fd44cb3858c93052d81c04a19f89b05fbddbc58171e",
+     "tile_names": 4216,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/crop_split/lucas_crop_split.MANIFEST.json",
+     "bytes": 1977,
+     "sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed",
+     "tile_names": 49,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/crop_split/lucas_crop_split.json",
+     "bytes": 787580,
+     "sha256": "8d5e65f9fcae8e8ca6ae5fd44cb3858c93052d81c04a19f89b05fbddbc58171e",
+     "tile_names": 4216,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/heads/clay_r2_split.json",
+     "bytes": 7392,
+     "sha256": "cea694cff2dfa5c260a490b30dcce421ff0e18e052d68e0c9e8769ef009a2c81",
+     "tile_names": 280,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/heads/croma_r2_split.json",
+     "bytes": 7349,
+     "sha256": "2deaa867e543c979b7a25e3d7f13fcb47ba7953be32916c728ba6ecf40c4c50e",
+     "tile_names": 278,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/heads/prithvi300m4f_r2_split.json",
+     "bytes": 7221,
+     "sha256": "c2b44041533fe8e7aacabebececa66f59de9c282edab5e4158561841d94065ad",
+     "tile_names": 273,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/heads/prithvi300m_r2_split.json",
+     "bytes": 7219,
+     "sha256": "c85809d64bf4ab4ce2acfc2bc846eff6b7df5f75e282408f490599dcbe690a4c",
+     "tile_names": 273,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/heads/prithvi600m_r2_split.json",
+     "bytes": 7399,
+     "sha256": "3d4e83595b8983015635335919f26ce4072bdd7156894608910364815724217f",
+     "tile_names": 280,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/heads/terramind_r2_split.json",
+     "bytes": 7175,
+     "sha256": "95a69581963eccf924ca2d327f42135bd6877755fbb4f210c230619e73b05750",
+     "tile_names": 271,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/heads/tessera_r2_split.json",
+     "bytes": 7395,
+     "sha256": "89251428f036f61d424a49d403f25de53055cc0937e6cd86c7dd17820224c928",
+     "tile_names": 280,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/distill/pinned_plots.json",
+     "bytes": 76482,
+     "sha256": "4fa47962b510c3e8d31d3518c1ed86e6d58d980b10223fabcdaa1a68db31f94c",
+     "tile_names": 266,
+     "holdout_names_found": 0
+    },
+    {
+     "path": "/data/ladder_inference/tiles.json",
+     "bytes": 1336,
+     "sha256": "829b8f411941026f1ae77cf7fad2ea117a16e42a22a307546deb458e827f04ad",
+     "tile_names": 23,
+     "holdout_names_found": 10
+    },
+    {
+     "path": "/data/unified_v2_512/manifest.json",
+     "bytes": 220,
+     "sha256": "3a8c4643e4030bf1cadfb13d65f76ef7e90068038d4dbf9d49dfcd02f8921de7",
+     "tile_names": 13,
+     "holdout_names_found": 0
+    }
+   ],
+   "split_files_naming_holdout_tiles": [],
+   "visualisation_files_naming_holdout_tiles": [
+    "/data/ladder_inference/tiles.json"
+   ],
+   "teacher_feature_tables_naming_holdout_tiles": {
+    "clay": 0,
+    "croma": 0,
+    "prithvi300m": 0,
+    "prithvi300m4f": 0,
+    "prithvi600m": 0,
+    "terramind": 0,
+    "tessera": 0
+   },
+   "plot_indexes_naming_holdout_tiles": {
+    "pinned_index": 0,
+    "v4_index": 0
+   },
+   "text_files_mentioning_holdout": [
+    {
+     "path": "/data/audits/holdout_val_cdse_probe.json",
+     "mentions_holdout_dir": 0,
+     "holdout_tile_names": 1
+    },
+    {
+     "path": "/data/audits/holdout_val_cdse_probe2.json",
+     "mentions_holdout_dir": 0,
+     "holdout_tile_names": 1
+    },
+    {
+     "path": "/data/audits/holdout_val_cdse_probe3.json",
+     "mentions_holdout_dir": 0,
+     "holdout_tile_names": 1
+    },
+    {
+     "path": "/data/audits/holdout_val_phaseA.json",
+     "mentions_holdout_dir": 0,
+     "holdout_tile_names": 1463
+    },
+    {
+     "path": "/data/debug/holdout_sen2cor_frame2016_plan.json",
+     "mentions_holdout_dir": 0,
+     "holdout_tile_names": 1463
+    },
+    {
+     "path": "/data/ladder_inference/matrix.json",
+     "mentions_holdout_dir": 0,
+     "holdout_tile_names": 10
+    },
+    {
+     "path": "/data/ladder_inference/tiles.json",
+     "mentions_holdout_dir": 1,
+     "holdout_tile_names": 10
+    }
+   ],
+   "footprint": {
+    "cohort_tiles_with_geometry": 7882,
+    "holdout_tiles_overlapping_any_year_training_tile": {
+     "2018": 127,
+     "2019": 141,
+     "2020": 148,
+     "2021": 124,
+     "2022": 469,
+     "2023": 169,
+     "2024": 192
+    },
+    "holdout_tiles_overlapping_same_year_training_tile": {
+     "2018": 63,
+     "2021": 8,
+     "2022": 141
+    },
+    "training_tile_overlaps_any_year": {
+     "2018": 198,
+     "2019": 223,
+     "2020": 248,
+     "2021": 175,
+     "2022": 703,
+     "2023": 252,
+     "2024": 319
+    },
+    "training_tile_overlaps_same_year": {
+     "2018": 78,
+     "2021": 8,
+     "2022": 184
+    }
+   },
+   "used_for_training_or_selection": false
+  },
+  "sizing_cross_check": {
+   "file": "/workspace/codex_sizing.json",
+   "inputs_compared": 11,
+   "input_hash_mismatches": [],
+   "teacher_feature_union_expected": 841,
+   "teacher_feature_union_here": 841,
+   "legacy_permission_errors_expected": 84,
+   "legacy_files_expected": 1463
+  }
+ }
+}
