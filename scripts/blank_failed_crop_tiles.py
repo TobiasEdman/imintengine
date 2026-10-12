@@ -49,11 +49,12 @@ def blank_one(name: str, data_dir: Path, dry_run: bool) -> dict:
                 "old_d0": str(dates[0])}
 
     try:
-        img = d.get("spectral", d.get("image")).copy()           # (4*N_BANDS, H, W)
+        image_key = "spectral" if "spectral" in d else "image"
+        img = d[image_key].copy()           # (4*N_BANDS, H, W)
         img[:N_BANDS] = 0.0               # zero out frame 0 bands
 
         dates[0] = ""
-        d.get("spectral", d.get("image")) = img
+        d[image_key] = img
         d["dates"] = np.array(dates)
 
         # Also clear DOY and temporal_mask for frame 0
