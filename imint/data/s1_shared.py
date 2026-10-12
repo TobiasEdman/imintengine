@@ -116,6 +116,21 @@ def item_overlap_area(item: Any, bbox_4326: tuple[float, float, float, float]) -
     return w * h
 
 
+def footprint_intersection_area(item: Any, geometry: Any) -> float:
+    """Intersection area (deg²) of an item's footprint polygon with a shapely geometry.
+
+    Unlike :func:`item_overlap_area` this uses the swath footprint, not its
+    bbox: S1 footprints are rotated quadrilaterals whose bboxes overlap far
+    more than the swaths do. Areas are in WGS84 degrees², as AI2's
+    historical-scene selection computes them.
+    """
+    from shapely.geometry import shape
+
+    if not item.geometry:
+        return 0.0
+    return float(shape(item.geometry).intersection(geometry).area)
+
+
 def item_datetime(item: Any):
     """Best-effort acquisition ``datetime`` for a STAC item (None on failure).
 

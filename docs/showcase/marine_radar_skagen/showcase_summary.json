@@ -1,0 +1,157 @@
+{
+  "area": "skagen",
+  "area_name": "Skagen anchorage",
+  "scenes": {
+    "target": {
+      "scene_id": "S1D_IW_GRDH_1SDV_20260628T053135_20260628T053200_003432_0060CF",
+      "start_utc": "2026-06-28T05:31:35.545314Z",
+      "platform": "sentinel-1d",
+      "orbit_direction": "DESCENDING",
+      "relative_orbit": 66
+    },
+    "historical": {
+      "scene_id": "S1D_IW_GRDH_1SDV_20260523T053133_20260523T053158_002907_004F80",
+      "start_utc": "2026-05-23T05:31:33.076174Z",
+      "platform": "sentinel-1d",
+      "orbit_direction": "DESCENDING",
+      "relative_orbit": 66
+    }
+  },
+  "target_scene_time_utc": "2026-06-28T05:31:42.206698Z",
+  "coords": {
+    "west": 10.58,
+    "south": 57.64,
+    "east": 10.95,
+    "north": 57.82
+  },
+  "coords_fetch": {
+    "west": 10.554762,
+    "south": 57.626525,
+    "east": 10.975238,
+    "north": 57.833475
+  },
+  "fetch_margin_m": 1500.0,
+  "display_grid": {
+    "crs": "EPSG:3006",
+    "transform": [
+      10.0,
+      0.0,
+      236230.0,
+      0.0,
+      -10.0,
+      6417250.0
+    ],
+    "width": 2327,
+    "height": 2140
+  },
+  "model_grid": {
+    "crs": "EPSG:32632",
+    "transform": [
+      10.0,
+      0.0,
+      592320.0,
+      0.0,
+      -10.0,
+      6411890.0
+    ],
+    "width": 2564,
+    "height": 2370
+  },
+  "score_floor": 0.3,
+  "production_threshold": 0.7,
+  "detections_above_threshold": {
+    "count": 25,
+    "score_range": [
+      0.7892,
+      0.998
+    ],
+    "pred_length_m_median": 174.4,
+    "pred_length_m_range": [
+      20.7,
+      278.2
+    ]
+  },
+  "candidates_below_threshold": {
+    "count": 9,
+    "score_range": [
+      0.3439,
+      0.6966
+    ],
+    "pred_length_m_median": 33.5,
+    "pred_length_m_range": [
+      19.4,
+      148.3
+    ]
+  },
+  "detections_above_threshold_in_requested_bbox": 22,
+  "detections_in_fetch_window": 39,
+  "display": {
+    "band": "VV",
+    "scale": "20*log10(GRD DN), uncalibrated",
+    "stretch_db": [
+      28.0,
+      58.0
+    ],
+    "resampling": "bilinear",
+    "rgb.png": {
+      "valid_frac": 1.0,
+      "db_p01_p50_p99": [
+        26.86,
+        32.76,
+        45.4
+      ],
+      "clipped_low_frac": 0.0278,
+      "clipped_high_frac": 0.0005
+    },
+    "baseline.png": {
+      "valid_frac": 1.0,
+      "db_p01_p50_p99": [
+        23.11,
+        32.34,
+        46.08
+      ],
+      "clipped_low_frac": 0.1016,
+      "clipped_high_frac": 0.0006
+    }
+  },
+  "chart": {
+    "source": "OpenStreetMap basemap + OpenSeaMap seamarks, offline tiles committed in marine-awareness (scripts/prefetch_osm_tiles.py)",
+    "attribution": "\u00a9 OpenStreetMap contributors (ODbL), seamarks \u00a9 OpenSeaMap (CC BY-SA)",
+    "licence": "OSM data ODbL; OpenSeaMap tiles CC BY-SA 2.0; this derived chart image is shared under CC BY-SA",
+    "repo": "marine-awareness",
+    "ref": "origin/main",
+    "commit": "6af8c24ca5aca42b1f25008ff85ba209713256bf",
+    "zooms": {
+      "base": 12,
+      "seamark": 13
+    },
+    "tiles": {
+      "base": 25,
+      "seamark": 100
+    },
+    "tile_blobs_sha256": "sha256:b90b2d3249afea486a7ccedb202a84dc01adbd698f9d39b1bb69f1919212234f",
+    "tile_blobs_sha256_of": "sorted '<path> <git blob sha>' lines, newline-joined",
+    "resampling": "base bicubic x2 to z13, composite, then bilinear to EPSG:3006"
+  },
+  "detector": {
+    "score_threshold": 0.3,
+    "patches": 36,
+    "raw_detections": 63,
+    "after_nms": 39,
+    "final_detections": 39,
+    "infra_filter": {
+      "applied": true,
+      "distance_m": 200.0,
+      "removed": 0,
+      "dataset": "Satlas marine infrastructure (Allen AI, ODC-BY)",
+      "path": "/Users/tobiasedman/.cache/imint/satlas_marine_infrastructure/latest.geojson",
+      "points": 39582,
+      "sha256": "a40bebd54df7cdd4c46d25d4ce2a7035d1f7201c6b23bb7fac7144c1f3266f63"
+    },
+    "attr_crops_padded": 4,
+    "water_mask": "none (Sentinel-1 has no SCL; AI2 applies none)",
+    "valid_frac_target": 1.0,
+    "valid_frac_historical": 1.0,
+    "seconds_total": 65.0
+  }
+}

@@ -21,6 +21,7 @@ from .analyzers.prithvi import PrithviAnalyzer
 from .analyzers.nmd import NMDAnalyzer
 from .analyzers.cot import COTAnalyzer
 from .analyzers.marine_vessels import MarineVesselAnalyzer
+from .analyzers.ai2_vessels_s1 import AI2S1VesselAnalyzer
 from .analyzers.vegetation_edge import VegetationEdgeAnalyzer
 from .analyzers.samgeo import SAMGeoAnalyzer
 from .analyzers.insar import InSARAnalyzer
@@ -49,6 +50,7 @@ ANALYZER_REGISTRY = {
     "nmd": NMDAnalyzer,
     "cot": COTAnalyzer,
     "marine_vessels": MarineVesselAnalyzer,
+    "ai2_vessels_s1": AI2S1VesselAnalyzer,
     "vegetation_edge": VegetationEdgeAnalyzer,
     "samgeo": SAMGeoAnalyzer,
     "insar": InSARAnalyzer,

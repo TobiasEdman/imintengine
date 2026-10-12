@@ -36,6 +36,58 @@ _STAC_COLLECTION = "sentinel-1-grd"
 _REQUEST_TIMEOUT_S = 60
 
 
+# ── STAC helpers (shared with imint.fetch.fetch_s1_vessel_scenes) ────────
+
+def _stac_client() -> Any:
+    """Anonymous MPC STAC client. Items come back unsigned; see :func:`sign_item`."""
+    try:
+        from pystac_client import Client
+    except ImportError as e:
+        raise ImportError(
+            "mpc_s1 requires pystac-client. Install: pip install pystac-client"
+        ) from e
+    return Client.open(_STAC_ROOT)
+
+
+def sign_item(item: Any) -> Any:
+    """Return a copy of ``item`` whose asset hrefs carry an MPC SAS token (~1 h)."""
+    try:
+        import planetary_computer as pc
+    except ImportError as e:
+        raise ImportError(
+            "mpc_s1 requires planetary-computer. "
+            "Install: pip install planetary-computer"
+        ) from e
+    return pc.sign(item)
+
+
+def search_grd_items(
+    datetime_range: str,
+    *,
+    bbox_4326: tuple[float, float, float, float] | None = None,
+    intersects: dict | None = None,
+    limit: int = 50,
+) -> list[Any]:
+    """Search the MPC ``sentinel-1-grd`` collection.
+
+    Args:
+        datetime_range: STAC interval, ``"<start>/<end>"`` (ISO 8601).
+        bbox_4326: (west, south, east, north) in degrees, or
+        intersects: a GeoJSON geometry; exactly one of the two must be given.
+        limit: page size.
+
+    Returns:
+        Unsigned items, unfiltered (use ``s1_shared.filter_iw_grdh``).
+    """
+    if (bbox_4326 is None) == (intersects is None):
+        raise ValueError("give exactly one of bbox_4326 / intersects")
+    spatial = {"bbox": list(bbox_4326)} if bbox_4326 is not None else {"intersects": intersects}
+    search = _stac_client().search(
+        collections=[_STAC_COLLECTION], datetime=datetime_range, limit=limit, **spatial,
+    )
+    return list(search.items())
+
+
 # ── Public API ───────────────────────────────────────────────────────────
 
 def fetch_s1_scene(
@@ -56,21 +108,6 @@ def fetch_s1_scene(
     See module docstring for the why. Args / return identical to
     :func:`cdse_s1_stac.fetch_s1_scene`.
     """
-    try:
-        from pystac_client import Client
-    except ImportError as e:
-        raise ImportError(
-            "mpc_s1 requires pystac-client. Install: pip install pystac-client"
-        ) from e
-
-    try:
-        import planetary_computer as pc
-    except ImportError as e:
-        raise ImportError(
-            "mpc_s1 requires planetary-computer. "
-            "Install: pip install planetary-computer"
-        ) from e
-
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
 
     s1_shared.assert_bbox_size_match(west, south, east, north, h_px, w_px)
@@ -89,14 +126,9 @@ def fetch_s1_scene(
     dt_to = (dt + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
 
     try:
-        client = Client.open(_STAC_ROOT)
-        search = client.search(
-            collections=[_STAC_COLLECTION],
-            bbox=list(bbox_4326),
-            datetime=f"{dt_from}/{dt_to}",
-            limit=50,
-        )
-        items = list(search.items())
+        items = search_grd_items(f"{dt_from}/{dt_to}", bbox_4326=bbox_4326)
+    except ImportError:
+        raise
     except Exception as e:
         print(f"    [MPC S1] {date}: search failed: {e}")
         return None
@@ -110,7 +142,9 @@ def fetch_s1_scene(
 
     # ── 2. Sign asset URLs ───────────────────────────────────────────────
     try:
-        signed = pc.sign(item)
+        signed = sign_item(item)
+    except ImportError:
+        raise
     except Exception as e:
         print(f"    [MPC S1] {product_id}: signing failed: {e}")
         return None

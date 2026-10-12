@@ -27,7 +27,8 @@ from typing import Any, Callable
 
 import numpy as np
 
-from . import aws_s1, cdse_s1_stac, mpc_s1
+from . import aws_s1, cdse_s1_stac
+from imint.data import mpc_s1
 
 
 _DEFAULT_ORDER = ("cdse", "mpc", "aws")

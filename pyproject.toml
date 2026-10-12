@@ -14,6 +14,7 @@ dependencies = ["numpy>=1.24", "scipy>=1.10", "Pillow>=10", "pyyaml>=6"]
 
 [project.optional-dependencies]
 fetch = [
+  "pystac-client>=0.9.0,<1", "planetary-computer>=1.0.0,<2",
   "rasterio>=1.3", "shapely>=2", "geopandas>=0.14", "fiona>=1.9",
   "pyproj>=3.6", "pyarrow>=14", "openeo>=0.20", "requests>=2.31",
   "xarray>=2024.7", "cftime>=1.6.4",

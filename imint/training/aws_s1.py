@@ -36,7 +36,7 @@ from typing import Any
 
 import numpy as np
 
-from . import s1_shared
+from imint.data import s1_shared
 
 # ── Module constants ─────────────────────────────────────────────────────
 

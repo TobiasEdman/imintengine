@@ -16,6 +16,7 @@ th,td { padding:7px 8px; text-align:left; vertical-align:top; }
 thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#9ca3af; border-bottom:1px solid #1f2937; white-space:nowrap; }
 .rung-label { white-space:nowrap; color:#d1d5db; font-weight:600; font-size:12.5px; border-right:1px solid #1f2937; }
 .rung-label small { display:block; color:#6b7280; font-weight:400; font-size:11px; }
+.rung-label small.note { white-space:normal; max-width:230px; color:#fbbf24; }
 .cell { background:#0f1622; border:1px solid #1f2937; border-radius:7px; padding:8px 9px; min-width:132px; }
 .cell.running { border-color:#2563eb; }
 .cell.completed { border-color:#15803d; }
@@ -603,7 +604,7 @@ function renderInference() {
        tiles.map(x => `<td>${img(`_rgb/${x.name}.png`)}</td>`).join("") + "</tr>";
   h += `<tr><td class="rung-label">Truth 23-cl<small>rung 1 target (NMD2018+LPIS+SKS)</small></td>` +
        tiles.map(x => `<td>${img(`_truth23/${x.name}.png`)}</td>`).join("") + "</tr>";
-  h += `<tr><td class="rung-label">Truth 28-cl<small>rungs 2–4 target (NMD2023+LPIS+SKS)</small></td>` +
+  h += `<tr><td class="rung-label">Truth 28-cl<small>rungs 2–4 target (NMD2023+LPIS+SKS)</small><small class="note">helsvart = utanför NMD2023:s rullande utbredning — täckningsluckan är källdata, inte fel (2 av 10 frysta tiles helt, 1 delvis)</small></td>` +
        tiles.map(x => `<td>${img(`_truth28/${x.name}.png`)}</td>`).join("") + "</tr>";
   let rendered = 0;
   for (const m of MODELS) {
