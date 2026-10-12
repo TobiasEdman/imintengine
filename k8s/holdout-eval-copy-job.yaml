@@ -182,7 +182,7 @@ spec:
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: SOURCE_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
-            - {name: SOURCE_COMMIT, value: "df7dea162ec48981f81b4a72aced7f5ab2e59882"}
+            - {name: SOURCE_COMMIT, value: "532df9aefa113e24272a36dd6a61f0119d360ad3"}
             - {name: EXPECTED_EXCLUDED, value: "212"}
           resources:
             requests: {cpu: "4", memory: "16Gi"}
