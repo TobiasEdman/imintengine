@@ -1,0 +1,10 @@
+{
+  "id": "0109",
+  "subject": "Repair confirmed API and service audit defects",
+  "description": "User scope: review repository and all PRs until solved. Repair reproduced results-server startup/containment, dashboard traversal, callback policy, API input acquisition/result/config contract, telemetry cardinality, single-worker deployment contract, and picker origin boundary. No live services, remote acquisition, production data changes, or deployment. Tests and independent review required.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/codex/api-audit-fixes",
+  "created_at": "2026-10-12T20:16:38Z",
+  "updated_at": "2026-10-12T20:16:38Z"
+}
