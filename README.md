@@ -27,6 +27,7 @@ imint/                      Core engine (executor-agnostic)
     grazing.py              LPIS grazing activity classification
     marine_vessels.py       Marine vessel detection (fine-tuned YOLO)
     ai2_vessels.py          AI2 satellite vessel detection
+    ai2_vessels_s1.py       AI2 Sentinel-1 vessel detection (radar, GRD DN)
     prithvi.py              Prithvi-EO foundation model segmentation
 
   fm/                       Foundation models & weights
@@ -35,6 +36,7 @@ imint/                      Core engine (executor-agnostic)
     cot_models/             Cloud optical thickness MLP5
     marine_vessels/          Fine-tuned YOLO for vessel detection
     ai2_vessels/            AI2 vessel detection model
+    ai2_vessels_s1/         AI2 Sentinel-1 vessel detection models (LICENSE.md; weights gitignored)
     pib_grazing/            PIB grazing classification model
     terratorch_loader.py    TerraTorch model loading
     upernet.py              UPerNet segmentation head

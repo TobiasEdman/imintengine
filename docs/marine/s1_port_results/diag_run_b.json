@@ -1,0 +1,114 @@
+[
+ {
+  "kind": "ai2-only",
+  "lon": 10.668790266287962,
+  "lat": 57.823391731595095,
+  "score": 0.7134488821029663,
+  "nearest_other_m": 2459.1687117090755,
+  "aoi_edge_dist_px": 3131,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     2766,
+     3688
+    ],
+    "edge_dist_px": 60,
+    "best_score": 0.7134501934051514
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     2766,
+     3688
+    ],
+    "edge_dist_px": 60,
+    "best_score": 0.6932264566421509
+   }
+  ]
+ },
+ {
+  "kind": "ai2-only",
+  "lon": 11.655873543411406,
+  "lat": 57.746527653180365,
+  "score": 0.7412622570991516,
+  "nearest_other_m": 3576.6194427946252,
+  "aoi_edge_dist_px": 1782,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     8759,
+     4610
+    ],
+    "edge_dist_px": 198,
+    "best_score": 0.7412616610527039
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     8759,
+     4610
+    ],
+    "edge_dist_px": 198,
+    "best_score": 0.5781310796737671
+   }
+  ]
+ },
+ {
+  "kind": "port-only",
+  "lon": 11.697675108719569,
+  "lat": 57.66916671362786,
+  "score": 0.7987347841262817,
+  "nearest_other_m": 1044.018462667597,
+  "aoi_edge_dist_px": 1499,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     9220,
+     5532
+    ],
+    "edge_dist_px": 89,
+    "best_score": 0.6852942109107971
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     9220,
+     5532
+    ],
+    "edge_dist_px": 89,
+    "best_score": 0.7987347841262817
+   }
+  ]
+ },
+ {
+  "kind": "port-only",
+  "lon": 10.479473847355155,
+  "lat": 58.06407182589475,
+  "score": 0.7070587873458862,
+  "nearest_other_m": 839.3996757197514,
+  "aoi_edge_dist_px": 1487,
+  "ai2_patches": [
+   {
+    "patch_local": [
+     1844,
+     1383
+    ],
+    "edge_dist_px": 104,
+    "best_score": 0.674250602722168
+   }
+  ],
+  "port_patches": [
+   {
+    "patch_local": [
+     1844,
+     1383
+    ],
+    "edge_dist_px": 104,
+    "best_score": 0.7070587873458862
+   }
+  ]
+ }
+]
