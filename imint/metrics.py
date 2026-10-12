@@ -17,7 +17,8 @@ def compute_miou(
         pred: (N,) or (H, W) predicted class indices.
         target: (N,) or (H, W) ground truth class indices.
         num_classes: Total number of classes (including background).
-        ignore_index: Class to ignore in mIoU computation.
+        ignore_index: Target label excluded from confusion, IoU, and accuracy.
+            Predictions of this class on other valid targets remain errors.
 
     Returns:
         Dict with "miou", "per_class_iou", "overall_accuracy",
@@ -29,7 +30,11 @@ def compute_miou(
     # Confusion matrix — num_classes already includes background (class 0)
     n = num_classes
     cm = np.zeros((n, n), dtype=np.int64)
-    valid = (target >= 0) & (target < n) & (pred >= 0) & (pred < n)
+    valid = (
+        (target != ignore_index)
+        & (target >= 0) & (target < n)
+        & (pred >= 0) & (pred < n)
+    )
     np.add.at(cm, (target[valid], pred[valid]), 1)
 
     # Per-class IoU — use unified 23-class names when applicable
@@ -60,10 +65,9 @@ def compute_miou(
 
     miou = float(np.mean(ious)) if ious else 0.0
 
-    # Overall accuracy (excluding ignore class)
-    mask = target != ignore_index
-    if mask.any():
-        oa = float((pred[mask] == target[mask]).sum()) / mask.sum()
+    # Accuracy uses the same valid pairs as the confusion matrix.
+    if valid.any():
+        oa = float((pred[valid] == target[valid]).sum()) / valid.sum()
     else:
         oa = 0.0
 
