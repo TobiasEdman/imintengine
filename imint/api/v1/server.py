@@ -6,27 +6,27 @@ Decouples ImintEngine from any specific executor by exposing the
 existing `run_job(IMINTJob) → IMINTResult` entry point as HTTP. Same
 analysis pipeline; new boundary.
 
-Design notes:
- - Jobs run in a background task pool, not inline. POST /v1/analyze
-   returns immediately with a job_id; clients poll GET /v1/jobs/{id}.
- - The job store is in-memory by default (suitable for single-process
-   uvicorn). Production deploys swap in a Redis-backed store; the
-   `JobStore` interface is small.
- - Authentication is intentionally NOT wired yet (rollout W4 is
-   "infra-only"). The first customer pilot will require OAuth2 or an
-   API-key middleware; placeholder hook is in place.
- - SLA telemetry (W4.5) is wired via the `instrumentation` module if
-   present (fail-open like omni-rag / des-chatbot).
+Deployment contract:
+ - One ASGI worker, one replica, one host, lifespan enabled. Job state is
+   memory-only and disappears on restart; artifacts remain on disk.
+ - A POSIX file lock in IMINT_API_OUTPUT_DIR rejects a second local worker
+   using that directory. It is NOT a distributed lock or shared job store.
+ - This unauthenticated API is for trusted access behind an operator-managed
+   access boundary. It is not a public multi-tenant service.
+ - Callbacks and per-request analyzer controls are rejected (422).
+ - Exact-day production DES fetch, cloud threshold 0.1, server YAML config.
 
-Run locally:
-    uvicorn imint.api.v1:app --reload
+Run from the repository root (no reload; no multi-worker gunicorn):
+    uvicorn imint.api.v1:app --host 127.0.0.1 --workers 1 --lifespan on
 
-Production:
-    gunicorn imint.api.v1:app -k uvicorn.workers.UvicornWorker -w 4
+See imint/api/v1/README.md for limits and shutdown behavior.
 """
 from __future__ import annotations
 
 import asyncio
+import fcntl
+from contextlib import asynccontextmanager
+from contextvars import copy_context
 import logging
 import os
 from pathlib import Path
@@ -70,8 +70,7 @@ logger = logging.getLogger("imint.api.v1")
 
 # ── Job store ───────────────────────────────────────────────────────────────
 #
-# Minimal in-memory job store. Each job is a dict; production will swap this
-# for a Redis-backed implementation behind the same interface (get/put/list).
+# Single-process, ephemeral job state. Never deploy multiple replicas.
 _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = asyncio.Lock()
 
@@ -86,9 +85,51 @@ async def _get_job(job_id: str) -> dict[str, Any] | None:
         return _jobs.get(job_id)
 
 
+_pending_jobs: set[asyncio.Task] = set()
+_accepting_jobs = False
+_analysis_slot = asyncio.Semaphore(1)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Hold local ownership until all accepted blocking jobs finish."""
+    global _accepting_jobs
+    root = _output_root()
+    root.mkdir(parents=True, exist_ok=True)
+    # Do not unlink this file: replacing its inode would bypass flock.
+    with (root / ".api-worker.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                "ImintEngine API requires one worker using IMINT_API_OUTPUT_DIR"
+            ) from exc
+        _accepting_jobs = True
+        try:
+            yield
+        finally:
+            _accepting_jobs = False
+            # Do not cancel to_thread work: cancelling its await does not
+            # stop the thread. Keep the ownership lock while draining.
+            cancelled = False
+            if _pending_jobs:
+                drain = asyncio.gather(*tuple(_pending_jobs), return_exceptions=True)
+                while not drain.done():
+                    try:
+                        await asyncio.shield(drain)
+                    except asyncio.CancelledError:
+                        # Lifespan cancellation must not release ownership
+                        # while a blocking worker thread still writes outputs.
+                        cancelled = True
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            if cancelled:
+                raise asyncio.CancelledError
+
+
 # ── App ─────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
+    lifespan=lifespan,
     title="ImintEngine API",
     description=(
         "HTTP boundary for ImintEngine. Submit AOI + date, get IMINT analysis "
@@ -268,6 +309,8 @@ async def submit_analysis(req: AnalyzeRequest) -> AnalyzeResponse:
     Returns 202 Accepted immediately. The job_id in the response can be
     used to poll `GET /v1/jobs/{id}` for status and final result.
     """
+    if not _accepting_jobs:
+        raise HTTPException(status_code=503, detail="API worker not started or shutting down")
     resp = AnalyzeResponse(
         poll_url="",  # filled in below once we have job_id
     )
@@ -293,9 +336,9 @@ async def submit_analysis(req: AnalyzeRequest) -> AnalyzeResponse:
         },
     )
 
-    # Fire-and-forget the worker. asyncio.create_task is fine for in-process
-    # backgrounding; production swaps to Celery / RQ behind the same interface.
-    asyncio.create_task(_run_job_async(resp.job_id))
+    task = asyncio.create_task(_run_job_serial(resp.job_id))
+    _pending_jobs.add(task)
+    task.add_done_callback(_pending_jobs.discard)
 
     return resp
 
@@ -364,6 +407,12 @@ def _execute_analysis(req: dict[str, Any], job_id: str):
     return run_job(job)
 
 
+async def _run_job_serial(job_id: str) -> None:
+    # Single production fetch/analysis at a time; waiting jobs stay queued.
+    async with _analysis_slot:
+        await _run_job_async(job_id)
+
+
 async def _run_job_async(job_id: str) -> None:
     """Background worker — runs run_job() in a thread to avoid blocking the
     event loop on numpy/torch work."""
@@ -376,9 +425,22 @@ async def _run_job_async(job_id: str) -> None:
     await _put_job(job_id, job)
     start = time.monotonic()
 
+    cancelled = False
     try:
-        # Fetch and analysis are blocking; both stay off the event loop.
-        result = await asyncio.to_thread(_execute_analysis, job["_request"], job_id)
+        # Keep a Future, not a to_thread Task: event-loop teardown cancels
+        # every Task, but must not invalidate our thread-completion signal.
+        # Preserve to_thread's context propagation for instrumentation.
+        work = asyncio.get_running_loop().run_in_executor(
+            None, copy_context().run, _execute_analysis, job["_request"], job_id,
+        )
+        while not work.done():
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError:
+                # A cancelled waiter cannot stop blocking work. Keep the
+                # analysis slot and lifespan ownership until it completes.
+                cancelled = True
+        result = work.result()
 
         job["completed_at"] = datetime.now(timezone.utc)
         job["duration_ms"] = (time.monotonic() - start) * 1000
@@ -410,6 +472,9 @@ async def _run_job_async(job_id: str) -> None:
         job["duration_ms"] or 0.0,
         status=job["status"].value if isinstance(job["status"], JobStatus) else str(job["status"]),
     )
+    if cancelled:
+        # Persist the actual worker outcome before propagating cancellation.
+        raise asyncio.CancelledError
 
 # ── Exception handlers ─────────────────────────────────────────────────────
 

@@ -13,6 +13,21 @@ fastapi = pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from imint.api.v1 import server
+
+    monkeypatch.setenv("IMINT_API_OUTPUT_DIR", str(tmp_path / "api-output"))
+    # These are HTTP-boundary tests. Never fetch imagery or import models.
+    monkeypatch.setattr(server, "_execute_analysis", lambda *args: SimpleNamespace(
+        success=False, error="synthetic boundary-test worker", summary_path=None,
+        analyzer_results=[],
+    ))
+    with TestClient(server.app) as client:
+        yield client
+
+
 def test_schemas_validate_minimal_request():
     from imint.api.v1.schemas import AnalyzeRequest, BBox
 
@@ -31,10 +46,7 @@ def test_bbox_rejects_out_of_range():
         BBox(west=-200, south=0, east=0, north=0)
 
 
-def test_health_endpoint():
-    from imint.api.v1 import app
-
-    client = TestClient(app)
+def test_health_endpoint(client):
     r = client.get("/v1/health")
     assert r.status_code == 200
     body = r.json()
@@ -44,10 +56,7 @@ def test_health_endpoint():
     assert "embedding_identity" in body
 
 
-def test_analyzers_endpoint_returns_list():
-    from imint.api.v1 import app
-
-    client = TestClient(app)
+def test_analyzers_endpoint_returns_list(client):
     r = client.get("/v1/analyzers")
     # If ANALYZER_REGISTRY can't be loaded (e.g. torch missing in test env),
     # we expect 503 — that's acceptable. Otherwise expect 200 with the list.
@@ -58,22 +67,16 @@ def test_analyzers_endpoint_returns_list():
         assert "schema_version" in body
 
 
-def test_unknown_job_returns_404():
-    from imint.api.v1 import app
-
-    client = TestClient(app)
+def test_unknown_job_returns_404(client):
     r = client.get("/v1/jobs/does-not-exist")
     assert r.status_code == 404
     body = r.json()
     assert "does-not-exist" in body["detail"]
 
 
-def test_analyze_returns_202_with_poll_url():
+def test_analyze_returns_202_with_poll_url(client):
     """Submit a job; we don't wait for it to finish (would need image fetch).
     Just confirm the boundary returns 202 + a poll_url."""
-    from imint.api.v1 import app
-
-    client = TestClient(app)
     r = client.post(
         "/v1/analyze",
         json={
@@ -93,10 +96,7 @@ def test_analyze_returns_202_with_poll_url():
     assert r.json()["status"] in ("queued", "running", "success", "failed")
 
 
-def test_openapi_schema_published():
-    from imint.api.v1 import app
-
-    client = TestClient(app)
+def test_openapi_schema_published(client):
     r = client.get("/v1/openapi.json")
     assert r.status_code == 200
     spec = r.json()
@@ -110,22 +110,16 @@ def test_openapi_schema_published():
     assert "/v1/metrics" not in paths
 
 
-def test_response_includes_request_id_header():
+def test_response_includes_request_id_header(client):
     """W4.5: every response carries an X-Request-Id for trace stitching."""
-    from imint.api.v1 import app
-
-    client = TestClient(app)
     r = client.get("/v1/health")
     assert r.status_code == 200
     rid = r.headers.get("X-Request-Id")
     assert rid is not None and len(rid) >= 8
 
 
-def test_response_includes_response_time_header():
+def test_response_includes_response_time_header(client):
     """W4.5: X-Response-Time-MS aids client-side SLA tracking."""
-    from imint.api.v1 import app
-
-    client = TestClient(app)
     r = client.get("/v1/health")
     assert r.status_code == 200
     rt = r.headers.get("X-Response-Time-MS")
@@ -133,11 +127,8 @@ def test_response_includes_response_time_header():
     assert float(rt) >= 0.0
 
 
-def test_metrics_endpoint_reachable():
+def test_metrics_endpoint_reachable(client):
     """W4.5: /v1/metrics returns text/plain even without prometheus_client."""
-    from imint.api.v1 import app
-
-    client = TestClient(app)
     r = client.get("/v1/metrics")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/plain")
