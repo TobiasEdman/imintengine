@@ -15,9 +15,11 @@ Encoding (uint8):
 The fetcher snaps the input bbox to the 10 m EPSG:3006 grid (same as
 ``skg_height.py``) before requesting from the proxy.
 
-Access goes through Skogsstyrelsen's public kartportal proxy that
-forwards to the underlying ImageServer without requiring auth — same
-mechanism documented in ``docs/conversation_log/13_auxiliary_channels_fusion.md``.
+Access went through Skogsstyrelsen's public kartportal proxy, which
+Skogsstyrelsen retired in 2026: requests now raise
+``skg_imageserver.SkgEndpointRetiredError`` naming the open per-county
+download that replaces it. Tiles fetched before then keep their stored
+aux channels.
 
 Endpoint URL is loaded from ``.skg_endpoints`` config (``[markfukt_slu]``
 section) or the ``SKG_MARKFUKT_URL`` environment variable. A public
@@ -37,14 +39,12 @@ from __future__ import annotations
 
 import configparser
 import os
-import time
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 import numpy as np
 
 from .skg_height import _to_nmd_grid_bounds
+from .skg_imageserver import download_export_image
 
 
 # ── ArcGIS ImageServer endpoint ──────────────────────────────────────────
@@ -164,41 +164,14 @@ def _download_tile(
         "interpolation": "RSP_NearestNeighbor",
         "f": "image",
     }
-    url = _get_markfukt_url() + "?" + urllib.parse.urlencode(params)
-
-    last_err: Exception | None = None
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            req = urllib.request.Request(url)
-            req.add_header("User-Agent", "ImintEngine/1.0")
-            with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
-                data = resp.read()
-
-            if data[:4] in (b"II*\x00", b"MM\x00*"):
-                return data
-
-            try:
-                import json
-                err = json.loads(data)
-                msg = err.get("error", {}).get("message", str(err)[:200])
-                raise RuntimeError(f"ImageServer error: {msg}")
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                raise RuntimeError(
-                    f"Unexpected response ({len(data)} bytes, "
-                    f"starts with {data[:20]!r})"
-                )
-        except Exception as e:
-            last_err = e
-            if attempt < _MAX_RETRIES:
-                time.sleep(_RETRY_DELAY_S * (attempt + 1))
-                continue
-            raise RuntimeError(
-                f"SLU Markfuktighet fetch failed after "
-                f"{_MAX_RETRIES + 1} attempts: {e}"
-            ) from e
-
-    # Unreachable, satisfies type-checker
-    raise RuntimeError(f"Unreachable: {last_err}")
+    return download_export_image(
+        _get_markfukt_url(), params,
+        product="SLU Markfuktighet",
+        open_data_hint="sksSLUMarkfuktighet<län>.zip, 2 m uint16, nodata 65535",
+        timeout_s=_REQUEST_TIMEOUT_S,
+        retries=_MAX_RETRIES,
+        retry_delay_s=_RETRY_DELAY_S,
+    )
 
 
 def _parse_tiff(
