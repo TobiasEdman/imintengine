@@ -36,6 +36,7 @@ from scipy.ndimage import label as nd_label
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.tile_fetch import fetch_nmd_label_local
+from imint.training.tile_time import resolve_tile_year
 from imint.training.unified_schema import merge_all, merge_all_2023, UNIFIED_CLASS_NAMES
 
 def _compute_nmd_area_map(nmd_label: np.ndarray, pixel_ha: float = 0.01) -> np.ndarray:
@@ -224,40 +225,10 @@ def build_tile_label(
         if bbox_3006 is None:
             return {"name": name, "status": "failed", "reason": "no_bbox"}
 
-        # Determine tile year — use the most common year in the
-        # date stack, NOT dates[0]. Per CLAUDE.md, frame 0 is the
-        # autumn background from *year-1* (Sep-Oct, used by the
-        # hygges-pipeline). Frames 1-3 are the primary year. The
-        # naive `dates[0][:4]` picks the year-1 background, which
-        # makes _lpis_handle look up the wrong year — e.g. dates
-        # = [2021-09, 2022-04, 2022-06, 2022-07] triggered a search
-        # for LPIS-2021 (which doesn't exist on disk) instead of
-        # LPIS-2022 where the parcels actually live. That dropped
-        # 1000 crop_*-tiles in the 2026-05-07 run.
-        tile_year = None
-        if "year" in data:
-            tile_year = int(data["year"])
-        elif "lpis_year" in data:
-            tile_year = int(data["lpis_year"])
-        elif "dates" in data:
-            from collections import Counter
-            years = []
-            for d in data["dates"]:
-                s = str(d)
-                if s and len(s) >= 4:
-                    try:
-                        years.append(int(s[:4]))
-                    except ValueError:
-                        pass
-            if years:
-                # Pick the modal year. Ties broken by most recent year
-                # (a sane default — 2022 over 2021 if equal counts).
-                counts = Counter(years)
-                top_count = counts.most_common(1)[0][1]
-                tied = [y for y, c in counts.items() if c == top_count]
-                tile_year = max(tied)
+        # Shared resolver preserves prior-autumn frames and rejects conflicts.
+        tile_year = resolve_tile_year(data)
         if tile_year is None:
-            tile_year = 2022  # default
+            return {"name": name, "status": "failed", "reason": "no_tile_year"}
 
         # --- Step 1: NMD label from local raster ---
         # 2023 reads raw uint16 codes (mapped later by merge_all_2023); 2018
@@ -272,22 +243,33 @@ def build_tile_label(
         # Stored separately; unified_dataset.py merges with parcel_area_ha.
         data["nmd_area_ha"] = _compute_nmd_area_map(nmd_label)
 
+        # Rebuild every label-owned field, including explicit zeros in sidecars:
+        # omitted area keys would fall back to stale values in the source tile.
+        shape = nmd_label.shape
+        data["label_mask"] = np.zeros(shape, dtype=np.uint16)
+        data["parcel_area_ha"] = np.zeros(shape, dtype=np.float32)
+        data["n_parcels"] = np.int32(0)
+        data["harvest_mask"] = np.zeros(shape, dtype=np.uint8)
+        data["n_harvest_polygons"] = np.int32(0)
+        data["n_mature_polygons"] = np.int32(0)
+
         _ensure_helpers_loaded()
 
         # --- Step 2: LPIS crop mask (bbox-filtered SpatialParquet query) ---
         lpis_mask = None
         lpis_sp = _lpis_handle(tile_year, lpis_dir)
-        if lpis_sp is not None:
-            gdf = lpis_sp.query(bbox_3006)
-            if len(gdf) > 0:
-                bbox_arr = np.array([bbox_3006["west"], bbox_3006["south"],
-                                     bbox_3006["east"], bbox_3006["north"]])
-                lpis_mask, area_map, n_parcels = _rasterize_parcels(
-                    gdf, bbox_arr, tile_size=tile_cfg.size_px,
-                )
-                data["label_mask"]     = lpis_mask   # uint16 raw SJV codes
-                data["parcel_area_ha"] = area_map    # float32 ha/pixel
-                data["n_parcels"]      = np.int32(n_parcels)
+        if lpis_sp is None:
+            return {"name": name, "status": "failed", "reason": f"missing_lpis_reference:{tile_year}"}
+        gdf = lpis_sp.query(bbox_3006)
+        if len(gdf) > 0:
+            bbox_arr = np.array([bbox_3006["west"], bbox_3006["south"],
+                                 bbox_3006["east"], bbox_3006["north"]])
+            lpis_mask, area_map, n_parcels = _rasterize_parcels(
+                gdf, bbox_arr, tile_size=tile_cfg.size_px,
+            )
+            data["label_mask"]     = lpis_mask   # uint16 raw SJV codes
+            data["parcel_area_ha"] = area_map    # float32 ha/pixel
+            data["n_parcels"]      = np.int32(n_parcels)
 
         # --- Step 3: SKS harvest mask (filtered by tile year + tile bbox) ---
         # Hygge = avverkat inom 5 år före tile-året
@@ -296,36 +278,38 @@ def build_tile_label(
                       bbox_3006["east"], bbox_3006["north"])
 
         sks_utforda_sp = _sks_utforda_handle(sks_dir)
-        if sks_utforda_sp is not None:
-            import pandas as pd
-            sks_utforda_local = sks_utforda_sp.query(bbox_3006)
-            if len(sks_utforda_local) > 0:
-                # Parse Avvdatum lazily — only for polygons that intersect this tile
-                sks_utforda_local = sks_utforda_local.copy()
-                sks_utforda_local["Avvdatum"] = pd.to_datetime(
-                    sks_utforda_local["Avvdatum"], errors="coerce",
+        if sks_utforda_sp is None:
+            return {"name": name, "status": "failed", "reason": "missing_sks_utforda_reference"}
+        import pandas as pd
+        sks_utforda_local = sks_utforda_sp.query(bbox_3006)
+        if len(sks_utforda_local) > 0:
+            # Parse Avvdatum lazily — only for polygons that intersect this tile
+            sks_utforda_local = sks_utforda_local.copy()
+            sks_utforda_local["Avvdatum"] = pd.to_datetime(
+                sks_utforda_local["Avvdatum"], errors="coerce",
+            )
+            min_date = pd.Timestamp(f"{tile_year - 5}-01-01")
+            max_date = pd.Timestamp(f"{tile_year}-12-31")
+            sks_filtered = sks_utforda_local[
+                (sks_utforda_local["Avvdatum"] >= min_date) &
+                (sks_utforda_local["Avvdatum"] <= max_date)
+            ]
+            if len(sks_filtered) > 0:
+                harvest_mask, n_harvest = _rasterize_sks(
+                    sks_filtered, bbox_tuple, tile_size=tile_cfg.size_px,
                 )
-                min_date = pd.Timestamp(f"{tile_year - 5}-01-01")
-                max_date = pd.Timestamp(f"{tile_year}-12-31")
-                sks_filtered = sks_utforda_local[
-                    (sks_utforda_local["Avvdatum"] >= min_date) &
-                    (sks_utforda_local["Avvdatum"] <= max_date)
-                ]
-                if len(sks_filtered) > 0:
-                    harvest_mask, n_harvest = _rasterize_sks(
-                        sks_filtered, bbox_tuple, tile_size=tile_cfg.size_px,
-                    )
-                    data["harvest_mask"] = harvest_mask
-                    data["n_harvest_polygons"] = np.int32(n_harvest)
+                data["harvest_mask"] = harvest_mask
+                data["n_harvest_polygons"] = np.int32(n_harvest)
 
         sks_anmalda_sp = _sks_anmalda_handle(sks_dir)
-        if sks_anmalda_sp is not None:
-            sks_anmalda_local = sks_anmalda_sp.query(bbox_3006)
-            if len(sks_anmalda_local) > 0:
-                _, n_mature = _rasterize_sks(
-                    sks_anmalda_local, bbox_tuple, tile_size=tile_cfg.size_px,
-                )
-                data["n_mature_polygons"] = np.int32(n_mature)
+        if sks_anmalda_sp is None:
+            return {"name": name, "status": "failed", "reason": "missing_sks_anmalda_reference"}
+        sks_anmalda_local = sks_anmalda_sp.query(bbox_3006)
+        if len(sks_anmalda_local) > 0:
+            _, n_mature = _rasterize_sks(
+                sks_anmalda_local, bbox_tuple, tile_size=tile_cfg.size_px,
+            )
+            data["n_mature_polygons"] = np.int32(n_mature)
 
         # --- Step 4: Merge all → unified label ---
         if nmd_version == 2023:
