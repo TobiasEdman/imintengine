@@ -21,8 +21,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from imint.training.skg_height import fetch_height_tile
+
 from imint.training.skg_grunddata import (
+    fetch_tree_height_tile,
     fetch_volume_tile,
     fetch_basal_area_tile,
     fetch_diameter_tile,
@@ -61,7 +62,7 @@ def process_tile(tile_path: str) -> dict:
         for var in needs:
             try:
                 if var == "height":
-                    arr = fetch_height_tile(west, south, east, north, size_px=size)
+                    arr = fetch_tree_height_tile(west, south, east, north, size_px=size)
                 elif var == "volume":
                     arr = fetch_volume_tile(west, south, east, north, size_px=size)
                 elif var == "basal_area":

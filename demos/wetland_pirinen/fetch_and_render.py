@@ -13,10 +13,10 @@ reproducera hans fullständiga input-stack från svenska öppna geodata.
 8 lager:
     1. NMD basskikt (DES openEO)
     2. NMD markfuktighetsindex (lokal extraherad zip via nvv_smi)
-    3. SLU markfukt (SKS ImageServer via slu_markfukt)
+    3. SLU markfukt (Skogsstyrelsens öppna data via slu_markfukt)
     4. NVV objekthöjd 0.5–5 m / busk-höjd (lokal via nvv_objektdata)
     5. NVV objekttäckning 0.5–5 m / busk-täckning (lokal)
-    6. Skogsstyrelsen trädhöjd (SKG ImageServer via skg_height)
+    6. Skogsstyrelsen trädhöjd (öppna data via skg_grunddata)
     7. NVV objekttäckning 5–45 m / träd-täckning (lokal)
     8. Copernicus DEM GLO-30 (S3 COG via copernicus_dem)
 
@@ -58,10 +58,8 @@ from imint.training.nvv_objektdata import (  # noqa: E402
     fetch_tree_cover_tile,
 )
 from imint.training.nvv_smi import fetch_smi_tile  # noqa: E402
-from imint.training.skg_height import (  # noqa: E402
-    _get_height_url,
-    _to_nmd_grid_bounds,
-)
+from imint.training.nmd_grid import to_nmd_grid_bounds  # noqa: E402
+from imint.training.skg_grunddata import fetch_tree_height_tile  # noqa: E402
 from imint.training.slu_markfukt import fetch_markfukt_tile  # noqa: E402
 
 
@@ -106,7 +104,7 @@ class LayerSpec:
 
 
 # Re-project once to EPSG:3006 + snap to 10 m grid; reused by every fetcher
-PROJECTED = _to_nmd_grid_bounds(WGS84_BBOX)
+PROJECTED = to_nmd_grid_bounds(WGS84_BBOX)
 W, S, E, N = PROJECTED["west"], PROJECTED["south"], PROJECTED["east"], PROJECTED["north"]
 
 
@@ -127,40 +125,9 @@ def _fetch_bush_c(**kw):
 
 
 def _fetch_tree_h_skg(**kw):
-    """SKG trädhöjd utan THF-mosaicRule (THF saknas norr om limes Norrlandicus).
-
-    `imint.training.skg_height.fetch_height_tile` filtrerar på
-    `ProductName = 'THF'` (Trädhöjd Flygbild). Den produkten täcker
-    bara södra Sverige; norr om ~62°N returnerar servern endast
-    nollor. För demon (Stormyran 64°N) hämtar vi default-mosaiken
-    direkt från ImageServer utan filter.
-    """
-    import io
-    import urllib.parse, urllib.request
-    import rasterio
-    cache_key = f"tree_height_skg_nofilter_{int(W)}_{int(S)}_{int(E)}_{int(N)}.npy"
-    cache_path = LAYER_CACHE / cache_key
-    if cache_path.exists():
-        cached = np.load(cache_path)
-        if cached.shape == (SIZE_PX, SIZE_PX):
-            return cached
-    params = {
-        "bbox": f"{W},{S},{E},{N}",
-        "bboxSR": "3006", "imageSR": "3006",
-        "size": f"{SIZE_PX},{SIZE_PX}",
-        "format": "tiff", "pixelType": "S16", "f": "image",
-    }
-    url = _get_height_url() + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url)
-    req.add_header("User-Agent", "ImintEngine/1.0")
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = resp.read()
-    with rasterio.io.MemoryFile(data) as mf:
-        with mf.open() as ds:
-            arr = ds.read(1).astype(np.float32) / 10.0  # dm → m
-    arr = np.clip(arr, 0.0, None)
-    np.save(cache_path, arr)
-    return arr
+    """Skogsstyrelsen trädhöjd (metres) from the open-data mirror
+    (``imint.training.skg_open``), national coverage."""
+    return fetch_tree_height_tile(W, S, E, N, size_px=SIZE_PX, cache_dir=LAYER_CACHE, **kw)
 
 
 def _fetch_tree_c(**kw):
@@ -187,7 +154,7 @@ LAYERS: list[LayerSpec] = [
         key="slu_markfukt",
         title="SLU Markfuktighetskarta",
         pirinen_idx=4,
-        source="SLU (Lidberg & Ågren) via Skogsstyrelsen ImageServer",
+        source="SLU (Lidberg & Ågren) via Skogsstyrelsens öppna data (lokal spegel)",
         fetcher=_fetch_slu_markfukt,
         cmap="YlGnBu",
         units="%",
@@ -220,7 +187,7 @@ LAYERS: list[LayerSpec] = [
         key="tree_height",
         title="Trädhöjd (laser)",
         pirinen_idx=8,
-        source="Skogsstyrelsen Trädhöjd 3.1 (ImageServer proxy)",
+        source="Skogsstyrelsen Trädhöjd (öppna data, lokal spegel)",
         fetcher=_fetch_tree_h_skg,
         cmap="viridis",
         units="m",

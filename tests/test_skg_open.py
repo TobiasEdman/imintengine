@@ -1,0 +1,134 @@
+"""Tests for the Skogsstyrelsen open-data mirror reader (IM-022).
+
+Synthetic county rasters stand in for the PVC mirror: a 10 m omdrev 2
+raster, a 10 m omdrev 3 raster covering part of the area, and a 12.5 m
+omdrev 1 raster, so the newest-omdrev-per-pixel policy, the lattice
+alignment, nodata mapping and the cache contract are checked offline.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from imint.training import skg_grunddata, skg_open
+from imint.training.nmd_grid import is_on_grid, snap_bounds, to_nmd_grid_bounds
+from tests.skg_mirror_fixture import write_raster
+
+# A 64 x 64 cell tile on the lattice.
+W, S, E, N = 500_000, 6_250_000, 500_640, 6_250_640
+PX = 64
+
+
+@pytest.fixture
+def mirror(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv(skg_open.ENV_MIRROR_DIR, str(tmp_path))
+    g = tmp_path / "grunddata"
+    # omdrev 2: 10 m, covers the tile plus a 100 m margin, value = 1000 + row*10 + col%10
+    rows = cols = PX + 20
+    om2 = (1000 + np.arange(rows)[:, None] * 10 + np.arange(cols)[None, :] % 10).astype(np.int16)
+    om2[:, -30:] = -1                 # nodata on the east side (county edge)
+    write_raster(g / "volym_omdrev2.vrt", om2, W - 100, N + 100, 10.0, nodata=-1)
+    # omdrev 3: 10 m, only the NW quarter of the tile, value 3
+    om3 = np.full((PX // 2, PX // 2), 3, dtype=np.int16)
+    om3[0, 0] = -1                    # one nodata pixel falls through to omdrev 2
+    write_raster(g / "volym_omdrev3.vrt", om3, W, N, 10.0, nodata=-1)
+    # omdrev 1: 12.5 m, whole area, constant 7 -> bilinear of a constant is 7
+    om1 = np.full((80, 80), 7, dtype=np.int16)
+    write_raster(g / "volym_omdrev1.vrt", om1, W - 200, N + 200, 12.5, nodata=-1)
+    # tradhojd 10 m derivative in dm, covers the tile; nodata strip at the top
+    th = np.full((PX, PX), 125, dtype=np.int16)
+    th[:4, :] = -1
+    th[10, 10] = -3                   # negative garbage is clipped like before
+    write_raster(tmp_path / "tradhojd" / "tradhojd_10m.vrt", th, W, N, 10.0, nodata=-1)
+    return om2, om3
+
+
+def test_newest_omdrev_wins_per_pixel(mirror):
+    om2, om3 = mirror
+    arr = skg_open.read_grunddata("volym", W, S, E, N, size_px=PX)
+    assert arr.shape == (PX, PX) and arr.dtype == np.float32
+    q = PX // 2
+    assert (arr[:q, :q][1:, 1:] == 3).all()                       # omdrev 3 where present
+    assert arr[0, 0] == om2[10, 10]                               # its nodata pixel -> omdrev 2
+    np.testing.assert_array_equal(arr[q:, :q], om2[10 + q:10 + PX, 10:10 + q])   # exact lattice read
+    assert (arr[:, -20:] == 7).all()                              # omdrev 2 nodata -> omdrev 1
+    assert (arr >= 0).all()
+
+
+def test_nodata_everywhere_is_zero_not_an_error(mirror, tmp_path):
+    (tmp_path / "grunddata" / "volym_omdrev1.vrt").unlink()
+    arr = skg_open.read_grunddata("volym", W, S, E, N, size_px=PX)
+    assert (arr[:, -20:] == 0).all()
+
+
+def test_tile_outside_every_county_is_all_zero(mirror):
+    arr = skg_open.read_grunddata("volym", W + 50_000, S, E + 50_000, N, size_px=PX)
+    assert arr.shape == (PX, PX) and not arr.any()
+
+
+def test_off_lattice_bbox_is_rejected(mirror):
+    with pytest.raises(ValueError, match="not on the 10 m NMD lattice"):
+        skg_open.read_grunddata("volym", W + 5, S, E + 5, N, size_px=PX)
+
+
+def test_unknown_variable_is_rejected(mirror):
+    with pytest.raises(ValueError, match="unknown grunddata variable"):
+        skg_open.read_grunddata("biomassa", W, S, E, N, size_px=PX)
+
+
+def test_missing_mirror_fails_loud(monkeypatch, tmp_path):
+    monkeypatch.setenv(skg_open.ENV_MIRROR_DIR, str(tmp_path / "nowhere"))
+    with pytest.raises(skg_open.SkgMirrorMissingError, match="SKG_OPEN_DIR"):
+        skg_open.read_grunddata("volym", W, S, E, N, size_px=PX)
+    with pytest.raises(skg_open.SkgMirrorMissingError, match="trädhöjd"):
+        skg_open.read_tradhojd(W, S, E, N, size_px=PX)
+
+
+def test_tree_height_is_metres_and_cache_is_decimetres(mirror, tmp_path):
+    cache = tmp_path / "cache"
+    m = skg_grunddata.fetch_tree_height_tile(W, S, E, N, size_px=PX, cache_dir=cache)
+    assert m.dtype == np.float32 and m[20, 20] == pytest.approx(12.5)
+    assert (m[:4] == 0).all() and m[10, 10] == 0
+    cached = np.load(cache / f"tree_height_{W}_{S}_{E}_{N}.npy")
+    assert cached[20, 20] == 125
+
+
+def test_public_fetchers_share_the_cache_contract(mirror, tmp_path):
+    cache = tmp_path / "cache"
+    a = skg_grunddata.fetch_volume_tile(W, S, E, N, size_px=PX, cache_dir=cache)
+    assert sorted(p.name for p in cache.iterdir()) == [f"volume_{W}_{S}_{E}_{N}.npy"]
+    for p in (tmp_path / "grunddata").iterdir():
+        p.unlink()
+    b = skg_grunddata.fetch_volume_tile(W, S, E, N, size_px=PX, cache_dir=cache)
+    np.testing.assert_array_equal(a, b)
+    # a cached array of another shape is not returned for a different grid
+    with pytest.raises(skg_open.SkgMirrorMissingError):
+        skg_grunddata.fetch_volume_tile(W, S, W + 320, S + 320, size_px=32, cache_dir=cache)
+
+
+def test_basal_area_and_diameter_read_their_own_products(mirror, tmp_path):
+    g = tmp_path / "grunddata"
+    for var, val in (("grundyta", 21), ("medeldiameter", 17)):
+        write_raster(g / f"{var}_omdrev2.vrt", np.full((PX, PX), val, np.int16), W, N, 10.0, nodata=-1)
+    assert skg_grunddata.fetch_basal_area_tile(W, S, E, N, size_px=PX)[5, 5] == 21
+    assert skg_grunddata.fetch_diameter_tile(W, S, E, N, size_px=PX)[5, 5] == 17
+
+
+# ── grid snapping ───────────────────────────────────────────────────────────
+
+def test_snap_bounds_expands_outwards_to_10m():
+    assert snap_bounds(100_004.9, 6_500_001.0, 100_995.1, 6_500_999.0) == (100_000, 6_500_000, 101_000, 6_501_000)
+    assert snap_bounds(100_000, 6_500_000, 101_000, 6_501_000) == (100_000, 6_500_000, 101_000, 6_501_000)
+
+
+def test_is_on_grid():
+    assert is_on_grid(100_000, 6_500_000.0)
+    assert not is_on_grid(100_005)
+
+
+def test_wgs84_bbox_lands_on_the_lattice_in_3006():
+    b = to_nmd_grid_bounds({"west": 15.85, "south": 64.25, "east": 16.02, "north": 64.34})
+    assert is_on_grid(*b.values()) and b["west"] < b["east"] and b["south"] < b["north"]
+    assert 500_000 < b["west"] < 600_000 and 7_100_000 < b["south"] < 7_200_000
