@@ -555,6 +555,23 @@ def cohort_geometry(cohort_dir: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def require_cohort_geometry(cohort_dir: Path) -> pd.DataFrame:
+    """The training cohort's geometry, or a refusal: a missing or incomplete
+    cohort would silently turn the same-year exclusion into a no-op."""
+    if not cohort_dir.is_dir():
+        raise SystemExit(f"REFUSING: training cohort directory {cohort_dir} is missing; "
+                         f"the same-year footprint exclusion cannot be computed")
+    geo = cohort_geometry(cohort_dir)
+    if geo.empty:
+        raise SystemExit(f"REFUSING: no tiles under {cohort_dir}")
+    bad = geo.loc[~geo["readable"].astype(bool) | geo["west"].isna() | geo["year"].isna(), "name"].tolist() \
+        if "west" in geo else geo["name"].tolist()
+    if bad:
+        raise SystemExit(f"REFUSING: {len(bad)} cohort tiles without readable geometry or year "
+                         f"(first: {bad[:3]}); the footprint exclusion would be incomplete")
+    return geo
+
+
 def footprint_overlap(tiles: list[dict], cohort: pd.DataFrame) -> dict:
     """Mark every holdout tile's overlap with the training cohort and summarise.
 
@@ -767,7 +784,7 @@ def main(argv: list[str] | None = None) -> dict:
     v4_known = ft.observation_keys(v4_crop).unique()
     index = build_index(tiles, plots)
     print(f"index: {len(index):,} rows on {index['tile_name'].nunique() if len(index) else 0:,} tiles", flush=True)
-    footprint = footprint_overlap(tiles, cohort_geometry(cohort_dir) if cohort_dir.is_dir() else pd.DataFrame())
+    footprint = footprint_overlap(tiles, require_cohort_geometry(cohort_dir))
     print(f"footprint: {len(footprint['excluded_same_year_overlap_names'])} holdout tiles overlap a "
           f"same-year training tile", flush=True)
     elig = eligibility(ft, index, tiles, exposure, v4_known, years)

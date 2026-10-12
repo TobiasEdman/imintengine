@@ -311,6 +311,22 @@ def test_wrong_fieldtruth_version_is_refused(tmp_path):
         census.load_fieldtruth(bogus)
 
 
+def test_missing_or_incomplete_cohort_refuses_instead_of_skipping_the_exclusion(data_root, fieldtruth_file, tmp_path):
+    import shutil
+    shutil.rmtree(data_root / "unified_v2_512")
+    with pytest.raises(SystemExit, match="cohort directory .* is missing"):
+        census.main(["--data-root", str(data_root), "--fieldtruth-file", str(fieldtruth_file),
+                     "--out-json", str(tmp_path / "c.json")])
+    (data_root / "unified_v2_512").mkdir()
+    with pytest.raises(SystemExit, match="no tiles under"):
+        census.main(["--data-root", str(data_root), "--fieldtruth-file", str(fieldtruth_file),
+                     "--out-json", str(tmp_path / "c.json")])
+    np.savez(data_root / "unified_v2_512/tile_nogeo.npz", spectral=np.zeros((2, 2, 2)))  # no bbox, no year
+    with pytest.raises(SystemExit, match="without readable geometry or year"):
+        census.main(["--data-root", str(data_root), "--fieldtruth-file", str(fieldtruth_file),
+                     "--out-json", str(tmp_path / "c.json")])
+
+
 def test_out_json_under_the_data_root_is_refused(data_root, fieldtruth_file):
     with pytest.raises(SystemExit, match="must not be under the data root"):
         census.main(["--data-root", str(data_root), "--fieldtruth-file", str(fieldtruth_file),

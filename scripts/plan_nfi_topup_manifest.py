@@ -48,8 +48,8 @@ sys.path[:0] = [str(REPO), str(REPO / "scripts")]
 
 from imint.training.tile_config import TileConfig  # noqa: E402
 from scripts.census_holdout_val_512 import (  # noqa: E402
-    CROP_PX, PAD, build_index, cohort_geometry, exposure_union, load_fieldtruth,
-    read_tile, valid_rows,
+    CROP_PX, PAD, build_index, exposure_union, load_fieldtruth, read_tile,
+    require_cohort_geometry, valid_rows,
 )
 
 TILE = TileConfig(size_px=512)
@@ -213,7 +213,10 @@ def main(argv: list[str] | None = None) -> dict:
     else:
         covered_keys, covered_by_year = ft.observation_keys(plots.iloc[0:0]), {}
     print(f"evaluation copy: {len(tiles)} tiles, covered eligible plot-years {covered_by_year}", flush=True)
-    cohort = cohort_geometry(cohort_dir) if cohort_dir.is_dir() else pd.DataFrame()
+    cohort = require_cohort_geometry(cohort_dir)  # refuses when missing or incomplete
+    if not (cohort["year"] == 0).empty and cohort["year"].isin(args.years).sum() == 0:
+        print(f"note: no training tile of a requested year under {cohort_dir}; "
+              f"footprint exclusion will exclude nothing for these years", flush=True)
 
     from derive_missing_vpp_mgrs import cached_pairs, mgrs_tiles_for_bbox
     have = cached_pairs(str(vpp_cache)) if vpp_cache.is_dir() else set()

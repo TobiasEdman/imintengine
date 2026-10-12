@@ -114,6 +114,16 @@ def test_selection_is_prespecified_by_identity_hash(data_root, fieldtruth_file, 
     assert manifest[0]["n_plots"] == (2 if best == "880004_880005" else 1)
 
 
+def test_missing_cohort_refuses_rather_than_planning_without_the_footprint_rule(data_root, fieldtruth_file, tmp_path):
+    import shutil
+    shutil.rmtree(data_root / "unified_v2_512")
+    with pytest.raises(SystemExit, match="cohort directory .* is missing"):
+        plan.main(["--data-root", str(data_root), "--fieldtruth-file", str(fieldtruth_file),
+                   "--years", "2019", "--target", "4", "--out-dir", str(tmp_path / "plan"),
+                   "--summary-json", str(tmp_path / "s.json")])
+    assert not (tmp_path / "plan").exists() and not (tmp_path / "s.json").exists()
+
+
 def test_outputs_carry_no_plot_identity_or_coordinate(data_root, fieldtruth_file, tmp_path):
     _run(data_root, fieldtruth_file, tmp_path, target=4)
     text = (tmp_path / "summary.json").read_text() + (tmp_path / "plan/nfi2019_topup_512.json").read_text()
