@@ -1,5 +1,9 @@
 """Regression checks for installed-library and training boundaries."""
 import ast
+import shlex
+import re
+
+import yaml
 import subprocess
 import sys
 from pathlib import Path
@@ -68,8 +72,107 @@ def test_training_and_evaluation_use_identical_metric_function():
     np.testing.assert_array_equal(a['confusion_matrix'], b['confusion_matrix'])
 
 
+def _shell_commands(script):
+    """Split static shell commands without treating quoted operators as separators."""
+    command = []
+    quote = None
+    i = 0
+    while i < len(script):
+        char = script[i]
+        if char == "\\" and quote != "'" and i + 1 < len(script):
+            following = script[i + 1]
+            if following != "\n":
+                command.extend((char, following))
+            i += 2
+            continue
+        if quote:
+            command.append(char)
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+            command.append(char)
+        elif char == "#" and (not command or command[-1].isspace()):
+            # A comment ends at the physical newline, even after a backslash.
+            i = script.find("\n", i)
+            if i == -1:
+                break
+            continue
+        elif char in ";&|()\n":
+            if command:
+                yield shlex.split("".join(command), comments=False)
+                command = []
+        else:
+            command.append(char)
+        i += 1
+    if command:
+        yield shlex.split("".join(command), comments=False)
+
+
+def _manifest_containers(document):
+    """Visit PodSpecs, including workload templates and Kubernetes Lists."""
+    if not isinstance(document, dict):
+        return
+    for item in document.get("items", []):
+        yield from _manifest_containers(item)
+    spec = document.get("spec", {})
+    for field in ("containers", "initContainers"):
+        yield from spec.get(field, [])
+    for field in ("template", "jobTemplate"):
+        yield from _manifest_containers(spec.get(field))
+
+
+def _container_commands(container):
+    # Without command, the image ENTRYPOINT is unknown; args alone are not shell.
+    argv = container.get("command", []) + container.get("args", [])
+    if not container.get("command"):
+        return
+    if Path(argv[0]).name not in ("sh", "bash", "dash", "ksh", "zsh"):
+        yield argv
+        return
+    i = 1
+    while i < len(argv) and argv[i].startswith("-") and argv[i] != "--":
+        option = argv[i]
+        if option in ("-o", "+o", "-O"):
+            i += 2
+            continue
+        if not option.startswith("--") and "c" in option[1:]:
+            assert i + 1 < len(argv), "shell -c requires a script"
+            for args in _shell_commands(argv[i + 1]):
+                # Static shell control words and assignment prefixes do not
+                # change which executable receives the remaining arguments.
+                while args and (
+                    args[0] in ("if", "then", "elif", "else", "do", "!")
+                    or re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*=.*", args[0], re.DOTALL)
+                ):
+                    args = args[1:]
+                yield args
+            return  # Later argv values are shell positional parameters.
+        i += 1
+
+
 def test_training_manifests_request_training_dependencies():
     for path in (ROOT / "k8s").rglob("*.yaml"):
-        for line in path.read_text().splitlines():
-            if "pip install" in line and "-e ." in line:
-                assert "--no-deps" in line, f"{path}: base-only installation omits training dependencies"
+        for document in yaml.safe_load_all(path.read_text()):
+            for container in _manifest_containers(document):
+                for args in _container_commands(container):
+                    if args[:3] in (["python", "-m", "pip"], ["python3", "-m", "pip"]):
+                        args = args[2:]
+                    if args[:2] not in (["pip", "install"], ["pip3", "install"]):
+                        continue
+                    for i, arg in enumerate(args):
+                        if arg in ("-e", "--editable"):
+                            requirement = args[i + 1]
+                        elif arg.startswith("--editable="):
+                            requirement = arg.split("=", 1)[1]
+                        else:
+                            continue
+                        if requirement == ".":
+                            extras = []
+                        elif requirement.startswith(".[") and requirement.endswith("]"):
+                            extras = [extra.strip() for extra in requirement[2:-1].split(",")]
+                        else:
+                            continue
+                        assert "training" in extras or "--no-deps" in args, (
+                            f"{path}: editable install {requirement!r} omits training dependencies"
+                        )
