@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,8 +35,8 @@ class AnalyzeRequest(BaseModel):
 
     A request asks ImintEngine to run analysis for one date + one bbox.
     The set of analyzers run is configured server-side via
-    `config/analyzers.yaml`; clients can opt-out specific ones via
-    `disable_analyzers` if needed.
+    `config/analyzers.yaml`. Per-request analyzer controls and callbacks
+    are unsupported and rejected as extra fields (HTTP 422).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -48,18 +47,6 @@ class AnalyzeRequest(BaseModel):
         json_schema_extra={"examples": ["2026-04-25"]},
     )
     bbox: BBox
-    analyzers: list[str] | None = Field(
-        default=None,
-        description="Override server config. None = run all enabled analyzers.",
-    )
-    disable_analyzers: list[str] | None = Field(
-        default=None,
-        description="Names to skip even if enabled in server config.",
-    )
-    config_overrides: dict[str, dict[str, Any]] | None = Field(
-        default=None,
-        description="Per-analyzer config overrides, keyed by analyzer name.",
-    )
 
 
 
