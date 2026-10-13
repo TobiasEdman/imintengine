@@ -71,7 +71,7 @@ en blocker) uppdaterar tabellen i samma PR där det är möjligt.
 
 | ID | Titel | Typ | Status | Branch/PR | Anmärkning |
 |---|---|---|---|---|---|
-| IM-019 | `save_tabbed_report`: odefinierad `grazing_prefix` | bug | done | [#76](https://github.com/TobiasEdman/imintengine/pull/76), `19b4c9b` | Fallback-grenen använder `grazing_dir` när metadata saknas. Verifierad rapportgenerering och regressionstester. |
+| IM-019 | `save_tabbed_report`: odefinierad `grazing_prefix` | bug | done | [#76](https://github.com/TobiasEdman/imintengine/pull/76), `19b4c9b` | Fallback-grenen läser `grazing_dir/bands/bands_meta.json` när `grazing_meta.json` saknas. Verifierad rapportgenerering och regressionstester. |
 | IM-020 | Bakgrundsväxlingen använder odefinierad JS-variabel `bg` | bug | done | [#76](https://github.com/TobiasEdman/imintengine/pull/76), `19b4c9b` | RGB-panelen använder `activeBg`; växling och opacity verifierade i webbläsare. |
 
 ---
