@@ -24,6 +24,8 @@ class JobStatus(str, Enum):
 class BBox(BaseModel):
     """Ordered, nonempty WGS84 bounding box; antimeridian spans unsupported."""
 
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
     west: float = Field(..., ge=-180.0, le=180.0)
     south: float = Field(..., ge=-90.0, le=90.0)
     east: float = Field(..., ge=-180.0, le=180.0)
@@ -83,10 +85,16 @@ class AnalyzerSummary(BaseModel):
 
     name: str
     status: str
-    duration_ms: float | None = None
+    duration_ms: float | None = Field(
+        default=None, description="Unknown: the engine does not record per-analyzer timing.",
+    )
     artifacts: list[str] = Field(
         default_factory=list,
-        description="Output paths produced by this analyzer (GeoTIFF / GeoJSON / PNG).",
+        description="Reserved output paths; empty until the engine supplies an artifact manifest.",
+    )
+    output_names: list[str] = Field(
+        default_factory=list,
+        description="Keys in AnalysisResult.outputs; raster values are not embedded in this summary.",
     )
     error: str | None = None
 

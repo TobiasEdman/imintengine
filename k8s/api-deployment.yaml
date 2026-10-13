@@ -47,6 +47,15 @@ spec:
               containerPort: 8000
               protocol: TCP
           env:
+            # REQUIRED operator ConfigMap; no guessed default budget.
+            # Validate max_pixels for the enabled analyzers before rollout.
+            # 4Gi memory alone does not determine a safe raster size.
+            - name: IMINT_API_MAX_PIXELS
+              valueFrom:
+                configMapKeyRef:
+                  name: imint-api-resource-budget
+                  key: max_pixels
+                  optional: false
             - name: PORT
               value: "8000"
             - name: PYTHONUNBUFFERED

@@ -19,6 +19,7 @@ def client(tmp_path, monkeypatch):
     from imint.api.v1 import server
 
     monkeypatch.setenv("IMINT_API_OUTPUT_DIR", str(tmp_path / "api-output"))
+    monkeypatch.setenv("IMINT_API_MAX_PIXELS", "1000000")
     # These are HTTP-boundary tests. Never fetch imagery or import models.
     monkeypatch.setattr(server, "_execute_analysis", lambda *args: SimpleNamespace(
         success=False, error="synthetic boundary-test worker", summary_path=None,
@@ -81,7 +82,7 @@ def test_analyze_returns_202_with_poll_url(client):
         "/v1/analyze",
         json={
             "date": "2026-04-25",
-            "bbox": {"west": 11.5, "south": 58.0, "east": 12.0, "north": 58.5},
+            "bbox": {"west": 11.5, "south": 58.0, "east": 11.51, "north": 58.01},
         },
     )
     assert r.status_code == 202

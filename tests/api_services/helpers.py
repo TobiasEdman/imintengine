@@ -4,7 +4,7 @@ import importlib.util
 import io
 
 ROOT = Path(__file__).resolve().parents[2]
-REQ = {"date": "2026-04-25", "bbox": {"west": 11.5, "south": 58, "east": 12, "north": 58.5}}
+REQ = {"date": "2026-04-25", "bbox": {"west": 11.5, "south": 58, "east": 11.51, "north": 58.01}}
 
 
 def load(name, path):

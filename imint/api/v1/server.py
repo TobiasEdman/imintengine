@@ -13,6 +13,7 @@ Deployment contract:
    using that directory. It is NOT a distributed lock or shared job store.
  - This unauthenticated API is for trusted access behind an operator-managed
    access boundary. It is not a public multi-tenant service.
+ - IMINT_API_MAX_PIXELS must specify an operator-validated positive pixel budget.
  - Callbacks and per-request analyzer controls are rejected (422).
  - Exact-day production DES fetch, cloud threshold 0.1, server YAML config.
 
@@ -28,6 +29,7 @@ import fcntl
 from contextlib import asynccontextmanager
 from contextvars import copy_context
 import logging
+import math
 import os
 from pathlib import Path
 import time
@@ -36,6 +38,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 from imint.api.v1.schemas import (
     AnalyzeRequest,
@@ -72,28 +75,34 @@ logger = logging.getLogger("imint.api.v1")
 #
 # Single-process, ephemeral job state. Never deploy multiple replicas.
 _jobs: dict[str, dict[str, Any]] = {}
-_jobs_lock = asyncio.Lock()
+_jobs_lock: asyncio.Lock | None = None
 
 
 async def _put_job(job_id: str, payload: dict[str, Any]) -> None:
+    if _jobs_lock is None:
+        raise RuntimeError("API lifespan is not active")
     async with _jobs_lock:
         _jobs[job_id] = payload
 
 
 async def _get_job(job_id: str) -> dict[str, Any] | None:
+    if _jobs_lock is None:
+        return _jobs.get(job_id)
     async with _jobs_lock:
         return _jobs.get(job_id)
 
 
 _pending_jobs: set[asyncio.Task] = set()
 _accepting_jobs = False
-_analysis_slot = asyncio.Semaphore(1)
+_analysis_slot: asyncio.Semaphore | None = None
+_max_pixels: int | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Hold local ownership until all accepted blocking jobs finish."""
-    global _accepting_jobs
+    global _accepting_jobs, _jobs_lock, _analysis_slot, _max_pixels
+    max_pixels = _configured_max_pixels()
     root = _output_root()
     root.mkdir(parents=True, exist_ok=True)
     # Do not unlink this file: replacing its inode would bypass flock.
@@ -104,6 +113,11 @@ async def lifespan(app: FastAPI):
             raise RuntimeError(
                 "ImintEngine API requires one worker using IMINT_API_OUTPUT_DIR"
             ) from exc
+        # asyncio primitives bind on contention; never reuse across lifespans.
+        _jobs_lock = asyncio.Lock()
+        _analysis_slot = asyncio.Semaphore(1)
+        _jobs.clear()
+        _max_pixels = max_pixels
         _accepting_jobs = True
         try:
             yield
@@ -177,8 +191,7 @@ async def telemetry_middleware(request: Request, call_next):
     """
     start = time.monotonic()
     request_id = new_request_id()
-    # `route.path` is the parameterised pattern (e.g. /v1/jobs/{job_id});
-    # falls back to URL path if FastAPI hasn't matched yet.
+    # Routing happens inside call_next. Attach the bounded template afterward.
     route_template = "unmatched"
 
     with span(
@@ -230,6 +243,17 @@ async def telemetry_middleware(request: Request, call_next):
                 request_id,
             )
             raise
+        finally:
+            if _HAS_OTEL:
+                # The shared instrumentation context manager yields None;
+                # use OTel's current span while still inside that context.
+                try:
+                    from opentelemetry import trace
+                    trace.get_current_span().set_attribute(
+                        "route", getattr(request.scope.get("route"), "path", "unmatched"),
+                    )
+                except Exception:
+                    pass  # Optional telemetry must not break the HTTP boundary.
 
 
 @app.get("/v1/metrics", include_in_schema=False)
@@ -311,6 +335,7 @@ async def submit_analysis(req: AnalyzeRequest) -> AnalyzeResponse:
     """
     if not _accepting_jobs:
         raise HTTPException(status_code=503, detail="API worker not started or shutting down")
+    _validate_bbox_budget(req.bbox.model_dump())
     resp = AnalyzeResponse(
         poll_url="",  # filled in below once we have job_id
     )
@@ -338,7 +363,7 @@ async def submit_analysis(req: AnalyzeRequest) -> AnalyzeResponse:
 
     task = asyncio.create_task(_run_job_serial(resp.job_id))
     _pending_jobs.add(task)
-    task.add_done_callback(_pending_jobs.discard)
+    task.add_done_callback(lambda done: _finish_job_task(resp.job_id, done))
 
     return resp
 
@@ -375,6 +400,55 @@ async def get_job(job_id: str) -> JobStatusResponse:
 # ── Worker ─────────────────────────────────────────────────────────────────
 
 
+def _configured_max_pixels() -> int:
+    """Require an operator-calibrated admission budget; no universal engine cap."""
+    value = os.environ.get("IMINT_API_MAX_PIXELS", "").strip()
+    if value.isascii() and value.isdecimal() and int(value) > 0:
+        return int(value)
+    raise RuntimeError("IMINT_API_MAX_PIXELS must be configured as a positive integer")
+
+
+def _validate_bbox_budget(coords: dict) -> None:
+    # Same projection and outward snapping as the production DES fetch path.
+    # This helper performs no acquisition, credential lookup or model import.
+    from imint.fetch import _to_nmd_grid, NMD_GRID_SIZE
+    from rasterio.errors import RasterioError
+
+    if _max_pixels is None:
+        raise HTTPException(status_code=503, detail="API pixel budget is not configured")
+    try:
+        projected = _to_nmd_grid(coords)
+        bounds = [projected[key] for key in ("west", "south", "east", "north")]
+        if not all(math.isfinite(value) for value in bounds):
+            raise ValueError("nonfinite projected bounds")
+        width = int((projected["east"] - projected["west"]) // NMD_GRID_SIZE)
+        height = int((projected["north"] - projected["south"]) // NMD_GRID_SIZE)
+        valid = width > 0 and height > 0 and width * height <= _max_pixels
+    except (ValueError, OverflowError, RasterioError):
+        valid = False
+    if not valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"bbox must have a finite, nonempty projected raster of at most "
+                   f"{_max_pixels} pixels on the engine's {NMD_GRID_SIZE} m grid",
+        )
+
+
+def _finish_job_task(job_id: str, task: asyncio.Task) -> None:
+    """Finalize even tasks cancelled before their coroutine first executes."""
+    _pending_jobs.discard(task)
+    error = "Job cancelled before analysis completed" if task.cancelled() else task.exception()
+    job = _jobs.get(job_id)
+    if error is None or job is None or job["status"] not in (JobStatus.QUEUED, JobStatus.RUNNING):
+        return
+    # Done callbacks run on the same loop. No await/lock gap can interrupt
+    # this transition; running threads have already been joined by the worker.
+    completed = datetime.now(timezone.utc)
+    job.update(status=JobStatus.FAILED, success=False, completed_at=completed,
+               duration_ms=((completed - job["started_at"]).total_seconds() * 1000
+                            if job["started_at"] else 0.0), error=str(error))
+
+
 def _output_root() -> Path:
     """Trusted operator setting, never a request-supplied path."""
     return Path(os.environ.get("IMINT_API_OUTPUT_DIR", "outputs/api")).resolve()
@@ -409,6 +483,8 @@ def _execute_analysis(req: dict[str, Any], job_id: str):
 
 async def _run_job_serial(job_id: str) -> None:
     # Single production fetch/analysis at a time; waiting jobs stay queued.
+    if _analysis_slot is None:
+        raise RuntimeError("API lifespan is not active")
     async with _analysis_slot:
         await _run_job_async(job_id)
 
@@ -451,8 +527,7 @@ async def _run_job_async(job_id: str) -> None:
             AnalyzerSummary(
                 name=r.analyzer,
                 status="skipped" if r.skipped else ("success" if r.success else "failed"),
-                duration_ms=getattr(r, "duration_ms", None),
-                artifacts=list(getattr(r, "artifacts", []) or []),
+                output_names=sorted(r.outputs),
                 error=getattr(r, "error", None),
             ).model_dump()
             for r in (result.analyzer_results or [])
@@ -477,6 +552,16 @@ async def _run_job_async(job_id: str) -> None:
         raise asyncio.CancelledError
 
 # ── Exception handlers ─────────────────────────────────────────────────────
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # Invalid JSON numbers (NaN/Infinity) cannot be echoed by JSONResponse.
+    # Do not reflect raw input or exception objects from Pydantic's context.
+    return JSONResponse(status_code=422, content={"detail": [
+        {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
+        for error in exc.errors()
+    ]})
 
 
 @app.exception_handler(Exception)

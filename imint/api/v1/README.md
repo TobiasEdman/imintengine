@@ -4,8 +4,30 @@ Run from the repository root with production fetch dependencies and operator
 credentials configured separately:
 
 ```sh
-uvicorn imint.api.v1:app --host 127.0.0.1 --workers 1 --lifespan on
+IMINT_API_MAX_PIXELS="$VALIDATED_MAX_PIXELS" \
+  uvicorn imint.api.v1:app --host 127.0.0.1 --workers 1 --lifespan on
 ```
+
+Set `VALIDATED_MAX_PIXELS` above to a positive integer calibrated for your
+server's analyzer configuration and resources. `IMINT_API_MAX_PIXELS` is
+required: missing, zero, negative or non-integer values fail startup before
+admission opens. There is no default and no universal engine-supported cap.
+Existing deployments must supply this new setting before upgrading.
+The Kubernetes manifest explicitly requires the `imint-api-resource-budget`
+ConfigMap in namespace `imint`, with key `max_pixels`. Operators must provision
+it with their validated positive integer before rollout. A missing ConfigMap
+or key prevents container creation; an invalid value fails application startup.
+No example ConfigMap with an invented budget is supplied.
+
+Before creating any job or task, admission uses production `_to_nmd_grid` to
+project the bbox into EPSG:3006 and snap outward to the 10 m lattice. Both
+dimensions must be positive/finite and their product must not exceed the
+configured pixel count; invalid projections or over-budget rasters return 422.
+The budget is read once per lifespan. It is a request-size bound, not a peak
+memory, runtime, queue-length, disk or all-analyzer safety guarantee. Validate
+it operationally for the enabled analyzers; the container's 4 GiB limit alone
+does not establish a safe value. Larger workloads require a different validated
+operator budget or a separate bulk workflow, not silently coarser imagery.
 
 Use **one worker, one replica, one host**, no reload, and lifespan enabled.
 `IMINT_API_OUTPUT_DIR` (default `outputs/api`, relative to the working directory)
@@ -27,11 +49,20 @@ Artifacts remain under `<output-root>/<job-id>/`. Accepted work runs one job at
 a time, including fetching. Shutdown stops admission and drains queued/running
 jobs before releasing the lock. Give the process sufficient shutdown time;
 forced termination can leave partial output and loses in-memory status. There
-is no durable queue, retry, job cancellation, retention policy, or resource quota.
+is no durable queue, retry, caller cancellation, retention policy, or aggregate
+resource quota. Internal task cancellation before execution records a failed
+terminal result. Cancellation during blocking execution waits for the real
+outcome before releasing ownership. The default Kubernetes termination grace
+is only 30 seconds; operators must size shutdown grace and persistent storage
+for their workloads. No finite grace period guarantees draining an unbounded
+queue or a stalled remote service.
 
 POST `/v1/analyze` accepts only `date` and `bbox`. Date must be exact YYYY-MM-DD;
 bbox must be ordered, nonempty WGS84 (EPSG:4326). Antimeridian spans and other
-CRSs are unsupported. Unknown top-level fields, including `callback_url`,
+CRSs are unsupported. Coordinates must be finite JSON numbers (integers are
+accepted; strings and booleans are rejected). Unknown bbox keys are rejected.
+Validation errors omit raw input/context so NaN/Infinity rejection remains a
+JSON 422. Unknown top-level fields, including `callback_url`,
 `analyzers`, `disable_analyzers`, and `config_overrides`, are rejected with 422,
 even if null. There are no outbound completion callbacks; poll the job URL.
 Callbacks require a future server-registered destination policy.
@@ -47,3 +78,10 @@ This API has no application authentication. Keep it behind a trusted operator
 access boundary; the loopback invocation above is the default supported setup.
 Do not publish it as a public or multi-tenant service. Output isolation and
 request validation are not quotas or authorization.
+
+Analyzer summaries retain `duration_ms` (null: per-analyzer timing is not
+recorded) and `artifacts` (empty: no engine artifact manifest). The additive
+`output_names` field lists actual `AnalysisResult.outputs` keys. Output values
+include arrays, nested statistics and paths, so this API does not pretend that
+each output is a file or embed raster arrays in polling responses. The job's
+`summary_path` continues to identify the engine's persisted summary report.

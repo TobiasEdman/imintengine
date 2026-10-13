@@ -124,6 +124,11 @@ def test_single_worker_deployment_defaults():
     assert deployment["spec"]["strategy"] == {"type": "Recreate"}
     variables = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
     assert not any(item["name"] == "GUNICORN_WORKERS" for item in variables)
+    budget = next(item for item in variables if item["name"] == "IMINT_API_MAX_PIXELS")
+    assert budget == {"name": "IMINT_API_MAX_PIXELS", "valueFrom": {"configMapKeyRef": {
+        "name": "imint-api-resource-budget", "key": "max_pixels", "optional": False,
+    }}}
+
 
 
 @pytest.mark.parametrize("worker_fails", [False, True])

@@ -40,6 +40,7 @@ def api(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, 'prometheus_client', fake_prom)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv('IMINT_API_OUTPUT_DIR', str(tmp_path/'artifacts'))
+    monkeypatch.setenv("IMINT_API_MAX_PIXELS", "1000000")
     (tmp_path/'config').mkdir(); (tmp_path/'config/analyzers.yaml').write_text('{}')
     job = importlib.import_module('imint.job')
     analyzers = types.ModuleType('imint.analyzers')

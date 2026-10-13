@@ -284,7 +284,7 @@ spec:
               # to the stdlib SimpleHTTPRequestHandler unchanged.
               cat > /serve.py <<'PY'
               import json, os
-              from urllib.parse import unquote, urlsplit
+              from urllib.parse import unquote
               from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
               # Tile counts pre-computed at pod boot via the MD5/90:10 split
@@ -404,12 +404,12 @@ spec:
                       # Preserve configured publication symlinks, but never
                       # allow a custom handler to navigate above its URL root.
                       # Fragments are not part of an HTTP request target.
-                      # Reject raw # before urlsplit can hide filesystem parts
+                      # Reject raw # before parsing can hide filesystem parts
                       # still consumed by the custom handlers below.
                       if "#" in self.path:
                           self.send_error(400, "Invalid request target")
                           return
-                      request_path = unquote(urlsplit(self.path).path)
+                      request_path = unquote(self.path.split("?", 1)[0])
                       if ".." in request_path.split("/") or "\\" in request_path:
                           self.send_error(400, "Invalid path")
                           return

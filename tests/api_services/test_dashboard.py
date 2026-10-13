@@ -20,7 +20,7 @@ def test_A04_dashboard_routes(tmp_path):
     nodes=[n for n in tree.body if isinstance(n,(ast.Import,ast.ImportFrom,ast.FunctionDef,ast.ClassDef)) or (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='COMPARE_SLIC_STRIP' for t in n.targets))]
     ns={'TILE_COUNTS':{}}
     exec(compile(ast.Module(body=nodes,type_ignores=[]),'dashboard-inline','exec'),ns)
-    for path in ['/compare/../../outside/marker.html','/../outside/marker.json?training_log.json?','/compare/%2e%2e/%2e%2e/outside/marker.html']:
+    for path in ['//../outside/training_log.json', '/compare/../../outside/marker.html','/../outside/marker.json?training_log.json?','/compare/%2e%2e/%2e%2e/outside/marker.html']:
         h=handler(ns['Handler'],path);h.do_GET();assert h.status==400
     for path in ['/compare/','/published/training_log.json']:
         h=handler(ns['Handler'],path);h.do_GET();assert h.status==200
