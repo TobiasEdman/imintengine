@@ -28,10 +28,11 @@ on:
     paths:
       - 'docker/**'
       - '.github/workflows/build-pipeline-images.yml'
+      - '.github/scripts/select_pipeline_images.py'
+  # Every PR runs so that "Build summary" always reports and can be a
+  # required check. select_images builds only images whose paths changed;
+  # a PR touching none of them skips pr_build and the summary passes.
   pull_request:
-    paths:
-      - 'docker/**'
-      - '.github/workflows/build-pipeline-images.yml'
   workflow_dispatch:
     inputs:
       image:
@@ -59,7 +60,17 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
+      build: ${{ steps.select.outputs.build }}
     steps:
+      # On a PR, HEAD is the test commit GitHub builds and HEAD^1 is the
+      # base branch tip, so depth 2 suffices. Trees only, no file contents.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: .github
+
       - name: Select requested images
         id: select
         env:
@@ -67,22 +78,19 @@ jobs:
           REF_NAME: ${{ github.ref }}
           REQUESTED_IMAGE: ${{ inputs.image }}
         run: |
-          requested="$REQUESTED_IMAGE"
-          if [ -z "$requested" ] && [ "$EVENT_NAME" = workflow_dispatch ] && \
-             [ "$REF_NAME" != refs/heads/main ]; then
-            requested=ladder-crop-distill
+          set -euo pipefail
+          if [ "$EVENT_NAME" = pull_request ]; then
+            git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed-files.txt"
+            set -- --changed-files "$RUNNER_TEMP/changed-files.txt"
           fi
-          if [ "$requested" = ladder-crop-distill ]; then
-            matrix='{"include":[{"image":"ladder-crop-distill","context":".","dockerfile":"docker/ladder-crop-distill/Dockerfile","platforms":"linux/amd64"}]}'
-          else
-            matrix='{"include":[{"image":"cloud-models","context":"docker/cloud-models","dockerfile":"docker/cloud-models/Dockerfile","platforms":"linux/amd64,linux/arm64"},{"image":"c2rcc-snap","context":"docker/c2rcc-snap","dockerfile":"docker/c2rcc-snap/Dockerfile","platforms":"linux/amd64"},{"image":"ladder-crop-distill","context":".","dockerfile":"docker/ladder-crop-distill/Dockerfile","platforms":"linux/amd64"}]}'
-          fi
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/select_pipeline_images.py \
+            --event "$EVENT_NAME" --ref "$REF_NAME" \
+            --requested "$REQUESTED_IMAGE" "$@" | tee -a "$GITHUB_OUTPUT"
 
   pr_build:
     name: PR build ${{ matrix.image }} (${{ matrix.platforms }})
     needs: select_images
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && needs.select_images.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -446,8 +454,10 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  # Sammanfattnings-job — failar om någon image inte byggdes,
-  # ger en enda statusrad i PR-kommentaren.
+  # Sammanfattnings-job — failar om någon vald image inte byggdes och ger
+  # en enda statusrad. Körs på varje PR (även utan image-ändringar), så
+  # "Build summary" kan vara en required check. Byt inte namn på jobbet
+  # utan att uppdatera branch protection.
   summary:
     name: Build summary
     needs: [select_images, pr_build, publish]
@@ -459,6 +469,7 @@ jobs:
       - name: Check build matrix
         env:
           EVENT_NAME: ${{ github.event_name }}
+          BUILD_SELECTED: ${{ needs.select_images.outputs.build }}
           PR_BUILD_RESULT: ${{ needs.pr_build.result }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           SELECT_RESULT: ${{ needs.select_images.result }}
@@ -467,7 +478,13 @@ jobs:
             echo "::error::Image-matrisen kunde inte väljas"
             exit 1
           fi
-          if [ "$EVENT_NAME" = pull_request ]; then
+          if [ "$EVENT_NAME" = pull_request ] && [ "$BUILD_SELECTED" != true ]; then
+            if [ "$PR_BUILD_RESULT" != skipped ]; then
+              echo "::error::pr_build körde trots att ingen image valdes ($PR_BUILD_RESULT)"
+              exit 1
+            fi
+            echo "Inga pipeline-image-sökvägar ändrade i PR:en; inget byggdes"
+          elif [ "$EVENT_NAME" = pull_request ]; then
             if [ "$PR_BUILD_RESULT" != success ]; then
               echo "::error::En eller flera PR-images failade build/smoke"
               exit 1
