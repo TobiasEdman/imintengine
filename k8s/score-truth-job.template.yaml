@@ -5,6 +5,11 @@
 #   __MEMBER__   job-name suffix / output stem
 #   __TRUTH__    nfi | lucas
 #   __CKPT_SHA__ checkpoint sha subdir written by infer-tiles (16 hex)
+#   __PRODUCER_PIN__ independently recorded Stage A contract SHA-256
+#   __INPUT_VALIDATION__ content | immutable (explicit operator choice)
+#   __INPUT_VALIDATION_ARGS__ empty for content; immutable requires receipt,
+#       pinned receipt SHA, immutable root and --assume-immutable-inputs
+#       See docs/operations/prediction-cache-migration.md; no real snapshot assumed.
 #   __TRUTH_ARGS__ truth-index args, e.g. for nfi:
 #       "--plot-index /data/nfi/nfi_index_unified_v2_512.parquet"
 #     for lucas:
@@ -22,7 +27,7 @@ metadata:
     purpose: score-truth
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 1800   # CPU-only over a cached raster set = minutes
+  activeDeadlineSeconds: 1800   # Operator must size this deadline for the explicit validation mode
   ttlSecondsAfterFinished: 172800
   template:
     metadata:
@@ -61,6 +66,9 @@ spec:
                 --truth __TRUTH__ \
                 --cache-dir /data/pred_cache \
                 --ckpt-sha __CKPT_SHA__ \
+                --producer-pin __PRODUCER_PIN__ \
+                --input-validation __INPUT_VALIDATION__ \
+                __INPUT_VALIDATION_ARGS__ \
                 --img-size 504 --num-classes 28 \
                 __TRUTH_ARGS__ \
                 --out /data/nfi_eval/__TRUTH__-validation-__MEMBER__.json \

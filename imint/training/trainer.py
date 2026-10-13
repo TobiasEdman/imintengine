@@ -29,6 +29,7 @@ from .config import TrainingConfig
 from imint.schema.class_schema import compute_class_weights
 from .dataset import LULCDataset, build_weighted_sampler
 from .evaluate import evaluate_model
+from imint.metrics import SEGMENTATION_METRIC_VERSION
 
 
 def _seed_worker(worker_id: int) -> None:
@@ -49,6 +50,7 @@ class LULCTrainer:
     """
 
     def __init__(self, config: TrainingConfig):
+        self._resume_preflight = self._preflight_resume(config)
         self.config = config
         # A/B experiments rely on identical model initialization, sampling,
         # and augmentation; only the auxiliary values may differ.
@@ -90,6 +92,7 @@ class LULCTrainer:
             "epochs": [],
             "best_epoch": 0,
             "best_metric": 0.0,
+            "metric_version": SEGMENTATION_METRIC_VERSION,
             "status": "initialized",
             "started_at": None,
             "updated_at": None,
@@ -320,6 +323,11 @@ class LULCTrainer:
         """
         cfg = self.config
         ckpt_dir = Path(cfg.checkpoint_dir)
+        if getattr(self, "_resume_preflight", None) is not None:
+            resume_path, resume_checkpoint = self._resume_preflight
+            del self._resume_preflight
+        else:
+            resume_path, resume_checkpoint = self._preflight_resume(cfg)
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
         # Thread area-weighting config into datasets so __getitem__ uses
@@ -543,13 +551,6 @@ class LULCTrainer:
             # a fresh optimizer, and every parameter trainable.
 
         # ── Resume from checkpoint ────────────────────────────────
-        resume_path = None
-        if cfg.resume_from_checkpoint and not cfg.warm_start_from_checkpoint:
-            resume_path = Path(cfg.resume_from_checkpoint)
-        elif not cfg.warm_start_from_checkpoint:
-            auto_path = ckpt_dir / "last_checkpoint.pt"
-            if auto_path.exists():
-                resume_path = auto_path
 
         if resume_path and resume_path.exists():
             if cfg.freeze_spectral:
@@ -559,8 +560,9 @@ class LULCTrainer:
                 self._init_training_log()
             else:
                 state = self._load_resume_checkpoint(
-                    resume_path, optimizer, scheduler,
+                    resume_path, optimizer, scheduler, checkpoint=resume_checkpoint,
                 )
+                resume_checkpoint = None  # Release the CPU preflight copy.
                 start_epoch = state["epoch"] + 1
                 step = state["step"]
                 best_metric = state["best_metric"]
@@ -876,6 +878,7 @@ class LULCTrainer:
                     if best_path.exists():
                         ckpt = torch.load(best_path, map_location=self.device,
                                           weights_only=False)
+                        self._validate_metric_version(ckpt)
                         # _save_checkpoint stores under "model" with
                         # Lightning-convention "model." prefix; strip it.
                         sd = ckpt.get("model", ckpt)
@@ -1091,6 +1094,7 @@ class LULCTrainer:
     ) -> None:
         """Save full training state for resumption after interruption."""
         checkpoint = {
+            "metric_version": SEGMENTATION_METRIC_VERSION,
             "epoch": epoch,
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
@@ -1364,11 +1368,42 @@ class LULCTrainer:
             print(f"  Aux layers initialized randomly ({len(aux_missing)} params)")
         print(f"  Spectral model loaded successfully")
 
+    @staticmethod
+    def _preflight_resume(config: TrainingConfig) -> tuple[Path | None, dict | None]:
+        """Read and validate selection state before RNG, model or output setup."""
+        if config.warm_start_from_checkpoint:
+            return None, None
+        path = (Path(config.resume_from_checkpoint) if config.resume_from_checkpoint
+                else Path(config.checkpoint_dir) / "last_checkpoint.pt")
+        if not path.exists():
+            return None, None
+        if config.freeze_spectral:
+            # Weight-only stage transition; it does not restore selection state.
+            return path, None
+        checkpoint = torch.load(path, map_location="cpu")
+        LULCTrainer._validate_metric_version(checkpoint)
+        return path, checkpoint
+
+    @staticmethod
+    def _validate_metric_version(checkpoint: dict) -> None:
+        version = checkpoint.get("metric_version")
+        if version != SEGMENTATION_METRIC_VERSION:
+            raise ValueError(
+                f"Checkpoint metric version {version!r} is not "
+                f"{SEGMENTATION_METRIC_VERSION!r}; historical best_metric/mIoU "
+                "cannot be resumed under changed metric semantics. Use an explicitly "
+                "configured weight-only warm start in a new output directory, or "
+                "resume with the original metric implementation. See "
+                "docs/training/metric_migration.md."
+            )
+
     def _load_resume_checkpoint(
         self,
         path: Path,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler._LRScheduler,
+        *,
+        checkpoint: dict | None = None,
     ) -> dict:
         """Load full training state from a resume checkpoint.
 
@@ -1377,7 +1412,9 @@ class LULCTrainer:
             best_epoch, patience_counter.
         """
         print(f"  Resuming from checkpoint: {path}")
-        ckpt = torch.load(path, map_location=self.device)
+        ckpt = (torch.load(path, map_location=self.device)
+                if checkpoint is None else checkpoint)
+        self._validate_metric_version(ckpt)
         model_state = ckpt["model_state_dict"]
         # CROMA's forward router attaches its deterministic normalizer lazily
         # on the first forward pass. Its four constant buffers are therefore
@@ -1466,6 +1503,7 @@ class LULCTrainer:
             except Exception:
                 pool_sizes = None
         checkpoint = {
+            "metric_version": SEGMENTATION_METRIC_VERSION,
             "state_dict": state_dict,
             "epoch": epoch,
             "metrics": {k: v for k, v in metrics.items()
@@ -1504,6 +1542,7 @@ class LULCTrainer:
                 meta_dir = Path(f"/data/results/{run_id}")
                 meta_dir.mkdir(parents=True, exist_ok=True)
                 meta = {
+                    "metric_version": SEGMENTATION_METRIC_VERSION,
                     "run_id": run_id,
                     "epoch": epoch,
                     "miou": metrics.get("miou", 0),

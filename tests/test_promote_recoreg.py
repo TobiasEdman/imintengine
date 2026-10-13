@@ -113,3 +113,44 @@ def test_promote_aborts_on_cross_filesystem(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit, match="different filesystems"):
         pr._promote(str(live), str(recoreg), execute=True, min_frac=0.0)
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_rerun_after_failed_restore_requires_recovery(tmp_path, monkeypatch, execute):
+    live, recoreg = tmp_path / "live", tmp_path / "recoreg"
+    _touch_tiles(live, [str(i) for i in range(10)])
+    _touch_tiles(recoreg, ["new"])
+    monkeypatch.setattr(pr, "_utc_stamp", lambda: "first")
+    rename = pr.os.rename
+
+    def fail_promote_and_restore(src, dst):
+        if dst == str(live):
+            raise OSError(errno.EACCES, "injected promote/restore failure")
+        rename(src, dst)
+
+    with monkeypatch.context() as failure:
+        failure.setattr(pr.os, "rename", fail_promote_and_restore)
+        with pytest.raises(RuntimeError, match="restoration failed"):
+            pr._promote(str(live), str(recoreg), execute=True, min_frac=0.0)
+    backup = tmp_path / "live_pre_recoreg_first"
+    assert not live.exists()
+    assert _names(backup) == {str(i) for i in range(10)}
+    monkeypatch.setattr(pr, "_utc_stamp", lambda: "second")
+    with pytest.raises(SystemExit, match="recover.*--rollback"):
+        pr._promote(str(live), str(recoreg), execute=execute, min_frac=0.9)
+    assert not live.exists()
+    assert _names(recoreg) == {"new"}
+    assert _names(backup) == {str(i) for i in range(10)}
+    # Recovery restores the denominator; the normal min-frac gate then applies.
+    pr._rollback(str(live), execute=True)
+    with pytest.raises(SystemExit, match="min-frac"):
+        pr._promote(str(live), str(recoreg), execute=True, min_frac=0.9)
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_fresh_promote_without_backup_remains_supported(tmp_path, execute):
+    live, recoreg = tmp_path / "live", tmp_path / "recoreg"
+    _touch_tiles(recoreg, ["new"])
+    assert pr._promote(str(live), str(recoreg), execute=execute, min_frac=0.9) == 0
+    assert _names(live if execute else recoreg) == {"new"}
+    assert live.exists() == execute

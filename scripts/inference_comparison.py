@@ -31,6 +31,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from imint._cache_identity import record_caller
+
+record_caller()
+
 class TileIdentityError(RuntimeError):
     """A frozen tile's path, size, or bytes differ from its inventory."""
 

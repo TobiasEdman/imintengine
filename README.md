@@ -211,6 +211,12 @@ The ColonyOS executor reads `DATE`, `WEST`, `SOUTH`, `EAST`, `NORTH` from enviro
 
 ## Training (LULC segmentation)
 
+> **Metric migration:** historical training mIoU below (37.5%, 44.14%) and in
+> existing reports/checkpoints is **not comparable** with `miou-ignore-target-v2`.
+> Ignored targets no longer contribute false positives. Old full-state resumes
+> are refused; historical values remain unchanged. See the
+> [metric migration and affected results](docs/training/metric_migration.md).
+
 ### Current: Unified 20-class multitemporal (v3)
 
 ```bash

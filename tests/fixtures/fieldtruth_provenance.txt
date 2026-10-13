@@ -1,0 +1,10 @@
+Historical fixture for test_census_holdout_val_512.py
+
+Source: imint/eval/fieldtruth.py at ba31235c6bb5f4c2fa9d5c71929926a0023d062b
+SHA-256: 3f7143f2fceda3104ea61925000547f6cd6baac49d9112acce6c49be208ad68c
+
+This is an unmodified snapshot of the census sizing identity implementation.
+The fixture asserts census.FIELDTRUTH_SHA256 before loading it. Keep the
+historical bytes intact; do not replace them with current fieldtruth code.
+Bundling this file makes the census suite independent of clone depth, Git,
+and network availability. Missing or changed bytes fail instead of skipping.

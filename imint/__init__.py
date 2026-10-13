@@ -4,6 +4,7 @@ Importing imint does not initialize models, providers or the analysis engine.
 """
 from importlib import import_module
 
+
 __all__ = [
     "run_job", "coregister_to_reference", "coregister_timeseries",
     "coregister_interframe", "clearest_frame_idx", "estimate_mi_offset",

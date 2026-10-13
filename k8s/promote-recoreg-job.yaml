@@ -1,8 +1,11 @@
 # promote-recoreg-job.yaml — one-shot k8s Job that landed the re-coreg
 # campaign by renaming the corrected dir over the live training dataset.
 #
-# Wraps `scripts/promote_recoreg.py --execute`, which does TWO atomic
-# `os.rename` calls on the same PVC (`/data` = `training-data-cephfs`):
+# Wraps `scripts/promote_recoreg.py --execute`: two individually atomic
+# renames on the same PVC (`/data` = `training-data-cephfs`), NOT an atomic pair.
+# Live is briefly absent. A failed second rename attempts restoration; if that
+# fails, inspect retained paths and recover with --rollback before retrying.
+# Keep exclusive access during promotion and recovery.
 #
 #   /data/unified_v2_512          ->  /data/unified_v2_512_pre_recoreg_<UTC-ts>   (backup)
 #   /data/unified_v2_512_recoreg  ->  /data/unified_v2_512                       (promote)

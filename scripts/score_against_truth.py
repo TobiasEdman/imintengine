@@ -40,7 +40,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cache_predict import make_cached_predict_fn  # noqa: E402
+from scripts.cache_predict import make_cached_predict_fn  # noqa: E402
 
 
 def _load_script(name):
@@ -68,6 +68,47 @@ def _cache_has_fracs(cache_dir, ckpt_sha) -> bool:
         return "fracs" in z.files
 
 
+def _validation_options(args, tile_paths):
+    """Stat-only cost preflight before any tile payload or cache read.
+
+    This is the candidate input size, not a timing prediction. Crop filtering
+    may reduce it; repeated predictor calls hash again in content mode.
+    """
+    paths = sorted({str(Path(p).absolute()) for p in tile_paths})
+    total = sum(Path(p).stat().st_size for p in paths)
+    print(f"[score] verification preflight: {len(paths)} distinct candidate tiles, "
+          f"{total} source bytes per complete content-verification pass", flush=True)
+    print("[score] excludes prediction arrays and crop/coordinate reads; "
+          "repeated predictor calls verify bytes again; no throughput estimate", flush=True)
+    choice = args.input_validation
+    if choice not in ('content', 'immutable'):
+        raise SystemExit("Choose --input-validation content to authorize source-byte hashing, "
+                         "or immutable with a pinned receipt and an explicit immutable-snapshot assumption.")
+    immutable = dict(input_manifest=args.input_manifest,
+                     input_manifest_sha256=args.input_manifest_sha256,
+                     immutable_input_root=args.immutable_input_root,
+                     assume_immutable_inputs=args.assume_immutable_inputs)
+    if choice == 'content':
+        if any(immutable.values()):
+            raise SystemExit('content validation does not accept immutable-mode arguments')
+        print(f'[score] explicitly selected content verification of up to {total} candidate bytes per pass', flush=True)
+    elif not all(immutable.values()):
+        raise SystemExit('immutable requires --input-manifest, --input-manifest-sha256, '
+                         '--immutable-input-root and --assume-immutable-inputs')
+    else:
+        print('[score] explicitly assumes operator-guaranteed immutable snapshot; '
+              'tile payload verification bytes=0 (receipt and prediction arrays still read)', flush=True)
+    if not args.producer_pin:
+        raise SystemExit('--producer-pin must be the independently recorded Stage A contract digest')
+    options = dict(producer_pin=args.producer_pin,
+                   img_size=args.img_size, num_classes=args.num_classes)
+    if choice == 'immutable':
+        options.update(immutable)
+    # Validate pins/receipt now, before crop helpers read tile payloads.
+    make_cached_predict_fn(args.cache_dir, args.ckpt_sha, want_fracs=False, **options)
+    return options
+
+
 def score_nfi(args) -> dict:
     van = _load_script("validate_against_nfi")
     index_df = pd.read_parquet(args.plot_index)
@@ -79,6 +120,10 @@ def score_nfi(args) -> dict:
         gone = int((~exists).sum())
         print(f"dropping {gone} plots on tiles no longer in the dataset")
         index_df = index_df[exists].copy()
+
+    if index_df.empty:
+        raise SystemExit('no NFI tiles found')
+    validation = _validation_options(args, index_df['tile_path'])
 
     # Same centre-crop remap the fused validator applies (run_inference crops to
     # img_size; the cache is stored in crop coords, so plot (row,col) must be
@@ -100,7 +145,8 @@ def score_nfi(args) -> dict:
         # Fraction-collapse mode: identical rule to the fused validator via
         # the SHARED van.fracs_to_class_and_probs (parity by construction).
         base = make_cached_predict_fn(
-            args.cache_dir, args.ckpt_sha, want_fracs=True)
+            args.cache_dir, args.ckpt_sha, want_fracs=True,
+            **validation)
         print(f"  fraction-head collapse: dominant_frac={args.dominant_frac}, "
               f"forest_floor={args.forest_floor}")
 
@@ -111,7 +157,8 @@ def score_nfi(args) -> dict:
                 forest_floor=args.forest_floor, num_classes=args.num_classes)
     else:
         predict_fn = make_cached_predict_fn(
-            args.cache_dir, args.ckpt_sha, want_fracs=False)
+            args.cache_dir, args.ckpt_sha, want_fracs=False,
+            **validation)
     per_plot = [] if args.dump_per_plot else None
     results = van.score_against_nfi(
         index_df, predict_fn, num_classes=args.num_classes,
@@ -142,6 +189,7 @@ def score_lucas(args) -> dict:
     if index_df.empty:
         raise SystemExit(f"no LUCAS tiles found under {args.data_dir}")
 
+    validation = _validation_options(args, index_df['tile_path'])
     index_df = val._apply_crop_offset(index_df, args.img_size)
 
     is_fraction = args.use_fraction_head
@@ -151,7 +199,8 @@ def score_lucas(args) -> dict:
               f"{'present → L2a on' if is_fraction else 'absent → L2b only'}")
 
     predict_fn = make_cached_predict_fn(
-        args.cache_dir, args.ckpt_sha, want_fracs=is_fraction)
+        args.cache_dir, args.ckpt_sha, want_fracs=is_fraction,
+            **validation)
     tile_years = val.build_tile_years(index_df)
 
     per_point = [] if args.dump_per_point else None
@@ -184,6 +233,14 @@ def main() -> None:
     ap.add_argument("--cache-dir", required=True)
     ap.add_argument("--ckpt-sha", required=True,
                     help="checkpoint sha subdir name (from infer_tiles.py)")
+    ap.add_argument('--producer-pin', help='independently recorded Stage A producer contract SHA-256')
+    ap.add_argument('--input-validation', choices=['content', 'immutable'],
+                    help='explicit cost/trust choice; omitted: print byte preflight and stop')
+    ap.add_argument('--input-manifest', help='Stage A input receipt for an immutable snapshot')
+    ap.add_argument('--input-manifest-sha256', help='independently pinned receipt SHA-256')
+    ap.add_argument('--immutable-input-root', help='operator-guaranteed immutable dataset root')
+    ap.add_argument('--assume-immutable-inputs', action='store_true',
+                    help='assert the entire snapshot remains immutable; stats/receipt do not prove this')
     ap.add_argument("--img-size", type=int, default=504,
                     help="must match the crop infer_tiles.py used")
     ap.add_argument("--num-classes", type=int, default=28)

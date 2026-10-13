@@ -30,14 +30,33 @@ def blank_one(name: str, data_dir: Path, dry_run: bool) -> dict:
         return {"name": name, "status": "missing"}
 
     try:
-        d = dict(np.load(fp, allow_pickle=True))
+        with np.load(fp, allow_pickle=False) as source:
+            d = {key: source[key] for key in source.files}
     except Exception as e:
         return {"name": name, "status": "load_error", "msg": str(e)}
 
-    # Already blanked or already patched with 2017 data — skip
-    dates = list(d["dates"])
-    if str(dates[0]) == "" or not str(dates[0]).startswith("2018"):
-        return {"name": name, "status": "skip", "d0": str(dates[0])}
+    try:
+        image_keys = [key for key in ("spectral", "image") if key in d]
+        if not image_keys:
+            raise ValueError("missing spectral/image raster")
+        image = d[image_keys[0]]
+        if image.ndim != 3 or image.shape[0] != 4 * N_BANDS:
+            raise ValueError("repair requires four N_BANDS frames")
+        if any(d[key].dtype != image.dtype or not np.array_equal(d[key], image, equal_nan=True)
+               for key in image_keys[1:]):
+            raise ValueError("conflicting spectral/image aliases")
+        for key in ("dates", "doy", "temporal_mask"):
+            if key not in d or np.asarray(d[key]).shape != (4,):
+                raise ValueError(f"repair requires four-element {key}")
+        dates = list(d["dates"])
+        if str(dates[0]) == "":
+            if d["doy"][0] != 0 or d["temporal_mask"][0] != 0 or np.any(image[:N_BANDS] != 0):
+                raise ValueError("inconsistent blank autumn frame")
+            return {"name": name, "status": "skip", "d0": ""}
+        if not str(dates[0]).startswith("2018"):
+            return {"name": name, "status": "skip", "d0": str(dates[0])}
+    except Exception as e:
+        return {"name": name, "status": "invalid_tile", "msg": str(e)}
 
     n_parcels = int(d.get("n_parcels", 0))
     if n_parcels == 0:
@@ -48,12 +67,14 @@ def blank_one(name: str, data_dir: Path, dry_run: bool) -> dict:
         return {"name": name, "status": "dry_blanked", "n_parcels": n_parcels,
                 "old_d0": str(dates[0])}
 
+    tmp = fp.with_suffix(".tmp.npz")
     try:
-        img = d.get("spectral", d.get("image")).copy()           # (4*N_BANDS, H, W)
+        img = image.copy()           # (4*N_BANDS, H, W)
         img[:N_BANDS] = 0.0               # zero out frame 0 bands
 
         dates[0] = ""
-        d.get("spectral", d.get("image")) = img
+        for key in image_keys:
+            d[key] = img.copy()
         d["dates"] = np.array(dates)
 
         # Also clear DOY and temporal_mask for frame 0
@@ -66,13 +87,13 @@ def blank_one(name: str, data_dir: Path, dry_run: bool) -> dict:
             tm[0] = 0
             d["temporal_mask"] = tm
 
-        tmp = fp.with_suffix(".tmp.npz")
         np.savez_compressed(str(tmp), **d)
         tmp.rename(fp)
 
         return {"name": name, "status": "blanked", "n_parcels": n_parcels}
 
     except Exception as e:
+        tmp.unlink(missing_ok=True)
         return {"name": name, "status": "write_error", "msg": str(e)}
 
 

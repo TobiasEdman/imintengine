@@ -21,18 +21,18 @@ MODELS = ("clay", "croma", "prithvi300m", "prithvi300m4f", "prithvi600m", "terra
 SIZE = 16  # spectral side in the fixtures; the census checks 24 bands and squareness, not 512
 
 
-@pytest.fixture(scope="module")
-def fieldtruth_file(tmp_path_factory) -> Path:
-    """Codex's identity module at the sizing's process commit, or skip when the object is absent."""
-    proc = subprocess.run(["git", "-C", str(REPO), "show", f"{FIELDTRUTH_COMMIT}:imint/eval/fieldtruth.py"],
-                          capture_output=True)
-    if proc.returncode != 0:
-        pytest.skip("fieldtruth.py at the task-0103 process commit is not in this clone")
-    path = tmp_path_factory.mktemp("ft") / "fieldtruth.py"
-    path.write_bytes(proc.stdout)
+def _write_fieldtruth_fixture(directory: Path) -> Path:
+    """Use the byte-exact sizing identity module, even in shallow/source archives."""
+    fixture = REPO / "tests" / "fixtures" / f"fieldtruth_{FIELDTRUTH_COMMIT}.py"
+    path = directory / "fieldtruth.py"
+    path.write_bytes(fixture.read_bytes())
     assert census.sha256_path(path) == census.FIELDTRUTH_SHA256
     return path
 
+
+@pytest.fixture(scope="module")
+def fieldtruth_file(tmp_path_factory) -> Path:
+    return _write_fieldtruth_fixture(tmp_path_factory.mktemp("ft"))
 
 def _bbox(cell_x: int, cell_y: int) -> dict:
     w, s = cell_x * 5120, cell_y * 5120
@@ -331,3 +331,12 @@ def test_out_json_under_the_data_root_is_refused(data_root, fieldtruth_file):
     with pytest.raises(SystemExit, match="must not be under the data root"):
         census.main(["--data-root", str(data_root), "--fieldtruth-file", str(fieldtruth_file),
                      "--out-json", str(data_root / "census.json")])
+
+
+def test_fieldtruth_fixture_needs_no_git_history(monkeypatch, tmp_path):
+    def forbid_git(*args, **kwargs):
+        raise AssertionError("The census fixture must work without Git history")
+
+    monkeypatch.setattr(subprocess, "run", forbid_git)
+    path = _write_fieldtruth_fixture(tmp_path)
+    assert census.sha256_path(path) == census.FIELDTRUTH_SHA256

@@ -1,0 +1,2 @@
+# Preserve the byte-pinned census identity source on every checkout.
+/tests/fixtures/fieldtruth_ba31235c6bb5f4c2fa9d5c71929926a0023d062b.py -text

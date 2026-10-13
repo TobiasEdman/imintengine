@@ -60,16 +60,19 @@ class LocalExecutor(BaseExecutor):
         cloud detection using SCL. Falls back to a synthetic image with a
         warning (useful for analyzer development without DES access).
         """
+        scl = geo = None
         if rgb is not None:
             print(f"[LocalExecutor] Using provided RGB array {rgb.shape}")
         else:
-            rgb, bands = self._fetch_and_check(date, coords)
+            rgb, bands, scl, geo = self._fetch_and_check(date, coords)
 
         return IMINTJob(
             date=date,
             coords=coords,
             rgb=rgb,
             bands=bands or {},
+            scl=scl,
+            geo=geo,
             output_dir=os.path.join(self.output_dir, date),
             config_path=self.config_path,
             job_id=job_id or f"local_{date}",
@@ -95,24 +98,26 @@ class LocalExecutor(BaseExecutor):
                     f"[LocalExecutor] Cloud fraction {result.cloud_fraction:.1%} "
                     f"> threshold {self.cloud_threshold:.0%} — skipping {date}"
                 )
-                return None, None
+                return None, None, None, None
 
             print(
                 f"[LocalExecutor] Fetched {len(result.bands)} bands, "
                 f"cloud fraction {result.cloud_fraction:.1%}"
             )
-            return result.rgb, result.bands
+            return result.rgb, result.bands, result.scl, result.geo
 
         except ImportError:
             print("[LocalExecutor] WARNING: openeo not installed.")
             print("  Generating synthetic image for analyzer development.")
             print("  To use real data: pip install openeo")
-            return self._synthetic_image()
+            rgb, bands = self._synthetic_image()
+            return rgb, bands, None, None
 
         except Exception as e:
             print(f"[LocalExecutor] WARNING: DES fetch failed: {e}")
             print("  Generating synthetic image for analyzer development.")
-            return self._synthetic_image()
+            rgb, bands = self._synthetic_image()
+            return rgb, bands, None, None
 
     def _synthetic_image(self):
         """Synthetic image for local dev — no DES needed."""

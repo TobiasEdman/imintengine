@@ -3,7 +3,7 @@
 
 Phases 1+2 write a NEW directory (``unified_v2_512_recoreg``) so the live
 ``unified_v2_512`` stays intact until an explicit, verified promote. This script
-performs that swap via two atomic directory renames on the same filesystem::
+performs that swap via two directory renames on the same filesystem::
 
     unified_v2_512          -> unified_v2_512_pre_recoreg_<UTC-ts>   (backup)
     unified_v2_512_recoreg  -> unified_v2_512                        (promote)
@@ -11,8 +11,14 @@ performs that swap via two atomic directory renames on the same filesystem::
 Rename-with-backup is chosen over per-file copy (slower; needs stale-tile cleanup
 to stay consistent) and symlink-swap (changes consumer path assumptions): renames
 are metadata-only + atomic per call, rollback is a reverse rename, and the
-timestamped backup is a safety net. Both dirs MUST live on one filesystem (they do
-— same PVC ``/data``); otherwise ``os.rename`` raises ``EXDEV``.
+timestamped backup is a safety net. Paths must be distinct, non-nested directories
+on one filesystem. A failed second rename triggers an attempt to restore live;
+if recovery fails, the error identifies the retained data and recovery paths.
+The pair is NOT crash-atomic: live is briefly absent between renames, and process
+termination or a machine crash can leave it absent. Operators must ensure
+exclusive access to these paths during the operation (including recovery).
+If live is absent but a backup exists, recover before retrying promotion;
+otherwise the missing live tile count would bypass the minimum-fraction gate.
 
 DRY-RUN by default: prints the plan and exits 0 without touching disk. Pass
 ``--execute`` to act. ``--rollback`` restores the most recent
@@ -63,14 +69,78 @@ def _rename(src: str, dst: str, *, execute: bool) -> None:
         os.rename(src, dst)
     except OSError as e:
         if getattr(e, "errno", None) == errno.EXDEV:  # cross-device link
-            sys.exit(f"ERROR: {src} and {dst} are on different filesystems "
-                     f"(os.rename EXDEV). Promote requires one filesystem.")
+            raise SystemExit(
+                f"ERROR: {src} and {dst} are on different filesystems "
+                f"(os.rename EXDEV). Promote requires one filesystem."
+            ) from e
+        raise
+
+
+def _validate_swap(live: str, candidate: str, saved: str) -> None:
+    """Reject unsafe paths before moving anything, including in dry-run mode."""
+    for path in (live, candidate):
+        if os.path.islink(path):
+            sys.exit(f"ERROR: dataset path must not be a symlink: {path}")
+        if os.path.lexists(path) and not os.path.isdir(path):
+            sys.exit(f"ERROR: dataset path is not a directory: {path}")
+    if not os.path.isdir(candidate):
+        sys.exit(f"ERROR: candidate directory not found: {candidate}")
+    if os.path.lexists(saved):
+        sys.exit(f"ERROR: backup/aside path already exists: {saved}")
+
+    paths = [os.path.realpath(p) for p in (live, candidate, saved)]
+    for i, path in enumerate(paths):
+        for other in paths[i + 1:]:
+            if os.path.commonpath((path, other)) in (path, other):
+                sys.exit(f"ERROR: paths must be distinct and non-nested: "
+                         f"{path}, {other}")
+    # Check both directories and parents: a mounted dataset directory may have
+    # a different device from its parent, making the first rename impossible.
+    devices = set()
+    for path in (live, candidate, saved):
+        parent = os.path.dirname(path)
+        if not os.path.isdir(parent):
+            sys.exit(f"ERROR: parent directory not found: {parent}")
+        devices.add(os.stat(parent).st_dev)
+        if os.path.isdir(path):
+            devices.add(os.stat(path).st_dev)
+    if len(devices) != 1:
+        sys.exit("ERROR: swap paths are on different filesystems; "
+                 "all directories and parents must share one filesystem.")
+
+
+def _swap(live: str, candidate: str, saved: str, *, execute: bool) -> None:
+    """Compensate a failed second rename; this is not a crash-atomic swap."""
+    had_live = os.path.isdir(live)
+    if had_live:
+        _rename(live, saved, execute=execute)
+    try:
+        _rename(candidate, live, execute=execute)
+    except (OSError, SystemExit) as original:
+        if execute and had_live:
+            try:
+                # Never replace a path that appeared after the first rename.
+                if os.path.lexists(live):
+                    raise FileExistsError(f"live path reappeared: {live}")
+                _rename(saved, live, execute=True)
+            except (OSError, SystemExit) as recovery:
+                raise RuntimeError(
+                    f"Swap failed ({candidate} -> {live}): {original}; "
+                    f"restoration failed ({saved} -> {live}): {recovery}. "
+                    f"Manual recovery required; inspect {saved}, {candidate} "
+                    f"and {live} before moving anything."
+                ) from original
         raise
 
 
 def _promote(live: str, recoreg: str, *, execute: bool, min_frac: float) -> int:
-    if not os.path.isdir(recoreg):
-        sys.exit(f"ERROR: recoreg dir not found: {recoreg}")
+    live, recoreg = os.path.abspath(live), os.path.abspath(recoreg)
+    if not os.path.lexists(live) and (previous := _newest_backup(live)) is not None:
+        sys.exit(f"ERROR: live is absent but a prior backup exists: {previous}. "
+                 "Inspect the retained paths and recover with --rollback "
+                 "before retrying promote; this is not a fresh dataset.")
+    backup = live + _BACKUP_SUFFIX + _utc_stamp()
+    _validate_swap(live, recoreg, backup)
     n_recoreg = _count_npz(recoreg)
     if n_recoreg == 0:
         sys.exit(f"ERROR: recoreg dir has no .npz tiles: {recoreg}")
@@ -90,13 +160,10 @@ def _promote(live: str, recoreg: str, *, execute: bool, min_frac: float) -> int:
                      f"(< --min-frac {min_frac:.0%}). Re-check the campaign or "
                      f"pass --min-frac to override.")
 
-    backup = live + _BACKUP_SUFFIX + _utc_stamp()
     print("  steps:")
-    if os.path.isdir(live):
-        _rename(live, backup, execute=execute)
-    else:
+    if not os.path.isdir(live):
         print("    (live dir absent — no backup; fresh promote)")
-    _rename(recoreg, live, execute=execute)
+    _swap(live, recoreg, backup, execute=execute)
 
     if execute:
         print(f"=== promoted: {recoreg} is now {live} ===")
@@ -108,18 +175,18 @@ def _promote(live: str, recoreg: str, *, execute: bool, min_frac: float) -> int:
 
 
 def _rollback(live: str, *, execute: bool) -> int:
+    live = os.path.abspath(live)
     backup = _newest_backup(live)
     if backup is None:
         sys.exit(f"ERROR: no {live}{_BACKUP_SUFFIX}* backup to roll back to.")
+    aside = live + "_recoreg_rolledback_" + _utc_stamp()
+    _validate_swap(live, backup, aside)
     print("=== rollback plan ===")
     print(f"  newest backup: {backup}  ({_count_npz(backup)} tiles)")
     print("  steps:")
     # Preserve the current (promoted) live by moving it back to a recoreg-style
     # name rather than deleting it — rollback must never destroy data.
-    if os.path.isdir(live):
-        aside = live + "_recoreg_rolledback_" + _utc_stamp()
-        _rename(live, aside, execute=execute)
-    _rename(backup, live, execute=execute)
+    _swap(live, backup, aside, execute=execute)
     if execute:
         print(f"=== rolled back: {backup} is now {live} ===")
     else:

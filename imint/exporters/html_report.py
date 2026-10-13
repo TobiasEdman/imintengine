@@ -2175,7 +2175,7 @@ def save_tabbed_report(
             _gs = _gm.get("shape", [344, 383])
             grazing_h, grazing_w = _gs[0], _gs[1]
         else:
-            grazing_h, grazing_w = _read_shape(grazing_dir, grazing_prefix)
+            grazing_h, grazing_w = _read_shape(grazing_dir, "")
 
     # Kustlinje shape — read from meta
     kustlinje_h, kustlinje_w = 450, 900  # default
@@ -3399,7 +3399,7 @@ def save_tabbed_report(
                         // For analysis panels: keep analysis overlay as controlled layer
                         const prefix = mapId.split('-')[0];
                         if (mapId === prefix + '-rgb') {{
-                            overlays[mapId] = (bg === 'rgb') ? layers.rgb : layers.sjokort;
+                            overlays[mapId] = (activeBg === 'rgb') ? layers.rgb : layers.sjokort;
                             const slider = document.getElementById('opacity-' + mapId);
                             if (slider) {{
                                 slider.value = 100;
