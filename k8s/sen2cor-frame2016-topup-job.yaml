@@ -1,4 +1,8 @@
 ---
+# Source: pinned to main d4d24f9 (the code this plan was reviewed against)
+# with a SHA-256 check of every script it runs; main has since moved
+# (engine-package refactor, PR #59). Decision 2026-10-13.
+#
 # Step 3h: frame_2016 for the top-up tiles, per staging root. Same pipeline,
 # image and gate as sen2cor-frame2016-holdout-eval-job.yaml (select_scenes
 # 2016 with 2015 fallback, run_sen2cor_per_scene, COT gate 8.0 on the GPU,
@@ -45,6 +49,10 @@ spec:
               mkdir -p /workspace && cd /workspace
               git clone --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
               cd ie
+              git fetch -q --depth 1 origin "$SCRIPTS_COMMIT"
+              git checkout -q "$SCRIPTS_COMMIT"
+              test "$(git rev-parse HEAD)" = "$SCRIPTS_COMMIT" || { echo "REFUSING: HEAD is not $SCRIPTS_COMMIT"; exit 1; }
+              printf '%s\n' "$SCRIPTS_SHA256" | sha256sum -c -   # the reviewed bytes of every script this Job runs
               export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
               echo "HEAD: $(git rev-parse HEAD)"
               python3 scripts/sen2cor_pipeline/select_scenes.py --help > /dev/null
@@ -69,6 +77,8 @@ spec:
               done
               echo "=== done: $(date -u) ==="
           env:
+            - {name: SCRIPTS_COMMIT, value: "d4d24f9ab1581ecdc8db739d4271905806401b6a"}   # main as reviewed for this plan; pinned 2026-10-13
+            - {name: SCRIPTS_SHA256, value: "351538d1f676d290b99285200adb7469b8f85fd5774bf2c39bd32844e2c15339  scripts/sen2cor_pipeline/select_scenes.py\n3ee7f52c9c367603ae469ecf164839e4660820253193553bcc9134cfa913edde  scripts/sen2cor_pipeline/run_sen2cor_per_scene.py"}
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: YEARS, value: "2018 2019 2021 2022"}
           resources:

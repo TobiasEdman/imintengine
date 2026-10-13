@@ -1,4 +1,8 @@
 ---
+# Source: pinned to main d4d24f9 (the code this plan was reviewed against)
+# with a SHA-256 check of every script it runs; main has since moved
+# (engine-package refactor, PR #59). Decision 2026-10-13.
+#
 # Step 3e: Sentinel-1 for the top-up tiles, per staging root, and the
 # explicit aux-incomplete marking Tobias decided on 2026-10-12 (option a).
 #
@@ -50,6 +54,10 @@ spec:
               mkdir -p /workspace && cd /workspace
               git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
               cd ie
+              git fetch -q --depth 1 origin "$SCRIPTS_COMMIT"
+              git checkout -q "$SCRIPTS_COMMIT"
+              test "$(git rev-parse HEAD)" = "$SCRIPTS_COMMIT" || { echo "REFUSING: HEAD is not $SCRIPTS_COMMIT"; exit 1; }
+              printf '%s\n' "$SCRIPTS_SHA256" | sha256sum -c -   # the reviewed bytes of every script this Job runs
               export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
               echo "HEAD: $(git rev-parse HEAD)"
               python scripts/enrich_tiles_s1.py --help > /dev/null && echo "imports OK"
@@ -96,6 +104,8 @@ spec:
               done
               echo "=== done: $(date -u) ==="
           env:
+            - {name: SCRIPTS_COMMIT, value: "d4d24f9ab1581ecdc8db739d4271905806401b6a"}   # main as reviewed for this plan; pinned 2026-10-13
+            - {name: SCRIPTS_SHA256, value: "42f7e93ff7edd8a612a3a3df02133671c9b9615a775cf55da80f1799c53e028c  scripts/enrich_tiles_s1.py"}
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: YEARS, value: "2018 2019 2021 2022"}
           resources:
