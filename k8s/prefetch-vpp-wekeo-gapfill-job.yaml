@@ -87,7 +87,7 @@ spec:
               python3 -c "
               import glob, rasterio
               from rasterio.warp import transform_bounds
-              from imint.training.wekeo_vpp import fetch_vpp_tiles_local
+              from imint.data.wekeo_vpp import fetch_vpp_tiles_local
               cogs = sorted(glob.glob('/data/vpp_wekeo/VPP_2019_*_SOSD.tif'))
               assert cogs, 'no 2019 SOSD COG fetched'
               with rasterio.open(cogs[0]) as src:

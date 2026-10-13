@@ -205,9 +205,9 @@ def _run_local(
 ) -> None:
     """Run S2 Process API fetch locally with ThreadPoolExecutor."""
     import numpy as np
-    from imint.training.cdse_s2 import fetch_s2_seasonal_tile
+    from imint.data.cdse_s2 import fetch_s2_seasonal_tile
     from imint.fetch import fetch_nmd_data, FetchError
-    from imint.training.class_schema import nmd_raster_to_lulc
+    from imint.schema.class_schema import nmd_raster_to_lulc
 
     # Filter to tiles that don't exist yet
     todo = []

@@ -18,7 +18,7 @@ spec:
   # in /data/unified_v2_512_recoreg/vpp_known_empty.json, not fabricated.
   #
   # WEkEO credentials come from the `wekeo-creds` Secret (read by
-  # imint.training.wekeo_vpp); CDSE fallback creds from `cdse-credentials`
+  # imint.data.wekeo_vpp); CDSE fallback creds from `cdse-credentials`
   # (CDSE_CLIENT_ID/SECRET). Neither is ever in this manifest. The WEkEO COG
   # cache lives on the PVC at
   # $VPP_WEKEO_DIR (default /data/vpp_wekeo), populated by the

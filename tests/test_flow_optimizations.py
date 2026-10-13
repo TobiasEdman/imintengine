@@ -24,7 +24,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from imint.training import optimal_fetch as of
+from imint.data import optimal_fetch as of
 from imint.training import tile_fetch as tf
 
 

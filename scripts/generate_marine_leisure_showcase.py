@@ -55,7 +55,7 @@ def main():
     args = parser.parse_args()
 
     from imint.fetch import _to_nmd_grid
-    from imint.training.cdse_s2 import fetch_s2_scene
+    from imint.data.cdse_s2 import fetch_s2_scene
     from imint.analyzers.spectral import SpectralAnalyzer
     from imint.analyzers.nmd import NMDAnalyzer
     from imint.analyzers.marine_vessels import MarineVesselAnalyzer

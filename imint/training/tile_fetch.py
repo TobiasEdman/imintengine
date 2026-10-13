@@ -38,94 +38,8 @@ PRITHVI_BANDS = ["B02", "B03", "B04", "B8A", "B11", "B12"]
 # override attempted to mutate _tf.TILE_SIZE_M = 5120.
 
 
-class AdaptiveSemaphore:
-    """Semaphore that adjusts concurrency based on success/failure rates.
-
-    Starts at ``initial`` permits, increases by 1 (up to ``max_permits``)
-    after ``ramp_up_after`` consecutive successes, decreases by 1 (down to
-    ``min_permits``) on any failure or timeout.
-    """
-
-    def __init__(
-        self,
-        initial: int = 3,
-        min_permits: int = 1,
-        max_permits: int = 8,
-        ramp_up_after: int = 10,
-        name: str = "",
-    ):
-        self._lock = threading.Lock()
-        self._sem = threading.Semaphore(initial)
-        self._permits = initial
-        self._min = min_permits
-        self._max = max_permits
-        self._ramp_up_after = ramp_up_after
-        self._consecutive_ok = 0
-        self._name = name
-        self._total_success = 0
-        self._total_failure = 0
-
-    @property
-    def permits(self) -> int:
-        return self._permits
-
-    @property
-    def stats(self) -> str:
-        return f"{self._name}: ok={self._total_success} fail={self._total_failure} permits={self._permits}"
-
-    def acquire(self, timeout: float | None = None) -> bool:
-        return self._sem.acquire(timeout=timeout)
-
-    def release(self) -> None:
-        self._sem.release()
-
-    def report_success(self) -> None:
-        with self._lock:
-            self._total_success += 1
-            self._consecutive_ok += 1
-            if self._consecutive_ok >= self._ramp_up_after and self._permits < self._max:
-                self._permits += 1
-                self._consecutive_ok = 0
-                self._sem.release()  # add a permit
-                print(f"    [{self._name}] ↑ concurrency → {self._permits}")
-
-    def report_failure(self) -> None:
-        with self._lock:
-            self._total_failure += 1
-            self._consecutive_ok = 0
-            if self._permits > self._min:
-                self._permits -= 1
-                # consume a permit (don't release — effectively reduces slots)
-                self._sem.acquire(timeout=0)
-                print(f"    [{self._name}] ↓ concurrency → {self._permits}")
-
-
-# DES openEO: raised 2026-05-26 to 6 concurrent slots after CDSE openEO
-# became the primary source (single-flight) and DES needed to absorb the
-# parallel-worker load. Race-bug fix (commit bbea8af) means a DES hang
-# no longer blocks tile completion — workers time out at 180 s and
-# threads are abandoned via shutdown(wait=False, cancel_futures=True).
-_DES_SEMAPHORE = AdaptiveSemaphore(
-    initial=6, min_permits=2, max_permits=6,
-    ramp_up_after=10, name="DES",
-)
-# CDSE SH Process API allows 300 req/min but each 512px request takes
-# ~20s. 10 concurrent = ~30 req/min, well within quota.
-_CDSE_SEMAPHORE = AdaptiveSemaphore(
-    initial=10, min_permits=3, max_permits=20,
-    ramp_up_after=20, name="CDSE",
-)
-# CDSE openEO enforces a HARD per-account ceiling of 1 concurrent
-# connection (verified 2026-05-26: synchronous fetches over that limit
-# return `[429] max connections reached: 1` at preflight, before any
-# process graph runs). Adaptive ramp-up would just bounce us repeatedly
-# into 429-spam, so we lock the semaphore at single-flight. Throughput
-# tradeoff: ~60-120 frames/h via this source alone — acceptable because
-# (a) the SH PU pool is exhausted and (b) DES openEO can race in
-# parallel as opportunistic secondary.
-_CDSE_OPENEO_SEMAPHORE = AdaptiveSemaphore(
-    initial=1, min_permits=1, max_permits=1,
-    ramp_up_after=10, name="CDSE-OPENEO",
+from imint.data.concurrency import (
+    AdaptiveSemaphore, _DES_SEMAPHORE, _CDSE_SEMAPHORE, _CDSE_OPENEO_SEMAPHORE,
 )
 
 
@@ -346,7 +260,7 @@ def _fetch_single_scene(
     """
     from imint.training.fetch_spectral import (
         fetch_spectral, SUPPORTED_BACKENDS, DES_L2A_FLOOR)
-    from imint.training.openeo_tile_graph import is_source_dead
+    from imint.data.openeo_tile_graph import is_source_dead
 
     # 1) Build candidate list.
     candidates: list[tuple[str, float]] = []
@@ -357,7 +271,7 @@ def _fetch_single_scene(
         ]
     elif date_end >= DES_L2A_FLOOR:
         try:
-            from imint.training.optimal_fetch import optimal_fetch_dates
+            from imint.data.optimal_fetch import optimal_fetch_dates
             plan = optimal_fetch_dates(
                 coords_wgs84, date_start, date_end,
                 mode="era5_then_scl",
@@ -462,7 +376,7 @@ def _get_vpp_doy_windows(bbox_3006: dict, num_growing_frames: int = 3,
     Returns list of (doy_start, doy_end) tuples, or None if VPP fails.
     """
     try:
-        from imint.training.cdse_vpp import fetch_vpp_tiles
+        from imint.data.cdse_vpp import fetch_vpp_tiles
         from imint.training.vpp_windows import compute_growing_season_windows
 
         vpp_kwargs = {} if year is None else {"year": int(year)}
@@ -511,7 +425,7 @@ def _best_date_in_window(
     """
     from datetime import date as _date
 
-    from imint.training.optimal_fetch import optimal_fetch_dates
+    from imint.data.optimal_fetch import optimal_fetch_dates
 
     kwargs = {"mode": mode, "scl_backend": scl_backend}
     if max_aoi_cloud is not None:
@@ -630,7 +544,7 @@ def fetch_aux_channels(bbox_3006: dict, tile: "TileConfig",
     # VPP phenology (5 bands) — goes through CDSE semaphore
     _CDSE_SEMAPHORE.acquire()
     try:
-        from imint.training.cdse_vpp import fetch_vpp_tiles
+        from imint.data.cdse_vpp import fetch_vpp_tiles
         # Pass the tile's own year. ``fetch_vpp_tiles`` defaults to year=2021,
         # so omitting it gave EVERY tile 2021 phenology regardless of its
         # actual year — 5 of the 11 aux channels systematically wrong-year.
@@ -806,7 +720,7 @@ def fetch_nmd_label_local(
 
     if raw:
         return nmd_raw.astype(np.uint16)
-    from imint.training.class_schema import nmd_raster_to_lulc
+    from imint.schema.class_schema import nmd_raster_to_lulc
     return nmd_raster_to_lulc(nmd_raw).astype(np.uint8)
 
 
@@ -876,7 +790,7 @@ def fetch_background_frame(
         network unreachable).  On a per-tile failure the caller should
         store ``has_frame_2016 = 0`` and a zero-filled ``frame_2016``.
     """
-    from imint.training.cdse_s2 import fetch_s2_scene, cdse_catalog_search
+    from imint.data.cdse_s2 import fetch_s2_scene, cdse_catalog_search
 
     coords_wgs84 = bbox_3006_to_wgs84(bbox_3006)
     bbox_4326 = (

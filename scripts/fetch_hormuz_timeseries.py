@@ -29,9 +29,9 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from imint.training.cdse_s2 import fetch_s2_scene_wgs84
+from imint.data.cdse_s2 import fetch_s2_scene_wgs84
 from imint.training.cdse_s1 import fetch_s1_scene_wgs84
-from imint.training.cdse_vpp import _get_token
+from imint.data.cdse_vpp import _get_token
 
 # ── Config ────────────────────────────────────────────────────────
 BBOX = [54.0, 25.0, 58.0, 27.5]  # west, south, east, north (WGS84)

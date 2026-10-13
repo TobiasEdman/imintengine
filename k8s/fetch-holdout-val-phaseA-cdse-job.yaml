@@ -47,7 +47,7 @@ spec:
               export PYTHONPATH=/workspace/imintengine
               echo "CLONED HEAD: $(git rev-parse --short HEAD)"
               git grep -q '_bands_groups_for_source("cdse-openeo")' \
-                imint/training/openeo_tile_graph.py
+                imint/data/openeo_tile_graph.py
               cp /etc/skg/skg_endpoints /workspace/imintengine/.skg_endpoints
 
               OUT=/data/holdout_val_512
