@@ -41,7 +41,6 @@
   {
    "job": "holdout-eval-copy",
    "manifest": "k8s/holdout-eval-copy-job.yaml",
-   "manifest_sha256_at_f11702f": "66a66af3fe4ab2d3d6685bb73da92a34de9fbde76673aad02efec28f11001b39",
    "submitted_from_head": "938eff9",
    "job_uid": "586cedde-a79a-439c-afe5-26966340ecdc",
    "job_start": "2026-10-12T19:13:12Z",
@@ -61,6 +60,24 @@
     "same_year_excluded_not_copied": 212,
     "demoted_frame_2016": 4,
     "demoted_tessera": 1
+   },
+   "source_binding": {
+    "kind": "checkout_pinned",
+    "commit": "0386349d557aadd6b9857cc0753d239d0ccbae45",
+    "hash_guard": false,
+    "observed_head": "0386349d557aadd6b9857cc0753d239d0ccbae45"
+   },
+   "executed_manifest": {
+    "commit": "938eff9",
+    "manifest_sha256": "9ab459fb173d0818e86290115c6553cb2411e3af4cf1fef312d514d56af5f276",
+    "live_script_sha256": "68afcb21ba2ff3f3ea5cb0765b5b85870ace4c103b3bcc241ebb5a1d37e1ea47",
+    "runtime_overrides": "none: the live Job's script and environment equal the 938eff9 manifest",
+    "codex_review_at_submission": "none yet; submitted under the step-2 go after #71's merge, before Codex's first review of #75",
+    "later_guarded_version": {
+     "commit": "f11702f",
+     "manifest_sha256": "66a66af3fe4ab2d3d6685bb73da92a34de9fbde76673aad02efec28f11001b39",
+     "ran": false
+    }
    },
    "log_bytes": 1301,
    "log_sha256": "32542cc3e87be14db15e88b06f16ac2b84eee291a478e5ee6fd83056db3573d8",
@@ -93,6 +110,18 @@
     "geotessera": "0.10.2",
     "scripts_commit": "d4d24f9ab1581ecdc8db739d4271905806401b6a"
    },
+   "source_binding": {
+    "kind": "clone_main_unpinned",
+    "commit": null,
+    "hash_guard": false,
+    "observed_head": "d4d24f9ab1581ecdc8db739d4271905806401b6a"
+   },
+   "executed_manifest": {
+    "commit": "3481550",
+    "manifest_sha256": "92474ea974afd934a68651a176ac3990758b7391dc179011c7364dea30d42e67",
+    "byte_identical_to_f11702f": true,
+    "codex_approved": true
+   },
    "log_bytes": 11469,
    "log_sha256": "2170e839feb49417da57609b5b7e337bfad7f434f8429828fce9f0294b9fdbdc",
    "log_source": "kubectl logs, read 2026-10-13",
@@ -120,6 +149,16 @@
     "prescan_invalid": 54,
     "targets": 55,
     "recovered": 54,
+    "recovered_meaning": "usable contract: finite, non-zero, 128 channels on the spectral grid, tile year, every registry-listed block delivered; not full pixel coverage",
+    "recovered_full_pixel_coverage": 23,
+    "recovered_with_partial_coverage": 31,
+    "partial_coverage_zero_pixel_share": {
+     "min": 3.814697265625e-06,
+     "median": 0.001312255859375,
+     "max": 0.35507965087890625
+    },
+    "report_sha256": "531660658b483f26cc0bba55c8e04bf85879d955ab5cf3c185c8002850e14b69",
+    "report_bytes": 5348,
     "already_recovered": 0,
     "coverage_hole": 1,
     "unresolved": 0,
@@ -128,6 +167,18 @@
     "geotessera": "0.10.2",
     "scripts_commit": "d4d24f9ab1581ecdc8db739d4271905806401b6a",
     "helper_sha256": "71580e368bea50a405ec400f2607fe70be3cd92a7d641959c576ec048f0d2f20"
+   },
+   "source_binding": {
+    "kind": "checkout_pinned",
+    "commit": "d4d24f9ab1581ecdc8db739d4271905806401b6a",
+    "hash_guard": true,
+    "observed_head": "d4d24f9ab1581ecdc8db739d4271905806401b6a"
+   },
+   "executed_manifest": {
+    "commit": "f11702f",
+    "manifest_sha256": "b17286d09e40ab8a0decb1e5e8ae64a92a081344d726a64752bb4d70668b91bb",
+    "byte_identical_to_f11702f": true,
+    "codex_approved": true
    },
    "log_bytes": 3606,
    "log_sha256": "75afa48d52a581846fccfabadfc29698aff708bb1322533845ec28059bbe793e",
@@ -167,6 +218,18 @@
     "gpu": "NVIDIA GeForce RTX 2080 Ti",
     "gpu_hours_wall": 0.939,
     "d4_budget_gpu_hours": 30
+   },
+   "source_binding": {
+    "kind": "clone_main_unpinned",
+    "commit": null,
+    "hash_guard": false,
+    "observed_head": "d4d24f9ab1581ecdc8db739d4271905806401b6a"
+   },
+   "executed_manifest": {
+    "commit": "3481550",
+    "manifest_sha256": "a6734fbcd7f418f31e46963998d3d8804b6beb1fab31c873188e9bb9be190989",
+    "byte_identical_to_f11702f": true,
+    "codex_approved": true
    },
    "gpu_requested": true,
    "log_bytes": 17048,
@@ -209,6 +272,18 @@
      "2024": 19
     },
     "relaxed_gate_frames": 0
+   },
+   "source_binding": {
+    "kind": "inline_script_no_repo_source",
+    "commit": null,
+    "hash_guard": false,
+    "observed_head": null
+   },
+   "executed_manifest": {
+    "commit": "3481550",
+    "manifest_sha256": "9936be104041513cac70e22e0e4a45b2683aea67d0932e9e06d3669ad427b9af",
+    "byte_identical_to_f11702f": true,
+    "codex_approved": true
    },
    "log_bytes": 569,
    "log_sha256": "7cd7280e7b80893381af23452b8a8341a46edfc56bb62205d48b534a924ba0ed",
@@ -253,6 +328,18 @@
     "job_exit_nonzero_reason": "one tile not at seasonal S1 version 4; the step-1 census already recorded s1_enrich_v {4: 1462, 3: 1}",
     "rerun": false
    },
+   "source_binding": {
+    "kind": "clone_main_unpinned",
+    "commit": null,
+    "hash_guard": false,
+    "observed_head": "d4d24f9ab1581ecdc8db739d4271905806401b6a"
+   },
+   "executed_manifest": {
+    "commit": "3481550",
+    "manifest_sha256": "b4633562aec82ce2265e2ebabc2687266c2e29817f7af0e324df9055c0a86169",
+    "byte_identical_to_f11702f": true,
+    "codex_approved": true
+   },
    "log_bytes": 101092,
    "log_sha256": "4b6dd2c7255bfc3fc0038f935b6398b25b526d956ace9b3746e1e47acc6269f3",
    "log_source": "kubectl logs, read 2026-10-13",
@@ -282,6 +369,18 @@
     "excluded_to": "/data/holdout_eval_512_excluded/forestry_zero",
     "remaining": 1241
    },
+   "source_binding": {
+    "kind": "inline_script_no_repo_source",
+    "commit": null,
+    "hash_guard": false,
+    "observed_head": null
+   },
+   "executed_manifest": {
+    "commit": "3481550",
+    "manifest_sha256": "29603299877290bd735e29618d71708405d391d261b704e82318db1c325a7319",
+    "byte_identical_to_f11702f": true,
+    "codex_approved": true
+   },
    "log_bytes": 820,
    "log_sha256": "0a2ab0007c44ef873db2adfa34920b806e66775860199806a69f44e3a6cd9660",
    "log_source": "kubectl logs, read 2026-10-13",
@@ -308,6 +407,18 @@
     "census_commit": "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb",
     "census_script_sha256": "9244f7bc5415af4b3aab75a3d6b6a4f393bc070bf598bfa518c0622c4f43084a",
     "elapsed_s": 2159.2
+   },
+   "source_binding": {
+    "kind": "checkout_pinned",
+    "commit": "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb",
+    "hash_guard": true,
+    "observed_head": "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb"
+   },
+   "executed_manifest": {
+    "commit": "3481550",
+    "manifest_sha256": "8f41bf50bb5983a2e83e457e8f4876c9872cf35bd439219911ce2d2ac06b6eb9",
+    "byte_identical_to_f11702f": true,
+    "codex_approved": true
    },
    "log_bytes": 45554,
    "log_sha256": "7fe19394f2215a3dc9081313e73649af53733687df0a93b9a4d596e1c8020fa4",

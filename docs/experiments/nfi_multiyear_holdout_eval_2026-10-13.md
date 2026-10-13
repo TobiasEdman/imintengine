@@ -1,8 +1,10 @@
 # Multi-year NFI control tiles, step 2: the evaluation copy `holdout_eval_512`
 
 Built 2026-10-12 19:13 to 2026-10-13 06:11 UTC on the data volume by the
-eight Jobs of PR #75, every one submitted from a Codex-approved head, in the
-order the plan prescribes and never two writers at once. Every count below is
+eight Jobs of PR #75, in the order the plan prescribes and never two writers
+at once. The copy Job ran from `938eff9`, before Codex's first review of #75,
+under the step-2 go that followed #71's merge; the seven later Jobs ran from
+heads Codex had approved (see "Manifests and source binding"). Every count below is
 the final census's (read-only, `holdout-eval-census`, 05:34 to 06:11 UTC) or
 a Job's own result line; all of them, with the Job, pod, image, time, exit
 code and log hash of each step, are in the
@@ -19,7 +21,12 @@ the 10 whose forestry channels are all zero (moved to
 `/data/holdout_eval_512_excluded/forestry_zero/`, not deleted). All 1,241
 carry `tessera_source = geotessera-0.10.2` with `tessera_year` equal to the
 tile year; 1,240 carry a usable embedding and 1 is a confirmed coverage hole
-(`has_tessera = 0`, reason recorded). No tile has a contradictory year.
+(`has_tessera = 0`, reason recorded). "Usable" is the re-probe Job's
+contract: finite, non-zero, 128 channels on the spectral grid, the tile's
+own year, and every block the registry listed delivered. It is not full
+pixel coverage: 31 tiles keep some pixels whose whole embedding vector is
+zero (median share 0.13 %, maximum 35.5 %), recorded per tile as
+`partial_coverage` in the re-probe report. No tile has a contradictory year.
 
 **Named-tile evidence is unchanged: no use detected, scans complete.** Every
 split file on the volume (64, all parsed), the seven teacher feature tables
@@ -69,9 +76,9 @@ plot-years in common with the v4 index crop and 70 new.
 
 | Step | Job (head) | Result |
 |---|---|---|
-| Copy | `holdout-eval-copy` (938eff9, source commit 7317d7e) | 1,251 tiles copied, 0 skipped; same-year tiles not copied (212); demoted in the copy: 4 all-zero `frame_2016`, 1 all-zero `tessera` |
+| Copy | `holdout-eval-copy` (938eff9, source pinned to 0386349) | 1,251 tiles copied, 0 skipped; same-year tiles not copied (212); demoted in the copy: 4 all-zero `frame_2016`, 1 all-zero `tessera` |
 | TESSERA re-source, 4 workers | `holdout-eval-tessera` (3481550) | 1,250 resourced, 1 hole; 24 downloads swallowed by geotessera 0.10.2 and logged; 4 h 37 min |
-| TESSERA re-probe, 1 worker | `holdout-eval-tessera-retry` (f11702f) | whole-copy pre-scan found 54 usable flags on partially delivered, non-finite or wrong-year embeddings; 55 targets: 54 recovered whole, 1 confirmed coverage hole, 0 unresolved; whole-copy final check clean |
+| TESSERA re-probe, 1 worker | `holdout-eval-tessera-retry` (f11702f) | whole-copy pre-scan found 54 usable flags on partially delivered, non-finite or wrong-year embeddings; 55 targets: 54 recovered to the usable contract (23 with full pixel coverage, 31 with some all-zero pixels after every listed block was delivered), 1 confirmed coverage hole, 0 unresolved; whole-copy final check clean |
 | sen2cor `frame_2016`, GPU | `sen2cor-frame2016-holdout-eval` (3481550) | plan 29 scenes / 223 tiles / 0 unassigned; runner ok 59, deferred 84, cloud-gate rejected 80, sen2cor failed 6 scenes; `has_frame_2016 = 1` from 1,028 to 1,087 of 1,251; **56 min 20 s on one RTX 2080 Ti = 0.94 GPU-h** of the ~30 in D4 |
 | Mark frame gaps | `holdout-eval-mark-frame-gaps` (3481550) | 164 tiles flagged (2018 13, 2019 18, 2020 20, 2021 20, 2022 50, 2023 24, 2024 19); 0 at a relaxed gate |
 | S1 seasonal + 2016 | `holdout-eval-s1-2016` (3481550) | 1,245 ok, 6 failed (`no_composite_<orbit>_<year>`); verify: version 4 on 1,250 of 1,251, non-zero on 1,251, 2016 composite on 1,085 of 1,087 frame tiles; **Job exit 1** by its own post-check (one tile not at version 4) |
@@ -105,18 +112,23 @@ re-run; the copy was carried forward with the gap recorded.
 
 ## Reproduction and verification
 
-- Manifests `k8s/holdout-eval-*.yaml` and
-  `k8s/sen2cor-frame2016-holdout-eval-job.yaml` on PR #75; each ran from the
-  head Codex had approved for it (3481550, then f11702f for the re-probe
-  Job), byte-identical to the branch tip f11702f. SHA-256 of each manifest is
-  in the JSON record.
-- Source binding: the tessera Jobs clone main at
-  `d4d24f9ab1581ecdc8db739d4271905806401b6a` and check the helper's SHA-256
-  before import; the census Job checks out `7317d7e` and verifies the census
-  script's SHA-256, the identity module `imint/eval/fieldtruth.py` at
+- **Manifests and source binding.** What each Job ran, and how firmly its
+  source was bound, differs by step:
+
+  | Job | Manifest that ran | Repository source |
+  |---|---|---|
+  | copy | `938eff9` (sha256 `9ab459fb…`), submitted before Codex's first review of #75; the live Job's script and environment equal that file, so no runtime override was used | checkout pinned to `0386349`, no hash guard |
+  | tessera first pass, sen2cor, S1 | `3481550`, approved by Codex, byte-identical to `f11702f` | clones the tip of `main`, unpinned; each pod logged `HEAD d4d24f9` |
+  | mark frame gaps, forestry | `3481550`, approved, byte-identical to `f11702f` | none: inline script only |
+  | re-probe | `f11702f`, approved | checkout pinned to `d4d24f9`, helper SHA-256 checked before import |
+  | census | `3481550`, approved, byte-identical to `f11702f` | checkout pinned to `7317d7e`, census script SHA-256 checked |
+
+  The guarded copy manifest at the PR tip (sha256 `66a66af3…`, source
+  `7317d7e`) is the version Codex approved later; it is not what ran. The
+  census also verified the identity module `imint/eval/fieldtruth.py` at
   `ba31235c…` (sha256 `3f7143f2…`) and the task-0103 sizing (sha256
   `4a7102cf…`); all eleven input hashes equal the sizing's, teacher union
-  841.
+  841. SHA-256 of every executed manifest is in the JSON record.
 - Execution evidence per Job (uid, pod, node, image digest, container
   start and end, exit code, log bytes and SHA-256) is in the JSON record.
   Seven pod logs were read from the namespace. The sen2cor Job and its pod
@@ -129,8 +141,8 @@ re-run; the copy was carried forward with the gap recorded.
   heredoc offline: `pytest tests/test_holdout_eval_tessera_retry.py`.
 - The copy's reports are on the volume under `/data/manifests/`:
   `holdout_eval_512_copy.json`, `holdout_eval_512_tessera.json`,
-  `holdout_eval_512_tessera_retry.json` (per-tile partial-coverage fractions
-  after the probe), `holdout_eval_512_frame2016_gaps.json` and
+  `holdout_eval_512_tessera_retry.json` (sha256 `53166065…`, per-tile
+  partial-coverage fractions after the probe), `holdout_eval_512_frame2016_gaps.json` and
   `holdout_eval_512_forestry.json`.
 
 ## What this does not decide
