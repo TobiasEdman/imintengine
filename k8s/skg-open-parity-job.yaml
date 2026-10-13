@@ -45,9 +45,12 @@ spec:
               apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
               pip install -q --no-cache-dir numpy rasterio
               mkdir -p /workspace && cd /workspace
-              git clone -q --depth 1 --branch "${IMINT_BRANCH}" https://github.com/TobiasEdman/ImintEngine.git ie
-              cd ie
-              echo "HEAD: $(git rev-parse HEAD) (${IMINT_BRANCH})"
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "${IMINT_COMMIT}"
+              echo "${IMINT_SCRIPT_SHA256}  scripts/verify_skg_open_parity.py" | sha256sum -c -
+              echo "HEAD: $(git rev-parse HEAD)"
               export SKG_OPEN_DIR=/data/skg_open
               test -f /data/skg_open/MANIFEST.json
               OUT=/data/skg_open/parity/parity_$(date -u +%Y%m%dT%H%M%SZ).json
@@ -56,7 +59,8 @@ spec:
                 --channels ${PARITY_CHANNELS} --sample ${PARITY_SAMPLE} --out "$OUT"
               echo "=== done: $(date -u) ==="
           env:
-            - {name: IMINT_BRANCH, value: "agent/te/claude/im022-skg-geotiff-source"}
+            - {name: IMINT_COMMIT, value: "ce466af26516fdaf73d1049c0a7d2877ef3e0ac1"}
+            - {name: IMINT_SCRIPT_SHA256, value: "0e79b5cbf722c43b818ccafa4044c67866243c5ef1a4407e469ed9bdb6f0ca99"}
             - {name: PARITY_CHANNELS, value: "volume basal_area diameter markfukt"}
             - {name: PARITY_SAMPLE, value: "150"}
           resources:
