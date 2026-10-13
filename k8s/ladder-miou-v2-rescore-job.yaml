@@ -1,0 +1,90 @@
+---
+# Rescore the 28 distillation-ladder cells under miou-ignore-target-v2 from
+# the confusion matrix each training_log.json stores for its best epoch.
+# CPU only: no inference, no GPU, no cache regeneration.
+#
+# scripts/ladder_miou_v2_rescore.py refuses a cell unless the historical
+# metric recomputed from the matrix reproduces the stored best_metric (4 dp)
+# and best_model.pt (loaded weights_only on CPU) carries that epoch and mIoU.
+# It writes only NEW files, all with exclusive create, and only if all 28
+# cells pass and none of the targets exist:
+#   /cephfs/checkpoints/ladder/<cell>/miou_v2_rescore.json
+#   $SUMMARY_OUT
+# The PVC is mounted read-write because those files must be created; no
+# existing file is opened for writing. The summary is also printed between
+# RESCORE_SUMMARY_BEGIN/END so it survives in the pod log.
+#
+# The clone is pinned to RESCORE_COMMIT and the three sources the result
+# depends on are sha256-guarded. Versions follow the ladder inference freeze
+# record /cephfs/ops/deps/ladder-inference-matrix-20260924T050551Z-$.txt
+# (torch 2.10.0, numpy 2.4.6), CPU wheel. Submit with `kubectl create -f`.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: ladder-miou-v2-rescore-
+  namespace: prithvi-training-default
+  labels: {app: ladder-rescore, purpose: miou-v2-rescore}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: ladder-rescore}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: rescore
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              echo "=== ladder mIoU v2 rescore — $(date -u) ==="
+              test ! -e "$SUMMARY_OUT" || { echo "REFUSING: $SUMMARY_OUT exists"; exit 1; }
+              apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+              pip install -q --no-cache-dir "numpy==$NUMPY_VERSION"
+              pip install -q --no-cache-dir "torch==$TORCH_VERSION" --index-url https://download.pytorch.org/whl/cpu
+              python -c "import numpy, torch; print('numpy', numpy.__version__, 'torch', torch.__version__)"
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch "$RESCORE_BRANCH" https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              git fetch -q --depth 1 origin "$RESCORE_COMMIT"
+              git checkout -q "$RESCORE_COMMIT"
+              test "$(git rev-parse HEAD)" = "$RESCORE_COMMIT"
+              echo "HEAD: $(git rev-parse HEAD)"
+              printf '%s  %s\n' \
+                "$SCRIPT_SHA256" scripts/ladder_miou_v2_rescore.py \
+                "$METRICS_SHA256" imint/metrics.py \
+                "$LOADER_SHA256" scripts/inference_comparison.py | sha256sum -c -
+              export PYTHONPATH=/workspace/ie RESCORE_GIT_COMMIT="$RESCORE_COMMIT" TMPDIR=/scratch
+              python scripts/ladder_miou_v2_rescore.py \
+                --ladder-root /cephfs/checkpoints/ladder \
+                --expected-cells 28 \
+                --tiles-root /cephfs/unified_v2_512 \
+                --summary-out "$SUMMARY_OUT" \
+                --write
+              ls -la "$SUMMARY_OUT"
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: RESCORE_BRANCH, value: "claude/ladder-miou-recompute-d2e9ef"}
+            - {name: RESCORE_COMMIT, value: "52a0c90a9b5789df43df59158478bc85dff64d01"}
+            - {name: SCRIPT_SHA256, value: "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74"}
+            - {name: METRICS_SHA256, value: "ac4dc4dbf11dcfdc32918b7cca00114e72709792742f5b2b71b696a2dda78455"}
+            - {name: LOADER_SHA256, value: "6c106a2d154be67e8e1a8c89e0cbecb0a89c43cb42cd2033bc8236b969d59419"}
+            - {name: NUMPY_VERSION, value: "2.4.6"}
+            - {name: TORCH_VERSION, value: "2.10.0+cpu"}
+            - {name: SUMMARY_OUT, value: "/cephfs/checkpoints/ladder/_miou_v2_rescore_20261013.json"}
+          resources:
+            requests: {cpu: "2", memory: "8Gi", ephemeral-storage: "8Gi"}
+            limits: {cpu: "2", memory: "12Gi", ephemeral-storage: "16Gi"}
+          volumeMounts:
+            - {name: cephfs, mountPath: /cephfs}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: scratch
+          emptyDir: {sizeLimit: 12Gi}
