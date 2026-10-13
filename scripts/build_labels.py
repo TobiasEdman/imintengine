@@ -192,6 +192,7 @@ def build_tile_label(
     sks_dir: str,
     nmd_version: int = 2018,
     label_out_dir: str | None = None,
+    allow_nmd_only_years: tuple[int, ...] = (),
 ) -> dict:
     """Build the unified label for one tile from scratch.
 
@@ -215,6 +216,13 @@ def build_tile_label(
         # per-tile 'failed' record instead (PR #45 review).
         with np.load(tile_path, allow_pickle=False) as _z:
             data = {k: _z[k] for k in _z.files}
+
+        # Inspect crop evidence before resetting label-owned fields below.
+        crop_evidence = (name.startswith("crop_")
+                         or int(data.get("n_parcels", 0)) != 0
+                         or np.any(data.get("label_mask", 0) != 0)
+                         or np.any(data.get("parcel_area_ha", 0) > 0)
+                         or np.isin(data.get("label", 0), np.arange(11, 22)).any())
 
         # Derive tile size from raster (authoritative) or persisted key
         sp = data.get("spectral", data.get("image"))
@@ -258,9 +266,25 @@ def build_tile_label(
         # --- Step 2: LPIS crop mask (bbox-filtered SpatialParquet query) ---
         lpis_mask = None
         lpis_sp = _lpis_handle(tile_year, lpis_dir)
+        lpis_policy = "same_year_lpis"
         if lpis_sp is None:
-            return {"name": name, "status": "failed", "reason": f"missing_lpis_reference:{tile_year}"}
-        gdf = lpis_sp.query(bbox_3006)
+            if tile_year not in allow_nmd_only_years:
+                return {"name": name, "status": "failed", "reason": f"missing_lpis_reference:{tile_year}"}
+            # Test LPIS eligibility with the canonical merge, not a duplicated
+            # crop-code table: any pixel that could receive a crop overlay
+            # makes a missing LPIS reference unsafe for this entire tile.
+            merge = merge_all_2023 if nmd_version == 2023 else merge_all
+            potential_crop = np.any(merge(nmd_label, np.full(shape, 4, dtype=np.uint16))
+                                    != merge(nmd_label))
+            if crop_evidence or potential_crop:
+                return {"name": name, "status": "failed",
+                        "reason": f"missing_lpis_reference_for_crop:{tile_year}"}
+            lpis_policy = "nmd_only_missing_lpis"
+            gdf = ()
+        else:
+            gdf = lpis_sp.query(bbox_3006)
+        data["label_lpis_policy"] = np.array(lpis_policy)
+        data["label_year"] = np.int32(tile_year)
         if len(gdf) > 0:
             bbox_arr = np.array([bbox_3006["west"], bbox_3006["south"],
                                  bbox_3006["east"], bbox_3006["north"]])
@@ -362,7 +386,8 @@ def build_tile_label(
         if label_out_dir is not None:
             _LABEL_KEYS = ("label", "nmd_label_raw", "nmd_area_ha", "label_mask",
                            "parcel_area_ha", "n_parcels", "harvest_mask",
-                           "n_harvest_polygons", "n_mature_polygons")
+                           "n_harvest_polygons", "n_mature_polygons",
+                           "label_lpis_policy", "label_year")
             payload = {k: data[k] for k in _LABEL_KEYS if k in data}
             payload["tile_size_px"] = np.int32(size_px)
             out_path = os.path.join(label_out_dir, name + ".npz")
@@ -377,7 +402,7 @@ def build_tile_label(
         tmp_base = out_path + ".tmp"
         np.savez_compressed(tmp_base, **payload)
         os.replace(tmp_base + ".npz", out_path)
-        return {"name": name, "status": "ok"}
+        return {"name": name, "status": "ok", "lpis_policy": lpis_policy, "label_year": tile_year}
 
     except Exception as e:
         # Clean up any half-written tmp file (.tmp.npz from savez)
@@ -404,6 +429,9 @@ def main():
                         "non-destructive relabel, no full dataset copy")
     p.add_argument("--lpis-dir", default="data/lpis")
     p.add_argument("--sks-dir", default="data/sks")
+    p.add_argument("--allow-nmd-only-year", type=int, action="append", default=[],
+                   help="Explicit tile year allowed without LPIS, only with no crop evidence "
+                        "or LPIS-eligible NMD pixels. Repeat per year; no year fallback.")
     p.add_argument("--tile-ids", nargs="+",
                    help="Only process these tile IDs (filename stems, e.g. 45843596)")
     p.add_argument("--workers", type=int, default=1,
@@ -427,6 +455,8 @@ def main():
              "invariants in tile_fetch / spatial_parquet.",
     )
     args = p.parse_args()
+    if any(year < 1 or year > 9999 for year in args.allow_nmd_only_year):
+        p.error("--allow-nmd-only-year must be a calendar year in 1..9999")
     # Tile size is derived per-tile from the raster shape / tile_size_px key.
     # No CLI flag needed — the script adapts to whatever fetch_unified_tiles wrote.
 
@@ -441,6 +471,7 @@ def main():
     print(f"  Tiles: {len(tiles)}")
     print(f"  NMD: {args.nmd_raster}")
     print(f"  LPIS: {args.lpis_dir}")
+    print(f"  NMD-only missing-LPIS years: {sorted(set(args.allow_nmd_only_year))}")
     print(f"  SKS: {args.sks_dir}")
     print(f"  Schema: {len(UNIFIED_CLASS_NAMES)} classes")
     print()
@@ -467,7 +498,7 @@ def main():
         futs = {
             pool.submit(build_tile_label, t, args.nmd_raster,
                         args.lpis_dir, args.sks_dir, args.nmd_version,
-                        args.label_out_dir): t
+                        args.label_out_dir, tuple(args.allow_nmd_only_year)): t
             for t in tiles
         }
         for i, f in enumerate(as_completed(futs)):

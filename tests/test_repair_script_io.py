@@ -49,7 +49,7 @@ def tile(tmp_path, layout):
     if layout in ('spectral', 'both'):
         arrays['spectral'] = stack.copy()
     if layout in ('image', 'both'):
-        arrays['image'] = stack.copy() + 1000
+        arrays['image'] = stack.copy()
     path = tmp_path / 'tile.npz'
     np.savez_compressed(path, **arrays)
     return path, arrays
@@ -81,12 +81,16 @@ def test_repair_roundtrip_preserves_other_payloads(tmp_path, monkeypatch, operat
     path, expected = tile(tmp_path, layout)
     result = call(module, path, operation)
     assert result['status'] == ('blanked' if operation == 'blank' else 'ok')
-    key = 'image' if layout == 'image' else 'spectral'
-    expected[key][:6] = 0 if operation == 'blank' else 0.25
+    for key in ('spectral', 'image'):
+        if key in expected:
+            expected[key][:6] = 0 if operation == 'blank' else 0.25
     expected['dates'][0] = '' if operation == 'blank' else '2017-09-20'
     if operation == 'blank':
         expected['doy'][0] = 0
         expected['temporal_mask'][0] = 0
+    else:
+        expected['doy'][0] = 263
+        expected['temporal_mask'][0] = 1
     # Real compressed write/rename and reload, not a mocked persistence layer.
     with np.load(path, allow_pickle=False) as actual:
         assert set(actual.files) == set(expected)
@@ -124,6 +128,7 @@ def test_repair_failed_temp_write_preserves_original(tmp_path, monkeypatch, oper
     monkeypatch.setattr(module.np, 'savez_compressed', failed_write)
     assert call(module, path, operation)['status'] == 'write_error'
     assert path.read_bytes() == before
+    assert not path.with_suffix('.tmp.npz').exists()
     with np.load(path, allow_pickle=False) as actual:
         assert actual['dates'][0] == '2018-09-01'
 
