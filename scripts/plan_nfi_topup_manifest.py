@@ -134,21 +134,41 @@ def place_tiles(candidates: pd.DataFrame, same_year_training: pd.DataFrame, key_
     return sorted(tiles, key=lambda t: (t["_rank"], t["name"]))
 
 
+# MGRS 100 km square ids: zone 01-60, latitude band C-X without I/O, a column
+# letter from the zone's set (zones cycle A-H, J-R, S-Z, no I/O) and a row
+# letter A-V without I/O. A cell outside these sets can never equal a cell
+# derived from a tile bbox, so accepting it would make an exclusion a no-op.
+_BANDS = "CDEFGHJKLMNPQRSTUVWX"
+_COLUMNS = ("ABCDEFGH", "JKLMNPQR", "STUVWXYZ")
+_ROWS = "ABCDEFGHJKLMNPQRSTUV"
+_TOKEN = re.compile(r"(?:(\d{4}):)?(\d{2})([A-Z])([A-Z])([A-Z])")
+
+
+def valid_mgrs_cell(zone: int, band: str, column: str, row: str) -> bool:
+    return (1 <= zone <= 60 and band in _BANDS and column in _COLUMNS[(zone - 1) % 3]
+            and row in _ROWS)
+
+
 def parse_no_vpp(tokens: list[str], years: list[int]) -> dict[int, frozenset[str]]:
     """``CELL`` (no product in any year) or ``YEAR:CELL`` -> cells without HR-VPP per planned year.
 
-    Refuses malformed tokens and years that are not being planned, so a typo
-    can never silently leave an uncoverable tile in a manifest.
+    Refuses anything but those two exact forms, any cell that is not a real
+    MGRS 100 km square, and years that are not being planned, so a typo can
+    never silently leave an uncoverable tile in a manifest.
     """
     out: dict[int, set[str]] = {y: set() for y in years}
     for tok in tokens:
-        year_s, _, cell = tok.rpartition(":")
-        if not re.fullmatch(r"\d{2}[C-X][A-Z]{2}", cell):
+        m = _TOKEN.fullmatch(tok)
+        if not m:
             raise SystemExit(f"--no-vpp: {tok!r} is not CELL or YEAR:CELL (e.g. 33UVC, 2018:34WCA)")
-        if not year_s:
+        year_s, zone_s, band, column, row = m.groups()
+        cell = f"{zone_s}{band}{column}{row}"
+        if not valid_mgrs_cell(int(zone_s), band, column, row):
+            raise SystemExit(f"--no-vpp: {tok!r}: {cell} is not an MGRS 100 km square")
+        if year_s is None:
             for y in out:
                 out[y].add(cell)
-        elif not year_s.isdigit() or int(year_s) not in out:
+        elif int(year_s) not in out:
             raise SystemExit(f"--no-vpp: {tok!r} names a year that is not planned ({sorted(out)})")
         else:
             out[int(year_s)].add(cell)

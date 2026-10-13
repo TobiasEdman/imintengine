@@ -135,7 +135,7 @@ def test_outputs_carry_no_plot_identity_or_coordinate(data_root, fieldtruth_file
 
 def _cell(bbox: dict) -> str:
     """A valid MGRS-shaped id per kilometre of easting, distinct for every fixture tile."""
-    return "33VW" + chr(65 + int(bbox["west"] // 1000) % 26)
+    return "33VW" + "ABCDEFGHJKLMNPQRSTUV"[int(bbox["west"] // 1000) % 20]
 
 
 @pytest.fixture
@@ -190,13 +190,33 @@ def test_blocking_every_feasible_cell_reports_the_gap_rather_than_choosing_a_blo
 @pytest.mark.parametrize("token, message", [
     ("33vwq", "is not CELL or YEAR:CELL"),
     ("33VWQ1", "is not CELL or YEAR:CELL"),
+    (":33UVC", "is not CELL or YEAR:CELL"),        # empty year is a typo, not "every year"
+    ("2018:", "is not CELL or YEAR:CELL"),
+    ("2018::33UVC", "is not CELL or YEAR:CELL"),
+    ("18:33UVC", "is not CELL or YEAR:CELL"),
+    ("x:33VWQ", "is not CELL or YEAR:CELL"),
+    ("2018-33UVC", "is not CELL or YEAR:CELL"),
+    (" 33UVC", "is not CELL or YEAR:CELL"),
+    ("00UVC", "is not an MGRS 100 km square"),      # zone 0
+    ("61UVC", "is not an MGRS 100 km square"),      # zone 61
+    ("33IVC", "is not an MGRS 100 km square"),      # band I
+    ("33YVC", "is not an MGRS 100 km square"),      # band Y
+    ("34WCI", "is not an MGRS 100 km square"),      # row I
+    ("34WCW", "is not an MGRS 100 km square"),      # row beyond V
+    ("33UCC", "is not an MGRS 100 km square"),      # column C belongs to zones 1, 4, ... not 33
+    ("34WOA", "is not an MGRS 100 km square"),      # column O
     ("2021:33VWQ", "names a year that is not planned"),
-    ("x:33VWQ", "names a year that is not planned"),
 ])
 def test_a_malformed_or_unplanned_token_refuses_before_any_output(data_root, fieldtruth_file, tmp_path, token, message):
     with pytest.raises(SystemExit, match=message):
         _plan(data_root, fieldtruth_file, tmp_path, 4, token)
     assert not (tmp_path / "plan").exists() and not (tmp_path / "s.json").exists()
+
+
+@pytest.mark.parametrize("cell", ["33UVC", "34WCA", "34WDR", "35WLP", "34WCT", "32VPL",
+                                  "01CAA", "60XZV", "31NHV", "02DJA", "03ESA"])
+def test_real_mgrs_cells_are_accepted(cell):
+    assert plan.parse_no_vpp([cell, f"2019:{cell}"], [2019]) == {2019: frozenset({cell})}
 
 
 def test_parse_no_vpp_scopes_tokens_by_year():
