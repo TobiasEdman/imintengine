@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from imint.schema.unified_schema import NUM_UNIFIED_CLASSES, UNIFIED_COLORS
 
 from gen_ladder_manifests import DISTILL, RUNGS
-from infer_tiles import ckpt_sha256
+from scripts.cache_predict import ckpt_sha256
 
 TILES_NAME = "tiles.json"
 MATRIX_NAME = "matrix.json"

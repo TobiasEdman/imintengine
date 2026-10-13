@@ -38,7 +38,6 @@ in the fetchers).
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.util
 import json
 import subprocess
@@ -60,7 +59,7 @@ import numpy as np
 from imint.training import unified_dataset  # Capture shared preprocessing before callers import it.
 from imint.training.tile_fetch import is_tile_tmp
 from scripts.cache_predict import (  # noqa: E402
-    CacheValidationError, atomic_write, file_identity,
+    CacheValidationError, atomic_write, ckpt_sha256, file_identity,
     read_cache_entry, identity_differences, contract_pin, cache_publication_lock,
     write_input_manifest,
 )
@@ -73,19 +72,6 @@ def _load_infcmp():
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
-
-
-def ckpt_sha256(checkpoint: str) -> str:
-    """First 16 hex of the checkpoint's sha256 — the cache subdir name.
-
-    Keys the cache to the exact checkpoint bytes so two checkpoints never share
-    a cache dir and a re-trained model invalidates its old predictions.
-    """
-    h = hashlib.sha256()
-    with open(checkpoint, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()[:16]
 
 
 def _git_sha() -> str:
