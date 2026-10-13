@@ -1,0 +1,88 @@
+---
+# Step 2g, the last of the evaluation-copy chain: the same read-only census
+# as nfi-holdout-census(-v2), pointed at /data/holdout_eval_512 — the copy
+# after tessera re-source, sen2cor frame_2016, gap marking, S1-2016 and the
+# forestry fix/exclude. Everything the first census checked is checked again
+# here (key presence against the 2024 bar, all-zero arrays, flag-vs-array
+# consistency, per-tile modalities, the NFI plot index with the task-0103
+# identity and exclusion, never-trained-on, footprint); the "excluded for
+# same-year overlap" tiles are absent from the copy, so they show up as
+# "planned but missing" and the eligible counts are the post-decision ones.
+# The report is the step-2 record for Tobias and the input to step 3's gap.
+#
+# Source identity pinned as in nfi-holdout-census-job.yaml. PVC readOnly.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: holdout-eval-census
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: holdout-census}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 18000
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: census
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== holdout_val_512 census — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow rasterio pyproj openpyxl
+              pip list --format=freeze 2>/dev/null | grep -i -E "^(numpy|pandas|pyarrow|rasterio|pyproj)="
+
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch "$CENSUS_BRANCH" \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              git fetch -q --depth 1 origin "$CENSUS_COMMIT" "$FIELDTRUTH_COMMIT" "$SIZING_COMMIT"
+              git checkout -q "$CENSUS_COMMIT"
+              # Never run an old census: the pinned bytes must be the reviewed ones.
+              echo "$CENSUS_SCRIPT_SHA256  scripts/census_holdout_val_512.py" | sha256sum -c -
+              echo "HEAD: $(git rev-parse HEAD)"
+              # Codex's identity module and sizing record, read-only, at the
+              # commits the sizing cites. Neither file is on this branch.
+              git checkout -q "$FIELDTRUTH_COMMIT" -- imint/eval/fieldtruth.py
+              git show "$SIZING_COMMIT:docs/experiments/nfi_fieldtruth_0103_tile_sizing_20261008.json" \
+                > /workspace/codex_sizing.json
+              sha256sum imint/eval/fieldtruth.py /workspace/codex_sizing.json
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+
+              echo "=== import smoke ==="
+              python scripts/census_holdout_val_512.py --help > /dev/null
+              echo "imports OK"
+
+              python scripts/census_holdout_val_512.py \
+                --data-root /data \
+                --holdout-dir /data/holdout_eval_512 \
+                --expected-sizing /workspace/codex_sizing.json \
+                --out-json /workspace/holdout_census.json
+
+              echo "=== CENSUS_JSON_BEGIN ==="
+              cat /workspace/holdout_census.json
+              echo ""
+              echo "=== CENSUS_JSON_END ==="
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: CENSUS_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
+            - {name: CENSUS_COMMIT, value: "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb"}
+            - {name: CENSUS_SCRIPT_SHA256, value: "9244f7bc5415af4b3aab75a3d6b6a4f393bc070bf598bfa518c0622c4f43084a"}
+            - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
+            - {name: SIZING_COMMIT, value: "94b26bbbef9d28220734e4efce38ed4943fd6157"}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data, readOnly: true}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}

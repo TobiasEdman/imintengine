@@ -1,0 +1,98 @@
+---
+# Make the 84 root-only holdout files readable. One purpose, no content change.
+#
+# The 2026-10-12 census (docs/experiments/nfi_multiyear_holdout_census_2026-10-12.md)
+# found 84 of the 1,463 files under /data/holdout_val_512 with mode 0600 owned
+# by root; every other file is 0644. A non-root process (the task-0103 sizing
+# Job, uid 2000) got PermissionError on them and credited them nothing. Tobias
+# decided 2026-10-12: make them readable, then re-census and fold them in.
+#
+# This Job runs as root, selects files by their CURRENT mode (no world-read
+# bit) rather than a pasted list, refuses to touch anything but *.npz directly
+# under the holdout directory, and refuses to run at all if the selection is
+# not exactly the 84 the census counted — a different number means the
+# directory changed since, and that needs a look, not a chmod. chmod changes
+# the inode mode and ctime only; file content and mtime are untouched, which
+# the Job verifies by size and sha256 before/after on every selected file.
+#
+# Nothing is written, moved, created or deleted. Not idempotent by design: a
+# second run finds 0 files and exits non-zero, which is the correct outcome.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-holdout-chmod
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: holdout-chmod}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: chmod
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import hashlib, os, stat, sys
+              ROOT = "/data/holdout_val_512"
+              EXPECTED = int(os.environ["EXPECTED_COUNT"])
+              names = sorted(n for n in os.listdir(ROOT)
+                             if n.endswith(".npz") and not n.endswith(".tmp.npz"))
+              print(f"files under {ROOT}: {len(names)}")
+              def sha(p):
+                  h = hashlib.sha256()
+                  with open(p, "rb") as f:
+                      for b in iter(lambda: f.read(8 << 20), b""):
+                          h.update(b)
+                  return h.hexdigest()
+              targets = []
+              for n in names:
+                  p = os.path.join(ROOT, n)
+                  st = os.lstat(p)
+                  if not stat.S_ISREG(st.st_mode):
+                      continue
+                  if not (st.st_mode & stat.S_IROTH):
+                      targets.append((p, st))
+              print(f"not world-readable: {len(targets)} (expected {EXPECTED})")
+              modes = {}
+              for p, st in targets:
+                  modes[(oct(stat.S_IMODE(st.st_mode)), st.st_uid)] = modes.get((oct(stat.S_IMODE(st.st_mode)), st.st_uid), 0) + 1
+              print(f"modes: {modes}")
+              if len(targets) != EXPECTED:
+                  sys.exit(f"REFUSING: selection is {len(targets)} files, census counted {EXPECTED}")
+              before = {p: (st.st_size, st.st_mtime_ns, sha(p)) for p, st in targets}
+              for p, st in targets:
+                  os.chmod(p, stat.S_IMODE(st.st_mode) | stat.S_IRGRP | stat.S_IROTH)
+              bad = []
+              for p, (size, mtime, digest) in before.items():
+                  st = os.lstat(p)
+                  if (st.st_size, st.st_mtime_ns, sha(p)) != (size, mtime, digest):
+                      bad.append(p)
+                  if not (st.st_mode & stat.S_IROTH):
+                      bad.append(p)
+              still = sum(1 for n in names if not (os.lstat(os.path.join(ROOT, n)).st_mode & stat.S_IROTH))
+              print(f"changed mode on {len(targets)} files; content/mtime differences: {len(bad)}; "
+                    f"still not world-readable: {still}")
+              for p in bad:
+                  print(f"  UNEXPECTED: {os.path.basename(p)}")
+              if bad or still:
+                  sys.exit(1)
+              for p, _ in targets:
+                  print(f"  {os.path.basename(p)[:-4]}  -> {oct(stat.S_IMODE(os.lstat(p).st_mode))}")
+              print("done: every holdout file is world-readable; no content changed")
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: EXPECTED_COUNT, value: "84"}
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits: {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

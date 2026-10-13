@@ -1,0 +1,95 @@
+---
+# Step 3i: after sen2cor, per staging root — mark the tiles still without a
+# frame_2016 (has_frame_2016=0 + dated reason, the campaign's convention),
+# then Sentinel-1 again with --no-skip-existing so s1_vv_vh_2016 lands on
+# every tile that now has the frame. One Job because the order inside it is
+# the point: marking before S1 keeps a stale 2016 composite off gap tiles,
+# and S1 before sen2cor is the ordering bug of 2026-10-05. PU-free.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-mark-frame-gaps-s1-2016
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: s1
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== top-up frame gaps + S1-2016 — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml requests shapely pystac-client planetary-computer pandas pyarrow Pillow
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse HEAD)"
+              python scripts/enrich_tiles_s1.py --help > /dev/null && echo "imports OK"
+              for Y in $YEARS; do
+                DIR=/data/unified_v2_512_nfi${Y}_staging
+                [ -d "$DIR" ] || { echo "$Y: no staging root, skipping"; continue; }
+                BEFORE=$(find "$DIR" -maxdepth 1 -type f -name '*.npz' | wc -l)
+                echo ""; echo "######## $Y: $BEFORE tiles ########"
+                [ "$BEFORE" -gt 0 ] || continue
+                python - "$DIR" "$Y" <<'PYEOF'
+              import glob, json, os, sys, time
+              import numpy as np
+              root, year = sys.argv[1], sys.argv[2]
+              STAMP = time.strftime("%Y-%m-%d")
+              REASON = f"no_usable_l1c_2016_2015_after_sen2cor_pass__verified_{STAMP}"
+              have, marked = 0, []
+              for p in sorted(glob.glob(f"{root}/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  if int(d.get("has_frame_2016", 0)) == 1:
+                      have += 1; continue
+                  d["has_frame_2016"] = np.array(0); d["frame_2016_gap_reason"] = np.array(REASON)
+                  tmp = p + ".tmp.npz"; np.savez_compressed(tmp, **d); os.replace(tmp, p)
+                  marked.append(os.path.basename(p)[:-4])
+              print(f"{year}: frame_2016 on {have}, marked gaps {len(marked)}")
+              json.dump({"year": int(year), "tiles_with_frame": have, "tiles_marked_gap": marked, "gap_reason": REASON},
+                        open(f"/data/manifests/nfi{year}_topup_frame2016_gaps.json", "w"), indent=1)
+              PYEOF
+                python scripts/enrich_tiles_s1.py --data-dir "$DIR" --s1-backend pc-rtc --workers 8 --no-skip-existing
+                AFTER=$(find "$DIR" -maxdepth 1 -type f -name '*.npz' | wc -l)
+                [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed in $DIR"; exit 1; }
+                python - "$DIR" <<'PYEOF'
+              import glob, sys
+              from collections import Counter
+              import numpy as np
+              c = Counter()
+              for p in sorted(glob.glob(f"{sys.argv[1]}/*.npz")):
+                  d = np.load(p, allow_pickle=True); c["tiles"] += 1
+                  hf = int(d.get("has_frame_2016", 0)) == 1; c["has_frame_2016"] += hf
+                  has16 = "s1_vv_vh_2016" in d.files and bool(np.any(d["s1_vv_vh_2016"])); c["s1_2016_nonzero"] += has16
+                  c["s1_v4"] += int(d.get("s1_enrich_v", 0)) == 4
+                  if hf and not has16: c["FRAME_WITHOUT_S1_2016"] += 1
+                  if not hf and "s1_vv_vh_2016" in d.files: c["S1_2016_WITHOUT_FRAME"] += 1
+              print(dict(c))
+              if c["s1_v4"] != c["tiles"] or c["S1_2016_WITHOUT_FRAME"]:
+                  sys.exit("FAIL: S1 state inconsistent")
+              PYEOF
+              done
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

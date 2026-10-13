@@ -1,0 +1,91 @@
+---
+# Step 3f: TESSERA for the top-up tiles from the promoted source (geotessera
+# 0.10.2, python:3.12), stamped, per staging root. The tiles have no prior
+# tessera, so this is the repo's own enrich_tiles_tessera.py followed by the
+# promotion-era stamp (tessera_source) and the campaign's hole convention:
+# a tile whose fetch failed or came back all zero gets has_tessera=0 with a
+# dated reason, never a silent zero array behind a positive flag. PU-free.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-tessera
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: tessera
+          image: python:3.12-slim@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== top-up tessera — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml geotessera==0.10.2 pandas pyarrow
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python -c "import importlib.metadata as m, sys; v = m.version('geotessera'); sys.exit(f'Unexpected geotessera {v}') if v != '0.10.2' else print('geotessera', v)"
+              echo "HEAD: $(git rev-parse HEAD)"
+              python scripts/enrich_tiles_tessera.py --help > /dev/null && echo "imports OK"
+              for Y in $YEARS; do
+                ROOT=/data/unified_v2_512_nfi${Y}_staging
+                [ -d "$ROOT" ] || { echo "$Y: no staging root, skipping"; continue; }
+                BEFORE=$(find "$ROOT" -maxdepth 1 -type f -name '*.npz' | wc -l)
+                echo ""; echo "######## $Y: $BEFORE tiles ########"
+                [ "$BEFORE" -gt 0 ] || continue
+                python scripts/enrich_tiles_tessera.py --data-dir "$ROOT" \
+                  --embeddings-dir /data/tessera_cache/embeddings --registry-cache-dir /data/tessera_cache/registry \
+                  --workers 4 --cache-soft-gb 20 --skip-existing
+                AFTER=$(find "$ROOT" -maxdepth 1 -type f -name '*.npz' | wc -l)
+                [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed in $ROOT"; exit 1; }
+                python - "$ROOT" <<'PYEOF'
+              import glob, os, sys, time
+              from collections import Counter
+              import numpy as np
+              from importlib.metadata import version
+              producer_version = version("geotessera")
+              if producer_version != "0.10.2":
+                  sys.exit(f"REFUSING: unexpected geotessera {producer_version}")
+              root = sys.argv[1]; SRC = f"geotessera-{producer_version}"; STAMP = time.strftime("%Y-%m-%d")
+              st = Counter()
+              for p in sorted(glob.glob(f"{root}/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  a = d.get("tessera")
+                  ok = a is not None and getattr(a, "ndim", 0) >= 2 and bool(np.any(a)) and int(d.get("has_tessera", 0)) == 1
+                  if ok:
+                      if str(d.get("tessera_source", "")) == SRC:
+                          st["already_stamped"] += 1; continue
+                      d["tessera_source"] = np.array(SRC); st["stamped"] += 1
+                  else:
+                      if int(d.get("has_tessera", 0)) == 0 and "tessera_gap_reason" in d:
+                          st["hole_marked"] += 1; continue
+                      d["has_tessera"] = np.array(0)
+                      d["tessera_gap_reason"] = np.array(f"no_tessera_coverage_or_fetch_failed__verified_{STAMP}")
+                      st["hole"] += 1
+                  tmp = p + ".tmp.npz"; np.savez_compressed(tmp, **d); os.replace(tmp, p)
+              print(dict(st))
+              PYEOF
+              done
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

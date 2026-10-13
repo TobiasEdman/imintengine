@@ -1,0 +1,86 @@
+---
+# Step 2e: Sentinel-1 for the evaluation copy, AFTER sen2cor — so that
+# s1_vv_vh_2016 lands wherever has_frame_2016 == 1 (the script writes the 2016
+# composite only for those tiles, and drops a stale one otherwise). Running S1
+# before sen2cor is the ordering bug the campaign hit on 2026-10-05.
+#
+# --no-skip-existing re-enriches every tile (seasonal s1_vv_vh at v4 and the
+# 2016 composite); the campaign did 475 tiles in ~17 min. PU-free (pc-rtc).
+# Runs ONLY on /data/holdout_eval_512.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: holdout-eval-s1-2016
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: holdout-eval}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800   # 8 h
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: s1
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              DIR=/data/holdout_eval_512
+              echo "=== S1 + S1-2016, evaluation copy — $(date -u) ==="
+              test -f /data/manifests/holdout_eval_512_frame2016_gaps.json || { echo "REFUSING: frame gaps not marked yet"; exit 1; }
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy scipy rasterio pyproj pyyaml requests shapely pystac-client planetary-computer pandas pyarrow Pillow
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse HEAD)"
+              python scripts/enrich_tiles_s1.py --help > /dev/null && echo "imports OK"
+              BEFORE=$(find "$DIR" -maxdepth 1 -name '*.npz' | wc -l); echo "TILES BEFORE: $BEFORE"
+
+              python scripts/enrich_tiles_s1.py --data-dir "$DIR" --s1-backend pc-rtc --workers 8 --no-skip-existing
+
+              AFTER=$(find "$DIR" -maxdepth 1 -name '*.npz' | wc -l); echo "TILES AFTER: $AFTER"
+              [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed"; exit 1; }
+              python - <<'PYEOF'
+              import glob, sys
+              from collections import Counter
+              import numpy as np
+              c = Counter()
+              for p in sorted(glob.glob("/data/holdout_eval_512/*.npz")):
+                  d = np.load(p, allow_pickle=True)
+                  c["tiles"] += 1
+                  c["s1_v4"] += int(d.get("s1_enrich_v", 0)) == 4
+                  c["s1_nonzero"] += "s1_vv_vh" in d.files and bool(np.any(d["s1_vv_vh"]))
+                  hf = int(d.get("has_frame_2016", 0)) == 1
+                  c["has_frame_2016"] += hf
+                  has16 = "s1_vv_vh_2016" in d.files and bool(np.any(d["s1_vv_vh_2016"]))
+                  c["s1_2016_nonzero"] += has16
+                  if hf and not has16:
+                      c["FRAME_WITHOUT_S1_2016"] += 1
+                  if not hf and "s1_vv_vh_2016" in d.files:
+                      c["S1_2016_WITHOUT_FRAME"] += 1
+              print(dict(c))
+              if c["s1_v4"] != c["tiles"] or c["s1_nonzero"] != c["tiles"]:
+                  sys.exit("FAIL: seasonal S1 missing or empty on some tiles")
+              if c["S1_2016_WITHOUT_FRAME"]:
+                  sys.exit("FAIL: a 2016 composite sits on a tile without frame_2016")
+              print(f"frame_2016 tiles without a 2016 S1 composite: {c['FRAME_WITHOUT_S1_2016']} (same-orbit/no-data gaps; marked by the census)")
+              PYEOF
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

@@ -1,0 +1,213 @@
+---
+# Step 2a of the multi-year NFI plan: the EVALUATION-ONLY COPY of the legacy
+# holdout. /data/holdout_val_512 stays byte-identical and reproducible; every
+# enrichment that follows writes to /data/holdout_eval_512 only.
+#
+# Decisions it executes (Tobias, 2026-10-12, after PR #71):
+#   * tiles that overlap a TRAINING tile of the SAME year are excluded from
+#     the evaluation (D6 covers other-year overlap only). The set is recomputed
+#     here from the cohort geometry with the census's own function, and the
+#     Job refuses to run unless it finds exactly the EXPECTED_EXCLUDED tiles
+#     the census counted (212) — a different number means the cohort or the
+#     holdout changed since the census;
+#   * the 84 root-only files count, so nfi-holdout-chmod must have run: the
+#     Job refuses if any source file is still not world-readable.
+#
+# What it writes: one verified copy per kept tile (sha256 of source and copy
+# equal; an interrupted bootstrap can resume only while existing copies match
+# and no completion manifest exists), then two honest
+# demotions inside the COPY only — the four all-zero frame_2016 arrays and the
+# one all-zero tessera array that sit behind a positive flag get has_*=0 and a
+# dated reason, the convention from nfi2024-fix-zero-frames and
+# tessera-mark-holes. Without the demotion the sen2cor selector would skip
+# the four frames (it trusts has_frame_2016) and the tessera hole would pass
+# as data. A manifest of what was copied, excluded and demoted goes to
+# /data/manifests/holdout_eval_512_copy.json.
+#
+# Disk: ~1,250 tiles x ~78 MB = ~100 GB on a volume with ~626 GB free
+# (2026-10-12). The Job refuses to start below the copy size plus 150 GB.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: holdout-eval-copy
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: holdout-eval}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600   # 6 h; ~100 GB cephfs -> cephfs with sha256 on both sides
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: copy
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== holdout evaluation copy — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow rasterio pyproj openpyxl
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch "$SOURCE_BRANCH" https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              git fetch -q --depth 1 origin "$SOURCE_COMMIT"
+              git checkout -q "$SOURCE_COMMIT"
+              # Never run an old census: the pinned bytes must be the reviewed ones.
+              echo "$CENSUS_SCRIPT_SHA256  scripts/census_holdout_val_512.py" | sha256sum -c -
+              echo "HEAD: $(git rev-parse HEAD)"
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python scripts/census_holdout_val_512.py --help > /dev/null && echo "imports OK"
+              python - <<'PYEOF'
+              import hashlib, json, os, shutil, stat, sys, time
+              from pathlib import Path
+
+              import numpy as np
+
+              sys.path.insert(0, "/workspace/ie")
+              from scripts.census_holdout_val_512 import cohort_geometry, footprint_overlap, tile_year
+
+              SRC = Path("/data/holdout_val_512")
+              DST = Path("/data/holdout_eval_512")
+              COHORT = Path("/data/unified_v2_512")
+              REPORT = Path("/data/manifests/holdout_eval_512_copy.json")
+              EXPECTED_EXCLUDED = int(os.environ["EXPECTED_EXCLUDED"])
+              MARGIN_GB = 150.0
+              STAMP = time.strftime("%Y-%m-%d")
+
+              def sha(p):
+                  h = hashlib.sha256()
+                  with open(p, "rb") as f:
+                      for b in iter(lambda: f.read(8 << 20), b""):
+                          h.update(b)
+                  return h.hexdigest()
+
+              # Completed copies and downstream work must never be reset by bootstrap.
+              completed = sorted(REPORT.parent.glob("holdout_eval_512_*.json"))
+              if completed:
+                  sys.exit(f"REFUSING: evaluation copy/enrichment manifests already exist: {completed}")
+
+              # 1. light geometry read of every source tile (no array decompression)
+              paths = sorted(p for p in SRC.glob("*.npz") if not p.name.endswith(".tmp.npz"))
+              print(f"source tiles: {len(paths)}")
+              restricted = [p.name for p in paths if not (p.stat().st_mode & stat.S_IROTH)]
+              if restricted:
+                  sys.exit(f"REFUSING: {len(restricted)} source files are not world-readable; "
+                           f"run nfi-holdout-chmod first")
+              recs = []
+              for p in paths:
+                  with np.load(p, allow_pickle=True) as d:
+                      meta = {k: d[k] for k in ("bbox_3006", "year", "lpis_year", "dates") if k in d.files}
+                  v = np.asarray(meta["bbox_3006"]).reshape(-1)
+                  bbox = dict(zip(("west", "south", "east", "north"), (int(x) for x in v)))
+                  recs.append({"name": p.stem, "readable": True, "_bbox": bbox, "year_lenient": tile_year(meta)})
+              fp = footprint_overlap(recs, cohort_geometry(COHORT))
+              excluded = set(fp["excluded_same_year_overlap_names"])
+              print(f"same-year training overlap: {len(excluded)} tiles "
+                    f"{fp['holdout_tiles_overlapping_same_year_training_tile']}")
+              if len(excluded) != EXPECTED_EXCLUDED:
+                  sys.exit(f"REFUSING: {len(excluded)} excluded tiles, census counted {EXPECTED_EXCLUDED}")
+              kept = [p for p in paths if p.stem not in excluded]
+
+              # Refuse divergent or unexpected destinations before writing any tile.
+              hashes = {p.stem: sha(p) for p in kept}
+              extra = sorted(q.stem for q in DST.glob("*.npz") if q.stem not in hashes)
+              changed = [p.name for p in kept if (DST / p.name).exists()
+                         and sha(DST / p.name) != hashes[p.stem]]
+              if extra or changed:
+                  sys.exit(f"REFUSING: existing evaluation files differ from bootstrap: "
+                           f"unexpected={extra[:5]}, changed={changed[:5]}")
+
+              # 2. disk preflight
+              need_gb = sum(p.stat().st_size for p in kept) / 1e9
+              free_gb = shutil.disk_usage("/data").free / 1e9
+              print(f"copy size {need_gb:.1f} GB, free {free_gb:.1f} GB, margin {MARGIN_GB:.0f} GB")
+              if free_gb < need_gb + MARGIN_GB:
+                  sys.exit("REFUSING: not enough free space for the copy plus margin")
+
+              # 3. verified, resumable copy
+              DST.mkdir(exist_ok=True)
+              copied = skipped = 0
+              t0 = time.time()
+              for i, p in enumerate(kept, 1):
+                  dst = DST / p.name
+                  s = hashes[p.stem]
+                  if dst.exists():
+                      if sha(dst) != s:
+                          sys.exit(f"REFUSING: destination changed during bootstrap: {p.name}")
+                      skipped += 1
+                  else:
+                      tmp = DST / (p.name + ".copying")
+                      shutil.copyfile(p, tmp)
+                      if sha(tmp) != s:
+                          tmp.unlink()
+                          sys.exit(f"copy of {p.name} does not match its source")
+                      os.replace(tmp, dst)
+                      copied += 1
+                  hashes[p.stem] = s
+                  if i % 100 == 0:
+                      print(f"  {i}/{len(kept)} ({time.time() - t0:.0f}s) copied={copied} skipped={skipped}", flush=True)
+              print(f"copied {copied}, already identical {skipped}, total {len(kept)}")
+              extra = sorted(q.stem for q in DST.glob("*.npz") if q.stem not in hashes)
+              if extra:
+                  sys.exit(f"unexpected files in the copy: {extra[:5]} ...")
+
+              # 4. honest demotions inside the copy only
+              demoted = {"frame_2016": [], "tessera": []}
+              reasons = {"frame_2016": f"frame_2016_extracted_all_zero__demoted_in_eval_copy__verified_{STAMP}",
+                         "tessera": f"tessera_all_zero_legacy_source__demoted_in_eval_copy__verified_{STAMP}"}
+              for q in sorted(DST.glob("*.npz")):
+                  d = np.load(q, allow_pickle=True)
+                  todo = []
+                  for key, flag in (("frame_2016", "has_frame_2016"), ("tessera", "has_tessera")):
+                      if key in d.files and flag in d.files and int(d[flag]) == 1:
+                          a = d[key]
+                          if getattr(a, "ndim", 0) >= 2 and not np.any(a):
+                              todo.append((key, flag))
+                  if not todo:
+                      continue
+                  data = dict(d)
+                  for key, flag in todo:
+                      data[flag] = np.array(0)
+                      data[f"{key}_gap_reason"] = np.array(reasons[key])
+                      demoted[key].append(q.stem)
+                  tmp = str(q) + ".tmp.npz"
+                  np.savez_compressed(tmp, **data)
+                  os.replace(tmp, q)
+              print(f"demoted in the copy: frame_2016 {len(demoted['frame_2016'])}, tessera {len(demoted['tessera'])}")
+
+              # 5. the source is untouched: spot-check 20 hashes
+              import random
+              random.seed(20261012)
+              for p in random.sample(kept, min(20, len(kept))):
+                  assert sha(p) == hashes[p.stem], f"source changed: {p.name}"
+              REPORT.parent.mkdir(exist_ok=True)
+              REPORT.write_text(json.dumps({
+                  "source": str(SRC), "copy": str(DST), "copied_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "source_tiles": len(paths), "kept": len(kept), "copied_now": copied, "already_identical": skipped,
+                  "excluded_same_year_training_overlap": sorted(excluded),
+                  "excluded_by_year": fp["holdout_tiles_overlapping_same_year_training_tile"],
+                  "demoted_in_copy": demoted, "demotion_reasons": reasons,
+                  "sha256": hashes}, indent=1))
+              print(f"manifest -> {REPORT}")
+              print("source untouched; evaluation copy ready")
+              PYEOF
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: SOURCE_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
+            - {name: SOURCE_COMMIT, value: "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb"}
+            - {name: CENSUS_SCRIPT_SHA256, value: "9244f7bc5415af4b3aab75a3d6b6a4f393bc070bf598bfa518c0622c4f43084a"}
+            - {name: EXPECTED_EXCLUDED, value: "212"}
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

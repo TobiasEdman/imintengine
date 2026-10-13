@@ -25,6 +25,9 @@
 # nfi2024-key-census2, so it reads them and reports them separately
 # (not world-readable, by year). Whether to count them is Tobias's call.
 #
+# v4 (2026-10-12, after nfi-holdout-chmod, at the approved #71 script): the
+# 84 formerly root-only files are world-readable, so the world-readable and
+# all-files columns coincide and the per-year table folds them in.
 # v3 (2026-10-12, after Codex's second review): parsed files account only for
 # the names they extracted, holdout-directory mentions in training territory
 # keep the verdict open. v2 (after the first review): the script fails closed
@@ -41,7 +44,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: nfi-holdout-census-v3
+  name: nfi-holdout-census-v4
   namespace: prithvi-training-default
   labels: {app: fieldtruth-prep, purpose: holdout-census}
 spec:
@@ -72,6 +75,8 @@ spec:
               cd ie
               git fetch -q --depth 1 origin "$CENSUS_COMMIT" "$FIELDTRUTH_COMMIT" "$SIZING_COMMIT"
               git checkout -q "$CENSUS_COMMIT"
+              # Never run an old census: the pinned bytes must be the reviewed ones.
+              echo "$CENSUS_SCRIPT_SHA256  scripts/census_holdout_val_512.py" | sha256sum -c -
               echo "HEAD: $(git rev-parse HEAD)"
               # Codex's identity module and sizing record, read-only, at the
               # commits the sizing cites. Neither file is on this branch.
@@ -97,8 +102,9 @@ spec:
               echo "=== done: $(date -u) ==="
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
-            - {name: CENSUS_BRANCH, value: "agent/te/claude/nfi-multiyear-census"}
-            - {name: CENSUS_COMMIT, value: "532df9aefa113e24272a36dd6a61f0119d360ad3"}
+            - {name: CENSUS_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
+            - {name: CENSUS_COMMIT, value: "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb"}
+            - {name: CENSUS_SCRIPT_SHA256, value: "9244f7bc5415af4b3aab75a3d6b6a4f393bc070bf598bfa518c0622c4f43084a"}
             - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
             - {name: SIZING_COMMIT, value: "94b26bbbef9d28220734e4efce38ed4943fd6157"}
           resources:

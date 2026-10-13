@@ -1,0 +1,110 @@
+---
+# Step 2c: frame_2016 for the evaluation copy — the ~254 tiles without one
+# plus the four whose all-zero frame was demoted by holdout-eval-copy.
+#
+# Same pipeline, image and gate as sen2cor-frame2016-nfi2024-job.yaml (the
+# campaign's 423/475 first pass): select_scenes picks a 2016 scene with 2015
+# fallback for every tile lacking has_frame_2016==1, run_sen2cor_per_scene
+# runs L2A_Process per scene and extracts the frame, COT gate 8.0 on the GPU.
+# Nothing is relaxed here; a fallback pass over alternate scenes at the same
+# gate is the next step if the first pass leaves gaps (campaign: +38 of 52).
+#
+# GPU-hours: decision D4 allows ~30 GPU-h for the campaign; the parent brief
+# sizes this at ~4-5 GPU-h (campaign: 5.5 h wall for 475 tiles, GPU attached
+# the whole time, sen2cor CPU-bound). Wall time of this pod is the GPU-hour
+# figure to report. RTX 2080 Ti only (H100 reserved; srv04/srv06 carry the
+# cgroup bug). nvidia.com/gpu: "1" is what gives the pod a device; the
+# affinity alone gives it a node (lesson 2026-10-05).
+#
+# Runs ONLY on /data/holdout_eval_512. PU-free (GCS L1C -> sen2cor).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sen2cor-frame2016-holdout-eval
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: holdout-eval}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200   # 12 h; ~260 tiles, plus queueing for a free 2080 Ti
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values: ["NVIDIA-GeForce-RTX-2080-Ti"]
+      containers:
+        - name: pipeline
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              DIR=/data/holdout_eval_512
+              PLAN=/data/debug/sen2cor_frame2016_holdout_eval_plan.json
+              echo "=== sen2cor frame_2016, evaluation copy — $(date -u) ==="
+              test -f /data/manifests/holdout_eval_512_copy.json || { echo "REFUSING: no copy manifest"; exit 1; }
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj requests Pillow pystac-client openeo torch 2>&1 | tail -1
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse HEAD)"
+              python3 scripts/sen2cor_pipeline/select_scenes.py --help > /dev/null
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py --help > /dev/null
+              echo "imports OK"
+              nvidia-smi --query-gpu=name --format=csv,noheader || { echo "FAIL: no GPU device"; exit 1; }
+
+              BEFORE=$(python3 -c "
+              import glob, numpy as np
+              n = sum(int(np.load(p, allow_pickle=True).get('has_frame_2016', 0)) == 1 for p in glob.glob('$DIR/*.npz'))
+              print(n)")
+              echo "tiles with has_frame_2016=1 before: $BEFORE"
+
+              echo ""
+              echo "=== 1/2 select_scenes ==="
+              python3 scripts/sen2cor_pipeline/select_scenes.py \
+                --data-dir "$DIR" --year 2016 --fallback-year 2015 --workers 16 --out "$PLAN"
+              python3 -c "
+              import json
+              p = json.load(open('$PLAN'))
+              print(f\"  plan: scenes={p['n_scenes']} covered={p['n_tiles_covered']} unassigned={len(p['unassigned'])}\")"
+
+              echo ""
+              echo "=== 2/2 run_sen2cor_per_scene (COT gate 8.0, cuda) ==="
+              python3 scripts/sen2cor_pipeline/run_sen2cor_per_scene.py \
+                --plan "$PLAN" --data-dir "$DIR" --safe-cache /data/sen2cor_cache \
+                --cot-max 8.0 --workers 4 --device cuda
+
+              AFTER=$(python3 -c "
+              import glob, numpy as np
+              n = sum(int(np.load(p, allow_pickle=True).get('has_frame_2016', 0)) == 1 for p in glob.glob('$DIR/*.npz'))
+              print(n)")
+              TOTAL=$(find "$DIR" -maxdepth 1 -name '*.npz' | wc -l)
+              echo ""
+              echo "tiles with has_frame_2016=1: before $BEFORE, after $AFTER, of $TOTAL"
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "24", memory: "64Gi"}
+            limits: {cpu: "24", memory: "64Gi", nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
