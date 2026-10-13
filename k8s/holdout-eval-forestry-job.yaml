@@ -1,0 +1,79 @@
+---
+# Step 2f: the twelve evaluation-copy tiles whose four SKG forestry channels
+# (height, volume, basal_area, diameter) are all zero. Zero-filled aux is
+# forbidden in this repo: a zero array behind a present key is a fetch that
+# never happened, not a measurement.
+#
+# Fix was the first intention; it is not available. k8s/skg-endpoint-probe-job
+# (2026-10-12 15:03Z) ran prefetch_aux --force against the configured
+# endpoints on a scratch copy of one tile and got "Skogliga grunddata fetch
+# failed after 3 attempts: Unexpected response (… <!DOCTYPE html>)" — the
+# Skogsstyrelsen proxies are retired (PR #73), and the open replacement is
+# per-county GeoTIFF zips not yet downloaded (backlog IM-022). The probe also
+# showed that a failed --force leaves the stored arrays untouched, so nothing
+# was lost, but no re-fetch can succeed today.
+#
+# So this Job EXCLUDES: the still-zero tiles are MOVED out of the copy to
+# /data/holdout_eval_512_excluded/forestry_zero/ (not deleted), names in a
+# manifest, so the final census sees a copy whose every tile carries real
+# forestry data. Tobias asked to be told which it was: exclude, because fix
+# is impossible until IM-022 lands. Runs ONLY on /data/holdout_eval_512.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: holdout-eval-forestry
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: holdout-eval}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: forestry
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              DIR=/data/holdout_eval_512
+              echo "=== forestry re-fetch, evaluation copy — $(date -u) ==="
+              test -f /data/manifests/holdout_eval_512_copy.json || { echo "REFUSING: no copy manifest"; exit 1; }
+              pip install -q --no-cache-dir numpy
+              test -f /data/manifests/holdout_eval_512_copy.json || { echo "REFUSING: no copy manifest"; exit 1; }
+              python - <<'PYEOF'
+              import glob, json, os, time
+              import numpy as np
+              KEYS = ("height", "volume", "basal_area", "diameter")
+              DIR = "/data/holdout_eval_512"
+              OUT = "/data/holdout_eval_512_excluded/forestry_zero"
+              zero = sorted(p.split("/")[-1][:-4] for p in sorted(glob.glob(f"{DIR}/*.npz"))
+                            if all(not np.any(np.load(p, allow_pickle=True)[k]) for k in KEYS))
+              print(f"all-zero forestry: {len(zero)}")
+              os.makedirs(OUT, exist_ok=True)
+              for name in zero:
+                  os.replace(f"{DIR}/{name}.npz", f"{OUT}/{name}.npz")
+              json.dump({"dir": DIR, "zero_forestry": zero, "fixed_by_refetch": [], "excluded_still_zero": zero,
+                         "excluded_to": OUT, "refetch_attempted": False,
+                         "reason": "Skogsstyrelsen ImageServer proxies retired (probe 2026-10-12, PR #73); open GeoTIFF source is backlog IM-022",
+                         "verified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                        open("/data/manifests/holdout_eval_512_forestry.json", "w"), indent=1)
+              print(f"excluded (moved, not deleted): {zero}")
+              print(f"tiles remaining in the copy: {len(glob.glob(f'{DIR}/*.npz'))}")
+              PYEOF
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

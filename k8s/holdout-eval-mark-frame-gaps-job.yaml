@@ -1,0 +1,76 @@
+---
+# Step 2d: mark the evaluation-copy tiles that still have no frame_2016 after
+# the sen2cor pass(es), so absence is recorded rather than ambiguous.
+#
+# Same convention as nfi2024-mark-frame-gaps: scans for what is actually
+# missing (no pasted list), writes has_frame_2016=0 plus a dated reason, and
+# records the names in a manifest. A gap tile stays in the copy and is simply
+# not at the bar; the final census counts it as such. Run after the last
+# sen2cor pass, before S1-2016 (which only fills tiles with has_frame_2016=1).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: holdout-eval-mark-frame-gaps
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: holdout-eval}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: mark
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              pip install -q --no-cache-dir numpy
+              test -f /data/manifests/holdout_eval_512_copy.json || { echo "REFUSING: no copy manifest"; exit 1; }
+              python - <<'PYEOF'
+              import glob, json, os, time
+              from collections import Counter
+
+              import numpy as np
+
+              DIR = "/data/holdout_eval_512"
+              STAMP = time.strftime("%Y-%m-%d")
+              REASON = f"no_usable_l1c_2016_2015_after_sen2cor_pass__eval_copy__verified_{STAMP}"
+              REPORT = "/data/manifests/holdout_eval_512_frame2016_gaps.json"
+              have, marked, relaxed, by_year = 0, [], {}, Counter()
+              for p in sorted(glob.glob(f"{DIR}/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  name = os.path.basename(p)[:-4]
+                  if int(d.get("has_frame_2016", 0)) == 1:
+                      have += 1
+                      if "frame_2016_cot_max" in d:
+                          relaxed[name] = float(d["frame_2016_cot_max"])
+                      continue
+                  d["has_frame_2016"] = np.array(0)
+                  d["frame_2016_gap_reason"] = np.array(REASON)
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **d)
+                  os.replace(tmp, p)
+                  marked.append(name)
+                  by_year[name.rsplit("_", 1)[-1]] += 1
+              total = have + len(marked)
+              print(f"tiles with frame_2016: {have} / {total}; marked as gaps: {len(marked)} {dict(by_year)}")
+              print(f"frames at a relaxed COT gate: {len(relaxed)}")
+              json.dump({"dir": DIR, "tiles_with_frame": have, "tiles_marked_gap": marked,
+                         "marked_by_year": dict(by_year), "gap_reason": REASON, "relaxed_frames": relaxed},
+                        open(REPORT, "w"), indent=1)
+              print(f"report -> {REPORT}")
+              PYEOF
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

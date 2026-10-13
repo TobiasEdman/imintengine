@@ -1,0 +1,108 @@
+---
+# Step 3e: Sentinel-1 for the top-up tiles, per staging root, and the
+# explicit aux-incomplete marking Tobias decided on 2026-10-12 (option a).
+#
+# The Skogsstyrelsen proxies behind height/volume/basal_area/diameter and
+# markfukt are retired (PR #73; k8s/skg-endpoint-probe-job confirmed 403/HTML
+# on the configured endpoint). The fetch's aux step is skip-on-fail, so the
+# new tiles arrive WITHOUT those channels, and nothing may zero-fill them.
+# Decision: fetch spectral now, enrich forestry + markfukt later when the open
+# GeoTIFF source is wired in (backlog IM-022, a separate PR, not this chain).
+# Until then every such tile is marked, in the tile itself, the way tessera
+# and frame_2016 gaps are marked: aux_complete=0, aux_missing=<channels>,
+# aux_gap_reason=<dated string>. Evaluation and inference must not read a
+# tile with aux_complete=0; the final census reports them per year.
+#
+# S1 via pc-rtc is unaffected and runs here (PU-free). Forestry is not
+# attempted; a retired endpoint costs three retries per tile for nothing.
+#
+# Later pass (Tobias 2026-10-12): once the open GeoTIFFs are on the PVC and
+# the fetchers read them (IM-022), run prefetch_aux for the five channels
+# over each staging root and rerun THIS Job: a tile whose channels are then
+# present and non-zero is un-marked (aux_complete=1, reason removed) by the
+# same step, and the census shows the roots complete.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-enrich
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: enrich
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== top-up S1 + aux-incomplete marking — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml requests shapely pystac-client planetary-computer pandas pyarrow Pillow
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse HEAD)"
+              python scripts/enrich_tiles_s1.py --help > /dev/null && echo "imports OK"
+              for Y in $YEARS; do
+                ROOT=/data/unified_v2_512_nfi${Y}_staging
+                [ -d "$ROOT" ] || { echo "$Y: no staging root, skipping"; continue; }
+                BEFORE=$(find "$ROOT" -maxdepth 1 -type f -name '*.npz' | wc -l)
+                echo ""; echo "######## $Y: $BEFORE tiles ########"
+                [ "$BEFORE" -gt 0 ] || continue
+                python scripts/enrich_tiles_s1.py --data-dir "$ROOT" --s1-backend pc-rtc --workers 8 --skip-existing
+                AFTER=$(find "$ROOT" -maxdepth 1 -type f -name '*.npz' | wc -l)
+                [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed in $ROOT"; exit 1; }
+                python - "$ROOT" "$Y" <<'PYEOF'
+              import glob, json, os, sys, time
+              from collections import Counter
+              import numpy as np
+              root, year = sys.argv[1], sys.argv[2]
+              AUX = ("height", "volume", "basal_area", "diameter", "markfukt")
+              STAMP = time.strftime("%Y-%m-%d")
+              REASON = f"forestry_markfukt_unavailable__skg_proxies_retired__pending_IM-022__verified_{STAMP}"
+              c = Counter(); marked = []
+              for p in sorted(glob.glob(f"{root}/*.npz")):
+                  d = dict(np.load(p, allow_pickle=True))
+                  c["tiles"] += 1
+                  if "s1_vv_vh" not in d or not np.any(d["s1_vv_vh"]) or int(d.get("has_s1", 0)) != 1:
+                      c["S1_MISSING"] += 1
+                  missing = [k for k in AUX if k not in d or (getattr(d[k], "ndim", 0) >= 2 and not np.any(np.nan_to_num(d[k])))]
+                  if not missing:
+                      if int(d.get("aux_complete", 1)) == 0:
+                          d["aux_complete"] = np.array(1); d.pop("aux_missing", None); d.pop("aux_gap_reason", None)
+                          tmp = p + ".tmp.npz"; np.savez_compressed(tmp, **d); os.replace(tmp, p)
+                      c["aux_complete"] += 1; continue
+                  for k in missing:
+                      d.pop(k, None)  # never leave a zero array behind a present key
+                  d["aux_complete"] = np.array(0); d["aux_missing"] = np.array(missing); d["aux_gap_reason"] = np.array(REASON)
+                  tmp = p + ".tmp.npz"; np.savez_compressed(tmp, **d); os.replace(tmp, p)
+                  marked.append(os.path.basename(p)[:-4]); c["aux_incomplete"] += 1
+              print(f"{year}: {dict(c)}")
+              json.dump({"year": int(year), "tiles": c["tiles"], "aux_incomplete": marked, "aux_missing_channels": list(AUX),
+                         "reason": REASON}, open(f"/data/manifests/nfi{year}_topup_aux_incomplete.json", "w"), indent=1)
+              if c["S1_MISSING"]:
+                  sys.exit(f"FAIL {year}: S1 missing or empty on {c['S1_MISSING']} tiles")
+              PYEOF
+              done
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

@@ -1,0 +1,272 @@
+---
+# Fetch TESSERA from the current source and store it ALONGSIDE the existing
+# embeddings as `tessera_v2` — nothing is overwritten.
+#
+# The earlier plan replaced `tessera` in place. That destroys data that cannot
+# be recovered: dl2.geotessera.org returns 410, so the embeddings the cohort
+# carries — and the published R5 tessera result rests on — exist nowhere else.
+# Keeping both means the comparison is a measurement instead of a bet, the old
+# numbers stay reproducible, and choosing between them is a later decision made
+# on evidence.
+#
+# Cost of the second copy: 67 MB raw per tile x 8,357 = ~560 GB. The PVC was
+# expanded 1600 -> 2400 Gi for it.
+#
+# Resumable: existing tessera_v2 arrays are reused and their durable comparison
+# sidecars reconciled, so a crash or disk-guard exit continues rather than restarts. The disk guard exists because
+# a mid-run ENOSPC on this volume has happened before (see the preflight note
+# in enrich_tiles_tessera.py).
+#
+# python:3.12-slim is required — geotessera 0.8.0+ needs >= 3.12, and 0.7.5,
+# the last 3.11-compatible release, points at the dead host.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tessera-v2-add
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: tessera-v2-add}
+spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200   # 12 h
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: add
+          image: python:3.12-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
+              set -e
+              export PYTHONUNBUFFERED=1
+              echo "=== tessera_v2 alongside — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq \
+                git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir \
+                numpy scipy rasterio pyproj pyyaml geotessera pandas pyarrow
+              mkdir -p /workspace && cd /workspace
+              git clone --depth 1 --branch main \
+                https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python -c "import importlib.metadata as m; print('geotessera', m.version('geotessera'))"
+              echo "HEAD: $(git rev-parse --short HEAD)"
+              df -h /data | tail -1
+
+              echo ""
+              echo "=== import smoke ==="
+              python scripts/enrich_tiles_tessera.py --help > /dev/null
+              echo "imports OK"
+
+              python - <<'PYEOF'
+              import glob
+              import hashlib
+              import importlib.metadata
+              import json
+              import os
+              import shutil
+              import sys
+              import tempfile
+              import threading
+              from collections import Counter
+              from concurrent.futures import ThreadPoolExecutor
+
+              import numpy as np
+
+              sys.path.insert(0, "/workspace/ie")
+              from geotessera import GeoTessera
+              from imint.training.tile_bbox import resolve_tile_bbox
+              from imint.training.tile_config import TileConfig
+              from scripts.enrich_tiles_tessera import _fetch_tessera_for_tile
+
+              DIRS = ["/data/unified_v2_512", "/data/unified_v2_512_nfi2024_staging"]
+              MIN_FREE_GB = 150.0
+              REPORT = "/data/manifests/tessera_v2_comparison.jsonl"
+              SOURCE = "geotessera-" + importlib.metadata.version("geotessera")
+              EVIDENCE = REPORT + ".d"
+              os.makedirs(EVIDENCE, exist_ok=True)
+
+              paths = []
+              for d in DIRS:
+                  paths.extend(sorted(glob.glob(f"{d}/*.npz")))
+              print(f"tiles total: {len(paths):,}")
+
+              cache = tempfile.mkdtemp(prefix="gt-")
+              gt = GeoTessera(embeddings_dir=cache, cache_dir=cache)
+              print("GeoTessera ready")
+
+              lock = threading.Lock()
+              stats = Counter()
+              stop = threading.Event()
+              rows = []
+
+              def comparison(path, data):
+                  old, new = np.asarray(data["tessera"]), np.asarray(data["tessera_v2"])
+                  same_shape = old.shape == new.shape
+                  diff = rel = None
+                  if same_shape and np.isfinite(old).all() and np.isfinite(new).all():
+                      a, b = old.astype(np.float32), new.astype(np.float32)
+                      diff = float(np.mean(np.abs(a - b)))
+                      rel = diff / float(np.std(a) or 1.0)
+                  return {"tile": os.path.basename(path), "path": os.path.abspath(path),
+                          "identical": same_shape and bool(np.array_equal(old, new)),
+                          "mean_abs_diff": diff, "rel_to_std": rel,
+                          "merged": int(data.get("tessera_v2_merged", 0)),
+                          "year": int(data["tessera_v2_year"]),
+                          "source": str(data.get("tessera_v2_source", "unknown")),
+                          "old_sha256": hashlib.sha256(old.tobytes()).hexdigest(),
+                          "new_sha256": hashlib.sha256(new.tobytes()).hexdigest(),
+                          "old_shape": list(old.shape), "new_shape": list(new.shape),
+                          "old_dtype": str(old.dtype), "new_dtype": str(new.dtype)}
+
+
+              def persist_comparison(path, row):
+                  key = hashlib.sha256(os.path.abspath(path).encode()).hexdigest()
+                  target = os.path.join(EVIDENCE, key + ".json")
+                  fd, tmp = tempfile.mkstemp(prefix=key + ".", suffix=".tmp", dir=EVIDENCE)
+                  try:
+                      with os.fdopen(fd, "w") as stream:
+                          json.dump(row, stream, allow_nan=False)
+                          stream.flush()
+                          os.fsync(stream.fileno())
+                      os.replace(tmp, target)
+                      directory_fd = os.open(EVIDENCE, os.O_RDONLY)
+                      try:
+                          os.fsync(directory_fd)
+                      finally:
+                          os.close(directory_fd)
+                  finally:
+                      if os.path.exists(tmp):
+                          os.unlink(tmp)
+
+
+              def free_gb():
+                  return shutil.disk_usage("/data").free / 1e9
+
+              def one(p):
+                  if stop.is_set():
+                      return
+                  name = os.path.basename(p)
+                  try:
+                      data = dict(np.load(p, allow_pickle=True))
+                  except Exception as e:
+                      with lock:
+                          stats["unreadable"] += 1
+                      return
+                  if "tessera_v2" in data:
+                      # Tile replacement may have completed before a crash or before this
+                      # evidence protocol existed. Rebuild from the two stored arrays;
+                      # do not fetch again or invent missing source metadata.
+                      row = comparison(p, data)
+                      persist_comparison(p, row)
+                      with lock:
+                          stats["identical" if row["identical"] else "differs"] += 1
+                          stats["already"] += 1
+                          rows.append(row)
+                      return
+                  if "tessera" not in data or "tessera_year" not in data:
+                      with lock:
+                          stats["no_prior_tessera"] += 1
+                      return
+
+                  year = int(data["tessera_year"])
+                  size = int(data["tile_size_px"])
+                  bbox = resolve_tile_bbox(
+                      name=name[:-4], tile=TileConfig(size_px=size), npz_data=data)
+                  if bbox is None:
+                      with lock:
+                          stats["no_bbox"] += 1
+                      return
+
+                  try:
+                      new, merged = _fetch_tessera_for_tile(gt, bbox, year, size)
+                  except Exception as e:
+                      with lock:
+                          stats["fetch_error"] += 1
+                      return
+                  if new is None or merged == 0:
+                      with lock:
+                          stats["fetch_empty"] += 1
+                      return
+
+                  data["tessera_v2"] = np.asarray(new)
+                  data["tessera_v2_year"] = np.array(year)
+                  data["tessera_v2_source"] = np.array(SOURCE)
+                  data["tessera_v2_merged"] = np.array(merged)
+                  row = comparison(p, data)
+
+                  tmp = p + ".tmp.npz"
+                  np.savez_compressed(tmp, **data)
+                  with open(tmp, "rb") as stream:
+                      os.fsync(stream.fileno())
+                  os.replace(tmp, p)
+                  directory_fd = os.open(os.path.dirname(p), os.O_RDONLY)
+                  try:
+                      os.fsync(directory_fd)
+                  finally:
+                      os.close(directory_fd)
+                  persist_comparison(p, row)
+
+                  with lock:
+                      stats["identical" if row["identical"] else "differs"] += 1
+                      rows.append(row)
+                      n = sum(stats.values())
+                      if n % 200 == 0:
+                          d_ = stats["differs"]; i_ = stats["identical"]
+                          tot = d_ + i_
+                          print(f"  [{n:,}/{len(paths):,}] differs={d_:,} "
+                                f"identical={i_:,} "
+                                f"({d_/max(tot,1):.0%} changed)  free={free_gb():.0f}G",
+                                flush=True)
+                      if free_gb() < MIN_FREE_GB:
+                          print(f"  DISK GUARD: {free_gb():.0f}G free < {MIN_FREE_GB:.0f}G "
+                                f"— stopping cleanly, rerun to resume", flush=True)
+                          stop.set()
+
+              with ThreadPoolExecutor(max_workers=4) as ex:
+                  list(ex.map(one, paths))
+
+              shutil.rmtree(cache, ignore_errors=True)
+              with open(REPORT + ".tmp", "w") as f:
+                  for r in rows:
+                      f.write(json.dumps(r) + "\n")
+                  f.flush()
+                  os.fsync(f.fileno())
+              os.replace(REPORT + ".tmp", REPORT)
+
+              print("\n=== result ===")
+              for k, v in stats.most_common():
+                  print(f"  {k:18s} {v:,}")
+              tot = stats["differs"] + stats["identical"]
+              if tot:
+                  print(f"\nchanged vs the stored embeddings: "
+                        f"{stats['differs']/tot:.1%} of {tot:,} compared")
+                  nz = [r["rel_to_std"] for r in rows
+                        if not r["identical"] and r["rel_to_std"] is not None]
+                  if nz:
+                      print(f"  mean|diff|/std on differing tiles: "
+                            f"median {np.median(nz):.1%}, max {max(nz):.1%}")
+              print(f"\nper-tile comparison summarized in {REPORT}")
+              print(f"free space: {free_gb():.0f}G")
+              if stop.is_set():
+                  sys.exit("stopped by disk guard — rerun to resume")
+              PYEOF
+              echo ""
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

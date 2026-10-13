@@ -1,0 +1,87 @@
+---
+# Step 3d: unified labels for the top-up tiles, one staging root per year.
+#
+# Fetch and label stay strictly separate (CLAUDE.md): this touches only
+# NMD/LPIS/SKS -> labels, never spectral. Same call as nfi2024-labels-job.yaml
+# per root; the run asserts every tile's label came out in unified space
+# (max class <= 22) — before this Job the `label` key holds RAW NMD codes
+# written by the fetch, so the assertion is the proof the remap happened.
+#
+# Reference data per year, verified on the PVC 2026-10-12: LPIS parquets for
+# 2018, 2019 and 2021 exist (2020 does not — not a top-up year). SKS covers
+# 2021-2026, so 2018 and 2019 tiles get no hygge class, as the cohort's.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-labels
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: labels
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== top-up labels — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy pandas pyarrow rasterio pyproj shapely geopandas fiona python-dotenv requests Pillow
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              echo "HEAD: $(git rev-parse HEAD)"
+              python scripts/build_labels.py --help > /dev/null && echo "imports OK"
+              for Y in $YEARS; do
+                ROOT=/data/unified_v2_512_nfi${Y}_staging
+                [ -d "$ROOT" ] || { echo "$Y: no staging root, skipping"; continue; }
+                BEFORE=$(find "$ROOT" -maxdepth 1 -type f -name '*.npz' | wc -l)
+                echo ""; echo "######## $Y: $BEFORE tiles ########"
+                [ "$BEFORE" -gt 0 ] || continue
+                python scripts/build_labels.py --data-dir "$ROOT" \
+                  --nmd-raster /data/nmd/nmd2018bas_ogeneraliserad_v1_1.tif --nmd-version 2018 \
+                  --lpis-dir /data/lpis --sks-dir /data/sks --workers 4
+                AFTER=$(find "$ROOT" -maxdepth 1 -type f -name '*.npz' | wc -l)
+                [ "$BEFORE" = "$AFTER" ] || { echo "FAIL: tile count changed in $ROOT"; exit 1; }
+                python - "$ROOT" <<'PYEOF'
+              import glob, sys
+              from collections import Counter
+              import numpy as np
+              root = sys.argv[1]
+              tot, bad, n = Counter(), [], 0
+              for p in sorted(glob.glob(f"{root}/*.npz")):
+                  lab = np.load(p, allow_pickle=True).get("label")
+                  if lab is None or int(lab.max()) > 22:
+                      bad.append(p.split("/")[-1]); continue
+                  n += 1
+                  u, c = np.unique(lab, return_counts=True)
+                  tot.update(dict(zip(u.tolist(), c.tolist())))
+              px = sum(tot.values()) or 1
+              crop = sum(c for k, c in tot.items() if 11 <= int(k) <= 21)
+              print(f"tiles in unified space: {n}; crop classes {100*crop/px:.2f}%; hygge {100*tot.get(22,0)/px:.2f}%")
+              if bad:
+                  sys.exit(f"NOT REMAPPED: {bad[:10]}")
+              PYEOF
+              done
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

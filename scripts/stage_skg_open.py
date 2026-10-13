@@ -138,13 +138,76 @@ def load_manifest(dest: Path) -> dict:
 
 
 def save_manifest(dest: Path, manifest: dict) -> None:
+    """Atomic write; the previous manifest is kept as MANIFEST.previous.json
+    so a record is never lost by a later run."""
     manifest["updated_at"] = _now()
     manifest["git_sha"] = _git_sha()
     path = dest / "MANIFEST.json"
+    if path.exists():
+        shutil.copyfile(path, path.with_name("MANIFEST.previous.json"))
     tmp = path.with_suffix(".json.tmp")
     with open(tmp, "w") as f:
         json.dump(manifest, f, indent=1, sort_keys=True)
     os.replace(tmp, path)
+
+
+class UpstreamChanged(RuntimeError):
+    """A re-downloaded zip does not match the sha256 recorded for it."""
+
+
+def check_recovered(rec: dict, new_sha256: str, name: str, *, accept: bool,
+                    raw: Path | None = None, dest: Path | None = None) -> dict:
+    """A raw zip re-downloaded after deletion must hash to the recorded
+    sha256. If upstream changed, the old digest is kept under
+    ``superseded_sha256`` and the run stops unless ``accept`` is set: a
+    silently replaced digest would turn the manifest into a record of the
+    *current* upstream, not of what the COGs were derived from.
+
+    On a refused mismatch the downloaded file is moved aside to
+    ``<name>.upstream-changed`` so that no later run can find a raw file
+    under the recorded name and skip the check. On an accepted mismatch
+    the manifest as it was before the change is archived as an immutable
+    ``MANIFEST.superseded-<timestamp>.json`` (the rolling
+    ``MANIFEST.previous.json`` is overwritten by the same run's later saves).
+    """
+    old = rec.get("sha256")
+    if not old or old == new_sha256:
+        return rec
+    if not accept:
+        if raw is not None and raw.exists():
+            os.replace(raw, raw.with_name(raw.name + ".upstream-changed"))
+        raise UpstreamChanged(
+            f"{name}: re-downloaded file hashes to {new_sha256[:12]}…, manifest records "
+            f"{old[:12]}…; upstream changed since the COG was derived. The download was moved "
+            f"to {raw.name + '.upstream-changed' if raw is not None else '<name>.upstream-changed'}. "
+            "Re-run with --accept-upstream-change to record the new digest (the old one is "
+            "kept under superseded_sha256) and re-derive the raster.")
+    if dest is not None and (dest / "MANIFEST.json").exists():
+        archive_manifest(dest)
+    return {**rec, "superseded_sha256": [*rec.get("superseded_sha256", []), old],
+            "upstream_changed_at": _now()}
+
+
+def archive_manifest(dest: Path) -> Path:
+    """Copy MANIFEST.json to an immutable ``MANIFEST.superseded-<ts>[-n].json``.
+
+    The file is created exclusively (O_CREAT | O_EXCL): a name that already
+    exists — two acceptances in the same second, or a leftover from an
+    earlier run — gets the next ``-n`` suffix instead of being overwritten,
+    so every archived record survives."""
+    stamp = _now().replace(":", "").replace("-", "")
+    src = (dest / "MANIFEST.json").read_bytes()
+    for n in range(0, 10_000):
+        path = dest / (f"MANIFEST.superseded-{stamp}.json" if n == 0
+                       else f"MANIFEST.superseded-{stamp}-{n}.json")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as f:
+            f.write(src)
+        return path
+    raise RuntimeError(f"{dest}: could not allocate a unique manifest archive name")
 
 
 def is_done(item: Item, manifest: dict, dest: Path) -> bool:
@@ -398,11 +461,31 @@ def verify_cog(src: str, cog: Path, *, lossless: bool) -> dict:
         return rec
 
 
-def build_vrt(dest: Path, vrt: str, rasters: list[str], nodata: int) -> dict:
+def vrt_nodata(vrt: str) -> tuple[int, int]:
+    """``(srcnodata, vrtnodata)`` for a product mosaic.
+
+    The county rasters are rectangles that overlap their neighbours. Grunddata
+    and Trädhöjd pad the area outside the county polygon with their nodata
+    value (-1), so overlapping sources compose correctly. The markfukt
+    rasters pad it with the *fill code 255* (their nodata 65535 does not
+    occur), so 255 must be the transparent value when the counties are
+    mosaicked; it is nodata to every reader anyway (0 and 255 both map to
+    "no data" in the service encoding). Measured 2026-10-13: with 65535 as
+    the source nodata, half of Sweden read a neighbour's 255 padding.
+    """
+    if vrt.startswith("markfukt/"):
+        return 255, MARKFUKT_NODATA
+    return -1, -1
+
+
+MARKFUKT_NODATA = 65535
+
+
+def build_vrt(dest: Path, vrt: str, rasters: list[str], srcnodata: int, vrtnodata: int) -> dict:
     out = dest / vrt
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".vrt.tmp")
-    subprocess.run(["gdalbuildvrt", "-q", "-srcnodata", str(nodata), "-vrtnodata", str(nodata),
+    subprocess.run(["gdalbuildvrt", "-q", "-srcnodata", str(srcnodata), "-vrtnodata", str(vrtnodata),
                     "-resolution", "highest", str(tmp), *[str(dest / r) for r in rasters]],
                    check=True)
     text = tmp.read_text()
@@ -418,7 +501,8 @@ def build_vrt(dest: Path, vrt: str, rasters: list[str], nodata: int) -> dict:
         if ds.crs.to_epsg() != 3006:
             raise ValueError(f"{out}: CRS {ds.crs}")
         return {"sources": rasters, "width": ds.width, "height": ds.height,
-                "res_m": float(ds.res[0]), "nodata": ds.nodata, "built_at": _now()}
+                "res_m": float(ds.res[0]), "nodata": ds.nodata, "srcnodata": srcnodata,
+                "built_at": _now()}
 
 
 # ── main ────────────────────────────────────────────────────────────────────
@@ -436,6 +520,9 @@ def main(argv: list[str] | None = None) -> int:
                         "retired proxy's height channel (see docs/data/skg_open_mirror.md)")
     p.add_argument("--drop-raw", action="store_true",
                    help="delete the raw zip after its derived raster is verified (tradhojd only)")
+    p.add_argument("--accept-upstream-change", action="store_true",
+                   help="when a re-downloaded zip no longer matches its recorded sha256, record the "
+                        "new digest (old kept under superseded_sha256) and re-derive instead of stopping")
     p.add_argument("--work-dir", type=Path, default=None, help="scratch for Deflate64 inflation (default <dest>/_work)")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
@@ -469,11 +556,17 @@ def main(argv: list[str] | None = None) -> int:
         if not rec.get("sha256") or not raw.exists():
             print(f"[{done + skipped + 1}/{len(items)}] download {it.name} ({index[it.name]['bytes'] / 2**20:.0f} MiB)", flush=True)
             dl = download(args.source_url + urllib.parse.quote(it.name), raw, index[it.name]["bytes"])
-            rec = {"url": args.source_url + urllib.parse.quote(it.name), "bytes": raw.stat().st_size,
-                   "sha256": sha256_of(raw), "index_modified": index[it.name]["modified"],
+            new_sha = sha256_of(raw)
+            kept = check_recovered(rec, new_sha, it.name, accept=args.accept_upstream_change,
+                                   raw=raw, dest=dest)
+            rec = {**kept, "url": args.source_url + urllib.parse.quote(it.name), "bytes": raw.stat().st_size,
+                   "sha256": new_sha, "index_modified": index[it.name]["modified"],
                    "downloaded_at": _now(), "product": it.product, "omdrev": it.omdrev,
                    "variable": it.variable, "county": it.county,
                    **{k: v for k, v in dl.items() if k != "attempts"}}
+            rec.pop("raw_deleted_at", None)
+            if "superseded_sha256" in rec:
+                manifest["derived"].pop(it.derived, None)      # must be re-derived from the new bytes
             manifest["files"][it.name] = rec
             save_manifest(dest, manifest)
         print(f"    convert -> {it.derived}", flush=True)
@@ -487,8 +580,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for vrt in vrt_targets(items):
         rasters = staged_vrt_sources(manifest, dest, vrt)
-        nodata = 65535 if vrt.startswith("markfukt") else -1
-        manifest["vrt"][vrt] = build_vrt(dest, vrt, rasters, nodata)
+        manifest["vrt"][vrt] = build_vrt(dest, vrt, rasters, *vrt_nodata(vrt))
         print(f"vrt {vrt}: {len(rasters)} sources", flush=True)
     save_manifest(dest, manifest)
     staged = sum(r["bytes"] for r in manifest["files"].values() if not r.get("raw_deleted_at"))

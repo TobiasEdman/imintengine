@@ -73,6 +73,32 @@ Modellen har två output-huvuden från samma backbone:
 
 - **Alla tiles i samma katalog.** LULC, crop och urban tiles blandas inte i underkatalog — allt ligger i en platt `unified_v2/`-katalog. Datasetet filtrerar/samplar internt.
 
+- **`frame_2016` MÅSTE föras för fullständighet.** En tile utan
+  2016-bakgrundsramen är inte komplett och får inte räknas som klar.
+  Datasetet *tolererar* avsaknad — `unified_dataset` nollpaddar och maskar
+  frame 0 när `has_frame_2016 != 1` — men då har tilen fyra effektiva ramar
+  där kohorten har fem, och den skillnaden i indatakomposition konfunderar
+  varje jämförelse mellan tilemängderna. Masken gör felet osynligt, inte
+  oskadligt.
+
+  DES har ingen 2016-L2A: varje `2016-06-01..2016-08-16`-fönster ger
+  `final=0` i datumtratten. Ramen hämtas därför via **sen2cor-vägen**
+  (GCS L1C → `l1c_sen2cor`, PU-fri) med
+  `k8s/sen2cor-frame2016-512-job.yaml` som mall —
+  `select_scenes.py` → `run_sen2cor_per_scene.py`, pinnad image-digest.
+  **Aldrig via CDSE SH-Process**: den delade PU-poolen är reserverad enligt
+  regeln längre ner.
+
+  En ny tilekampanj är inte färdig förrän `has_frame_2016 == 1`. Kör en
+  nyckeljämförelse mot kohorten innan kampanjen förklaras klar —
+  `k8s/nfi2024-aux-audit`-mönstret listar exakt vilka nycklar som saknas,
+  och berikningsstegen (S1, tessera, SKG, `vpp_year`, `frame_2016`) körs
+  INTE av fetchen.
+  *(Lärdom 2026-10-05: nfi2024-kampanjen rapporterades klar med 475
+  etiketterade tiles medan S1, tessera, skogsdata, `vpp_year` och
+  `frame_2016` alla saknades. Etikettverifieringen var noggrann och
+  kontrollerade fel sak.)*
+
 ## Datapipeline — 2 steg
 
 ### Steg 1: Fetch spektral (CDSE, CPU-pod, ~5h)

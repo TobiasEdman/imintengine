@@ -221,3 +221,108 @@ def test_vrt_sources_come_from_the_whole_staged_inventory(tmp_path):
     items = st.plan(["markfukt"], [2], ["03"], {"sksSLUMarkfuktighet03.zip": {"bytes": 1, "modified": ""}})
     for vrt in st.vrt_targets(items):
         assert len(st.staged_vrt_sources(m, tmp_path, vrt)) == 2
+
+
+def test_markfukt_mosaic_makes_the_255_padding_transparent():
+    # county rasters overlap; markfukt pads outside the polygon with 255, grunddata with -1
+    assert st.vrt_nodata("markfukt/markfukt.vrt") == (255, 65535)
+    assert st.vrt_nodata("grunddata/volym_omdrev2.vrt") == (-1, -1)
+    assert st.vrt_nodata("tradhojd/tradhojd_10m.vrt") == (-1, -1)
+
+
+@pytest.mark.skipif(shutil.which("gdalbuildvrt") is None, reason="gdal CLI not installed")
+def test_overlapping_markfukt_counties_compose_without_padding_bleed(tmp_path):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    m = st.load_manifest(tmp_path)
+    (tmp_path / "markfukt").mkdir()
+    # county A covers x 0-200, real data 40 on the left half, 255 padding on the right
+    a = np.full((10, 20), 255, np.uint16); a[:, :10] = 40
+    # county B covers x 100-300, real data 60 on its right half, 255 padding on the left
+    b = np.full((10, 20), 255, np.uint16); b[:, 10:] = 60
+    for name, arr, west in (("markfukt_01.tif", a, 0), ("markfukt_03.tif", b, 100)):
+        with rasterio.open(tmp_path / "markfukt" / name, "w", driver="GTiff", width=20, height=10, count=1,
+                           dtype="uint16", crs="EPSG:3006", transform=from_origin(west, 100, 10, 10),
+                           nodata=65535) as d:
+            d.write(arr, 1)
+        m["derived"]["markfukt/" + name] = {"sha256": "x" * 64}
+    rec = st.build_vrt(tmp_path, "markfukt/markfukt.vrt", st.staged_vrt_sources(m, tmp_path, "markfukt/markfukt.vrt"),
+                       *st.vrt_nodata("markfukt/markfukt.vrt"))
+    with rasterio.open(tmp_path / "markfukt" / "markfukt.vrt") as v:
+        row = v.read(1)[5]
+    assert rec["srcnodata"] == 255 and v.nodata == 65535
+    assert list(row[:10]) == [40] * 10 and list(row[20:]) == [60] * 10      # neither county's padding won
+    assert list(row[10:20]) == [65535] * 10                               # padding in both -> nodata
+
+
+def test_recovered_download_must_match_the_recorded_digest(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMINT_GIT_SHA", "abc")
+    rec = {"sha256": "a" * 64, "bytes": 1}
+    assert st.check_recovered(rec, "a" * 64, "x.zip", accept=False) == rec        # same bytes: fine
+    assert st.check_recovered({}, "b" * 64, "x.zip", accept=False) == {}         # first download
+    raw = tmp_path / "raw" / "x.zip"
+    raw.parent.mkdir()
+    raw.write_bytes(b"new upstream bytes")
+    with pytest.raises(st.UpstreamChanged, match="upstream-changed"):
+        st.check_recovered(rec, "b" * 64, "x.zip", accept=False, raw=raw, dest=tmp_path)
+    assert not raw.exists() and (tmp_path / "raw" / "x.zip.upstream-changed").exists()
+    # a later run therefore sees the raw as missing and cannot skip the check
+    item = st.Item("x.zip", "markfukt", "markfukt/markfukt_01.tif", county="01")
+    m = st.load_manifest(tmp_path)
+    m["files"]["x.zip"] = rec
+    m["derived"][item.derived] = {"sha256": "d" * 64}
+    (tmp_path / "markfukt").mkdir()
+    (tmp_path / item.derived).write_bytes(b"tif")
+    assert not st.is_done(item, m, tmp_path)
+    # acceptance archives the pre-change manifest immutably and keeps the old digest
+    st.save_manifest(tmp_path, m)
+    raw.write_bytes(b"new upstream bytes")
+    out = st.check_recovered(rec, "b" * 64, "x.zip", accept=True, raw=raw, dest=tmp_path)
+    assert out["superseded_sha256"] == ["a" * 64] and out["upstream_changed_at"].endswith("Z")
+    assert rec == {"sha256": "a" * 64, "bytes": 1}                                 # input untouched
+    archived = list(tmp_path.glob("MANIFEST.superseded-*.json"))
+    assert len(archived) == 1 and json.loads(archived[0].read_text())["files"]["x.zip"]["sha256"] == "a" * 64
+    m["files"]["x.zip"] = {**out, "sha256": "b" * 64}
+    st.save_manifest(tmp_path, m)                                                  # later save in the same run
+    st.save_manifest(tmp_path, m)
+    assert json.loads(archived[0].read_text())["files"]["x.zip"]["sha256"] == "a" * 64   # archive untouched
+
+
+def test_save_manifest_keeps_the_previous_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMINT_GIT_SHA", "abc")
+    m = st.load_manifest(tmp_path)
+    m["files"]["a.zip"] = {"sha256": "1" * 64}
+    st.save_manifest(tmp_path, m)
+    assert not (tmp_path / "MANIFEST.previous.json").exists()
+    m["files"]["a.zip"] = {"sha256": "2" * 64}
+    st.save_manifest(tmp_path, m)
+    prev = json.loads((tmp_path / "MANIFEST.previous.json").read_text())
+    assert prev["files"]["a.zip"]["sha256"] == "1" * 64
+    assert json.loads((tmp_path / "MANIFEST.json").read_text())["files"]["a.zip"]["sha256"] == "2" * 64
+
+
+def test_manifest_archives_never_overwrite_each_other(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMINT_GIT_SHA", "abc")
+    monkeypatch.setattr(st, "_now", lambda: "2026-10-13T05:50:00Z")      # freeze the second
+    m = st.load_manifest(tmp_path)
+    paths = []
+    for digest in ("1" * 64, "2" * 64, "3" * 64):
+        m["files"]["a.zip"] = {"sha256": digest}
+        st.save_manifest(tmp_path, m)
+        paths.append(st.archive_manifest(tmp_path))
+    assert [p.name for p in paths] == ["MANIFEST.superseded-20261013T055000Z.json",
+                                       "MANIFEST.superseded-20261013T055000Z-1.json",
+                                       "MANIFEST.superseded-20261013T055000Z-2.json"]
+    assert [json.loads(p.read_text())["files"]["a.zip"]["sha256"][0] for p in paths] == ["1", "2", "3"]
+    # two same-second accepted recoveries keep both pre-change records
+    rec_a = {"sha256": "a" * 64}
+    m["files"]["a.zip"] = rec_a
+    st.save_manifest(tmp_path, m)
+    st.check_recovered(rec_a, "b" * 64, "a.zip", accept=True, dest=tmp_path)
+    m["files"]["a.zip"] = {"sha256": "b" * 64}
+    st.save_manifest(tmp_path, m)
+    st.check_recovered(m["files"]["a.zip"], "c" * 64, "a.zip", accept=True, dest=tmp_path)
+    archived = sorted(tmp_path.glob("MANIFEST.superseded-*.json"))
+    assert len(archived) == 5
+    assert {json.loads(p.read_text())["files"]["a.zip"]["sha256"][0] for p in archived} >= {"a", "b"}

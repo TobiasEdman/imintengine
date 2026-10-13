@@ -1,0 +1,160 @@
+---
+# Step 2b: re-source TESSERA in the evaluation copy from the promoted source
+# (geotessera 0.10.2), and stamp it.
+#
+# Every legacy holdout tile carries embeddings from the retired
+# dl2.geotessera.org with no tessera_source stamp; the cohort and the 2024
+# campaign read geotessera 0.10.2 (decision 2026-10-07: v2 everywhere).
+# Evaluation input must match the source each model was trained with.
+#
+# This is the repo's own enrich_one_tile, driven from Python so the outcome
+# per tile is known: ok -> tessera_source stamped; refetch failed -> the old
+# array stays but has_tessera=0 with the reason, so a mixed-source tile can
+# never pass as data. All-zero results are marked holes the same way.
+# No tessera_v1 copy is kept here: /data/holdout_val_512 is the preserved
+# record of the old arrays (unlike the cohort, where there was no other copy).
+#
+# python:3.12-slim because geotessera >= 0.8 needs Python >= 3.12. PU-free.
+# Runs ONLY on the evaluation copy; holdout-eval-copy must be Complete.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: holdout-eval-tessera
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: holdout-eval}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200   # 12 h; the campaign did 475 tiles in 78 min with 4 workers
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: tessera
+          image: python:3.12-slim@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== tessera re-source, evaluation copy — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml geotessera==0.10.2 pandas pyarrow
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python -c "import importlib.metadata as m, sys; v = m.version('geotessera'); sys.exit(f'Unexpected geotessera {v}') if v != '0.10.2' else print('geotessera', v)"
+              echo "HEAD: $(git rev-parse HEAD)"
+              test -f /data/manifests/holdout_eval_512_copy.json || { echo "REFUSING: no copy manifest"; exit 1; }
+              python scripts/enrich_tiles_tessera.py --help > /dev/null && echo "imports OK"
+              python - <<'PYEOF'
+              import json, os, sys, threading, time
+              from collections import Counter
+              from concurrent.futures import ThreadPoolExecutor, as_completed
+
+              import numpy as np
+
+              sys.path.insert(0, "/workspace/ie")
+              from scripts.enrich_tiles_tessera import (_LRUCacheGuard, clean_stale_tile_tmps,
+                                                        enrich_one_tile, list_tile_paths)
+              from geotessera import GeoTessera
+
+              DIR = "/data/holdout_eval_512"
+              EMB, REG = "/data/tessera_cache/embeddings", "/data/tessera_cache/registry"
+              from importlib.metadata import version
+              producer_version = version("geotessera")
+              if producer_version != "0.10.2":
+                  sys.exit(f"REFUSING: unexpected geotessera {producer_version}")
+              SRC = f"geotessera-{producer_version}"
+              STAMP = time.strftime("%Y-%m-%d")
+              REPORT = "/data/manifests/holdout_eval_512_tessera.json"
+              EXPECTED = len(json.load(open("/data/manifests/holdout_eval_512_copy.json"))["sha256"])
+
+              clean_stale_tile_tmps(DIR)
+              tiles = list_tile_paths(DIR)
+              print(f"tiles: {len(tiles)} (copy manifest: {EXPECTED})")
+              if len(tiles) != EXPECTED:
+                  sys.exit("REFUSING: tile count differs from the copy manifest")
+              os.makedirs(EMB, exist_ok=True); os.makedirs(REG, exist_ok=True)
+              gt = GeoTessera(embeddings_dir=EMB, cache_dir=REG)
+              guard = _LRUCacheGuard(EMB, soft_gb=20.0); guard.start()
+
+              lock = threading.Lock()
+              st = Counter()
+              outcomes = {}
+              t0 = time.time()
+
+              def rewrite(path, **fields):
+                  data = dict(np.load(path, allow_pickle=True))
+                  data.update({k: np.array(v) for k, v in fields.items()})
+                  tmp = path + ".tmp.npz"
+                  np.savez_compressed(tmp, **data)
+                  os.replace(tmp, path)
+
+              def one(path):
+                  name = os.path.basename(path)[:-4]
+                  r = enrich_one_tile(path, gt, skip_existing=False)
+                  if r.get("status") == "ok":
+                      a = np.asarray(np.load(path, allow_pickle=True)["tessera"])
+                      if a.ndim >= 2 and np.any(a):
+                          rewrite(path, tessera_source=SRC)
+                          rewrite_reason = None
+                          state = "resourced"
+                      else:
+                          rewrite(path, has_tessera=0, tessera_source=SRC,
+                                  tessera_gap_reason=f"tessera_all_zero_in_{SRC}__verified_{STAMP}")
+                          state = "hole"
+                  else:
+                      reason = str(r.get("reason", "unknown"))[:60].replace(" ", "_")
+                      rewrite(path, has_tessera=0,
+                              tessera_gap_reason=f"tessera_refetch_failed__{reason}__verified_{STAMP}")
+                      state = "refetch_failed"
+                  with lock:
+                      st[state] += 1
+                      outcomes[name] = state
+                      n = sum(st.values())
+                      if n % 50 == 0:
+                          print(f"  [{n}/{len(tiles)}] {dict(st)}  {n / max(time.time() - t0, 1) * 3600:.0f}/h", flush=True)
+
+              try:
+                  with ThreadPoolExecutor(max_workers=4) as pool:
+                      futs = [pool.submit(one, t) for t in tiles]
+                      for f in as_completed(futs):
+                          f.result()
+              finally:
+                  guard.request_stop(); guard.join(timeout=60)
+
+              print(f"\nresult: {dict(st)}")
+              chk = Counter()
+              for p in tiles:
+                  d = np.load(p, allow_pickle=True)
+                  a = np.asarray(d["tessera"])
+                  flag = int(d["has_tessera"])
+                  src = str(d["tessera_source"]) if "tessera_source" in d.files else ""
+                  if flag == 1 and not np.any(a):
+                      chk["FLAG_ON_EMPTY"] += 1
+                  if flag == 1 and src != SRC:
+                      chk["USABLE_WITHOUT_PROMOTED_STAMP"] += 1
+                  chk["usable"] += flag == 1
+              print(f"verify: {dict(chk)}")
+              json.dump({"dir": DIR, "source": SRC, "states": dict(st), "verify": dict(chk),
+                         "failed_or_hole": sorted(n for n, s in outcomes.items() if s != "resourced")},
+                        open(REPORT, "w"), indent=1)
+              print(f"report -> {REPORT}")
+              if chk["FLAG_ON_EMPTY"] or chk["USABLE_WITHOUT_PROMOTED_STAMP"]:
+                  sys.exit("FAIL: a usable tile lacks the promoted stamp or is empty")
+              PYEOF
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
