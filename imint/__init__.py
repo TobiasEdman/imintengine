@@ -4,9 +4,6 @@ Importing imint does not initialize models, providers or the analysis engine.
 """
 from importlib import import_module
 
-from . import _cache_identity
-
-_cache_identity.record_caller()
 
 __all__ = [
     "run_job", "coregister_to_reference", "coregister_timeseries",

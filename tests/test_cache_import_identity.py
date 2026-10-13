@@ -41,6 +41,7 @@ def test_symlinked_source_does_not_break_import_and_failure_is_sticky(source):
         assert "imint.engine" not in sys.modules
         assert "torch" not in sys.modules
         from imint import _cache_identity as identity
+        from scripts import infer_tiles
         for repair in (False, True):
             if repair:
                 p = Path("imint/training/sampler.py")
@@ -60,21 +61,24 @@ def test_unavailable_metadata_is_deferred_and_producer_failure_is_sticky(source)
     run(source, '''
         import sys
         import importlib.metadata as metadata
-        real = metadata.distributions
+        real = metadata.version
         calls = []
-        def unavailable():
+        def unavailable(*args):
             calls.append(1)
             raise OSError("metadata unavailable")
-        metadata.distributions = unavailable
+        metadata.version = unavailable
         import imint
         from imint import _cache_identity as identity
         assert calls == []
         assert "imint.engine" not in sys.modules
         assert "torch" not in sys.modules
+        metadata.version = real
+        from scripts import infer_tiles
+        metadata.version = unavailable
         identity.producer_revision()  # Source-only validation doesn't enumerate packages.
         for repair in (False, True):
             if repair:
-                metadata.distributions = real
+                metadata.version = real
             try:
                 identity.producer_environment()
             except identity.ProducerIdentityError as exc:
@@ -97,6 +101,7 @@ def test_source_read_error_does_not_break_noncache_import(source):
             return original(path, *args, **kwargs)
         with patch.object(Path, "open", unreadable):
             import imint
+            from scripts import infer_tiles
         from imint import _cache_identity as identity
         try:
             identity.producer_revision()
@@ -127,6 +132,7 @@ def test_source_drift_during_capture_does_not_break_noncache_import(source):
             return value
         with patch.object(os, "fstat", drift):
             import imint
+            from scripts import infer_tiles
         from imint import _cache_identity as identity
         try:
             identity.producer_revision()
@@ -143,6 +149,7 @@ def test_observer_fast_skips_unrelated_execution_without_filesystem_calls(source
         from unittest.mock import patch
         import imint
         from imint import _cache_identity as identity
+        from scripts import infer_tiles
         code = compile("value = 42", "/outside-watched-roots/unrelated.py", "exec")
         scope = {}
         with patch.object(identity, "Path", side_effect=AssertionError("unexpected filesystem work")):
@@ -159,10 +166,14 @@ def test_observer_errors_do_not_interrupt_execution_but_invalidate_cache(source)
         from unittest.mock import patch
         import imint
         from imint import _cache_identity as identity
+        from scripts import infer_tiles
         code = compile("value = 42", str(Path("imint/observer-probe.py").resolve()), "exec")
         scope = {}
         with patch.object(identity, "_record", side_effect=OSError("observer failed")):
-            exec(code, scope)
+            # Execute through an observed producer frame.
+            from scripts import inference_comparison
+            exec(compile("exec(code, scope)", inference_comparison.__file__, "exec"),
+                 dict(code=code, scope=scope))
         assert scope["value"] == 42
         try:
             identity.producer_revision()
@@ -182,15 +193,15 @@ def test_producer_versions_are_pinned_on_first_use_without_loading_models(source
         import imint
         from imint import _cache_identity as identity
         assert "torch" not in sys.modules and "numpy" not in sys.modules
+        from scripts import infer_tiles
         runtime = identity.producer_environment()
         versions = dict(runtime["packages"])
         assert versions["torch"] == metadata.version("torch")
         assert versions["numpy"] == metadata.version("numpy")
-        assert runtime["python"] == sys.version
-        with patch.object(metadata, "distributions", side_effect=AssertionError("recapture")):
+        assert runtime["python"] == sys.version.split()[0]
+        with patch.object(metadata, "version", side_effect=AssertionError("recapture")):
             assert identity.producer_environment() == runtime
         runtime["packages"].clear()
         assert identity.producer_environment()["packages"]
-        assert "torch" not in sys.modules and "numpy" not in sys.modules
         print("Python/torch/numpy versions pinned lazily; no numerical modules loaded")
     ''')

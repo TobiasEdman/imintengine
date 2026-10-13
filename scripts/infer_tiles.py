@@ -46,19 +46,23 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from imint.training.tile_fetch import is_tile_tmp  # noqa: E402
 from imint._cache_identity import (  # noqa: E402
-    producer_environment, producer_revision, record_caller,
+    producer_environment, producer_revision, record_caller, start_capture,
+    producer_sources, validate_recorded_sources,
 )
 
+start_capture(producer=True)
 record_caller()
+import numpy as np
+from imint.training import unified_dataset  # Capture shared preprocessing before callers import it.
+from imint.training.tile_fetch import is_tile_tmp
 from scripts.cache_predict import (  # noqa: E402
     CacheValidationError, atomic_write, file_identity,
-    read_cache_entry,
+    read_cache_entry, identity_differences, contract_pin, cache_publication_lock,
+    write_input_manifest,
 )
 
 
@@ -153,7 +157,7 @@ class TileInferenceDataset:
     """
 
     def __init__(self, tile_paths, device_family, img_size, aux_channel_names,
-                 num_frames=None, identities=None, producer=None):
+                 num_frames=None, identities=None, producer=None, producer_sources=None):
         import torch  # noqa: F401  (import guarded to keep module import light)
         self._torch = __import__("torch")
         self.tile_paths = [str(p) for p in tile_paths]
@@ -169,14 +173,30 @@ class TileInferenceDataset:
         self.num_frames = num_frames
         self.identities = identities
         self.producer = producer
+        self.producer_sources = producer_sources
         self._infcmp = _load_infcmp()
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state.pop('_torch', None)
+        state.pop('_infcmp', None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._torch = __import__('torch')
+        self._infcmp = _load_infcmp()
+        if self.producer is not None:
+            producer_revision(expected=self.producer, helpers=self._infcmp,
+                              expected_sources=self.producer_sources)
 
     def __len__(self):
         return len(self.tile_paths)
 
     def __getitem__(self, i):
         if self.producer is not None:
-            producer_revision(expected=self.producer, helpers=self._infcmp)
+            producer_revision(expected=self.producer, helpers=self._infcmp,
+                              expected_sources=self.producer_sources)
         tile_path = self.tile_paths[i]
         # Build on CPU (device="cpu") — the DataLoader worker has no GPU;
         # tensors are moved to the GPU in the main loop after collation.
@@ -188,7 +208,8 @@ class TileInferenceDataset:
             self.aux_channel_names, family=self.family,
             num_frames=self.num_frames, **verified)
         if self.producer is not None:
-            producer_revision(expected=self.producer, helpers=self._infcmp)
+            producer_revision(expected=self.producer, helpers=self._infcmp,
+                              expected_sources=self.producer_sources)
         item = {
             "img5d": inp["img5d"].squeeze(0),   # drop the (1, …) batch dim
             "aux": inp["aux"].squeeze(0),
@@ -228,9 +249,12 @@ def _collate(batch):
 
 
 def _write_manifest(sha_dir: Path, *, checkpoint, ckpt_sha, backbone_name,
-                    num_classes, img_size, n_tiles, git_sha, produced_at, inference):
+                    num_classes, img_size, n_tiles, git_sha, produced_at, inference,
+                    regenerate_invalid=False):
     """Provenance sidecar mirroring the repo's Docker-artifact MANIFEST rule."""
     manifest = {
+        "cache_version": 2, "producer_sources": producer_sources(),
+        "producer_pin": contract_pin(inference),
         "inference": inference,
         "checkpoint": str(checkpoint),
         "ckpt_sha": ckpt_sha,
@@ -241,14 +265,27 @@ def _write_manifest(sha_dir: Path, *, checkpoint, ckpt_sha, backbone_name,
         "git_sha": git_sha,
         "produced_at": produced_at,
     }
-    atomic_write(sha_dir / "MANIFEST.json",
-                 lambda f: f.write(json.dumps(manifest, indent=2).encode()))
+    with cache_publication_lock(sha_dir):
+        path = sha_dir / "MANIFEST.json"
+        if path.exists():
+            try:
+                previous = json.loads(path.read_text())
+            except (OSError, ValueError):
+                if not regenerate_invalid:
+                    raise CacheValidationError('unreadable existing manifest; explicit regeneration required')
+                previous = {}
+            if previous.get('inference') == inference and previous.get('cache_version') == 2:
+                return  # Same-contract shards never overwrite one another's manifest.
+            if not regenerate_invalid:
+                fields = identity_differences(previous.get('inference', {}), inference, 'inference')
+                raise CacheValidationError('conflicting shard manifest: ' + ', '.join(fields))
+        atomic_write(path, lambda f: f.write(json.dumps(manifest, indent=2).encode()))
 
 
 def infer_all(
     *, checkpoint, backbone_name, data_dir, tile_list, img_size, num_classes,
     cache_dir, batch_size, num_workers, device, shard, log_every, produced_at,
-    allow_missing=False,
+    allow_missing=False, regenerate_invalid=False,
 ):
     """Load the model ONCE, batch-infer the tile set, write the cache.
 
@@ -257,10 +294,7 @@ def infer_all(
     import torch
     from torch.utils.data import DataLoader, Subset
 
-    revision = producer_revision()
-    environment = producer_environment()
     infcmp = _load_infcmp()
-    producer_revision(expected=revision, helpers=infcmp)
     dev = torch.device(device)
 
     checkpoint_identity = file_identity(checkpoint)
@@ -273,6 +307,58 @@ def infer_all(
         i, k = shard
         tiles = tiles[i::k]
         print(f"shard {i}/{k}: {len(tiles)} tiles")
+
+    # All incompatibility classification precedes model construction/forward.
+    identities = [file_identity(p) for p in tiles]
+    previous = None
+    failures = []
+    manifest_path = sha_dir / 'MANIFEST.json'
+    if manifest_path.exists():
+        try:
+            previous = json.loads(manifest_path.read_text())
+            if previous.get('cache_version') != 2:
+                failures.append('manifest.cache_version (legacy)')
+            else:
+                requested = {'checkpoint': {k: checkpoint_identity[k] for k in ('size', 'sha256')},
+                             'img_size': int(img_size), 'num_classes': int(num_classes),
+                             'backbone_name': backbone_name}
+                stored = previous['inference']
+                failures.extend(identity_differences({k: stored.get(k) for k in requested}, requested, 'inference'))
+                failures.extend(validate_recorded_sources(previous['producer_sources']))
+                # Compare only versions recorded as relevant by the producer,
+                # never enumerate every installed distribution.
+                from importlib.metadata import version
+                for package, expected_version in stored['runtime']['packages']:
+                    if version(package) != expected_version:
+                        failures.append('inference.runtime.packages.' + package)
+                runtime = producer_environment(dev)
+                for field in ('device', 'numerics', 'python'):
+                    failures.extend(identity_differences(stored['runtime'][field], runtime[field],
+                                                        'inference.runtime.' + field))
+        except Exception as exc:
+            failures.append('manifest: ' + str(exc))
+    elif any(sha_dir.glob('*.npz')):
+        failures.append('manifest missing (legacy/incomplete cache)')
+    invalid = []
+    for p, identity in zip(tiles, identities):
+        entry = sha_dir / (p.stem + '.npz')
+        if not entry.exists():
+            continue
+        if failures or previous is None:
+            invalid.append((p.name, ', '.join(failures) or 'manifest missing'))
+        else:
+            try:
+                read_cache_entry(entry, source=identity, inference=previous['inference'])
+            except CacheValidationError as exc:
+                invalid.append((p.name, str(exc)))
+    if failures or invalid:
+        print(f'[infer_tiles] cache refusal preflight: {len(invalid)} affected existing entries; '
+              f'fields/reasons: {failures or [reason for _, reason in invalid]}')
+        if not regenerate_invalid:
+            raise CacheValidationError(f'{len(invalid)} incompatible existing cache entries; '
+                f'{failures or invalid}; no model loaded. Inspect costs, then explicitly '
+                'authorize --regenerate-invalid (or use a new cache directory).')
+        print(f'[infer_tiles] EXPLICIT regeneration authorized for {len(invalid)} invalid entries')
 
     print(f"[infer_tiles] checkpoint sha={sha} cache={sha_dir}")
     # Thread runtime img_size so clay/croma (no pos_embed, minimal config)
@@ -316,6 +402,11 @@ def infer_all(
     # branch and a 1-frame model's temporal_encoding rejects the 4x token
     # grid (15376 vs 3844), which killed the first ladder-eval wave.
     model_num_frames = getattr(model, "num_frames", None)
+    # Load the actual shared preprocessing closure before fixing the contract.
+    from imint.training import unified_dataset  # noqa: F401
+    revision = producer_revision(helpers=infcmp)
+    environment = producer_environment(dev)
+
     inference = {
         "checkpoint": {k: checkpoint_identity[k] for k in ("size", "sha256")},
         "backbone_name": backbone_name, "family": family,
@@ -325,9 +416,18 @@ def infer_all(
         "runtime": environment,
     }
     producer_revision(expected=revision, helpers=infcmp)
-    identities = [file_identity(p) for p in tiles]
+    _write_manifest(
+        sha_dir, checkpoint=checkpoint, ckpt_sha=sha, backbone_name=backbone_name,
+        num_classes=num_classes, img_size=img_size, n_tiles=len(tiles),
+        git_sha=_git_sha(), produced_at=produced_at, inference=inference,
+        regenerate_invalid=regenerate_invalid)
+    input_path, input_pin = write_input_manifest(sha_dir, identities)
+    print(f'[infer_tiles] producer_pin={contract_pin(inference)}')
+    print(f'[infer_tiles] input receipt={input_path} sha256={input_pin}; '
+          'fast Stage B additionally requires an operator-guaranteed immutable snapshot')
     ds = TileInferenceDataset(tiles, family, img_size, aux_names,
-                             num_frames=model_num_frames, identities=identities, producer=revision)
+                             num_frames=model_num_frames, identities=identities, producer=revision,
+                             producer_sources=producer_sources())
 
     # Group tiles by crop size so a batch collates cleanly. Odd-sized tiles are
     # inferred at batch=1 rather than being mis-cropped or padded.
@@ -349,7 +449,10 @@ def infer_all(
             cpath = sha_dir / f"{Path(ds.tile_paths[i]).stem}.npz"
             try:
                 read_cache_entry(cpath, source=identities[i], inference=inference)
-            except CacheValidationError:
+            except CacheValidationError as exc:
+                if cpath.exists() and not regenerate_invalid:
+                    raise CacheValidationError(f'cache changed after preflight: {exc}') from exc
+                print(f'[infer_tiles] {"regenerate" if cpath.exists() else "missing"}: {cpath.name}: {exc}')
                 pending.append(i)
         n_skipped += len(idxs) - len(pending)
         done += len(idxs) - len(pending)
@@ -381,13 +484,19 @@ def infer_all(
                 raise ValueError("model output channels disagree with cache configuration")
             for j, stem in enumerate(batch["stems"]):
                 cpath = sha_dir / f"{stem}.npz"
-                metadata = json.dumps({"version": 1,
+                metadata = json.dumps({"version": 2,
                                        "source": batch["identities"][j],
                                        "inference": inference}, sort_keys=True)
                 arrays = dict(pred=pred[j], probs=probs[j], fracs=fracs[j],
                               metadata=np.array(metadata))
                 producer_revision(expected=revision, helpers=infcmp)
-                atomic_write(cpath, lambda f: np.savez_compressed(f, **arrays))
+                if producer_environment(dev) != environment:
+                    raise CacheValidationError('producer runtime changed before publication')
+                with cache_publication_lock(sha_dir):
+                    current = json.loads(manifest_path.read_text())
+                    if current.get('inference') != inference:
+                        raise CacheValidationError('shard contract changed; refusing publication')
+                    atomic_write(cpath, lambda f: np.savez_compressed(f, **arrays))
                 n_written += 1
             done += len(batch["stems"])
             if log_every and (n_written % log_every < len(batch["stems"])):
@@ -472,6 +581,9 @@ def main() -> None:
     ap.add_argument("--allow-missing", action="store_true",
                     help="skip+log tiles in --tile-list absent from --data-dir "
                          "(truth indices may list removed tiles)")
+    ap.add_argument("--regenerate-invalid", action="store_true",
+                    help="explicitly authorize replacement of incompatible/corrupt/legacy entries; "
+                         "default refuses before model load (may incur GPU cost)")
     ap.add_argument("--produced-at", default=None,
                     help="ISO timestamp for MANIFEST provenance (deterministic; "
                          "no wall-clock read in library code)")
@@ -484,7 +596,7 @@ def main() -> None:
         batch_size=args.batch_size, num_workers=args.num_workers,
         device=args.device, shard=_parse_shard(args.shard),
         log_every=args.log_every, produced_at=args.produced_at,
-        allow_missing=args.allow_missing)
+        allow_missing=args.allow_missing, regenerate_invalid=args.regenerate_invalid)
 
 
 if __name__ == "__main__":

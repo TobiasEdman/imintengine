@@ -63,9 +63,9 @@ def run(root, code):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("dependency", ["imint/training/sampler.py", "imint/fm/upernet.py",
-                                         "imint/fm/prithvi_mae/config.json"])
-def test_dependency_change_rejects_read_and_skip(producer, dependency):
+@pytest.mark.parametrize("dependency", ["imint/training/sampler.py", "imint/training/unified_dataset.py",
+                                         "imint/training/tile_time.py"])
+def test_dependency_change_preserves_pinned_read_but_refuses_resume(producer, dependency):
     run(producer, '''
         sha, counts = t._run_stage_a(model, data, cache, checkpoint)
         assert counts == (3, 0)
@@ -89,13 +89,16 @@ def test_dependency_change_rejects_read_and_skip(producer, dependency):
     path.write_text(source)
     run(producer, f"dependency = {dependency!r}\n" + textwrap.dedent('''
         sha = (root / "old-sha").read_text()
-        try:
-            t.cache_predict.make_cached_predict_fn(cache, sha, want_fracs=False)(tile)
-        except (ValueError, RuntimeError):
-            pass
-        else:
-            raise AssertionError("changed producer dependency accepted by reader")
-        assert t._run_stage_a(model, data, cache, checkpoint)[1] == (3, 0)
+        # Stage B consumes recorded producer provenance, not its local code.
+        t._cached_predict_fn(cache, sha, want_fracs=False)(tile)
+        with patch.object(t._FakeInfcmp, 'load_model', side_effect=AssertionError('model loaded')):
+            try:
+                t._run_stage_a(model, data, cache, checkpoint)
+            except ValueError as exc:
+                assert 'producer_sources' in str(exc)
+            else:
+                raise AssertionError('changed producer silently regenerated')
+        assert t._run_stage_a(model, data, cache, checkpoint, regenerate_invalid=True)[1] == (3, 0)
         assert t._run_stage_a(model, data, cache, checkpoint)[1] == (0, 3)
         if "sampler" in dependency:
             inp = t.infcmp._build_inference_inputs(root / "probe.npz", t.torch.device("cpu"), 16, None)
@@ -154,7 +157,7 @@ def test_replacement_during_forward_prevents_publication(producer):
     run(producer, '''
         original = model.forward
         def replace_then_forward(*args, **kwargs):
-            path = root / "imint/fm/upernet.py"
+            path = root / "imint/training/sampler.py"
             path.write_text(path.read_text() + "\\n# changed during forward\\n")
             return original(*args, **kwargs)
         model.forward = replace_then_forward
@@ -213,18 +216,13 @@ def test_stale_bytecode_cannot_impersonate_new_source(producer):
     ''')
 
 
-def test_pinned_reader_rejects_source_drift(producer):
+def test_pinned_reader_independent_of_reader_source_drift(producer):
     run(producer, '''
         sha, _ = t._run_stage_a(model, data, cache, checkpoint)
-        reader = t.cache_predict.make_cached_predict_fn(cache, sha, want_fracs=False)
+        reader = t._cached_predict_fn(cache, sha, want_fracs=False)
         reader(tile)
         source = root / "imint/training/sampler.py"
         source.write_text(source.read_text().replace("math.radians(15.0)", "math.radians(16.0)"))
-        try:
-            reader(tile)
-        except RuntimeError as exc:
-            assert "producer" in str(exc)
-        else:
-            raise AssertionError("pinned reader accepted changed producer source")
-        print("pinned reader rejects post-construction source change")
+        reader(tile)
+        print("pinned reader retains original producer provenance")
     ''')

@@ -38,10 +38,19 @@ def _load(name, path):
     return m
 
 
+infer_tiles = _load("infer_tiles", SCRIPTS / "infer_tiles.py")
 infcmp = _load("_infcmp", SCRIPTS / "inference_comparison.py")
 van = _load("validate_against_nfi", SCRIPTS / "validate_against_nfi.py")
-infer_tiles = _load("infer_tiles", SCRIPTS / "infer_tiles.py")
 cache_predict = _load("cache_predict", SCRIPTS / "cache_predict.py")
+
+
+def _cached_predict_fn(cache_dir, sha, **kwargs):
+    # Fixture captures the Stage-A published pin; production callers must
+    # supply their separately recorded/approved pin explicitly.
+    manifest = json.loads((Path(cache_dir) / sha / 'MANIFEST.json').read_text())
+    return cache_predict.make_cached_predict_fn(cache_dir, sha,
+        producer_pin=manifest.get('producer_pin'), **kwargs)
+
 
 from imint.training.unified_dataset import AUX_CHANNEL_NAMES  # noqa: E402
 
@@ -217,9 +226,9 @@ def test_cached_predict_matches_direct(tiles, cache_dir_tmp, checkpoint):
     sha, _ = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
     device = torch.device("cpu")
 
-    cached_hard = cache_predict.make_cached_predict_fn(
+    cached_hard = _cached_predict_fn(
         cache_dir_tmp, sha, want_fracs=False)
-    cached_frac = cache_predict.make_cached_predict_fn(
+    cached_frac = _cached_predict_fn(
         cache_dir_tmp, sha, want_fracs=True)
 
     for i in range(3):
@@ -266,7 +275,7 @@ def test_score_against_nfi_direct_vs_cached(tiles, cache_dir_tmp, checkpoint):
         probs = _direct_probs(model, tile_path, device)
         return probs.argmax(0).astype(np.int64), probs
 
-    cached_predict_fn = cache_predict.make_cached_predict_fn(
+    cached_predict_fn = _cached_predict_fn(
         cache_dir_tmp, sha, want_fracs=False)
 
     res_direct = van.score_against_nfi(
@@ -298,7 +307,7 @@ def test_cache_regenerates_changed_identity(tiles, cache_dir_tmp, checkpoint, tm
     import shutil
     model = FakeDualHead()
     sha, _ = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
-    reader = cache_predict.make_cached_predict_fn(cache_dir_tmp, sha, want_fracs=False)
+    reader = _cached_predict_fn(cache_dir_tmp, sha, want_fracs=False)
     original_tile = tiles / "tileX_0.npz"
     _, before = reader(original_tile)
     options = {}
@@ -320,9 +329,9 @@ def test_cache_regenerates_changed_identity(tiles, cache_dir_tmp, checkpoint, tm
         model.ck_cfg = {"enabled_aux_names": list(reversed(AUX_CHANNEL_NAMES))}
     else:
         options["backbone_name"] = "other-backbone"
-    _, counts = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint, **options)
+    _, counts = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint, regenerate_invalid=True, **options)
     assert counts == ((1, 2) if change == "bytes" else (3, 0))
-    fresh = cache_predict.make_cached_predict_fn(cache_dir_tmp, sha, want_fracs=False)
+    fresh = _cached_predict_fn(cache_dir_tmp, sha, want_fracs=False)
     _, after = fresh(tiles / original_tile.name)
     if change == "bytes":
         assert not np.array_equal(before, after)
@@ -341,7 +350,7 @@ def test_cache_rejects_and_repairs_invalid_entries(tiles, cache_dir_tmp, checkpo
     sha, _ = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
     tile = tiles / "tileX_0.npz"
     cpath = cache_predict.cache_path_for(cache_dir_tmp, sha, tile)
-    reader = cache_predict.make_cached_predict_fn(cache_dir_tmp, sha, want_fracs=True)
+    reader = _cached_predict_fn(cache_dir_tmp, sha, want_fracs=True)
     if damage == "truncated":
         cpath.write_bytes(cpath.read_bytes()[:80])
     else:
@@ -356,9 +365,9 @@ def test_cache_rejects_and_repairs_invalid_entries(tiles, cache_dir_tmp, checkpo
         else:
             arrays["metadata"] = np.array("{}")
         np.savez_compressed(cpath, **arrays)
-    with pytest.raises(ValueError, match="rerun infer_tiles"):
+    with pytest.raises(ValueError, match="cache|manifest"):
         reader(tile)
-    assert _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)[1] == (1, 2)
+    assert _run_stage_a(model, tiles, cache_dir_tmp, checkpoint, regenerate_invalid=True)[1] == (1, 2)
     assert np.isfinite(reader(tile)[2]).all()
 
 
@@ -374,8 +383,8 @@ def test_cache_checkpoint_bytes_change_namespace(tiles, cache_dir_tmp, checkpoin
 @pytest.mark.parametrize("options", [{"img_size": 8}, {"num_classes": 2}])
 def test_cache_reader_rejects_scoring_config(tiles, cache_dir_tmp, checkpoint, options):
     sha, _ = _run_stage_a(FakeDualHead(), tiles, cache_dir_tmp, checkpoint)
-    with pytest.raises(ValueError, match="configuration mismatch"):
-        cache_predict.make_cached_predict_fn(cache_dir_tmp, sha, want_fracs=False, **options)
+    with pytest.raises(ValueError, match="inference.*mismatch"):
+        _cached_predict_fn(cache_dir_tmp, sha, want_fracs=False, **options)
 
 
 def test_cache_authenticates_bytes_consumed_by_preprocessing(tiles, cache_dir_tmp, checkpoint, monkeypatch):
@@ -413,11 +422,11 @@ def test_cache_atomic_failure_preserves_complete_entry(tiles, cache_dir_tmp, che
 
     monkeypatch.setattr(np, "savez_compressed", fail_write)
     with pytest.raises(OSError, match="injected write failure"):
-        _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
+        _run_stage_a(model, tiles, cache_dir_tmp, checkpoint, regenerate_invalid=True)
     assert cpath.read_bytes() == before
     assert not list(cpath.parent.glob(".*.npz.*"))
     monkeypatch.setattr(np, "savez_compressed", real)
-    assert _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)[1] == (1, 2)
+    assert _run_stage_a(model, tiles, cache_dir_tmp, checkpoint, regenerate_invalid=True)[1] == (1, 2)
 
 
 def test_cache_rejects_legacy_manifest(tiles, cache_dir_tmp, checkpoint):
@@ -426,8 +435,8 @@ def test_cache_rejects_legacy_manifest(tiles, cache_dir_tmp, checkpoint):
     data = json.loads(manifest.read_text())
     data.pop("inference", None)
     manifest.write_text(json.dumps(data))
-    with pytest.raises(ValueError, match="rerun infer_tiles"):
-        cache_predict.make_cached_predict_fn(cache_dir_tmp, sha, want_fracs=False)
+    with pytest.raises(ValueError, match="cache|manifest"):
+        _cached_predict_fn(cache_dir_tmp, sha, want_fracs=False)
 
 
 def test_cache_refuses_wrong_output_class_count(tiles, cache_dir_tmp, checkpoint):
