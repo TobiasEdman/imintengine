@@ -431,15 +431,23 @@ def infer_all(
         # Skip tiles already cached (idempotent) BEFORE building the loader,
         # so a resumed run only re-infers the missing slice.
         pending = []
+        n_missing = 0
         for i in idxs:
             cpath = sha_dir / f"{Path(ds.tile_paths[i]).stem}.npz"
+            if not cpath.exists():
+                # Uncached is the normal fresh-run state; summarised below.
+                n_missing += 1
+                pending.append(i)
+                continue
             try:
                 read_cache_entry(cpath, source=identities[i], inference=inference)
             except CacheValidationError as exc:
-                if cpath.exists() and not regenerate_invalid:
+                if not regenerate_invalid:
                     raise CacheValidationError(f'cache changed after preflight: {exc}') from exc
-                print(f'[infer_tiles] {"regenerate" if cpath.exists() else "missing"}: {cpath.name}: {exc}')
+                print(f'[infer_tiles] regenerate: {cpath.name}: {exc}')
                 pending.append(i)
+        if n_missing:
+            print(f'[infer_tiles] crop {cs}: {n_missing}/{len(idxs)} tiles not cached; inferring')
         n_skipped += len(idxs) - len(pending)
         done += len(idxs) - len(pending)
         if not pending:
