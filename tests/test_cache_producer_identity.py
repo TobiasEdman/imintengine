@@ -24,8 +24,8 @@ def producer(tmp_path):
         shutil.copytree(ROOT / folder, root / folder,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     (root / "tests").mkdir()
-    shutil.copyfile(ROOT / "tests/test_cached_validation_parity.py",
-                    root / "tests/test_cached_validation_parity.py")
+    shutil.copyfile(ROOT / "tests/_cache_validation_cases.py",
+                    root / "tests/_cache_validation_cases.py")
     return root
 
 
@@ -36,7 +36,7 @@ from pathlib import Path
 from unittest.mock import patch
 import numpy as np
 root = Path.cwd()
-spec = importlib.util.spec_from_file_location("fixture", root / "tests/test_cached_validation_parity.py")
+spec = importlib.util.spec_from_file_location("fixture", root / "tests/_cache_validation_cases.py")
 t = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(t)
 data = root / "tiles"
