@@ -9,6 +9,53 @@ from imint.schema.unified_schema import UNIFIED_CLASSES
 SEGMENTATION_METRIC_VERSION = "miou-ignore-target-v2"
 
 
+def miou_from_confusion(
+    cm: np.ndarray,
+    ignore_index: int = 0,
+) -> tuple[float, dict[int, float]]:
+    """Score a (target, prediction) confusion matrix under the v2 contract.
+
+    Row ``ignore_index`` (pixels whose *target* is ignored) is dropped before
+    scoring, so a matrix accumulated without the ignore filter is scored the
+    same way as one built by :func:`compute_miou`. Column ``ignore_index`` is
+    kept: predicting it on a valid target is a false negative for that target.
+
+    Args:
+        cm: (n, n) non-negative integer counts, rows = target, cols = pred.
+        ignore_index: Target label excluded from scoring.
+
+    Returns:
+        ``(miou, per_class)``: unrounded mean IoU over classes with a nonzero
+        denominator (0.0 if none), and IoU per class index except
+        ``ignore_index`` (NaN where the denominator is zero).
+    """
+    cm = np.asarray(cm)
+    if cm.ndim != 2 or cm.shape[0] != cm.shape[1]:
+        raise ValueError(f"confusion matrix must be square, got {cm.shape}")
+    if not np.issubdtype(cm.dtype, np.integer) or (cm < 0).any():
+        raise ValueError("confusion matrix must hold non-negative integer counts")
+    n = cm.shape[0]
+    cm = cm.astype(np.int64)
+    if 0 <= ignore_index < n:
+        cm[ignore_index, :] = 0
+
+    per_class: dict[int, float] = {}
+    ious = []
+    for c in range(n):
+        if c == ignore_index:
+            continue
+        tp = cm[c, c]
+        fp = cm[:, c].sum() - tp
+        fn = cm[c, :].sum() - tp
+        denom = tp + fp + fn
+        iou = tp / denom if denom > 0 else float("nan")
+        per_class[c] = iou
+        if not np.isnan(iou):
+            ious.append(iou)
+    miou = float(np.mean(ious)) if ious else 0.0
+    return miou, per_class
+
+
 def compute_miou(
     pred: np.ndarray,
     target: np.ndarray,
@@ -56,27 +103,11 @@ def compute_miou(
         class_names = UNIFIED_CLASSES
     else:
         class_names = get_class_names(num_classes)
-    per_class_iou = {}
-    ious = []
-
-    for c in range(n):
-        if c == ignore_index:
-            continue
-        tp = cm[c, c]
-        fp = cm[:, c].sum() - tp
-        fn = cm[c, :].sum() - tp
-        denom = tp + fp + fn
-        if denom > 0:
-            iou = tp / denom
-        else:
-            iou = float("nan")
-
-        name = class_names.get(c, f"class_{c}")
-        per_class_iou[name] = round(float(iou), 4)
-        if not np.isnan(iou):
-            ious.append(iou)
-
-    miou = float(np.mean(ious)) if ious else 0.0
+    miou, ious_by_class = miou_from_confusion(cm, ignore_index)
+    per_class_iou = {
+        class_names.get(c, f"class_{c}"): round(float(iou), 4)
+        for c, iou in ious_by_class.items()
+    }
 
     # Accuracy uses the same valid pairs as the confusion matrix.
     if valid.any():
