@@ -6,7 +6,9 @@
 #  - No ColonyOS executor in the image (smaller surface)
 #
 # Build:    docker build -f Dockerfile.api -t imint-engine-api:v0.1.0 .
-# Run:      docker run --rm -p 127.0.0.1:8000:8000 imint-engine-api:v0.1.0
+# Export IMINT_API_MAX_PIXELS as an operator-validated positive integer first.
+# See imint/api/v1/README.md for calibration and resource-limit caveats.
+# Run:      docker run --rm -p 127.0.0.1:8000:8000 -e IMINT_API_MAX_PIXELS imint-engine-api:v0.1.0
 # Health:   curl http://localhost:8000/v1/health
 
 # Stage 1: Build native wheels (rasterio/GDAL/shapely/numpy)
