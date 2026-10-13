@@ -59,7 +59,7 @@ spec:
                 --channels ${PARITY_CHANNELS} --sample ${PARITY_SAMPLE} --out "$OUT"
               echo "=== done: $(date -u) ==="
           env:
-            - {name: IMINT_COMMIT, value: "cddfbc1a9d9f96aab1273ae36c1b7077442b3397"}
+            - {name: IMINT_COMMIT, value: "1fa4c1ec27081d4bb30fae26b3f4b0fbb87552e4"}
             - {name: IMINT_SCRIPT_SHA256, value: "0e79b5cbf722c43b818ccafa4044c67866243c5ef1a4407e469ed9bdb6f0ca99"}
             - {name: PARITY_CHANNELS, value: "volume basal_area diameter markfukt"}
             - {name: PARITY_SAMPLE, value: "150"}

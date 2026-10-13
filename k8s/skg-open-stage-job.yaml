@@ -85,8 +85,8 @@ spec:
               df -h /data | tail -1
               echo "=== done: $(date -u) ==="
           env:
-            - {name: IMINT_COMMIT, value: "cddfbc1a9d9f96aab1273ae36c1b7077442b3397"}
-            - {name: IMINT_SCRIPT_SHA256, value: "c6826d846872bf8790db4edfe94eb8e47cba139af5b04c18d25d8d1d57128536"}
+            - {name: IMINT_COMMIT, value: "1fa4c1ec27081d4bb30fae26b3f4b0fbb87552e4"}
+            - {name: IMINT_SCRIPT_SHA256, value: "0f8a5b15ccf72ba814f17b26b91b7bd12c7f66bc81b7f76a419b8d87bbc9d5fa"}
             - {name: STAGE_PRODUCTS, value: "grunddata markfukt"}
             # 2026-10-12 run 1 (8Gi, cache 2048 MB) was OOM-killed on the
             # 10.6 GiB markfukt county 23 after 171/174 files: the page cache
