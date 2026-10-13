@@ -6,12 +6,12 @@ spinning up FastAPI.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date as calendar_date, datetime, timezone
+from typing import Literal
 from enum import Enum
-from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class JobStatus(str, Enum):
@@ -22,13 +22,21 @@ class JobStatus(str, Enum):
 
 
 class BBox(BaseModel):
-    """Geographic bounding box. WGS84 unless `crs` says otherwise."""
+    """Ordered, nonempty WGS84 bounding box; antimeridian spans unsupported."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
     west: float = Field(..., ge=-180.0, le=180.0)
     south: float = Field(..., ge=-90.0, le=90.0)
     east: float = Field(..., ge=-180.0, le=180.0)
     north: float = Field(..., ge=-90.0, le=90.0)
-    crs: str = "EPSG:4326"
+    crs: Literal["EPSG:4326"] = "EPSG:4326"
+
+    @model_validator(mode="after")
+    def ordered_bounds(self) -> "BBox":
+        if self.west >= self.east or self.south >= self.north:
+            raise ValueError("bbox must satisfy west < east and south < north")
+        return self
 
 
 class AnalyzeRequest(BaseModel):
@@ -36,9 +44,11 @@ class AnalyzeRequest(BaseModel):
 
     A request asks ImintEngine to run analysis for one date + one bbox.
     The set of analyzers run is configured server-side via
-    `config/analyzers.yaml`; clients can opt-out specific ones via
-    `disable_analyzers` if needed.
+    `config/analyzers.yaml`. Per-request analyzer controls and callbacks
+    are unsupported and rejected as extra fields (HTTP 422).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     date: str = Field(
         ...,
@@ -46,22 +56,16 @@ class AnalyzeRequest(BaseModel):
         json_schema_extra={"examples": ["2026-04-25"]},
     )
     bbox: BBox
-    analyzers: list[str] | None = Field(
-        default=None,
-        description="Override server config. None = run all enabled analyzers.",
-    )
-    disable_analyzers: list[str] | None = Field(
-        default=None,
-        description="Names to skip even if enabled in server config.",
-    )
-    config_overrides: dict[str, dict[str, Any]] | None = Field(
-        default=None,
-        description="Per-analyzer config overrides, keyed by analyzer name.",
-    )
-    callback_url: str | None = Field(
-        default=None,
-        description="Optional webhook for completion notification (POST with JobStatusResponse).",
-    )
+
+    @field_validator("date")
+    @classmethod
+    def exact_date(cls, value: str) -> str:
+        # The engine uses this value in output filenames: accept only a date.
+        parsed = calendar_date.fromisoformat(value)
+        if parsed.isoformat() != value:
+            raise ValueError("date must use YYYY-MM-DD")
+        return value
+
 
 
 class AnalyzeResponse(BaseModel):
@@ -81,10 +85,16 @@ class AnalyzerSummary(BaseModel):
 
     name: str
     status: str
-    duration_ms: float | None = None
+    duration_ms: float | None = Field(
+        default=None, description="Unknown: the engine does not record per-analyzer timing.",
+    )
     artifacts: list[str] = Field(
         default_factory=list,
-        description="Output paths produced by this analyzer (GeoTIFF / GeoJSON / PNG).",
+        description="Reserved output paths; empty until the engine supplies an artifact manifest.",
+    )
+    output_names: list[str] = Field(
+        default_factory=list,
+        description="Keys in AnalysisResult.outputs; raster values are not embedded in this summary.",
     )
     error: str | None = None
 

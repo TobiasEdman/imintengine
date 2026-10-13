@@ -1,7 +1,10 @@
-# ImintEngine API — production K8s deployment (W4.1).
+# ImintEngine API — single-replica K8s deployment (ephemeral job state).
 #
 # Apply: kubectl apply -f k8s/api-deployment.yaml
-# Scale: kubectl scale deployment/imint-engine-api --replicas=N
+# Do not scale above one replica: there is no shared job store.
+# Recreate prevents overlap during upgrades. Restart loses jobs and outputs
+# unless an operator separately supplies persistent artifact storage.
+# Keep behind a trusted access boundary; application authentication is absent.
 #
 # Image must be pre-built and pushed:
 #   docker build -f Dockerfile.api -t <registry>/imint-engine-api:v0.1.0 .
@@ -18,12 +21,9 @@ metadata:
     component: api
     version: v0.1.0
 spec:
-  replicas: 2
+  replicas: 1
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+    type: Recreate
   selector:
     matchLabels:
       app: imint-engine-api
@@ -47,10 +47,17 @@ spec:
               containerPort: 8000
               protocol: TCP
           env:
+            # REQUIRED operator ConfigMap; no guessed default budget.
+            # Validate max_pixels for the enabled analyzers before rollout.
+            # 4Gi memory alone does not determine a safe raster size.
+            - name: IMINT_API_MAX_PIXELS
+              valueFrom:
+                configMapKeyRef:
+                  name: imint-api-resource-budget
+                  key: max_pixels
+                  optional: false
             - name: PORT
               value: "8000"
-            - name: GUNICORN_WORKERS
-              value: "4"
             - name: PYTHONUNBUFFERED
               value: "1"
             # OTel — optional. If the cluster has a collector at the address

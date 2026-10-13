@@ -40,26 +40,40 @@ class ResultsHandler(BaseHTTPRequestHandler):
             self._json({"ok": True})
         elif path == "/api/runs":
             self._list_runs()
-        elif path.startswith("/api/runs/") and path.endswith("/log"):
-            run_id = path.split("/")[3]
-            self._serve_file(RESULTS_DIR / run_id / "training_log.json")
-        elif path.startswith("/api/runs/") and path.endswith("/meta"):
-            run_id = path.split("/")[3]
-            self._serve_file(RESULTS_DIR / run_id / "checkpoint_meta.json")
-        elif path.startswith("/api/runs/") and path.endswith("/checkpoint"):
-            run_id = path.split("/")[3]
-            self._serve_binary(CHECKPOINTS_DIR / run_id / "best_model.pt")
+        elif path.startswith("/api/runs/"):
+            parts = path.split("/")
+            if len(parts) != 5 or parts[3] in {"", ".", ".."}:
+                self.send_error(404)
+                return
+            run_id, kind = parts[3:]
+            targets = {
+                "log": (RESULTS_DIR, "training_log.json"),
+                "meta": (RESULTS_DIR, "checkpoint_meta.json"),
+                "checkpoint": (CHECKPOINTS_DIR, "best_model.pt"),
+            }
+            if kind not in targets:
+                self.send_error(404)
+                return
+            root, filename = targets[kind]
+            target = (root / run_id / filename).resolve()
+            if not target.is_relative_to(root.resolve()):
+                self.send_error(404)
+                return
+            if kind == "checkpoint":
+                self._serve_binary(target)
+            else:
+                self._serve_file(target)
         else:
             self.send_error(404)
 
     def _list_runs(self):
         runs = []
         for d in sorted(RESULTS_DIR.iterdir()) if RESULTS_DIR.exists() else []:
-            if not d.is_dir():
+            if not d.is_dir() or not d.resolve().is_relative_to(RESULTS_DIR.resolve()):
                 continue
             run = {"id": d.name}
             log_path = d / "training_log.json"
-            if log_path.exists():
+            if log_path.exists() and log_path.resolve().is_relative_to(RESULTS_DIR.resolve()):
                 try:
                     log = json.loads(log_path.read_text())
                     run["status"] = log.get("status", "unknown")
@@ -69,14 +83,16 @@ class ResultsHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             meta_path = d / "checkpoint_meta.json"
-            if meta_path.exists():
+            if meta_path.exists() and meta_path.resolve().is_relative_to(RESULTS_DIR.resolve()):
                 try:
                     run["checkpoint"] = json.loads(meta_path.read_text())
                 except Exception:
                     pass
             # Check if checkpoint file exists
             ckpt = CHECKPOINTS_DIR / d.name / "best_model.pt"
-            run["checkpoint_available"] = ckpt.exists()
+            run["checkpoint_available"] = (
+                ckpt.exists() and ckpt.resolve().is_relative_to(CHECKPOINTS_DIR.resolve())
+            )
             runs.append(run)
         self._json({"runs": runs})
 
@@ -125,6 +141,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 
 def main():
+    global RESULTS_DIR, CHECKPOINTS_DIR
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, default=PORT)
@@ -132,7 +149,6 @@ def main():
     p.add_argument("--checkpoints-dir", default=str(CHECKPOINTS_DIR))
     args = p.parse_args()
 
-    global RESULTS_DIR, CHECKPOINTS_DIR
     RESULTS_DIR = Path(args.results_dir)
     CHECKPOINTS_DIR = Path(args.checkpoints_dir)
 

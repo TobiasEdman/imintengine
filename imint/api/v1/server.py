@@ -6,34 +6,39 @@ Decouples ImintEngine from any specific executor by exposing the
 existing `run_job(IMINTJob) → IMINTResult` entry point as HTTP. Same
 analysis pipeline; new boundary.
 
-Design notes:
- - Jobs run in a background task pool, not inline. POST /v1/analyze
-   returns immediately with a job_id; clients poll GET /v1/jobs/{id}.
- - The job store is in-memory by default (suitable for single-process
-   uvicorn). Production deploys swap in a Redis-backed store; the
-   `JobStore` interface is small.
- - Authentication is intentionally NOT wired yet (rollout W4 is
-   "infra-only"). The first customer pilot will require OAuth2 or an
-   API-key middleware; placeholder hook is in place.
- - SLA telemetry (W4.5) is wired via the `instrumentation` module if
-   present (fail-open like omni-rag / des-chatbot).
+Deployment contract:
+ - One ASGI worker, one replica, one host, lifespan enabled. Job state is
+   memory-only and disappears on restart; artifacts remain on disk.
+ - A POSIX file lock in IMINT_API_OUTPUT_DIR rejects a second local worker
+   using that directory. It is NOT a distributed lock or shared job store.
+ - This unauthenticated API is for trusted access behind an operator-managed
+   access boundary. It is not a public multi-tenant service.
+ - IMINT_API_MAX_PIXELS must specify an operator-validated positive pixel budget.
+ - Callbacks and per-request analyzer controls are rejected (422).
+ - Exact-day production DES fetch, cloud threshold 0.1, server YAML config.
 
-Run locally:
-    uvicorn imint.api.v1:app --reload
+Run from the repository root (no reload; no multi-worker gunicorn):
+    uvicorn imint.api.v1:app --host 127.0.0.1 --workers 1 --lifespan on
 
-Production:
-    gunicorn imint.api.v1:app -k uvicorn.workers.UvicornWorker -w 4
+See imint/api/v1/README.md for limits and shutdown behavior.
 """
 from __future__ import annotations
 
 import asyncio
+import fcntl
+from contextlib import asynccontextmanager
+from contextvars import copy_context
 import logging
+import math
+import os
+from pathlib import Path
 import time
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 from imint.api.v1.schemas import (
     AnalyzeRequest,
@@ -68,25 +73,77 @@ logger = logging.getLogger("imint.api.v1")
 
 # ── Job store ───────────────────────────────────────────────────────────────
 #
-# Minimal in-memory job store. Each job is a dict; production will swap this
-# for a Redis-backed implementation behind the same interface (get/put/list).
+# Single-process, ephemeral job state. Never deploy multiple replicas.
 _jobs: dict[str, dict[str, Any]] = {}
-_jobs_lock = asyncio.Lock()
+_jobs_lock: asyncio.Lock | None = None
 
 
 async def _put_job(job_id: str, payload: dict[str, Any]) -> None:
+    if _jobs_lock is None:
+        raise RuntimeError("API lifespan is not active")
     async with _jobs_lock:
         _jobs[job_id] = payload
 
 
 async def _get_job(job_id: str) -> dict[str, Any] | None:
+    if _jobs_lock is None:
+        return _jobs.get(job_id)
     async with _jobs_lock:
         return _jobs.get(job_id)
+
+
+_pending_jobs: set[asyncio.Task] = set()
+_accepting_jobs = False
+_analysis_slot: asyncio.Semaphore | None = None
+_max_pixels: int | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Hold local ownership until all accepted blocking jobs finish."""
+    global _accepting_jobs, _jobs_lock, _analysis_slot, _max_pixels
+    max_pixels = _configured_max_pixels()
+    root = _output_root()
+    root.mkdir(parents=True, exist_ok=True)
+    # Do not unlink this file: replacing its inode would bypass flock.
+    with (root / ".api-worker.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                "ImintEngine API requires one worker using IMINT_API_OUTPUT_DIR"
+            ) from exc
+        # asyncio primitives bind on contention; never reuse across lifespans.
+        _jobs_lock = asyncio.Lock()
+        _analysis_slot = asyncio.Semaphore(1)
+        _jobs.clear()
+        _max_pixels = max_pixels
+        _accepting_jobs = True
+        try:
+            yield
+        finally:
+            _accepting_jobs = False
+            # Do not cancel to_thread work: cancelling its await does not
+            # stop the thread. Keep the ownership lock while draining.
+            cancelled = False
+            if _pending_jobs:
+                drain = asyncio.gather(*tuple(_pending_jobs), return_exceptions=True)
+                while not drain.done():
+                    try:
+                        await asyncio.shield(drain)
+                    except asyncio.CancelledError:
+                        # Lifespan cancellation must not release ownership
+                        # while a blocking worker thread still writes outputs.
+                        cancelled = True
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            if cancelled:
+                raise asyncio.CancelledError
 
 
 # ── App ─────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
+    lifespan=lifespan,
     title="ImintEngine API",
     description=(
         "HTTP boundary for ImintEngine. Submit AOI + date, get IMINT analysis "
@@ -134,9 +191,8 @@ async def telemetry_middleware(request: Request, call_next):
     """
     start = time.monotonic()
     request_id = new_request_id()
-    # `route.path` is the parameterised pattern (e.g. /v1/jobs/{job_id});
-    # falls back to URL path if FastAPI hasn't matched yet.
-    route_template = getattr(request.scope.get("route"), "path", request.url.path)
+    # Routing happens inside call_next. Attach the bounded template afterward.
+    route_template = "unmatched"
 
     with span(
         f"http.{request.method.lower()}",
@@ -158,7 +214,7 @@ async def telemetry_middleware(request: Request, call_next):
             )
             record_request(
                 method=request.method,
-                route=route_template,
+                route=getattr(request.scope.get("route"), "path", "unmatched"),
                 status=response.status_code,
                 duration_ms=duration_ms,
             )
@@ -175,7 +231,7 @@ async def telemetry_middleware(request: Request, call_next):
             )
             record_request(
                 method=request.method,
-                route=route_template,
+                route=getattr(request.scope.get("route"), "path", "unmatched"),
                 status=500,
                 duration_ms=duration_ms,
             )
@@ -187,6 +243,17 @@ async def telemetry_middleware(request: Request, call_next):
                 request_id,
             )
             raise
+        finally:
+            if _HAS_OTEL:
+                # The shared instrumentation context manager yields None;
+                # use OTel's current span while still inside that context.
+                try:
+                    from opentelemetry import trace
+                    trace.get_current_span().set_attribute(
+                        "route", getattr(request.scope.get("route"), "path", "unmatched"),
+                    )
+                except Exception:
+                    pass  # Optional telemetry must not break the HTTP boundary.
 
 
 @app.get("/v1/metrics", include_in_schema=False)
@@ -266,6 +333,9 @@ async def submit_analysis(req: AnalyzeRequest) -> AnalyzeResponse:
     Returns 202 Accepted immediately. The job_id in the response can be
     used to poll `GET /v1/jobs/{id}` for status and final result.
     """
+    if not _accepting_jobs:
+        raise HTTPException(status_code=503, detail="API worker not started or shutting down")
+    _validate_bbox_budget(req.bbox.model_dump())
     resp = AnalyzeResponse(
         poll_url="",  # filled in below once we have job_id
     )
@@ -288,13 +358,12 @@ async def submit_analysis(req: AnalyzeRequest) -> AnalyzeResponse:
             "summary_path": None,
             "error": None,
             "_request": req.model_dump(),
-            "_callback_url": req.callback_url,
         },
     )
 
-    # Fire-and-forget the worker. asyncio.create_task is fine for in-process
-    # backgrounding; production swaps to Celery / RQ behind the same interface.
-    asyncio.create_task(_run_job_async(resp.job_id))
+    task = asyncio.create_task(_run_job_serial(resp.job_id))
+    _pending_jobs.add(task)
+    task.add_done_callback(lambda done: _finish_job_task(resp.job_id, done))
 
     return resp
 
@@ -331,6 +400,95 @@ async def get_job(job_id: str) -> JobStatusResponse:
 # ── Worker ─────────────────────────────────────────────────────────────────
 
 
+def _configured_max_pixels() -> int:
+    """Require an operator-calibrated admission budget; no universal engine cap."""
+    value = os.environ.get("IMINT_API_MAX_PIXELS", "").strip()
+    if value.isascii() and value.isdecimal() and int(value) > 0:
+        return int(value)
+    raise RuntimeError("IMINT_API_MAX_PIXELS must be configured as a positive integer")
+
+
+def _validate_bbox_budget(coords: dict) -> None:
+    # Same projection and outward snapping as the production DES fetch path.
+    # This helper performs no acquisition, credential lookup or model import.
+    from imint.fetch import _to_nmd_grid, NMD_GRID_SIZE
+    from rasterio.errors import RasterioError
+
+    if _max_pixels is None:
+        raise HTTPException(status_code=503, detail="API pixel budget is not configured")
+    try:
+        projected = _to_nmd_grid(coords)
+        bounds = [projected[key] for key in ("west", "south", "east", "north")]
+        if not all(math.isfinite(value) for value in bounds):
+            raise ValueError("nonfinite projected bounds")
+        width = int((projected["east"] - projected["west"]) // NMD_GRID_SIZE)
+        height = int((projected["north"] - projected["south"]) // NMD_GRID_SIZE)
+        valid = width > 0 and height > 0 and width * height <= _max_pixels
+    except (ValueError, OverflowError, RasterioError):
+        valid = False
+    if not valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"bbox must have a finite, nonempty projected raster of at most "
+                   f"{_max_pixels} pixels on the engine's {NMD_GRID_SIZE} m grid",
+        )
+
+
+def _finish_job_task(job_id: str, task: asyncio.Task) -> None:
+    """Finalize even tasks cancelled before their coroutine first executes."""
+    _pending_jobs.discard(task)
+    error = "Job cancelled before analysis completed" if task.cancelled() else task.exception()
+    job = _jobs.get(job_id)
+    if error is None or job is None or job["status"] not in (JobStatus.QUEUED, JobStatus.RUNNING):
+        return
+    # Done callbacks run on the same loop. No await/lock gap can interrupt
+    # this transition; running threads have already been joined by the worker.
+    completed = datetime.now(timezone.utc)
+    job.update(status=JobStatus.FAILED, success=False, completed_at=completed,
+               duration_ms=((completed - job["started_at"]).total_seconds() * 1000
+                            if job["started_at"] else 0.0), error=str(error))
+
+
+def _output_root() -> Path:
+    """Trusted operator setting, never a request-supplied path."""
+    return Path(os.environ.get("IMINT_API_OUTPUT_DIR", "outputs/api")).resolve()
+
+
+def _execute_analysis(req: dict[str, Any], job_id: str):
+    """Fetch real, exact-day DES imagery before calling the engine.
+
+    Uses the production fetcher, which rejects excess clouds and fetch
+    failures. There is deliberately no development/synthetic fallback.
+    """
+    from imint.fetch import fetch_des_data
+    from imint.engine import run_job
+    from imint.job import IMINTJob
+
+    config_path = Path("config/analyzers.yaml").resolve()
+    if not config_path.is_file():
+        raise RuntimeError("API requires config/analyzers.yaml in its working directory")
+    bbox = req["bbox"]
+    coords = {key: bbox[key] for key in ("west", "south", "east", "north")}
+    fetched = fetch_des_data(
+        date=req["date"], coords=coords, cloud_threshold=0.1,
+        include_scl=True, date_window=0,
+    )
+    job = IMINTJob(
+        date=req["date"], coords=coords, job_id=job_id,
+        rgb=fetched.rgb, bands=fetched.bands, scl=fetched.scl, geo=fetched.geo,
+        output_dir=str(_output_root() / job_id), config_path=str(config_path),
+    )
+    return run_job(job)
+
+
+async def _run_job_serial(job_id: str) -> None:
+    # Single production fetch/analysis at a time; waiting jobs stay queued.
+    if _analysis_slot is None:
+        raise RuntimeError("API lifespan is not active")
+    async with _analysis_slot:
+        await _run_job_async(job_id)
+
+
 async def _run_job_async(job_id: str) -> None:
     """Background worker — runs run_job() in a thread to avoid blocking the
     event loop on numpy/torch work."""
@@ -343,30 +501,22 @@ async def _run_job_async(job_id: str) -> None:
     await _put_job(job_id, job)
     start = time.monotonic()
 
+    cancelled = False
     try:
-        # Lazy import — keeps API import time low when worker isn't called.
-        from imint.engine import run_job
-        from imint.job import IMINTJob
-
-        req = job["_request"]
-        bbox = req["bbox"]
-
-        # Construct the IMINTJob. Image data is fetched by run_job's
-        # downstream via the existing fetch pipeline; the API layer
-        # passes coords + date and lets the engine resolve the rest.
-        imint_job = IMINTJob(
-            date=req["date"],
-            coords={
-                "west": bbox["west"],
-                "south": bbox["south"],
-                "east": bbox["east"],
-                "north": bbox["north"],
-            },
-            job_id=job_id,
+        # Keep a Future, not a to_thread Task: event-loop teardown cancels
+        # every Task, but must not invalidate our thread-completion signal.
+        # Preserve to_thread's context propagation for instrumentation.
+        work = asyncio.get_running_loop().run_in_executor(
+            None, copy_context().run, _execute_analysis, job["_request"], job_id,
         )
-
-        # Run in a thread — run_job is blocking numpy/torch.
-        result = await asyncio.to_thread(run_job, imint_job)
+        while not work.done():
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError:
+                # A cancelled waiter cannot stop blocking work. Keep the
+                # analysis slot and lifespan ownership until it completes.
+                cancelled = True
+        result = work.result()
 
         job["completed_at"] = datetime.now(timezone.utc)
         job["duration_ms"] = (time.monotonic() - start) * 1000
@@ -375,10 +525,9 @@ async def _run_job_async(job_id: str) -> None:
         job["summary_path"] = result.summary_path
         job["analyzers"] = [
             AnalyzerSummary(
-                name=getattr(r, "name", "unknown"),
-                status=getattr(r, "status", "success"),
-                duration_ms=getattr(r, "duration_ms", None),
-                artifacts=list(getattr(r, "artifacts", []) or []),
+                name=r.analyzer,
+                status="skipped" if r.skipped else ("success" if r.success else "failed"),
+                output_names=sorted(r.outputs),
                 error=getattr(r, "error", None),
             ).model_dump()
             for r in (result.analyzer_results or [])
@@ -398,37 +547,21 @@ async def _run_job_async(job_id: str) -> None:
         job["duration_ms"] or 0.0,
         status=job["status"].value if isinstance(job["status"], JobStatus) else str(job["status"]),
     )
-
-    # Optional webhook notification — best-effort, never blocks the worker.
-    callback = job.get("_callback_url")
-    if callback:
-        asyncio.create_task(_notify_callback(job_id, callback))
-
-
-async def _notify_callback(job_id: str, url: str) -> None:
-    """POST the final job state to the configured webhook. Best-effort."""
-    try:
-        import httpx  # type: ignore[import-not-found]
-
-        job = await _get_job(job_id)
-        if job is None:
-            return
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(url, json={
-                "job_id": job_id,
-                "status": (
-                    job["status"].value
-                    if isinstance(job["status"], JobStatus)
-                    else str(job["status"])
-                ),
-                "success": job["success"],
-                "duration_ms": job["duration_ms"],
-            })
-    except Exception:
-        logger.exception("callback POST to %s failed for job %s", url, job_id)
-
+    if cancelled:
+        # Persist the actual worker outcome before propagating cancellation.
+        raise asyncio.CancelledError
 
 # ── Exception handlers ─────────────────────────────────────────────────────
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # Invalid JSON numbers (NaN/Infinity) cannot be echoed by JSONResponse.
+    # Do not reflect raw input or exception objects from Pydantic's context.
+    return JSONResponse(status_code=422, content={"detail": [
+        {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
+        for error in exc.errors()
+    ]})
 
 
 @app.exception_handler(Exception)
