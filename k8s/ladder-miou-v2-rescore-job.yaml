@@ -77,9 +77,11 @@ spec:
             - {name: NUMPY_VERSION, value: "2.4.6"}
             - {name: TORCH_VERSION, value: "2.10.0+cpu"}
             - {name: SUMMARY_OUT, value: "/cephfs/checkpoints/ladder/_miou_v2_rescore_20261013.json"}
+          # The ICE admission webhook rejects any limit that differs from its
+          # request. Peak use is one private checkpoint copy (max 2.7 GB).
           resources:
-            requests: {cpu: "2", memory: "8Gi", ephemeral-storage: "8Gi"}
-            limits: {cpu: "2", memory: "12Gi", ephemeral-storage: "16Gi"}
+            requests: {cpu: "2", memory: "8Gi", ephemeral-storage: "10Gi"}
+            limits: {cpu: "2", memory: "8Gi", ephemeral-storage: "10Gi"}
           volumeMounts:
             - {name: cephfs, mountPath: /cephfs}
             - {name: scratch, mountPath: /scratch}
@@ -87,4 +89,4 @@ spec:
         - name: cephfs
           persistentVolumeClaim: {claimName: training-data-cephfs}
         - name: scratch
-          emptyDir: {sizeLimit: 12Gi}
+          emptyDir: {sizeLimit: 6Gi}
