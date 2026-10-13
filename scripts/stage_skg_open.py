@@ -183,10 +183,31 @@ def check_recovered(rec: dict, new_sha256: str, name: str, *, accept: bool,
             "Re-run with --accept-upstream-change to record the new digest (the old one is "
             "kept under superseded_sha256) and re-derive the raster.")
     if dest is not None and (dest / "MANIFEST.json").exists():
-        stamp = _now().replace(":", "").replace("-", "")
-        shutil.copyfile(dest / "MANIFEST.json", dest / f"MANIFEST.superseded-{stamp}.json")
+        archive_manifest(dest)
     return {**rec, "superseded_sha256": [*rec.get("superseded_sha256", []), old],
             "upstream_changed_at": _now()}
+
+
+def archive_manifest(dest: Path) -> Path:
+    """Copy MANIFEST.json to an immutable ``MANIFEST.superseded-<ts>[-n].json``.
+
+    The file is created exclusively (O_CREAT | O_EXCL): a name that already
+    exists — two acceptances in the same second, or a leftover from an
+    earlier run — gets the next ``-n`` suffix instead of being overwritten,
+    so every archived record survives."""
+    stamp = _now().replace(":", "").replace("-", "")
+    src = (dest / "MANIFEST.json").read_bytes()
+    for n in range(0, 10_000):
+        path = dest / (f"MANIFEST.superseded-{stamp}.json" if n == 0
+                       else f"MANIFEST.superseded-{stamp}-{n}.json")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as f:
+            f.write(src)
+        return path
+    raise RuntimeError(f"{dest}: could not allocate a unique manifest archive name")
 
 
 def is_done(item: Item, manifest: dict, dest: Path) -> bool:

@@ -300,3 +300,29 @@ def test_save_manifest_keeps_the_previous_copy(tmp_path, monkeypatch):
     prev = json.loads((tmp_path / "MANIFEST.previous.json").read_text())
     assert prev["files"]["a.zip"]["sha256"] == "1" * 64
     assert json.loads((tmp_path / "MANIFEST.json").read_text())["files"]["a.zip"]["sha256"] == "2" * 64
+
+
+def test_manifest_archives_never_overwrite_each_other(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMINT_GIT_SHA", "abc")
+    monkeypatch.setattr(st, "_now", lambda: "2026-10-13T05:50:00Z")      # freeze the second
+    m = st.load_manifest(tmp_path)
+    paths = []
+    for digest in ("1" * 64, "2" * 64, "3" * 64):
+        m["files"]["a.zip"] = {"sha256": digest}
+        st.save_manifest(tmp_path, m)
+        paths.append(st.archive_manifest(tmp_path))
+    assert [p.name for p in paths] == ["MANIFEST.superseded-20261013T055000Z.json",
+                                       "MANIFEST.superseded-20261013T055000Z-1.json",
+                                       "MANIFEST.superseded-20261013T055000Z-2.json"]
+    assert [json.loads(p.read_text())["files"]["a.zip"]["sha256"][0] for p in paths] == ["1", "2", "3"]
+    # two same-second accepted recoveries keep both pre-change records
+    rec_a = {"sha256": "a" * 64}
+    m["files"]["a.zip"] = rec_a
+    st.save_manifest(tmp_path, m)
+    st.check_recovered(rec_a, "b" * 64, "a.zip", accept=True, dest=tmp_path)
+    m["files"]["a.zip"] = {"sha256": "b" * 64}
+    st.save_manifest(tmp_path, m)
+    st.check_recovered(m["files"]["a.zip"], "c" * 64, "a.zip", accept=True, dest=tmp_path)
+    archived = sorted(tmp_path.glob("MANIFEST.superseded-*.json"))
+    assert len(archived) == 5
+    assert {json.loads(p.read_text())["files"]["a.zip"]["sha256"][0] for p in archived} >= {"a", "b"}
