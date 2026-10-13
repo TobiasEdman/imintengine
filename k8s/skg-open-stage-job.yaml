@@ -86,7 +86,7 @@ spec:
               echo "=== done: $(date -u) ==="
           env:
             - {name: IMINT_COMMIT, value: "cddfbc1a9d9f96aab1273ae36c1b7077442b3397"}
-            - {name: IMINT_SCRIPT_SHA256, value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+            - {name: IMINT_SCRIPT_SHA256, value: "c6826d846872bf8790db4edfe94eb8e47cba139af5b04c18d25d8d1d57128536"}
             - {name: STAGE_PRODUCTS, value: "grunddata markfukt"}
             # 2026-10-12 run 1 (8Gi, cache 2048 MB) was OOM-killed on the
             # 10.6 GiB markfukt county 23 after 171/174 files: the page cache
