@@ -1,0 +1,176 @@
+# Skogsstyrelsen open-data mirror (IM-022)
+
+Source of the forestry aux channels (`height`, `volume`, `basal_area`,
+`diameter`) and SLU `markfukt` since 2026-10. Replaces the kartportal
+ImageServer proxies (`kartor.skogsstyrelsen.se/kartor/*ArcGIS93Rest`),
+which Skogsstyrelsen retired in 2026 (task 0106, PR #73).
+
+| | |
+|---|---|
+| Source | `https://geodpags.skogsstyrelsen.se/geodataport/data/` (IIS directory, HTTP range supported, no login) |
+| Mirror | `/data/skg_open` on `training-data-cephfs` (`SKG_OPEN_DIR`) |
+| Staging | `scripts/stage_skg_open.py` via `k8s/skg-open-stage-job.yaml` |
+| Reader | `imint/training/skg_open.py`, used by `skg_grunddata.py` and `slu_markfukt.py` |
+| Manifest | `/data/skg_open/MANIFEST.json`: per zip URL, bytes, sha256, index date, download date; per derived raster method, sha256, grid; git sha |
+| Licence | Skogsstyrelsen open data (CC0 per product descriptions) |
+
+## Why a mirror and not windowed HTTP reads
+
+The server supports range requests, but every zip holds one strip-TIFF
+(one row per strip, LZW) inside deflate or Deflate64. Reading a window
+means inflating the zip stream up to that row, so random access over
+HTTP is not possible. Each raster is therefore downloaded once and
+re-encoded as a tiled COG (512 px blocks, DEFLATE, no overviews) that the
+reader windows locally.
+
+## Products
+
+| Channel | Published file | Native | Mirror | Reader policy |
+|---|---|---|---|---|
+| volume, basal_area, diameter | `sks_{Volym,Grundyta,Medeldiameter}_omdrev{1,2,3}_<län>.zip` | omdrev 2/3: 10 m int16, nodata −1; omdrev 1: 12.5 m | lossless COG per county + one VRT per variable and omdrev | newest omdrev per pixel: 3 → 2 → 1 (omdrev 1 resampled bilinearly) |
+| markfukt | `sksSLUMarkfuktighet<län>.zip` | 2 m uint16 index 0–100, 101 water, 255 fill, nodata 65535 | lossless COG per county + VRT | nearest 2 m sample at each 10 m cell centre (65535 → 0) |
+| height | `sksTradhojd<län>.zip` | 1 m int16 dm, nodata −1 | 10 m derivative per county (`tradhojd_10m_<län>.tif`) + VRT | 10 m value as is, dm (fetcher converts to m) |
+
+The initial staging manifest recorded git 798f18b (the run that
+downloaded and converted everything); the VRTs were rebuilt afterwards
+from d6b60cc, which is the git sha the manifest now carries. Both are
+chronological states of the same mirror.
+
+Omdrev = laser-scanning round. Omdrev 1 is the 2009–2015 scanning
+(12.5 m product), omdrev 2 the 2018– national re-scan ("complete"
+2025-12-09 per the product description), omdrev 3 the third round
+published 2026-04 for nine counties (07, 10, 12, 13, 21–25).
+
+## Parity against proxy-fetched arrays (2026-10-12, Blekinge, county 10)
+
+References: `.npy` cache arrays written by the proxy fetchers, 512×512
+at 10 m, from `/data/unified_v2_512/cache` (2026-06-25),
+`/data/unified_v2_512_orphans_staging/cache` (2026-07-04) and
+`/data/unified_v2_512_nfi2024_staging/cache` (2026-10-02, the last run
+before the proxies went away). Script: session scratchpad
+`parity_grunddata.py` / `parity_markfukt.py`; summary below.
+
+**Grunddata** (`volume`, `basal_area`, `diameter`), newest-omdrev policy:
+
+| Reference cache | Tiles | Exact match | Note |
+|---|---|---|---|
+| nfi2024_staging (2026-10-02) | 6 | 5 tiles 1.000, 1 tile 0.855 | the 0.855 tile straddles the Skåne border; its mismatching pixels are where the Blekinge file has nodata (checked), which the national VRT fills from county 12 |
+| orphans_staging (2026-07-04) | 4 | 1.000 | omdrev 3 covers 92–100 % of these tiles; the rest is omdrev 2 |
+| unified_v2_512 (2026-06-25) | 6 | 0.992 mean, 0.951 min | the mismatching pixels of the one 0.951 tile are all outside every Blekinge file (county-12 area) |
+
+Reading omdrev 2 alone matched 100 % on the 2026-10-02 references and
+only 70 % on the 2026-07-04 ones, which is how the "newest omdrev per
+pixel" policy was identified. The national VRTs remove the county-border
+cases.
+
+**Markfukt**: the published county files are not the model version the
+proxy served. Nodata mask (0.178 vs 0.181) and water mask (0.194 vs
+0.194) agree; the index values do not (23–39 % exact, mean absolute
+difference 4–6 on the 0–100 scale, no reduction method does better).
+Counties 20, 22, 24 and 25 were re-published 2026-04 and may be the
+newer version; to be measured on the cluster once staged. Treated as a
+documented per-channel difference: new tiles get the published version,
+stored tiles keep the proxy version.
+
+**Height** (Blekinge, 1 m `sksTradhojd10`): the stored channel is not an
+aggregate of the open 1 m model. Per 10 m cell, the mean of the 1 m
+values is 4–7 m too low, the maximum 1.5 m too high; the 90th percentile
+is closest (MAE 0.8–1.0 m, 12 % exact, bias +0.4–0.7 m). Grunddata
+`Medelhöjd` (Hgv) is a different variable (MAE up to 2.6 m). The
+staging script therefore derives the 10 m height as p90 of the 1 m
+cells and the channel is a documented difference.
+
+## National parity (2026-10-13, `k8s/skg-open-parity-job.yaml`)
+
+150 random reference arrays per cache root and channel, read through the
+mirror-backed fetchers; reports under `/data/skg_open/parity/`.
+
+| Root (reference date) | volume | basal_area | diameter | markfukt |
+|---|---|---|---|---|
+| unified_v2_512 (2026-06-25) | 99.96 % identical pixels (min 96.8 %), MAE 0.017 | 99.98 %, MAE 0.002 | 100.00 % (rounded; min 99.59 %), MAE 0.001 | 35.8 % identical (min 12.6 %), MAE 5.0, bias +0.6; non-zero on 90.1 % of pixels vs 90.4 % for the proxy |
+| nfi2024_staging (2026-10-02) | 100.00 % (rounded; min 99.97 %) | 100.00 % (min 99.97 %) | 100.00 % (min 100.00 %) | no reference arrays |
+| orphans_staging (2026-07-04) | 99.94 % (min 91.1 %), MAE 0.012 | 99.75 % (min 79.5 %), MAE 0.019 | 99.89 % (min 88.9 %), MAE 0.009 | no reference arrays |
+
+"Identical pixels" is the fraction of pixels with equal values after the
+fetchers' nodata mapping; the mean is over 150 tiles, "min" the worst
+tile. Rounded 100.00 % values still have a few differing pixels where
+the minimum is below 100 %. The residuals on the June and July
+references are not attributed by measurement; the Blekinge check
+suggests omdrev timing (pixels where omdrev 3 was published after the
+reference was fetched) as the likely cause, and a reader bug is not
+excluded by these numbers alone.
+
+Markfukt: the first national run (VRT with source nodata 65535) read
+255 on 79 of the 150 tiles (22 % identical, MAE 17.8, non-zero on 65 %
+of the pixels vs 95 %): the published county rasters pad the area
+outside the county polygon with 255, and overlapping county rectangles
+overwrote each other. With 255 transparent in the mosaic (commit
+d6b60cc) the non-zero fractions agree in aggregate (90.1 % vs 90.4 %;
+this is not a pixelwise mask comparison) and the remaining difference
+is index values 5 apart on average with no systematic bias. The
+counties re-published 2026-04 (20, 22, 24, 25) are not closer to the
+proxy than the 2022 ones (MAE 6.2 vs 6.5 on single-county tiles). The
+working hypothesis is that the proxy served a model version that is not
+among the published files; that is inferred from these numbers, not
+confirmed with Skogsstyrelsen.
+
+## Operations
+
+Dry run of the plan (no writes):
+
+```bash
+python scripts/stage_skg_open.py --dest /tmp/x --products grunddata markfukt --dry-run
+```
+
+Stage on the cluster (resumable; re-apply under a new Job name after a
+failure, finished files are skipped):
+
+```bash
+kubectl apply -f k8s/skg-open-stage-job.yaml
+```
+
+## Staged (2026-10-13 01:04Z, Job `skg-open-stage` + resumed `skg-open-stage-r2`)
+
+| | |
+|---|---|
+| Files | 174 (grunddata omdrev 1–3 × 3 variables = 153, markfukt 21), all sha256-recorded |
+| Raw zips `raw/` | 97.3 GiB |
+| Derived COGs | 79.2 GiB (grunddata 16 GiB, markfukt 64 GiB), lossless, pixel-verified on five windows each |
+| VRTs | 10 (volym/grundyta/medeldiameter × omdrev 1, 2, 3 + markfukt) |
+| Manifest git sha | 798f18b (branch `agent/te/claude/im022-skg-geotiff-source`) |
+| PVC free | 626 GiB before, 333 GiB after (the mirror is ~176 GiB; other jobs wrote the rest meanwhile) |
+
+The first run (8 GiB memory) was OOM-killed while converting the 10.6 GiB
+markfukt county 23 after 171 files: the page cache of a sequential
+10 GiB write counts against the container's cgroup. The re-run with
+24 GiB and `GDAL_CACHEMAX=512` skipped the 171 finished files and
+converted counties 23–25 (peak 14 GiB resident). The manifest therefore
+requires 24 GiB for any future county of that size.
+
+Trädhöjd (21 files, 329.2 GiB raw at 1 m) is not staged: it does not
+reproduce the stored height channel (closest statistic p90, MAE ≈ 1 m)
+and would take half the remaining PVC. Run `STAGE_PRODUCTS=tradhojd`
+once that cost is approved; the 10 m derivative is ~3 GiB and the raw
+zips can be dropped afterwards with `--drop-raw`.
+
+### Raw files after enrichment
+
+Two different things are at stake:
+
+- **Raster usability** does not depend on `raw/`: the COGs are lossless
+  re-encodings, pixel-verified on five windows each, with their own
+  sha256 in the manifest. Readers never touch the zips.
+- **Archive reproducibility** does: the zips are the only copy of the
+  bytes the COGs were derived from. A recovery re-download fetches
+  *current* upstream bytes, which Skogsstyrelsen may have re-published
+  (four markfukt counties were, in 2026-04). The staging script keeps the
+  recorded digest as the record: a recovered file that hashes
+  differently stops the run (`UpstreamChanged`) unless
+  `--accept-upstream-change` is given, in which case the old digest is
+  kept under `superseded_sha256`, the derived raster is re-derived, and
+  the previous manifest survives as `MANIFEST.previous.json`.
+
+Deleting `raw/` (97.3 GiB) therefore keeps the mirror usable and keeps
+the record of what it was derived from, but gives up the ability to
+re-derive from the *same* bytes if upstream changes. That trade is
+Tobias's call after the enrichment pass.

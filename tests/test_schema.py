@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from imint.training.unified_schema import (
+from imint.schema.unified_schema import (
     NUM_UNIFIED_CLASSES,
     UNIFIED_CLASSES,
     UNIFIED_COLORS,
@@ -308,7 +308,7 @@ def test_unified_palette_json_matches_schema():
     """
     import json
     from pathlib import Path
-    from imint.training.unified_schema import (
+    from imint.schema.unified_schema import (
         NUM_UNIFIED_CLASSES, UNIFIED_CLASS_NAMES, UNIFIED_COLOR_LIST)
     p = Path(__file__).resolve().parents[1] / "scripts" / "unified_palette.json"
     pal = json.loads(p.read_text(encoding="utf-8"))

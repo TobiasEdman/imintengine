@@ -49,7 +49,7 @@ from imint.training.unified_dataset import (
     AUX_LOG_TRANSFORM,
     AUX_NORM,
 )
-from imint.training.unified_schema import (
+from imint.schema.unified_schema import (
     NUM_UNIFIED_CLASSES,
     get_class_weights,
 )

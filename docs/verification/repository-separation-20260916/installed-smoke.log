@@ -1,0 +1,36 @@
+/Users/tobiasedman/.matplotlib is not a writable directory
+Matplotlib created a temporary cache directory at /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/matplotlib-ndayyl0g because there was an issue with the default path (/Users/tobiasedman/.matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Matplotlib is building the font cache; this may take a moment.
+
+============================================================
+  IMINT Engine  |  2026-09-16  |  job_id=None
+  Image: (16, 16, 3)  |  Output: /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result
+============================================================
+    saved: /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/2026-09-16_rgb.png
+    saved: /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/bands/ (6 bands cached)
+  [change_detection] skipped
+  [spectral] running...
+  [spectral] OK — outputs: indices
+    saved: /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/2026-09-16_ndvi.png
+    saved: /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/2026-09-16_ndvi_clean.png
+    saved: /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/2026-09-16_ndwi_clean.png
+    saved: /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/2026-09-16_ndbi_clean.png
+    saved: /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/2026-09-16_evi_clean.png
+    saved: /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/2026-09-16_nbr_clean.png
+  [object_detection] skipped
+  [prithvi] skipped
+  [nmd] skipped
+  [cot] skipped
+  [marine_vessels] skipped
+  [vegetation_edge] skipped
+  [samgeo] skipped
+  [insar] skipped
+  [water_quality] skipped
+
+  Summary → /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/2026-09-16_imint_summary.json
+    saved: /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/2026-09-16_imint_report.html
+  HTML Report → /var/folders/1k/jvj1pj4d0sl080w0vb5tz1m00000gn/T/tmpbe96hz9b/result/2026-09-16_imint_report.html
+============================================================
+
+{"installed_package": "/private/tmp/imint-split-20260916/installed-env/lib/python3.11/site-packages/imint/__init__.py", "lightweight_imports": "pass", "spectral_job_disk_round_trip": "pass", "shared_schema_classes": 28}
+Packaged COT ensemble: PASS

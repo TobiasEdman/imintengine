@@ -1,0 +1,196 @@
+---
+# Promote tessera_v2 to tessera across the cohort, so every tile reads from
+# the one source that still exists.
+#
+# Decision 2026-10-07: v2 everywhere. The cohort and the campaign were on
+# DIFFERENT sources under the same key name — the cohort's tessera came from
+# the retired dl2.geotessera.org, the campaign's 475 were fetched with
+# geotessera 0.10.2 from the new location. 36.6% of the cohort's values
+# differ, so any comparison across the two sets mixed sources silently.
+#
+# THIS IS A RENAME, NOT AN OVERWRITE. The old embeddings cannot be
+# re-obtained (410), and the published R5 numbers rest on them, so they are
+# preserved as tessera_v1 / tessera_v1_year rather than destroyed. Disk is
+# flat: a tile holds two 128-channel arrays before and after.
+#
+#   tessera      <- tessera_v2        (what the model reads)
+#   tessera_year <- tessera_v2_year
+#   tessera_v1   <- the old array     (irreproducible, kept)
+#   tessera_source <- tessera_v2_source (observed producer identity)
+#   tessera_v2*  dropped — they are tessera now
+#
+# The corrected body requires TESSERA_PROMOTION_EXPECTED: a reviewed JSON
+# manifest with source, cohort/campaign filename-to-year mappings, and optional
+# exclusions keyed as group/filename with nonempty reasons. Missing/unreadable
+# files, wrong source/year/shape and empty/nonfinite admitted arrays fail closed.
+# Campaign arrays must already carry verified provenance; no source is guessed.
+# Already-promoted tiles are validated, not accepted merely for having a v1 key.
+# These historical Jobs remain guarded; this body is a candidate for review,
+# not a replacement execution plan or a reinterpretation of the historical run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tessera-promote-v2
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: tessera-promote}
+spec:
+  suspend: true  # Historical record: do not resume; use a reviewed replacement.
+  backoffLimit: 0
+  activeDeadlineSeconds: 144000  # 40 h — ~310 tiles/h measured, full recompression per tile
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: promote
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              # Fail closed even if a suspended historical Job is accidentally resumed.
+              echo "HISTORICAL ONLY: immutable runtime/source/dependency identities are incomplete; use a separately reviewed replacement." >&2
+              exit 64
+              set -e
+              export PYTHONUNBUFFERED=1
+              pip install -q --no-cache-dir numpy
+              python - <<'PYEOF'
+              import glob
+              import json
+              import os
+              from collections import Counter
+
+              import numpy as np
+
+              COHORT = "/data/unified_v2_512"
+              STAGE = "/data/unified_v2_512_nfi2024_staging"
+              REPORT = "/data/manifests/tessera_promotion.json"
+              # A reviewed replacement must supply complete membership, intended embedding
+              # year per file, observed source identity, and explicit exclusion reasons.
+              EXPECTED = os.environ["TESSERA_PROMOTION_EXPECTED"]
+              manifest = json.load(open(EXPECTED))
+              SRC = manifest["source"]
+              if not isinstance(SRC, str) or not SRC.startswith("geotessera-"):
+                  raise SystemExit("invalid expected source")
+              groups = {"cohort": COHORT, "campaign": STAGE}
+              excluded = manifest.get("exclusions", {})
+              st = Counter()
+              errors = []
+
+
+              def load(path):
+                  with np.load(path, allow_pickle=False) as archive:
+                      return dict(archive)
+
+
+              def check(data, prefix, year):
+                  array = np.asarray(data[prefix])
+                  size = int(data["tile_size_px"])
+                  if size <= 0 or array.shape != (128, size, size):
+                      raise ValueError("invalid embedding shape")
+                  if not np.isfinite(array).all() or not np.any(array):
+                      raise ValueError("empty or nonfinite embedding; document exclusion")
+                  if int(data[prefix + "_year"]) != year:
+                      raise ValueError("embedding year differs from expected membership")
+                  if str(data[prefix + "_source"]) != SRC:
+                      raise ValueError("embedding source differs from expected identity")
+                  if prefix == "tessera" and int(data.get("has_tessera", 0)) != 1:
+                      raise ValueError("valid embedding has invalid flag")
+
+
+              def finish():
+                  report = {"source": SRC, "states": dict(st), "exclusions": excluded,
+                            "errors": errors, "status": "failed" if errors else "passed",
+                            "expected": manifest, "old_preserved_as": "tessera_v1 / tessera_v1_year"}
+                  os.makedirs(os.path.dirname(REPORT), exist_ok=True)
+                  with open(REPORT, "w") as stream:
+                      json.dump(report, stream, indent=2)
+                  if errors:
+                      raise SystemExit(f"FAIL: {len(errors)} promotion errors; see {REPORT}")
+
+
+              # Validate the full population before any tile is rewritten. A directory scan
+              # alone cannot notice missing files, and a v1 key alone does not prove success.
+              members = {}
+              for group, directory in groups.items():
+                  expected = manifest[group]
+                  if not isinstance(expected, dict):
+                      raise SystemExit("expected membership must map filenames to years")
+                  for name, year in expected.items():
+                      if os.path.basename(name) != name or not name.endswith(".npz") or type(year) is not int:
+                          raise SystemExit("invalid expected filename/year")
+                      members[f"{group}/{name}"] = (os.path.join(directory, name), year, group)
+                  actual = {os.path.basename(p) for p in glob.glob(f"{directory}/*.npz")}
+                  if not os.path.isdir(directory) or actual != set(expected):
+                      errors.append({"group": group, "missing": sorted(set(expected) - actual),
+                                     "unexpected": sorted(actual - set(expected)),
+                                     "directory_exists": os.path.isdir(directory)})
+              if not manifest["cohort"] or not set(members) - set(excluded):
+                  errors.append({"error": "expected/admitted membership is empty"})
+              if (not isinstance(excluded, dict) or not set(excluded) <= set(members)
+                      or any(not isinstance(reason, str) or not reason.strip() for reason in excluded.values())):
+                  errors.append({"error": "exclusions need known members and nonempty reasons"})
+              for key, (path, year, group) in members.items():
+                  if key in excluded:
+                      st["excluded"] += 1
+                      continue
+                  try:
+                      data = load(path)
+                      if group == "cohort" and "tessera_v1" not in data:
+                          check(data, "tessera_v2", year)
+                          if "tessera" not in data or "tessera_year" not in data:
+                              raise ValueError("missing original embedding/year to preserve")
+                      else:
+                          check(data, "tessera", year)
+                          if group == "cohort" and "tessera_v2" in data:
+                              raise ValueError("ambiguous partly promoted tile")
+                  except Exception as exc:
+                      errors.append({"tile": key, "error": str(exc)})
+              if errors:
+                  finish()
+
+              for key, (path, year, group) in members.items():
+                  if key in excluded or group != "cohort":
+                      continue
+                  data = load(path)
+                  if "tessera_v1" in data:
+                      st["already"] += 1
+                      continue
+                  data["tessera_v1"] = data["tessera"]
+                  data["tessera_v1_year"] = data["tessera_year"]
+                  data["tessera"] = data.pop("tessera_v2")
+                  data["tessera_year"] = data.pop("tessera_v2_year")
+                  # Copy observed provenance; never label an unstamped array by assumption.
+                  data["tessera_source"] = data.pop("tessera_v2_source")
+                  data.pop("tessera_v2_merged", None)
+                  data["has_tessera"] = np.array(1)
+                  data.pop("tessera_gap_reason", None)
+                  tmp = path + ".tmp.npz"
+                  np.savez_compressed(tmp, **data)
+                  os.replace(tmp, path)
+                  st["promoted"] += 1
+
+              for key, (path, year, group) in members.items():
+                  if key in excluded:
+                      continue
+                  try:
+                      data = load(path)
+                      check(data, "tessera", year)
+                      if group == "cohort" and ("tessera_v1" not in data or "tessera_v2" in data):
+                          raise ValueError("incomplete promotion")
+                      st["verified"] += 1
+                  except Exception as exc:
+                      errors.append({"tile": key, "error": str(exc)})
+              for group, directory in groups.items():
+                  actual = {os.path.basename(p) for p in glob.glob(f"{directory}/*.npz")}
+                  if actual != set(manifest[group]):
+                      errors.append({"group": group, "error": "membership changed during promotion"})
+              finish()
+              print("every admitted tile verified against expected membership, year and source")
+              PYEOF
+          resources:
+            requests: {cpu: "8", memory: "32Gi"}
+            limits: {cpu: "8", memory: "32Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

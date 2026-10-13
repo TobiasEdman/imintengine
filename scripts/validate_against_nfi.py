@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.eval.metrics import auroc_aupr
 
-# Unified-schema forest classes (imint/training/unified_schema.py).
+# Unified-schema forest classes (imint/schema/unified_schema.py).
 TALLSKOG, GRANSKOG, LOVSKOG, BLANDSKOG = 1, 2, 3, 4
 FOREST_CLASSES = (TALLSKOG, GRANSKOG, LOVSKOG, BLANDSKOG)
 FOREST_NAMES = {1: "tallskog", 2: "granskog", 3: "lövskog", 4: "blandskog"}

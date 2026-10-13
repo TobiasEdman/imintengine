@@ -14,7 +14,7 @@ What it does, per tile:
   2. Resolve the EPSG:3006 bbox (``bbox_3006`` key) and the tile year
      (canonical ``tile_fetch.infer_tile_year``: ``year`` → ``lpis_year``
      → modal year across ``dates``).
-  3. Fetch the five VPP bands via ``imint.training.cdse_vpp.fetch_vpp_tiles``
+  3. Fetch the five VPP bands via ``imint.data.cdse_vpp.fetch_vpp_tiles``
      for that bbox + year. Source routing is the function's own
      ``$VPP_SOURCE`` env switch (NOT a kwarg): we force ``wekeo`` first —
      PU-free — and only fall back to ``cdse`` on a WEkEO miss. A "miss" is
@@ -62,7 +62,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from imint.training.cdse_vpp import _has_sufficient_coverage, fetch_vpp_tiles
+from imint.data.cdse_vpp import _has_sufficient_coverage, fetch_vpp_tiles
 from imint.training.tile_bbox import resolve_fetch_bbox
 from imint.training.tile_fetch import infer_tile_year
 from scripts.atomic_npz import (

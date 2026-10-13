@@ -13,7 +13,7 @@ a single in-distribution number.
 Existing infrastructure reused:
     * ``imint.training.evaluate``  — per-class IoU, confusion matrix
     * ``imint.training.dataset``    — tile loader + label transforms
-    * ``imint.training.unified_schema`` — 23-class definition
+    * ``imint.schema.unified_schema`` — 23-class definition
 """
 from __future__ import annotations
 

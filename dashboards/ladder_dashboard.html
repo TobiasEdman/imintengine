@@ -37,6 +37,25 @@ thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color
 .cell.completed .bar > div { background:#16a34a; }
 .delta { font-size:11.5px; font-variant-numeric:tabular-nums; }
 .up { color:#4ade80; } .down { color:#f87171; } .flat { color:#6b7280; }
+/* Swipe layers share ONE geographic frame. Each layer is centred and scaled
+   by its own native size against the widest layer, so a 496 or 504 centre
+   crop covers exactly the ground it represents and a 512 truth layer keeps
+   its outer ring. Stretching every layer to 100% put different ground
+   resolutions on the same pixels and misregistered the comparison. */
+.sw-layer { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+            width:100%; border-radius:6px; image-rendering:pixelated; }
+/* Hatched backdrop. A centre-cropped layer does not reach the frame edge,
+   so whatever ring it leaves uncovered shows this pattern instead of dead
+   background — the viewer can see where a prediction simply has no data
+   rather than reading the gap as empty ground. The right clip carries its
+   own opaque copy: without it the full-size left layer shows through the
+   right layer's uncovered ring and reads as prediction agreeing with truth. */
+#swNoData, #swClipR { position:absolute; inset:0; border-radius:6px;
+  background:repeating-linear-gradient(45deg,#1b2433 0 6px,#0f1622 6px 12px); }
+#swStale, #swErr { display:none; color:#fbbf24; font-size:12.5px; margin:6px 0 0; }
+/* A comparison is only drawn once both selected PNGs have loaded. */
+#swStage.sw-off img { visibility:hidden; }
+#swStage.sw-off { cursor:default; }
 select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-radius:6px; padding:5px 8px; font:inherit; font-size:12.5px; }
 .h2h { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
 .h2h-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
@@ -91,6 +110,33 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
 </div>
 
 <div class="panel">
+  <h2>Field truth — NFI forest type (full cohort, training overlap)</h2>
+  <table id="fieldtruth"></table>
+  <div class="foot"><b>Full-cohort diagnostics, not a held-out evaluation.</b> These score the
+    whole NFI index (<span class="stat">nfi_index_unified_v2_512</span>), and that same index
+    supplies the rung-3/4 distillation teachers — roughly three quarters of its plots are in the
+    distillation training split. Rungs 3 and 4 are therefore scored partly on plots whose NFI
+    labels shaped their training targets, and their margins here are inflated by an unquantified
+    amount. Rungs 1 and 2 never saw NFI and carry no such overlap.
+    Each cell shows its accuracy and its margin over <b>NMD2023 v2.1 scored on that cell's own
+    plots</b> — the reference is recomputed per column, so the margin is valid even where a
+    backbone's img_size keeps a different plot subset. Rung 1 competes despite being 23-class:
+    classes 1–4 exist in both vocabularies. A held-out comparison needs the per-model
+    <span class="stat">*_r2_split.json</span> test tiles applied first.
+    <span id="ftRef"></span></div>
+</div>
+
+<div class="panel">
+  <h2>Field truth — LUCAS, shared vocabulary</h2>
+  <table id="fieldtruthLucas"></table>
+  <div class="foot">LUCAS carries field truth for crops, which NFI cannot: 21 of 28 classes against
+    NFI's 5. Classes 23–27 are NMD2023's finer subdivisions of open land and are folded onto class 8
+    in <b>both</b> truth and prediction, so a 28-class model is not charged for a finer-but-correct
+    answer and no point is discarded. Columns are scored on the points every cell kept.
+    <span id="ftLucasNote"></span></div>
+</div>
+
+<div class="panel">
   <h2>All runs — every curve on one axis</h2>
   <div class="h2h-controls">
     <select id="rungFilter">
@@ -134,11 +180,39 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
     <span id="infStatus" style="font-size:12.5px;color:#6b7280"></span>
   </div>
   <div style="overflow-x:auto"><table id="infMatrix"></table></div>
+
+  <h3 style="margin:18px 0 6px">Tile-inspektör — svep facit ↔ prediktion</h3>
+  <p id="swStale"></p>
+  <div id="swBox">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+    <button id="swPrev" style="cursor:pointer">◀</button>
+    <select id="swTile"></select>
+    <button id="swNext" style="cursor:pointer">▶</button>
+    <select id="swLeft"></select>
+    <span style="color:#6b7280">↔</span>
+    <select id="swRight"></select>
+  </div>
+  <div id="swStage" style="position:relative;max-width:560px;aspect-ratio:1/1;background:#0b0e17;border-radius:6px;user-select:none;cursor:ew-resize">
+    <div id="swNoData"></div>
+    <img id="swImgL" class="sw-layer" draggable="false">
+    <div id="swClipR" style="position:absolute;inset:0;clip-path:inset(0 0 0 50%)">
+      <img id="swImgR" class="sw-layer" draggable="false">
+    </div>
+    <div id="swBar" style="position:absolute;top:0;bottom:0;left:50%;width:2px;background:#fbbf24;pointer-events:none"></div>
+    <span id="swLabL" style="position:absolute;left:6px;top:6px;font-size:11px;background:#0008;color:#fff;padding:2px 6px;border-radius:4px"></span>
+    <span id="swLabR" style="position:absolute;right:6px;top:6px;font-size:11px;background:#0008;color:#fff;padding:2px 6px;border-radius:4px"></span>
+  </div>
+  <input id="swSlide" type="range" min="0" max="100" value="50" style="width:100%;max-width:560px;margin-top:6px">
+  <p id="swErr"></p>
+  </div>
   <div class="foot">Frozen farthest-point panel from the held-out validation set
     (<span class="stat">holdout_val_512</span> — never trained on by any rung). Rows: summer RGB,
     in-tile truth, then each backbone's prediction for the selected rung. Click a thumbnail for
     full size. A row renders once <span class="stat">ladder-inference-matrix</span> has run for
-    that cell's checkpoint; predictions are sha-keyed to the exact checkpoint bytes.</div>
+    that cell's checkpoint; predictions are sha-keyed to the exact checkpoint bytes.
+    In the inspector all layers share one 512&nbsp;px tile frame; a hatched ring marks
+    ground the selected layer does not cover, which is normal for centre-cropped
+    predictions and is not missing truth.</div>
 </div>
 
 <script>
@@ -167,6 +241,8 @@ let DATA = {};   // "model_rN" -> log | null
 let DSTL = {};   // model -> distillability json | null
 let STAGE = {};  // model -> {gate:bool, feats:bool} — distill-stage probes
 let INF = null;  // inference/matrix.json — the visual matrix' index
+let FT = null;   // fieldtruth/fieldtruth-standings.json (NFI + LUCAS)
+let FTSP = {};   // cell -> fieldtruth/sameplots/*.json (model vs NMD, same plots)
 // nfi_head_cv.py BASELINES: NMD2023's own 5-class field accuracy at the
 // same plots — the number a column's features must beat to claim the
 // model knows more forest type than the map it was trained on.
@@ -208,6 +284,22 @@ async function loadAll() {
       const res = await fetch(`inference/matrix.json?t=${Date.now()}`);
       INF = res.ok ? await res.json() : null;
     } catch { INF = null; }
+  })(), (async () => {
+    // Field truth (the /www/ladder/fieldtruth symlink). Both files are
+    // written by separate jobs and appear cell by cell over hours, so every
+    // miss is an awaiting-state, never an error.
+    try {
+      const res = await fetch(`fieldtruth/fieldtruth-standings.json?t=${Date.now()}`);
+      FT = res.ok ? await res.json() : null;
+    } catch { FT = null; }
+    FTSP = {};
+    const cells = MODELS.flatMap(m => RUNGS.map(r => `${m}_r${r.n}`));
+    await Promise.all(cells.map(async (cell) => {
+      try {
+        const res = await fetch(`fieldtruth/sameplots/sameplots-${cell}.json?t=${Date.now()}`);
+        if (res.ok) FTSP[cell] = await res.json();
+      } catch {}
+    }));
   })()]));
 }
 
@@ -335,6 +427,83 @@ function renderDeltas() {
     h += "</tr>";
   }
   document.getElementById("deltas").innerHTML = h + "</tbody>";
+}
+
+function ftModel(sp) {
+  // compare_nmd2023_nfi labels the model under test with a legacy key; the
+  // two NMD entries are the fixed references, so the model is whatever is
+  // left. Keying on the leftover survives that name changing.
+  const s = sp && sp.sources;
+  if (!s) return null;
+  const k = Object.keys(s).find(x => x !== "NMD2023_v2.1" && x !== "NMD2018_v1.1");
+  return k ? s[k] : null;
+}
+
+function renderFieldTruth() {
+  const el = document.getElementById("fieldtruth");
+  const have = Object.keys(FTSP).length;
+  if (!have) {
+    el.innerHTML = "<tbody><tr><td class='rung-label'>awaiting the field-truth jobs" +
+                   " — nothing scored yet</td></tr></tbody>";
+    document.getElementById("ftRef").textContent = "";
+    return;
+  }
+  let h = "<thead><tr><th></th>" + MODELS.map(m=>`<th>${LABELS[m]}</th>`).join("") +
+          "</tr></thead><tbody>";
+  const refs = new Set();
+  for (const r of RUNGS) {
+    h += `<tr><td class="rung-label">r${r.n} ${r.name}</td>`;
+    for (const m of MODELS) {
+      const sp = FTSP[`${m}_r${r.n}`], mm = ftModel(sp);
+      if (!mm) { h += `<td class="delta flat">—</td>`; continue; }
+      const nmd = sp.sources["NMD2023_v2.1"].overall_accuracy_5class;
+      const oa = mm.overall_accuracy_5class, d = oa - nmd;
+      refs.add(nmd.toFixed(4));
+      const cls = d > 0.0005 ? "up" : d < -0.0005 ? "down" : "flat";
+      h += `<td class="delta ${cls}" title="n=${sp.n_plots_compared} plots, ` +
+           `kappa ${mm.cohen_kappa.toFixed(4)}">${oa.toFixed(4)}` +
+           `<small style="display:block">${d>0?"+":""}${d.toFixed(4)}</small></td>`;
+    }
+    h += "</tr>";
+  }
+  el.innerHTML = h + "</tbody>";
+  const r = [...refs].sort();
+  document.getElementById("ftRef").textContent = !r.length ? "" :
+    (r.length === 1
+      ? `NMD2023 on these plots: ${r[0]}. `
+      : `NMD2023 differs by column (${r.join(", ")}) because each is scored on ` +
+        `its own plot subset — read the margins, not the levels. `) +
+    `${have} of ${MODELS.length * RUNGS.length} cells scored.`;
+}
+
+function renderFieldTruthLucas() {
+  const el = document.getElementById("fieldtruthLucas");
+  const rows = (FT && FT.lucas_shared_vocab) || [];
+  if (!rows.length) {
+    el.innerHTML = "<tbody><tr><td class='rung-label'>awaiting the standings job</td></tr></tbody>";
+    document.getElementById("ftLucasNote").textContent = "";
+    return;
+  }
+  const by = {}; const ns = new Set();
+  for (const r of rows) { by[r.cell] = r; ns.add(r.n); }
+  let h = "<thead><tr><th></th>" + MODELS.map(m=>`<th>${LABELS[m]}</th>`).join("") +
+          "</tr></thead><tbody>";
+  for (const r of RUNGS) {
+    h += `<tr><td class="rung-label">r${r.n} ${r.name}</td>`;
+    for (const m of MODELS) {
+      const row = by[`${m}_r${r.n}`];
+      h += row ? `<td class="delta flat" title="n=${row.n} points">${row.overall.toFixed(4)}</td>`
+               : `<td class="delta flat">—</td>`;
+    }
+    h += "</tr>";
+  }
+  el.innerHTML = h + "</tbody>";
+  const nn = [...ns].sort((a, b) => a - b);
+  document.getElementById("ftLucasNote").textContent = nn.length === 1
+    ? `${rows.length} cell(s) scored on ${nn[0]} shared points.`
+    : `${rows.length} cell(s); point counts DIFFER (${nn.join(", ")}), so these ` +
+      `columns are not on a common cohort — equal counts would anyway be ` +
+      `necessary but not sufficient. Hover a cell for its own n.`;
 }
 
 function options() {
@@ -620,10 +789,156 @@ function renderInference() {
   status.textContent = `· ${rendered}/${MODELS.length} backbones rendered for rung ${rung}`;
 }
 
+
+// Tile-inspektör: one tile at a time, swipe between any two layers
+// (ground truth / RGB / any rendered cell). Pure client-side; images are
+// the same PNGs the matrix table uses.
+// The tile footprint every layer is a centre crop of. Fixing the frame here
+// rather than taking max() of the two loaded layers keeps the zoom stable
+// across layer pairs: a 496-vs-504 comparison now renders on the same
+// 512 ground extent as a 512-vs-496 one, instead of silently rescaling.
+const TILE_PX = 512;
+let SW_BUILT = false;
+function swLayers() {
+  const layers = [["_rgb", "RGB (sommar)"], ["_truth23", "Facit 23-kl"],
+                  ["_truth28", "Facit 28-kl"]];
+  for (const m of MODELS) for (const r of [1, 2, 3, 4]) {
+    const c = INF.cells?.[`${m}_r${r}`];
+    if (c) layers.push([`${m}_r${r}`, `${LABELS[m]} · r${r}`,
+                        (c.ckpt_sha || "").slice(0, 8)]);
+  }
+  return layers;
+}
+function swUpdate() {
+  const t = document.getElementById("swTile").value;
+  const L = document.getElementById("swLeft").value;
+  const R = document.getElementById("swRight").value;
+  const layers = Object.fromEntries(swLayers().map(x => [x[0], x]));
+  const v = k => layers[k]?.[2] ? `?v=${layers[k][2]}` : "";
+  const a = document.getElementById("swImgL"), b = document.getElementById("swImgR");
+  a.dataset.label = layers[L]?.[1] || L;
+  b.dataset.label = layers[R]?.[1] || R;
+  for (const [el, src] of [[a, `inference/${L}/${t}.png${v(L)}`],
+                           [b, `inference/${R}/${t}.png${v(R)}`]]) {
+    // The 30 s tick re-runs this; an unchanged, loaded layer stays as it is.
+    // Anything else (new choice, or a retry after a failure) reloads.
+    if (el.dataset.src === src && el.dataset.state === "ok") continue;
+    el.dataset.src = src; el.dataset.state = "loading";
+    el.onload = () => { if (el.dataset.src === src) { el.dataset.state = "ok"; swState(); } };
+    el.onerror = () => { if (el.dataset.src === src) { el.dataset.state = "error"; swState(); } };
+    el.src = src;
+    // An image already in the memory cache is complete at once and Chromium
+    // may not fire load for it again; take that synchronous result.
+    if (el.complete && el.naturalWidth) el.dataset.state = "ok";
+  }
+  swState();
+}
+// Gate the comparison on both layers having loaded. A layer that is still
+// loading or failed (404, broken PNG: naturalWidth 0) would otherwise leave
+// an enabled swipe whose label names an image that is not on screen, so the
+// stage hides its images, the slider and drag stop, and the label says why.
+function swState() {
+  const a = document.getElementById("swImgL"), b = document.getElementById("swImgR");
+  const ready = a.dataset.state === "ok" && b.dataset.state === "ok";
+  const failed = [a, b].filter(el => el.dataset.state === "error");
+  const tag = el => ({loading: " — laddar…", error: " — saknas"}[el.dataset.state] || "");
+  document.getElementById("swLabL").textContent = a.dataset.label + tag(a);
+  document.getElementById("swLabR").textContent = b.dataset.label + tag(b);
+  document.getElementById("swStage").classList.toggle("sw-off", !ready);
+  document.getElementById("swSlide").disabled = !ready;
+  const err = document.getElementById("swErr");
+  err.style.display = failed.length ? "block" : "none";
+  err.textContent = failed.length
+    ? "Jämförelsen är avstängd — " + failed.map(el =>
+        `${el.dataset.label} kunde inte laddas (${el.dataset.src.split("?")[0]})`).join("; ")
+      + ". Välj ett annat lager eller vänta på nästa uppdatering."
+    : "";
+  if (ready) swFit();
+}
+// Scale both layers against the widest of the two. All layers are centre
+// crops of one tile footprint, so equal centres plus native-proportional
+// width is exact relative registration — no estimated offset, no sign to
+// get wrong. Runs on every load because natural sizes differ per layer.
+function swFit() {
+  const a = document.getElementById("swImgL"), b = document.getElementById("swImgR");
+  // Guard the max() so an unexpectedly larger layer cannot overflow the
+  // frame; in normal data every layer is <= TILE_PX.
+  const ref = Math.max(TILE_PX, a.naturalWidth || 0, b.naturalWidth || 0);
+  if (!(a.naturalWidth || b.naturalWidth)) return;
+  for (const el of [a, b]) {
+    const n = el.naturalWidth || 0;
+    el.style.width = n ? `${(100 * n / ref).toFixed(4)}%` : "100%";
+  }
+}
+function swPos(pct) {
+  pct = Math.max(0, Math.min(100, pct));
+  document.getElementById("swClipR").style.clipPath = `inset(0 0 0 ${pct}%)`;
+  document.getElementById("swBar").style.left = `${pct}%`;
+  document.getElementById("swSlide").value = pct;
+}
+function renderInspector() {
+  const box = document.getElementById("swBox"), stale = document.getElementById("swStale");
+  if (!INF || !INF.tiles?.length) {
+    // The index went away mid-session (matrix.json 404). Whatever is on
+    // screen describes a run we can no longer confirm, so stop offering it.
+    box.style.display = "none";
+    stale.style.display = "block";
+    stale.textContent = "Inspektören är pausad — inferensindexet kunde inte läsas. "
+      + "Senast visade rutor är inte längre bekräftade.";
+    for (const id of ["swTile", "swLeft", "swRight", "swPrev", "swNext", "swSlide"])
+      document.getElementById(id).disabled = true;
+    return;
+  }
+  box.style.display = ""; stale.style.display = "none";
+  // The slider is re-enabled by swState() once both layers have loaded.
+  for (const id of ["swTile", "swLeft", "swRight", "swPrev", "swNext"])
+    document.getElementById(id).disabled = false;
+  const tileSel = document.getElementById("swTile");
+  const lSel = document.getElementById("swLeft");
+  const rSel = document.getElementById("swRight");
+  const layers = swLayers();
+  if (!SW_BUILT) {
+    tileSel.innerHTML = INF.tiles.map(t =>
+      `<option value="${t.name}">${t.name.replace(/^holdoutval_/, "")}</option>`).join("");
+    document.getElementById("swPrev").onclick = () => {
+      tileSel.selectedIndex = (tileSel.selectedIndex + tileSel.length - 1) % tileSel.length;
+      swUpdate();
+    };
+    document.getElementById("swNext").onclick = () => {
+      tileSel.selectedIndex = (tileSel.selectedIndex + 1) % tileSel.length;
+      swUpdate();
+    };
+    for (const el of [tileSel, lSel, rSel]) el.onchange = swUpdate;
+    document.getElementById("swSlide").oninput = e => swPos(+e.target.value);
+    const stage = document.getElementById("swStage");
+    const drag = e => {
+      if (stage.classList.contains("sw-off")) return;
+      const r = stage.getBoundingClientRect();
+      swPos(100 * ((e.touches ? e.touches[0].clientX : e.clientX) - r.left) / r.width);
+    };
+    stage.onpointerdown = e => { stage.setPointerCapture(e.pointerId); drag(e); stage.onpointermove = drag; };
+    stage.onpointerup = () => { stage.onpointermove = null; };
+    SW_BUILT = true;
+  }
+  // (Re)fill layer selects, preserving choices as cells appear over time.
+  const keep = sel => { const v = sel.value; return () => {
+    if ([...sel.options].some(o => o.value === v)) sel.value = v; }; };
+  const kL = keep(lSel), kR = keep(rSel);
+  const opts = layers.map(x => `<option value="${x[0]}">${x[1]}</option>`).join("");
+  lSel.innerHTML = opts; rSel.innerHTML = opts;
+  kL(); kR();
+  if (lSel.value === rSel.value) {
+    lSel.value = "_truth23";
+    rSel.value = layers[3]?.[0] || "_truth28";
+  }
+  swUpdate();
+}
+
 async function tick() {
   await loadAll();
   renderMatrix(); renderDeltas(); renderDistill(); renderAll(); fillSelects(); renderH2H();
-  renderInference();
+  renderInference(); renderFieldTruth(); renderFieldTruthLucas();
+  renderInspector();
   document.getElementById("updated").textContent =
     "· refreshed " + new Date().toLocaleTimeString();
 }

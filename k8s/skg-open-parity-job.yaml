@@ -1,0 +1,73 @@
+---
+# Parity of the open-data mirror against proxy-fetched cache arrays (IM-022).
+#
+# Runs scripts/verify_skg_open_parity.py read-only against /data: for each
+# cache root it reads a seeded sample of the .npy arrays the retired
+# fetchers wrote (volume, basal_area, diameter, markfukt, height) and
+# fetches the same bbox through the mirror-backed fetchers. Writes the
+# report to /data/skg_open/parity/<date>.json and prints the per-channel
+# summary. Requires k8s/skg-open-stage-job.yaml to have finished.
+#
+# Nothing is written outside /data/skg_open/parity; no tile is touched.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: skg-open-parity
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: skg-open-parity}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: parity
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== skg-open-parity — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio
+              mkdir -p /workspace && cd /workspace
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "${IMINT_COMMIT}"
+              echo "${IMINT_SCRIPT_SHA256}  scripts/verify_skg_open_parity.py" | sha256sum -c -
+              echo "HEAD: $(git rev-parse HEAD)"
+              export SKG_OPEN_DIR=/data/skg_open
+              test -f /data/skg_open/MANIFEST.json
+              OUT=/data/skg_open/parity/parity_$(date -u +%Y%m%dT%H%M%SZ).json
+              python scripts/verify_skg_open_parity.py \
+                --roots /data/unified_v2_512 /data/unified_v2_512_nfi2024_staging /data/unified_v2_512_orphans_staging \
+                --channels ${PARITY_CHANNELS} --sample ${PARITY_SAMPLE} --out "$OUT"
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: IMINT_COMMIT, value: "ce466af26516fdaf73d1049c0a7d2877ef3e0ac1"}
+            - {name: IMINT_SCRIPT_SHA256, value: "0e79b5cbf722c43b818ccafa4044c67866243c5ef1a4407e469ed9bdb6f0ca99"}
+            - {name: PARITY_CHANNELS, value: "volume basal_area diameter markfukt"}
+            - {name: PARITY_SAMPLE, value: "150"}
+          resources:
+            requests: {cpu: "2", memory: "6Gi"}
+            limits: {cpu: "2", memory: "6Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

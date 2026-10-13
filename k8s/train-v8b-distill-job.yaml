@@ -59,7 +59,7 @@ spec:
               git clone --depth 1 --branch "$BRANCH" \
                 https://github.com/TobiasEdman/ImintEngine.git imintengine
               cd /workspace/imintengine
-              pip install --no-cache-dir -e . || pip install --quiet --no-cache-dir -r requirements.txt
+              pip install --no-cache-dir -e '.[training]' || pip install --quiet --no-cache-dir -r requirements.txt
               echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
               D=$(ls /cephfs/nmd2023_distill_labels/*.npz 2>/dev/null | wc -l)
               echo "distill sidecars: $D"; [ "$D" -lt 100 ] && { echo "FATAL: distill labels missing"; exit 1; }
