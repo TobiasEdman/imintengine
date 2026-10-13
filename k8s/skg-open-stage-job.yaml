@@ -79,10 +79,13 @@ spec:
           env:
             - {name: IMINT_BRANCH, value: "agent/te/claude/im022-skg-geotiff-source"}
             - {name: STAGE_PRODUCTS, value: "grunddata markfukt"}
-            - {name: GDAL_CACHEMAX, value: "2048"}
+            # 2026-10-12 run 1 (8Gi, cache 2048 MB) was OOM-killed on the
+            # 10.6 GiB markfukt county 23 after 171/174 files: the page cache
+            # of the sequential 10+ GiB write counts against the cgroup.
+            - {name: GDAL_CACHEMAX, value: "512"}
           resources:
-            requests: {cpu: "4", memory: "8Gi"}
-            limits: {cpu: "4", memory: "8Gi"}
+            requests: {cpu: "4", memory: "24Gi"}
+            limits: {cpu: "4", memory: "24Gi"}
           volumeMounts:
             - {name: d, mountPath: /data}
       volumes:

@@ -85,5 +85,34 @@ failure, finished files are skipped):
 kubectl apply -f k8s/skg-open-stage-job.yaml
 ```
 
-Sizes planned 2026-10-12: grunddata omdrev 1–3 + markfukt = 174 files,
-97.3 GiB raw; Trädhöjd = 21 files, 329.2 GiB raw (1 m), separate run.
+## Staged (2026-10-13 01:04Z, Job `skg-open-stage` + resumed `skg-open-stage-r2`)
+
+| | |
+|---|---|
+| Files | 174 (grunddata omdrev 1–3 × 3 variables = 153, markfukt 21), all sha256-recorded |
+| Raw zips `raw/` | 97.3 GiB |
+| Derived COGs | 79.2 GiB (grunddata 16 GiB, markfukt 64 GiB), lossless, pixel-verified on five windows each |
+| VRTs | 10 (volym/grundyta/medeldiameter × omdrev 1, 2, 3 + markfukt) |
+| Manifest git sha | 798f18b (branch `agent/te/claude/im022-skg-geotiff-source`) |
+| PVC free | 626 GiB before, 333 GiB after (the mirror is ~176 GiB; other jobs wrote the rest meanwhile) |
+
+The first run (8 GiB memory) was OOM-killed while converting the 10.6 GiB
+markfukt county 23 after 171 files: the page cache of a sequential
+10 GiB write counts against the container's cgroup. The re-run with
+24 GiB and `GDAL_CACHEMAX=512` skipped the 171 finished files and
+converted counties 23–25 (peak 14 GiB resident). The manifest therefore
+requires 24 GiB for any future county of that size.
+
+Trädhöjd (21 files, 329.2 GiB raw at 1 m) is not staged: it does not
+reproduce the stored height channel (closest statistic p90, MAE ≈ 1 m)
+and would take half the remaining PVC. Run `STAGE_PRODUCTS=tradhojd`
+once that cost is approved; the 10 m derivative is ~3 GiB and the raw
+zips can be dropped afterwards with `--drop-raw`.
+
+### Raw files after enrichment
+
+The COGs are lossless re-encodings verified pixel-for-pixel on sampled
+windows, every raw zip's sha256 is in `MANIFEST.json`, and the source
+stays published, so deleting `raw/` (97.3 GiB) after the enrichment pass
+loses no reproducibility: a re-download can be checked against the
+recorded hashes. Keeping it only buys re-derivation without network.

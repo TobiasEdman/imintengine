@@ -398,11 +398,31 @@ def verify_cog(src: str, cog: Path, *, lossless: bool) -> dict:
         return rec
 
 
-def build_vrt(dest: Path, vrt: str, rasters: list[str], nodata: int) -> dict:
+def vrt_nodata(vrt: str) -> tuple[int, int]:
+    """``(srcnodata, vrtnodata)`` for a product mosaic.
+
+    The county rasters are rectangles that overlap their neighbours. Grunddata
+    and Trädhöjd pad the area outside the county polygon with their nodata
+    value (-1), so overlapping sources compose correctly. The markfukt
+    rasters pad it with the *fill code 255* (their nodata 65535 does not
+    occur), so 255 must be the transparent value when the counties are
+    mosaicked; it is nodata to every reader anyway (0 and 255 both map to
+    "no data" in the service encoding). Measured 2026-10-13: with 65535 as
+    the source nodata, half of Sweden read a neighbour's 255 padding.
+    """
+    if vrt.startswith("markfukt/"):
+        return 255, MARKFUKT_NODATA
+    return -1, -1
+
+
+MARKFUKT_NODATA = 65535
+
+
+def build_vrt(dest: Path, vrt: str, rasters: list[str], srcnodata: int, vrtnodata: int) -> dict:
     out = dest / vrt
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".vrt.tmp")
-    subprocess.run(["gdalbuildvrt", "-q", "-srcnodata", str(nodata), "-vrtnodata", str(nodata),
+    subprocess.run(["gdalbuildvrt", "-q", "-srcnodata", str(srcnodata), "-vrtnodata", str(vrtnodata),
                     "-resolution", "highest", str(tmp), *[str(dest / r) for r in rasters]],
                    check=True)
     text = tmp.read_text()
@@ -418,7 +438,8 @@ def build_vrt(dest: Path, vrt: str, rasters: list[str], nodata: int) -> dict:
         if ds.crs.to_epsg() != 3006:
             raise ValueError(f"{out}: CRS {ds.crs}")
         return {"sources": rasters, "width": ds.width, "height": ds.height,
-                "res_m": float(ds.res[0]), "nodata": ds.nodata, "built_at": _now()}
+                "res_m": float(ds.res[0]), "nodata": ds.nodata, "srcnodata": srcnodata,
+                "built_at": _now()}
 
 
 # ── main ────────────────────────────────────────────────────────────────────
@@ -487,8 +508,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for vrt in vrt_targets(items):
         rasters = staged_vrt_sources(manifest, dest, vrt)
-        nodata = 65535 if vrt.startswith("markfukt") else -1
-        manifest["vrt"][vrt] = build_vrt(dest, vrt, rasters, nodata)
+        manifest["vrt"][vrt] = build_vrt(dest, vrt, rasters, *vrt_nodata(vrt))
         print(f"vrt {vrt}: {len(rasters)} sources", flush=True)
     save_manifest(dest, manifest)
     staged = sum(r["bytes"] for r in manifest["files"].values() if not r.get("raw_deleted_at"))

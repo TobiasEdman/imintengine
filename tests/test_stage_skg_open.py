@@ -221,3 +221,36 @@ def test_vrt_sources_come_from_the_whole_staged_inventory(tmp_path):
     items = st.plan(["markfukt"], [2], ["03"], {"sksSLUMarkfuktighet03.zip": {"bytes": 1, "modified": ""}})
     for vrt in st.vrt_targets(items):
         assert len(st.staged_vrt_sources(m, tmp_path, vrt)) == 2
+
+
+def test_markfukt_mosaic_makes_the_255_padding_transparent():
+    # county rasters overlap; markfukt pads outside the polygon with 255, grunddata with -1
+    assert st.vrt_nodata("markfukt/markfukt.vrt") == (255, 65535)
+    assert st.vrt_nodata("grunddata/volym_omdrev2.vrt") == (-1, -1)
+    assert st.vrt_nodata("tradhojd/tradhojd_10m.vrt") == (-1, -1)
+
+
+@pytest.mark.skipif(shutil.which("gdalbuildvrt") is None, reason="gdal CLI not installed")
+def test_overlapping_markfukt_counties_compose_without_padding_bleed(tmp_path):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    m = st.load_manifest(tmp_path)
+    (tmp_path / "markfukt").mkdir()
+    # county A covers x 0-200, real data 40 on the left half, 255 padding on the right
+    a = np.full((10, 20), 255, np.uint16); a[:, :10] = 40
+    # county B covers x 100-300, real data 60 on its right half, 255 padding on the left
+    b = np.full((10, 20), 255, np.uint16); b[:, 10:] = 60
+    for name, arr, west in (("markfukt_01.tif", a, 0), ("markfukt_03.tif", b, 100)):
+        with rasterio.open(tmp_path / "markfukt" / name, "w", driver="GTiff", width=20, height=10, count=1,
+                           dtype="uint16", crs="EPSG:3006", transform=from_origin(west, 100, 10, 10),
+                           nodata=65535) as d:
+            d.write(arr, 1)
+        m["derived"]["markfukt/" + name] = {"sha256": "x" * 64}
+    rec = st.build_vrt(tmp_path, "markfukt/markfukt.vrt", st.staged_vrt_sources(m, tmp_path, "markfukt/markfukt.vrt"),
+                       *st.vrt_nodata("markfukt/markfukt.vrt"))
+    with rasterio.open(tmp_path / "markfukt" / "markfukt.vrt") as v:
+        row = v.read(1)[5]
+    assert rec["srcnodata"] == 255 and v.nodata == 65535
+    assert list(row[:10]) == [40] * 10 and list(row[20:]) == [60] * 10      # neither county's padding won
+    assert list(row[10:20]) == [65535] * 10                               # padding in both -> nodata
