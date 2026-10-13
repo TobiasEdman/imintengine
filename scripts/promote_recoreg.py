@@ -17,6 +17,8 @@ if recovery fails, the error identifies the retained data and recovery paths.
 The pair is NOT crash-atomic: live is briefly absent between renames, and process
 termination or a machine crash can leave it absent. Operators must ensure
 exclusive access to these paths during the operation (including recovery).
+If live is absent but a backup exists, recover before retrying promotion;
+otherwise the missing live tile count would bypass the minimum-fraction gate.
 
 DRY-RUN by default: prints the plan and exits 0 without touching disk. Pass
 ``--execute`` to act. ``--rollback`` restores the most recent
@@ -133,6 +135,10 @@ def _swap(live: str, candidate: str, saved: str, *, execute: bool) -> None:
 
 def _promote(live: str, recoreg: str, *, execute: bool, min_frac: float) -> int:
     live, recoreg = os.path.abspath(live), os.path.abspath(recoreg)
+    if not os.path.lexists(live) and (previous := _newest_backup(live)) is not None:
+        sys.exit(f"ERROR: live is absent but a prior backup exists: {previous}. "
+                 "Inspect the retained paths and recover with --rollback "
+                 "before retrying promote; this is not a fresh dataset.")
     backup = live + _BACKUP_SUFFIX + _utc_stamp()
     _validate_swap(live, recoreg, backup)
     n_recoreg = _count_npz(recoreg)
