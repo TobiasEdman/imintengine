@@ -21,7 +21,11 @@ under the rules decided on 2026-10-11/12:
   * placement is the 2024 campaign's: a 5,120 m lattice cell decides which
     plots share a tile, the tile is centred on their bounding box and
     snapped to the 10 m grid, and a group that does not fit the 496 px crop
-    is split recursively (the sizing's ``tile_cover`` rule).
+    is split recursively (the sizing's ``tile_cover`` rule);
+  * a candidate tile touching an MGRS cell that has no HR-VPP product for
+    its year (``--no-vpp``, an explicit list confirmed by a WEkEO re-search)
+    is infeasible: it could never get its VPP channels and zero-filling is
+    forbidden, so the next tile in rank order takes its place.
 
 Outputs, per year: a manifest in the ``nfi2024_512.json`` shape (tile name,
 bbox_3006, year, source, n_plots), a WEkEO VPP gap report in the
@@ -35,6 +39,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 from collections import Counter
@@ -129,8 +134,30 @@ def place_tiles(candidates: pd.DataFrame, same_year_training: pd.DataFrame, key_
     return sorted(tiles, key=lambda t: (t["_rank"], t["name"]))
 
 
+def parse_no_vpp(tokens: list[str], years: list[int]) -> dict[int, frozenset[str]]:
+    """``CELL`` (no product in any year) or ``YEAR:CELL`` -> cells without HR-VPP per planned year.
+
+    Refuses malformed tokens and years that are not being planned, so a typo
+    can never silently leave an uncoverable tile in a manifest.
+    """
+    out: dict[int, set[str]] = {y: set() for y in years}
+    for tok in tokens:
+        year_s, _, cell = tok.rpartition(":")
+        if not re.fullmatch(r"\d{2}[C-X][A-Z]{2}", cell):
+            raise SystemExit(f"--no-vpp: {tok!r} is not CELL or YEAR:CELL (e.g. 33UVC, 2018:34WCA)")
+        if not year_s:
+            for y in out:
+                out[y].add(cell)
+        elif not year_s.isdigit() or int(year_s) not in out:
+            raise SystemExit(f"--no-vpp: {tok!r} names a year that is not planned ({sorted(out)})")
+        else:
+            out[int(year_s)].add(cell)
+    return {y: frozenset(c) for y, c in out.items()}
+
+
 def plan_year(year: int, plots: pd.DataFrame, ft, exposure, covered_keys, cohort: pd.DataFrame,
-              target: int, covered_count: int) -> tuple[list[dict], dict]:
+              target: int, covered_count: int, no_vpp: frozenset[str] = frozenset(),
+              cells_for=None) -> tuple[list[dict], dict]:
     key_cols = list(ft.NFI_KEY)
     p = plots[plots["Year"] == year].copy()
     valid = valid_rows(p)
@@ -144,8 +171,12 @@ def plan_year(year: int, plots: pd.DataFrame, ft, exposure, covered_keys, cohort
     candidates["_rank"] = [rank_key(t, pl, y) for t, pl, y in ft.observation_keys(candidates)]
     need = max(0, target - covered_count)
     tiles = place_tiles(candidates, same_year, key_cols)
+    for t in tiles:
+        t["_no_vpp_product"] = (not t["_same_year_training_overlap"] and bool(no_vpp)
+                                and bool(cells_for(t["bbox_3006"]) & no_vpp))
     dropped_overlap = [t for t in tiles if t["_same_year_training_overlap"]]
-    feasible = [t for t in tiles if not t["_same_year_training_overlap"]]
+    no_product = [t for t in tiles if t["_no_vpp_product"]]
+    feasible = [t for t in tiles if not (t["_same_year_training_overlap"] or t["_no_vpp_product"])]
     chosen, gained = [], 0
     for t in feasible:
         if gained >= need:
@@ -166,6 +197,9 @@ def plan_year(year: int, plots: pd.DataFrame, ft, exposure, covered_keys, cohort
         "candidate_tiles": len(tiles),
         "candidate_tiles_dropped_same_year_overlap": len(dropped_overlap),
         "plots_on_dropped_tiles": int(sum(t["n_plots"] for t in dropped_overlap)),
+        "no_vpp_cells": sorted(no_vpp),
+        "candidate_tiles_dropped_no_vpp_product": len(no_product),
+        "plots_on_no_vpp_tiles": int(sum(t["n_plots"] for t in no_product)),
         "feasible_tiles": len(feasible),
         "feasible_plot_years": int(sum(t["n_plots"] for t in feasible)),
         "chosen_tiles": len(chosen),
@@ -185,6 +219,8 @@ def main(argv: list[str] | None = None) -> dict:
     ap.add_argument("--years", type=int, nargs="+", required=True)
     ap.add_argument("--target", type=int, default=1000)
     ap.add_argument("--vpp-cache", type=Path, default=None, help="default <data-root>/vpp_wekeo")
+    ap.add_argument("--no-vpp", nargs="*", default=[], metavar="[YEAR:]CELL",
+                    help="MGRS cells with no HR-VPP product, confirmed by re-search; CELL alone means every year")
     ap.add_argument("--out-dir", type=Path, required=True, help="where nfi{Y}_topup_512.json and gaps go")
     ap.add_argument("--summary-json", type=Path, required=True)
     args = ap.parse_args(argv)
@@ -194,6 +230,7 @@ def main(argv: list[str] | None = None) -> dict:
     vpp_cache = args.vpp_cache or root / "vpp_wekeo"
     t0 = time.time()
 
+    no_vpp = parse_no_vpp(args.no_vpp, sorted(set(args.years)))
     # Fail before any input is read or any output written: without a complete
     # training-cohort inventory the footprint rule would silently exclude nothing.
     cohort = require_cohort_geometry(cohort_dir)
@@ -224,12 +261,14 @@ def main(argv: list[str] | None = None) -> dict:
     summaries, requests = [], 0
     for year in sorted(set(args.years)):
         chosen, summary = plan_year(year, plots, ft, exposure, covered_keys, cohort, args.target,
-                                    covered_by_year.get(year, 0))
+                                    covered_by_year.get(year, 0), no_vpp[year], mgrs_tiles_for_bbox)
         manifest = [{k: v for k, v in t.items() if not k.startswith("_")} for t in chosen]
         manifest.sort(key=lambda t: -t["n_plots"])
         need_mgrs = set()
         for t in manifest:
             need_mgrs |= mgrs_tiles_for_bbox(t["bbox_3006"])
+        if need_mgrs & no_vpp[year]:
+            raise SystemExit(f"{year}: a chosen tile touches a cell without HR-VPP: {sorted(need_mgrs & no_vpp[year])}")
         missing = sorted(m for m in need_mgrs if (m, year) not in have)
         summary["mgrs_cells"] = len(need_mgrs)
         summary["mgrs_missing_in_wekeo_cache"] = len(missing)
