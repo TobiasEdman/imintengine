@@ -18,7 +18,10 @@
 # under /data/skg_open. No tile is touched.
 #
 # Image digest: python:3.11-slim as resolved 2026-10-12 (same pin as
-# k8s/skg-endpoint-probe-job.yaml).
+# k8s/skg-endpoint-probe-job.yaml). Code pin: IMINT_COMMIT (full sha) and
+# IMINT_SCRIPT_SHA256 (sha256 of scripts/stage_skg_open.py at that commit,
+# `git show <sha>:scripts/stage_skg_open.py | sha256sum`); the pod refuses
+# to run if either check fails. Bump both when the script changes.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -57,10 +60,15 @@ spec:
               pip install -q --no-cache-dir numpy rasterio inflate64
               gdalinfo --version
               mkdir -p /workspace && cd /workspace
-              git clone -q --depth 1 --branch "${IMINT_BRANCH}" https://github.com/TobiasEdman/ImintEngine.git ie
-              cd ie
+              # Pinned to a reviewed full commit, never a branch tip: a branch
+              # resolves to whatever it points at when the pod starts.
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
               export IMINT_GIT_SHA="$(git rev-parse HEAD)"
-              echo "HEAD: ${IMINT_GIT_SHA} (${IMINT_BRANCH})"
+              test "${IMINT_GIT_SHA}" = "${IMINT_COMMIT}"
+              echo "${IMINT_SCRIPT_SHA256}  scripts/stage_skg_open.py" | sha256sum -c -
+              echo "HEAD: ${IMINT_GIT_SHA}"
               df -h /data | tail -1
               python scripts/stage_skg_open.py --dest /data/skg_open \
                 --products ${STAGE_PRODUCTS} --omdrev 1 2 3
@@ -77,7 +85,8 @@ spec:
               df -h /data | tail -1
               echo "=== done: $(date -u) ==="
           env:
-            - {name: IMINT_BRANCH, value: "agent/te/claude/im022-skg-geotiff-source"}
+            - {name: IMINT_COMMIT, value: "cddfbc1a9d9f96aab1273ae36c1b7077442b3397"}
+            - {name: IMINT_SCRIPT_SHA256, value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
             - {name: STAGE_PRODUCTS, value: "grunddata markfukt"}
             # 2026-10-12 run 1 (8Gi, cache 2048 MB) was OOM-killed on the
             # 10.6 GiB markfukt county 23 after 171/174 files: the page cache
