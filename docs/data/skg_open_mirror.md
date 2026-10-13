@@ -67,8 +67,40 @@ newer version; to be measured on the cluster once staged. Treated as a
 documented per-channel difference: new tiles get the published version,
 stored tiles keep the proxy version.
 
-**Height**: see the parity note below once measured against
-`sksTradhojd10` (1 m).
+**Height** (Blekinge, 1 m `sksTradhojd10`): the stored channel is not an
+aggregate of the open 1 m model. Per 10 m cell, the mean of the 1 m
+values is 4–7 m too low, the maximum 1.5 m too high; the 90th percentile
+is closest (MAE 0.8–1.0 m, 12 % exact, bias +0.4–0.7 m). Grunddata
+`Medelhöjd` (Hgv) is a different variable (MAE up to 2.6 m). The
+staging script therefore derives the 10 m height as p90 of the 1 m
+cells and the channel is a documented difference.
+
+## National parity (2026-10-13, `k8s/skg-open-parity-job.yaml`)
+
+150 random reference arrays per cache root and channel, read through the
+mirror-backed fetchers; reports under `/data/skg_open/parity/`.
+
+| Root (reference date) | volume | basal_area | diameter | markfukt |
+|---|---|---|---|---|
+| unified_v2_512 (2026-06-25) | 99.96 % exact (min 96.8 %), MAE 0.017 | 99.98 %, MAE 0.002 | 100.00 %, MAE 0.001 | 35.8 % exact (min 12.6 %), MAE 5.0, bias +0.6; data on 90.1 % of pixels vs 90.4 % for the proxy |
+| nfi2024_staging (2026-10-02) | 100.00 % (min 99.97 %) | 100.00 % | 100.00 % | no reference arrays |
+| orphans_staging (2026-07-04) | 99.94 % (min 91.1 %), MAE 0.012 | 99.75 % (min 79.5 %), MAE 0.019 | 99.89 % (min 88.9 %), MAE 0.009 | no reference arrays |
+
+Grunddata: the residual on the June and July references is the same
+omdrev-timing effect as in Blekinge (pixels where omdrev 3 arrived after
+the reference was fetched); every October reference is exact.
+
+Markfukt: the first national run (VRT with source nodata 65535) read
+255 on 79 of the 150 tiles (22 % exact, MAE 17.8, data on 65 % of the
+pixels vs 95 %): the published county rasters pad the area outside the
+county polygon with 255, and overlapping county rectangles overwrote
+each other. With 255 transparent in the mosaic (commit d6b60cc) the
+coverage matches the proxy (90.1 % vs 90.4 %) and what remains is the
+model-version difference already seen in Blekinge: masks agree, index
+values differ by 5 on average, no systematic bias. The counties
+re-published 2026-04 (20, 22, 24, 25) are not closer to the proxy than
+the 2022 ones (MAE 6.2 vs 6.5 on single-county tiles), so the served
+version is not among the published files.
 
 ## Operations
 
