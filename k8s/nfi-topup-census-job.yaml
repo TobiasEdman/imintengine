@@ -62,7 +62,7 @@ spec:
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: YEARS, value: "2018 2019 2021 2022"}
-            - {name: CENSUS_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
+            - {name: CENSUS_BRANCH, value: "main"}
             - {name: CENSUS_COMMIT, value: "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb"}
             - {name: CENSUS_SCRIPT_SHA256, value: "9244f7bc5415af4b3aab75a3d6b6a4f393bc070bf598bfa518c0622c4f43084a"}
             - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}

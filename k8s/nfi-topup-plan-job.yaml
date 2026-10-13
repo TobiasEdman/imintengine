@@ -16,11 +16,31 @@
 # Runs after the whole evaluation-copy chain (the forestry manifest is the
 # last mutating step there); refuses otherwise, since "covered" would be
 # counted on an unfinished copy. The planner's own tile reading reuses the
-# census reader, so expect ~25 min for the copy's tiles.
+# census reader, so expect ~35 min for the copy's tiles.
+#
+# Re-plan with substitutes (decision 2026-10-13). Tiles touching an MGRS cell
+# with no HR-VPP product can never get VPP channels and must not be
+# zero-filled, so the planner treats them as infeasible and takes the next
+# tile in rank order. The no-product list is explicit:
+#   NO_VPP_PROVEN            cells with no product in ANY year, proven by the
+#                            2024 campaign's re-search (nfi2024-vpp-retry5);
+#   NO_VPP_IF_STILL_MISSING  YEAR:CELL pairs the first top-up prefetch could
+#                            not fill; each enters only if the retry prefetch
+#                            still left it missing and uncached.
+# Both apply per year only while the cache lacks the pair. Confirmed pairs
+# are kept in /data/manifests/nfi_topup_no_vpp_confirmed.json, because a
+# re-plan rewrites the gap reports without the cells it routed around; an
+# entry leaves the ledger only when the cache holds it (positive recovery),
+# and the release is recorded. Run the retry prefetch BEFORE the first
+# re-plan: "confirmed" means the named candidate stayed uncached after it.
+# Any other cell still missing in a gap report makes the Job refuse: the
+# prefetch must run again first. A re-plan also refuses once any top-up
+# staging root holds a tile, since it rewrites the manifests those tiles came
+# from. Submit with `kubectl create -f` (generateName keeps every run).
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: nfi-topup-plan
+  generateName: nfi-topup-plan-
   namespace: prithvi-training-default
   labels: {app: fieldtruth-prep, purpose: nfi-topup}
 spec:
@@ -42,6 +62,12 @@ spec:
               export PYTHONUNBUFFERED=1
               echo "=== top-up plan — $(date -u) ==="
               test -f /data/manifests/holdout_eval_512_forestry.json || { echo "REFUSING: evaluation copy chain not finished"; exit 1; }
+              for Y in $YEARS; do
+                S=/data/unified_v2_512_nfi${Y}_staging
+                if [ -d "$S" ] && [ -n "$(find "$S" -maxdepth 1 -name '*.npz' -print -quit)" ]; then
+                  echo "REFUSING: $S already holds tiles; a re-plan would rewrite the manifest they came from"; exit 1
+                fi
+              done
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
               pip install -q --no-cache-dir numpy pandas pyarrow rasterio pyproj openpyxl mgrs packaging
               mkdir -p /workspace && cd /workspace
@@ -55,9 +81,57 @@ spec:
               # Repin PLAN_COMMIT after integrating the planner fix. Never run an old planner.
               echo "$PLAN_SCRIPT_SHA256  scripts/plan_nfi_topup_manifest.py" | sha256sum -c -
               python scripts/plan_nfi_topup_manifest.py --help > /dev/null && echo "imports OK"
+              NO_VPP=$(python - <<'PYEOF'
+              import json, os, sys, time
+              sys.path.insert(0, "scripts")
+              from derive_missing_vpp_mgrs import cached_pairs
+              # Confirmed exclusions persist in a ledger, not in the gap reports: a
+              # re-plan rewrites those reports without the cells it routed around, so
+              # rebuilding the list from them alone would bring blocked tiles back.
+              LEDGER = "/data/manifests/nfi_topup_no_vpp_confirmed.json"
+              years = [int(y) for y in os.environ["YEARS"].split()]
+              have = cached_pairs("/data/vpp_wekeo")
+              proven = os.environ["NO_VPP_PROVEN"].split()
+              candidates = set(os.environ["NO_VPP_IF_STILL_MISSING"].split())
+              stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+              ledger = json.load(open(LEDGER)) if os.path.exists(LEDGER) else {"confirmed": [], "released": []}
+              confirmed = set(ledger["confirmed"])
+              for pair in sorted(confirmed):          # released only on positive recovery
+                  y, m = pair.split(":")
+                  if (m, int(y)) in have:
+                      confirmed.discard(pair)
+                      ledger["released"].append({"pair": pair, "at": stamp, "reason": "now cached"})
+              newly, unexpected = [], {}
+              for y in years:
+                  path = f"/data/manifests/nfi{y}_topup_vpp_gaps.json"
+                  missing = json.load(open(path))["missing"] if os.path.exists(path) else []
+                  for m in missing:
+                      pair = f"{y}:{m}"
+                      if (m, y) in have or m in proven or pair in confirmed:
+                          continue
+                      if pair in candidates:
+                          confirmed.add(pair); newly.append(pair)
+                      else:
+                          unexpected.setdefault(y, []).append(m)
+              if unexpected:
+                  sys.exit(f"REFUSING: still missing and neither proven nor a named retry candidate: {unexpected}; run the prefetch again first")
+              ledger.update(confirmed=sorted(confirmed), updated=stamp)
+              tmp = LEDGER + ".tmp"
+              with open(tmp, "w") as fh:
+                  json.dump(ledger, fh, indent=1)
+              os.replace(tmp, LEDGER)
+              proven_tokens = [f"{y}:{m}" for m in proven for y in years if (m, y) not in have]
+              ledger_tokens = sorted(p for p in confirmed if int(p.split(":")[0]) in years)
+              print(f"no HR-VPP product: proven {proven}, ledger {sorted(confirmed)} (new this run {newly}), "
+                    f"released {[r['pair'] for r in ledger['released'] if r['at'] == stamp]}", file=sys.stderr)
+              print(" ".join(proven_tokens + ledger_tokens))
+              PYEOF
+              )
+              echo "no-VPP list passed to the planner: $NO_VPP"
               python scripts/plan_nfi_topup_manifest.py \
                 --data-root /data \
                 --years $YEARS \
+                --no-vpp $NO_VPP \
                 --target 1000 \
                 --out-dir /data/manifests \
                 --summary-json /data/manifests/nfi_topup_plan_summary.json
@@ -65,11 +139,13 @@ spec:
               echo "=== done: $(date -u) ==="
           env:
             - {name: PYTHONUNBUFFERED, value: "1"}
-            - {name: PLAN_BRANCH, value: "agent/te/claude/nfi-holdout-readiness"}
-            - {name: PLAN_SCRIPT_SHA256, value: "b16bc6a260f0af63f9244980ce22df3159416b51e6bf6b23d66d26d20e6067cb"}
-            - {name: PLAN_COMMIT, value: "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb"}
+            - {name: PLAN_BRANCH, value: "main"}
+            - {name: PLAN_SCRIPT_SHA256, value: "5b189d6e909579416bc60cac5304ce3483c1c12e89fb0b4a5dfee4a90de81725"}
+            - {name: PLAN_COMMIT, value: "639caf2231c264c2ca1fe2e75e357e251afaf6c0"}
             - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
             - {name: YEARS, value: "2018 2019 2021 2022"}
+            - {name: NO_VPP_PROVEN, value: "33UVC 34WCS 34WCT 34WCU 34WCV"}
+            - {name: NO_VPP_IF_STILL_MISSING, value: "2018:34WCA 2018:34WDR 2018:35WLP"}
           resources:
             requests: {cpu: "8", memory: "24Gi"}
             limits: {cpu: "8", memory: "24Gi"}

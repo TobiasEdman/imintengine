@@ -129,3 +129,97 @@ def test_outputs_carry_no_plot_identity_or_coordinate(data_root, fieldtruth_file
     text = (tmp_path / "summary.json").read_text() + (tmp_path / "plan/nfi2019_topup_512.json").read_text()
     for ident in ("880004", "880005", "880006", "880007", "Easting", "Northing", "_keys", "_rank"):
         assert ident not in text
+
+
+# ---- cells without an HR-VPP product (decision 2026-10-13: replan with substitutes) ----
+
+def _cell(bbox: dict) -> str:
+    """A valid MGRS-shaped id per kilometre of easting, distinct for every fixture tile."""
+    return "33VW" + "ABCDEFGHJKLMNPQRSTUV"[int(bbox["west"] // 1000) % 20]
+
+
+@pytest.fixture
+def named_cells(monkeypatch):
+    monkeypatch.setattr(derive_missing_vpp_mgrs, "mgrs_tiles_for_bbox", lambda bbox: {_cell(bbox)})
+
+
+def _plan(root, fieldtruth_file, out, target, *no_vpp):
+    args = ["--data-root", str(root), "--fieldtruth-file", str(fieldtruth_file), "--years", "2019",
+            "--target", str(target), "--out-dir", str(out / "plan"), "--summary-json", str(out / "s.json")]
+    if no_vpp:
+        args += ["--no-vpp", *no_vpp]
+    s = plan.main(args)["by_year"][0]
+    return s, json.loads((out / "plan/nfi2019_topup_512.json").read_text()), \
+        json.loads((out / "plan/nfi2019_topup_vpp_gaps.json").read_text())
+
+
+def test_a_tile_in_a_cell_without_vpp_is_replaced_by_the_next_in_rank(data_root, fieldtruth_file, tmp_path, named_cells):
+    s0, m0, _ = _plan(data_root, fieldtruth_file, tmp_path / "a", 2)          # need 1 -> the best tile
+    assert s0["chosen_tiles"] == 1 and s0["candidate_tiles_dropped_no_vpp_product"] == 0
+    blocked = _cell(m0[0]["bbox_3006"])
+    s1, m1, gaps = _plan(data_root, fieldtruth_file, tmp_path / "b", 2, blocked)
+    assert s1["no_vpp_cells"] == [blocked]
+    assert s1["candidate_tiles_dropped_no_vpp_product"] == 1
+    assert s1["plots_on_no_vpp_tiles"] == m0[0]["n_plots"]
+    assert s1["feasible_tiles"] == s0["feasible_tiles"] - 1
+    assert s1["gap_after_plan"] == 0 and len(m1) == 1 and m1[0]["name"] != m0[0]["name"]
+    assert blocked not in gaps["needed"] and blocked not in gaps["missing"]
+    # the substitute is the best-ranked tile among the rest, i.e. the next in the first run's order
+    s2, m2, _ = _plan(data_root, fieldtruth_file, tmp_path / "c", 5)          # need 4 -> every feasible tile
+    order = [t["name"] for t in m2]
+    assert m1[0]["name"] in order and m0[0]["name"] in order
+
+
+def test_a_year_scoped_cell_equals_an_all_years_cell_for_that_year(data_root, fieldtruth_file, tmp_path, named_cells):
+    _, m0, _ = _plan(data_root, fieldtruth_file, tmp_path / "a", 2)
+    blocked = _cell(m0[0]["bbox_3006"])
+    s_all, m_all, _ = _plan(data_root, fieldtruth_file, tmp_path / "b", 2, blocked)
+    s_year, m_year, _ = _plan(data_root, fieldtruth_file, tmp_path / "c", 2, f"2019:{blocked}")
+    assert m_all == m_year and s_all["no_vpp_cells"] == s_year["no_vpp_cells"] == [blocked]
+
+
+def test_blocking_every_feasible_cell_reports_the_gap_rather_than_choosing_a_blocked_tile(
+        data_root, fieldtruth_file, tmp_path, named_cells):
+    _, m_all, _ = _plan(data_root, fieldtruth_file, tmp_path / "a", 5)       # every feasible tile
+    cells = sorted({_cell(t["bbox_3006"]) for t in m_all})
+    s, m, gaps = _plan(data_root, fieldtruth_file, tmp_path / "b", 5, *cells)
+    assert m == [] and gaps["needed"] == [] and s["feasible_tiles"] == 0
+    assert s["gap_after_plan"] == s["need"] == 4
+
+
+@pytest.mark.parametrize("token, message", [
+    ("33vwq", "is not CELL or YEAR:CELL"),
+    ("33VWQ1", "is not CELL or YEAR:CELL"),
+    (":33UVC", "is not CELL or YEAR:CELL"),        # empty year is a typo, not "every year"
+    ("2018:", "is not CELL or YEAR:CELL"),
+    ("2018::33UVC", "is not CELL or YEAR:CELL"),
+    ("18:33UVC", "is not CELL or YEAR:CELL"),
+    ("x:33VWQ", "is not CELL or YEAR:CELL"),
+    ("2018-33UVC", "is not CELL or YEAR:CELL"),
+    (" 33UVC", "is not CELL or YEAR:CELL"),
+    ("00UVC", "is not an MGRS 100 km square"),      # zone 0
+    ("61UVC", "is not an MGRS 100 km square"),      # zone 61
+    ("33IVC", "is not an MGRS 100 km square"),      # band I
+    ("33YVC", "is not an MGRS 100 km square"),      # band Y
+    ("34WCI", "is not an MGRS 100 km square"),      # row I
+    ("34WCW", "is not an MGRS 100 km square"),      # row beyond V
+    ("33UCC", "is not an MGRS 100 km square"),      # column C belongs to zones 1, 4, ... not 33
+    ("34WOA", "is not an MGRS 100 km square"),      # column O
+    ("2021:33VWQ", "names a year that is not planned"),
+])
+def test_a_malformed_or_unplanned_token_refuses_before_any_output(data_root, fieldtruth_file, tmp_path, token, message):
+    with pytest.raises(SystemExit, match=message):
+        _plan(data_root, fieldtruth_file, tmp_path, 4, token)
+    assert not (tmp_path / "plan").exists() and not (tmp_path / "s.json").exists()
+
+
+@pytest.mark.parametrize("cell", ["33UVC", "34WCA", "34WDR", "35WLP", "34WCT", "32VPL",
+                                  "01CAA", "60XZV", "31NHV", "02DJA", "03ESA"])
+def test_real_mgrs_cells_are_accepted(cell):
+    assert plan.parse_no_vpp([cell, f"2019:{cell}"], [2019]) == {2019: frozenset({cell})}
+
+
+def test_parse_no_vpp_scopes_tokens_by_year():
+    got = plan.parse_no_vpp(["33UVC", "2018:34WCA"], [2018, 2021])
+    assert got == {2018: frozenset({"33UVC", "34WCA"}), 2021: frozenset({"33UVC"})}
+    assert plan.parse_no_vpp([], [2019]) == {2019: frozenset()}
