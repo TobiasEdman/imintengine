@@ -254,3 +254,27 @@ def test_overlapping_markfukt_counties_compose_without_padding_bleed(tmp_path):
     assert rec["srcnodata"] == 255 and v.nodata == 65535
     assert list(row[:10]) == [40] * 10 and list(row[20:]) == [60] * 10      # neither county's padding won
     assert list(row[10:20]) == [65535] * 10                               # padding in both -> nodata
+
+
+def test_recovered_download_must_match_the_recorded_digest():
+    rec = {"sha256": "a" * 64, "bytes": 1}
+    assert st.check_recovered(rec, "a" * 64, "x.zip", accept=False) == rec        # same bytes: fine
+    assert st.check_recovered({}, "b" * 64, "x.zip", accept=False) == {}         # first download
+    with pytest.raises(st.UpstreamChanged, match="superseded_sha256"):
+        st.check_recovered(rec, "b" * 64, "x.zip", accept=False)
+    out = st.check_recovered(rec, "b" * 64, "x.zip", accept=True)
+    assert out["superseded_sha256"] == ["a" * 64] and out["upstream_changed_at"].endswith("Z")
+    assert rec == {"sha256": "a" * 64, "bytes": 1}                                 # input untouched
+
+
+def test_save_manifest_keeps_the_previous_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMINT_GIT_SHA", "abc")
+    m = st.load_manifest(tmp_path)
+    m["files"]["a.zip"] = {"sha256": "1" * 64}
+    st.save_manifest(tmp_path, m)
+    assert not (tmp_path / "MANIFEST.previous.json").exists()
+    m["files"]["a.zip"] = {"sha256": "2" * 64}
+    st.save_manifest(tmp_path, m)
+    prev = json.loads((tmp_path / "MANIFEST.previous.json").read_text())
+    assert prev["files"]["a.zip"]["sha256"] == "1" * 64
+    assert json.loads((tmp_path / "MANIFEST.json").read_text())["files"]["a.zip"]["sha256"] == "2" * 64

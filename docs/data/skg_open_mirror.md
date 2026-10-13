@@ -31,6 +31,11 @@ reader windows locally.
 | markfukt | `sksSLUMarkfuktighet<län>.zip` | 2 m uint16 index 0–100, 101 water, 255 fill, nodata 65535 | lossless COG per county + VRT | nearest 2 m sample at each 10 m cell centre (65535 → 0) |
 | height | `sksTradhojd<län>.zip` | 1 m int16 dm, nodata −1 | 10 m derivative per county (`tradhojd_10m_<län>.tif`) + VRT | 10 m value as is, dm (fetcher converts to m) |
 
+The initial staging manifest recorded git 798f18b (the run that
+downloaded and converted everything); the VRTs were rebuilt afterwards
+from d6b60cc, which is the git sha the manifest now carries. Both are
+chronological states of the same mirror.
+
 Omdrev = laser-scanning round. Omdrev 1 is the 2009–2015 scanning
 (12.5 m product), omdrev 2 the 2018– national re-scan ("complete"
 2025-12-09 per the product description), omdrev 3 the third round
@@ -49,7 +54,7 @@ before the proxies went away). Script: session scratchpad
 
 | Reference cache | Tiles | Exact match | Note |
 |---|---|---|---|
-| nfi2024_staging (2026-10-02) | 6 | 100 % where the county file has data (5 tiles 1.000, 1 tile 0.855) | the 0.855 tile straddles the Skåne border; its remaining pixels live in county 12's file |
+| nfi2024_staging (2026-10-02) | 6 | 5 tiles 1.000, 1 tile 0.855 | the 0.855 tile straddles the Skåne border; its mismatching pixels are where the Blekinge file has nodata (checked), which the national VRT fills from county 12 |
 | orphans_staging (2026-07-04) | 4 | 1.000 | omdrev 3 covers 92–100 % of these tiles; the rest is omdrev 2 |
 | unified_v2_512 (2026-06-25) | 6 | 0.992 mean, 0.951 min | the mismatching pixels of the one 0.951 tile are all outside every Blekinge file (county-12 area) |
 
@@ -82,25 +87,32 @@ mirror-backed fetchers; reports under `/data/skg_open/parity/`.
 
 | Root (reference date) | volume | basal_area | diameter | markfukt |
 |---|---|---|---|---|
-| unified_v2_512 (2026-06-25) | 99.96 % exact (min 96.8 %), MAE 0.017 | 99.98 %, MAE 0.002 | 100.00 %, MAE 0.001 | 35.8 % exact (min 12.6 %), MAE 5.0, bias +0.6; data on 90.1 % of pixels vs 90.4 % for the proxy |
-| nfi2024_staging (2026-10-02) | 100.00 % (min 99.97 %) | 100.00 % | 100.00 % | no reference arrays |
+| unified_v2_512 (2026-06-25) | 99.96 % identical pixels (min 96.8 %), MAE 0.017 | 99.98 %, MAE 0.002 | 100.00 % (rounded; min 99.59 %), MAE 0.001 | 35.8 % identical (min 12.6 %), MAE 5.0, bias +0.6; non-zero on 90.1 % of pixels vs 90.4 % for the proxy |
+| nfi2024_staging (2026-10-02) | 100.00 % (rounded; min 99.97 %) | 100.00 % (min 99.97 %) | 100.00 % (min 100.00 %) | no reference arrays |
 | orphans_staging (2026-07-04) | 99.94 % (min 91.1 %), MAE 0.012 | 99.75 % (min 79.5 %), MAE 0.019 | 99.89 % (min 88.9 %), MAE 0.009 | no reference arrays |
 
-Grunddata: the residual on the June and July references is the same
-omdrev-timing effect as in Blekinge (pixels where omdrev 3 arrived after
-the reference was fetched); every October reference is exact.
+"Identical pixels" is the fraction of pixels with equal values after the
+fetchers' nodata mapping; the mean is over 150 tiles, "min" the worst
+tile. Rounded 100.00 % values still have a few differing pixels where
+the minimum is below 100 %. The residuals on the June and July
+references are not attributed by measurement; the Blekinge check
+suggests omdrev timing (pixels where omdrev 3 was published after the
+reference was fetched) as the likely cause, and a reader bug is not
+excluded by these numbers alone.
 
 Markfukt: the first national run (VRT with source nodata 65535) read
-255 on 79 of the 150 tiles (22 % exact, MAE 17.8, data on 65 % of the
-pixels vs 95 %): the published county rasters pad the area outside the
-county polygon with 255, and overlapping county rectangles overwrote
-each other. With 255 transparent in the mosaic (commit d6b60cc) the
-coverage matches the proxy (90.1 % vs 90.4 %) and what remains is the
-model-version difference already seen in Blekinge: masks agree, index
-values differ by 5 on average, no systematic bias. The counties
-re-published 2026-04 (20, 22, 24, 25) are not closer to the proxy than
-the 2022 ones (MAE 6.2 vs 6.5 on single-county tiles), so the served
-version is not among the published files.
+255 on 79 of the 150 tiles (22 % identical, MAE 17.8, non-zero on 65 %
+of the pixels vs 95 %): the published county rasters pad the area
+outside the county polygon with 255, and overlapping county rectangles
+overwrote each other. With 255 transparent in the mosaic (commit
+d6b60cc) the non-zero fractions agree in aggregate (90.1 % vs 90.4 %;
+this is not a pixelwise mask comparison) and the remaining difference
+is index values 5 apart on average with no systematic bias. The
+counties re-published 2026-04 (20, 22, 24, 25) are not closer to the
+proxy than the 2022 ones (MAE 6.2 vs 6.5 on single-county tiles). The
+working hypothesis is that the proxy served a model version that is not
+among the published files; that is inferred from these numbers, not
+confirmed with Skogsstyrelsen.
 
 ## Operations
 
@@ -143,8 +155,22 @@ zips can be dropped afterwards with `--drop-raw`.
 
 ### Raw files after enrichment
 
-The COGs are lossless re-encodings verified pixel-for-pixel on sampled
-windows, every raw zip's sha256 is in `MANIFEST.json`, and the source
-stays published, so deleting `raw/` (97.3 GiB) after the enrichment pass
-loses no reproducibility: a re-download can be checked against the
-recorded hashes. Keeping it only buys re-derivation without network.
+Two different things are at stake:
+
+- **Raster usability** does not depend on `raw/`: the COGs are lossless
+  re-encodings, pixel-verified on five windows each, with their own
+  sha256 in the manifest. Readers never touch the zips.
+- **Archive reproducibility** does: the zips are the only copy of the
+  bytes the COGs were derived from. A recovery re-download fetches
+  *current* upstream bytes, which Skogsstyrelsen may have re-published
+  (four markfukt counties were, in 2026-04). The staging script keeps the
+  recorded digest as the record: a recovered file that hashes
+  differently stops the run (`UpstreamChanged`) unless
+  `--accept-upstream-change` is given, in which case the old digest is
+  kept under `superseded_sha256`, the derived raster is re-derived, and
+  the previous manifest survives as `MANIFEST.previous.json`.
+
+Deleting `raw/` (97.3 GiB) therefore keeps the mirror usable and keeps
+the record of what it was derived from, but gives up the ability to
+re-derive from the *same* bytes if upstream changes. That trade is
+Tobias's call after the enrichment pass.

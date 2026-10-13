@@ -138,13 +138,41 @@ def load_manifest(dest: Path) -> dict:
 
 
 def save_manifest(dest: Path, manifest: dict) -> None:
+    """Atomic write; the previous manifest is kept as MANIFEST.previous.json
+    so a record is never lost by a later run."""
     manifest["updated_at"] = _now()
     manifest["git_sha"] = _git_sha()
     path = dest / "MANIFEST.json"
+    if path.exists():
+        shutil.copyfile(path, path.with_name("MANIFEST.previous.json"))
     tmp = path.with_suffix(".json.tmp")
     with open(tmp, "w") as f:
         json.dump(manifest, f, indent=1, sort_keys=True)
     os.replace(tmp, path)
+
+
+class UpstreamChanged(RuntimeError):
+    """A re-downloaded zip does not match the sha256 recorded for it."""
+
+
+def check_recovered(rec: dict, new_sha256: str, name: str, *, accept: bool) -> dict:
+    """A raw zip re-downloaded after deletion must hash to the recorded
+    sha256. If upstream changed, the old digest is kept under
+    ``superseded_sha256`` and the run stops unless ``accept`` is set: a
+    silently replaced digest would turn the manifest into a record of the
+    *current* upstream, not of what the COGs were derived from."""
+    old = rec.get("sha256")
+    if not old or old == new_sha256:
+        return rec
+    rec = {**rec, "superseded_sha256": [*rec.get("superseded_sha256", []), old],
+           "upstream_changed_at": _now()}
+    if not accept:
+        raise UpstreamChanged(
+            f"{name}: re-downloaded file hashes to {new_sha256[:12]}…, manifest records "
+            f"{old[:12]}…; upstream changed since the COG was derived. Re-run with "
+            "--accept-upstream-change to record the new digest (the old one is kept under "
+            "superseded_sha256) and re-derive the raster.")
+    return rec
 
 
 def is_done(item: Item, manifest: dict, dest: Path) -> bool:
@@ -457,6 +485,9 @@ def main(argv: list[str] | None = None) -> int:
                         "retired proxy's height channel (see docs/data/skg_open_mirror.md)")
     p.add_argument("--drop-raw", action="store_true",
                    help="delete the raw zip after its derived raster is verified (tradhojd only)")
+    p.add_argument("--accept-upstream-change", action="store_true",
+                   help="when a re-downloaded zip no longer matches its recorded sha256, record the "
+                        "new digest (old kept under superseded_sha256) and re-derive instead of stopping")
     p.add_argument("--work-dir", type=Path, default=None, help="scratch for Deflate64 inflation (default <dest>/_work)")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
@@ -490,11 +521,16 @@ def main(argv: list[str] | None = None) -> int:
         if not rec.get("sha256") or not raw.exists():
             print(f"[{done + skipped + 1}/{len(items)}] download {it.name} ({index[it.name]['bytes'] / 2**20:.0f} MiB)", flush=True)
             dl = download(args.source_url + urllib.parse.quote(it.name), raw, index[it.name]["bytes"])
-            rec = {"url": args.source_url + urllib.parse.quote(it.name), "bytes": raw.stat().st_size,
-                   "sha256": sha256_of(raw), "index_modified": index[it.name]["modified"],
+            new_sha = sha256_of(raw)
+            kept = check_recovered(rec, new_sha, it.name, accept=args.accept_upstream_change)
+            rec = {**kept, "url": args.source_url + urllib.parse.quote(it.name), "bytes": raw.stat().st_size,
+                   "sha256": new_sha, "index_modified": index[it.name]["modified"],
                    "downloaded_at": _now(), "product": it.product, "omdrev": it.omdrev,
                    "variable": it.variable, "county": it.county,
                    **{k: v for k, v in dl.items() if k != "attempts"}}
+            rec.pop("raw_deleted_at", None)
+            if "superseded_sha256" in rec:
+                manifest["derived"].pop(it.derived, None)      # must be re-derived from the new bytes
             manifest["files"][it.name] = rec
             save_manifest(dest, manifest)
         print(f"    convert -> {it.derived}", flush=True)
