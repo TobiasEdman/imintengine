@@ -256,15 +256,37 @@ def test_overlapping_markfukt_counties_compose_without_padding_bleed(tmp_path):
     assert list(row[10:20]) == [65535] * 10                               # padding in both -> nodata
 
 
-def test_recovered_download_must_match_the_recorded_digest():
+def test_recovered_download_must_match_the_recorded_digest(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMINT_GIT_SHA", "abc")
     rec = {"sha256": "a" * 64, "bytes": 1}
     assert st.check_recovered(rec, "a" * 64, "x.zip", accept=False) == rec        # same bytes: fine
     assert st.check_recovered({}, "b" * 64, "x.zip", accept=False) == {}         # first download
-    with pytest.raises(st.UpstreamChanged, match="superseded_sha256"):
-        st.check_recovered(rec, "b" * 64, "x.zip", accept=False)
-    out = st.check_recovered(rec, "b" * 64, "x.zip", accept=True)
+    raw = tmp_path / "raw" / "x.zip"
+    raw.parent.mkdir()
+    raw.write_bytes(b"new upstream bytes")
+    with pytest.raises(st.UpstreamChanged, match="upstream-changed"):
+        st.check_recovered(rec, "b" * 64, "x.zip", accept=False, raw=raw, dest=tmp_path)
+    assert not raw.exists() and (tmp_path / "raw" / "x.zip.upstream-changed").exists()
+    # a later run therefore sees the raw as missing and cannot skip the check
+    item = st.Item("x.zip", "markfukt", "markfukt/markfukt_01.tif", county="01")
+    m = st.load_manifest(tmp_path)
+    m["files"]["x.zip"] = rec
+    m["derived"][item.derived] = {"sha256": "d" * 64}
+    (tmp_path / "markfukt").mkdir()
+    (tmp_path / item.derived).write_bytes(b"tif")
+    assert not st.is_done(item, m, tmp_path)
+    # acceptance archives the pre-change manifest immutably and keeps the old digest
+    st.save_manifest(tmp_path, m)
+    raw.write_bytes(b"new upstream bytes")
+    out = st.check_recovered(rec, "b" * 64, "x.zip", accept=True, raw=raw, dest=tmp_path)
     assert out["superseded_sha256"] == ["a" * 64] and out["upstream_changed_at"].endswith("Z")
     assert rec == {"sha256": "a" * 64, "bytes": 1}                                 # input untouched
+    archived = list(tmp_path.glob("MANIFEST.superseded-*.json"))
+    assert len(archived) == 1 and json.loads(archived[0].read_text())["files"]["x.zip"]["sha256"] == "a" * 64
+    m["files"]["x.zip"] = {**out, "sha256": "b" * 64}
+    st.save_manifest(tmp_path, m)                                                  # later save in the same run
+    st.save_manifest(tmp_path, m)
+    assert json.loads(archived[0].read_text())["files"]["x.zip"]["sha256"] == "a" * 64   # archive untouched
 
 
 def test_save_manifest_keeps_the_previous_copy(tmp_path, monkeypatch):
