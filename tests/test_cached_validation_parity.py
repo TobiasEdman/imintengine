@@ -8,6 +8,7 @@ contract or installing process-wide producer observers in the pytest parent.
 import builtins
 import importlib
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -32,5 +33,13 @@ def test_cached_validation_parity_in_clean_process(tmp_path):
     print(result.stdout)
     print(result.stderr)
     assert result.returncode == 0, result.stdout + result.stderr
+    # A zero exit also covers skipped or deselected cases; require that every
+    # collected case ran and passed.
+    collected = re.search(r"collected (\d+) items", result.stdout)
+    assert collected and int(collected.group(1)) > 0, result.stdout
+    summary = result.stdout.strip().splitlines()[-1]
+    outcomes = {kind: int(n) for n, kind in re.findall(r"(\d+) (\w+)", summary)
+                if not kind.startswith("warning")}
+    assert outcomes == {"passed": int(collected.group(1))}, summary
     assert sys.modules["imint.training.tile_fetch"] is tile_fetch
     assert hooks == (builtins.__import__, importlib._bootstrap._gcd_import)
