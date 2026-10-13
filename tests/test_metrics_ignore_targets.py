@@ -37,14 +37,30 @@ def test_background_predictions_remain_errors_on_valid_targets():
     assert result["per_class_iou"][UNIFIED_CLASSES[2]] == 1.0
 
 
-def test_accuracy_and_confusion_use_the_same_valid_pairs():
-    # Out-of-range pairs already excluded from confusion must not dilute OA.
-    target = np.array([1, 1, 2, 0, -1, 23, 1, 2])
-    pred = np.array([1, 0, 2, 1, 1, 2, -1, 23])
-    result = compute_miou(pred, target, 23)
-    assert result["confusion_matrix"].sum() == 3
-    assert result["miou"] == 0.75
-    assert result["overall_accuracy"] == 0.6667
+@pytest.mark.parametrize("bad_prediction", [-1, 23, 255, np.nan, 1.5])
+def test_invalid_prediction_on_scored_target_is_rejected(bad_prediction):
+    with pytest.raises(ValueError, match="predictions on valid targets"):
+        compute_miou(np.array([1, bad_prediction]), np.array([1, 1]), 23)
+
+
+def test_invalid_predictions_on_excluded_targets_are_ignored():
+    result = compute_miou(np.array([1, 255, -1, 255]), np.array([1, 0, -1, 23]), 23)
+    assert result["confusion_matrix"].sum() == 1
+    assert result["miou"] == result["overall_accuracy"] == 1.0
+
+
+@pytest.mark.parametrize("bad_prediction", [-1, 255])
+def test_global_evaluation_rejects_invalid_prediction(tmp_path, bad_prediction):
+    from imint.eval.eval_in_distribution import _eval_one_predictor
+
+    np.savez(tmp_path / "tile.npz", label=np.array([[1, 1]]))
+    with pytest.raises(ValueError, match="predictions on valid targets"):
+        _eval_one_predictor(
+            name="invalid", predict_fn=lambda path: (np.array([[1, bad_prediction]]), None),
+            tile_names=["tile"], tiles_dir=str(tmp_path), num_classes=23,
+            ignore_index=0, ece_pixel_sample=0, output_dir=tmp_path,
+        )
+    assert not (tmp_path / "confusion_phase_1_invalid.npy").exists()
 
 
 @pytest.mark.parametrize("target,pred", [([], []), ([0, 0], [1, 2]), ([-1, 23], [1, 2])])
@@ -107,3 +123,9 @@ def test_evaluate_model_matches_global_and_per_tile_metrics(tmp_path, ignored_pr
     assert global_result.metrics["mIoU"] == pytest.approx(5 / 6)
     assert global_result.metrics["accuracy"] == 0.75
     assert global_result.num_pixels == 4
+
+
+
+def test_fractional_target_is_not_truncated_into_a_class():
+    with pytest.raises(ValueError, match="valid targets must be integer"):
+        compute_miou(np.array([1]), np.array([1.5]), 23)

@@ -251,7 +251,7 @@ def _eval_one_predictor(
                   f"{type(exc).__name__}: {str(exc)[:120]}", flush=True)
             continue
 
-        pred = np.asarray(pred).astype(np.int64)
+        pred = np.asarray(pred)
         if pred.shape != target.shape:
             # Center-crop / pad to match — eval-time defensive resize.
             pred = _resize_or_pad_to(pred, target.shape)
@@ -261,30 +261,20 @@ def _eval_one_predictor(
                      for c in range(probs.shape[0])]
                 )
 
-        valid = target != ignore_index
-        if not valid.any():
-            continue
-        p = pred[valid]
-        t = target[valid]
-        # Bound predictions into [0, num_classes) — predictors might
-        # emit garbage outside that range; we still want a confusion
-        # matrix that sums to total valid pixels.
-        p = np.clip(p, 0, num_classes - 1)
-        t = np.clip(t, 0, num_classes - 1)
-
-        # Accumulate confusion matrix via bincount on flat index.
-        idx = t * num_classes + p
-        bc = np.bincount(idx, minlength=num_classes * num_classes)
-        conf_mat += bc.reshape(num_classes, num_classes)
-
-        n_pix = int(valid.sum())
-        total_pixels += n_pix
-        accuracy_correct += int((p == t).sum())
-        accuracy_total += n_pix
-
-        # Per-tile mIoU for failure-mode use.
+        # Shared validation refuses invalid predictions instead of dropping or
+        # clipping them differently for global and per-tile scores.
         tile_iou = per_class_iou(pred, target, num_classes,
                                  ignore_index=ignore_index)
+        valid = (target != ignore_index) & (target >= 0) & (target < num_classes)
+        if not valid.any():
+            continue
+        tile_confusion = tile_iou["confusion_matrix"]
+        conf_mat += tile_confusion
+        n_pix = int(tile_confusion.sum())
+        total_pixels += n_pix
+        accuracy_correct += int(np.trace(tile_confusion))
+        accuracy_total += n_pix
+
         per_tile_metrics.append({
             "tile":   tile_name,
             "n_pix":  n_pix,
@@ -295,7 +285,7 @@ def _eval_one_predictor(
         if probs is not None and ece_pixel_sample > 0:
             cls_first = probs.transpose(1, 2, 0).reshape(-1, num_classes)
             tgt_flat = target.reshape(-1)
-            valid_flat = tgt_flat != ignore_index
+            valid_flat = valid.reshape(-1)
             cls_first = cls_first[valid_flat]
             tgt_flat = tgt_flat[valid_flat]
             if cls_first.size > 0:

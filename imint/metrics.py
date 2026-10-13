@@ -5,6 +5,10 @@ import numpy as np
 from imint.schema.class_schema import get_class_names
 from imint.schema.unified_schema import UNIFIED_CLASSES
 
+# Checkpoint-selection semantics; unversioned historical scores are not comparable.
+SEGMENTATION_METRIC_VERSION = "miou-ignore-target-v2"
+
+
 def compute_miou(
     pred: np.ndarray,
     target: np.ndarray,
@@ -24,6 +28,10 @@ def compute_miou(
         Dict with "miou", "per_class_iou", "overall_accuracy",
         "confusion_matrix".
     """
+    pred = np.asarray(pred)
+    target = np.asarray(target)
+    if pred.shape != target.shape:
+        raise ValueError("prediction and target shapes must match")
     pred = pred.flatten()
     target = target.flatten()
 
@@ -33,9 +41,14 @@ def compute_miou(
     valid = (
         (target != ignore_index)
         & (target >= 0) & (target < n)
-        & (pred >= 0) & (pred < n)
     )
-    np.add.at(cm, (target[valid], pred[valid]), 1)
+    if np.any(target[valid] != np.floor(target[valid])):
+        raise ValueError("valid targets must be integer class IDs")
+    scored_pred = pred[valid]
+    if np.any(~np.isfinite(scored_pred) | (scored_pred < 0)
+              | (scored_pred >= n) | (scored_pred != np.floor(scored_pred))):
+        raise ValueError("predictions on valid targets must be integer class IDs in range")
+    np.add.at(cm, (target[valid].astype(np.int64), scored_pred.astype(np.int64)), 1)
 
     # Per-class IoU — use unified 23-class names when applicable
     from imint.schema.unified_schema import NUM_UNIFIED_CLASSES
@@ -72,6 +85,7 @@ def compute_miou(
         oa = 0.0
 
     return {
+        "metric_version": SEGMENTATION_METRIC_VERSION,
         "miou": round(miou, 4),
         "per_class_iou": per_class_iou,
         "overall_accuracy": round(oa, 4),

@@ -16,6 +16,7 @@ import torch.nn as nn
 
 from imint.training.config import TrainingConfig
 from imint.training.trainer import LULCTrainer
+from imint.metrics import SEGMENTATION_METRIC_VERSION
 
 
 class _Spec:
@@ -54,6 +55,7 @@ def test_full_config_round_trip(tmp_path):
     t._save_checkpoint(path, epoch=7, metrics={"mIoU": 0.5})
 
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    assert ckpt["metric_version"] == SEGMENTATION_METRIC_VERSION
     c = ckpt["config"]
 
     # Every FULL build parameter the task requires must be present.
