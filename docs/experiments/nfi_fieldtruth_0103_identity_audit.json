@@ -1,0 +1,82 @@
+{
+  "schema": "nfi-fieldtruth-identity-audit-v1",
+  "status": "completed",
+  "preliminary": true,
+  "input_freeze": false,
+  "inference": false,
+  "nmd_scoring": false,
+  "source_git_sha": "307678d71200a8512c68a8efaf4709ed65caa432",
+  "image": {
+    "ref": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:d25aa72c2205453d211f31e8fe1491f0fe6c5686c4624ddf32caa514cb4888a5",
+    "digest": "d25aa72c2205453d211f31e8fe1491f0fe6c5686c4624ddf32caa514cb4888a5"
+  },
+  "identity": [
+    "TractID",
+    "PlotID",
+    "Year"
+  ],
+  "candidate_rows": 3705,
+  "candidate_plot_years": 3195,
+  "teacher_training_plot_years_union": 828,
+  "teachers": {
+    "clay": {
+      "feature_rows": 944,
+      "training_plot_years": 667,
+      "campaign_training_tiles": 0
+    },
+    "croma": {
+      "feature_rows": 931,
+      "training_plot_years": 689,
+      "campaign_training_tiles": 0
+    },
+    "prithvi300m": {
+      "feature_rows": 913,
+      "training_plot_years": 677,
+      "campaign_training_tiles": 0
+    },
+    "prithvi300m4f": {
+      "feature_rows": 913,
+      "training_plot_years": 677,
+      "campaign_training_tiles": 0
+    },
+    "prithvi600m": {
+      "feature_rows": 944,
+      "training_plot_years": 667,
+      "campaign_training_tiles": 0
+    },
+    "terramind": {
+      "feature_rows": 900,
+      "training_plot_years": 624,
+      "campaign_training_tiles": 0
+    },
+    "tessera": {
+      "feature_rows": 944,
+      "training_plot_years": 667,
+      "campaign_training_tiles": 0
+    }
+  },
+  "training_overlap_rows": 935,
+  "training_overlap_plot_years": 828,
+  "eligible_rows_before_modality_crop": 2770,
+  "eligible_plot_years_before_modality_crop": 2367,
+  "remaining_training_overlap": 0,
+  "campaign_tiles": 475,
+  "invalid_volume_rows": 0,
+  "year_row_support_before_modality_crop": {
+    "2018": 95,
+    "2021": 25,
+    "2022": 50,
+    "2024": 2600
+  },
+  "next_gate": "terminal clean Tessera promotion before input freeze",
+  "execution_evidence": {
+    "job": "nfi0103-identity-audit-307678d-r2",
+    "pod": "nfi0103-identity-audit-307678d-r2-2764z",
+    "phase": "Succeeded",
+    "image_id": "docker-pullable://ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:d25aa72c2205453d211f31e8fe1491f0fe6c5686c4624ddf32caa514cb4888a5",
+    "finished_at": "2026-10-08T14:09:05Z",
+    "read_only_data_mount": true,
+    "gpu_requested": false
+  },
+  "interpretation": "Preliminary recorded train-union audit. New conservative all-feature exclusion and modality/crop gates can reduce support further. Not a frozen population."
+}

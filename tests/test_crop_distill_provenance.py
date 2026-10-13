@@ -1244,3 +1244,43 @@ def test_completed_output_rejects_symlink(tmp_path, runtime):
     with pytest.raises(provenance.ProvenanceError, match="missing output artifact"):
         provenance.finalize(args)
     assert victim.read_bytes() == b"attacker\n"
+
+
+# NFI preparation runs in the same source-sealed image, with no Git checkout.
+def test_nfi_preparation_uses_sealed_runtime_without_git(runtime, monkeypatch):
+    from scripts import prepare_nfi_holdout as prep
+    manifest = json.loads(runtime["manifest"].read_text())
+    scoring_python = manifest["environments"]["scoring"]["python"]["path"]
+    monkeypatch.setattr(prep.sys, "executable", scoring_python)
+    result = prep.preparation_runtime(
+        runtime["source"], runtime["manifest"], SOURCE_GIT_SHA, IMAGE_REF)
+    assert result["source"]["git_sha"] == SOURCE_GIT_SHA
+    assert result["image"]["ref"] == IMAGE_REF
+    assert not (runtime["source"] / ".git").exists()
+
+
+def test_nfi_preparation_rejects_other_running_tree(runtime, tmp_path):
+    from scripts import prepare_nfi_holdout as prep
+    other = tmp_path / "other-source"
+    _write(other / "worker.py", b"print('unsealed')\n")
+    with pytest.raises(ValueError, match="verified source tree"):
+        prep.preparation_runtime(
+            other, runtime["manifest"], SOURCE_GIT_SHA, IMAGE_REF)
+
+
+def test_nfi_preparation_rejects_modified_sealed_source(runtime):
+    from scripts import prepare_nfi_holdout as prep
+    (runtime["source"] / "scripts/worker.py").write_text("changed")
+    with pytest.raises(provenance.ProvenanceError, match="sealed tree"):
+        prep.preparation_runtime(
+            runtime["source"], runtime["manifest"], SOURCE_GIT_SHA, IMAGE_REF)
+
+
+def test_nfi_preparation_rejects_model_interpreter(runtime, monkeypatch):
+    from scripts import prepare_nfi_holdout as prep
+    manifest = json.loads(runtime["manifest"].read_text())
+    monkeypatch.setattr(prep.sys, "executable",
+                        manifest["environments"]["model"]["python"]["path"])
+    with pytest.raises(ValueError, match="scoring interpreter"):
+        prep.preparation_runtime(
+            runtime["source"], runtime["manifest"], SOURCE_GIT_SHA, IMAGE_REF)

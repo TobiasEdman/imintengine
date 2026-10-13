@@ -1,0 +1,500 @@
+{
+  "schema": "nfi-tile-sizing-v1",
+  "preliminary": true,
+  "input_freeze": false,
+  "fetch_started": false,
+  "gpu_started": false,
+  "nmd_scoring": false,
+  "years": [
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024
+  ],
+  "identity": [
+    "TractID",
+    "PlotID",
+    "Year"
+  ],
+  "inputs": {
+    "/cephfs/nfi/nfi_plots.parquet": {
+      "bytes": 4336303,
+      "sha256": "70d4daedeba4536362a22c23b84eee40e499f271c6d203829407e38290ff9de0"
+    },
+    "/cephfs/nfi/nfi_index_unified_v2_512.parquet": {
+      "bytes": 141999,
+      "sha256": "671d4bbb0d168f15635f09fc93fe04ec66845575adcb5342e4c3d82de6fcda33"
+    },
+    "/cephfs/distill/heads/clay_r2_plot_features.parquet": {
+      "bytes": 1378800,
+      "sha256": "49e0c1ec0b3f3e7e88ae680d58827ca62817b624bc6b409b53220dcdfaab7ddb"
+    },
+    "/cephfs/distill/heads/croma_r2_plot_features.parquet": {
+      "bytes": 1389354,
+      "sha256": "c123b84c9b6e67890fa68534e4ec396f74a8d7f500ca2240f9f73b463828df4c"
+    },
+    "/cephfs/distill/heads/prithvi300m_r2_plot_features.parquet": {
+      "bytes": 1452224,
+      "sha256": "e19d1dc154fe362c64e69c6d23adc0a632bc160aa21b98981f558fc85b6d5868"
+    },
+    "/cephfs/distill/heads/prithvi300m4f_r2_plot_features.parquet": {
+      "bytes": 1487769,
+      "sha256": "3a70e178757d5d860208f829dd8eec218454ffa5fcc4175c0ee86d68d18ad92e"
+    },
+    "/cephfs/distill/heads/prithvi600m_r2_plot_features.parquet": {
+      "bytes": 1608422,
+      "sha256": "ae5d6dfae5afc414b86dfc664b881b58a880d07c583e7f0341f61b35bd01057c"
+    },
+    "/cephfs/distill/heads/terramind_r2_plot_features.parquet": {
+      "bytes": 1434286,
+      "sha256": "92ae4609d66d04cf11ffbdd9a0587df1ad22145fbb4ce80b901be1f7dd7df53c"
+    },
+    "/cephfs/distill/heads/tessera_r2_plot_features.parquet": {
+      "bytes": 971347,
+      "sha256": "6193f5ca4bf49641a8d73e98e320861f87ac6658dbebc5b2df58a2fa26b42355"
+    },
+    "/cephfs/nfi/nfi_index_v4_2026-09-30.parquet": {
+      "bytes": 413251,
+      "sha256": "bf08903edda0527241209ef5572b4e989b7554e9dbecaad91b09f917427dbc84"
+    },
+    "/cephfs/audits/holdout_val_phaseA.json": {
+      "bytes": 251713,
+      "sha256": "35b129b078b56eda212c2875131290f94987ec3cbd446b0ccbc8403011e572a0"
+    }
+  },
+  "teacher_feature_union": 841,
+  "common_crop_px": 496,
+  "tile_size_px": 512,
+  "invalid_rows_by_year": {
+    "2018": 0,
+    "2019": 0,
+    "2020": 0,
+    "2021": 0,
+    "2022": 0,
+    "2023": 0,
+    "2024": 0
+  },
+  "balanced_planning_ceiling_per_year": 1902,
+  "selection_seed": 20261008,
+  "legacy_existing_files": 1463,
+  "legacy_metadata_verified_by_year": {
+    "2024": 181,
+    "2022": 509,
+    "2021": 124,
+    "2023": 166,
+    "2018": 112,
+    "2019": 140,
+    "2020": 147
+  },
+  "legacy_metadata_issues": {
+    "metadata_PermissionError": 84
+  },
+  "legacy_unmatched_files": 0,
+  "legacy_tessera_sources": {
+    "unstamped": 1379
+  },
+  "by_year": [
+    {
+      "year": 2018,
+      "valid_plot_years": 2348,
+      "excluded_teacher_plot_years": 446,
+      "eligible_plot_years": 1902,
+      "balanced_planning_plot_years": 1902,
+      "existing_v4_index_common_crop": 81,
+      "geometric_reuse_all_roots": 779,
+      "balanced_geometric_reuse": 779,
+      "cover_all_eligible_from_scratch": {
+        "tiles": 497,
+        "plots": 1902,
+        "original_lattice_cells": 497,
+        "extra_crop_splits": 0
+      },
+      "cover_balanced_from_scratch": {
+        "tiles": 497,
+        "plots": 1902,
+        "original_lattice_cells": 497,
+        "extra_crop_splits": 0
+      },
+      "additional_all_if_legacy_reusable": {
+        "tiles": 390,
+        "plots": 1123,
+        "original_lattice_cells": 390,
+        "extra_crop_splits": 0
+      },
+      "additional_balanced_if_legacy_reusable": {
+        "tiles": 390,
+        "plots": 1123,
+        "original_lattice_cells": 390,
+        "extra_crop_splits": 0
+      }
+    },
+    {
+      "year": 2019,
+      "valid_plot_years": 2319,
+      "excluded_teacher_plot_years": 0,
+      "eligible_plot_years": 2319,
+      "balanced_planning_plot_years": 1902,
+      "existing_v4_index_common_crop": 0,
+      "geometric_reuse_all_roots": 938,
+      "balanced_geometric_reuse": 772,
+      "cover_all_eligible_from_scratch": {
+        "tiles": 599,
+        "plots": 2319,
+        "original_lattice_cells": 599,
+        "extra_crop_splits": 0
+      },
+      "cover_balanced_from_scratch": {
+        "tiles": 574,
+        "plots": 1902,
+        "original_lattice_cells": 574,
+        "extra_crop_splits": 0
+      },
+      "additional_all_if_legacy_reusable": {
+        "tiles": 475,
+        "plots": 1381,
+        "original_lattice_cells": 475,
+        "extra_crop_splits": 0
+      },
+      "additional_balanced_if_legacy_reusable": {
+        "tiles": 449,
+        "plots": 1130,
+        "original_lattice_cells": 449,
+        "extra_crop_splits": 0
+      }
+    },
+    {
+      "year": 2020,
+      "valid_plot_years": 2325,
+      "excluded_teacher_plot_years": 0,
+      "eligible_plot_years": 2325,
+      "balanced_planning_plot_years": 1902,
+      "existing_v4_index_common_crop": 0,
+      "geometric_reuse_all_roots": 1003,
+      "balanced_geometric_reuse": 828,
+      "cover_all_eligible_from_scratch": {
+        "tiles": 618,
+        "plots": 2325,
+        "original_lattice_cells": 617,
+        "extra_crop_splits": 1
+      },
+      "cover_balanced_from_scratch": {
+        "tiles": 593,
+        "plots": 1902,
+        "original_lattice_cells": 593,
+        "extra_crop_splits": 0
+      },
+      "additional_all_if_legacy_reusable": {
+        "tiles": 483,
+        "plots": 1322,
+        "original_lattice_cells": 483,
+        "extra_crop_splits": 0
+      },
+      "additional_balanced_if_legacy_reusable": {
+        "tiles": 458,
+        "plots": 1074,
+        "original_lattice_cells": 458,
+        "extra_crop_splits": 0
+      }
+    },
+    {
+      "year": 2021,
+      "valid_plot_years": 2238,
+      "excluded_teacher_plot_years": 53,
+      "eligible_plot_years": 2185,
+      "balanced_planning_plot_years": 1902,
+      "existing_v4_index_common_crop": 9,
+      "geometric_reuse_all_roots": 885,
+      "balanced_geometric_reuse": 776,
+      "cover_all_eligible_from_scratch": {
+        "tiles": 593,
+        "plots": 2185,
+        "original_lattice_cells": 593,
+        "extra_crop_splits": 0
+      },
+      "cover_balanced_from_scratch": {
+        "tiles": 574,
+        "plots": 1902,
+        "original_lattice_cells": 574,
+        "extra_crop_splits": 0
+      },
+      "additional_all_if_legacy_reusable": {
+        "tiles": 477,
+        "plots": 1300,
+        "original_lattice_cells": 477,
+        "extra_crop_splits": 0
+      },
+      "additional_balanced_if_legacy_reusable": {
+        "tiles": 458,
+        "plots": 1126,
+        "original_lattice_cells": 458,
+        "extra_crop_splits": 0
+      }
+    },
+    {
+      "year": 2022,
+      "valid_plot_years": 2318,
+      "excluded_teacher_plot_years": 342,
+      "eligible_plot_years": 1976,
+      "balanced_planning_plot_years": 1902,
+      "existing_v4_index_common_crop": 24,
+      "geometric_reuse_all_roots": 1167,
+      "balanced_geometric_reuse": 1125,
+      "cover_all_eligible_from_scratch": {
+        "tiles": 519,
+        "plots": 1976,
+        "original_lattice_cells": 519,
+        "extra_crop_splits": 0
+      },
+      "cover_balanced_from_scratch": {
+        "tiles": 513,
+        "plots": 1902,
+        "original_lattice_cells": 513,
+        "extra_crop_splits": 0
+      },
+      "additional_all_if_legacy_reusable": {
+        "tiles": 320,
+        "plots": 809,
+        "original_lattice_cells": 320,
+        "extra_crop_splits": 0
+      },
+      "additional_balanced_if_legacy_reusable": {
+        "tiles": 314,
+        "plots": 777,
+        "original_lattice_cells": 314,
+        "extra_crop_splits": 0
+      }
+    },
+    {
+      "year": 2023,
+      "valid_plot_years": 2329,
+      "excluded_teacher_plot_years": 0,
+      "eligible_plot_years": 2329,
+      "balanced_planning_plot_years": 1902,
+      "existing_v4_index_common_crop": 0,
+      "geometric_reuse_all_roots": 1181,
+      "balanced_geometric_reuse": 970,
+      "cover_all_eligible_from_scratch": {
+        "tiles": 530,
+        "plots": 2329,
+        "original_lattice_cells": 530,
+        "extra_crop_splits": 0
+      },
+      "cover_balanced_from_scratch": {
+        "tiles": 515,
+        "plots": 1902,
+        "original_lattice_cells": 515,
+        "extra_crop_splits": 0
+      },
+      "additional_all_if_legacy_reusable": {
+        "tiles": 387,
+        "plots": 1148,
+        "original_lattice_cells": 387,
+        "extra_crop_splits": 0
+      },
+      "additional_balanced_if_legacy_reusable": {
+        "tiles": 369,
+        "plots": 932,
+        "original_lattice_cells": 369,
+        "extra_crop_splits": 0
+      }
+    },
+    {
+      "year": 2024,
+      "valid_plot_years": 2389,
+      "excluded_teacher_plot_years": 0,
+      "eligible_plot_years": 2389,
+      "balanced_planning_plot_years": 1902,
+      "existing_v4_index_common_crop": 2211,
+      "geometric_reuse_all_roots": 2287,
+      "balanced_geometric_reuse": 1825,
+      "cover_all_eligible_from_scratch": {
+        "tiles": 518,
+        "plots": 2389,
+        "original_lattice_cells": 518,
+        "extra_crop_splits": 0
+      },
+      "cover_balanced_from_scratch": {
+        "tiles": 493,
+        "plots": 1902,
+        "original_lattice_cells": 493,
+        "extra_crop_splits": 0
+      },
+      "additional_all_if_legacy_reusable": {
+        "tiles": 30,
+        "plots": 102,
+        "original_lattice_cells": 30,
+        "extra_crop_splits": 0
+      },
+      "additional_balanced_if_legacy_reusable": {
+        "tiles": 27,
+        "plots": 77,
+        "original_lattice_cells": 27,
+        "extra_crop_splits": 0
+      }
+    }
+  ],
+  "additional_planning_scenarios": [
+    {
+      "observations_per_year": 1000,
+      "by_year": [
+        {
+          "year": 2018,
+          "plot_years": 1000,
+          "geometric_reuse": 406,
+          "cover_from_scratch": {
+            "tiles": 417,
+            "plots": 1000,
+            "original_lattice_cells": 417,
+            "extra_crop_splits": 0
+          },
+          "additional_if_legacy_reusable": {
+            "tiles": 306,
+            "plots": 594,
+            "original_lattice_cells": 306,
+            "extra_crop_splits": 0
+          }
+        },
+        {
+          "year": 2019,
+          "plot_years": 1000,
+          "geometric_reuse": 398,
+          "cover_from_scratch": {
+            "tiles": 464,
+            "plots": 1000,
+            "original_lattice_cells": 464,
+            "extra_crop_splits": 0
+          },
+          "additional_if_legacy_reusable": {
+            "tiles": 342,
+            "plots": 602,
+            "original_lattice_cells": 342,
+            "extra_crop_splits": 0
+          }
+        },
+        {
+          "year": 2020,
+          "plot_years": 1000,
+          "geometric_reuse": 455,
+          "cover_from_scratch": {
+            "tiles": 470,
+            "plots": 1000,
+            "original_lattice_cells": 470,
+            "extra_crop_splits": 0
+          },
+          "additional_if_legacy_reusable": {
+            "tiles": 333,
+            "plots": 545,
+            "original_lattice_cells": 333,
+            "extra_crop_splits": 0
+          }
+        },
+        {
+          "year": 2021,
+          "plot_years": 1000,
+          "geometric_reuse": 400,
+          "cover_from_scratch": {
+            "tiles": 467,
+            "plots": 1000,
+            "original_lattice_cells": 467,
+            "extra_crop_splits": 0
+          },
+          "additional_if_legacy_reusable": {
+            "tiles": 351,
+            "plots": 600,
+            "original_lattice_cells": 351,
+            "extra_crop_splits": 0
+          }
+        },
+        {
+          "year": 2022,
+          "plot_years": 1000,
+          "geometric_reuse": 613,
+          "cover_from_scratch": {
+            "tiles": 418,
+            "plots": 1000,
+            "original_lattice_cells": 418,
+            "extra_crop_splits": 0
+          },
+          "additional_if_legacy_reusable": {
+            "tiles": 224,
+            "plots": 387,
+            "original_lattice_cells": 224,
+            "extra_crop_splits": 0
+          }
+        },
+        {
+          "year": 2023,
+          "plot_years": 1000,
+          "geometric_reuse": 508,
+          "cover_from_scratch": {
+            "tiles": 432,
+            "plots": 1000,
+            "original_lattice_cells": 432,
+            "extra_crop_splits": 0
+          },
+          "additional_if_legacy_reusable": {
+            "tiles": 284,
+            "plots": 492,
+            "original_lattice_cells": 284,
+            "extra_crop_splits": 0
+          }
+        },
+        {
+          "year": 2024,
+          "plot_years": 1000,
+          "geometric_reuse": 961,
+          "cover_from_scratch": {
+            "tiles": 425,
+            "plots": 1000,
+            "original_lattice_cells": 425,
+            "extra_crop_splits": 0
+          },
+          "additional_if_legacy_reusable": {
+            "tiles": 18,
+            "plots": 39,
+            "original_lattice_cells": 18,
+            "extra_crop_splits": 0
+          }
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Counts are geometric feasible covers, not global minimum or imagery success forecasts.",
+    "Legacy reuse is conditional on modality/source readiness and independence/model-selection audit.",
+    "v4 index geometry assumed512px as produced; full tile readiness remains a freeze gate.",
+    "Final equal count must be recalculated after all coverage and modality exclusions, before scores.",
+    "Read-only sizing does not authorize acquisition, input freeze, inference or joint NMD scoring."
+  ],
+  "totals": {
+    "eligible_plot_years": 15425,
+    "additional_tiles_all_candidates": 2562,
+    "additional_tiles_1902_per_year": 2465,
+    "additional_tiles_1000_per_year": 1858
+  },
+  "execution_evidence": {
+    "process_git_sha": "ba31235c6bb5f4c2fa9d5c71929926a0023d062b",
+    "runtime": {
+      "source_git_sha": "fdf7d3a2aa7d6a801434af1aa07b0e24464b670d",
+      "image": {
+        "ref": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:5d1968bc87a68f251d30f88d09ab72bf748b717c0d0b0e16738e2b4790692b39",
+        "digest": "5d1968bc87a68f251d30f88d09ab72bf748b717c0d0b0e16738e2b4790692b39"
+      },
+      "planner_sha256": "910695f37f4977c8df3691208d4a601ac81d2bb3d76dd04c7df588ad00148173"
+    },
+    "job_name": "nfi0103-tile-counts-v1",
+    "job_uid": "1fda9fd7-e223-400a-a079-4afbfff57c87",
+    "namespace": "prithvi-training-default",
+    "pod_name": "nfi0103-tile-counts-v1-tm2tz",
+    "pod_uid": "387377fa-a51e-4be3-9647-7ec1f4ccdcaa",
+    "image_id": "docker-pullable://ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:5d1968bc87a68f251d30f88d09ab72bf748b717c0d0b0e16738e2b4790692b39",
+    "exit_code": 0,
+    "container_started_at": "2026-10-08T17:19:40Z",
+    "container_finished_at": "2026-10-08T17:21:49Z",
+    "job_completed_at": "2026-10-08T17:21:55Z",
+    "log_sha256": "bda2f5f13b985ee5510838372206470750027c6f7e0e9ece1b0c91e5e7815dfa"
+  }
+}

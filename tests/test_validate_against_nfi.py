@@ -99,3 +99,9 @@ def test_per_plot_sink():
     assert list(df["nfi_forest"]) == [1, 2, 3, 4, -1]
     # model prediction sampled from the mock class_map (7 = non-forest at the treeless plot)
     assert list(df["model_pred"]) == [1, 1, 3, 4, 7]
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1])
+def test_invalid_species_volumes_cannot_become_forest_truth(value):
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        van.derive_nfi_forest_class(_row(pine=value))

@@ -68,6 +68,7 @@ from .era5_aux import (
     era5_grid_context,
     format_era5_cell_id,
 )
+from .errors import TilePrerequisiteError
 from .s1_enrichment import S1_ENRICH_VERSION
 from .tile_bbox import resolve_tile_bbox
 from .tile_config import TileConfig
@@ -2016,7 +2017,7 @@ class UnifiedDataset(Dataset):
         if needs_sar:
             s1_ver = int(data.get("s1_enrich_v", 0))
             if s1_ver != S1_ENRICH_VERSION:
-                raise KeyError(
+                raise TilePrerequisiteError(
                     f"tile requires s1_enrich_v=={S1_ENRICH_VERSION} RTC γ⁰ season composite for "
                     f"model_keys={sorted(set(self.model_keys) & {'croma_base', 'terramind_v1_base'})}"
                     f" but found s1_enrich_v={s1_ver}. Re-run the S1 season "

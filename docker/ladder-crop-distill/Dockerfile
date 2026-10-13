@@ -143,6 +143,8 @@ RUN python /tmp/prepare_runtime.py seal \
       --source-git-sha "${SOURCE_GIT_SHA}" \
       --image-ref "local-build@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
       --runtime-manifest /opt/provenance/runtime.json \
+    && /opt/venvs/scoring/bin/python /tmp/runtime_smoke.py preparation \
+      --source-git-sha "${SOURCE_GIT_SHA}" \
     && rm /tmp/prepare_runtime.py /tmp/runtime_smoke.py \
       /opt/provenance/archive-identities.json
 
