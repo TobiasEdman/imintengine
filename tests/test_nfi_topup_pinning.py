@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(REPO), str(REPO / "scripts")]
 PIN = "d4d24f9ab1581ecdc8db739d4271905806401b6a"
 PINNED = sorted(
     [*(f"k8s/nfi-topup-{kind}-{y}-job.yaml" for kind in ("fetch", "retry") for y in (2018, 2019, 2021, 2022)),
@@ -108,12 +109,25 @@ def _no_vpp(tmp_path, monkeypatch, missing: dict, cached: set, *, years="2018 20
     return code, out
 
 
-def test_proven_cells_always_apply_and_a_candidate_still_missing_is_confirmed(tmp_path, monkeypatch):
+def test_proven_cells_apply_per_year_and_a_candidate_still_missing_is_confirmed(tmp_path, monkeypatch):
     code, out = _no_vpp(tmp_path, monkeypatch,
                         {"2018": ["33UVC", "34WCA", "34WCU"], "2021": ["34WCT"]}, cached=set())
     tokens = out[-1].split()
+    proven = ["33UVC", "34WCS", "34WCT", "34WCU", "34WCV"]
     assert code == 0
-    assert tokens[:5] == ["33UVC", "34WCS", "34WCT", "34WCU", "34WCV"] and tokens[5:] == ["2018:34WCA"]
+    assert tokens[:10] == [f"{y}:{m}" for m in proven for y in (2018, 2021)] and tokens[10:] == ["2018:34WCA"]
+    ledger = json.loads((tmp_path / "manifests/nfi_topup_no_vpp_confirmed.json").read_text())
+    assert ledger["confirmed"] == ["2018:34WCA"] and ledger["released"] == []
+
+
+def test_a_proven_cell_is_not_excluded_for_a_year_the_cache_holds(tmp_path, monkeypatch):
+    code, out = _no_vpp(tmp_path, monkeypatch, {"2018": [], "2021": []}, cached={("33UVC", 2021)})
+    assert code == 0 and "2018:33UVC" in out[-1].split() and "2021:33UVC" not in out[-1].split()
+
+
+def test_without_gap_reports_no_candidate_is_excluded(tmp_path, monkeypatch):
+    code, out = _no_vpp(tmp_path, monkeypatch, {}, cached=set())
+    assert code == 0 and not any(t.endswith(("34WCA", "34WDR", "35WLP")) for t in out[-1].split())
 
 
 def test_a_candidate_the_retry_filled_is_not_excluded(tmp_path, monkeypatch):
@@ -135,6 +149,44 @@ def test_a_candidate_is_year_scoped(tmp_path, monkeypatch):
 def test_a_cached_pair_is_never_excluded_even_if_the_report_is_stale(tmp_path, monkeypatch):
     code, out = _no_vpp(tmp_path, monkeypatch, {"2018": ["34WDR"], "2021": []}, cached={("34WDR", 2018)})
     assert code == 0 and "2018:34WDR" not in out[-1].split()
+
+
+# Codex review 5503673024, finding 2, inverted: the exclusion must survive the re-plan that routed around it.
+from tests.test_plan_nfi_topup_manifest import _plan, data_root, fieldtruth_file  # noqa: E402,F401
+import derive_missing_vpp_mgrs as derive  # noqa: E402
+
+
+def test_a_confirmed_exclusion_survives_the_replan_that_routed_around_it(data_root, fieldtruth_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(derive, "mgrs_tiles_for_bbox", lambda bbox: {"34WDR"})
+    _, initial, _ = _plan(data_root, fieldtruth_file, tmp_path / "initial", 2)
+    best = initial[0]["bbox_3006"]
+    monkeypatch.setattr(derive, "mgrs_tiles_for_bbox", lambda bbox: {"34WCA" if bbox == best else "34WDR"})
+    cached = {("34WDR", 2019)}
+    monkeypatch.setattr(derive, "cached_pairs", lambda path: set(cached))
+    out = tmp_path / "cycle"; (out / "plan").mkdir(parents=True)
+    (out / "plan/nfi2019_topup_vpp_gaps.json").write_text(json.dumps({"year": 2019, "needed": ["34WCA"], "missing": ["34WCA"]}))
+    monkeypatch.setenv("YEARS", "2019"); monkeypatch.setenv("NO_VPP_PROVEN", "")
+    monkeypatch.setenv("NO_VPP_IF_STILL_MISSING", "2019:34WCA")
+    body = NO_VPP_BODY.replace('"/data/manifests', json.dumps(str(out / "plan"))[:-1])
+
+    def tokens():
+        printed = []
+        with patch("builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a))) if "file" not in k else None):
+            exec(compile(body, "no-vpp-heredoc", "exec"), {})
+        return printed[-1].split()
+
+    assert tokens() == ["2019:34WCA"]                                           # confirmed after the retry
+    _, replacement, gaps = _plan(data_root, fieldtruth_file, out, 2, "2019:34WCA")
+    assert replacement != initial and gaps["missing"] == []                     # routed around it
+    assert tokens() == ["2019:34WCA"]                                           # still excluded: from the ledger
+    _, again, gaps = _plan(data_root, fieldtruth_file, out, 2, *tokens())
+    assert again == replacement and gaps["missing"] == []
+    cached.add(("34WCA", 2019))                                                 # positive recovery
+    assert tokens() == []
+    ledger = json.loads((out / "plan/nfi_topup_no_vpp_confirmed.json").read_text())
+    assert ledger["confirmed"] == [] and [r["pair"] for r in ledger["released"]] == ["2019:34WCA"]
+    _, restored, _ = _plan(data_root, fieldtruth_file, out, 2)
+    assert restored == initial
 
 
 def test_replan_refuses_once_a_staging_root_holds_tiles(tmp_path):
